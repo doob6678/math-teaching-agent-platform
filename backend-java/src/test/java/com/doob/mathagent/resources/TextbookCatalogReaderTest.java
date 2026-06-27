@@ -47,4 +47,20 @@ class TextbookCatalogReaderTest {
                 .extracting(TextbookCatalogItem::docId)
                 .isEqualTo("book_a");
     }
+
+    @Test
+    void toleratesAdditionalFieldsFromGeneratedCatalog() throws Exception {
+        Path catalog = tempDir.resolve("catalog.jsonl");
+        Files.writeString(catalog, """
+                {"doc_id":"book_with_source","book_name":"A","volume":"必修","book_root":"C:/books/a","manifest":"C:/books/a/manifest.json","chunk_count":3,"page_count":4,"ai_ok":true,"source_pdf":"C:/raw/a.pdf","generated_at":"2026-06-27T00:00:00Z"}
+                """);
+
+        TextbookCatalogReader reader = new TextbookCatalogReader();
+
+        assertThat(reader.read(catalog))
+                .hasSize(1)
+                .first()
+                .extracting(TextbookCatalogItem::docId)
+                .isEqualTo("book_with_source");
+    }
 }

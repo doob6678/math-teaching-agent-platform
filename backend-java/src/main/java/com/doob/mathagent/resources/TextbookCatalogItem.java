@@ -1,7 +1,9 @@
 package com.doob.mathagent.resources;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 public record TextbookCatalogItem(
         @JsonProperty("doc_id") String docId,
         @JsonProperty("book_name") String bookName,
