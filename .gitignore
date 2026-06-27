@@ -1,0 +1,31 @@
+.idea/
+.vscode/
+
+# Java / Maven
+target/
+*.class
+*.jar
+*.war
+
+# Python
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+
+# Node / frontend
+node_modules/
+dist/
+build/
+
+# Local secrets and runtime files
+.env
+.env.*
+!.env.example
+*.log
+logs/
+
+# OS
+Thumbs.db
+.DS_Store
