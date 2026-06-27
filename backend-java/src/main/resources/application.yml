@@ -1,6 +1,15 @@
 spring:
   application:
     name: math-agent-rag-backend
+  flyway:
+    enabled: false
 
 server:
   port: 8080
+
+math-agent:
+  database:
+    enabled: ${MATH_AGENT_DB_ENABLED:false}
+    url: ${MATH_AGENT_DB_URL:}
+    username: ${MATH_AGENT_DB_USERNAME:}
+    password: ${MATH_AGENT_DB_PASSWORD:}
