@@ -2,7 +2,9 @@ package com.doob.mathagent.resources;
 
 import java.nio.file.Path;
 import java.util.List;
+import org.springframework.stereotype.Service;
 
+@Service
 public class TextbookResourceService {
 
     private final TextbookCatalogReader catalogReader;
