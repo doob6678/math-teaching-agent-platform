@@ -24,6 +24,15 @@ public class LocalTextbookBm25SearchEngine {
             "text", 1.00,
             "formulaText", 0.95);
     private static final Pattern ASCII_TERM = Pattern.compile("[A-Za-z0-9_]+");
+    private final TextbookPageQualityClassifier pageQualityClassifier;
+
+    public LocalTextbookBm25SearchEngine() {
+        this(new TextbookPageQualityClassifier());
+    }
+
+    LocalTextbookBm25SearchEngine(TextbookPageQualityClassifier pageQualityClassifier) {
+        this.pageQualityClassifier = pageQualityClassifier;
+    }
 
     public List<TextbookSearchHit> search(String query, List<TextbookChunk> chunks, int limit) {
         List<String> queryTerms = terms(query);
@@ -43,6 +52,7 @@ public class LocalTextbookBm25SearchEngine {
 
         double averageLength = documentLengths.stream().mapToDouble(Double::doubleValue).average().orElse(1.0);
         Map<Integer, Double> scores = new HashMap<>();
+        Map<String, Integer> maxPageByDocId = maxPageByDocId(chunks);
         Map<String, Long> queryCounts = frequency(queryTerms);
         int documentCount = chunks.size();
         for (Map.Entry<String, Long> queryTerm : queryCounts.entrySet()) {
@@ -73,6 +83,9 @@ public class LocalTextbookBm25SearchEngine {
                     scores.merge(index, Math.min(1.2, 0.18 + compact(phrase).length() * 0.035), Double::sum);
                 }
             }
+            TextbookChunk chunk = chunks.get(index);
+            String qualityLabel = pageQualityClassifier.label(chunk, maxPageByDocId.getOrDefault(chunk.docId(), 0));
+            scores.computeIfPresent(index, (ignored, score) -> score * pageQualityClassifier.scoreFactor(qualityLabel));
         }
 
         int effectiveLimit = limit > 0 ? limit : 10;
@@ -80,8 +93,20 @@ public class LocalTextbookBm25SearchEngine {
                 .filter(entry -> entry.getValue() > 0.0)
                 .sorted(Map.Entry.<Integer, Double>comparingByValue().reversed())
                 .limit(effectiveLimit)
-                .map(entry -> toHit(chunks.get(entry.getKey()), roundScore(entry.getValue())))
+                .map(entry -> {
+                    TextbookChunk chunk = chunks.get(entry.getKey());
+                    String qualityLabel = pageQualityClassifier.label(chunk, maxPageByDocId.getOrDefault(chunk.docId(), 0));
+                    return toHit(chunk, roundScore(entry.getValue()), qualityLabel);
+                })
                 .toList();
+    }
+
+    private static Map<String, Integer> maxPageByDocId(List<TextbookChunk> chunks) {
+        Map<String, Integer> maxPages = new HashMap<>();
+        for (TextbookChunk chunk : chunks) {
+            maxPages.merge(chunk.docId(), chunk.pageNo(), Math::max);
+        }
+        return maxPages;
     }
 
     private static Map<String, Double> weightedTerms(TextbookChunk chunk) {
@@ -153,7 +178,7 @@ public class LocalTextbookBm25SearchEngine {
                 safe(chunk.formulaText()));
     }
 
-    private static TextbookSearchHit toHit(TextbookChunk chunk, double score) {
+    private static TextbookSearchHit toHit(TextbookChunk chunk, double score, String pageQualityLabel) {
         return new TextbookSearchHit(
                 chunk.chunkId(),
                 score,
@@ -167,7 +192,8 @@ public class LocalTextbookBm25SearchEngine {
                 chunk.sectionTitle(),
                 snippet(chunk.text()),
                 chunk.formulaText(),
-                chunk.sourcePageImage());
+                chunk.sourcePageImage(),
+                pageQualityLabel);
     }
 
     private static String snippet(String text) {

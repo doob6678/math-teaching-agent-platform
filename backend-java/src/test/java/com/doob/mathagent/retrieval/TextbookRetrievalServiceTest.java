@@ -3,9 +3,11 @@ package com.doob.mathagent.retrieval;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.doob.mathagent.resources.TextbookCatalogReader;
+import com.doob.mathagent.resources.TextbookChunk;
 import com.doob.mathagent.resources.TextbookChunkReader;
-import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Files;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -43,7 +45,44 @@ class TextbookRetrievalServiceTest {
                 .isEqualTo("book_a_p101_text_001");
     }
 
+    @Test
+    void reusesLoadedChunksWhenSourceFilesAreUnchanged() throws Exception {
+        Path root = tempDir.resolve("processed_books");
+        Path bookRoot = root.resolve("book_a");
+        Files.createDirectories(bookRoot.resolve("jsonl"));
+        Files.writeString(root.resolve("catalog.jsonl"), """
+                {"doc_id":"book_a","book_name":"教材A","volume":"必修 第一册","book_root":"%s","manifest":"%s","chunk_count":1,"page_count":1,"ai_ok":false}
+                """.formatted(escape(bookRoot), escape(bookRoot.resolve("manifest.json"))));
+        Files.writeString(bookRoot.resolve("jsonl/chunks.jsonl"), """
+                {"chunk_id":"book_a_p101_text_001","doc_id":"book_a","book_name":"教材A","volume":"必修 第一册","chapter_path":["第三章 函数"],"page_no":101,"printed_page_no":"98","chunk_type":"page_summary","section_title":"分段函数","text":"分段函数是在定义域的不同部分用不同解析式表示的函数。","formula_text":"","image_rel_paths":[],"source_page_image":"pages/p101.png"}
+                """);
+        CountingTextbookChunkReader chunkReader = new CountingTextbookChunkReader();
+        TextbookRetrievalService service = new TextbookRetrievalService(
+                new TextbookCatalogReader(),
+                chunkReader,
+                new LocalTextbookBm25SearchEngine());
+
+        service.search(root, new TextbookSearchRequest("分段函数", 5));
+        service.search(root, new TextbookSearchRequest("函数", 5));
+
+        assertThat(chunkReader.readCount()).isEqualTo(1);
+    }
+
     private static String escape(Path path) {
         return path.toString().replace("\\", "\\\\");
+    }
+
+    private static class CountingTextbookChunkReader extends TextbookChunkReader {
+        private int readCount;
+
+        @Override
+        public List<TextbookChunk> read(Path chunksJsonl) {
+            readCount++;
+            return super.read(chunksJsonl);
+        }
+
+        int readCount() {
+            return readCount;
+        }
     }
 }

@@ -15,5 +15,6 @@ public record TextbookSearchHit(
         String sectionTitle,
         String textSnippet,
         String formulaText,
-        String sourcePageImage) {
+        String sourcePageImage,
+        String pageQualityLabel) {
 }
