@@ -1,0 +1,50 @@
+import { describe, expect, it, vi } from "vitest";
+import { createTextbookApiClient } from "./textbookApi";
+
+describe("textbookApi", () => {
+  it("loads textbook summary from backend", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ bookCount: 7, totalChunkCount: 1169, totalPageCount: 1118, books: [] }),
+    });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const summary = await client.getSummary();
+
+    expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:8080/api/resources/textbooks/summary");
+    expect(summary.bookCount).toBe(7);
+    expect(summary.totalChunkCount).toBe(1169);
+  });
+
+  it("searches textbooks with encoded query and limit", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        query: "分段函数",
+        limit: 3,
+        retrievalStrategy: "local_bm25_first",
+        total: 1,
+        hits: [{ chunkId: "c1", pageQualityLabel: "content_page" }],
+      }),
+    });
+    const client = createTextbookApiClient("http://127.0.0.1:8080/", fetchMock);
+
+    const response = await client.search("分段函数", 3);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8080/api/retrieval/textbooks/search?query=%E5%88%86%E6%AE%B5%E5%87%BD%E6%95%B0&limit=3",
+    );
+    expect(response.hits[0].pageQualityLabel).toBe("content_page");
+  });
+
+  it("raises readable errors for failed backend requests", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      text: async () => "backend failed",
+    });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    await expect(client.getSummary()).rejects.toThrow("Backend request failed: 500 backend failed");
+  });
+});

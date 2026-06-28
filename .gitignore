@@ -25,6 +25,7 @@ build/
 !.env.example
 *.log
 logs/
+.playwright-cli/
 
 # OS
 Thumbs.db
