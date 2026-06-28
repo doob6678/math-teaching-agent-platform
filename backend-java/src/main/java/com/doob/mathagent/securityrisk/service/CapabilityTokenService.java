@@ -24,6 +24,7 @@ public class CapabilityTokenService {
 
     private final CapabilityTokenStore store;
     private final Clock clock;
+    private final CapabilityAuditSink auditSink;
 
     /**
      * Creates a production service.
@@ -31,8 +32,8 @@ public class CapabilityTokenService {
      * @param store token store
      */
     @Autowired
-    public CapabilityTokenService(CapabilityTokenStore store) {
-        this(store, Clock.systemUTC());
+    public CapabilityTokenService(CapabilityTokenStore store, CapabilityAuditSink auditSink) {
+        this(store, Clock.systemUTC(), auditSink);
     }
 
     /**
@@ -42,8 +43,20 @@ public class CapabilityTokenService {
      * @param clock clock
      */
     public CapabilityTokenService(CapabilityTokenStore store, Clock clock) {
+        this(store, clock, new NoopCapabilityAuditSink());
+    }
+
+    /**
+     * Creates a testable service with explicit audit sink.
+     *
+     * @param store token store
+     * @param clock clock
+     * @param auditSink audit sink
+     */
+    public CapabilityTokenService(CapabilityTokenStore store, Clock clock, CapabilityAuditSink auditSink) {
         this.store = store;
         this.clock = clock;
+        this.auditSink = auditSink == null ? new NoopCapabilityAuditSink() : auditSink;
     }
 
     /**
@@ -57,7 +70,20 @@ public class CapabilityTokenService {
         RequestSubject normalized = subject.normalize();
         String action = request.action().strip();
         String path = request.path().strip();
-        validateApplication(action, path, normalized);
+        try {
+            validateApplication(action, path, normalized);
+        } catch (IllegalArgumentException exception) {
+            auditApplication(
+                    normalized,
+                    action,
+                    path,
+                    request.requestHash(),
+                    request.idempotencyKey(),
+                    null,
+                    "rejected",
+                    exception.getMessage());
+            throw exception;
+        }
         Instant expiresAt = Instant.now(clock).plus(TOKEN_TTL);
         CapabilityTokenRecord record = new CapabilityTokenRecord(
                 UUID.randomUUID().toString(),
@@ -72,6 +98,7 @@ public class CapabilityTokenService {
                 expiresAt,
                 false);
         CapabilityTokenRecord saved = store.save(record);
+        auditRecord(saved, "issued", "Capability token issued");
         return new CapabilityTokenResponse(
                 saved.token(),
                 saved.action(),
@@ -98,19 +125,26 @@ public class CapabilityTokenService {
             String requestHash,
             RequestSubject subject) {
         if (token == null || token.isBlank()) {
-            return CapabilityConsumeDecision.deny("Missing capability token");
+            CapabilityConsumeDecision decision = CapabilityConsumeDecision.deny("Missing capability token");
+            auditConsumption(null, action, path, requestHash, subject, null, "denied", decision.reason());
+            return decision;
         }
         CapabilityTokenRecord record = store.find(token.strip()).orElse(null);
         if (record == null) {
-            return CapabilityConsumeDecision.deny("Capability token not found");
+            CapabilityConsumeDecision decision = CapabilityConsumeDecision.deny("Capability token not found");
+            auditConsumption(token.strip(), action, path, requestHash, subject, null, "denied", decision.reason());
+            return decision;
         }
         CapabilityConsumeDecision validation = validate(record, action, path, requestHash, subject);
         if (!validation.allowed()) {
+            auditRecord(record, "denied", validation.reason());
             return validation;
         }
-        return store.consumeIfUnused(record.token())
+        CapabilityConsumeDecision decision = store.consumeIfUnused(record.token())
                 .map(ignored -> CapabilityConsumeDecision.allow())
                 .orElseGet(() -> CapabilityConsumeDecision.deny("Capability token already used"));
+        auditRecord(record, decision.allowed() ? "consumed" : "denied", decision.reason());
+        return decision;
     }
 
     /**
@@ -153,5 +187,72 @@ public class CapabilityTokenService {
         if (!CAPABILITY_ALLOWED_ROLES.contains(subject.subjectType()) || subject.subjectId() == null) {
             throw new IllegalArgumentException("Capability subject not allowed");
         }
+    }
+
+    /**
+     * Records an audit event from a persisted token record.
+     */
+    private void auditRecord(CapabilityTokenRecord record, String decision, String reason) {
+        auditApplication(
+                new RequestSubject(record.tenantId(), record.subjectType(), record.subjectId(), null),
+                record.action(),
+                record.path(),
+                record.requestHash(),
+                record.idempotencyKey(),
+                record.token(),
+                decision,
+                reason);
+    }
+
+    /**
+     * Records an audit event when no stored record may exist.
+     */
+    private void auditConsumption(
+            String token,
+            String action,
+            String path,
+            String requestHash,
+            RequestSubject subject,
+            String idempotencyKey,
+            String decision,
+            String reason) {
+        auditApplication(subject, action, path, requestHash, idempotencyKey, token, decision, reason);
+    }
+
+    /**
+     * Writes a normalized capability audit event.
+     */
+    private void auditApplication(
+            RequestSubject subject,
+            String action,
+            String path,
+            String requestHash,
+            String idempotencyKey,
+            String token,
+            String decision,
+            String reason) {
+        RequestSubject normalized = subject == null
+                ? RequestSubject.anonymous("default", "unknown-device")
+                : subject.normalize();
+        auditSink.record(new CapabilityAuditEvent(
+                UUID.randomUUID().toString(),
+                Instant.now(clock),
+                normalized.tenantId(),
+                normalized.subjectType(),
+                normalized.subjectId(),
+                safeText(action),
+                safeText(path),
+                safeText(requestHash),
+                safeText(idempotencyKey),
+                safeText(token),
+                safeText(decision),
+                safeText(reason)));
+    }
+
+    /**
+     * Returns stripped text or empty string for audit fields.
+     */
+    private static String safeText(String value) {
+        return value == null || value.isBlank() ? "" : value.strip();
     }
 }
