@@ -339,6 +339,42 @@ export interface TeachingMemoryReuse {
 /**
  * 教学任务阶段耗时，用于前端状态、工具调用和性能面板。
  */
+/**
+ * Request body for student memory remember operations. Identity is resolved by the backend session.
+ */
+export interface StudentMemoryRequest {
+  /** Student question text used for future similarity matching. */
+  questionText: string;
+  /** Generated answer text to store as memory. */
+  answerText: string;
+  /** Optional knowledge point label used to improve matching precision. */
+  knowledgePointName?: string;
+  /** Requested scope; backend downgrades unprivileged public writes to private. */
+  memoryScope?: "private" | "public";
+  /** Whether the caller explicitly bypassed reuse before generating this answer. */
+  bypassReuse?: boolean;
+}
+
+/**
+ * Student memory remember/reuse response returned by the backend memory service.
+ */
+export interface StudentMemoryResponse {
+  /** Whether a previous memory answer was reused. */
+  reused: boolean;
+  /** Memory entry id when a memory was stored or matched. */
+  memoryId?: string;
+  /** Effective memory scope after backend normalization. */
+  reuseScope?: string;
+  /** Stored or reused answer text. */
+  answer?: string;
+  /** Similarity or write confidence score from 0 to 1. */
+  similarity: number;
+  /** Backend decision reason. */
+  reason: string;
+  /** Backend stage timing rows for performance review. */
+  stageTimings?: TeachingStageTiming[];
+}
+
 export interface TeachingStageTiming {
   /** 阶段编码，例如 memory_reuse、textbook_retrieval。 */
   stage: string;
@@ -685,6 +721,28 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     /**
      * 按 taskId 读取教学任务结果，用于页面恢复和轮询。
      */
+    /**
+     * Stores a student memory entry after applying a capability token for the exact request body.
+     */
+    async rememberStudentMemory(request: StudentMemoryRequest): Promise<StudentMemoryResponse> {
+      const body = JSON.stringify(request);
+      const capability = await applyCapability(
+        "student-memory:remember",
+        "/api/students/memory/remember",
+        body,
+        `student-memory-remember:${request.knowledgePointName ?? "general"}:${request.questionText}`,
+      );
+      return requestJson<StudentMemoryResponse>("/api/students/memory/remember", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Capability-Token": capability.token,
+          "X-Request-Hash": capability.requestHash,
+        },
+        body,
+      });
+    },
+
     getTeachingTask(taskId: string): Promise<TeachingTaskResponse> {
       return requestJson<TeachingTaskResponse>(`/api/teaching/tasks/${encodeURIComponent(taskId)}`);
     },

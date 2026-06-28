@@ -288,6 +288,67 @@ describe("textbookApi", () => {
     expect(task.stageTimings?.[0].stage).toBe("memory_reuse");
   });
 
+  it("remembers student memory with one-time capability token and backend identity", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          token: "memory-capability",
+          action: "student-memory:remember",
+          path: "/api/students/memory/remember",
+          requestHash: "hash-from-server",
+          expiresAt: "2026-06-28T12:02:00Z",
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          reused: false,
+          memoryId: "memory-1",
+          reuseScope: "private",
+          answer: "Use a dot b = |a||b|cos(theta) first.",
+          similarity: 1,
+          reason: "Memory stored",
+          stageTimings: [{ stage: "write_memory", elapsedMs: 1 }],
+        }),
+      });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+    const request = {
+      questionText: "vector dot product angle",
+      answerText: "Use a dot b = |a||b|cos(theta) first.",
+      knowledgePointName: "vector dot product",
+      memoryScope: "private" as const,
+      bypassReuse: false,
+    };
+
+    const response = await client.rememberStudentMemory(request);
+
+    const capabilityBody = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
+    expect(capabilityBody).toEqual({
+      action: "student-memory:remember",
+      path: "/api/students/memory/remember",
+      requestHash: expect.any(String),
+      idempotencyKey: expect.stringContaining("student-memory-remember:"),
+      maxCost: 1,
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://127.0.0.1:8080/api/students/memory/remember",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "Content-Type": "application/json",
+          "X-Capability-Token": "memory-capability",
+          "X-Request-Hash": capabilityBody.requestHash,
+        }),
+        body: JSON.stringify(request),
+      }),
+    );
+    expect(fetchMock.mock.calls[1][1]?.headers).not.toHaveProperty("X-Subject-Id");
+    expect(response.memoryId).toBe("memory-1");
+  });
+
   it("loads teaching task by task id for page resume", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

@@ -142,6 +142,34 @@ class CapabilityTokenServiceTest {
     }
 
     @Test
+    void issuesStudentMemoryCapabilityTokenOnlyForStudents() {
+        CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
+        RequestSubject student = new RequestSubject("school-a", "student", "student-001", "device-1");
+
+        CapabilityTokenResponse remember = service.apply(new CapabilityTokenApplyRequest(
+                "student-memory:remember",
+                "/api/students/memory/remember",
+                "hash-memory",
+                "student-memory-remember:student-001",
+                1.0), student);
+
+        assertThat(service.consume(
+                remember.token(),
+                "student-memory:remember",
+                "/api/students/memory/remember",
+                "hash-memory",
+                student).allowed()).isTrue();
+        assertThatThrownBy(() -> service.apply(new CapabilityTokenApplyRequest(
+                "student-memory:remember",
+                "/api/students/memory/remember",
+                "hash-memory",
+                "student-memory-remember:teacher-001",
+                1.0), new RequestSubject("school-a", "teacher", "teacher-001", "device-1")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Capability subject not allowed");
+    }
+
+    @Test
     void recordsAuditEventsForIssueConsumeAndDeniedReplay() {
         CapturingCapabilityAuditSink auditSink = new CapturingCapabilityAuditSink();
         CapabilityTokenService service =

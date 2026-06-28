@@ -11,6 +11,7 @@ import com.doob.mathagent.memory.service.StudentMemoryReuseService;
 import com.doob.mathagent.memory.vo.StudentMemoryResponse;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.web.server.ResponseStatusException;
 
 class StudentMemoryControllerTest {
 
@@ -19,7 +20,8 @@ class StudentMemoryControllerTest {
         StudentMemoryReuseService service = new StudentMemoryReuseService(new InMemoryStudentMemoryStore());
         StudentMemoryController controller = new StudentMemoryController(
                 service,
-                request -> new RequestSubject("school-a", "student", "student-real", "device-1"));
+                request -> new RequestSubject("school-a", "student", "student-real", "device-1"),
+                (token, action, path, requestHash, subject) -> true);
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.addHeader("X-Subject-Id", "student-spoofed");
 
@@ -51,5 +53,35 @@ class StudentMemoryControllerTest {
 
         assertThat(victim.reused()).isFalse();
         assertThat(owner.reused()).isTrue();
+    }
+
+    @Test
+    void rejectsRememberWithoutAcceptedCapabilityToken() {
+        StudentMemoryReuseService service = new StudentMemoryReuseService(new InMemoryStudentMemoryStore());
+        StudentMemoryController controller = new StudentMemoryController(
+                service,
+                request -> new RequestSubject("school-a", "student", "student-real", "device-1"),
+                (token, action, path, requestHash, subject) -> false);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.remember(
+                        new StudentMemoryRequest(
+                                "vector dot product angle",
+                                "Use a dot b = |a||b|cos(theta) first.",
+                                "vector dot product",
+                                "private",
+                                false),
+                        requestWithCapability("bad-token", "hash-memory")))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("Capability token");
+    }
+
+    /**
+     * Builds an HTTP request carrying capability headers for controller tests.
+     */
+    private static MockHttpServletRequest requestWithCapability(String token, String requestHash) {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader("X-Capability-Token", token);
+        request.addHeader("X-Request-Hash", requestHash);
+        return request;
     }
 }

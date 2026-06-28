@@ -23,8 +23,11 @@ public class CapabilityTokenService {
     private static final String TEACHER_RESOURCE_REGISTER_ACTION = "teacher-resource:register";
     private static final String TEACHER_RESOURCE_ARCHIVE_ACTION = "teacher-resource:archive";
     private static final String TEACHER_RESOURCES_PATH = "/api/teacher/resources";
+    private static final String STUDENT_MEMORY_REMEMBER_ACTION = "student-memory:remember";
+    private static final String STUDENT_MEMORY_REMEMBER_PATH = "/api/students/memory/remember";
     private static final Set<String> CAPABILITY_ALLOWED_ROLES = Set.of("student", "teacher", "admin");
     private static final Set<String> TEACHER_RESOURCE_ALLOWED_ROLES = Set.of("teacher", "admin");
+    private static final Set<String> STUDENT_MEMORY_ALLOWED_ROLES = Set.of("student");
 
     private final CapabilityTokenStore store;
     private final Clock clock;
@@ -199,6 +202,10 @@ public class CapabilityTokenService {
             validateTeacherResourceSubject(subject);
             return;
         }
+        if (STUDENT_MEMORY_REMEMBER_ACTION.equals(action) && STUDENT_MEMORY_REMEMBER_PATH.equals(path)) {
+            validateStudentMemorySubject(subject);
+            return;
+        }
         throw new IllegalArgumentException("Unsupported capability action or path");
     }
 
@@ -207,6 +214,15 @@ public class CapabilityTokenService {
      */
     private static void validateTeacherResourceSubject(RequestSubject subject) {
         if (!TEACHER_RESOURCE_ALLOWED_ROLES.contains(subject.subjectType()) || subject.subjectId() == null) {
+            throw new IllegalArgumentException("Capability subject not allowed");
+        }
+    }
+
+    /**
+     * Validates subject for student-owned long-term memory writes.
+     */
+    private static void validateStudentMemorySubject(RequestSubject subject) {
+        if (!STUDENT_MEMORY_ALLOWED_ROLES.contains(subject.subjectType()) || subject.subjectId() == null) {
             throw new IllegalArgumentException("Capability subject not allowed");
         }
     }
