@@ -4,6 +4,7 @@ import {
   RetrievalAuditDetail,
   StudentDashboardResponse,
   TeachingTaskResponse,
+  TeacherResourceDocumentResponse,
   TextbookSearchHit,
   TextbookSearchResponse,
   TextbookSummary,
@@ -30,14 +31,22 @@ export function App() {
   const [learningGoal, setLearningGoal] = useState("理解函数新概念综合题");
   const [teachingTask, setTeachingTask] = useState<TeachingTaskResponse | null>(null);
   const [studentDashboard, setStudentDashboard] = useState<StudentDashboardResponse | null>(null);
+  const [teacherResources, setTeacherResources] = useState<TeacherResourceDocumentResponse[]>([]);
   const [teachingError, setTeachingError] = useState("");
   const [studentDashboardError, setStudentDashboardError] = useState("");
+  const [teacherResourceError, setTeacherResourceError] = useState("");
+  const [resourceTitle, setResourceTitle] = useState("空间向量讲义");
+  const [resourceLocation, setResourceLocation] = useState("");
+  const [resourceSourceType, setResourceSourceType] = useState("local_path");
+  const [resourceScope, setResourceScope] = useState("MATH_VIP");
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [searching, setSearching] = useState(false);
   const [loadingAudit, setLoadingAudit] = useState(false);
   const [submittingTeachingTask, setSubmittingTeachingTask] = useState(false);
   const [loadingTeachingTask, setLoadingTeachingTask] = useState(false);
   const [loadingStudentDashboard, setLoadingStudentDashboard] = useState(false);
+  const [loadingTeacherResources, setLoadingTeacherResources] = useState(false);
+  const [registeringResource, setRegisteringResource] = useState(false);
 
   useEffect(() => {
     setLoadingSummary(true);
@@ -56,6 +65,19 @@ export function App() {
       .catch((error: Error) => setStudentDashboardError(error.message))
       .finally(() => setLoadingStudentDashboard(false));
   }, [api]);
+
+  useEffect(() => {
+    refreshTeacherResources();
+  }, [api]);
+
+  function refreshTeacherResources() {
+    setLoadingTeacherResources(true);
+    api
+      .listTeacherResources()
+      .then(setTeacherResources)
+      .catch((error: Error) => setTeacherResourceError(error.message))
+      .finally(() => setLoadingTeacherResources(false));
+  }
 
   useEffect(() => {
     const taskId = window.localStorage.getItem(TEACHING_TASK_STORAGE_KEY);
@@ -117,6 +139,35 @@ export function App() {
       })
       .catch((error: Error) => setTeachingError(error.message))
       .finally(() => setSubmittingTeachingTask(false));
+  }
+
+  function handleRegisterResource(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!resourceTitle.trim() || !resourceLocation.trim()) {
+      setTeacherResourceError("请输入资料标题和本地路径或飞书 URL。");
+      return;
+    }
+    setRegisteringResource(true);
+    setTeacherResourceError("");
+    api
+      .registerTeacherResource({
+        sourceType: resourceSourceType,
+        title: resourceTitle.trim(),
+        originalUrl: resourceSourceType === "feishu" ? resourceLocation.trim() : undefined,
+        localPath: resourceSourceType === "local_path" ? resourceLocation.trim() : undefined,
+        permissionScope: resourceScope,
+      })
+      .then((resource) => setTeacherResources((current) => [resource, ...current]))
+      .catch((error: Error) => setTeacherResourceError(error.message))
+      .finally(() => setRegisteringResource(false));
+  }
+
+  function handleArchiveResource(documentId: string) {
+    setTeacherResourceError("");
+    api
+      .archiveTeacherResource(documentId)
+      .then(() => setTeacherResources((current) => current.filter((resource) => resource.documentId !== documentId)))
+      .catch((error: Error) => setTeacherResourceError(error.message));
   }
 
   return (
@@ -188,6 +239,25 @@ export function App() {
               <span>生成讲义任务</span>
             </button>
           </form>
+
+          <div className="divider" />
+
+          <TeacherResourcePanel
+            resources={teacherResources}
+            title={resourceTitle}
+            location={resourceLocation}
+            sourceType={resourceSourceType}
+            scope={resourceScope}
+            loading={loadingTeacherResources}
+            registering={registeringResource}
+            error={teacherResourceError}
+            onTitleChange={setResourceTitle}
+            onLocationChange={setResourceLocation}
+            onSourceTypeChange={setResourceSourceType}
+            onScopeChange={setResourceScope}
+            onRegister={handleRegisterResource}
+            onArchive={handleArchiveResource}
+          />
         </aside>
 
         <section className="result-panel">
@@ -347,6 +417,95 @@ function StudentDashboardPanel({
           </div>
         </div>
       ) : null}
+    </section>
+  );
+}
+
+function TeacherResourcePanel({
+  resources,
+  title,
+  location,
+  sourceType,
+  scope,
+  loading,
+  registering,
+  error,
+  onTitleChange,
+  onLocationChange,
+  onSourceTypeChange,
+  onScopeChange,
+  onRegister,
+  onArchive,
+}: {
+  resources: TeacherResourceDocumentResponse[];
+  title: string;
+  location: string;
+  sourceType: string;
+  scope: string;
+  loading: boolean;
+  registering: boolean;
+  error: string;
+  onTitleChange: (value: string) => void;
+  onLocationChange: (value: string) => void;
+  onSourceTypeChange: (value: string) => void;
+  onScopeChange: (value: string) => void;
+  onRegister: (event: FormEvent<HTMLFormElement>) => void;
+  onArchive: (documentId: string) => void;
+}) {
+  return (
+    <section className="teacher-resource-panel">
+      <PanelTitle icon={<Database size={18} />} title="教师资料源" />
+      <form className="search-form" onSubmit={onRegister}>
+        <label>
+          <span>标题</span>
+          <input value={title} onChange={(event) => onTitleChange(event.target.value)} />
+        </label>
+        <label>
+          <span>来源</span>
+          <select value={sourceType} onChange={(event) => onSourceTypeChange(event.target.value)}>
+            <option value="local_path">本地路径</option>
+            <option value="feishu">飞书 URL</option>
+          </select>
+        </label>
+        <label>
+          <span>{sourceType === "feishu" ? "飞书 URL" : "本地路径"}</span>
+          <input value={location} onChange={(event) => onLocationChange(event.target.value)} />
+        </label>
+        <label>
+          <span>权限域</span>
+          <select value={scope} onChange={(event) => onScopeChange(event.target.value)}>
+            <option value="TEACHER_PRIVATE">教师私有</option>
+            <option value="MATH_VIP">数学 VIP</option>
+            <option value="PUBLIC_TEXTBOOK">公开教材</option>
+          </select>
+        </label>
+        <button type="submit" disabled={registering}>
+          {registering ? <Loader2 className="spin" size={17} /> : <Database size={17} />}
+          <span>登记资料</span>
+        </button>
+      </form>
+      {loading ? <StatusLine icon={<Loader2 className="spin" size={16} />} text="读取教师资料源中" /> : null}
+      {error ? <StatusLine icon={<AlertCircle size={16} />} text={error} tone="danger" /> : null}
+      <div className="resource-list">
+        {resources.map((resource) => (
+          <article className="resource-item" key={resource.documentId}>
+            <div>
+              <strong>{resource.title}</strong>
+              <span>{resource.sourceType} / {resource.permissionScope}</span>
+            </div>
+            <div className="resource-status">
+              <span>{resource.syncStatus}</span>
+              <span>{resource.indexStatus ?? "waiting_rebuild"}</span>
+            </div>
+            {resource.previewFiles?.length ? (
+              <p>{resource.previewFiles.map((file) => file.fileName).join("、")}</p>
+            ) : null}
+            <button type="button" onClick={() => onArchive(resource.documentId)}>
+              归档
+            </button>
+          </article>
+        ))}
+      </div>
     </section>
   );
 }

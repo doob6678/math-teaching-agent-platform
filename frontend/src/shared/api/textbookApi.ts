@@ -360,6 +360,66 @@ export interface StudentResourceScope {
   accessPolicy?: string;
 }
 
+/**
+ * 教师资料源登记请求，用于飞书、本地文件夹、题库和讲义资料接入。
+ */
+export interface TeacherResourceRegistrationRequest {
+  /** 来源类型，例如 feishu、local_path、local_docx 或 textbook_md。 */
+  sourceType: string;
+  /** 教师端展示标题。 */
+  title: string;
+  /** 飞书或外部来源 URL。 */
+  originalUrl?: string;
+  /** 本地文件或文件夹路径。 */
+  localPath?: string;
+  /** RAG 权限域，例如 TEACHER_PRIVATE、MATH_VIP 或 PUBLIC_TEXTBOOK。 */
+  permissionScope: string;
+}
+
+/**
+ * 教师资料源响应，用于后台预览、删除和重建索引状态展示。
+ */
+export interface TeacherResourceDocumentResponse {
+  /** 资料源稳定 ID。 */
+  documentId: string;
+  /** 租户 ID。 */
+  tenantId?: string;
+  /** 资料所属教师或管理员主体 ID。 */
+  ownerSubjectId?: string;
+  /** 来源类型。 */
+  sourceType?: string;
+  /** 教师端展示标题。 */
+  title: string;
+  /** 飞书或外部来源 URL。 */
+  originalUrl?: string;
+  /** 本地文件或文件夹路径。 */
+  localPath?: string;
+  /** RAG 权限域。 */
+  permissionScope?: string;
+  /** 同步状态。 */
+  syncStatus: string;
+  /** 解析状态。 */
+  parseStatus?: string;
+  /** embedding 状态。 */
+  embeddingStatus?: string;
+  /** BM25/Milvus 索引状态。 */
+  indexStatus?: string;
+  /** 本地预览文件列表。 */
+  previewFiles?: TeacherResourcePreviewFile[];
+}
+
+/**
+ * 教师资料源本地文件预览项。
+ */
+export interface TeacherResourcePreviewFile {
+  /** 文件名。 */
+  fileName: string;
+  /** 相对登记根目录的路径。 */
+  relativePath: string;
+  /** 文件大小，单位字节。 */
+  fileSizeBytes: number;
+}
+
 type FetchLike = (input: string, init?: RequestInit) => Promise<Pick<Response, "ok" | "status" | "json" | "text">>;
 
 const LOCAL_CONSOLE_HEADERS = {
@@ -451,6 +511,36 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
       return requestJson<StudentDashboardResponse>(`/api/students/dashboard${suffix}`, {
         headers: LOCAL_STUDENT_HEADERS,
       });
+    },
+
+    /**
+     * 读取当前教师可见的资料源列表。
+     */
+    listTeacherResources(): Promise<TeacherResourceDocumentResponse[]> {
+      return requestJson<TeacherResourceDocumentResponse[]>("/api/teacher/resources");
+    },
+
+    /**
+     * 登记教师资料源，后端会返回预览和等待重建索引状态。
+     */
+    registerTeacherResource(
+      request: TeacherResourceRegistrationRequest,
+    ): Promise<TeacherResourceDocumentResponse> {
+      return requestJson<TeacherResourceDocumentResponse>("/api/teacher/resources", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
+      });
+    },
+
+    /**
+     * 归档教师资料源，避免硬删除导致旧讲解引用断裂。
+     */
+    archiveTeacherResource(documentId: string): Promise<TeacherResourceDocumentResponse> {
+      return requestJson<TeacherResourceDocumentResponse>(
+        `/api/teacher/resources/${encodeURIComponent(documentId)}`,
+        { method: "DELETE" },
+      );
     },
   };
 }

@@ -16,7 +16,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -161,7 +162,8 @@ h2 {
   font-weight: 700;
 }
 
-.search-form input {
+.search-form input,
+.search-form select {
   width: 100%;
   min-height: 38px;
   border: 1px solid #cfd8e5;
@@ -391,6 +393,67 @@ h2 {
   color: #0f5f9f;
   font-size: 12px;
   font-weight: 800;
+}
+
+.teacher-resource-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.resource-list {
+  display: grid;
+  gap: 8px;
+}
+
+.resource-item {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #e1e7f0;
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
+.resource-item strong {
+  display: block;
+  color: #1e293b;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.resource-item span,
+.resource-item p {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.resource-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.resource-status span {
+  min-height: 24px;
+  padding: 4px 7px;
+  border-radius: 5px;
+  background: #f1f5f9;
+  color: #475569;
+}
+
+.resource-item button {
+  justify-self: start;
+  min-height: 30px;
+  border: 1px solid #cfd8e5;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #334155;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .teaching-task {

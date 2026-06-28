@@ -193,4 +193,64 @@ describe("textbookApi", () => {
     expect(dashboard.studentId).toBe("local-student");
     expect(dashboard.knowledgeProgress[0].progressPercent).toBe(68);
   });
+
+  it("manages teacher resources with teacher identity headers", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ([{ documentId: "doc-1", title: "空间向量讲义", syncStatus: "registered" }]),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ documentId: "doc-2", title: "飞书题库", syncStatus: "registered" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ documentId: "doc-2", title: "飞书题库", syncStatus: "archived" }),
+      });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const list = await client.listTeacherResources();
+    const created = await client.registerTeacherResource({
+      sourceType: "feishu",
+      title: "飞书题库",
+      originalUrl: "https://example.feishu.cn/docs/doc1",
+      permissionScope: "TEACHER_PRIVATE",
+    });
+    const archived = await client.archiveTeacherResource("doc-2");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "http://127.0.0.1:8080/api/teacher/resources",
+      expect.objectContaining({
+        headers: expect.objectContaining({ "X-Subject-Type": "teacher" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://127.0.0.1:8080/api/teacher/resources",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "Content-Type": "application/json",
+          "X-Subject-Id": "local-teacher-console",
+        }),
+        body: JSON.stringify({
+          sourceType: "feishu",
+          title: "飞书题库",
+          originalUrl: "https://example.feishu.cn/docs/doc1",
+          permissionScope: "TEACHER_PRIVATE",
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "http://127.0.0.1:8080/api/teacher/resources/doc-2",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+    expect(list[0].documentId).toBe("doc-1");
+    expect(created.syncStatus).toBe("registered");
+    expect(archived.syncStatus).toBe("archived");
+  });
 });
