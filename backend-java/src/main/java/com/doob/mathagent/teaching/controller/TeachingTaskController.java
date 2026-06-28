@@ -5,6 +5,7 @@ import com.doob.mathagent.infrastructure.security.RequestSubjectResolver;
 import com.doob.mathagent.teaching.TeachingRequestContext;
 import com.doob.mathagent.teaching.dto.TeachingTaskRequest;
 import com.doob.mathagent.teaching.service.TeachingCapabilityVerifier;
+import com.doob.mathagent.teaching.service.TeachingHandoutPdfExportService;
 import com.doob.mathagent.teaching.service.TeachingWorkflowService;
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
 import jakarta.servlet.http.HttpServletRequest;
@@ -30,11 +31,13 @@ public class TeachingTaskController {
 
     private static final String TEACHING_SUBMIT_ACTION = "teaching:submit";
     private static final String TEACHING_HANDOUT_LATEX_EXPORT_ACTION = "teaching-handout:export-latex";
+    private static final String TEACHING_HANDOUT_PDF_EXPORT_ACTION = "teaching-handout:export-pdf";
     private static final String TEACHING_TASKS_PATH = "/api/teaching/tasks";
 
     private final TeachingWorkflowService workflowService;
     private final RequestSubjectResolver subjectResolver;
     private final TeachingCapabilityVerifier capabilityVerifier;
+    private final TeachingHandoutPdfExportService pdfExportService;
 
     /**
      * 注入教学编排服务。
@@ -42,10 +45,12 @@ public class TeachingTaskController {
     public TeachingTaskController(
             TeachingWorkflowService workflowService,
             RequestSubjectResolver subjectResolver,
-            TeachingCapabilityVerifier capabilityVerifier) {
+            TeachingCapabilityVerifier capabilityVerifier,
+            TeachingHandoutPdfExportService pdfExportService) {
         this.workflowService = workflowService;
         this.subjectResolver = subjectResolver;
         this.capabilityVerifier = capabilityVerifier;
+        this.pdfExportService = pdfExportService;
     }
 
     /**
@@ -107,6 +112,34 @@ public class TeachingTaskController {
                         .build()
                         .toString())
                 .body(task.handoutLatex());
+    }
+
+    /**
+     * Exports the PDF handout for an owned teaching task after consuming a one-time capability token.
+     */
+    @GetMapping("/api/teaching/tasks/{taskId}/handout/pdf")
+    public ResponseEntity<byte[]> exportPdf(
+            @PathVariable String taskId,
+            HttpServletRequest httpRequest) {
+        RequestSubject subject = subjectResolver.resolve(httpRequest);
+        String path = TEACHING_TASKS_PATH + "/" + taskId + "/handout/pdf";
+        if (!capabilityVerifier.verify(
+                headerOrNull(httpRequest, "X-Capability-Token"),
+                TEACHING_HANDOUT_PDF_EXPORT_ACTION,
+                path,
+                headerOrNull(httpRequest, "X-Request-Hash"),
+                subject)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for PDF export");
+        }
+        TeachingTaskResponse task = workflowService.get(taskId, requestContext(subject))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Teaching task not found"));
+        return ResponseEntity.ok()
+                .contentType(MediaType.APPLICATION_PDF)
+                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
+                        .filename(task.taskId() + ".pdf", StandardCharsets.UTF_8)
+                        .build()
+                        .toString())
+                .body(pdfExportService.render(task));
     }
 
     private static TeachingRequestContext requestContext(RequestSubject subject) {

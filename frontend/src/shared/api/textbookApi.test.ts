@@ -419,6 +419,51 @@ describe("textbookApi", () => {
     expect(latex).toContain("\\section");
   });
 
+  it("exports teaching task pdf with one-time capability token", async () => {
+    const pdfBytes = new Uint8Array([37, 80, 68, 70, 45, 49, 46, 52]).buffer;
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          token: "pdf-capability",
+          action: "teaching-handout:export-pdf",
+          path: "/api/teaching/tasks/task-1/handout/pdf",
+          requestHash: "hash-empty",
+          expiresAt: "2026-06-28T12:02:00Z",
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        arrayBuffer: async () => pdfBytes,
+        text: async () => "",
+      });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const pdf = await client.exportTeachingTaskPdf("task-1");
+
+    const capabilityBody = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
+    expect(capabilityBody).toEqual({
+      action: "teaching-handout:export-pdf",
+      path: "/api/teaching/tasks/task-1/handout/pdf",
+      requestHash: expect.any(String),
+      idempotencyKey: "teaching-handout-export-pdf:task-1",
+      maxCost: 2,
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://127.0.0.1:8080/api/teaching/tasks/task-1/handout/pdf",
+      expect.objectContaining({
+        method: "GET",
+        headers: expect.objectContaining({
+          "X-Capability-Token": "pdf-capability",
+          "X-Request-Hash": capabilityBody.requestHash,
+        }),
+      }),
+    );
+    expect(Array.from(pdf.slice(0, 4))).toEqual([37, 80, 68, 70]);
+  });
+
   it("loads student dashboard without client supplied identity headers", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

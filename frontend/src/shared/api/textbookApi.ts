@@ -578,7 +578,10 @@ export interface TeacherResourcePreviewFile {
   fileSizeBytes: number;
 }
 
-type FetchLike = (input: string, init?: RequestInit) => Promise<Pick<Response, "ok" | "status" | "json" | "text">>;
+type FetchLike = (
+  input: string,
+  init?: RequestInit,
+) => Promise<Pick<Response, "ok" | "status" | "json" | "text" | "arrayBuffer">>;
 
 const AUTH_STORAGE_KEY = "math-agent:auth-session";
 const DEVICE_ID_HEADER = { "X-Device-Id": "local-browser-console" };
@@ -626,6 +629,27 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
       throw new Error(`Backend request failed: ${response.status} ${body}`.trim());
     }
     return response.text();
+  }
+
+  /**
+   * Requests backend binary content while preserving the same session and device headers.
+   */
+  async function requestBytes(path: string, init: RequestInit = {}): Promise<Uint8Array> {
+    const auth = readAuthSession();
+    const authHeader = auth ? { [auth.tokenName]: auth.tokenValue } : {};
+    const response = await fetchImpl(`${normalizedBaseUrl}${path}`, {
+      ...init,
+      headers: {
+        ...DEVICE_ID_HEADER,
+        ...authHeader,
+        ...init.headers,
+      },
+    });
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`Backend request failed: ${response.status} ${body}`.trim());
+    }
+    return new Uint8Array(await response.arrayBuffer());
   }
 
   /**
@@ -783,6 +807,27 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
         `teaching-handout-export-latex:${taskId}`,
       );
       return requestText(path, {
+        method: "GET",
+        headers: {
+          "X-Capability-Token": capability.token,
+          "X-Request-Hash": capability.requestHash,
+        },
+      });
+    },
+
+    /**
+     * Downloads the PDF handout for a teaching task after applying a one-time capability token.
+     */
+    async exportTeachingTaskPdf(taskId: string): Promise<Uint8Array> {
+      const path = `/api/teaching/tasks/${encodeURIComponent(taskId)}/handout/pdf`;
+      const capability = await applyCapability(
+        "teaching-handout:export-pdf",
+        path,
+        "",
+        `teaching-handout-export-pdf:${taskId}`,
+        2,
+      );
+      return requestBytes(path, {
         method: "GET",
         headers: {
           "X-Capability-Token": capability.token,

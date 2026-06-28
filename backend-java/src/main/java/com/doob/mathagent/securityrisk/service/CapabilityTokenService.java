@@ -21,6 +21,7 @@ public class CapabilityTokenService {
     private static final String TEACHING_SUBMIT_ACTION = "teaching:submit";
     private static final String TEACHING_TASKS_PATH = "/api/teaching/tasks";
     private static final String TEACHING_HANDOUT_LATEX_EXPORT_ACTION = "teaching-handout:export-latex";
+    private static final String TEACHING_HANDOUT_PDF_EXPORT_ACTION = "teaching-handout:export-pdf";
     private static final String TEACHER_RESOURCE_REGISTER_ACTION = "teacher-resource:register";
     private static final String TEACHER_RESOURCE_ARCHIVE_ACTION = "teacher-resource:archive";
     private static final String TEACHER_RESOURCES_PATH = "/api/teacher/resources";
@@ -198,6 +199,14 @@ public class CapabilityTokenService {
         if (TEACHING_HANDOUT_LATEX_EXPORT_ACTION.equals(action)
                 && path.startsWith(TEACHING_TASKS_PATH + "/")
                 && path.endsWith("/handout/latex")) {
+            if (!CAPABILITY_ALLOWED_ROLES.contains(subject.subjectType()) || subject.subjectId() == null) {
+                throw new IllegalArgumentException("Capability subject not allowed");
+            }
+            return;
+        }
+        if (TEACHING_HANDOUT_PDF_EXPORT_ACTION.equals(action)
+                && path.startsWith(TEACHING_TASKS_PATH + "/")
+                && path.endsWith("/handout/pdf")) {
             if (!CAPABILITY_ALLOWED_ROLES.contains(subject.subjectType()) || subject.subjectId() == null) {
                 throw new IllegalArgumentException("Capability subject not allowed");
             }
