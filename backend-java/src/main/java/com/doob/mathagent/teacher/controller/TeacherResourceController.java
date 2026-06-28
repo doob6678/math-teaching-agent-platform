@@ -1,5 +1,7 @@
 package com.doob.mathagent.teacher.controller;
 
+import com.doob.mathagent.infrastructure.security.RequestSubject;
+import com.doob.mathagent.infrastructure.security.RequestSubjectResolver;
 import com.doob.mathagent.teacher.dto.TeacherResourceRegistrationRequest;
 import com.doob.mathagent.teacher.service.TeacherResourceService;
 import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
@@ -19,14 +21,19 @@ import org.springframework.web.bind.annotation.RestController;
 public class TeacherResourceController {
 
     private final TeacherResourceService teacherResourceService;
+    private final RequestSubjectResolver subjectResolver;
 
     /**
      * Creates a teacher resource controller.
      *
      * @param teacherResourceService teacher resource service
+     * @param subjectResolver backend subject resolver
      */
-    public TeacherResourceController(TeacherResourceService teacherResourceService) {
+    public TeacherResourceController(
+            TeacherResourceService teacherResourceService,
+            RequestSubjectResolver subjectResolver) {
         this.teacherResourceService = teacherResourceService;
+        this.subjectResolver = subjectResolver;
     }
 
     /**
@@ -40,7 +47,7 @@ public class TeacherResourceController {
     public TeacherResourceDocumentResponse register(
             @RequestBody TeacherResourceRegistrationRequest request,
             HttpServletRequest httpRequest) {
-        return teacherResourceService.register(enrich(request, httpRequest));
+        return teacherResourceService.register(enrich(request, subjectResolver.resolve(httpRequest)));
     }
 
     /**
@@ -51,10 +58,8 @@ public class TeacherResourceController {
      */
     @GetMapping("/api/teacher/resources")
     public List<TeacherResourceDocumentResponse> list(HttpServletRequest httpRequest) {
-        return teacherResourceService.list(
-                headerOrDefault(httpRequest, "X-Tenant-Id", "default"),
-                headerOrDefault(httpRequest, "X-Subject-Type", "teacher"),
-                headerOrDefault(httpRequest, "X-Subject-Id", "local-teacher-console"));
+        RequestSubject subject = subjectResolver.resolve(httpRequest).normalize();
+        return teacherResourceService.list(subject.tenantId(), subject.subjectType(), subject.subjectId());
     }
 
     /**
@@ -68,10 +73,11 @@ public class TeacherResourceController {
     public TeacherResourceDocumentResponse archive(
             @PathVariable String documentId,
             HttpServletRequest httpRequest) {
+        RequestSubject subject = subjectResolver.resolve(httpRequest).normalize();
         return teacherResourceService.archive(
-                headerOrDefault(httpRequest, "X-Tenant-Id", "default"),
-                headerOrDefault(httpRequest, "X-Subject-Type", "teacher"),
-                headerOrDefault(httpRequest, "X-Subject-Id", "local-teacher-console"),
+                subject.tenantId(),
+                subject.subjectType(),
+                subject.subjectId(),
                 documentId);
     }
 
@@ -84,31 +90,16 @@ public class TeacherResourceController {
      */
     private static TeacherResourceRegistrationRequest enrich(
             TeacherResourceRegistrationRequest request,
-            HttpServletRequest httpRequest) {
+            RequestSubject subject) {
+        RequestSubject normalized = subject.normalize();
         return new TeacherResourceRegistrationRequest(
-                headerOrDefault(httpRequest, "X-Tenant-Id", request.tenantId()),
-                headerOrDefault(httpRequest, "X-Subject-Type", request.viewerRole()),
-                headerOrDefault(httpRequest, "X-Subject-Id", request.viewerSubjectId()),
+                normalized.tenantId(),
+                normalized.subjectType(),
+                normalized.subjectId(),
                 request.sourceType(),
                 request.title(),
                 request.originalUrl(),
                 request.localPath(),
                 request.permissionScope());
-    }
-
-    /**
-     * Reads a request header and returns a fallback when blank.
-     *
-     * @param request HTTP request
-     * @param name header name
-     * @param defaultValue fallback value
-     * @return header value or fallback
-     */
-    private static String headerOrDefault(HttpServletRequest request, String name, String defaultValue) {
-        if (request == null) {
-            return defaultValue;
-        }
-        String value = request.getHeader(name);
-        return value == null || value.isBlank() ? defaultValue : value.strip();
     }
 }

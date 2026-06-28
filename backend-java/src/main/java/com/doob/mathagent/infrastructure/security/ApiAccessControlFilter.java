@@ -15,12 +15,16 @@ import org.springframework.web.filter.OncePerRequestFilter;
 public class ApiAccessControlFilter extends OncePerRequestFilter {
 
     private final ApiAccessControlService accessControlService;
+    private final RequestSubjectResolver subjectResolver;
 
     /**
      * 注入访问控制服务。
      */
-    public ApiAccessControlFilter(ApiAccessControlService accessControlService) {
+    public ApiAccessControlFilter(
+            ApiAccessControlService accessControlService,
+            RequestSubjectResolver subjectResolver) {
         this.accessControlService = accessControlService;
+        this.subjectResolver = subjectResolver;
     }
 
     /**
@@ -43,7 +47,7 @@ public class ApiAccessControlFilter extends OncePerRequestFilter {
             filterChain.doFilter(request, response);
             return;
         }
-        ApiAccessDecision decision = accessControlService.evaluate(identityFrom(request));
+        ApiAccessDecision decision = accessControlService.evaluate(identityFrom(request, subjectResolver.resolve(request)));
         response.setHeader("X-Api-Access-Level", decision.level().name());
         response.setHeader("X-RateLimit-Limit", String.valueOf(decision.limit()));
         response.setHeader("X-RateLimit-Used", String.valueOf(decision.used()));
@@ -57,15 +61,16 @@ public class ApiAccessControlFilter extends OncePerRequestFilter {
     /**
      * 从 HTTP 请求头和连接信息中提取调用身份。
      */
-    private static ApiRequestIdentity identityFrom(HttpServletRequest request) {
+    private static ApiRequestIdentity identityFrom(HttpServletRequest request, RequestSubject subject) {
+        RequestSubject normalized = subject.normalize();
         return new ApiRequestIdentity(
                 request.getMethod(),
                 request.getRequestURI(),
-                headerOrDefault(request, "X-Tenant-Id", "default"),
-                headerOrDefault(request, "X-Subject-Type", "anonymous"),
-                headerOrNull(request, "X-Subject-Id"),
+                normalized.tenantId(),
+                normalized.subjectType(),
+                normalized.subjectId(),
                 clientIp(request),
-                headerOrDefault(request, "X-Device-Id", "unknown-device"),
+                normalized.deviceId(),
                 request.getHeader("User-Agent"));
     }
 
@@ -93,14 +98,6 @@ public class ApiAccessControlFilter extends OncePerRequestFilter {
 
     /**
      * 读取请求头，空白时使用默认值。
-     */
-    private static String headerOrDefault(HttpServletRequest request, String name, String defaultValue) {
-        String value = headerOrNull(request, name);
-        return value == null ? defaultValue : value;
-    }
-
-    /**
-     * 读取请求头，空白值归一为 null。
      */
     private static String headerOrNull(HttpServletRequest request, String name) {
         String value = request.getHeader(name);

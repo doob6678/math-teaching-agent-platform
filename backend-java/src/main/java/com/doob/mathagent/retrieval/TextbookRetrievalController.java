@@ -1,5 +1,7 @@
 package com.doob.mathagent.retrieval;
 
+import com.doob.mathagent.infrastructure.security.RequestSubject;
+import com.doob.mathagent.infrastructure.security.RequestSubjectResolver;
 import com.doob.mathagent.resources.TextbookResourceProperties;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -11,12 +13,15 @@ public class TextbookRetrievalController {
 
     private final TextbookRetrievalService retrievalService;
     private final TextbookResourceProperties resourceProperties;
+    private final RequestSubjectResolver subjectResolver;
 
     public TextbookRetrievalController(
             TextbookRetrievalService retrievalService,
-            TextbookResourceProperties resourceProperties) {
+            TextbookResourceProperties resourceProperties,
+            RequestSubjectResolver subjectResolver) {
         this.retrievalService = retrievalService;
         this.resourceProperties = resourceProperties;
+        this.subjectResolver = subjectResolver;
     }
 
     @GetMapping("/api/retrieval/textbooks/search")
@@ -27,23 +32,24 @@ public class TextbookRetrievalController {
         return retrievalService.search(
                 resourceProperties.processedBooksRoot(),
                 new TextbookSearchRequest(query, limit),
-                requestContext(httpRequest));
+                requestContext(httpRequest, subjectResolver.resolve(httpRequest)));
     }
 
     TextbookSearchResponse search(String query, int limit) {
         return search(query, limit, null);
     }
 
-    private static RetrievalRequestContext requestContext(HttpServletRequest httpRequest) {
+    private static RetrievalRequestContext requestContext(HttpServletRequest httpRequest, RequestSubject subject) {
+        RequestSubject normalized = subject.normalize();
         if (httpRequest == null) {
             return RetrievalRequestContext.defaultTextbookSearch();
         }
         return new RetrievalRequestContext(
-                headerOrDefault(httpRequest, "X-Tenant-Id", "default"),
-                headerOrNull(httpRequest, "X-Subject-Type"),
-                headerOrNull(httpRequest, "X-Subject-Id"),
+                normalized.tenantId(),
+                normalized.subjectType(),
+                normalized.subjectId(),
                 clientIp(httpRequest),
-                headerOrNull(httpRequest, "X-Device-Id"),
+                normalized.deviceId(),
                 httpRequest.getHeader("User-Agent"),
                 httpRequest.getRequestURI());
     }
@@ -54,11 +60,6 @@ public class TextbookRetrievalController {
             return forwardedFor.split(",")[0].strip();
         }
         return httpRequest.getRemoteAddr();
-    }
-
-    private static String headerOrDefault(HttpServletRequest httpRequest, String name, String defaultValue) {
-        String value = headerOrNull(httpRequest, name);
-        return value == null ? defaultValue : value;
     }
 
     private static String headerOrNull(HttpServletRequest httpRequest, String name) {

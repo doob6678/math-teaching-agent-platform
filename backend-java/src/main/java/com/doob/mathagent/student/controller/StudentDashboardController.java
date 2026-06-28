@@ -1,5 +1,7 @@
 package com.doob.mathagent.student.controller;
 
+import com.doob.mathagent.infrastructure.security.RequestSubject;
+import com.doob.mathagent.infrastructure.security.RequestSubjectResolver;
 import com.doob.mathagent.student.dto.StudentDashboardQuery;
 import com.doob.mathagent.student.service.StudentDashboardService;
 import com.doob.mathagent.student.vo.StudentDashboardResponse;
@@ -15,14 +17,19 @@ import org.springframework.web.bind.annotation.RestController;
 public class StudentDashboardController {
 
     private final StudentDashboardService dashboardService;
+    private final RequestSubjectResolver subjectResolver;
 
     /**
      * Injects the student dashboard service.
      *
      * @param dashboardService dashboard service
+     * @param subjectResolver backend subject resolver
      */
-    public StudentDashboardController(StudentDashboardService dashboardService) {
+    public StudentDashboardController(
+            StudentDashboardService dashboardService,
+            RequestSubjectResolver subjectResolver) {
         this.dashboardService = dashboardService;
+        this.subjectResolver = subjectResolver;
     }
 
     /**
@@ -36,7 +43,7 @@ public class StudentDashboardController {
     public StudentDashboardResponse getDashboard(
             @RequestParam(required = false) String studentId,
             HttpServletRequest httpRequest) {
-        return dashboardService.dashboard(query(studentId, httpRequest));
+        return dashboardService.dashboard(query(studentId, subjectResolver.resolve(httpRequest)));
     }
 
     /**
@@ -46,27 +53,12 @@ public class StudentDashboardController {
      * @param httpRequest HTTP request
      * @return normalized dashboard query source
      */
-    private static StudentDashboardQuery query(String studentId, HttpServletRequest httpRequest) {
-        if (httpRequest == null) {
-            return new StudentDashboardQuery("default", "student", "local-student", studentId);
-        }
+    private static StudentDashboardQuery query(String studentId, RequestSubject subject) {
+        RequestSubject normalized = subject.normalize();
         return new StudentDashboardQuery(
-                headerOrDefault(httpRequest, "X-Tenant-Id", "default"),
-                headerOrDefault(httpRequest, "X-Subject-Type", "student"),
-                headerOrDefault(httpRequest, "X-Subject-Id", "local-student"),
+                normalized.tenantId(),
+                normalized.subjectType(),
+                normalized.subjectId(),
                 studentId);
-    }
-
-    /**
-     * Reads a header and falls back to a default when blank.
-     *
-     * @param request HTTP request
-     * @param name header name
-     * @param defaultValue default value
-     * @return header value or default
-     */
-    private static String headerOrDefault(HttpServletRequest request, String name, String defaultValue) {
-        String value = request.getHeader(name);
-        return value == null || value.isBlank() ? defaultValue : value.strip();
     }
 }

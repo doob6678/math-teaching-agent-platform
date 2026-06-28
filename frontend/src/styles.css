@@ -192,6 +192,32 @@ h2 {
   opacity: 0.72;
 }
 
+.auth-form {
+  margin-bottom: 10px;
+}
+
+.auth-session {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #dce5ef;
+  border-radius: 6px;
+  background: #fbfcfe;
+}
+
+.auth-session span {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.auth-session strong {
+  color: #1e293b;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
 .status-line {
   display: flex;
   align-items: flex-start;
@@ -487,6 +513,58 @@ h2 {
   overflow-wrap: anywhere;
 }
 
+.memory-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #dce5ef;
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
+.memory-strip div {
+  min-width: 0;
+}
+
+.memory-strip span,
+.timing-item span {
+  display: block;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.memory-strip strong,
+.timing-item strong {
+  display: block;
+  margin-top: 4px;
+  color: #1e293b;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.memory-strip p {
+  grid-column: 1 / -1;
+  color: #536173;
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.timing-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+  gap: 8px;
+}
+
+.timing-item {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #e1e7f0;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
 .node-list,
 .react-list {
   display: grid;
@@ -730,6 +808,10 @@ h2 {
 
   .score-item {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .memory-strip {
+    grid-template-columns: 1fr;
   }
 
   .score-item strong {

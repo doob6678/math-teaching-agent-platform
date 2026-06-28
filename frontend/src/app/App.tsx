@@ -8,6 +8,7 @@ import {
   TextbookSearchHit,
   TextbookSearchResponse,
   TextbookSummary,
+  LoginResponse,
   createTextbookApiClient,
 } from "../shared/api/textbookApi";
 
@@ -35,10 +36,14 @@ export function App() {
   const [teachingError, setTeachingError] = useState("");
   const [studentDashboardError, setStudentDashboardError] = useState("");
   const [teacherResourceError, setTeacherResourceError] = useState("");
+  const [authError, setAuthError] = useState("");
   const [resourceTitle, setResourceTitle] = useState("空间向量讲义");
   const [resourceLocation, setResourceLocation] = useState("");
   const [resourceSourceType, setResourceSourceType] = useState("local_path");
   const [resourceScope, setResourceScope] = useState("MATH_VIP");
+  const [loginUsername, setLoginUsername] = useState("teacher");
+  const [loginPassword, setLoginPassword] = useState("teacher-123456");
+  const [authSession, setAuthSession] = useState<LoginResponse | null>(() => readStoredAuthSession());
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [searching, setSearching] = useState(false);
   const [loadingAudit, setLoadingAudit] = useState(false);
@@ -47,6 +52,7 @@ export function App() {
   const [loadingStudentDashboard, setLoadingStudentDashboard] = useState(false);
   const [loadingTeacherResources, setLoadingTeacherResources] = useState(false);
   const [registeringResource, setRegisteringResource] = useState(false);
+  const [loggingIn, setLoggingIn] = useState(false);
 
   useEffect(() => {
     setLoadingSummary(true);
@@ -141,6 +147,21 @@ export function App() {
       .finally(() => setSubmittingTeachingTask(false));
   }
 
+  function handleLogin(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!loginUsername.trim() || !loginPassword.trim()) {
+      setAuthError("请输入用户名和密码。");
+      return;
+    }
+    setLoggingIn(true);
+    setAuthError("");
+    api
+      .login({ username: loginUsername.trim(), password: loginPassword })
+      .then(setAuthSession)
+      .catch((error: Error) => setAuthError(error.message))
+      .finally(() => setLoggingIn(false));
+  }
+
   function handleRegisterResource(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!resourceTitle.trim() || !resourceLocation.trim()) {
@@ -185,6 +206,45 @@ export function App() {
 
       <section className="workspace">
         <aside className="side-panel">
+          <PanelTitle icon={<ShieldCheck size={18} />} title="会话身份" />
+          <form className="search-form auth-form" onSubmit={handleLogin}>
+            <label>
+              <span>账号</span>
+              <select
+                value={loginUsername}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setLoginUsername(value);
+                  setLoginPassword(`${value}-123456`);
+                }}
+              >
+                <option value="student">student</option>
+                <option value="teacher">teacher</option>
+                <option value="admin">admin</option>
+              </select>
+            </label>
+            <label>
+              <span>密码</span>
+              <input
+                type="password"
+                value={loginPassword}
+                onChange={(event) => setLoginPassword(event.target.value)}
+              />
+            </label>
+            <button type="submit" disabled={loggingIn}>
+              {loggingIn ? <Loader2 className="spin" size={17} /> : <ShieldCheck size={17} />}
+              <span>登录</span>
+            </button>
+          </form>
+          {authError ? <StatusLine icon={<AlertCircle size={16} />} text={authError} tone="danger" /> : null}
+          {authSession ? (
+            <div className="auth-session">
+              <span>{authSession.role}</span>
+              <strong>{authSession.userId}</strong>
+            </div>
+          ) : null}
+          <div className="divider" />
+
           <PanelTitle icon={<BookOpen size={18} />} title="教材资源" />
           {loadingSummary ? (
             <StatusLine icon={<Loader2 className="spin" size={16} />} text="读取教材目录中" />
@@ -541,6 +601,31 @@ function TeachingTaskPanel({
             <span>Learning goal</span>
             <strong>{task.learningGoal}</strong>
           </div>
+          <div className="memory-strip">
+            <div>
+              <span>Memory</span>
+              <strong>{task.memoryReuse?.reused ? "reused" : "not reused"}</strong>
+            </div>
+            <div>
+              <span>Scope</span>
+              <strong>{task.memoryReuse?.reuseScope ?? "none"}</strong>
+            </div>
+            <div>
+              <span>Similarity</span>
+              <strong>{formatSimilarity(task.memoryReuse?.similarity)}</strong>
+            </div>
+            <p>{task.memoryReuse?.reason ?? "未记录记忆复用决策。"}</p>
+          </div>
+          {task.stageTimings?.length ? (
+            <div className="timing-list">
+              {task.stageTimings.map((timing) => (
+                <div className="timing-item" key={timing.stage}>
+                  <span>{stageLabel(timing.stage)}</span>
+                  <strong>{timing.elapsedMs} ms</strong>
+                </div>
+              ))}
+            </div>
+          ) : null}
           <div className="node-list">
             {task.nodes.map((node) => (
               <div className="node-item" key={node.code}>
@@ -583,6 +668,30 @@ function TeachingTaskPanel({
 
 function boundedPercent(value: number) {
   return Math.max(0, Math.min(100, value));
+}
+
+function readStoredAuthSession() {
+  try {
+    const value = globalThis.localStorage?.getItem("math-agent:auth-session");
+    return value ? (JSON.parse(value) as LoginResponse) : null;
+  } catch {
+    return null;
+  }
+}
+
+function formatSimilarity(value?: number) {
+  return value === undefined ? "0.0000" : value.toFixed(4);
+}
+
+function stageLabel(stage: string) {
+  const labels: Record<string, string> = {
+    memory_reuse: "记忆复用",
+    reuse_short_circuit: "复用短路",
+    textbook_retrieval: "教材检索",
+    react_trace: "ReAct 轨迹",
+    handout_generation: "讲义生成",
+  };
+  return labels[stage] ?? stage;
 }
 
 function PanelTitle({ icon, title }: { icon: React.ReactNode; title: string }) {

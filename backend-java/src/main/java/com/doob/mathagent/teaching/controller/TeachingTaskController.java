@@ -1,5 +1,7 @@
 package com.doob.mathagent.teaching.controller;
 
+import com.doob.mathagent.infrastructure.security.RequestSubject;
+import com.doob.mathagent.infrastructure.security.RequestSubjectResolver;
 import com.doob.mathagent.teaching.TeachingRequestContext;
 import com.doob.mathagent.teaching.dto.TeachingTaskRequest;
 import com.doob.mathagent.teaching.service.TeachingWorkflowService;
@@ -21,12 +23,16 @@ import org.springframework.web.server.ResponseStatusException;
 public class TeachingTaskController {
 
     private final TeachingWorkflowService workflowService;
+    private final RequestSubjectResolver subjectResolver;
 
     /**
      * 注入教学编排服务。
      */
-    public TeachingTaskController(TeachingWorkflowService workflowService) {
+    public TeachingTaskController(
+            TeachingWorkflowService workflowService,
+            RequestSubjectResolver subjectResolver) {
         this.workflowService = workflowService;
+        this.subjectResolver = subjectResolver;
     }
 
     /**
@@ -36,7 +42,7 @@ public class TeachingTaskController {
     public TeachingTaskResponse submit(
             @Valid @RequestBody TeachingTaskRequest request,
             HttpServletRequest httpRequest) {
-        return workflowService.submit(request, requestContext(httpRequest));
+        return workflowService.submit(request, requestContext(subjectResolver.resolve(httpRequest)));
     }
 
     /**
@@ -46,29 +52,19 @@ public class TeachingTaskController {
     public TeachingTaskResponse get(
             @PathVariable String taskId,
             HttpServletRequest httpRequest) {
-        return workflowService.get(taskId, requestContext(httpRequest))
+        return workflowService.get(taskId, requestContext(subjectResolver.resolve(httpRequest)))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Teaching task not found"));
     }
 
     /**
-     * 从 HTTP 请求头读取租户、主体和设备信息，用于任务隔离和审计。
+     * 从后端会话身份读取租户、主体和设备信息，用于任务隔离和审计。
      */
-    private static TeachingRequestContext requestContext(HttpServletRequest httpRequest) {
-        if (httpRequest == null) {
-            return TeachingRequestContext.localTeacher();
-        }
+    private static TeachingRequestContext requestContext(RequestSubject subject) {
+        RequestSubject normalized = subject.normalize();
         return new TeachingRequestContext(
-                headerOrDefault(httpRequest, "X-Tenant-Id", "default"),
-                headerOrDefault(httpRequest, "X-Subject-Type", "anonymous"),
-                headerOrDefault(httpRequest, "X-Subject-Id", "anonymous"),
-                headerOrDefault(httpRequest, "X-Device-Id", "unknown-device"));
-    }
-
-    /**
-     * 读取请求头，空白时使用默认值。
-     */
-    private static String headerOrDefault(HttpServletRequest request, String name, String defaultValue) {
-        String value = request.getHeader(name);
-        return value == null || value.isBlank() ? defaultValue : value.strip();
+                normalized.tenantId(),
+                normalized.subjectType(),
+                normalized.subjectId(),
+                normalized.deviceId());
     }
 }

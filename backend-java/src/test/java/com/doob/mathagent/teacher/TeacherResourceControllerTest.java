@@ -2,6 +2,7 @@ package com.doob.mathagent.teacher;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.teacher.controller.TeacherResourceController;
 import com.doob.mathagent.teacher.dto.TeacherResourceRegistrationRequest;
 import com.doob.mathagent.teacher.service.InMemoryTeacherResourceStore;
@@ -19,17 +20,17 @@ class TeacherResourceControllerTest {
     Path tempDir;
 
     @Test
-    void controllerBuildsTeacherContextFromHeaders() throws Exception {
+    void controllerBuildsTeacherContextFromBackendSubject() throws Exception {
         Path folder = tempDir.resolve("teacher-bank");
         Files.createDirectories(folder);
         Files.writeString(folder.resolve("函数.md"), "# 函数题型");
 
         TeacherResourceController controller = new TeacherResourceController(
-                new TeacherResourceService(new InMemoryTeacherResourceStore()));
+                new TeacherResourceService(new InMemoryTeacherResourceStore()),
+                request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"));
         MockHttpServletRequest request = new MockHttpServletRequest();
-        request.addHeader("X-Tenant-Id", "school-a");
-        request.addHeader("X-Subject-Type", "teacher");
-        request.addHeader("X-Subject-Id", "teacher-88");
+        request.addHeader("X-Subject-Type", "admin");
+        request.addHeader("X-Subject-Id", "teacher-spoofed");
 
         TeacherResourceDocumentResponse response = controller.register(new TeacherResourceRegistrationRequest(
                 null,

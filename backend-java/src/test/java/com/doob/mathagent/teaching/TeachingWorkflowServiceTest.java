@@ -2,6 +2,9 @@ package com.doob.mathagent.teaching;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.doob.mathagent.memory.dto.StudentMemoryRequest;
+import com.doob.mathagent.memory.service.InMemoryStudentMemoryStore;
+import com.doob.mathagent.memory.service.StudentMemoryReuseService;
 import com.doob.mathagent.resources.TextbookCatalogReader;
 import com.doob.mathagent.resources.TextbookChunkReader;
 import com.doob.mathagent.retrieval.LocalTextbookBm25SearchEngine;
@@ -60,6 +63,50 @@ class TeachingWorkflowServiceTest {
         assertThat(response.evidence().getFirst().sourceScope()).isEqualTo("PUBLIC_TEXTBOOK");
         assertThat(response.handoutLatex()).contains("\\section{学习目标}");
         assertThat(response.interactiveSuggestions()).contains("继续追问定义 D(x_0)");
+        assertThat(response.memoryReuse().reused()).isFalse();
+        assertThat(response.stageTimings()).extracting(TeachingTaskResponse.StageTiming::stage)
+                .contains("memory_reuse", "textbook_retrieval", "react_trace", "handout_generation");
+    }
+
+    @Test
+    void reusesStudentMemoryBeforeTextbookRetrievalWhenSimilarAnswerExists() throws Exception {
+        Path root = createTextbookCorpus();
+        StudentMemoryReuseService memoryReuseService = memoryReuseService();
+        memoryReuseService.remember(new StudentMemoryRequest(
+                "tenant-a",
+                "student",
+                "student-1",
+                "空间向量数量积怎么求夹角",
+                "先用 a·b=|a||b|cosθ 求 cosθ，再根据角度范围确定夹角。",
+                "空间向量数量积",
+                "private",
+                false));
+        TeachingWorkflowService service = service(root, memoryReuseService);
+        TeachingTaskRequest request = new TeachingTaskRequest(
+                "req-memory-hit",
+                "空间向量数量积求夹角的方法",
+                "空间向量数量积",
+                3);
+        TeachingRequestContext context = new TeachingRequestContext(
+                "tenant-a",
+                "student",
+                "student-1",
+                "device-1");
+
+        TeachingTaskResponse response = service.submit(request, context);
+
+        assertThat(response.memoryReuse().reused()).isTrue();
+        assertThat(response.memoryReuse().reuseScope()).isEqualTo("private");
+        assertThat(response.memoryReuse().answer()).contains("cosθ");
+        assertThat(response.evidence()).isEmpty();
+        assertThat(response.nodes())
+                .filteredOn(node -> "REUSE_RESOURCE".equals(node.code()))
+                .extracting(TeachingWorkflowNode::summary)
+                .first()
+                .asString()
+                .contains("命中学生记忆");
+        assertThat(response.stageTimings()).extracting(TeachingTaskResponse.StageTiming::stage)
+                .contains("memory_reuse", "reuse_short_circuit", "react_trace", "handout_generation");
     }
 
     @Test
@@ -101,12 +148,20 @@ class TeachingWorkflowServiceTest {
     }
 
     private TeachingWorkflowService service(Path root) {
+        return service(root, memoryReuseService());
+    }
+
+    private TeachingWorkflowService service(Path root, StudentMemoryReuseService memoryReuseService) {
         TextbookRetrievalService retrievalService = new TextbookRetrievalService(
                 new TextbookCatalogReader(),
                 new TextbookChunkReader(),
                 new LocalTextbookBm25SearchEngine(),
                 new NoopRetrievalAuditSink());
-        return new TeachingWorkflowService(root, retrievalService, new InMemoryTeachingTaskStore());
+        return new TeachingWorkflowService(root, retrievalService, new InMemoryTeachingTaskStore(), memoryReuseService);
+    }
+
+    private StudentMemoryReuseService memoryReuseService() {
+        return new StudentMemoryReuseService(new InMemoryStudentMemoryStore());
     }
 
     private Path createTextbookCorpus() throws Exception {

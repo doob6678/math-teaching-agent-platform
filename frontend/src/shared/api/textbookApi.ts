@@ -173,6 +173,34 @@ export interface RetrievalAuditDetail {
 }
 
 /**
+ * 登录请求。身份由后端用户名密码校验产生，前端不能自报 userId/role/studentId。
+ */
+export interface LoginRequest {
+  /** 后端账号名。 */
+  username: string;
+  /** 后端账号密码。 */
+  password: string;
+}
+
+/**
+ * 登录响应。tokenName/tokenValue 由 Sa-Token 生成，后续请求按后端要求携带。
+ */
+export interface LoginResponse {
+  /** 后端可信用户 ID。 */
+  userId: string;
+  /** 登录账号名。 */
+  username: string;
+  /** 后端会话角色。 */
+  role: string;
+  /** 后端会话租户。 */
+  tenantId: string;
+  /** Sa-Token token 名称。 */
+  tokenName: string;
+  /** Sa-Token token 值。 */
+  tokenValue: string;
+}
+
+/**
  * 教学任务提交请求。clientRequestId 由前端生成并持久化，用于重复提交时恢复同一任务。
  */
 export interface TeachingTaskRequest {
@@ -229,6 +257,34 @@ export interface TeachingEvidence {
 }
 
 /**
+ * 教学任务中的学生记忆复用摘要，用于展示是否复用了私有或公开历史答案。
+ */
+export interface TeachingMemoryReuse {
+  /** 是否复用了历史答案。 */
+  reused: boolean;
+  /** 命中的记忆 ID；未命中时为空。 */
+  memoryId?: string;
+  /** 复用作用域，private 表示学生私有，public 表示租户内公开复用。 */
+  reuseScope?: string;
+  /** 可复用答案文本；未命中时为空。 */
+  answer?: string;
+  /** 相似度分数，范围 0 到 1。 */
+  similarity: number;
+  /** 复用或不复用原因。 */
+  reason: string;
+}
+
+/**
+ * 教学任务阶段耗时，用于前端状态、工具调用和性能面板。
+ */
+export interface TeachingStageTiming {
+  /** 阶段编码，例如 memory_reuse、textbook_retrieval。 */
+  stage: string;
+  /** 当前阶段耗时毫秒数。 */
+  elapsedMs: number;
+}
+
+/**
  * 教学任务响应。taskId 可保存到 localStorage，用户离开页面后继续恢复结果。
  */
 export interface TeachingTaskResponse {
@@ -258,6 +314,10 @@ export interface TeachingTaskResponse {
   handoutLatex: string;
   /** 后续交互建议。 */
   interactiveSuggestions: string[];
+  /** 学生记忆复用决策。 */
+  memoryReuse?: TeachingMemoryReuse;
+  /** 后端 DAG 阶段耗时统计。 */
+  stageTimings?: TeachingStageTiming[];
   /** 失败原因。 */
   errorMessage?: string;
 }
@@ -422,31 +482,25 @@ export interface TeacherResourcePreviewFile {
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<Pick<Response, "ok" | "status" | "json" | "text">>;
 
-const LOCAL_CONSOLE_HEADERS = {
-  "X-Tenant-Id": "default",
-  "X-Subject-Type": "teacher",
-  "X-Subject-Id": "local-teacher-console",
-  "X-Device-Id": "local-browser-console",
-};
-
-const LOCAL_STUDENT_HEADERS = {
-  "X-Tenant-Id": "default",
-  "X-Subject-Type": "student",
-  "X-Subject-Id": "local-student",
-  "X-Device-Id": "local-browser-student",
-};
+const AUTH_STORAGE_KEY = "math-agent:auth-session";
+const DEVICE_ID_HEADER = { "X-Device-Id": "local-browser-console" };
 
 export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = fetch) {
   const normalizedBaseUrl = baseUrl.replace(/\/+$/, "");
 
   /**
-   * 请求后端 JSON，并携带本地教师控制台身份头用于接口分级和限流审计。
+   * 请求后端 JSON。身份只通过后端登录 token 传递，不能使用前端自报角色或学生 ID。
    */
   async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> {
+    const auth = readAuthSession();
+    const authHeader = auth ? { [auth.tokenName]: auth.tokenValue } : {};
     const response = await fetchImpl(`${normalizedBaseUrl}${path}`, {
       ...init,
-      headers: LOCAL_CONSOLE_HEADERS,
-      ...("headers" in init ? { headers: { ...LOCAL_CONSOLE_HEADERS, ...init.headers } } : {}),
+      headers: {
+        ...DEVICE_ID_HEADER,
+        ...authHeader,
+        ...init.headers,
+      },
     });
     if (!response.ok) {
       const body = await response.text();
@@ -456,6 +510,19 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
   }
 
   return {
+    /**
+     * 登录并保存后端会话 token；后续请求只携带 token，不携带 userId/role/studentId。
+     */
+    async login(request: LoginRequest): Promise<LoginResponse> {
+      const response = await requestJson<LoginResponse>("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
+      });
+      globalThis.localStorage?.setItem(AUTH_STORAGE_KEY, JSON.stringify(response));
+      return response;
+    },
+
     /**
      * 读取教材资源摘要。
      */
@@ -508,9 +575,7 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
         params.set("studentId", studentId);
       }
       const suffix = params.size > 0 ? `?${params.toString()}` : "";
-      return requestJson<StudentDashboardResponse>(`/api/students/dashboard${suffix}`, {
-        headers: LOCAL_STUDENT_HEADERS,
-      });
+      return requestJson<StudentDashboardResponse>(`/api/students/dashboard${suffix}`);
     },
 
     /**
@@ -543,4 +608,16 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
       );
     },
   };
+}
+
+/**
+ * Reads the saved Sa-Token session from localStorage.
+ */
+function readAuthSession(): LoginResponse | null {
+  try {
+    const value = globalThis.localStorage?.getItem(AUTH_STORAGE_KEY);
+    return value ? (JSON.parse(value) as LoginResponse) : null;
+  } catch {
+    return null;
+  }
 }

@@ -2,6 +2,7 @@ package com.doob.mathagent.retrieval;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.doob.mathagent.infrastructure.security.RequestSubjectResolver;
 import com.doob.mathagent.resources.TextbookCatalogReader;
 import com.doob.mathagent.resources.TextbookChunkReader;
 import com.doob.mathagent.resources.TextbookResourceProperties;
@@ -31,7 +32,10 @@ class TextbookRetrievalControllerTest {
                 new TextbookChunkReader(),
                 new LocalTextbookBm25SearchEngine(),
                 new NoopRetrievalAuditSink());
-        TextbookRetrievalController controller = new TextbookRetrievalController(service, new TextbookResourceProperties(root));
+        TextbookRetrievalController controller = new TextbookRetrievalController(
+                service,
+                new TextbookResourceProperties(root),
+                RequestSubjectResolver.localDevelopment());
 
         TextbookSearchResponse response = controller.search("分段函数", 3);
 

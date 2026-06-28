@@ -28,12 +28,13 @@ public class ApiAccessPolicy {
     public static ApiAccessPolicy defaultRules() {
         return new ApiAccessPolicy(List.of(
                 new ApiAccessRule("/api/system/health", ApiAccessLevel.PUBLIC, Set.of("*"), 120, Duration.ofMinutes(1)),
+                new ApiAccessRule("/api/auth/login", ApiAccessLevel.PUBLIC, Set.of("*"), 20, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/resources/textbooks/summary", ApiAccessLevel.PUBLIC, Set.of("*"), 120, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/students/memory", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 40, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/teacher/resources", ApiAccessLevel.ADMIN, Set.of("teacher", "admin"), 30, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/teaching/tasks", ApiAccessLevel.GUEST, Set.of("student", "teacher", "admin"), 20, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/retrieval/audit", ApiAccessLevel.ADMIN, Set.of("teacher", "admin"), 60, Duration.ofMinutes(1)),
-                new ApiAccessRule("/api/retrieval/textbooks/search", ApiAccessLevel.GUEST, Set.of("anonymous", "guest", "teacher", "admin"), 30, Duration.ofMinutes(1))));
+                new ApiAccessRule("/api/retrieval/textbooks/search", ApiAccessLevel.GUEST, Set.of("anonymous", "guest", "student", "teacher", "admin"), 30, Duration.ofMinutes(1))));
     }
 
     /**
@@ -42,7 +43,7 @@ public class ApiAccessPolicy {
     public static ApiAccessPolicy defaultRulesForTests(int limit) {
         return new ApiAccessPolicy(List.of(
                 new ApiAccessRule("/api/retrieval/audit", ApiAccessLevel.ADMIN, Set.of("teacher", "admin"), limit, Duration.ofMinutes(1)),
-                new ApiAccessRule("/api/retrieval/textbooks/search", ApiAccessLevel.GUEST, Set.of("anonymous", "guest", "teacher", "admin"), limit, Duration.ofMinutes(1))));
+                new ApiAccessRule("/api/retrieval/textbooks/search", ApiAccessLevel.GUEST, Set.of("anonymous", "guest", "student", "teacher", "admin"), limit, Duration.ofMinutes(1))));
     }
 
     /**

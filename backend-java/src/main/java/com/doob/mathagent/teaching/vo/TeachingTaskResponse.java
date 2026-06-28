@@ -22,6 +22,8 @@ import java.util.List;
  * @param evidence 使用的证据列表。
  * @param handoutLatex LaTeX 讲义草稿。
  * @param interactiveSuggestions 后续交互建议。
+ * @param memoryReuse 学生记忆复用决策，用于前端展示是否跳过重复生成。
+ * @param stageTimings 教学任务每个阶段的耗时统计，用于前端状态面板和性能排查。
  * @param errorMessage 失败原因；成功时为空。
  */
 public record TeachingTaskResponse(
@@ -38,5 +40,35 @@ public record TeachingTaskResponse(
         List<TeachingEvidence> evidence,
         String handoutLatex,
         List<String> interactiveSuggestions,
+        MemoryReuse memoryReuse,
+        List<StageTiming> stageTimings,
         String errorMessage) {
+
+    /**
+     * 学生记忆复用摘要。
+     *
+     * @param reused 是否复用了历史答案。
+     * @param memoryId 命中的记忆 ID；未命中时为空。
+     * @param reuseScope private 表示学生私有，public 表示租户内公开复用。
+     * @param answer 可复用答案文本；未命中时为空。
+     * @param similarity 相似度分数，范围 0 到 1。
+     * @param reason 复用或不复用的原因，便于审计和前端显示。
+     */
+    public record MemoryReuse(
+            boolean reused,
+            String memoryId,
+            String reuseScope,
+            String answer,
+            double similarity,
+            String reason) {
+    }
+
+    /**
+     * 教学 DAG 阶段耗时。
+     *
+     * @param stage 阶段编码，例如 memory_reuse、textbook_retrieval。
+     * @param elapsedMs 当前阶段耗时毫秒数。
+     */
+    public record StageTiming(String stage, long elapsedMs) {
+    }
 }

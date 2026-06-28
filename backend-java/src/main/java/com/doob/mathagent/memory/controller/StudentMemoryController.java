@@ -1,5 +1,7 @@
 package com.doob.mathagent.memory.controller;
 
+import com.doob.mathagent.infrastructure.security.RequestSubject;
+import com.doob.mathagent.infrastructure.security.RequestSubjectResolver;
 import com.doob.mathagent.memory.dto.StudentMemoryRequest;
 import com.doob.mathagent.memory.service.StudentMemoryReuseService;
 import com.doob.mathagent.memory.vo.StudentMemoryResponse;
@@ -15,14 +17,19 @@ import org.springframework.web.bind.annotation.RestController;
 public class StudentMemoryController {
 
     private final StudentMemoryReuseService memoryReuseService;
+    private final RequestSubjectResolver subjectResolver;
 
     /**
      * Creates a student memory controller.
      *
      * @param memoryReuseService memory reuse service
+     * @param subjectResolver backend subject resolver
      */
-    public StudentMemoryController(StudentMemoryReuseService memoryReuseService) {
+    public StudentMemoryController(
+            StudentMemoryReuseService memoryReuseService,
+            RequestSubjectResolver subjectResolver) {
         this.memoryReuseService = memoryReuseService;
+        this.subjectResolver = subjectResolver;
     }
 
     /**
@@ -34,7 +41,7 @@ public class StudentMemoryController {
      */
     @PostMapping("/api/students/memory/reuse")
     public StudentMemoryResponse reuse(@RequestBody StudentMemoryRequest request, HttpServletRequest httpRequest) {
-        return memoryReuseService.reuse(enrich(request, httpRequest));
+        return memoryReuseService.reuse(enrich(request, subjectResolver.resolve(httpRequest)));
     }
 
     /**
@@ -46,7 +53,7 @@ public class StudentMemoryController {
      */
     @PostMapping("/api/students/memory/remember")
     public StudentMemoryResponse remember(@RequestBody StudentMemoryRequest request, HttpServletRequest httpRequest) {
-        return memoryReuseService.remember(enrich(request, httpRequest));
+        return memoryReuseService.remember(enrich(request, subjectResolver.resolve(httpRequest)));
     }
 
     /**
@@ -56,31 +63,16 @@ public class StudentMemoryController {
      * @param httpRequest HTTP request
      * @return enriched request
      */
-    private static StudentMemoryRequest enrich(StudentMemoryRequest request, HttpServletRequest httpRequest) {
+    private static StudentMemoryRequest enrich(StudentMemoryRequest request, RequestSubject subject) {
+        RequestSubject normalized = subject.normalize();
         return new StudentMemoryRequest(
-                headerOrDefault(httpRequest, "X-Tenant-Id", request.tenantId()),
-                headerOrDefault(httpRequest, "X-Subject-Type", request.viewerRole()),
-                headerOrDefault(httpRequest, "X-Subject-Id", request.studentId()),
+                normalized.tenantId(),
+                normalized.subjectType(),
+                normalized.subjectId(),
                 request.questionText(),
                 request.answerText(),
                 request.knowledgePointName(),
                 request.memoryScope(),
                 request.bypassReuse());
-    }
-
-    /**
-     * Reads a header and falls back when blank.
-     *
-     * @param request HTTP request
-     * @param name header name
-     * @param defaultValue fallback value
-     * @return header value or fallback
-     */
-    private static String headerOrDefault(HttpServletRequest request, String name, String defaultValue) {
-        if (request == null) {
-            return defaultValue;
-        }
-        String value = request.getHeader(name);
-        return value == null || value.isBlank() ? defaultValue : value.strip();
     }
 }

@@ -2,6 +2,9 @@ package com.doob.mathagent.teaching;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.doob.mathagent.infrastructure.security.RequestSubjectResolver;
+import com.doob.mathagent.memory.service.InMemoryStudentMemoryStore;
+import com.doob.mathagent.memory.service.StudentMemoryReuseService;
 import com.doob.mathagent.resources.TextbookCatalogReader;
 import com.doob.mathagent.resources.TextbookChunkReader;
 import com.doob.mathagent.retrieval.LocalTextbookBm25SearchEngine;
@@ -33,8 +36,9 @@ class TeachingTaskControllerTest {
         TeachingWorkflowService service = new TeachingWorkflowService(
                 root,
                 retrievalService,
-                new InMemoryTeachingTaskStore());
-        TeachingTaskController controller = new TeachingTaskController(service);
+                new InMemoryTeachingTaskStore(),
+                new StudentMemoryReuseService(new InMemoryStudentMemoryStore()));
+        TeachingTaskController controller = new TeachingTaskController(service, RequestSubjectResolver.localDevelopment());
         TeachingTaskRequest request = new TeachingTaskRequest(
                 "client-001",
                 "我想学 D(-1) 怎么求",

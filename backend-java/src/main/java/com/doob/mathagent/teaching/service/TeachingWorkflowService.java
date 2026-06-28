@@ -1,5 +1,8 @@
 package com.doob.mathagent.teaching.service;
 
+import com.doob.mathagent.memory.dto.StudentMemoryRequest;
+import com.doob.mathagent.memory.service.StudentMemoryReuseService;
+import com.doob.mathagent.memory.vo.StudentMemoryResponse;
 import com.doob.mathagent.retrieval.RetrievalRequestContext;
 import com.doob.mathagent.retrieval.TextbookRetrievalService;
 import com.doob.mathagent.retrieval.TextbookSearchHit;
@@ -13,6 +16,7 @@ import com.doob.mathagent.teaching.TeachingWorkflowNode;
 import com.doob.mathagent.teaching.dto.TeachingTaskRequest;
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -27,6 +31,7 @@ public class TeachingWorkflowService {
     private final Path processedBooksRoot;
     private final TextbookRetrievalService retrievalService;
     private final TeachingTaskStore taskStore;
+    private final StudentMemoryReuseService memoryReuseService;
 
     /**
      * 创建教学编排服务。
@@ -34,14 +39,17 @@ public class TeachingWorkflowService {
      * @param processedBooksRoot 教材 processed_books 根目录。
      * @param retrievalService 教材 BM25-first 检索服务。
      * @param taskStore 任务存储，用于恢复和隔离。
+     * @param memoryReuseService 学生长短期记忆复用服务。
      */
     public TeachingWorkflowService(
             Path processedBooksRoot,
             TextbookRetrievalService retrievalService,
-            TeachingTaskStore taskStore) {
+            TeachingTaskStore taskStore,
+            StudentMemoryReuseService memoryReuseService) {
         this.processedBooksRoot = processedBooksRoot.toAbsolutePath().normalize();
         this.retrievalService = retrievalService;
         this.taskStore = taskStore;
+        this.memoryReuseService = memoryReuseService;
     }
 
     /**
@@ -70,22 +78,35 @@ public class TeachingWorkflowService {
      * 执行固定 DAG：学习目标识别、资源复用、公开教材检索、私有飞书占位、练习题占位、ReAct、LaTeX 讲义、交互建议。
      */
     private TeachingTaskResponse execute(TeachingTaskRequest request, TeachingRequestContext context) {
-        TextbookSearchResponse retrieval = retrievalService.search(
-                processedBooksRoot,
-                new TextbookSearchRequest(retrievalQuery(request), request.evidenceLimit()),
-                new RetrievalRequestContext(
-                        context.tenantId(),
-                        context.subjectType(),
-                        context.subjectId(),
-                        null,
-                        context.deviceId(),
-                        "teaching-workflow",
-                        "/api/teaching/tasks"));
-        List<TeachingEvidence> evidence = retrieval.hits().stream()
-                .map(this::toEvidence)
-                .toList();
-        List<TeachingWorkflowNode> nodes = buildNodes(request, evidence);
-        List<TeachingReactStep> reactTrace = buildReactTrace(request, evidence);
+        StageTimer timer = new StageTimer();
+        StudentMemoryResponse memoryResponse = memoryReuseService.reuse(memoryRequest(request, context));
+        timer.mark("memory_reuse");
+        List<TeachingEvidence> evidence;
+        if (memoryResponse.reused()) {
+            evidence = List.of();
+            timer.mark("reuse_short_circuit");
+        } else {
+            TextbookSearchResponse retrieval = retrievalService.search(
+                    processedBooksRoot,
+                    new TextbookSearchRequest(retrievalQuery(request), request.evidenceLimit()),
+                    new RetrievalRequestContext(
+                            context.tenantId(),
+                            context.subjectType(),
+                            context.subjectId(),
+                            null,
+                            context.deviceId(),
+                            "teaching-workflow",
+                            "/api/teaching/tasks"));
+            evidence = retrieval.hits().stream()
+                    .map(this::toEvidence)
+                    .toList();
+            timer.mark("textbook_retrieval");
+        }
+        List<TeachingWorkflowNode> nodes = buildNodes(request, evidence, memoryResponse);
+        List<TeachingReactStep> reactTrace = buildReactTrace(request, evidence, memoryResponse);
+        timer.mark("react_trace");
+        String handoutLatex = buildHandoutLatex(request, evidence, memoryResponse);
+        timer.mark("handout_generation");
         return new TeachingTaskResponse(
                 UUID.randomUUID().toString(),
                 request.clientRequestId(),
@@ -98,9 +119,39 @@ public class TeachingWorkflowService {
                 nodes,
                 reactTrace,
                 evidence,
-                buildHandoutLatex(request, evidence),
+                handoutLatex,
                 List.of("继续追问定义 D(x_0)", "生成同类练习题", "把讲义导出为 PDF"),
+                toMemoryReuse(memoryResponse),
+                timer.timings(),
                 null);
+    }
+
+    /**
+     * 构造学生记忆查询请求；教学任务阶段先使用学习目标作为知识点粗标签，后续会接入知识点识别器。
+     */
+    private static StudentMemoryRequest memoryRequest(TeachingTaskRequest request, TeachingRequestContext context) {
+        return new StudentMemoryRequest(
+                context.tenantId(),
+                context.subjectType(),
+                context.subjectId(),
+                request.questionText(),
+                null,
+                request.learningGoal(),
+                "private",
+                false);
+    }
+
+    /**
+     * 把 memory 模块响应转换为 teaching 模块 VO，避免跨模块 VO 直接暴露给前端契约。
+     */
+    private static TeachingTaskResponse.MemoryReuse toMemoryReuse(StudentMemoryResponse response) {
+        return new TeachingTaskResponse.MemoryReuse(
+                response.reused(),
+                response.memoryId(),
+                response.reuseScope(),
+                response.answer(),
+                response.similarity(),
+                response.reason());
     }
 
     /**
@@ -125,10 +176,17 @@ public class TeachingWorkflowService {
     /**
      * 构造固定 DAG 节点输出；飞书、练习题和互动讲义先作为可观测占位节点。
      */
-    private static List<TeachingWorkflowNode> buildNodes(TeachingTaskRequest request, List<TeachingEvidence> evidence) {
+    private static List<TeachingWorkflowNode> buildNodes(
+            TeachingTaskRequest request,
+            List<TeachingEvidence> evidence,
+            StudentMemoryResponse memoryResponse) {
+        String reuseSummary = memoryResponse.reused()
+                ? "命中学生记忆 %s，作用域 %s，相似度 %.4f，跳过重复教材召回。"
+                        .formatted(memoryResponse.memoryId(), memoryResponse.reuseScope(), memoryResponse.similarity())
+                : "未命中可复用学生记忆，原因：" + memoryResponse.reason() + "。";
         return List.of(
                 node("LEARNING_GOAL", "学习目标识别", "识别用户想学：" + request.learningGoal()),
-                node("REUSE_RESOURCE", "历史资源复用", "按租户和用户隔离检查历史任务，当前命中同 clientRequestId 时复用。"),
+                node("REUSE_RESOURCE", "历史资源复用", reuseSummary),
                 node("PUBLIC_TEXTBOOK_RETRIEVAL", "公开教材检索", "命中公开教材证据 " + evidence.size() + " 条。"),
                 node("PRIVATE_FEISHU_PLACEHOLDER", "私有飞书文档", "预留 tenantId + subjectId + docScope 隔离的飞书资料检索节点。"),
                 node("PRACTICE_DISCOVERY_PLACEHOLDER", "练习题发现", "预留同知识点练习题和错题库召回节点。"),
@@ -147,13 +205,24 @@ public class TeachingWorkflowService {
     /**
      * 构造最小 ReAct 轨迹，后续接入大模型后保留同样结构用于审计和回放。
      */
-    private static List<TeachingReactStep> buildReactTrace(TeachingTaskRequest request, List<TeachingEvidence> evidence) {
-        String observation = evidence.isEmpty()
+    private static List<TeachingReactStep> buildReactTrace(
+            TeachingTaskRequest request,
+            List<TeachingEvidence> evidence,
+            StudentMemoryResponse memoryResponse) {
+        String observation = memoryResponse.reused()
+                ? "观察到可复用学生记忆：" + memoryResponse.memoryId()
+                : evidence.isEmpty()
                 ? "未命中教材证据，需要降级到教师提示词和基础知识。"
                 : "观察到教材证据：" + evidence.getFirst().sourceTitle();
+        String action = memoryResponse.reused()
+                ? "调用 student_memory_reuse 命中历史同质问题答案。"
+                : "调用 search_textbook 检索教材定义、例题和相关章节。";
         return List.of(
                 new TeachingReactStep("THOUGHT", "先明确用户想学什么，再找可复用资源和公开教材证据。", null),
-                new TeachingReactStep("ACTION", "调用 search_textbook 检索教材定义、例题和相关章节。", "search_textbook"),
+                new TeachingReactStep(
+                        "ACTION",
+                        action,
+                        memoryResponse.reused() ? "student_memory_reuse" : "search_textbook"),
                 new TeachingReactStep("OBSERVATION", observation, null),
                 new TeachingReactStep("ANSWER", "整理为分步讲解和 LaTeX 讲义草稿。", null));
     }
@@ -161,8 +230,13 @@ public class TeachingWorkflowService {
     /**
      * 生成 LaTeX 讲义草稿；当前阶段输出结构，后续会接入更强的排版和 PDF 渲染。
      */
-    private static String buildHandoutLatex(TeachingTaskRequest request, List<TeachingEvidence> evidence) {
-        String evidenceSnippet = evidence.isEmpty() ? "暂无教材证据。" : escapeLatex(evidence.getFirst().snippet());
+    private static String buildHandoutLatex(
+            TeachingTaskRequest request,
+            List<TeachingEvidence> evidence,
+            StudentMemoryResponse memoryResponse) {
+        String evidenceSnippet = memoryResponse.reused()
+                ? "复用学生记忆：" + escapeLatex(memoryResponse.answer())
+                : evidence.isEmpty() ? "暂无教材证据。" : escapeLatex(evidence.getFirst().snippet());
         return """
                 \\section{学习目标}
                 %% 用户想学什么
@@ -193,5 +267,30 @@ public class TeachingWorkflowService {
                 .replace("_", "\\_")
                 .replace("{", "\\{")
                 .replace("}", "\\}");
+    }
+
+    /**
+     * 教学任务阶段计时器；只记录阶段耗时，不保存业务内容，避免日志泄露学生题目。
+     */
+    private static final class StageTimer {
+
+        private final List<TeachingTaskResponse.StageTiming> timings = new ArrayList<>();
+        private long lastNanos = System.nanoTime();
+
+        /**
+         * 记录一个阶段相对上个检查点的耗时。
+         */
+        void mark(String stage) {
+            long now = System.nanoTime();
+            timings.add(new TeachingTaskResponse.StageTiming(stage, Math.max(0L, (now - lastNanos) / 1_000_000L)));
+            lastNanos = now;
+        }
+
+        /**
+         * 返回不可变耗时列表，保证任务保存后不会被后续流程修改。
+         */
+        List<TeachingTaskResponse.StageTiming> timings() {
+            return List.copyOf(timings);
+        }
     }
 }
