@@ -20,6 +20,7 @@ describe("textbookApi", () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
+        queryId: "audit-query-1",
         query: "分段函数",
         limit: 3,
         retrievalStrategy: "local_bm25_first",
@@ -34,6 +35,7 @@ describe("textbookApi", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "http://127.0.0.1:8080/api/retrieval/textbooks/search?query=%E5%88%86%E6%AE%B5%E5%87%BD%E6%95%B0&limit=3",
     );
+    expect(response.queryId).toBe("audit-query-1");
     expect(response.hits[0].pageQualityLabel).toBe("content_page");
   });
 

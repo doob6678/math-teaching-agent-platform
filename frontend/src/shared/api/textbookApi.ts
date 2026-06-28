@@ -71,9 +71,11 @@ export interface TextbookSearchHit {
 }
 
 /**
- * 教材检索响应。query/limit 会原样回显，便于页面确认实际请求。
+ * 教材检索响应。query/limit 会原样回显，queryId 用于和后端审计日志对齐。
  */
 export interface TextbookSearchResponse {
+  /** 本次检索审计 ID，对应后端 retrieval_query_log.query_id，可用于排查和追踪。 */
+  queryId: string;
   /** 实际检索 query。 */
   query: string;
   /** 后端采用的结果条数上限。 */

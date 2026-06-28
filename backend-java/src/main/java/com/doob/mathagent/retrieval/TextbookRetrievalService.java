@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import org.springframework.stereotype.Service;
 
@@ -19,27 +20,43 @@ public class TextbookRetrievalService {
     private final TextbookCatalogReader catalogReader;
     private final TextbookChunkReader chunkReader;
     private final LocalTextbookBm25SearchEngine searchEngine;
+    private final RetrievalAuditSink auditSink;
     private volatile CachedTextbookCorpus cachedCorpus;
 
     public TextbookRetrievalService(
             TextbookCatalogReader catalogReader,
             TextbookChunkReader chunkReader,
-            LocalTextbookBm25SearchEngine searchEngine) {
+            LocalTextbookBm25SearchEngine searchEngine,
+            RetrievalAuditSink auditSink) {
         this.catalogReader = catalogReader;
         this.chunkReader = chunkReader;
         this.searchEngine = searchEngine;
+        this.auditSink = auditSink;
     }
 
     public TextbookSearchResponse search(Path processedBooksRoot, TextbookSearchRequest request) {
+        return search(processedBooksRoot, request, RetrievalRequestContext.defaultTextbookSearch());
+    }
+
+    public TextbookSearchResponse search(
+            Path processedBooksRoot,
+            TextbookSearchRequest request,
+            RetrievalRequestContext requestContext) {
+        String queryId = UUID.randomUUID().toString();
+        long startedAtNanos = System.nanoTime();
         Path normalizedRoot = processedBooksRoot.toAbsolutePath().normalize();
         List<TextbookChunk> chunks = loadCorpus(normalizedRoot).chunks();
         List<TextbookSearchHit> hits = searchEngine.search(request.query(), chunks, request.limit());
-        return new TextbookSearchResponse(
+        int elapsedMs = elapsedMs(startedAtNanos);
+        TextbookSearchResponse response = new TextbookSearchResponse(
+                queryId,
                 request.query(),
                 request.limit(),
                 "local_bm25_first",
                 hits.size(),
                 hits);
+        auditSink.record(RetrievalAuditEvent.from(queryId, request, response, elapsedMs, requestContext));
+        return response;
     }
 
     private CachedTextbookCorpus loadCorpus(Path processedBooksRoot) {
@@ -95,6 +112,11 @@ public class TextbookRetrievalService {
             return textChunks;
         }
         throw new IllegalStateException("Missing textbook chunks for book " + book.docId() + ": " + bookRoot);
+    }
+
+    private static int elapsedMs(long startedAtNanos) {
+        long elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAtNanos);
+        return elapsed > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) elapsed;
     }
 
     private record SourceFileSignature(Path path, long size, long lastModifiedNanos) {

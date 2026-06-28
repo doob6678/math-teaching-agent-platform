@@ -221,6 +221,26 @@ h2 {
   margin-top: 16px;
 }
 
+.audit-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 14px;
+  color: #475569;
+  font-size: 12px;
+}
+
+.audit-row strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  padding: 4px 7px;
+  border-radius: 5px;
+  background: #f1f5f9;
+  color: #1e293b;
+  font-weight: 700;
+}
+
 .evidence-card {
   display: grid;
   grid-template-columns: 38px minmax(0, 1fr);

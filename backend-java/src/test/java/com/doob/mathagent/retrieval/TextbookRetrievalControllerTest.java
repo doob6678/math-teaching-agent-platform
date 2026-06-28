@@ -29,7 +29,8 @@ class TextbookRetrievalControllerTest {
         TextbookRetrievalService service = new TextbookRetrievalService(
                 new TextbookCatalogReader(),
                 new TextbookChunkReader(),
-                new LocalTextbookBm25SearchEngine());
+                new LocalTextbookBm25SearchEngine(),
+                new NoopRetrievalAuditSink());
         TextbookRetrievalController controller = new TextbookRetrievalController(service, new TextbookResourceProperties(root));
 
         TextbookSearchResponse response = controller.search("分段函数", 3);

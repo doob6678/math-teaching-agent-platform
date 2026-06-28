@@ -121,11 +121,17 @@ export function App() {
           ) : null}
 
           {searchResult ? (
-            <div className="hit-list">
-              {searchResult.hits.map((hit, index) => (
-                <EvidenceCard key={hit.chunkId} hit={hit} rank={index + 1} />
-              ))}
-            </div>
+            <>
+              <div className="audit-row">
+                <span>审计追踪号</span>
+                <strong>{searchResult.queryId}</strong>
+              </div>
+              <div className="hit-list">
+                {searchResult.hits.map((hit, index) => (
+                  <EvidenceCard key={hit.chunkId} hit={hit} rank={index + 1} />
+                ))}
+              </div>
+            </>
           ) : null}
         </section>
       </section>
