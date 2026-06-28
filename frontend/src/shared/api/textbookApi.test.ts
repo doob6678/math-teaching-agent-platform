@@ -49,4 +49,28 @@ describe("textbookApi", () => {
 
     await expect(client.getSummary()).rejects.toThrow("Backend request failed: 500 backend failed");
   });
+
+  it("loads audit detail by query id", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        queryId: "audit-query-1",
+        tenantId: "default",
+        queryText: "分段函数",
+        retrievalStrategy: "local_bm25_first",
+        requestedLimit: 5,
+        hitCount: 1,
+        elapsedMs: 12,
+        requestContext: { endpoint: "/api/retrieval/textbooks/search" },
+        hits: [{ rankNo: 1, chunkId: "chunk-1", score: 10.5 }],
+      }),
+    });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const audit = await client.getAudit("audit-query-1");
+
+    expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:8080/api/retrieval/audit/audit-query-1");
+    expect(audit.queryText).toBe("分段函数");
+    expect(audit.hits[0].rankNo).toBe(1);
+  });
 });

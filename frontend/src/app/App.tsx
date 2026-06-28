@@ -1,6 +1,7 @@
 import { AlertCircle, BookOpen, Database, Loader2, Search, ShieldCheck } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
+  RetrievalAuditDetail,
   TextbookSearchHit,
   TextbookSearchResponse,
   TextbookSummary,
@@ -19,9 +20,12 @@ export function App() {
   const [query, setQuery] = useState("分段函数");
   const [limit, setLimit] = useState(5);
   const [searchResult, setSearchResult] = useState<TextbookSearchResponse | null>(null);
+  const [auditDetail, setAuditDetail] = useState<RetrievalAuditDetail | null>(null);
   const [searchError, setSearchError] = useState("");
+  const [auditError, setAuditError] = useState("");
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [searching, setSearching] = useState(false);
+  const [loadingAudit, setLoadingAudit] = useState(false);
 
   useEffect(() => {
     setLoadingSummary(true);
@@ -40,9 +44,19 @@ export function App() {
     }
     setSearching(true);
     setSearchError("");
+    setAuditError("");
+    setAuditDetail(null);
     api
       .search(query.trim(), limit)
-      .then(setSearchResult)
+      .then((result) => {
+        setSearchResult(result);
+        setLoadingAudit(true);
+        return api
+          .getAudit(result.queryId)
+          .then(setAuditDetail)
+          .catch((error: Error) => setAuditError(error.message))
+          .finally(() => setLoadingAudit(false));
+      })
       .catch((error: Error) => setSearchError(error.message))
       .finally(() => setSearching(false));
   }
@@ -126,6 +140,13 @@ export function App() {
                 <span>审计追踪号</span>
                 <strong>{searchResult.queryId}</strong>
               </div>
+              {loadingAudit ? (
+                <StatusLine icon={<Loader2 className="spin" size={16} />} text="读取审计详情中" />
+              ) : auditError ? (
+                <StatusLine icon={<AlertCircle size={16} />} text={auditError} tone="danger" />
+              ) : auditDetail ? (
+                <AuditDetailPanel audit={auditDetail} />
+              ) : null}
               <div className="hit-list">
                 {searchResult.hits.map((hit, index) => (
                   <EvidenceCard key={hit.chunkId} hit={hit} rank={index + 1} />
@@ -171,6 +192,38 @@ function StatusLine({
       {icon}
       <span>{text}</span>
     </div>
+  );
+}
+
+function AuditDetailPanel({ audit }: { audit: RetrievalAuditDetail }) {
+  const firstHit = audit.hits[0];
+  return (
+    <section className="audit-detail">
+      <div className="audit-detail-grid">
+        <Metric label="耗时 ms" value={audit.elapsedMs} />
+        <Metric label="命中" value={audit.hitCount} />
+        <Metric label="Top K" value={audit.requestedLimit} />
+      </div>
+      <div className="audit-detail-row">
+        <span>Endpoint</span>
+        <strong>{audit.requestContext?.endpoint || "未记录"}</strong>
+      </div>
+      <div className="audit-detail-row">
+        <span>主体</span>
+        <strong>
+          {audit.subjectType || "anonymous"}
+          {audit.subjectId ? ` / ${audit.subjectId}` : ""}
+        </strong>
+      </div>
+      {firstHit ? (
+        <div className="audit-detail-row">
+          <span>Top hit</span>
+          <strong>
+            #{firstHit.rankNo} {firstHit.chunkId} / {firstHit.pageQualityLabel}
+          </strong>
+        </div>
+      ) : null}
+    </section>
   );
 }
 

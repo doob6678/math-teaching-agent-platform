@@ -88,6 +88,90 @@ export interface TextbookSearchResponse {
   hits: TextbookSearchHit[];
 }
 
+/**
+ * 检索请求上下文审计字段。字段来自后端 `RetrievalRequestContext`，用于排查调用来源。
+ */
+export interface RetrievalRequestContextAudit {
+  /** 租户标识；当前单租户阶段通常为 default。 */
+  tenantId?: string;
+  /** 主体类型，如 teacher、student、guest、admin、api_key。 */
+  subjectType?: string;
+  /** 主体 ID；未接入登录态时可能为空。 */
+  subjectId?: string;
+  /** 客户端 IP，用于风控和异常排查。 */
+  ip?: string;
+  /** 设备 ID，用于识别同设备异常检索。 */
+  deviceId?: string;
+  /** 浏览器或调用方 User-Agent。 */
+  userAgent?: string;
+  /** 实际触发检索的后端 endpoint。 */
+  endpoint?: string;
+}
+
+/**
+ * 单条检索命中审计详情。字段来自后端 `RetrievalAuditHit`。
+ */
+export interface RetrievalAuditHit {
+  /** 当前查询内的排序名次，从 1 开始。 */
+  rankNo: number;
+  /** 命中的教材 chunk 唯一 ID。 */
+  chunkId: string;
+  /** 教材文档 ID。 */
+  docId: string;
+  /** 教材显示名称。 */
+  bookName: string;
+  /** PDF 页码。 */
+  pageNo: number;
+  /** 教材印刷页码。 */
+  printedPageNo: string;
+  /** 命中分数。 */
+  score: number;
+  /** 产生该命中的具体召回策略。 */
+  retrievalStrategy: string;
+  /** 页面质量标签。 */
+  pageQualityLabel: string;
+  /** 页图相对路径。 */
+  sourcePageImage: string;
+  /** 教材册别。 */
+  volume: string;
+  /** 章节路径。 */
+  chapterPath: string[];
+  /** 命中小节标题。 */
+  sectionTitle: string;
+  /** 审计中保留的正文片段。 */
+  textSnippet: string;
+  /** 审计中保留的公式文本。 */
+  formulaText: string;
+}
+
+/**
+ * 检索审计详情响应。用于按 queryId 查看一次检索的查询、上下文和命中证据。
+ */
+export interface RetrievalAuditDetail {
+  /** 审计追踪号，对应后端 queryId。 */
+  queryId: string;
+  /** 租户标识。 */
+  tenantId: string;
+  /** 主体类型，未登录时可能为空。 */
+  subjectType?: string;
+  /** 主体 ID，未登录时可能为空。 */
+  subjectId?: string;
+  /** 原始检索词。 */
+  queryText: string;
+  /** 总检索策略。 */
+  retrievalStrategy: string;
+  /** 请求的 Top K。 */
+  requestedLimit: number;
+  /** 实际命中数量。 */
+  hitCount: number;
+  /** 后端检索耗时毫秒。 */
+  elapsedMs: number;
+  /** 请求上下文，包含 endpoint、IP、设备和 UA 等线索。 */
+  requestContext: RetrievalRequestContextAudit;
+  /** 按 rankNo 排序的命中审计列表。 */
+  hits: RetrievalAuditHit[];
+}
+
 type FetchLike = (input: string) => Promise<Pick<Response, "ok" | "status" | "json" | "text">>;
 
 export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = fetch) {
@@ -113,6 +197,10 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
         limit: String(limit),
       });
       return requestJson<TextbookSearchResponse>(`/api/retrieval/textbooks/search?${params.toString()}`);
+    },
+
+    getAudit(queryId: string): Promise<RetrievalAuditDetail> {
+      return requestJson<RetrievalAuditDetail>(`/api/retrieval/audit/${encodeURIComponent(queryId)}`);
     },
   };
 }

@@ -241,6 +241,37 @@ h2 {
   font-weight: 700;
 }
 
+.audit-detail {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px solid #dce5ef;
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
+.audit-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.audit-detail-row {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 8px;
+  color: #475569;
+  font-size: 12px;
+}
+
+.audit-detail-row strong {
+  min-width: 0;
+  color: #1e293b;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
 .evidence-card {
   display: grid;
   grid-template-columns: 38px minmax(0, 1fr);
