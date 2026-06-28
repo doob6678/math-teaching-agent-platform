@@ -421,6 +421,40 @@ export interface TeachingTaskResponse {
 }
 
 /**
+ * Request for creating a temporary ZIP of teaching handouts.
+ */
+export interface TeachingHandoutBatchExportRequest {
+  /** Selected task ids; backend reloads each task through session ownership checks. */
+  taskIds: string[];
+  /** Optional folder ids used for audit and future backend folder expansion. */
+  folderIds?: string[];
+  /** Optional folder paths used as ZIP entry prefixes. */
+  folderPaths?: string[];
+}
+
+/**
+ * Temporary ZIP metadata returned by the backend.
+ */
+export interface TeachingHandoutBatchExportResponse {
+  /** Temporary batch id used by the protected download endpoint. */
+  batchId: string;
+  /** Export status; current baseline returns COMPLETED synchronously. */
+  status: string;
+  /** Number of requested task ids. */
+  requestedCount: number;
+  /** Number of owned tasks exported into the ZIP. */
+  exportedCount: number;
+  /** Backend-owned task ids included in the ZIP. */
+  taskIds: string[];
+  /** Folder ids captured for audit. */
+  folderIds: string[];
+  /** Folder paths used inside the ZIP. */
+  folderPaths: string[];
+  /** Backend expiration timestamp for the temporary ZIP. */
+  expiresAt: string;
+}
+
+/**
  * 学生学习画像响应。字段与后端 `StudentDashboardResponse` 对齐，用于学生端进度图谱、薄弱点和历史记录展示。
  */
 export interface StudentDashboardResponse {
@@ -816,6 +850,26 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     },
 
     /**
+     * Loads LaTeX handout source for inline frontend preview with a separate capability audit action.
+     */
+    async previewTeachingTaskLatex(taskId: string): Promise<string> {
+      const path = `/api/teaching/tasks/${encodeURIComponent(taskId)}/handout/latex/preview`;
+      const capability = await applyCapability(
+        "teaching-handout:preview-latex",
+        path,
+        "",
+        `teaching-handout-preview-latex:${taskId}`,
+      );
+      return requestText(path, {
+        method: "GET",
+        headers: {
+          "X-Capability-Token": capability.token,
+          "X-Request-Hash": capability.requestHash,
+        },
+      });
+    },
+
+    /**
      * Downloads the PDF handout for a teaching task after applying a one-time capability token.
      */
     async exportTeachingTaskPdf(taskId: string): Promise<Uint8Array> {
@@ -825,6 +879,57 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
         path,
         "",
         `teaching-handout-export-pdf:${taskId}`,
+        2,
+      );
+      return requestBytes(path, {
+        method: "GET",
+        headers: {
+          "X-Capability-Token": capability.token,
+          "X-Request-Hash": capability.requestHash,
+        },
+      });
+    },
+
+    /**
+     * Creates a short-lived backend ZIP package for selected handouts and folder grouping.
+     */
+    async createTeachingHandoutBatchZip(
+      request: TeachingHandoutBatchExportRequest,
+    ): Promise<TeachingHandoutBatchExportResponse> {
+      const body = JSON.stringify(request);
+      const path = "/api/teaching/handouts/batch/zip";
+      const idempotencyKey = `teaching-handout-batch-export-zip:${[
+        ...(request.folderIds ?? []),
+        request.taskIds.join(","),
+      ].join(":")}`;
+      const capability = await applyCapability(
+        "teaching-handout:batch-export-zip",
+        path,
+        body,
+        idempotencyKey,
+        Math.max(1, request.taskIds.length),
+      );
+      return requestJson<TeachingHandoutBatchExportResponse>(path, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Capability-Token": capability.token,
+          "X-Request-Hash": capability.requestHash,
+        },
+        body,
+      });
+    },
+
+    /**
+     * Downloads a temporary handout ZIP after applying a download-specific capability token.
+     */
+    async downloadTeachingHandoutBatchZip(batchId: string): Promise<Uint8Array> {
+      const path = `/api/teaching/handouts/batch/zip/${encodeURIComponent(batchId)}/download`;
+      const capability = await applyCapability(
+        "teaching-handout:batch-download-zip",
+        path,
+        "",
+        `teaching-handout-batch-download-zip:${batchId}`,
         2,
       );
       return requestBytes(path, {

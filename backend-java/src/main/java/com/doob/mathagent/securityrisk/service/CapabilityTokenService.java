@@ -21,7 +21,11 @@ public class CapabilityTokenService {
     private static final String TEACHING_SUBMIT_ACTION = "teaching:submit";
     private static final String TEACHING_TASKS_PATH = "/api/teaching/tasks";
     private static final String TEACHING_HANDOUT_LATEX_EXPORT_ACTION = "teaching-handout:export-latex";
+    private static final String TEACHING_HANDOUT_LATEX_PREVIEW_ACTION = "teaching-handout:preview-latex";
     private static final String TEACHING_HANDOUT_PDF_EXPORT_ACTION = "teaching-handout:export-pdf";
+    private static final String TEACHING_HANDOUT_BATCH_ZIP_EXPORT_ACTION = "teaching-handout:batch-export-zip";
+    private static final String TEACHING_HANDOUT_BATCH_ZIP_DOWNLOAD_ACTION = "teaching-handout:batch-download-zip";
+    private static final String TEACHING_BATCH_ZIP_PATH = "/api/teaching/handouts/batch/zip";
     private static final String TEACHER_RESOURCE_REGISTER_ACTION = "teacher-resource:register";
     private static final String TEACHER_RESOURCE_ARCHIVE_ACTION = "teacher-resource:archive";
     private static final String TEACHER_RESOURCES_PATH = "/api/teacher/resources";
@@ -199,17 +203,30 @@ public class CapabilityTokenService {
         if (TEACHING_HANDOUT_LATEX_EXPORT_ACTION.equals(action)
                 && path.startsWith(TEACHING_TASKS_PATH + "/")
                 && path.endsWith("/handout/latex")) {
-            if (!CAPABILITY_ALLOWED_ROLES.contains(subject.subjectType()) || subject.subjectId() == null) {
-                throw new IllegalArgumentException("Capability subject not allowed");
-            }
+            validateTeachingSubject(subject);
+            return;
+        }
+        if (TEACHING_HANDOUT_LATEX_PREVIEW_ACTION.equals(action)
+                && path.startsWith(TEACHING_TASKS_PATH + "/")
+                && path.endsWith("/handout/latex/preview")) {
+            validateTeachingSubject(subject);
             return;
         }
         if (TEACHING_HANDOUT_PDF_EXPORT_ACTION.equals(action)
                 && path.startsWith(TEACHING_TASKS_PATH + "/")
                 && path.endsWith("/handout/pdf")) {
-            if (!CAPABILITY_ALLOWED_ROLES.contains(subject.subjectType()) || subject.subjectId() == null) {
-                throw new IllegalArgumentException("Capability subject not allowed");
-            }
+            validateTeachingSubject(subject);
+            return;
+        }
+        if (TEACHING_HANDOUT_BATCH_ZIP_EXPORT_ACTION.equals(action)
+                && TEACHING_BATCH_ZIP_PATH.equals(path)) {
+            validateTeachingSubject(subject);
+            return;
+        }
+        if (TEACHING_HANDOUT_BATCH_ZIP_DOWNLOAD_ACTION.equals(action)
+                && path.startsWith(TEACHING_BATCH_ZIP_PATH + "/")
+                && path.endsWith("/download")) {
+            validateTeachingSubject(subject);
             return;
         }
         if (TEACHER_RESOURCE_REGISTER_ACTION.equals(action) && TEACHER_RESOURCES_PATH.equals(path)) {
@@ -232,6 +249,15 @@ public class CapabilityTokenService {
      */
     private static void validateTeacherResourceSubject(RequestSubject subject) {
         if (!TEACHER_RESOURCE_ALLOWED_ROLES.contains(subject.subjectType()) || subject.subjectId() == null) {
+            throw new IllegalArgumentException("Capability subject not allowed");
+        }
+    }
+
+    /**
+     * Validates subject for owned teaching task reads and exports.
+     */
+    private static void validateTeachingSubject(RequestSubject subject) {
+        if (!CAPABILITY_ALLOWED_ROLES.contains(subject.subjectType()) || subject.subjectId() == null) {
             throw new IllegalArgumentException("Capability subject not allowed");
         }
     }

@@ -210,6 +210,58 @@ class CapabilityTokenServiceTest {
     }
 
     @Test
+    void issuesTeachingHandoutLatexPreviewCapabilityTokens() {
+        CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
+        RequestSubject student = new RequestSubject("school-a", "student", "student-001", "device-1");
+
+        CapabilityTokenResponse preview = service.apply(new CapabilityTokenApplyRequest(
+                "teaching-handout:preview-latex",
+                "/api/teaching/tasks/task-1/handout/latex/preview",
+                "hash-empty-body",
+                "teaching-handout-preview-latex:task-1",
+                1.0), student);
+
+        assertThat(service.consume(
+                preview.token(),
+                "teaching-handout:preview-latex",
+                "/api/teaching/tasks/task-1/handout/latex/preview",
+                "hash-empty-body",
+                student).allowed()).isTrue();
+    }
+
+    @Test
+    void issuesTeachingHandoutBatchZipCapabilityTokens() {
+        CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
+        RequestSubject teacher = new RequestSubject("school-a", "teacher", "teacher-001", "device-1");
+
+        CapabilityTokenResponse export = service.apply(new CapabilityTokenApplyRequest(
+                "teaching-handout:batch-export-zip",
+                "/api/teaching/handouts/batch/zip",
+                "hash-batch-body",
+                "teaching-handout-batch-export-zip:folder-a",
+                5.0), teacher);
+        CapabilityTokenResponse download = service.apply(new CapabilityTokenApplyRequest(
+                "teaching-handout:batch-download-zip",
+                "/api/teaching/handouts/batch/zip/batch-1/download",
+                "hash-empty-body",
+                "teaching-handout-batch-download-zip:batch-1",
+                5.0), teacher);
+
+        assertThat(service.consume(
+                export.token(),
+                "teaching-handout:batch-export-zip",
+                "/api/teaching/handouts/batch/zip",
+                "hash-batch-body",
+                teacher).allowed()).isTrue();
+        assertThat(service.consume(
+                download.token(),
+                "teaching-handout:batch-download-zip",
+                "/api/teaching/handouts/batch/zip/batch-1/download",
+                "hash-empty-body",
+                teacher).allowed()).isTrue();
+    }
+
+    @Test
     void recordsAuditEventsForIssueConsumeAndDeniedReplay() {
         CapturingCapabilityAuditSink auditSink = new CapturingCapabilityAuditSink();
         CapabilityTokenService service =

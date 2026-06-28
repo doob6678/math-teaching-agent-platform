@@ -3,14 +3,19 @@ package com.doob.mathagent.teaching.controller;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.infrastructure.security.RequestSubjectResolver;
 import com.doob.mathagent.teaching.TeachingRequestContext;
+import com.doob.mathagent.teaching.dto.TeachingHandoutBatchExportRequest;
 import com.doob.mathagent.teaching.dto.TeachingTaskRequest;
+import com.doob.mathagent.teaching.service.TeachingHandoutBatchExportRecord;
+import com.doob.mathagent.teaching.service.TeachingHandoutBatchExportService;
 import com.doob.mathagent.teaching.service.TeachingCapabilityVerifier;
 import com.doob.mathagent.teaching.service.TeachingHandoutPdfExportService;
 import com.doob.mathagent.teaching.service.TeachingWorkflowService;
+import com.doob.mathagent.teaching.vo.TeachingHandoutBatchExportResponse;
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -31,13 +36,18 @@ public class TeachingTaskController {
 
     private static final String TEACHING_SUBMIT_ACTION = "teaching:submit";
     private static final String TEACHING_HANDOUT_LATEX_EXPORT_ACTION = "teaching-handout:export-latex";
+    private static final String TEACHING_HANDOUT_LATEX_PREVIEW_ACTION = "teaching-handout:preview-latex";
     private static final String TEACHING_HANDOUT_PDF_EXPORT_ACTION = "teaching-handout:export-pdf";
+    private static final String TEACHING_HANDOUT_BATCH_ZIP_EXPORT_ACTION = "teaching-handout:batch-export-zip";
+    private static final String TEACHING_HANDOUT_BATCH_ZIP_DOWNLOAD_ACTION = "teaching-handout:batch-download-zip";
     private static final String TEACHING_TASKS_PATH = "/api/teaching/tasks";
+    private static final String TEACHING_BATCH_ZIP_PATH = "/api/teaching/handouts/batch/zip";
 
     private final TeachingWorkflowService workflowService;
     private final RequestSubjectResolver subjectResolver;
     private final TeachingCapabilityVerifier capabilityVerifier;
     private final TeachingHandoutPdfExportService pdfExportService;
+    private final TeachingHandoutBatchExportService batchExportService;
 
     /**
      * 注入教学编排服务。
@@ -46,11 +56,13 @@ public class TeachingTaskController {
             TeachingWorkflowService workflowService,
             RequestSubjectResolver subjectResolver,
             TeachingCapabilityVerifier capabilityVerifier,
-            TeachingHandoutPdfExportService pdfExportService) {
+            TeachingHandoutPdfExportService pdfExportService,
+            TeachingHandoutBatchExportService batchExportService) {
         this.workflowService = workflowService;
         this.subjectResolver = subjectResolver;
         this.capabilityVerifier = capabilityVerifier;
         this.pdfExportService = pdfExportService;
+        this.batchExportService = batchExportService;
     }
 
     /**
@@ -115,6 +127,34 @@ public class TeachingTaskController {
     }
 
     /**
+     * Previews the LaTeX handout inline after consuming a one-time capability token.
+     */
+    @GetMapping("/api/teaching/tasks/{taskId}/handout/latex/preview")
+    public ResponseEntity<String> previewLatex(
+            @PathVariable String taskId,
+            HttpServletRequest httpRequest) {
+        RequestSubject subject = subjectResolver.resolve(httpRequest);
+        String path = TEACHING_TASKS_PATH + "/" + taskId + "/handout/latex/preview";
+        if (!capabilityVerifier.verify(
+                headerOrNull(httpRequest, "X-Capability-Token"),
+                TEACHING_HANDOUT_LATEX_PREVIEW_ACTION,
+                path,
+                headerOrNull(httpRequest, "X-Request-Hash"),
+                subject)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for LaTeX preview");
+        }
+        TeachingTaskResponse task = workflowService.get(taskId, requestContext(subject))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Teaching task not found"));
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType("application/x-tex;charset=UTF-8"))
+                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.inline()
+                        .filename(task.taskId() + ".tex", StandardCharsets.UTF_8)
+                        .build()
+                        .toString())
+                .body(task.handoutLatex());
+    }
+
+    /**
      * Exports the PDF handout for an owned teaching task after consuming a one-time capability token.
      */
     @GetMapping("/api/teaching/tasks/{taskId}/handout/pdf")
@@ -140,6 +180,66 @@ public class TeachingTaskController {
                         .build()
                         .toString())
                 .body(pdfExportService.render(task));
+    }
+
+    /**
+     * Creates a short-lived ZIP package for owned teaching handouts.
+     */
+    @PostMapping("/api/teaching/handouts/batch/zip")
+    public TeachingHandoutBatchExportResponse createBatchZip(
+            @Valid @RequestBody TeachingHandoutBatchExportRequest request,
+            HttpServletRequest httpRequest) {
+        RequestSubject subject = subjectResolver.resolve(httpRequest);
+        if (!capabilityVerifier.verify(
+                headerOrNull(httpRequest, "X-Capability-Token"),
+                TEACHING_HANDOUT_BATCH_ZIP_EXPORT_ACTION,
+                TEACHING_BATCH_ZIP_PATH,
+                headerOrNull(httpRequest, "X-Request-Hash"),
+                subject)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for batch ZIP export");
+        }
+        TeachingRequestContext context = requestContext(subject);
+        TeachingHandoutBatchExportRequest normalized = request.normalize();
+        List<TeachingTaskResponse> tasks = normalized.taskIds().stream()
+                .map(taskId -> workflowService.get(taskId, context)
+                        .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Teaching task not found")))
+                .toList();
+        try {
+            return batchExportService.create(normalized, context, tasks);
+        } catch (IllegalArgumentException exception) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, exception.getMessage(), exception);
+        }
+    }
+
+    /**
+     * Downloads a short-lived ZIP package after capability and owner checks.
+     */
+    @GetMapping("/api/teaching/handouts/batch/zip/{batchId}/download")
+    public ResponseEntity<byte[]> downloadBatchZip(
+            @PathVariable String batchId,
+            HttpServletRequest httpRequest) {
+        RequestSubject subject = subjectResolver.resolve(httpRequest);
+        String path = TEACHING_BATCH_ZIP_PATH + "/" + batchId + "/download";
+        if (!capabilityVerifier.verify(
+                headerOrNull(httpRequest, "X-Capability-Token"),
+                TEACHING_HANDOUT_BATCH_ZIP_DOWNLOAD_ACTION,
+                path,
+                headerOrNull(httpRequest, "X-Request-Hash"),
+                subject)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for batch ZIP download");
+        }
+        if (batchExportService.isExpired(batchId)) {
+            throw new ResponseStatusException(HttpStatus.GONE, "Temporary batch ZIP expired");
+        }
+        TeachingHandoutBatchExportRecord record = batchExportService.findDownload(batchId, requestContext(subject))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Batch ZIP not found"));
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType("application/zip"))
+                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
+                        .filename(record.response().batchId() + ".zip", StandardCharsets.UTF_8)
+                        .build()
+                        .toString())
+                .body(record.zipBytes());
     }
 
     private static TeachingRequestContext requestContext(RequestSubject subject) {

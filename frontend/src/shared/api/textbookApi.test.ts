@@ -464,6 +464,145 @@ describe("textbookApi", () => {
     expect(Array.from(pdf.slice(0, 4))).toEqual([37, 80, 68, 70]);
   });
 
+  it("previews teaching task latex with one-time capability token", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          token: "preview-capability",
+          action: "teaching-handout:preview-latex",
+          path: "/api/teaching/tasks/task-1/handout/latex/preview",
+          requestHash: "hash-empty",
+          expiresAt: "2026-06-28T12:02:00Z",
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        text: async () => "\\section{Learning Goal}",
+      });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const latex = await client.previewTeachingTaskLatex("task-1");
+
+    const capabilityBody = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
+    expect(capabilityBody).toEqual({
+      action: "teaching-handout:preview-latex",
+      path: "/api/teaching/tasks/task-1/handout/latex/preview",
+      requestHash: expect.any(String),
+      idempotencyKey: "teaching-handout-preview-latex:task-1",
+      maxCost: 1,
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://127.0.0.1:8080/api/teaching/tasks/task-1/handout/latex/preview",
+      expect.objectContaining({
+        method: "GET",
+        headers: expect.objectContaining({
+          "X-Capability-Token": "preview-capability",
+          "X-Request-Hash": capabilityBody.requestHash,
+        }),
+      }),
+    );
+    expect(latex).toContain("\\section");
+  });
+
+  it("creates and downloads teaching handout batch zip with capability tokens", async () => {
+    const zipBytes = new Uint8Array([80, 75, 3, 4, 20, 0]).buffer;
+    const batchRequest = {
+      taskIds: ["task-1", "task-2"],
+      folderIds: ["folder-algebra"],
+      folderPaths: ["grade-10/functions"],
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          token: "batch-export-capability",
+          action: "teaching-handout:batch-export-zip",
+          path: "/api/teaching/handouts/batch/zip",
+          requestHash: "hash-batch",
+          expiresAt: "2026-06-28T12:02:00Z",
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          batchId: "batch-1",
+          status: "COMPLETED",
+          requestedCount: 2,
+          exportedCount: 2,
+          taskIds: ["task-1", "task-2"],
+          folderIds: ["folder-algebra"],
+          folderPaths: ["grade-10/functions"],
+          expiresAt: "2026-06-28T12:30:00Z",
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          token: "batch-download-capability",
+          action: "teaching-handout:batch-download-zip",
+          path: "/api/teaching/handouts/batch/zip/batch-1/download",
+          requestHash: "hash-empty",
+          expiresAt: "2026-06-28T12:02:00Z",
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        arrayBuffer: async () => zipBytes,
+        text: async () => "",
+      });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const batch = await client.createTeachingHandoutBatchZip(batchRequest);
+    const zip = await client.downloadTeachingHandoutBatchZip(batch.batchId);
+
+    const createCapabilityBody = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
+    expect(createCapabilityBody).toEqual({
+      action: "teaching-handout:batch-export-zip",
+      path: "/api/teaching/handouts/batch/zip",
+      requestHash: expect.any(String),
+      idempotencyKey: "teaching-handout-batch-export-zip:folder-algebra:task-1,task-2",
+      maxCost: 2,
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://127.0.0.1:8080/api/teaching/handouts/batch/zip",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "Content-Type": "application/json",
+          "X-Capability-Token": "batch-export-capability",
+          "X-Request-Hash": createCapabilityBody.requestHash,
+        }),
+        body: JSON.stringify(batchRequest),
+      }),
+    );
+    const downloadCapabilityBody = JSON.parse(fetchMock.mock.calls[2][1]?.body as string);
+    expect(downloadCapabilityBody).toEqual({
+      action: "teaching-handout:batch-download-zip",
+      path: "/api/teaching/handouts/batch/zip/batch-1/download",
+      requestHash: expect.any(String),
+      idempotencyKey: "teaching-handout-batch-download-zip:batch-1",
+      maxCost: 2,
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      "http://127.0.0.1:8080/api/teaching/handouts/batch/zip/batch-1/download",
+      expect.objectContaining({
+        method: "GET",
+        headers: expect.objectContaining({
+          "X-Capability-Token": "batch-download-capability",
+          "X-Request-Hash": downloadCapabilityBody.requestHash,
+        }),
+      }),
+    );
+    expect(batch.exportedCount).toBe(2);
+    expect(Array.from(zip.slice(0, 2))).toEqual([80, 75]);
+  });
+
   it("loads student dashboard without client supplied identity headers", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
