@@ -1,5 +1,9 @@
-package com.doob.mathagent.teaching;
+package com.doob.mathagent.teaching.vo;
 
+import com.doob.mathagent.teaching.TeachingEvidence;
+import com.doob.mathagent.teaching.TeachingReactStep;
+import com.doob.mathagent.teaching.TeachingTaskStatus;
+import com.doob.mathagent.teaching.TeachingWorkflowNode;
 import java.util.List;
 
 /**

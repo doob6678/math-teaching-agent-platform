@@ -1,5 +1,9 @@
-package com.doob.mathagent.teaching;
+package com.doob.mathagent.teaching.controller;
 
+import com.doob.mathagent.teaching.TeachingRequestContext;
+import com.doob.mathagent.teaching.dto.TeachingTaskRequest;
+import com.doob.mathagent.teaching.service.TeachingWorkflowService;
+import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;

@@ -1,5 +1,6 @@
-package com.doob.mathagent.teaching;
+package com.doob.mathagent.teaching.service;
 
+import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
 import java.util.Optional;
 
 /**

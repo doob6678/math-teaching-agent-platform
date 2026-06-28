@@ -1,10 +1,17 @@
-package com.doob.mathagent.teaching;
+package com.doob.mathagent.teaching.service;
 
 import com.doob.mathagent.retrieval.RetrievalRequestContext;
 import com.doob.mathagent.retrieval.TextbookRetrievalService;
 import com.doob.mathagent.retrieval.TextbookSearchHit;
 import com.doob.mathagent.retrieval.TextbookSearchRequest;
 import com.doob.mathagent.retrieval.TextbookSearchResponse;
+import com.doob.mathagent.teaching.TeachingEvidence;
+import com.doob.mathagent.teaching.TeachingReactStep;
+import com.doob.mathagent.teaching.TeachingRequestContext;
+import com.doob.mathagent.teaching.TeachingTaskStatus;
+import com.doob.mathagent.teaching.TeachingWorkflowNode;
+import com.doob.mathagent.teaching.dto.TeachingTaskRequest;
+import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;

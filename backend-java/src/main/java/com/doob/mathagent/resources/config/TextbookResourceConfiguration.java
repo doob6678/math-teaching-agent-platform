@@ -1,5 +1,6 @@
-package com.doob.mathagent.resources;
+package com.doob.mathagent.resources.config;
 
+import com.doob.mathagent.resources.TextbookResourceProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;

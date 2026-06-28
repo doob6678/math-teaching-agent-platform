@@ -1,6 +1,18 @@
 spring:
   application:
     name: math-agent-rag-backend
+  ai:
+    model:
+      chat: ${MATH_AGENT_AI_CHAT_MODEL:openai}
+      embedding: ${MATH_AGENT_AI_EMBEDDING_MODEL:none}
+      image: ${MATH_AGENT_AI_IMAGE_MODEL:none}
+      audio:
+        speech: ${MATH_AGENT_AI_AUDIO_SPEECH_MODEL:none}
+        transcription: ${MATH_AGENT_AI_AUDIO_TRANSCRIPTION_MODEL:none}
+      moderation: ${MATH_AGENT_AI_MODERATION_MODEL:none}
+    openai:
+      api-key: ${OPENAI_API_KEY:}
+      base-url: ${OPENAI_BASE_URL:https://api.openai.com}
   flyway:
     enabled: false
 
@@ -8,12 +20,40 @@ server:
   port: 8080
 
 math-agent:
+  ai:
+    default-provider: ${MATH_AGENT_AI_DEFAULT_PROVIDER:openai}
+    openai:
+      name: openai
+      base-url: ${OPENAI_BASE_URL:https://api.openai.com}
+      api-key: ${OPENAI_API_KEY:}
+      chat-model: ${OPENAI_CHAT_MODEL:gpt-4.1}
+    deepseek:
+      name: deepseek
+      base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
+      api-key: ${DEEPSEEK_API_KEY:}
+      chat-model: ${DEEPSEEK_CHAT_MODEL:deepseek-chat}
+    ark:
+      name: ark
+      base-url: ${ARK_BASE_URL:https://ark.cn-beijing.volces.com/api/v3}
+      api-key: ${ARK_API_KEY:}
+      chat-model: ${ARK_CHAT_MODEL:doubao-seed-1-6}
   database:
     enabled: ${MATH_AGENT_DB_ENABLED:false}
     url: ${MATH_AGENT_DB_URL:}
     username: ${MATH_AGENT_DB_USERNAME:}
     password: ${MATH_AGENT_DB_PASSWORD:}
   redis:
+    redisson:
+      enabled: ${MATH_AGENT_REDIS_REDISSON_ENABLED:false}
+      address: ${MATH_AGENT_REDIS_REDISSON_ADDRESS:redis://127.0.0.1:6379}
     rate-limit:
       enabled: ${MATH_AGENT_REDIS_RATE_LIMIT_ENABLED:false}
       key-prefix: ${MATH_AGENT_REDIS_RATE_LIMIT_KEY_PREFIX:math-agent:api:rate-limit}
+  resources:
+    processed-books-root: ${MATH_AGENT_PROCESSED_BOOKS_ROOT:C:/Users/doob/Desktop/个人资料/高中数学/下载课本代码/tchMaterial-parser-main/tchMaterial-parser-main/processed_books}
+    project-test-data-root: ${MATH_AGENT_PROJECT_TEST_DATA_ROOT:C:/Users/doob/Desktop/code/dev/math_agent_rag/文档/项目测试数据位置}
+    legacy-textbook-parser-root: ${MATH_AGENT_LEGACY_TEXTBOOK_PARSER_ROOT:C:/Users/doob/Desktop/个人资料/高中数学/下载课本代码/tchMaterial-parser-main/tchMaterial-parser-main}
+    design-spec-root: ${MATH_AGENT_DESIGN_SPEC_ROOT:C:/Users/doob/Desktop/code/dev/math_agent_rag/文档/设计方案体系}
+    reference-handout-pdf: ${MATH_AGENT_REFERENCE_HANDOUT_PDF:C:/Users/doob/Desktop/code/dev/math_agent_rag/文档/项目测试数据位置/参考讲义数学空间向量.pdf}
+    prompt-design-pdf: ${MATH_AGENT_PROMPT_DESIGN_PDF:C:/Users/doob/Desktop/code/dev/math_agent_rag/文档/豆包爱学的提示词设计.pdf}
+    local-file-storage-root: ${MATH_AGENT_LOCAL_FILE_STORAGE_ROOT:C:/Users/doob/Desktop/code/dev/math_agent_rag/.local-storage}

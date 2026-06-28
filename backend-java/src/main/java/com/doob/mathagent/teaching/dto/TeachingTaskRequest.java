@@ -1,4 +1,4 @@
-package com.doob.mathagent.teaching;
+package com.doob.mathagent.teaching.dto;
 
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
