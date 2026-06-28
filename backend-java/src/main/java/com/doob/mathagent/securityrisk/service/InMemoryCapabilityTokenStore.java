@@ -3,12 +3,10 @@ package com.doob.mathagent.securityrisk.service;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
-import org.springframework.stereotype.Repository;
 
 /**
  * In-memory capability token store for local development and tests.
  */
-@Repository
 public class InMemoryCapabilityTokenStore implements CapabilityTokenStore {
 
     /** Token records keyed by opaque token value. */

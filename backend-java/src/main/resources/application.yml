@@ -46,6 +46,9 @@ math-agent:
     redisson:
       enabled: ${MATH_AGENT_REDIS_REDISSON_ENABLED:false}
       address: ${MATH_AGENT_REDIS_REDISSON_ADDRESS:redis://127.0.0.1:6379}
+    capability-store:
+      enabled: ${MATH_AGENT_REDIS_CAPABILITY_STORE_ENABLED:false}
+      key-prefix: ${MATH_AGENT_REDIS_CAPABILITY_STORE_KEY_PREFIX:math-agent:security:capability}
     rate-limit:
       enabled: ${MATH_AGENT_REDIS_RATE_LIMIT_ENABLED:false}
       key-prefix: ${MATH_AGENT_REDIS_RATE_LIMIT_KEY_PREFIX:math-agent:api:rate-limit}
