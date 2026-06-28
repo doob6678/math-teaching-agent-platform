@@ -571,6 +571,31 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     return response.json() as Promise<T>;
   }
 
+  /**
+   * Applies for a one-time capability token bound to the exact consuming request body.
+   */
+  async function applyCapability(
+    action: string,
+    path: string,
+    body: string,
+    idempotencyKey: string,
+    maxCost = 1,
+  ): Promise<CapabilityTokenResponse> {
+    const requestHash = await hashRequestBody(body);
+    const capability = await requestJson<CapabilityTokenResponse>("/api/security/capabilities", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action,
+        path,
+        requestHash,
+        idempotencyKey,
+        maxCost,
+      }),
+    });
+    return { ...capability, requestHash };
+  }
+
   return {
     /**
      * 登录并保存后端会话 token；后续请求只携带 token，不携带 userId/role/studentId。
@@ -639,24 +664,19 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
      */
     async submitTeachingTask(request: TeachingTaskRequest): Promise<TeachingTaskResponse> {
       const body = JSON.stringify(request);
-      const requestHash = await hashRequestBody(body);
-      const capability = await requestJson<CapabilityTokenResponse>("/api/security/capabilities", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "teaching:submit",
-          path: "/api/teaching/tasks",
-          requestHash,
-          idempotencyKey: request.clientRequestId,
-          maxCost: Math.max(0, request.evidenceLimit),
-        }),
-      });
+      const capability = await applyCapability(
+        "teaching:submit",
+        "/api/teaching/tasks",
+        body,
+        request.clientRequestId,
+        Math.max(0, request.evidenceLimit),
+      );
       return requestJson<TeachingTaskResponse>("/api/teaching/tasks", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "X-Capability-Token": capability.token,
-          "X-Request-Hash": requestHash,
+          "X-Request-Hash": capability.requestHash,
         },
         body,
       });
@@ -694,21 +714,43 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     registerTeacherResource(
       request: TeacherResourceRegistrationRequest,
     ): Promise<TeacherResourceDocumentResponse> {
-      return requestJson<TeacherResourceDocumentResponse>("/api/teacher/resources", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(request),
-      });
+      const body = JSON.stringify(request);
+      return applyCapability(
+        "teacher-resource:register",
+        "/api/teacher/resources",
+        body,
+        `teacher-resource-register:${request.sourceType}:${request.title}`,
+      ).then((capability) =>
+        requestJson<TeacherResourceDocumentResponse>("/api/teacher/resources", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Capability-Token": capability.token,
+            "X-Request-Hash": capability.requestHash,
+          },
+          body,
+        }),
+      );
     },
 
     /**
      * 归档教师资料源，避免硬删除导致旧讲解引用断裂。
      */
-    archiveTeacherResource(documentId: string): Promise<TeacherResourceDocumentResponse> {
-      return requestJson<TeacherResourceDocumentResponse>(
-        `/api/teacher/resources/${encodeURIComponent(documentId)}`,
-        { method: "DELETE" },
+    async archiveTeacherResource(documentId: string): Promise<TeacherResourceDocumentResponse> {
+      const path = `/api/teacher/resources/${encodeURIComponent(documentId)}`;
+      const capability = await applyCapability(
+        "teacher-resource:archive",
+        path,
+        "",
+        `teacher-resource-archive:${documentId}`,
       );
+      return requestJson<TeacherResourceDocumentResponse>(path, {
+        method: "DELETE",
+        headers: {
+          "X-Capability-Token": capability.token,
+          "X-Request-Hash": capability.requestHash,
+        },
+      });
     },
   };
 }

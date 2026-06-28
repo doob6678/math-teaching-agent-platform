@@ -20,7 +20,11 @@ public class CapabilityTokenService {
     private static final Duration TOKEN_TTL = Duration.ofMinutes(2);
     private static final String TEACHING_SUBMIT_ACTION = "teaching:submit";
     private static final String TEACHING_TASKS_PATH = "/api/teaching/tasks";
+    private static final String TEACHER_RESOURCE_REGISTER_ACTION = "teacher-resource:register";
+    private static final String TEACHER_RESOURCE_ARCHIVE_ACTION = "teacher-resource:archive";
+    private static final String TEACHER_RESOURCES_PATH = "/api/teacher/resources";
     private static final Set<String> CAPABILITY_ALLOWED_ROLES = Set.of("student", "teacher", "admin");
+    private static final Set<String> TEACHER_RESOURCE_ALLOWED_ROLES = Set.of("teacher", "admin");
 
     private final CapabilityTokenStore store;
     private final Clock clock;
@@ -181,10 +185,28 @@ public class CapabilityTokenService {
      * Validates that the backend may mint a token for this operation and authenticated subject.
      */
     private static void validateApplication(String action, String path, RequestSubject subject) {
-        if (!TEACHING_SUBMIT_ACTION.equals(action) || !TEACHING_TASKS_PATH.equals(path)) {
-            throw new IllegalArgumentException("Unsupported capability action or path");
+        if (TEACHING_SUBMIT_ACTION.equals(action) && TEACHING_TASKS_PATH.equals(path)) {
+            if (!CAPABILITY_ALLOWED_ROLES.contains(subject.subjectType()) || subject.subjectId() == null) {
+                throw new IllegalArgumentException("Capability subject not allowed");
+            }
+            return;
         }
-        if (!CAPABILITY_ALLOWED_ROLES.contains(subject.subjectType()) || subject.subjectId() == null) {
+        if (TEACHER_RESOURCE_REGISTER_ACTION.equals(action) && TEACHER_RESOURCES_PATH.equals(path)) {
+            validateTeacherResourceSubject(subject);
+            return;
+        }
+        if (TEACHER_RESOURCE_ARCHIVE_ACTION.equals(action) && path.startsWith(TEACHER_RESOURCES_PATH + "/")) {
+            validateTeacherResourceSubject(subject);
+            return;
+        }
+        throw new IllegalArgumentException("Unsupported capability action or path");
+    }
+
+    /**
+     * Validates subject for high-value teacher resource mutations.
+     */
+    private static void validateTeacherResourceSubject(RequestSubject subject) {
+        if (!TEACHER_RESOURCE_ALLOWED_ROLES.contains(subject.subjectType()) || subject.subjectId() == null) {
             throw new IllegalArgumentException("Capability subject not allowed");
         }
     }

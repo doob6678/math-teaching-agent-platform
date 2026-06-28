@@ -13,6 +13,7 @@ import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.web.server.ResponseStatusException;
 
 class TeacherResourceControllerTest {
 
@@ -27,7 +28,8 @@ class TeacherResourceControllerTest {
 
         TeacherResourceController controller = new TeacherResourceController(
                 new TeacherResourceService(new InMemoryTeacherResourceStore()),
-                request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"));
+                request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"),
+                (token, action, path, requestHash, subject) -> true);
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.addHeader("X-Subject-Type", "admin");
         request.addHeader("X-Subject-Id", "teacher-spoofed");
@@ -53,7 +55,8 @@ class TeacherResourceControllerTest {
 
         TeacherResourceController controller = new TeacherResourceController(
                 new TeacherResourceService(new InMemoryTeacherResourceStore()),
-                request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"));
+                request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"),
+                (token, action, path, requestHash, subject) -> true);
 
         TeacherResourceDocumentResponse response = controller.register(new TeacherResourceRegistrationRequest(
                 "local_path",
@@ -73,7 +76,8 @@ class TeacherResourceControllerTest {
 
         TeacherResourceController controller = new TeacherResourceController(
                 new TeacherResourceService(new InMemoryTeacherResourceStore()),
-                request -> new RequestSubject("school-a", "admin", "admin-1", "device-1"));
+                request -> new RequestSubject("school-a", "admin", "admin-1", "device-1"),
+                (token, action, path, requestHash, subject) -> true);
 
         TeacherResourceDocumentResponse response = controller.register(new TeacherResourceRegistrationRequest(
                 "local_path",
@@ -83,5 +87,53 @@ class TeacherResourceControllerTest {
                 "MATH_VIP"), new MockHttpServletRequest());
 
         assertThat(response.permissionScope()).isEqualTo("MATH_VIP");
+    }
+
+    @Test
+    void rejectsRegisterAndArchiveWithoutAcceptedCapabilityToken() throws Exception {
+        Path folder = tempDir.resolve("protected-resource");
+        Files.createDirectories(folder);
+        Files.writeString(folder.resolve("vector.md"), "# vector");
+        InMemoryTeacherResourceStore store = new InMemoryTeacherResourceStore();
+        TeacherResourceController setupController = new TeacherResourceController(
+                new TeacherResourceService(store),
+                request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"),
+                (token, action, path, requestHash, subject) -> true);
+        TeacherResourceDocumentResponse created = setupController.register(new TeacherResourceRegistrationRequest(
+                "local_path",
+                "protected resource",
+                null,
+                folder.toString(),
+                "TEACHER_PRIVATE"), requestWithCapability("token-ok", "hash-ok"));
+        TeacherResourceController protectedController = new TeacherResourceController(
+                new TeacherResourceService(store),
+                request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"),
+                (token, action, path, requestHash, subject) -> false);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> protectedController.register(
+                        new TeacherResourceRegistrationRequest(
+                                "local_path",
+                                "blocked resource",
+                                null,
+                                folder.toString(),
+                                "TEACHER_PRIVATE"),
+                        requestWithCapability("bad-token", "hash-register")))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("Capability token");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> protectedController.archive(
+                        created.documentId(),
+                        requestWithCapability("bad-token", "hash-archive")))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("Capability token");
+    }
+
+    /**
+     * Builds an HTTP request carrying capability headers for controller tests.
+     */
+    private static MockHttpServletRequest requestWithCapability(String token, String requestHash) {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader("X-Capability-Token", token);
+        request.addHeader("X-Request-Hash", requestHash);
+        return request;
     }
 }

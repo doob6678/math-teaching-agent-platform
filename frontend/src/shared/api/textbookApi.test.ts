@@ -347,7 +347,7 @@ describe("textbookApi", () => {
     expect(dashboard.knowledgeProgress[0].progressPercent).toBe(68);
   });
 
-  it("manages teacher resources without client supplied identity headers", async () => {
+  it("manages teacher resources with capability tokens and without client supplied identity headers", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce({
@@ -356,7 +356,27 @@ describe("textbookApi", () => {
       })
       .mockResolvedValueOnce({
         ok: true,
+        json: async () => ({
+          token: "register-capability",
+          action: "teacher-resource:register",
+          path: "/api/teacher/resources",
+          requestHash: "hash-register",
+          expiresAt: "2026-06-28T12:02:00Z",
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
         json: async () => ({ documentId: "doc-2", title: "Feishu question bank", syncStatus: "registered" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          token: "archive-capability",
+          action: "teacher-resource:archive",
+          path: "/api/teacher/resources/doc-2",
+          requestHash: "hash-archive",
+          expiresAt: "2026-06-28T12:02:00Z",
+        }),
       })
       .mockResolvedValueOnce({
         ok: true,
@@ -382,12 +402,33 @@ describe("textbookApi", () => {
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
+      "http://127.0.0.1:8080/api/security/capabilities",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "Content-Type": "application/json",
+          "X-Device-Id": "local-browser-console",
+        }),
+      }),
+    );
+    const registerCapabilityBody = JSON.parse(fetchMock.mock.calls[1][1]?.body as string);
+    expect(registerCapabilityBody).toEqual({
+      action: "teacher-resource:register",
+      path: "/api/teacher/resources",
+      requestHash: expect.any(String),
+      idempotencyKey: expect.stringContaining("teacher-resource-register:"),
+      maxCost: 1,
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
       "http://127.0.0.1:8080/api/teacher/resources",
       expect.objectContaining({
         method: "POST",
         headers: expect.objectContaining({
           "Content-Type": "application/json",
           "X-Device-Id": "local-browser-console",
+          "X-Capability-Token": "register-capability",
+          "X-Request-Hash": registerCapabilityBody.requestHash,
         }),
         body: JSON.stringify({
           sourceType: "feishu",
@@ -398,9 +439,31 @@ describe("textbookApi", () => {
       }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
-      3,
+      4,
+      "http://127.0.0.1:8080/api/security/capabilities",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ "Content-Type": "application/json" }),
+      }),
+    );
+    const archiveCapabilityBody = JSON.parse(fetchMock.mock.calls[3][1]?.body as string);
+    expect(archiveCapabilityBody).toEqual({
+      action: "teacher-resource:archive",
+      path: "/api/teacher/resources/doc-2",
+      requestHash: expect.any(String),
+      idempotencyKey: "teacher-resource-archive:doc-2",
+      maxCost: 1,
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      5,
       "http://127.0.0.1:8080/api/teacher/resources/doc-2",
-      expect.objectContaining({ method: "DELETE" }),
+      expect.objectContaining({
+        method: "DELETE",
+        headers: expect.objectContaining({
+          "X-Capability-Token": "archive-capability",
+          "X-Request-Hash": archiveCapabilityBody.requestHash,
+        }),
+      }),
     );
     expect(list[0].documentId).toBe("doc-1");
     expect(created.syncStatus).toBe("registered");

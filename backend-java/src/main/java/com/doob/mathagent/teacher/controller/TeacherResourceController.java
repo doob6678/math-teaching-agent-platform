@@ -3,17 +3,20 @@ package com.doob.mathagent.teacher.controller;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.infrastructure.security.RequestSubjectResolver;
 import com.doob.mathagent.teacher.dto.TeacherResourceRegistrationRequest;
+import com.doob.mathagent.teacher.service.TeacherResourceCapabilityVerifier;
 import com.doob.mathagent.teacher.service.TeacherResourceRegistrationCommand;
 import com.doob.mathagent.teacher.service.TeacherResourceService;
 import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.List;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 
 /**
  * Teacher resource management API for Feishu, local folders, and teacher-owned question banks.
@@ -21,8 +24,13 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 public class TeacherResourceController {
 
+    private static final String REGISTER_ACTION = "teacher-resource:register";
+    private static final String ARCHIVE_ACTION = "teacher-resource:archive";
+    private static final String RESOURCES_PATH = "/api/teacher/resources";
+
     private final TeacherResourceService teacherResourceService;
     private final RequestSubjectResolver subjectResolver;
+    private final TeacherResourceCapabilityVerifier capabilityVerifier;
 
     /**
      * Creates a teacher resource controller.
@@ -32,9 +40,11 @@ public class TeacherResourceController {
      */
     public TeacherResourceController(
             TeacherResourceService teacherResourceService,
-            RequestSubjectResolver subjectResolver) {
+            RequestSubjectResolver subjectResolver,
+            TeacherResourceCapabilityVerifier capabilityVerifier) {
         this.teacherResourceService = teacherResourceService;
         this.subjectResolver = subjectResolver;
+        this.capabilityVerifier = capabilityVerifier;
     }
 
     /**
@@ -48,7 +58,16 @@ public class TeacherResourceController {
     public TeacherResourceDocumentResponse register(
             @RequestBody TeacherResourceRegistrationRequest request,
             HttpServletRequest httpRequest) {
-        return teacherResourceService.register(enrich(request, subjectResolver.resolve(httpRequest)));
+        RequestSubject subject = subjectResolver.resolve(httpRequest);
+        if (!capabilityVerifier.verify(
+                headerOrNull(httpRequest, "X-Capability-Token"),
+                REGISTER_ACTION,
+                RESOURCES_PATH,
+                headerOrNull(httpRequest, "X-Request-Hash"),
+                subject)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for teacher resource register");
+        }
+        return teacherResourceService.register(enrich(request, subject));
     }
 
     /**
@@ -75,6 +94,15 @@ public class TeacherResourceController {
             @PathVariable String documentId,
             HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest).normalize();
+        String path = RESOURCES_PATH + "/" + documentId;
+        if (!capabilityVerifier.verify(
+                headerOrNull(httpRequest, "X-Capability-Token"),
+                ARCHIVE_ACTION,
+                path,
+                headerOrNull(httpRequest, "X-Request-Hash"),
+                subject)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for teacher resource archive");
+        }
         return teacherResourceService.archive(
                 subject.tenantId(),
                 subject.subjectType(),
@@ -98,5 +126,20 @@ public class TeacherResourceController {
                 normalized.subjectType(),
                 normalized.subjectId(),
                 request);
+    }
+
+    /**
+     * Reads a non-authoritative request header used for capability token verification.
+     *
+     * @param request HTTP request
+     * @param name header name
+     * @return stripped header value or null
+     */
+    private static String headerOrNull(HttpServletRequest request, String name) {
+        if (request == null) {
+            return null;
+        }
+        String value = request.getHeader(name);
+        return value == null || value.isBlank() ? null : value.strip();
     }
 }

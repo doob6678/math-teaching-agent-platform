@@ -110,6 +110,38 @@ class CapabilityTokenServiceTest {
     }
 
     @Test
+    void issuesTeacherResourceCapabilityTokensForRegisterAndArchive() {
+        CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
+        RequestSubject teacher = new RequestSubject("school-a", "teacher", "teacher-001", "device-1");
+
+        CapabilityTokenResponse register = service.apply(new CapabilityTokenApplyRequest(
+                "teacher-resource:register",
+                "/api/teacher/resources",
+                "hash-register",
+                "resource-register-001",
+                1.0), teacher);
+        CapabilityTokenResponse archive = service.apply(new CapabilityTokenApplyRequest(
+                "teacher-resource:archive",
+                "/api/teacher/resources/doc-1",
+                "hash-archive",
+                "resource-archive-doc-1",
+                1.0), teacher);
+
+        assertThat(service.consume(
+                register.token(),
+                "teacher-resource:register",
+                "/api/teacher/resources",
+                "hash-register",
+                teacher).allowed()).isTrue();
+        assertThat(service.consume(
+                archive.token(),
+                "teacher-resource:archive",
+                "/api/teacher/resources/doc-1",
+                "hash-archive",
+                teacher).allowed()).isTrue();
+    }
+
+    @Test
     void recordsAuditEventsForIssueConsumeAndDeniedReplay() {
         CapturingCapabilityAuditSink auditSink = new CapturingCapabilityAuditSink();
         CapabilityTokenService service =
