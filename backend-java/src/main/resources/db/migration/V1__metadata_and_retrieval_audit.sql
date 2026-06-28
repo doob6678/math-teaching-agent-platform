@@ -90,6 +90,29 @@ CREATE TABLE retrieval_hit_log (
         ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
+CREATE TABLE capability_audit_log (
+    id BIGINT NOT NULL AUTO_INCREMENT,
+    event_id CHAR(36) NOT NULL,
+    occurred_at DATETIME(3) NOT NULL,
+    tenant_id VARCHAR(64) NOT NULL DEFAULT 'default',
+    subject_type VARCHAR(32) NULL,
+    subject_id VARCHAR(64) NULL,
+    action VARCHAR(64) NOT NULL,
+    path VARCHAR(255) NOT NULL,
+    request_hash VARCHAR(128) NULL,
+    idempotency_key VARCHAR(128) NULL,
+    token_hash CHAR(64) NULL,
+    decision VARCHAR(32) NOT NULL,
+    reason TEXT NULL,
+    created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_capability_audit_event (event_id),
+    KEY idx_capability_audit_created_at (created_at),
+    KEY idx_capability_audit_subject (tenant_id, subject_type, subject_id, occurred_at),
+    KEY idx_capability_audit_action_decision (action, decision, occurred_at),
+    KEY idx_capability_audit_token_hash (token_hash)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
 CREATE TABLE security_audit_log (
     id BIGINT NOT NULL AUTO_INCREMENT,
     tenant_id VARCHAR(64) NOT NULL DEFAULT 'default',
