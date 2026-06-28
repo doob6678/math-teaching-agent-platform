@@ -170,6 +170,26 @@ class CapabilityTokenServiceTest {
     }
 
     @Test
+    void issuesTeachingHandoutLatexExportCapabilityTokens() {
+        CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
+        RequestSubject student = new RequestSubject("school-a", "student", "student-001", "device-1");
+
+        CapabilityTokenResponse export = service.apply(new CapabilityTokenApplyRequest(
+                "teaching-handout:export-latex",
+                "/api/teaching/tasks/task-1/handout/latex",
+                "hash-empty-body",
+                "teaching-handout-export-latex:task-1",
+                1.0), student);
+
+        assertThat(service.consume(
+                export.token(),
+                "teaching-handout:export-latex",
+                "/api/teaching/tasks/task-1/handout/latex",
+                "hash-empty-body",
+                student).allowed()).isTrue();
+    }
+
+    @Test
     void recordsAuditEventsForIssueConsumeAndDeniedReplay() {
         CapturingCapabilityAuditSink auditSink = new CapturingCapabilityAuditSink();
         CapabilityTokenService service =

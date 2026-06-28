@@ -608,6 +608,27 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
   }
 
   /**
+   * Requests a backend text response while preserving the same session and device headers.
+   */
+  async function requestText(path: string, init: RequestInit = {}): Promise<string> {
+    const auth = readAuthSession();
+    const authHeader = auth ? { [auth.tokenName]: auth.tokenValue } : {};
+    const response = await fetchImpl(`${normalizedBaseUrl}${path}`, {
+      ...init,
+      headers: {
+        ...DEVICE_ID_HEADER,
+        ...authHeader,
+        ...init.headers,
+      },
+    });
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`Backend request failed: ${response.status} ${body}`.trim());
+    }
+    return response.text();
+  }
+
+  /**
    * Applies for a one-time capability token bound to the exact consuming request body.
    */
   async function applyCapability(
@@ -750,6 +771,26 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     /**
      * 读取学生学习画像。默认使用本地学生身份，避免学生面板误带教师权限。
      */
+    /**
+     * Downloads the LaTeX handout for a teaching task after applying a one-time capability token.
+     */
+    async exportTeachingTaskLatex(taskId: string): Promise<string> {
+      const path = `/api/teaching/tasks/${encodeURIComponent(taskId)}/handout/latex`;
+      const capability = await applyCapability(
+        "teaching-handout:export-latex",
+        path,
+        "",
+        `teaching-handout-export-latex:${taskId}`,
+      );
+      return requestText(path, {
+        method: "GET",
+        headers: {
+          "X-Capability-Token": capability.token,
+          "X-Request-Hash": capability.requestHash,
+        },
+      });
+    },
+
     getStudentDashboard(studentId?: string): Promise<StudentDashboardResponse> {
       const params = new URLSearchParams();
       if (studentId) {

@@ -9,7 +9,12 @@ import com.doob.mathagent.teaching.service.TeachingWorkflowService;
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import java.nio.charset.StandardCharsets;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -24,6 +29,7 @@ import org.springframework.web.server.ResponseStatusException;
 public class TeachingTaskController {
 
     private static final String TEACHING_SUBMIT_ACTION = "teaching:submit";
+    private static final String TEACHING_HANDOUT_LATEX_EXPORT_ACTION = "teaching-handout:export-latex";
     private static final String TEACHING_TASKS_PATH = "/api/teaching/tasks";
 
     private final TeachingWorkflowService workflowService;
@@ -75,6 +81,34 @@ public class TeachingTaskController {
     /**
      * 从后端会话身份读取租户、主体和设备信息，用于任务隔离和审计。
      */
+    /**
+     * Exports the LaTeX handout for an owned teaching task after consuming a one-time capability token.
+     */
+    @GetMapping("/api/teaching/tasks/{taskId}/handout/latex")
+    public ResponseEntity<String> exportLatex(
+            @PathVariable String taskId,
+            HttpServletRequest httpRequest) {
+        RequestSubject subject = subjectResolver.resolve(httpRequest);
+        String path = TEACHING_TASKS_PATH + "/" + taskId + "/handout/latex";
+        if (!capabilityVerifier.verify(
+                headerOrNull(httpRequest, "X-Capability-Token"),
+                TEACHING_HANDOUT_LATEX_EXPORT_ACTION,
+                path,
+                headerOrNull(httpRequest, "X-Request-Hash"),
+                subject)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for LaTeX export");
+        }
+        TeachingTaskResponse task = workflowService.get(taskId, requestContext(subject))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Teaching task not found"));
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType("application/x-tex;charset=UTF-8"))
+                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
+                        .filename(task.taskId() + ".tex", StandardCharsets.UTF_8)
+                        .build()
+                        .toString())
+                .body(task.handoutLatex());
+    }
+
     private static TeachingRequestContext requestContext(RequestSubject subject) {
         RequestSubject normalized = subject.normalize();
         return new TeachingRequestContext(

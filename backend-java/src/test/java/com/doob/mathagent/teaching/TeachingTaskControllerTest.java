@@ -19,6 +19,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.server.ResponseStatusException;
 
 class TeachingTaskControllerTest {
@@ -51,9 +52,12 @@ class TeachingTaskControllerTest {
 
         TeachingTaskResponse submitted = controller.submit(request, null);
         TeachingTaskResponse loaded = controller.get(submitted.taskId(), null);
+        ResponseEntity<String> exported = controller.exportLatex(submitted.taskId(), null);
 
         assertThat(loaded.taskId()).isEqualTo(submitted.taskId());
         assertThat(loaded.status()).isEqualTo(TeachingTaskStatus.COMPLETED);
+        assertThat(exported.getBody()).contains("\\section");
+        assertThat(exported.getHeaders().getContentDisposition().getFilename()).isEqualTo(submitted.taskId() + ".tex");
         assertThat(loaded.handoutLatex()).contains("\\section{证据与讲解}");
     }
 
@@ -76,6 +80,34 @@ class TeachingTaskControllerTest {
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.submit(
                         new TeachingTaskRequest("client-002", "我想学 D(-1) 怎么求", "理解函数新定义题", 3),
                         null))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("Capability token");
+    }
+
+    @Test
+    void rejectsLatexExportWithoutAcceptedCapabilityToken() throws Exception {
+        TeachingWorkflowService service = new TeachingWorkflowService(
+                createTextbookCorpus(),
+                new TextbookRetrievalService(
+                        new TextbookCatalogReader(),
+                        new TextbookChunkReader(),
+                        new LocalTextbookBm25SearchEngine(),
+                        new NoopRetrievalAuditSink()),
+                new InMemoryTeachingTaskStore(),
+                new StudentMemoryReuseService(new InMemoryStudentMemoryStore()));
+        TeachingTaskController setupController = new TeachingTaskController(
+                service,
+                RequestSubjectResolver.localDevelopment(),
+                (token, action, path, requestHash, subject) -> true);
+        TeachingTaskResponse submitted = setupController.submit(
+                new TeachingTaskRequest("client-003", "question", "goal", 3),
+                null);
+        TeachingTaskController protectedController = new TeachingTaskController(
+                service,
+                RequestSubjectResolver.localDevelopment(),
+                (token, action, path, requestHash, subject) -> false);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> protectedController.exportLatex(submitted.taskId(), null))
                 .isInstanceOf(ResponseStatusException.class)
                 .hasMessageContaining("Capability token");
     }
