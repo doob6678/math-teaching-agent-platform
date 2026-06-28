@@ -215,6 +215,74 @@ h2 {
   text-align: center;
 }
 
+.empty-state.compact {
+  min-height: 120px;
+}
+
+.teaching-task {
+  display: grid;
+  gap: 14px;
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid #e5e9f0;
+}
+
+.teaching-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.task-meta {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #dce5ef;
+  border-radius: 8px;
+  background: #fbfcfe;
+  color: #475569;
+  font-size: 12px;
+}
+
+.task-meta strong {
+  min-width: 0;
+  color: #1e293b;
+  overflow-wrap: anywhere;
+}
+
+.node-list,
+.react-list {
+  display: grid;
+  gap: 8px;
+}
+
+.node-item,
+.react-item {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid #e1e7f0;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.node-item strong,
+.react-item strong {
+  color: #1f2a44;
+  font-size: 13px;
+}
+
+.node-item span,
+.react-item span {
+  color: #536173;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.formula-block.handout {
+  max-height: 260px;
+}
+
 .hit-list {
   display: grid;
   gap: 12px;
@@ -282,6 +350,10 @@ h2 {
   background: #ffffff;
 }
 
+.teaching-evidence-card {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .card-rank {
   display: grid;
   place-items: center;
@@ -291,6 +363,18 @@ h2 {
   background: #eef6ff;
   color: #0f5f9f;
   font-weight: 800;
+}
+
+.scope-badge {
+  justify-self: start;
+  max-width: 100%;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: #eef6ff;
+  color: #0f5f9f;
+  font-size: 12px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
 }
 
 .card-main {

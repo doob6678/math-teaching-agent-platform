@@ -172,6 +172,96 @@ export interface RetrievalAuditDetail {
   hits: RetrievalAuditHit[];
 }
 
+/**
+ * 教学任务提交请求。clientRequestId 由前端生成并持久化，用于重复提交时恢复同一任务。
+ */
+export interface TeachingTaskRequest {
+  /** 前端幂等请求号，刷新或重试时保持不变。 */
+  clientRequestId: string;
+  /** 用户输入的题目或学习问题。 */
+  questionText: string;
+  /** 用户想学什么。 */
+  learningGoal: string;
+  /** 教材证据召回数量上限。 */
+  evidenceLimit: number;
+}
+
+/**
+ * 教学 DAG 节点执行记录。
+ */
+export interface TeachingWorkflowNode {
+  /** DAG 节点稳定编码。 */
+  code: string;
+  /** 节点显示名称。 */
+  name: string;
+  /** 节点执行状态。 */
+  status: string;
+  /** 节点输出摘要。 */
+  summary: string;
+}
+
+/**
+ * ReAct 解题轨迹步骤。
+ */
+export interface TeachingReactStep {
+  /** THOUGHT/ACTION/OBSERVATION/ANSWER。 */
+  phase: string;
+  /** 当前步骤内容。 */
+  content: string;
+  /** ACTION 阶段调用的工具名。 */
+  toolName?: string;
+}
+
+/**
+ * 教学任务证据，明确区分公开教材和后续私有飞书资料。
+ */
+export interface TeachingEvidence {
+  /** 证据作用域，例如 PUBLIC_TEXTBOOK。 */
+  sourceScope: string;
+  /** 证据来源标题。 */
+  sourceTitle: string;
+  /** 证据 chunk ID。 */
+  chunkId: string;
+  /** 教材页码。 */
+  pageNo: number;
+  /** 证据片段。 */
+  snippet: string;
+}
+
+/**
+ * 教学任务响应。taskId 可保存到 localStorage，用户离开页面后继续恢复结果。
+ */
+export interface TeachingTaskResponse {
+  /** 后端任务 ID。 */
+  taskId: string;
+  /** 前端幂等请求号。 */
+  clientRequestId: string;
+  /** 租户 ID。 */
+  tenantId?: string;
+  /** 主体类型。 */
+  subjectType?: string;
+  /** 主体 ID。 */
+  subjectId?: string;
+  /** 任务状态。 */
+  status: "CREATED" | "RUNNING" | "COMPLETED" | "FAILED";
+  /** 用户题目。 */
+  questionText?: string;
+  /** 学习目标。 */
+  learningGoal?: string;
+  /** DAG 节点。 */
+  nodes: TeachingWorkflowNode[];
+  /** ReAct 轨迹。 */
+  reactTrace: TeachingReactStep[];
+  /** 证据列表。 */
+  evidence: TeachingEvidence[];
+  /** LaTeX 讲义草稿。 */
+  handoutLatex: string;
+  /** 后续交互建议。 */
+  interactiveSuggestions: string[];
+  /** 失败原因。 */
+  errorMessage?: string;
+}
+
 type FetchLike = (input: string, init?: RequestInit) => Promise<Pick<Response, "ok" | "status" | "json" | "text">>;
 
 const LOCAL_CONSOLE_HEADERS = {
@@ -187,9 +277,11 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
   /**
    * 请求后端 JSON，并携带本地教师控制台身份头用于接口分级和限流审计。
    */
-  async function requestJson<T>(path: string): Promise<T> {
+  async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> {
     const response = await fetchImpl(`${normalizedBaseUrl}${path}`, {
+      ...init,
       headers: LOCAL_CONSOLE_HEADERS,
+      ...("headers" in init ? { headers: { ...LOCAL_CONSOLE_HEADERS, ...init.headers } } : {}),
     });
     if (!response.ok) {
       const body = await response.text();
@@ -222,6 +314,24 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
      */
     getAudit(queryId: string): Promise<RetrievalAuditDetail> {
       return requestJson<RetrievalAuditDetail>(`/api/retrieval/audit/${encodeURIComponent(queryId)}`);
+    },
+
+    /**
+     * 提交可恢复教学任务。前端需要保存返回的 taskId，页面离开后可继续查询。
+     */
+    submitTeachingTask(request: TeachingTaskRequest): Promise<TeachingTaskResponse> {
+      return requestJson<TeachingTaskResponse>("/api/teaching/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
+      });
+    },
+
+    /**
+     * 按 taskId 读取教学任务结果，用于页面恢复和轮询。
+     */
+    getTeachingTask(taskId: string): Promise<TeachingTaskResponse> {
+      return requestJson<TeachingTaskResponse>(`/api/teaching/tasks/${encodeURIComponent(taskId)}`);
     },
   };
 }

@@ -90,4 +90,74 @@ describe("textbookApi", () => {
     expect(audit.queryText).toBe("分段函数");
     expect(audit.hits[0].rankNo).toBe(1);
   });
+
+  it("submits teaching task with recoverable client request id", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        taskId: "task-1",
+        clientRequestId: "client-1",
+        status: "COMPLETED",
+        nodes: [],
+        reactTrace: [],
+        evidence: [],
+        handoutLatex: "\\section{学习目标}",
+        interactiveSuggestions: [],
+      }),
+    });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const task = await client.submitTeachingTask({
+      clientRequestId: "client-1",
+      questionText: "我想学 D(-1)",
+      learningGoal: "理解函数新定义题",
+      evidenceLimit: 3,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8080/api/teaching/tasks",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "Content-Type": "application/json",
+          "X-Subject-Type": "teacher",
+        }),
+        body: JSON.stringify({
+          clientRequestId: "client-1",
+          questionText: "我想学 D(-1)",
+          learningGoal: "理解函数新定义题",
+          evidenceLimit: 3,
+        }),
+      }),
+    );
+    expect(task.taskId).toBe("task-1");
+    expect(task.status).toBe("COMPLETED");
+  });
+
+  it("loads teaching task by task id for page resume", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        taskId: "task-1",
+        clientRequestId: "client-1",
+        status: "COMPLETED",
+        nodes: [{ code: "LEARNING_GOAL", name: "学习目标识别", status: "completed", summary: "识别目标" }],
+        reactTrace: [],
+        evidence: [],
+        handoutLatex: "\\section{学习目标}",
+        interactiveSuggestions: [],
+      }),
+    });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const task = await client.getTeachingTask("task-1");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8080/api/teaching/tasks/task-1",
+      expect.objectContaining({
+        headers: expect.objectContaining({ "X-Device-Id": "local-browser-console" }),
+      }),
+    );
+    expect(task.nodes[0].code).toBe("LEARNING_GOAL");
+  });
 });
