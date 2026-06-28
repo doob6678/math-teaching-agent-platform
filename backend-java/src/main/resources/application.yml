@@ -13,3 +13,7 @@ math-agent:
     url: ${MATH_AGENT_DB_URL:}
     username: ${MATH_AGENT_DB_USERNAME:}
     password: ${MATH_AGENT_DB_PASSWORD:}
+  redis:
+    rate-limit:
+      enabled: ${MATH_AGENT_REDIS_RATE_LIMIT_ENABLED:false}
+      key-prefix: ${MATH_AGENT_REDIS_RATE_LIMIT_KEY_PREFIX:math-agent:api:rate-limit}

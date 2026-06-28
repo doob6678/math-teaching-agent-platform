@@ -1,6 +1,7 @@
 package com.doob.mathagent.infrastructure.security;
 
 import java.time.Clock;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 /**
@@ -9,21 +10,22 @@ import org.springframework.stereotype.Service;
 @Service
 public class ApiAccessControlService {
 
-    private final FixedWindowRateLimiter rateLimiter;
+    private final ApiRateLimiter rateLimiter;
     private final Clock clock;
     private final ApiAccessPolicy policy;
 
     /**
      * 创建生产默认访问控制服务。
      */
-    public ApiAccessControlService() {
-        this(FixedWindowRateLimiter.empty(), Clock.systemUTC(), ApiAccessPolicy.defaultRules());
+    @Autowired
+    public ApiAccessControlService(ApiRateLimiter rateLimiter) {
+        this(rateLimiter, Clock.systemUTC(), ApiAccessPolicy.defaultRules());
     }
 
     /**
      * 创建可测试访问控制服务。
      */
-    ApiAccessControlService(FixedWindowRateLimiter rateLimiter, Clock clock, ApiAccessPolicy policy) {
+    ApiAccessControlService(ApiRateLimiter rateLimiter, Clock clock, ApiAccessPolicy policy) {
         this.rateLimiter = rateLimiter;
         this.clock = clock;
         this.policy = policy;
@@ -56,7 +58,7 @@ public class ApiAccessControlService {
                     0,
                     "Endpoint requires subject type in " + rule.allowedSubjectTypes());
         }
-        FixedWindowRateLimiter.RateLimitUsage usage = rateLimiter.check(
+        RateLimitUsage usage = rateLimiter.check(
                 rule.rateLimitKey(identity),
                 rule.limit(),
                 rule.window(),

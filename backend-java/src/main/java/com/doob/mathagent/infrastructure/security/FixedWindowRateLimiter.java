@@ -6,9 +6,9 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * 进程内固定窗口限流器，用于本地开发和单机阶段的次数限制。
+ * 进程内固定窗口限流器：用于本地开发和单机阶段的次数限制。
  */
-public class FixedWindowRateLimiter {
+public class FixedWindowRateLimiter implements ApiRateLimiter {
 
     private final Map<String, WindowCounter> counters = new HashMap<>();
 
@@ -22,6 +22,7 @@ public class FixedWindowRateLimiter {
     /**
      * 记录一次访问并返回窗口内使用情况。
      */
+    @Override
     public synchronized RateLimitUsage check(String key, int limit, Duration window, Instant now) {
         long windowStart = now.toEpochMilli() / window.toMillis() * window.toMillis();
         WindowCounter counter = counters.get(key);
@@ -35,24 +36,10 @@ public class FixedWindowRateLimiter {
 
     /**
      * 单个固定窗口计数器。
+     *
+     * @param windowStartMillis 固定窗口开始时间戳，单位毫秒。
+     * @param used 当前窗口已经使用的请求次数。
      */
     private record WindowCounter(long windowStartMillis, int used) {
-    }
-
-    /**
-     * 限流窗口使用情况。
-     */
-    public record RateLimitUsage(
-            /** 窗口允许次数。 */
-            int limit,
-            /** 窗口已用次数。 */
-            int used) {
-
-        /**
-         * 判断当前窗口是否已经超过限制。
-         */
-        public boolean exceeded() {
-            return used > limit;
-        }
     }
 }

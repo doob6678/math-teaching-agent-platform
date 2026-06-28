@@ -1,6 +1,7 @@
 package com.doob.mathagent.retrieval;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.doob.mathagent.resources.TextbookCatalogReader;
 import com.doob.mathagent.resources.TextbookChunk;
@@ -148,6 +149,61 @@ class TextbookRetrievalServiceTest {
         assertThat(chunkReader.readCount()).isEqualTo(1);
     }
 
+    @Test
+    void servesStaleCorpusWhenReloadFailsAfterSuccessfulCacheWarmup() throws Exception {
+        Path root = tempDir.resolve("processed_books");
+        Path bookRoot = root.resolve("book_a");
+        Files.createDirectories(bookRoot.resolve("jsonl"));
+        Files.writeString(root.resolve("catalog.jsonl"), """
+                {"doc_id":"book_a","book_name":"Textbook A","volume":"required 1","book_root":"%s","manifest":"%s","chunk_count":1,"page_count":1,"ai_ok":false}
+                """.formatted(escape(bookRoot), escape(bookRoot.resolve("manifest.json"))));
+        Path chunksPath = bookRoot.resolve("jsonl/chunks.jsonl");
+        Files.writeString(chunksPath, """
+                {"chunk_id":"book_a_p101_text_001","doc_id":"book_a","book_name":"Textbook A","volume":"required 1","chapter_path":["Functions"],"page_no":101,"printed_page_no":"98","chunk_type":"page_summary","section_title":"Piecewise function","text":"piecewise function mapping","formula_text":"","image_rel_paths":[],"source_page_image":"pages/p101.png"}
+                """);
+        TextbookRetrievalService service = new TextbookRetrievalService(
+                new TextbookCatalogReader(),
+                new TextbookChunkReader(),
+                new LocalTextbookBm25SearchEngine(),
+                new NoopRetrievalAuditSink());
+
+        TextbookSearchResponse warmed = service.search(root, new TextbookSearchRequest("piecewise function", 5));
+        Files.delete(chunksPath);
+        TextbookSearchResponse fallback = service.search(root, new TextbookSearchRequest("piecewise function", 5));
+
+        assertThat(warmed.hits()).hasSize(1);
+        assertThat(fallback.hits()).hasSize(1);
+        assertThat(fallback.hits().getFirst().chunkId()).isEqualTo("book_a_p101_text_001");
+    }
+
+    @Test
+    void coolsDownRepeatedReloadFailuresWhenNoStaleCorpusExists() throws Exception {
+        Path root = tempDir.resolve("processed_books");
+        Path bookRoot = root.resolve("book_a");
+        Files.createDirectories(bookRoot.resolve("jsonl"));
+        Files.writeString(root.resolve("catalog.jsonl"), """
+                {"doc_id":"book_a","book_name":"Textbook A","volume":"required 1","book_root":"%s","manifest":"%s","chunk_count":1,"page_count":1,"ai_ok":false}
+                """.formatted(escape(bookRoot), escape(bookRoot.resolve("manifest.json"))));
+        Files.writeString(bookRoot.resolve("jsonl/chunks.jsonl"), """
+                {"chunk_id":"book_a_p101_text_001","doc_id":"book_a","book_name":"Textbook A","volume":"required 1","chapter_path":["Functions"],"page_no":101,"printed_page_no":"98","chunk_type":"page_summary","section_title":"Piecewise function","text":"piecewise function mapping","formula_text":"","image_rel_paths":[],"source_page_image":"pages/p101.png"}
+                """);
+        AlwaysFailingTextbookChunkReader chunkReader = new AlwaysFailingTextbookChunkReader();
+        TextbookRetrievalService service = new TextbookRetrievalService(
+                new TextbookCatalogReader(),
+                chunkReader,
+                new LocalTextbookBm25SearchEngine(),
+                new NoopRetrievalAuditSink());
+
+        assertThatThrownBy(() -> service.search(root, new TextbookSearchRequest("piecewise function", 5)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Failed to load textbook corpus");
+        assertThatThrownBy(() -> service.search(root, new TextbookSearchRequest("piecewise function", 5)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("cooldown");
+
+        assertThat(chunkReader.readCount()).isEqualTo(1);
+    }
+
     private static String escape(Path path) {
         return path.toString().replace("\\", "\\\\");
     }
@@ -188,6 +244,20 @@ class TextbookRetrievalServiceTest {
 
         int readCount() {
             return readCount.get();
+        }
+    }
+
+    private static class AlwaysFailingTextbookChunkReader extends TextbookChunkReader {
+        private int readCount;
+
+        @Override
+        public List<TextbookChunk> read(Path chunksJsonl) {
+            readCount++;
+            throw new IllegalStateException("simulated chunk read failure");
+        }
+
+        int readCount() {
+            return readCount;
         }
     }
 
