@@ -19,6 +19,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.springframework.web.server.ResponseStatusException;
 
 class TeachingTaskControllerTest {
 
@@ -38,7 +39,10 @@ class TeachingTaskControllerTest {
                 retrievalService,
                 new InMemoryTeachingTaskStore(),
                 new StudentMemoryReuseService(new InMemoryStudentMemoryStore()));
-        TeachingTaskController controller = new TeachingTaskController(service, RequestSubjectResolver.localDevelopment());
+        TeachingTaskController controller = new TeachingTaskController(
+                service,
+                RequestSubjectResolver.localDevelopment(),
+                (token, action, path, requestHash, subject) -> true);
         TeachingTaskRequest request = new TeachingTaskRequest(
                 "client-001",
                 "我想学 D(-1) 怎么求",
@@ -51,6 +55,29 @@ class TeachingTaskControllerTest {
         assertThat(loaded.taskId()).isEqualTo(submitted.taskId());
         assertThat(loaded.status()).isEqualTo(TeachingTaskStatus.COMPLETED);
         assertThat(loaded.handoutLatex()).contains("\\section{证据与讲解}");
+    }
+
+    @Test
+    void rejectsTeachingSubmitWithoutAcceptedCapabilityToken() throws Exception {
+        TeachingWorkflowService service = new TeachingWorkflowService(
+                createTextbookCorpus(),
+                new TextbookRetrievalService(
+                        new TextbookCatalogReader(),
+                        new TextbookChunkReader(),
+                        new LocalTextbookBm25SearchEngine(),
+                        new NoopRetrievalAuditSink()),
+                new InMemoryTeachingTaskStore(),
+                new StudentMemoryReuseService(new InMemoryStudentMemoryStore()));
+        TeachingTaskController controller = new TeachingTaskController(
+                service,
+                RequestSubjectResolver.localDevelopment(),
+                (token, action, path, requestHash, subject) -> false);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.submit(
+                        new TeachingTaskRequest("client-002", "我想学 D(-1) 怎么求", "理解函数新定义题", 3),
+                        null))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("Capability token");
     }
 
     private Path createTextbookCorpus() throws Exception {

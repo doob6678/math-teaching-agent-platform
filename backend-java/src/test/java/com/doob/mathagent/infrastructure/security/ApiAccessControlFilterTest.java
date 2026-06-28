@@ -35,4 +35,13 @@ class ApiAccessControlFilterTest {
         assertThat(response.getStatus()).isEqualTo(403);
         assertThat(response.getContentAsString()).contains("API_ACCESS_DENIED");
     }
+
+    @Test
+    void teachingSubmitIsUserLevelEndpoint() {
+        ApiAccessRule rule = ApiAccessPolicy.defaultRules()
+                .findRule("/api/teaching/tasks")
+                .orElseThrow();
+
+        assertThat(rule.level()).isEqualTo(ApiAccessLevel.USER);
+    }
 }

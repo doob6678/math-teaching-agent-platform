@@ -100,6 +100,33 @@ class StudentMemoryReuseServiceTest {
     }
 
     @Test
+    void studentRequestedPublicMemoryIsStoredAsPrivate() {
+        StudentMemoryReuseService service = new StudentMemoryReuseService(new InMemoryStudentMemoryStore(), clock);
+
+        StudentMemoryResponse stored = service.remember(new StudentMemoryRequest(
+                "default",
+                "student",
+                "student-001",
+                "domain of a piecewise function",
+                "Check each branch condition first.",
+                "piecewise function",
+                "public",
+                false));
+        StudentMemoryResponse otherStudent = service.reuse(new StudentMemoryRequest(
+                "default",
+                "student",
+                "student-002",
+                "how to find a piecewise function domain",
+                null,
+                "piecewise function",
+                "private",
+                false));
+
+        assertThat(stored.reuseScope()).isEqualTo("private");
+        assertThat(otherStudent.reused()).isFalse();
+    }
+
+    @Test
     void expiredOrExplicitlyBypassedMemoryIsNotReused() {
         StudentMemoryReuseService service = new StudentMemoryReuseService(new InMemoryStudentMemoryStore(), clock);
         service.remember(new StudentMemoryRequest(

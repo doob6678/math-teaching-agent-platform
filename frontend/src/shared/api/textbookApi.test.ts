@@ -77,7 +77,6 @@ describe("textbookApi", () => {
     expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Id");
   });
 
-
   it("loads textbook summary from backend", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
@@ -102,7 +101,7 @@ describe("textbookApi", () => {
       ok: true,
       json: async () => ({
         queryId: "audit-query-1",
-        query: "分段函数",
+        query: "piecewise function",
         limit: 3,
         retrievalStrategy: "local_bm25_first",
         total: 1,
@@ -111,10 +110,10 @@ describe("textbookApi", () => {
     });
     const client = createTextbookApiClient("http://127.0.0.1:8080/", fetchMock);
 
-    const response = await client.search("分段函数", 3);
+    const response = await client.search("piecewise function", 3);
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:8080/api/retrieval/textbooks/search?query=%E5%88%86%E6%AE%B5%E5%87%BD%E6%95%B0&limit=3",
+      "http://127.0.0.1:8080/api/retrieval/textbooks/search?query=piecewise+function&limit=3",
       expect.objectContaining({
         headers: expect.not.objectContaining({ "X-Subject-Type": expect.any(String) }),
       }),
@@ -140,7 +139,7 @@ describe("textbookApi", () => {
       json: async () => ({
         queryId: "audit-query-1",
         tenantId: "default",
-        queryText: "分段函数",
+        queryText: "piecewise function",
         retrievalStrategy: "local_bm25_first",
         requestedLimit: 5,
         hitCount: 1,
@@ -161,56 +160,86 @@ describe("textbookApi", () => {
         }),
       }),
     );
-    expect(audit.queryText).toBe("分段函数");
+    expect(audit.queryText).toBe("piecewise function");
     expect(audit.hits[0].rankNo).toBe(1);
   });
 
-  it("submits teaching task with recoverable client request id", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        taskId: "task-1",
-        clientRequestId: "client-1",
-        status: "COMPLETED",
-        nodes: [],
-        reactTrace: [],
-        evidence: [],
-        handoutLatex: "\\section{学习目标}",
-        interactiveSuggestions: [],
-        memoryReuse: {
-          reused: true,
-          memoryId: "memory-1",
-          reuseScope: "private",
-          answer: "先看定义域再代入。",
-          similarity: 0.91,
-          reason: "Reusable memory matched",
-        },
-        stageTimings: [{ stage: "memory_reuse", elapsedMs: 2 }],
-      }),
-    });
+  it("submits teaching task with one-time capability token bound to request hash", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          token: "capability-1",
+          action: "teaching:submit",
+          path: "/api/teaching/tasks",
+          requestHash: "hash-from-client",
+          expiresAt: "2026-06-28T12:02:00Z",
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          taskId: "task-1",
+          clientRequestId: "client-1",
+          status: "COMPLETED",
+          nodes: [],
+          reactTrace: [],
+          evidence: [],
+          handoutLatex: "\\section{Learning Goal}",
+          interactiveSuggestions: [],
+          memoryReuse: {
+            reused: true,
+            memoryId: "memory-1",
+            reuseScope: "private",
+            answer: "Review the domain before substitution.",
+            similarity: 0.91,
+            reason: "Reusable memory matched",
+          },
+          stageTimings: [{ stage: "memory_reuse", elapsedMs: 2 }],
+        }),
+      });
     const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
-
-    const task = await client.submitTeachingTask({
+    const request = {
       clientRequestId: "client-1",
-      questionText: "我想学 D(-1)",
-      learningGoal: "理解函数新定义题",
+      questionText: "Find f(-1)",
+      learningGoal: "Understand new function definitions",
       evidenceLimit: 3,
-    });
+    };
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:8080/api/teaching/tasks",
+    const task = await client.submitTeachingTask(request);
+
+    const capabilityBody = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "http://127.0.0.1:8080/api/security/capabilities",
       expect.objectContaining({
         method: "POST",
         headers: expect.objectContaining({
           "Content-Type": "application/json",
           "X-Device-Id": "local-browser-console",
         }),
-        body: JSON.stringify({
-          clientRequestId: "client-1",
-          questionText: "我想学 D(-1)",
-          learningGoal: "理解函数新定义题",
-          evidenceLimit: 3,
+      }),
+    );
+    expect(capabilityBody).toEqual({
+      action: "teaching:submit",
+      path: "/api/teaching/tasks",
+      requestHash: expect.any(String),
+      idempotencyKey: "client-1",
+      maxCost: 3,
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://127.0.0.1:8080/api/teaching/tasks",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "Content-Type": "application/json",
+          "X-Device-Id": "local-browser-console",
+          "X-Capability-Token": "capability-1",
+          "X-Request-Hash": capabilityBody.requestHash,
         }),
+        body: JSON.stringify(request),
       }),
     );
     expect(task.taskId).toBe("task-1");
@@ -226,10 +255,10 @@ describe("textbookApi", () => {
         taskId: "task-1",
         clientRequestId: "client-1",
         status: "COMPLETED",
-        nodes: [{ code: "LEARNING_GOAL", name: "学习目标识别", status: "completed", summary: "识别目标" }],
+        nodes: [{ code: "LEARNING_GOAL", name: "Learning goal", status: "completed", summary: "parsed" }],
         reactTrace: [],
         evidence: [],
-        handoutLatex: "\\section{学习目标}",
+        handoutLatex: "\\section{Learning Goal}",
         interactiveSuggestions: [],
       }),
     });
@@ -255,7 +284,7 @@ describe("textbookApi", () => {
         viewerRole: "student",
         viewerSubjectId: "local-student",
         isAdminView: false,
-        knowledgeProgress: [{ knowledgePointName: "空间向量数量积", progressPercent: 68 }],
+        knowledgeProgress: [{ knowledgePointName: "space vector", progressPercent: 68 }],
         weakPoints: [],
         recentQuestions: [],
         scoreTrend: [],
@@ -283,22 +312,22 @@ describe("textbookApi", () => {
       .fn()
       .mockResolvedValueOnce({
         ok: true,
-        json: async () => ([{ documentId: "doc-1", title: "空间向量讲义", syncStatus: "registered" }]),
+        json: async () => ([{ documentId: "doc-1", title: "Space vector handout", syncStatus: "registered" }]),
       })
       .mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ documentId: "doc-2", title: "飞书题库", syncStatus: "registered" }),
+        json: async () => ({ documentId: "doc-2", title: "Feishu question bank", syncStatus: "registered" }),
       })
       .mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ documentId: "doc-2", title: "飞书题库", syncStatus: "archived" }),
+        json: async () => ({ documentId: "doc-2", title: "Feishu question bank", syncStatus: "archived" }),
       });
     const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
 
     const list = await client.listTeacherResources();
     const created = await client.registerTeacherResource({
       sourceType: "feishu",
-      title: "飞书题库",
+      title: "Feishu question bank",
       originalUrl: "https://example.feishu.cn/docs/doc1",
       permissionScope: "TEACHER_PRIVATE",
     });
@@ -322,7 +351,7 @@ describe("textbookApi", () => {
         }),
         body: JSON.stringify({
           sourceType: "feishu",
-          title: "飞书题库",
+          title: "Feishu question bank",
           originalUrl: "https://example.feishu.cn/docs/doc1",
           permissionScope: "TEACHER_PRIVATE",
         }),

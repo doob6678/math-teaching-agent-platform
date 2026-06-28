@@ -68,7 +68,7 @@ public class StudentMemoryReuseService {
                 UUID.randomUUID().toString(),
                 normalized.tenantId(),
                 normalized.studentId(),
-                normalizeScope(normalized.memoryScope()),
+                normalizeScope(normalized.memoryScope(), normalized.viewerRole()),
                 normalized.knowledgePointName(),
                 normalized.questionText(),
                 normalized.answerText(),
@@ -180,13 +180,14 @@ public class StudentMemoryReuseService {
     }
 
     /**
-     * Normalizes unsupported scopes to private for safety.
+     * Normalizes unsupported scopes and unprivileged public writes to private for safety.
      *
      * @param scope requested scope
      * @return private or public
      */
-    private static String normalizeScope(String scope) {
-        return "public".equals(scope) ? "public" : "private";
+    private static String normalizeScope(String scope, String viewerRole) {
+        boolean privilegedWriter = "teacher".equals(viewerRole) || "admin".equals(viewerRole);
+        return privilegedWriter && "public".equals(scope) ? "public" : "private";
     }
 
     /**

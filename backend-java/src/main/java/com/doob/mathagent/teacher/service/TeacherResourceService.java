@@ -47,7 +47,7 @@ public class TeacherResourceService {
                 normalized.title(),
                 normalized.originalUrl(),
                 normalized.localPath(),
-                normalized.permissionScope(),
+                normalizePermissionScope(normalized.permissionScope(), normalized.viewerRole()),
                 "registered",
                 "pending",
                 "pending",
@@ -134,6 +134,24 @@ public class TeacherResourceService {
         if (!request.hasLocalPath() && !request.hasOriginalUrl()) {
             throw new IllegalArgumentException("Teacher resource requires localPath or originalUrl");
         }
+    }
+
+    /**
+     * Prevents non-admin teachers from self-assigning shared or public RAG permission scopes.
+     *
+     * @param permissionScope requested permission scope
+     * @param viewerRole backend resolved viewer role
+     * @return safe permission scope
+     */
+    private static String normalizePermissionScope(String permissionScope, String viewerRole) {
+        if (!"admin".equals(viewerRole)) {
+            return "TEACHER_PRIVATE";
+        }
+        String normalizedScope = textOrDefault(permissionScope, "TEACHER_PRIVATE").toUpperCase();
+        if ("MATH_VIP".equals(normalizedScope) || "PUBLIC_TEXTBOOK".equals(normalizedScope)) {
+            return normalizedScope;
+        }
+        return "TEACHER_PRIVATE";
     }
 
     /**

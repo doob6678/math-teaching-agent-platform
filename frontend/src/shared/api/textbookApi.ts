@@ -215,6 +215,22 @@ export interface TeachingTaskRequest {
 }
 
 /**
+ * One-time capability token returned before a high-value operation.
+ */
+export interface CapabilityTokenResponse {
+  /** Opaque token that must be consumed by the matching high-value request. */
+  token: string;
+  /** High-value action code bound to this token. */
+  action: string;
+  /** API path bound to this token. */
+  path: string;
+  /** Stable digest of the exact request body that will consume the token. */
+  requestHash: string;
+  /** Backend expiration timestamp. */
+  expiresAt: string;
+}
+
+/**
  * 教学 DAG 节点执行记录。
  */
 export interface TeachingWorkflowNode {
@@ -551,11 +567,28 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     /**
      * 提交可恢复教学任务。前端需要保存返回的 taskId，页面离开后可继续查询。
      */
-    submitTeachingTask(request: TeachingTaskRequest): Promise<TeachingTaskResponse> {
-      return requestJson<TeachingTaskResponse>("/api/teaching/tasks", {
+    async submitTeachingTask(request: TeachingTaskRequest): Promise<TeachingTaskResponse> {
+      const body = JSON.stringify(request);
+      const requestHash = await hashRequestBody(body);
+      const capability = await requestJson<CapabilityTokenResponse>("/api/security/capabilities", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(request),
+        body: JSON.stringify({
+          action: "teaching:submit",
+          path: "/api/teaching/tasks",
+          requestHash,
+          idempotencyKey: request.clientRequestId,
+          maxCost: Math.max(0, request.evidenceLimit),
+        }),
+      });
+      return requestJson<TeachingTaskResponse>("/api/teaching/tasks", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Capability-Token": capability.token,
+          "X-Request-Hash": requestHash,
+        },
+        body,
       });
     },
 
@@ -620,4 +653,28 @@ function readAuthSession(): LoginResponse | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Hashes the exact request body that will consume a capability token.
+ */
+async function hashRequestBody(body: string): Promise<string> {
+  const subtle = globalThis.crypto?.subtle;
+  if (subtle) {
+    const digest = await subtle.digest("SHA-256", new TextEncoder().encode(body));
+    return `sha256:${Array.from(new Uint8Array(digest), byteToHex).join("")}`;
+  }
+  let hash = 2166136261;
+  for (let index = 0; index < body.length; index += 1) {
+    hash ^= body.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `fnv1a32:${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+/**
+ * Converts a digest byte into two lowercase hex characters.
+ */
+function byteToHex(value: number): string {
+  return value.toString(16).padStart(2, "0");
 }

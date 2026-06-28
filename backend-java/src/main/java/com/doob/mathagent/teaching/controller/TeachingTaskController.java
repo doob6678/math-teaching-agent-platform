@@ -4,6 +4,7 @@ import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.infrastructure.security.RequestSubjectResolver;
 import com.doob.mathagent.teaching.TeachingRequestContext;
 import com.doob.mathagent.teaching.dto.TeachingTaskRequest;
+import com.doob.mathagent.teaching.service.TeachingCapabilityVerifier;
 import com.doob.mathagent.teaching.service.TeachingWorkflowService;
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
 import jakarta.servlet.http.HttpServletRequest;
@@ -22,17 +23,23 @@ import org.springframework.web.server.ResponseStatusException;
 @RestController
 public class TeachingTaskController {
 
+    private static final String TEACHING_SUBMIT_ACTION = "teaching:submit";
+    private static final String TEACHING_TASKS_PATH = "/api/teaching/tasks";
+
     private final TeachingWorkflowService workflowService;
     private final RequestSubjectResolver subjectResolver;
+    private final TeachingCapabilityVerifier capabilityVerifier;
 
     /**
      * 注入教学编排服务。
      */
     public TeachingTaskController(
             TeachingWorkflowService workflowService,
-            RequestSubjectResolver subjectResolver) {
+            RequestSubjectResolver subjectResolver,
+            TeachingCapabilityVerifier capabilityVerifier) {
         this.workflowService = workflowService;
         this.subjectResolver = subjectResolver;
+        this.capabilityVerifier = capabilityVerifier;
     }
 
     /**
@@ -42,7 +49,16 @@ public class TeachingTaskController {
     public TeachingTaskResponse submit(
             @Valid @RequestBody TeachingTaskRequest request,
             HttpServletRequest httpRequest) {
-        return workflowService.submit(request, requestContext(subjectResolver.resolve(httpRequest)));
+        RequestSubject subject = subjectResolver.resolve(httpRequest);
+        if (!capabilityVerifier.verify(
+                headerOrNull(httpRequest, "X-Capability-Token"),
+                TEACHING_SUBMIT_ACTION,
+                TEACHING_TASKS_PATH,
+                headerOrNull(httpRequest, "X-Request-Hash"),
+                subject)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for teaching submit");
+        }
+        return workflowService.submit(request, requestContext(subject));
     }
 
     /**
@@ -66,5 +82,16 @@ public class TeachingTaskController {
                 normalized.subjectType(),
                 normalized.subjectId(),
                 normalized.deviceId());
+    }
+
+    /**
+     * Reads a non-authoritative request header used for capability token verification.
+     */
+    private static String headerOrNull(HttpServletRequest request, String name) {
+        if (request == null) {
+            return null;
+        }
+        String value = request.getHeader(name);
+        return value == null || value.isBlank() ? null : value.strip();
     }
 }

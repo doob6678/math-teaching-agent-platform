@@ -47,4 +47,49 @@ class TeacherResourceControllerTest {
         assertThat(controller.list(request)).extracting(TeacherResourceDocumentResponse::title)
                 .contains("函数本地题库");
     }
+    @Test
+    void teacherCannotSelfAssignPublicResourceScope() throws Exception {
+        Path folder = tempDir.resolve("teacher-public-claim");
+        Files.createDirectories(folder);
+        Files.writeString(folder.resolve("function.md"), "# function");
+
+        TeacherResourceController controller = new TeacherResourceController(
+                new TeacherResourceService(new InMemoryTeacherResourceStore()),
+                request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"));
+
+        TeacherResourceDocumentResponse response = controller.register(new TeacherResourceRegistrationRequest(
+                null,
+                null,
+                null,
+                "local_path",
+                "teacher public claim",
+                null,
+                folder.toString(),
+                "PUBLIC_TEXTBOOK"), new MockHttpServletRequest());
+
+        assertThat(response.permissionScope()).isEqualTo("TEACHER_PRIVATE");
+    }
+
+    @Test
+    void adminCanAssignSharedResourceScope() throws Exception {
+        Path folder = tempDir.resolve("admin-shared-resource");
+        Files.createDirectories(folder);
+        Files.writeString(folder.resolve("vector.md"), "# vector");
+
+        TeacherResourceController controller = new TeacherResourceController(
+                new TeacherResourceService(new InMemoryTeacherResourceStore()),
+                request -> new RequestSubject("school-a", "admin", "admin-1", "device-1"));
+
+        TeacherResourceDocumentResponse response = controller.register(new TeacherResourceRegistrationRequest(
+                null,
+                null,
+                null,
+                "local_path",
+                "admin shared resource",
+                null,
+                folder.toString(),
+                "MATH_VIP"), new MockHttpServletRequest());
+
+        assertThat(response.permissionScope()).isEqualTo("MATH_VIP");
+    }
 }
