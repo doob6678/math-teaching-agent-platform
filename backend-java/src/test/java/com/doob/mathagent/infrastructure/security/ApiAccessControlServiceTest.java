@@ -1,0 +1,60 @@
+package com.doob.mathagent.infrastructure.security;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import org.junit.jupiter.api.Test;
+
+class ApiAccessControlServiceTest {
+
+    @Test
+    void deniesAuditEndpointWhenSubjectIsAnonymous() {
+        ApiAccessControlService service = new ApiAccessControlService(
+                FixedWindowRateLimiter.empty(),
+                Clock.fixed(Instant.parse("2026-06-28T10:00:00Z"), ZoneOffset.UTC),
+                ApiAccessPolicy.defaultRules());
+        ApiRequestIdentity identity = new ApiRequestIdentity(
+                "GET",
+                "/api/retrieval/audit/query-1",
+                "default",
+                "anonymous",
+                null,
+                "127.0.0.1",
+                "device-1",
+                "JUnit");
+
+        ApiAccessDecision decision = service.evaluate(identity);
+
+        assertThat(decision.allowed()).isFalse();
+        assertThat(decision.httpStatus()).isEqualTo(403);
+        assertThat(decision.reason()).contains("teacher");
+    }
+
+    @Test
+    void limitsSearchEndpointByDeviceAndEndpointWindow() {
+        ApiAccessControlService service = new ApiAccessControlService(
+                FixedWindowRateLimiter.empty(),
+                Clock.fixed(Instant.parse("2026-06-28T10:00:00Z"), ZoneOffset.UTC),
+                ApiAccessPolicy.defaultRulesForTests(2));
+        ApiRequestIdentity identity = new ApiRequestIdentity(
+                "GET",
+                "/api/retrieval/textbooks/search",
+                "default",
+                "guest",
+                "guest-1",
+                "127.0.0.1",
+                "device-1",
+                "JUnit");
+
+        assertThat(service.evaluate(identity).allowed()).isTrue();
+        assertThat(service.evaluate(identity).allowed()).isTrue();
+        ApiAccessDecision blocked = service.evaluate(identity);
+
+        assertThat(blocked.allowed()).isFalse();
+        assertThat(blocked.httpStatus()).isEqualTo(429);
+        assertThat(blocked.limit()).isEqualTo(2);
+        assertThat(blocked.used()).isEqualTo(3);
+    }
+}

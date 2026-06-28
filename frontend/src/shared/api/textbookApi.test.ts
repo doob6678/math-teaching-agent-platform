@@ -11,7 +11,12 @@ describe("textbookApi", () => {
 
     const summary = await client.getSummary();
 
-    expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:8080/api/resources/textbooks/summary");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8080/api/resources/textbooks/summary",
+      expect.objectContaining({
+        headers: expect.objectContaining({ "X-Subject-Type": "teacher" }),
+      }),
+    );
     expect(summary.bookCount).toBe(7);
     expect(summary.totalChunkCount).toBe(1169);
   });
@@ -34,6 +39,9 @@ describe("textbookApi", () => {
 
     expect(fetchMock).toHaveBeenCalledWith(
       "http://127.0.0.1:8080/api/retrieval/textbooks/search?query=%E5%88%86%E6%AE%B5%E5%87%BD%E6%95%B0&limit=3",
+      expect.objectContaining({
+        headers: expect.objectContaining({ "X-Subject-Type": "teacher" }),
+      }),
     );
     expect(response.queryId).toBe("audit-query-1");
     expect(response.hits[0].pageQualityLabel).toBe("content_page");
@@ -69,7 +77,16 @@ describe("textbookApi", () => {
 
     const audit = await client.getAudit("audit-query-1");
 
-    expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:8080/api/retrieval/audit/audit-query-1");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8080/api/retrieval/audit/audit-query-1",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          "X-Subject-Type": "teacher",
+          "X-Subject-Id": "local-teacher-console",
+          "X-Device-Id": "local-browser-console",
+        }),
+      }),
+    );
     expect(audit.queryText).toBe("分段函数");
     expect(audit.hits[0].rankNo).toBe(1);
   });

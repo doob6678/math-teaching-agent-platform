@@ -172,13 +172,25 @@ export interface RetrievalAuditDetail {
   hits: RetrievalAuditHit[];
 }
 
-type FetchLike = (input: string) => Promise<Pick<Response, "ok" | "status" | "json" | "text">>;
+type FetchLike = (input: string, init?: RequestInit) => Promise<Pick<Response, "ok" | "status" | "json" | "text">>;
+
+const LOCAL_CONSOLE_HEADERS = {
+  "X-Tenant-Id": "default",
+  "X-Subject-Type": "teacher",
+  "X-Subject-Id": "local-teacher-console",
+  "X-Device-Id": "local-browser-console",
+};
 
 export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = fetch) {
   const normalizedBaseUrl = baseUrl.replace(/\/+$/, "");
 
+  /**
+   * 请求后端 JSON，并携带本地教师控制台身份头用于接口分级和限流审计。
+   */
   async function requestJson<T>(path: string): Promise<T> {
-    const response = await fetchImpl(`${normalizedBaseUrl}${path}`);
+    const response = await fetchImpl(`${normalizedBaseUrl}${path}`, {
+      headers: LOCAL_CONSOLE_HEADERS,
+    });
     if (!response.ok) {
       const body = await response.text();
       throw new Error(`Backend request failed: ${response.status} ${body}`.trim());
@@ -187,10 +199,16 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
   }
 
   return {
+    /**
+     * 读取教材资源摘要。
+     */
     getSummary(): Promise<TextbookSummary> {
       return requestJson<TextbookSummary>("/api/resources/textbooks/summary");
     },
 
+    /**
+     * 执行教材证据检索。
+     */
     search(query: string, limit: number): Promise<TextbookSearchResponse> {
       const params = new URLSearchParams({
         query,
@@ -199,6 +217,9 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
       return requestJson<TextbookSearchResponse>(`/api/retrieval/textbooks/search?${params.toString()}`);
     },
 
+    /**
+     * 按 queryId 读取检索审计详情。
+     */
     getAudit(queryId: string): Promise<RetrievalAuditDetail> {
       return requestJson<RetrievalAuditDetail>(`/api/retrieval/audit/${encodeURIComponent(queryId)}`);
     },

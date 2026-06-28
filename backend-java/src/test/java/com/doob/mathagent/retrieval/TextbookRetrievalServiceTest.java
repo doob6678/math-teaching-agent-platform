@@ -7,7 +7,12 @@ import com.doob.mathagent.resources.TextbookChunk;
 import com.doob.mathagent.resources.TextbookChunkReader;
 import java.nio.file.Path;
 import java.nio.file.Files;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -112,6 +117,37 @@ class TextbookRetrievalServiceTest {
         assertThat(chunkReader.readCount()).isEqualTo(1);
     }
 
+    @Test
+    void loadsCorpusOnceWhenConcurrentRequestsMissCacheTogether() throws Exception {
+        Path root = tempDir.resolve("processed_books");
+        Path bookRoot = root.resolve("book_a");
+        Files.createDirectories(bookRoot.resolve("jsonl"));
+        Files.writeString(root.resolve("catalog.jsonl"), """
+                {"doc_id":"book_a","book_name":"Textbook A","volume":"required 1","book_root":"%s","manifest":"%s","chunk_count":1,"page_count":1,"ai_ok":false}
+                """.formatted(escape(bookRoot), escape(bookRoot.resolve("manifest.json"))));
+        Files.writeString(bookRoot.resolve("jsonl/chunks.jsonl"), """
+                {"chunk_id":"book_a_p101_text_001","doc_id":"book_a","book_name":"Textbook A","volume":"required 1","chapter_path":["Functions"],"page_no":101,"printed_page_no":"98","chunk_type":"page_summary","section_title":"Piecewise function","text":"piecewise function mapping","formula_text":"","image_rel_paths":[],"source_page_image":"pages/p101.png"}
+                """);
+        SlowCountingTextbookChunkReader chunkReader = new SlowCountingTextbookChunkReader(4);
+        TextbookRetrievalService service = new TextbookRetrievalService(
+                new TextbookCatalogReader(),
+                chunkReader,
+                new LocalTextbookBm25SearchEngine(),
+                new NoopRetrievalAuditSink());
+        ExecutorService executor = Executors.newFixedThreadPool(4);
+        List<Future<TextbookSearchResponse>> futures = new ArrayList<>();
+
+        for (int index = 0; index < 4; index++) {
+            futures.add(executor.submit(() -> service.search(root, new TextbookSearchRequest("piecewise function", 5))));
+        }
+        for (Future<TextbookSearchResponse> future : futures) {
+            assertThat(future.get().hits()).hasSize(1);
+        }
+        executor.shutdownNow();
+
+        assertThat(chunkReader.readCount()).isEqualTo(1);
+    }
+
     private static String escape(Path path) {
         return path.toString().replace("\\", "\\\\");
     }
@@ -127,6 +163,31 @@ class TextbookRetrievalServiceTest {
 
         int readCount() {
             return readCount;
+        }
+    }
+
+    private static class SlowCountingTextbookChunkReader extends TextbookChunkReader {
+        private final long delayMillis;
+        private final AtomicInteger readCount = new AtomicInteger();
+
+        SlowCountingTextbookChunkReader(int expectedConcurrentReaders) {
+            this.delayMillis = expectedConcurrentReaders * 60L;
+        }
+
+        @Override
+        public List<TextbookChunk> read(Path chunksJsonl) {
+            readCount.incrementAndGet();
+            try {
+                Thread.sleep(delayMillis);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("Interrupted while waiting for concurrent cache load test", e);
+            }
+            return super.read(chunksJsonl);
+        }
+
+        int readCount() {
+            return readCount.get();
         }
     }
 
