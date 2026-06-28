@@ -6,12 +6,14 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Repository;
 
 /**
  * In-memory teacher resource store for local development and tests.
  */
 @Repository
+@ConditionalOnProperty(prefix = "math-agent.database", name = "enabled", havingValue = "false", matchIfMissing = true)
 public class InMemoryTeacherResourceStore implements TeacherResourceStore {
 
     /** Resource documents keyed by document id. */
