@@ -2,6 +2,7 @@ import { AlertCircle, BookOpen, Database, Loader2, Search, ShieldCheck } from "l
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   RetrievalAuditDetail,
+  StudentDashboardResponse,
   TeachingTaskResponse,
   TextbookSearchHit,
   TextbookSearchResponse,
@@ -28,12 +29,15 @@ export function App() {
   const [teachingQuestion, setTeachingQuestion] = useState("已知函数 f(x) 的定义域为 R，求 D(-1)");
   const [learningGoal, setLearningGoal] = useState("理解函数新概念综合题");
   const [teachingTask, setTeachingTask] = useState<TeachingTaskResponse | null>(null);
+  const [studentDashboard, setStudentDashboard] = useState<StudentDashboardResponse | null>(null);
   const [teachingError, setTeachingError] = useState("");
+  const [studentDashboardError, setStudentDashboardError] = useState("");
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [searching, setSearching] = useState(false);
   const [loadingAudit, setLoadingAudit] = useState(false);
   const [submittingTeachingTask, setSubmittingTeachingTask] = useState(false);
   const [loadingTeachingTask, setLoadingTeachingTask] = useState(false);
+  const [loadingStudentDashboard, setLoadingStudentDashboard] = useState(false);
 
   useEffect(() => {
     setLoadingSummary(true);
@@ -42,6 +46,15 @@ export function App() {
       .then(setSummary)
       .catch((error: Error) => setSummaryError(error.message))
       .finally(() => setLoadingSummary(false));
+  }, [api]);
+
+  useEffect(() => {
+    setLoadingStudentDashboard(true);
+    api
+      .getStudentDashboard()
+      .then(setStudentDashboard)
+      .catch((error: Error) => setStudentDashboardError(error.message))
+      .finally(() => setLoadingStudentDashboard(false));
   }, [api]);
 
   useEffect(() => {
@@ -178,6 +191,12 @@ export function App() {
         </aside>
 
         <section className="result-panel">
+          <StudentDashboardPanel
+            dashboard={studentDashboard}
+            loading={loadingStudentDashboard}
+            error={studentDashboardError}
+          />
+
           <div className="result-header">
             <div>
               <p className="eyebrow">Evidence</p>
@@ -226,6 +245,109 @@ export function App() {
         </section>
       </section>
     </main>
+  );
+}
+
+function StudentDashboardPanel({
+  dashboard,
+  loading,
+  error,
+}: {
+  dashboard: StudentDashboardResponse | null;
+  loading: boolean;
+  error: string;
+}) {
+  const latestScore = dashboard?.scoreTrend.at(-1);
+  return (
+    <section className="student-dashboard">
+      <div className="result-header">
+        <div>
+          <p className="eyebrow">Student Profile</p>
+          <h2>学习画像</h2>
+        </div>
+        {dashboard ? <div className="strategy-pill">{dashboard.viewerRole}</div> : null}
+      </div>
+      {loading ? <StatusLine icon={<Loader2 className="spin" size={16} />} text="读取学习画像中" /> : null}
+      {error ? <StatusLine icon={<AlertCircle size={16} />} text={error} tone="danger" /> : null}
+      {dashboard ? (
+        <div className="dashboard-grid">
+          <div className="profile-strip">
+            <div>
+              <span>学生</span>
+              <strong>{dashboard.studentId}</strong>
+            </div>
+            <div>
+              <span>查看者</span>
+              <strong>{dashboard.viewerSubjectId}</strong>
+            </div>
+            <div>
+              <span>最近成绩</span>
+              <strong>{latestScore ? `${latestScore.score} / ${latestScore.rankInGrade}名` : "未记录"}</strong>
+            </div>
+          </div>
+
+          <div className="knowledge-panel">
+            <h3>知识点进度</h3>
+            <div className="progress-list">
+              {dashboard.knowledgeProgress.map((item) => (
+                <div className="progress-item" key={item.knowledgePointId ?? item.knowledgePointName}>
+                  <div className="progress-head">
+                    <strong>{item.knowledgePointName}</strong>
+                    <span>{item.progressPercent}%</span>
+                  </div>
+                  <div className="progress-track" aria-label={`${item.knowledgePointName} ${item.progressPercent}%`}>
+                    <div className="progress-fill" style={{ width: `${boundedPercent(item.progressPercent)}%` }} />
+                  </div>
+                  <p>{item.textbookAnchor}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="dashboard-column">
+            <h3>薄弱点</h3>
+            {dashboard.weakPoints.map((item) => (
+              <div className="weak-item" key={item.knowledgePointId ?? item.knowledgePointName}>
+                <div>
+                  <strong>{item.knowledgePointName}</strong>
+                  <span>等级 {item.weaknessLevel}</span>
+                </div>
+                <p>{item.evidenceSummary}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="dashboard-column">
+            <h3>历史问题</h3>
+            {dashboard.recentQuestions.map((item) => (
+              <div className="question-item" key={item.recordId}>
+                <strong>{item.questionTitle}</strong>
+                <span>{item.sourceType} / {item.status}</span>
+              </div>
+            ))}
+          </div>
+
+          <div className="dashboard-column score-column">
+            <h3>成绩趋势</h3>
+            {dashboard.scoreTrend.map((item) => (
+              <div className="score-item" key={item.examName}>
+                <span>{item.examName}</span>
+                <div className="score-bar">
+                  <div style={{ width: `${boundedPercent((item.score / 150) * 100)}%` }} />
+                </div>
+                <strong>{item.score}</strong>
+              </div>
+            ))}
+          </div>
+
+          <div className="scope-list">
+            {dashboard.resourceScopes.map((scope) => (
+              <span key={scope.scopeCode}>{scope.scopeName ?? scope.scopeCode}</span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </section>
   );
 }
 
@@ -298,6 +420,10 @@ function TeachingTaskPanel({
       ) : null}
     </section>
   );
+}
+
+function boundedPercent(value: number) {
+  return Math.max(0, Math.min(100, value));
 }
 
 function PanelTitle({ icon, title }: { icon: React.ReactNode; title: string }) {

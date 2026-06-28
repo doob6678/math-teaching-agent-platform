@@ -219,6 +219,180 @@ h2 {
   min-height: 120px;
 }
 
+.student-dashboard {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 22px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid #e5e9f0;
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(240px, 0.85fr);
+  gap: 12px;
+}
+
+.profile-strip {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.profile-strip div,
+.knowledge-panel,
+.dashboard-column {
+  border: 1px solid #dce5ef;
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
+.profile-strip div {
+  min-width: 0;
+  padding: 10px;
+}
+
+.profile-strip span,
+.progress-head span,
+.weak-item span,
+.question-item span,
+.score-item span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.profile-strip strong {
+  display: block;
+  margin-top: 4px;
+  color: #1e293b;
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+
+.knowledge-panel,
+.dashboard-column {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+}
+
+.knowledge-panel h3,
+.dashboard-column h3 {
+  color: #1f2a44;
+  font-size: 14px;
+  line-height: 1.3;
+}
+
+.progress-list {
+  display: grid;
+  gap: 12px;
+}
+
+.progress-item {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.progress-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.progress-head strong {
+  min-width: 0;
+  color: #1e293b;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.progress-track,
+.score-bar {
+  position: relative;
+  overflow: hidden;
+  height: 9px;
+  border-radius: 999px;
+  background: #e6edf5;
+}
+
+.progress-fill,
+.score-bar div {
+  height: 100%;
+  border-radius: inherit;
+  background: #1769aa;
+}
+
+.progress-item p,
+.weak-item p {
+  color: #536173;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.weak-item,
+.question-item {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 10px;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.weak-item div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.weak-item strong,
+.question-item strong {
+  min-width: 0;
+  color: #1e293b;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.score-column {
+  grid-column: 1 / -1;
+}
+
+.score-item {
+  display: grid;
+  grid-template-columns: minmax(90px, 0.6fr) minmax(120px, 1fr) 44px;
+  gap: 10px;
+  align-items: center;
+}
+
+.score-item strong {
+  color: #1e293b;
+  font-size: 13px;
+  text-align: right;
+}
+
+.scope-list {
+  display: flex;
+  flex-wrap: wrap;
+  grid-column: 1 / -1;
+  gap: 8px;
+}
+
+.scope-list span {
+  min-height: 26px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: #eef6ff;
+  color: #0f5f9f;
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .teaching-task {
   display: grid;
   gap: 14px;
@@ -484,5 +658,18 @@ h2 {
 
   .workspace {
     grid-template-columns: 1fr;
+  }
+
+  .dashboard-grid,
+  .profile-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .score-item {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .score-item strong {
+    text-align: left;
   }
 }

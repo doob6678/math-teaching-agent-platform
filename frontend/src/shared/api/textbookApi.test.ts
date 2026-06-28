@@ -160,4 +160,37 @@ describe("textbookApi", () => {
     );
     expect(task.nodes[0].code).toBe("LEARNING_GOAL");
   });
+
+  it("loads student dashboard with student identity headers", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        tenantId: "default",
+        studentId: "local-student",
+        viewerRole: "student",
+        viewerSubjectId: "local-student",
+        isAdminView: false,
+        knowledgeProgress: [{ knowledgePointName: "空间向量数量积", progressPercent: 68 }],
+        weakPoints: [],
+        recentQuestions: [],
+        scoreTrend: [],
+        resourceScopes: [{ scopeCode: "PUBLIC_TEXTBOOK" }],
+      }),
+    });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const dashboard = await client.getStudentDashboard();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8080/api/students/dashboard",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          "X-Subject-Type": "student",
+          "X-Subject-Id": "local-student",
+        }),
+      }),
+    );
+    expect(dashboard.studentId).toBe("local-student");
+    expect(dashboard.knowledgeProgress[0].progressPercent).toBe(68);
+  });
 });

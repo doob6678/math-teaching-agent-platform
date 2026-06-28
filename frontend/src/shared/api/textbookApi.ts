@@ -262,6 +262,104 @@ export interface TeachingTaskResponse {
   errorMessage?: string;
 }
 
+/**
+ * 学生学习画像响应。字段与后端 `StudentDashboardResponse` 对齐，用于学生端进度图谱、薄弱点和历史记录展示。
+ */
+export interface StudentDashboardResponse {
+  /** 租户 ID，用于学校或机构维度的数据隔离。 */
+  tenantId: string;
+  /** 当前面板展示的学生 ID。 */
+  studentId: string;
+  /** 当前查看者角色，通常为 student、teacher 或 admin。 */
+  viewerRole: string;
+  /** 当前查看者主体 ID。 */
+  viewerSubjectId: string;
+  /** 是否为教师或管理员代查学生画像。 */
+  isAdminView: boolean;
+  /** 按教材和飞书锚点组织的知识点掌握进度。 */
+  knowledgeProgress: StudentKnowledgeProgress[];
+  /** 从做题、试卷和教学任务中汇总的薄弱知识点。 */
+  weakPoints: StudentWeakPoint[];
+  /** 可恢复的历史问题记录。 */
+  recentQuestions: StudentRecentQuestion[];
+  /** 历史成绩趋势和年级排名。 */
+  scoreTrend: StudentScorePoint[];
+  /** 当前学生可访问的资源域。 */
+  resourceScopes: StudentResourceScope[];
+}
+
+/**
+ * 单个知识点进度，用于绘制学生端动态进度条和知识图谱节点。
+ */
+export interface StudentKnowledgeProgress {
+  /** 知识点稳定 ID。 */
+  knowledgePointId?: string;
+  /** 知识点显示名称。 */
+  knowledgePointName: string;
+  /** 教材章节或页码定位。 */
+  textbookAnchor?: string;
+  /** 飞书知识库链接或占位链接。 */
+  feishuDocUrl?: string;
+  /** 掌握百分比，范围 0 到 100。 */
+  progressPercent: number;
+}
+
+/**
+ * 学生薄弱点条目。
+ */
+export interface StudentWeakPoint {
+  /** 知识点稳定 ID。 */
+  knowledgePointId?: string;
+  /** 知识点显示名称。 */
+  knowledgePointName: string;
+  /** 薄弱等级，数值越高越需要优先处理。 */
+  weaknessLevel: number;
+  /** 触发该薄弱点的题目或试卷证据摘要。 */
+  evidenceSummary: string;
+}
+
+/**
+ * 学生最近题目记录。
+ */
+export interface StudentRecentQuestion {
+  /** 可恢复记录 ID。 */
+  recordId: string;
+  /** 来源类型，例如 teaching_task、uploaded_image 或 exam_paper。 */
+  sourceType: string;
+  /** 题目标题或摘要。 */
+  questionTitle: string;
+  /** 关联知识点名称。 */
+  knowledgePointName: string;
+  /** 当前任务状态。 */
+  status: string;
+}
+
+/**
+ * 学生考试趋势点。
+ */
+export interface StudentScorePoint {
+  /** 考试名称。 */
+  examName: string;
+  /** 分数。 */
+  score: number;
+  /** 年级排名。 */
+  rankInGrade: number;
+  /** 从试卷分析中提取出的薄弱点数量。 */
+  extractedWeakPointCount: number;
+}
+
+/**
+ * 学生可访问的资源域。
+ */
+export interface StudentResourceScope {
+  /** 权限检查使用的资源域编码。 */
+  scopeCode: string;
+  /** 资源域显示名称。 */
+  scopeName?: string;
+  /** 资源域访问策略说明。 */
+  accessPolicy?: string;
+}
+
 type FetchLike = (input: string, init?: RequestInit) => Promise<Pick<Response, "ok" | "status" | "json" | "text">>;
 
 const LOCAL_CONSOLE_HEADERS = {
@@ -269,6 +367,13 @@ const LOCAL_CONSOLE_HEADERS = {
   "X-Subject-Type": "teacher",
   "X-Subject-Id": "local-teacher-console",
   "X-Device-Id": "local-browser-console",
+};
+
+const LOCAL_STUDENT_HEADERS = {
+  "X-Tenant-Id": "default",
+  "X-Subject-Type": "student",
+  "X-Subject-Id": "local-student",
+  "X-Device-Id": "local-browser-student",
 };
 
 export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = fetch) {
@@ -332,6 +437,20 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
      */
     getTeachingTask(taskId: string): Promise<TeachingTaskResponse> {
       return requestJson<TeachingTaskResponse>(`/api/teaching/tasks/${encodeURIComponent(taskId)}`);
+    },
+
+    /**
+     * 读取学生学习画像。默认使用本地学生身份，避免学生面板误带教师权限。
+     */
+    getStudentDashboard(studentId?: string): Promise<StudentDashboardResponse> {
+      const params = new URLSearchParams();
+      if (studentId) {
+        params.set("studentId", studentId);
+      }
+      const suffix = params.size > 0 ? `?${params.toString()}` : "";
+      return requestJson<StudentDashboardResponse>(`/api/students/dashboard${suffix}`, {
+        headers: LOCAL_STUDENT_HEADERS,
+      });
     },
   };
 }
