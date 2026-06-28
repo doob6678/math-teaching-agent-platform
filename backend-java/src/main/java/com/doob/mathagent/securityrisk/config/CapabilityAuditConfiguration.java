@@ -1,6 +1,5 @@
 package com.doob.mathagent.securityrisk.config;
 
-import com.doob.mathagent.securityrisk.service.CapabilityAuditSink;
 import com.doob.mathagent.securityrisk.service.RecentCapabilityAuditStore;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
@@ -19,7 +18,7 @@ public class CapabilityAuditConfiguration {
      */
     @Bean
     @ConditionalOnProperty(prefix = "math-agent.database", name = "enabled", havingValue = "false", matchIfMissing = true)
-    public CapabilityAuditSink capabilityAuditSink() {
+    public RecentCapabilityAuditStore capabilityAuditSink() {
         return new RecentCapabilityAuditStore(500);
     }
 }

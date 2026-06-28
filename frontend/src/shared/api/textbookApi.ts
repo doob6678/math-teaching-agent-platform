@@ -231,6 +231,52 @@ export interface CapabilityTokenResponse {
 }
 
 /**
+ * Capability audit query filters. Tenant and reviewer identity are resolved by the backend session.
+ */
+export interface CapabilityAuditQuery {
+  /** Optional audited subject role filter, such as student or teacher. */
+  subjectType?: string;
+  /** Optional audited subject id filter. */
+  subjectId?: string;
+  /** Optional high-value action code filter. */
+  action?: string;
+  /** Optional lifecycle decision filter, such as issued, consumed, rejected, or denied. */
+  decision?: string;
+  /** Maximum rows returned by the backend. */
+  limit?: number;
+}
+
+/**
+ * Capability audit row returned to teacher/admin reviewers.
+ */
+export interface CapabilityAuditLogResponse {
+  /** Stable audit event id. */
+  eventId: string;
+  /** Backend event timestamp when present. */
+  occurredAt?: string;
+  /** Tenant that owns the event. */
+  tenantId: string;
+  /** Backend resolved requester role. */
+  subjectType?: string;
+  /** Backend resolved requester id. */
+  subjectId?: string;
+  /** High-value action code. */
+  action: string;
+  /** API path bound to the capability. */
+  path: string;
+  /** Hash of the exact high-value request body. */
+  requestHash: string;
+  /** Client idempotency key. */
+  idempotencyKey: string;
+  /** SHA-256 token hash; raw capability tokens are never returned. */
+  tokenHash: string;
+  /** Lifecycle decision, such as issued, consumed, rejected, or denied. */
+  decision: string;
+  /** Human-readable decision reason. */
+  reason: string;
+}
+
+/**
  * 教学 DAG 节点执行记录。
  */
 export interface TeachingWorkflowNode {
@@ -562,6 +608,30 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
      */
     getAudit(queryId: string): Promise<RetrievalAuditDetail> {
       return requestJson<RetrievalAuditDetail>(`/api/retrieval/audit/${encodeURIComponent(queryId)}`);
+    },
+
+    /**
+     * Reads high-value capability audit rows for teacher/admin security review.
+     */
+    listCapabilityAudits(query: CapabilityAuditQuery = {}): Promise<CapabilityAuditLogResponse[]> {
+      const params = new URLSearchParams();
+      if (query.subjectType) {
+        params.set("subjectType", query.subjectType);
+      }
+      if (query.subjectId) {
+        params.set("subjectId", query.subjectId);
+      }
+      if (query.action) {
+        params.set("action", query.action);
+      }
+      if (query.decision) {
+        params.set("decision", query.decision);
+      }
+      if (query.limit) {
+        params.set("limit", String(query.limit));
+      }
+      const suffix = params.size > 0 ? `?${params.toString()}` : "";
+      return requestJson<CapabilityAuditLogResponse[]>(`/api/security/capability-audits${suffix}`);
     },
 
     /**

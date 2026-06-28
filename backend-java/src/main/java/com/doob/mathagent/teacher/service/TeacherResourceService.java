@@ -1,6 +1,5 @@
 package com.doob.mathagent.teacher.service;
 
-import com.doob.mathagent.teacher.dto.TeacherResourceRegistrationRequest;
 import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -35,8 +34,8 @@ public class TeacherResourceService {
      * @param request registration request
      * @return registered resource document
      */
-    public TeacherResourceDocumentResponse register(TeacherResourceRegistrationRequest request) {
-        TeacherResourceRegistrationRequest normalized = request.normalize();
+    public TeacherResourceDocumentResponse register(TeacherResourceRegistrationCommand request) {
+        TeacherResourceRegistrationCommand normalized = request.normalize();
         requireTeacherOrAdmin(normalized.viewerRole());
         requireSourceLocation(normalized);
         TeacherResourceDocumentResponse document = new TeacherResourceDocumentResponse(
@@ -130,7 +129,7 @@ public class TeacherResourceService {
      *
      * @param request normalized registration request
      */
-    private static void requireSourceLocation(TeacherResourceRegistrationRequest request) {
+    private static void requireSourceLocation(TeacherResourceRegistrationCommand request) {
         if (!request.hasLocalPath() && !request.hasOriginalUrl()) {
             throw new IllegalArgumentException("Teacher resource requires localPath or originalUrl");
         }

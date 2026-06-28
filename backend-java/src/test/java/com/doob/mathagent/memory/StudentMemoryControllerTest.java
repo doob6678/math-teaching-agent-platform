@@ -6,6 +6,7 @@ import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.memory.controller.StudentMemoryController;
 import com.doob.mathagent.memory.dto.StudentMemoryRequest;
 import com.doob.mathagent.memory.service.InMemoryStudentMemoryStore;
+import com.doob.mathagent.memory.service.StudentMemoryCommand;
 import com.doob.mathagent.memory.service.StudentMemoryReuseService;
 import com.doob.mathagent.memory.vo.StudentMemoryResponse;
 import org.junit.jupiter.api.Test;
@@ -14,7 +15,7 @@ import org.springframework.mock.web.MockHttpServletRequest;
 class StudentMemoryControllerTest {
 
     @Test
-    void requestBodyStudentIdCannotWriteAnotherStudentsPrivateMemory() {
+    void requestBodyCannotWriteAnotherStudentsPrivateMemory() {
         StudentMemoryReuseService service = new StudentMemoryReuseService(new InMemoryStudentMemoryStore());
         StudentMemoryController controller = new StudentMemoryController(
                 service,
@@ -23,31 +24,28 @@ class StudentMemoryControllerTest {
         request.addHeader("X-Subject-Id", "student-spoofed");
 
         controller.remember(new StudentMemoryRequest(
-                "school-a",
-                "admin",
-                "student-victim",
-                "空间向量数量积求夹角",
-                "用数量积公式先求 cosθ。",
-                "空间向量数量积",
+                "vector dot product angle",
+                "Use a dot b = |a||b|cos(theta) first.",
+                "vector dot product",
                 "private",
                 false), request);
 
-        StudentMemoryResponse victim = service.reuse(new StudentMemoryRequest(
+        StudentMemoryResponse victim = service.reuse(new StudentMemoryCommand(
                 "school-a",
                 "student",
                 "student-victim",
-                "空间向量数量积求夹角",
+                "vector dot product angle",
                 null,
-                "空间向量数量积",
+                "vector dot product",
                 "private",
                 false));
-        StudentMemoryResponse owner = service.reuse(new StudentMemoryRequest(
+        StudentMemoryResponse owner = service.reuse(new StudentMemoryCommand(
                 "school-a",
                 "student",
                 "student-real",
-                "空间向量数量积求夹角",
+                "vector dot product angle",
                 null,
-                "空间向量数量积",
+                "vector dot product",
                 "private",
                 false));
 

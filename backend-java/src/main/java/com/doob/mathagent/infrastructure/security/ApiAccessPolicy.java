@@ -29,6 +29,7 @@ public class ApiAccessPolicy {
         return new ApiAccessPolicy(List.of(
                 new ApiAccessRule("/api/system/health", ApiAccessLevel.PUBLIC, Set.of("*"), 120, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/auth/login", ApiAccessLevel.PUBLIC, Set.of("*"), 20, Duration.ofMinutes(1)),
+                new ApiAccessRule("/api/security/capability-audits", ApiAccessLevel.ADMIN, Set.of("teacher", "admin"), 60, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/security/capabilities", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 20, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/resources/textbooks/summary", ApiAccessLevel.PUBLIC, Set.of("*"), 120, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/students/memory", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 40, Duration.ofMinutes(1)),

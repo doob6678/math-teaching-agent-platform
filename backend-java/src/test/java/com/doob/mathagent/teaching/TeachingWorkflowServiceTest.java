@@ -2,8 +2,8 @@ package com.doob.mathagent.teaching;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.doob.mathagent.memory.dto.StudentMemoryRequest;
 import com.doob.mathagent.memory.service.InMemoryStudentMemoryStore;
+import com.doob.mathagent.memory.service.StudentMemoryCommand;
 import com.doob.mathagent.memory.service.StudentMemoryReuseService;
 import com.doob.mathagent.resources.TextbookCatalogReader;
 import com.doob.mathagent.resources.TextbookChunkReader;
@@ -72,7 +72,7 @@ class TeachingWorkflowServiceTest {
     void reusesStudentMemoryBeforeTextbookRetrievalWhenSimilarAnswerExists() throws Exception {
         Path root = createTextbookCorpus();
         StudentMemoryReuseService memoryReuseService = memoryReuseService();
-        memoryReuseService.remember(new StudentMemoryRequest(
+        memoryReuseService.remember(new StudentMemoryCommand(
                 "tenant-a",
                 "student",
                 "student-1",

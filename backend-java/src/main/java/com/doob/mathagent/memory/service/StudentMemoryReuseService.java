@@ -1,6 +1,5 @@
 package com.doob.mathagent.memory.service;
 
-import com.doob.mathagent.memory.dto.StudentMemoryRequest;
 import com.doob.mathagent.memory.vo.StudentMemoryResponse;
 import java.time.Clock;
 import java.time.Instant;
@@ -50,9 +49,9 @@ public class StudentMemoryReuseService {
      * @param request memory request
      * @return memory write response
      */
-    public StudentMemoryResponse remember(StudentMemoryRequest request) {
+    public StudentMemoryResponse remember(StudentMemoryCommand request) {
         StageTimer timer = new StageTimer();
-        StudentMemoryRequest normalized = request.normalize();
+        StudentMemoryCommand normalized = request.normalize();
         timer.mark("normalize");
         if (!normalized.rememberable()) {
             return new StudentMemoryResponse(
@@ -91,9 +90,9 @@ public class StudentMemoryReuseService {
      * @param request memory reuse request
      * @return reuse decision response
      */
-    public StudentMemoryResponse reuse(StudentMemoryRequest request) {
+    public StudentMemoryResponse reuse(StudentMemoryCommand request) {
         StageTimer timer = new StageTimer();
-        StudentMemoryRequest normalized = request.normalize();
+        StudentMemoryCommand normalized = request.normalize();
         timer.mark("normalize");
         if (normalized.bypassReuse()) {
             return new StudentMemoryResponse(
@@ -142,7 +141,7 @@ public class StudentMemoryReuseService {
      * @param candidate memory candidate
      * @return similarity from 0 to 1
      */
-    private static double similarity(StudentMemoryRequest request, StudentMemoryEntry candidate) {
+    private static double similarity(StudentMemoryCommand request, StudentMemoryEntry candidate) {
         Set<String> left = tokens(request.questionText());
         Set<String> right = tokens(candidate.questionText());
         if (left.isEmpty() || right.isEmpty()) {

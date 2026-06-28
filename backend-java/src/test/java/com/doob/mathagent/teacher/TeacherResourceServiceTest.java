@@ -3,8 +3,8 @@ package com.doob.mathagent.teacher;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.doob.mathagent.teacher.dto.TeacherResourceRegistrationRequest;
 import com.doob.mathagent.teacher.service.InMemoryTeacherResourceStore;
+import com.doob.mathagent.teacher.service.TeacherResourceRegistrationCommand;
 import com.doob.mathagent.teacher.service.TeacherResourceService;
 import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
 import java.nio.file.Files;
@@ -24,7 +24,7 @@ class TeacherResourceServiceTest {
         Files.writeString(folder.resolve("vector.md"), "# 空间向量\n数量积方法");
 
         TeacherResourceService service = new TeacherResourceService(new InMemoryTeacherResourceStore());
-        TeacherResourceRegistrationRequest request = new TeacherResourceRegistrationRequest(
+        TeacherResourceRegistrationCommand request = new TeacherResourceRegistrationCommand(
                 "default",
                 "teacher",
                 "teacher-001",
@@ -50,7 +50,7 @@ class TeacherResourceServiceTest {
     @Test
     void studentCannotRegisterTeacherResource() {
         TeacherResourceService service = new TeacherResourceService(new InMemoryTeacherResourceStore());
-        TeacherResourceRegistrationRequest request = new TeacherResourceRegistrationRequest(
+        TeacherResourceRegistrationCommand request = new TeacherResourceRegistrationCommand(
                 "default",
                 "student",
                 "student-001",
@@ -68,7 +68,7 @@ class TeacherResourceServiceTest {
     @Test
     void ownerTeacherCanArchiveOwnResource() {
         TeacherResourceService service = new TeacherResourceService(new InMemoryTeacherResourceStore());
-        TeacherResourceDocumentResponse created = service.register(new TeacherResourceRegistrationRequest(
+        TeacherResourceDocumentResponse created = service.register(new TeacherResourceRegistrationCommand(
                 "default",
                 "teacher",
                 "teacher-001",

@@ -1,11 +1,12 @@
 package com.doob.mathagent.securityrisk.service;
 
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.doob.mathagent.securityrisk.dto.CapabilityAuditQuery;
 import com.doob.mathagent.securityrisk.entity.CapabilityAuditLogEntity;
 import com.doob.mathagent.securityrisk.mapper.CapabilityAuditLogMapper;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.util.HexFormat;
+import com.doob.mathagent.securityrisk.vo.CapabilityAuditLogResponse;
+import java.util.List;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Repository;
 
@@ -14,7 +15,7 @@ import org.springframework.stereotype.Repository;
  */
 @Repository
 @ConditionalOnProperty(prefix = "math-agent.database", name = "enabled", havingValue = "true")
-public class MyBatisCapabilityAuditStore implements CapabilityAuditSink {
+public class MyBatisCapabilityAuditStore implements CapabilityAuditSink, CapabilityAuditLookup {
 
     private final CapabilityAuditLogMapper mapper;
 
@@ -41,6 +42,29 @@ public class MyBatisCapabilityAuditStore implements CapabilityAuditSink {
     }
 
     /**
+     * Searches persisted capability audit rows by backend tenant and optional filters.
+     *
+     * @param query query conditions
+     * @return matching audit rows without raw capability tokens
+     */
+    @Override
+    public List<CapabilityAuditLogResponse> search(CapabilityAuditQuery query) {
+        CapabilityAuditQuery normalized = query.normalize();
+        QueryWrapper<CapabilityAuditLogEntity> wrapper = new QueryWrapper<CapabilityAuditLogEntity>()
+                .eq("tenant_id", normalized.tenantId())
+                .orderByDesc("occurred_at");
+        eqIfPresent(wrapper, "subject_type", normalized.subjectType());
+        eqIfPresent(wrapper, "subject_id", normalized.subjectId());
+        eqIfPresent(wrapper, "action", normalized.action());
+        eqIfPresent(wrapper, "decision", normalized.decision());
+        return mapper.selectPage(Page.of(1, normalized.limit()), wrapper)
+                .getRecords()
+                .stream()
+                .map(CapabilityAuditResponses::fromEntity)
+                .toList();
+    }
+
+    /**
      * Converts an audit event to a database entity.
      *
      * @param event audit event
@@ -57,27 +81,18 @@ public class MyBatisCapabilityAuditStore implements CapabilityAuditSink {
         entity.setPath(event.path());
         entity.setRequestHash(event.requestHash());
         entity.setIdempotencyKey(event.idempotencyKey());
-        entity.setTokenHash(tokenHash(event.token()));
+        entity.setTokenHash(CapabilityAuditResponses.tokenHash(event.token()));
         entity.setDecision(event.decision());
         entity.setReason(event.reason());
         return entity;
     }
 
     /**
-     * Hashes raw capability tokens before persistence.
-     *
-     * @param token raw token
-     * @return SHA-256 token hash or empty string when token is absent
+     * Adds an equality filter only when a request parameter is present.
      */
-    private static String tokenHash(String token) {
-        if (token == null || token.isBlank()) {
-            return "";
-        }
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            return HexFormat.of().formatHex(digest.digest(token.getBytes(StandardCharsets.UTF_8)));
-        } catch (NoSuchAlgorithmException exception) {
-            throw new IllegalStateException("SHA-256 is not available", exception);
+    private static void eqIfPresent(QueryWrapper<CapabilityAuditLogEntity> wrapper, String column, String value) {
+        if (value != null) {
+            wrapper.eq(column, value);
         }
     }
 }

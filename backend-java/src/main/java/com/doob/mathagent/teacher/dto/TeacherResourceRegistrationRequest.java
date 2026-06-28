@@ -1,21 +1,15 @@
 package com.doob.mathagent.teacher.dto;
 
 /**
- * Request used by teachers or admins to register a managed resource source.
+ * Request body used by teachers or admins to register a managed resource source.
  *
- * @param tenantId tenant id that owns the resource
- * @param viewerRole current viewer role, usually teacher or admin
- * @param viewerSubjectId current teacher/admin subject id
- * @param sourceType resource source type, such as feishu, local_path, local_docx, textbook_md
+ * @param sourceType resource source type, such as feishu, local_path, local_docx, or textbook_md
  * @param title display title shown in teacher resource management pages
  * @param originalUrl original Feishu URL or external source URL
  * @param localPath local folder or file path configured by teacher/admin
  * @param permissionScope resource access scope, such as TEACHER_PRIVATE, MATH_VIP, or PUBLIC_TEXTBOOK
  */
 public record TeacherResourceRegistrationRequest(
-        String tenantId,
-        String viewerRole,
-        String viewerSubjectId,
         String sourceType,
         String title,
         String originalUrl,
@@ -23,17 +17,14 @@ public record TeacherResourceRegistrationRequest(
         String permissionScope) {
 
     /**
-     * Returns a normalized registration request with local development defaults.
+     * Returns a normalized request body without adding identity defaults.
      *
-     * @return normalized registration request
+     * @return normalized request body
      */
     public TeacherResourceRegistrationRequest normalize() {
         return new TeacherResourceRegistrationRequest(
-                textOrDefault(tenantId, "default"),
-                textOrDefault(viewerRole, "teacher").toLowerCase(),
-                textOrDefault(viewerSubjectId, "local-teacher-console"),
                 textOrDefault(sourceType, "local_path").toLowerCase(),
-                textOrDefault(title, "未命名教师资料"),
+                textOrDefault(title, "untitled-teacher-resource"),
                 blankToNull(originalUrl),
                 blankToNull(localPath),
                 textOrDefault(permissionScope, "TEACHER_PRIVATE"));

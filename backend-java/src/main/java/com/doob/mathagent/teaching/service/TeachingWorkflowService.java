@@ -1,6 +1,7 @@
 package com.doob.mathagent.teaching.service;
 
 import com.doob.mathagent.memory.dto.StudentMemoryRequest;
+import com.doob.mathagent.memory.service.StudentMemoryCommand;
 import com.doob.mathagent.memory.service.StudentMemoryReuseService;
 import com.doob.mathagent.memory.vo.StudentMemoryResponse;
 import com.doob.mathagent.retrieval.RetrievalRequestContext;
@@ -129,16 +130,17 @@ public class TeachingWorkflowService {
     /**
      * 构造学生记忆查询请求；教学任务阶段先使用学习目标作为知识点粗标签，后续会接入知识点识别器。
      */
-    private static StudentMemoryRequest memoryRequest(TeachingTaskRequest request, TeachingRequestContext context) {
-        return new StudentMemoryRequest(
+    private static StudentMemoryCommand memoryRequest(TeachingTaskRequest request, TeachingRequestContext context) {
+        return StudentMemoryCommand.fromRequest(
                 context.tenantId(),
                 context.subjectType(),
                 context.subjectId(),
-                request.questionText(),
-                null,
-                request.learningGoal(),
-                "private",
-                false);
+                new StudentMemoryRequest(
+                        request.questionText(),
+                        null,
+                        request.learningGoal(),
+                        "private",
+                        false));
     }
 
     /**

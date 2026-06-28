@@ -164,6 +164,46 @@ describe("textbookApi", () => {
     expect(audit.hits[0].rankNo).toBe(1);
   });
 
+  it("loads capability audits without client supplied identity", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ([{
+        eventId: "event-1",
+        tenantId: "school-a",
+        subjectType: "student",
+        subjectId: "student-1",
+        action: "teaching:submit",
+        path: "/api/teaching/tasks",
+        requestHash: "hash-1",
+        idempotencyKey: "client-1",
+        tokenHash: "token-hash-1",
+        decision: "issued",
+        reason: "Capability token issued",
+      }]),
+    });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const audits = await client.listCapabilityAudits({
+      subjectType: "student",
+      subjectId: "student-1",
+      action: "teaching:submit",
+      decision: "issued",
+      limit: 25,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8080/api/security/capability-audits?subjectType=student&subjectId=student-1&action=teaching%3Asubmit&decision=issued&limit=25",
+      expect.objectContaining({
+        headers: expect.not.objectContaining({
+          "X-Subject-Type": expect.any(String),
+          "X-Subject-Id": expect.any(String),
+        }),
+      }),
+    );
+    expect(audits[0].tokenHash).toBe("token-hash-1");
+    expect(audits[0]).not.toHaveProperty("token");
+  });
+
   it("submits teaching task with one-time capability token bound to request hash", async () => {
     const fetchMock = vi
       .fn()

@@ -3,6 +3,7 @@ package com.doob.mathagent.teacher.controller;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.infrastructure.security.RequestSubjectResolver;
 import com.doob.mathagent.teacher.dto.TeacherResourceRegistrationRequest;
+import com.doob.mathagent.teacher.service.TeacherResourceRegistrationCommand;
 import com.doob.mathagent.teacher.service.TeacherResourceService;
 import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
 import jakarta.servlet.http.HttpServletRequest;
@@ -82,24 +83,20 @@ public class TeacherResourceController {
     }
 
     /**
-     * Merges request body fields with authenticated request headers.
+     * Merges request body fields with backend-resolved subject identity.
      *
      * @param request registration body
-     * @param httpRequest HTTP request
-     * @return enriched registration request
+     * @param subject backend resolved subject
+     * @return server-side registration command
      */
-    private static TeacherResourceRegistrationRequest enrich(
+    private static TeacherResourceRegistrationCommand enrich(
             TeacherResourceRegistrationRequest request,
             RequestSubject subject) {
         RequestSubject normalized = subject.normalize();
-        return new TeacherResourceRegistrationRequest(
+        return TeacherResourceRegistrationCommand.fromRequest(
                 normalized.tenantId(),
                 normalized.subjectType(),
                 normalized.subjectId(),
-                request.sourceType(),
-                request.title(),
-                request.originalUrl(),
-                request.localPath(),
-                request.permissionScope());
+                request);
     }
 }

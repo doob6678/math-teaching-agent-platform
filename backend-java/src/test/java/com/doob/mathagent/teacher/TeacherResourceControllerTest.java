@@ -23,7 +23,7 @@ class TeacherResourceControllerTest {
     void controllerBuildsTeacherContextFromBackendSubject() throws Exception {
         Path folder = tempDir.resolve("teacher-bank");
         Files.createDirectories(folder);
-        Files.writeString(folder.resolve("函数.md"), "# 函数题型");
+        Files.writeString(folder.resolve("function.md"), "# function");
 
         TeacherResourceController controller = new TeacherResourceController(
                 new TeacherResourceService(new InMemoryTeacherResourceStore()),
@@ -33,11 +33,8 @@ class TeacherResourceControllerTest {
         request.addHeader("X-Subject-Id", "teacher-spoofed");
 
         TeacherResourceDocumentResponse response = controller.register(new TeacherResourceRegistrationRequest(
-                null,
-                null,
-                null,
                 "local_path",
-                "函数本地题库",
+                "function local bank",
                 null,
                 folder.toString(),
                 "MATH_VIP"), request);
@@ -45,8 +42,9 @@ class TeacherResourceControllerTest {
         assertThat(response.tenantId()).isEqualTo("school-a");
         assertThat(response.ownerSubjectId()).isEqualTo("teacher-88");
         assertThat(controller.list(request)).extracting(TeacherResourceDocumentResponse::title)
-                .contains("函数本地题库");
+                .contains("function local bank");
     }
+
     @Test
     void teacherCannotSelfAssignPublicResourceScope() throws Exception {
         Path folder = tempDir.resolve("teacher-public-claim");
@@ -58,9 +56,6 @@ class TeacherResourceControllerTest {
                 request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"));
 
         TeacherResourceDocumentResponse response = controller.register(new TeacherResourceRegistrationRequest(
-                null,
-                null,
-                null,
                 "local_path",
                 "teacher public claim",
                 null,
@@ -81,9 +76,6 @@ class TeacherResourceControllerTest {
                 request -> new RequestSubject("school-a", "admin", "admin-1", "device-1"));
 
         TeacherResourceDocumentResponse response = controller.register(new TeacherResourceRegistrationRequest(
-                null,
-                null,
-                null,
                 "local_path",
                 "admin shared resource",
                 null,

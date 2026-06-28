@@ -2,8 +2,8 @@ package com.doob.mathagent.memory;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.doob.mathagent.memory.dto.StudentMemoryRequest;
 import com.doob.mathagent.memory.service.InMemoryStudentMemoryStore;
+import com.doob.mathagent.memory.service.StudentMemoryCommand;
 import com.doob.mathagent.memory.service.StudentMemoryReuseService;
 import com.doob.mathagent.memory.vo.StudentMemoryResponse;
 import java.time.Clock;
@@ -18,7 +18,7 @@ class StudentMemoryReuseServiceTest {
     @Test
     void studentReusesOwnSimilarQuestionMemory() {
         StudentMemoryReuseService service = new StudentMemoryReuseService(new InMemoryStudentMemoryStore(), clock);
-        service.remember(new StudentMemoryRequest(
+        service.remember(new StudentMemoryCommand(
                 "default",
                 "student",
                 "student-001",
@@ -28,7 +28,7 @@ class StudentMemoryReuseServiceTest {
                 "private",
                 false));
 
-        StudentMemoryResponse response = service.reuse(new StudentMemoryRequest(
+        StudentMemoryResponse response = service.reuse(new StudentMemoryCommand(
                 "default",
                 "student",
                 "student-001",
@@ -48,7 +48,7 @@ class StudentMemoryReuseServiceTest {
     @Test
     void studentCannotReuseAnotherStudentsPrivateMemory() {
         StudentMemoryReuseService service = new StudentMemoryReuseService(new InMemoryStudentMemoryStore(), clock);
-        service.remember(new StudentMemoryRequest(
+        service.remember(new StudentMemoryCommand(
                 "default",
                 "student",
                 "student-001",
@@ -58,7 +58,7 @@ class StudentMemoryReuseServiceTest {
                 "private",
                 false));
 
-        StudentMemoryResponse response = service.reuse(new StudentMemoryRequest(
+        StudentMemoryResponse response = service.reuse(new StudentMemoryCommand(
                 "default",
                 "student",
                 "student-002",
@@ -75,7 +75,7 @@ class StudentMemoryReuseServiceTest {
     @Test
     void publicMemoryCanBeReusedAcrossStudents() {
         StudentMemoryReuseService service = new StudentMemoryReuseService(new InMemoryStudentMemoryStore(), clock);
-        service.remember(new StudentMemoryRequest(
+        service.remember(new StudentMemoryCommand(
                 "default",
                 "teacher",
                 "teacher-001",
@@ -85,7 +85,7 @@ class StudentMemoryReuseServiceTest {
                 "public",
                 false));
 
-        StudentMemoryResponse response = service.reuse(new StudentMemoryRequest(
+        StudentMemoryResponse response = service.reuse(new StudentMemoryCommand(
                 "default",
                 "student",
                 "student-003",
@@ -103,7 +103,7 @@ class StudentMemoryReuseServiceTest {
     void studentRequestedPublicMemoryIsStoredAsPrivate() {
         StudentMemoryReuseService service = new StudentMemoryReuseService(new InMemoryStudentMemoryStore(), clock);
 
-        StudentMemoryResponse stored = service.remember(new StudentMemoryRequest(
+        StudentMemoryResponse stored = service.remember(new StudentMemoryCommand(
                 "default",
                 "student",
                 "student-001",
@@ -112,7 +112,7 @@ class StudentMemoryReuseServiceTest {
                 "piecewise function",
                 "public",
                 false));
-        StudentMemoryResponse otherStudent = service.reuse(new StudentMemoryRequest(
+        StudentMemoryResponse otherStudent = service.reuse(new StudentMemoryCommand(
                 "default",
                 "student",
                 "student-002",
@@ -129,7 +129,7 @@ class StudentMemoryReuseServiceTest {
     @Test
     void expiredOrExplicitlyBypassedMemoryIsNotReused() {
         StudentMemoryReuseService service = new StudentMemoryReuseService(new InMemoryStudentMemoryStore(), clock);
-        service.remember(new StudentMemoryRequest(
+        service.remember(new StudentMemoryCommand(
                 "default",
                 "student",
                 "student-001",
@@ -139,7 +139,7 @@ class StudentMemoryReuseServiceTest {
                 "private",
                 false));
 
-        StudentMemoryResponse bypassed = service.reuse(new StudentMemoryRequest(
+        StudentMemoryResponse bypassed = service.reuse(new StudentMemoryCommand(
                 "default",
                 "student",
                 "student-001",

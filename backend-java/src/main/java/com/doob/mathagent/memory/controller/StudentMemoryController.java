@@ -3,6 +3,7 @@ package com.doob.mathagent.memory.controller;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.infrastructure.security.RequestSubjectResolver;
 import com.doob.mathagent.memory.dto.StudentMemoryRequest;
+import com.doob.mathagent.memory.service.StudentMemoryCommand;
 import com.doob.mathagent.memory.service.StudentMemoryReuseService;
 import com.doob.mathagent.memory.vo.StudentMemoryResponse;
 import jakarta.servlet.http.HttpServletRequest;
@@ -57,22 +58,18 @@ public class StudentMemoryController {
     }
 
     /**
-     * Merges request body with request headers.
+     * Merges request body with backend-resolved subject identity.
      *
      * @param request request body
-     * @param httpRequest HTTP request
-     * @return enriched request
+     * @param subject backend resolved subject
+     * @return server-side memory command
      */
-    private static StudentMemoryRequest enrich(StudentMemoryRequest request, RequestSubject subject) {
+    private static StudentMemoryCommand enrich(StudentMemoryRequest request, RequestSubject subject) {
         RequestSubject normalized = subject.normalize();
-        return new StudentMemoryRequest(
+        return StudentMemoryCommand.fromRequest(
                 normalized.tenantId(),
                 normalized.subjectType(),
                 normalized.subjectId(),
-                request.questionText(),
-                request.answerText(),
-                request.knowledgePointName(),
-                request.memoryScope(),
-                request.bypassReuse());
+                request);
     }
 }

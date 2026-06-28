@@ -1,21 +1,15 @@
 package com.doob.mathagent.memory.dto;
 
 /**
- * Request for student memory remember/reuse operations.
+ * Request body for student memory remember/reuse operations.
  *
- * @param tenantId tenant id used to isolate schools or organizations
- * @param viewerRole current viewer role, such as student, teacher, or admin
- * @param studentId student id that owns private memory
  * @param questionText normalized or raw student question text
  * @param answerText answer text to remember; empty when only querying reuse
  * @param knowledgePointName optional knowledge point used to improve similarity matching
- * @param memoryScope private means student-owned; public means reusable across students in the same tenant
+ * @param memoryScope private means student-owned; public means reusable only after server-side role check
  * @param bypassReuse whether the caller explicitly asks to skip reuse and regenerate
  */
 public record StudentMemoryRequest(
-        String tenantId,
-        String viewerRole,
-        String studentId,
         String questionText,
         String answerText,
         String knowledgePointName,
@@ -23,15 +17,12 @@ public record StudentMemoryRequest(
         boolean bypassReuse) {
 
     /**
-     * Returns a normalized memory request with safe local defaults.
+     * Returns a normalized request body without adding identity defaults.
      *
-     * @return normalized request
+     * @return normalized request body
      */
     public StudentMemoryRequest normalize() {
         return new StudentMemoryRequest(
-                textOrDefault(tenantId, "default"),
-                textOrDefault(viewerRole, "student").toLowerCase(),
-                textOrDefault(studentId, "local-student"),
                 textOrDefault(questionText, ""),
                 answerText == null ? null : answerText.strip(),
                 knowledgePointName == null ? "" : knowledgePointName.strip(),
@@ -40,7 +31,7 @@ public record StudentMemoryRequest(
     }
 
     /**
-     * Returns whether the request can be stored as a memory entry.
+     * Returns whether the request body has enough content to be stored.
      *
      * @return true when question and answer are present
      */
