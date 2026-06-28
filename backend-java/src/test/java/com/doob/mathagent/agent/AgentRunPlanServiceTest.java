@@ -1,0 +1,133 @@
+package com.doob.mathagent.agent;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import com.doob.mathagent.agent.dto.AgentRunPlanRequest;
+import com.doob.mathagent.agent.service.AgentRunPlanService;
+import com.doob.mathagent.agent.vo.AgentRunPlanResponse;
+import com.doob.mathagent.infrastructure.ai.AiProviderCatalog;
+import com.doob.mathagent.infrastructure.ai.AiProviderProperties;
+import com.doob.mathagent.infrastructure.security.RequestSubject;
+import java.util.List;
+import org.junit.jupiter.api.Test;
+
+class AgentRunPlanServiceTest {
+
+    @Test
+    void plansStudentTutorWithOnlyStudentSafeToolsAndDataScopes() {
+        AgentRunPlanService service = new AgentRunPlanService(providerCatalog());
+        AgentRunPlanRequest request = new AgentRunPlanRequest(
+                "StudentTutorAgent",
+                "question_solving",
+                "free",
+                5000,
+                2000,
+                false,
+                true,
+                "hard",
+                "normal",
+                0.08,
+                0,
+                false,
+                List.of("tool:search:textbook", "tool:student:progress:read", "tool:knowledge:write"),
+                List.of("PUBLIC_TEXTBOOK", "STUDENT_PRIVATE", "TEACHER_PRIVATE"),
+                false);
+
+        AgentRunPlanResponse plan = service.plan(
+                request,
+                new RequestSubject("school-a", "student", "student-001", "device-1"));
+
+        assertThat(plan.agentCode()).isEqualTo("StudentTutorAgent");
+        assertThat(plan.providerName()).isEqualTo("openai");
+        assertThat(plan.modelLevel()).isEqualTo("reasoning");
+        assertThat(plan.allowedToolScopes()).containsExactly("tool:search:textbook", "tool:student:progress:read");
+        assertThat(plan.deniedToolScopes()).containsExactly("tool:knowledge:write");
+        assertThat(plan.allowedDataScopes()).containsExactly("PUBLIC_TEXTBOOK", "STUDENT_PRIVATE");
+        assertThat(plan.deniedDataScopes()).containsExactly("TEACHER_PRIVATE");
+        assertThat(plan.maxInputTokens()).isEqualTo(2400);
+        assertThat(plan.maxOutputTokens()).isEqualTo(900);
+        assertThat(plan.capabilityRequired()).isFalse();
+        assertThat(plan.stageTimings()).extracting(AgentRunPlanResponse.StageTiming::stage)
+                .containsExactly("agent_policy", "model_route", "budget_guard");
+        assertThat(plan.concurrencyKeys()).contains(
+                "concurrent:user:student-001:StudentTutorAgent",
+                "concurrent:tenant:school-a:StudentTutorAgent",
+                "concurrent:model:gpt-4.1");
+    }
+
+    @Test
+    void teacherCoursewareAgentRequiresCapabilityAndRejectsStudentWriteTool() {
+        AgentRunPlanService service = new AgentRunPlanService(providerCatalog());
+        AgentRunPlanRequest request = new AgentRunPlanRequest(
+                "CoursewareAgent",
+                "courseware_generation",
+                "teacher",
+                3000,
+                1600,
+                false,
+                true,
+                "medium",
+                "normal",
+                2.5,
+                0,
+                true,
+                List.of("tool:courseware:generate", "tool:search:private", "tool:student:progress:write"),
+                List.of("TEACHER_PRIVATE", "CLASS_AUTHORIZED", "STUDENT_PRIVATE"),
+                true);
+
+        AgentRunPlanResponse plan = service.plan(
+                request,
+                new RequestSubject("school-a", "teacher", "teacher-001", "device-1"));
+
+        assertThat(plan.agentCode()).isEqualTo("CoursewareAgent");
+        assertThat(plan.capabilityRequired()).isTrue();
+        assertThat(plan.capabilityAction()).isEqualTo("agent-run:CoursewareAgent");
+        assertThat(plan.allowedToolScopes()).containsExactly("tool:courseware:generate", "tool:search:private");
+        assertThat(plan.deniedToolScopes()).containsExactly("tool:student:progress:write");
+        assertThat(plan.allowedDataScopes()).containsExactly("TEACHER_PRIVATE", "CLASS_AUTHORIZED");
+        assertThat(plan.deniedDataScopes()).containsExactly("STUDENT_PRIVATE");
+        assertThat(plan.withinBudget()).isTrue();
+    }
+
+    @Test
+    void switchesToFallbackProviderAfterRepeatedFailures() {
+        AgentRunPlanService service = new AgentRunPlanService(providerCatalog());
+        AgentRunPlanRequest request = new AgentRunPlanRequest(
+                "QualityCheckAgent",
+                "quality_check",
+                "teacher",
+                1200,
+                600,
+                false,
+                false,
+                "medium",
+                "low",
+                0.5,
+                2,
+                true,
+                List.of("tool:quality:check"),
+                List.of("PUBLIC_TEXTBOOK"),
+                false);
+
+        AgentRunPlanResponse plan = service.plan(
+                request,
+                new RequestSubject("school-a", "teacher", "teacher-001", "device-1"));
+
+        assertThat(plan.providerName()).isEqualTo("deepseek");
+        assertThat(plan.modelCode()).isEqualTo("deepseek-chat");
+        assertThat(plan.modelLevel()).isEqualTo("json_stable");
+        assertThat(plan.routeReason()).contains("fallback");
+    }
+
+    private static AiProviderCatalog providerCatalog() {
+        AiProviderProperties properties = new AiProviderProperties();
+        properties.setDefaultProvider("openai");
+        properties.getOpenai().setApiKey("openai-key");
+        properties.getOpenai().setChatModel("gpt-4.1");
+        properties.getDeepseek().setApiKey("deepseek-key");
+        properties.getDeepseek().setChatModel("deepseek-chat");
+        properties.getArk().setApiKey("ark-key");
+        properties.getArk().setChatModel("doubao-seed-1-6");
+        return new AiProviderCatalog(properties);
+    }
+}

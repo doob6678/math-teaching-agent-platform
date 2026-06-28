@@ -455,6 +455,92 @@ export interface TeachingHandoutBatchExportResponse {
 }
 
 /**
+ * Request for planning an AI agent run before model/tool execution.
+ */
+export interface AgentRunPlanRequest {
+  /** Requested agent code, such as StudentTutorAgent or CoursewareAgent. */
+  agentCode: string;
+  /** Task type used for route selection. */
+  taskType: string;
+  /** Caller tier used for token and model budget limits. */
+  userVipLevel: string;
+  /** Estimated input tokens before backend clipping. */
+  estimatedInputTokens: number;
+  /** Estimated output tokens before backend clipping. */
+  estimatedOutputTokens: number;
+  /** Whether the task includes image input. */
+  hasImage: boolean;
+  /** Whether the task contains formulas. */
+  hasFormula: boolean;
+  /** Difficulty label used for model routing. */
+  difficulty: string;
+  /** Latency preference, such as low or normal. */
+  latencyRequirement: string;
+  /** Cost budget for the planned run. */
+  costBudget: number;
+  /** Recent failure count used for fallback routing. */
+  previousFailureCount: number;
+  /** Whether the output must satisfy a JSON schema. */
+  requiredJsonSchema: boolean;
+  /** Tool scopes requested by the workflow. */
+  requestedToolScopes: string[];
+  /** Data scopes requested by the workflow. */
+  requestedDataScopes: string[];
+  /** Whether this run can spend high-value model/tool budget. */
+  highValueOperation: boolean;
+}
+
+/**
+ * Safe AI agent execution plan returned by the backend.
+ */
+export interface AgentRunPlanResponse {
+  /** Plan id used for later trace linking. */
+  planId: string;
+  /** Backend resolved tenant id. */
+  tenantId: string;
+  /** Backend resolved subject type. */
+  subjectType: string;
+  /** Backend resolved subject id. */
+  subjectId: string;
+  /** Selected agent code. */
+  agentCode: string;
+  /** Selected provider name. */
+  providerName: string;
+  /** Selected model code. */
+  modelCode: string;
+  /** Selected model capability level. */
+  modelLevel: string;
+  /** Tool scopes accepted by policy. */
+  allowedToolScopes: string[];
+  /** Tool scopes rejected by policy. */
+  deniedToolScopes: string[];
+  /** Data scopes accepted by policy. */
+  allowedDataScopes: string[];
+  /** Data scopes rejected by policy. */
+  deniedDataScopes: string[];
+  /** Whether execution requires a capability token. */
+  capabilityRequired: boolean;
+  /** Capability action to request when required. */
+  capabilityAction: string;
+  /** Policy-clipped input token limit. */
+  maxInputTokens: number;
+  /** Policy-clipped output token limit. */
+  maxOutputTokens: number;
+  /** Estimated total tokens after clipping. */
+  estimatedTotalTokens: number;
+  /** Local deterministic cost estimate. */
+  estimatedCost: number;
+  /** Whether the cost estimate is inside budget. */
+  withinBudget: boolean;
+  /** Human-readable route reason for audit. */
+  routeReason: string;
+  /** Stage timings for monitoring. */
+  stageTimings: TeachingStageTiming[];
+  /** Redis-style concurrency keys for later execution. */
+  concurrencyKeys: string[];
+}
+
+/**
  * 学生学习画像响应。字段与后端 `StudentDashboardResponse` 对齐，用于学生端进度图谱、薄弱点和历史记录展示。
  */
 export interface StudentDashboardResponse {
@@ -938,6 +1024,17 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
           "X-Capability-Token": capability.token,
           "X-Request-Hash": capability.requestHash,
         },
+      });
+    },
+
+    /**
+     * Plans an AI agent run using backend session identity and server-side policy.
+     */
+    planAgentRun(request: AgentRunPlanRequest): Promise<AgentRunPlanResponse> {
+      return requestJson<AgentRunPlanResponse>("/api/agents/run-plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
       });
     },
 
