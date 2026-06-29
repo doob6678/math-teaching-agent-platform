@@ -8,6 +8,7 @@ import java.util.List;
  *
  * @param batchId temporary package id used by the protected download endpoint
  * @param status export status; the current baseline completes synchronously
+ * @param subjectType backend-resolved requester role that controls teacher/student package content
  * @param requestedCount number of task ids requested by the caller
  * @param exportedCount number of owned task handouts written into the ZIP
  * @param taskIds owned task ids included in the ZIP
@@ -18,6 +19,7 @@ import java.util.List;
 public record TeachingHandoutBatchExportResponse(
         String batchId,
         String status,
+        String subjectType,
         int requestedCount,
         int exportedCount,
         List<String> taskIds,

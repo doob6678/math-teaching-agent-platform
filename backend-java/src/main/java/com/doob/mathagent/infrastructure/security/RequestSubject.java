@@ -48,6 +48,15 @@ public record RequestSubject(
     }
 
     /**
+     * Builds a local teacher subject for controller tests that need teacher-only behavior.
+     *
+     * @return local teacher subject
+     */
+    public static RequestSubject localTeacher() {
+        return new RequestSubject("default", "teacher", "local-teacher", "local-device");
+    }
+
+    /**
      * Returns stripped text or a fallback when blank.
      */
     private static String textOrDefault(String value, String defaultValue) {

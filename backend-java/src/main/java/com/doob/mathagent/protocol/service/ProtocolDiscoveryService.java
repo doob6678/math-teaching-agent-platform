@@ -1,8 +1,14 @@
 package com.doob.mathagent.protocol.service;
 
+import com.doob.mathagent.protocol.dto.McpConfigurationRequest;
 import com.doob.mathagent.protocol.vo.A2aAgentCardResponse;
+import com.doob.mathagent.protocol.vo.McpConfigurationResponse;
 import com.doob.mathagent.protocol.vo.McpToolDescriptor;
 import com.doob.mathagent.protocol.vo.McpToolInputSchema;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -16,6 +22,20 @@ public class ProtocolDiscoveryService {
 
     private static final List<String> TEACHING_ROLES = List.of("student", "teacher", "admin");
     private static final List<String> TEACHER_ROLES = List.of("teacher", "admin");
+    private static final List<String> ALL_PROMPTS = List.of(
+            "teacher_handout_writer",
+            "student_blank_handout_writer",
+            "solution_reviewer");
+    private static final List<String> STUDENT_TOOLS = List.of("search_textbook_evidence", "plan_agent_run");
+    private static final List<String> STUDENT_PROMPTS = List.of("student_blank_handout_writer", "solution_reviewer");
+    private static final List<String> TEACHER_TOOLS = List.of(
+            "search_textbook_evidence",
+            "plan_agent_run",
+            "create_teaching_task",
+            "export_handout_pdf",
+            "list_teacher_resources");
+    private static final List<String> TEACHER_PROMPTS = ALL_PROMPTS;
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     /**
      * Returns MCP tool descriptors without exposing execution endpoints.
@@ -150,6 +170,171 @@ public class ProtocolDiscoveryService {
                                 "capability-token",
                                 "one-time-token",
                                 "High-value operations require request-hash-bound one-time capability tokens and audit.")));
+    }
+
+    /**
+     * Validates MCP URL and secret shape, then builds a copyable JSON template without echoing the secret.
+     */
+    public McpConfigurationResponse mcpConfiguration(McpConfigurationRequest request) {
+        String url = normalizeUrl(request.url());
+        String secretKey = normalizeSecretKey(request.secretKey());
+        String secretEnvName = normalizeSecretEnvName(request.secretEnvName());
+        String keyProfile = keyProfile(secretKey);
+        List<String> exposedTools = exposedItems(
+                safeList(request.enabledToolNames()),
+                "student".equals(keyProfile) ? STUDENT_TOOLS : TEACHER_TOOLS);
+        List<String> exposedPrompts = exposedItems(
+                safeList(request.enabledPromptNames()),
+                "student".equals(keyProfile) ? STUDENT_PROMPTS : TEACHER_PROMPTS);
+        String configJson = mcpConfigJson(url, secretEnvName, exposedTools, exposedPrompts);
+        return new McpConfigurationResponse(
+                "math-agent-rag",
+                url,
+                true,
+                true,
+                previewSecret(secretKey),
+                secretEnvName,
+                keyProfile,
+                exposedTools,
+                exposedPrompts,
+                configJson,
+                mcpLayers());
+    }
+
+    /**
+     * Normalizes and validates the externally reachable MCP base URL.
+     */
+    private static String normalizeUrl(String value) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException("MCP URL is required");
+        }
+        try {
+            URI uri = new URI(value.strip()).normalize();
+            String scheme = uri.getScheme();
+            if (!"https".equalsIgnoreCase(scheme) && !"http".equalsIgnoreCase(scheme)) {
+                throw new IllegalArgumentException("MCP URL must use http or https");
+            }
+            if (uri.getHost() == null || uri.getHost().isBlank()) {
+                throw new IllegalArgumentException("MCP URL must include a host");
+            }
+            return uri.toString().replaceAll("/+$", "");
+        } catch (URISyntaxException exception) {
+            throw new IllegalArgumentException("MCP URL is invalid", exception);
+        }
+    }
+
+    /**
+     * Validates the submitted secret key without storing or returning it.
+     */
+    private static String normalizeSecretKey(String value) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException("secretKey is required");
+        }
+        String normalized = value.strip();
+        if (normalized.length() < 16 || normalized.length() > 160) {
+            throw new IllegalArgumentException("secretKey length must be between 16 and 160");
+        }
+        if (!normalized.matches("[A-Za-z0-9._:-]+")) {
+            throw new IllegalArgumentException("secretKey contains unsupported characters");
+        }
+        return normalized;
+    }
+
+    /**
+     * Normalizes the environment variable name used by generated MCP JSON.
+     */
+    private static String normalizeSecretEnvName(String value) {
+        String normalized = value == null || value.isBlank() ? "MATH_AGENT_MCP_SECRET" : value.strip();
+        if (!normalized.matches("[A-Z][A-Z0-9_]{2,63}")) {
+            throw new IllegalArgumentException("secretEnvName must be an uppercase environment variable name");
+        }
+        return normalized;
+    }
+
+    /**
+     * Builds pretty JSON for client MCP configuration.
+     */
+    private static String mcpConfigJson(
+            String url,
+            String secretEnvName,
+            List<String> exposedTools,
+            List<String> exposedPrompts) {
+        Map<String, Object> server = new LinkedHashMap<>();
+        server.put("type", "http");
+        server.put("url", url);
+        server.put("headers", Map.of("Authorization", "Bearer ${" + secretEnvName + "}"));
+        server.put("tools", exposedTools);
+        server.put("prompts", exposedPrompts);
+        server.put("discovery", Map.of("tools", url + "/tools", "agentCard", url + "/../a2a/.well-known/agent-card.json"));
+        Map<String, Object> root = Map.of("mcpServers", Map.of("math-agent-rag", server));
+        try {
+            return OBJECT_MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(root);
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("Failed to build MCP configuration JSON", exception);
+        }
+    }
+
+    /**
+     * Returns a redacted preview that proves validation happened without leaking raw secret.
+     */
+    private static String previewSecret(String secretKey) {
+        return secretKey.substring(0, Math.min(4, secretKey.length()))
+                + "..."
+                + secretKey.substring(secretKey.length() - 4);
+    }
+
+    /**
+     * Derives a local baseline key profile from the validated secret shape.
+     */
+    private static String keyProfile(String secretKey) {
+        if (secretKey.startsWith("student_")) {
+            return "student";
+        }
+        return "teacher";
+    }
+
+    /**
+     * Applies backend profile allow-list after user selection; empty selection means all allowed items.
+     */
+    private static List<String> exposedItems(List<String> requestedItems, List<String> allowedItems) {
+        if (requestedItems.isEmpty()) {
+            return allowedItems;
+        }
+        return allowedItems.stream()
+                .filter(requestedItems::contains)
+                .toList();
+    }
+
+    /**
+     * Returns a null-safe immutable list.
+     */
+    private static List<String> safeList(List<String> values) {
+        return values == null ? List.of() : List.copyOf(values);
+    }
+
+    /**
+     * Describes layered MCP access so the frontend can show safe usage guidance.
+     */
+    private static List<McpConfigurationResponse.Layer> mcpLayers() {
+        return List.of(
+                new McpConfigurationResponse.Layer(
+                        "discovery",
+                        "Discovery",
+                        "Lists available MCP tools and Agent Card metadata only.",
+                        "Sa-Token session or future registered MCP secret",
+                        List.of("GET /api/mcp/tools", "GET /api/a2a/.well-known/agent-card.json")),
+                new McpConfigurationResponse.Layer(
+                        "session",
+                        "Session-bound calls",
+                        "Uses backend-resolved tenant, role, and subject identity for read operations.",
+                        "Sa-Token session",
+                        List.of("textbook evidence search", "agent run planning", "teacher resource listing")),
+                new McpConfigurationResponse.Layer(
+                        "high_value",
+                        "High-value execution",
+                        "Requires one-time capability token, request hash, rate limit, and audit before execution.",
+                        "Sa-Token session plus capability token",
+                        List.of("teaching task creation", "PDF/ZIP handout export", "agent execution")));
     }
 
     /**

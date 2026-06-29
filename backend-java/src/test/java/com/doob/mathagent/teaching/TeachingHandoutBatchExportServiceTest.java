@@ -85,6 +85,34 @@ class TeachingHandoutBatchExportServiceTest {
                         "grade-10/versioned/student/task-versioned.pdf");
     }
 
+    @Test
+    void studentBatchZipContainsOnlyStudentHandoutVersion() throws Exception {
+        TeachingHandoutBatchExportService service = new TeachingHandoutBatchExportService(
+                new TeachingHandoutPdfExportService());
+
+        TeachingHandoutBatchExportResponse response = service.create(
+                new TeachingHandoutBatchExportRequest(
+                        List.of("task-student"),
+                        List.of("folder-student"),
+                        List.of("grade-10/student")),
+                new TeachingRequestContext("default", "student", "student-1", "browser-1"),
+                List.of(task("task-student")));
+
+        List<String> entries = zipEntries(service.findDownload(
+                        response.batchId(),
+                        new TeachingRequestContext("default", "student", "student-1", "browser-1"))
+                .orElseThrow()
+                .zipBytes());
+        assertThat(entries).contains(
+                "grade-10/student/student/task-student.tex",
+                "grade-10/student/student/task-student.pdf",
+                "manifest.txt");
+        assertThat(entries).noneMatch(entry ->
+                entry.equals("grade-10/student/task-student.tex")
+                        || entry.equals("grade-10/student/task-student.pdf")
+                        || entry.contains("/teacher/"));
+    }
+
     private static TeachingTaskResponse task(String taskId) {
         return new TeachingTaskResponse(
                 taskId,

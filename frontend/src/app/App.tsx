@@ -2,6 +2,7 @@ import { AlertCircle, BookOpen, Database, Loader2, Search, ShieldCheck } from "l
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   AgentRunPlanResponse,
+  McpConfigurationResponse,
   RetrievalAuditDetail,
   StudentDashboardResponse,
   TeachingTaskResponse,
@@ -12,6 +13,12 @@ import {
   LoginResponse,
   createTextbookApiClient,
 } from "../shared/api/textbookApi";
+import {
+  MCP_PROMPT_OPTIONS,
+  MCP_TOOL_OPTIONS,
+  defaultMcpExposureSelection,
+  toggleMcpExposureOption,
+} from "./mcpExposureSelection";
 
 const DEFAULT_BACKEND_URL = import.meta.env.VITE_BACKEND_URL ?? "http://127.0.0.1:8080";
 const TEACHING_TASK_STORAGE_KEY = "math-agent:last-teaching-task-id";
@@ -49,6 +56,14 @@ export function App() {
   const [agentPlanError, setAgentPlanError] = useState("");
   const [disablePrivateSearch, setDisablePrivateSearch] = useState(true);
   const [disableTextbookSearch, setDisableTextbookSearch] = useState(false);
+  const [mcpUrl, setMcpUrl] = useState(`${DEFAULT_BACKEND_URL}/api/mcp`);
+  const [mcpSecretKey, setMcpSecretKey] = useState("");
+  const [mcpSecretEnvName, setMcpSecretEnvName] = useState("MATH_AGENT_MCP_SECRET");
+  const [mcpSelection, setMcpSelection] = useState(() => defaultMcpExposureSelection());
+  const [mcpConfiguration, setMcpConfiguration] = useState<McpConfigurationResponse | null>(null);
+  const [mcpBuilding, setMcpBuilding] = useState(false);
+  const [mcpCopyMessage, setMcpCopyMessage] = useState("");
+  const [mcpError, setMcpError] = useState("");
   const [teachingError, setTeachingError] = useState("");
   const [studentDashboardError, setStudentDashboardError] = useState("");
   const [teacherResourceError, setTeacherResourceError] = useState("");
@@ -340,6 +355,52 @@ export function App() {
       .finally(() => setPlanningAgent(false));
   }
 
+  function handleBuildMcpConfiguration(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setMcpBuilding(true);
+    setMcpError("");
+    setMcpCopyMessage("");
+    api
+      .buildMcpConfiguration({
+        url: mcpUrl.trim(),
+        secretKey: mcpSecretKey.trim(),
+        secretEnvName: mcpSecretEnvName.trim(),
+        enabledToolNames: mcpSelection.tools,
+        enabledPromptNames: mcpSelection.prompts,
+      })
+      .then(setMcpConfiguration)
+      .catch((error: Error) => setMcpError(error.message))
+      .finally(() => setMcpBuilding(false));
+  }
+
+  function handleMcpToolToggle(option: string, checked: boolean) {
+    setMcpSelection((current) => ({
+      ...current,
+      tools: toggleMcpExposureOption(current.tools, option, checked, MCP_TOOL_OPTIONS),
+    }));
+  }
+
+  function handleMcpPromptToggle(option: string, checked: boolean) {
+    setMcpSelection((current) => ({
+      ...current,
+      prompts: toggleMcpExposureOption(current.prompts, option, checked, MCP_PROMPT_OPTIONS),
+    }));
+  }
+
+  function handleCopyMcpConfiguration() {
+    if (!mcpConfiguration?.configJson) {
+      return;
+    }
+    if (!navigator.clipboard?.writeText) {
+      setMcpCopyMessage("当前浏览器不支持剪贴板写入。");
+      return;
+    }
+    navigator.clipboard
+      .writeText(mcpConfiguration.configJson)
+      .then(() => setMcpCopyMessage("MCP JSON 已复制。"))
+      .catch((error: Error) => setMcpCopyMessage(error.message));
+  }
+
   return (
     <main className="app-shell">
       <section className="topbar">
@@ -478,6 +539,24 @@ export function App() {
 
           <div className="divider" />
 
+          <McpConfigurationForm
+            url={mcpUrl}
+            secretKey={mcpSecretKey}
+            secretEnvName={mcpSecretEnvName}
+            selectedTools={mcpSelection.tools}
+            selectedPrompts={mcpSelection.prompts}
+            building={mcpBuilding}
+            error={mcpError}
+            onUrlChange={setMcpUrl}
+            onSecretKeyChange={setMcpSecretKey}
+            onSecretEnvNameChange={setMcpSecretEnvName}
+            onToolToggle={handleMcpToolToggle}
+            onPromptToggle={handleMcpPromptToggle}
+            onSubmit={handleBuildMcpConfiguration}
+          />
+
+          <div className="divider" />
+
           <TeacherResourcePanel
             resources={teacherResources}
             title={resourceTitle}
@@ -504,6 +583,12 @@ export function App() {
           />
 
           <AgentPlanPanel plan={agentPlan} loading={planningAgent} error={agentPlanError} />
+
+          <McpConfigurationPanel
+            configuration={mcpConfiguration}
+            copyMessage={mcpCopyMessage}
+            onCopy={handleCopyMcpConfiguration}
+          />
 
           <div className="result-header">
             <div>
@@ -681,6 +766,177 @@ function StudentDashboardPanel({
         </div>
       ) : null}
     </section>
+  );
+}
+
+function McpConfigurationForm({
+  url,
+  secretKey,
+  secretEnvName,
+  selectedTools,
+  selectedPrompts,
+  building,
+  error,
+  onUrlChange,
+  onSecretKeyChange,
+  onSecretEnvNameChange,
+  onToolToggle,
+  onPromptToggle,
+  onSubmit,
+}: {
+  url: string;
+  secretKey: string;
+  secretEnvName: string;
+  selectedTools: string[];
+  selectedPrompts: string[];
+  building: boolean;
+  error: string;
+  onUrlChange: (value: string) => void;
+  onSecretKeyChange: (value: string) => void;
+  onSecretEnvNameChange: (value: string) => void;
+  onToolToggle: (option: string, checked: boolean) => void;
+  onPromptToggle: (option: string, checked: boolean) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+  return (
+    <section className="mcp-config-form">
+      <PanelTitle icon={<ShieldCheck size={18} />} title="MCP 配置" />
+      <form className="search-form" onSubmit={onSubmit}>
+        <label>
+          <span>URL</span>
+          <input value={url} onChange={(event) => onUrlChange(event.target.value)} />
+        </label>
+        <label>
+          <span>secretKey</span>
+          <input
+            type="password"
+            value={secretKey}
+            onChange={(event) => onSecretKeyChange(event.target.value)}
+            placeholder="mcp_secret_..."
+          />
+        </label>
+        <label>
+          <span>环境变量</span>
+          <input value={secretEnvName} onChange={(event) => onSecretEnvNameChange(event.target.value)} />
+        </label>
+        <McpOptionGroup
+          title="Tools"
+          options={MCP_TOOL_OPTIONS}
+          selected={selectedTools}
+          onToggle={onToolToggle}
+        />
+        <McpOptionGroup
+          title="Prompts"
+          options={MCP_PROMPT_OPTIONS}
+          selected={selectedPrompts}
+          onToggle={onPromptToggle}
+        />
+        <button type="submit" disabled={building}>
+          {building ? <Loader2 className="spin" size={17} /> : <ShieldCheck size={17} />}
+          <span>生成 JSON</span>
+        </button>
+      </form>
+      {error ? <StatusLine icon={<AlertCircle size={16} />} text={error} tone="danger" /> : null}
+    </section>
+  );
+}
+
+function McpOptionGroup({
+  title,
+  options,
+  selected,
+  onToggle,
+}: {
+  title: string;
+  options: readonly string[];
+  selected: string[];
+  onToggle: (option: string, checked: boolean) => void;
+}) {
+  return (
+    <fieldset className="mcp-option-group">
+      <legend>{title}</legend>
+      {options.map((option) => (
+        <label className="toggle-row" key={option}>
+          <input
+            type="checkbox"
+            checked={selected.includes(option)}
+            onChange={(event) => onToggle(option, event.target.checked)}
+          />
+          <span>{option}</span>
+        </label>
+      ))}
+    </fieldset>
+  );
+}
+
+function McpConfigurationPanel({
+  configuration,
+  copyMessage,
+  onCopy,
+}: {
+  configuration: McpConfigurationResponse | null;
+  copyMessage: string;
+  onCopy: () => void;
+}) {
+  return (
+    <section className="mcp-config-panel">
+      <div className="result-header">
+        <div>
+          <p className="eyebrow">MCP</p>
+          <h2>外部客户端配置</h2>
+        </div>
+        {configuration ? <div className="strategy-pill">{configuration.keyProfile}</div> : null}
+      </div>
+      {configuration ? (
+        <div className="mcp-config-grid">
+          <div className="profile-strip">
+            <div>
+              <span>URL</span>
+              <strong>{configuration.url}</strong>
+            </div>
+            <div>
+              <span>Secret</span>
+              <strong>{configuration.secretKeyPreview}</strong>
+            </div>
+            <div>
+              <span>Env</span>
+              <strong>{configuration.secretEnvName}</strong>
+            </div>
+          </div>
+          <div className="mcp-exposure-list">
+            <McpExposureColumn title="Tools" items={configuration.exposedTools} />
+            <McpExposureColumn title="Prompts" items={configuration.exposedPrompts} />
+          </div>
+          <div className="mcp-layer-list">
+            {configuration.layers.map((layer) => (
+              <div className="mcp-layer" key={layer.code}>
+                <strong>{layer.name}</strong>
+                <span>{layer.description}</span>
+              </div>
+            ))}
+          </div>
+          <div className="mcp-json-head">
+            <strong>config.json</strong>
+            <button type="button" onClick={onCopy}>复制</button>
+          </div>
+          {copyMessage ? <StatusLine icon={<ShieldCheck size={16} />} text={copyMessage} /> : null}
+          <pre className="formula-block mcp-json">{configuration.configJson}</pre>
+        </div>
+      ) : (
+        <div className="empty-state compact">生成配置后，这里展示后端过滤后的 MCP tools、prompts 和可复制 JSON。</div>
+      )}
+    </section>
+  );
+}
+
+function McpExposureColumn({ title, items }: { title: string; items: string[] }) {
+  return (
+    <div className="mcp-exposure-column">
+      <strong>{title}</strong>
+      {items.map((item) => (
+        <span key={item}>{item}</span>
+      ))}
+    </div>
   );
 }
 

@@ -110,10 +110,30 @@ class ApiAccessControlServiceTest {
                 "127.0.0.1",
                 "device-2",
                 "JUnit");
+        ApiRequestIdentity studentConfiguration = new ApiRequestIdentity(
+                "POST",
+                "/api/mcp/configuration",
+                "default",
+                "student",
+                "student-1",
+                "127.0.0.1",
+                "device-3",
+                "JUnit");
+        ApiRequestIdentity teacherConfiguration = new ApiRequestIdentity(
+                "POST",
+                "/api/mcp/configuration",
+                "default",
+                "teacher",
+                "teacher-1",
+                "127.0.0.1",
+                "device-4",
+                "JUnit");
 
         ApiAccessDecision denied = service.evaluate(anonymousMcp);
         ApiAccessDecision studentAllowed = service.evaluate(studentMcp);
         ApiAccessDecision teacherAllowed = service.evaluate(teacherA2a);
+        ApiAccessDecision studentConfigurationDenied = service.evaluate(studentConfiguration);
+        ApiAccessDecision teacherConfigurationAllowed = service.evaluate(teacherConfiguration);
 
         assertThat(denied.allowed()).isFalse();
         assertThat(denied.httpStatus()).isEqualTo(403);
@@ -123,6 +143,10 @@ class ApiAccessControlServiceTest {
         assertThat(teacherAllowed.allowed()).isTrue();
         assertThat(teacherAllowed.level()).isEqualTo(ApiAccessLevel.USER);
         assertThat(teacherAllowed.limit()).isEqualTo(30);
+        assertThat(studentConfigurationDenied.allowed()).isFalse();
+        assertThat(studentConfigurationDenied.httpStatus()).isEqualTo(403);
+        assertThat(teacherConfigurationAllowed.allowed()).isTrue();
+        assertThat(teacherConfigurationAllowed.limit()).isEqualTo(20);
     }
 
     @Test

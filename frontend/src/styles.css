@@ -780,6 +780,124 @@ h2 {
   opacity: 0.7;
 }
 
+.mcp-config-form {
+  display: grid;
+  gap: 10px;
+}
+
+.mcp-option-group {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid #e1e7f0;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.mcp-option-group legend {
+  padding: 0 4px;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.mcp-option-group .toggle-row span {
+  overflow-wrap: anywhere;
+}
+
+.mcp-config-panel {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.mcp-config-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.mcp-exposure-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.mcp-exposure-column {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #e1e7f0;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.mcp-exposure-column strong {
+  color: #1f2a44;
+  font-size: 13px;
+}
+
+.mcp-exposure-column span {
+  color: #536173;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.mcp-layer-list {
+  display: grid;
+  gap: 8px;
+}
+
+.mcp-layer {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid #e1e7f0;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.mcp-layer strong {
+  color: #1f2a44;
+  font-size: 13px;
+}
+
+.mcp-layer span {
+  color: #536173;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.mcp-json-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.mcp-json-head strong {
+  color: #1f2a44;
+  font-size: 13px;
+}
+
+.mcp-json-head button {
+  min-height: 34px;
+  padding: 6px 12px;
+  border: 1px solid #c8d5e3;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #1f3a5c;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.formula-block.mcp-json {
+  max-height: 300px;
+  white-space: pre-wrap;
+}
+
 .human-feedback-panel {
   display: grid;
   gap: 10px;

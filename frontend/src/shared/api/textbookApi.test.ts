@@ -574,6 +574,7 @@ describe("textbookApi", () => {
         json: async () => ({
           batchId: "batch-1",
           status: "COMPLETED",
+          subjectType: "teacher",
           requestedCount: 2,
           exportedCount: 2,
           taskIds: ["task-1", "task-2"],
@@ -730,6 +731,7 @@ describe("textbookApi", () => {
         json: async () => ({
           batchId: "batch-2",
           status: "COMPLETED",
+          subjectType: "teacher",
           requestedCount: 2,
           exportedCount: 2,
           taskIds: ["task-1", "task-2"],
@@ -1017,6 +1019,49 @@ describe("textbookApi", () => {
     expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Id");
     expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Type");
     expect(traces[0].traceId).toBe("trace-1");
+  });
+
+  it("builds copyable MCP configuration without client supplied identity headers", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        serverName: "math-agent-rag",
+        url: "https://math.example.com/api/mcp",
+        valid: true,
+        secretKeyAccepted: true,
+        secretKeyPreview: "mcp_...cdef",
+        secretEnvName: "MATH_AGENT_MCP_SECRET",
+        configJson:
+          '{\n  "mcpServers" : {\n    "math-agent-rag" : {\n      "type" : "http",\n      "url" : "https://math.example.com/api/mcp",\n      "headers" : {\n        "Authorization" : "Bearer ${MATH_AGENT_MCP_SECRET}"\n      }\n    }\n  }\n}',
+      }),
+    });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+    const request = {
+      url: "https://math.example.com/api/mcp",
+      secretKey: "mcp_secret_1234567890abcdef",
+      secretEnvName: "MATH_AGENT_MCP_SECRET",
+      enabledToolNames: ["search_textbook_evidence", "plan_agent_run"],
+      enabledPromptNames: ["teacher_handout_writer", "student_blank_handout_writer"],
+    };
+
+    const config = await client.buildMcpConfiguration(request);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8080/api/mcp/configuration",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "Content-Type": "application/json",
+          "X-Device-Id": "local-browser-console",
+        }),
+        body: JSON.stringify(request),
+      }),
+    );
+    expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Id");
+    expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Type");
+    expect(config.configJson).toContain("mcpServers");
+    expect(config.configJson).toContain("${MATH_AGENT_MCP_SECRET}");
+    expect(config.configJson).not.toContain("mcp_secret_1234567890abcdef");
   });
 
   it("loads student dashboard without client supplied identity headers", async () => {

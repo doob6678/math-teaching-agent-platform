@@ -145,13 +145,14 @@ public class TeachingTaskController {
         }
         TeachingTaskResponse task = workflowService.get(taskId, requestContext(subject))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Teaching task not found"));
+        String effectiveVersion = defaultHandoutVersion(subject);
         return ResponseEntity.ok()
                 .contentType(MediaType.parseMediaType("application/x-tex;charset=UTF-8"))
                 .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
                         .filename(task.taskId() + ".tex", StandardCharsets.UTF_8)
                         .build()
                         .toString())
-                .body(task.handoutLatex());
+                .body(task.handoutLatexFor(effectiveVersion));
     }
 
     /**
@@ -164,6 +165,7 @@ public class TeachingTaskController {
             HttpServletRequest httpRequest) {
         String normalizedVersion = normalizeHandoutVersion(version);
         RequestSubject subject = subjectResolver.resolve(httpRequest);
+        requireHandoutVersionAllowed(normalizedVersion, subject);
         String path = TEACHING_TASKS_PATH + "/" + taskId + "/handout/" + normalizedVersion + "/latex";
         if (!capabilityVerifier.verify(
                 headerOrNull(httpRequest, "X-Capability-Token"),
@@ -203,13 +205,14 @@ public class TeachingTaskController {
         }
         TeachingTaskResponse task = workflowService.get(taskId, requestContext(subject))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Teaching task not found"));
+        String effectiveVersion = defaultHandoutVersion(subject);
         return ResponseEntity.ok()
                 .contentType(MediaType.parseMediaType("application/x-tex;charset=UTF-8"))
                 .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.inline()
                         .filename(task.taskId() + ".tex", StandardCharsets.UTF_8)
                         .build()
                         .toString())
-                .body(task.handoutLatex());
+                .body(task.handoutLatexFor(effectiveVersion));
     }
 
     /**
@@ -222,6 +225,7 @@ public class TeachingTaskController {
             HttpServletRequest httpRequest) {
         String normalizedVersion = normalizeHandoutVersion(version);
         RequestSubject subject = subjectResolver.resolve(httpRequest);
+        requireHandoutVersionAllowed(normalizedVersion, subject);
         String path = TEACHING_TASKS_PATH + "/" + taskId + "/handout/" + normalizedVersion + "/latex/preview";
         if (!capabilityVerifier.verify(
                 headerOrNull(httpRequest, "X-Capability-Token"),
@@ -261,13 +265,14 @@ public class TeachingTaskController {
         }
         TeachingTaskResponse task = workflowService.get(taskId, requestContext(subject))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Teaching task not found"));
+        String effectiveVersion = defaultHandoutVersion(subject);
         return ResponseEntity.ok()
                 .contentType(MediaType.APPLICATION_PDF)
                 .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
                         .filename(task.taskId() + ".pdf", StandardCharsets.UTF_8)
                         .build()
                         .toString())
-                .body(pdfExportService.render(task));
+                .body(pdfExportService.render(task, effectiveVersion));
     }
 
     /**
@@ -280,6 +285,7 @@ public class TeachingTaskController {
             HttpServletRequest httpRequest) {
         String normalizedVersion = normalizeHandoutVersion(version);
         RequestSubject subject = subjectResolver.resolve(httpRequest);
+        requireHandoutVersionAllowed(normalizedVersion, subject);
         String path = TEACHING_TASKS_PATH + "/" + taskId + "/handout/" + normalizedVersion + "/pdf";
         if (!capabilityVerifier.verify(
                 headerOrNull(httpRequest, "X-Capability-Token"),
@@ -417,6 +423,30 @@ public class TeachingTaskController {
             return "student";
         }
         throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported handout version");
+    }
+
+    /**
+     * Returns the safest default handout version for the backend-resolved role.
+     */
+    private static String defaultHandoutVersion(RequestSubject subject) {
+        return canUseTeacherHandout(subject) ? "teacher" : "student";
+    }
+
+    /**
+     * Blocks student sessions from teacher-only handout sources even if the frontend requests that route.
+     */
+    private static void requireHandoutVersionAllowed(String version, RequestSubject subject) {
+        if ("teacher".equals(version) && !canUseTeacherHandout(subject)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Teacher handout version requires teacher role");
+        }
+    }
+
+    /**
+     * Teacher/admin roles may view detailed solutions; students are limited to blank/student handouts.
+     */
+    private static boolean canUseTeacherHandout(RequestSubject subject) {
+        RequestSubject normalized = subject.normalize();
+        return "teacher".equals(normalized.subjectType()) || "admin".equals(normalized.subjectType());
     }
 
     /**

@@ -56,7 +56,7 @@ class TeachingTaskControllerTest {
                 new StudentMemoryReuseService(new InMemoryStudentMemoryStore()));
         TeachingTaskController controller = new TeachingTaskController(
                 service,
-                RequestSubjectResolver.localDevelopment(),
+                teacherResolver(),
                 (token, action, path, requestHash, subject) -> true,
                 new TeachingHandoutPdfExportService(),
                 new TeachingHandoutBatchExportService(new TeachingHandoutPdfExportService()));
@@ -222,7 +222,7 @@ class TeachingTaskControllerTest {
     }
 
     @Test
-    void createsTemporaryBatchZipForOwnedTasksAndDownloadsIt() throws Exception {
+    void studentCannotPreviewOrExportTeacherHandoutVersion() throws Exception {
         TeachingWorkflowService service = new TeachingWorkflowService(
                 createTextbookCorpus(),
                 new TextbookRetrievalService(
@@ -236,6 +236,51 @@ class TeachingTaskControllerTest {
         TeachingTaskController controller = new TeachingTaskController(
                 service,
                 RequestSubjectResolver.localDevelopment(),
+                (token, action, path, requestHash, subject) -> true,
+                pdfExportService,
+                new TeachingHandoutBatchExportService(pdfExportService));
+        TeachingTaskResponse submitted = controller.submit(
+                new TeachingTaskRequest("client-student-version", "question", "goal", 3),
+                null);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.previewLatexVersion(
+                        submitted.taskId(),
+                        "teacher",
+                        null))
+                .isInstanceOfSatisfying(ResponseStatusException.class, exception ->
+                        assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.exportLatexVersion(
+                        submitted.taskId(),
+                        "teacher",
+                        null))
+                .isInstanceOfSatisfying(ResponseStatusException.class, exception ->
+                        assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.exportPdfVersion(
+                        submitted.taskId(),
+                        "teacher",
+                        null))
+                .isInstanceOfSatisfying(ResponseStatusException.class, exception ->
+                        assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
+        assertThat(controller.previewLatexVersion(submitted.taskId(), "student", null).getBody())
+                .contains("\\section{学生版}")
+                .doesNotContain("Teacher");
+    }
+
+    @Test
+    void createsTemporaryBatchZipForOwnedTasksAndDownloadsIt() throws Exception {
+        TeachingWorkflowService service = new TeachingWorkflowService(
+                createTextbookCorpus(),
+                new TextbookRetrievalService(
+                        new TextbookCatalogReader(),
+                        new TextbookChunkReader(),
+                        new LocalTextbookBm25SearchEngine(),
+                        new NoopRetrievalAuditSink()),
+                new InMemoryTeachingTaskStore(),
+                new StudentMemoryReuseService(new InMemoryStudentMemoryStore()));
+        TeachingHandoutPdfExportService pdfExportService = new TeachingHandoutPdfExportService();
+        TeachingTaskController controller = new TeachingTaskController(
+                service,
+                teacherResolver(),
                 (token, action, path, requestHash, subject) -> true,
                 pdfExportService,
                 new TeachingHandoutBatchExportService(pdfExportService));
@@ -399,6 +444,10 @@ class TeachingTaskControllerTest {
             }
             return names;
         }
+    }
+
+    private static RequestSubjectResolver teacherResolver() {
+        return request -> com.doob.mathagent.infrastructure.security.RequestSubject.localTeacher();
     }
 
     private static final class MutableClock extends Clock {

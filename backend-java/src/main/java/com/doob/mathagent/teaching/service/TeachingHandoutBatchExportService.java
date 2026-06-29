@@ -93,9 +93,11 @@ public class TeachingHandoutBatchExportService {
         Instant expiresAt = Instant.now(clock).plus(ttl);
         List<String> taskIds = tasks.stream().map(TeachingTaskResponse::taskId).toList();
         List<String> folderPaths = sanitizeFolderPaths(normalized.folderPaths());
+        TeachingRequestContext normalizedContext = context.normalize();
         TeachingHandoutBatchExportResponse response = new TeachingHandoutBatchExportResponse(
                 batchId,
                 "COMPLETED",
+                normalizedContext.subjectType(),
                 normalized.taskIds().size(),
                 taskIds.size(),
                 taskIds,
@@ -104,7 +106,7 @@ public class TeachingHandoutBatchExportService {
                 expiresAt);
         records.put(batchId, new TeachingHandoutBatchExportRecord(
                 response,
-                context.normalize().ownerKey(),
+                normalizedContext.ownerKey(),
                 zipBytes(response, tasks)));
         return response;
     }
@@ -147,9 +149,11 @@ public class TeachingHandoutBatchExportService {
                 for (int index = 0; index < tasks.size(); index += 1) {
                     TeachingTaskResponse task = tasks.get(index);
                     String folderPrefix = folderPrefix(response.folderPaths(), index, tasks.size());
-                    put(zip, folderPrefix + task.taskId() + ".tex", task.handoutLatex().getBytes(StandardCharsets.UTF_8));
-                    put(zip, folderPrefix + task.taskId() + ".pdf", pdfExportService.render(task));
-                    putVersion(zip, folderPrefix, task, "teacher");
+                    if (canUseTeacherHandout(response.subjectType())) {
+                        put(zip, folderPrefix + task.taskId() + ".tex", task.handoutLatexFor("teacher").getBytes(StandardCharsets.UTF_8));
+                        put(zip, folderPrefix + task.taskId() + ".pdf", pdfExportService.render(task, "teacher"));
+                        putVersion(zip, folderPrefix, task, "teacher");
+                    }
                     putVersion(zip, folderPrefix, task, "student");
                 }
                 put(zip, "manifest.txt", manifest(response).getBytes(StandardCharsets.UTF_8));
@@ -189,6 +193,7 @@ public class TeachingHandoutBatchExportService {
         return """
                 batchId=%s
                 status=%s
+                subjectType=%s
                 requestedCount=%d
                 exportedCount=%d
                 taskIds=%s
@@ -198,6 +203,7 @@ public class TeachingHandoutBatchExportService {
                 """.formatted(
                 response.batchId(),
                 response.status(),
+                response.subjectType(),
                 response.requestedCount(),
                 response.exportedCount(),
                 response.taskIds(),
@@ -278,5 +284,12 @@ public class TeachingHandoutBatchExportService {
      */
     private boolean isExpired(TeachingHandoutBatchExportRecord record) {
         return !Instant.now(clock).isBefore(record.response().expiresAt());
+    }
+
+    /**
+     * Teacher-only handout versions include detailed answers and must not be packaged for students.
+     */
+    private static boolean canUseTeacherHandout(String subjectType) {
+        return "teacher".equalsIgnoreCase(subjectType) || "admin".equalsIgnoreCase(subjectType);
     }
 }

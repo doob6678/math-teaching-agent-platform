@@ -444,6 +444,8 @@ export interface TeachingHandoutBatchExportResponse {
   batchId: string;
   /** Export status; current baseline returns COMPLETED synchronously. */
   status: string;
+  /** Backend-resolved requester role that controls whether teacher handouts are packaged. */
+  subjectType: string;
   /** Number of requested task ids. */
   requestedCount: number;
   /** Number of owned tasks exported into the ZIP. */
@@ -695,6 +697,66 @@ export interface AgentTraceResponse {
 /**
  * 学生学习画像响应。字段与后端 `StudentDashboardResponse` 对齐，用于学生端进度图谱、薄弱点和历史记录展示。
  */
+/**
+ * Request for building a copyable MCP client configuration.
+ */
+export interface McpConfigurationRequest {
+  /** Public MCP base URL that the external client should call. */
+  url: string;
+  /** Secret key entered for validation only; backend must not echo it. */
+  secretKey: string;
+  /** Environment variable name referenced by the copied JSON. */
+  secretEnvName: string;
+  /** Tool names manually selected by the user; empty means default all allowed by key profile. */
+  enabledToolNames: string[];
+  /** Prompt names manually selected by the user; empty means default all allowed by key profile. */
+  enabledPromptNames: string[];
+}
+
+/**
+ * Backend-generated MCP configuration template and layered usage notes.
+ */
+export interface McpConfigurationResponse {
+  /** Stable MCP server name. */
+  serverName: string;
+  /** Validated public MCP URL. */
+  url: string;
+  /** Whether validation passed. */
+  valid: boolean;
+  /** Whether the secret key satisfied backend policy. */
+  secretKeyAccepted: boolean;
+  /** Redacted secret preview; raw secret is never returned. */
+  secretKeyPreview: string;
+  /** Environment variable name used in copied JSON. */
+  secretEnvName: string;
+  /** Backend-derived profile such as teacher or student. */
+  keyProfile: string;
+  /** Final exposed tool names after backend filtering. */
+  exposedTools: string[];
+  /** Final exposed prompt names after backend filtering. */
+  exposedPrompts: string[];
+  /** Copyable MCP JSON template. */
+  configJson: string;
+  /** Layered MCP usage explanation. */
+  layers: McpConfigurationLayer[];
+}
+
+/**
+ * One MCP usage layer displayed in the frontend.
+ */
+export interface McpConfigurationLayer {
+  /** Stable layer code. */
+  code: string;
+  /** Layer display name. */
+  name: string;
+  /** Layer description. */
+  description: string;
+  /** Credential expected by this layer. */
+  requiredCredential: string;
+  /** Operations allowed in this layer. */
+  allowedOperations: string[];
+}
+
 export interface StudentDashboardResponse {
   /** 租户 ID，用于学校或机构维度的数据隔离。 */
   tenantId: string;
@@ -1259,6 +1321,17 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
       }
       const suffix = params.size > 0 ? `?${params.toString()}` : "";
       return requestJson<AgentTraceResponse[]>(`/api/agents/traces${suffix}`);
+    },
+
+    /**
+     * Builds a copyable MCP configuration template after backend URL, secret, and profile filtering.
+     */
+    buildMcpConfiguration(request: McpConfigurationRequest): Promise<McpConfigurationResponse> {
+      return requestJson<McpConfigurationResponse>("/api/mcp/configuration", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
+      });
     },
 
     getStudentDashboard(studentId?: string): Promise<StudentDashboardResponse> {
