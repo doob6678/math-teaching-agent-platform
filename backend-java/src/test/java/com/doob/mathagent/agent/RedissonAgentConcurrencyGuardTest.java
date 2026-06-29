@@ -23,14 +23,14 @@ class RedissonAgentConcurrencyGuardTest {
                 new RedissonAgentConcurrencyGuard(redisson.client(), "math-agent:test:agent-concurrency");
 
         Optional<AgentConcurrencyLease> lease = guard.tryAcquire(
-                List.of("concurrent:user:teacher-1:CoursewareAgent", "concurrent:model:gpt-4.1"),
+                List.of("concurrent:user:teacher-1:CoursewareAgent", "concurrent:model:gpt-5.4"),
                 "trace-1",
                 Duration.ofSeconds(45));
 
         assertThat(lease).isPresent();
         assertThat(redisson.lockNames()).containsExactly(
                 "math-agent:test:agent-concurrency:concurrent:user:teacher-1:CoursewareAgent",
-                "math-agent:test:agent-concurrency:concurrent:model:gpt-4.1");
+                "math-agent:test:agent-concurrency:concurrent:model:gpt-5.4");
         assertThat(redisson.leaseMillis()).containsOnly(45000L);
 
         lease.get().close();
@@ -45,7 +45,7 @@ class RedissonAgentConcurrencyGuardTest {
                 new RedissonAgentConcurrencyGuard(redisson.client(), "math-agent:test:agent-concurrency");
 
         Optional<AgentConcurrencyLease> lease = guard.tryAcquire(
-                List.of("concurrent:user:teacher-1:CoursewareAgent", "concurrent:model:gpt-4.1"),
+                List.of("concurrent:user:teacher-1:CoursewareAgent", "concurrent:model:gpt-5.4"),
                 "trace-1",
                 Duration.ofSeconds(45));
 

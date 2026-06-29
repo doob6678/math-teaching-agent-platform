@@ -6,6 +6,7 @@ import com.doob.mathagent.agent.dto.AgentTraceQueryRequest;
 import com.doob.mathagent.agent.service.AgentTraceQueryService;
 import com.doob.mathagent.agent.service.AgentTraceRecord;
 import com.doob.mathagent.agent.service.InMemoryAgentTraceStore;
+import com.doob.mathagent.agent.vo.AgentRunExecuteResponse;
 import com.doob.mathagent.agent.vo.AgentTraceResponse;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import java.time.Instant;
@@ -28,6 +29,10 @@ class AgentTraceQueryServiceTest {
 
         assertThat(traces).extracting(AgentTraceResponse::traceId).containsExactly("trace-student-1");
         assertThat(traces.getFirst().subjectId()).isEqualTo("student-1");
+        assertThat(traces.getFirst().actualUsage().totalTokens()).isEqualTo(18);
+        assertThat(traces.getFirst().stageTimings()).extracting(AgentRunExecuteResponse.StageTiming::stage)
+                .containsExactly("model_call");
+        assertThat(traces.getFirst().message()).contains("model response recorded");
     }
 
     @Test
@@ -68,11 +73,14 @@ class AgentTraceQueryServiceTest {
                 subjectId,
                 agentCode,
                 "openai",
-                "gpt-4.1",
+                "gpt-5.4",
                 "COMPLETED",
                 0.46,
                 List.of("tool:search:textbook"),
                 List.of("PUBLIC_TEXTBOOK"),
-                List.of("textbook:chapter-1"));
+                List.of("textbook:chapter-1"),
+                List.of(new AgentRunExecuteResponse.StageTiming("model_call", 12)),
+                new AgentRunExecuteResponse.TokenUsage(11, 7, 18),
+                "Live model response recorded");
     }
 }

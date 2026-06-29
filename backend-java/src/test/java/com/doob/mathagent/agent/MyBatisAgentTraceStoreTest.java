@@ -9,6 +9,7 @@ import com.doob.mathagent.agent.mapper.AgentRunTraceMapper;
 import com.doob.mathagent.agent.service.AgentTraceRecord;
 import com.doob.mathagent.agent.service.AgentTraceSearchCriteria;
 import com.doob.mathagent.agent.service.MyBatisAgentTraceStore;
+import com.doob.mathagent.agent.vo.AgentRunExecuteResponse;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.lang.reflect.Proxy;
 import java.time.Instant;
@@ -32,7 +33,9 @@ class MyBatisAgentTraceStoreTest {
         assertThat(mapper.inserted.getAllowedToolScopesJson()).contains("tool:courseware:generate");
         assertThat(mapper.inserted.getAllowedDataScopesJson()).contains("TEACHER_PRIVATE");
         assertThat(mapper.inserted.getEvidenceRefsJson()).contains("textbook:chapter-1");
-        assertThat(mapper.inserted.getMetadataJson()).contains("baseline");
+        assertThat(mapper.inserted.getMetadataJson()).contains("stageTimings");
+        assertThat(mapper.inserted.getMetadataJson()).contains("promptTokens");
+        assertThat(mapper.inserted.getMetadataJson()).contains("model response recorded");
         assertThat(mapper.inserted.toString()).doesNotContain("rawPrompt").doesNotContain("modelOutput");
     }
 
@@ -54,6 +57,9 @@ class MyBatisAgentTraceStoreTest {
         assertThat(traces).extracting(AgentTraceRecord::traceId).containsExactly("trace-1");
         assertThat(traces.getFirst().allowedToolScopes()).containsExactly("tool:courseware:generate");
         assertThat(traces.getFirst().evidenceRefs()).containsExactly("textbook:chapter-1");
+        assertThat(traces.getFirst().actualUsage().totalTokens()).isEqualTo(18);
+        assertThat(traces.getFirst().stageTimings()).extracting(AgentRunExecuteResponse.StageTiming::stage)
+                .containsExactly("model_call");
     }
 
     private static AgentTraceRecord trace(String traceId, String subjectType, String subjectId, String agentCode) {
@@ -66,12 +72,15 @@ class MyBatisAgentTraceStoreTest {
                 subjectId,
                 agentCode,
                 "openai",
-                "gpt-4.1",
+                "gpt-5.4",
                 "COMPLETED",
                 0.46,
                 List.of("tool:courseware:generate"),
                 List.of("TEACHER_PRIVATE"),
-                List.of("textbook:chapter-1"));
+                List.of("textbook:chapter-1"),
+                List.of(new AgentRunExecuteResponse.StageTiming("model_call", 12)),
+                new AgentRunExecuteResponse.TokenUsage(11, 7, 18),
+                "Live model response recorded");
     }
 
     private static AgentRunTraceEntity entity(
@@ -89,13 +98,15 @@ class MyBatisAgentTraceStoreTest {
         entity.setSubjectId(subjectId);
         entity.setAgentCode(agentCode);
         entity.setProviderName("openai");
-        entity.setModelCode("gpt-4.1");
+        entity.setModelCode("gpt-5.4");
         entity.setStatus("COMPLETED");
         entity.setEstimatedCost(0.46);
         entity.setAllowedToolScopesJson("[\"tool:courseware:generate\"]");
         entity.setAllowedDataScopesJson("[\"TEACHER_PRIVATE\"]");
         entity.setEvidenceRefsJson("[\"textbook:chapter-1\"]");
-        entity.setMetadataJson("{\"mode\":\"baseline\"}");
+        entity.setMetadataJson("""
+                {"stageTimings":[{"stage":"model_call","elapsedMs":12}],"actualUsage":{"promptTokens":11,"completionTokens":7,"totalTokens":18},"message":"Live model response recorded"}
+                """);
         return entity;
     }
 

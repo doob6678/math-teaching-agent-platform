@@ -522,7 +522,7 @@ describe("textbookApi", () => {
       })
       .mockResolvedValueOnce({
         ok: true,
-        text: async () => "\\section{学生版}",
+        text: async () => "\\section{student-version}",
       });
     const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
 
@@ -547,7 +547,7 @@ describe("textbookApi", () => {
         }),
       }),
     );
-    expect(latex).toContain("学生版");
+    expect(latex).toContain("\\section");
   });
 
   it("creates and downloads teaching handout batch zip with capability tokens", async () => {
@@ -651,7 +651,7 @@ describe("textbookApi", () => {
     const request = {
       rating: 4,
       decision: "needs_revision",
-      comment: "第二步讲解需要再展开。",
+      comment: "Step two explanation needs more detail.",
     };
     const fetchMock = vi
       .fn()
@@ -675,7 +675,7 @@ describe("textbookApi", () => {
           subjectId: "student-1",
           rating: 4,
           decision: "needs_revision",
-          comment: "第二步讲解需要再展开。",
+          comment: "Step two explanation needs more detail.",
           createdAt: "2026-06-28T12:00:00Z",
         }),
       });
@@ -783,7 +783,7 @@ describe("textbookApi", () => {
         subjectId: "teacher-1",
         agentCode: "CoursewareAgent",
         providerName: "openai",
-        modelCode: "gpt-4.1",
+        modelCode: "gpt-5.4",
         modelLevel: "reasoning",
         allowedToolScopes: ["tool:courseware:generate"],
         deniedToolScopes: ["tool:search:private"],
@@ -879,7 +879,7 @@ describe("textbookApi", () => {
       subjectId: "teacher-1",
       agentCode: "CoursewareAgent",
       providerName: "openai",
-      modelCode: "gpt-4.1",
+      modelCode: "gpt-5.4",
       modelLevel: "reasoning",
       allowedToolScopes: ["tool:courseware:generate"],
       deniedToolScopes: [],
@@ -1004,12 +1004,19 @@ describe("textbookApi", () => {
         subjectId: "teacher-1",
         agentCode: "CoursewareAgent",
         providerName: "openai",
-        modelCode: "gpt-4.1",
+        modelCode: "gpt-5.4",
         status: "COMPLETED",
         estimatedCost: 0.46,
         allowedToolScopes: ["tool:courseware:generate"],
         allowedDataScopes: ["TEACHER_PRIVATE"],
         evidenceRefs: ["textbook:chapter-1"],
+        stageTimings: [{ stage: "model_call", elapsedMs: 14 }],
+        actualUsage: {
+          promptTokens: 123,
+          completionTokens: 45,
+          totalTokens: 168,
+        },
+        message: "Live model response recorded with provider usage metadata.",
       }]),
     });
     const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
@@ -1028,6 +1035,8 @@ describe("textbookApi", () => {
     expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Id");
     expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Type");
     expect(traces[0].traceId).toBe("trace-1");
+    expect(traces[0].modelCode).toBe("gpt-5.4");
+    expect(traces[0].actualUsage.totalTokens).toBe(168);
   });
 
   it("builds copyable MCP configuration without client supplied identity headers", async () => {

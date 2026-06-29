@@ -20,6 +20,9 @@ import java.util.List;
  * @param allowedToolScopes allowed tool scopes recorded for audit
  * @param allowedDataScopes allowed data scopes recorded for audit
  * @param evidenceRefs evidence references used by this run
+ * @param stageTimings persisted stage timings for task recovery
+ * @param actualUsage provider-reported token usage for recovered runs
+ * @param message safe execution message without raw prompt or model output
  */
 public record AgentTraceResponse(
         String traceId,
@@ -35,5 +38,8 @@ public record AgentTraceResponse(
         double estimatedCost,
         List<String> allowedToolScopes,
         List<String> allowedDataScopes,
-        List<String> evidenceRefs) {
+        List<String> evidenceRefs,
+        List<AgentRunExecuteResponse.StageTiming> stageTimings,
+        AgentRunExecuteResponse.TokenUsage actualUsage,
+        String message) {
 }

@@ -710,6 +710,12 @@ export interface AgentTraceResponse {
   allowedDataScopes: string[];
   /** Evidence references used by this run. */
   evidenceRefs: string[];
+  /** Persisted execution stage timings for recovery views. */
+  stageTimings: TeachingStageTiming[];
+  /** Provider-reported token usage persisted by backend trace metadata. */
+  actualUsage: AgentTokenUsage;
+  /** Safe execution message without raw prompt or raw model output. */
+  message: string;
 }
 
 /**

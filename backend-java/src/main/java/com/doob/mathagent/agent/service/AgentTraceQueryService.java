@@ -105,6 +105,9 @@ public class AgentTraceQueryService {
                 trace.estimatedCost(),
                 trace.allowedToolScopes(),
                 trace.allowedDataScopes(),
-                trace.evidenceRefs());
+                trace.evidenceRefs(),
+                trace.stageTimings(),
+                trace.actualUsage(),
+                trace.message());
     }
 }

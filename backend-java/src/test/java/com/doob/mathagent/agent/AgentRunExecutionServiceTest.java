@@ -264,8 +264,9 @@ class AgentRunExecutionServiceTest {
                 7,
                 18,
                 "model response recorded")));
+        InMemoryAgentTraceStore traceStore = new InMemoryAgentTraceStore();
         AgentRunExecutionService service = new AgentRunExecutionService(
-                new InMemoryAgentTraceStore(),
+                traceStore,
                 new InMemoryAgentConcurrencyGuard(),
                 gateway);
         AgentRunPlanResponse plan = coursewarePlan();
@@ -284,6 +285,10 @@ class AgentRunExecutionServiceTest {
         assertThat(response.stageTimings()).extracting(AgentRunExecuteResponse.StageTiming::stage)
                 .contains("model_call");
         assertThat(response.message()).contains("model response recorded");
+        assertThat(traceStore.find(response.traceId()).orElseThrow().actualUsage().totalTokens()).isEqualTo(18);
+        assertThat(traceStore.find(response.traceId()).orElseThrow().stageTimings())
+                .extracting(AgentRunExecuteResponse.StageTiming::stage)
+                .contains("model_call");
     }
 
     @Test

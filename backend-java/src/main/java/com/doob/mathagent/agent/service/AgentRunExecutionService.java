@@ -185,20 +185,22 @@ public class AgentRunExecutionService {
                 plan.estimatedCost(),
                 safeList(plan.allowedToolScopes()),
                 safeList(plan.allowedDataScopes()),
-                safeList(normalized.evidenceRefs()));
+                safeList(normalized.evidenceRefs()),
+                List.of(),
+                new AgentRunExecuteResponse.TokenUsage(0, 0, 0),
+                "");
         try {
             timer.mark("trace_start");
 
-            traceStore.save(record);
             ExecutionOutcome outcome = normalized.dryRun()
                     ? ExecutionOutcome.baseline(record.providerName(), record.modelCode())
                     : callModelWithFallback(normalized, record);
             timer.mark(normalized.dryRun() ? "baseline_execute" : "model_call");
             timer.mark("trace_finish");
-
-            return new AgentRunExecuteResponse(
+            AgentTraceRecord finalRecord = new AgentTraceRecord(
                     record.traceId(),
                     record.planId(),
+                    record.createdAt(),
                     record.tenantId(),
                     record.subjectType(),
                     record.subjectId(),
@@ -209,13 +211,32 @@ public class AgentRunExecutionService {
                     record.estimatedCost(),
                     record.allowedToolScopes(),
                     record.allowedDataScopes(),
-                    concurrencyKeys,
+                    record.evidenceRefs(),
                     timer.timings(),
                     new AgentRunExecuteResponse.TokenUsage(
                             outcome.promptTokens(),
                             outcome.completionTokens(),
                             outcome.totalTokens()),
                     outcome.message());
+            traceStore.save(finalRecord);
+
+            return new AgentRunExecuteResponse(
+                    finalRecord.traceId(),
+                    finalRecord.planId(),
+                    finalRecord.tenantId(),
+                    finalRecord.subjectType(),
+                    finalRecord.subjectId(),
+                    finalRecord.agentCode(),
+                    finalRecord.providerName(),
+                    finalRecord.modelCode(),
+                    finalRecord.status(),
+                    finalRecord.estimatedCost(),
+                    finalRecord.allowedToolScopes(),
+                    finalRecord.allowedDataScopes(),
+                    concurrencyKeys,
+                    finalRecord.stageTimings(),
+                    finalRecord.actualUsage(),
+                    finalRecord.message());
         } finally {
             lease.close();
         }

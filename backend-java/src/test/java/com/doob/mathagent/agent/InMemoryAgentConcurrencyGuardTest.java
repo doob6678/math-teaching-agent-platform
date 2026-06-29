@@ -16,7 +16,7 @@ class InMemoryAgentConcurrencyGuardTest {
         InMemoryAgentConcurrencyGuard guard = new InMemoryAgentConcurrencyGuard();
 
         Optional<AgentConcurrencyLease> first = guard.tryAcquire(
-                List.of("concurrent:user:teacher-1:CoursewareAgent", "concurrent:model:gpt-4.1"),
+                List.of("concurrent:user:teacher-1:CoursewareAgent", "concurrent:model:gpt-5.4"),
                 "trace-1",
                 Duration.ofSeconds(30));
         Optional<AgentConcurrencyLease> overlap = guard.tryAcquire(
@@ -38,11 +38,11 @@ class InMemoryAgentConcurrencyGuardTest {
     @Test
     void rollsBackAlreadyAcquiredKeysWhenAnyRequestedKeyConflicts() {
         InMemoryAgentConcurrencyGuard guard = new InMemoryAgentConcurrencyGuard();
-        AgentConcurrencyLease active = guard.tryAcquire(List.of("model:gpt-4.1"), "trace-1", Duration.ofSeconds(30))
+        AgentConcurrencyLease active = guard.tryAcquire(List.of("model:gpt-5.4"), "trace-1", Duration.ofSeconds(30))
                 .orElseThrow();
 
         Optional<AgentConcurrencyLease> denied = guard.tryAcquire(
-                List.of("user:teacher-1", "model:gpt-4.1"),
+                List.of("user:teacher-1", "model:gpt-5.4"),
                 "trace-2",
                 Duration.ofSeconds(30));
 

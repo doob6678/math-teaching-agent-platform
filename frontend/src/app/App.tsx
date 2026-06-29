@@ -3,6 +3,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   AgentRunExecuteResponse,
   AgentRunPlanResponse,
+  AgentTraceResponse,
   McpConfigurationResponse,
   RetrievalAuditDetail,
   StudentDashboardResponse,
@@ -60,10 +61,13 @@ export function App() {
   const [feedbackMessage, setFeedbackMessage] = useState("");
   const [agentPlan, setAgentPlan] = useState<AgentRunPlanResponse | null>(null);
   const [agentExecution, setAgentExecution] = useState<AgentRunExecuteResponse | null>(null);
+  const [agentTraces, setAgentTraces] = useState<AgentTraceResponse[]>([]);
   const [planningAgent, setPlanningAgent] = useState(false);
   const [executingAgent, setExecutingAgent] = useState(false);
+  const [loadingAgentTraces, setLoadingAgentTraces] = useState(false);
   const [agentPlanError, setAgentPlanError] = useState("");
   const [agentExecutionError, setAgentExecutionError] = useState("");
+  const [agentTraceError, setAgentTraceError] = useState("");
   const [disablePrivateSearch, setDisablePrivateSearch] = useState(true);
   const [disableTextbookSearch, setDisableTextbookSearch] = useState(false);
   const [agentProvider, setAgentProvider] = useState("openai");
@@ -120,6 +124,10 @@ export function App() {
     refreshTeacherResources();
   }, [api]);
 
+  useEffect(() => {
+    refreshAgentTraces();
+  }, [api]);
+
   function refreshTeacherResources() {
     setLoadingTeacherResources(true);
     api
@@ -127,6 +135,16 @@ export function App() {
       .then(setTeacherResources)
       .catch((error: Error) => setTeacherResourceError(error.message))
       .finally(() => setLoadingTeacherResources(false));
+  }
+
+  function refreshAgentTraces() {
+    setLoadingAgentTraces(true);
+    setAgentTraceError("");
+    api
+      .listAgentTraces({ limit: 10 })
+      .then(setAgentTraces)
+      .catch((error: Error) => setAgentTraceError(error.message))
+      .finally(() => setLoadingAgentTraces(false));
   }
 
   useEffect(() => {
@@ -384,7 +402,10 @@ export function App() {
         evidenceRefs: teachingTask ? [`teaching-task:${teachingTask.taskId}`] : ["textbook:planned-context"],
         dryRun: false,
       })
-      .then(setAgentExecution)
+      .then((execution) => {
+        setAgentExecution(execution);
+        refreshAgentTraces();
+      })
       .catch((error: Error) => setAgentExecutionError(error.message))
       .finally(() => setExecutingAgent(false));
   }
@@ -649,6 +670,13 @@ export function App() {
             executing={executingAgent}
             error={agentPlanError || agentExecutionError}
             onExecute={handleExecuteAgentRun}
+          />
+
+          <AgentTracePanel
+            traces={agentTraces}
+            loading={loadingAgentTraces}
+            error={agentTraceError}
+            onRefresh={refreshAgentTraces}
           />
 
           <McpConfigurationPanel
@@ -1421,6 +1449,102 @@ function AgentPlanPanel({
         <div className="empty-state compact">Plan an agent run to see which tools the backend will inject.</div>
       )}
     </section>
+  );
+}
+
+export function AgentTracePanel({
+  traces,
+  loading,
+  error,
+  onRefresh,
+}: {
+  traces: AgentTraceResponse[];
+  loading: boolean;
+  error: string;
+  onRefresh: () => void;
+}) {
+  return (
+    <section className="agent-trace-panel">
+      <div className="result-header">
+        <div>
+          <p className="eyebrow">Run Recovery</p>
+          <h2>Agent execution history</h2>
+        </div>
+        <button type="button" className="inline-action" onClick={onRefresh} disabled={loading}>
+          {loading ? <Loader2 className="spin" size={16} /> : <Search size={16} />}
+          <span>Refresh</span>
+        </button>
+      </div>
+      {loading ? <StatusLine icon={<Loader2 className="spin" size={16} />} text="Loading recoverable traces" /> : null}
+      {error ? <StatusLine icon={<AlertCircle size={16} />} text={error} tone="danger" /> : null}
+      {traces.length > 0 ? (
+        <div className="agent-trace-list">
+          {traces.map((trace) => (
+            <article className="agent-trace-item" key={trace.traceId}>
+              <div className="card-head">
+                <div>
+                  <h3>{trace.agentCode}</h3>
+                  <p>{formatDateTime(trace.createdAt)}</p>
+                </div>
+                <span className="quality-badge good">{trace.status}</span>
+              </div>
+              <div className="profile-strip">
+                <div>
+                  <span>Trace</span>
+                  <strong>{trace.traceId}</strong>
+                </div>
+                <div>
+                  <span>Model</span>
+                  <strong>
+                    {trace.providerName} / {trace.modelCode}
+                  </strong>
+                </div>
+                <div>
+                  <span>Backend subject</span>
+                  <strong>
+                    {trace.subjectType}:{trace.subjectId}
+                  </strong>
+                </div>
+                <div>
+                  <span>Token usage</span>
+                  <strong>
+                    {trace.actualUsage.totalTokens} total / {trace.actualUsage.promptTokens} prompt /{" "}
+                    {trace.actualUsage.completionTokens} completion
+                  </strong>
+                </div>
+              </div>
+              <div className="execution-trace">
+                <p>{trace.message}</p>
+                <div className="tool-decision-list compact">
+                  {trace.stageTimings.map((timing) => (
+                    <div className="tool-decision allowed" key={`${trace.traceId}:${timing.stage}`}>
+                      <strong>{timing.stage}</strong>
+                      <span>{timing.elapsedMs} ms</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <TraceBadgeRow label="Tools" values={trace.allowedToolScopes} />
+              <TraceBadgeRow label="Data" values={trace.allowedDataScopes} />
+              <TraceBadgeRow label="Evidence" values={trace.evidenceRefs} />
+            </article>
+          ))}
+        </div>
+      ) : !loading ? (
+        <div className="empty-state compact">No recoverable agent traces for the current backend session.</div>
+      ) : null}
+    </section>
+  );
+}
+
+function TraceBadgeRow({ label, values }: { label: string; values: string[] }) {
+  return (
+    <div className="trace-badge-row">
+      <span>{label}</span>
+      <div>
+        {values.length > 0 ? values.map((value) => <strong key={value}>{value}</strong>) : <strong>none</strong>}
+      </div>
+    </div>
   );
 }
 

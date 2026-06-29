@@ -287,6 +287,68 @@ h2 {
   border-bottom: 1px solid #e5e9f0;
 }
 
+.agent-trace-panel {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 22px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid #e5e9f0;
+}
+
+.inline-action {
+  width: auto;
+  min-width: 112px;
+}
+
+.agent-trace-list {
+  display: grid;
+  gap: 10px;
+}
+
+.agent-trace-item {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #dce5ef;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.agent-trace-item .profile-strip {
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
+.trace-badge-row {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.trace-badge-row > span {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.trace-badge-row > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.trace-badge-row strong {
+  max-width: 100%;
+  padding: 4px 7px;
+  border-radius: 6px;
+  background: #f1f5f9;
+  color: #334155;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
 .agent-plan-grid {
   display: grid;
   gap: 10px;
@@ -1199,6 +1261,7 @@ h2 {
 
   .dashboard-grid,
   .profile-strip,
+  .trace-badge-row,
   .tool-decision {
     grid-template-columns: 1fr;
   }

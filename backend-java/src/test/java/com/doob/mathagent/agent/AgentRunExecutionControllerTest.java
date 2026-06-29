@@ -107,7 +107,7 @@ class AgentRunExecutionControllerTest {
                 subjectId,
                 agentCode,
                 "openai",
-                "gpt-4.1",
+                "gpt-5.4",
                 "reasoning",
                 List.of("tool:search:textbook"),
                 List.of(),

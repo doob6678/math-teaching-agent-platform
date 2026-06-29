@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.doob.mathagent.agent.entity.AgentRunTraceEntity;
 import com.doob.mathagent.agent.mapper.AgentRunTraceMapper;
+import com.doob.mathagent.agent.vo.AgentRunExecuteResponse;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -20,6 +21,8 @@ import org.springframework.stereotype.Repository;
 public class MyBatisAgentTraceStore implements AgentTraceStore {
 
     private static final TypeReference<List<String>> STRING_LIST = new TypeReference<>() {
+    };
+    private static final TypeReference<TraceMetadata> TRACE_METADATA = new TypeReference<>() {
     };
 
     private final AgentRunTraceMapper mapper;
@@ -96,7 +99,10 @@ public class MyBatisAgentTraceStore implements AgentTraceStore {
         entity.setAllowedToolScopesJson(writeList(record.allowedToolScopes()));
         entity.setAllowedDataScopesJson(writeList(record.allowedDataScopes()));
         entity.setEvidenceRefsJson(writeList(record.evidenceRefs()));
-        entity.setMetadataJson("{\"mode\":\"baseline\"}");
+        entity.setMetadataJson(writeMetadata(new TraceMetadata(
+                record.stageTimings(),
+                record.actualUsage(),
+                safeText(record.message()))));
         return entity;
     }
 
@@ -104,6 +110,7 @@ public class MyBatisAgentTraceStore implements AgentTraceStore {
      * Converts a database entity to a trace record.
      */
     private AgentTraceRecord toRecord(AgentRunTraceEntity entity) {
+        TraceMetadata metadata = readMetadata(entity.getMetadataJson());
         return new AgentTraceRecord(
                 entity.getTraceId(),
                 entity.getPlanId(),
@@ -118,7 +125,10 @@ public class MyBatisAgentTraceStore implements AgentTraceStore {
                 entity.getEstimatedCost() == null ? 0.0d : entity.getEstimatedCost(),
                 readList(entity.getAllowedToolScopesJson()),
                 readList(entity.getAllowedDataScopesJson()),
-                readList(entity.getEvidenceRefsJson()));
+                readList(entity.getEvidenceRefsJson()),
+                metadata.stageTimings(),
+                metadata.actualUsage(),
+                metadata.message());
     }
 
     /**
@@ -147,11 +157,69 @@ public class MyBatisAgentTraceStore implements AgentTraceStore {
     }
 
     /**
+     * Serializes safe trace metadata without raw prompts or raw model output.
+     */
+    private String writeMetadata(TraceMetadata metadata) {
+        try {
+            return objectMapper.writeValueAsString(metadata.normalize());
+        } catch (JsonProcessingException exception) {
+            throw new IllegalArgumentException("Agent trace metadata is not serializable", exception);
+        }
+    }
+
+    /**
+     * Reads optional metadata from older and current trace rows.
+     */
+    private TraceMetadata readMetadata(String value) {
+        if (value == null || value.isBlank()) {
+            return TraceMetadata.empty();
+        }
+        try {
+            return objectMapper.readValue(value, TRACE_METADATA).normalize();
+        } catch (JsonProcessingException exception) {
+            return TraceMetadata.empty();
+        }
+    }
+
+    /**
      * Adds an equality filter only when a value is present.
      */
     private static void eqIfPresent(QueryWrapper<AgentRunTraceEntity> wrapper, String column, String value) {
         if (value != null) {
             wrapper.eq(column, value);
+        }
+    }
+
+    /**
+     * Returns stripped text or an empty string.
+     */
+    private static String safeText(String value) {
+        return value == null || value.isBlank() ? "" : value.strip();
+    }
+
+    /**
+     * Safe metadata stored in agent_run_trace.metadata_json.
+     */
+    private record TraceMetadata(
+            List<AgentRunExecuteResponse.StageTiming> stageTimings,
+            AgentRunExecuteResponse.TokenUsage actualUsage,
+            String message) {
+
+        /**
+         * Returns metadata defaults for old rows and failed metadata parsing.
+         */
+        private static TraceMetadata empty() {
+            return new TraceMetadata(List.of(), new AgentRunExecuteResponse.TokenUsage(0, 0, 0), "");
+        }
+
+        /**
+         * Normalizes null fields before returning metadata to callers.
+         */
+        private TraceMetadata normalize() {
+            return new TraceMetadata(
+                    stageTimings == null ? List.of() : List.copyOf(stageTimings),
+                    actualUsage == null ? new AgentRunExecuteResponse.TokenUsage(0, 0, 0) : actualUsage,
+                    safeText(message));
         }
     }
 }
