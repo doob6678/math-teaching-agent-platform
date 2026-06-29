@@ -1080,10 +1080,9 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     ): Promise<TeachingHandoutBatchExportResponse> {
       const body = JSON.stringify(request);
       const path = "/api/teaching/handouts/batch/zip";
-      const idempotencyKey = `teaching-handout-batch-export-zip:${[
-        ...(request.folderIds ?? []),
-        request.taskIds.join(","),
-      ].join(":")}`;
+      const idempotencyKey = `teaching-handout-batch-export-zip:${(request.folderIds ?? []).join(",")}:${(
+        request.folderPaths ?? []
+      ).join(",")}:${request.taskIds.join(",")}`;
       const capability = await applyCapability(
         "teaching-handout:batch-export-zip",
         path,

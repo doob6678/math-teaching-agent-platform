@@ -598,6 +598,69 @@ h2 {
   max-height: 260px;
 }
 
+.formula-block.handout.preview {
+  border-color: #b8d6f0;
+  background: #f3f9ff;
+}
+
+.handout-toolbar,
+.batch-export-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: end;
+}
+
+.handout-toolbar button,
+.batch-export-row button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 36px;
+  border: 1px solid #c8d5e3;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #1f3a5c;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.handout-toolbar button {
+  padding: 7px 10px;
+}
+
+.batch-export-row label {
+  display: grid;
+  flex: 1 1 220px;
+  gap: 5px;
+  min-width: 0;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.batch-export-row input {
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid #cfd8e5;
+  border-radius: 6px;
+  padding: 7px 9px;
+  color: #172033;
+}
+
+.batch-export-row button {
+  flex: 0 0 auto;
+  padding: 7px 12px;
+}
+
+.handout-toolbar button:disabled,
+.batch-export-row button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
 .hit-list {
   display: grid;
   gap: 12px;
@@ -812,6 +875,11 @@ h2 {
 
   .memory-strip {
     grid-template-columns: 1fr;
+  }
+
+  .batch-export-row button,
+  .handout-toolbar button {
+    width: 100%;
   }
 
   .score-item strong {

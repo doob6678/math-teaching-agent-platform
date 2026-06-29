@@ -564,7 +564,7 @@ describe("textbookApi", () => {
       action: "teaching-handout:batch-export-zip",
       path: "/api/teaching/handouts/batch/zip",
       requestHash: expect.any(String),
-      idempotencyKey: "teaching-handout-batch-export-zip:folder-algebra:task-1,task-2",
+      idempotencyKey: "teaching-handout-batch-export-zip:folder-algebra:grade-10/functions:task-1,task-2",
       maxCost: 2,
     });
     expect(fetchMock).toHaveBeenNthCalledWith(
@@ -601,6 +601,59 @@ describe("textbookApi", () => {
     );
     expect(batch.exportedCount).toBe(2);
     expect(Array.from(zip.slice(0, 2))).toEqual([80, 75]);
+  });
+
+  it("binds batch zip capability idempotency to selected folder paths", async () => {
+    const batchRequest = {
+      taskIds: ["task-1", "task-2"],
+      folderIds: ["folder-algebra", "folder-geometry"],
+      folderPaths: ["grade-10/functions", "grade-10/vectors"],
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          token: "batch-export-capability",
+          action: "teaching-handout:batch-export-zip",
+          path: "/api/teaching/handouts/batch/zip",
+          requestHash: "hash-batch",
+          expiresAt: "2026-06-28T12:02:00Z",
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          batchId: "batch-2",
+          status: "COMPLETED",
+          requestedCount: 2,
+          exportedCount: 2,
+          taskIds: ["task-1", "task-2"],
+          folderIds: ["folder-algebra", "folder-geometry"],
+          folderPaths: ["grade-10/functions", "grade-10/vectors"],
+          expiresAt: "2026-06-28T12:30:00Z",
+        }),
+      });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    await client.createTeachingHandoutBatchZip(batchRequest);
+
+    const createCapabilityBody = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
+    expect(createCapabilityBody).toEqual({
+      action: "teaching-handout:batch-export-zip",
+      path: "/api/teaching/handouts/batch/zip",
+      requestHash: expect.any(String),
+      idempotencyKey:
+        "teaching-handout-batch-export-zip:folder-algebra,folder-geometry:grade-10/functions,grade-10/vectors:task-1,task-2",
+      maxCost: 2,
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://127.0.0.1:8080/api/teaching/handouts/batch/zip",
+      expect.objectContaining({
+        body: JSON.stringify(batchRequest),
+      }),
+    );
   });
 
   it("plans agent run with backend session identity and no client supplied user identity", async () => {

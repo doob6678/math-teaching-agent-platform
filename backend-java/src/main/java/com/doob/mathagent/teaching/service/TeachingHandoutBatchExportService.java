@@ -9,6 +9,8 @@ import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -17,6 +19,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 /**
@@ -38,6 +41,17 @@ public class TeachingHandoutBatchExportService {
      * @param pdfExportService PDF renderer reused for each task in the package
      */
     @Autowired
+    public TeachingHandoutBatchExportService(
+            TeachingHandoutPdfExportService pdfExportService,
+            @Value("${math-agent.teaching.handout.batch-zip-ttl-minutes:30}") long ttlMinutes) {
+        this(pdfExportService, Clock.systemUTC(), Duration.ofMinutes(Math.max(1, ttlMinutes)));
+    }
+
+    /**
+     * Creates a service with the default TTL for focused tests and local utility usage.
+     *
+     * @param pdfExportService PDF renderer reused for each task in the package
+     */
     public TeachingHandoutBatchExportService(TeachingHandoutPdfExportService pdfExportService) {
         this(pdfExportService, Clock.systemUTC(), DEFAULT_TTL);
     }
@@ -78,6 +92,7 @@ public class TeachingHandoutBatchExportService {
         String batchId = UUID.randomUUID().toString();
         Instant expiresAt = Instant.now(clock).plus(ttl);
         List<String> taskIds = tasks.stream().map(TeachingTaskResponse::taskId).toList();
+        List<String> folderPaths = sanitizeFolderPaths(normalized.folderPaths());
         TeachingHandoutBatchExportResponse response = new TeachingHandoutBatchExportResponse(
                 batchId,
                 "COMPLETED",
@@ -85,7 +100,7 @@ public class TeachingHandoutBatchExportService {
                 taskIds.size(),
                 taskIds,
                 normalized.folderIds(),
-                normalized.folderPaths(),
+                folderPaths,
                 expiresAt);
         records.put(batchId, new TeachingHandoutBatchExportRecord(
                 response,
@@ -129,8 +144,9 @@ public class TeachingHandoutBatchExportService {
         try {
             ByteArrayOutputStream bytes = new ByteArrayOutputStream();
             try (ZipOutputStream zip = new ZipOutputStream(bytes, StandardCharsets.UTF_8)) {
-                String folderPrefix = folderPrefix(response.folderPaths());
-                for (TeachingTaskResponse task : tasks) {
+                for (int index = 0; index < tasks.size(); index += 1) {
+                    TeachingTaskResponse task = tasks.get(index);
+                    String folderPrefix = folderPrefix(response.folderPaths(), index, tasks.size());
                     put(zip, folderPrefix + task.taskId() + ".tex", task.handoutLatex().getBytes(StandardCharsets.UTF_8));
                     put(zip, folderPrefix + task.taskId() + ".pdf", pdfExportService.render(task));
                 }
@@ -176,18 +192,63 @@ public class TeachingHandoutBatchExportService {
     }
 
     /**
-     * Uses the first selected folder path as the ZIP directory prefix.
+     * Resolves the ZIP directory prefix for the task at the current request order.
      */
-    private static String folderPrefix(List<String> folderPaths) {
+    private static String folderPrefix(List<String> folderPaths, int index, int taskCount) {
         if (folderPaths == null || folderPaths.isEmpty()) {
             return "";
         }
-        String sanitized = folderPaths.getFirst()
-                .replace("\\", "/")
-                .replaceAll("^/+", "")
-                .replaceAll("/+", "/")
-                .replaceAll("\\.\\.", "");
-        return sanitized.isBlank() ? "" : sanitized + "/";
+        String folderPath = folderPaths.size() == taskCount && index < folderPaths.size()
+                ? folderPaths.get(index)
+                : folderPaths.getFirst();
+        return folderPath == null || folderPath.isBlank() ? "" : folderPath + "/";
+    }
+
+    /**
+     * Sanitizes client-provided folder labels before they become ZIP entry names.
+     */
+    private static List<String> sanitizeFolderPaths(List<String> folderPaths) {
+        if (folderPaths == null || folderPaths.isEmpty()) {
+            return List.of();
+        }
+        return folderPaths.stream()
+                .map(TeachingHandoutBatchExportService::sanitizeFolderPath)
+                .filter(path -> !path.isBlank())
+                .distinct()
+                .toList();
+    }
+
+    /**
+     * Normalizes one folder path by dropping drive names and resolving traversal segments.
+     */
+    private static String sanitizeFolderPath(String folderPath) {
+        if (folderPath == null || folderPath.isBlank()) {
+            return "";
+        }
+        ArrayDeque<String> segments = new ArrayDeque<>();
+        for (String rawSegment : folderPath.replace("\\", "/").split("/+")) {
+            String segment = rawSegment.strip();
+            if (segment.isBlank() || ".".equals(segment)) {
+                continue;
+            }
+            if ("..".equals(segment)) {
+                if (!segments.isEmpty()) {
+                    segments.removeLast();
+                }
+                continue;
+            }
+            if (segment.matches("(?i)^[a-z]:$")) {
+                continue;
+            }
+            String safeSegment = segment
+                    .replaceAll("[\\p{Cntrl}:*?\"<>|]", "_")
+                    .replaceAll("^\\.+$", "")
+                    .strip();
+            if (!safeSegment.isBlank()) {
+                segments.addLast(safeSegment);
+            }
+        }
+        return String.join("/", new ArrayList<>(segments));
     }
 
     /**

@@ -33,6 +33,10 @@ export function App() {
   const [teachingTask, setTeachingTask] = useState<TeachingTaskResponse | null>(null);
   const [studentDashboard, setStudentDashboard] = useState<StudentDashboardResponse | null>(null);
   const [teacherResources, setTeacherResources] = useState<TeacherResourceDocumentResponse[]>([]);
+  const [handoutPreviewLatex, setHandoutPreviewLatex] = useState("");
+  const [handoutPreviewTaskId, setHandoutPreviewTaskId] = useState("");
+  const [handoutAction, setHandoutAction] = useState("");
+  const [handoutExportMessage, setHandoutExportMessage] = useState("");
   const [teachingError, setTeachingError] = useState("");
   const [studentDashboardError, setStudentDashboardError] = useState("");
   const [teacherResourceError, setTeacherResourceError] = useState("");
@@ -41,6 +45,7 @@ export function App() {
   const [resourceLocation, setResourceLocation] = useState("");
   const [resourceSourceType, setResourceSourceType] = useState("local_path");
   const [resourceScope, setResourceScope] = useState("MATH_VIP");
+  const [batchFolderPath, setBatchFolderPath] = useState("handouts/latest");
   const [loginUsername, setLoginUsername] = useState("teacher");
   const [loginPassword, setLoginPassword] = useState("teacher-123456");
   const [authSession, setAuthSession] = useState<LoginResponse | null>(() => readStoredAuthSession());
@@ -142,6 +147,9 @@ export function App() {
       .then((task) => {
         window.localStorage.setItem(TEACHING_TASK_STORAGE_KEY, task.taskId);
         setTeachingTask(task);
+        setHandoutPreviewLatex("");
+        setHandoutPreviewTaskId("");
+        setHandoutExportMessage("");
       })
       .catch((error: Error) => setTeachingError(error.message))
       .finally(() => setSubmittingTeachingTask(false));
@@ -189,6 +197,80 @@ export function App() {
       .archiveTeacherResource(documentId)
       .then(() => setTeacherResources((current) => current.filter((resource) => resource.documentId !== documentId)))
       .catch((error: Error) => setTeacherResourceError(error.message));
+  }
+
+  function handlePreviewLatex() {
+    if (!teachingTask) {
+      return;
+    }
+    setHandoutAction("preview");
+    setTeachingError("");
+    setHandoutExportMessage("");
+    api
+      .previewTeachingTaskLatex(teachingTask.taskId)
+      .then((latex) => {
+        setHandoutPreviewLatex(latex);
+        setHandoutPreviewTaskId(teachingTask.taskId);
+      })
+      .catch((error: Error) => setTeachingError(error.message))
+      .finally(() => setHandoutAction(""));
+  }
+
+  function handleExportLatex() {
+    if (!teachingTask) {
+      return;
+    }
+    setHandoutAction("latex");
+    setTeachingError("");
+    setHandoutExportMessage("");
+    api
+      .exportTeachingTaskLatex(teachingTask.taskId)
+      .then((latex) => {
+        downloadText(`${teachingTask.taskId}.tex`, latex, "application/x-tex;charset=utf-8");
+        setHandoutExportMessage("LaTeX source exported.");
+      })
+      .catch((error: Error) => setTeachingError(error.message))
+      .finally(() => setHandoutAction(""));
+  }
+
+  function handleExportPdf() {
+    if (!teachingTask) {
+      return;
+    }
+    setHandoutAction("pdf");
+    setTeachingError("");
+    setHandoutExportMessage("");
+    api
+      .exportTeachingTaskPdf(teachingTask.taskId)
+      .then((pdf) => {
+        downloadBytes(`${teachingTask.taskId}.pdf`, pdf, "application/pdf");
+        setHandoutExportMessage("PDF handout exported.");
+      })
+      .catch((error: Error) => setTeachingError(error.message))
+      .finally(() => setHandoutAction(""));
+  }
+
+  function handleExportBatchZip() {
+    if (!teachingTask) {
+      return;
+    }
+    setHandoutAction("zip");
+    setTeachingError("");
+    setHandoutExportMessage("");
+    api
+      .createTeachingHandoutBatchZip({
+        taskIds: [teachingTask.taskId],
+        folderIds: [`task-${teachingTask.taskId}`],
+        folderPaths: [batchFolderPath.trim() || `handouts/${teachingTask.taskId}`],
+      })
+      .then((batch) =>
+        api.downloadTeachingHandoutBatchZip(batch.batchId).then((zip) => {
+          downloadBytes(`${batch.batchId}.zip`, zip, "application/zip");
+          setHandoutExportMessage(`ZIP exported. Temporary package expires at ${formatDateTime(batch.expiresAt)}.`);
+        }),
+      )
+      .catch((error: Error) => setTeachingError(error.message))
+      .finally(() => setHandoutAction(""));
   }
 
   return (
@@ -371,6 +453,15 @@ export function App() {
             task={teachingTask}
             loading={loadingTeachingTask}
             error={teachingError}
+            previewLatex={handoutPreviewTaskId === teachingTask?.taskId ? handoutPreviewLatex : ""}
+            action={handoutAction}
+            exportMessage={handoutExportMessage}
+            batchFolderPath={batchFolderPath}
+            onBatchFolderPathChange={setBatchFolderPath}
+            onPreviewLatex={handlePreviewLatex}
+            onExportLatex={handleExportLatex}
+            onExportPdf={handleExportPdf}
+            onExportBatchZip={handleExportBatchZip}
           />
         </section>
       </section>
@@ -574,11 +665,30 @@ function TeachingTaskPanel({
   task,
   loading,
   error,
+  previewLatex,
+  action,
+  exportMessage,
+  batchFolderPath,
+  onBatchFolderPathChange,
+  onPreviewLatex,
+  onExportLatex,
+  onExportPdf,
+  onExportBatchZip,
 }: {
   task: TeachingTaskResponse | null;
   loading: boolean;
   error: string;
+  previewLatex: string;
+  action: string;
+  exportMessage: string;
+  batchFolderPath: string;
+  onBatchFolderPathChange: (value: string) => void;
+  onPreviewLatex: () => void;
+  onExportLatex: () => void;
+  onExportPdf: () => void;
+  onExportBatchZip: () => void;
 }) {
+  const busy = Boolean(action);
   return (
     <section className="teaching-task">
       <div className="result-header">
@@ -659,7 +769,40 @@ function TeachingTaskPanel({
               </article>
             ))}
           </div>
-          <pre className="formula-block handout">{task.handoutLatex}</pre>
+          <div className="handout-toolbar">
+            <button type="button" onClick={onPreviewLatex} disabled={busy}>
+              {action === "preview" ? <Loader2 className="spin" size={16} /> : <BookOpen size={16} />}
+              <span>Preview LaTeX</span>
+            </button>
+            <button type="button" onClick={onExportLatex} disabled={busy}>
+              {action === "latex" ? <Loader2 className="spin" size={16} /> : <ShieldCheck size={16} />}
+              <span>Export TeX</span>
+            </button>
+            <button type="button" onClick={onExportPdf} disabled={busy}>
+              {action === "pdf" ? <Loader2 className="spin" size={16} /> : <Database size={16} />}
+              <span>Export PDF</span>
+            </button>
+          </div>
+          <div className="batch-export-row">
+            <label>
+              <span>ZIP folder</span>
+              <input
+                value={batchFolderPath}
+                onChange={(event) => onBatchFolderPathChange(event.target.value)}
+                placeholder={`handouts/${task.taskId}`}
+              />
+            </label>
+            <button type="button" onClick={onExportBatchZip} disabled={busy}>
+              {action === "zip" ? <Loader2 className="spin" size={16} /> : <Database size={16} />}
+              <span>Export ZIP</span>
+            </button>
+          </div>
+          {exportMessage ? <StatusLine icon={<ShieldCheck size={16} />} text={exportMessage} /> : null}
+          {previewLatex ? (
+            <pre className="formula-block handout preview">{previewLatex}</pre>
+          ) : (
+            <pre className="formula-block handout">{task.handoutLatex}</pre>
+          )}
         </div>
       ) : null}
     </section>
@@ -681,6 +824,30 @@ function readStoredAuthSession() {
 
 function formatSimilarity(value?: number) {
   return value === undefined ? "0.0000" : value.toFixed(4);
+}
+
+function formatDateTime(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString("zh-CN", { hour12: false });
+}
+
+function downloadText(fileName: string, content: string, mimeType: string) {
+  downloadBlob(fileName, new Blob([content], { type: mimeType }));
+}
+
+function downloadBytes(fileName: string, bytes: Uint8Array, mimeType: string) {
+  const arrayBuffer = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(arrayBuffer).set(bytes);
+  downloadBlob(fileName, new Blob([arrayBuffer], { type: mimeType }));
+}
+
+function downloadBlob(fileName: string, blob: Blob) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 function stageLabel(stage: string) {
