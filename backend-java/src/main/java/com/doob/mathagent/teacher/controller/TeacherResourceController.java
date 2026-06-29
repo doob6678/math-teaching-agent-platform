@@ -6,6 +6,7 @@ import com.doob.mathagent.teacher.dto.TeacherResourceRegistrationRequest;
 import com.doob.mathagent.teacher.service.TeacherResourceCapabilityVerifier;
 import com.doob.mathagent.teacher.service.TeacherResourceRegistrationCommand;
 import com.doob.mathagent.teacher.service.TeacherResourceService;
+import com.doob.mathagent.teacher.service.TeacherSourceSyncExecutionService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncJobService;
 import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncJobResponse;
@@ -29,10 +30,12 @@ public class TeacherResourceController {
     private static final String REGISTER_ACTION = "teacher-resource:register";
     private static final String ARCHIVE_ACTION = "teacher-resource:archive";
     private static final String SYNC_ACTION = "teacher-resource:sync";
+    private static final String SYNC_EXECUTE_ACTION = "teacher-resource:sync-execute";
     private static final String RESOURCES_PATH = "/api/teacher/resources";
 
     private final TeacherResourceService teacherResourceService;
     private final TeacherSourceSyncJobService syncJobService;
+    private final TeacherSourceSyncExecutionService syncExecutionService;
     private final RequestSubjectResolver subjectResolver;
     private final TeacherResourceCapabilityVerifier capabilityVerifier;
 
@@ -45,10 +48,12 @@ public class TeacherResourceController {
     public TeacherResourceController(
             TeacherResourceService teacherResourceService,
             TeacherSourceSyncJobService syncJobService,
+            TeacherSourceSyncExecutionService syncExecutionService,
             RequestSubjectResolver subjectResolver,
             TeacherResourceCapabilityVerifier capabilityVerifier) {
         this.teacherResourceService = teacherResourceService;
         this.syncJobService = syncJobService;
+        this.syncExecutionService = syncExecutionService;
         this.subjectResolver = subjectResolver;
         this.capabilityVerifier = capabilityVerifier;
     }
@@ -142,6 +147,37 @@ public class TeacherResourceController {
                 subject.subjectType(),
                 subject.subjectId(),
                 documentId);
+    }
+
+    /**
+     * Executes a queued source synchronization job after a separate high-value capability check.
+     *
+     * @param documentId resource document id
+     * @param jobId sync job id
+     * @param httpRequest HTTP request containing capability headers
+     * @return completed, running, or failed sync job state
+     */
+    @PostMapping("/api/teacher/resources/{documentId}/sync-jobs/{jobId}/execute")
+    public TeacherSourceSyncJobResponse executeSyncJob(
+            @PathVariable String documentId,
+            @PathVariable String jobId,
+            HttpServletRequest httpRequest) {
+        RequestSubject subject = subjectResolver.resolve(httpRequest).normalize();
+        String path = RESOURCES_PATH + "/" + documentId + "/sync-jobs/" + jobId + "/execute";
+        if (!capabilityVerifier.verify(
+                headerOrNull(httpRequest, "X-Capability-Token"),
+                SYNC_EXECUTE_ACTION,
+                path,
+                headerOrNull(httpRequest, "X-Request-Hash"),
+                subject)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for teacher resource sync execution");
+        }
+        return syncExecutionService.execute(
+                subject.tenantId(),
+                subject.subjectType(),
+                subject.subjectId(),
+                documentId,
+                jobId);
     }
 
     /**

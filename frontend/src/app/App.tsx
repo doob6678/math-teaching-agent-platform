@@ -288,10 +288,20 @@ export function App() {
     setTeacherResourceError("");
     api
       .createTeacherResourceSyncJob(documentId)
-      .then((job) =>
+      .then((job) => {
         setTeacherSyncJobs((current) => ({
           ...current,
           [documentId]: [job, ...(current[documentId] ?? [])],
+        }));
+        return api.executeTeacherResourceSyncJob(documentId, job.jobId);
+      })
+      .then((executedJob) =>
+        setTeacherSyncJobs((current) => ({
+          ...current,
+          [documentId]: [
+            executedJob,
+            ...(current[documentId] ?? []).filter((job) => job.jobId !== executedJob.jobId),
+          ],
         })),
       )
       .catch((error: Error) => setTeacherResourceError(error.message))

@@ -7,7 +7,9 @@ import com.doob.mathagent.teacher.controller.TeacherResourceController;
 import com.doob.mathagent.teacher.dto.TeacherResourceRegistrationRequest;
 import com.doob.mathagent.teacher.service.InMemoryTeacherResourceStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherSourceSyncJobStore;
+import com.doob.mathagent.teacher.service.InMemoryTeacherDocumentBlockStore;
 import com.doob.mathagent.teacher.service.TeacherResourceService;
+import com.doob.mathagent.teacher.service.TeacherSourceSyncExecutionService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncJobService;
 import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncJobResponse;
@@ -32,6 +34,10 @@ class TeacherResourceControllerTest {
         TeacherResourceController controller = new TeacherResourceController(
                 new TeacherResourceService(new InMemoryTeacherResourceStore()),
                 new TeacherSourceSyncJobService(new InMemoryTeacherResourceStore(), new InMemoryTeacherSourceSyncJobStore()),
+                new TeacherSourceSyncExecutionService(
+                        new InMemoryTeacherResourceStore(),
+                        new InMemoryTeacherSourceSyncJobStore(),
+                        new InMemoryTeacherDocumentBlockStore()),
                 request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"),
                 (token, action, path, requestHash, subject) -> true);
         MockHttpServletRequest request = new MockHttpServletRequest();
@@ -60,6 +66,10 @@ class TeacherResourceControllerTest {
         TeacherResourceController controller = new TeacherResourceController(
                 new TeacherResourceService(new InMemoryTeacherResourceStore()),
                 new TeacherSourceSyncJobService(new InMemoryTeacherResourceStore(), new InMemoryTeacherSourceSyncJobStore()),
+                new TeacherSourceSyncExecutionService(
+                        new InMemoryTeacherResourceStore(),
+                        new InMemoryTeacherSourceSyncJobStore(),
+                        new InMemoryTeacherDocumentBlockStore()),
                 request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"),
                 (token, action, path, requestHash, subject) -> true);
 
@@ -82,6 +92,10 @@ class TeacherResourceControllerTest {
         TeacherResourceController controller = new TeacherResourceController(
                 new TeacherResourceService(new InMemoryTeacherResourceStore()),
                 new TeacherSourceSyncJobService(new InMemoryTeacherResourceStore(), new InMemoryTeacherSourceSyncJobStore()),
+                new TeacherSourceSyncExecutionService(
+                        new InMemoryTeacherResourceStore(),
+                        new InMemoryTeacherSourceSyncJobStore(),
+                        new InMemoryTeacherDocumentBlockStore()),
                 request -> new RequestSubject("school-a", "admin", "admin-1", "device-1"),
                 (token, action, path, requestHash, subject) -> true);
 
@@ -104,6 +118,10 @@ class TeacherResourceControllerTest {
         TeacherResourceController setupController = new TeacherResourceController(
                 new TeacherResourceService(store),
                 new TeacherSourceSyncJobService(store, new InMemoryTeacherSourceSyncJobStore()),
+                new TeacherSourceSyncExecutionService(
+                        store,
+                        new InMemoryTeacherSourceSyncJobStore(),
+                        new InMemoryTeacherDocumentBlockStore()),
                 request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"),
                 (token, action, path, requestHash, subject) -> true);
         TeacherResourceDocumentResponse created = setupController.register(new TeacherResourceRegistrationRequest(
@@ -115,6 +133,10 @@ class TeacherResourceControllerTest {
         TeacherResourceController protectedController = new TeacherResourceController(
                 new TeacherResourceService(store),
                 new TeacherSourceSyncJobService(store, new InMemoryTeacherSourceSyncJobStore()),
+                new TeacherSourceSyncExecutionService(
+                        store,
+                        new InMemoryTeacherSourceSyncJobStore(),
+                        new InMemoryTeacherDocumentBlockStore()),
                 request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"),
                 (token, action, path, requestHash, subject) -> false);
 
@@ -142,6 +164,10 @@ class TeacherResourceControllerTest {
         TeacherResourceController controller = new TeacherResourceController(
                 new TeacherResourceService(store),
                 new TeacherSourceSyncJobService(store, jobStore),
+                new TeacherSourceSyncExecutionService(
+                        store,
+                        jobStore,
+                        new InMemoryTeacherDocumentBlockStore()),
                 request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"),
                 (token, action, path, requestHash, subject) ->
                         (("teacher-resource:register".equals(action) && "/api/teacher/resources".equals(path))
@@ -163,6 +189,82 @@ class TeacherResourceControllerTest {
         assertThat(controller.listSyncJobs(resource.documentId(), new MockHttpServletRequest()))
                 .extracting(TeacherSourceSyncJobResponse::status)
                 .containsExactly("queued");
+    }
+
+    @Test
+    void executesLocalSyncJobWithCapabilityTokenAndBackendSubject() throws Exception {
+        Path folder = tempDir.resolve("sync-execute-resource");
+        Files.createDirectories(folder);
+        Files.writeString(folder.resolve("vector.md"), "# Space vector\n\nA vector has magnitude and direction.");
+        InMemoryTeacherResourceStore store = new InMemoryTeacherResourceStore();
+        InMemoryTeacherSourceSyncJobStore jobStore = new InMemoryTeacherSourceSyncJobStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        TeacherResourceController controller = new TeacherResourceController(
+                new TeacherResourceService(store),
+                new TeacherSourceSyncJobService(store, jobStore),
+                new TeacherSourceSyncExecutionService(store, jobStore, blockStore),
+                request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"),
+                (token, action, path, requestHash, subject) ->
+                        (("teacher-resource:register".equals(action) && "/api/teacher/resources".equals(path))
+                                || ("teacher-resource:sync".equals(action) && path.endsWith("/sync-jobs"))
+                                || ("teacher-resource:sync-execute".equals(action) && path.endsWith("/execute")))
+                                && "teacher-88".equals(subject.normalize().subjectId()));
+        TeacherResourceDocumentResponse resource = controller.register(new TeacherResourceRegistrationRequest(
+                "local_path",
+                "Executable local resource",
+                null,
+                folder.toString(),
+                "TEACHER_PRIVATE"), requestWithCapability("token-ok", "hash-register"));
+        TeacherSourceSyncJobResponse queued = controller.createSyncJob(
+                resource.documentId(),
+                requestWithCapability("token-ok", "hash-sync"));
+
+        TeacherSourceSyncJobResponse completed = controller.executeSyncJob(
+                resource.documentId(),
+                queued.jobId(),
+                requestWithCapability("token-ok", "hash-execute"));
+
+        assertThat(completed.status()).isEqualTo("completed");
+        assertThat(completed.phase()).isEqualTo("parse_completed");
+        assertThat(completed.message()).contains("Parsed 1 blocks");
+        assertThat(store.find("school-a", resource.documentId()).syncStatus()).isEqualTo("synced");
+    }
+
+    @Test
+    void rejectsSyncJobExecutionWithoutAcceptedCapabilityToken() throws Exception {
+        Path folder = tempDir.resolve("blocked-sync-execute-resource");
+        Files.createDirectories(folder);
+        Files.writeString(folder.resolve("vector.md"), "# Space vector\n\nA vector has magnitude and direction.");
+        InMemoryTeacherResourceStore store = new InMemoryTeacherResourceStore();
+        InMemoryTeacherSourceSyncJobStore jobStore = new InMemoryTeacherSourceSyncJobStore();
+        TeacherResourceController setupController = new TeacherResourceController(
+                new TeacherResourceService(store),
+                new TeacherSourceSyncJobService(store, jobStore),
+                new TeacherSourceSyncExecutionService(store, jobStore, new InMemoryTeacherDocumentBlockStore()),
+                request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"),
+                (token, action, path, requestHash, subject) -> true);
+        TeacherResourceDocumentResponse resource = setupController.register(new TeacherResourceRegistrationRequest(
+                "local_path",
+                "Blocked executable local resource",
+                null,
+                folder.toString(),
+                "TEACHER_PRIVATE"), requestWithCapability("token-ok", "hash-register"));
+        TeacherSourceSyncJobResponse queued = setupController.createSyncJob(
+                resource.documentId(),
+                requestWithCapability("token-ok", "hash-sync"));
+        TeacherResourceController protectedController = new TeacherResourceController(
+                new TeacherResourceService(store),
+                new TeacherSourceSyncJobService(store, jobStore),
+                new TeacherSourceSyncExecutionService(store, jobStore, new InMemoryTeacherDocumentBlockStore()),
+                request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"),
+                (token, action, path, requestHash, subject) -> false);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> protectedController.executeSyncJob(
+                        resource.documentId(),
+                        queued.jobId(),
+                        requestWithCapability("bad-token", "hash-execute")))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("Capability token");
     }
 
     /**

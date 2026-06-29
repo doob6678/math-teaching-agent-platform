@@ -154,6 +154,41 @@ class CapabilityTokenServiceTest {
     }
 
     @Test
+    void issuesTeacherResourceSyncExecuteCapabilityTokenForExactJobPath() {
+        CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
+        RequestSubject teacher = new RequestSubject("school-a", "teacher", "teacher-001", "device-1");
+
+        CapabilityTokenResponse execute = service.apply(new CapabilityTokenApplyRequest(
+                "teacher-resource:sync-execute",
+                "/api/teacher/resources/doc-1/sync-jobs/job-1/execute",
+                "hash-execute",
+                "resource-sync-execute-doc-1-job-1",
+                2.0), teacher);
+
+        assertThat(service.consume(
+                execute.token(),
+                "teacher-resource:sync-execute",
+                "/api/teacher/resources/doc-1/sync-jobs/job-1/execute",
+                "hash-execute",
+                teacher).allowed()).isTrue();
+    }
+
+    @Test
+    void rejectsMalformedTeacherResourceSyncExecuteCapabilityPaths() {
+        CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
+        RequestSubject teacher = new RequestSubject("school-a", "teacher", "teacher-001", "device-1");
+
+        assertThatThrownBy(() -> service.apply(new CapabilityTokenApplyRequest(
+                "teacher-resource:sync-execute",
+                "/api/teacher/resources/doc-1/sync-jobs/execute",
+                "hash-execute",
+                "resource-sync-execute-doc-1",
+                2.0), teacher))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Unsupported capability action");
+    }
+
+    @Test
     void issuesStudentMemoryCapabilityTokenOnlyForStudents() {
         CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
         RequestSubject student = new RequestSubject("school-a", "student", "student-001", "device-1");

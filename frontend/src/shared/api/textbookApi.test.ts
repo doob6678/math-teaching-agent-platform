@@ -1298,7 +1298,7 @@ describe("textbookApi", () => {
     expect(archived.syncStatus).toBe("archived");
   });
 
-  it("creates and lists teacher resource sync jobs with capability tokens", async () => {
+  it("creates, executes, and lists teacher resource sync jobs with capability tokens", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce({
@@ -1332,11 +1332,35 @@ describe("textbookApi", () => {
           phase: "download_pending",
           createdBy: "teacher-1",
         }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          token: "sync-execute-capability",
+          action: "teacher-resource:sync-execute",
+          path: "/api/teacher/resources/doc-1/sync-jobs/job-2/execute",
+          requestHash: "hash-sync-execute",
+          expiresAt: "2026-06-28T12:02:00Z",
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          jobId: "job-2",
+          documentId: "doc-1",
+          sourceType: "feishu",
+          operation: "feishu_download",
+          status: "completed",
+          phase: "download_completed",
+          createdBy: "teacher-1",
+          message: "Downloaded 1 Feishu files; skipped 0",
+        }),
       });
     const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
 
     const jobs = await client.listTeacherResourceSyncJobs("doc-1");
     const created = await client.createTeacherResourceSyncJob("doc-1");
+    const executed = await client.executeTeacherResourceSyncJob("doc-1", created.jobId);
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
@@ -1367,7 +1391,30 @@ describe("textbookApi", () => {
         }),
       }),
     );
+    const executeCapabilityBody = JSON.parse(fetchMock.mock.calls[3][1]?.body as string);
+    expect(executeCapabilityBody).toEqual({
+      action: "teacher-resource:sync-execute",
+      path: "/api/teacher/resources/doc-1/sync-jobs/job-2/execute",
+      requestHash: expect.any(String),
+      idempotencyKey: "teacher-resource-sync-execute:doc-1:job-2",
+      maxCost: 2,
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      5,
+      "http://127.0.0.1:8080/api/teacher/resources/doc-1/sync-jobs/job-2/execute",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "X-Capability-Token": "sync-execute-capability",
+          "X-Request-Hash": executeCapabilityBody.requestHash,
+        }),
+      }),
+    );
+    expect(fetchMock.mock.calls[4][1]?.headers).not.toHaveProperty("X-Subject-Id");
+    expect(fetchMock.mock.calls[4][1]?.headers).not.toHaveProperty("X-Subject-Type");
     expect(jobs[0].status).toBe("queued");
     expect(created.operation).toBe("feishu_download");
+    expect(executed.status).toBe("completed");
+    expect(executed.phase).toBe("download_completed");
   });
 });

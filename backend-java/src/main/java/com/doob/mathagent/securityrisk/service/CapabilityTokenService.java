@@ -30,6 +30,7 @@ public class CapabilityTokenService {
     private static final String TEACHER_RESOURCE_REGISTER_ACTION = "teacher-resource:register";
     private static final String TEACHER_RESOURCE_ARCHIVE_ACTION = "teacher-resource:archive";
     private static final String TEACHER_RESOURCE_SYNC_ACTION = "teacher-resource:sync";
+    private static final String TEACHER_RESOURCE_SYNC_EXECUTE_ACTION = "teacher-resource:sync-execute";
     private static final String TEACHER_RESOURCES_PATH = "/api/teacher/resources";
     private static final String STUDENT_MEMORY_REMEMBER_ACTION = "student-memory:remember";
     private static final String STUDENT_MEMORY_REMEMBER_PATH = "/api/students/memory/remember";
@@ -246,6 +247,10 @@ public class CapabilityTokenService {
             validateTeacherResourceSubject(subject);
             return;
         }
+        if (TEACHER_RESOURCE_SYNC_EXECUTE_ACTION.equals(action) && isTeacherResourceSyncExecutePath(path)) {
+            validateTeacherResourceSubject(subject);
+            return;
+        }
         if (STUDENT_MEMORY_REMEMBER_ACTION.equals(action) && STUDENT_MEMORY_REMEMBER_PATH.equals(path)) {
             validateStudentMemorySubject(subject);
             return;
@@ -317,6 +322,18 @@ public class CapabilityTokenService {
     private static boolean isTeacherResourceSyncPath(String path) {
         String[] parts = pathPartsAfterPrefix(path, TEACHER_RESOURCES_PATH);
         return parts.length == 2 && hasText(parts[0]) && "sync-jobs".equals(parts[1]);
+    }
+
+    /**
+     * Validates the exact source sync job execution path shape.
+     */
+    private static boolean isTeacherResourceSyncExecutePath(String path) {
+        String[] parts = pathPartsAfterPrefix(path, TEACHER_RESOURCES_PATH);
+        return parts.length == 4
+                && hasText(parts[0])
+                && "sync-jobs".equals(parts[1])
+                && hasText(parts[2])
+                && "execute".equals(parts[3]);
     }
 
     /**
