@@ -78,6 +78,54 @@ class ApiAccessControlServiceTest {
     }
 
     @Test
+    void protocolDiscoveryRequiresLoggedInStudentTeacherOrAdmin() {
+        ApiAccessControlService service = new ApiAccessControlService(
+                FixedWindowRateLimiter.empty(),
+                Clock.fixed(Instant.parse("2026-06-28T10:00:00Z"), ZoneOffset.UTC),
+                ApiAccessPolicy.defaultRules());
+        ApiRequestIdentity anonymousMcp = new ApiRequestIdentity(
+                "GET",
+                "/api/mcp/tools",
+                "default",
+                "anonymous",
+                null,
+                "127.0.0.1",
+                "device-1",
+                "JUnit");
+        ApiRequestIdentity studentMcp = new ApiRequestIdentity(
+                "GET",
+                "/api/mcp/tools",
+                "default",
+                "student",
+                "student-1",
+                "127.0.0.1",
+                "device-1",
+                "JUnit");
+        ApiRequestIdentity teacherA2a = new ApiRequestIdentity(
+                "GET",
+                "/api/a2a/.well-known/agent-card.json",
+                "default",
+                "teacher",
+                "teacher-1",
+                "127.0.0.1",
+                "device-2",
+                "JUnit");
+
+        ApiAccessDecision denied = service.evaluate(anonymousMcp);
+        ApiAccessDecision studentAllowed = service.evaluate(studentMcp);
+        ApiAccessDecision teacherAllowed = service.evaluate(teacherA2a);
+
+        assertThat(denied.allowed()).isFalse();
+        assertThat(denied.httpStatus()).isEqualTo(403);
+        assertThat(studentAllowed.allowed()).isTrue();
+        assertThat(studentAllowed.level()).isEqualTo(ApiAccessLevel.USER);
+        assertThat(studentAllowed.limit()).isEqualTo(30);
+        assertThat(teacherAllowed.allowed()).isTrue();
+        assertThat(teacherAllowed.level()).isEqualTo(ApiAccessLevel.USER);
+        assertThat(teacherAllowed.limit()).isEqualTo(30);
+    }
+
+    @Test
     void limitsSearchEndpointByDeviceAndEndpointWindow() {
         ApiAccessControlService service = new ApiAccessControlService(
                 FixedWindowRateLimiter.empty(),

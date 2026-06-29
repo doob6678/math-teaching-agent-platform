@@ -29,6 +29,8 @@ public class ApiAccessPolicy {
         return new ApiAccessPolicy(List.of(
                 new ApiAccessRule("/api/system/health", ApiAccessLevel.PUBLIC, Set.of("*"), 120, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/auth/login", ApiAccessLevel.PUBLIC, Set.of("*"), 20, Duration.ofMinutes(1)),
+                new ApiAccessRule("/api/a2a/.well-known/agent-card.json", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 30, Duration.ofMinutes(1)),
+                new ApiAccessRule("/api/mcp/tools", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 30, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/security/capability-audits", ApiAccessLevel.ADMIN, Set.of("teacher", "admin"), 60, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/security/capabilities", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 20, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/agents/traces", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 60, Duration.ofMinutes(1)),
