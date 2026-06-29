@@ -54,4 +54,22 @@ class DatabaseMigrationSqlContractTest {
                 .contains("idempotency_key")
                 .doesNotContain("token VARCHAR");
     }
+
+    @Test
+    void agentTraceMigrationStoresExecutionMonitoringFieldsWithoutRawModelOutput() throws Exception {
+        String migration = Files.readString(Path.of("src/main/resources/db/migration/V2__agent_run_trace.sql"));
+
+        assertThat(migration)
+                .contains("CREATE TABLE agent_run_trace")
+                .contains("trace_id CHAR(36)")
+                .contains("plan_id CHAR(36)")
+                .contains("agent_code")
+                .contains("allowed_tool_scopes_json JSON")
+                .contains("allowed_data_scopes_json JSON")
+                .contains("evidence_refs_json JSON")
+                .contains("idx_agent_trace_subject")
+                .contains("idx_agent_trace_agent_status")
+                .doesNotContain("raw_prompt")
+                .doesNotContain("model_output");
+    }
 }

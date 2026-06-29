@@ -786,6 +786,55 @@ describe("textbookApi", () => {
     expect(response.traceId).toBe("trace-1");
   });
 
+  it("lists agent traces with backend session identity and no client supplied user identity", async () => {
+    globalThis.localStorage.setItem(
+      "math-agent:auth-session",
+      JSON.stringify({
+        userId: "teacher-1",
+        username: "teacher",
+        role: "teacher",
+        tenantId: "school-a",
+        tokenName: "satoken",
+        tokenValue: "token-teacher",
+      }),
+    );
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ([{
+        traceId: "trace-1",
+        planId: "plan-1",
+        createdAt: "2026-06-29T00:00:00Z",
+        tenantId: "school-a",
+        subjectType: "teacher",
+        subjectId: "teacher-1",
+        agentCode: "CoursewareAgent",
+        providerName: "openai",
+        modelCode: "gpt-4.1",
+        status: "COMPLETED",
+        estimatedCost: 0.46,
+        allowedToolScopes: ["tool:courseware:generate"],
+        allowedDataScopes: ["TEACHER_PRIVATE"],
+        evidenceRefs: ["textbook:chapter-1"],
+      }]),
+    });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const traces = await client.listAgentTraces({ agentCode: "CoursewareAgent", status: "COMPLETED", limit: 20 });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8080/api/agents/traces?agentCode=CoursewareAgent&status=COMPLETED&limit=20",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          satoken: "token-teacher",
+          "X-Device-Id": "local-browser-console",
+        }),
+      }),
+    );
+    expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Id");
+    expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Type");
+    expect(traces[0].traceId).toBe("trace-1");
+  });
+
   it("loads student dashboard without client supplied identity headers", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

@@ -589,6 +589,52 @@ export interface AgentRunExecuteResponse {
 }
 
 /**
+ * Optional filters for listing visible agent traces.
+ */
+export interface AgentTraceQuery {
+  /** Optional agent code filter. */
+  agentCode?: string;
+  /** Optional execution status filter. */
+  status?: string;
+  /** Maximum rows to return. */
+  limit?: number;
+}
+
+/**
+ * Safe trace row returned for recovery and monitoring.
+ */
+export interface AgentTraceResponse {
+  /** Trace id. */
+  traceId: string;
+  /** Linked plan id. */
+  planId: string;
+  /** Trace creation time. */
+  createdAt: string;
+  /** Backend tenant id. */
+  tenantId: string;
+  /** Backend subject type. */
+  subjectType: string;
+  /** Backend subject id. */
+  subjectId: string;
+  /** Executed agent code. */
+  agentCode: string;
+  /** Selected provider. */
+  providerName: string;
+  /** Selected model code. */
+  modelCode: string;
+  /** Execution status. */
+  status: string;
+  /** Estimated local cost. */
+  estimatedCost: number;
+  /** Allowed tool scopes recorded for audit. */
+  allowedToolScopes: string[];
+  /** Allowed data scopes recorded for audit. */
+  allowedDataScopes: string[];
+  /** Evidence references used by this run. */
+  evidenceRefs: string[];
+}
+
+/**
  * 学生学习画像响应。字段与后端 `StudentDashboardResponse` 对齐，用于学生端进度图谱、薄弱点和历史记录展示。
  */
 export interface StudentDashboardResponse {
@@ -1109,6 +1155,24 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
         headers,
         body,
       });
+    },
+
+    /**
+     * Lists agent traces visible to the backend session subject.
+     */
+    listAgentTraces(query: AgentTraceQuery = {}): Promise<AgentTraceResponse[]> {
+      const params = new URLSearchParams();
+      if (query.agentCode) {
+        params.set("agentCode", query.agentCode);
+      }
+      if (query.status) {
+        params.set("status", query.status);
+      }
+      if (query.limit) {
+        params.set("limit", String(query.limit));
+      }
+      const suffix = params.size > 0 ? `?${params.toString()}` : "";
+      return requestJson<AgentTraceResponse[]>(`/api/agents/traces${suffix}`);
     },
 
     getStudentDashboard(studentId?: string): Promise<StudentDashboardResponse> {
