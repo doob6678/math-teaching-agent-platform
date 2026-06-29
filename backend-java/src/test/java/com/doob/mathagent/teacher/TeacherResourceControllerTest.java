@@ -337,6 +337,12 @@ class TeacherResourceControllerTest {
             if (calls == 1) {
                 throw new TeacherFeishuDownloadException("ProxyError: proxy connection reset", true);
             }
+            try {
+                Files.createDirectories(savedPath);
+                Files.writeString(savedPath.resolve("resume-result.txt"), "Feishu resume downloaded text");
+            } catch (java.io.IOException exception) {
+                throw new IllegalStateException("Failed to create resumed Feishu fixture", exception);
+            }
             return new FeishuDownloadResult(savedPath, 1, 0, 0, "Downloaded 1 Feishu files after resume");
         }
     }

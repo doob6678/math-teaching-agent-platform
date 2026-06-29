@@ -18,6 +18,11 @@ import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 import java.util.stream.Stream;
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.text.PDFTextStripper;
+import org.apache.poi.xwpf.usermodel.XWPFDocument;
+import org.apache.poi.xwpf.usermodel.XWPFParagraph;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -159,16 +164,23 @@ public class TeacherSourceSyncExecutionService {
                         "waiting_rebuild",
                         document.previewFiles());
                 resourceStore.save(downloaded);
+                List<TeacherDocumentBlockResponse> blocks = parseResourceFiles(downloaded);
+                if (!blocks.isEmpty()) {
+                    blockStore.replaceActiveBlocks(document.tenantId(), document.documentId(), blocks);
+                    markLocalResourceSynced(downloaded);
+                }
                 TeacherSourceSyncJobResponse completed = updateJob(
                         running,
                         "completed",
                         "download_completed",
                         result.savedPath().toString(),
-                        result.message());
+                        blocks.isEmpty()
+                                ? result.message() + "; no supported files parsed"
+                                : result.message() + "; Parsed " + blocks.size() + " blocks");
                 saveFeishuCheckpoint(document, completed, downloadedItemsJson(result), "[]", 2);
                 return jobStore.save(completed);
             }
-            List<TeacherDocumentBlockResponse> blocks = parseLocalResource(document);
+            List<TeacherDocumentBlockResponse> blocks = parseResourceFiles(document);
             blockStore.replaceActiveBlocks(document.tenantId(), document.documentId(), blocks);
             markLocalResourceSynced(document);
             TeacherSourceSyncJobResponse completed = updateJob(
@@ -332,10 +344,7 @@ public class TeacherSourceSyncExecutionService {
     /**
      * Parses a local teacher resource into document blocks.
      */
-    private static List<TeacherDocumentBlockResponse> parseLocalResource(TeacherResourceDocumentResponse document) {
-        if (!"local_path".equalsIgnoreCase(textOrDefault(document.sourceType(), ""))) {
-            throw new IllegalArgumentException("Only local_path sync execution is supported in this stage");
-        }
+    private static List<TeacherDocumentBlockResponse> parseResourceFiles(TeacherResourceDocumentResponse document) {
         Path root = Path.of(textOrDefault(document.localPath(), ""));
         if (!Files.exists(root)) {
             throw new IllegalArgumentException("Local resource path does not exist: " + root);
@@ -347,9 +356,8 @@ public class TeacherSourceSyncExecutionService {
         List<TeacherDocumentBlockResponse> blocks = new ArrayList<>();
         int order = 0;
         for (Path file : files) {
-            String text = readUtf8(file);
             String relativePath = root.equals(file) ? file.getFileName().toString() : root.relativize(file).toString();
-            for (ParsedBlock parsed : parseTextBlocks(text, file)) {
+            for (ParsedBlock parsed : parseFileBlocks(file)) {
                 blocks.add(toBlock(document.documentId(), relativePath.replace('\\', '/'), parsed, order++));
             }
         }
@@ -379,7 +387,10 @@ public class TeacherSourceSyncExecutionService {
      */
     private static boolean isSupportedFile(Path file) {
         String fileName = file.getFileName().toString().toLowerCase(Locale.ROOT);
-        return fileName.endsWith(".md") || fileName.endsWith(".txt");
+        return fileName.endsWith(".md")
+                || fileName.endsWith(".txt")
+                || fileName.endsWith(".docx")
+                || fileName.endsWith(".pdf");
     }
 
     /**
@@ -391,6 +402,23 @@ public class TeacherSourceSyncExecutionService {
         } catch (IOException exception) {
             throw new IllegalArgumentException("Failed to read local resource file: " + file, exception);
         }
+    }
+
+    /**
+     * Parses a supported source file into normalized text blocks.
+     */
+    private static List<ParsedBlock> parseFileBlocks(Path file) {
+        String fileName = file.getFileName().toString().toLowerCase(Locale.ROOT);
+        if (fileName.endsWith(".md") || fileName.endsWith(".txt")) {
+            return parseTextBlocks(readUtf8(file), file);
+        }
+        if (fileName.endsWith(".docx")) {
+            return parseDocxBlocks(file);
+        }
+        if (fileName.endsWith(".pdf")) {
+            return parsePdfBlocks(file);
+        }
+        return List.of();
     }
 
     /**
@@ -428,9 +456,50 @@ public class TeacherSourceSyncExecutionService {
     private static void flushBlock(List<ParsedBlock> blocks, String chapter, String section, StringBuilder current) {
         String value = current.toString().strip();
         if (!value.isBlank()) {
-            blocks.add(new ParsedBlock(chapter, section, value));
+            blocks.add(new ParsedBlock(chapter, section, null, value));
         }
         current.setLength(0);
+    }
+
+    /**
+     * Parses DOCX paragraphs into ordered blocks while preserving the source file name as chapter.
+     */
+    private static List<ParsedBlock> parseDocxBlocks(Path file) {
+        List<ParsedBlock> blocks = new ArrayList<>();
+        String chapter = stripExtension(file.getFileName().toString());
+        try (XWPFDocument document = new XWPFDocument(Files.newInputStream(file))) {
+            for (XWPFParagraph paragraph : document.getParagraphs()) {
+                String text = textOrDefault(paragraph.getText(), "");
+                if (!text.isBlank()) {
+                    blocks.add(new ParsedBlock(chapter, null, null, text));
+                }
+            }
+        } catch (IOException exception) {
+            throw new IllegalArgumentException("Failed to parse DOCX resource file: " + file, exception);
+        }
+        return blocks;
+    }
+
+    /**
+     * Parses a PDF into one block per page when extractable text exists.
+     */
+    private static List<ParsedBlock> parsePdfBlocks(Path file) {
+        List<ParsedBlock> blocks = new ArrayList<>();
+        String chapter = stripExtension(file.getFileName().toString());
+        try (PDDocument document = Loader.loadPDF(file.toFile())) {
+            PDFTextStripper stripper = new PDFTextStripper();
+            for (int page = 1; page <= document.getNumberOfPages(); page += 1) {
+                stripper.setStartPage(page);
+                stripper.setEndPage(page);
+                String text = textOrDefault(stripper.getText(document), "");
+                if (!text.isBlank()) {
+                    blocks.add(new ParsedBlock(chapter, null, page, text));
+                }
+            }
+        } catch (IOException exception) {
+            throw new IllegalArgumentException("Failed to parse PDF resource file: " + file, exception);
+        }
+        return blocks;
     }
 
     /**
@@ -450,7 +519,7 @@ public class TeacherSourceSyncExecutionService {
                 order,
                 parsed.chapter(),
                 parsed.section(),
-                null,
+                parsed.pageNo(),
                 null,
                 parsed.text(),
                 normalized,
@@ -560,6 +629,6 @@ public class TeacherSourceSyncExecutionService {
     /**
      * Internal parsed block model.
      */
-    private record ParsedBlock(String chapter, String section, String text) {
+    private record ParsedBlock(String chapter, String section, Integer pageNo, String text) {
     }
 }
