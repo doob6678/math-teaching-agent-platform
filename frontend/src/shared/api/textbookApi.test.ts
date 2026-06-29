@@ -1417,4 +1417,59 @@ describe("textbookApi", () => {
     expect(executed.status).toBe("completed");
     expect(executed.phase).toBe("download_completed");
   });
+
+  it("resumes a paused teacher resource sync job with a resume capability token", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          token: "sync-resume-capability",
+          action: "teacher-resource:sync-resume",
+          path: "/api/teacher/resources/doc-1/sync-jobs/job-2/resume",
+          requestHash: "hash-sync-resume",
+          expiresAt: "2026-06-28T12:02:00Z",
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          jobId: "job-2",
+          documentId: "doc-1",
+          sourceType: "feishu",
+          operation: "feishu_download",
+          status: "completed",
+          phase: "download_completed",
+          createdBy: "teacher-1",
+          message: "Downloaded 1 Feishu files after resume",
+        }),
+      });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const resumed = await client.resumeTeacherResourceSyncJob("doc-1", "job-2");
+
+    const capabilityBody = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
+    expect(capabilityBody).toEqual({
+      action: "teacher-resource:sync-resume",
+      path: "/api/teacher/resources/doc-1/sync-jobs/job-2/resume",
+      requestHash: expect.any(String),
+      idempotencyKey: "teacher-resource-sync-resume:doc-1:job-2",
+      maxCost: 2,
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://127.0.0.1:8080/api/teacher/resources/doc-1/sync-jobs/job-2/resume",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "X-Capability-Token": "sync-resume-capability",
+          "X-Request-Hash": capabilityBody.requestHash,
+        }),
+      }),
+    );
+    expect(fetchMock.mock.calls[1][1]?.headers).not.toHaveProperty("X-Subject-Id");
+    expect(fetchMock.mock.calls[1][1]?.headers).not.toHaveProperty("X-Subject-Type");
+    expect(resumed.status).toBe("completed");
+    expect(resumed.phase).toBe("download_completed");
+  });
 });

@@ -174,6 +174,26 @@ class CapabilityTokenServiceTest {
     }
 
     @Test
+    void issuesTeacherResourceSyncResumeCapabilityTokenForExactJobPath() {
+        CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
+        RequestSubject teacher = new RequestSubject("school-a", "teacher", "teacher-001", "device-1");
+
+        CapabilityTokenResponse resume = service.apply(new CapabilityTokenApplyRequest(
+                "teacher-resource:sync-resume",
+                "/api/teacher/resources/doc-1/sync-jobs/job-1/resume",
+                "hash-resume",
+                "resource-sync-resume-doc-1-job-1",
+                2.0), teacher);
+
+        assertThat(service.consume(
+                resume.token(),
+                "teacher-resource:sync-resume",
+                "/api/teacher/resources/doc-1/sync-jobs/job-1/resume",
+                "hash-resume",
+                teacher).allowed()).isTrue();
+    }
+
+    @Test
     void rejectsMalformedTeacherResourceSyncExecuteCapabilityPaths() {
         CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
         RequestSubject teacher = new RequestSubject("school-a", "teacher", "teacher-001", "device-1");
@@ -183,6 +203,15 @@ class CapabilityTokenServiceTest {
                 "/api/teacher/resources/doc-1/sync-jobs/execute",
                 "hash-execute",
                 "resource-sync-execute-doc-1",
+                2.0), teacher))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Unsupported capability action");
+
+        assertThatThrownBy(() -> service.apply(new CapabilityTokenApplyRequest(
+                "teacher-resource:sync-resume",
+                "/api/teacher/resources/doc-1/sync-jobs/resume",
+                "hash-resume",
+                "resource-sync-resume-doc-1",
                 2.0), teacher))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Unsupported capability action");

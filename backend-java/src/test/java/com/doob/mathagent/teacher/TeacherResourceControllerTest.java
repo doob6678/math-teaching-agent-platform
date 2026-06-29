@@ -5,12 +5,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.teacher.controller.TeacherResourceController;
 import com.doob.mathagent.teacher.dto.TeacherResourceRegistrationRequest;
-import com.doob.mathagent.teacher.service.InMemoryTeacherResourceStore;
-import com.doob.mathagent.teacher.service.InMemoryTeacherSourceSyncJobStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherDocumentBlockStore;
+import com.doob.mathagent.teacher.service.InMemoryTeacherResourceStore;
+import com.doob.mathagent.teacher.service.InMemoryTeacherSourceSyncCheckpointStore;
+import com.doob.mathagent.teacher.service.InMemoryTeacherSourceSyncJobStore;
+import com.doob.mathagent.teacher.service.TeacherFeishuDownloadClient;
+import com.doob.mathagent.teacher.service.TeacherFeishuDownloadException;
 import com.doob.mathagent.teacher.service.TeacherResourceService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncExecutionService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncJobService;
+import com.doob.mathagent.teacher.service.TeacherSourceSyncProperties;
 import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncJobResponse;
 import java.nio.file.Files;
@@ -231,6 +235,57 @@ class TeacherResourceControllerTest {
     }
 
     @Test
+    void resumesPausedFeishuSyncJobWithCapabilityTokenAndCheckpoint() {
+        InMemoryTeacherResourceStore store = new InMemoryTeacherResourceStore();
+        InMemoryTeacherSourceSyncJobStore jobStore = new InMemoryTeacherSourceSyncJobStore();
+        InMemoryTeacherSourceSyncCheckpointStore checkpointStore = new InMemoryTeacherSourceSyncCheckpointStore();
+        FailsOnceThenSucceedsFeishuClient feishuClient =
+                new FailsOnceThenSucceedsFeishuClient(tempDir.resolve("feishu-resumed"));
+        TeacherResourceController controller = new TeacherResourceController(
+                new TeacherResourceService(store),
+                new TeacherSourceSyncJobService(store, jobStore),
+                new TeacherSourceSyncExecutionService(
+                        store,
+                        jobStore,
+                        new InMemoryTeacherDocumentBlockStore(),
+                        feishuClient,
+                        TeacherSourceSyncProperties.defaults(),
+                        checkpointStore),
+                request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"),
+                (token, action, path, requestHash, subject) ->
+                        (("teacher-resource:register".equals(action) && "/api/teacher/resources".equals(path))
+                                || ("teacher-resource:sync".equals(action) && path.endsWith("/sync-jobs"))
+                                || ("teacher-resource:sync-execute".equals(action) && path.endsWith("/execute"))
+                                || ("teacher-resource:sync-resume".equals(action) && path.endsWith("/resume")))
+                                && "teacher-88".equals(subject.normalize().subjectId()));
+        TeacherResourceDocumentResponse resource = controller.register(new TeacherResourceRegistrationRequest(
+                "feishu",
+                "Retryable Feishu resource",
+                "https://my.feishu.cn/drive/folder/XVn7fXppJlQMK5dkuOkc1ePan2f",
+                null,
+                "TEACHER_PRIVATE"), requestWithCapability("token-ok", "hash-register"));
+        TeacherSourceSyncJobResponse queued = controller.createSyncJob(
+                resource.documentId(),
+                requestWithCapability("token-ok", "hash-sync"));
+        TeacherSourceSyncJobResponse paused = controller.executeSyncJob(
+                resource.documentId(),
+                queued.jobId(),
+                requestWithCapability("token-ok", "hash-execute"));
+
+        TeacherSourceSyncJobResponse resumed = controller.resumeSyncJob(
+                resource.documentId(),
+                queued.jobId(),
+                requestWithCapability("token-ok", "hash-resume"));
+
+        assertThat(paused.status()).isEqualTo("paused");
+        assertThat(paused.phase()).isEqualTo("download_paused");
+        assertThat(resumed.status()).isEqualTo("completed");
+        assertThat(resumed.phase()).isEqualTo("download_completed");
+        assertThat(checkpointStore.findByJobId("school-a", queued.jobId()).orElseThrow().downloadedItemsJson())
+                .contains("feishu-resumed");
+    }
+
+    @Test
     void rejectsSyncJobExecutionWithoutAcceptedCapabilityToken() throws Exception {
         Path folder = tempDir.resolve("blocked-sync-execute-resource");
         Files.createDirectories(folder);
@@ -265,6 +320,25 @@ class TeacherResourceControllerTest {
                         requestWithCapability("bad-token", "hash-execute")))
                 .isInstanceOf(ResponseStatusException.class)
                 .hasMessageContaining("Capability token");
+    }
+
+    private static final class FailsOnceThenSucceedsFeishuClient implements TeacherFeishuDownloadClient {
+
+        private final Path savedPath;
+        private int calls;
+
+        private FailsOnceThenSucceedsFeishuClient(Path savedPath) {
+            this.savedPath = savedPath;
+        }
+
+        @Override
+        public FeishuDownloadResult download(String url, Path stagingRoot, int maxFiles) {
+            calls += 1;
+            if (calls == 1) {
+                throw new TeacherFeishuDownloadException("ProxyError: proxy connection reset", true);
+            }
+            return new FeishuDownloadResult(savedPath, 1, 0, 0, "Downloaded 1 Feishu files after resume");
+        }
     }
 
     /**

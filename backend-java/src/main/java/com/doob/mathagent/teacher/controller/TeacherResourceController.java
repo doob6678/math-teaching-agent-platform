@@ -31,6 +31,7 @@ public class TeacherResourceController {
     private static final String ARCHIVE_ACTION = "teacher-resource:archive";
     private static final String SYNC_ACTION = "teacher-resource:sync";
     private static final String SYNC_EXECUTE_ACTION = "teacher-resource:sync-execute";
+    private static final String SYNC_RESUME_ACTION = "teacher-resource:sync-resume";
     private static final String RESOURCES_PATH = "/api/teacher/resources";
 
     private final TeacherResourceService teacherResourceService;
@@ -173,6 +174,37 @@ public class TeacherResourceController {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for teacher resource sync execution");
         }
         return syncExecutionService.execute(
+                subject.tenantId(),
+                subject.subjectType(),
+                subject.subjectId(),
+                documentId,
+                jobId);
+    }
+
+    /**
+     * Resumes a paused source synchronization job when a durable checkpoint is available.
+     *
+     * @param documentId resource document id
+     * @param jobId sync job id
+     * @param httpRequest HTTP request containing capability headers
+     * @return resumed sync job state
+     */
+    @PostMapping("/api/teacher/resources/{documentId}/sync-jobs/{jobId}/resume")
+    public TeacherSourceSyncJobResponse resumeSyncJob(
+            @PathVariable String documentId,
+            @PathVariable String jobId,
+            HttpServletRequest httpRequest) {
+        RequestSubject subject = subjectResolver.resolve(httpRequest).normalize();
+        String path = RESOURCES_PATH + "/" + documentId + "/sync-jobs/" + jobId + "/resume";
+        if (!capabilityVerifier.verify(
+                headerOrNull(httpRequest, "X-Capability-Token"),
+                SYNC_RESUME_ACTION,
+                path,
+                headerOrNull(httpRequest, "X-Request-Hash"),
+                subject)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for teacher resource sync resume");
+        }
+        return syncExecutionService.resume(
                 subject.tenantId(),
                 subject.subjectType(),
                 subject.subjectId(),

@@ -202,6 +202,45 @@ public class TeacherSourceSyncExecutionService {
     }
 
     /**
+     * Resumes a paused synchronization job after verifying that a durable checkpoint exists.
+     *
+     * @param tenantId tenant id
+     * @param viewerRole backend-resolved viewer role
+     * @param viewerSubjectId backend-resolved viewer subject id
+     * @param documentId source document id
+     * @param jobId sync job id
+     * @return resumed job state after execution
+     */
+    public TeacherSourceSyncJobResponse resume(
+            String tenantId,
+            String viewerRole,
+            String viewerSubjectId,
+            String documentId,
+            String jobId) {
+        String normalizedTenantId = textOrDefault(tenantId, "default");
+        String normalizedRole = textOrDefault(viewerRole, "teacher").toLowerCase(Locale.ROOT);
+        String normalizedSubjectId = textOrDefault(viewerSubjectId, "local-teacher-console");
+        requireTeacherOrAdmin(normalizedRole);
+        TeacherResourceDocumentResponse document = requireVisibleDocument(
+                normalizedTenantId,
+                normalizedRole,
+                normalizedSubjectId,
+                documentId);
+        TeacherSourceSyncJobResponse job = requireJob(document.tenantId(), document.documentId(), jobId);
+        if (!"paused".equalsIgnoreCase(textOrDefault(job.status(), ""))) {
+            throw new IllegalArgumentException("Only paused source sync jobs can be resumed");
+        }
+        checkpointStore.findByJobId(document.tenantId(), job.jobId())
+                .orElseThrow(() -> new IllegalArgumentException("Source sync checkpoint not found: " + job.jobId()));
+        return execute(
+                normalizedTenantId,
+                normalizedRole,
+                normalizedSubjectId,
+                document.documentId(),
+                job.jobId());
+    }
+
+    /**
      * Saves a Feishu checkpoint snapshot for start, success, paused, or failed states.
      */
     private void saveFeishuCheckpoint(

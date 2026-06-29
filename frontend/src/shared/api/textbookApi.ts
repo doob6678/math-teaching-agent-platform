@@ -1536,6 +1536,27 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
         },
       });
     },
+
+    async resumeTeacherResourceSyncJob(
+      documentId: string,
+      jobId: string,
+    ): Promise<TeacherSourceSyncJobResponse> {
+      const path = `/api/teacher/resources/${encodeURIComponent(documentId)}/sync-jobs/${encodeURIComponent(jobId)}/resume`;
+      const capability = await applyCapability(
+        "teacher-resource:sync-resume",
+        path,
+        "",
+        `teacher-resource-sync-resume:${documentId}:${jobId}`,
+        2,
+      );
+      return requestJson<TeacherSourceSyncJobResponse>(path, {
+        method: "POST",
+        headers: {
+          "X-Capability-Token": capability.token,
+          "X-Request-Hash": capability.requestHash,
+        },
+      });
+    },
   };
 }
 

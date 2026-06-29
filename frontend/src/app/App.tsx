@@ -308,6 +308,24 @@ export function App() {
       .finally(() => setSyncingResourceId(""));
   }
 
+  function handleResumeResourceSyncJob(documentId: string, jobId: string) {
+    setSyncingResourceId(documentId);
+    setTeacherResourceError("");
+    api
+      .resumeTeacherResourceSyncJob(documentId, jobId)
+      .then((resumedJob) =>
+        setTeacherSyncJobs((current) => ({
+          ...current,
+          [documentId]: [
+            resumedJob,
+            ...(current[documentId] ?? []).filter((job) => job.jobId !== resumedJob.jobId),
+          ],
+        })),
+      )
+      .catch((error: Error) => setTeacherResourceError(error.message))
+      .finally(() => setSyncingResourceId(""));
+  }
+
   function handlePreviewLatex() {
     if (!teachingTask) {
       return;
@@ -707,6 +725,7 @@ export function App() {
             onRegister={handleRegisterResource}
             onArchive={handleArchiveResource}
             onSync={handleCreateResourceSyncJob}
+            onResume={handleResumeResourceSyncJob}
           />
         </aside>
 
@@ -1108,6 +1127,7 @@ function TeacherResourcePanel({
   onRegister,
   onArchive,
   onSync,
+  onResume,
 }: {
   resources: TeacherResourceDocumentResponse[];
   title: string;
@@ -1126,6 +1146,7 @@ function TeacherResourcePanel({
   onRegister: (event: FormEvent<HTMLFormElement>) => void;
   onArchive: (documentId: string) => void;
   onSync: (documentId: string) => void;
+  onResume: (documentId: string, jobId: string) => void;
 }) {
   return (
     <section className="teacher-resource-panel">
@@ -1187,6 +1208,16 @@ function TeacherResourcePanel({
               {syncingResourceId === resource.documentId ? <Loader2 className="spin" size={15} /> : <Database size={15} />}
               <span>Sync</span>
             </button>
+            {latestJob?.status === "paused" ? (
+              <button
+                type="button"
+                onClick={() => onResume(resource.documentId, latestJob.jobId)}
+                disabled={syncingResourceId === resource.documentId}
+              >
+                {syncingResourceId === resource.documentId ? <Loader2 className="spin" size={15} /> : <Database size={15} />}
+                <span>Resume</span>
+              </button>
+            ) : null}
             <button type="button" onClick={() => onArchive(resource.documentId)}>
               归档
             </button>

@@ -31,6 +31,7 @@ public class CapabilityTokenService {
     private static final String TEACHER_RESOURCE_ARCHIVE_ACTION = "teacher-resource:archive";
     private static final String TEACHER_RESOURCE_SYNC_ACTION = "teacher-resource:sync";
     private static final String TEACHER_RESOURCE_SYNC_EXECUTE_ACTION = "teacher-resource:sync-execute";
+    private static final String TEACHER_RESOURCE_SYNC_RESUME_ACTION = "teacher-resource:sync-resume";
     private static final String TEACHER_RESOURCES_PATH = "/api/teacher/resources";
     private static final String STUDENT_MEMORY_REMEMBER_ACTION = "student-memory:remember";
     private static final String STUDENT_MEMORY_REMEMBER_PATH = "/api/students/memory/remember";
@@ -251,6 +252,10 @@ public class CapabilityTokenService {
             validateTeacherResourceSubject(subject);
             return;
         }
+        if (TEACHER_RESOURCE_SYNC_RESUME_ACTION.equals(action) && isTeacherResourceSyncResumePath(path)) {
+            validateTeacherResourceSubject(subject);
+            return;
+        }
         if (STUDENT_MEMORY_REMEMBER_ACTION.equals(action) && STUDENT_MEMORY_REMEMBER_PATH.equals(path)) {
             validateStudentMemorySubject(subject);
             return;
@@ -328,12 +333,26 @@ public class CapabilityTokenService {
      * Validates the exact source sync job execution path shape.
      */
     private static boolean isTeacherResourceSyncExecutePath(String path) {
+        return isTeacherResourceSyncJobActionPath(path, "execute");
+    }
+
+    /**
+     * Validates the exact source sync job resume path shape.
+     */
+    private static boolean isTeacherResourceSyncResumePath(String path) {
+        return isTeacherResourceSyncJobActionPath(path, "resume");
+    }
+
+    /**
+     * Validates a source sync job action path under a specific document/job pair.
+     */
+    private static boolean isTeacherResourceSyncJobActionPath(String path, String actionSegment) {
         String[] parts = pathPartsAfterPrefix(path, TEACHER_RESOURCES_PATH);
         return parts.length == 4
                 && hasText(parts[0])
                 && "sync-jobs".equals(parts[1])
                 && hasText(parts[2])
-                && "execute".equals(parts[3]);
+                && actionSegment.equals(parts[3]);
     }
 
     /**
