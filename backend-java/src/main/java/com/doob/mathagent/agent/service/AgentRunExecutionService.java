@@ -9,6 +9,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -189,6 +190,16 @@ public class AgentRunExecutionService {
         if (!toolViolations.isEmpty()) {
             throw new IllegalArgumentException("Agent plan tool scope not allowed: " + toolViolations);
         }
+        Set<String> disabledByUser = safeToolDecisions(plan).stream()
+                .filter(decision -> "DISABLED_BY_USER".equals(decision.decision()))
+                .map(AgentRunPlanResponse.ToolPolicyDecision::scope)
+                .collect(java.util.stream.Collectors.toSet());
+        List<String> disabledViolations = safeList(plan.allowedToolScopes()).stream()
+                .filter(disabledByUser::contains)
+                .toList();
+        if (!disabledViolations.isEmpty()) {
+            throw new IllegalArgumentException("Agent plan tool scope disabled by user: " + disabledViolations);
+        }
         List<String> dataViolations = safeList(plan.allowedDataScopes()).stream()
                 .filter(scope -> !agent.allowedDataScopes().contains(scope))
                 .toList();
@@ -209,6 +220,13 @@ public class AgentRunExecutionService {
      */
     private static List<String> safeList(List<String> values) {
         return values == null ? List.of() : values.stream().map(AgentRunExecutionService::safeText).toList();
+    }
+
+    /**
+     * Returns null-safe tool policy decisions from a frontend-returned plan snapshot.
+     */
+    private static List<AgentRunPlanResponse.ToolPolicyDecision> safeToolDecisions(AgentRunPlanResponse plan) {
+        return plan.toolPolicyDecisions() == null ? List.of() : plan.toolPolicyDecisions();
     }
 
     /**

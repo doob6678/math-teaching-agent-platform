@@ -15,6 +15,7 @@ import java.util.List;
  * @param modelLevel selected model capability level
  * @param allowedToolScopes requested tool scopes accepted by agent policy
  * @param deniedToolScopes requested tool scopes rejected by agent policy
+ * @param toolPolicyDecisions per-tool decision rows explaining dynamic injection filtering
  * @param allowedDataScopes requested data scopes accepted by agent policy
  * @param deniedDataScopes requested data scopes rejected by agent policy
  * @param capabilityRequired whether the caller must acquire a high-value capability token before execution
@@ -39,6 +40,7 @@ public record AgentRunPlanResponse(
         String modelLevel,
         List<String> allowedToolScopes,
         List<String> deniedToolScopes,
+        List<ToolPolicyDecision> toolPolicyDecisions,
         List<String> allowedDataScopes,
         List<String> deniedDataScopes,
         boolean capabilityRequired,
@@ -59,5 +61,15 @@ public record AgentRunPlanResponse(
      * @param elapsedMs elapsed milliseconds for the stage
      */
     public record StageTiming(String stage, long elapsedMs) {
+    }
+
+    /**
+     * Tool-scope decision returned by the backend planner for audit and UI display.
+     *
+     * @param scope requested tool scope
+     * @param decision stable decision code: ALLOWED, DISABLED_BY_USER, or DENIED_BY_AGENT_POLICY
+     * @param reason concise reason that explains why the tool is or is not injected
+     */
+    public record ToolPolicyDecision(String scope, String decision, String reason) {
     }
 }

@@ -35,6 +35,7 @@ class AgentRunPlanControllerTest {
                 0,
                 false,
                 List.of("tool:search:private"),
+                List.of(),
                 List.of("TEACHER_PRIVATE"),
                 true);
 

@@ -30,6 +30,7 @@ class AgentRunPlanServiceTest {
                 0,
                 false,
                 List.of("tool:search:textbook", "tool:student:progress:read", "tool:knowledge:write"),
+                List.of(),
                 List.of("PUBLIC_TEXTBOOK", "STUDENT_PRIVATE", "TEACHER_PRIVATE"),
                 false);
 
@@ -72,6 +73,7 @@ class AgentRunPlanServiceTest {
                 0,
                 true,
                 List.of("tool:courseware:generate", "tool:search:private", "tool:student:progress:write"),
+                List.of(),
                 List.of("TEACHER_PRIVATE", "CLASS_AUTHORIZED", "STUDENT_PRIVATE"),
                 true);
 
@@ -87,6 +89,41 @@ class AgentRunPlanServiceTest {
         assertThat(plan.allowedDataScopes()).containsExactly("TEACHER_PRIVATE", "CLASS_AUTHORIZED");
         assertThat(plan.deniedDataScopes()).containsExactly("STUDENT_PRIVATE");
         assertThat(plan.withinBudget()).isTrue();
+    }
+
+    @Test
+    void removesUserDisabledToolsFromDynamicInjectionPlan() {
+        AgentRunPlanService service = new AgentRunPlanService(providerCatalog());
+        AgentRunPlanRequest request = new AgentRunPlanRequest(
+                "CoursewareAgent",
+                "courseware_generation",
+                "teacher",
+                3000,
+                1600,
+                false,
+                true,
+                "medium",
+                "normal",
+                2.5,
+                0,
+                true,
+                List.of("tool:courseware:generate", "tool:search:private", "tool:student:progress:write"),
+                List.of("tool:search:private"),
+                List.of("TEACHER_PRIVATE", "CLASS_AUTHORIZED"),
+                true);
+
+        AgentRunPlanResponse plan = service.plan(
+                request,
+                new RequestSubject("school-a", "teacher", "teacher-001", "device-1"));
+
+        assertThat(plan.allowedToolScopes()).containsExactly("tool:courseware:generate");
+        assertThat(plan.deniedToolScopes()).containsExactly("tool:search:private", "tool:student:progress:write");
+        assertThat(plan.toolPolicyDecisions())
+                .extracting(AgentRunPlanResponse.ToolPolicyDecision::scope)
+                .containsExactly("tool:courseware:generate", "tool:search:private", "tool:student:progress:write");
+        assertThat(plan.toolPolicyDecisions())
+                .extracting(AgentRunPlanResponse.ToolPolicyDecision::decision)
+                .containsExactly("ALLOWED", "DISABLED_BY_USER", "DENIED_BY_AGENT_POLICY");
     }
 
     @Test
@@ -106,6 +143,7 @@ class AgentRunPlanServiceTest {
                 2,
                 true,
                 List.of("tool:quality:check"),
+                List.of(),
                 List.of("PUBLIC_TEXTBOOK"),
                 false);
 

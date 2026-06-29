@@ -5,6 +5,7 @@ import com.doob.mathagent.agent.vo.AgentRunPlanResponse;
 import com.doob.mathagent.infrastructure.ai.AiProviderCatalog;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -39,8 +40,17 @@ public class AgentRunPlanService {
         AgentRunPlanRequest normalized = request.normalize();
         RequestSubject normalizedSubject = subject.normalize();
         AgentRunPolicy.AgentDefinition agent = AgentRunPolicy.resolveAgent(normalized, normalizedSubject);
-        List<String> allowedTools = allowed(normalized.requestedToolScopes(), agent.allowedToolScopes());
-        List<String> deniedTools = denied(normalized.requestedToolScopes(), agent.allowedToolScopes());
+        Set<String> disabledTools = new HashSet<>(normalized.disabledToolScopes());
+        List<AgentRunPlanResponse.ToolPolicyDecision> toolDecisions =
+                toolPolicyDecisions(normalized.requestedToolScopes(), agent.allowedToolScopes(), disabledTools);
+        List<String> allowedTools = toolDecisions.stream()
+                .filter(decision -> "ALLOWED".equals(decision.decision()))
+                .map(AgentRunPlanResponse.ToolPolicyDecision::scope)
+                .toList();
+        List<String> deniedTools = toolDecisions.stream()
+                .filter(decision -> !"ALLOWED".equals(decision.decision()))
+                .map(AgentRunPlanResponse.ToolPolicyDecision::scope)
+                .toList();
         List<String> allowedData = allowed(normalized.requestedDataScopes(), agent.allowedDataScopes());
         List<String> deniedData = denied(normalized.requestedDataScopes(), agent.allowedDataScopes());
         timer.mark("agent_policy");
@@ -63,6 +73,7 @@ public class AgentRunPlanService {
                 route.modelLevel(),
                 allowedTools,
                 deniedTools,
+                toolDecisions,
                 allowedData,
                 deniedData,
                 capabilityRequired,
@@ -129,6 +140,43 @@ public class AgentRunPlanService {
      */
     private static List<String> denied(List<String> requested, Set<String> allowed) {
         return requested.stream().filter(scope -> !allowed.contains(scope)).toList();
+    }
+
+    /**
+     * Explains how every requested tool scope is handled before dynamic tool injection.
+     */
+    private static List<AgentRunPlanResponse.ToolPolicyDecision> toolPolicyDecisions(
+            List<String> requested,
+            Set<String> allowed,
+            Set<String> disabled) {
+        return requested.stream()
+                .map(scope -> toolPolicyDecision(scope, allowed, disabled))
+                .toList();
+    }
+
+    /**
+     * Resolves one tool decision without trusting frontend role or identity.
+     */
+    private static AgentRunPlanResponse.ToolPolicyDecision toolPolicyDecision(
+            String scope,
+            Set<String> allowed,
+            Set<String> disabled) {
+        if (!allowed.contains(scope)) {
+            return new AgentRunPlanResponse.ToolPolicyDecision(
+                    scope,
+                    "DENIED_BY_AGENT_POLICY",
+                    "Tool is not allowed for the backend-selected agent and subject role");
+        }
+        if (disabled.contains(scope)) {
+            return new AgentRunPlanResponse.ToolPolicyDecision(
+                    scope,
+                    "DISABLED_BY_USER",
+                    "Tool was removed by this request's user preference");
+        }
+        return new AgentRunPlanResponse.ToolPolicyDecision(
+                scope,
+                "ALLOWED",
+                "Tool is allowed by agent policy and not disabled by request preference");
     }
 
     /**

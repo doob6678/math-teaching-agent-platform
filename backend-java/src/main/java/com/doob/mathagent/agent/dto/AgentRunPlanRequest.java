@@ -18,6 +18,7 @@ import java.util.List;
  * @param previousFailureCount number of recent model failures used for fallback routing
  * @param requiredJsonSchema whether the response must satisfy a structured JSON schema
  * @param requestedToolScopes tool scopes requested by the workflow
+ * @param disabledToolScopes per-request user preference that removes tools from dynamic injection without granting access
  * @param requestedDataScopes data scopes requested by the workflow
  * @param highValueOperation whether this run can spend high-value model/tool budget
  */
@@ -35,6 +36,7 @@ public record AgentRunPlanRequest(
         int previousFailureCount,
         boolean requiredJsonSchema,
         List<String> requestedToolScopes,
+        List<String> disabledToolScopes,
         List<String> requestedDataScopes,
         boolean highValueOperation) {
 
@@ -56,6 +58,7 @@ public record AgentRunPlanRequest(
                 Math.max(0, previousFailureCount),
                 requiredJsonSchema,
                 normalizeList(requestedToolScopes),
+                normalizeList(disabledToolScopes),
                 normalizeList(requestedDataScopes),
                 highValueOperation);
     }

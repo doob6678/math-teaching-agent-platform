@@ -111,6 +111,10 @@ class AgentRunExecutionControllerTest {
                 "reasoning",
                 List.of("tool:search:textbook"),
                 List.of(),
+                List.of(new AgentRunPlanResponse.ToolPolicyDecision(
+                        "tool:search:textbook",
+                        "ALLOWED",
+                        "Tool is allowed by agent policy and not disabled by request preference")),
                 List.of("PUBLIC_TEXTBOOK"),
                 List.of(),
                 capabilityRequired,

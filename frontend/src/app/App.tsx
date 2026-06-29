@@ -1,6 +1,7 @@
 import { AlertCircle, BookOpen, Database, Loader2, Search, ShieldCheck } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
+  AgentRunPlanResponse,
   RetrievalAuditDetail,
   StudentDashboardResponse,
   TeachingTaskResponse,
@@ -43,6 +44,11 @@ export function App() {
   const [feedbackComment, setFeedbackComment] = useState("");
   const [submittingFeedback, setSubmittingFeedback] = useState(false);
   const [feedbackMessage, setFeedbackMessage] = useState("");
+  const [agentPlan, setAgentPlan] = useState<AgentRunPlanResponse | null>(null);
+  const [planningAgent, setPlanningAgent] = useState(false);
+  const [agentPlanError, setAgentPlanError] = useState("");
+  const [disablePrivateSearch, setDisablePrivateSearch] = useState(true);
+  const [disableTextbookSearch, setDisableTextbookSearch] = useState(false);
   const [teachingError, setTeachingError] = useState("");
   const [studentDashboardError, setStudentDashboardError] = useState("");
   const [teacherResourceError, setTeacherResourceError] = useState("");
@@ -302,6 +308,38 @@ export function App() {
       .finally(() => setSubmittingFeedback(false));
   }
 
+  function handlePlanAgent(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const disabledToolScopes = [
+      disablePrivateSearch ? "tool:search:private" : "",
+      disableTextbookSearch ? "tool:search:textbook" : "",
+    ].filter(Boolean);
+    setPlanningAgent(true);
+    setAgentPlanError("");
+    api
+      .planAgentRun({
+        agentCode: "CoursewareAgent",
+        taskType: "courseware_generation",
+        userVipLevel: "teacher",
+        estimatedInputTokens: 3200,
+        estimatedOutputTokens: 1800,
+        hasImage: false,
+        hasFormula: true,
+        difficulty: "medium",
+        latencyRequirement: "normal",
+        costBudget: 2.5,
+        previousFailureCount: 0,
+        requiredJsonSchema: true,
+        requestedToolScopes: ["tool:courseware:generate", "tool:search:private", "tool:search:textbook"],
+        disabledToolScopes,
+        requestedDataScopes: ["TEACHER_PRIVATE", "CLASS_AUTHORIZED", "PUBLIC_TEXTBOOK"],
+        highValueOperation: true,
+      })
+      .then(setAgentPlan)
+      .catch((error: Error) => setAgentPlanError(error.message))
+      .finally(() => setPlanningAgent(false));
+  }
+
   return (
     <main className="app-shell">
       <section className="topbar">
@@ -413,6 +451,33 @@ export function App() {
 
           <div className="divider" />
 
+          <PanelTitle icon={<ShieldCheck size={18} />} title="Agent tool policy" />
+          <form className="search-form agent-tool-form" onSubmit={handlePlanAgent}>
+            <label className="toggle-row">
+              <input
+                type="checkbox"
+                checked={disablePrivateSearch}
+                onChange={(event) => setDisablePrivateSearch(event.target.checked)}
+              />
+              <span>Disable private RAG search</span>
+            </label>
+            <label className="toggle-row">
+              <input
+                type="checkbox"
+                checked={disableTextbookSearch}
+                onChange={(event) => setDisableTextbookSearch(event.target.checked)}
+              />
+              <span>Disable textbook search</span>
+            </label>
+            <button type="submit" disabled={planningAgent}>
+              {planningAgent ? <Loader2 className="spin" size={17} /> : <ShieldCheck size={17} />}
+              <span>Plan tools</span>
+            </button>
+          </form>
+          {agentPlanError ? <StatusLine icon={<AlertCircle size={16} />} text={agentPlanError} tone="danger" /> : null}
+
+          <div className="divider" />
+
           <TeacherResourcePanel
             resources={teacherResources}
             title={resourceTitle}
@@ -437,6 +502,8 @@ export function App() {
             loading={loadingStudentDashboard}
             error={studentDashboardError}
           />
+
+          <AgentPlanPanel plan={agentPlan} loading={planningAgent} error={agentPlanError} />
 
           <div className="result-header">
             <div>
@@ -925,6 +992,59 @@ function TeachingTaskPanel({
           </form>
         </div>
       ) : null}
+    </section>
+  );
+}
+
+function AgentPlanPanel({
+  plan,
+  loading,
+  error,
+}: {
+  plan: AgentRunPlanResponse | null;
+  loading: boolean;
+  error: string;
+}) {
+  return (
+    <section className="agent-plan-panel">
+      <div className="result-header">
+        <div>
+          <p className="eyebrow">Agent Policy</p>
+          <h2>Dynamic tool injection</h2>
+        </div>
+        {plan ? <div className="strategy-pill">{plan.agentCode}</div> : null}
+      </div>
+      {loading ? <StatusLine icon={<Loader2 className="spin" size={16} />} text="Planning agent tool policy" /> : null}
+      {error ? <StatusLine icon={<AlertCircle size={16} />} text={error} tone="danger" /> : null}
+      {plan ? (
+        <div className="agent-plan-grid">
+          <div className="profile-strip">
+            <div>
+              <span>Provider</span>
+              <strong>{plan.providerName}</strong>
+            </div>
+            <div>
+              <span>Model</span>
+              <strong>{plan.modelCode}</strong>
+            </div>
+            <div>
+              <span>Capability</span>
+              <strong>{plan.capabilityRequired ? plan.capabilityAction : "not required"}</strong>
+            </div>
+          </div>
+          <div className="tool-decision-list">
+            {plan.toolPolicyDecisions.map((decision) => (
+              <div className={`tool-decision ${decision.decision.toLowerCase()}`} key={decision.scope}>
+                <strong>{decision.scope}</strong>
+                <span>{decision.decision}</span>
+                <p>{decision.reason}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div className="empty-state compact">Plan an agent run to see which tools the backend will inject.</div>
+      )}
     </section>
   );
 }

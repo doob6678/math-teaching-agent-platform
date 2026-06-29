@@ -90,6 +90,7 @@ class AgentRunExecutionServiceTest {
                 plan.modelLevel(),
                 List.of("tool:courseware:generate", "tool:student:progress:write"),
                 plan.deniedToolScopes(),
+                plan.toolPolicyDecisions(),
                 plan.allowedDataScopes(),
                 plan.deniedDataScopes(),
                 plan.capabilityRequired(),
@@ -127,6 +128,7 @@ class AgentRunExecutionServiceTest {
                 plan.modelLevel(),
                 plan.allowedToolScopes(),
                 plan.deniedToolScopes(),
+                plan.toolPolicyDecisions(),
                 plan.allowedDataScopes(),
                 plan.deniedDataScopes(),
                 plan.capabilityRequired(),
@@ -164,6 +166,7 @@ class AgentRunExecutionServiceTest {
                 plan.modelLevel(),
                 plan.allowedToolScopes(),
                 plan.deniedToolScopes(),
+                plan.toolPolicyDecisions(),
                 plan.allowedDataScopes(),
                 plan.deniedDataScopes(),
                 false,
@@ -180,6 +183,44 @@ class AgentRunExecutionServiceTest {
         assertThat(service.requiresCapability(new AgentRunExecuteRequest(tampered, "tampered", List.of(), true)))
                 .isTrue();
         assertThat(service.capabilityAction(tampered)).isEqualTo("agent-run:CoursewareAgent");
+    }
+
+    @Test
+    void rejectsExecutionWhenFrontendReAddsUserDisabledTool() {
+        AgentRunExecutionService service = new AgentRunExecutionService(
+                new InMemoryAgentTraceStore(),
+                new InMemoryAgentConcurrencyGuard());
+        AgentRunPlanResponse plan = disabledPrivateSearchPlan();
+        AgentRunPlanResponse tampered = new AgentRunPlanResponse(
+                plan.planId(),
+                plan.tenantId(),
+                plan.subjectType(),
+                plan.subjectId(),
+                plan.agentCode(),
+                plan.providerName(),
+                plan.modelCode(),
+                plan.modelLevel(),
+                List.of("tool:courseware:generate", "tool:search:private"),
+                plan.deniedToolScopes(),
+                plan.toolPolicyDecisions(),
+                plan.allowedDataScopes(),
+                plan.deniedDataScopes(),
+                plan.capabilityRequired(),
+                plan.capabilityAction(),
+                plan.maxInputTokens(),
+                plan.maxOutputTokens(),
+                plan.estimatedTotalTokens(),
+                plan.estimatedCost(),
+                plan.withinBudget(),
+                plan.routeReason(),
+                plan.stageTimings(),
+                plan.concurrencyKeys());
+
+        assertThatThrownBy(() -> service.execute(
+                new AgentRunExecuteRequest(tampered, "tampered", List.of(), true),
+                new RequestSubject("school-a", "teacher", "teacher-001", "device-1")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Agent plan tool scope disabled by user");
     }
 
     @Test
@@ -225,6 +266,28 @@ class AgentRunExecutionServiceTest {
                         0,
                         true,
                         List.of("tool:courseware:generate", "tool:search:private"),
+                        List.of(),
+                        List.of("TEACHER_PRIVATE", "CLASS_AUTHORIZED"),
+                        true),
+                new RequestSubject("school-a", "teacher", "teacher-001", "device-1"));
+    }
+
+    private static AgentRunPlanResponse disabledPrivateSearchPlan() {
+        return new AgentRunPlanService(providerCatalog()).plan(new AgentRunPlanRequest(
+                        "CoursewareAgent",
+                        "courseware_generation",
+                        "teacher",
+                        3000,
+                        1600,
+                        false,
+                        true,
+                        "medium",
+                        "normal",
+                        2.5,
+                        0,
+                        true,
+                        List.of("tool:courseware:generate", "tool:search:private"),
+                        List.of("tool:search:private"),
                         List.of("TEACHER_PRIVATE", "CLASS_AUTHORIZED"),
                         true),
                 new RequestSubject("school-a", "teacher", "teacher-001", "device-1"));

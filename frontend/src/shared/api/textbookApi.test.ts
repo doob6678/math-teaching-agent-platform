@@ -784,7 +784,19 @@ describe("textbookApi", () => {
         modelCode: "gpt-4.1",
         modelLevel: "reasoning",
         allowedToolScopes: ["tool:courseware:generate"],
-        deniedToolScopes: [],
+        deniedToolScopes: ["tool:search:private"],
+        toolPolicyDecisions: [
+          {
+            scope: "tool:courseware:generate",
+            decision: "ALLOWED",
+            reason: "Tool is allowed by agent policy and not disabled by request preference",
+          },
+          {
+            scope: "tool:search:private",
+            decision: "DISABLED_BY_USER",
+            reason: "Tool was removed by this request's user preference",
+          },
+        ],
         allowedDataScopes: ["TEACHER_PRIVATE"],
         deniedDataScopes: [],
         capabilityRequired: true,
@@ -813,7 +825,8 @@ describe("textbookApi", () => {
       costBudget: 2.5,
       previousFailureCount: 0,
       requiredJsonSchema: false,
-      requestedToolScopes: ["tool:courseware:generate"],
+      requestedToolScopes: ["tool:courseware:generate", "tool:search:private"],
+      disabledToolScopes: ["tool:search:private"],
       requestedDataScopes: ["TEACHER_PRIVATE"],
       highValueOperation: true,
     };
@@ -836,6 +849,11 @@ describe("textbookApi", () => {
     expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Type");
     expect(plan.capabilityRequired).toBe(true);
     expect(plan.allowedToolScopes).toContain("tool:courseware:generate");
+    expect(plan.deniedToolScopes).toContain("tool:search:private");
+    expect(plan.toolPolicyDecisions[1]).toMatchObject({
+      scope: "tool:search:private",
+      decision: "DISABLED_BY_USER",
+    });
   });
 
   it("executes high-value agent run with capability token and no client supplied identity", async () => {
@@ -861,6 +879,13 @@ describe("textbookApi", () => {
       modelLevel: "reasoning",
       allowedToolScopes: ["tool:courseware:generate"],
       deniedToolScopes: [],
+      toolPolicyDecisions: [
+        {
+          scope: "tool:courseware:generate",
+          decision: "ALLOWED" as const,
+          reason: "Tool is allowed by agent policy and not disabled by request preference",
+        },
+      ],
       allowedDataScopes: ["TEACHER_PRIVATE"],
       deniedDataScopes: [],
       capabilityRequired: true,

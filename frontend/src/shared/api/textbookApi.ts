@@ -524,6 +524,8 @@ export interface AgentRunPlanRequest {
   requiredJsonSchema: boolean;
   /** Tool scopes requested by the workflow. */
   requestedToolScopes: string[];
+  /** Per-request tool scopes the user disabled; backend only removes tools and never grants access from this field. */
+  disabledToolScopes: string[];
   /** Data scopes requested by the workflow. */
   requestedDataScopes: string[];
   /** Whether this run can spend high-value model/tool budget. */
@@ -554,6 +556,8 @@ export interface AgentRunPlanResponse {
   allowedToolScopes: string[];
   /** Tool scopes rejected by policy. */
   deniedToolScopes: string[];
+  /** Per-tool backend decisions explaining dynamic tool injection filtering. */
+  toolPolicyDecisions: AgentToolPolicyDecision[];
   /** Data scopes accepted by policy. */
   allowedDataScopes: string[];
   /** Data scopes rejected by policy. */
@@ -578,6 +582,18 @@ export interface AgentRunPlanResponse {
   stageTimings: TeachingStageTiming[];
   /** Redis-style concurrency keys for later execution. */
   concurrencyKeys: string[];
+}
+
+/**
+ * Backend decision for one requested agent tool scope.
+ */
+export interface AgentToolPolicyDecision {
+  /** Requested tool scope. */
+  scope: string;
+  /** Stable backend decision code. */
+  decision: "ALLOWED" | "DISABLED_BY_USER" | "DENIED_BY_AGENT_POLICY";
+  /** Human-readable audit reason. */
+  reason: string;
 }
 
 /**
