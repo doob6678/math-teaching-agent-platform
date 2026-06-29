@@ -89,4 +89,24 @@ class DatabaseMigrationSqlContractTest {
                 .contains("idx_source_sync_job_status")
                 .contains("FOREIGN KEY (source_document_id) REFERENCES source_document(id)");
     }
+
+    @Test
+    void sourceSyncCheckpointMigrationStoresResumeCursorAndItemSets() throws Exception {
+        String migration = Files.readString(Path.of("src/main/resources/db/migration/V4__source_sync_checkpoint.sql"));
+
+        assertThat(migration)
+                .contains("CREATE TABLE source_sync_checkpoint")
+                .contains("job_id CHAR(36) NOT NULL")
+                .contains("root_token VARCHAR(128)")
+                .contains("current_folder_token VARCHAR(128)")
+                .contains("page_token VARCHAR(256)")
+                .contains("visited_folder_tokens_json JSON")
+                .contains("downloaded_items_json JSON")
+                .contains("failed_items_json JSON")
+                .contains("cursor_version INT NOT NULL DEFAULT 1")
+                .contains("uk_source_sync_checkpoint_tenant_job")
+                .contains("idx_source_sync_checkpoint_document")
+                .contains("FOREIGN KEY (job_id) REFERENCES source_sync_job(job_id)")
+                .contains("FOREIGN KEY (source_document_id) REFERENCES source_document(id)");
+    }
 }
