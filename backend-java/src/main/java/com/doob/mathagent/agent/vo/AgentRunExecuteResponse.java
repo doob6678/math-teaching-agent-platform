@@ -17,6 +17,7 @@ import java.util.List;
  * @param estimatedCost estimated local cost copied from the plan for monitoring
  * @param allowedToolScopes tool scopes allowed by the plan and recorded for audit
  * @param allowedDataScopes data scopes allowed by the plan and recorded for audit
+ * @param concurrencyKeys concurrency keys acquired for this execution
  * @param stageTimings execution stage timing rows
  * @param message safe status message; raw prompt and raw model output are intentionally omitted
  */
@@ -33,6 +34,7 @@ public record AgentRunExecuteResponse(
         double estimatedCost,
         List<String> allowedToolScopes,
         List<String> allowedDataScopes,
+        List<String> concurrencyKeys,
         List<StageTiming> stageTimings,
         String message) {
 

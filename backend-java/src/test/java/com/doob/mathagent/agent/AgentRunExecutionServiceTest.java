@@ -5,22 +5,30 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.doob.mathagent.agent.dto.AgentRunExecuteRequest;
 import com.doob.mathagent.agent.dto.AgentRunPlanRequest;
+import com.doob.mathagent.agent.service.AgentConcurrencyGuard;
+import com.doob.mathagent.agent.service.AgentConcurrencyLease;
 import com.doob.mathagent.agent.service.AgentRunExecutionService;
 import com.doob.mathagent.agent.service.AgentRunPlanService;
+import com.doob.mathagent.agent.service.InMemoryAgentConcurrencyGuard;
 import com.doob.mathagent.agent.service.InMemoryAgentTraceStore;
 import com.doob.mathagent.agent.vo.AgentRunExecuteResponse;
 import com.doob.mathagent.agent.vo.AgentRunPlanResponse;
 import com.doob.mathagent.infrastructure.ai.AiProviderCatalog;
 import com.doob.mathagent.infrastructure.ai.AiProviderProperties;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
+import java.time.Duration;
 import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
 
 class AgentRunExecutionServiceTest {
 
     @Test
     void recordsBaselineTraceWithoutRawModelOutput() {
-        AgentRunExecutionService service = new AgentRunExecutionService(new InMemoryAgentTraceStore());
+        AgentRunExecutionService service = new AgentRunExecutionService(
+                new InMemoryAgentTraceStore(),
+                new InMemoryAgentConcurrencyGuard());
         AgentRunPlanResponse plan = coursewarePlan();
         AgentRunExecuteRequest request = new AgentRunExecuteRequest(
                 plan,
@@ -41,14 +49,17 @@ class AgentRunExecutionServiceTest {
         assertThat(response.modelCode()).isEqualTo("gpt-4.1");
         assertThat(response.allowedToolScopes()).containsExactlyElementsOf(plan.allowedToolScopes());
         assertThat(response.allowedDataScopes()).containsExactlyElementsOf(plan.allowedDataScopes());
+        assertThat(response.concurrencyKeys()).containsExactlyElementsOf(plan.concurrencyKeys());
         assertThat(response.estimatedCost()).isEqualTo(plan.estimatedCost());
         assertThat(response.stageTimings()).extracting(AgentRunExecuteResponse.StageTiming::stage)
-                .containsExactly("capability_guard", "trace_start", "baseline_execute", "trace_finish");
+                .containsExactly("capability_guard", "concurrency_guard", "trace_start", "baseline_execute", "trace_finish");
     }
 
     @Test
     void rejectsExecutionWhenBackendSubjectDoesNotOwnPlan() {
-        AgentRunExecutionService service = new AgentRunExecutionService(new InMemoryAgentTraceStore());
+        AgentRunExecutionService service = new AgentRunExecutionService(
+                new InMemoryAgentTraceStore(),
+                new InMemoryAgentConcurrencyGuard());
         AgentRunExecuteRequest request = new AgentRunExecuteRequest(
                 coursewarePlan(),
                 "Generate teacher handout for space vectors",
@@ -64,7 +75,9 @@ class AgentRunExecutionServiceTest {
 
     @Test
     void rejectsExecutionWhenPlanContainsToolScopeOutsideServerPolicy() {
-        AgentRunExecutionService service = new AgentRunExecutionService(new InMemoryAgentTraceStore());
+        AgentRunExecutionService service = new AgentRunExecutionService(
+                new InMemoryAgentTraceStore(),
+                new InMemoryAgentConcurrencyGuard());
         AgentRunPlanResponse plan = coursewarePlan();
         AgentRunPlanResponse tampered = new AgentRunPlanResponse(
                 plan.planId(),
@@ -99,7 +112,9 @@ class AgentRunExecutionServiceTest {
 
     @Test
     void rejectsExecutionWhenPlanRoleIsNotAllowedForAgent() {
-        AgentRunExecutionService service = new AgentRunExecutionService(new InMemoryAgentTraceStore());
+        AgentRunExecutionService service = new AgentRunExecutionService(
+                new InMemoryAgentTraceStore(),
+                new InMemoryAgentConcurrencyGuard());
         AgentRunPlanResponse plan = coursewarePlan();
         AgentRunPlanResponse tampered = new AgentRunPlanResponse(
                 plan.planId(),
@@ -134,7 +149,9 @@ class AgentRunExecutionServiceTest {
 
     @Test
     void requiresCapabilityFromServerSideAgentPolicyEvenWhenPlanIsTampered() {
-        AgentRunExecutionService service = new AgentRunExecutionService(new InMemoryAgentTraceStore());
+        AgentRunExecutionService service = new AgentRunExecutionService(
+                new InMemoryAgentTraceStore(),
+                new InMemoryAgentConcurrencyGuard());
         AgentRunPlanResponse plan = coursewarePlan();
         AgentRunPlanResponse tampered = new AgentRunPlanResponse(
                 plan.planId(),
@@ -165,6 +182,34 @@ class AgentRunExecutionServiceTest {
         assertThat(service.capabilityAction(tampered)).isEqualTo("agent-run:CoursewareAgent");
     }
 
+    @Test
+    void rejectsExecutionWhenConcurrencyKeysAreAlreadyActive() {
+        InMemoryAgentConcurrencyGuard guard = new InMemoryAgentConcurrencyGuard();
+        AgentRunPlanResponse plan = coursewarePlan();
+        guard.tryAcquire(plan.concurrencyKeys(), "trace-active", Duration.ofSeconds(30)).orElseThrow();
+        AgentRunExecutionService service = new AgentRunExecutionService(new InMemoryAgentTraceStore(), guard);
+
+        assertThatThrownBy(() -> service.execute(
+                new AgentRunExecuteRequest(plan, "Generate handout", List.of(), true),
+                new RequestSubject("school-a", "teacher", "teacher-001", "device-1")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Agent concurrency limit exceeded");
+    }
+
+    @Test
+    void releasesConcurrencyLeaseAfterBaselineExecution() {
+        TrackingConcurrencyGuard guard = new TrackingConcurrencyGuard();
+        AgentRunPlanResponse plan = coursewarePlan();
+        AgentRunExecutionService service = new AgentRunExecutionService(new InMemoryAgentTraceStore(), guard);
+
+        service.execute(
+                new AgentRunExecuteRequest(plan, "Generate handout", List.of(), true),
+                new RequestSubject("school-a", "teacher", "teacher-001", "device-1"));
+
+        assertThat(guard.requestedKeys).containsExactlyElementsOf(plan.concurrencyKeys());
+        assertThat(guard.released).isTrue();
+    }
+
     private static AgentRunPlanResponse coursewarePlan() {
         return new AgentRunPlanService(providerCatalog()).plan(new AgentRunPlanRequest(
                         "CoursewareAgent",
@@ -191,5 +236,16 @@ class AgentRunExecutionServiceTest {
         properties.getOpenai().setApiKey("openai-key");
         properties.getOpenai().setChatModel("gpt-4.1");
         return new AiProviderCatalog(properties);
+    }
+
+    private static final class TrackingConcurrencyGuard implements AgentConcurrencyGuard {
+        private List<String> requestedKeys = List.of();
+        private final AtomicBoolean released = new AtomicBoolean(false);
+
+        @Override
+        public Optional<AgentConcurrencyLease> tryAcquire(List<String> keys, String traceId, Duration leaseTime) {
+            requestedKeys = keys;
+            return Optional.of(() -> released.set(true));
+        }
     }
 }

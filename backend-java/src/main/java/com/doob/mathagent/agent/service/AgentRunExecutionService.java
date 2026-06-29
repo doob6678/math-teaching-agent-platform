@@ -5,6 +5,7 @@ import com.doob.mathagent.agent.vo.AgentRunExecuteResponse;
 import com.doob.mathagent.agent.vo.AgentRunPlanResponse;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -19,8 +20,10 @@ import org.springframework.stereotype.Service;
 public class AgentRunExecutionService {
 
     private static final String COMPLETED = "COMPLETED";
+    private static final Duration CONCURRENCY_LEASE_TIME = Duration.ofMinutes(10);
 
     private final AgentTraceStore traceStore;
+    private final AgentConcurrencyGuard concurrencyGuard;
     private final Clock clock;
 
     /**
@@ -29,8 +32,17 @@ public class AgentRunExecutionService {
      * @param traceStore trace storage boundary
      */
     @Autowired
+    public AgentRunExecutionService(AgentTraceStore traceStore, AgentConcurrencyGuard concurrencyGuard) {
+        this(traceStore, concurrencyGuard, Clock.systemUTC());
+    }
+
+    /**
+     * Creates a service with local concurrency protection for tests that only provide a trace store.
+     *
+     * @param traceStore trace storage boundary
+     */
     public AgentRunExecutionService(AgentTraceStore traceStore) {
-        this(traceStore, Clock.systemUTC());
+        this(traceStore, new InMemoryAgentConcurrencyGuard(), Clock.systemUTC());
     }
 
     /**
@@ -40,7 +52,22 @@ public class AgentRunExecutionService {
      * @param clock clock used for trace timestamps
      */
     public AgentRunExecutionService(AgentTraceStore traceStore, Clock clock) {
+        this(traceStore, new InMemoryAgentConcurrencyGuard(), clock);
+    }
+
+    /**
+     * Creates a testable execution service with explicit dependencies.
+     *
+     * @param traceStore trace storage boundary
+     * @param concurrencyGuard concurrency guard
+     * @param clock clock used for trace timestamps
+     */
+    public AgentRunExecutionService(
+            AgentTraceStore traceStore,
+            AgentConcurrencyGuard concurrencyGuard,
+            Clock clock) {
         this.traceStore = traceStore;
+        this.concurrencyGuard = concurrencyGuard;
         this.clock = clock;
     }
 
@@ -86,6 +113,11 @@ public class AgentRunExecutionService {
         timer.mark("capability_guard");
 
         String traceId = UUID.randomUUID().toString();
+        List<String> concurrencyKeys = safeList(plan.concurrencyKeys());
+        AgentConcurrencyLease lease = concurrencyGuard.tryAcquire(concurrencyKeys, traceId, CONCURRENCY_LEASE_TIME)
+                .orElseThrow(() -> new IllegalStateException("Agent concurrency limit exceeded"));
+        timer.mark("concurrency_guard");
+
         AgentTraceRecord record = new AgentTraceRecord(
                 traceId,
                 safeText(plan.planId()),
@@ -101,27 +133,32 @@ public class AgentRunExecutionService {
                 safeList(plan.allowedToolScopes()),
                 safeList(plan.allowedDataScopes()),
                 safeList(normalized.evidenceRefs()));
-        timer.mark("trace_start");
+        try {
+            timer.mark("trace_start");
 
-        traceStore.save(record);
-        timer.mark("baseline_execute");
-        timer.mark("trace_finish");
+            traceStore.save(record);
+            timer.mark("baseline_execute");
+            timer.mark("trace_finish");
 
-        return new AgentRunExecuteResponse(
-                record.traceId(),
-                record.planId(),
-                record.tenantId(),
-                record.subjectType(),
-                record.subjectId(),
-                record.agentCode(),
-                record.providerName(),
-                record.modelCode(),
-                record.status(),
-                record.estimatedCost(),
-                record.allowedToolScopes(),
-                record.allowedDataScopes(),
-                timer.timings(),
-                "Baseline trace recorded; external model execution is not enabled yet.");
+            return new AgentRunExecuteResponse(
+                    record.traceId(),
+                    record.planId(),
+                    record.tenantId(),
+                    record.subjectType(),
+                    record.subjectId(),
+                    record.agentCode(),
+                    record.providerName(),
+                    record.modelCode(),
+                    record.status(),
+                    record.estimatedCost(),
+                    record.allowedToolScopes(),
+                    record.allowedDataScopes(),
+                    concurrencyKeys,
+                    timer.timings(),
+                    "Baseline trace recorded; external model execution is not enabled yet.");
+        } finally {
+            lease.close();
+        }
     }
 
     /**

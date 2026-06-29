@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.doob.mathagent.agent.controller.AgentRunExecutionController;
 import com.doob.mathagent.agent.dto.AgentRunExecuteRequest;
+import com.doob.mathagent.agent.service.AgentConcurrencyGuard;
 import com.doob.mathagent.agent.service.AgentRunExecutionService;
 import com.doob.mathagent.agent.service.AgentRunCapabilityVerifier;
 import com.doob.mathagent.agent.service.InMemoryAgentTraceStore;
@@ -13,7 +14,9 @@ import com.doob.mathagent.agent.vo.AgentRunPlanResponse;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 
 class AgentRunExecutionControllerTest {
@@ -59,6 +62,19 @@ class AgentRunExecutionControllerTest {
 
         assertThat(response.status()).isEqualTo("COMPLETED");
         assertThat(response.subjectId()).isEqualTo("student-001");
+    }
+
+    @Test
+    void mapsConcurrencyConflictToTooManyRequests() {
+        AgentConcurrencyGuard deniedGuard = (keys, traceId, leaseTime) -> Optional.empty();
+        AgentRunExecutionController controller = new AgentRunExecutionController(
+                new AgentRunExecutionService(new InMemoryAgentTraceStore(), deniedGuard),
+                request -> new RequestSubject("school-a", "teacher", "teacher-001", "device-1"),
+                (token, action, path, requestHash, subject) -> true);
+
+        assertThatThrownBy(() -> controller.execute(highValueRequest(), null))
+                .isInstanceOfSatisfying(ResponseStatusException.class, exception ->
+                        assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS));
     }
 
     private static AgentRunExecuteRequest highValueRequest() {

@@ -582,6 +582,8 @@ export interface AgentRunExecuteResponse {
   allowedToolScopes: string[];
   /** Data scopes recorded for audit. */
   allowedDataScopes: string[];
+  /** Concurrency keys acquired for this run. */
+  concurrencyKeys: string[];
   /** Execution stage timings. */
   stageTimings: TeachingStageTiming[];
   /** Safe status message. */
