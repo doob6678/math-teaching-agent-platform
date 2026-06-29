@@ -2,6 +2,7 @@ package com.doob.mathagent.teacher.service;
 
 import com.doob.mathagent.teacher.vo.TeacherDocumentBlockResponse;
 import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
+import com.doob.mathagent.teacher.vo.TeacherSourceSyncCheckpointResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncJobResponse;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -33,6 +34,7 @@ public class TeacherSourceSyncExecutionService {
     private final TeacherDocumentBlockStore blockStore;
     private final TeacherFeishuDownloadClient feishuDownloadClient;
     private final TeacherSourceSyncProperties syncProperties;
+    private final TeacherSourceSyncCheckpointStore checkpointStore;
 
     /**
      * Creates a sync execution service.
@@ -47,12 +49,38 @@ public class TeacherSourceSyncExecutionService {
             TeacherSourceSyncJobStore jobStore,
             TeacherDocumentBlockStore blockStore,
             TeacherFeishuDownloadClient feishuDownloadClient,
-            TeacherSourceSyncProperties syncProperties) {
+            TeacherSourceSyncProperties syncProperties,
+            TeacherSourceSyncCheckpointStore checkpointStore) {
         this.resourceStore = resourceStore;
         this.jobStore = jobStore;
         this.blockStore = blockStore;
         this.feishuDownloadClient = feishuDownloadClient;
         this.syncProperties = syncProperties;
+        this.checkpointStore = checkpointStore;
+    }
+
+    /**
+     * Creates a sync execution service with a no-op local checkpoint store for older focused tests.
+     *
+     * @param resourceStore source document store
+     * @param jobStore sync job store
+     * @param blockStore parsed block store
+     * @param feishuDownloadClient Feishu downloader
+     * @param syncProperties sync properties
+     */
+    public TeacherSourceSyncExecutionService(
+            TeacherResourceStore resourceStore,
+            TeacherSourceSyncJobStore jobStore,
+            TeacherDocumentBlockStore blockStore,
+            TeacherFeishuDownloadClient feishuDownloadClient,
+            TeacherSourceSyncProperties syncProperties) {
+        this(
+                resourceStore,
+                jobStore,
+                blockStore,
+                feishuDownloadClient,
+                syncProperties,
+                new InMemoryTeacherSourceSyncCheckpointStore());
     }
 
     /**
@@ -71,7 +99,8 @@ public class TeacherSourceSyncExecutionService {
                 jobStore,
                 blockStore,
                 new UnconfiguredTeacherFeishuDownloadClient(),
-                TeacherSourceSyncProperties.defaults());
+                TeacherSourceSyncProperties.defaults(),
+                new InMemoryTeacherSourceSyncCheckpointStore());
     }
 
     /**
@@ -110,6 +139,7 @@ public class TeacherSourceSyncExecutionService {
         jobStore.save(running);
         try {
             if (feishuSource) {
+                saveFeishuCheckpoint(document, running, "[]", "[]", 1);
                 TeacherFeishuDownloadClient.FeishuDownloadResult result = feishuDownloadClient.download(
                         textOrDefault(document.originalUrl(), syncProperties.feishuDefaultUrl()),
                         syncProperties.feishuStagingRoot(),
@@ -135,6 +165,7 @@ public class TeacherSourceSyncExecutionService {
                         "download_completed",
                         result.savedPath().toString(),
                         result.message());
+                saveFeishuCheckpoint(document, completed, downloadedItemsJson(result), "[]", 2);
                 return jobStore.save(completed);
             }
             List<TeacherDocumentBlockResponse> blocks = parseLocalResource(document);
@@ -148,14 +179,94 @@ public class TeacherSourceSyncExecutionService {
                     "Parsed " + blocks.size() + " blocks from local source");
             return jobStore.save(completed);
         } catch (RuntimeException exception) {
+            if (feishuSource) {
+                boolean retryable = exception instanceof TeacherFeishuDownloadException feishuException
+                        && feishuException.retryable();
+                TeacherSourceSyncJobResponse pausedOrFailed = updateJob(
+                        running,
+                        retryable ? "paused" : "failed",
+                        retryable ? "download_paused" : "download_failed",
+                        null,
+                        exception.getMessage());
+                saveFeishuCheckpoint(document, pausedOrFailed, "[]", failedItemsJson(exception, retryable), 2);
+                return jobStore.save(pausedOrFailed);
+            }
             TeacherSourceSyncJobResponse failed = updateJob(
                     running,
                     "failed",
-                    feishuSource ? "download_failed" : "parse_failed",
+                    "parse_failed",
                     null,
                     exception.getMessage());
             return jobStore.save(failed);
         }
+    }
+
+    /**
+     * Saves a Feishu checkpoint snapshot for start, success, paused, or failed states.
+     */
+    private void saveFeishuCheckpoint(
+            TeacherResourceDocumentResponse document,
+            TeacherSourceSyncJobResponse job,
+            String downloadedItemsJson,
+            String failedItemsJson,
+            int cursorVersion) {
+        String rootToken = extractFeishuToken(textOrDefault(document.originalUrl(), syncProperties.feishuDefaultUrl()));
+        checkpointStore.save(new TeacherSourceSyncCheckpointResponse(
+                job.jobId(),
+                document.tenantId(),
+                document.documentId(),
+                rootToken,
+                rootToken,
+                textOrDefault(document.title(), "Feishu source"),
+                null,
+                rootToken.isBlank() ? "[]" : "[\"" + escapeJson(rootToken) + "\"]",
+                downloadedItemsJson,
+                failedItemsJson,
+                cursorVersion,
+                Instant.now().toString()));
+    }
+
+    /**
+     * Builds a compact downloaded-items JSON array from a successful download result.
+     */
+    private static String downloadedItemsJson(TeacherFeishuDownloadClient.FeishuDownloadResult result) {
+        return "[{\"savedPath\":\"" + escapeJson(result.savedPath().toString()) + "\","
+                + "\"files\":" + result.files() + ","
+                + "\"skipped\":" + result.skipped() + ","
+                + "\"failed\":" + result.failed() + "}]";
+    }
+
+    /**
+     * Builds a compact failed-items JSON array from a download failure.
+     */
+    private static String failedItemsJson(RuntimeException exception, boolean retryable) {
+        return "[{\"message\":\"" + escapeJson(textOrDefault(exception.getMessage(), exception.getClass().getSimpleName()))
+                + "\",\"retryable\":" + retryable + "}]";
+    }
+
+    /**
+     * Extracts a Feishu browser URL token without exposing any secret material.
+     */
+    private static String extractFeishuToken(String url) {
+        String normalized = textOrDefault(url, "");
+        int slash = normalized.lastIndexOf('/');
+        if (slash < 0 || slash == normalized.length() - 1) {
+            return normalized;
+        }
+        String tail = normalized.substring(slash + 1);
+        int question = tail.indexOf('?');
+        return question >= 0 ? tail.substring(0, question) : tail;
+    }
+
+    /**
+     * Escapes a string for the small JSON snippets stored in checkpoint rows.
+     */
+    private static String escapeJson(String value) {
+        return textOrDefault(value, "")
+                .replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+                .replace("\r", "\\r")
+                .replace("\n", "\\n");
     }
 
     /**

@@ -50,7 +50,11 @@ public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownload
                 return runDownloader(url, outputRoot, maxFiles, attempt);
             } catch (IllegalStateException exception) {
                 lastFailure = exception;
-                if (attempt == MAX_ATTEMPTS || !isRetryable(exception)) {
+                boolean retryable = isRetryable(exception);
+                if (attempt == MAX_ATTEMPTS && retryable) {
+                    throw new TeacherFeishuDownloadException(exception.getMessage(), true, exception);
+                }
+                if (attempt == MAX_ATTEMPTS || !retryable) {
                     throw exception;
                 }
                 sleepBeforeRetry(attempt);

@@ -4,8 +4,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.doob.mathagent.teacher.service.InMemoryTeacherDocumentBlockStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherResourceStore;
+import com.doob.mathagent.teacher.service.InMemoryTeacherSourceSyncCheckpointStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherSourceSyncJobStore;
 import com.doob.mathagent.teacher.service.ProcessTeacherFeishuDownloadClient;
+import com.doob.mathagent.teacher.service.TeacherFeishuDownloadClient;
+import com.doob.mathagent.teacher.service.TeacherFeishuDownloadException;
 import com.doob.mathagent.teacher.service.TeacherResourceRegistrationCommand;
 import com.doob.mathagent.teacher.service.TeacherResourceService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncExecutionService;
@@ -14,6 +17,7 @@ import com.doob.mathagent.teacher.service.TeacherSourceSyncProperties;
 import com.doob.mathagent.teacher.service.UnconfiguredTeacherFeishuDownloadClient;
 import com.doob.mathagent.teacher.vo.TeacherDocumentBlockResponse;
 import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
+import com.doob.mathagent.teacher.vo.TeacherSourceSyncCheckpointResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncJobResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -43,6 +47,7 @@ class TeacherSourceSyncExecutionServiceTest {
         InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
         InMemoryTeacherSourceSyncJobStore jobStore = new InMemoryTeacherSourceSyncJobStore();
         InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        InMemoryTeacherSourceSyncCheckpointStore checkpointStore = new InMemoryTeacherSourceSyncCheckpointStore();
         TeacherResourceService resourceService = new TeacherResourceService(resourceStore);
         TeacherResourceDocumentResponse resource = resourceService.register(new TeacherResourceRegistrationCommand(
                 "school-a",
@@ -88,6 +93,7 @@ class TeacherSourceSyncExecutionServiceTest {
         InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
         InMemoryTeacherSourceSyncJobStore jobStore = new InMemoryTeacherSourceSyncJobStore();
         InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        InMemoryTeacherSourceSyncCheckpointStore checkpointStore = new InMemoryTeacherSourceSyncCheckpointStore();
         TeacherResourceService resourceService = new TeacherResourceService(resourceStore);
         TeacherResourceDocumentResponse resource = resourceService.register(new TeacherResourceRegistrationCommand(
                 "school-a",
@@ -109,7 +115,8 @@ class TeacherSourceSyncExecutionServiceTest {
                 jobStore,
                 blockStore,
                 new UnconfiguredTeacherFeishuDownloadClient(),
-                TeacherSourceSyncProperties.defaults());
+                TeacherSourceSyncProperties.defaults(),
+                checkpointStore);
 
         TeacherSourceSyncJobResponse completed = executionService.execute(
                 "school-a",
@@ -125,6 +132,106 @@ class TeacherSourceSyncExecutionServiceTest {
         assertThat(unchanged.syncStatus()).isEqualTo("registered");
         assertThat(unchanged.localPath()).isNull();
         assertThat(blockStore.listByDocument("school-a", resource.documentId())).isEmpty();
+        TeacherSourceSyncCheckpointResponse checkpoint =
+                checkpointStore.findByJobId("school-a", queued.jobId()).orElseThrow();
+        assertThat(checkpoint.rootToken()).isEqualTo("XVn7fXppJlQMK5dkuOkc1ePan2f");
+        assertThat(checkpoint.failedItemsJson()).contains("Feishu downloader is not configured");
+    }
+
+    @Test
+    void feishuSyncJobPausesAndKeepsCheckpointOnRetryableNetworkFailure() {
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherSourceSyncJobStore jobStore = new InMemoryTeacherSourceSyncJobStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        InMemoryTeacherSourceSyncCheckpointStore checkpointStore = new InMemoryTeacherSourceSyncCheckpointStore();
+        TeacherResourceService resourceService = new TeacherResourceService(resourceStore);
+        TeacherResourceDocumentResponse resource = resourceService.register(new TeacherResourceRegistrationCommand(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                "feishu",
+                "Feishu math root",
+                "https://my.feishu.cn/drive/folder/XVn7fXppJlQMK5dkuOkc1ePan2f",
+                null,
+                "TEACHER_PRIVATE"));
+        TeacherSourceSyncJobService jobService = new TeacherSourceSyncJobService(resourceStore, jobStore);
+        TeacherSourceSyncJobResponse queued = jobService.createSyncJob(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                resource.documentId());
+        TeacherSourceSyncExecutionService executionService = new TeacherSourceSyncExecutionService(
+                resourceStore,
+                jobStore,
+                blockStore,
+                new RetryableFailingFeishuDownloadClient(),
+                TeacherSourceSyncProperties.defaults(),
+                checkpointStore);
+
+        TeacherSourceSyncJobResponse paused = executionService.execute(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                resource.documentId(),
+                queued.jobId());
+
+        assertThat(paused.status()).isEqualTo("paused");
+        assertThat(paused.phase()).isEqualTo("download_paused");
+        assertThat(paused.message()).contains("ProxyError");
+        TeacherResourceDocumentResponse unchanged = resourceStore.find("school-a", resource.documentId());
+        assertThat(unchanged.syncStatus()).isEqualTo("registered");
+        TeacherSourceSyncCheckpointResponse checkpoint =
+                checkpointStore.findByJobId("school-a", queued.jobId()).orElseThrow();
+        assertThat(checkpoint.rootToken()).isEqualTo("XVn7fXppJlQMK5dkuOkc1ePan2f");
+        assertThat(checkpoint.currentPath()).isEqualTo("Feishu math root");
+        assertThat(checkpoint.failedItemsJson()).contains("ProxyError").contains("retryable");
+    }
+
+    @Test
+    void feishuSyncJobWritesCheckpointWhenDownloadCompletes() {
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherSourceSyncJobStore jobStore = new InMemoryTeacherSourceSyncJobStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        InMemoryTeacherSourceSyncCheckpointStore checkpointStore = new InMemoryTeacherSourceSyncCheckpointStore();
+        TeacherResourceService resourceService = new TeacherResourceService(resourceStore);
+        TeacherResourceDocumentResponse resource = resourceService.register(new TeacherResourceRegistrationCommand(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                "feishu",
+                "Feishu math root",
+                "https://my.feishu.cn/drive/folder/XVn7fXppJlQMK5dkuOkc1ePan2f",
+                null,
+                "TEACHER_PRIVATE"));
+        TeacherSourceSyncJobService jobService = new TeacherSourceSyncJobService(resourceStore, jobStore);
+        TeacherSourceSyncJobResponse queued = jobService.createSyncJob(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                resource.documentId());
+        Path savedPath = tempDir.resolve("downloaded-feishu");
+        TeacherSourceSyncExecutionService executionService = new TeacherSourceSyncExecutionService(
+                resourceStore,
+                jobStore,
+                blockStore,
+                new SuccessfulFeishuDownloadClient(savedPath),
+                TeacherSourceSyncProperties.defaults(),
+                checkpointStore);
+
+        TeacherSourceSyncJobResponse completed = executionService.execute(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                resource.documentId(),
+                queued.jobId());
+
+        assertThat(completed.status()).isEqualTo("completed");
+        assertThat(completed.phase()).isEqualTo("download_completed");
+        TeacherSourceSyncCheckpointResponse checkpoint =
+                checkpointStore.findByJobId("school-a", queued.jobId()).orElseThrow();
+        assertThat(checkpoint.downloadedItemsJson()).contains("downloaded-feishu").contains("\"files\":1");
+        assertThat(checkpoint.failedItemsJson()).isEqualTo("[]");
+        assertThat(checkpoint.cursorVersion()).isEqualTo(2);
     }
 
     @Test
@@ -181,5 +288,29 @@ class TeacherSourceSyncExecutionServiceTest {
         TeacherResourceDocumentResponse downloaded = resourceStore.find("school-a", resource.documentId());
         assertThat(downloaded.syncStatus()).isEqualTo("downloaded");
         assertThat(downloaded.localPath()).isEqualTo(completed.stagingPath());
+    }
+
+    private static final class RetryableFailingFeishuDownloadClient implements TeacherFeishuDownloadClient {
+
+        @Override
+        public FeishuDownloadResult download(String url, Path stagingRoot, int maxFiles) {
+            throw new TeacherFeishuDownloadException(
+                    "ProxyError: Remote end closed connection without response",
+                    true);
+        }
+    }
+
+    private static final class SuccessfulFeishuDownloadClient implements TeacherFeishuDownloadClient {
+
+        private final Path savedPath;
+
+        private SuccessfulFeishuDownloadClient(Path savedPath) {
+            this.savedPath = savedPath;
+        }
+
+        @Override
+        public FeishuDownloadResult download(String url, Path stagingRoot, int maxFiles) {
+            return new FeishuDownloadResult(savedPath, 1, 0, 0, "Downloaded 1 Feishu files; skipped 0");
+        }
     }
 }
