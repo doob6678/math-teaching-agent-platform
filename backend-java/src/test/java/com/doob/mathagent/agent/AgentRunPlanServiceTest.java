@@ -39,7 +39,7 @@ class AgentRunPlanServiceTest {
                 new RequestSubject("school-a", "student", "student-001", "device-1"));
 
         assertThat(plan.agentCode()).isEqualTo("StudentTutorAgent");
-        assertThat(plan.providerName()).isEqualTo("openai");
+        assertThat(plan.providerName()).isEqualTo("dashscope");
         assertThat(plan.modelLevel()).isEqualTo("reasoning");
         assertThat(plan.allowedToolScopes()).containsExactly("tool:search:textbook", "tool:student:progress:read");
         assertThat(plan.deniedToolScopes()).containsExactly("tool:knowledge:write");
@@ -53,7 +53,7 @@ class AgentRunPlanServiceTest {
         assertThat(plan.concurrencyKeys()).contains(
                 "concurrent:user:student-001:StudentTutorAgent",
                 "concurrent:tenant:school-a:StudentTutorAgent",
-                "concurrent:model:gpt-4.1");
+                "concurrent:model:qwen3.6-flash");
     }
 
     @Test
@@ -151,21 +151,23 @@ class AgentRunPlanServiceTest {
                 request,
                 new RequestSubject("school-a", "teacher", "teacher-001", "device-1"));
 
-        assertThat(plan.providerName()).isEqualTo("deepseek");
-        assertThat(plan.modelCode()).isEqualTo("deepseek-chat");
+        assertThat(plan.providerName()).isEqualTo("openai");
+        assertThat(plan.modelCode()).isEqualTo("gpt-5.4-mini");
         assertThat(plan.modelLevel()).isEqualTo("json_stable");
         assertThat(plan.routeReason()).contains("fallback");
     }
 
     private static AiProviderCatalog providerCatalog() {
         AiProviderProperties properties = new AiProviderProperties();
-        properties.setDefaultProvider("openai");
+        properties.setDefaultProvider("dashscope");
+        properties.getDashscope().setApiKey("dashscope-key");
+        properties.getDashscope().setChatModel("qwen3.6-flash");
         properties.getOpenai().setApiKey("openai-key");
-        properties.getOpenai().setChatModel("gpt-4.1");
+        properties.getOpenai().setChatModel("gpt-5.4-mini");
         properties.getDeepseek().setApiKey("deepseek-key");
-        properties.getDeepseek().setChatModel("deepseek-chat");
+        properties.getDeepseek().setChatModel("deepseek-v4-flash");
         properties.getArk().setApiKey("ark-key");
-        properties.getArk().setChatModel("doubao-seed-1-6");
+        properties.getArk().setChatModel("doubao-seed-2-0-lite-260428");
         return new AiProviderCatalog(properties);
     }
 }

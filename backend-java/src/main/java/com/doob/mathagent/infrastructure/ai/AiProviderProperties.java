@@ -14,16 +14,23 @@ import org.springframework.stereotype.Component;
 public class AiProviderProperties {
 
     /** Default provider name used when a workflow does not specify a provider. */
-    private String defaultProvider = "openai";
+    private String defaultProvider = "dashscope";
+
+    /** Alibaba Cloud Model Studio Qwen provider configuration. */
+    private Provider dashscope = new Provider(
+            "dashscope",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "",
+            "qwen3.6-flash");
 
     /** OpenAI-compatible GPT provider configuration. */
-    private Provider openai = new Provider("openai", "https://api.openai.com", "", "gpt-4.1");
+    private Provider openai = new Provider("openai", "https://api.openai.com", "", "gpt-5-mini");
 
     /** DeepSeek OpenAI-compatible provider configuration. */
-    private Provider deepseek = new Provider("deepseek", "https://api.deepseek.com", "", "deepseek-chat");
+    private Provider deepseek = new Provider("deepseek", "https://api.deepseek.com", "", "deepseek-v4-flash");
 
     /** Volcengine Ark/Doubao OpenAI-compatible provider configuration. */
-    private Provider ark = new Provider("ark", "https://ark.cn-beijing.volces.com/api/v3", "", "doubao-seed-1-6");
+    private Provider ark = new Provider("ark", "https://ark.cn-beijing.volces.com/api/v3", "", "doubao-seed-2-0-lite-260428");
 
     /**
      * Returns the default provider name.
@@ -41,6 +48,24 @@ public class AiProviderProperties {
      */
     public void setDefaultProvider(String defaultProvider) {
         this.defaultProvider = defaultProvider;
+    }
+
+    /**
+     * Returns DashScope provider configuration.
+     *
+     * @return DashScope configuration
+     */
+    public Provider getDashscope() {
+        return dashscope;
+    }
+
+    /**
+     * Sets DashScope provider configuration.
+     *
+     * @param dashscope DashScope configuration
+     */
+    public void setDashscope(Provider dashscope) {
+        this.dashscope = dashscope;
     }
 
     /**

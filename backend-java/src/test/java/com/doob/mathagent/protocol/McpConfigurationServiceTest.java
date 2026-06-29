@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.doob.mathagent.protocol.dto.McpConfigurationRequest;
+import com.doob.mathagent.protocol.service.McpClientRegistryProperties;
 import com.doob.mathagent.protocol.service.ProtocolDiscoveryService;
 import com.doob.mathagent.protocol.vo.McpConfigurationResponse;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -60,6 +61,31 @@ class McpConfigurationServiceTest {
         assertThat(response.configJson()).contains("search_textbook_evidence");
         assertThat(response.configJson()).doesNotContain("export_handout_pdf");
         assertThat(response.configJson()).contains("student_blank_handout_writer");
+        assertThat(response.configJson()).doesNotContain("teacher_handout_writer");
+    }
+
+    @Test
+    void resolvesKeyProfileFromRegisteredSecretHashInsteadOfSecretPrefix() {
+        McpClientRegistryProperties properties = new McpClientRegistryProperties();
+        properties.setClients(List.of(new McpClientRegistryProperties.Client(
+                "student-client-1",
+                "student",
+                ProtocolDiscoveryService.secretHashForTest("teacher_named_secret_1234567890"),
+                true)));
+        ProtocolDiscoveryService service = new ProtocolDiscoveryService(properties);
+
+        McpConfigurationResponse response = service.mcpConfiguration(new McpConfigurationRequest(
+                "https://math.example.com/api/mcp",
+                "teacher_named_secret_1234567890",
+                "MATH_AGENT_REGISTERED_MCP_SECRET",
+                List.of("search_textbook_evidence", "export_handout_pdf"),
+                List.of("student_blank_handout_writer", "teacher_handout_writer")));
+
+        assertThat(response.keyProfile()).isEqualTo("student");
+        assertThat(response.exposedTools()).containsExactly("search_textbook_evidence");
+        assertThat(response.exposedPrompts()).containsExactly("student_blank_handout_writer");
+        assertThat(response.configJson()).doesNotContain("teacher_named_secret_1234567890");
+        assertThat(response.configJson()).doesNotContain("export_handout_pdf");
         assertThat(response.configJson()).doesNotContain("teacher_handout_writer");
     }
 

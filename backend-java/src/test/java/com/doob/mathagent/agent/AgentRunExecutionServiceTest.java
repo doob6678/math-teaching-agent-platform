@@ -45,8 +45,8 @@ class AgentRunExecutionServiceTest {
         assertThat(response.message()).contains("Baseline trace recorded");
         assertThat(response.planId()).isEqualTo(plan.planId());
         assertThat(response.agentCode()).isEqualTo("CoursewareAgent");
-        assertThat(response.providerName()).isEqualTo("openai");
-        assertThat(response.modelCode()).isEqualTo("gpt-4.1");
+        assertThat(response.providerName()).isEqualTo("dashscope");
+        assertThat(response.modelCode()).isEqualTo("qwen3.6-flash");
         assertThat(response.allowedToolScopes()).containsExactlyElementsOf(plan.allowedToolScopes());
         assertThat(response.allowedDataScopes()).containsExactlyElementsOf(plan.allowedDataScopes());
         assertThat(response.concurrencyKeys()).containsExactlyElementsOf(plan.concurrencyKeys());
@@ -295,9 +295,9 @@ class AgentRunExecutionServiceTest {
 
     private static AiProviderCatalog providerCatalog() {
         AiProviderProperties properties = new AiProviderProperties();
-        properties.setDefaultProvider("openai");
-        properties.getOpenai().setApiKey("openai-key");
-        properties.getOpenai().setChatModel("gpt-4.1");
+        properties.setDefaultProvider("dashscope");
+        properties.getDashscope().setApiKey("dashscope-key");
+        properties.getDashscope().setChatModel("qwen3.6-flash");
         return new AiProviderCatalog(properties);
     }
 

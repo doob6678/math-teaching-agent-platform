@@ -31,7 +31,12 @@ public class AiProviderCatalog {
      * @return enabled providers
      */
     public List<Provider> enabledProviders() {
-        return List.of(properties.getOpenai(), properties.getDeepseek(), properties.getArk()).stream()
+        return List.of(
+                        properties.getDashscope(),
+                        properties.getOpenai(),
+                        properties.getDeepseek(),
+                        properties.getArk())
+                .stream()
                 .filter(AiProviderCatalog::hasUsableCredentials)
                 .map(AiProviderCatalog::toProvider)
                 .toList();

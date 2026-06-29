@@ -9,9 +9,13 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import org.springframework.stereotype.Service;
 
 /**
@@ -36,6 +40,26 @@ public class ProtocolDiscoveryService {
             "list_teacher_resources");
     private static final List<String> TEACHER_PROMPTS = ALL_PROMPTS;
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+
+    private final McpClientRegistryProperties clientRegistryProperties;
+
+    /**
+     * Creates the protocol discovery service with an empty local MCP client registry.
+     */
+    public ProtocolDiscoveryService() {
+        this(new McpClientRegistryProperties());
+    }
+
+    /**
+     * Creates the protocol discovery service with configured MCP client profiles.
+     *
+     * @param clientRegistryProperties registered MCP client hashes and profiles
+     */
+    public ProtocolDiscoveryService(McpClientRegistryProperties clientRegistryProperties) {
+        this.clientRegistryProperties = clientRegistryProperties == null
+                ? new McpClientRegistryProperties()
+                : clientRegistryProperties;
+    }
 
     /**
      * Returns MCP tool descriptors without exposing execution endpoints.
@@ -179,7 +203,7 @@ public class ProtocolDiscoveryService {
         String url = normalizeUrl(request.url());
         String secretKey = normalizeSecretKey(request.secretKey());
         String secretEnvName = normalizeSecretEnvName(request.secretEnvName());
-        String keyProfile = keyProfile(secretKey);
+        String keyProfile = keyProfile(secretKey, clientRegistryProperties);
         List<String> exposedTools = exposedItems(
                 safeList(request.enabledToolNames()),
                 "student".equals(keyProfile) ? STUDENT_TOOLS : TEACHER_TOOLS);
@@ -286,11 +310,66 @@ public class ProtocolDiscoveryService {
     /**
      * Derives a local baseline key profile from the validated secret shape.
      */
-    private static String keyProfile(String secretKey) {
-        if (secretKey.startsWith("student_")) {
-            return "student";
+    private static String keyProfile(String secretKey, McpClientRegistryProperties registryProperties) {
+        Optional<String> registeredProfile = registeredKeyProfile(secretKey, registryProperties);
+        if (registeredProfile.isPresent()) {
+            return registeredProfile.get();
         }
-        return "teacher";
+        return secretKey.startsWith("student_") ? "student" : "teacher";
+    }
+
+    /**
+     * Resolves the profile from the configured secret hash registry before using local compatibility fallback.
+     */
+    private static Optional<String> registeredKeyProfile(
+            String secretKey,
+            McpClientRegistryProperties registryProperties) {
+        String secretHash = secretHash(secretKey);
+        return registryProperties.getClients().stream()
+                .filter(McpClientRegistryProperties.Client::enabled)
+                .filter(client -> secretHash.equalsIgnoreCase(blankToEmpty(client.secretHash())))
+                .map(McpClientRegistryProperties.Client::profile)
+                .map(ProtocolDiscoveryService::normalizeProfile)
+                .filter(profile -> profile.equals("student") || profile.equals("teacher") || profile.equals("admin"))
+                .findFirst();
+    }
+
+    /**
+     * Returns a SHA-256 secret hash for focused tests and local key bootstrap scripts.
+     */
+    public static String secretHashForTest(String secretKey) {
+        return secretHash(secretKey);
+    }
+
+    /**
+     * Hashes an MCP secret without storing or logging the raw secret.
+     */
+    private static String secretHash(String secretKey) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(secretKey.getBytes(StandardCharsets.UTF_8));
+            StringBuilder builder = new StringBuilder("sha256:");
+            for (byte value : digest) {
+                builder.append("%02x".formatted(value));
+            }
+            return builder.toString();
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 digest is unavailable", exception);
+        }
+    }
+
+    /**
+     * Normalizes a configured profile value.
+     */
+    private static String normalizeProfile(String profile) {
+        return profile == null ? "" : profile.strip().toLowerCase();
+    }
+
+    /**
+     * Converts null strings to empty strings for safe comparisons.
+     */
+    private static String blankToEmpty(String value) {
+        return value == null ? "" : value.strip();
     }
 
     /**

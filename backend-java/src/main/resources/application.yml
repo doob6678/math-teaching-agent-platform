@@ -13,6 +13,9 @@ spring:
     openai:
       api-key: ${OPENAI_API_KEY:}
       base-url: ${OPENAI_BASE_URL:https://api.openai.com}
+      chat:
+        options:
+          model: ${OPENAI_CHAT_MODEL:gpt-5.4-mini}
   flyway:
     enabled: false
 
@@ -21,22 +24,27 @@ server:
 
 math-agent:
   ai:
-    default-provider: ${MATH_AGENT_AI_DEFAULT_PROVIDER:openai}
+    default-provider: ${MATH_AGENT_AI_DEFAULT_PROVIDER:dashscope}
+    dashscope:
+      name: dashscope
+      base-url: ${DASHSCOPE_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+      api-key: ${DASHSCOPE_API_KEY:}
+      chat-model: ${DASHSCOPE_CHAT_MODEL:qwen3.6-flash}
     openai:
       name: openai
       base-url: ${OPENAI_BASE_URL:https://api.openai.com}
       api-key: ${OPENAI_API_KEY:}
-      chat-model: ${OPENAI_CHAT_MODEL:gpt-4.1}
+      chat-model: ${OPENAI_CHAT_MODEL:gpt-5.4-mini}
     deepseek:
       name: deepseek
       base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
       api-key: ${DEEPSEEK_API_KEY:}
-      chat-model: ${DEEPSEEK_CHAT_MODEL:deepseek-chat}
+      chat-model: ${DEEPSEEK_CHAT_MODEL:deepseek-v4-flash}
     ark:
       name: ark
       base-url: ${ARK_BASE_URL:https://ark.cn-beijing.volces.com/api/v3}
       api-key: ${ARK_API_KEY:}
-      chat-model: ${ARK_CHAT_MODEL:doubao-seed-1-6}
+      chat-model: ${ARK_CHAT_MODEL:doubao-seed-2-0-lite-260428}
   database:
     enabled: ${MATH_AGENT_DB_ENABLED:false}
     url: ${MATH_AGENT_DB_URL:}
@@ -52,6 +60,10 @@ math-agent:
     rate-limit:
       enabled: ${MATH_AGENT_REDIS_RATE_LIMIT_ENABLED:false}
       key-prefix: ${MATH_AGENT_REDIS_RATE_LIMIT_KEY_PREFIX:math-agent:api:rate-limit}
+  protocol:
+    mcp:
+      registry:
+        clients: []
   resources:
     processed-books-root: ${MATH_AGENT_PROCESSED_BOOKS_ROOT:C:/Users/doob/Desktop/个人资料/高中数学/下载课本代码/tchMaterial-parser-main/tchMaterial-parser-main/processed_books}
     project-test-data-root: ${MATH_AGENT_PROJECT_TEST_DATA_ROOT:C:/Users/doob/Desktop/code/dev/math_agent_rag/文档/项目测试数据位置}
