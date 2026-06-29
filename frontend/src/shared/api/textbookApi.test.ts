@@ -907,7 +907,7 @@ describe("textbookApi", () => {
       plan,
       userInputSummary: "Generate teacher handout for space vectors",
       evidenceRefs: ["textbook:chapter-1"],
-      dryRun: true,
+      dryRun: false,
     };
     const fetchMock = vi
       .fn()
@@ -932,7 +932,7 @@ describe("textbookApi", () => {
           subjectId: "teacher-1",
           agentCode: "CoursewareAgent",
           providerName: "openai",
-          modelCode: "gpt-4.1",
+          modelCode: "gpt-5.4",
           status: "COMPLETED",
           estimatedCost: 0.46,
           allowedToolScopes: ["tool:courseware:generate"],
@@ -940,11 +940,11 @@ describe("textbookApi", () => {
           concurrencyKeys: ["concurrent:user:teacher-1:CoursewareAgent"],
           stageTimings: [{ stage: "baseline_execute", elapsedMs: 1 }],
           actualUsage: {
-            promptTokens: 0,
-            completionTokens: 0,
-            totalTokens: 0,
+            promptTokens: 123,
+            completionTokens: 45,
+            totalTokens: 168,
           },
-          message: "Baseline trace recorded; external model execution is not enabled yet.",
+          message: "Live model response recorded with provider usage metadata.",
         }),
       });
     const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
@@ -977,7 +977,8 @@ describe("textbookApi", () => {
     expect(fetchMock.mock.calls[1][1]?.headers).not.toHaveProperty("X-Subject-Type");
     expect(response.traceId).toBe("trace-1");
     expect(response.concurrencyKeys).toContain("concurrent:user:teacher-1:CoursewareAgent");
-    expect(response.actualUsage.totalTokens).toBe(0);
+    expect(response.modelCode).toBe("gpt-5.4");
+    expect(response.actualUsage.totalTokens).toBe(168);
   });
 
   it("lists agent traces with backend session identity and no client supplied user identity", async () => {

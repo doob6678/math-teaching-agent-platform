@@ -349,6 +349,27 @@ h2 {
   color: #991b1b;
 }
 
+.agent-execution-panel {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 10px;
+}
+
+.agent-execution-panel .profile-strip {
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+}
+
+.execution-trace {
+  display: grid;
+  gap: 8px;
+}
+
+.execution-trace > p {
+  color: #536173;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .dashboard-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(240px, 0.85fr);

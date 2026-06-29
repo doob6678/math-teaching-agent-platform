@@ -1,6 +1,7 @@
 import { AlertCircle, BookOpen, Database, Loader2, Search, ShieldCheck } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
+  AgentRunExecuteResponse,
   AgentRunPlanResponse,
   McpConfigurationResponse,
   RetrievalAuditDetail,
@@ -58,8 +59,11 @@ export function App() {
   const [submittingFeedback, setSubmittingFeedback] = useState(false);
   const [feedbackMessage, setFeedbackMessage] = useState("");
   const [agentPlan, setAgentPlan] = useState<AgentRunPlanResponse | null>(null);
+  const [agentExecution, setAgentExecution] = useState<AgentRunExecuteResponse | null>(null);
   const [planningAgent, setPlanningAgent] = useState(false);
+  const [executingAgent, setExecutingAgent] = useState(false);
   const [agentPlanError, setAgentPlanError] = useState("");
+  const [agentExecutionError, setAgentExecutionError] = useState("");
   const [disablePrivateSearch, setDisablePrivateSearch] = useState(true);
   const [disableTextbookSearch, setDisableTextbookSearch] = useState(false);
   const [agentProvider, setAgentProvider] = useState("openai");
@@ -339,6 +343,8 @@ export function App() {
     ].filter(Boolean);
     setPlanningAgent(true);
     setAgentPlanError("");
+    setAgentExecutionError("");
+    setAgentExecution(null);
     api
       .planAgentRun({
         agentCode: "CoursewareAgent",
@@ -363,6 +369,24 @@ export function App() {
       .then(setAgentPlan)
       .catch((error: Error) => setAgentPlanError(error.message))
       .finally(() => setPlanningAgent(false));
+  }
+
+  function handleExecuteAgentRun() {
+    if (!agentPlan) {
+      return;
+    }
+    setExecutingAgent(true);
+    setAgentExecutionError("");
+    api
+      .executeAgentRun({
+        plan: agentPlan,
+        userInputSummary: `Generate teacher handout for ${learningGoal}`,
+        evidenceRefs: teachingTask ? [`teaching-task:${teachingTask.taskId}`] : ["textbook:planned-context"],
+        dryRun: false,
+      })
+      .then(setAgentExecution)
+      .catch((error: Error) => setAgentExecutionError(error.message))
+      .finally(() => setExecutingAgent(false));
   }
 
   function handleBuildMcpConfiguration(event: FormEvent<HTMLFormElement>) {
@@ -618,7 +642,14 @@ export function App() {
             error={studentDashboardError}
           />
 
-          <AgentPlanPanel plan={agentPlan} loading={planningAgent} error={agentPlanError} />
+          <AgentPlanPanel
+            plan={agentPlan}
+            execution={agentExecution}
+            loading={planningAgent}
+            executing={executingAgent}
+            error={agentPlanError || agentExecutionError}
+            onExecute={handleExecuteAgentRun}
+          />
 
           <McpConfigurationPanel
             configuration={mcpConfiguration}
@@ -1290,12 +1321,18 @@ function TeachingTaskPanel({
 
 function AgentPlanPanel({
   plan,
+  execution,
   loading,
+  executing,
   error,
+  onExecute,
 }: {
   plan: AgentRunPlanResponse | null;
+  execution: AgentRunExecuteResponse | null;
   loading: boolean;
+  executing: boolean;
   error: string;
+  onExecute: () => void;
 }) {
   return (
     <section className="agent-plan-panel">
@@ -1336,6 +1373,48 @@ function AgentPlanPanel({
                 <p>{decision.reason}</p>
               </div>
             ))}
+          </div>
+          <div className="agent-execution-panel">
+            <button type="button" onClick={onExecute} disabled={executing}>
+              {executing ? <Loader2 className="spin" size={16} /> : <ShieldCheck size={16} />}
+              <span>Execute model</span>
+            </button>
+            {execution ? (
+              <div className="profile-strip">
+                <div>
+                  <span>Actual provider</span>
+                  <strong>{execution.providerName}</strong>
+                </div>
+                <div>
+                  <span>Actual model</span>
+                  <strong>{execution.modelCode}</strong>
+                </div>
+                <div>
+                  <span>Token usage</span>
+                  <strong>
+                    {execution.actualUsage.totalTokens} total / {execution.actualUsage.promptTokens} prompt /{" "}
+                    {execution.actualUsage.completionTokens} completion
+                  </strong>
+                </div>
+                <div>
+                  <span>Status</span>
+                  <strong>{execution.status}</strong>
+                </div>
+              </div>
+            ) : null}
+            {execution ? (
+              <div className="execution-trace">
+                <p>{execution.message}</p>
+                <div className="tool-decision-list compact">
+                  {execution.stageTimings.map((timing) => (
+                    <div className="tool-decision allowed" key={timing.stage}>
+                      <strong>{timing.stage}</strong>
+                      <span>{timing.elapsedMs} ms</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </div>
         </div>
       ) : (
