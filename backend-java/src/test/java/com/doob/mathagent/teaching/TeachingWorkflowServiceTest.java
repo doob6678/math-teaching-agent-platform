@@ -55,6 +55,7 @@ class TeachingWorkflowServiceTest {
                         "PRACTICE_DISCOVERY_PLACEHOLDER",
                         "REACT_SOLVE",
                         "LATEX_HANDOUT",
+                        "HUMAN_FEEDBACK",
                         "INTERACTIVE_FOLLOW_UP");
         assertThat(response.reactTrace())
                 .extracting(TeachingReactStep::phase)

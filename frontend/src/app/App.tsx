@@ -38,6 +38,11 @@ export function App() {
   const [handoutVersion, setHandoutVersion] = useState<"teacher" | "student">("teacher");
   const [handoutAction, setHandoutAction] = useState("");
   const [handoutExportMessage, setHandoutExportMessage] = useState("");
+  const [feedbackRating, setFeedbackRating] = useState(4);
+  const [feedbackDecision, setFeedbackDecision] = useState("needs_revision");
+  const [feedbackComment, setFeedbackComment] = useState("");
+  const [submittingFeedback, setSubmittingFeedback] = useState(false);
+  const [feedbackMessage, setFeedbackMessage] = useState("");
   const [teachingError, setTeachingError] = useState("");
   const [studentDashboardError, setStudentDashboardError] = useState("");
   const [teacherResourceError, setTeacherResourceError] = useState("");
@@ -151,6 +156,7 @@ export function App() {
         setHandoutPreviewLatex("");
         setHandoutPreviewTaskId("");
         setHandoutExportMessage("");
+        setFeedbackMessage("");
       })
       .catch((error: Error) => setTeachingError(error.message))
       .finally(() => setSubmittingTeachingTask(false));
@@ -272,6 +278,28 @@ export function App() {
       )
       .catch((error: Error) => setTeachingError(error.message))
       .finally(() => setHandoutAction(""));
+  }
+
+  function handleSubmitFeedback(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!teachingTask) {
+      return;
+    }
+    setSubmittingFeedback(true);
+    setTeachingError("");
+    setFeedbackMessage("");
+    api
+      .submitTeachingHumanFeedback(teachingTask.taskId, {
+        rating: feedbackRating,
+        decision: feedbackDecision,
+        comment: feedbackComment.trim(),
+      })
+      .then((feedback) => {
+        setFeedbackMessage(`Feedback recorded: ${feedback.decision} / ${feedback.rating}`);
+        setFeedbackComment("");
+      })
+      .catch((error: Error) => setTeachingError(error.message))
+      .finally(() => setSubmittingFeedback(false));
   }
 
   return (
@@ -458,6 +486,11 @@ export function App() {
             previewLatex={handoutPreviewTaskId === `${teachingTask?.taskId}:${handoutVersion}` ? handoutPreviewLatex : ""}
             action={handoutAction}
             exportMessage={handoutExportMessage}
+            feedbackRating={feedbackRating}
+            feedbackDecision={feedbackDecision}
+            feedbackComment={feedbackComment}
+            submittingFeedback={submittingFeedback}
+            feedbackMessage={feedbackMessage}
             batchFolderPath={batchFolderPath}
             onVersionChange={(version) => {
               setHandoutVersion(version);
@@ -470,6 +503,10 @@ export function App() {
             onExportLatex={handleExportLatex}
             onExportPdf={handleExportPdf}
             onExportBatchZip={handleExportBatchZip}
+            onFeedbackRatingChange={setFeedbackRating}
+            onFeedbackDecisionChange={setFeedbackDecision}
+            onFeedbackCommentChange={setFeedbackComment}
+            onSubmitFeedback={handleSubmitFeedback}
           />
         </section>
       </section>
@@ -677,6 +714,11 @@ function TeachingTaskPanel({
   previewLatex,
   action,
   exportMessage,
+  feedbackRating,
+  feedbackDecision,
+  feedbackComment,
+  submittingFeedback,
+  feedbackMessage,
   batchFolderPath,
   onVersionChange,
   onBatchFolderPathChange,
@@ -684,6 +726,10 @@ function TeachingTaskPanel({
   onExportLatex,
   onExportPdf,
   onExportBatchZip,
+  onFeedbackRatingChange,
+  onFeedbackDecisionChange,
+  onFeedbackCommentChange,
+  onSubmitFeedback,
 }: {
   task: TeachingTaskResponse | null;
   loading: boolean;
@@ -692,6 +738,11 @@ function TeachingTaskPanel({
   previewLatex: string;
   action: string;
   exportMessage: string;
+  feedbackRating: number;
+  feedbackDecision: string;
+  feedbackComment: string;
+  submittingFeedback: boolean;
+  feedbackMessage: string;
   batchFolderPath: string;
   onVersionChange: (value: "teacher" | "student") => void;
   onBatchFolderPathChange: (value: string) => void;
@@ -699,6 +750,10 @@ function TeachingTaskPanel({
   onExportLatex: () => void;
   onExportPdf: () => void;
   onExportBatchZip: () => void;
+  onFeedbackRatingChange: (value: number) => void;
+  onFeedbackDecisionChange: (value: string) => void;
+  onFeedbackCommentChange: (value: string) => void;
+  onSubmitFeedback: (event: FormEvent<HTMLFormElement>) => void;
 }) {
   const busy = Boolean(action);
   const selectedDraft = version === "student"
@@ -830,6 +885,44 @@ function TeachingTaskPanel({
           ) : (
             <pre className="formula-block handout">{selectedDraft}</pre>
           )}
+          <form className="human-feedback-panel" onSubmit={onSubmitFeedback}>
+            <div className="feedback-head">
+              <strong>Human feedback</strong>
+              {feedbackMessage ? <span>{feedbackMessage}</span> : null}
+            </div>
+            <div className="feedback-grid">
+              <label>
+                <span>Rating</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={5}
+                  value={feedbackRating}
+                  onChange={(event) => onFeedbackRatingChange(Number(event.target.value))}
+                />
+              </label>
+              <label>
+                <span>Decision</span>
+                <select value={feedbackDecision} onChange={(event) => onFeedbackDecisionChange(event.target.value)}>
+                  <option value="helpful">Helpful</option>
+                  <option value="confusing">Confusing</option>
+                  <option value="needs_revision">Needs revision</option>
+                </select>
+              </label>
+            </div>
+            <label>
+              <span>Comment</span>
+              <textarea
+                value={feedbackComment}
+                onChange={(event) => onFeedbackCommentChange(event.target.value)}
+                placeholder="Record what should be improved or kept."
+              />
+            </label>
+            <button type="submit" disabled={submittingFeedback}>
+              {submittingFeedback ? <Loader2 className="spin" size={16} /> : <ShieldCheck size={16} />}
+              <span>Submit feedback</span>
+            </button>
+          </form>
         </div>
       ) : null}
     </section>

@@ -12,12 +12,14 @@ import com.doob.mathagent.retrieval.NoopRetrievalAuditSink;
 import com.doob.mathagent.retrieval.TextbookRetrievalService;
 import com.doob.mathagent.teaching.controller.TeachingTaskController;
 import com.doob.mathagent.teaching.dto.TeachingHandoutBatchExportRequest;
+import com.doob.mathagent.teaching.dto.TeachingHumanFeedbackRequest;
 import com.doob.mathagent.teaching.dto.TeachingTaskRequest;
 import com.doob.mathagent.teaching.service.TeachingHandoutBatchExportService;
 import com.doob.mathagent.teaching.service.TeachingHandoutPdfExportService;
 import com.doob.mathagent.teaching.service.InMemoryTeachingTaskStore;
 import com.doob.mathagent.teaching.service.TeachingWorkflowService;
 import com.doob.mathagent.teaching.vo.TeachingHandoutBatchExportResponse;
+import com.doob.mathagent.teaching.vo.TeachingHumanFeedbackResponse;
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
 import java.io.ByteArrayInputStream;
 import java.nio.file.Files;
@@ -299,6 +301,76 @@ class TeachingTaskControllerTest {
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.downloadBatchZip(batch.batchId(), null))
                 .isInstanceOfSatisfying(ResponseStatusException.class, exception ->
                         assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.GONE));
+    }
+
+    @Test
+    void submitsAndListsHumanFeedbackForOwnedTeachingTask() throws Exception {
+        TeachingWorkflowService service = new TeachingWorkflowService(
+                createTextbookCorpus(),
+                new TextbookRetrievalService(
+                        new TextbookCatalogReader(),
+                        new TextbookChunkReader(),
+                        new LocalTextbookBm25SearchEngine(),
+                        new NoopRetrievalAuditSink()),
+                new InMemoryTeachingTaskStore(),
+                new StudentMemoryReuseService(new InMemoryStudentMemoryStore()));
+        TeachingTaskController controller = new TeachingTaskController(
+                service,
+                RequestSubjectResolver.localDevelopment(),
+                (token, action, path, requestHash, subject) -> true,
+                new TeachingHandoutPdfExportService(),
+                new TeachingHandoutBatchExportService(new TeachingHandoutPdfExportService()));
+        TeachingTaskResponse task = controller.submit(
+                new TeachingTaskRequest("client-feedback", "question", "goal", 3),
+                null);
+
+        TeachingHumanFeedbackResponse feedback = controller.submitHumanFeedback(
+                task.taskId(),
+                new TeachingHumanFeedbackRequest(4, "needs_revision", "第二步讲解需要再展开。"),
+                null);
+        List<TeachingHumanFeedbackResponse> feedbackList = controller.listHumanFeedback(task.taskId(), null);
+
+        assertThat(feedback.taskId()).isEqualTo(task.taskId());
+        assertThat(feedback.rating()).isEqualTo(4);
+        assertThat(feedback.decision()).isEqualTo("needs_revision");
+        assertThat(feedback.comment()).contains("第二步");
+        assertThat(feedbackList).extracting(TeachingHumanFeedbackResponse::feedbackId)
+                .containsExactly(feedback.feedbackId());
+    }
+
+    @Test
+    void rejectsHumanFeedbackWithoutAcceptedCapabilityToken() throws Exception {
+        TeachingWorkflowService service = new TeachingWorkflowService(
+                createTextbookCorpus(),
+                new TextbookRetrievalService(
+                        new TextbookCatalogReader(),
+                        new TextbookChunkReader(),
+                        new LocalTextbookBm25SearchEngine(),
+                        new NoopRetrievalAuditSink()),
+                new InMemoryTeachingTaskStore(),
+                new StudentMemoryReuseService(new InMemoryStudentMemoryStore()));
+        TeachingTaskController setupController = new TeachingTaskController(
+                service,
+                RequestSubjectResolver.localDevelopment(),
+                (token, action, path, requestHash, subject) -> true,
+                new TeachingHandoutPdfExportService(),
+                new TeachingHandoutBatchExportService(new TeachingHandoutPdfExportService()));
+        TeachingTaskResponse task = setupController.submit(
+                new TeachingTaskRequest("client-feedback-protected", "question", "goal", 3),
+                null);
+        TeachingTaskController protectedController = new TeachingTaskController(
+                service,
+                RequestSubjectResolver.localDevelopment(),
+                (token, action, path, requestHash, subject) -> false,
+                new TeachingHandoutPdfExportService(),
+                new TeachingHandoutBatchExportService(new TeachingHandoutPdfExportService()));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> protectedController.submitHumanFeedback(
+                        task.taskId(),
+                        new TeachingHumanFeedbackRequest(5, "helpful", "讲义可用。"),
+                        null))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("Capability token");
     }
 
     private Path createTextbookCorpus() throws Exception {

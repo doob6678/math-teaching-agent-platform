@@ -262,6 +262,71 @@ class CapabilityTokenServiceTest {
     }
 
     @Test
+    void issuesTeachingHumanFeedbackCapabilityTokens() {
+        CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
+        RequestSubject student = new RequestSubject("school-a", "student", "student-001", "device-1");
+
+        CapabilityTokenResponse feedback = service.apply(new CapabilityTokenApplyRequest(
+                "teaching-feedback:submit",
+                "/api/teaching/tasks/task-1/feedback",
+                "hash-feedback-body",
+                "teaching-feedback-submit:task-1",
+                1.0), student);
+
+        assertThat(service.consume(
+                feedback.token(),
+                "teaching-feedback:submit",
+                "/api/teaching/tasks/task-1/feedback",
+                "hash-feedback-body",
+                student).allowed()).isTrue();
+    }
+
+    @Test
+    void rejectsMalformedTeachingHumanFeedbackCapabilityPaths() {
+        CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
+        RequestSubject student = new RequestSubject("school-a", "student", "student-001", "device-1");
+
+        assertThatThrownBy(() -> service.apply(new CapabilityTokenApplyRequest(
+                "teaching-feedback:submit",
+                "/api/teaching/tasks/task-1/extra/feedback",
+                "hash-feedback-body",
+                "teaching-feedback-submit:task-1",
+                1.0), student))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Unsupported capability action");
+    }
+
+    @Test
+    void rejectsMalformedTeachingBatchDownloadCapabilityPaths() {
+        CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
+        RequestSubject teacher = new RequestSubject("school-a", "teacher", "teacher-001", "device-1");
+
+        assertThatThrownBy(() -> service.apply(new CapabilityTokenApplyRequest(
+                "teaching-handout:batch-download-zip",
+                "/api/teaching/handouts/batch/zip/batch-1/extra/download",
+                "hash-empty-body",
+                "teaching-handout-batch-download-zip:batch-1",
+                5.0), teacher))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Unsupported capability action");
+    }
+
+    @Test
+    void rejectsMalformedTeachingHandoutCapabilityPaths() {
+        CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
+        RequestSubject teacher = new RequestSubject("school-a", "teacher", "teacher-001", "device-1");
+
+        assertThatThrownBy(() -> service.apply(new CapabilityTokenApplyRequest(
+                "teaching-handout:export-latex",
+                "/api/teaching/tasks/task-1/extra/handout/latex",
+                "hash-empty-body",
+                "teaching-handout-export-latex:task-1",
+                1.0), teacher))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Unsupported capability action");
+    }
+
+    @Test
     void issuesAgentRunCapabilityTokensForLoggedInSubjects() {
         CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
         RequestSubject teacher = new RequestSubject("school-a", "teacher", "teacher-001", "device-1");

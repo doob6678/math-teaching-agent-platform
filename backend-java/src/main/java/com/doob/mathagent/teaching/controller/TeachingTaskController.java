@@ -4,18 +4,23 @@ import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.infrastructure.security.RequestSubjectResolver;
 import com.doob.mathagent.teaching.TeachingRequestContext;
 import com.doob.mathagent.teaching.dto.TeachingHandoutBatchExportRequest;
+import com.doob.mathagent.teaching.dto.TeachingHumanFeedbackRequest;
 import com.doob.mathagent.teaching.dto.TeachingTaskRequest;
+import com.doob.mathagent.teaching.service.InMemoryTeachingHumanFeedbackStore;
 import com.doob.mathagent.teaching.service.TeachingHandoutBatchExportRecord;
 import com.doob.mathagent.teaching.service.TeachingHandoutBatchExportService;
 import com.doob.mathagent.teaching.service.TeachingCapabilityVerifier;
+import com.doob.mathagent.teaching.service.TeachingHumanFeedbackService;
 import com.doob.mathagent.teaching.service.TeachingHandoutPdfExportService;
 import com.doob.mathagent.teaching.service.TeachingWorkflowService;
 import com.doob.mathagent.teaching.vo.TeachingHandoutBatchExportResponse;
+import com.doob.mathagent.teaching.vo.TeachingHumanFeedbackResponse;
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -40,6 +45,7 @@ public class TeachingTaskController {
     private static final String TEACHING_HANDOUT_PDF_EXPORT_ACTION = "teaching-handout:export-pdf";
     private static final String TEACHING_HANDOUT_BATCH_ZIP_EXPORT_ACTION = "teaching-handout:batch-export-zip";
     private static final String TEACHING_HANDOUT_BATCH_ZIP_DOWNLOAD_ACTION = "teaching-handout:batch-download-zip";
+    private static final String TEACHING_FEEDBACK_SUBMIT_ACTION = "teaching-feedback:submit";
     private static final String TEACHING_TASKS_PATH = "/api/teaching/tasks";
     private static final String TEACHING_BATCH_ZIP_PATH = "/api/teaching/handouts/batch/zip";
 
@@ -48,9 +54,29 @@ public class TeachingTaskController {
     private final TeachingCapabilityVerifier capabilityVerifier;
     private final TeachingHandoutPdfExportService pdfExportService;
     private final TeachingHandoutBatchExportService batchExportService;
+    private final TeachingHumanFeedbackService feedbackService;
 
     /**
      * 注入教学编排服务。
+     */
+    @Autowired
+    public TeachingTaskController(
+            TeachingWorkflowService workflowService,
+            RequestSubjectResolver subjectResolver,
+            TeachingCapabilityVerifier capabilityVerifier,
+            TeachingHandoutPdfExportService pdfExportService,
+            TeachingHandoutBatchExportService batchExportService,
+            TeachingHumanFeedbackService feedbackService) {
+        this.workflowService = workflowService;
+        this.subjectResolver = subjectResolver;
+        this.capabilityVerifier = capabilityVerifier;
+        this.pdfExportService = pdfExportService;
+        this.batchExportService = batchExportService;
+        this.feedbackService = feedbackService;
+    }
+
+    /**
+     * Backward-compatible constructor for focused controller tests that do not inject feedback infrastructure.
      */
     public TeachingTaskController(
             TeachingWorkflowService workflowService,
@@ -58,11 +84,13 @@ public class TeachingTaskController {
             TeachingCapabilityVerifier capabilityVerifier,
             TeachingHandoutPdfExportService pdfExportService,
             TeachingHandoutBatchExportService batchExportService) {
-        this.workflowService = workflowService;
-        this.subjectResolver = subjectResolver;
-        this.capabilityVerifier = capabilityVerifier;
-        this.pdfExportService = pdfExportService;
-        this.batchExportService = batchExportService;
+        this(
+                workflowService,
+                subjectResolver,
+                capabilityVerifier,
+                pdfExportService,
+                batchExportService,
+                new TeachingHumanFeedbackService(new InMemoryTeachingHumanFeedbackStore()));
     }
 
     /**
@@ -330,6 +358,43 @@ public class TeachingTaskController {
                         .build()
                         .toString())
                 .body(record.zipBytes());
+    }
+
+    /**
+     * Records human feedback for an owned teaching task after consuming a capability token.
+     */
+    @PostMapping("/api/teaching/tasks/{taskId}/feedback")
+    public TeachingHumanFeedbackResponse submitHumanFeedback(
+            @PathVariable String taskId,
+            @Valid @RequestBody TeachingHumanFeedbackRequest request,
+            HttpServletRequest httpRequest) {
+        RequestSubject subject = subjectResolver.resolve(httpRequest);
+        String path = TEACHING_TASKS_PATH + "/" + taskId + "/feedback";
+        if (!capabilityVerifier.verify(
+                headerOrNull(httpRequest, "X-Capability-Token"),
+                TEACHING_FEEDBACK_SUBMIT_ACTION,
+                path,
+                headerOrNull(httpRequest, "X-Request-Hash"),
+                subject)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for human feedback");
+        }
+        TeachingRequestContext context = requestContext(subject);
+        workflowService.get(taskId, context)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Teaching task not found"));
+        return feedbackService.submit(taskId, context, request);
+    }
+
+    /**
+     * Lists human feedback records attached to an owned teaching task.
+     */
+    @GetMapping("/api/teaching/tasks/{taskId}/feedback")
+    public List<TeachingHumanFeedbackResponse> listHumanFeedback(
+            @PathVariable String taskId,
+            HttpServletRequest httpRequest) {
+        TeachingRequestContext context = requestContext(subjectResolver.resolve(httpRequest));
+        workflowService.get(taskId, context)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Teaching task not found"));
+        return feedbackService.list(taskId, context);
     }
 
     private static TeachingRequestContext requestContext(RequestSubject subject) {

@@ -459,6 +459,42 @@ export interface TeachingHandoutBatchExportResponse {
 }
 
 /**
+ * Human feedback request for a generated teaching task.
+ */
+export interface TeachingHumanFeedbackRequest {
+  /** Numeric feedback score from 1 to 5. */
+  rating: number;
+  /** Compact decision code, such as helpful, confusing, or needs_revision. */
+  decision: string;
+  /** Human-readable feedback content for later review. */
+  comment: string;
+}
+
+/**
+ * Human feedback record returned after backend ownership and capability checks.
+ */
+export interface TeachingHumanFeedbackResponse {
+  /** Backend-generated feedback id. */
+  feedbackId: string;
+  /** Teaching task id that received feedback. */
+  taskId: string;
+  /** Backend tenant id resolved from session. */
+  tenantId: string;
+  /** Backend subject role resolved from session. */
+  subjectType: string;
+  /** Backend subject id resolved from session. */
+  subjectId: string;
+  /** Numeric feedback score from 1 to 5. */
+  rating: number;
+  /** Compact decision code. */
+  decision: string;
+  /** Free-text feedback content. */
+  comment: string;
+  /** Backend creation timestamp. */
+  createdAt: string;
+}
+
+/**
  * Request for planning an AI agent run before model/tool execution.
  */
 export interface AgentRunPlanRequest {
@@ -1126,6 +1162,32 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
           "X-Capability-Token": capability.token,
           "X-Request-Hash": capability.requestHash,
         },
+      });
+    },
+
+    /**
+     * Submits human feedback for an owned teaching task after applying a one-time capability token.
+     */
+    async submitTeachingHumanFeedback(
+      taskId: string,
+      request: TeachingHumanFeedbackRequest,
+    ): Promise<TeachingHumanFeedbackResponse> {
+      const body = JSON.stringify(request);
+      const path = `/api/teaching/tasks/${encodeURIComponent(taskId)}/feedback`;
+      const capability = await applyCapability(
+        "teaching-feedback:submit",
+        path,
+        body,
+        `teaching-feedback-submit:${taskId}:${request.decision}`,
+      );
+      return requestJson<TeachingHumanFeedbackResponse>(path, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Capability-Token": capability.token,
+          "X-Request-Hash": capability.requestHash,
+        },
+        body,
       });
     },
 

@@ -17,7 +17,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -686,6 +687,81 @@ h2 {
   opacity: 0.7;
 }
 
+.human-feedback-panel {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #dce5ef;
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
+.feedback-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  color: #1f2a44;
+  font-size: 13px;
+}
+
+.feedback-head span {
+  color: #1769aa;
+  font-weight: 800;
+}
+
+.feedback-grid {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.human-feedback-panel label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.human-feedback-panel input,
+.human-feedback-panel select,
+.human-feedback-panel textarea {
+  width: 100%;
+  border: 1px solid #cfd8e5;
+  border-radius: 6px;
+  padding: 7px 9px;
+  color: #172033;
+  background: #ffffff;
+}
+
+.human-feedback-panel textarea {
+  min-height: 76px;
+  resize: vertical;
+}
+
+.human-feedback-panel button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  justify-self: start;
+  gap: 7px;
+  min-height: 36px;
+  border: 1px solid #c8d5e3;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #1f3a5c;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.human-feedback-panel button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
 .hit-list {
   display: grid;
   gap: 12px;
@@ -903,8 +979,13 @@ h2 {
   }
 
   .batch-export-row button,
-  .handout-toolbar button {
+  .handout-toolbar button,
+  .human-feedback-panel button {
     width: 100%;
+  }
+
+  .feedback-grid {
+    grid-template-columns: 1fr;
   }
 
   .score-item strong {

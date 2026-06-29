@@ -25,6 +25,7 @@ public class CapabilityTokenService {
     private static final String TEACHING_HANDOUT_PDF_EXPORT_ACTION = "teaching-handout:export-pdf";
     private static final String TEACHING_HANDOUT_BATCH_ZIP_EXPORT_ACTION = "teaching-handout:batch-export-zip";
     private static final String TEACHING_HANDOUT_BATCH_ZIP_DOWNLOAD_ACTION = "teaching-handout:batch-download-zip";
+    private static final String TEACHING_FEEDBACK_SUBMIT_ACTION = "teaching-feedback:submit";
     private static final String TEACHING_BATCH_ZIP_PATH = "/api/teaching/handouts/batch/zip";
     private static final String TEACHER_RESOURCE_REGISTER_ACTION = "teacher-resource:register";
     private static final String TEACHER_RESOURCE_ARCHIVE_ACTION = "teacher-resource:archive";
@@ -223,8 +224,12 @@ public class CapabilityTokenService {
             return;
         }
         if (TEACHING_HANDOUT_BATCH_ZIP_DOWNLOAD_ACTION.equals(action)
-                && path.startsWith(TEACHING_BATCH_ZIP_PATH + "/")
-                && path.endsWith("/download")) {
+                && isBatchZipDownloadPath(path)) {
+            validateTeachingSubject(subject);
+            return;
+        }
+        if (TEACHING_FEEDBACK_SUBMIT_ACTION.equals(action)
+                && isTeachingFeedbackPath(path)) {
             validateTeachingSubject(subject);
             return;
         }
@@ -263,12 +268,77 @@ public class CapabilityTokenService {
      * Allows legacy handout paths and explicit teacher/student version paths for protected exports.
      */
     private static boolean isTeachingHandoutPath(String path, String suffix) {
-        if (!path.startsWith(TEACHING_TASKS_PATH + "/")) {
+        String[] parts = pathPartsAfterPrefix(path, TEACHING_TASKS_PATH);
+        if (parts.length < 3 || !hasText(parts[0]) || !"handout".equals(parts[1])) {
             return false;
         }
-        return path.endsWith("/handout" + suffix)
-                || path.endsWith("/handout/teacher" + suffix)
-                || path.endsWith("/handout/student" + suffix);
+        if ("/latex".equals(suffix)) {
+            return (parts.length == 3 && "latex".equals(parts[2]))
+                    || (parts.length == 4 && isHandoutVersion(parts[2]) && "latex".equals(parts[3]));
+        }
+        if ("/latex/preview".equals(suffix)) {
+            return (parts.length == 4 && "latex".equals(parts[2]) && "preview".equals(parts[3]))
+                    || (parts.length == 5
+                    && isHandoutVersion(parts[2])
+                    && "latex".equals(parts[3])
+                    && "preview".equals(parts[4]));
+        }
+        if ("/pdf".equals(suffix)) {
+            return (parts.length == 3 && "pdf".equals(parts[2]))
+                    || (parts.length == 4 && isHandoutVersion(parts[2]) && "pdf".equals(parts[3]));
+        }
+        return false;
+    }
+
+    /**
+     * Validates the exact feedback capability path shape.
+     */
+    private static boolean isTeachingFeedbackPath(String path) {
+        String[] parts = pathPartsAfterPrefix(path, TEACHING_TASKS_PATH);
+        return parts.length == 2 && hasText(parts[0]) && "feedback".equals(parts[1]);
+    }
+
+    /**
+     * Validates the exact temporary ZIP download capability path shape.
+     */
+    private static boolean isBatchZipDownloadPath(String path) {
+        String[] parts = pathPartsAfterPrefix(path, TEACHING_BATCH_ZIP_PATH);
+        return parts.length == 2 && hasText(parts[0]) && "download".equals(parts[1]);
+    }
+
+    /**
+     * Splits path segments after a fixed API prefix and rejects empty segments.
+     */
+    private static String[] pathPartsAfterPrefix(String path, String prefix) {
+        String normalizedPrefix = prefix + "/";
+        if (path == null || !path.startsWith(normalizedPrefix)) {
+            return new String[0];
+        }
+        String tail = path.substring(normalizedPrefix.length());
+        if (tail.isBlank()) {
+            return new String[0];
+        }
+        String[] parts = tail.split("/", -1);
+        for (String part : parts) {
+            if (!hasText(part)) {
+                return new String[0];
+            }
+        }
+        return parts;
+    }
+
+    /**
+     * Checks whether a path segment is a supported handout version.
+     */
+    private static boolean isHandoutVersion(String value) {
+        return "teacher".equals(value) || "student".equals(value);
+    }
+
+    /**
+     * Returns true when a path segment contains non-blank text.
+     */
+    private static boolean hasText(String value) {
+        return value != null && !value.isBlank();
     }
 
     /**

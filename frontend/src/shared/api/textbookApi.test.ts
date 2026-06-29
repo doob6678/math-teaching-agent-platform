@@ -646,6 +646,67 @@ describe("textbookApi", () => {
     expect(Array.from(zip.slice(0, 2))).toEqual([80, 75]);
   });
 
+  it("submits teaching human feedback with a task-bound capability token", async () => {
+    const request = {
+      rating: 4,
+      decision: "needs_revision",
+      comment: "第二步讲解需要再展开。",
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          token: "feedback-capability",
+          action: "teaching-feedback:submit",
+          path: "/api/teaching/tasks/task-1/feedback",
+          requestHash: "hash-feedback",
+          expiresAt: "2026-06-28T12:02:00Z",
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          feedbackId: "feedback-1",
+          taskId: "task-1",
+          tenantId: "default",
+          subjectType: "student",
+          subjectId: "student-1",
+          rating: 4,
+          decision: "needs_revision",
+          comment: "第二步讲解需要再展开。",
+          createdAt: "2026-06-28T12:00:00Z",
+        }),
+      });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const feedback = await client.submitTeachingHumanFeedback("task-1", request);
+
+    const capabilityBody = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
+    expect(capabilityBody).toEqual({
+      action: "teaching-feedback:submit",
+      path: "/api/teaching/tasks/task-1/feedback",
+      requestHash: expect.any(String),
+      idempotencyKey: "teaching-feedback-submit:task-1:needs_revision",
+      maxCost: 1,
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://127.0.0.1:8080/api/teaching/tasks/task-1/feedback",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "Content-Type": "application/json",
+          "X-Capability-Token": "feedback-capability",
+          "X-Request-Hash": capabilityBody.requestHash,
+        }),
+        body: JSON.stringify(request),
+      }),
+    );
+    expect(feedback.feedbackId).toBe("feedback-1");
+    expect(feedback.rating).toBe(4);
+  });
+
   it("binds batch zip capability idempotency to selected folder paths", async () => {
     const batchRequest = {
       taskIds: ["task-1", "task-2"],

@@ -197,6 +197,7 @@ public class TeachingWorkflowService {
                 node("PRACTICE_DISCOVERY_PLACEHOLDER", "练习题发现", "预留同知识点练习题和错题库召回节点。"),
                 node("REACT_SOLVE", "ReAct 解题", "基于证据生成 thought/action/observation/answer 轨迹。"),
                 node("LATEX_HANDOUT", "LaTeX 讲义", "生成可导出为 PDF 的讲义草稿。"),
+                node("HUMAN_FEEDBACK", "人类反馈", "等待学生或教师对讲义、解析和练习建议给出人工反馈。"),
                 node("INTERACTIVE_FOLLOW_UP", "交互追问", "给出继续追问、练习和导出建议。"));
     }
 
