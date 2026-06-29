@@ -127,6 +127,36 @@ public class TeachingTaskController {
     }
 
     /**
+     * Exports a specific LaTeX handout version after consuming a version-bound capability token.
+     */
+    @GetMapping("/api/teaching/tasks/{taskId}/handout/{version}/latex")
+    public ResponseEntity<String> exportLatexVersion(
+            @PathVariable String taskId,
+            @PathVariable String version,
+            HttpServletRequest httpRequest) {
+        String normalizedVersion = normalizeHandoutVersion(version);
+        RequestSubject subject = subjectResolver.resolve(httpRequest);
+        String path = TEACHING_TASKS_PATH + "/" + taskId + "/handout/" + normalizedVersion + "/latex";
+        if (!capabilityVerifier.verify(
+                headerOrNull(httpRequest, "X-Capability-Token"),
+                TEACHING_HANDOUT_LATEX_EXPORT_ACTION,
+                path,
+                headerOrNull(httpRequest, "X-Request-Hash"),
+                subject)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for LaTeX export");
+        }
+        TeachingTaskResponse task = workflowService.get(taskId, requestContext(subject))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Teaching task not found"));
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType("application/x-tex;charset=UTF-8"))
+                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
+                        .filename(task.taskId() + "-" + normalizedVersion + ".tex", StandardCharsets.UTF_8)
+                        .build()
+                        .toString())
+                .body(task.handoutLatexFor(normalizedVersion));
+    }
+
+    /**
      * Previews the LaTeX handout inline after consuming a one-time capability token.
      */
     @GetMapping("/api/teaching/tasks/{taskId}/handout/latex/preview")
@@ -155,6 +185,36 @@ public class TeachingTaskController {
     }
 
     /**
+     * Previews a specific handout version inline after consuming a version-bound capability token.
+     */
+    @GetMapping("/api/teaching/tasks/{taskId}/handout/{version}/latex/preview")
+    public ResponseEntity<String> previewLatexVersion(
+            @PathVariable String taskId,
+            @PathVariable String version,
+            HttpServletRequest httpRequest) {
+        String normalizedVersion = normalizeHandoutVersion(version);
+        RequestSubject subject = subjectResolver.resolve(httpRequest);
+        String path = TEACHING_TASKS_PATH + "/" + taskId + "/handout/" + normalizedVersion + "/latex/preview";
+        if (!capabilityVerifier.verify(
+                headerOrNull(httpRequest, "X-Capability-Token"),
+                TEACHING_HANDOUT_LATEX_PREVIEW_ACTION,
+                path,
+                headerOrNull(httpRequest, "X-Request-Hash"),
+                subject)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for LaTeX preview");
+        }
+        TeachingTaskResponse task = workflowService.get(taskId, requestContext(subject))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Teaching task not found"));
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType("application/x-tex;charset=UTF-8"))
+                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.inline()
+                        .filename(task.taskId() + "-" + normalizedVersion + ".tex", StandardCharsets.UTF_8)
+                        .build()
+                        .toString())
+                .body(task.handoutLatexFor(normalizedVersion));
+    }
+
+    /**
      * Exports the PDF handout for an owned teaching task after consuming a one-time capability token.
      */
     @GetMapping("/api/teaching/tasks/{taskId}/handout/pdf")
@@ -180,6 +240,36 @@ public class TeachingTaskController {
                         .build()
                         .toString())
                 .body(pdfExportService.render(task));
+    }
+
+    /**
+     * Exports a specific PDF handout version after capability and owner checks.
+     */
+    @GetMapping("/api/teaching/tasks/{taskId}/handout/{version}/pdf")
+    public ResponseEntity<byte[]> exportPdfVersion(
+            @PathVariable String taskId,
+            @PathVariable String version,
+            HttpServletRequest httpRequest) {
+        String normalizedVersion = normalizeHandoutVersion(version);
+        RequestSubject subject = subjectResolver.resolve(httpRequest);
+        String path = TEACHING_TASKS_PATH + "/" + taskId + "/handout/" + normalizedVersion + "/pdf";
+        if (!capabilityVerifier.verify(
+                headerOrNull(httpRequest, "X-Capability-Token"),
+                TEACHING_HANDOUT_PDF_EXPORT_ACTION,
+                path,
+                headerOrNull(httpRequest, "X-Request-Hash"),
+                subject)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for PDF export");
+        }
+        TeachingTaskResponse task = workflowService.get(taskId, requestContext(subject))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Teaching task not found"));
+        return ResponseEntity.ok()
+                .contentType(MediaType.APPLICATION_PDF)
+                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
+                        .filename(task.taskId() + "-" + normalizedVersion + ".pdf", StandardCharsets.UTF_8)
+                        .build()
+                        .toString())
+                .body(pdfExportService.render(task, normalizedVersion));
     }
 
     /**
@@ -249,6 +339,19 @@ public class TeachingTaskController {
                 normalized.subjectType(),
                 normalized.subjectId(),
                 normalized.deviceId());
+    }
+
+    /**
+     * Normalizes handout version path variables to the two backend-supported variants.
+     */
+    private static String normalizeHandoutVersion(String version) {
+        if ("teacher".equalsIgnoreCase(version)) {
+            return "teacher";
+        }
+        if ("student".equalsIgnoreCase(version)) {
+            return "student";
+        }
+        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported handout version");
     }
 
     /**

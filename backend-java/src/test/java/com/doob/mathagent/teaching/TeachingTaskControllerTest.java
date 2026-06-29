@@ -69,14 +69,18 @@ class TeachingTaskControllerTest {
         ResponseEntity<String> exported = controller.exportLatex(submitted.taskId(), null);
         ResponseEntity<String> preview = controller.previewLatex(submitted.taskId(), null);
         ResponseEntity<byte[]> exportedPdf = controller.exportPdf(submitted.taskId(), null);
+        ResponseEntity<String> studentPreview = controller.previewLatexVersion(submitted.taskId(), "student", null);
+        ResponseEntity<byte[]> teacherPdf = controller.exportPdfVersion(submitted.taskId(), "teacher", null);
 
         assertThat(loaded.taskId()).isEqualTo(submitted.taskId());
         assertThat(loaded.status()).isEqualTo(TeachingTaskStatus.COMPLETED);
         assertThat(exported.getBody()).contains("\\section");
         assertThat(preview.getBody()).contains("\\section");
+        assertThat(studentPreview.getBody()).contains("\\section{学生版}");
         assertThat(preview.getHeaders().getContentDisposition().isInline()).isTrue();
         assertThat(exported.getHeaders().getContentDisposition().getFilename()).isEqualTo(submitted.taskId() + ".tex");
         assertThat(exportedPdf.getBody()).startsWith(new byte[] {'%', 'P', 'D', 'F'});
+        assertThat(teacherPdf.getBody()).startsWith(new byte[] {'%', 'P', 'D', 'F'});
         assertThat(exportedPdf.getHeaders().getContentDisposition().getFilename()).isEqualTo(submitted.taskId() + ".pdf");
         assertThat(loaded.handoutLatex()).contains("\\section{证据与讲解}");
     }

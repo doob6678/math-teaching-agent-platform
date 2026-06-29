@@ -62,6 +62,29 @@ class TeachingHandoutBatchExportServiceTest {
                 entry.contains("..") || entry.startsWith("/") || entry.startsWith("\\") || entry.contains(":"));
     }
 
+    @Test
+    void includesTeacherAndStudentHandoutVersionsInBatchZip() throws Exception {
+        TeachingHandoutBatchExportService service = new TeachingHandoutBatchExportService(
+                new TeachingHandoutPdfExportService());
+
+        TeachingHandoutBatchExportResponse response = service.create(
+                new TeachingHandoutBatchExportRequest(
+                        List.of("task-versioned"),
+                        List.of("folder-versioned"),
+                        List.of("grade-10/versioned")),
+                TeachingRequestContext.localTeacher(),
+                List.of(task("task-versioned")));
+
+        assertThat(zipEntries(service.findDownload(response.batchId(), TeachingRequestContext.localTeacher())
+                        .orElseThrow()
+                        .zipBytes()))
+                .contains(
+                        "grade-10/versioned/teacher/task-versioned.tex",
+                        "grade-10/versioned/teacher/task-versioned.pdf",
+                        "grade-10/versioned/student/task-versioned.tex",
+                        "grade-10/versioned/student/task-versioned.pdf");
+    }
+
     private static TeachingTaskResponse task(String taskId) {
         return new TeachingTaskResponse(
                 taskId,
@@ -76,6 +99,8 @@ class TeachingHandoutBatchExportServiceTest {
                 List.of(),
                 List.of(),
                 "\\section{" + taskId + "}",
+                "\\section{Teacher " + taskId + "}",
+                "\\section{Student " + taskId + "}",
                 List.of(),
                 null,
                 List.of(),

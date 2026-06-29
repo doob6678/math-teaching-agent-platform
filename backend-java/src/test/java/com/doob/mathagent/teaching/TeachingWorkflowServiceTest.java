@@ -62,6 +62,9 @@ class TeachingWorkflowServiceTest {
         assertThat(response.evidence()).isNotEmpty();
         assertThat(response.evidence().getFirst().sourceScope()).isEqualTo("PUBLIC_TEXTBOOK");
         assertThat(response.handoutLatex()).contains("\\section{学习目标}");
+        assertThat(response.teacherHandoutLatex()).contains("\\section{教师版}", "\\section{知识点归属}");
+        assertThat(response.studentHandoutLatex()).contains("\\section{学生版}", "\\vspace");
+        assertThat(response.studentHandoutLatex()).doesNotContain("知识点归属");
         assertThat(response.interactiveSuggestions()).contains("继续追问定义 D(x_0)");
         assertThat(response.memoryReuse().reused()).isFalse();
         assertThat(response.stageTimings()).extracting(TeachingTaskResponse.StageTiming::stage)

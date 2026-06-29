@@ -603,6 +603,31 @@ h2 {
   background: #f3f9ff;
 }
 
+.handout-version-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: end;
+}
+
+.handout-version-row label {
+  display: grid;
+  gap: 5px;
+  min-width: 180px;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.handout-version-row select {
+  min-height: 36px;
+  border: 1px solid #cfd8e5;
+  border-radius: 6px;
+  padding: 7px 9px;
+  color: #172033;
+  background: #ffffff;
+}
+
 .handout-toolbar,
 .batch-export-row {
   display: flex;

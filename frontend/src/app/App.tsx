@@ -35,6 +35,7 @@ export function App() {
   const [teacherResources, setTeacherResources] = useState<TeacherResourceDocumentResponse[]>([]);
   const [handoutPreviewLatex, setHandoutPreviewLatex] = useState("");
   const [handoutPreviewTaskId, setHandoutPreviewTaskId] = useState("");
+  const [handoutVersion, setHandoutVersion] = useState<"teacher" | "student">("teacher");
   const [handoutAction, setHandoutAction] = useState("");
   const [handoutExportMessage, setHandoutExportMessage] = useState("");
   const [teachingError, setTeachingError] = useState("");
@@ -207,10 +208,10 @@ export function App() {
     setTeachingError("");
     setHandoutExportMessage("");
     api
-      .previewTeachingTaskLatex(teachingTask.taskId)
+      .previewTeachingTaskLatex(teachingTask.taskId, handoutVersion)
       .then((latex) => {
         setHandoutPreviewLatex(latex);
-        setHandoutPreviewTaskId(teachingTask.taskId);
+        setHandoutPreviewTaskId(`${teachingTask.taskId}:${handoutVersion}`);
       })
       .catch((error: Error) => setTeachingError(error.message))
       .finally(() => setHandoutAction(""));
@@ -224,9 +225,9 @@ export function App() {
     setTeachingError("");
     setHandoutExportMessage("");
     api
-      .exportTeachingTaskLatex(teachingTask.taskId)
+      .exportTeachingTaskLatex(teachingTask.taskId, handoutVersion)
       .then((latex) => {
-        downloadText(`${teachingTask.taskId}.tex`, latex, "application/x-tex;charset=utf-8");
+        downloadText(`${teachingTask.taskId}-${handoutVersion}.tex`, latex, "application/x-tex;charset=utf-8");
         setHandoutExportMessage("LaTeX source exported.");
       })
       .catch((error: Error) => setTeachingError(error.message))
@@ -241,9 +242,9 @@ export function App() {
     setTeachingError("");
     setHandoutExportMessage("");
     api
-      .exportTeachingTaskPdf(teachingTask.taskId)
+      .exportTeachingTaskPdf(teachingTask.taskId, handoutVersion)
       .then((pdf) => {
-        downloadBytes(`${teachingTask.taskId}.pdf`, pdf, "application/pdf");
+        downloadBytes(`${teachingTask.taskId}-${handoutVersion}.pdf`, pdf, "application/pdf");
         setHandoutExportMessage("PDF handout exported.");
       })
       .catch((error: Error) => setTeachingError(error.message))
@@ -453,10 +454,17 @@ export function App() {
             task={teachingTask}
             loading={loadingTeachingTask}
             error={teachingError}
-            previewLatex={handoutPreviewTaskId === teachingTask?.taskId ? handoutPreviewLatex : ""}
+            version={handoutVersion}
+            previewLatex={handoutPreviewTaskId === `${teachingTask?.taskId}:${handoutVersion}` ? handoutPreviewLatex : ""}
             action={handoutAction}
             exportMessage={handoutExportMessage}
             batchFolderPath={batchFolderPath}
+            onVersionChange={(version) => {
+              setHandoutVersion(version);
+              setHandoutPreviewLatex("");
+              setHandoutPreviewTaskId("");
+              setHandoutExportMessage("");
+            }}
             onBatchFolderPathChange={setBatchFolderPath}
             onPreviewLatex={handlePreviewLatex}
             onExportLatex={handleExportLatex}
@@ -665,10 +673,12 @@ function TeachingTaskPanel({
   task,
   loading,
   error,
+  version,
   previewLatex,
   action,
   exportMessage,
   batchFolderPath,
+  onVersionChange,
   onBatchFolderPathChange,
   onPreviewLatex,
   onExportLatex,
@@ -678,10 +688,12 @@ function TeachingTaskPanel({
   task: TeachingTaskResponse | null;
   loading: boolean;
   error: string;
+  version: "teacher" | "student";
   previewLatex: string;
   action: string;
   exportMessage: string;
   batchFolderPath: string;
+  onVersionChange: (value: "teacher" | "student") => void;
   onBatchFolderPathChange: (value: string) => void;
   onPreviewLatex: () => void;
   onExportLatex: () => void;
@@ -689,6 +701,9 @@ function TeachingTaskPanel({
   onExportBatchZip: () => void;
 }) {
   const busy = Boolean(action);
+  const selectedDraft = version === "student"
+    ? task?.studentHandoutLatex ?? task?.handoutLatex ?? ""
+    : task?.teacherHandoutLatex ?? task?.handoutLatex ?? "";
   return (
     <section className="teaching-task">
       <div className="result-header">
@@ -769,6 +784,18 @@ function TeachingTaskPanel({
               </article>
             ))}
           </div>
+          <div className="handout-version-row">
+            <label>
+              <span>Handout version</span>
+              <select
+                value={version}
+                onChange={(event) => onVersionChange(event.target.value as "teacher" | "student")}
+              >
+                <option value="teacher">Teacher</option>
+                <option value="student">Student</option>
+              </select>
+            </label>
+          </div>
           <div className="handout-toolbar">
             <button type="button" onClick={onPreviewLatex} disabled={busy}>
               {action === "preview" ? <Loader2 className="spin" size={16} /> : <BookOpen size={16} />}
@@ -801,7 +828,7 @@ function TeachingTaskPanel({
           {previewLatex ? (
             <pre className="formula-block handout preview">{previewLatex}</pre>
           ) : (
-            <pre className="formula-block handout">{task.handoutLatex}</pre>
+            <pre className="formula-block handout">{selectedDraft}</pre>
           )}
         </div>
       ) : null}

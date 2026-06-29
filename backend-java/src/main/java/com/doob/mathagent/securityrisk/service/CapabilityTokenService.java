@@ -203,20 +203,17 @@ public class CapabilityTokenService {
             return;
         }
         if (TEACHING_HANDOUT_LATEX_EXPORT_ACTION.equals(action)
-                && path.startsWith(TEACHING_TASKS_PATH + "/")
-                && path.endsWith("/handout/latex")) {
+                && isTeachingHandoutPath(path, "/latex")) {
             validateTeachingSubject(subject);
             return;
         }
         if (TEACHING_HANDOUT_LATEX_PREVIEW_ACTION.equals(action)
-                && path.startsWith(TEACHING_TASKS_PATH + "/")
-                && path.endsWith("/handout/latex/preview")) {
+                && isTeachingHandoutPath(path, "/latex/preview")) {
             validateTeachingSubject(subject);
             return;
         }
         if (TEACHING_HANDOUT_PDF_EXPORT_ACTION.equals(action)
-                && path.startsWith(TEACHING_TASKS_PATH + "/")
-                && path.endsWith("/handout/pdf")) {
+                && isTeachingHandoutPath(path, "/pdf")) {
             validateTeachingSubject(subject);
             return;
         }
@@ -260,6 +257,18 @@ public class CapabilityTokenService {
         if (!TEACHER_RESOURCE_ALLOWED_ROLES.contains(subject.subjectType()) || subject.subjectId() == null) {
             throw new IllegalArgumentException("Capability subject not allowed");
         }
+    }
+
+    /**
+     * Allows legacy handout paths and explicit teacher/student version paths for protected exports.
+     */
+    private static boolean isTeachingHandoutPath(String path, String suffix) {
+        if (!path.startsWith(TEACHING_TASKS_PATH + "/")) {
+            return false;
+        }
+        return path.endsWith("/handout" + suffix)
+                || path.endsWith("/handout/teacher" + suffix)
+                || path.endsWith("/handout/student" + suffix);
     }
 
     /**

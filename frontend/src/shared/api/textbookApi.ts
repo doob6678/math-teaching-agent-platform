@@ -410,6 +410,10 @@ export interface TeachingTaskResponse {
   evidence: TeachingEvidence[];
   /** LaTeX 讲义草稿。 */
   handoutLatex: string;
+  /** Teacher version with explanation, method notes, and knowledge point attribution. */
+  teacherHandoutLatex?: string;
+  /** Student version with blanks and prompts but without detailed teacher-only answers. */
+  studentHandoutLatex?: string;
   /** 后续交互建议。 */
   interactiveSuggestions: string[];
   /** 学生记忆复用决策。 */
@@ -1014,13 +1018,14 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     /**
      * Downloads the LaTeX handout for a teaching task after applying a one-time capability token.
      */
-    async exportTeachingTaskLatex(taskId: string): Promise<string> {
-      const path = `/api/teaching/tasks/${encodeURIComponent(taskId)}/handout/latex`;
+    async exportTeachingTaskLatex(taskId: string, version: "teacher" | "student" = "teacher"): Promise<string> {
+      const encodedTaskId = encodeURIComponent(taskId);
+      const path = `/api/teaching/tasks/${encodedTaskId}/handout/${version}/latex`;
       const capability = await applyCapability(
         "teaching-handout:export-latex",
         path,
         "",
-        `teaching-handout-export-latex:${taskId}`,
+        `teaching-handout-export-latex:${taskId}:${version}`,
       );
       return requestText(path, {
         method: "GET",
@@ -1034,13 +1039,14 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     /**
      * Loads LaTeX handout source for inline frontend preview with a separate capability audit action.
      */
-    async previewTeachingTaskLatex(taskId: string): Promise<string> {
-      const path = `/api/teaching/tasks/${encodeURIComponent(taskId)}/handout/latex/preview`;
+    async previewTeachingTaskLatex(taskId: string, version: "teacher" | "student" = "teacher"): Promise<string> {
+      const encodedTaskId = encodeURIComponent(taskId);
+      const path = `/api/teaching/tasks/${encodedTaskId}/handout/${version}/latex/preview`;
       const capability = await applyCapability(
         "teaching-handout:preview-latex",
         path,
         "",
-        `teaching-handout-preview-latex:${taskId}`,
+        `teaching-handout-preview-latex:${taskId}:${version}`,
       );
       return requestText(path, {
         method: "GET",
@@ -1054,13 +1060,14 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     /**
      * Downloads the PDF handout for a teaching task after applying a one-time capability token.
      */
-    async exportTeachingTaskPdf(taskId: string): Promise<Uint8Array> {
-      const path = `/api/teaching/tasks/${encodeURIComponent(taskId)}/handout/pdf`;
+    async exportTeachingTaskPdf(taskId: string, version: "teacher" | "student" = "teacher"): Promise<Uint8Array> {
+      const encodedTaskId = encodeURIComponent(taskId);
+      const path = `/api/teaching/tasks/${encodedTaskId}/handout/${version}/pdf`;
       const capability = await applyCapability(
         "teaching-handout:export-pdf",
         path,
         "",
-        `teaching-handout-export-pdf:${taskId}`,
+        `teaching-handout-export-pdf:${taskId}:${version}`,
         2,
       );
       return requestBytes(path, {

@@ -20,7 +20,18 @@ public class TeachingHandoutPdfExportService {
      * @return PDF bytes beginning with the PDF header
      */
     public byte[] render(TeachingTaskResponse task) {
-        List<String> lines = handoutLines(task);
+        return render(task, "teacher");
+    }
+
+    /**
+     * Renders one specific handout version into a valid single-page PDF byte array.
+     *
+     * @param task owned teaching task
+     * @param version handout version code, such as teacher or student
+     * @return PDF bytes beginning with the PDF header
+     */
+    public byte[] render(TeachingTaskResponse task, String version) {
+        List<String> lines = handoutLines(task, version);
         String contentStream = contentStream(lines);
         return pdfDocument(contentStream);
     }
@@ -28,14 +39,15 @@ public class TeachingHandoutPdfExportService {
     /**
      * Builds short PDF text lines from the task metadata and LaTeX source.
      */
-    private static List<String> handoutLines(TeachingTaskResponse task) {
+    private static List<String> handoutLines(TeachingTaskResponse task, String version) {
         List<String> lines = new ArrayList<>();
         lines.add("Math Agent Teaching Handout");
+        lines.add("Version: " + safeAscii(version));
         lines.add("Task: " + task.taskId());
         lines.add("Learning goal: " + safeAscii(task.learningGoal()));
         lines.add("Question: " + safeAscii(task.questionText()));
         lines.add("LaTeX source preview:");
-        for (String sourceLine : task.handoutLatex().split("\\R")) {
+        for (String sourceLine : task.handoutLatexFor(version).split("\\R")) {
             if (!sourceLine.isBlank()) {
                 lines.addAll(wrap(safeAscii(sourceLine), 86));
             }

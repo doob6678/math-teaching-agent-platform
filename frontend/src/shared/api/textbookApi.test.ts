@@ -400,14 +400,14 @@ describe("textbookApi", () => {
     const capabilityBody = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
     expect(capabilityBody).toEqual({
       action: "teaching-handout:export-latex",
-      path: "/api/teaching/tasks/task-1/handout/latex",
+      path: "/api/teaching/tasks/task-1/handout/teacher/latex",
       requestHash: expect.any(String),
-      idempotencyKey: "teaching-handout-export-latex:task-1",
+      idempotencyKey: "teaching-handout-export-latex:task-1:teacher",
       maxCost: 1,
     });
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
-      "http://127.0.0.1:8080/api/teaching/tasks/task-1/handout/latex",
+      "http://127.0.0.1:8080/api/teaching/tasks/task-1/handout/teacher/latex",
       expect.objectContaining({
         method: "GET",
         headers: expect.objectContaining({
@@ -445,14 +445,14 @@ describe("textbookApi", () => {
     const capabilityBody = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
     expect(capabilityBody).toEqual({
       action: "teaching-handout:export-pdf",
-      path: "/api/teaching/tasks/task-1/handout/pdf",
+      path: "/api/teaching/tasks/task-1/handout/teacher/pdf",
       requestHash: expect.any(String),
-      idempotencyKey: "teaching-handout-export-pdf:task-1",
+      idempotencyKey: "teaching-handout-export-pdf:task-1:teacher",
       maxCost: 2,
     });
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
-      "http://127.0.0.1:8080/api/teaching/tasks/task-1/handout/pdf",
+      "http://127.0.0.1:8080/api/teaching/tasks/task-1/handout/teacher/pdf",
       expect.objectContaining({
         method: "GET",
         headers: expect.objectContaining({
@@ -488,14 +488,14 @@ describe("textbookApi", () => {
     const capabilityBody = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
     expect(capabilityBody).toEqual({
       action: "teaching-handout:preview-latex",
-      path: "/api/teaching/tasks/task-1/handout/latex/preview",
+      path: "/api/teaching/tasks/task-1/handout/teacher/latex/preview",
       requestHash: expect.any(String),
-      idempotencyKey: "teaching-handout-preview-latex:task-1",
+      idempotencyKey: "teaching-handout-preview-latex:task-1:teacher",
       maxCost: 1,
     });
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
-      "http://127.0.0.1:8080/api/teaching/tasks/task-1/handout/latex/preview",
+      "http://127.0.0.1:8080/api/teaching/tasks/task-1/handout/teacher/latex/preview",
       expect.objectContaining({
         method: "GET",
         headers: expect.objectContaining({
@@ -505,6 +505,49 @@ describe("textbookApi", () => {
       }),
     );
     expect(latex).toContain("\\section");
+  });
+
+  it("previews student handout latex with a version-bound capability token", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          token: "student-preview-capability",
+          action: "teaching-handout:preview-latex",
+          path: "/api/teaching/tasks/task-1/handout/student/latex/preview",
+          requestHash: "hash-empty",
+          expiresAt: "2026-06-28T12:02:00Z",
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        text: async () => "\\section{学生版}",
+      });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const latex = await client.previewTeachingTaskLatex("task-1", "student");
+
+    const capabilityBody = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
+    expect(capabilityBody).toEqual({
+      action: "teaching-handout:preview-latex",
+      path: "/api/teaching/tasks/task-1/handout/student/latex/preview",
+      requestHash: expect.any(String),
+      idempotencyKey: "teaching-handout-preview-latex:task-1:student",
+      maxCost: 1,
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://127.0.0.1:8080/api/teaching/tasks/task-1/handout/student/latex/preview",
+      expect.objectContaining({
+        method: "GET",
+        headers: expect.objectContaining({
+          "X-Capability-Token": "student-preview-capability",
+          "X-Request-Hash": capabilityBody.requestHash,
+        }),
+      }),
+    );
+    expect(latex).toContain("学生版");
   });
 
   it("creates and downloads teaching handout batch zip with capability tokens", async () => {

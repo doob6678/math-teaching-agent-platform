@@ -106,7 +106,8 @@ public class TeachingWorkflowService {
         List<TeachingWorkflowNode> nodes = buildNodes(request, evidence, memoryResponse);
         List<TeachingReactStep> reactTrace = buildReactTrace(request, evidence, memoryResponse);
         timer.mark("react_trace");
-        String handoutLatex = buildHandoutLatex(request, evidence, memoryResponse);
+        String teacherHandoutLatex = buildTeacherHandoutLatex(request, evidence, memoryResponse);
+        String studentHandoutLatex = buildStudentHandoutLatex(request, evidence, memoryResponse);
         timer.mark("handout_generation");
         return new TeachingTaskResponse(
                 UUID.randomUUID().toString(),
@@ -120,7 +121,9 @@ public class TeachingWorkflowService {
                 nodes,
                 reactTrace,
                 evidence,
-                handoutLatex,
+                teacherHandoutLatex,
+                teacherHandoutLatex,
+                studentHandoutLatex,
                 List.of("继续追问定义 D(x_0)", "生成同类练习题", "把讲义导出为 PDF"),
                 toMemoryReuse(memoryResponse),
                 timer.timings(),
@@ -232,7 +235,7 @@ public class TeachingWorkflowService {
     /**
      * 生成 LaTeX 讲义草稿；当前阶段输出结构，后续会接入更强的排版和 PDF 渲染。
      */
-    private static String buildHandoutLatex(
+    private static String buildTeacherHandoutLatex(
             TeachingTaskRequest request,
             List<TeachingEvidence> evidence,
             StudentMemoryResponse memoryResponse) {
@@ -240,6 +243,9 @@ public class TeachingWorkflowService {
                 ? "复用学生记忆：" + escapeLatex(memoryResponse.answer())
                 : evidence.isEmpty() ? "暂无教材证据。" : escapeLatex(evidence.getFirst().snippet());
         return """
+                \\section{教师版}
+                本讲义面向教师备课使用，包含知识点归属、证据来源和详细讲解。
+
                 \\section{学习目标}
                 %% 用户想学什么
                 %s
@@ -252,12 +258,61 @@ public class TeachingWorkflowService {
                 %% 公开教材证据，私有资料需按 tenantId/subjectId 隔离后再引用
                 %s
 
+                \\section{知识点归属}
+                %% 后续接入飞书知识库、教材章节图谱和教师私有资料后继续细分
+                %s
+
                 \\section{互动练习}
-                继续追问定义 D(x_0)，再生成同类练习题。
+                继续追问定义 D(x_0)，再生成同类练习题，并根据学生回答补充追问。
                 """.formatted(
                 escapeLatex(request.learningGoal()),
                 escapeLatex(request.questionText()),
-                evidenceSnippet);
+                evidenceSnippet,
+                teacherKnowledgePoint(request, evidence));
+    }
+
+    /**
+     * 生成学生版 LaTeX 讲义：保留题目、提示和空白作答区，不直接暴露教师解析和知识点归属。
+     */
+    private static String buildStudentHandoutLatex(
+            TeachingTaskRequest request,
+            List<TeachingEvidence> evidence,
+            StudentMemoryResponse memoryResponse) {
+        String hint = memoryResponse.reused()
+                ? "回忆同类问题的方法，先写出已知条件，再判断可用公式。"
+                : evidence.isEmpty()
+                ? "先圈出题目中的关键词，再尝试写出相关定义。"
+                : "先阅读教材证据中的定义或公式，再补全自己的推理。";
+        return """
+                \\section{学生版}
+                本讲义用于课堂练习和课后复盘，请先独立完成空白区，再查看教师讲解。
+
+                \\section{学习目标}
+                %s
+
+                \\section{题目}
+                %s
+
+                \\section{思路提示}
+                %s
+
+                \\section{我的解答}
+                \\vspace{8em}
+
+                \\section{订正记录}
+                \\vspace{6em}
+                """.formatted(
+                escapeLatex(request.learningGoal()),
+                escapeLatex(request.questionText()),
+                escapeLatex(hint));
+    }
+
+    /**
+     * Builds a compact teacher-facing knowledge point label from the learning goal and top evidence.
+     */
+    private static String teacherKnowledgePoint(TeachingTaskRequest request, List<TeachingEvidence> evidence) {
+        String source = evidence.isEmpty() ? "待接入教师私有资料或公开教材章节" : evidence.getFirst().sourceTitle();
+        return escapeLatex(request.learningGoal() + "；来源：" + source);
     }
 
     /**

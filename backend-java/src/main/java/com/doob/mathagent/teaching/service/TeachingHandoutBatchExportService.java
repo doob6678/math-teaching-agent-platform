@@ -149,6 +149,8 @@ public class TeachingHandoutBatchExportService {
                     String folderPrefix = folderPrefix(response.folderPaths(), index, tasks.size());
                     put(zip, folderPrefix + task.taskId() + ".tex", task.handoutLatex().getBytes(StandardCharsets.UTF_8));
                     put(zip, folderPrefix + task.taskId() + ".pdf", pdfExportService.render(task));
+                    putVersion(zip, folderPrefix, task, "teacher");
+                    putVersion(zip, folderPrefix, task, "student");
                 }
                 put(zip, "manifest.txt", manifest(response).getBytes(StandardCharsets.UTF_8));
             }
@@ -165,6 +167,19 @@ public class TeachingHandoutBatchExportService {
         zip.putNextEntry(new ZipEntry(name));
         zip.write(bytes);
         zip.closeEntry();
+    }
+
+    /**
+     * Writes one explicit teacher or student handout version into the ZIP package.
+     */
+    private void putVersion(
+            ZipOutputStream zip,
+            String folderPrefix,
+            TeachingTaskResponse task,
+            String version) throws java.io.IOException {
+        String versionPrefix = folderPrefix + version + "/" + task.taskId();
+        put(zip, versionPrefix + ".tex", task.handoutLatexFor(version).getBytes(StandardCharsets.UTF_8));
+        put(zip, versionPrefix + ".pdf", pdfExportService.render(task, version));
     }
 
     /**

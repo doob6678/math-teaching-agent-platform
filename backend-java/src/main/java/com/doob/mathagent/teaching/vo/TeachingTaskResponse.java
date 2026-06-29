@@ -39,10 +39,25 @@ public record TeachingTaskResponse(
         List<TeachingReactStep> reactTrace,
         List<TeachingEvidence> evidence,
         String handoutLatex,
+        String teacherHandoutLatex,
+        String studentHandoutLatex,
         List<String> interactiveSuggestions,
         MemoryReuse memoryReuse,
         List<StageTiming> stageTimings,
         String errorMessage) {
+
+    /**
+     * Returns the requested LaTeX handout version, using the teacher version as the default for compatibility.
+     *
+     * @param version version code from backend-controlled routes, such as teacher or student
+     * @return LaTeX source for the requested handout version
+     */
+    public String handoutLatexFor(String version) {
+        if ("student".equalsIgnoreCase(version)) {
+            return studentHandoutLatex == null || studentHandoutLatex.isBlank() ? handoutLatex : studentHandoutLatex;
+        }
+        return teacherHandoutLatex == null || teacherHandoutLatex.isBlank() ? handoutLatex : teacherHandoutLatex;
+    }
 
     /**
      * 学生记忆复用摘要。
