@@ -35,8 +35,10 @@ public class ApiAccessPolicy {
                 new ApiAccessRule("/api/agents/execute", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 20, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/agents/run-plan", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 30, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/resources/textbooks/summary", ApiAccessLevel.PUBLIC, Set.of("*"), 120, Duration.ofMinutes(1)),
+                new ApiAccessRule("/api/students/dashboard", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 40, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/students/memory", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 40, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/teacher/resources", ApiAccessLevel.ADMIN, Set.of("teacher", "admin"), 30, Duration.ofMinutes(1)),
+                new ApiAccessRule("/api/teaching/handouts/batch/zip", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 10, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/teaching/tasks", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 20, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/retrieval/audit", ApiAccessLevel.ADMIN, Set.of("teacher", "admin"), 60, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/retrieval/textbooks/search", ApiAccessLevel.GUEST, Set.of("anonymous", "guest", "student", "teacher", "admin"), 30, Duration.ofMinutes(1))));

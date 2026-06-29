@@ -2,10 +2,21 @@ package com.doob.mathagent.infrastructure.security;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.lang.reflect.Method;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.springframework.context.annotation.ClassPathScanningCandidateComponentProvider;
+import org.springframework.core.type.filter.AnnotationTypeFilter;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
 
 class ApiAccessControlServiceTest {
 
@@ -127,6 +138,54 @@ class ApiAccessControlServiceTest {
     }
 
     @Test
+    void teachingBatchZipRequiresLoggedInSubjectAndHasOwnRateLimitBucket() {
+        ApiAccessControlService service = new ApiAccessControlService(
+                FixedWindowRateLimiter.empty(),
+                Clock.fixed(Instant.parse("2026-06-28T10:00:00Z"), ZoneOffset.UTC),
+                ApiAccessPolicy.defaultRules());
+        ApiRequestIdentity anonymousCreate = new ApiRequestIdentity(
+                "POST",
+                "/api/teaching/handouts/batch/zip",
+                "default",
+                "anonymous",
+                null,
+                "127.0.0.1",
+                "device-1",
+                "JUnit");
+        ApiRequestIdentity studentCreate = new ApiRequestIdentity(
+                "POST",
+                "/api/teaching/handouts/batch/zip",
+                "default",
+                "student",
+                "student-1",
+                "127.0.0.1",
+                "device-1",
+                "JUnit");
+        ApiRequestIdentity teacherDownload = new ApiRequestIdentity(
+                "GET",
+                "/api/teaching/handouts/batch/zip/batch-1/download",
+                "default",
+                "teacher",
+                "teacher-1",
+                "127.0.0.1",
+                "device-2",
+                "JUnit");
+
+        ApiAccessDecision denied = service.evaluate(anonymousCreate);
+        ApiAccessDecision studentAllowed = service.evaluate(studentCreate);
+        ApiAccessDecision teacherAllowed = service.evaluate(teacherDownload);
+
+        assertThat(denied.allowed()).isFalse();
+        assertThat(denied.httpStatus()).isEqualTo(403);
+        assertThat(studentAllowed.allowed()).isTrue();
+        assertThat(studentAllowed.level()).isEqualTo(ApiAccessLevel.USER);
+        assertThat(studentAllowed.limit()).isEqualTo(10);
+        assertThat(teacherAllowed.allowed()).isTrue();
+        assertThat(teacherAllowed.level()).isEqualTo(ApiAccessLevel.USER);
+        assertThat(teacherAllowed.limit()).isEqualTo(10);
+    }
+
+    @Test
     void teacherResourcesRequireTeacherOrAdminSubject() {
         ApiAccessControlService service = new ApiAccessControlService(
                 FixedWindowRateLimiter.empty(),
@@ -192,6 +251,41 @@ class ApiAccessControlServiceTest {
         assertThat(denied.httpStatus()).isEqualTo(403);
         assertThat(allowed.allowed()).isTrue();
         assertThat(allowed.level()).isEqualTo(ApiAccessLevel.USER);
+    }
+
+    @Test
+    void studentDashboardRequiresLoggedInStudentTeacherOrAdmin() {
+        ApiAccessControlService service = new ApiAccessControlService(
+                FixedWindowRateLimiter.empty(),
+                Clock.fixed(Instant.parse("2026-06-28T10:00:00Z"), ZoneOffset.UTC),
+                ApiAccessPolicy.defaultRules());
+        ApiRequestIdentity anonymous = new ApiRequestIdentity(
+                "GET",
+                "/api/students/dashboard",
+                "default",
+                "anonymous",
+                null,
+                "127.0.0.1",
+                "device-1",
+                "JUnit");
+        ApiRequestIdentity teacher = new ApiRequestIdentity(
+                "GET",
+                "/api/students/dashboard",
+                "default",
+                "teacher",
+                "teacher-1",
+                "127.0.0.1",
+                "device-1",
+                "JUnit");
+
+        ApiAccessDecision denied = service.evaluate(anonymous);
+        ApiAccessDecision allowed = service.evaluate(teacher);
+
+        assertThat(denied.allowed()).isFalse();
+        assertThat(denied.httpStatus()).isEqualTo(403);
+        assertThat(allowed.allowed()).isTrue();
+        assertThat(allowed.level()).isEqualTo(ApiAccessLevel.USER);
+        assertThat(allowed.limit()).isEqualTo(40);
     }
 
     @Test
@@ -294,5 +388,113 @@ class ApiAccessControlServiceTest {
         assertThat(denied.httpStatus()).isEqualTo(403);
         assertThat(allowed.allowed()).isTrue();
         assertThat(allowed.level()).isEqualTo(ApiAccessLevel.USER);
+    }
+
+    @Test
+    void everyApiControllerPathIsCoveredByAccessPolicy() throws Exception {
+        ApiAccessPolicy policy = ApiAccessPolicy.defaultRules();
+        List<String> uncovered = new ArrayList<>();
+
+        for (Class<?> controller : restControllerClasses()) {
+            for (Method method : controller.getDeclaredMethods()) {
+                for (String path : apiPaths(method)) {
+                    if (policy.findRule(path).isEmpty()) {
+                        uncovered.add(controller.getSimpleName() + "#" + method.getName() + " -> " + path);
+                    }
+                }
+            }
+        }
+
+        assertThat(uncovered).isEmpty();
+    }
+
+    /**
+     * Scans production controllers so new /api endpoints must declare a global access policy rule.
+     */
+    private static List<Class<?>> restControllerClasses() throws ClassNotFoundException {
+        ClassPathScanningCandidateComponentProvider scanner =
+                new ClassPathScanningCandidateComponentProvider(false);
+        scanner.addIncludeFilter(new AnnotationTypeFilter(RestController.class));
+        List<Class<?>> controllers = new ArrayList<>();
+        for (var component : scanner.findCandidateComponents("com.doob.mathagent")) {
+            controllers.add(Class.forName(component.getBeanClassName()));
+        }
+        return controllers;
+    }
+
+    /**
+     * Extracts API paths from the Spring mapping annotations used by current controllers.
+     */
+    private static List<String> apiPaths(Method method) {
+        List<String> paths = new ArrayList<>();
+        addValues(paths, method.getAnnotation(GetMapping.class));
+        addValues(paths, method.getAnnotation(PostMapping.class));
+        addValues(paths, method.getAnnotation(PutMapping.class));
+        addValues(paths, method.getAnnotation(DeleteMapping.class));
+        addValues(paths, method.getAnnotation(RequestMapping.class));
+        return paths.stream()
+                .filter(path -> path.startsWith("/api/"))
+                .toList();
+    }
+
+    /**
+     * Adds GetMapping values to the collected path list.
+     */
+    private static void addValues(List<String> paths, GetMapping mapping) {
+        if (mapping != null) {
+            addPathValues(paths, mapping.value(), mapping.path());
+        }
+    }
+
+    /**
+     * Adds PostMapping values to the collected path list.
+     */
+    private static void addValues(List<String> paths, PostMapping mapping) {
+        if (mapping != null) {
+            addPathValues(paths, mapping.value(), mapping.path());
+        }
+    }
+
+    /**
+     * Adds PutMapping values to the collected path list.
+     */
+    private static void addValues(List<String> paths, PutMapping mapping) {
+        if (mapping != null) {
+            addPathValues(paths, mapping.value(), mapping.path());
+        }
+    }
+
+    /**
+     * Adds DeleteMapping values to the collected path list.
+     */
+    private static void addValues(List<String> paths, DeleteMapping mapping) {
+        if (mapping != null) {
+            addPathValues(paths, mapping.value(), mapping.path());
+        }
+    }
+
+    /**
+     * Adds RequestMapping values to the collected path list.
+     */
+    private static void addValues(List<String> paths, RequestMapping mapping) {
+        if (mapping != null) {
+            addPathValues(paths, mapping.value(), mapping.path());
+        }
+    }
+
+    /**
+     * Adds annotation value/path aliases while ignoring empty class-level mappings.
+     */
+    private static void addPathValues(List<String> paths, String[] values, String[] aliases) {
+        for (String value : values) {
+            if (!value.isBlank()) {
+                paths.add(value);
+            }
+        }
+        for (String alias : aliases) {
+            if (!alias.isBlank()) {
+                paths.add(alias);
+            }
+        }
     }
 }

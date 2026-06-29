@@ -230,6 +230,44 @@ class CapabilityTokenServiceTest {
     }
 
     @Test
+    void issuesVersionBoundTeachingHandoutCapabilityTokens() {
+        CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
+        RequestSubject teacher = new RequestSubject("school-a", "teacher", "teacher-001", "device-1");
+
+        CapabilityTokenResponse teacherPreview = service.apply(new CapabilityTokenApplyRequest(
+                "teaching-handout:preview-latex",
+                "/api/teaching/tasks/task-1/handout/teacher/latex/preview",
+                "hash-empty-body",
+                "teaching-handout-preview-latex:task-1:teacher",
+                1.0), teacher);
+        CapabilityTokenResponse studentPdf = service.apply(new CapabilityTokenApplyRequest(
+                "teaching-handout:export-pdf",
+                "/api/teaching/tasks/task-1/handout/student/pdf",
+                "hash-empty-body",
+                "teaching-handout-export-pdf:task-1:student",
+                2.0), teacher);
+
+        assertThat(service.consume(
+                teacherPreview.token(),
+                "teaching-handout:preview-latex",
+                "/api/teaching/tasks/task-1/handout/student/latex/preview",
+                "hash-empty-body",
+                teacher).allowed()).isFalse();
+        assertThat(service.consume(
+                teacherPreview.token(),
+                "teaching-handout:preview-latex",
+                "/api/teaching/tasks/task-1/handout/teacher/latex/preview",
+                "hash-empty-body",
+                teacher).allowed()).isTrue();
+        assertThat(service.consume(
+                studentPdf.token(),
+                "teaching-handout:export-pdf",
+                "/api/teaching/tasks/task-1/handout/student/pdf",
+                "hash-empty-body",
+                teacher).allowed()).isTrue();
+    }
+
+    @Test
     void issuesTeachingHandoutBatchZipCapabilityTokens() {
         CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
         RequestSubject teacher = new RequestSubject("school-a", "teacher", "teacher-001", "device-1");
