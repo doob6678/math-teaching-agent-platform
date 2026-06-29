@@ -541,6 +541,54 @@ export interface AgentRunPlanResponse {
 }
 
 /**
+ * Request body for executing a planned AI agent run.
+ */
+export interface AgentRunExecuteRequest {
+  /** Plan returned by backend planning; backend still rechecks identity and high-value policy. */
+  plan: AgentRunPlanResponse;
+  /** Short user task summary for trace audit. */
+  userInputSummary: string;
+  /** Evidence ids or resource anchors used by this run. */
+  evidenceRefs: string[];
+  /** True keeps this stage in trace-only mode without external model calls. */
+  dryRun: boolean;
+}
+
+/**
+ * Safe baseline execution response; raw prompt and model output are intentionally omitted.
+ */
+export interface AgentRunExecuteResponse {
+  /** Trace id used for later monitoring and audit. */
+  traceId: string;
+  /** Source plan id. */
+  planId: string;
+  /** Backend resolved tenant id. */
+  tenantId: string;
+  /** Backend resolved subject type. */
+  subjectType: string;
+  /** Backend resolved subject id. */
+  subjectId: string;
+  /** Executed agent code. */
+  agentCode: string;
+  /** Selected provider name. */
+  providerName: string;
+  /** Selected model code. */
+  modelCode: string;
+  /** Execution status. */
+  status: string;
+  /** Estimated local cost copied from the plan. */
+  estimatedCost: number;
+  /** Tool scopes recorded for audit. */
+  allowedToolScopes: string[];
+  /** Data scopes recorded for audit. */
+  allowedDataScopes: string[];
+  /** Execution stage timings. */
+  stageTimings: TeachingStageTiming[];
+  /** Safe status message. */
+  message: string;
+}
+
+/**
  * 学生学习画像响应。字段与后端 `StudentDashboardResponse` 对齐，用于学生端进度图谱、薄弱点和历史记录展示。
  */
 export interface StudentDashboardResponse {
@@ -1035,6 +1083,31 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(request),
+      });
+    },
+
+    /**
+     * Executes a planned AI agent run. High-value runs first acquire a one-time capability token.
+     */
+    async executeAgentRun(request: AgentRunExecuteRequest): Promise<AgentRunExecuteResponse> {
+      const body = JSON.stringify(request);
+      const path = "/api/agents/execute";
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (request.plan.capabilityRequired) {
+        const capability = await applyCapability(
+          request.plan.capabilityAction || `agent-run:${request.plan.agentCode}`,
+          path,
+          body,
+          `agent-run:${request.plan.planId}`,
+          Math.max(1, Math.ceil(request.plan.estimatedCost)),
+        );
+        headers["X-Capability-Token"] = capability.token;
+        headers["X-Request-Hash"] = capability.requestHash;
+      }
+      return requestJson<AgentRunExecuteResponse>(path, {
+        method: "POST",
+        headers,
+        body,
       });
     },
 

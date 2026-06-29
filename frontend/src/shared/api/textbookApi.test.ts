@@ -681,6 +681,111 @@ describe("textbookApi", () => {
     expect(plan.allowedToolScopes).toContain("tool:courseware:generate");
   });
 
+  it("executes high-value agent run with capability token and no client supplied identity", async () => {
+    globalThis.localStorage.setItem(
+      "math-agent:auth-session",
+      JSON.stringify({
+        userId: "teacher-1",
+        username: "teacher",
+        role: "teacher",
+        tenantId: "school-a",
+        tokenName: "satoken",
+        tokenValue: "token-teacher",
+      }),
+    );
+    const plan = {
+      planId: "plan-1",
+      tenantId: "school-a",
+      subjectType: "teacher",
+      subjectId: "teacher-1",
+      agentCode: "CoursewareAgent",
+      providerName: "openai",
+      modelCode: "gpt-4.1",
+      modelLevel: "reasoning",
+      allowedToolScopes: ["tool:courseware:generate"],
+      deniedToolScopes: [],
+      allowedDataScopes: ["TEACHER_PRIVATE"],
+      deniedDataScopes: [],
+      capabilityRequired: true,
+      capabilityAction: "agent-run:CoursewareAgent",
+      maxInputTokens: 12000,
+      maxOutputTokens: 4000,
+      estimatedTotalTokens: 4600,
+      estimatedCost: 0.46,
+      withinBudget: true,
+      routeReason: "courseware_generation uses reasoning model",
+      stageTimings: [{ stage: "model_route", elapsedMs: 1 }],
+      concurrencyKeys: ["concurrent:user:teacher-1:CoursewareAgent"],
+    };
+    const executeRequest = {
+      plan,
+      userInputSummary: "Generate teacher handout for space vectors",
+      evidenceRefs: ["textbook:chapter-1"],
+      dryRun: true,
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          token: "agent-capability",
+          action: "agent-run:CoursewareAgent",
+          path: "/api/agents/execute",
+          requestHash: "hash-agent",
+          expiresAt: "2026-06-28T12:02:00Z",
+          maxCost: 1,
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          traceId: "trace-1",
+          planId: "plan-1",
+          tenantId: "school-a",
+          subjectType: "teacher",
+          subjectId: "teacher-1",
+          agentCode: "CoursewareAgent",
+          providerName: "openai",
+          modelCode: "gpt-4.1",
+          status: "COMPLETED",
+          estimatedCost: 0.46,
+          allowedToolScopes: ["tool:courseware:generate"],
+          allowedDataScopes: ["TEACHER_PRIVATE"],
+          stageTimings: [{ stage: "baseline_execute", elapsedMs: 1 }],
+          message: "Baseline trace recorded; external model execution is not enabled yet.",
+        }),
+      });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const response = await client.executeAgentRun(executeRequest);
+
+    const capabilityBody = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
+    expect(capabilityBody).toEqual({
+      action: "agent-run:CoursewareAgent",
+      path: "/api/agents/execute",
+      requestHash: expect.any(String),
+      idempotencyKey: "agent-run:plan-1",
+      maxCost: 1,
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://127.0.0.1:8080/api/agents/execute",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "Content-Type": "application/json",
+          satoken: "token-teacher",
+          "X-Capability-Token": "agent-capability",
+          "X-Request-Hash": capabilityBody.requestHash,
+        }),
+        body: JSON.stringify(executeRequest),
+      }),
+    );
+    expect(fetchMock.mock.calls[1][1]?.headers).not.toHaveProperty("X-Subject-Id");
+    expect(fetchMock.mock.calls[1][1]?.headers).not.toHaveProperty("X-Subject-Type");
+    expect(response.traceId).toBe("trace-1");
+  });
+
   it("loads student dashboard without client supplied identity headers", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

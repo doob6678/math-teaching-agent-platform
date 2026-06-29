@@ -16,32 +16,6 @@ import org.springframework.stereotype.Service;
 @Service
 public class AgentRunPlanService {
 
-    private static final List<AgentDefinition> AGENTS = List.of(
-            new AgentDefinition(
-                    "StudentTutorAgent",
-                    Set.of("student"),
-                    Set.of("tool:search:textbook", "tool:student:progress:read"),
-                    Set.of("PUBLIC_TEXTBOOK", "STUDENT_PRIVATE", "MATH_VIP"),
-                    false),
-            new AgentDefinition(
-                    "TeacherAssistantAgent",
-                    Set.of("teacher", "admin"),
-                    Set.of("tool:search:textbook", "tool:search:private", "tool:student:progress:read"),
-                    Set.of("PUBLIC_TEXTBOOK", "TEACHER_PRIVATE", "CLASS_AUTHORIZED"),
-                    false),
-            new AgentDefinition(
-                    "CoursewareAgent",
-                    Set.of("teacher", "admin"),
-                    Set.of("tool:courseware:generate", "tool:search:private", "tool:search:textbook"),
-                    Set.of("PUBLIC_TEXTBOOK", "TEACHER_PRIVATE", "CLASS_AUTHORIZED"),
-                    true),
-            new AgentDefinition(
-                    "QualityCheckAgent",
-                    Set.of("teacher", "admin"),
-                    Set.of("tool:quality:check"),
-                    Set.of("PUBLIC_TEXTBOOK", "TEACHER_PRIVATE", "CLASS_AUTHORIZED"),
-                    false));
-
     private final AiProviderCatalog providerCatalog;
 
     /**
@@ -64,7 +38,7 @@ public class AgentRunPlanService {
         StageTimer timer = new StageTimer();
         AgentRunPlanRequest normalized = request.normalize();
         RequestSubject normalizedSubject = subject.normalize();
-        AgentDefinition agent = resolveAgent(normalized, normalizedSubject);
+        AgentRunPolicy.AgentDefinition agent = AgentRunPolicy.resolveAgent(normalized, normalizedSubject);
         List<String> allowedTools = allowed(normalized.requestedToolScopes(), agent.allowedToolScopes());
         List<String> deniedTools = denied(normalized.requestedToolScopes(), agent.allowedToolScopes());
         List<String> allowedData = allowed(normalized.requestedDataScopes(), agent.allowedDataScopes());
@@ -101,31 +75,6 @@ public class AgentRunPlanService {
                 route.reason(),
                 timer.timings(),
                 concurrencyKeys(normalizedSubject, agent.code(), route.provider().chatModel()));
-    }
-
-    /**
-     * Resolves the requested agent and verifies that the backend subject role may use it.
-     */
-    private static AgentDefinition resolveAgent(AgentRunPlanRequest request, RequestSubject subject) {
-        String requested = request.agentCode().isBlank() ? defaultAgent(request, subject) : request.agentCode();
-        AgentDefinition agent = AGENTS.stream()
-                .filter(candidate -> candidate.code().equals(requested))
-                .findFirst()
-                .orElseThrow(() -> new IllegalArgumentException("Unsupported agent code: " + requested));
-        if (!agent.allowedRoles().contains(subject.subjectType())) {
-            throw new IllegalArgumentException("Agent subject not allowed: " + subject.subjectType());
-        }
-        return agent;
-    }
-
-    /**
-     * Selects a conservative default agent when callers omit an explicit agent code.
-     */
-    private static String defaultAgent(AgentRunPlanRequest request, RequestSubject subject) {
-        if ("teacher".equals(subject.subjectType()) || "admin".equals(subject.subjectType())) {
-            return request.taskType().contains("courseware") ? "CoursewareAgent" : "TeacherAssistantAgent";
-        }
-        return "StudentTutorAgent";
     }
 
     /**
@@ -190,17 +139,6 @@ public class AgentRunPlanService {
                 "concurrent:user:" + subject.subjectId() + ":" + agentCode,
                 "concurrent:tenant:" + subject.tenantId() + ":" + agentCode,
                 "concurrent:model:" + modelCode);
-    }
-
-    /**
-     * Static agent definition used until definitions move to MySQL.
-     */
-    private record AgentDefinition(
-            String code,
-            Set<String> allowedRoles,
-            Set<String> allowedToolScopes,
-            Set<String> allowedDataScopes,
-            boolean highValueRequired) {
     }
 
     /**

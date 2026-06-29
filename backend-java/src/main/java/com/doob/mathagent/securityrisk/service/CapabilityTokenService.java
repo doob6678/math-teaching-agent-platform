@@ -31,6 +31,8 @@ public class CapabilityTokenService {
     private static final String TEACHER_RESOURCES_PATH = "/api/teacher/resources";
     private static final String STUDENT_MEMORY_REMEMBER_ACTION = "student-memory:remember";
     private static final String STUDENT_MEMORY_REMEMBER_PATH = "/api/students/memory/remember";
+    private static final String AGENT_RUN_ACTION_PREFIX = "agent-run:";
+    private static final String AGENT_EXECUTE_PATH = "/api/agents/execute";
     private static final Set<String> CAPABILITY_ALLOWED_ROLES = Set.of("student", "teacher", "admin");
     private static final Set<String> TEACHER_RESOURCE_ALLOWED_ROLES = Set.of("teacher", "admin");
     private static final Set<String> STUDENT_MEMORY_ALLOWED_ROLES = Set.of("student");
@@ -239,6 +241,13 @@ public class CapabilityTokenService {
         }
         if (STUDENT_MEMORY_REMEMBER_ACTION.equals(action) && STUDENT_MEMORY_REMEMBER_PATH.equals(path)) {
             validateStudentMemorySubject(subject);
+            return;
+        }
+        if (action.startsWith(AGENT_RUN_ACTION_PREFIX) && AGENT_EXECUTE_PATH.equals(path)) {
+            if (action.length() == AGENT_RUN_ACTION_PREFIX.length()) {
+                throw new IllegalArgumentException("Unsupported capability action or path");
+            }
+            validateTeachingSubject(subject);
             return;
         }
         throw new IllegalArgumentException("Unsupported capability action or path");

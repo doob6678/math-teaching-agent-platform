@@ -262,6 +262,34 @@ class CapabilityTokenServiceTest {
     }
 
     @Test
+    void issuesAgentRunCapabilityTokensForLoggedInSubjects() {
+        CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
+        RequestSubject teacher = new RequestSubject("school-a", "teacher", "teacher-001", "device-1");
+
+        CapabilityTokenResponse execute = service.apply(new CapabilityTokenApplyRequest(
+                "agent-run:CoursewareAgent",
+                "/api/agents/execute",
+                "hash-execute-body",
+                "agent-run:plan-1",
+                3.0), teacher);
+
+        assertThat(execute.action()).isEqualTo("agent-run:CoursewareAgent");
+        assertThat(execute.path()).isEqualTo("/api/agents/execute");
+        assertThat(service.consume(
+                execute.token(),
+                "agent-run:CoursewareAgent",
+                "/api/agents/execute",
+                "hash-execute-body",
+                teacher).allowed()).isTrue();
+        assertThat(service.consume(
+                execute.token(),
+                "agent-run:CoursewareAgent",
+                "/api/agents/execute",
+                "hash-execute-body",
+                teacher).allowed()).isFalse();
+    }
+
+    @Test
     void recordsAuditEventsForIssueConsumeAndDeniedReplay() {
         CapturingCapabilityAuditSink auditSink = new CapturingCapabilityAuditSink();
         CapabilityTokenService service =
