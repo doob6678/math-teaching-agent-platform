@@ -15,7 +15,7 @@ spring:
       base-url: ${OPENAI_BASE_URL:https://api.openai.com}
       chat:
         options:
-          model: ${OPENAI_CHAT_MODEL:gpt-5.4-mini}
+          model: ${OPENAI_CHAT_MODEL:gpt-5.4}
   flyway:
     enabled: false
 
@@ -34,7 +34,7 @@ math-agent:
       name: openai
       base-url: ${OPENAI_BASE_URL:https://api.openai.com}
       api-key: ${OPENAI_API_KEY:}
-      chat-model: ${OPENAI_CHAT_MODEL:gpt-5.4-mini}
+      chat-model: ${OPENAI_CHAT_MODEL:gpt-5.4}
     deepseek:
       name: deepseek
       base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}

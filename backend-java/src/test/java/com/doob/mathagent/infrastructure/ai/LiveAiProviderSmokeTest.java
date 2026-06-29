@@ -83,7 +83,7 @@ class LiveAiProviderSmokeTest {
                                 "openai",
                                 env("OPENAI_BASE_URL", "https://api.openai.com"),
                                 env("OPENAI_API_KEY", ""),
-                                env("OPENAI_CHAT_MODEL", "gpt-5.4-mini")))
+                                env("OPENAI_CHAT_MODEL", "gpt-5.4")))
                 .stream()
                 .filter(LiveProvider::hasUsableCredentials)
                 .toList();

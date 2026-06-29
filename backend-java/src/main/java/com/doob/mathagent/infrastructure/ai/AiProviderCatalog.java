@@ -56,6 +56,23 @@ public class AiProviderCatalog {
     }
 
     /**
+     * Looks up an enabled provider and validates that the requested model belongs to that provider's allow-list.
+     *
+     * @param providerName provider name requested by a user preference
+     * @param modelCode model code requested by a user preference
+     * @return provider with the requested model when allowed
+     */
+    public Optional<Provider> preferredProvider(String providerName, String modelCode) {
+        String normalizedModel = safeText(modelCode);
+        if (normalizedModel.isBlank()) {
+            return Optional.empty();
+        }
+        return provider(providerName)
+                .filter(provider -> allowedModels(provider.name()).contains(normalizedModel))
+                .map(provider -> new Provider(provider.name(), provider.baseUrl(), normalizedModel));
+    }
+
+    /**
      * Returns the configured default provider.
      *
      * @return default provider
@@ -100,6 +117,32 @@ public class AiProviderCatalog {
      */
     private static String normalize(String value) {
         return value == null ? "" : value.strip().toLowerCase(Locale.ROOT);
+    }
+
+    /**
+     * Returns an allow-list of model codes the frontend may request for one provider.
+     *
+     * @param providerName normalized provider name
+     * @return allowed model codes
+     */
+    private static List<String> allowedModels(String providerName) {
+        return switch (normalize(providerName)) {
+            case "dashscope" -> List.of("qwen3.6-flash", "qwen3.7-plus", "qwen3.7-max");
+            case "openai" -> List.of("gpt-5.4", "gpt-5.4-mini");
+            case "deepseek" -> List.of("deepseek-v4-flash", "deepseek-v4-pro");
+            case "ark" -> List.of("doubao-seed-2-0-lite-260428");
+            default -> List.of();
+        };
+    }
+
+    /**
+     * Returns stripped text or an empty string.
+     *
+     * @param value text value
+     * @return stripped text
+     */
+    private static String safeText(String value) {
+        return value == null || value.isBlank() ? "" : value.strip();
     }
 
     /**

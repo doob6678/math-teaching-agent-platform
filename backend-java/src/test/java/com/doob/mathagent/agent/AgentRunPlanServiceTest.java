@@ -152,9 +152,73 @@ class AgentRunPlanServiceTest {
                 new RequestSubject("school-a", "teacher", "teacher-001", "device-1"));
 
         assertThat(plan.providerName()).isEqualTo("openai");
-        assertThat(plan.modelCode()).isEqualTo("gpt-5.4-mini");
+        assertThat(plan.modelCode()).isEqualTo("gpt-5.4");
         assertThat(plan.modelLevel()).isEqualTo("json_stable");
         assertThat(plan.routeReason()).contains("fallback");
+    }
+
+    @Test
+    void honorsBackendValidatedPreferredProviderAndModel() {
+        AgentRunPlanService service = new AgentRunPlanService(providerCatalog());
+        AgentRunPlanRequest request = new AgentRunPlanRequest(
+                "CoursewareAgent",
+                "courseware_generation",
+                "teacher",
+                3000,
+                1600,
+                false,
+                true,
+                "medium",
+                "normal",
+                2.5,
+                0,
+                true,
+                List.of("tool:courseware:generate"),
+                List.of(),
+                List.of("TEACHER_PRIVATE"),
+                true,
+                "openai",
+                "gpt-5.4-mini");
+
+        AgentRunPlanResponse plan = service.plan(
+                request,
+                new RequestSubject("school-a", "teacher", "teacher-001", "device-1"));
+
+        assertThat(plan.providerName()).isEqualTo("openai");
+        assertThat(plan.modelCode()).isEqualTo("gpt-5.4-mini");
+        assertThat(plan.routeReason()).contains("preferred model");
+    }
+
+    @Test
+    void ignoresUnknownPreferredModelAndKeepsDefaultProvider() {
+        AgentRunPlanService service = new AgentRunPlanService(providerCatalog());
+        AgentRunPlanRequest request = new AgentRunPlanRequest(
+                "CoursewareAgent",
+                "courseware_generation",
+                "teacher",
+                3000,
+                1600,
+                false,
+                true,
+                "medium",
+                "normal",
+                2.5,
+                0,
+                true,
+                List.of("tool:courseware:generate"),
+                List.of(),
+                List.of("TEACHER_PRIVATE"),
+                true,
+                "openai",
+                "drop table agent_trace");
+
+        AgentRunPlanResponse plan = service.plan(
+                request,
+                new RequestSubject("school-a", "teacher", "teacher-001", "device-1"));
+
+        assertThat(plan.providerName()).isEqualTo("dashscope");
+        assertThat(plan.modelCode()).isEqualTo("qwen3.6-flash");
+        assertThat(plan.routeReason()).contains("ignored preferred model");
     }
 
     private static AiProviderCatalog providerCatalog() {
@@ -163,7 +227,7 @@ class AgentRunPlanServiceTest {
         properties.getDashscope().setApiKey("dashscope-key");
         properties.getDashscope().setChatModel("qwen3.6-flash");
         properties.getOpenai().setApiKey("openai-key");
-        properties.getOpenai().setChatModel("gpt-5.4-mini");
+        properties.getOpenai().setChatModel("gpt-5.4");
         properties.getDeepseek().setApiKey("deepseek-key");
         properties.getDeepseek().setChatModel("deepseek-v4-flash");
         properties.getArk().setApiKey("ark-key");

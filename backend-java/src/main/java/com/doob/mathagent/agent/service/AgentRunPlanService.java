@@ -98,7 +98,8 @@ public class AgentRunPlanService {
         }
         AiProviderCatalog.Provider provider = request.previousFailureCount() >= 2 && providers.size() > 1
                 ? providers.get(1)
-                : providerCatalog.defaultProvider();
+                : providerCatalog.preferredProvider(request.preferredProviderName(), request.preferredModelCode())
+                .orElseGet(providerCatalog::defaultProvider);
         String level;
         if (request.requiredJsonSchema()) {
             level = "json_stable";
@@ -109,10 +110,29 @@ public class AgentRunPlanService {
         } else {
             level = "fast_text";
         }
-        String reason = request.previousFailureCount() >= 2 && providers.size() > 1
-                ? "fallback after repeated failures"
-                : request.taskType() + " uses " + level + " model";
+        String reason = routeReason(request, providers, level, provider);
         return new RouteDecision(provider, level, reason);
+    }
+
+    /**
+     * Builds a route reason without echoing untrusted model preference into SQL or logs.
+     */
+    private String routeReason(
+            AgentRunPlanRequest request,
+            List<AiProviderCatalog.Provider> providers,
+            String level,
+            AiProviderCatalog.Provider provider) {
+        if (request.previousFailureCount() >= 2 && providers.size() > 1) {
+            return "fallback after repeated failures";
+        }
+        if (provider.name().equals(request.preferredProviderName())
+                && provider.chatModel().equals(request.preferredModelCode())) {
+            return request.taskType() + " uses preferred model " + provider.name() + "/" + provider.chatModel();
+        }
+        if (!request.preferredProviderName().isBlank() || !request.preferredModelCode().isBlank()) {
+            return request.taskType() + " ignored preferred model and uses " + level + " model";
+        }
+        return request.taskType() + " uses " + level + " model";
     }
 
     /**

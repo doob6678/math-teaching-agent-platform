@@ -7,6 +7,9 @@ import com.doob.mathagent.agent.dto.AgentRunExecuteRequest;
 import com.doob.mathagent.agent.dto.AgentRunPlanRequest;
 import com.doob.mathagent.agent.service.AgentConcurrencyGuard;
 import com.doob.mathagent.agent.service.AgentConcurrencyLease;
+import com.doob.mathagent.agent.service.AiChatGateway;
+import com.doob.mathagent.agent.service.AiChatRequest;
+import com.doob.mathagent.agent.service.AiChatResult;
 import com.doob.mathagent.agent.service.AgentRunExecutionService;
 import com.doob.mathagent.agent.service.AgentRunPlanService;
 import com.doob.mathagent.agent.service.InMemoryAgentConcurrencyGuard;
@@ -20,6 +23,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
 class AgentRunExecutionServiceTest {
@@ -251,6 +255,61 @@ class AgentRunExecutionServiceTest {
         assertThat(guard.released).isTrue();
     }
 
+    @Test
+    void callsModelGatewayForNonDryRunAndReturnsActualUsage() {
+        CapturingAiChatGateway gateway = new CapturingAiChatGateway(List.of(new AiChatResult(
+                "dashscope",
+                "qwen3.6-flash",
+                11,
+                7,
+                18,
+                "model response recorded")));
+        AgentRunExecutionService service = new AgentRunExecutionService(
+                new InMemoryAgentTraceStore(),
+                new InMemoryAgentConcurrencyGuard(),
+                gateway);
+        AgentRunPlanResponse plan = coursewarePlan();
+
+        AgentRunExecuteResponse response = service.execute(
+                new AgentRunExecuteRequest(plan, "Generate handout", List.of("doc-1"), false),
+                new RequestSubject("school-a", "teacher", "teacher-001", "device-1"));
+
+        assertThat(gateway.requests).hasSize(1);
+        assertThat(gateway.requests.getFirst().providerName()).isEqualTo("dashscope");
+        assertThat(response.providerName()).isEqualTo("dashscope");
+        assertThat(response.modelCode()).isEqualTo("qwen3.6-flash");
+        assertThat(response.actualUsage().promptTokens()).isEqualTo(11);
+        assertThat(response.actualUsage().completionTokens()).isEqualTo(7);
+        assertThat(response.actualUsage().totalTokens()).isEqualTo(18);
+        assertThat(response.stageTimings()).extracting(AgentRunExecuteResponse.StageTiming::stage)
+                .contains("model_call");
+        assertThat(response.message()).contains("model response recorded");
+    }
+
+    @Test
+    void rotatesToFallbackModelWhenPrimaryModelCallFails() {
+        CapturingAiChatGateway gateway = new CapturingAiChatGateway(List.of(
+                new IllegalStateException("primary unavailable"),
+                new AiChatResult("openai", "gpt-5.4", 9, 6, 15, "fallback response recorded")));
+        AgentRunExecutionService service = new AgentRunExecutionService(
+                new InMemoryAgentTraceStore(),
+                new InMemoryAgentConcurrencyGuard(),
+                gateway);
+        AgentRunPlanResponse plan = coursewarePlan();
+
+        AgentRunExecuteResponse response = service.execute(
+                new AgentRunExecuteRequest(plan, "Generate handout", List.of("doc-1"), false),
+                new RequestSubject("school-a", "teacher", "teacher-001", "device-1"));
+
+        assertThat(gateway.requests).hasSize(2);
+        assertThat(gateway.requests.get(0).providerName()).isEqualTo("dashscope");
+        assertThat(gateway.requests.get(1).providerName()).isEqualTo("openai");
+        assertThat(response.providerName()).isEqualTo("openai");
+        assertThat(response.modelCode()).isEqualTo("gpt-5.4");
+        assertThat(response.actualUsage().totalTokens()).isEqualTo(15);
+        assertThat(response.message()).contains("fallback response recorded");
+    }
+
     private static AgentRunPlanResponse coursewarePlan() {
         return new AgentRunPlanService(providerCatalog()).plan(new AgentRunPlanRequest(
                         "CoursewareAgent",
@@ -298,6 +357,8 @@ class AgentRunExecutionServiceTest {
         properties.setDefaultProvider("dashscope");
         properties.getDashscope().setApiKey("dashscope-key");
         properties.getDashscope().setChatModel("qwen3.6-flash");
+        properties.getOpenai().setApiKey("openai-key");
+        properties.getOpenai().setChatModel("gpt-5.4");
         return new AiProviderCatalog(properties);
     }
 
@@ -309,6 +370,26 @@ class AgentRunExecutionServiceTest {
         public Optional<AgentConcurrencyLease> tryAcquire(List<String> keys, String traceId, Duration leaseTime) {
             requestedKeys = keys;
             return Optional.of(() -> released.set(true));
+        }
+    }
+
+    private static final class CapturingAiChatGateway implements AiChatGateway {
+        private final List<Object> outcomes;
+        private final AtomicInteger calls = new AtomicInteger();
+        private final List<AiChatRequest> requests = new java.util.ArrayList<>();
+
+        private CapturingAiChatGateway(List<Object> outcomes) {
+            this.outcomes = outcomes;
+        }
+
+        @Override
+        public AiChatResult call(AiChatRequest request) {
+            requests.add(request);
+            Object outcome = outcomes.get(calls.getAndIncrement());
+            if (outcome instanceof RuntimeException exception) {
+                throw exception;
+            }
+            return (AiChatResult) outcome;
         }
     }
 }

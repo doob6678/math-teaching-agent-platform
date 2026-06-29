@@ -22,6 +22,12 @@ import {
 
 const DEFAULT_BACKEND_URL = import.meta.env.VITE_BACKEND_URL ?? "http://127.0.0.1:8080";
 const TEACHING_TASK_STORAGE_KEY = "math-agent:last-teaching-task-id";
+const AGENT_MODEL_OPTIONS: Record<string, string[]> = {
+  dashscope: ["qwen3.6-flash", "qwen3.7-plus", "qwen3.7-max"],
+  openai: ["gpt-5.4", "gpt-5.4-mini"],
+  deepseek: ["deepseek-v4-flash", "deepseek-v4-pro"],
+  ark: ["doubao-seed-2-0-lite-260428"],
+};
 
 /**
  * 教材检索控制台。当前阶段面向教师端/后台资料搜索，用来验证 BM25-first 检索证据是否可审计。
@@ -56,6 +62,8 @@ export function App() {
   const [agentPlanError, setAgentPlanError] = useState("");
   const [disablePrivateSearch, setDisablePrivateSearch] = useState(true);
   const [disableTextbookSearch, setDisableTextbookSearch] = useState(false);
+  const [agentProvider, setAgentProvider] = useState("openai");
+  const [agentModel, setAgentModel] = useState("gpt-5.4");
   const [mcpUrl, setMcpUrl] = useState(`${DEFAULT_BACKEND_URL}/api/mcp`);
   const [mcpSecretKey, setMcpSecretKey] = useState("");
   const [mcpSecretEnvName, setMcpSecretEnvName] = useState("MATH_AGENT_MCP_SECRET");
@@ -349,6 +357,8 @@ export function App() {
         disabledToolScopes,
         requestedDataScopes: ["TEACHER_PRIVATE", "CLASS_AUTHORIZED", "PUBLIC_TEXTBOOK"],
         highValueOperation: true,
+        preferredProviderName: agentProvider,
+        preferredModelCode: agentModel,
       })
       .then(setAgentPlan)
       .catch((error: Error) => setAgentPlanError(error.message))
@@ -378,6 +388,12 @@ export function App() {
       ...current,
       tools: toggleMcpExposureOption(current.tools, option, checked, MCP_TOOL_OPTIONS),
     }));
+  }
+
+  function handleAgentProviderChange(provider: string) {
+    const models = AGENT_MODEL_OPTIONS[provider] ?? [];
+    setAgentProvider(provider);
+    setAgentModel(models[0] ?? "");
   }
 
   function handleMcpPromptToggle(option: string, checked: boolean) {
@@ -514,6 +530,26 @@ export function App() {
 
           <PanelTitle icon={<ShieldCheck size={18} />} title="Agent tool policy" />
           <form className="search-form agent-tool-form" onSubmit={handlePlanAgent}>
+            <label>
+              <span>Provider</span>
+              <select value={agentProvider} onChange={(event) => handleAgentProviderChange(event.target.value)}>
+                {Object.keys(AGENT_MODEL_OPTIONS).map((provider) => (
+                  <option key={provider} value={provider}>
+                    {provider}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span>Model</span>
+              <select value={agentModel} onChange={(event) => setAgentModel(event.target.value)}>
+                {(AGENT_MODEL_OPTIONS[agentProvider] ?? []).map((model) => (
+                  <option key={model} value={model}>
+                    {model}
+                  </option>
+                ))}
+              </select>
+            </label>
             <label className="toggle-row">
               <input
                 type="checkbox"
@@ -1286,6 +1322,10 @@ function AgentPlanPanel({
             <div>
               <span>Capability</span>
               <strong>{plan.capabilityRequired ? plan.capabilityAction : "not required"}</strong>
+            </div>
+            <div>
+              <span>Est. tokens</span>
+              <strong>{plan.estimatedTotalTokens}</strong>
             </div>
           </div>
           <div className="tool-decision-list">

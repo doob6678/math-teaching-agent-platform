@@ -3,6 +3,8 @@ package com.doob.mathagent.agent.service;
 import com.doob.mathagent.agent.dto.AgentRunExecuteRequest;
 import com.doob.mathagent.agent.vo.AgentRunExecuteResponse;
 import com.doob.mathagent.agent.vo.AgentRunPlanResponse;
+import com.doob.mathagent.infrastructure.ai.AiProviderCatalog;
+import com.doob.mathagent.infrastructure.ai.AiProviderProperties;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import java.time.Clock;
 import java.time.Duration;
@@ -25,6 +27,8 @@ public class AgentRunExecutionService {
 
     private final AgentTraceStore traceStore;
     private final AgentConcurrencyGuard concurrencyGuard;
+    private final AiChatGateway aiChatGateway;
+    private final AiProviderCatalog providerCatalog;
     private final Clock clock;
 
     /**
@@ -33,8 +37,12 @@ public class AgentRunExecutionService {
      * @param traceStore trace storage boundary
      */
     @Autowired
-    public AgentRunExecutionService(AgentTraceStore traceStore, AgentConcurrencyGuard concurrencyGuard) {
-        this(traceStore, concurrencyGuard, Clock.systemUTC());
+    public AgentRunExecutionService(
+            AgentTraceStore traceStore,
+            AgentConcurrencyGuard concurrencyGuard,
+            AiChatGateway aiChatGateway,
+            AiProviderCatalog providerCatalog) {
+        this(traceStore, concurrencyGuard, aiChatGateway, providerCatalog, Clock.systemUTC());
     }
 
     /**
@@ -43,7 +51,7 @@ public class AgentRunExecutionService {
      * @param traceStore trace storage boundary
      */
     public AgentRunExecutionService(AgentTraceStore traceStore) {
-        this(traceStore, new InMemoryAgentConcurrencyGuard(), Clock.systemUTC());
+        this(traceStore, new InMemoryAgentConcurrencyGuard(), new NoopAiChatGateway(), emptyProviderCatalog(), Clock.systemUTC());
     }
 
     /**
@@ -53,7 +61,31 @@ public class AgentRunExecutionService {
      * @param clock clock used for trace timestamps
      */
     public AgentRunExecutionService(AgentTraceStore traceStore, Clock clock) {
-        this(traceStore, new InMemoryAgentConcurrencyGuard(), clock);
+        this(traceStore, new InMemoryAgentConcurrencyGuard(), new NoopAiChatGateway(), emptyProviderCatalog(), clock);
+    }
+
+    /**
+     * Creates a testable execution service with explicit concurrency guard.
+     *
+     * @param traceStore trace storage boundary
+     * @param concurrencyGuard concurrency guard
+     */
+    public AgentRunExecutionService(AgentTraceStore traceStore, AgentConcurrencyGuard concurrencyGuard) {
+        this(traceStore, concurrencyGuard, new NoopAiChatGateway(), emptyProviderCatalog(), Clock.systemUTC());
+    }
+
+    /**
+     * Creates a testable execution service with a fake model gateway.
+     *
+     * @param traceStore trace storage boundary
+     * @param concurrencyGuard concurrency guard
+     * @param aiChatGateway model gateway
+     */
+    public AgentRunExecutionService(
+            AgentTraceStore traceStore,
+            AgentConcurrencyGuard concurrencyGuard,
+            AiChatGateway aiChatGateway) {
+        this(traceStore, concurrencyGuard, aiChatGateway, defaultTestProviderCatalog(), Clock.systemUTC());
     }
 
     /**
@@ -67,8 +99,28 @@ public class AgentRunExecutionService {
             AgentTraceStore traceStore,
             AgentConcurrencyGuard concurrencyGuard,
             Clock clock) {
+        this(traceStore, concurrencyGuard, new NoopAiChatGateway(), emptyProviderCatalog(), clock);
+    }
+
+    /**
+     * Creates a testable execution service with explicit dependencies.
+     *
+     * @param traceStore trace storage boundary
+     * @param concurrencyGuard concurrency guard
+     * @param aiChatGateway model gateway
+     * @param providerCatalog provider catalog used for fallback rotation
+     * @param clock clock used for trace timestamps
+     */
+    public AgentRunExecutionService(
+            AgentTraceStore traceStore,
+            AgentConcurrencyGuard concurrencyGuard,
+            AiChatGateway aiChatGateway,
+            AiProviderCatalog providerCatalog,
+            Clock clock) {
         this.traceStore = traceStore;
         this.concurrencyGuard = concurrencyGuard;
+        this.aiChatGateway = aiChatGateway;
+        this.providerCatalog = providerCatalog;
         this.clock = clock;
     }
 
@@ -138,7 +190,10 @@ public class AgentRunExecutionService {
             timer.mark("trace_start");
 
             traceStore.save(record);
-            timer.mark("baseline_execute");
+            ExecutionOutcome outcome = normalized.dryRun()
+                    ? ExecutionOutcome.baseline(record.providerName(), record.modelCode())
+                    : callModelWithFallback(normalized, record);
+            timer.mark(normalized.dryRun() ? "baseline_execute" : "model_call");
             timer.mark("trace_finish");
 
             return new AgentRunExecuteResponse(
@@ -148,18 +203,63 @@ public class AgentRunExecutionService {
                     record.subjectType(),
                     record.subjectId(),
                     record.agentCode(),
-                    record.providerName(),
-                    record.modelCode(),
+                    outcome.providerName(),
+                    outcome.modelCode(),
                     record.status(),
                     record.estimatedCost(),
                     record.allowedToolScopes(),
                     record.allowedDataScopes(),
                     concurrencyKeys,
                     timer.timings(),
-                    "Baseline trace recorded; external model execution is not enabled yet.");
+                    new AgentRunExecuteResponse.TokenUsage(
+                            outcome.promptTokens(),
+                            outcome.completionTokens(),
+                            outcome.totalTokens()),
+                    outcome.message());
         } finally {
             lease.close();
         }
+    }
+
+    /**
+     * Calls the selected model and rotates to configured fallback providers when the primary call fails.
+     */
+    private ExecutionOutcome callModelWithFallback(AgentRunExecuteRequest request, AgentTraceRecord record) {
+        RuntimeException lastFailure = null;
+        for (AiProviderCatalog.Provider provider : fallbackProviders(record.providerName(), record.modelCode())) {
+            try {
+                AiChatResult result = aiChatGateway.call(new AiChatRequest(
+                        provider.name(),
+                        provider.chatModel(),
+                        record.agentCode(),
+                        request.userInputSummary(),
+                        request.evidenceRefs()));
+                return new ExecutionOutcome(
+                        result.providerName(),
+                        result.modelCode(),
+                        Math.max(0, result.promptTokens()),
+                        Math.max(0, result.completionTokens()),
+                        Math.max(0, result.totalTokens()),
+                        result.safeMessage());
+            } catch (RuntimeException exception) {
+                lastFailure = exception;
+            }
+        }
+        throw new IllegalStateException("All configured AI providers failed", lastFailure);
+    }
+
+    /**
+     * Builds provider rotation order with the plan-selected provider first and remaining enabled providers after it.
+     */
+    private List<AiProviderCatalog.Provider> fallbackProviders(String providerName, String modelCode) {
+        List<AiProviderCatalog.Provider> enabled = providerCatalog.enabledProviders();
+        AiProviderCatalog.Provider primary = new AiProviderCatalog.Provider(providerName, "", modelCode);
+        List<AiProviderCatalog.Provider> ordered = new ArrayList<>();
+        ordered.add(primary);
+        enabled.stream()
+                .filter(provider -> !provider.name().equals(providerName))
+                .forEach(ordered::add);
+        return ordered;
     }
 
     /**
@@ -223,6 +323,26 @@ public class AgentRunExecutionService {
     }
 
     /**
+     * Builds an empty provider catalog for dry-run-only tests.
+     */
+    private static AiProviderCatalog emptyProviderCatalog() {
+        return new AiProviderCatalog(new AiProviderProperties());
+    }
+
+    /**
+     * Builds a deterministic provider catalog for gateway unit tests.
+     */
+    private static AiProviderCatalog defaultTestProviderCatalog() {
+        AiProviderProperties properties = new AiProviderProperties();
+        properties.setDefaultProvider("dashscope");
+        properties.getDashscope().setApiKey("dashscope-key");
+        properties.getDashscope().setChatModel("qwen3.6-flash");
+        properties.getOpenai().setApiKey("openai-key");
+        properties.getOpenai().setChatModel("gpt-5.4");
+        return new AiProviderCatalog(properties);
+    }
+
+    /**
      * Returns null-safe tool policy decisions from a frontend-returned plan snapshot.
      */
     private static List<AgentRunPlanResponse.ToolPolicyDecision> safeToolDecisions(AgentRunPlanResponse plan) {
@@ -251,6 +371,31 @@ public class AgentRunExecutionService {
          */
         List<AgentRunExecuteResponse.StageTiming> timings() {
             return List.copyOf(timings);
+        }
+    }
+
+    /**
+     * Internal execution outcome used to keep response construction uniform.
+     */
+    private record ExecutionOutcome(
+            String providerName,
+            String modelCode,
+            int promptTokens,
+            int completionTokens,
+            int totalTokens,
+            String message) {
+
+        /**
+         * Returns a baseline dry-run outcome with zero provider usage.
+         */
+        private static ExecutionOutcome baseline(String providerName, String modelCode) {
+            return new ExecutionOutcome(
+                    providerName,
+                    modelCode,
+                    0,
+                    0,
+                    0,
+                    "Baseline trace recorded; external model execution is not enabled yet.");
         }
     }
 }

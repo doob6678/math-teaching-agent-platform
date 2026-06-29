@@ -831,6 +831,8 @@ describe("textbookApi", () => {
       disabledToolScopes: ["tool:search:private"],
       requestedDataScopes: ["TEACHER_PRIVATE"],
       highValueOperation: true,
+      preferredProviderName: "openai",
+      preferredModelCode: "gpt-5.4",
     };
 
     const plan = await client.planAgentRun(request);
@@ -937,6 +939,11 @@ describe("textbookApi", () => {
           allowedDataScopes: ["TEACHER_PRIVATE"],
           concurrencyKeys: ["concurrent:user:teacher-1:CoursewareAgent"],
           stageTimings: [{ stage: "baseline_execute", elapsedMs: 1 }],
+          actualUsage: {
+            promptTokens: 0,
+            completionTokens: 0,
+            totalTokens: 0,
+          },
           message: "Baseline trace recorded; external model execution is not enabled yet.",
         }),
       });
@@ -970,6 +977,7 @@ describe("textbookApi", () => {
     expect(fetchMock.mock.calls[1][1]?.headers).not.toHaveProperty("X-Subject-Type");
     expect(response.traceId).toBe("trace-1");
     expect(response.concurrencyKeys).toContain("concurrent:user:teacher-1:CoursewareAgent");
+    expect(response.actualUsage.totalTokens).toBe(0);
   });
 
   it("lists agent traces with backend session identity and no client supplied user identity", async () => {

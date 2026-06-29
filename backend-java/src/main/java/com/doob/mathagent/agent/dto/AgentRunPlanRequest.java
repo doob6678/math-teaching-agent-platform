@@ -21,6 +21,8 @@ import java.util.List;
  * @param disabledToolScopes per-request user preference that removes tools from dynamic injection without granting access
  * @param requestedDataScopes data scopes requested by the workflow
  * @param highValueOperation whether this run can spend high-value model/tool budget
+ * @param preferredProviderName optional provider preference selected in UI; backend validates it against enabled providers
+ * @param preferredModelCode optional model preference selected in UI; backend validates it against a provider allow-list
  */
 public record AgentRunPlanRequest(
         String agentCode,
@@ -38,7 +40,50 @@ public record AgentRunPlanRequest(
         List<String> requestedToolScopes,
         List<String> disabledToolScopes,
         List<String> requestedDataScopes,
-        boolean highValueOperation) {
+        boolean highValueOperation,
+        String preferredProviderName,
+        String preferredModelCode) {
+
+    /**
+     * Backward-compatible constructor for callers that do not expose model preference controls yet.
+     */
+    public AgentRunPlanRequest(
+            String agentCode,
+            String taskType,
+            String userVipLevel,
+            int estimatedInputTokens,
+            int estimatedOutputTokens,
+            boolean hasImage,
+            boolean hasFormula,
+            String difficulty,
+            String latencyRequirement,
+            double costBudget,
+            int previousFailureCount,
+            boolean requiredJsonSchema,
+            List<String> requestedToolScopes,
+            List<String> disabledToolScopes,
+            List<String> requestedDataScopes,
+            boolean highValueOperation) {
+        this(
+                agentCode,
+                taskType,
+                userVipLevel,
+                estimatedInputTokens,
+                estimatedOutputTokens,
+                hasImage,
+                hasFormula,
+                difficulty,
+                latencyRequirement,
+                costBudget,
+                previousFailureCount,
+                requiredJsonSchema,
+                requestedToolScopes,
+                disabledToolScopes,
+                requestedDataScopes,
+                highValueOperation,
+                "",
+                "");
+    }
 
     /**
      * Returns a request with stable defaults and null-safe lists.
@@ -60,7 +105,9 @@ public record AgentRunPlanRequest(
                 normalizeList(requestedToolScopes),
                 normalizeList(disabledToolScopes),
                 normalizeList(requestedDataScopes),
-                highValueOperation);
+                highValueOperation,
+                defaultText(preferredProviderName, "").toLowerCase(java.util.Locale.ROOT),
+                defaultText(preferredModelCode, ""));
     }
 
     /**

@@ -532,6 +532,10 @@ export interface AgentRunPlanRequest {
   requestedDataScopes: string[];
   /** Whether this run can spend high-value model/tool budget. */
   highValueOperation: boolean;
+  /** Optional provider preference selected by UI; backend validates it before use. */
+  preferredProviderName?: string;
+  /** Optional model preference selected by UI; backend validates it against provider allow-list. */
+  preferredModelCode?: string;
 }
 
 /**
@@ -644,8 +648,22 @@ export interface AgentRunExecuteResponse {
   concurrencyKeys: string[];
   /** Execution stage timings. */
   stageTimings: TeachingStageTiming[];
+  /** Provider-reported token usage for live model calls. */
+  actualUsage: AgentTokenUsage;
   /** Safe status message. */
   message: string;
+}
+
+/**
+ * Provider-reported token usage for a real AI call.
+ */
+export interface AgentTokenUsage {
+  /** Input tokens reported by provider. */
+  promptTokens: number;
+  /** Output tokens reported by provider. */
+  completionTokens: number;
+  /** Total tokens reported by provider. */
+  totalTokens: number;
 }
 
 /**

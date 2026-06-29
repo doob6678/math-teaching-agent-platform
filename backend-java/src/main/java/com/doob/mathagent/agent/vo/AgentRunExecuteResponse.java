@@ -19,6 +19,7 @@ import java.util.List;
  * @param allowedDataScopes data scopes allowed by the plan and recorded for audit
  * @param concurrencyKeys concurrency keys acquired for this execution
  * @param stageTimings execution stage timing rows
+ * @param actualUsage provider-reported token usage; zero values mean no live call was made or provider omitted usage
  * @param message safe status message; raw prompt and raw model output are intentionally omitted
  */
 public record AgentRunExecuteResponse(
@@ -36,6 +37,7 @@ public record AgentRunExecuteResponse(
         List<String> allowedDataScopes,
         List<String> concurrencyKeys,
         List<StageTiming> stageTimings,
+        TokenUsage actualUsage,
         String message) {
 
     /**
@@ -45,5 +47,15 @@ public record AgentRunExecuteResponse(
      * @param elapsedMs elapsed milliseconds for the stage
      */
     public record StageTiming(String stage, long elapsedMs) {
+    }
+
+    /**
+     * Provider-reported token usage for real model calls.
+     *
+     * @param promptTokens input tokens reported by the provider
+     * @param completionTokens output tokens reported by the provider
+     * @param totalTokens total tokens reported by the provider
+     */
+    public record TokenUsage(int promptTokens, int completionTokens, int totalTokens) {
     }
 }

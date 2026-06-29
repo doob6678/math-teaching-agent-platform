@@ -15,7 +15,7 @@ class AiProviderCatalogTest {
         properties.getDashscope().setChatModel("qwen3.6-flash");
         properties.getOpenai().setApiKey("openai-key");
         properties.getOpenai().setBaseUrl("https://api.openai.com");
-        properties.getOpenai().setChatModel("gpt-5.4-mini");
+        properties.getOpenai().setChatModel("gpt-5.4");
         properties.getDeepseek().setApiKey("deepseek-key");
         properties.getDeepseek().setBaseUrl("https://api.deepseek.com");
         properties.getDeepseek().setChatModel("deepseek-v4-flash");
