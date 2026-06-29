@@ -676,6 +676,9 @@ h2 {
 
 .resource-item button {
   justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   min-height: 30px;
   border: 1px solid #cfd8e5;
   border-radius: 6px;

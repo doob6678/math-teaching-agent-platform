@@ -72,4 +72,21 @@ class DatabaseMigrationSqlContractTest {
                 .doesNotContain("raw_prompt")
                 .doesNotContain("model_output");
     }
+
+    @Test
+    void sourceSyncJobMigrationStoresDurableJobStatusAndDocumentReference() throws Exception {
+        String migration = Files.readString(Path.of("src/main/resources/db/migration/V3__source_sync_job.sql"));
+
+        assertThat(migration)
+                .contains("CREATE TABLE source_sync_job")
+                .contains("job_id CHAR(36)")
+                .contains("source_document_id BIGINT NOT NULL")
+                .contains("operation VARCHAR(64) NOT NULL")
+                .contains("status VARCHAR(32) NOT NULL")
+                .contains("phase VARCHAR(64) NOT NULL")
+                .contains("attempt INT NOT NULL DEFAULT 0")
+                .contains("idx_source_sync_job_tenant_document")
+                .contains("idx_source_sync_job_status")
+                .contains("FOREIGN KEY (source_document_id) REFERENCES source_document(id)");
+    }
 }

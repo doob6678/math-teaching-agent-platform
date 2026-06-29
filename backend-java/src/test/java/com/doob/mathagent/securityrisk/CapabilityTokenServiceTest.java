@@ -110,7 +110,7 @@ class CapabilityTokenServiceTest {
     }
 
     @Test
-    void issuesTeacherResourceCapabilityTokensForRegisterAndArchive() {
+    void issuesTeacherResourceCapabilityTokensForRegisterArchiveAndSync() {
         CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
         RequestSubject teacher = new RequestSubject("school-a", "teacher", "teacher-001", "device-1");
 
@@ -126,6 +126,12 @@ class CapabilityTokenServiceTest {
                 "hash-archive",
                 "resource-archive-doc-1",
                 1.0), teacher);
+        CapabilityTokenResponse sync = service.apply(new CapabilityTokenApplyRequest(
+                "teacher-resource:sync",
+                "/api/teacher/resources/doc-1/sync-jobs",
+                "hash-sync",
+                "resource-sync-doc-1",
+                1.0), teacher);
 
         assertThat(service.consume(
                 register.token(),
@@ -138,6 +144,12 @@ class CapabilityTokenServiceTest {
                 "teacher-resource:archive",
                 "/api/teacher/resources/doc-1",
                 "hash-archive",
+                teacher).allowed()).isTrue();
+        assertThat(service.consume(
+                sync.token(),
+                "teacher-resource:sync",
+                "/api/teacher/resources/doc-1/sync-jobs",
+                "hash-sync",
                 teacher).allowed()).isTrue();
     }
 

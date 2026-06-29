@@ -1297,4 +1297,77 @@ describe("textbookApi", () => {
     expect(created.syncStatus).toBe("registered");
     expect(archived.syncStatus).toBe("archived");
   });
+
+  it("creates and lists teacher resource sync jobs with capability tokens", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ([{
+          jobId: "job-1",
+          documentId: "doc-1",
+          operation: "feishu_download",
+          status: "queued",
+          phase: "download_pending",
+        }]),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          token: "sync-capability",
+          action: "teacher-resource:sync",
+          path: "/api/teacher/resources/doc-1/sync-jobs",
+          requestHash: "hash-sync",
+          expiresAt: "2026-06-28T12:02:00Z",
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          jobId: "job-2",
+          documentId: "doc-1",
+          sourceType: "feishu",
+          operation: "feishu_download",
+          status: "queued",
+          phase: "download_pending",
+          createdBy: "teacher-1",
+        }),
+      });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const jobs = await client.listTeacherResourceSyncJobs("doc-1");
+    const created = await client.createTeacherResourceSyncJob("doc-1");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "http://127.0.0.1:8080/api/teacher/resources/doc-1/sync-jobs",
+      expect.objectContaining({
+        headers: expect.not.objectContaining({
+          "X-Subject-Type": expect.any(String),
+          "X-Subject-Id": expect.any(String),
+        }),
+      }),
+    );
+    const capabilityBody = JSON.parse(fetchMock.mock.calls[1][1]?.body as string);
+    expect(capabilityBody).toEqual({
+      action: "teacher-resource:sync",
+      path: "/api/teacher/resources/doc-1/sync-jobs",
+      requestHash: expect.any(String),
+      idempotencyKey: "teacher-resource-sync:doc-1",
+      maxCost: 1,
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "http://127.0.0.1:8080/api/teacher/resources/doc-1/sync-jobs",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "X-Capability-Token": "sync-capability",
+          "X-Request-Hash": capabilityBody.requestHash,
+        }),
+      }),
+    );
+    expect(jobs[0].status).toBe("queued");
+    expect(created.operation).toBe("feishu_download");
+  });
 });

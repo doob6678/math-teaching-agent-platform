@@ -976,6 +976,22 @@ export interface TeacherResourcePreviewFile {
   fileSizeBytes: number;
 }
 
+export interface TeacherSourceSyncJobResponse {
+  jobId: string;
+  documentId: string;
+  tenantId?: string;
+  sourceType?: string;
+  operation: string;
+  status: string;
+  phase: string;
+  attempt?: number;
+  createdBy?: string;
+  stagingPath?: string;
+  message?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 type FetchLike = (
   input: string,
   init?: RequestInit,
@@ -1470,6 +1486,29 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
       );
       return requestJson<TeacherResourceDocumentResponse>(path, {
         method: "DELETE",
+        headers: {
+          "X-Capability-Token": capability.token,
+          "X-Request-Hash": capability.requestHash,
+        },
+      });
+    },
+
+    listTeacherResourceSyncJobs(documentId: string): Promise<TeacherSourceSyncJobResponse[]> {
+      return requestJson<TeacherSourceSyncJobResponse[]>(
+        `/api/teacher/resources/${encodeURIComponent(documentId)}/sync-jobs`,
+      );
+    },
+
+    async createTeacherResourceSyncJob(documentId: string): Promise<TeacherSourceSyncJobResponse> {
+      const path = `/api/teacher/resources/${encodeURIComponent(documentId)}/sync-jobs`;
+      const capability = await applyCapability(
+        "teacher-resource:sync",
+        path,
+        "",
+        `teacher-resource-sync:${documentId}`,
+      );
+      return requestJson<TeacherSourceSyncJobResponse>(path, {
+        method: "POST",
         headers: {
           "X-Capability-Token": capability.token,
           "X-Request-Hash": capability.requestHash,

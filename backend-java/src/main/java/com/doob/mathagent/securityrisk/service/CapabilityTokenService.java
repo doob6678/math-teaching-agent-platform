@@ -29,6 +29,7 @@ public class CapabilityTokenService {
     private static final String TEACHING_BATCH_ZIP_PATH = "/api/teaching/handouts/batch/zip";
     private static final String TEACHER_RESOURCE_REGISTER_ACTION = "teacher-resource:register";
     private static final String TEACHER_RESOURCE_ARCHIVE_ACTION = "teacher-resource:archive";
+    private static final String TEACHER_RESOURCE_SYNC_ACTION = "teacher-resource:sync";
     private static final String TEACHER_RESOURCES_PATH = "/api/teacher/resources";
     private static final String STUDENT_MEMORY_REMEMBER_ACTION = "student-memory:remember";
     private static final String STUDENT_MEMORY_REMEMBER_PATH = "/api/students/memory/remember";
@@ -241,6 +242,10 @@ public class CapabilityTokenService {
             validateTeacherResourceSubject(subject);
             return;
         }
+        if (TEACHER_RESOURCE_SYNC_ACTION.equals(action) && isTeacherResourceSyncPath(path)) {
+            validateTeacherResourceSubject(subject);
+            return;
+        }
         if (STUDENT_MEMORY_REMEMBER_ACTION.equals(action) && STUDENT_MEMORY_REMEMBER_PATH.equals(path)) {
             validateStudentMemorySubject(subject);
             return;
@@ -304,6 +309,14 @@ public class CapabilityTokenService {
     private static boolean isBatchZipDownloadPath(String path) {
         String[] parts = pathPartsAfterPrefix(path, TEACHING_BATCH_ZIP_PATH);
         return parts.length == 2 && hasText(parts[0]) && "download".equals(parts[1]);
+    }
+
+    /**
+     * Validates the exact source sync job path shape.
+     */
+    private static boolean isTeacherResourceSyncPath(String path) {
+        String[] parts = pathPartsAfterPrefix(path, TEACHER_RESOURCES_PATH);
+        return parts.length == 2 && hasText(parts[0]) && "sync-jobs".equals(parts[1]);
     }
 
     /**

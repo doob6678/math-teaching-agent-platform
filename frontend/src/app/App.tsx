@@ -10,6 +10,7 @@ import {
   StudentDashboardResponse,
   TeachingTaskResponse,
   TeacherResourceDocumentResponse,
+  TeacherSourceSyncJobResponse,
   TextbookSearchHit,
   TextbookSearchResponse,
   TextbookSummary,
@@ -50,6 +51,7 @@ export function App() {
   const [teachingTask, setTeachingTask] = useState<TeachingTaskResponse | null>(null);
   const [studentDashboard, setStudentDashboard] = useState<StudentDashboardResponse | null>(null);
   const [teacherResources, setTeacherResources] = useState<TeacherResourceDocumentResponse[]>([]);
+  const [teacherSyncJobs, setTeacherSyncJobs] = useState<Record<string, TeacherSourceSyncJobResponse[]>>({});
   const [handoutPreviewLatex, setHandoutPreviewLatex] = useState("");
   const [handoutPreviewTaskId, setHandoutPreviewTaskId] = useState("");
   const [handoutVersion, setHandoutVersion] = useState<"teacher" | "student">("teacher");
@@ -102,6 +104,7 @@ export function App() {
   const [loadingStudentDashboard, setLoadingStudentDashboard] = useState(false);
   const [loadingTeacherResources, setLoadingTeacherResources] = useState(false);
   const [registeringResource, setRegisteringResource] = useState(false);
+  const [syncingResourceId, setSyncingResourceId] = useState("");
   const [loggingIn, setLoggingIn] = useState(false);
 
   useEffect(() => {
@@ -134,9 +137,24 @@ export function App() {
     setLoadingTeacherResources(true);
     api
       .listTeacherResources()
-      .then(setTeacherResources)
+      .then((resources) => {
+        setTeacherResources(resources);
+        return loadTeacherSyncJobs(resources);
+      })
       .catch((error: Error) => setTeacherResourceError(error.message))
       .finally(() => setLoadingTeacherResources(false));
+  }
+
+  function loadTeacherSyncJobs(resources: TeacherResourceDocumentResponse[]) {
+    return Promise.all(
+      resources.map((resource) =>
+        api
+          .listTeacherResourceSyncJobs(resource.documentId)
+          .then((jobs) => [resource.documentId, jobs] as const),
+      ),
+    ).then((entries) =>
+      setTeacherSyncJobs(Object.fromEntries(entries)),
+    );
   }
 
   function refreshAgentTraces() {
@@ -249,7 +267,10 @@ export function App() {
         localPath: resourceSourceType === "local_path" ? resourceLocation.trim() : undefined,
         permissionScope: resourceScope,
       })
-      .then((resource) => setTeacherResources((current) => [resource, ...current]))
+      .then((resource) => {
+        setTeacherResources((current) => [resource, ...current]);
+        setTeacherSyncJobs((current) => ({ ...current, [resource.documentId]: [] }));
+      })
       .catch((error: Error) => setTeacherResourceError(error.message))
       .finally(() => setRegisteringResource(false));
   }
@@ -260,6 +281,21 @@ export function App() {
       .archiveTeacherResource(documentId)
       .then(() => setTeacherResources((current) => current.filter((resource) => resource.documentId !== documentId)))
       .catch((error: Error) => setTeacherResourceError(error.message));
+  }
+
+  function handleCreateResourceSyncJob(documentId: string) {
+    setSyncingResourceId(documentId);
+    setTeacherResourceError("");
+    api
+      .createTeacherResourceSyncJob(documentId)
+      .then((job) =>
+        setTeacherSyncJobs((current) => ({
+          ...current,
+          [documentId]: [job, ...(current[documentId] ?? [])],
+        })),
+      )
+      .catch((error: Error) => setTeacherResourceError(error.message))
+      .finally(() => setSyncingResourceId(""));
   }
 
   function handlePreviewLatex() {
@@ -651,6 +687,8 @@ export function App() {
             scope={resourceScope}
             loading={loadingTeacherResources}
             registering={registeringResource}
+            syncingResourceId={syncingResourceId}
+            syncJobsByDocument={teacherSyncJobs}
             error={teacherResourceError}
             onTitleChange={setResourceTitle}
             onLocationChange={setResourceLocation}
@@ -658,6 +696,7 @@ export function App() {
             onScopeChange={setResourceScope}
             onRegister={handleRegisterResource}
             onArchive={handleArchiveResource}
+            onSync={handleCreateResourceSyncJob}
           />
         </aside>
 
@@ -1049,6 +1088,8 @@ function TeacherResourcePanel({
   scope,
   loading,
   registering,
+  syncingResourceId,
+  syncJobsByDocument,
   error,
   onTitleChange,
   onLocationChange,
@@ -1056,6 +1097,7 @@ function TeacherResourcePanel({
   onScopeChange,
   onRegister,
   onArchive,
+  onSync,
 }: {
   resources: TeacherResourceDocumentResponse[];
   title: string;
@@ -1064,6 +1106,8 @@ function TeacherResourcePanel({
   scope: string;
   loading: boolean;
   registering: boolean;
+  syncingResourceId: string;
+  syncJobsByDocument: Record<string, TeacherSourceSyncJobResponse[]>;
   error: string;
   onTitleChange: (value: string) => void;
   onLocationChange: (value: string) => void;
@@ -1071,6 +1115,7 @@ function TeacherResourcePanel({
   onScopeChange: (value: string) => void;
   onRegister: (event: FormEvent<HTMLFormElement>) => void;
   onArchive: (documentId: string) => void;
+  onSync: (documentId: string) => void;
 }) {
   return (
     <section className="teacher-resource-panel">
@@ -1107,24 +1152,37 @@ function TeacherResourcePanel({
       {loading ? <StatusLine icon={<Loader2 className="spin" size={16} />} text="读取教师资料源中" /> : null}
       {error ? <StatusLine icon={<AlertCircle size={16} />} text={error} tone="danger" /> : null}
       <div className="resource-list">
-        {resources.map((resource) => (
+        {resources.map((resource) => {
+          const latestJob = syncJobsByDocument[resource.documentId]?.[0];
+          return (
           <article className="resource-item" key={resource.documentId}>
             <div>
               <strong>{resource.title}</strong>
               <span>{resource.sourceType} / {resource.permissionScope}</span>
             </div>
             <div className="resource-status">
-              <span>{resource.syncStatus}</span>
-              <span>{resource.indexStatus ?? "waiting_rebuild"}</span>
+              <span>{latestJob?.status ?? resource.syncStatus}</span>
+              <span>{latestJob?.phase ?? resource.indexStatus ?? "waiting_rebuild"}</span>
             </div>
-            {resource.previewFiles?.length ? (
+            {latestJob ? (
+              <p>{latestJob.operation}: {latestJob.message ?? latestJob.createdAt ?? latestJob.jobId}</p>
+            ) : resource.previewFiles?.length ? (
               <p>{resource.previewFiles.map((file) => file.fileName).join("、")}</p>
             ) : null}
+            <button
+              type="button"
+              onClick={() => onSync(resource.documentId)}
+              disabled={syncingResourceId === resource.documentId}
+            >
+              {syncingResourceId === resource.documentId ? <Loader2 className="spin" size={15} /> : <Database size={15} />}
+              <span>Sync</span>
+            </button>
             <button type="button" onClick={() => onArchive(resource.documentId)}>
               归档
             </button>
           </article>
-        ))}
+          );
+        })}
       </div>
     </section>
   );

@@ -6,7 +6,9 @@ import com.doob.mathagent.teacher.dto.TeacherResourceRegistrationRequest;
 import com.doob.mathagent.teacher.service.TeacherResourceCapabilityVerifier;
 import com.doob.mathagent.teacher.service.TeacherResourceRegistrationCommand;
 import com.doob.mathagent.teacher.service.TeacherResourceService;
+import com.doob.mathagent.teacher.service.TeacherSourceSyncJobService;
 import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
+import com.doob.mathagent.teacher.vo.TeacherSourceSyncJobResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.List;
 import org.springframework.http.HttpStatus;
@@ -26,9 +28,11 @@ public class TeacherResourceController {
 
     private static final String REGISTER_ACTION = "teacher-resource:register";
     private static final String ARCHIVE_ACTION = "teacher-resource:archive";
+    private static final String SYNC_ACTION = "teacher-resource:sync";
     private static final String RESOURCES_PATH = "/api/teacher/resources";
 
     private final TeacherResourceService teacherResourceService;
+    private final TeacherSourceSyncJobService syncJobService;
     private final RequestSubjectResolver subjectResolver;
     private final TeacherResourceCapabilityVerifier capabilityVerifier;
 
@@ -40,9 +44,11 @@ public class TeacherResourceController {
      */
     public TeacherResourceController(
             TeacherResourceService teacherResourceService,
+            TeacherSourceSyncJobService syncJobService,
             RequestSubjectResolver subjectResolver,
             TeacherResourceCapabilityVerifier capabilityVerifier) {
         this.teacherResourceService = teacherResourceService;
+        this.syncJobService = syncJobService;
         this.subjectResolver = subjectResolver;
         this.capabilityVerifier = capabilityVerifier;
     }
@@ -104,6 +110,53 @@ public class TeacherResourceController {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for teacher resource archive");
         }
         return teacherResourceService.archive(
+                subject.tenantId(),
+                subject.subjectType(),
+                subject.subjectId(),
+                documentId);
+    }
+
+    /**
+     * Queues a source synchronization job. The worker may later download, parse, embed and reindex the source.
+     *
+     * @param documentId resource document id
+     * @param httpRequest HTTP request containing capability headers
+     * @return queued sync job
+     */
+    @PostMapping("/api/teacher/resources/{documentId}/sync-jobs")
+    public TeacherSourceSyncJobResponse createSyncJob(
+            @PathVariable String documentId,
+            HttpServletRequest httpRequest) {
+        RequestSubject subject = subjectResolver.resolve(httpRequest).normalize();
+        String path = RESOURCES_PATH + "/" + documentId + "/sync-jobs";
+        if (!capabilityVerifier.verify(
+                headerOrNull(httpRequest, "X-Capability-Token"),
+                SYNC_ACTION,
+                path,
+                headerOrNull(httpRequest, "X-Request-Hash"),
+                subject)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for teacher resource sync");
+        }
+        return syncJobService.createSyncJob(
+                subject.tenantId(),
+                subject.subjectType(),
+                subject.subjectId(),
+                documentId);
+    }
+
+    /**
+     * Lists synchronization jobs for a visible resource.
+     *
+     * @param documentId resource document id
+     * @param httpRequest HTTP request containing backend session
+     * @return sync jobs
+     */
+    @GetMapping("/api/teacher/resources/{documentId}/sync-jobs")
+    public List<TeacherSourceSyncJobResponse> listSyncJobs(
+            @PathVariable String documentId,
+            HttpServletRequest httpRequest) {
+        RequestSubject subject = subjectResolver.resolve(httpRequest).normalize();
+        return syncJobService.listSyncJobs(
                 subject.tenantId(),
                 subject.subjectType(),
                 subject.subjectId(),
