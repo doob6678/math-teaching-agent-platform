@@ -30,7 +30,15 @@ public class MyBatisTeacherSourceSyncJobStore implements TeacherSourceSyncJobSto
     @Override
     public TeacherSourceSyncJobResponse save(TeacherSourceSyncJobResponse job) {
         TeacherSourceSyncJobEntity entity = toEntity(job);
-        mapper.insert(entity);
+        TeacherSourceSyncJobEntity existing = mapper.selectOne(
+                new LambdaQueryWrapper<TeacherSourceSyncJobEntity>()
+                        .eq(TeacherSourceSyncJobEntity::getJobId, job.jobId()));
+        if (existing == null) {
+            mapper.insert(entity);
+        } else {
+            entity.setId(existing.getId());
+            mapper.updateById(entity);
+        }
         return toResponse(entity);
     }
 
