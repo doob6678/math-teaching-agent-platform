@@ -8,6 +8,7 @@ import com.doob.mathagent.agent.service.AgentTraceRecord;
 import com.doob.mathagent.agent.service.InMemoryAgentTraceStore;
 import com.doob.mathagent.agent.vo.AgentRunExecuteResponse;
 import com.doob.mathagent.agent.vo.AgentTraceResponse;
+import com.doob.mathagent.agent.vo.AgentTraceUsageSummaryResponse;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import java.time.Instant;
 import java.util.List;
@@ -63,7 +64,42 @@ class AgentTraceQueryServiceTest {
         assertThat(trace).isEmpty();
     }
 
+    @Test
+    void summarizesOfficialUsageOnlyForBackendVisibleTraces() {
+        InMemoryAgentTraceStore store = new InMemoryAgentTraceStore();
+        store.save(trace("trace-student-1", "student", "student-1", "StudentTutorAgent"));
+        store.save(traceWithUsage("trace-student-1b", "student", "student-1", "StudentTutorAgent",
+                "dashscope", "qwen3.6-flash", 5, 3, 8));
+        store.save(traceWithUsage("trace-student-2", "student", "student-2", "StudentTutorAgent",
+                "openai", "gpt-5.4", 100, 50, 150));
+        AgentTraceQueryService service = new AgentTraceQueryService(store);
+
+        AgentTraceUsageSummaryResponse summary = service.usageSummary(
+                new AgentTraceQueryRequest("StudentTutorAgent", "COMPLETED", 20),
+                new RequestSubject("school-a", "student", "student-1", "device-1"));
+
+        assertThat(summary.runCount()).isEqualTo(2);
+        assertThat(summary.totalUsage().promptTokens()).isEqualTo(16);
+        assertThat(summary.totalUsage().completionTokens()).isEqualTo(10);
+        assertThat(summary.totalUsage().totalTokens()).isEqualTo(26);
+        assertThat(summary.modelUsages()).extracting(AgentTraceUsageSummaryResponse.ModelUsage::modelCode)
+                .containsExactly("gpt-5.4", "qwen3.6-flash");
+    }
+
     private static AgentTraceRecord trace(String traceId, String subjectType, String subjectId, String agentCode) {
+        return traceWithUsage(traceId, subjectType, subjectId, agentCode, "openai", "gpt-5.4", 11, 7, 18);
+    }
+
+    private static AgentTraceRecord traceWithUsage(
+            String traceId,
+            String subjectType,
+            String subjectId,
+            String agentCode,
+            String providerName,
+            String modelCode,
+            int promptTokens,
+            int completionTokens,
+            int totalTokens) {
         return new AgentTraceRecord(
                 traceId,
                 "plan-1",
@@ -72,15 +108,15 @@ class AgentTraceQueryServiceTest {
                 subjectType,
                 subjectId,
                 agentCode,
-                "openai",
-                "gpt-5.4",
+                providerName,
+                modelCode,
                 "COMPLETED",
                 0.46,
                 List.of("tool:search:textbook"),
                 List.of("PUBLIC_TEXTBOOK"),
                 List.of("textbook:chapter-1"),
                 List.of(new AgentRunExecuteResponse.StageTiming("model_call", 12)),
-                new AgentRunExecuteResponse.TokenUsage(11, 7, 18),
+                new AgentRunExecuteResponse.TokenUsage(promptTokens, completionTokens, totalTokens),
                 "Live model response recorded");
     }
 }

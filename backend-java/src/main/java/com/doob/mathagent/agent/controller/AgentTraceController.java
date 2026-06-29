@@ -3,6 +3,7 @@ package com.doob.mathagent.agent.controller;
 import com.doob.mathagent.agent.dto.AgentTraceQueryRequest;
 import com.doob.mathagent.agent.service.AgentTraceQueryService;
 import com.doob.mathagent.agent.vo.AgentTraceResponse;
+import com.doob.mathagent.agent.vo.AgentTraceUsageSummaryResponse;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.infrastructure.security.RequestSubjectResolver;
 import jakarta.servlet.http.HttpServletRequest;
@@ -50,6 +51,25 @@ public class AgentTraceController {
         RequestSubject subject = subjectResolver.resolve(httpRequest);
         try {
             return traceQueryService.list(query, subject);
+        } catch (IllegalArgumentException exception) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, exception.getMessage(), exception);
+        }
+    }
+
+    /**
+     * Summarizes provider-reported token usage for traces visible to the backend subject.
+     *
+     * @param query optional query filters
+     * @param httpRequest HTTP request used only for backend subject resolution
+     * @return visible usage summary
+     */
+    @GetMapping("/api/agents/traces/usage-summary")
+    public AgentTraceUsageSummaryResponse usageSummary(
+            @ModelAttribute AgentTraceQueryRequest query,
+            HttpServletRequest httpRequest) {
+        RequestSubject subject = subjectResolver.resolve(httpRequest);
+        try {
+            return traceQueryService.usageSummary(query, subject);
         } catch (IllegalArgumentException exception) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, exception.getMessage(), exception);
         }

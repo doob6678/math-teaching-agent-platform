@@ -1,11 +1,15 @@
 package com.doob.mathagent.agent.service;
 
 import com.doob.mathagent.agent.dto.AgentTraceQueryRequest;
+import com.doob.mathagent.agent.vo.AgentRunExecuteResponse;
 import com.doob.mathagent.agent.vo.AgentTraceResponse;
+import com.doob.mathagent.agent.vo.AgentTraceUsageSummaryResponse;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.TreeMap;
 import org.springframework.stereotype.Service;
 
 /**
@@ -33,6 +37,43 @@ public class AgentTraceQueryService {
      * @return visible traces
      */
     public List<AgentTraceResponse> list(AgentTraceQueryRequest request, RequestSubject subject) {
+        return visibleRecords(request, subject).stream()
+                .map(AgentTraceQueryService::toResponse)
+                .sorted(Comparator.comparing(AgentTraceResponse::traceId))
+                .toList();
+    }
+
+    /**
+     * Summarizes provider-reported usage for traces visible to the backend subject.
+     *
+     * @param request query request without identity fields
+     * @param subject backend subject
+     * @return aggregated usage summary
+     */
+    public AgentTraceUsageSummaryResponse usageSummary(AgentTraceQueryRequest request, RequestSubject subject) {
+        AgentTraceQueryRequest normalizedRequest = request == null
+                ? new AgentTraceQueryRequest(null, null, null).normalize()
+                : request.normalize();
+        RequestSubject normalizedSubject = subject.normalize();
+        List<AgentTraceRecord> records = visibleRecords(normalizedRequest, normalizedSubject);
+        int promptTokens = records.stream().mapToInt(trace -> trace.actualUsage().promptTokens()).sum();
+        int completionTokens = records.stream().mapToInt(trace -> trace.actualUsage().completionTokens()).sum();
+        int totalTokens = records.stream().mapToInt(trace -> trace.actualUsage().totalTokens()).sum();
+        return new AgentTraceUsageSummaryResponse(
+                normalizedSubject.tenantId(),
+                normalizedSubject.subjectType(),
+                normalizedSubject.subjectId(),
+                normalizedRequest.agentCode(),
+                normalizedRequest.status(),
+                records.size(),
+                new AgentRunExecuteResponse.TokenUsage(promptTokens, completionTokens, totalTokens),
+                modelUsages(records));
+    }
+
+    /**
+     * Searches records visible to the backend subject using the same scoping for list and summaries.
+     */
+    private List<AgentTraceRecord> visibleRecords(AgentTraceQueryRequest request, RequestSubject subject) {
         AgentTraceQueryRequest normalizedRequest = request == null
                 ? new AgentTraceQueryRequest(null, null, null).normalize()
                 : request.normalize();
@@ -46,10 +87,7 @@ public class AgentTraceQueryService {
                 normalizedRequest.agentCode(),
                 normalizedRequest.status(),
                 normalizedRequest.limit());
-        return traceStore.search(criteria).stream()
-                .map(AgentTraceQueryService::toResponse)
-                .sorted(Comparator.comparing(AgentTraceResponse::traceId))
-                .toList();
+        return traceStore.search(criteria);
     }
 
     /**
@@ -109,5 +147,66 @@ public class AgentTraceQueryService {
                 trace.stageTimings(),
                 trace.actualUsage(),
                 trace.message());
+    }
+
+    /**
+     * Aggregates usage by provider/model, sorted by largest token usage first for monitoring.
+     */
+    private static List<AgentTraceUsageSummaryResponse.ModelUsage> modelUsages(List<AgentTraceRecord> records) {
+        Map<String, UsageAccumulator> buckets = new TreeMap<>();
+        records.forEach(trace -> {
+            String key = trace.providerName() + "\u0000" + trace.modelCode();
+            buckets.computeIfAbsent(key, ignored -> new UsageAccumulator(trace.providerName(), trace.modelCode()))
+                    .add(trace.actualUsage());
+        });
+        return buckets.values().stream()
+                .map(UsageAccumulator::toResponse)
+                .sorted(Comparator.comparingInt(AgentTraceUsageSummaryResponse.ModelUsage::totalTokens).reversed()
+                        .thenComparing(AgentTraceUsageSummaryResponse.ModelUsage::providerName)
+                        .thenComparing(AgentTraceUsageSummaryResponse.ModelUsage::modelCode))
+                .toList();
+    }
+
+    /**
+     * Mutable local counter used only while building one response.
+     */
+    private static final class UsageAccumulator {
+        private final String providerName;
+        private final String modelCode;
+        private int runCount;
+        private int promptTokens;
+        private int completionTokens;
+        private int totalTokens;
+
+        /**
+         * Creates a usage accumulator for one provider/model bucket.
+         */
+        private UsageAccumulator(String providerName, String modelCode) {
+            this.providerName = providerName;
+            this.modelCode = modelCode;
+        }
+
+        /**
+         * Adds one provider-reported usage row.
+         */
+        private void add(AgentRunExecuteResponse.TokenUsage usage) {
+            runCount += 1;
+            promptTokens += usage.promptTokens();
+            completionTokens += usage.completionTokens();
+            totalTokens += usage.totalTokens();
+        }
+
+        /**
+         * Converts the counter into a safe response row.
+         */
+        private AgentTraceUsageSummaryResponse.ModelUsage toResponse() {
+            return new AgentTraceUsageSummaryResponse.ModelUsage(
+                    providerName,
+                    modelCode,
+                    runCount,
+                    promptTokens,
+                    completionTokens,
+                    totalTokens);
+        }
     }
 }

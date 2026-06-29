@@ -722,6 +722,46 @@ export interface AgentTraceResponse {
  * 学生学习画像响应。字段与后端 `StudentDashboardResponse` 对齐，用于学生端进度图谱、薄弱点和历史记录展示。
  */
 /**
+ * Aggregated provider-reported token usage for visible agent traces.
+ */
+export interface AgentTraceUsageSummaryResponse {
+  /** Backend tenant id used for the aggregation. */
+  tenantId: string;
+  /** Backend subject type used for visibility. */
+  subjectType: string;
+  /** Backend subject id used for visibility. */
+  subjectId: string;
+  /** Optional agent code filter echoed by backend. */
+  agentCode?: string;
+  /** Optional status filter echoed by backend. */
+  status?: string;
+  /** Visible trace rows included in the summary. */
+  runCount: number;
+  /** Total official provider usage. */
+  totalUsage: AgentTokenUsage;
+  /** Provider/model usage breakdown. */
+  modelUsages: AgentTraceModelUsage[];
+}
+
+/**
+ * Usage bucket for one provider/model pair.
+ */
+export interface AgentTraceModelUsage {
+  /** Provider name recorded by backend execution. */
+  providerName: string;
+  /** Model code recorded by backend execution. */
+  modelCode: string;
+  /** Visible trace rows in this bucket. */
+  runCount: number;
+  /** Summed prompt tokens. */
+  promptTokens: number;
+  /** Summed completion tokens. */
+  completionTokens: number;
+  /** Summed total tokens. */
+  totalTokens: number;
+}
+
+/**
  * Request for building a copyable MCP client configuration.
  */
 export interface McpConfigurationRequest {
@@ -1345,6 +1385,24 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
       }
       const suffix = params.size > 0 ? `?${params.toString()}` : "";
       return requestJson<AgentTraceResponse[]>(`/api/agents/traces${suffix}`);
+    },
+
+    /**
+     * Summarizes provider-reported usage for traces visible to the backend session subject.
+     */
+    getAgentTraceUsageSummary(query: AgentTraceQuery = {}): Promise<AgentTraceUsageSummaryResponse> {
+      const params = new URLSearchParams();
+      if (query.agentCode) {
+        params.set("agentCode", query.agentCode);
+      }
+      if (query.status) {
+        params.set("status", query.status);
+      }
+      if (query.limit) {
+        params.set("limit", String(query.limit));
+      }
+      const suffix = params.size > 0 ? `?${params.toString()}` : "";
+      return requestJson<AgentTraceUsageSummaryResponse>(`/api/agents/traces/usage-summary${suffix}`);
     },
 
     /**

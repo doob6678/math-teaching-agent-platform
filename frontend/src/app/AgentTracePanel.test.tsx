@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { AgentTracePanel } from "./App";
-import { AgentTraceResponse } from "../shared/api/textbookApi";
+import { AgentTraceResponse, AgentTraceUsageSummaryResponse } from "../shared/api/textbookApi";
 
 describe("AgentTracePanel", () => {
   it("renders recoverable traces with backend resolved model and evidence", () => {
@@ -26,9 +26,28 @@ describe("AgentTracePanel", () => {
         message: "Live model response recorded with provider usage metadata.",
       },
     ];
+    const usageSummary: AgentTraceUsageSummaryResponse = {
+      tenantId: "school-a",
+      subjectType: "teacher",
+      subjectId: "teacher-1",
+      agentCode: "CoursewareAgent",
+      status: "COMPLETED",
+      runCount: 1,
+      totalUsage: { promptTokens: 123, completionTokens: 45, totalTokens: 168 },
+      modelUsages: [
+        {
+          providerName: "openai",
+          modelCode: "gpt-5.4",
+          runCount: 1,
+          promptTokens: 123,
+          completionTokens: 45,
+          totalTokens: 168,
+        },
+      ],
+    };
 
     const html = renderToStaticMarkup(
-      <AgentTracePanel traces={traces} loading={false} error="" onRefresh={vi.fn()} />,
+      <AgentTracePanel traces={traces} usageSummary={usageSummary} loading={false} error="" onRefresh={vi.fn()} />,
     );
 
     expect(html).toContain("trace-1");
@@ -39,6 +58,10 @@ describe("AgentTracePanel", () => {
     expect(html).toContain("168");
     expect(html).toContain("model_call");
     expect(html).toContain("Live model response recorded");
+    expect(html).toContain("Usage summary");
+    expect(html).toContain("1 runs");
+    expect(html).toContain("123 prompt");
+    expect(html).toContain("45 completion");
     expect(html).toContain("teaching-task:task-1");
     expect(html).toContain("tool:search:textbook");
   });

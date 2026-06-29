@@ -1039,6 +1039,67 @@ describe("textbookApi", () => {
     expect(traces[0].actualUsage.totalTokens).toBe(168);
   });
 
+  it("summarizes visible agent trace usage with backend session identity only", async () => {
+    globalThis.localStorage.setItem(
+      "math-agent:auth-session",
+      JSON.stringify({
+        userId: "teacher-1",
+        username: "teacher",
+        role: "teacher",
+        tenantId: "school-a",
+        tokenName: "satoken",
+        tokenValue: "token-teacher",
+      }),
+    );
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        tenantId: "school-a",
+        subjectType: "teacher",
+        subjectId: "teacher-1",
+        agentCode: "CoursewareAgent",
+        status: "COMPLETED",
+        runCount: 2,
+        totalUsage: {
+          promptTokens: 246,
+          completionTokens: 90,
+          totalTokens: 336,
+        },
+        modelUsages: [
+          {
+            providerName: "openai",
+            modelCode: "gpt-5.4",
+            runCount: 2,
+            promptTokens: 246,
+            completionTokens: 90,
+            totalTokens: 336,
+          },
+        ],
+      }),
+    });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const summary = await client.getAgentTraceUsageSummary({
+      agentCode: "CoursewareAgent",
+      status: "COMPLETED",
+      limit: 20,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8080/api/agents/traces/usage-summary?agentCode=CoursewareAgent&status=COMPLETED&limit=20",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          satoken: "token-teacher",
+          "X-Device-Id": "local-browser-console",
+        }),
+      }),
+    );
+    expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Id");
+    expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Type");
+    expect(summary.runCount).toBe(2);
+    expect(summary.totalUsage.totalTokens).toBe(336);
+  });
+
   it("builds copyable MCP configuration without client supplied identity headers", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

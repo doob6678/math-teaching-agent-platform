@@ -4,6 +4,7 @@ import {
   AgentRunExecuteResponse,
   AgentRunPlanResponse,
   AgentTraceResponse,
+  AgentTraceUsageSummaryResponse,
   McpConfigurationResponse,
   RetrievalAuditDetail,
   StudentDashboardResponse,
@@ -62,6 +63,7 @@ export function App() {
   const [agentPlan, setAgentPlan] = useState<AgentRunPlanResponse | null>(null);
   const [agentExecution, setAgentExecution] = useState<AgentRunExecuteResponse | null>(null);
   const [agentTraces, setAgentTraces] = useState<AgentTraceResponse[]>([]);
+  const [agentUsageSummary, setAgentUsageSummary] = useState<AgentTraceUsageSummaryResponse | null>(null);
   const [planningAgent, setPlanningAgent] = useState(false);
   const [executingAgent, setExecutingAgent] = useState(false);
   const [loadingAgentTraces, setLoadingAgentTraces] = useState(false);
@@ -142,7 +144,10 @@ export function App() {
     setAgentTraceError("");
     api
       .listAgentTraces({ limit: 10 })
-      .then(setAgentTraces)
+      .then((traces) => {
+        setAgentTraces(traces);
+        return api.getAgentTraceUsageSummary({ limit: 100 }).then(setAgentUsageSummary);
+      })
       .catch((error: Error) => setAgentTraceError(error.message))
       .finally(() => setLoadingAgentTraces(false));
   }
@@ -674,6 +679,7 @@ export function App() {
 
           <AgentTracePanel
             traces={agentTraces}
+            usageSummary={agentUsageSummary}
             loading={loadingAgentTraces}
             error={agentTraceError}
             onRefresh={refreshAgentTraces}
@@ -1454,11 +1460,13 @@ function AgentPlanPanel({
 
 export function AgentTracePanel({
   traces,
+  usageSummary,
   loading,
   error,
   onRefresh,
 }: {
   traces: AgentTraceResponse[];
+  usageSummary: AgentTraceUsageSummaryResponse | null;
   loading: boolean;
   error: string;
   onRefresh: () => void;
@@ -1477,6 +1485,31 @@ export function AgentTracePanel({
       </div>
       {loading ? <StatusLine icon={<Loader2 className="spin" size={16} />} text="Loading recoverable traces" /> : null}
       {error ? <StatusLine icon={<AlertCircle size={16} />} text={error} tone="danger" /> : null}
+      {usageSummary ? (
+        <div className="agent-usage-summary">
+          <div className="result-header compact">
+            <div>
+              <p className="eyebrow">Usage summary</p>
+              <h3>{usageSummary.runCount} runs</h3>
+            </div>
+            <strong>
+              {usageSummary.totalUsage.totalTokens} total / {usageSummary.totalUsage.promptTokens} prompt /{" "}
+              {usageSummary.totalUsage.completionTokens} completion
+            </strong>
+          </div>
+          <div className="trace-badge-row">
+            <span>Models</span>
+            <div>
+              {usageSummary.modelUsages.map((usage) => (
+                <strong key={`${usage.providerName}:${usage.modelCode}`}>
+                  {usage.providerName}/{usage.modelCode}: {usage.totalTokens} total, {usage.promptTokens} prompt,{" "}
+                  {usage.completionTokens} completion
+                </strong>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : null}
       {traces.length > 0 ? (
         <div className="agent-trace-list">
           {traces.map((trace) => (
