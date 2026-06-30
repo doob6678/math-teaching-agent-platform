@@ -119,11 +119,11 @@ public class TeachingWorkflowService {
                     .toList();
             timer.mark("textbook_retrieval");
         }
-        List<TeachingWorkflowNode> nodes = buildNodes(request, evidence, memoryResponse);
         List<TeachingReactStep> reactTrace = buildReactTrace(request, evidence, memoryResponse);
         timer.mark("react_trace");
         TeachingTaskResponse.AiDraft aiDraft = aiDraftService.draft(request, evidence, memoryResponse);
         timer.mark("ai_draft");
+        List<TeachingWorkflowNode> nodes = buildNodes(request, evidence, memoryResponse, aiDraft);
         String teacherHandoutLatex = appendAiDraft(
                 buildTeacherHandoutLatex(request, evidence, memoryResponse),
                 aiDraft,
@@ -250,7 +250,8 @@ public class TeachingWorkflowService {
     private static List<TeachingWorkflowNode> buildNodes(
             TeachingTaskRequest request,
             List<TeachingEvidence> evidence,
-            StudentMemoryResponse memoryResponse) {
+            StudentMemoryResponse memoryResponse,
+            TeachingTaskResponse.AiDraft aiDraft) {
         String reuseSummary = memoryResponse.reused()
                 ? "命中学生记忆 %s，作用域 %s，相似度 %.4f，跳过重复教材召回。"
                         .formatted(memoryResponse.memoryId(), memoryResponse.reuseScope(), memoryResponse.similarity())
@@ -262,10 +263,28 @@ public class TeachingWorkflowService {
                 node("PRIVATE_FEISHU_PLACEHOLDER", "私有飞书文档", "预留 tenantId + subjectId + docScope 隔离的飞书资料检索节点。"),
                 node("PRACTICE_DISCOVERY_PLACEHOLDER", "练习题发现", "预留同知识点练习题和错题库召回节点。"),
                 node("REACT_SOLVE", "ReAct 解题", "基于证据生成 thought/action/observation/answer 轨迹。"),
-                node("AI_DRAFT", "AI 讲义草稿", "调用真实模型生成教师讲解、学生提示、知识点和互动问题。"),
+                node("AI_DRAFT", "AI 讲义草稿", aiDraftSummary(aiDraft)),
                 node("LATEX_HANDOUT", "LaTeX 讲义", "生成可导出为 PDF 的讲义草稿。"),
                 node("HUMAN_FEEDBACK", "人类反馈", "等待学生或教师对讲义、解析和练习建议给出人工反馈。"),
                 node("INTERACTIVE_FOLLOW_UP", "交互追问", "给出继续追问、练习和导出建议。"));
+    }
+
+    /**
+     * Summarizes the real AI draft result for the DAG node without exposing raw model content.
+     */
+    private static String aiDraftSummary(TeachingTaskResponse.AiDraft aiDraft) {
+        if (aiDraft == null || !aiDraft.enabled()) {
+            return "真实模型未启用：" + (aiDraft == null ? "" : aiDraft.message());
+        }
+        String parseState = aiDraft.structured() ? "结构化解析成功" : "结构化解析失败";
+        return "%s，模型 %s/%s，tokens=%d，retry=%d/%d，events=%d。".formatted(
+                parseState,
+                aiDraft.providerName(),
+                aiDraft.modelCode(),
+                aiDraft.totalTokens(),
+                aiDraft.retryCount(),
+                aiDraft.maxRetries(),
+                aiDraft.recoveryEvents() == null ? 0 : aiDraft.recoveryEvents().size());
     }
 
     /**

@@ -49,6 +49,8 @@ class TeachingAiDraftLiveSmokeTest {
         assertThat(draft.knowledgePoints()).isNotEmpty();
         assertThat(draft.followUpQuestions()).isNotEmpty();
         assertThat(draft.retryCount()).isLessThanOrEqualTo(draft.maxRetries());
+        assertThat(draft.recoveryEvents()).extracting(TeachingTaskResponse.AiRecoveryEvent::eventType)
+                .contains("MODEL_CALL_SUCCEEDED", "JSON_PARSE_SUCCEEDED");
     }
 
     /**

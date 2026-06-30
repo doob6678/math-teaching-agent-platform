@@ -55,12 +55,16 @@ public class TeachingAiDraftService {
         }
         RuntimeException lastFailure = null;
         TeachingTaskResponse.AiDraft lastUnstructuredDraft = null;
-        for (AiProviderCatalog.Provider provider : providers) {
+        List<TeachingTaskResponse.AiRecoveryEvent> recoveryEvents = new ArrayList<>();
+        int totalPromptTokens = 0;
+        int totalCompletionTokens = 0;
+        int totalTokens = 0;
+        for (int providerIndex = 0; providerIndex < providers.size(); providerIndex++) {
+            AiProviderCatalog.Provider provider = providers.get(providerIndex);
             String nextPrompt = prompt(request, evidence, memoryResponse);
-            int promptTokens = 0;
-            int completionTokens = 0;
-            int totalTokens = 0;
             for (int attempt = 0; attempt <= MAX_DRAFT_RETRIES; attempt++) {
+                boolean canRetryProvider = attempt < MAX_DRAFT_RETRIES;
+                boolean canRotateProvider = providerIndex < providers.size() - 1;
                 try {
                     AiChatResult result = aiChatGateway.call(new AiChatRequest(
                             provider.name(),
@@ -68,26 +72,98 @@ public class TeachingAiDraftService {
                             "CoursewareAgent",
                             nextPrompt,
                             evidenceRefs(evidence)));
-                    promptTokens += result.promptTokens();
-                    completionTokens += result.completionTokens();
+                    totalPromptTokens += result.promptTokens();
+                    totalCompletionTokens += result.completionTokens();
                     totalTokens += result.totalTokens();
+                    recoveryEvents.add(event(
+                            "MODEL_CALL_SUCCEEDED",
+                            result.providerName(),
+                            result.modelCode(),
+                            attempt,
+                            false,
+                            true,
+                            result.safeMessage()));
                     ParsedDraft parsed = parseStructuredDraft(result.generatedContent());
                     if (parsed.structured()) {
-                        return toAiDraft(result, parsed, promptTokens, completionTokens, totalTokens, attempt);
+                        recoveryEvents.add(event(
+                                "JSON_PARSE_SUCCEEDED",
+                                result.providerName(),
+                                result.modelCode(),
+                                attempt,
+                                true,
+                                false,
+                                "Structured teaching draft parsed."));
+                        return toAiDraft(
+                                result,
+                                parsed,
+                                totalPromptTokens,
+                                totalCompletionTokens,
+                                totalTokens,
+                                attempt,
+                                recoveryEvents);
                     }
+                    recoveryEvents.add(event(
+                            "JSON_PARSE_FAILED",
+                            result.providerName(),
+                            result.modelCode(),
+                            attempt,
+                            false,
+                            canRetryProvider || canRotateProvider,
+                            parsed.parseError()));
                     if (attempt == MAX_DRAFT_RETRIES) {
                         lastUnstructuredDraft = toAiDraft(
-                                result, parsed, promptTokens, completionTokens, totalTokens, attempt);
+                                result,
+                                parsed,
+                                totalPromptTokens,
+                                totalCompletionTokens,
+                                totalTokens,
+                                attempt,
+                                recoveryEvents);
                         break;
                     }
+                    recoveryEvents.add(event(
+                            "RETRY_SCHEDULED",
+                            provider.name(),
+                            provider.chatModel(),
+                            attempt + 1,
+                            false,
+                            true,
+                            "Retrying model output repair after JSON parse failure."));
                     nextPrompt = retryPrompt(request, evidence, memoryResponse, result.generatedContent(), parsed.parseError());
                 } catch (RuntimeException exception) {
                     lastFailure = exception;
+                    recoveryEvents.add(event(
+                            "MODEL_CALL_FAILED",
+                            provider.name(),
+                            provider.chatModel(),
+                            attempt,
+                            false,
+                            canRetryProvider || canRotateProvider,
+                            exception.getClass().getSimpleName()));
                     if (attempt == MAX_DRAFT_RETRIES) {
                         break;
                     }
+                    recoveryEvents.add(event(
+                            "RETRY_SCHEDULED",
+                            provider.name(),
+                            provider.chatModel(),
+                            attempt + 1,
+                            false,
+                            true,
+                            "Retrying after transient model gateway failure."));
                     nextPrompt = transientFailureRetryPrompt(request, evidence, memoryResponse, exception);
                 }
+            }
+            if (providerIndex < providers.size() - 1) {
+                AiProviderCatalog.Provider nextProvider = providers.get(providerIndex + 1);
+                recoveryEvents.add(event(
+                        "PROVIDER_ROTATED",
+                        nextProvider.name(),
+                        nextProvider.chatModel(),
+                        0,
+                        false,
+                        true,
+                        "Switching to next enabled provider after failed attempts."));
             }
         }
         if (lastUnstructuredDraft != null) {
@@ -101,7 +177,17 @@ public class TeachingAiDraftService {
                 0,
                 0,
                 "",
-                "AI provider failed: " + (lastFailure == null ? "unknown" : lastFailure.getClass().getSimpleName()));
+                "AI provider failed: " + (lastFailure == null ? "unknown" : lastFailure.getClass().getSimpleName()),
+                false,
+                "",
+                "",
+                List.of(),
+                List.of(),
+                lastFailure == null ? "" : lastFailure.getClass().getSimpleName(),
+                MAX_DRAFT_RETRIES,
+                MAX_DRAFT_RETRIES,
+                false,
+                List.copyOf(recoveryEvents));
     }
 
     private static TeachingTaskResponse.AiDraft toAiDraft(
@@ -110,7 +196,8 @@ public class TeachingAiDraftService {
             int promptTokens,
             int completionTokens,
             int totalTokens,
-            int retryCount) {
+            int retryCount,
+            List<TeachingTaskResponse.AiRecoveryEvent> recoveryEvents) {
         String message = parsed.structured()
                 ? result.safeMessage()
                 : result.safeMessage() + " Structured parse failed after " + retryCount + " retry.";
@@ -131,7 +218,26 @@ public class TeachingAiDraftService {
                 parsed.parseError(),
                 retryCount,
                 MAX_DRAFT_RETRIES,
-                parsed.structured() && retryCount > 0);
+                parsed.structured() && retryCount > 0,
+                List.copyOf(recoveryEvents));
+    }
+
+    private static TeachingTaskResponse.AiRecoveryEvent event(
+            String eventType,
+            String providerName,
+            String modelCode,
+            int attemptNo,
+            boolean structured,
+            boolean retryable,
+            String message) {
+        return new TeachingTaskResponse.AiRecoveryEvent(
+                eventType,
+                providerName,
+                modelCode,
+                attemptNo,
+                structured,
+                retryable,
+                safeEventMessage(message));
     }
 
     /**
@@ -310,6 +416,14 @@ public class TeachingAiDraftService {
             return "";
         }
         return message.length() <= 180 ? message : message.substring(0, 180);
+    }
+
+    private static String safeEventMessage(String message) {
+        if (message == null || message.isBlank()) {
+            return "";
+        }
+        String stripped = message.strip();
+        return stripped.length() <= 180 ? stripped : stripped.substring(0, 180);
     }
 
     record ParsedDraft(

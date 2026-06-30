@@ -2065,6 +2065,22 @@ function TeachingTaskPanel({
               ) : (
                 <p>{task.aiDraft.parseError || task.aiDraft.content || task.aiDraft.message}</p>
               )}
+              {task.aiDraft.recoveryEvents?.length ? (
+                <div className="ai-recovery-list">
+                  {task.aiDraft.recoveryEvents.map((event, index) => (
+                    <div
+                      className={event.structured ? "ai-recovery-event good" : "ai-recovery-event"}
+                      key={`${event.eventType}:${event.providerName}:${event.attemptNo}:${index}`}
+                    >
+                      <strong>{event.eventType}</strong>
+                      <span>
+                        {event.providerName}/{event.modelCode} attempt {event.attemptNo}
+                      </span>
+                      <p>{event.message}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
             </div>
           ) : null}
           <div className="node-list">

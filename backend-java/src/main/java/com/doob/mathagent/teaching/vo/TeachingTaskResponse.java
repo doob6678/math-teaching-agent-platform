@@ -108,6 +108,7 @@ public record TeachingTaskResponse(
      * @param retryCount actual retry count used by the AI draft stage
      * @param maxRetries backend retry limit for this stage
      * @param recoveredAfterRetry whether structured output succeeded after at least one retry
+     * @param recoveryEvents structured recovery events for model calls, JSON parsing, retries, and provider rotation
      */
     public record AiDraft(
             boolean enabled,
@@ -126,7 +127,8 @@ public record TeachingTaskResponse(
             String parseError,
             int retryCount,
             int maxRetries,
-            boolean recoveredAfterRetry) {
+            boolean recoveredAfterRetry,
+            List<AiRecoveryEvent> recoveryEvents) {
 
         /**
          * Backward-compatible constructor for disabled and provider-failure responses.
@@ -141,7 +143,28 @@ public record TeachingTaskResponse(
                 String content,
                 String message) {
             this(enabled, providerName, modelCode, promptTokens, completionTokens, totalTokens, content, message,
-                    false, "", "", List.of(), List.of(), "", 0, 0, false);
+                    false, "", "", List.of(), List.of(), "", 0, 0, false, List.of());
         }
+    }
+
+    /**
+     * One backend-owned AI recovery event. Events intentionally avoid raw prompt and raw model content.
+     *
+     * @param eventType stable event code, such as MODEL_CALL_SUCCEEDED or JSON_PARSE_FAILED
+     * @param providerName provider attempted by the backend
+     * @param modelCode model attempted by the backend
+     * @param attemptNo zero-based attempt number within the provider
+     * @param structured whether this event observed a valid structured draft
+     * @param retryable whether the backend still had a retry or provider fallback path after the event
+     * @param message short safe message for UI and audit
+     */
+    public record AiRecoveryEvent(
+            String eventType,
+            String providerName,
+            String modelCode,
+            int attemptNo,
+            boolean structured,
+            boolean retryable,
+            String message) {
     }
 }

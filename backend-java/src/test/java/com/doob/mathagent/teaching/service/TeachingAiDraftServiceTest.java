@@ -51,6 +51,14 @@ class TeachingAiDraftServiceTest {
         assertThat(draft.maxRetries()).isEqualTo(1);
         assertThat(draft.totalTokens()).isEqualTo(34);
         assertThat(draft.teacherExplanation()).contains("修复后的教师讲解");
+        assertThat(draft.recoveryEvents()).extracting(TeachingTaskResponse.AiRecoveryEvent::eventType)
+                .containsExactly(
+                        "MODEL_CALL_SUCCEEDED",
+                        "JSON_PARSE_FAILED",
+                        "RETRY_SCHEDULED",
+                        "MODEL_CALL_SUCCEEDED",
+                        "JSON_PARSE_SUCCEEDED");
+        assertThat(draft.recoveryEvents().get(1).retryable()).isTrue();
         assertThat(gateway.requests()).hasSize(2);
         assertThat(gateway.requests().get(1).userInputSummary()).contains("上一次输出没有通过后端 JSON schema 解析");
     }
@@ -69,8 +77,39 @@ class TeachingAiDraftServiceTest {
         assertThat(draft.providerName()).isEqualTo("dashscope");
         assertThat(draft.modelCode()).isEqualTo("qwen3.6-flash");
         assertThat(draft.retryCount()).isZero();
+        assertThat(draft.totalTokens()).isEqualTo(23);
+        assertThat(draft.recoveryEvents()).extracting(TeachingTaskResponse.AiRecoveryEvent::eventType)
+                .contains(
+                        "JSON_PARSE_FAILED",
+                        "PROVIDER_ROTATED",
+                        "JSON_PARSE_SUCCEEDED");
+        assertThat(draft.recoveryEvents()).filteredOn(event -> "PROVIDER_ROTATED".equals(event.eventType()))
+                .extracting(TeachingTaskResponse.AiRecoveryEvent::providerName)
+                .containsExactly("dashscope");
         assertThat(gateway.requests()).extracting(AiChatRequest::providerName)
                 .containsExactly("openai", "openai", "dashscope");
+    }
+
+    @Test
+    void retriesTransientGatewayFailureBeforeProviderRotation() {
+        CapturingGateway gateway = new CapturingGateway(List.of(
+                new IllegalStateException("proxy connection reset"),
+                new AiChatResult("openai", "gpt-5.4", 8, 5, 13, "ok", structuredJson("代理恢复后的教师讲解"))));
+        TeachingAiDraftService service = new TeachingAiDraftService(gateway, catalog(true, false));
+
+        TeachingTaskResponse.AiDraft draft = service.draft(request(), evidence(), memory());
+
+        assertThat(draft.structured()).isTrue();
+        assertThat(draft.recoveredAfterRetry()).isTrue();
+        assertThat(draft.retryCount()).isEqualTo(1);
+        assertThat(draft.teacherExplanation()).contains("代理恢复");
+        assertThat(draft.recoveryEvents()).extracting(TeachingTaskResponse.AiRecoveryEvent::eventType)
+                .containsExactly(
+                        "MODEL_CALL_FAILED",
+                        "RETRY_SCHEDULED",
+                        "MODEL_CALL_SUCCEEDED",
+                        "JSON_PARSE_SUCCEEDED");
+        assertThat(draft.recoveryEvents().getFirst().message()).isEqualTo("IllegalStateException");
     }
 
     @Test
@@ -88,6 +127,14 @@ class TeachingAiDraftServiceTest {
         assertThat(draft.message()).contains("Structured parse failed after 1 retry");
         assertThat(draft.retryCount()).isEqualTo(1);
         assertThat(draft.recoveredAfterRetry()).isFalse();
+        assertThat(draft.recoveryEvents()).extracting(TeachingTaskResponse.AiRecoveryEvent::eventType)
+                .containsExactly(
+                        "MODEL_CALL_SUCCEEDED",
+                        "JSON_PARSE_FAILED",
+                        "RETRY_SCHEDULED",
+                        "MODEL_CALL_SUCCEEDED",
+                        "JSON_PARSE_FAILED");
+        assertThat(draft.recoveryEvents().getLast().retryable()).isFalse();
     }
 
     private static String structuredJson(String teacherExplanation) {
@@ -131,21 +178,25 @@ class TeachingAiDraftServiceTest {
 
     private static final class CapturingGateway implements AiChatGateway {
 
-        private final List<AiChatResult> results;
+        private final List<Object> outcomes;
         private final List<AiChatRequest> requests = new ArrayList<>();
         private int index;
 
-        private CapturingGateway(List<AiChatResult> results) {
-            this.results = results;
+        private CapturingGateway(List<Object> outcomes) {
+            this.outcomes = outcomes;
         }
 
         @Override
         public AiChatResult call(AiChatRequest request) {
             requests.add(request);
-            if (index >= results.size()) {
+            if (index >= outcomes.size()) {
                 throw new IllegalStateException("No test result configured for request " + requests.size());
             }
-            return results.get(index++);
+            Object outcome = outcomes.get(index++);
+            if (outcome instanceof RuntimeException exception) {
+                throw exception;
+            }
+            return (AiChatResult) outcome;
         }
 
         private List<AiChatRequest> requests() {

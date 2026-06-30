@@ -1281,6 +1281,36 @@ h2 {
   overflow-wrap: anywhere;
 }
 
+.ai-recovery-list {
+  display: grid;
+  gap: 6px;
+}
+
+.ai-recovery-event {
+  display: grid;
+  gap: 2px;
+  padding: 8px;
+  border: 1px solid #e2e8f0;
+  border-left: 3px solid #f59e0b;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.ai-recovery-event.good {
+  border-left-color: #16a34a;
+}
+
+.ai-recovery-event strong {
+  font-size: 12px;
+}
+
+.ai-recovery-event span,
+.ai-recovery-event p {
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
 .node-list,
 .react-list {
   display: grid;

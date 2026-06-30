@@ -400,6 +400,17 @@ export interface TeachingAiDraft {
   retryCount: number;
   maxRetries: number;
   recoveredAfterRetry: boolean;
+  recoveryEvents: TeachingAiRecoveryEvent[];
+}
+
+export interface TeachingAiRecoveryEvent {
+  eventType: string;
+  providerName: string;
+  modelCode: string;
+  attemptNo: number;
+  structured: boolean;
+  retryable: boolean;
+  message: string;
 }
 
 /**
