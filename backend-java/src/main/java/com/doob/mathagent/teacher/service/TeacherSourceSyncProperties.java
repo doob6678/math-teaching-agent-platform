@@ -11,13 +11,33 @@ import org.springframework.core.env.Environment;
  * @param feishuAppkeyPath APPKEY file path used by the downloader; raw content is never returned by APIs
  * @param feishuStagingRoot local staging root for downloaded Feishu resources
  * @param feishuSmokeMaxFiles bounded file count for smoke tests and UI-triggered checks
+ * @param feishuProcessTimeoutSeconds hard timeout for one Python Feishu process attempt
  */
 public record TeacherSourceSyncProperties(
         String feishuDefaultUrl,
         Path feishuDownloaderScript,
         Path feishuAppkeyPath,
         Path feishuStagingRoot,
-        int feishuSmokeMaxFiles) {
+        int feishuSmokeMaxFiles,
+        int feishuProcessTimeoutSeconds) {
+
+    /**
+     * Keeps the previous constructor shape for tests and callers that do not need a custom timeout.
+     */
+    public TeacherSourceSyncProperties(
+            String feishuDefaultUrl,
+            Path feishuDownloaderScript,
+            Path feishuAppkeyPath,
+            Path feishuStagingRoot,
+            int feishuSmokeMaxFiles) {
+        this(
+                feishuDefaultUrl,
+                feishuDownloaderScript,
+                feishuAppkeyPath,
+                feishuStagingRoot,
+                feishuSmokeMaxFiles,
+                30);
+    }
 
     /**
      * Creates properties from Spring configuration.
@@ -39,7 +59,8 @@ public record TeacherSourceSyncProperties(
                 Path.of(textOrDefault(
                         environment.getProperty("math-agent.teacher.sync.feishu.staging-root"),
                         "D:/project2026/feishutest/codex-app-staging")),
-                integerOrDefault(environment.getProperty("math-agent.teacher.sync.feishu.smoke-max-files"), 1));
+                integerOrDefault(environment.getProperty("math-agent.teacher.sync.feishu.smoke-max-files"), 1),
+                integerOrDefault(environment.getProperty("math-agent.teacher.sync.feishu.process-timeout-seconds"), 30));
     }
 
     /**
@@ -53,7 +74,8 @@ public record TeacherSourceSyncProperties(
                 defaultFeishuDownloaderScript(),
                 Path.of("D:/project2026/feishutest/APPKEY.md"),
                 Path.of("D:/project2026/feishutest/codex-app-staging"),
-                1);
+                1,
+                30);
     }
 
     /**
@@ -64,6 +86,7 @@ public record TeacherSourceSyncProperties(
         feishuAppkeyPath = feishuAppkeyPath.toAbsolutePath().normalize();
         feishuStagingRoot = feishuStagingRoot.toAbsolutePath().normalize();
         feishuSmokeMaxFiles = Math.max(0, feishuSmokeMaxFiles);
+        feishuProcessTimeoutSeconds = Math.max(1, feishuProcessTimeoutSeconds);
     }
 
     /**

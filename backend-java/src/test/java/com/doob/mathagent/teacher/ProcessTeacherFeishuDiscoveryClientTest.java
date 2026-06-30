@@ -101,6 +101,36 @@ class ProcessTeacherFeishuDiscoveryClientTest {
     }
 
     @Test
+    void marksTimedOutDiscoveryProcessAsRetryable() throws Exception {
+        Path script = tempDir.resolve("feishu_discovery_timeout.py");
+        Path appkey = tempDir.resolve("APPKEY.md");
+        Files.writeString(appkey, "APP_ID=dummy\nAPP_SECRET=dummy\n");
+        Files.writeString(script, """
+                import time
+                print("starting slow discovery", flush=True)
+                time.sleep(10)
+                """);
+        TeacherSourceSyncProperties properties = new TeacherSourceSyncProperties(
+                "https://my.feishu.cn/drive/folder/root-token",
+                script,
+                appkey,
+                tempDir.resolve("staging"),
+                1,
+                1);
+        ProcessTeacherFeishuDiscoveryClient client = new ProcessTeacherFeishuDiscoveryClient(properties);
+
+        assertThatThrownBy(() -> client.discover(new TeacherFeishuDiscoveryQuery(
+                        "search",
+                        "space vector",
+                        "https://my.feishu.cn/drive/folder/root-token",
+                        1,
+                        1)))
+                .isInstanceOf(TeacherFeishuDiscoveryException.class)
+                .satisfies(exception -> assertThat(((TeacherFeishuDiscoveryException) exception).retryable()).isTrue())
+                .hasMessageContaining("timed out after 1 seconds");
+    }
+
+    @Test
     void realFeishuDiscoveryListsAndSearchesThroughVerifiedScript() {
         Path script = Path.of(System.getProperty("user.home"), ".codex", "skills", "feishu-cloud-docs", "scripts",
                 "download_feishu_url.py");
@@ -112,21 +142,30 @@ class ProcessTeacherFeishuDiscoveryClientTest {
                 script,
                 appkey,
                 tempDir.resolve("real-feishu-discovery"),
-                1);
+                1,
+                10);
         ProcessTeacherFeishuDiscoveryClient client = new ProcessTeacherFeishuDiscoveryClient(properties);
 
-        TeacherFeishuDiscoveryResponse listed = client.discover(new TeacherFeishuDiscoveryQuery(
+        TeacherFeishuDiscoveryResponse listed;
+        TeacherFeishuDiscoveryResponse searched;
+        try {
+            listed = client.discover(new TeacherFeishuDiscoveryQuery(
                 "list",
                 "",
                 "https://my.feishu.cn/drive/folder/XVn7fXppJlQMK5dkuOkc1ePan2f",
                 1,
                 5));
-        TeacherFeishuDiscoveryResponse searched = client.discover(new TeacherFeishuDiscoveryQuery(
+            searched = client.discover(new TeacherFeishuDiscoveryQuery(
                 "search",
                 "空间向量",
                 "https://my.feishu.cn/drive/folder/XVn7fXppJlQMK5dkuOkc1ePan2f",
                 1,
                 5));
+
+        } catch (TeacherFeishuDiscoveryException exception) {
+            Assumptions.assumeFalse(exception.retryable(), exception.getMessage());
+            throw exception;
+        }
 
         assertThat(listed.candidateCount()).isGreaterThan(0);
         assertThat(searched.candidateCount()).isGreaterThan(0);

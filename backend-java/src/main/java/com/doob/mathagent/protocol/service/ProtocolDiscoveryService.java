@@ -31,6 +31,7 @@ public class ProtocolDiscoveryService {
     private static final List<String> STUDENT_PROMPTS = List.of("student_blank_handout_writer", "solution_reviewer");
     private static final List<String> TEACHER_TOOLS = List.of(
             "search_textbook_evidence",
+            "search_teacher_resource_evidence",
             "plan_agent_run",
             "create_teaching_task",
             "export_handout_pdf",
@@ -71,6 +72,22 @@ public class ProtocolDiscoveryService {
                         true,
                         TEACHING_ROLES,
                         "query:basic",
+                        "low",
+                        false,
+                        true,
+                        schema(
+                                fields(
+                                        field("query", "string", "Search text submitted by the agent."),
+                                        field("limit", "integer", "Maximum evidence snippets to return.")),
+                                "query")),
+                new McpToolDescriptor(
+                        "search_teacher_resource_evidence",
+                        "Search teacher resource evidence",
+                        "Search parsed Feishu and teacher resource blocks visible to the registered teacher/admin key.",
+                        true,
+                        true,
+                        TEACHER_ROLES,
+                        "teacher-resource:read",
                         "low",
                         false,
                         true,

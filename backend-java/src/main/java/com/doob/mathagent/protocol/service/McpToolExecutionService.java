@@ -7,8 +7,11 @@ import com.doob.mathagent.retrieval.RetrievalRequestContext;
 import com.doob.mathagent.retrieval.TextbookRetrievalService;
 import com.doob.mathagent.retrieval.TextbookSearchRequest;
 import com.doob.mathagent.retrieval.TextbookSearchResponse;
+import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService;
+import com.doob.mathagent.teacher.vo.TeacherResourceBlockSearchResponse;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 /**
@@ -18,10 +21,12 @@ import org.springframework.stereotype.Service;
 public class McpToolExecutionService {
 
     private static final String TEXTBOOK_EVIDENCE_TOOL = "search_textbook_evidence";
+    private static final String TEACHER_RESOURCE_EVIDENCE_TOOL = "search_teacher_resource_evidence";
 
     private final McpClientRegistryProperties registryProperties;
     private final TextbookRetrievalService textbookRetrievalService;
     private final TextbookResourceProperties textbookResourceProperties;
+    private final TeacherResourceBlockSearchService teacherResourceBlockSearchService;
 
     /**
      * Creates an MCP execution service.
@@ -30,13 +35,26 @@ public class McpToolExecutionService {
      * @param textbookRetrievalService real textbook retrieval service
      * @param textbookResourceProperties processed textbook resource configuration
      */
+    @Autowired
+    public McpToolExecutionService(
+            McpClientRegistryProperties registryProperties,
+            TextbookRetrievalService textbookRetrievalService,
+            TextbookResourceProperties textbookResourceProperties,
+            TeacherResourceBlockSearchService teacherResourceBlockSearchService) {
+        this.registryProperties = registryProperties == null ? new McpClientRegistryProperties() : registryProperties;
+        this.textbookRetrievalService = textbookRetrievalService;
+        this.textbookResourceProperties = textbookResourceProperties;
+        this.teacherResourceBlockSearchService = teacherResourceBlockSearchService;
+    }
+
+    /**
+     * Backward-compatible constructor for tests that only exercise textbook evidence search.
+     */
     public McpToolExecutionService(
             McpClientRegistryProperties registryProperties,
             TextbookRetrievalService textbookRetrievalService,
             TextbookResourceProperties textbookResourceProperties) {
-        this.registryProperties = registryProperties == null ? new McpClientRegistryProperties() : registryProperties;
-        this.textbookRetrievalService = textbookRetrievalService;
-        this.textbookResourceProperties = textbookResourceProperties;
+        this(registryProperties, textbookRetrievalService, textbookResourceProperties, null);
     }
 
     /**
@@ -56,6 +74,7 @@ public class McpToolExecutionService {
         requireToolAllowed(client, normalizedToolName);
         Object result = switch (normalizedToolName) {
             case TEXTBOOK_EVIDENCE_TOOL -> searchTextbookEvidence(client, request);
+            case TEACHER_RESOURCE_EVIDENCE_TOOL -> searchTeacherResourceEvidence(client, request);
             default -> throw new IllegalArgumentException("MCP tool is not implemented: " + normalizedToolName);
         };
         return new McpToolCallResponse(
@@ -105,6 +124,37 @@ public class McpToolExecutionService {
         result.put("limit", response.limit());
         result.put("retrievalStrategy", response.retrievalStrategy());
         result.put("total", response.total());
+        result.put("hits", response.hits());
+        return result;
+    }
+
+    /**
+     * Executes teacher resource block search through the service that enforces owner and scope visibility.
+     */
+    private Object searchTeacherResourceEvidence(
+            McpClientRegistryProperties.Client client,
+            McpToolCallRequest request) {
+        if (teacherResourceBlockSearchService == null) {
+            throw new IllegalStateException("Teacher resource search service is not configured");
+        }
+        Map<String, Object> arguments = request == null ? Map.of() : request.arguments();
+        String query = stringArgument(arguments, "query");
+        int limit = intArgument(arguments, "limit", 10);
+        if (query.isBlank()) {
+            throw new IllegalArgumentException("query is required for search_teacher_resource_evidence");
+        }
+        TeacherResourceBlockSearchResponse response = teacherResourceBlockSearchService.search(
+                client.tenantId(),
+                normalizedProfile(client.profile()),
+                client.subjectId(),
+                query,
+                limit);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("queryId", response.queryId());
+        result.put("query", response.query());
+        result.put("limit", response.limit());
+        result.put("retrievalMode", response.retrievalMode());
+        result.put("hitCount", response.hitCount());
         result.put("hits", response.hits());
         return result;
     }

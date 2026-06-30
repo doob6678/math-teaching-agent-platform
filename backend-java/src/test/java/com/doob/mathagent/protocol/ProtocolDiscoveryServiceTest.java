@@ -22,12 +22,13 @@ class ProtocolDiscoveryServiceTest {
         assertThat(tools).extracting(McpToolDescriptor::name)
                 .contains(
                         "search_textbook_evidence",
+                        "search_teacher_resource_evidence",
                         "plan_agent_run",
                         "create_teaching_task",
                         "export_handout_pdf");
         assertThat(tools).filteredOn(McpToolDescriptor::executionEndpointEnabled)
                 .extracting(McpToolDescriptor::name)
-                .containsExactly("search_textbook_evidence");
+                .containsExactly("search_textbook_evidence", "search_teacher_resource_evidence");
         assertThat(tools).filteredOn(tool -> tool.requiresCapabilityToken())
                 .extracting(McpToolDescriptor::name)
                 .contains("create_teaching_task", "export_handout_pdf");
@@ -37,6 +38,13 @@ class ProtocolDiscoveryServiceTest {
                     assertThat(tool.readOnly()).isTrue();
                     assertThat(tool.inputSchema().required()).contains("query");
                     assertThat(tool.requiredRoles()).contains("student", "teacher", "admin");
+                });
+        assertThat(tools).filteredOn(tool -> tool.name().equals("search_teacher_resource_evidence"))
+                .singleElement()
+                .satisfies(tool -> {
+                    assertThat(tool.readOnly()).isTrue();
+                    assertThat(tool.requiredRoles()).containsExactly("teacher", "admin");
+                    assertThat(tool.requiredScope()).isEqualTo("teacher-resource:read");
                 });
         assertNoSecretsOrLocalPaths(objectMapper.writeValueAsString(tools));
     }

@@ -243,4 +243,33 @@ class ProcessTeacherFeishuDownloadClientTest {
         assertThat(result.files()).isEqualTo(1);
         assertThat(Files.readString(result.savedPath().resolve("result.txt"))).contains("after retry");
     }
+
+    @Test
+    void processDownloaderMarksTimedOutProcessAsRetryable() throws Exception {
+        Path script = tempDir.resolve("timeout_downloader.py");
+        Files.writeString(script, """
+                import time
+                print("starting slow download", flush=True)
+                time.sleep(10)
+                """);
+        Path appkey = tempDir.resolve("APPKEY.md");
+        Files.writeString(appkey, "APPID\ncli_dummy\nAPP Secret\nsecret_dummy\n");
+        TeacherSourceSyncProperties properties = new TeacherSourceSyncProperties(
+                "https://my.feishu.cn/drive/folder/rootToken",
+                script,
+                appkey,
+                tempDir.resolve("staging"),
+                1,
+                1);
+        ProcessTeacherFeishuDownloadClient client = new ProcessTeacherFeishuDownloadClient(properties);
+
+        assertThatThrownBy(() -> client.download(
+                "https://my.feishu.cn/drive/folder/rootToken",
+                tempDir.resolve("staging"),
+                1,
+                TeacherFeishuDownloadClient.FeishuDownloadCheckpoint.empty()))
+                .isInstanceOf(TeacherFeishuDownloadException.class)
+                .satisfies(error -> assertThat(((TeacherFeishuDownloadException) error).retryable()).isTrue())
+                .hasMessageContaining("timed out after 1 seconds");
+    }
 }

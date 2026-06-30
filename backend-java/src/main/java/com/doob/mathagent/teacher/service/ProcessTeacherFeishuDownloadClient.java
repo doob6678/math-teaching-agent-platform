@@ -7,6 +7,7 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -108,6 +109,8 @@ public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownload
         Path summaryPath = outputRoot.resolve("summary-" + Instant.now().toEpochMilli() + "-attempt-" + attempt + ".json");
         Path checkpointPath = outputRoot.resolve("resume-checkpoint-" + Instant.now().toEpochMilli()
                 + "-attempt-" + attempt + ".json");
+        Path processOutputPath = outputRoot.resolve("download-output-" + Instant.now().toEpochMilli()
+                + "-attempt-" + attempt + ".log");
         try {
             Files.createDirectories(outputRoot);
             Process process = new ProcessBuilder(buildCommand(
@@ -119,9 +122,18 @@ public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownload
                     fileExtension,
                     checkpoint))
                     .redirectErrorStream(true)
+                    .redirectOutput(processOutputPath.toFile())
                     .start();
-            String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-            int exitCode = process.waitFor();
+            boolean finished = process.waitFor(properties.feishuProcessTimeoutSeconds(), TimeUnit.SECONDS);
+            String output = readProcessOutput(processOutputPath);
+            if (!finished) {
+                process.destroyForcibly();
+                throw new ProcessDownloadFailure(
+                        "Feishu downloader timed out after " + properties.feishuProcessTimeoutSeconds()
+                                + " seconds: " + safeProcessOutput(output),
+                        readCheckpoint(checkpointPath));
+            }
+            int exitCode = process.exitValue();
             if (exitCode != 0) {
                 throw new ProcessDownloadFailure(
                         "Feishu downloader failed with exit " + exitCode + ": " + safeProcessOutput(output),
@@ -301,6 +313,15 @@ public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownload
             return normalized;
         }
         return normalized.substring(0, MAX_ERROR_OUTPUT_CHARS) + "...";
+    }
+
+    /**
+     * Reads bounded subprocess output captured outside the pipe to avoid blocking on network hangs.
+     */
+    private static String readProcessOutput(Path processOutputPath) throws IOException {
+        return Files.isRegularFile(processOutputPath)
+                ? new String(Files.readAllBytes(processOutputPath), StandardCharsets.UTF_8)
+                : "";
     }
 
     /**

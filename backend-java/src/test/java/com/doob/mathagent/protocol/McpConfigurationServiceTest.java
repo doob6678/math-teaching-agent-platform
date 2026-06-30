@@ -36,7 +36,7 @@ class McpConfigurationServiceTest {
         assertThat(response.configJson()).contains("\"math-agent-rag\"");
         assertThat(response.configJson()).contains("\"url\" : \"https://math.example.com/api/mcp\"");
         assertThat(response.configJson()).contains("\"Authorization\" : \"Bearer ${MATH_AGENT_MCP_SECRET}\"");
-        assertThat(response.exposedTools()).contains("search_textbook_evidence", "plan_agent_run");
+        assertThat(response.exposedTools()).contains("search_textbook_evidence", "search_teacher_resource_evidence", "plan_agent_run");
         assertThat(response.exposedPrompts()).contains("teacher_handout_writer", "student_blank_handout_writer");
         assertThat(json).doesNotContain("mcp_secret_1234567890abcdef");
         assertThat(json).doesNotContain("C:\\");
@@ -51,7 +51,7 @@ class McpConfigurationServiceTest {
                 "https://math.example.com/api/mcp",
                 "student_secret_1234567890abcdef",
                 "MATH_AGENT_STUDENT_MCP_SECRET",
-                List.of("search_textbook_evidence", "export_handout_pdf"),
+                List.of("search_textbook_evidence", "search_teacher_resource_evidence", "export_handout_pdf"),
                 List.of("student_blank_handout_writer", "teacher_handout_writer")));
 
         assertThat(response.keyProfile()).isEqualTo("student");
@@ -60,6 +60,7 @@ class McpConfigurationServiceTest {
         assertThat(response.configJson()).contains("\"tools\"");
         assertThat(response.configJson()).contains("search_textbook_evidence");
         assertThat(response.configJson()).doesNotContain("export_handout_pdf");
+        assertThat(response.configJson()).doesNotContain("search_teacher_resource_evidence");
         assertThat(response.configJson()).contains("student_blank_handout_writer");
         assertThat(response.configJson()).doesNotContain("teacher_handout_writer");
     }
