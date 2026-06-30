@@ -34,6 +34,8 @@ public class ApiAccessPolicy {
                 new ApiAccessRule("/api/mcp/tools", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 30, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/security/capability-audits", ApiAccessLevel.ADMIN, Set.of("teacher", "admin"), 60, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/security/capabilities", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 20, Duration.ofMinutes(1)),
+                new ApiAccessRule("/api/knowledge/points", ApiAccessLevel.ADMIN, Set.of("teacher", "admin"), 30, Duration.ofMinutes(1)),
+                new ApiAccessRule("/api/question-bank/items", ApiAccessLevel.ADMIN, Set.of("teacher", "admin"), 30, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/agents/traces", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 60, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/agents/execute", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 20, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/agents/run-plan", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 30, Duration.ofMinutes(1)),

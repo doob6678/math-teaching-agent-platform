@@ -37,6 +37,10 @@ public class CapabilityTokenService {
     private static final String STUDENT_MEMORY_REMEMBER_PATH = "/api/students/memory/remember";
     private static final String STUDENT_DASHBOARD_REFRESH_ACTION = "student-dashboard:refresh";
     private static final String STUDENT_DASHBOARD_REFRESH_PATH = "/api/students/dashboard/refresh";
+    private static final String KNOWLEDGE_POINT_CREATE_ACTION = "knowledge-point:create";
+    private static final String KNOWLEDGE_POINTS_PATH = "/api/knowledge/points";
+    private static final String QUESTION_BANK_CREATE_ACTION = "question-bank:create";
+    private static final String QUESTION_BANK_ITEMS_PATH = "/api/question-bank/items";
     private static final String AGENT_RUN_ACTION_PREFIX = "agent-run:";
     private static final String AGENT_EXECUTE_PATH = "/api/agents/execute";
     private static final Set<String> CAPABILITY_ALLOWED_ROLES = Set.of("student", "teacher", "admin");
@@ -265,6 +269,14 @@ public class CapabilityTokenService {
         }
         if (STUDENT_DASHBOARD_REFRESH_ACTION.equals(action) && STUDENT_DASHBOARD_REFRESH_PATH.equals(path)) {
             validateStudentDashboardRefreshSubject(subject);
+            return;
+        }
+        if (KNOWLEDGE_POINT_CREATE_ACTION.equals(action) && KNOWLEDGE_POINTS_PATH.equals(path)) {
+            validateTeacherResourceSubject(subject);
+            return;
+        }
+        if (QUESTION_BANK_CREATE_ACTION.equals(action) && QUESTION_BANK_ITEMS_PATH.equals(path)) {
+            validateTeacherResourceSubject(subject);
             return;
         }
         if (action.startsWith(AGENT_RUN_ACTION_PREFIX) && AGENT_EXECUTE_PATH.equals(path)) {

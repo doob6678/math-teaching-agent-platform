@@ -5,7 +5,9 @@ import {
   AgentRunPlanResponse,
   AgentTraceResponse,
   AgentTraceUsageSummaryResponse,
+  KnowledgePointResponse,
   McpConfigurationResponse,
+  QuestionBankItemResponse,
   RetrievalAuditDetail,
   StudentDashboardResponse,
   TeachingTaskResponse,
@@ -56,6 +58,8 @@ export function App() {
   const [studentDashboard, setStudentDashboard] = useState<StudentDashboardResponse | null>(null);
   const [teacherResources, setTeacherResources] = useState<TeacherResourceDocumentResponse[]>([]);
   const [teacherSyncJobs, setTeacherSyncJobs] = useState<Record<string, TeacherSourceSyncJobResponse[]>>({});
+  const [knowledgePoints, setKnowledgePoints] = useState<KnowledgePointResponse[]>([]);
+  const [questionBankItems, setQuestionBankItems] = useState<QuestionBankItemResponse[]>([]);
   const [teacherResourceSearchQuery, setTeacherResourceSearchQuery] = useState("space vector");
   const [teacherBlockSearchResult, setTeacherBlockSearchResult] = useState<TeacherResourceBlockSearchResponse | null>(null);
   const [feishuDiscoveryQuery, setFeishuDiscoveryQuery] = useState("空间向量");
@@ -95,11 +99,17 @@ export function App() {
   const [teachingError, setTeachingError] = useState("");
   const [studentDashboardError, setStudentDashboardError] = useState("");
   const [teacherResourceError, setTeacherResourceError] = useState("");
+  const [knowledgeBankError, setKnowledgeBankError] = useState("");
   const [authError, setAuthError] = useState("");
   const [resourceTitle, setResourceTitle] = useState("空间向量讲义");
   const [resourceLocation, setResourceLocation] = useState("");
   const [resourceSourceType, setResourceSourceType] = useState("local_path");
   const [resourceScope, setResourceScope] = useState("MATH_VIP");
+  const [knowledgePointName, setKnowledgePointName] = useState("space vector dot product");
+  const [knowledgeChapterPath, setKnowledgeChapterPath] = useState("selective compulsory / space vector");
+  const [questionTitle, setQuestionTitle] = useState("vector angle");
+  const [questionText, setQuestionText] = useState("Find the angle between two space vectors.");
+  const [questionBankQuery, setQuestionBankQuery] = useState("vector");
   const [batchFolderPath, setBatchFolderPath] = useState("handouts/latest");
   const [loginUsername, setLoginUsername] = useState("teacher");
   const [loginPassword, setLoginPassword] = useState("teacher-123456");
@@ -116,6 +126,7 @@ export function App() {
   const [discoveringFeishu, setDiscoveringFeishu] = useState(false);
   const [syncingResourceId, setSyncingResourceId] = useState("");
   const [loggingIn, setLoggingIn] = useState(false);
+  const [savingKnowledgeBank, setSavingKnowledgeBank] = useState(false);
 
   useEffect(() => {
     setLoadingSummary(true);
@@ -152,6 +163,10 @@ export function App() {
 
   useEffect(() => {
     refreshTeacherResources();
+  }, [api]);
+
+  useEffect(() => {
+    refreshKnowledgeQuestionBank();
   }, [api]);
 
   useEffect(() => {
@@ -193,6 +208,19 @@ export function App() {
       })
       .catch((error: Error) => setAgentTraceError(error.message))
       .finally(() => setLoadingAgentTraces(false));
+  }
+
+  function refreshKnowledgeQuestionBank() {
+    setKnowledgeBankError("");
+    Promise.all([
+      api.listKnowledgePoints(),
+      api.searchQuestionBankItems(questionBankQuery, 8),
+    ])
+      .then(([points, questions]) => {
+        setKnowledgePoints(points);
+        setQuestionBankItems(questions);
+      })
+      .catch((error: Error) => setKnowledgeBankError(error.message));
   }
 
   useEffect(() => {
@@ -306,6 +334,58 @@ export function App() {
       .archiveTeacherResource(documentId)
       .then(() => setTeacherResources((current) => current.filter((resource) => resource.documentId !== documentId)))
       .catch((error: Error) => setTeacherResourceError(error.message));
+  }
+
+  function handleCreateKnowledgePoint(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!knowledgePointName.trim()) {
+      setKnowledgeBankError("Knowledge point name is required.");
+      return;
+    }
+    setSavingKnowledgeBank(true);
+    setKnowledgeBankError("");
+    api
+      .createKnowledgePoint({
+        knowledgePointName: knowledgePointName.trim(),
+        chapterPath: knowledgeChapterPath.trim(),
+        permissionScope: resourceScope,
+        sourceSummary: "manual",
+      })
+      .then((point) => setKnowledgePoints((current) => [point, ...current]))
+      .catch((error: Error) => setKnowledgeBankError(error.message))
+      .finally(() => setSavingKnowledgeBank(false));
+  }
+
+  function handleCreateQuestionBankItem(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!questionTitle.trim() || !questionText.trim()) {
+      setKnowledgeBankError("Question title and text are required.");
+      return;
+    }
+    setSavingKnowledgeBank(true);
+    setKnowledgeBankError("");
+    const firstPointId = knowledgePoints[0]?.knowledgePointId;
+    api
+      .createQuestionBankItem({
+        questionTitle: questionTitle.trim(),
+        questionText: questionText.trim(),
+        answerJson: "{}",
+        difficulty: "medium",
+        permissionScope: resourceScope,
+        knowledgePointIds: firstPointId ? [firstPointId] : [],
+      })
+      .then((question) => setQuestionBankItems((current) => [question, ...current]))
+      .catch((error: Error) => setKnowledgeBankError(error.message))
+      .finally(() => setSavingKnowledgeBank(false));
+  }
+
+  function handleSearchQuestionBank(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setKnowledgeBankError("");
+    api
+      .searchQuestionBankItems(questionBankQuery.trim(), 8)
+      .then(setQuestionBankItems)
+      .catch((error: Error) => setKnowledgeBankError(error.message));
   }
 
   function handleCreateResourceSyncJob(documentId: string) {
@@ -817,6 +897,26 @@ export function App() {
             onRefresh={handleRefreshStudentDashboard}
           />
 
+          <KnowledgeQuestionBankPanel
+            knowledgePoints={knowledgePoints}
+            questions={questionBankItems}
+            knowledgePointName={knowledgePointName}
+            chapterPath={knowledgeChapterPath}
+            questionTitle={questionTitle}
+            questionText={questionText}
+            query={questionBankQuery}
+            saving={savingKnowledgeBank}
+            error={knowledgeBankError}
+            onKnowledgePointNameChange={setKnowledgePointName}
+            onChapterPathChange={setKnowledgeChapterPath}
+            onQuestionTitleChange={setQuestionTitle}
+            onQuestionTextChange={setQuestionText}
+            onQueryChange={setQuestionBankQuery}
+            onCreateKnowledgePoint={handleCreateKnowledgePoint}
+            onCreateQuestion={handleCreateQuestionBankItem}
+            onSearchQuestions={handleSearchQuestionBank}
+          />
+
           <AgentPlanPanel
             plan={agentPlan}
             execution={agentExecution}
@@ -1064,6 +1164,115 @@ export function StudentDashboardPanel({
           </div>
         </div>
       ) : null}
+    </section>
+  );
+}
+
+function KnowledgeQuestionBankPanel({
+  knowledgePoints,
+  questions,
+  knowledgePointName,
+  chapterPath,
+  questionTitle,
+  questionText,
+  query,
+  saving,
+  error,
+  onKnowledgePointNameChange,
+  onChapterPathChange,
+  onQuestionTitleChange,
+  onQuestionTextChange,
+  onQueryChange,
+  onCreateKnowledgePoint,
+  onCreateQuestion,
+  onSearchQuestions,
+}: {
+  knowledgePoints: KnowledgePointResponse[];
+  questions: QuestionBankItemResponse[];
+  knowledgePointName: string;
+  chapterPath: string;
+  questionTitle: string;
+  questionText: string;
+  query: string;
+  saving: boolean;
+  error: string;
+  onKnowledgePointNameChange: (value: string) => void;
+  onChapterPathChange: (value: string) => void;
+  onQuestionTitleChange: (value: string) => void;
+  onQuestionTextChange: (value: string) => void;
+  onQueryChange: (value: string) => void;
+  onCreateKnowledgePoint: (event: FormEvent<HTMLFormElement>) => void;
+  onCreateQuestion: (event: FormEvent<HTMLFormElement>) => void;
+  onSearchQuestions: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+  return (
+    <section className="agent-plan-panel">
+      <div className="result-header">
+        <div>
+          <p className="eyebrow">Knowledge Bank</p>
+          <h2>Knowledge points and questions</h2>
+        </div>
+        <div className="strategy-pill">{knowledgePoints.length} points</div>
+      </div>
+      {error ? <StatusLine icon={<AlertCircle size={16} />} text={error} tone="danger" /> : null}
+      <div className="agent-plan-grid">
+        <form className="search-form" onSubmit={onCreateKnowledgePoint}>
+          <label>
+            <span>Knowledge point</span>
+            <input value={knowledgePointName} onChange={(event) => onKnowledgePointNameChange(event.target.value)} />
+          </label>
+          <label>
+            <span>Chapter path</span>
+            <input value={chapterPath} onChange={(event) => onChapterPathChange(event.target.value)} />
+          </label>
+          <button type="submit" disabled={saving}>
+            {saving ? <Loader2 className="spin" size={16} /> : <Database size={16} />}
+            <span>Add point</span>
+          </button>
+        </form>
+        <form className="search-form" onSubmit={onCreateQuestion}>
+          <label>
+            <span>Question title</span>
+            <input value={questionTitle} onChange={(event) => onQuestionTitleChange(event.target.value)} />
+          </label>
+          <label>
+            <span>Question text</span>
+            <input value={questionText} onChange={(event) => onQuestionTextChange(event.target.value)} />
+          </label>
+          <button type="submit" disabled={saving}>
+            {saving ? <Loader2 className="spin" size={16} /> : <ShieldCheck size={16} />}
+            <span>Add question</span>
+          </button>
+        </form>
+        <form className="resource-block-search" onSubmit={onSearchQuestions}>
+          <label>
+            <span>Question search</span>
+            <input value={query} onChange={(event) => onQueryChange(event.target.value)} />
+          </label>
+          <button type="submit">
+            <Search size={16} />
+            <span>Search</span>
+          </button>
+        </form>
+        <div className="tool-decision-list compact">
+          {knowledgePoints.slice(0, 6).map((point) => (
+            <div className="tool-decision allowed" key={point.knowledgePointId}>
+              <strong>{point.knowledgePointName}</strong>
+              <span>{point.permissionScope}</span>
+              <p>{point.chapterPath}</p>
+            </div>
+          ))}
+        </div>
+        <div className="resource-search-results">
+          {questions.map((question) => (
+            <article className="resource-search-hit" key={question.questionId}>
+              <strong>{question.questionTitle}</strong>
+              <span>{question.permissionScope ?? "scope"} / {question.difficulty ?? "medium"}</span>
+              <p>{question.questionText}</p>
+            </article>
+          ))}
+        </div>
+      </div>
     </section>
   );
 }

@@ -997,6 +997,46 @@ export interface TeacherResourceRegistrationRequest {
 /**
  * 教师资料源响应，用于后台预览、删除和重建索引状态展示。
  */
+export interface KnowledgePointCreateRequest {
+  knowledgePointName: string;
+  chapterPath: string;
+  permissionScope: string;
+  sourceSummary: string;
+}
+
+export interface KnowledgePointResponse {
+  knowledgePointId: string;
+  tenantId: string;
+  ownerSubjectId: string;
+  permissionScope: string;
+  knowledgePointName: string;
+  chapterPath: string;
+  status: string;
+  sourceSummary: string;
+}
+
+export interface QuestionBankItemCreateRequest {
+  questionTitle: string;
+  questionText: string;
+  answerJson: string;
+  difficulty: string;
+  permissionScope: string;
+  knowledgePointIds: string[];
+}
+
+export interface QuestionBankItemResponse {
+  questionId: string;
+  tenantId?: string;
+  ownerSubjectId?: string;
+  permissionScope?: string;
+  questionTitle: string;
+  questionText: string;
+  answerJson?: string;
+  difficulty?: string;
+  status?: string;
+  knowledgePointIds: string[];
+}
+
 export interface TeacherResourceDocumentResponse {
   /** 资料源稳定 ID。 */
   documentId: string;
@@ -1576,6 +1616,56 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
           "X-Request-Hash": capability.requestHash,
         },
       });
+    },
+
+    listKnowledgePoints(): Promise<KnowledgePointResponse[]> {
+      return requestJson<KnowledgePointResponse[]>("/api/knowledge/points");
+    },
+
+    async createKnowledgePoint(request: KnowledgePointCreateRequest): Promise<KnowledgePointResponse> {
+      const body = JSON.stringify(request);
+      const capability = await applyCapability(
+        "knowledge-point:create",
+        "/api/knowledge/points",
+        body,
+        `knowledge-point-create:${request.knowledgePointName}`,
+      );
+      return requestJson<KnowledgePointResponse>("/api/knowledge/points", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Capability-Token": capability.token,
+          "X-Request-Hash": capability.requestHash,
+        },
+        body,
+      });
+    },
+
+    async createQuestionBankItem(request: QuestionBankItemCreateRequest): Promise<QuestionBankItemResponse> {
+      const body = JSON.stringify(request);
+      const capability = await applyCapability(
+        "question-bank:create",
+        "/api/question-bank/items",
+        body,
+        `question-bank-create:${request.questionTitle}`,
+      );
+      return requestJson<QuestionBankItemResponse>("/api/question-bank/items", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Capability-Token": capability.token,
+          "X-Request-Hash": capability.requestHash,
+        },
+        body,
+      });
+    },
+
+    searchQuestionBankItems(query: string, limit = 10): Promise<QuestionBankItemResponse[]> {
+      const params = new URLSearchParams({
+        query,
+        limit: String(limit),
+      });
+      return requestJson<QuestionBankItemResponse[]>(`/api/question-bank/items?${params.toString()}`);
     },
 
     /**

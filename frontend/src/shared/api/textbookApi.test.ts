@@ -1257,6 +1257,145 @@ describe("textbookApi", () => {
     expect(dashboard.knowledgeGraph?.generatedFrom).toContain("student_memory_entry");
   });
 
+  it("manages knowledge points and question bank items with capability tokens", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ([{
+          knowledgePointId: "kp-1",
+          tenantId: "school-a",
+          ownerSubjectId: "teacher-1",
+          permissionScope: "TEACHER_PRIVATE",
+          knowledgePointName: "function domain",
+          chapterPath: "functions/basic",
+          status: "active",
+          sourceSummary: "manual",
+        }]),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          token: "knowledge-capability",
+          action: "knowledge-point:create",
+          path: "/api/knowledge/points",
+          requestHash: "hash-knowledge",
+          expiresAt: "2026-06-28T12:02:00Z",
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          knowledgePointId: "kp-2",
+          tenantId: "school-a",
+          ownerSubjectId: "teacher-1",
+          permissionScope: "TEACHER_PRIVATE",
+          knowledgePointName: "space vector dot product",
+          chapterPath: "vectors",
+          status: "active",
+          sourceSummary: "manual",
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          token: "question-capability",
+          action: "question-bank:create",
+          path: "/api/question-bank/items",
+          requestHash: "hash-question",
+          expiresAt: "2026-06-28T12:02:00Z",
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          questionId: "q-1",
+          tenantId: "school-a",
+          ownerSubjectId: "teacher-1",
+          permissionScope: "TEACHER_PRIVATE",
+          questionTitle: "vector angle",
+          questionText: "Find the angle.",
+          answerJson: "{}",
+          difficulty: "medium",
+          status: "active",
+          knowledgePointIds: ["kp-2"],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ([{
+          questionId: "q-1",
+          questionTitle: "vector angle",
+          questionText: "Find the angle.",
+          permissionScope: "TEACHER_PRIVATE",
+          knowledgePointIds: ["kp-2"],
+        }]),
+      });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const points = await client.listKnowledgePoints();
+    const point = await client.createKnowledgePoint({
+      knowledgePointName: "space vector dot product",
+      chapterPath: "vectors",
+      permissionScope: "MATH_VIP",
+      sourceSummary: "manual",
+    });
+    const question = await client.createQuestionBankItem({
+      questionTitle: "vector angle",
+      questionText: "Find the angle.",
+      answerJson: "{}",
+      difficulty: "medium",
+      permissionScope: "MATH_VIP",
+      knowledgePointIds: [point.knowledgePointId],
+    });
+    const questions = await client.searchQuestionBankItems("vector", 5);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "http://127.0.0.1:8080/api/knowledge/points",
+      expect.objectContaining({
+        headers: expect.not.objectContaining({ "X-Subject-Id": expect.any(String) }),
+      }),
+    );
+    const knowledgeCapabilityBody = JSON.parse(fetchMock.mock.calls[1][1]?.body as string);
+    expect(knowledgeCapabilityBody).toEqual({
+      action: "knowledge-point:create",
+      path: "/api/knowledge/points",
+      requestHash: expect.any(String),
+      idempotencyKey: expect.stringContaining("knowledge-point-create:"),
+      maxCost: 1,
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "http://127.0.0.1:8080/api/knowledge/points",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "X-Capability-Token": "knowledge-capability",
+          "X-Request-Hash": knowledgeCapabilityBody.requestHash,
+        }),
+      }),
+    );
+    const questionCapabilityBody = JSON.parse(fetchMock.mock.calls[3][1]?.body as string);
+    expect(questionCapabilityBody).toEqual({
+      action: "question-bank:create",
+      path: "/api/question-bank/items",
+      requestHash: expect.any(String),
+      idempotencyKey: expect.stringContaining("question-bank-create:"),
+      maxCost: 1,
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      6,
+      "http://127.0.0.1:8080/api/question-bank/items?query=vector&limit=5",
+      expect.objectContaining({
+        headers: expect.not.objectContaining({ "X-Subject-Type": expect.any(String) }),
+      }),
+    );
+    expect(points[0].knowledgePointId).toBe("kp-1");
+    expect(question.knowledgePointIds).toEqual(["kp-2"]);
+    expect(questions[0].questionId).toBe("q-1");
+  });
+
   it("manages teacher resources with capability tokens and without client supplied identity headers", async () => {
     const fetchMock = vi
       .fn()

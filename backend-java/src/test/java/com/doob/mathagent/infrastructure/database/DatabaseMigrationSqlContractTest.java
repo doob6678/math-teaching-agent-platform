@@ -126,4 +126,25 @@ class DatabaseMigrationSqlContractTest {
                 .contains("idx_student_snapshot_tenant_student")
                 .contains("idx_student_snapshot_updated_at");
     }
+
+    @Test
+    void knowledgeAndQuestionBankMigrationStoresGraphQuestionAndLinkTables() throws Exception {
+        String migration = Files.readString(Path.of("src/main/resources/db/migration/V6__knowledge_question_bank.sql"));
+
+        assertThat(migration)
+                .contains("CREATE TABLE knowledge_point")
+                .contains("CREATE TABLE knowledge_relation")
+                .contains("CREATE TABLE question_bank_item")
+                .contains("CREATE TABLE question_knowledge_link")
+                .contains("tenant_id VARCHAR(64) NOT NULL")
+                .contains("permission_scope VARCHAR(128) NOT NULL")
+                .contains("owner_subject_id VARCHAR(128) NULL")
+                .contains("question_text LONGTEXT NOT NULL")
+                .contains("answer_json JSON NULL")
+                .contains("source_document_id BIGINT NULL")
+                .contains("idx_knowledge_point_tenant_status")
+                .contains("idx_question_bank_tenant_scope")
+                .contains("idx_question_knowledge_link_point")
+                .contains("FOREIGN KEY (source_document_id) REFERENCES source_document(id)");
+    }
 }

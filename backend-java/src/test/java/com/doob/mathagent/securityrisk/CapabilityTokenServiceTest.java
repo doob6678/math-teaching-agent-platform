@@ -279,6 +279,47 @@ class CapabilityTokenServiceTest {
     }
 
     @Test
+    void issuesKnowledgeAndQuestionBankCapabilityTokensOnlyForTeacherOrAdmin() {
+        CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
+        RequestSubject teacher = new RequestSubject("school-a", "teacher", "teacher-001", "device-1");
+        RequestSubject admin = new RequestSubject("school-a", "admin", "admin-001", "device-1");
+
+        CapabilityTokenResponse knowledge = service.apply(new CapabilityTokenApplyRequest(
+                "knowledge-point:create",
+                "/api/knowledge/points",
+                "hash-knowledge",
+                "knowledge-point-create:function-domain",
+                1.0), teacher);
+        CapabilityTokenResponse question = service.apply(new CapabilityTokenApplyRequest(
+                "question-bank:create",
+                "/api/question-bank/items",
+                "hash-question",
+                "question-bank-create:vector-angle",
+                1.0), admin);
+
+        assertThat(service.consume(
+                knowledge.token(),
+                "knowledge-point:create",
+                "/api/knowledge/points",
+                "hash-knowledge",
+                teacher).allowed()).isTrue();
+        assertThat(service.consume(
+                question.token(),
+                "question-bank:create",
+                "/api/question-bank/items",
+                "hash-question",
+                admin).allowed()).isTrue();
+        assertThatThrownBy(() -> service.apply(new CapabilityTokenApplyRequest(
+                "question-bank:create",
+                "/api/question-bank/items",
+                "hash-question",
+                "question-bank-create:student",
+                1.0), new RequestSubject("school-a", "student", "student-001", "device-1")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Capability subject not allowed");
+    }
+
+    @Test
     void issuesTeachingHandoutLatexExportCapabilityTokens() {
         CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
         RequestSubject student = new RequestSubject("school-a", "student", "student-001", "device-1");
