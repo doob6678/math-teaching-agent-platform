@@ -148,7 +148,8 @@ public class McpToolExecutionService {
                 normalizedProfile(client.profile()),
                 client.subjectId(),
                 query,
-                limit);
+                limit,
+                "/api/mcp/tools/search_teacher_resource_evidence/call");
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("queryId", response.queryId());
         result.put("query", response.query());

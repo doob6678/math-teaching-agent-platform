@@ -9,6 +9,8 @@ import com.doob.mathagent.teacher.service.InMemoryTeacherDocumentBlockStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherResourceStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherSourceSyncCheckpointStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherSourceSyncJobStore;
+import com.doob.mathagent.teacher.service.RecentTeacherResourceBlockSearchAuditStore;
+import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchAuditEvent;
 import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService;
 import com.doob.mathagent.teacher.service.TeacherFeishuDownloadClient;
 import com.doob.mathagent.teacher.service.TeacherFeishuDownloadException;
@@ -443,6 +445,69 @@ class TeacherResourceControllerTest {
                         controller.searchBlocks("vector theorem", 10, new MockHttpServletRequest()))
                 .isInstanceOf(ResponseStatusException.class)
                 .hasMessageContaining("teacher or admin");
+    }
+
+    @Test
+    void returnsTeacherBlockSearchAuditOnlyToOwningTeacherOrAdmin() {
+        InMemoryTeacherResourceStore store = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        RecentTeacherResourceBlockSearchAuditStore auditStore = new RecentTeacherResourceBlockSearchAuditStore(10);
+        TeacherResourceDocumentResponse ownResource = new TeacherResourceDocumentResponse(
+                "doc-own",
+                "school-a",
+                "teacher-88",
+                "local_path",
+                "Own parsed vectors",
+                null,
+                "C:/math/own",
+                "TEACHER_PRIVATE",
+                "synced",
+                "parsed",
+                "pending",
+                "waiting_rebuild",
+                java.util.List.of());
+        store.save(ownResource);
+        blockStore.replaceActiveBlocks("school-a", ownResource.documentId(), java.util.List.of(searchBlock(
+                "block-own",
+                ownResource.documentId(),
+                "backend subject vector theorem")));
+        TeacherResourceBlockSearchService searchService = new TeacherResourceBlockSearchService(
+                store,
+                blockStore,
+                auditStore);
+        TeacherResourceController ownerController = new TeacherResourceController(
+                new TeacherResourceService(store),
+                new TeacherSourceSyncJobService(store, new InMemoryTeacherSourceSyncJobStore()),
+                new TeacherSourceSyncExecutionService(store, new InMemoryTeacherSourceSyncJobStore(), blockStore),
+                searchService,
+                auditStore,
+                null,
+                request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"),
+                (token, action, path, requestHash, subject) -> true);
+
+        TeacherResourceBlockSearchResponse response =
+                ownerController.searchBlocks("vector theorem", 10, new MockHttpServletRequest());
+        TeacherResourceBlockSearchAuditEvent event =
+                ownerController.searchAudit(response.queryId(), new MockHttpServletRequest());
+
+        assertThat(event.queryId()).isEqualTo(response.queryId());
+        assertThat(event.subjectId()).isEqualTo("teacher-88");
+        assertThat(event.hits()).extracting(TeacherResourceBlockSearchAuditEvent.Hit::blockId)
+                .containsExactly("block-own");
+
+        TeacherResourceController otherTeacherController = new TeacherResourceController(
+                new TeacherResourceService(store),
+                new TeacherSourceSyncJobService(store, new InMemoryTeacherSourceSyncJobStore()),
+                new TeacherSourceSyncExecutionService(store, new InMemoryTeacherSourceSyncJobStore(), blockStore),
+                searchService,
+                auditStore,
+                null,
+                request -> new RequestSubject("school-a", "teacher", "teacher-other", "device-2"),
+                (token, action, path, requestHash, subject) -> true);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                        otherTeacherController.searchAudit(response.queryId(), new MockHttpServletRequest()))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("404");
     }
 
     @Test

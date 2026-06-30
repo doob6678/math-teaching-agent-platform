@@ -4,6 +4,8 @@ import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.infrastructure.security.RequestSubjectResolver;
 import com.doob.mathagent.teacher.dto.TeacherResourceRegistrationRequest;
 import com.doob.mathagent.teacher.service.TeacherResourceCapabilityVerifier;
+import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchAuditEvent;
+import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchAuditLookup;
 import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService;
 import com.doob.mathagent.teacher.service.TeacherResourceRegistrationCommand;
 import com.doob.mathagent.teacher.service.TeacherResourceService;
@@ -45,6 +47,7 @@ public class TeacherResourceController {
     private final TeacherSourceSyncJobService syncJobService;
     private final TeacherSourceSyncExecutionService syncExecutionService;
     private final TeacherResourceBlockSearchService blockSearchService;
+    private final TeacherResourceBlockSearchAuditLookup blockSearchAuditLookup;
     private final TeacherSourceSyncCheckpointQueryService checkpointQueryService;
     private final RequestSubjectResolver subjectResolver;
     private final TeacherResourceCapabilityVerifier capabilityVerifier;
@@ -61,6 +64,7 @@ public class TeacherResourceController {
             TeacherSourceSyncJobService syncJobService,
             TeacherSourceSyncExecutionService syncExecutionService,
             TeacherResourceBlockSearchService blockSearchService,
+            TeacherResourceBlockSearchAuditLookup blockSearchAuditLookup,
             TeacherSourceSyncCheckpointQueryService checkpointQueryService,
             RequestSubjectResolver subjectResolver,
             TeacherResourceCapabilityVerifier capabilityVerifier) {
@@ -68,6 +72,7 @@ public class TeacherResourceController {
         this.syncJobService = syncJobService;
         this.syncExecutionService = syncExecutionService;
         this.blockSearchService = blockSearchService;
+        this.blockSearchAuditLookup = blockSearchAuditLookup;
         this.checkpointQueryService = checkpointQueryService;
         this.subjectResolver = subjectResolver;
         this.capabilityVerifier = capabilityVerifier;
@@ -94,6 +99,29 @@ public class TeacherResourceController {
                 syncExecutionService,
                 null,
                 null,
+                null,
+                subjectResolver,
+                capabilityVerifier);
+    }
+
+    /**
+     * Creates a controller with block search but without checkpoint query for focused tests.
+     */
+    public TeacherResourceController(
+            TeacherResourceService teacherResourceService,
+            TeacherSourceSyncJobService syncJobService,
+            TeacherSourceSyncExecutionService syncExecutionService,
+            TeacherResourceBlockSearchService blockSearchService,
+            TeacherSourceSyncCheckpointQueryService checkpointQueryService,
+            RequestSubjectResolver subjectResolver,
+            TeacherResourceCapabilityVerifier capabilityVerifier) {
+        this(
+                teacherResourceService,
+                syncJobService,
+                syncExecutionService,
+                blockSearchService,
+                null,
+                checkpointQueryService,
                 subjectResolver,
                 capabilityVerifier);
     }
@@ -113,6 +141,7 @@ public class TeacherResourceController {
                 syncJobService,
                 syncExecutionService,
                 blockSearchService,
+                null,
                 null,
                 subjectResolver,
                 capabilityVerifier);
@@ -180,6 +209,33 @@ public class TeacherResourceController {
         } catch (IllegalArgumentException exception) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, exception.getMessage(), exception);
         }
+    }
+
+    /**
+     * Returns a recent teacher resource block search audit event visible to the current teacher/admin.
+     *
+     * @param queryId server-generated search query id
+     * @param httpRequest HTTP request containing backend session
+     * @return retained audit event
+     */
+    @GetMapping("/api/teacher/resources/search/audit/{queryId}")
+    public TeacherResourceBlockSearchAuditEvent searchAudit(
+            @PathVariable String queryId,
+            HttpServletRequest httpRequest) {
+        if (blockSearchAuditLookup == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED, "Teacher resource search audit is not configured");
+        }
+        RequestSubject subject = subjectResolver.resolve(httpRequest).normalize();
+        requireTeacherOrAdmin(subject);
+        TeacherResourceBlockSearchAuditEvent event = blockSearchAuditLookup.findByQueryId(queryId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Teacher resource search audit not found"));
+        if (!subject.tenantId().equals(event.tenantId())) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Teacher resource search audit not found");
+        }
+        if ("teacher".equals(subject.subjectType()) && !subject.subjectId().equals(event.subjectId())) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Teacher resource search audit not found");
+        }
+        return event;
     }
 
     /**
@@ -379,5 +435,15 @@ public class TeacherResourceController {
         }
         String value = request.getHeader(name);
         return value == null || value.isBlank() ? null : value.strip();
+    }
+
+    /**
+     * Ensures direct controller calls cannot bypass teacher/admin audit visibility rules.
+     */
+    private static void requireTeacherOrAdmin(RequestSubject subject) {
+        String role = subject.subjectType();
+        if (!"teacher".equals(role) && !"admin".equals(role)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Teacher resource audit requires teacher or admin role");
+        }
     }
 }

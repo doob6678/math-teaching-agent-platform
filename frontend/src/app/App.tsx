@@ -17,6 +17,7 @@ import {
   TeacherFeishuDiscoveryCandidate,
   TeacherFeishuDiscoveryResponse,
   TeacherBlockQuestionImportResponse,
+  TeacherResourceBlockSearchAuditEvent,
   TeacherResourceBlockSearchResponse,
   TeacherResourceDocumentResponse,
   TeacherSourceSyncCheckpointResponse,
@@ -72,6 +73,7 @@ export function App() {
   const [questionBankItems, setQuestionBankItems] = useState<QuestionBankItemResponse[]>([]);
   const [teacherResourceSearchQuery, setTeacherResourceSearchQuery] = useState("space vector");
   const [teacherBlockSearchResult, setTeacherBlockSearchResult] = useState<TeacherResourceBlockSearchResponse | null>(null);
+  const [teacherBlockSearchAudit, setTeacherBlockSearchAudit] = useState<TeacherResourceBlockSearchAuditEvent | null>(null);
   const [feishuDiscoveryQuery, setFeishuDiscoveryQuery] = useState("空间向量");
   const [feishuDiscoveryResult, setFeishuDiscoveryResult] = useState<TeacherFeishuDiscoveryResponse | null>(null);
   const [handoutPreviewLatex, setHandoutPreviewLatex] = useState("");
@@ -535,9 +537,16 @@ export function App() {
     }
     setSearchingTeacherBlocks(true);
     setTeacherResourceError("");
+    setTeacherBlockSearchAudit(null);
     api
       .searchTeacherResourceBlocks(teacherResourceSearchQuery.trim(), 8)
-      .then(setTeacherBlockSearchResult)
+      .then((result) => {
+        setTeacherBlockSearchResult(result);
+        return api
+          .getTeacherResourceBlockSearchAudit(result.queryId)
+          .then(setTeacherBlockSearchAudit)
+          .catch((error: Error) => setTeacherResourceError(error.message));
+      })
       .catch((error: Error) => setTeacherResourceError(error.message))
       .finally(() => setSearchingTeacherBlocks(false));
   }
@@ -990,6 +999,7 @@ export function App() {
             syncCheckpointsByJob={teacherSyncCheckpoints}
             blockSearchQuery={teacherResourceSearchQuery}
             blockSearchResult={teacherBlockSearchResult}
+            blockSearchAudit={teacherBlockSearchAudit}
             feishuDiscoveryQuery={feishuDiscoveryQuery}
             feishuDiscoveryResult={feishuDiscoveryResult}
             discoveringFeishu={discoveringFeishu}
@@ -1649,6 +1659,7 @@ function TeacherResourcePanel({
   syncCheckpointsByJob,
   blockSearchQuery,
   blockSearchResult,
+  blockSearchAudit,
   feishuDiscoveryQuery,
   feishuDiscoveryResult,
   discoveringFeishu,
@@ -1685,6 +1696,7 @@ function TeacherResourcePanel({
   syncCheckpointsByJob: Record<string, TeacherSourceSyncCheckpointResponse>;
   blockSearchQuery: string;
   blockSearchResult: TeacherResourceBlockSearchResponse | null;
+  blockSearchAudit: TeacherResourceBlockSearchAuditEvent | null;
   feishuDiscoveryQuery: string;
   feishuDiscoveryResult: TeacherFeishuDiscoveryResponse | null;
   discoveringFeishu: boolean;
@@ -1808,7 +1820,15 @@ function TeacherResourcePanel({
           <div className="resource-search-summary">
             <span>{blockSearchResult.retrievalMode}</span>
             <span>{blockSearchResult.hitCount} hits</span>
+            <span>{blockSearchResult.queryId}</span>
           </div>
+          {blockSearchAudit ? (
+            <div className="resource-audit-summary">
+              <span>{blockSearchAudit.endpoint}</span>
+              <span>{blockSearchAudit.elapsedMs} ms</span>
+              <span>{blockSearchAudit.subjectType}:{blockSearchAudit.subjectId}</span>
+            </div>
+          ) : null}
           {blockSearchResult.hits.map((hit) => (
             <article className="resource-search-hit" key={`${hit.documentId}:${hit.blockId}`}>
               <strong>{hit.documentTitle}</strong>

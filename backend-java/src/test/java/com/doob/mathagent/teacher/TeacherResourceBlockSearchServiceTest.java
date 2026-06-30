@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.doob.mathagent.teacher.service.InMemoryTeacherDocumentBlockStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherResourceStore;
+import com.doob.mathagent.teacher.service.RecentTeacherResourceBlockSearchAuditStore;
+import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchAuditEvent;
 import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService;
 import com.doob.mathagent.teacher.vo.TeacherDocumentBlockResponse;
 import com.doob.mathagent.teacher.vo.TeacherResourceBlockSearchResponse;
@@ -102,6 +104,41 @@ class TeacherResourceBlockSearchServiceTest {
 
         assertThat(response.hits()).extracting(TeacherResourceBlockSearchResponse.Hit::blockId)
                 .containsExactly("b-admin", "b-teacher");
+    }
+
+    @Test
+    void recordsSearchAuditEventWithoutLocalPathsOrSecrets() {
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        RecentTeacherResourceBlockSearchAuditStore auditStore = new RecentTeacherResourceBlockSearchAuditStore(5);
+        resourceStore.save(document("doc-own", "teacher-1", "TEACHER_PRIVATE", "Own vector notes"));
+        blockStore.replaceActiveBlocks("school-a", "doc-own", List.of(block(
+                "b-own",
+                "doc-own",
+                1,
+                "Space vector dot product method belongs to the teacher private handout.")));
+        TeacherResourceBlockSearchService service = new TeacherResourceBlockSearchService(
+                resourceStore,
+                blockStore,
+                auditStore);
+
+        TeacherResourceBlockSearchResponse response = service.search(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                "dot product",
+                10,
+                "/api/mcp/tools/search_teacher_resource_evidence/call");
+
+        TeacherResourceBlockSearchAuditEvent event = auditStore.findByQueryId(response.queryId()).orElseThrow();
+        assertThat(event.tenantId()).isEqualTo("school-a");
+        assertThat(event.subjectType()).isEqualTo("teacher");
+        assertThat(event.subjectId()).isEqualTo("teacher-1");
+        assertThat(event.endpoint()).isEqualTo("/api/mcp/tools/search_teacher_resource_evidence/call");
+        assertThat(event.hits()).extracting(TeacherResourceBlockSearchAuditEvent.Hit::blockId)
+                .containsExactly("b-own");
+        assertThat(event.toString()).doesNotContain("C:/math");
+        assertThat(event.toString()).doesNotContain("mcp_secret");
     }
 
     @Test

@@ -8,6 +8,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 /**
@@ -22,18 +23,32 @@ public class TeacherResourceBlockSearchService {
 
     private final TeacherResourceStore resourceStore;
     private final TeacherDocumentBlockStore blockStore;
+    private final TeacherResourceBlockSearchAuditSink auditSink;
 
     /**
      * Creates a parsed block search service.
      *
      * @param resourceStore source document store
      * @param blockStore parsed document block store
+     * @param auditSink recent audit sink for UI and MCP queryId lookup
+     */
+    @Autowired
+    public TeacherResourceBlockSearchService(
+            TeacherResourceStore resourceStore,
+            TeacherDocumentBlockStore blockStore,
+            TeacherResourceBlockSearchAuditSink auditSink) {
+        this.resourceStore = resourceStore;
+        this.blockStore = blockStore;
+        this.auditSink = auditSink == null ? NoopTeacherResourceBlockSearchAuditSink.INSTANCE : auditSink;
+    }
+
+    /**
+     * Creates a parsed block search service without audit recording for legacy focused tests.
      */
     public TeacherResourceBlockSearchService(
             TeacherResourceStore resourceStore,
             TeacherDocumentBlockStore blockStore) {
-        this.resourceStore = resourceStore;
-        this.blockStore = blockStore;
+        this(resourceStore, blockStore, NoopTeacherResourceBlockSearchAuditSink.INSTANCE);
     }
 
     /**
@@ -52,6 +67,28 @@ public class TeacherResourceBlockSearchService {
             String viewerSubjectId,
             String query,
             int limit) {
+        return search(tenantId, viewerRole, viewerSubjectId, query, limit, "/api/teacher/resources/search");
+    }
+
+    /**
+     * Searches visible blocks and records the logical caller endpoint for audit correlation.
+     *
+     * @param tenantId backend-resolved tenant id
+     * @param viewerRole backend-resolved viewer role
+     * @param viewerSubjectId backend-resolved subject id
+     * @param query user search query
+     * @param limit requested maximum hit count
+     * @param endpoint logical API endpoint or MCP tool call path
+     * @return visible block search response
+     */
+    public TeacherResourceBlockSearchResponse search(
+            String tenantId,
+            String viewerRole,
+            String viewerSubjectId,
+            String query,
+            int limit,
+            String endpoint) {
+        long startedNanos = System.nanoTime();
         String normalizedTenantId = textOrDefault(tenantId, "default");
         String normalizedRole = textOrDefault(viewerRole, "anonymous").toLowerCase(Locale.ROOT);
         String normalizedSubjectId = textOrDefault(viewerSubjectId, "");
@@ -59,7 +96,9 @@ public class TeacherResourceBlockSearchService {
         String normalizedQuery = normalizeQuery(query);
         int safeLimit = clampLimit(limit);
         if (normalizedQuery.isBlank()) {
-            return response(normalizedQuery, safeLimit, List.of());
+            TeacherResourceBlockSearchResponse emptyResponse = response(normalizedQuery, safeLimit, List.of());
+            recordAudit(normalizedTenantId, normalizedRole, normalizedSubjectId, endpoint, emptyResponse, startedNanos);
+            return emptyResponse;
         }
         String[] terms = searchTerms(normalizedQuery);
         List<TeacherResourceDocumentResponse> documents =
@@ -73,7 +112,29 @@ public class TeacherResourceBlockSearchService {
                         .thenComparingInt(TeacherResourceBlockSearchResponse.Hit::blockOrder))
                 .limit(safeLimit)
                 .toList();
-        return response(normalizedQuery, safeLimit, hits);
+        TeacherResourceBlockSearchResponse searchResponse = response(normalizedQuery, safeLimit, hits);
+        recordAudit(normalizedTenantId, normalizedRole, normalizedSubjectId, endpoint, searchResponse, startedNanos);
+        return searchResponse;
+    }
+
+    /**
+     * Records the search audit event without letting audit failures break read-only search.
+     */
+    private void recordAudit(
+            String tenantId,
+            String subjectType,
+            String subjectId,
+            String endpoint,
+            TeacherResourceBlockSearchResponse response,
+            long startedNanos) {
+        long elapsedMs = (System.nanoTime() - startedNanos) / 1_000_000L;
+        auditSink.record(TeacherResourceBlockSearchAuditEvent.from(
+                tenantId,
+                subjectType,
+                subjectId,
+                textOrDefault(endpoint, "/api/teacher/resources/search"),
+                response,
+                elapsedMs));
     }
 
     /**

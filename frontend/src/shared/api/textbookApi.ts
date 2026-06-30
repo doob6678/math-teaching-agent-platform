@@ -1200,6 +1200,31 @@ export interface TeacherResourceBlockSearchHit {
   score: number;
 }
 
+export interface TeacherResourceBlockSearchAuditEvent {
+  queryId: string;
+  tenantId: string;
+  subjectType: string;
+  subjectId: string;
+  query: string;
+  limit: number;
+  retrievalMode: string;
+  hitCount: number;
+  elapsedMs: number;
+  endpoint: string;
+  hits: TeacherResourceBlockSearchAuditHit[];
+}
+
+export interface TeacherResourceBlockSearchAuditHit {
+  documentId: string;
+  documentTitle: string;
+  permissionScope: string;
+  blockId: string;
+  blockType: string;
+  blockOrder: number;
+  pageNo?: number | null;
+  score: number;
+}
+
 export interface TeacherFeishuDiscoveryRequest {
   mode: "list" | "search";
   query?: string;
@@ -1835,6 +1860,12 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     searchTeacherResourceBlocks(query: string, limit = 10): Promise<TeacherResourceBlockSearchResponse> {
       const path = `/api/teacher/resources/search?query=${encodeURIComponent(query)}&limit=${encodeURIComponent(String(limit))}`;
       return requestJson<TeacherResourceBlockSearchResponse>(path);
+    },
+
+    getTeacherResourceBlockSearchAudit(queryId: string): Promise<TeacherResourceBlockSearchAuditEvent> {
+      return requestJson<TeacherResourceBlockSearchAuditEvent>(
+        `/api/teacher/resources/search/audit/${encodeURIComponent(queryId)}`,
+      );
     },
 
     discoverFeishuResources(request: TeacherFeishuDiscoveryRequest): Promise<TeacherFeishuDiscoveryResponse> {
