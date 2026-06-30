@@ -5,6 +5,7 @@ import com.doob.mathagent.knowledge.dto.QuestionBankItemCreateRequest;
 import com.doob.mathagent.knowledge.vo.KnowledgePointResponse;
 import com.doob.mathagent.knowledge.vo.QuestionBankItemResponse;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 
@@ -68,6 +69,79 @@ public class KnowledgeQuestionBankService {
                 textOrDefault(request.difficulty(), "medium"),
                 "active",
                 request.knowledgePointIds() == null ? List.of() : List.copyOf(request.knowledgePointIds()));
+        return toResponse(store.saveQuestion(record));
+    }
+
+    /**
+     * Creates or reuses a knowledge point with exact owner/scope/name/chapter identity.
+     */
+    public KnowledgePointResponse ensureKnowledgePoint(
+            String tenantId,
+            String viewerRole,
+            String viewerSubjectId,
+            String permissionScope,
+            String knowledgePointName,
+            String chapterPath,
+            String sourceSummary) {
+        String role = normalizeRole(viewerRole);
+        requireTeacherOrAdmin(role);
+        String normalizedTenantId = textOrDefault(tenantId, "default");
+        String normalizedOwner = textOrDefault(viewerSubjectId, "local-teacher-console");
+        String effectiveScope = normalizePermissionScope(permissionScope, role);
+        String normalizedName = requireText(knowledgePointName, "knowledgePointName");
+        String normalizedChapterPath = textOrDefault(chapterPath, "");
+        Optional<KnowledgePointRecord> existing = store.findKnowledgePoint(
+                normalizedTenantId,
+                normalizedOwner,
+                effectiveScope,
+                normalizedName,
+                normalizedChapterPath);
+        if (existing.isPresent()) {
+            return toResponse(existing.get());
+        }
+        KnowledgePointRecord record = new KnowledgePointRecord(
+                UUID.randomUUID().toString(),
+                normalizedTenantId,
+                normalizedOwner,
+                effectiveScope,
+                normalizedName,
+                normalizedChapterPath,
+                "active",
+                textOrDefault(sourceSummary, "teacher_resource_import"));
+        return toResponse(store.saveKnowledgePoint(record));
+    }
+
+    /**
+     * Creates an imported question with source metadata for sync resume and de-duplication.
+     */
+    public QuestionBankItemResponse createImportedQuestion(
+            String tenantId,
+            String viewerRole,
+            String viewerSubjectId,
+            String permissionScope,
+            String questionTitle,
+            String questionText,
+            String difficulty,
+            String sourceResourceDocumentId,
+            String sourceBlockId,
+            String sourceChecksum,
+            List<String> knowledgePointIds) {
+        String role = normalizeRole(viewerRole);
+        requireTeacherOrAdmin(role);
+        QuestionBankItemRecord record = new QuestionBankItemRecord(
+                UUID.randomUUID().toString(),
+                textOrDefault(tenantId, "default"),
+                textOrDefault(viewerSubjectId, "local-teacher-console"),
+                normalizePermissionScope(permissionScope, role),
+                requireText(questionTitle, "questionTitle"),
+                requireText(questionText, "questionText"),
+                "{}",
+                textOrDefault(difficulty, "medium"),
+                "active",
+                textOrDefault(sourceResourceDocumentId, ""),
+                textOrDefault(sourceBlockId, ""),
+                textOrDefault(sourceChecksum, ""),
+                knowledgePointIds == null ? List.of() : List.copyOf(knowledgePointIds));
         return toResponse(store.saveQuestion(record));
     }
 
@@ -140,6 +214,9 @@ public class KnowledgeQuestionBankService {
                 record.answerJson(),
                 record.difficulty(),
                 record.status(),
+                record.sourceResourceDocumentId(),
+                record.sourceBlockId(),
+                record.sourceChecksum(),
                 record.knowledgePointIds());
     }
 

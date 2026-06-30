@@ -3,6 +3,7 @@ package com.doob.mathagent.knowledge.service;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Repository;
@@ -27,12 +28,50 @@ public class InMemoryKnowledgeQuestionBankStore implements KnowledgeQuestionBank
     }
 
     /**
+     * Finds an active knowledge point by import identity.
+     */
+    @Override
+    public Optional<KnowledgePointRecord> findKnowledgePoint(
+            String tenantId,
+            String ownerSubjectId,
+            String permissionScope,
+            String knowledgePointName,
+            String chapterPath) {
+        return knowledgePoints.values().stream()
+                .filter(record -> tenantId.equals(record.tenantId()))
+                .filter(record -> "active".equals(record.status()))
+                .filter(record -> equalsText(ownerSubjectId, record.ownerSubjectId()))
+                .filter(record -> equalsText(permissionScope, record.permissionScope()))
+                .filter(record -> equalsText(knowledgePointName, record.knowledgePointName()))
+                .filter(record -> equalsText(chapterPath, record.chapterPath()))
+                .findFirst();
+    }
+
+    /**
      * Saves or replaces one question item.
      */
     @Override
     public QuestionBankItemRecord saveQuestion(QuestionBankItemRecord record) {
         questions.put(record.questionId(), record);
         return record;
+    }
+
+    /**
+     * Finds an active imported question by source block and checksum.
+     */
+    @Override
+    public Optional<QuestionBankItemRecord> findQuestionBySource(
+            String tenantId,
+            String sourceResourceDocumentId,
+            String sourceBlockId,
+            String sourceChecksum) {
+        return questions.values().stream()
+                .filter(record -> tenantId.equals(record.tenantId()))
+                .filter(record -> "active".equals(record.status()))
+                .filter(record -> equalsText(sourceResourceDocumentId, record.sourceResourceDocumentId()))
+                .filter(record -> equalsText(sourceBlockId, record.sourceBlockId()))
+                .filter(record -> equalsText(sourceChecksum, record.sourceChecksum()))
+                .findFirst();
     }
 
     /**
@@ -99,5 +138,14 @@ public class InMemoryKnowledgeQuestionBankStore implements KnowledgeQuestionBank
      */
     private static boolean contains(String value, String query) {
         return value != null && value.toLowerCase().contains(query);
+    }
+
+    /**
+     * Compares nullable text values exactly after null normalization.
+     */
+    private static boolean equalsText(String expected, String actual) {
+        String left = expected == null ? "" : expected;
+        String right = actual == null ? "" : actual;
+        return left.equals(right);
     }
 }

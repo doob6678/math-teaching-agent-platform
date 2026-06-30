@@ -13,6 +13,7 @@ import {
   TeachingTaskResponse,
   TeacherFeishuDiscoveryCandidate,
   TeacherFeishuDiscoveryResponse,
+  TeacherBlockQuestionImportResponse,
   TeacherResourceBlockSearchResponse,
   TeacherResourceDocumentResponse,
   TeacherSourceSyncJobResponse,
@@ -125,6 +126,9 @@ export function App() {
   const [searchingTeacherBlocks, setSearchingTeacherBlocks] = useState(false);
   const [discoveringFeishu, setDiscoveringFeishu] = useState(false);
   const [syncingResourceId, setSyncingResourceId] = useState("");
+  const [importingResourceId, setImportingResourceId] = useState("");
+  const [teacherResourceImportResult, setTeacherResourceImportResult] =
+    useState<TeacherBlockQuestionImportResponse | null>(null);
   const [loggingIn, setLoggingIn] = useState(false);
   const [savingKnowledgeBank, setSavingKnowledgeBank] = useState(false);
 
@@ -429,6 +433,20 @@ export function App() {
       )
       .catch((error: Error) => setTeacherResourceError(error.message))
       .finally(() => setSyncingResourceId(""));
+  }
+
+  function handleImportTeacherResourceQuestions(documentId: string) {
+    setImportingResourceId(documentId);
+    setTeacherResourceImportResult(null);
+    setTeacherResourceError("");
+    api
+      .importTeacherResourceQuestions(documentId)
+      .then((result) => {
+        setTeacherResourceImportResult(result);
+        setQuestionBankItems((current) => [...result.importedQuestions, ...current]);
+      })
+      .catch((error: Error) => setTeacherResourceError(error.message))
+      .finally(() => setImportingResourceId(""));
   }
 
   function handleTeacherBlockSearch(event: FormEvent<HTMLFormElement>) {
@@ -866,6 +884,8 @@ export function App() {
             registering={registeringResource}
             searchingBlocks={searchingTeacherBlocks}
             syncingResourceId={syncingResourceId}
+            importingResourceId={importingResourceId}
+            importResult={teacherResourceImportResult}
             syncJobsByDocument={teacherSyncJobs}
             blockSearchQuery={teacherResourceSearchQuery}
             blockSearchResult={teacherBlockSearchResult}
@@ -886,6 +906,7 @@ export function App() {
             onArchive={handleArchiveResource}
             onSync={handleCreateResourceSyncJob}
             onResume={handleResumeResourceSyncJob}
+            onImportQuestions={handleImportTeacherResourceQuestions}
           />
         </aside>
 
@@ -1458,6 +1479,8 @@ function TeacherResourcePanel({
   registering,
   searchingBlocks,
   syncingResourceId,
+  importingResourceId,
+  importResult,
   syncJobsByDocument,
   blockSearchQuery,
   blockSearchResult,
@@ -1478,6 +1501,7 @@ function TeacherResourcePanel({
   onArchive,
   onSync,
   onResume,
+  onImportQuestions,
 }: {
   resources: TeacherResourceDocumentResponse[];
   title: string;
@@ -1488,6 +1512,8 @@ function TeacherResourcePanel({
   registering: boolean;
   searchingBlocks: boolean;
   syncingResourceId: string;
+  importingResourceId: string;
+  importResult: TeacherBlockQuestionImportResponse | null;
   syncJobsByDocument: Record<string, TeacherSourceSyncJobResponse[]>;
   blockSearchQuery: string;
   blockSearchResult: TeacherResourceBlockSearchResponse | null;
@@ -1508,6 +1534,7 @@ function TeacherResourcePanel({
   onArchive: (documentId: string) => void;
   onSync: (documentId: string) => void;
   onResume: (documentId: string, jobId: string) => void;
+  onImportQuestions: (documentId: string) => void;
 }) {
   return (
     <section className="teacher-resource-panel">
@@ -1543,6 +1570,12 @@ function TeacherResourcePanel({
       </form>
       {loading ? <StatusLine icon={<Loader2 className="spin" size={16} />} text="读取教师资料源中" /> : null}
       {error ? <StatusLine icon={<AlertCircle size={16} />} text={error} tone="danger" /> : null}
+      {importResult ? (
+        <StatusLine
+          icon={<Database size={16} />}
+          text={`Imported ${importResult.importedQuestionCount}, skipped ${importResult.skippedBlockCount}, duplicate ${importResult.duplicateBlockCount}`}
+        />
+      ) : null}
       <div className="feishu-discovery-panel">
         <label>
           <span>飞书查找</span>
@@ -1642,6 +1675,14 @@ function TeacherResourcePanel({
                 <span>Resume</span>
               </button>
             ) : null}
+            <button
+              type="button"
+              onClick={() => onImportQuestions(resource.documentId)}
+              disabled={importingResourceId === resource.documentId}
+            >
+              {importingResourceId === resource.documentId ? <Loader2 className="spin" size={15} /> : <Database size={15} />}
+              <span>Import questions</span>
+            </button>
             <button type="button" onClick={() => onArchive(resource.documentId)}>
               归档
             </button>

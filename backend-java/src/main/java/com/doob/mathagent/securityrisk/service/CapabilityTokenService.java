@@ -41,6 +41,9 @@ public class CapabilityTokenService {
     private static final String KNOWLEDGE_POINTS_PATH = "/api/knowledge/points";
     private static final String QUESTION_BANK_CREATE_ACTION = "question-bank:create";
     private static final String QUESTION_BANK_ITEMS_PATH = "/api/question-bank/items";
+    private static final String QUESTION_BANK_IMPORT_TEACHER_RESOURCE_ACTION = "question-bank:import-teacher-resource";
+    private static final String QUESTION_BANK_IMPORT_TEACHER_RESOURCE_PATH_PREFIX =
+            "/api/question-bank/import/teacher-resources";
     private static final String AGENT_RUN_ACTION_PREFIX = "agent-run:";
     private static final String AGENT_EXECUTE_PATH = "/api/agents/execute";
     private static final Set<String> CAPABILITY_ALLOWED_ROLES = Set.of("student", "teacher", "admin");
@@ -279,6 +282,11 @@ public class CapabilityTokenService {
             validateTeacherResourceSubject(subject);
             return;
         }
+        if (QUESTION_BANK_IMPORT_TEACHER_RESOURCE_ACTION.equals(action)
+                && isQuestionBankTeacherResourceImportPath(path)) {
+            validateTeacherResourceSubject(subject);
+            return;
+        }
         if (action.startsWith(AGENT_RUN_ACTION_PREFIX) && AGENT_EXECUTE_PATH.equals(path)) {
             if (action.length() == AGENT_RUN_ACTION_PREFIX.length()) {
                 throw new IllegalArgumentException("Unsupported capability action or path");
@@ -372,6 +380,14 @@ public class CapabilityTokenService {
                 && "sync-jobs".equals(parts[1])
                 && hasText(parts[2])
                 && actionSegment.equals(parts[3]);
+    }
+
+    /**
+     * Validates importing parsed teacher resource blocks into the question bank.
+     */
+    private static boolean isQuestionBankTeacherResourceImportPath(String path) {
+        String[] parts = pathPartsAfterPrefix(path, QUESTION_BANK_IMPORT_TEACHER_RESOURCE_PATH_PREFIX);
+        return parts.length == 1 && hasText(parts[0]);
     }
 
     /**

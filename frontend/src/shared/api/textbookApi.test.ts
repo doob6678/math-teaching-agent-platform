@@ -1396,6 +1396,70 @@ describe("textbookApi", () => {
     expect(questions[0].questionId).toBe("q-1");
   });
 
+  it("imports teacher resource questions with capability token and backend identity", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          token: "import-capability",
+          action: "question-bank:import-teacher-resource",
+          path: "/api/question-bank/import/teacher-resources/doc-vector",
+          requestHash: "hash-import",
+          expiresAt: "2026-06-28T12:02:00Z",
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          documentId: "doc-vector",
+          processedBlockCount: 2,
+          importedQuestionCount: 1,
+          skippedBlockCount: 1,
+          duplicateBlockCount: 0,
+          linkedKnowledgePointCount: 1,
+          importedQuestions: [{
+            questionId: "q-imported",
+            questionTitle: "vector angle",
+            questionText: "已知空间向量 a,b，求夹角。",
+            answerJson: "{}",
+            difficulty: "medium",
+            status: "active",
+            sourceResourceDocumentId: "doc-vector",
+            sourceBlockId: "b-1",
+            sourceChecksum: "checksum-1",
+            knowledgePointIds: ["kp-vector"],
+          }],
+        }),
+      });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const response = await client.importTeacherResourceQuestions("doc-vector");
+
+    const capabilityBody = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
+    expect(capabilityBody).toEqual({
+      action: "question-bank:import-teacher-resource",
+      path: "/api/question-bank/import/teacher-resources/doc-vector",
+      requestHash: expect.any(String),
+      idempotencyKey: "question-bank-import-teacher-resource:doc-vector",
+      maxCost: 1,
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://127.0.0.1:8080/api/question-bank/import/teacher-resources/doc-vector",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "X-Capability-Token": "import-capability",
+          "X-Request-Hash": capabilityBody.requestHash,
+        }),
+      }),
+    );
+    expect(fetchMock.mock.calls[1][1]?.headers).not.toHaveProperty("X-Subject-Id");
+    expect(fetchMock.mock.calls[1][1]?.headers).not.toHaveProperty("X-Subject-Type");
+    expect(response.importedQuestions[0].sourceBlockId).toBe("b-1");
+  });
+
   it("manages teacher resources with capability tokens and without client supplied identity headers", async () => {
     const fetchMock = vi
       .fn()

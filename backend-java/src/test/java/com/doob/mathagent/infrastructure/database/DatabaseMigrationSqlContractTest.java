@@ -147,4 +147,16 @@ class DatabaseMigrationSqlContractTest {
                 .contains("idx_question_knowledge_link_point")
                 .contains("FOREIGN KEY (source_document_id) REFERENCES source_document(id)");
     }
+
+    @Test
+    void questionBankTeacherResourceSourceMigrationStoresImportDeduplicationFields() throws Exception {
+        String migration = Files.readString(Path.of("src/main/resources/db/migration/V7__question_bank_teacher_resource_source.sql"));
+
+        assertThat(migration)
+                .contains("ALTER TABLE question_bank_item")
+                .contains("source_resource_document_id VARCHAR(128)")
+                .contains("source_block_id VARCHAR(128)")
+                .contains("source_checksum CHAR(64)")
+                .contains("idx_question_bank_source_block");
+    }
 }

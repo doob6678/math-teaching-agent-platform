@@ -8,6 +8,7 @@ import com.doob.mathagent.knowledge.mapper.KnowledgePointMapper;
 import com.doob.mathagent.knowledge.mapper.QuestionBankItemMapper;
 import com.doob.mathagent.knowledge.mapper.QuestionKnowledgeLinkMapper;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Repository;
@@ -45,6 +46,28 @@ public class MyBatisKnowledgeQuestionBankStore implements KnowledgeQuestionBankS
     }
 
     /**
+     * Finds an active knowledge point by deterministic import identity.
+     */
+    @Override
+    public Optional<KnowledgePointRecord> findKnowledgePoint(
+            String tenantId,
+            String ownerSubjectId,
+            String permissionScope,
+            String knowledgePointName,
+            String chapterPath) {
+        LambdaQueryWrapper<KnowledgePointEntity> query = new LambdaQueryWrapper<KnowledgePointEntity>()
+                .eq(KnowledgePointEntity::getTenantId, tenantId)
+                .eq(KnowledgePointEntity::getOwnerSubjectId, ownerSubjectId)
+                .eq(KnowledgePointEntity::getPermissionScope, permissionScope)
+                .eq(KnowledgePointEntity::getKnowledgePointName, knowledgePointName)
+                .eq(KnowledgePointEntity::getChapterPath, chapterPath)
+                .eq(KnowledgePointEntity::getStatus, "active");
+        return knowledgePointMapper.selectList(query).stream()
+                .findFirst()
+                .map(MyBatisKnowledgeQuestionBankStore::toRecord);
+    }
+
+    /**
      * Inserts one question row and active manual links.
      */
     @Override
@@ -62,6 +85,26 @@ public class MyBatisKnowledgeQuestionBankStore implements KnowledgeQuestionBankS
             linkMapper.insert(link);
         }
         return record;
+    }
+
+    /**
+     * Finds an active imported question by teacher-resource source metadata.
+     */
+    @Override
+    public Optional<QuestionBankItemRecord> findQuestionBySource(
+            String tenantId,
+            String sourceResourceDocumentId,
+            String sourceBlockId,
+            String sourceChecksum) {
+        LambdaQueryWrapper<QuestionBankItemEntity> query = new LambdaQueryWrapper<QuestionBankItemEntity>()
+                .eq(QuestionBankItemEntity::getTenantId, tenantId)
+                .eq(QuestionBankItemEntity::getSourceResourceDocumentId, sourceResourceDocumentId)
+                .eq(QuestionBankItemEntity::getSourceBlockId, sourceBlockId)
+                .eq(QuestionBankItemEntity::getSourceChecksum, sourceChecksum)
+                .eq(QuestionBankItemEntity::getStatus, "active");
+        return questionMapper.selectList(query).stream()
+                .findFirst()
+                .map(entity -> toRecord(entity, links(tenantId, entity.getQuestionId())));
     }
 
     /**
@@ -182,6 +225,9 @@ public class MyBatisKnowledgeQuestionBankStore implements KnowledgeQuestionBankS
         entity.setAnswerJson(record.answerJson());
         entity.setDifficulty(record.difficulty());
         entity.setStatus(record.status());
+        entity.setSourceResourceDocumentId(record.sourceResourceDocumentId());
+        entity.setSourceBlockId(record.sourceBlockId());
+        entity.setSourceChecksum(record.sourceChecksum());
         return entity;
     }
 
@@ -214,6 +260,9 @@ public class MyBatisKnowledgeQuestionBankStore implements KnowledgeQuestionBankS
                 entity.getAnswerJson(),
                 entity.getDifficulty(),
                 entity.getStatus(),
+                entity.getSourceResourceDocumentId(),
+                entity.getSourceBlockId(),
+                entity.getSourceChecksum(),
                 knowledgePointIds);
     }
 }

@@ -292,6 +292,41 @@ class ApiAccessControlServiceTest {
     }
 
     @Test
+    void questionBankImportRequiresTeacherOrAdminSubjectAndTightRateLimit() {
+        ApiAccessControlService service = new ApiAccessControlService(
+                FixedWindowRateLimiter.empty(),
+                Clock.fixed(Instant.parse("2026-06-28T10:00:00Z"), ZoneOffset.UTC),
+                ApiAccessPolicy.defaultRules());
+        ApiRequestIdentity student = new ApiRequestIdentity(
+                "POST",
+                "/api/question-bank/import/teacher-resources/doc-vector",
+                "default",
+                "student",
+                "student-1",
+                "127.0.0.1",
+                "device-1",
+                "JUnit");
+        ApiRequestIdentity teacher = new ApiRequestIdentity(
+                "POST",
+                "/api/question-bank/import/teacher-resources/doc-vector",
+                "default",
+                "teacher",
+                "teacher-1",
+                "127.0.0.1",
+                "device-1",
+                "JUnit");
+
+        ApiAccessDecision denied = service.evaluate(student);
+        ApiAccessDecision allowed = service.evaluate(teacher);
+
+        assertThat(denied.allowed()).isFalse();
+        assertThat(denied.httpStatus()).isEqualTo(403);
+        assertThat(allowed.allowed()).isTrue();
+        assertThat(allowed.level()).isEqualTo(ApiAccessLevel.ADMIN);
+        assertThat(allowed.limit()).isEqualTo(10);
+    }
+
+    @Test
     void studentMemoryRequiresLoggedInStudentTeacherOrAdmin() {
         ApiAccessControlService service = new ApiAccessControlService(
                 FixedWindowRateLimiter.empty(),

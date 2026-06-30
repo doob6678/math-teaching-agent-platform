@@ -14,6 +14,9 @@ import java.util.List;
  * @param answerJson structured answer and explanation JSON
  * @param difficulty difficulty label such as easy, medium, or hard
  * @param status active, archived, or draft
+ * @param sourceResourceDocumentId teacher resource document id that produced this question
+ * @param sourceBlockId parsed teacher resource block id that produced this question
+ * @param sourceChecksum checksum of the parsed block at import time
  * @param knowledgePointIds linked knowledge point ids
  */
 public record QuestionBankItemRecord(
@@ -26,5 +29,38 @@ public record QuestionBankItemRecord(
         String answerJson,
         String difficulty,
         String status,
+        String sourceResourceDocumentId,
+        String sourceBlockId,
+        String sourceChecksum,
         List<String> knowledgePointIds) {
+
+    /**
+     * Builds a manual question item that does not have teacher-resource source metadata.
+     */
+    public QuestionBankItemRecord(
+            String questionId,
+            String tenantId,
+            String ownerSubjectId,
+            String permissionScope,
+            String questionTitle,
+            String questionText,
+            String answerJson,
+            String difficulty,
+            String status,
+            List<String> knowledgePointIds) {
+        this(
+                questionId,
+                tenantId,
+                ownerSubjectId,
+                permissionScope,
+                questionTitle,
+                questionText,
+                answerJson,
+                difficulty,
+                status,
+                null,
+                null,
+                null,
+                knowledgePointIds);
+    }
 }

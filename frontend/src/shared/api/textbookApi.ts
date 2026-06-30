@@ -1034,7 +1034,20 @@ export interface QuestionBankItemResponse {
   answerJson?: string;
   difficulty?: string;
   status?: string;
+  sourceResourceDocumentId?: string;
+  sourceBlockId?: string;
+  sourceChecksum?: string;
   knowledgePointIds: string[];
+}
+
+export interface TeacherBlockQuestionImportResponse {
+  documentId: string;
+  processedBlockCount: number;
+  importedQuestionCount: number;
+  skippedBlockCount: number;
+  duplicateBlockCount: number;
+  linkedKnowledgePointCount: number;
+  importedQuestions: QuestionBankItemResponse[];
 }
 
 export interface TeacherResourceDocumentResponse {
@@ -1666,6 +1679,25 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
         limit: String(limit),
       });
       return requestJson<QuestionBankItemResponse[]>(`/api/question-bank/items?${params.toString()}`);
+    },
+
+    async importTeacherResourceQuestions(documentId: string): Promise<TeacherBlockQuestionImportResponse> {
+      const encodedDocumentId = encodeURIComponent(documentId);
+      const path = `/api/question-bank/import/teacher-resources/${encodedDocumentId}`;
+      const capability = await applyCapability(
+        "question-bank:import-teacher-resource",
+        path,
+        "",
+        `question-bank-import-teacher-resource:${documentId}`,
+        1,
+      );
+      return requestJson<TeacherBlockQuestionImportResponse>(path, {
+        method: "POST",
+        headers: {
+          "X-Capability-Token": capability.token,
+          "X-Request-Hash": capability.requestHash,
+        },
+      });
     },
 
     /**

@@ -296,6 +296,12 @@ class CapabilityTokenServiceTest {
                 "hash-question",
                 "question-bank-create:vector-angle",
                 1.0), admin);
+        CapabilityTokenResponse importQuestions = service.apply(new CapabilityTokenApplyRequest(
+                "question-bank:import-teacher-resource",
+                "/api/question-bank/import/teacher-resources/doc-vector",
+                "hash-import",
+                "question-bank-import:doc-vector",
+                1.0), teacher);
 
         assertThat(service.consume(
                 knowledge.token(),
@@ -309,6 +315,12 @@ class CapabilityTokenServiceTest {
                 "/api/question-bank/items",
                 "hash-question",
                 admin).allowed()).isTrue();
+        assertThat(service.consume(
+                importQuestions.token(),
+                "question-bank:import-teacher-resource",
+                "/api/question-bank/import/teacher-resources/doc-vector",
+                "hash-import",
+                teacher).allowed()).isTrue();
         assertThatThrownBy(() -> service.apply(new CapabilityTokenApplyRequest(
                 "question-bank:create",
                 "/api/question-bank/items",
@@ -317,6 +329,14 @@ class CapabilityTokenServiceTest {
                 1.0), new RequestSubject("school-a", "student", "student-001", "device-1")))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Capability subject not allowed");
+        assertThatThrownBy(() -> service.apply(new CapabilityTokenApplyRequest(
+                "question-bank:import-teacher-resource",
+                "/api/question-bank/import/teacher-resources",
+                "hash-import",
+                "question-bank-import:malformed",
+                1.0), teacher))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Unsupported capability action");
     }
 
     @Test

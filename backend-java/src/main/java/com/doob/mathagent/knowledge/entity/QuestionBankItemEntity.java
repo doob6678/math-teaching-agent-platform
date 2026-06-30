@@ -37,6 +37,15 @@ public class QuestionBankItemEntity {
     /** Row status. */
     private String status;
 
+    /** Teacher resource document id that produced the imported question. */
+    private String sourceResourceDocumentId;
+
+    /** Parsed block id that produced the imported question. */
+    private String sourceBlockId;
+
+    /** Parsed block checksum captured when the question was imported. */
+    private String sourceChecksum;
+
     public String getQuestionId() {
         return questionId;
     }
@@ -107,5 +116,29 @@ public class QuestionBankItemEntity {
 
     public void setStatus(String status) {
         this.status = status;
+    }
+
+    public String getSourceResourceDocumentId() {
+        return sourceResourceDocumentId;
+    }
+
+    public void setSourceResourceDocumentId(String sourceResourceDocumentId) {
+        this.sourceResourceDocumentId = sourceResourceDocumentId;
+    }
+
+    public String getSourceBlockId() {
+        return sourceBlockId;
+    }
+
+    public void setSourceBlockId(String sourceBlockId) {
+        this.sourceBlockId = sourceBlockId;
+    }
+
+    public String getSourceChecksum() {
+        return sourceChecksum;
+    }
+
+    public void setSourceChecksum(String sourceChecksum) {
+        this.sourceChecksum = sourceChecksum;
     }
 }
