@@ -9,6 +9,8 @@ import {
   RetrievalAuditDetail,
   StudentDashboardResponse,
   TeachingTaskResponse,
+  TeacherFeishuDiscoveryCandidate,
+  TeacherFeishuDiscoveryResponse,
   TeacherResourceBlockSearchResponse,
   TeacherResourceDocumentResponse,
   TeacherSourceSyncJobResponse,
@@ -26,6 +28,7 @@ import {
 } from "./mcpExposureSelection";
 
 const DEFAULT_BACKEND_URL = import.meta.env.VITE_BACKEND_URL ?? "http://127.0.0.1:8080";
+const DEFAULT_FEISHU_ROOT_URL = "https://my.feishu.cn/drive/folder/XVn7fXppJlQMK5dkuOkc1ePan2f";
 const TEACHING_TASK_STORAGE_KEY = "math-agent:last-teaching-task-id";
 const AGENT_MODEL_OPTIONS: Record<string, string[]> = {
   dashscope: ["qwen3.6-flash", "qwen3.7-plus", "qwen3.7-max"],
@@ -55,6 +58,8 @@ export function App() {
   const [teacherSyncJobs, setTeacherSyncJobs] = useState<Record<string, TeacherSourceSyncJobResponse[]>>({});
   const [teacherResourceSearchQuery, setTeacherResourceSearchQuery] = useState("space vector");
   const [teacherBlockSearchResult, setTeacherBlockSearchResult] = useState<TeacherResourceBlockSearchResponse | null>(null);
+  const [feishuDiscoveryQuery, setFeishuDiscoveryQuery] = useState("空间向量");
+  const [feishuDiscoveryResult, setFeishuDiscoveryResult] = useState<TeacherFeishuDiscoveryResponse | null>(null);
   const [handoutPreviewLatex, setHandoutPreviewLatex] = useState("");
   const [handoutPreviewTaskId, setHandoutPreviewTaskId] = useState("");
   const [handoutVersion, setHandoutVersion] = useState<"teacher" | "student">("teacher");
@@ -108,6 +113,7 @@ export function App() {
   const [loadingTeacherResources, setLoadingTeacherResources] = useState(false);
   const [registeringResource, setRegisteringResource] = useState(false);
   const [searchingTeacherBlocks, setSearchingTeacherBlocks] = useState(false);
+  const [discoveringFeishu, setDiscoveringFeishu] = useState(false);
   const [syncingResourceId, setSyncingResourceId] = useState("");
   const [loggingIn, setLoggingIn] = useState(false);
 
@@ -343,6 +349,35 @@ export function App() {
       .then(setTeacherBlockSearchResult)
       .catch((error: Error) => setTeacherResourceError(error.message))
       .finally(() => setSearchingTeacherBlocks(false));
+  }
+
+  function handleDiscoverFeishu(mode: "list" | "search") {
+    if (mode === "search" && !feishuDiscoveryQuery.trim()) {
+      setTeacherResourceError("请输入飞书查找关键词。");
+      return;
+    }
+    const rootUrl = resourceSourceType === "feishu" && resourceLocation.trim()
+      ? resourceLocation.trim()
+      : DEFAULT_FEISHU_ROOT_URL;
+    setDiscoveringFeishu(true);
+    setTeacherResourceError("");
+    api
+      .discoverFeishuResources({
+        mode,
+        query: mode === "search" ? feishuDiscoveryQuery.trim() : "",
+        rootUrl,
+        listDepth: 1,
+        maxDepth: 5,
+      })
+      .then(setFeishuDiscoveryResult)
+      .catch((error: Error) => setTeacherResourceError(error.message))
+      .finally(() => setDiscoveringFeishu(false));
+  }
+
+  function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
+    setResourceSourceType("feishu");
+    setResourceLocation(candidate.url);
+    setResourceTitle(candidate.name || candidate.path || "Feishu resource");
   }
 
   function handlePreviewLatex() {
@@ -739,6 +774,9 @@ export function App() {
             syncJobsByDocument={teacherSyncJobs}
             blockSearchQuery={teacherResourceSearchQuery}
             blockSearchResult={teacherBlockSearchResult}
+            feishuDiscoveryQuery={feishuDiscoveryQuery}
+            feishuDiscoveryResult={feishuDiscoveryResult}
+            discoveringFeishu={discoveringFeishu}
             error={teacherResourceError}
             onTitleChange={setResourceTitle}
             onLocationChange={setResourceLocation}
@@ -746,6 +784,9 @@ export function App() {
             onScopeChange={setResourceScope}
             onBlockSearchQueryChange={setTeacherResourceSearchQuery}
             onBlockSearch={handleTeacherBlockSearch}
+            onFeishuDiscoveryQueryChange={setFeishuDiscoveryQuery}
+            onDiscoverFeishu={handleDiscoverFeishu}
+            onUseFeishuCandidate={handleUseFeishuCandidate}
             onRegister={handleRegisterResource}
             onArchive={handleArchiveResource}
             onSync={handleCreateResourceSyncJob}
@@ -1146,6 +1187,9 @@ function TeacherResourcePanel({
   syncJobsByDocument,
   blockSearchQuery,
   blockSearchResult,
+  feishuDiscoveryQuery,
+  feishuDiscoveryResult,
+  discoveringFeishu,
   error,
   onTitleChange,
   onLocationChange,
@@ -1153,6 +1197,9 @@ function TeacherResourcePanel({
   onScopeChange,
   onBlockSearchQueryChange,
   onBlockSearch,
+  onFeishuDiscoveryQueryChange,
+  onDiscoverFeishu,
+  onUseFeishuCandidate,
   onRegister,
   onArchive,
   onSync,
@@ -1170,6 +1217,9 @@ function TeacherResourcePanel({
   syncJobsByDocument: Record<string, TeacherSourceSyncJobResponse[]>;
   blockSearchQuery: string;
   blockSearchResult: TeacherResourceBlockSearchResponse | null;
+  feishuDiscoveryQuery: string;
+  feishuDiscoveryResult: TeacherFeishuDiscoveryResponse | null;
+  discoveringFeishu: boolean;
   error: string;
   onTitleChange: (value: string) => void;
   onLocationChange: (value: string) => void;
@@ -1177,6 +1227,9 @@ function TeacherResourcePanel({
   onScopeChange: (value: string) => void;
   onBlockSearchQueryChange: (value: string) => void;
   onBlockSearch: (event: FormEvent<HTMLFormElement>) => void;
+  onFeishuDiscoveryQueryChange: (value: string) => void;
+  onDiscoverFeishu: (mode: "list" | "search") => void;
+  onUseFeishuCandidate: (candidate: TeacherFeishuDiscoveryCandidate) => void;
   onRegister: (event: FormEvent<HTMLFormElement>) => void;
   onArchive: (documentId: string) => void;
   onSync: (documentId: string) => void;
@@ -1216,6 +1269,41 @@ function TeacherResourcePanel({
       </form>
       {loading ? <StatusLine icon={<Loader2 className="spin" size={16} />} text="读取教师资料源中" /> : null}
       {error ? <StatusLine icon={<AlertCircle size={16} />} text={error} tone="danger" /> : null}
+      <div className="feishu-discovery-panel">
+        <label>
+          <span>飞书查找</span>
+          <input value={feishuDiscoveryQuery} onChange={(event) => onFeishuDiscoveryQueryChange(event.target.value)} />
+        </label>
+        <div className="feishu-discovery-actions">
+          <button type="button" onClick={() => onDiscoverFeishu("list")} disabled={discoveringFeishu}>
+            {discoveringFeishu ? <Loader2 className="spin" size={16} /> : <Database size={16} />}
+            <span>List</span>
+          </button>
+          <button type="button" onClick={() => onDiscoverFeishu("search")} disabled={discoveringFeishu}>
+            {discoveringFeishu ? <Loader2 className="spin" size={16} /> : <Search size={16} />}
+            <span>Search</span>
+          </button>
+        </div>
+        {feishuDiscoveryResult ? (
+          <div className="feishu-candidate-list">
+            <div className="resource-search-summary">
+              <span>{feishuDiscoveryResult.mode}</span>
+              <span>{feishuDiscoveryResult.candidateCount} candidates</span>
+            </div>
+            {feishuDiscoveryResult.candidates.map((candidate) => (
+              <article className="feishu-candidate" key={`${candidate.resourceType}:${candidate.token}`}>
+                <div>
+                  <strong>{candidate.name}</strong>
+                  <span>{candidate.resourceType} / {candidate.path}</span>
+                </div>
+                <button type="button" onClick={() => onUseFeishuCandidate(candidate)}>
+                  Use
+                </button>
+              </article>
+            ))}
+          </div>
+        ) : null}
+      </div>
       <form className="resource-block-search" onSubmit={onBlockSearch}>
         <label>
           <span>资料块检索</span>

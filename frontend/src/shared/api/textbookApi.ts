@@ -999,6 +999,36 @@ export interface TeacherResourceBlockSearchHit {
   score: number;
 }
 
+export interface TeacherFeishuDiscoveryRequest {
+  mode: "list" | "search";
+  query?: string;
+  rootUrl?: string;
+  listDepth?: number;
+  maxDepth?: number;
+}
+
+export interface TeacherFeishuDiscoveryResponse {
+  queryId: string;
+  mode: string;
+  rootUrl: string;
+  keyword?: string;
+  depth: number;
+  candidateCount: number;
+  candidates: TeacherFeishuDiscoveryCandidate[];
+  status: string;
+  message: string;
+}
+
+export interface TeacherFeishuDiscoveryCandidate {
+  resourceType: string;
+  token: string;
+  name: string;
+  path: string;
+  url: string;
+  depth: number;
+  downloadable: boolean;
+}
+
 export interface TeacherSourceSyncJobResponse {
   jobId: string;
   documentId: string;
@@ -1474,6 +1504,17 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     searchTeacherResourceBlocks(query: string, limit = 10): Promise<TeacherResourceBlockSearchResponse> {
       const path = `/api/teacher/resources/search?query=${encodeURIComponent(query)}&limit=${encodeURIComponent(String(limit))}`;
       return requestJson<TeacherResourceBlockSearchResponse>(path);
+    },
+
+    discoverFeishuResources(request: TeacherFeishuDiscoveryRequest): Promise<TeacherFeishuDiscoveryResponse> {
+      const path = [
+        `/api/teacher/resources/feishu/discovery?mode=${encodeURIComponent(request.mode)}`,
+        `query=${encodeURIComponent(request.query ?? "")}`,
+        `rootUrl=${encodeURIComponent(request.rootUrl ?? "")}`,
+        `listDepth=${encodeURIComponent(String(request.listDepth ?? 1))}`,
+        `maxDepth=${encodeURIComponent(String(request.maxDepth ?? 5))}`,
+      ].join("&");
+      return requestJson<TeacherFeishuDiscoveryResponse>(path);
     },
 
     /**

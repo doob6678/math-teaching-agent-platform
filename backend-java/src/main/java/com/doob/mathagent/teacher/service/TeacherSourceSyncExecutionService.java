@@ -124,6 +124,19 @@ public class TeacherSourceSyncExecutionService {
             String viewerSubjectId,
             String documentId,
             String jobId) {
+        return executeWithCheckpoint(tenantId, viewerRole, viewerSubjectId, documentId, jobId, null);
+    }
+
+    /**
+     * Executes a queued or paused synchronization job, optionally resuming from a durable Feishu checkpoint.
+     */
+    private TeacherSourceSyncJobResponse executeWithCheckpoint(
+            String tenantId,
+            String viewerRole,
+            String viewerSubjectId,
+            String documentId,
+            String jobId,
+            TeacherSourceSyncCheckpointResponse resumeCheckpoint) {
         String normalizedTenantId = textOrDefault(tenantId, "default");
         String normalizedRole = textOrDefault(viewerRole, "teacher").toLowerCase(Locale.ROOT);
         String normalizedSubjectId = textOrDefault(viewerSubjectId, "local-teacher-console");
@@ -144,11 +157,14 @@ public class TeacherSourceSyncExecutionService {
         jobStore.save(running);
         try {
             if (feishuSource) {
-                saveFeishuCheckpoint(document, running, "[]", "[]", 1);
+                if (resumeCheckpoint == null) {
+                    saveFeishuCheckpoint(document, running, "[]", "[]", 1);
+                }
                 TeacherFeishuDownloadClient.FeishuDownloadResult result = feishuDownloadClient.download(
                         textOrDefault(document.originalUrl(), syncProperties.feishuDefaultUrl()),
                         syncProperties.feishuStagingRoot(),
-                        syncProperties.feishuSmokeMaxFiles());
+                        syncProperties.feishuSmokeMaxFiles(),
+                        toDownloadCheckpoint(resumeCheckpoint));
                 TeacherResourceDocumentResponse downloaded = new TeacherResourceDocumentResponse(
                         document.documentId(),
                         document.tenantId(),
@@ -192,15 +208,29 @@ public class TeacherSourceSyncExecutionService {
             return jobStore.save(completed);
         } catch (RuntimeException exception) {
             if (feishuSource) {
-                boolean retryable = exception instanceof TeacherFeishuDownloadException feishuException
-                        && feishuException.retryable();
+                TeacherFeishuDownloadClient.FeishuDownloadCheckpoint failureCheckpoint =
+                        TeacherFeishuDownloadClient.FeishuDownloadCheckpoint.empty();
+                boolean retryable = false;
+                if (exception instanceof TeacherFeishuDownloadException feishuException) {
+                    retryable = feishuException.retryable();
+                    failureCheckpoint = feishuException.checkpoint();
+                }
+                TeacherSourceSyncCheckpointResponse checkpointToSave = failureCheckpoint.hasCursor()
+                        ? toStoredCheckpoint(document, running, failureCheckpoint)
+                        : resumeCheckpoint;
                 TeacherSourceSyncJobResponse pausedOrFailed = updateJob(
                         running,
                         retryable ? "paused" : "failed",
                         retryable ? "download_paused" : "download_failed",
                         null,
                         exception.getMessage());
-                saveFeishuCheckpoint(document, pausedOrFailed, "[]", failedItemsJson(exception, retryable), 2);
+                saveFeishuCheckpoint(
+                        document,
+                        pausedOrFailed,
+                        checkpointToSave,
+                        checkpointToSave == null ? "[]" : checkpointToSave.downloadedItemsJson(),
+                        failedItemsJson(exception, retryable),
+                        2);
                 return jobStore.save(pausedOrFailed);
             }
             TeacherSourceSyncJobResponse failed = updateJob(
@@ -242,14 +272,15 @@ public class TeacherSourceSyncExecutionService {
         if (!"paused".equalsIgnoreCase(textOrDefault(job.status(), ""))) {
             throw new IllegalArgumentException("Only paused source sync jobs can be resumed");
         }
-        checkpointStore.findByJobId(document.tenantId(), job.jobId())
+        TeacherSourceSyncCheckpointResponse checkpoint = checkpointStore.findByJobId(document.tenantId(), job.jobId())
                 .orElseThrow(() -> new IllegalArgumentException("Source sync checkpoint not found: " + job.jobId()));
-        return execute(
+        return executeWithCheckpoint(
                 normalizedTenantId,
                 normalizedRole,
                 normalizedSubjectId,
                 document.documentId(),
-                job.jobId());
+                job.jobId(),
+                checkpoint);
     }
 
     /**
@@ -261,20 +292,82 @@ public class TeacherSourceSyncExecutionService {
             String downloadedItemsJson,
             String failedItemsJson,
             int cursorVersion) {
+        saveFeishuCheckpoint(document, job, null, downloadedItemsJson, failedItemsJson, cursorVersion);
+    }
+
+    /**
+     * Saves a Feishu checkpoint while preserving an existing provider cursor during resume attempts.
+     */
+    private void saveFeishuCheckpoint(
+            TeacherResourceDocumentResponse document,
+            TeacherSourceSyncJobResponse job,
+            TeacherSourceSyncCheckpointResponse previousCheckpoint,
+            String downloadedItemsJson,
+            String failedItemsJson,
+            int cursorVersion) {
         String rootToken = extractFeishuToken(textOrDefault(document.originalUrl(), syncProperties.feishuDefaultUrl()));
+        String currentFolderToken = previousCheckpoint == null
+                ? rootToken
+                : textOrDefault(previousCheckpoint.currentFolderToken(), rootToken);
+        String currentPath = previousCheckpoint == null
+                ? textOrDefault(document.title(), "Feishu source")
+                : textOrDefault(previousCheckpoint.currentPath(), textOrDefault(document.title(), "Feishu source"));
+        String pageToken = previousCheckpoint == null ? null : previousCheckpoint.pageToken();
+        String visitedFolderTokensJson = previousCheckpoint == null
+                ? (rootToken.isBlank() ? "[]" : "[\"" + escapeJson(rootToken) + "\"]")
+                : jsonOrEmptyArray(previousCheckpoint.visitedFolderTokensJson());
         checkpointStore.save(new TeacherSourceSyncCheckpointResponse(
                 job.jobId(),
                 document.tenantId(),
                 document.documentId(),
                 rootToken,
-                rootToken,
-                textOrDefault(document.title(), "Feishu source"),
-                null,
-                rootToken.isBlank() ? "[]" : "[\"" + escapeJson(rootToken) + "\"]",
-                downloadedItemsJson,
-                failedItemsJson,
+                currentFolderToken,
+                currentPath,
+                pageToken,
+                visitedFolderTokensJson,
+                jsonOrEmptyArray(downloadedItemsJson),
+                jsonOrEmptyArray(failedItemsJson),
                 cursorVersion,
                 Instant.now().toString()));
+    }
+
+    /**
+     * Converts a stored checkpoint to the downloader protocol.
+     */
+    private static TeacherFeishuDownloadClient.FeishuDownloadCheckpoint toDownloadCheckpoint(
+            TeacherSourceSyncCheckpointResponse checkpoint) {
+        if (checkpoint == null) {
+            return TeacherFeishuDownloadClient.FeishuDownloadCheckpoint.empty();
+        }
+        return new TeacherFeishuDownloadClient.FeishuDownloadCheckpoint(
+                textOrDefault(checkpoint.currentFolderToken(), ""),
+                textOrDefault(checkpoint.currentPath(), ""),
+                textOrDefault(checkpoint.pageToken(), ""),
+                jsonOrEmptyArray(checkpoint.visitedFolderTokensJson()),
+                jsonOrEmptyArray(checkpoint.downloadedItemsJson()));
+    }
+
+    /**
+     * Converts a worker checkpoint back into the persisted checkpoint shape.
+     */
+    private static TeacherSourceSyncCheckpointResponse toStoredCheckpoint(
+            TeacherResourceDocumentResponse document,
+            TeacherSourceSyncJobResponse job,
+            TeacherFeishuDownloadClient.FeishuDownloadCheckpoint checkpoint) {
+        String rootToken = extractFeishuToken(textOrDefault(document.originalUrl(), ""));
+        return new TeacherSourceSyncCheckpointResponse(
+                job.jobId(),
+                document.tenantId(),
+                document.documentId(),
+                rootToken,
+                textOrDefault(checkpoint.currentFolderToken(), rootToken),
+                textOrDefault(checkpoint.currentPath(), textOrDefault(document.title(), "Feishu source")),
+                textOrDefault(checkpoint.pageToken(), null),
+                jsonOrEmptyArray(checkpoint.visitedFolderTokensJson()),
+                jsonOrEmptyArray(checkpoint.downloadedItemsJson()),
+                "[]",
+                2,
+                Instant.now().toString());
     }
 
     /**
@@ -318,6 +411,13 @@ public class TeacherSourceSyncExecutionService {
                 .replace("\"", "\\\"")
                 .replace("\r", "\\r")
                 .replace("\n", "\\n");
+    }
+
+    /**
+     * Defaults blank JSON array fields to an empty array string.
+     */
+    private static String jsonOrEmptyArray(String value) {
+        return value == null || value.isBlank() ? "[]" : value;
     }
 
     /**

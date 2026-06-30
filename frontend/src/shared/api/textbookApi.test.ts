@@ -1515,4 +1515,54 @@ describe("textbookApi", () => {
     expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Type");
     expect(response.hits[0].blockId).toBe("block-1");
   });
+
+  it("discovers Feishu candidates without client supplied identity headers or secrets", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          queryId: "feishu-query-1",
+          mode: "search_root",
+          rootUrl: "https://my.feishu.cn/drive/folder/root-token",
+          keyword: "空间向量",
+          depth: 5,
+          candidateCount: 1,
+          candidates: [{
+            resourceType: "docx",
+            token: "doc-token",
+            name: "空间向量数量积",
+            path: "必修二/空间向量数量积",
+            url: "https://my.feishu.cn/docx/doc-token",
+            depth: 2,
+            downloadable: true,
+          }],
+          status: "ok",
+          message: "Found 1 Feishu candidates",
+        }),
+      });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const response = await client.discoverFeishuResources({
+      mode: "search",
+      query: "空间向量",
+      rootUrl: "https://my.feishu.cn/drive/folder/root-token",
+      listDepth: 1,
+      maxDepth: 5,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8080/api/teacher/resources/feishu/discovery?mode=search&query=%E7%A9%BA%E9%97%B4%E5%90%91%E9%87%8F&rootUrl=https%3A%2F%2Fmy.feishu.cn%2Fdrive%2Ffolder%2Froot-token&listDepth=1&maxDepth=5",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          "X-Device-Id": "local-browser-console",
+        }),
+      }),
+    );
+    expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Id");
+    expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Type");
+    expect(fetchMock.mock.calls[0][0]).not.toContain("APPKEY");
+    expect(fetchMock.mock.calls[0][0]).not.toContain("APP_SECRET");
+    expect(response.candidates[0].url).toBe("https://my.feishu.cn/docx/doc-token");
+  });
 });

@@ -290,6 +290,131 @@ class TeacherSourceSyncExecutionServiceTest {
     }
 
     @Test
+    void resumeFeishuSyncJobPassesDurableCheckpointToDownloader() throws Exception {
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherSourceSyncJobStore jobStore = new InMemoryTeacherSourceSyncJobStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        InMemoryTeacherSourceSyncCheckpointStore checkpointStore = new InMemoryTeacherSourceSyncCheckpointStore();
+        TeacherResourceService resourceService = new TeacherResourceService(resourceStore);
+        TeacherResourceDocumentResponse resource = resourceService.register(new TeacherResourceRegistrationCommand(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                "feishu",
+                "Feishu vector root",
+                "https://my.feishu.cn/drive/folder/rootToken",
+                null,
+                "TEACHER_PRIVATE"));
+        TeacherSourceSyncJobService jobService = new TeacherSourceSyncJobService(resourceStore, jobStore);
+        TeacherSourceSyncJobResponse queued = jobService.createSyncJob(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                resource.documentId());
+        jobStore.save(new TeacherSourceSyncJobResponse(
+                queued.jobId(),
+                queued.documentId(),
+                queued.tenantId(),
+                queued.sourceType(),
+                queued.operation(),
+                "paused",
+                "download_paused",
+                queued.attempt(),
+                queued.createdBy(),
+                queued.stagingPath(),
+                "ProxyError: paused after page token",
+                queued.createdAt(),
+                queued.updatedAt()));
+        checkpointStore.save(new TeacherSourceSyncCheckpointResponse(
+                queued.jobId(),
+                "school-a",
+                resource.documentId(),
+                "rootToken",
+                "folderToken-2",
+                "高中数学/空间向量",
+                "pageToken-3",
+                "[\"rootToken\",\"folderToken-1\",\"folderToken-2\"]",
+                "[{\"token\":\"docx-1\"}]",
+                "[{\"message\":\"ProxyError\",\"retryable\":true}]",
+                2,
+                java.time.Instant.now().toString()));
+        Path savedPath = tempDir.resolve("checkpoint-resume");
+        Files.createDirectories(savedPath);
+        Files.writeString(savedPath.resolve("resume.txt"), "resumed from checkpoint");
+        CapturingCheckpointFeishuDownloadClient feishuClient =
+                new CapturingCheckpointFeishuDownloadClient(savedPath);
+        TeacherSourceSyncExecutionService executionService = new TeacherSourceSyncExecutionService(
+                resourceStore,
+                jobStore,
+                blockStore,
+                feishuClient,
+                TeacherSourceSyncProperties.defaults(),
+                checkpointStore);
+
+        TeacherSourceSyncJobResponse completed = executionService.resume(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                resource.documentId(),
+                queued.jobId());
+
+        assertThat(completed.status()).isEqualTo("completed");
+        assertThat(feishuClient.checkpoint).isNotNull();
+        assertThat(feishuClient.checkpoint.currentFolderToken()).isEqualTo("folderToken-2");
+        assertThat(feishuClient.checkpoint.pageToken()).isEqualTo("pageToken-3");
+        assertThat(feishuClient.checkpoint.currentPath()).isEqualTo("高中数学/空间向量");
+        assertThat(feishuClient.checkpoint.visitedFolderTokensJson()).contains("folderToken-1");
+        assertThat(feishuClient.checkpoint.downloadedItemsJson()).contains("docx-1");
+    }
+
+    @Test
+    void retryableFeishuFailureStoresLatestDownloaderCheckpoint() {
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherSourceSyncJobStore jobStore = new InMemoryTeacherSourceSyncJobStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        InMemoryTeacherSourceSyncCheckpointStore checkpointStore = new InMemoryTeacherSourceSyncCheckpointStore();
+        TeacherResourceService resourceService = new TeacherResourceService(resourceStore);
+        TeacherResourceDocumentResponse resource = resourceService.register(new TeacherResourceRegistrationCommand(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                "feishu",
+                "Feishu vector root",
+                "https://my.feishu.cn/drive/folder/rootToken",
+                null,
+                "TEACHER_PRIVATE"));
+        TeacherSourceSyncJobService jobService = new TeacherSourceSyncJobService(resourceStore, jobStore);
+        TeacherSourceSyncJobResponse queued = jobService.createSyncJob(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                resource.documentId());
+        TeacherSourceSyncExecutionService executionService = new TeacherSourceSyncExecutionService(
+                resourceStore,
+                jobStore,
+                blockStore,
+                new FailingWithCheckpointFeishuDownloadClient(),
+                TeacherSourceSyncProperties.defaults(),
+                checkpointStore);
+
+        TeacherSourceSyncJobResponse paused = executionService.execute(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                resource.documentId(),
+                queued.jobId());
+
+        assertThat(paused.status()).isEqualTo("paused");
+        TeacherSourceSyncCheckpointResponse checkpoint =
+                checkpointStore.findByJobId("school-a", queued.jobId()).orElseThrow();
+        assertThat(checkpoint.currentFolderToken()).isEqualTo("folderToken-9");
+        assertThat(checkpoint.pageToken()).isEqualTo("pageToken-10");
+        assertThat(checkpoint.currentPath()).isEqualTo("高中数学/导数");
+        assertThat(checkpoint.downloadedItemsJson()).contains("docx-9");
+        assertThat(checkpoint.failedItemsJson()).contains("ProxyError").contains("retryable");
+    }
+
+    @Test
     void feishuSyncJobParsesDownloadedDocxAndTextFilesIntoDocumentBlocks() throws Exception {
         Path savedPath = tempDir.resolve("downloaded-feishu-content");
         Files.createDirectories(savedPath);
@@ -456,6 +581,47 @@ class TeacherSourceSyncExecutionServiceTest {
         @Override
         public FeishuDownloadResult download(String url, Path stagingRoot, int maxFiles) {
             return new FeishuDownloadResult(savedPath, 1, 0, 0, "Downloaded 1 Feishu files; skipped 0");
+        }
+    }
+
+    private static final class FailingWithCheckpointFeishuDownloadClient implements TeacherFeishuDownloadClient {
+
+        @Override
+        public FeishuDownloadResult download(
+                String url,
+                Path stagingRoot,
+                int maxFiles,
+                TeacherFeishuDownloadClient.FeishuDownloadCheckpoint checkpoint) {
+            throw new TeacherFeishuDownloadException(
+                    "ProxyError: tunnel reset after page",
+                    true,
+                    null,
+                    new TeacherFeishuDownloadClient.FeishuDownloadCheckpoint(
+                            "folderToken-9",
+                            "高中数学/导数",
+                            "pageToken-10",
+                            "[\"rootToken\",\"folderToken-9\"]",
+                            "[{\"token\":\"docx-9\"}]"));
+        }
+    }
+
+    private static final class CapturingCheckpointFeishuDownloadClient implements TeacherFeishuDownloadClient {
+
+        private final Path savedPath;
+        private TeacherFeishuDownloadClient.FeishuDownloadCheckpoint checkpoint;
+
+        private CapturingCheckpointFeishuDownloadClient(Path savedPath) {
+            this.savedPath = savedPath;
+        }
+
+        @Override
+        public FeishuDownloadResult download(
+                String url,
+                Path stagingRoot,
+                int maxFiles,
+                TeacherFeishuDownloadClient.FeishuDownloadCheckpoint checkpoint) {
+            this.checkpoint = checkpoint;
+            return new FeishuDownloadResult(savedPath, 1, 0, 0, "Downloaded 1 Feishu files from checkpoint");
         }
     }
 }

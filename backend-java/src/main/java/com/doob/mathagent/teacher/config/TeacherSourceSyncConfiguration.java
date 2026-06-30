@@ -1,7 +1,9 @@
 package com.doob.mathagent.teacher.config;
 
+import com.doob.mathagent.teacher.service.TeacherFeishuDiscoveryClient;
 import com.doob.mathagent.teacher.service.TeacherFeishuDownloadClient;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncProperties;
+import com.doob.mathagent.teacher.service.UnconfiguredTeacherFeishuDiscoveryClient;
 import com.doob.mathagent.teacher.service.UnconfiguredTeacherFeishuDownloadClient;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
@@ -34,5 +36,16 @@ public class TeacherSourceSyncConfiguration {
     @ConditionalOnMissingBean(TeacherFeishuDownloadClient.class)
     TeacherFeishuDownloadClient unconfiguredTeacherFeishuDownloadClient() {
         return new UnconfiguredTeacherFeishuDownloadClient();
+    }
+
+    /**
+     * Creates a fail-fast Feishu discovery client when the process-backed client is disabled.
+     *
+     * @return unconfigured discovery client that never reports fake candidates
+     */
+    @Bean
+    @ConditionalOnMissingBean(TeacherFeishuDiscoveryClient.class)
+    TeacherFeishuDiscoveryClient unconfiguredTeacherFeishuDiscoveryClient() {
+        return new UnconfiguredTeacherFeishuDiscoveryClient();
     }
 }

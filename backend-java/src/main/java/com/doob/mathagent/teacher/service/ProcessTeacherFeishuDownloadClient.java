@@ -5,6 +5,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.List;
 import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -25,6 +26,13 @@ public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownload
     private static final Pattern FILES_PATTERN = Pattern.compile("\"files\"\\s*:\\s*(\\d+)");
     private static final Pattern SKIPPED_PATTERN = Pattern.compile("\"skipped\"\\s*:\\s*(\\d+)");
     private static final Pattern FAILED_PATTERN = Pattern.compile("\"failed\"\\s*:\\s*(\\d+)");
+    private static final Pattern CURRENT_FOLDER_PATTERN = Pattern.compile("\"current_folder_token\"\\s*:\\s*\"([^\"]*)\"");
+    private static final Pattern CURRENT_PATH_PATTERN = Pattern.compile("\"current_path\"\\s*:\\s*\"([^\"]*)\"");
+    private static final Pattern PAGE_TOKEN_PATTERN = Pattern.compile("\"page_token\"\\s*:\\s*\"([^\"]*)\"");
+    private static final Pattern VISITED_FOLDERS_PATTERN = Pattern.compile(
+            "\"visited_folder_tokens\"\\s*:\\s*(\\[[\\s\\S]*?\\])\\s*,\\s*\"downloaded_items\"");
+    private static final Pattern DOWNLOADED_ITEMS_PATTERN = Pattern.compile(
+            "\"downloaded_items\"\\s*:\\s*(\\[[\\s\\S]*?\\])");
 
     private final TeacherSourceSyncProperties properties;
 
@@ -41,18 +49,31 @@ public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownload
      * Runs the Python downloader with an APPKEY path and a temporary summary file.
      */
     @Override
-    public FeishuDownloadResult download(String url, Path stagingRoot, int maxFiles) {
+    public FeishuDownloadResult download(
+            String url,
+            Path stagingRoot,
+            int maxFiles,
+            FeishuDownloadCheckpoint checkpoint) {
         validateConfiguredFiles();
         Path outputRoot = stagingRoot.toAbsolutePath().normalize();
         IllegalStateException lastFailure = null;
+        FeishuDownloadCheckpoint activeCheckpoint = checkpoint == null ? FeishuDownloadCheckpoint.empty() : checkpoint;
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
             try {
-                return runDownloader(url, outputRoot, maxFiles, attempt);
+                return runDownloader(url, outputRoot, maxFiles, activeCheckpoint, attempt);
             } catch (IllegalStateException exception) {
                 lastFailure = exception;
+                FeishuDownloadCheckpoint latestCheckpoint = latestCheckpoint(exception);
+                if (latestCheckpoint.hasCursor()) {
+                    activeCheckpoint = latestCheckpoint;
+                }
                 boolean retryable = isRetryable(exception);
                 if (attempt == MAX_ATTEMPTS && retryable) {
-                    throw new TeacherFeishuDownloadException(exception.getMessage(), true, exception);
+                    throw new TeacherFeishuDownloadException(
+                            exception.getMessage(),
+                            true,
+                            exception,
+                            activeCheckpoint);
                 }
                 if (attempt == MAX_ATTEMPTS || !retryable) {
                     throw exception;
@@ -66,36 +87,39 @@ public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownload
     /**
      * Runs one bounded downloader process attempt.
      */
-    private FeishuDownloadResult runDownloader(String url, Path outputRoot, int maxFiles, int attempt) {
+    private FeishuDownloadResult runDownloader(
+            String url,
+            Path outputRoot,
+            int maxFiles,
+            FeishuDownloadCheckpoint checkpoint,
+            int attempt) {
         Path summaryPath = outputRoot.resolve("summary-" + Instant.now().toEpochMilli() + "-attempt-" + attempt + ".json");
+        Path checkpointPath = outputRoot.resolve("resume-checkpoint-" + Instant.now().toEpochMilli()
+                + "-attempt-" + attempt + ".json");
         try {
             Files.createDirectories(outputRoot);
-            Process process = new ProcessBuilder(
-                    "python",
-                    properties.feishuDownloaderScript().toString(),
-                    "--url",
+            Process process = new ProcessBuilder(buildCommand(
                     url,
-                    "--appkey-path",
-                    properties.feishuAppkeyPath().toString(),
-                    "--output-dir",
-                    outputRoot.toString(),
-                    "--summary-path",
-                    summaryPath.toString(),
-                    "--max-files",
-                    String.valueOf(maxFiles),
-                    "--quiet")
+                    outputRoot,
+                    summaryPath,
+                    checkpointPath,
+                    maxFiles,
+                    checkpoint))
                     .redirectErrorStream(true)
                     .start();
             String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
             int exitCode = process.waitFor();
             if (exitCode != 0) {
-                throw new IllegalStateException(
-                        "Feishu downloader failed with exit " + exitCode + ": " + safeProcessOutput(output));
+                throw new ProcessDownloadFailure(
+                        "Feishu downloader failed with exit " + exitCode + ": " + safeProcessOutput(output),
+                        readCheckpoint(checkpointPath));
             }
             String summary = Files.readString(summaryPath, StandardCharsets.UTF_8);
             int failed = intField(summary, FAILED_PATTERN);
             if (failed > 0) {
-                throw new IllegalStateException("Feishu downloader reported failed files: " + failed);
+                throw new ProcessDownloadFailure(
+                        "Feishu downloader reported failed files: " + failed,
+                        readCheckpoint(checkpointPath));
             }
             Path savedPath = Path.of(textField(summary, SAVED_PATH_PATTERN, outputRoot.toString()));
             int files = intField(summary, FILES_PATTERN);
@@ -112,6 +136,103 @@ public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownload
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Feishu downloader was interrupted", exception);
         }
+    }
+
+    /**
+     * Builds a subprocess command without embedding secret material.
+     */
+    private List<String> buildCommand(
+            String url,
+            Path outputRoot,
+            Path summaryPath,
+            Path checkpointPath,
+            int maxFiles,
+            FeishuDownloadCheckpoint checkpoint) throws IOException {
+        List<String> command = new java.util.ArrayList<>(List.of(
+                "python",
+                properties.feishuDownloaderScript().toString(),
+                "--url",
+                url,
+                "--appkey-path",
+                properties.feishuAppkeyPath().toString(),
+                "--output-dir",
+                outputRoot.toString(),
+                "--summary-path",
+                summaryPath.toString(),
+                "--max-files",
+                String.valueOf(maxFiles),
+                "--quiet"));
+        FeishuDownloadCheckpoint normalized = checkpoint == null ? FeishuDownloadCheckpoint.empty() : checkpoint;
+        if (normalized.hasCursor()) {
+            Files.writeString(checkpointPath, checkpointJson(normalized), StandardCharsets.UTF_8);
+            command.add("--resume-checkpoint-path");
+            command.add(checkpointPath.toString());
+        }
+        return command;
+    }
+
+    /**
+     * Builds the UTF-8 checkpoint file consumed by the Python downloader.
+     */
+    private static String checkpointJson(FeishuDownloadCheckpoint checkpoint) {
+        return "{"
+                + "\"current_folder_token\":\"" + escapeJson(checkpoint.currentFolderToken()) + "\","
+                + "\"page_token\":\"" + escapeJson(checkpoint.pageToken()) + "\","
+                + "\"current_path\":\"" + escapeJson(checkpoint.currentPath()) + "\","
+                + "\"visited_folder_tokens\":" + jsonArrayOrEmpty(checkpoint.visitedFolderTokensJson()) + ","
+                + "\"downloaded_items\":" + jsonArrayOrEmpty(checkpoint.downloadedItemsJson())
+                + "}";
+    }
+
+    /**
+     * Escapes JSON string values written to the checkpoint file.
+     */
+    private static String escapeJson(String value) {
+        return value == null ? "" : value
+                .replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+                .replace("\r", "\\r")
+                .replace("\n", "\\n");
+    }
+
+    /**
+     * Keeps persisted JSON arrays intact and defaults blank values.
+     */
+    private static String jsonArrayOrEmpty(String value) {
+        if (value == null || value.isBlank()) {
+            return "[]";
+        }
+        String normalized = value.strip();
+        return normalized.startsWith("[") && normalized.endsWith("]") ? normalized : "[]";
+    }
+
+    /**
+     * Reads a downloader checkpoint file written by the Python worker.
+     */
+    private static FeishuDownloadCheckpoint readCheckpoint(Path checkpointPath) {
+        if (!Files.isRegularFile(checkpointPath)) {
+            return FeishuDownloadCheckpoint.empty();
+        }
+        try {
+            String json = Files.readString(checkpointPath, StandardCharsets.UTF_8);
+            return new FeishuDownloadCheckpoint(
+                    textField(json, CURRENT_FOLDER_PATTERN, ""),
+                    textField(json, CURRENT_PATH_PATTERN, ""),
+                    textField(json, PAGE_TOKEN_PATTERN, ""),
+                    textField(json, VISITED_FOLDERS_PATTERN, "[]"),
+                    textField(json, DOWNLOADED_ITEMS_PATTERN, "[]"));
+        } catch (IOException exception) {
+            return FeishuDownloadCheckpoint.empty();
+        }
+    }
+
+    /**
+     * Extracts the latest checkpoint carried by an internal process failure.
+     */
+    private static FeishuDownloadCheckpoint latestCheckpoint(IllegalStateException exception) {
+        return exception instanceof ProcessDownloadFailure failure
+                ? failure.checkpoint()
+                : FeishuDownloadCheckpoint.empty();
     }
 
     /**
@@ -181,5 +302,22 @@ public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownload
     private static int intField(String json, Pattern pattern) {
         Matcher matcher = pattern.matcher(json);
         return matcher.find() ? Integer.parseInt(matcher.group(1)) : 0;
+    }
+
+    /**
+     * Internal process failure that carries the last worker checkpoint.
+     */
+    private static final class ProcessDownloadFailure extends IllegalStateException {
+
+        private final FeishuDownloadCheckpoint checkpoint;
+
+        private ProcessDownloadFailure(String message, FeishuDownloadCheckpoint checkpoint) {
+            super(message);
+            this.checkpoint = checkpoint == null ? FeishuDownloadCheckpoint.empty() : checkpoint;
+        }
+
+        private FeishuDownloadCheckpoint checkpoint() {
+            return checkpoint;
+        }
     }
 }
