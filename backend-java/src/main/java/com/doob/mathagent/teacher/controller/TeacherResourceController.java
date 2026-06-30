@@ -4,20 +4,24 @@ import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.infrastructure.security.RequestSubjectResolver;
 import com.doob.mathagent.teacher.dto.TeacherResourceRegistrationRequest;
 import com.doob.mathagent.teacher.service.TeacherResourceCapabilityVerifier;
+import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService;
 import com.doob.mathagent.teacher.service.TeacherResourceRegistrationCommand;
 import com.doob.mathagent.teacher.service.TeacherResourceService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncExecutionService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncJobService;
+import com.doob.mathagent.teacher.vo.TeacherResourceBlockSearchResponse;
 import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncJobResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.List;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -37,6 +41,7 @@ public class TeacherResourceController {
     private final TeacherResourceService teacherResourceService;
     private final TeacherSourceSyncJobService syncJobService;
     private final TeacherSourceSyncExecutionService syncExecutionService;
+    private final TeacherResourceBlockSearchService blockSearchService;
     private final RequestSubjectResolver subjectResolver;
     private final TeacherResourceCapabilityVerifier capabilityVerifier;
 
@@ -46,17 +51,44 @@ public class TeacherResourceController {
      * @param teacherResourceService teacher resource service
      * @param subjectResolver backend subject resolver
      */
+    @Autowired
+    public TeacherResourceController(
+            TeacherResourceService teacherResourceService,
+            TeacherSourceSyncJobService syncJobService,
+            TeacherSourceSyncExecutionService syncExecutionService,
+            TeacherResourceBlockSearchService blockSearchService,
+            RequestSubjectResolver subjectResolver,
+            TeacherResourceCapabilityVerifier capabilityVerifier) {
+        this.teacherResourceService = teacherResourceService;
+        this.syncJobService = syncJobService;
+        this.syncExecutionService = syncExecutionService;
+        this.blockSearchService = blockSearchService;
+        this.subjectResolver = subjectResolver;
+        this.capabilityVerifier = capabilityVerifier;
+    }
+
+    /**
+     * Creates a controller without block search for older direct unit tests.
+     *
+     * @param teacherResourceService teacher resource service
+     * @param syncJobService sync job service
+     * @param syncExecutionService sync execution service
+     * @param subjectResolver backend subject resolver
+     * @param capabilityVerifier capability verifier
+     */
     public TeacherResourceController(
             TeacherResourceService teacherResourceService,
             TeacherSourceSyncJobService syncJobService,
             TeacherSourceSyncExecutionService syncExecutionService,
             RequestSubjectResolver subjectResolver,
             TeacherResourceCapabilityVerifier capabilityVerifier) {
-        this.teacherResourceService = teacherResourceService;
-        this.syncJobService = syncJobService;
-        this.syncExecutionService = syncExecutionService;
-        this.subjectResolver = subjectResolver;
-        this.capabilityVerifier = capabilityVerifier;
+        this(
+                teacherResourceService,
+                syncJobService,
+                syncExecutionService,
+                null,
+                subjectResolver,
+                capabilityVerifier);
     }
 
     /**
@@ -92,6 +124,35 @@ public class TeacherResourceController {
     public List<TeacherResourceDocumentResponse> list(HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest).normalize();
         return teacherResourceService.list(subject.tenantId(), subject.subjectType(), subject.subjectId());
+    }
+
+    /**
+     * Searches parsed blocks from teacher-managed resources visible to the backend subject.
+     *
+     * @param query search query
+     * @param limit maximum hit count
+     * @param httpRequest HTTP request containing backend session
+     * @return visible parsed block search hits
+     */
+    @GetMapping("/api/teacher/resources/search")
+    public TeacherResourceBlockSearchResponse searchBlocks(
+            @RequestParam String query,
+            @RequestParam(defaultValue = "10") int limit,
+            HttpServletRequest httpRequest) {
+        if (blockSearchService == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED, "Teacher resource block search is not configured");
+        }
+        RequestSubject subject = subjectResolver.resolve(httpRequest).normalize();
+        try {
+            return blockSearchService.search(
+                    subject.tenantId(),
+                    subject.subjectType(),
+                    subject.subjectId(),
+                    query,
+                    limit);
+        } catch (IllegalArgumentException exception) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, exception.getMessage(), exception);
+        }
     }
 
     /**

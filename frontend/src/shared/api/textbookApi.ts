@@ -976,6 +976,29 @@ export interface TeacherResourcePreviewFile {
   fileSizeBytes: number;
 }
 
+export interface TeacherResourceBlockSearchResponse {
+  queryId: string;
+  query: string;
+  limit: number;
+  retrievalMode: string;
+  hitCount: number;
+  hits: TeacherResourceBlockSearchHit[];
+}
+
+export interface TeacherResourceBlockSearchHit {
+  documentId: string;
+  documentTitle: string;
+  permissionScope: string;
+  blockId: string;
+  blockType: string;
+  blockOrder: number;
+  chapter?: string;
+  section?: string;
+  pageNo?: number | null;
+  snippet: string;
+  score: number;
+}
+
 export interface TeacherSourceSyncJobResponse {
   jobId: string;
   documentId: string;
@@ -1446,6 +1469,11 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
      */
     listTeacherResources(): Promise<TeacherResourceDocumentResponse[]> {
       return requestJson<TeacherResourceDocumentResponse[]>("/api/teacher/resources");
+    },
+
+    searchTeacherResourceBlocks(query: string, limit = 10): Promise<TeacherResourceBlockSearchResponse> {
+      const path = `/api/teacher/resources/search?query=${encodeURIComponent(query)}&limit=${encodeURIComponent(String(limit))}`;
+      return requestJson<TeacherResourceBlockSearchResponse>(path);
     },
 
     /**

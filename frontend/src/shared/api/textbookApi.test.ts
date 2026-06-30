@@ -1472,4 +1472,47 @@ describe("textbookApi", () => {
     expect(resumed.status).toBe("completed");
     expect(resumed.phase).toBe("download_completed");
   });
+
+  it("searches parsed teacher resource blocks without client supplied identity headers", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          queryId: "query-1",
+          query: "vector theorem",
+          limit: 8,
+          retrievalMode: "teacher_block_lexical",
+          hitCount: 1,
+          hits: [{
+            documentId: "doc-1",
+            documentTitle: "Space vector handout",
+            permissionScope: "TEACHER_PRIVATE",
+            blockId: "block-1",
+            blockType: "text",
+            blockOrder: 1,
+            chapter: "Vectors",
+            section: "Theorem",
+            pageNo: null,
+            snippet: "Space vector theorem",
+            score: 11,
+          }],
+        }),
+      });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const response = await client.searchTeacherResourceBlocks("vector theorem", 8);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8080/api/teacher/resources/search?query=vector%20theorem&limit=8",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          "X-Device-Id": "local-browser-console",
+        }),
+      }),
+    );
+    expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Id");
+    expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Type");
+    expect(response.hits[0].blockId).toBe("block-1");
+  });
 });

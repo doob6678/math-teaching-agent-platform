@@ -9,12 +9,15 @@ import com.doob.mathagent.teacher.service.InMemoryTeacherDocumentBlockStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherResourceStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherSourceSyncCheckpointStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherSourceSyncJobStore;
+import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService;
 import com.doob.mathagent.teacher.service.TeacherFeishuDownloadClient;
 import com.doob.mathagent.teacher.service.TeacherFeishuDownloadException;
 import com.doob.mathagent.teacher.service.TeacherResourceService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncExecutionService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncJobService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncProperties;
+import com.doob.mathagent.teacher.vo.TeacherDocumentBlockResponse;
+import com.doob.mathagent.teacher.vo.TeacherResourceBlockSearchResponse;
 import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncJobResponse;
 import java.nio.file.Files;
@@ -286,6 +289,81 @@ class TeacherResourceControllerTest {
     }
 
     @Test
+    void searchesParsedBlocksWithBackendSubjectAndIgnoresSpoofedHeaders() {
+        InMemoryTeacherResourceStore store = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        TeacherResourceDocumentResponse ownResource = store.save(new TeacherResourceDocumentResponse(
+                "doc-own",
+                "school-a",
+                "teacher-88",
+                "local_path",
+                "Own parsed vectors",
+                null,
+                "C:/math/own",
+                "TEACHER_PRIVATE",
+                "synced",
+                "parsed",
+                "pending",
+                "waiting_rebuild",
+                java.util.List.of()));
+        store.save(new TeacherResourceDocumentResponse(
+                "doc-spoofed",
+                "school-a",
+                "teacher-spoofed",
+                "local_path",
+                "Spoofed teacher private vectors",
+                null,
+                "C:/math/spoofed",
+                "TEACHER_PRIVATE",
+                "synced",
+                "parsed",
+                "pending",
+                "waiting_rebuild",
+                java.util.List.of()));
+        blockStore.replaceActiveBlocks("school-a", ownResource.documentId(), java.util.List.of(searchBlock(
+                "block-own",
+                ownResource.documentId(),
+                "backend subject vector theorem")));
+        blockStore.replaceActiveBlocks("school-a", "doc-spoofed", java.util.List.of(searchBlock(
+                "block-spoofed",
+                "doc-spoofed",
+                "spoofed private vector theorem")));
+        TeacherResourceController controller = new TeacherResourceController(
+                new TeacherResourceService(store),
+                new TeacherSourceSyncJobService(store, new InMemoryTeacherSourceSyncJobStore()),
+                new TeacherSourceSyncExecutionService(store, new InMemoryTeacherSourceSyncJobStore(), blockStore),
+                new TeacherResourceBlockSearchService(store, blockStore),
+                request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"),
+                (token, action, path, requestHash, subject) -> true);
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader("X-Subject-Type", "teacher");
+        request.addHeader("X-Subject-Id", "teacher-spoofed");
+
+        TeacherResourceBlockSearchResponse response = controller.searchBlocks("vector theorem", 10, request);
+
+        assertThat(response.hits()).extracting(TeacherResourceBlockSearchResponse.Hit::blockId)
+                .containsExactly("block-own");
+    }
+
+    @Test
+    void rejectsStudentTeacherBlockSearch() {
+        InMemoryTeacherResourceStore store = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        TeacherResourceController controller = new TeacherResourceController(
+                new TeacherResourceService(store),
+                new TeacherSourceSyncJobService(store, new InMemoryTeacherSourceSyncJobStore()),
+                new TeacherSourceSyncExecutionService(store, new InMemoryTeacherSourceSyncJobStore(), blockStore),
+                new TeacherResourceBlockSearchService(store, blockStore),
+                request -> new RequestSubject("school-a", "student", "student-1", "device-1"),
+                (token, action, path, requestHash, subject) -> true);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                        controller.searchBlocks("vector theorem", 10, new MockHttpServletRequest()))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("teacher or admin");
+    }
+
+    @Test
     void rejectsSyncJobExecutionWithoutAcceptedCapabilityToken() throws Exception {
         Path folder = tempDir.resolve("blocked-sync-execute-resource");
         Files.createDirectories(folder);
@@ -355,5 +433,28 @@ class TeacherResourceControllerTest {
         request.addHeader("X-Capability-Token", token);
         request.addHeader("X-Request-Hash", requestHash);
         return request;
+    }
+
+    /**
+     * Builds a parsed text block for controller-level search assertions.
+     */
+    private static TeacherDocumentBlockResponse searchBlock(String blockId, String documentId, String text) {
+        return new TeacherDocumentBlockResponse(
+                blockId,
+                documentId,
+                documentId + ":1",
+                "text",
+                1,
+                "Vectors",
+                "Theorem",
+                null,
+                null,
+                text,
+                text,
+                "[]",
+                "[]",
+                blockId + "-checksum",
+                1.0,
+                "active");
     }
 }

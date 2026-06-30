@@ -9,6 +9,7 @@ import {
   RetrievalAuditDetail,
   StudentDashboardResponse,
   TeachingTaskResponse,
+  TeacherResourceBlockSearchResponse,
   TeacherResourceDocumentResponse,
   TeacherSourceSyncJobResponse,
   TextbookSearchHit,
@@ -52,6 +53,8 @@ export function App() {
   const [studentDashboard, setStudentDashboard] = useState<StudentDashboardResponse | null>(null);
   const [teacherResources, setTeacherResources] = useState<TeacherResourceDocumentResponse[]>([]);
   const [teacherSyncJobs, setTeacherSyncJobs] = useState<Record<string, TeacherSourceSyncJobResponse[]>>({});
+  const [teacherResourceSearchQuery, setTeacherResourceSearchQuery] = useState("space vector");
+  const [teacherBlockSearchResult, setTeacherBlockSearchResult] = useState<TeacherResourceBlockSearchResponse | null>(null);
   const [handoutPreviewLatex, setHandoutPreviewLatex] = useState("");
   const [handoutPreviewTaskId, setHandoutPreviewTaskId] = useState("");
   const [handoutVersion, setHandoutVersion] = useState<"teacher" | "student">("teacher");
@@ -104,6 +107,7 @@ export function App() {
   const [loadingStudentDashboard, setLoadingStudentDashboard] = useState(false);
   const [loadingTeacherResources, setLoadingTeacherResources] = useState(false);
   const [registeringResource, setRegisteringResource] = useState(false);
+  const [searchingTeacherBlocks, setSearchingTeacherBlocks] = useState(false);
   const [syncingResourceId, setSyncingResourceId] = useState("");
   const [loggingIn, setLoggingIn] = useState(false);
 
@@ -324,6 +328,21 @@ export function App() {
       )
       .catch((error: Error) => setTeacherResourceError(error.message))
       .finally(() => setSyncingResourceId(""));
+  }
+
+  function handleTeacherBlockSearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!teacherResourceSearchQuery.trim()) {
+      setTeacherResourceError("请输入要检索的资料关键词。");
+      return;
+    }
+    setSearchingTeacherBlocks(true);
+    setTeacherResourceError("");
+    api
+      .searchTeacherResourceBlocks(teacherResourceSearchQuery.trim(), 8)
+      .then(setTeacherBlockSearchResult)
+      .catch((error: Error) => setTeacherResourceError(error.message))
+      .finally(() => setSearchingTeacherBlocks(false));
   }
 
   function handlePreviewLatex() {
@@ -715,13 +734,18 @@ export function App() {
             scope={resourceScope}
             loading={loadingTeacherResources}
             registering={registeringResource}
+            searchingBlocks={searchingTeacherBlocks}
             syncingResourceId={syncingResourceId}
             syncJobsByDocument={teacherSyncJobs}
+            blockSearchQuery={teacherResourceSearchQuery}
+            blockSearchResult={teacherBlockSearchResult}
             error={teacherResourceError}
             onTitleChange={setResourceTitle}
             onLocationChange={setResourceLocation}
             onSourceTypeChange={setResourceSourceType}
             onScopeChange={setResourceScope}
+            onBlockSearchQueryChange={setTeacherResourceSearchQuery}
+            onBlockSearch={handleTeacherBlockSearch}
             onRegister={handleRegisterResource}
             onArchive={handleArchiveResource}
             onSync={handleCreateResourceSyncJob}
@@ -1117,13 +1141,18 @@ function TeacherResourcePanel({
   scope,
   loading,
   registering,
+  searchingBlocks,
   syncingResourceId,
   syncJobsByDocument,
+  blockSearchQuery,
+  blockSearchResult,
   error,
   onTitleChange,
   onLocationChange,
   onSourceTypeChange,
   onScopeChange,
+  onBlockSearchQueryChange,
+  onBlockSearch,
   onRegister,
   onArchive,
   onSync,
@@ -1136,13 +1165,18 @@ function TeacherResourcePanel({
   scope: string;
   loading: boolean;
   registering: boolean;
+  searchingBlocks: boolean;
   syncingResourceId: string;
   syncJobsByDocument: Record<string, TeacherSourceSyncJobResponse[]>;
+  blockSearchQuery: string;
+  blockSearchResult: TeacherResourceBlockSearchResponse | null;
   error: string;
   onTitleChange: (value: string) => void;
   onLocationChange: (value: string) => void;
   onSourceTypeChange: (value: string) => void;
   onScopeChange: (value: string) => void;
+  onBlockSearchQueryChange: (value: string) => void;
+  onBlockSearch: (event: FormEvent<HTMLFormElement>) => void;
   onRegister: (event: FormEvent<HTMLFormElement>) => void;
   onArchive: (documentId: string) => void;
   onSync: (documentId: string) => void;
@@ -1182,6 +1216,34 @@ function TeacherResourcePanel({
       </form>
       {loading ? <StatusLine icon={<Loader2 className="spin" size={16} />} text="读取教师资料源中" /> : null}
       {error ? <StatusLine icon={<AlertCircle size={16} />} text={error} tone="danger" /> : null}
+      <form className="resource-block-search" onSubmit={onBlockSearch}>
+        <label>
+          <span>资料块检索</span>
+          <input value={blockSearchQuery} onChange={(event) => onBlockSearchQueryChange(event.target.value)} />
+        </label>
+        <button type="submit" disabled={searchingBlocks}>
+          {searchingBlocks ? <Loader2 className="spin" size={16} /> : <Search size={16} />}
+          <span>Search</span>
+        </button>
+      </form>
+      {blockSearchResult ? (
+        <div className="resource-search-results">
+          <div className="resource-search-summary">
+            <span>{blockSearchResult.retrievalMode}</span>
+            <span>{blockSearchResult.hitCount} hits</span>
+          </div>
+          {blockSearchResult.hits.map((hit) => (
+            <article className="resource-search-hit" key={`${hit.documentId}:${hit.blockId}`}>
+              <strong>{hit.documentTitle}</strong>
+              <span>
+                {hit.permissionScope} / {hit.blockType}
+                {hit.pageNo ? ` / p.${hit.pageNo}` : ""}
+              </span>
+              <p>{hit.snippet}</p>
+            </article>
+          ))}
+        </div>
+      ) : null}
       <div className="resource-list">
         {resources.map((resource) => {
           const latestJob = syncJobsByDocument[resource.documentId]?.[0];

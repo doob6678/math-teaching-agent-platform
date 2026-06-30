@@ -50,6 +50,28 @@ public class InMemoryTeacherResourceStore implements TeacherResourceStore {
     }
 
     /**
+     * Lists active documents that can contribute parsed blocks to teacher/admin RAG search.
+     *
+     * @param tenantId tenant id
+     * @param viewerRole current viewer role
+     * @param viewerSubjectId current viewer subject id
+     * @return searchable documents
+     */
+    @Override
+    public List<TeacherResourceDocumentResponse> listSearchable(
+            String tenantId,
+            String viewerRole,
+            String viewerSubjectId) {
+        return documents.values().stream()
+                .filter(document -> document.tenantId().equals(tenantId))
+                .filter(document -> !"archived".equals(document.syncStatus()))
+                .filter(document -> canSearch(document, viewerRole, viewerSubjectId))
+                .sorted(Comparator.comparing(TeacherResourceDocumentResponse::title)
+                        .thenComparing(TeacherResourceDocumentResponse::documentId))
+                .toList();
+    }
+
+    /**
      * Finds a resource document by tenant and id.
      *
      * @param tenantId tenant id
@@ -72,5 +94,30 @@ public class InMemoryTeacherResourceStore implements TeacherResourceStore {
      */
     public List<TeacherResourceDocumentResponse> snapshot() {
         return new ArrayList<>(documents.values());
+    }
+
+    /**
+     * Applies server-side resource visibility for parsed block search.
+     */
+    private static boolean canSearch(
+            TeacherResourceDocumentResponse document,
+            String viewerRole,
+            String viewerSubjectId) {
+        if ("admin".equals(viewerRole)) {
+            return true;
+        }
+        if ("teacher".equals(viewerRole) && document.ownerSubjectId().equals(viewerSubjectId)) {
+            return true;
+        }
+        return "teacher".equals(viewerRole) && isSharedSearchScope(document.permissionScope());
+    }
+
+    /**
+     * Returns true for scopes intended to be searched beyond a single private owner.
+     */
+    private static boolean isSharedSearchScope(String permissionScope) {
+        return "MATH_VIP".equals(permissionScope)
+                || "PUBLIC_TEXTBOOK".equals(permissionScope)
+                || "CLASS_AUTHORIZED".equals(permissionScope);
     }
 }

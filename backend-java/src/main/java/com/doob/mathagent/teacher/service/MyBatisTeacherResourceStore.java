@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.doob.mathagent.teacher.entity.TeacherSourceDocumentEntity;
 import com.doob.mathagent.teacher.mapper.TeacherSourceDocumentMapper;
 import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
+import java.util.Collection;
 import java.util.List;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Repository;
@@ -14,6 +15,11 @@ import org.springframework.stereotype.Repository;
 @Repository
 @ConditionalOnProperty(prefix = "math-agent.database", name = "enabled", havingValue = "true")
 public class MyBatisTeacherResourceStore implements TeacherResourceStore {
+
+    private static final Collection<String> SHARED_SEARCH_SCOPES = List.of(
+            "MATH_VIP",
+            "PUBLIC_TEXTBOOK",
+            "CLASS_AUTHORIZED");
 
     private final TeacherSourceDocumentMapper mapper;
 
@@ -62,6 +68,38 @@ public class MyBatisTeacherResourceStore implements TeacherResourceStore {
                 .orderByAsc(TeacherSourceDocumentEntity::getId);
         if (!"admin".equals(viewerRole)) {
             query.eq(TeacherSourceDocumentEntity::getCreatedBy, viewerSubjectId);
+        }
+        return mapper.selectList(query).stream()
+                .map(MyBatisTeacherResourceStore::toResponse)
+                .toList();
+    }
+
+    /**
+     * Lists active documents whose parsed blocks can be searched by this viewer.
+     *
+     * @param tenantId tenant id
+     * @param viewerRole current viewer role
+     * @param viewerSubjectId current viewer subject id
+     * @return searchable active documents
+     */
+    @Override
+    public List<TeacherResourceDocumentResponse> listSearchable(
+            String tenantId,
+            String viewerRole,
+            String viewerSubjectId) {
+        if (!"teacher".equals(viewerRole) && !"admin".equals(viewerRole)) {
+            return List.of();
+        }
+        LambdaQueryWrapper<TeacherSourceDocumentEntity> query = new LambdaQueryWrapper<TeacherSourceDocumentEntity>()
+                .eq(TeacherSourceDocumentEntity::getTenantId, tenantId)
+                .ne(TeacherSourceDocumentEntity::getSyncStatus, "archived")
+                .orderByAsc(TeacherSourceDocumentEntity::getTitle)
+                .orderByAsc(TeacherSourceDocumentEntity::getId);
+        if ("teacher".equals(viewerRole)) {
+            query.and(wrapper -> wrapper
+                    .eq(TeacherSourceDocumentEntity::getCreatedBy, viewerSubjectId)
+                    .or()
+                    .in(TeacherSourceDocumentEntity::getPermissionScope, SHARED_SEARCH_SCOPES));
         }
         return mapper.selectList(query).stream()
                 .map(MyBatisTeacherResourceStore::toResponse)
