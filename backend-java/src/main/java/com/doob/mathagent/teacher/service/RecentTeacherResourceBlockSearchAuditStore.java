@@ -4,7 +4,6 @@ import java.util.ArrayDeque;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
-import org.springframework.stereotype.Component;
 
 /**
  * In-memory recent audit store for teacher resource block searches.
@@ -12,7 +11,6 @@ import org.springframework.stereotype.Component;
  * <p>This is a bounded diagnostic store for UI/MCP queryId lookup. It does not replace
  * persistent capability audit tables and intentionally stores no raw MCP secrets or local paths.
  */
-@Component
 public class RecentTeacherResourceBlockSearchAuditStore
         implements TeacherResourceBlockSearchAuditSink, TeacherResourceBlockSearchAuditLookup {
 

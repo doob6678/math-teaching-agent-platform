@@ -187,6 +187,25 @@ class DatabaseMigrationSqlContractTest {
         assertThat(countOccurrences(migration, "00000000-0000-4000-9000-")).isBetween(20, 40);
     }
 
+    @Test
+    void teacherResourceSearchAuditMigrationStoresQueryAndRankedHitsWithoutSecretsOrPaths() throws Exception {
+        String migration = Files.readString(Path.of("src/main/resources/db/migration/V9__teacher_resource_search_audit.sql"));
+
+        assertThat(migration)
+                .contains("CREATE TABLE teacher_resource_search_audit_log")
+                .contains("CREATE TABLE teacher_resource_search_audit_hit")
+                .contains("query_id CHAR(36) NOT NULL")
+                .contains("endpoint VARCHAR(255) NOT NULL")
+                .contains("idx_teacher_resource_search_subject")
+                .contains("idx_teacher_resource_search_hit_query_rank")
+                .contains("FOREIGN KEY (query_id) REFERENCES teacher_resource_search_audit_log(query_id)")
+                .contains("ON DELETE CASCADE")
+                .doesNotContain("local_path")
+                .doesNotContain("token")
+                .doesNotContain("secret")
+                .doesNotContain("raw_text");
+    }
+
     /**
      * Counts non-overlapping text occurrences.
      */
