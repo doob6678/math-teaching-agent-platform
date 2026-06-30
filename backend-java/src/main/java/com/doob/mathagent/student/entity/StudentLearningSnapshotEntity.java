@@ -2,6 +2,7 @@ package com.doob.mathagent.student.entity;
 
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import java.time.LocalDateTime;
 
 /**
  * MyBatis-Plus entity for a student's dashboard snapshot.
@@ -42,6 +43,12 @@ public class StudentLearningSnapshotEntity {
 
     /** Source summary describing how the snapshot was assembled. */
     private String sourceSummary;
+
+    /** Database creation time. */
+    private LocalDateTime createdAt;
+
+    /** Database update time used to select the latest snapshot. */
+    private LocalDateTime updatedAt;
 
     /**
      * Returns the snapshot id.
@@ -239,5 +246,41 @@ public class StudentLearningSnapshotEntity {
      */
     public void setSourceSummary(String sourceSummary) {
         this.sourceSummary = sourceSummary;
+    }
+
+    /**
+     * Returns database creation time.
+     *
+     * @return creation time
+     */
+    public LocalDateTime getCreatedAt() {
+        return createdAt;
+    }
+
+    /**
+     * Sets database creation time.
+     *
+     * @param createdAt creation time
+     */
+    public void setCreatedAt(LocalDateTime createdAt) {
+        this.createdAt = createdAt;
+    }
+
+    /**
+     * Returns database update time.
+     *
+     * @return update time
+     */
+    public LocalDateTime getUpdatedAt() {
+        return updatedAt;
+    }
+
+    /**
+     * Sets database update time.
+     *
+     * @param updatedAt update time
+     */
+    public void setUpdatedAt(LocalDateTime updatedAt) {
+        this.updatedAt = updatedAt;
     }
 }

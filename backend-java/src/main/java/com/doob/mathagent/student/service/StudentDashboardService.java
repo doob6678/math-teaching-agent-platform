@@ -2,7 +2,10 @@ package com.doob.mathagent.student.service;
 
 import com.doob.mathagent.student.dto.StudentDashboardQuery;
 import com.doob.mathagent.student.vo.StudentDashboardResponse;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.List;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 /**
@@ -14,6 +17,28 @@ import org.springframework.stereotype.Service;
 @Service
 public class StudentDashboardService {
 
+    private final StudentLearningSnapshotStore snapshotStore;
+    private final ObjectMapper objectMapper;
+
+    /**
+     * Creates a dashboard service for Spring runtime.
+     *
+     * @param snapshotStore store for persisted student learning snapshots
+     * @param objectMapper JSON mapper used to decode persisted snapshot payloads
+     */
+    @Autowired
+    public StudentDashboardService(StudentLearningSnapshotStore snapshotStore, ObjectMapper objectMapper) {
+        this.snapshotStore = snapshotStore;
+        this.objectMapper = objectMapper;
+    }
+
+    /**
+     * Creates a dashboard service for focused tests that exercise fallback aggregation only.
+     */
+    public StudentDashboardService() {
+        this(new EmptyStudentLearningSnapshotStore(), new ObjectMapper());
+    }
+
     /**
      * Builds the dashboard for the target student after applying viewer isolation rules.
      *
@@ -23,6 +48,12 @@ public class StudentDashboardService {
     public StudentDashboardResponse dashboard(StudentDashboardQuery query) {
         StudentDashboardQuery normalized = query.normalize();
         String studentId = normalized.targetStudentId();
+        StudentLearningSnapshotRecord snapshot = snapshotStore
+                .findLatest(normalized.tenantId(), studentId)
+                .orElse(null);
+        if (snapshot != null) {
+            return dashboardFromSnapshot(normalized, snapshot);
+        }
         List<StudentDashboardResponse.KnowledgeProgress> progress = knowledgeProgress(studentId);
         List<StudentDashboardResponse.WeakPoint> weakPointList = weakPoints();
         return new StudentDashboardResponse(
@@ -37,6 +68,95 @@ public class StudentDashboardService {
                 scoreTrend(),
                 resourceScopes(normalized.viewerRole()),
                 StudentKnowledgeGraphAssembler.knowledgeGraph(progress, weakPointList, normalized.viewerRole()));
+    }
+
+    /**
+     * Builds a dashboard response from a persisted MySQL snapshot.
+     *
+     * @param normalized backend-normalized dashboard query
+     * @param snapshot persisted student snapshot
+     * @return dashboard response backed by snapshot JSON
+     */
+    private StudentDashboardResponse dashboardFromSnapshot(
+            StudentDashboardQuery normalized,
+            StudentLearningSnapshotRecord snapshot) {
+        try {
+            List<StudentDashboardResponse.KnowledgeProgress> progress = objectMapper.readValue(
+                    jsonOrEmptyArray(snapshot.knowledgeProgressJson()),
+                    new TypeReference<>() {
+                    });
+            List<StudentDashboardResponse.WeakPoint> weakPoints = objectMapper.readValue(
+                    jsonOrEmptyArray(snapshot.weakPointsJson()),
+                    new TypeReference<>() {
+                    });
+            List<StudentDashboardResponse.RecentQuestion> recentQuestions = objectMapper.readValue(
+                    jsonOrEmptyArray(snapshot.recentQuestionsJson()),
+                    new TypeReference<>() {
+                    });
+            List<StudentDashboardResponse.ScorePoint> scoreTrend = objectMapper.readValue(
+                    jsonOrEmptyArray(snapshot.scoreTrendJson()),
+                    new TypeReference<>() {
+                    });
+            List<StudentDashboardResponse.ResourceScope> resourceScopes = objectMapper.readValue(
+                    jsonOrEmptyArray(snapshot.resourceScopesJson()),
+                    new TypeReference<>() {
+                    });
+            StudentDashboardResponse.KnowledgeGraph graph = objectMapper.readValue(
+                    jsonOrDefaultGraph(snapshot.knowledgeGraphJson(), snapshot.sourceSummary()),
+                    StudentDashboardResponse.KnowledgeGraph.class);
+            return new StudentDashboardResponse(
+                    normalized.tenantId(),
+                    normalized.targetStudentId(),
+                    normalized.viewerRole(),
+                    normalized.viewerSubjectId(),
+                    normalized.adminView(),
+                    progress,
+                    weakPoints,
+                    recentQuestions,
+                    scoreTrend,
+                    resourceScopes,
+                    graph);
+        } catch (Exception exception) {
+            List<StudentDashboardResponse.KnowledgeProgress> progress = knowledgeProgress(normalized.targetStudentId());
+            List<StudentDashboardResponse.WeakPoint> weakPoints = weakPoints();
+            return new StudentDashboardResponse(
+                    normalized.tenantId(),
+                    normalized.targetStudentId(),
+                    normalized.viewerRole(),
+                    normalized.viewerSubjectId(),
+                    normalized.adminView(),
+                    progress,
+                    weakPoints,
+                    recentQuestions(normalized.targetStudentId()),
+                    scoreTrend(),
+                    resourceScopes(normalized.viewerRole()),
+                    StudentKnowledgeGraphAssembler.knowledgeGraph(progress, weakPoints, normalized.viewerRole()));
+        }
+    }
+
+    /**
+     * Defaults blank JSON array payloads.
+     *
+     * @param value persisted JSON value
+     * @return JSON array string
+     */
+    private static String jsonOrEmptyArray(String value) {
+        return value == null || value.isBlank() ? "[]" : value;
+    }
+
+    /**
+     * Defaults blank graph payloads.
+     *
+     * @param value persisted graph JSON
+     * @param sourceSummary fallback source summary
+     * @return graph JSON object string
+     */
+    private static String jsonOrDefaultGraph(String value, String sourceSummary) {
+        if (value != null && !value.isBlank()) {
+            return value;
+        }
+        String generatedFrom = sourceSummary == null || sourceSummary.isBlank() ? "mysql_snapshot" : sourceSummary;
+        return "{\"nodes\":[],\"edges\":[],\"generatedFrom\":\"" + generatedFrom.replace("\"", "\\\"") + "\"}";
     }
 
     /**

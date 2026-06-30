@@ -2,9 +2,12 @@ package com.doob.mathagent.student;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.doob.mathagent.student.service.StudentLearningSnapshotRecord;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.doob.mathagent.student.dto.StudentDashboardQuery;
 import com.doob.mathagent.student.service.StudentDashboardService;
 import com.doob.mathagent.student.vo.StudentDashboardResponse;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
 class StudentDashboardServiceTest {
@@ -63,7 +66,52 @@ class StudentDashboardServiceTest {
                     assertThat(node.evidenceLinks())
                             .extracting(StudentDashboardResponse.KnowledgeEvidenceLink::sourceType)
                             .contains("textbook", "feishu");
-                });
+        });
+    }
+
+    @Test
+    void dashboardUsesPersistedLearningSnapshotWhenAvailable() {
+        StudentDashboardService service = new StudentDashboardService(
+                (tenantId, studentId) -> Optional.of(new StudentLearningSnapshotRecord(
+                        "snapshot-1",
+                        tenantId,
+                        studentId,
+                        "Senior Grade 2",
+                        """
+                                [{"knowledgePointId":"persisted-vector","knowledgePointName":"persisted vector method","textbookAnchor":"book/page 35","feishuDocUrl":"https://my.feishu.cn/docx/persisted","progressPercent":91}]
+                                """,
+                        """
+                                {"nodes":[{"knowledgePointId":"persisted-vector","knowledgePointName":"persisted vector method","chapterPath":"book/page 35","masteryPercent":91,"riskLevel":"low","evidenceLinks":[{"sourceType":"textbook","title":"book/page 35","url":"/api/textbooks/search?query=persisted-vector","permissionScope":"PUBLIC_TEXTBOOK"}]}],"edges":[],"generatedFrom":"mysql_snapshot"}
+                                """,
+                        """
+                                [{"knowledgePointId":"persisted-vector","knowledgePointName":"persisted vector method","weaknessLevel":1,"evidenceSummary":"latest snapshot"}]
+                                """,
+                        """
+                                [{"recordId":"question-1","sourceType":"exam_paper","questionTitle":"persisted question","knowledgePointName":"persisted vector method","status":"COMPLETED"}]
+                                """,
+                        """
+                                [{"examName":"persisted exam","score":132,"rankInGrade":12,"extractedWeakPointCount":1}]
+                                """,
+                        """
+                                [{"scopeCode":"PUBLIC_TEXTBOOK","scopeName":"Public textbook","accessPolicy":"public"}]
+                                """,
+                        "mysql_snapshot")),
+                new ObjectMapper());
+        StudentDashboardQuery query = new StudentDashboardQuery(
+                "tenant-a",
+                "student",
+                "student-001",
+                null);
+
+        StudentDashboardResponse response = service.dashboard(query);
+
+        assertThat(response.knowledgeProgress()).extracting(StudentDashboardResponse.KnowledgeProgress::knowledgePointId)
+                .containsExactly("persisted-vector");
+        assertThat(response.knowledgeGraph().generatedFrom()).isEqualTo("mysql_snapshot");
+        assertThat(response.weakPoints()).extracting(StudentDashboardResponse.WeakPoint::evidenceSummary)
+                .containsExactly("latest snapshot");
+        assertThat(response.scoreTrend()).extracting(StudentDashboardResponse.ScorePoint::score)
+                .containsExactly(132);
     }
 
     @Test
