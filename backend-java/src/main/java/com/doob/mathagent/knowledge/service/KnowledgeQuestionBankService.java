@@ -3,6 +3,7 @@ package com.doob.mathagent.knowledge.service;
 import com.doob.mathagent.knowledge.dto.KnowledgePointCreateRequest;
 import com.doob.mathagent.knowledge.dto.QuestionBankItemCreateRequest;
 import com.doob.mathagent.knowledge.vo.KnowledgePointResponse;
+import com.doob.mathagent.knowledge.vo.KnowledgeRelationResponse;
 import com.doob.mathagent.knowledge.vo.QuestionBankItemResponse;
 import java.util.List;
 import java.util.Optional;
@@ -164,6 +165,24 @@ public class KnowledgeQuestionBankService {
     }
 
     /**
+     * Lists visible knowledge graph relations for the backend viewer.
+     */
+    public List<KnowledgeRelationResponse> listKnowledgeRelations(
+            String tenantId,
+            String viewerRole,
+            String viewerSubjectId) {
+        String role = normalizeRole(viewerRole);
+        requireTeacherOrAdmin(role);
+        return store.listKnowledgeRelations(
+                        textOrDefault(tenantId, "default"),
+                        role,
+                        textOrDefault(viewerSubjectId, "local-teacher-console"))
+                .stream()
+                .map(KnowledgeQuestionBankService::toResponse)
+                .toList();
+    }
+
+    /**
      * Searches visible question bank items for the backend viewer.
      */
     public List<QuestionBankItemResponse> searchQuestions(
@@ -198,6 +217,20 @@ public class KnowledgeQuestionBankService {
                 record.chapterPath(),
                 record.status(),
                 record.sourceSummary());
+    }
+
+    /**
+     * Converts a relation record to API response.
+     */
+    private static KnowledgeRelationResponse toResponse(KnowledgeRelationRecord record) {
+        return new KnowledgeRelationResponse(
+                record.relationId(),
+                record.tenantId(),
+                record.sourceKnowledgePointId(),
+                record.targetKnowledgePointId(),
+                record.relationType(),
+                record.evidenceSummary(),
+                record.status());
     }
 
     /**

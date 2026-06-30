@@ -511,6 +511,49 @@ h2 {
   color: #991b1b;
 }
 
+.knowledge-relation-list {
+  display: grid;
+  gap: 8px;
+}
+
+.knowledge-relation-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto;
+  gap: 6px 10px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #d7e1eb;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.knowledge-relation-row strong {
+  min-width: 0;
+  color: #1e293b;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.knowledge-relation-row span {
+  justify-self: end;
+  min-height: 24px;
+  padding: 4px 7px;
+  border-radius: 5px;
+  background: #eef6ff;
+  color: #0f5f9f;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.knowledge-relation-row p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #536173;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
 .agent-execution-panel {
   display: grid;
   grid-column: 1 / -1;

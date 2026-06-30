@@ -8,6 +8,7 @@ import {
   AgentTraceResponse,
   AgentTraceUsageSummaryResponse,
   KnowledgePointResponse,
+  KnowledgeRelationResponse,
   McpConfigurationResponse,
   QuestionBankItemResponse,
   RetrievalAuditDetail,
@@ -65,6 +66,7 @@ export function App() {
   const [teacherSyncCheckpoints, setTeacherSyncCheckpoints] =
     useState<Record<string, TeacherSourceSyncCheckpointResponse>>({});
   const [knowledgePoints, setKnowledgePoints] = useState<KnowledgePointResponse[]>([]);
+  const [knowledgeRelations, setKnowledgeRelations] = useState<KnowledgeRelationResponse[]>([]);
   const [questionBankItems, setQuestionBankItems] = useState<QuestionBankItemResponse[]>([]);
   const [teacherResourceSearchQuery, setTeacherResourceSearchQuery] = useState("space vector");
   const [teacherBlockSearchResult, setTeacherBlockSearchResult] = useState<TeacherResourceBlockSearchResponse | null>(null);
@@ -267,10 +269,12 @@ export function App() {
     setKnowledgeBankError("");
     Promise.all([
       api.listKnowledgePoints(),
+      api.listKnowledgeRelations(),
       api.searchQuestionBankItems(questionBankQuery, 8),
     ])
-      .then(([points, questions]) => {
+      .then(([points, relations, questions]) => {
         setKnowledgePoints(points);
+        setKnowledgeRelations(relations);
         setQuestionBankItems(questions);
       })
       .catch((error: Error) => setKnowledgeBankError(error.message));
@@ -1012,6 +1016,7 @@ export function App() {
 
           <KnowledgeQuestionBankPanel
             knowledgePoints={knowledgePoints}
+            knowledgeRelations={knowledgeRelations}
             questions={questionBankItems}
             knowledgePointName={knowledgePointName}
             chapterPath={knowledgeChapterPath}
@@ -1283,6 +1288,7 @@ export function StudentDashboardPanel({
 
 function KnowledgeQuestionBankPanel({
   knowledgePoints,
+  knowledgeRelations,
   questions,
   knowledgePointName,
   chapterPath,
@@ -1301,6 +1307,7 @@ function KnowledgeQuestionBankPanel({
   onSearchQuestions,
 }: {
   knowledgePoints: KnowledgePointResponse[];
+  knowledgeRelations: KnowledgeRelationResponse[];
   questions: QuestionBankItemResponse[];
   knowledgePointName: string;
   chapterPath: string;
@@ -1375,6 +1382,21 @@ function KnowledgeQuestionBankPanel({
               <p>{point.chapterPath}</p>
             </div>
           ))}
+        </div>
+        <div className="knowledge-relation-list">
+          {knowledgeRelations.length > 0 ? (
+            knowledgeRelations.slice(0, 6).map((relation) => (
+              <div className="knowledge-relation-row" key={relation.relationId}>
+                <strong>
+                  {relation.sourceKnowledgePointId} -&gt; {relation.targetKnowledgePointId}
+                </strong>
+                <span>{relation.relationType}</span>
+                <p>{relation.evidenceSummary || "No evidence summary recorded."}</p>
+              </div>
+            ))
+          ) : (
+            <div className="empty-state compact">No visible knowledge relations yet.</div>
+          )}
         </div>
         <div className="resource-search-results">
           {questions.map((question) => (

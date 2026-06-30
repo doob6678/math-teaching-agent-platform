@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.doob.mathagent.knowledge.service.InMemoryKnowledgeQuestionBankStore;
 import com.doob.mathagent.knowledge.service.KnowledgePointRecord;
+import com.doob.mathagent.knowledge.service.KnowledgeRelationRecord;
 import com.doob.mathagent.knowledge.service.QuestionBankItemRecord;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -92,5 +93,60 @@ class KnowledgeQuestionBankStoreTest {
         assertThat(store.searchQuestions("school-a", "admin", "admin-1", "空间", 10))
                 .extracting(QuestionBankItemRecord::questionId)
                 .containsExactly("q-vip");
+    }
+
+    @Test
+    void listsRelationsOnlyWhenBothEndpointKnowledgePointsAreVisible() {
+        InMemoryKnowledgeQuestionBankStore store = new InMemoryKnowledgeQuestionBankStore();
+        store.saveKnowledgePoint(new KnowledgePointRecord(
+                "kp-teacher-private",
+                "school-a",
+                "teacher-1",
+                "TEACHER_PRIVATE",
+                "Vector private point",
+                "space vector",
+                "active",
+                "manual"));
+        store.saveKnowledgePoint(new KnowledgePointRecord(
+                "kp-vip",
+                "school-a",
+                "admin-1",
+                "MATH_VIP",
+                "Vector VIP point",
+                "space vector",
+                "active",
+                "manual"));
+        store.saveKnowledgePoint(new KnowledgePointRecord(
+                "kp-other-private",
+                "school-a",
+                "teacher-2",
+                "TEACHER_PRIVATE",
+                "Other teacher private point",
+                "hidden",
+                "active",
+                "manual"));
+        store.saveKnowledgeRelation(new KnowledgeRelationRecord(
+                "rel-visible",
+                "school-a",
+                "kp-teacher-private",
+                "kp-vip",
+                "PREREQUISITE_FOR",
+                "Teacher-owned point connects to shared vector point.",
+                "active"));
+        store.saveKnowledgeRelation(new KnowledgeRelationRecord(
+                "rel-hidden-target",
+                "school-a",
+                "kp-teacher-private",
+                "kp-other-private",
+                "RELATED_TO",
+                "This edge would reveal another teacher private point.",
+                "active"));
+
+        assertThat(store.listKnowledgeRelations("school-a", "teacher", "teacher-1"))
+                .extracting(KnowledgeRelationRecord::relationId)
+                .containsExactly("rel-visible");
+        assertThat(store.listKnowledgeRelations("school-a", "admin", "admin-1"))
+                .extracting(KnowledgeRelationRecord::relationId)
+                .containsExactly("rel-hidden-target", "rel-visible");
     }
 }

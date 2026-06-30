@@ -1087,6 +1087,16 @@ export interface KnowledgePointResponse {
   sourceSummary: string;
 }
 
+export interface KnowledgeRelationResponse {
+  relationId: string;
+  tenantId: string;
+  sourceKnowledgePointId: string;
+  targetKnowledgePointId: string;
+  relationType: string;
+  evidenceSummary?: string;
+  status: string;
+}
+
 export interface QuestionBankItemCreateRequest {
   questionTitle: string;
   questionText: string;
@@ -1740,6 +1750,10 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
 
     listKnowledgePoints(): Promise<KnowledgePointResponse[]> {
       return requestJson<KnowledgePointResponse[]>("/api/knowledge/points");
+    },
+
+    listKnowledgeRelations(): Promise<KnowledgeRelationResponse[]> {
+      return requestJson<KnowledgeRelationResponse[]>("/api/knowledge/relations");
     },
 
     async createKnowledgePoint(request: KnowledgePointCreateRequest): Promise<KnowledgePointResponse> {

@@ -16,6 +16,7 @@ import org.springframework.stereotype.Repository;
 public class InMemoryKnowledgeQuestionBankStore implements KnowledgeQuestionBankStore {
 
     private final Map<String, KnowledgePointRecord> knowledgePoints = new ConcurrentHashMap<>();
+    private final Map<String, KnowledgeRelationRecord> relations = new ConcurrentHashMap<>();
     private final Map<String, QuestionBankItemRecord> questions = new ConcurrentHashMap<>();
 
     /**
@@ -24,6 +25,15 @@ public class InMemoryKnowledgeQuestionBankStore implements KnowledgeQuestionBank
     @Override
     public KnowledgePointRecord saveKnowledgePoint(KnowledgePointRecord record) {
         knowledgePoints.put(record.knowledgePointId(), record);
+        return record;
+    }
+
+    /**
+     * Saves or replaces one knowledge relation.
+     */
+    @Override
+    public KnowledgeRelationRecord saveKnowledgeRelation(KnowledgeRelationRecord record) {
+        relations.put(record.relationId(), record);
         return record;
     }
 
@@ -84,6 +94,23 @@ public class InMemoryKnowledgeQuestionBankStore implements KnowledgeQuestionBank
                 .filter(record -> "active".equals(record.status()))
                 .filter(record -> visible(record.permissionScope(), record.ownerSubjectId(), viewerRole, viewerSubjectId))
                 .sorted(Comparator.comparing(KnowledgePointRecord::knowledgePointName))
+                .toList();
+    }
+
+    /**
+     * Lists active relations only when both endpoint points are visible to the viewer.
+     */
+    @Override
+    public List<KnowledgeRelationRecord> listKnowledgeRelations(String tenantId, String viewerRole, String viewerSubjectId) {
+        Map<String, KnowledgePointRecord> visiblePoints = listKnowledgePoints(tenantId, viewerRole, viewerSubjectId)
+                .stream()
+                .collect(java.util.stream.Collectors.toMap(KnowledgePointRecord::knowledgePointId, record -> record));
+        return relations.values().stream()
+                .filter(record -> tenantId.equals(record.tenantId()))
+                .filter(record -> "active".equals(record.status()))
+                .filter(record -> visiblePoints.containsKey(record.sourceKnowledgePointId()))
+                .filter(record -> visiblePoints.containsKey(record.targetKnowledgePointId()))
+                .sorted(Comparator.comparing(KnowledgeRelationRecord::relationId))
                 .toList();
     }
 

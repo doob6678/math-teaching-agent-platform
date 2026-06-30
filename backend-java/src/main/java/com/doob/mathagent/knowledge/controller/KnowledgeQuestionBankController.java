@@ -8,6 +8,7 @@ import com.doob.mathagent.knowledge.service.KnowledgeQuestionBankCapabilityVerif
 import com.doob.mathagent.knowledge.service.KnowledgeQuestionBankService;
 import com.doob.mathagent.knowledge.service.TeacherBlockQuestionImportService;
 import com.doob.mathagent.knowledge.vo.KnowledgePointResponse;
+import com.doob.mathagent.knowledge.vo.KnowledgeRelationResponse;
 import com.doob.mathagent.knowledge.vo.QuestionBankItemResponse;
 import com.doob.mathagent.knowledge.vo.TeacherBlockQuestionImportResponse;
 import jakarta.servlet.http.HttpServletRequest;
@@ -99,6 +100,19 @@ public class KnowledgeQuestionBankController {
         RequestSubject subject = subjectResolver.resolve(httpRequest).normalize();
         try {
             return service.listKnowledgePoints(subject.tenantId(), subject.subjectType(), subject.subjectId());
+        } catch (IllegalArgumentException exception) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, exception.getMessage(), exception);
+        }
+    }
+
+    /**
+     * Lists visible knowledge graph relations for the backend-resolved teacher/admin.
+     */
+    @GetMapping("/api/knowledge/relations")
+    public List<KnowledgeRelationResponse> listKnowledgeRelations(HttpServletRequest httpRequest) {
+        RequestSubject subject = subjectResolver.resolve(httpRequest).normalize();
+        try {
+            return service.listKnowledgeRelations(subject.tenantId(), subject.subjectType(), subject.subjectId());
         } catch (IllegalArgumentException exception) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, exception.getMessage(), exception);
         }

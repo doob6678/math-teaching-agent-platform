@@ -2,13 +2,16 @@ package com.doob.mathagent.knowledge.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.doob.mathagent.knowledge.entity.KnowledgePointEntity;
+import com.doob.mathagent.knowledge.entity.KnowledgeRelationEntity;
 import com.doob.mathagent.knowledge.entity.QuestionBankItemEntity;
 import com.doob.mathagent.knowledge.entity.QuestionKnowledgeLinkEntity;
 import com.doob.mathagent.knowledge.mapper.KnowledgePointMapper;
+import com.doob.mathagent.knowledge.mapper.KnowledgeRelationMapper;
 import com.doob.mathagent.knowledge.mapper.QuestionBankItemMapper;
 import com.doob.mathagent.knowledge.mapper.QuestionKnowledgeLinkMapper;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Repository;
@@ -21,6 +24,7 @@ import org.springframework.stereotype.Repository;
 public class MyBatisKnowledgeQuestionBankStore implements KnowledgeQuestionBankStore {
 
     private final KnowledgePointMapper knowledgePointMapper;
+    private final KnowledgeRelationMapper relationMapper;
     private final QuestionBankItemMapper questionMapper;
     private final QuestionKnowledgeLinkMapper linkMapper;
 
@@ -29,9 +33,11 @@ public class MyBatisKnowledgeQuestionBankStore implements KnowledgeQuestionBankS
      */
     public MyBatisKnowledgeQuestionBankStore(
             KnowledgePointMapper knowledgePointMapper,
+            KnowledgeRelationMapper relationMapper,
             QuestionBankItemMapper questionMapper,
             QuestionKnowledgeLinkMapper linkMapper) {
         this.knowledgePointMapper = knowledgePointMapper;
+        this.relationMapper = relationMapper;
         this.questionMapper = questionMapper;
         this.linkMapper = linkMapper;
     }
@@ -42,6 +48,15 @@ public class MyBatisKnowledgeQuestionBankStore implements KnowledgeQuestionBankS
     @Override
     public KnowledgePointRecord saveKnowledgePoint(KnowledgePointRecord record) {
         knowledgePointMapper.insert(toEntity(record));
+        return record;
+    }
+
+    /**
+     * Inserts one knowledge relation row.
+     */
+    @Override
+    public KnowledgeRelationRecord saveKnowledgeRelation(KnowledgeRelationRecord record) {
+        relationMapper.insert(toEntity(record));
         return record;
     }
 
@@ -118,6 +133,28 @@ public class MyBatisKnowledgeQuestionBankStore implements KnowledgeQuestionBankS
                 .orderByAsc(KnowledgePointEntity::getKnowledgePointName);
         applyVisibility(query, viewerRole, viewerSubjectId);
         return knowledgePointMapper.selectList(query).stream().map(MyBatisKnowledgeQuestionBankStore::toRecord).toList();
+    }
+
+    /**
+     * Lists active relations whose source and target points are both visible to the viewer.
+     */
+    @Override
+    public List<KnowledgeRelationRecord> listKnowledgeRelations(String tenantId, String viewerRole, String viewerSubjectId) {
+        Set<String> visiblePointIds = listKnowledgePoints(tenantId, viewerRole, viewerSubjectId).stream()
+                .map(KnowledgePointRecord::knowledgePointId)
+                .collect(java.util.stream.Collectors.toSet());
+        if (visiblePointIds.isEmpty()) {
+            return List.of();
+        }
+        LambdaQueryWrapper<KnowledgeRelationEntity> query = new LambdaQueryWrapper<KnowledgeRelationEntity>()
+                .eq(KnowledgeRelationEntity::getTenantId, tenantId)
+                .eq(KnowledgeRelationEntity::getStatus, "active")
+                .in(KnowledgeRelationEntity::getSourceKnowledgePointId, visiblePointIds)
+                .in(KnowledgeRelationEntity::getTargetKnowledgePointId, visiblePointIds)
+                .orderByAsc(KnowledgeRelationEntity::getRelationId);
+        return relationMapper.selectList(query).stream()
+                .map(MyBatisKnowledgeQuestionBankStore::toRecord)
+                .toList();
     }
 
     /**
@@ -212,6 +249,21 @@ public class MyBatisKnowledgeQuestionBankStore implements KnowledgeQuestionBankS
     }
 
     /**
+     * Converts a relation record to entity.
+     */
+    private static KnowledgeRelationEntity toEntity(KnowledgeRelationRecord record) {
+        KnowledgeRelationEntity entity = new KnowledgeRelationEntity();
+        entity.setRelationId(record.relationId());
+        entity.setTenantId(record.tenantId());
+        entity.setSourceKnowledgePointId(record.sourceKnowledgePointId());
+        entity.setTargetKnowledgePointId(record.targetKnowledgePointId());
+        entity.setRelationType(record.relationType());
+        entity.setEvidenceSummary(record.evidenceSummary());
+        entity.setStatus(record.status());
+        return entity;
+    }
+
+    /**
      * Converts a record to entity.
      */
     private static QuestionBankItemEntity toEntity(QuestionBankItemRecord record) {
@@ -244,6 +296,20 @@ public class MyBatisKnowledgeQuestionBankStore implements KnowledgeQuestionBankS
                 entity.getChapterPath(),
                 entity.getStatus(),
                 entity.getSourceSummary());
+    }
+
+    /**
+     * Converts relation entity to service record.
+     */
+    private static KnowledgeRelationRecord toRecord(KnowledgeRelationEntity entity) {
+        return new KnowledgeRelationRecord(
+                entity.getRelationId(),
+                entity.getTenantId(),
+                entity.getSourceKnowledgePointId(),
+                entity.getTargetKnowledgePointId(),
+                entity.getRelationType(),
+                entity.getEvidenceSummary(),
+                entity.getStatus());
     }
 
     /**

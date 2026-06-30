@@ -1425,6 +1425,18 @@ describe("textbookApi", () => {
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ([{
+          relationId: "rel-1",
+          tenantId: "school-a",
+          sourceKnowledgePointId: "kp-1",
+          targetKnowledgePointId: "kp-2",
+          relationType: "PREREQUISITE_FOR",
+          evidenceSummary: "function domain supports vector angle setup",
+          status: "active",
+        }]),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ([{
           questionId: "q-1",
           questionTitle: "vector angle",
           questionText: "Find the angle.",
@@ -1449,6 +1461,7 @@ describe("textbookApi", () => {
       permissionScope: "MATH_VIP",
       knowledgePointIds: [point.knowledgePointId],
     });
+    const relations = await client.listKnowledgeRelations();
     const questions = await client.searchQuestionBankItems("vector", 5);
 
     expect(fetchMock).toHaveBeenNthCalledWith(
@@ -1487,6 +1500,13 @@ describe("textbookApi", () => {
     });
     expect(fetchMock).toHaveBeenNthCalledWith(
       6,
+      "http://127.0.0.1:8080/api/knowledge/relations",
+      expect.objectContaining({
+        headers: expect.not.objectContaining({ "X-Subject-Id": expect.any(String) }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      7,
       "http://127.0.0.1:8080/api/question-bank/items?query=vector&limit=5",
       expect.objectContaining({
         headers: expect.not.objectContaining({ "X-Subject-Type": expect.any(String) }),
@@ -1494,6 +1514,7 @@ describe("textbookApi", () => {
     );
     expect(points[0].knowledgePointId).toBe("kp-1");
     expect(question.knowledgePointIds).toEqual(["kp-2"]);
+    expect(relations[0].relationId).toBe("rel-1");
     expect(questions[0].questionId).toBe("q-1");
   });
 

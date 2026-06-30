@@ -8,7 +8,9 @@ import com.doob.mathagent.knowledge.dto.KnowledgePointCreateRequest;
 import com.doob.mathagent.knowledge.dto.QuestionBankItemCreateRequest;
 import com.doob.mathagent.knowledge.service.InMemoryKnowledgeQuestionBankStore;
 import com.doob.mathagent.knowledge.service.KnowledgeQuestionBankService;
+import com.doob.mathagent.knowledge.service.KnowledgeRelationRecord;
 import com.doob.mathagent.knowledge.vo.KnowledgePointResponse;
+import com.doob.mathagent.knowledge.vo.KnowledgeRelationResponse;
 import com.doob.mathagent.knowledge.vo.QuestionBankItemResponse;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -91,6 +93,40 @@ class KnowledgeQuestionBankControllerTest {
                         requestWithCapability("bad-token", "hash-create")))
                 .isInstanceOf(ResponseStatusException.class)
                 .hasMessageContaining("Capability token");
+    }
+
+    @Test
+    void listsKnowledgeRelationsFromBackendSubjectWithoutCapabilityToken() {
+        InMemoryKnowledgeQuestionBankStore store = new InMemoryKnowledgeQuestionBankStore();
+        KnowledgeQuestionBankController controller = new KnowledgeQuestionBankController(
+                new KnowledgeQuestionBankService(store),
+                request -> new RequestSubject("school-a", "teacher", "teacher-1", "device-1"),
+                (token, action, path, requestHash, subject) -> true);
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        KnowledgePointResponse source = controller.createKnowledgePoint(new KnowledgePointCreateRequest(
+                "Space vector basis",
+                "space vector",
+                "TEACHER_PRIVATE",
+                "manual"), requestWithCapability("token-ok", "hash-create-source"));
+        KnowledgePointResponse target = controller.createKnowledgePoint(new KnowledgePointCreateRequest(
+                "Vector angle",
+                "space vector",
+                "TEACHER_PRIVATE",
+                "manual"), requestWithCapability("token-ok", "hash-create-target"));
+        store.saveKnowledgeRelation(new KnowledgeRelationRecord(
+                "rel-controller-visible",
+                "school-a",
+                source.knowledgePointId(),
+                target.knowledgePointId(),
+                "PREREQUISITE_FOR",
+                "Basis supports angle calculation.",
+                "active"));
+
+        List<KnowledgeRelationResponse> relations = controller.listKnowledgeRelations(request);
+
+        assertThat(relations)
+                .extracting(KnowledgeRelationResponse::relationId)
+                .containsExactly("rel-controller-visible");
     }
 
     /**

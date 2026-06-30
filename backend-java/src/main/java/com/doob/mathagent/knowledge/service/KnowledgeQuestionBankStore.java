@@ -17,6 +17,14 @@ public interface KnowledgeQuestionBankStore {
     KnowledgePointRecord saveKnowledgePoint(KnowledgePointRecord record);
 
     /**
+     * Saves a knowledge relation.
+     *
+     * @param record relation record
+     * @return saved record
+     */
+    KnowledgeRelationRecord saveKnowledgeRelation(KnowledgeRelationRecord record);
+
+    /**
      * Finds an active knowledge point by normalized owner/scope/name identity.
      *
      * @param tenantId backend tenant id
@@ -65,6 +73,16 @@ public interface KnowledgeQuestionBankStore {
      * @return visible active knowledge points
      */
     List<KnowledgePointRecord> listKnowledgePoints(String tenantId, String viewerRole, String viewerSubjectId);
+
+    /**
+     * Lists visible knowledge relations after filtering both endpoint points.
+     *
+     * @param tenantId backend tenant id
+     * @param viewerRole backend viewer role
+     * @param viewerSubjectId backend subject id
+     * @return visible active relations
+     */
+    List<KnowledgeRelationRecord> listKnowledgeRelations(String tenantId, String viewerRole, String viewerSubjectId);
 
     /**
      * Searches visible question bank items by keyword.

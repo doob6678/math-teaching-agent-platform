@@ -3,9 +3,11 @@ package com.doob.mathagent.knowledge;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.doob.mathagent.knowledge.entity.KnowledgePointEntity;
+import com.doob.mathagent.knowledge.entity.KnowledgeRelationEntity;
 import com.doob.mathagent.knowledge.entity.QuestionBankItemEntity;
 import com.doob.mathagent.knowledge.entity.QuestionKnowledgeLinkEntity;
 import com.doob.mathagent.knowledge.mapper.KnowledgePointMapper;
+import com.doob.mathagent.knowledge.mapper.KnowledgeRelationMapper;
 import com.doob.mathagent.knowledge.mapper.QuestionBankItemMapper;
 import com.doob.mathagent.knowledge.mapper.QuestionKnowledgeLinkMapper;
 import com.doob.mathagent.knowledge.service.KnowledgePointRecord;
@@ -25,6 +27,7 @@ class MyBatisKnowledgeQuestionBankStoreTest {
         CapturingLinkMapper linkMapper = new CapturingLinkMapper();
         MyBatisKnowledgeQuestionBankStore store = new MyBatisKnowledgeQuestionBankStore(
                 knowledgeMapper.proxy(),
+                new CapturingRelationMapper().proxy(),
                 questionMapper.proxy(),
                 linkMapper.proxy());
 
@@ -80,6 +83,7 @@ class MyBatisKnowledgeQuestionBankStoreTest {
         linkMapper.rows.add(link);
         MyBatisKnowledgeQuestionBankStore store = new MyBatisKnowledgeQuestionBankStore(
                 new CapturingKnowledgeMapper().proxy(),
+                new CapturingRelationMapper().proxy(),
                 questionMapper.proxy(),
                 linkMapper.proxy());
 
@@ -87,6 +91,25 @@ class MyBatisKnowledgeQuestionBankStoreTest {
 
         assertThat(records).hasSize(1);
         assertThat(records.getFirst().knowledgePointIds()).containsExactly("kp-1");
+    }
+
+    private static final class CapturingRelationMapper {
+        private final List<KnowledgeRelationEntity> inserted = new ArrayList<>();
+        private final List<KnowledgeRelationEntity> rows = new ArrayList<>();
+
+        KnowledgeRelationMapper proxy() {
+            return (KnowledgeRelationMapper) Proxy.newProxyInstance(
+                    KnowledgeRelationMapper.class.getClassLoader(),
+                    new Class<?>[] {KnowledgeRelationMapper.class},
+                    (proxy, method, args) -> switch (method.getName()) {
+                        case "insert" -> {
+                            inserted.add((KnowledgeRelationEntity) args[0]);
+                            yield 1;
+                        }
+                        case "selectList" -> rows;
+                        default -> throw new UnsupportedOperationException(method.getName());
+                    });
+        }
     }
 
     private static final class CapturingKnowledgeMapper {
