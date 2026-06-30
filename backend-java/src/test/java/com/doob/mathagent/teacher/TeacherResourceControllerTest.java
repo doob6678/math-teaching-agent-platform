@@ -13,12 +13,14 @@ import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService;
 import com.doob.mathagent.teacher.service.TeacherFeishuDownloadClient;
 import com.doob.mathagent.teacher.service.TeacherFeishuDownloadException;
 import com.doob.mathagent.teacher.service.TeacherResourceService;
+import com.doob.mathagent.teacher.service.TeacherSourceSyncCheckpointQueryService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncExecutionService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncJobService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncProperties;
 import com.doob.mathagent.teacher.vo.TeacherDocumentBlockResponse;
 import com.doob.mathagent.teacher.vo.TeacherResourceBlockSearchResponse;
 import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
+import com.doob.mathagent.teacher.vo.TeacherSourceSyncCheckpointResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncJobResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -286,6 +288,59 @@ class TeacherResourceControllerTest {
         assertThat(resumed.phase()).isEqualTo("download_completed");
         assertThat(checkpointStore.findByJobId("school-a", queued.jobId()).orElseThrow().downloadedItemsJson())
                 .contains("feishu-resumed");
+    }
+
+    @Test
+    void readsSyncCheckpointForVisibleTeacherResourceWithoutCapabilityToken() {
+        InMemoryTeacherResourceStore store = new InMemoryTeacherResourceStore();
+        InMemoryTeacherSourceSyncJobStore jobStore = new InMemoryTeacherSourceSyncJobStore();
+        InMemoryTeacherSourceSyncCheckpointStore checkpointStore = new InMemoryTeacherSourceSyncCheckpointStore();
+        TeacherResourceController controller = new TeacherResourceController(
+                new TeacherResourceService(store),
+                new TeacherSourceSyncJobService(store, jobStore),
+                new TeacherSourceSyncExecutionService(
+                        store,
+                        jobStore,
+                        new InMemoryTeacherDocumentBlockStore(),
+                        new FailsOnceThenSucceedsFeishuClient(tempDir.resolve("feishu-resumed")),
+                        TeacherSourceSyncProperties.defaults(),
+                        checkpointStore),
+                null,
+                new TeacherSourceSyncCheckpointQueryService(store, jobStore, checkpointStore),
+                request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"),
+                (token, action, path, requestHash, subject) -> true);
+        TeacherResourceDocumentResponse resource = controller.register(new TeacherResourceRegistrationRequest(
+                "feishu",
+                "Checkpoint visible Feishu",
+                "https://my.feishu.cn/drive/folder/rootToken",
+                null,
+                "TEACHER_PRIVATE"), requestWithCapability("token-ok", "hash-register"));
+        TeacherSourceSyncJobResponse queued = controller.createSyncJob(
+                resource.documentId(),
+                requestWithCapability("token-ok", "hash-sync"));
+        checkpointStore.save(new TeacherSourceSyncCheckpointResponse(
+                queued.jobId(),
+                "school-a",
+                resource.documentId(),
+                "rootToken",
+                "folderToken-2",
+                "高中数学/空间向量",
+                "pageToken-3",
+                "[\"rootToken\",\"folderToken-2\"]",
+                "[{\"token\":\"docx-1\"}]",
+                "[{\"message\":\"ProxyError\",\"retryable\":true}]",
+                2,
+                "2026-06-30T06:00:00Z"));
+
+        TeacherSourceSyncCheckpointResponse checkpoint = controller.getSyncCheckpoint(
+                resource.documentId(),
+                queued.jobId(),
+                new MockHttpServletRequest()).orElseThrow();
+
+        assertThat(checkpoint.currentPath()).isEqualTo("高中数学/空间向量");
+        assertThat(checkpoint.pageToken()).isEqualTo("pageToken-3");
+        assertThat(checkpoint.downloadedItemsJson()).contains("docx-1");
+        assertThat(checkpoint.failedItemsJson()).contains("ProxyError");
     }
 
     @Test

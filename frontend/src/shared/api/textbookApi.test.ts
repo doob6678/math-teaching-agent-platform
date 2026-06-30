@@ -1859,6 +1859,55 @@ describe("textbookApi", () => {
     expect(resumed.phase).toBe("download_completed");
   });
 
+  it("loads teacher resource sync checkpoint without client supplied identity headers", async () => {
+    globalThis.localStorage.setItem(
+      "math-agent:auth-session",
+      JSON.stringify({
+        userId: "teacher-1",
+        username: "teacher",
+        role: "teacher",
+        tenantId: "school-a",
+        tokenName: "satoken",
+        tokenValue: "token-teacher",
+      }),
+    );
+    const fetchMock = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        jobId: "job-2",
+        tenantId: "school-a",
+        documentId: "doc-1",
+        rootToken: "root-token",
+        currentFolderToken: "folder-token-2",
+        currentPath: "高中数学/空间向量",
+        pageToken: "page-token-3",
+        visitedFolderTokensJson: "[\"root-token\",\"folder-token-2\"]",
+        downloadedItemsJson: "[{\"token\":\"docx-1\"}]",
+        failedItemsJson: "[{\"message\":\"ProxyError\",\"retryable\":true}]",
+        cursorVersion: 2,
+        updatedAt: "2026-06-30T06:00:00Z",
+      }),
+    });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const checkpoint = await client.getTeacherResourceSyncCheckpoint("doc-1", "job-2");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8080/api/teacher/resources/doc-1/sync-jobs/job-2/checkpoint",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          satoken: "token-teacher",
+          "X-Device-Id": "local-browser-console",
+        }),
+      }),
+    );
+    expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Id");
+    expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Type");
+    expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Capability-Token");
+    expect(checkpoint?.currentPath).toBe("高中数学/空间向量");
+    expect(checkpoint?.downloadedItemsJson).toContain("docx-1");
+  });
+
   it("searches parsed teacher resource blocks without client supplied identity headers", async () => {
     const fetchMock = vi
       .fn()

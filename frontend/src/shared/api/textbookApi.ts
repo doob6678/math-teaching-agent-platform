@@ -1232,6 +1232,33 @@ export interface TeacherSourceSyncJobResponse {
   updatedAt?: string;
 }
 
+export interface TeacherSourceSyncCheckpointResponse {
+  /** Source synchronization job id. */
+  jobId: string;
+  /** Backend tenant that owns the checkpoint. */
+  tenantId: string;
+  /** Source document id bound to the checkpoint. */
+  documentId: string;
+  /** Feishu root token being traversed. */
+  rootToken: string;
+  /** Current folder token where traversal stopped. */
+  currentFolderToken: string;
+  /** Human-readable folder path for progress display. */
+  currentPath: string;
+  /** Provider pagination cursor when the current folder has more pages. */
+  pageToken?: string | null;
+  /** JSON array of visited folder tokens. */
+  visitedFolderTokensJson: string;
+  /** JSON array of successfully downloaded item descriptors. */
+  downloadedItemsJson: string;
+  /** JSON array of failed item descriptors. */
+  failedItemsJson: string;
+  /** Checkpoint schema version. */
+  cursorVersion: number;
+  /** Backend update timestamp. */
+  updatedAt: string;
+}
+
 type FetchLike = (
   input: string,
   init?: RequestInit,
@@ -1851,6 +1878,15 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     listTeacherResourceSyncJobs(documentId: string): Promise<TeacherSourceSyncJobResponse[]> {
       return requestJson<TeacherSourceSyncJobResponse[]>(
         `/api/teacher/resources/${encodeURIComponent(documentId)}/sync-jobs`,
+      );
+    },
+
+    getTeacherResourceSyncCheckpoint(
+      documentId: string,
+      jobId: string,
+    ): Promise<TeacherSourceSyncCheckpointResponse | null> {
+      return requestJson<TeacherSourceSyncCheckpointResponse | null>(
+        `/api/teacher/resources/${encodeURIComponent(documentId)}/sync-jobs/${encodeURIComponent(jobId)}/checkpoint`,
       );
     },
 

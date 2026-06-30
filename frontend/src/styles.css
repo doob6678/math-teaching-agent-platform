@@ -1034,6 +1034,44 @@ h2 {
   color: #475569;
 }
 
+.sync-checkpoint {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid #dce5ef;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.sync-checkpoint div {
+  min-width: 0;
+}
+
+.sync-checkpoint span,
+.sync-checkpoint strong {
+  overflow-wrap: anywhere;
+}
+
+.sync-checkpoint strong {
+  color: #1e293b;
+  font-size: 12px;
+}
+
+.sync-checkpoint-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sync-checkpoint-grid span {
+  min-height: 22px;
+  padding: 3px 6px;
+  border-radius: 5px;
+  background: #eef6ff;
+  color: #0f5f9f;
+  font-weight: 800;
+}
+
 .resource-item button {
   justify-self: start;
   display: inline-flex;

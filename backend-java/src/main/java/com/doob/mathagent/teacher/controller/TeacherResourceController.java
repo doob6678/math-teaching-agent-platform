@@ -7,13 +7,16 @@ import com.doob.mathagent.teacher.service.TeacherResourceCapabilityVerifier;
 import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService;
 import com.doob.mathagent.teacher.service.TeacherResourceRegistrationCommand;
 import com.doob.mathagent.teacher.service.TeacherResourceService;
+import com.doob.mathagent.teacher.service.TeacherSourceSyncCheckpointQueryService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncExecutionService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncJobService;
 import com.doob.mathagent.teacher.vo.TeacherResourceBlockSearchResponse;
 import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
+import com.doob.mathagent.teacher.vo.TeacherSourceSyncCheckpointResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncJobResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.List;
+import java.util.Optional;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -42,6 +45,7 @@ public class TeacherResourceController {
     private final TeacherSourceSyncJobService syncJobService;
     private final TeacherSourceSyncExecutionService syncExecutionService;
     private final TeacherResourceBlockSearchService blockSearchService;
+    private final TeacherSourceSyncCheckpointQueryService checkpointQueryService;
     private final RequestSubjectResolver subjectResolver;
     private final TeacherResourceCapabilityVerifier capabilityVerifier;
 
@@ -57,12 +61,14 @@ public class TeacherResourceController {
             TeacherSourceSyncJobService syncJobService,
             TeacherSourceSyncExecutionService syncExecutionService,
             TeacherResourceBlockSearchService blockSearchService,
+            TeacherSourceSyncCheckpointQueryService checkpointQueryService,
             RequestSubjectResolver subjectResolver,
             TeacherResourceCapabilityVerifier capabilityVerifier) {
         this.teacherResourceService = teacherResourceService;
         this.syncJobService = syncJobService;
         this.syncExecutionService = syncExecutionService;
         this.blockSearchService = blockSearchService;
+        this.checkpointQueryService = checkpointQueryService;
         this.subjectResolver = subjectResolver;
         this.capabilityVerifier = capabilityVerifier;
     }
@@ -86,6 +92,27 @@ public class TeacherResourceController {
                 teacherResourceService,
                 syncJobService,
                 syncExecutionService,
+                null,
+                null,
+                subjectResolver,
+                capabilityVerifier);
+    }
+
+    /**
+     * Creates a controller with block search but without checkpoint query for focused tests.
+     */
+    public TeacherResourceController(
+            TeacherResourceService teacherResourceService,
+            TeacherSourceSyncJobService syncJobService,
+            TeacherSourceSyncExecutionService syncExecutionService,
+            TeacherResourceBlockSearchService blockSearchService,
+            RequestSubjectResolver subjectResolver,
+            TeacherResourceCapabilityVerifier capabilityVerifier) {
+        this(
+                teacherResourceService,
+                syncJobService,
+                syncExecutionService,
+                blockSearchService,
                 null,
                 subjectResolver,
                 capabilityVerifier);
@@ -290,6 +317,35 @@ public class TeacherResourceController {
                 subject.subjectType(),
                 subject.subjectId(),
                 documentId);
+    }
+
+    /**
+     * Returns the latest durable checkpoint for a visible sync job.
+     *
+     * @param documentId resource document id
+     * @param jobId sync job id
+     * @param httpRequest HTTP request containing backend session
+     * @return checkpoint when the job has started or paused after a partial download
+     */
+    @GetMapping("/api/teacher/resources/{documentId}/sync-jobs/{jobId}/checkpoint")
+    public Optional<TeacherSourceSyncCheckpointResponse> getSyncCheckpoint(
+            @PathVariable String documentId,
+            @PathVariable String jobId,
+            HttpServletRequest httpRequest) {
+        if (checkpointQueryService == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED, "Teacher source sync checkpoint query is not configured");
+        }
+        RequestSubject subject = subjectResolver.resolve(httpRequest).normalize();
+        try {
+            return checkpointQueryService.findCheckpoint(
+                    subject.tenantId(),
+                    subject.subjectType(),
+                    subject.subjectId(),
+                    documentId,
+                    jobId);
+        } catch (IllegalArgumentException exception) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, exception.getMessage(), exception);
+        }
     }
 
     /**

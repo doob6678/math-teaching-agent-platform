@@ -18,6 +18,7 @@ import {
   TeacherBlockQuestionImportResponse,
   TeacherResourceBlockSearchResponse,
   TeacherResourceDocumentResponse,
+  TeacherSourceSyncCheckpointResponse,
   TeacherSourceSyncJobResponse,
   TextbookSearchHit,
   TextbookSearchResponse,
@@ -61,6 +62,8 @@ export function App() {
   const [studentDashboard, setStudentDashboard] = useState<StudentDashboardResponse | null>(null);
   const [teacherResources, setTeacherResources] = useState<TeacherResourceDocumentResponse[]>([]);
   const [teacherSyncJobs, setTeacherSyncJobs] = useState<Record<string, TeacherSourceSyncJobResponse[]>>({});
+  const [teacherSyncCheckpoints, setTeacherSyncCheckpoints] =
+    useState<Record<string, TeacherSourceSyncCheckpointResponse>>({});
   const [knowledgePoints, setKnowledgePoints] = useState<KnowledgePointResponse[]>([]);
   const [questionBankItems, setQuestionBankItems] = useState<QuestionBankItemResponse[]>([]);
   const [teacherResourceSearchQuery, setTeacherResourceSearchQuery] = useState("space vector");
@@ -220,9 +223,31 @@ export function App() {
           .listTeacherResourceSyncJobs(resource.documentId)
           .then((jobs) => [resource.documentId, jobs] as const),
       ),
-    ).then((entries) =>
-      setTeacherSyncJobs(Object.fromEntries(entries)),
+    ).then((entries) => {
+      const jobsByDocument = Object.fromEntries(entries);
+      setTeacherSyncJobs(jobsByDocument);
+      return loadTeacherSyncCheckpoints(jobsByDocument);
+    });
+  }
+
+  function loadTeacherSyncCheckpoints(jobsByDocument: Record<string, TeacherSourceSyncJobResponse[]>) {
+    const requests = Object.entries(jobsByDocument).flatMap(([documentId, jobs]) =>
+      jobs.map((job) =>
+        api
+          .getTeacherResourceSyncCheckpoint(documentId, job.jobId)
+          .then((checkpoint) => [job.jobId, checkpoint] as const)
+          .catch(() => [job.jobId, null] as const),
+      ),
     );
+    return Promise.all(requests).then((entries) => {
+      const checkpoints: Record<string, TeacherSourceSyncCheckpointResponse> = {};
+      for (const [jobId, checkpoint] of entries) {
+        if (checkpoint) {
+          checkpoints[jobId] = checkpoint;
+        }
+      }
+      setTeacherSyncCheckpoints(checkpoints);
+    });
   }
 
   function refreshAgentTraces() {
@@ -426,17 +451,30 @@ export function App() {
           ...current,
           [documentId]: [job, ...(current[documentId] ?? [])],
         }));
+        setTeacherSyncCheckpoints((current) => {
+          const next = { ...current };
+          delete next[job.jobId];
+          return next;
+        });
         return api.executeTeacherResourceSyncJob(documentId, job.jobId);
       })
-      .then((executedJob) =>
+      .then((executedJob) => {
         setTeacherSyncJobs((current) => ({
           ...current,
           [documentId]: [
             executedJob,
             ...(current[documentId] ?? []).filter((job) => job.jobId !== executedJob.jobId),
           ],
-        })),
-      )
+        }));
+        return api
+          .getTeacherResourceSyncCheckpoint(documentId, executedJob.jobId)
+          .then((checkpoint) => {
+            if (checkpoint) {
+              setTeacherSyncCheckpoints((current) => ({ ...current, [executedJob.jobId]: checkpoint }));
+            }
+          })
+          .catch(() => undefined);
+      })
       .catch((error: Error) => setTeacherResourceError(error.message))
       .finally(() => setSyncingResourceId(""));
   }
@@ -446,15 +484,23 @@ export function App() {
     setTeacherResourceError("");
     api
       .resumeTeacherResourceSyncJob(documentId, jobId)
-      .then((resumedJob) =>
+      .then((resumedJob) => {
         setTeacherSyncJobs((current) => ({
           ...current,
           [documentId]: [
             resumedJob,
             ...(current[documentId] ?? []).filter((job) => job.jobId !== resumedJob.jobId),
           ],
-        })),
-      )
+        }));
+        return api
+          .getTeacherResourceSyncCheckpoint(documentId, resumedJob.jobId)
+          .then((checkpoint) => {
+            if (checkpoint) {
+              setTeacherSyncCheckpoints((current) => ({ ...current, [resumedJob.jobId]: checkpoint }));
+            }
+          })
+          .catch(() => undefined);
+      })
       .catch((error: Error) => setTeacherResourceError(error.message))
       .finally(() => setSyncingResourceId(""));
   }
@@ -932,6 +978,7 @@ export function App() {
             importingResourceId={importingResourceId}
             importResult={teacherResourceImportResult}
             syncJobsByDocument={teacherSyncJobs}
+            syncCheckpointsByJob={teacherSyncCheckpoints}
             blockSearchQuery={teacherResourceSearchQuery}
             blockSearchResult={teacherBlockSearchResult}
             feishuDiscoveryQuery={feishuDiscoveryQuery}
@@ -1527,6 +1574,7 @@ function TeacherResourcePanel({
   importingResourceId,
   importResult,
   syncJobsByDocument,
+  syncCheckpointsByJob,
   blockSearchQuery,
   blockSearchResult,
   feishuDiscoveryQuery,
@@ -1560,6 +1608,7 @@ function TeacherResourcePanel({
   importingResourceId: string;
   importResult: TeacherBlockQuestionImportResponse | null;
   syncJobsByDocument: Record<string, TeacherSourceSyncJobResponse[]>;
+  syncCheckpointsByJob: Record<string, TeacherSourceSyncCheckpointResponse>;
   blockSearchQuery: string;
   blockSearchResult: TeacherResourceBlockSearchResponse | null;
   feishuDiscoveryQuery: string;
@@ -1687,6 +1736,7 @@ function TeacherResourcePanel({
       <div className="resource-list">
         {resources.map((resource) => {
           const latestJob = syncJobsByDocument[resource.documentId]?.[0];
+          const latestCheckpoint = latestJob ? syncCheckpointsByJob[latestJob.jobId] : undefined;
           return (
           <article className="resource-item" key={resource.documentId}>
             <div>
@@ -1702,6 +1752,7 @@ function TeacherResourcePanel({
             ) : resource.previewFiles?.length ? (
               <p>{resource.previewFiles.map((file) => file.fileName).join("、")}</p>
             ) : null}
+            {latestCheckpoint ? <SyncCheckpointView checkpoint={latestCheckpoint} /> : null}
             <button
               type="button"
               onClick={() => onSync(resource.documentId)}
@@ -1736,6 +1787,23 @@ function TeacherResourcePanel({
         })}
       </div>
     </section>
+  );
+}
+
+function SyncCheckpointView({ checkpoint }: { checkpoint: TeacherSourceSyncCheckpointResponse }) {
+  return (
+    <div className="sync-checkpoint">
+      <div>
+        <span>Checkpoint</span>
+        <strong>{checkpoint.currentPath || checkpoint.currentFolderToken}</strong>
+      </div>
+      <div className="sync-checkpoint-grid">
+        <span>{checkpoint.pageToken ? `cursor ${checkpoint.pageToken}` : "cursor none"}</span>
+        <span>{countJsonArray(checkpoint.downloadedItemsJson)} downloaded</span>
+        <span>{countJsonArray(checkpoint.failedItemsJson)} failed</span>
+        <span>v{checkpoint.cursorVersion}</span>
+      </div>
+    </div>
   );
 }
 
@@ -2266,6 +2334,15 @@ function formatSimilarity(value?: number) {
 function formatDateTime(value: string) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString("zh-CN", { hour12: false });
+}
+
+function countJsonArray(value: string) {
+  try {
+    const parsed = JSON.parse(value || "[]");
+    return Array.isArray(parsed) ? parsed.length : 0;
+  } catch {
+    return 0;
+  }
 }
 
 function downloadText(fileName: string, content: string, mimeType: string) {
