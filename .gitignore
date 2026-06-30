@@ -26,6 +26,7 @@ build/
 *.log
 logs/
 .playwright-cli/
+docs/superpowers/plans/
 
 # OS
 Thumbs.db
