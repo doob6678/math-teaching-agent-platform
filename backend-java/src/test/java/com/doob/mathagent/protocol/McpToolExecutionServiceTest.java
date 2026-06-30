@@ -3,6 +3,10 @@ package com.doob.mathagent.protocol;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.doob.mathagent.agent.service.AgentTraceRecord;
+import com.doob.mathagent.agent.service.AgentTraceQueryService;
+import com.doob.mathagent.agent.service.InMemoryAgentTraceStore;
+import com.doob.mathagent.agent.vo.AgentRunExecuteResponse;
 import com.doob.mathagent.protocol.dto.McpToolCallRequest;
 import com.doob.mathagent.protocol.service.McpClientRegistryProperties;
 import com.doob.mathagent.protocol.service.McpToolExecutionService;
@@ -19,6 +23,7 @@ import com.doob.mathagent.teacher.vo.TeacherDocumentBlockResponse;
 import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -151,6 +156,59 @@ class McpToolExecutionServiceTest {
                 .hasMessageContaining("teacher or admin");
     }
 
+    @Test
+    void mcpSecretReadsOnlyOwnedTeachingAiTraceByTaskId() throws Exception {
+        InMemoryAgentTraceStore traceStore = new InMemoryAgentTraceStore();
+        traceStore.save(trace("trace-own", "task-own", "teacher", "workbuddy-teacher-subject"));
+        traceStore.save(trace("trace-other", "task-other", "teacher", "teacher-2"));
+        McpToolExecutionService service = new McpToolExecutionService(
+                registryWithTeachingAiTraceTool(),
+                new TextbookRetrievalService(
+                        new TextbookCatalogReader(),
+                        new TextbookChunkReader(),
+                        new LocalTextbookBm25SearchEngine(),
+                        new NoopRetrievalAuditSink()),
+                new TextbookResourceProperties(textbookCorpus()),
+                null,
+                new AgentTraceQueryService(traceStore));
+
+        var response = service.callTool(
+                "Bearer teacher_secret_1234567890abcdef",
+                "get_teaching_ai_trace",
+                new McpToolCallRequest(Map.of("taskId", "task-own")));
+
+        assertThat(response.toolName()).isEqualTo("get_teaching_ai_trace");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> result = (Map<String, Object>) response.result();
+        assertThat(result.get("traceId")).isEqualTo("trace-own");
+        assertThat(result.get("taskId")).isEqualTo("task-own");
+        assertThat(result.toString()).contains("JSON_PARSE_SUCCEEDED");
+        assertThat(result.toString()).doesNotContain("teacher-2");
+    }
+
+    @Test
+    void mcpTraceToolDoesNotLeakAnotherSubjectTaskId() throws Exception {
+        InMemoryAgentTraceStore traceStore = new InMemoryAgentTraceStore();
+        traceStore.save(trace("trace-other", "task-other", "teacher", "teacher-2"));
+        McpToolExecutionService service = new McpToolExecutionService(
+                registryWithTeachingAiTraceTool(),
+                new TextbookRetrievalService(
+                        new TextbookCatalogReader(),
+                        new TextbookChunkReader(),
+                        new LocalTextbookBm25SearchEngine(),
+                        new NoopRetrievalAuditSink()),
+                new TextbookResourceProperties(textbookCorpus()),
+                null,
+                new AgentTraceQueryService(traceStore));
+
+        assertThatThrownBy(() -> service.callTool(
+                        "Bearer teacher_secret_1234567890abcdef",
+                        "get_teaching_ai_trace",
+                        new McpToolCallRequest(Map.of("taskId", "task-other"))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Teaching AI trace not found");
+    }
+
     /**
      * Creates a registry where one WorkBuddy teacher key can call only textbook evidence search.
      */
@@ -183,6 +241,54 @@ class McpToolExecutionServiceTest {
                 List.of("search_teacher_resource_evidence"),
                 List.of("TEACHER_PRIVATE", "MATH_VIP"))));
         return properties;
+    }
+
+    /**
+     * Creates a registry where one WorkBuddy teacher key can read owned teaching AI trace diagnostics.
+     */
+    private static McpClientRegistryProperties registryWithTeachingAiTraceTool() {
+        McpClientRegistryProperties properties = new McpClientRegistryProperties();
+        properties.setClients(List.of(new McpClientRegistryProperties.Client(
+                "workbuddy-teacher",
+                "teacher",
+                "default",
+                "workbuddy-teacher-subject",
+                McpClientRegistryProperties.secretHash("teacher_secret_1234567890abcdef"),
+                true,
+                List.of("get_teaching_ai_trace"),
+                List.of("agent-trace:read"))));
+        return properties;
+    }
+
+    /**
+     * Builds a safe CoursewareAgent trace linked to a teaching task id.
+     */
+    private static AgentTraceRecord trace(String traceId, String taskId, String subjectType, String subjectId) {
+        return new AgentTraceRecord(
+                traceId,
+                taskId,
+                Instant.parse("2026-06-29T00:00:00Z"),
+                "default",
+                subjectType,
+                subjectId,
+                "CoursewareAgent",
+                "openai",
+                "gpt-5.4",
+                "COMPLETED",
+                0.0,
+                List.of("tool:courseware:generate"),
+                List.of("data:public_textbook"),
+                List.of("PUBLIC_TEXTBOOK:Book:chunk-1"),
+                List.of(new AgentRunExecuteResponse.StageTiming("ai_draft", 12)),
+                new AgentRunExecuteResponse.TokenUsage(10, 8, 18),
+                "Teaching AI draft structured; retry=0/1; recovered=false; events=2",
+                List.of(new AgentTraceRecord.DiagnosticEvent(
+                        "JSON_PARSE_SUCCEEDED",
+                        "openai",
+                        "gpt-5.4",
+                        0,
+                        false,
+                        "Structured teaching draft parsed.")));
     }
 
     /**

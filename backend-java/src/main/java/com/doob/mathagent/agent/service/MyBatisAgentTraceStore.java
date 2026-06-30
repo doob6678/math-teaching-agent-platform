@@ -73,6 +73,7 @@ public class MyBatisAgentTraceStore implements AgentTraceStore {
         eqIfPresent(wrapper, "subject_id", normalized.subjectId());
         eqIfPresent(wrapper, "agent_code", normalized.agentCode());
         eqIfPresent(wrapper, "status", normalized.status());
+        eqIfPresent(wrapper, "plan_id", normalized.planId());
         return mapper.selectPage(Page.of(1, normalized.limit()), wrapper)
                 .getRecords()
                 .stream()

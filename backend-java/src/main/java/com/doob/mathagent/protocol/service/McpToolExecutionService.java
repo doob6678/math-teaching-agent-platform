@@ -1,5 +1,9 @@
 package com.doob.mathagent.protocol.service;
 
+import com.doob.mathagent.agent.dto.AgentTraceQueryRequest;
+import com.doob.mathagent.agent.service.AgentTraceQueryService;
+import com.doob.mathagent.agent.vo.AgentTraceResponse;
+import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.protocol.dto.McpToolCallRequest;
 import com.doob.mathagent.protocol.vo.McpToolCallResponse;
 import com.doob.mathagent.resources.TextbookResourceProperties;
@@ -22,11 +26,13 @@ public class McpToolExecutionService {
 
     private static final String TEXTBOOK_EVIDENCE_TOOL = "search_textbook_evidence";
     private static final String TEACHER_RESOURCE_EVIDENCE_TOOL = "search_teacher_resource_evidence";
+    private static final String TEACHING_AI_TRACE_TOOL = "get_teaching_ai_trace";
 
     private final McpClientRegistryProperties registryProperties;
     private final TextbookRetrievalService textbookRetrievalService;
     private final TextbookResourceProperties textbookResourceProperties;
     private final TeacherResourceBlockSearchService teacherResourceBlockSearchService;
+    private final AgentTraceQueryService agentTraceQueryService;
 
     /**
      * Creates an MCP execution service.
@@ -40,11 +46,24 @@ public class McpToolExecutionService {
             McpClientRegistryProperties registryProperties,
             TextbookRetrievalService textbookRetrievalService,
             TextbookResourceProperties textbookResourceProperties,
-            TeacherResourceBlockSearchService teacherResourceBlockSearchService) {
+            TeacherResourceBlockSearchService teacherResourceBlockSearchService,
+            AgentTraceQueryService agentTraceQueryService) {
         this.registryProperties = registryProperties == null ? new McpClientRegistryProperties() : registryProperties;
         this.textbookRetrievalService = textbookRetrievalService;
         this.textbookResourceProperties = textbookResourceProperties;
         this.teacherResourceBlockSearchService = teacherResourceBlockSearchService;
+        this.agentTraceQueryService = agentTraceQueryService;
+    }
+
+    /**
+     * Backward-compatible constructor for tests and production wiring that do not expose trace reads.
+     */
+    public McpToolExecutionService(
+            McpClientRegistryProperties registryProperties,
+            TextbookRetrievalService textbookRetrievalService,
+            TextbookResourceProperties textbookResourceProperties,
+            TeacherResourceBlockSearchService teacherResourceBlockSearchService) {
+        this(registryProperties, textbookRetrievalService, textbookResourceProperties, teacherResourceBlockSearchService, null);
     }
 
     /**
@@ -54,7 +73,7 @@ public class McpToolExecutionService {
             McpClientRegistryProperties registryProperties,
             TextbookRetrievalService textbookRetrievalService,
             TextbookResourceProperties textbookResourceProperties) {
-        this(registryProperties, textbookRetrievalService, textbookResourceProperties, null);
+        this(registryProperties, textbookRetrievalService, textbookResourceProperties, null, null);
     }
 
     /**
@@ -75,6 +94,7 @@ public class McpToolExecutionService {
         Object result = switch (normalizedToolName) {
             case TEXTBOOK_EVIDENCE_TOOL -> searchTextbookEvidence(client, request);
             case TEACHER_RESOURCE_EVIDENCE_TOOL -> searchTeacherResourceEvidence(client, request);
+            case TEACHING_AI_TRACE_TOOL -> getTeachingAiTrace(client, request);
             default -> throw new IllegalArgumentException("MCP tool is not implemented: " + normalizedToolName);
         };
         return new McpToolCallResponse(
@@ -157,6 +177,46 @@ public class McpToolExecutionService {
         result.put("retrievalMode", response.retrievalMode());
         result.put("hitCount", response.hitCount());
         result.put("hits", response.hits());
+        return result;
+    }
+
+    /**
+     * Returns a safe CoursewareAgent trace linked to a teaching task id visible to this MCP subject.
+     */
+    private Object getTeachingAiTrace(
+            McpClientRegistryProperties.Client client,
+            McpToolCallRequest request) {
+        if (agentTraceQueryService == null) {
+            throw new IllegalStateException("Agent trace query service is not configured");
+        }
+        Map<String, Object> arguments = request == null ? Map.of() : request.arguments();
+        String taskId = stringArgument(arguments, "taskId");
+        if (taskId.isBlank()) {
+            throw new IllegalArgumentException("taskId is required for get_teaching_ai_trace");
+        }
+        AgentTraceResponse trace = agentTraceQueryService.list(
+                        new AgentTraceQueryRequest("CoursewareAgent", "COMPLETED", taskId, 1),
+                        new RequestSubject(
+                                client.tenantId(),
+                                normalizedProfile(client.profile()),
+                                client.subjectId(),
+                                "mcp:" + client.clientId()))
+                .stream()
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("Teaching AI trace not found for taskId"));
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("traceId", trace.traceId());
+        result.put("taskId", trace.planId());
+        result.put("createdAt", trace.createdAt());
+        result.put("agentCode", trace.agentCode());
+        result.put("providerName", trace.providerName());
+        result.put("modelCode", trace.modelCode());
+        result.put("status", trace.status());
+        result.put("actualUsage", trace.actualUsage());
+        result.put("stageTimings", trace.stageTimings());
+        result.put("diagnosticEvents", trace.diagnosticEvents());
+        result.put("message", trace.message());
+        result.put("evidenceRefs", trace.evidenceRefs());
         return result;
     }
 

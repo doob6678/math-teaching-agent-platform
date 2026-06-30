@@ -14,7 +14,11 @@ describe("mcpExposureSelection", () => {
 
     expect(selection.tools).toEqual([...MCP_TOOL_OPTIONS]);
     expect(selection.prompts).toEqual([...MCP_PROMPT_OPTIONS]);
-    expect(selection.tools).toEqual(["search_textbook_evidence", "search_teacher_resource_evidence"]);
+    expect(selection.tools).toEqual([
+      "search_textbook_evidence",
+      "search_teacher_resource_evidence",
+      "get_teaching_ai_trace",
+    ]);
     expect(selection.tools).not.toContain("create_teaching_task");
     expect(selection.tools).not.toContain("export_handout_pdf");
   });
@@ -30,6 +34,7 @@ describe("mcpExposureSelection", () => {
 
     expect(disabled).toEqual([
       "search_teacher_resource_evidence",
+      "get_teaching_ai_trace",
     ]);
     expect(enabledAgain).toEqual([...MCP_TOOL_OPTIONS]);
   });
@@ -42,6 +47,7 @@ describe("mcpExposureSelection", () => {
       "list_teacher_resources",
     ]);
     expect(MCP_TOOL_OPTION_META.search_teacher_resource_evidence.badge).toBe("read-only");
+    expect(MCP_TOOL_OPTION_META.get_teaching_ai_trace.note).toBe("Owned task diagnostics.");
     expect(MCP_TOOL_OPTION_META.export_handout_pdf.badge).toBe("protected");
   });
 });

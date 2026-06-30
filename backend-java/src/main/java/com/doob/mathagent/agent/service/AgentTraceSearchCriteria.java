@@ -8,6 +8,7 @@ package com.doob.mathagent.agent.service;
  * @param subjectId optional subject id; null lets admins search tenant-wide
  * @param agentCode optional agent code
  * @param status optional execution status
+ * @param planId optional plan id, used to link traces to teaching task ids
  * @param limit maximum rows
  */
 public record AgentTraceSearchCriteria(
@@ -16,7 +17,21 @@ public record AgentTraceSearchCriteria(
         String subjectId,
         String agentCode,
         String status,
+        String planId,
         int limit) {
+
+    /**
+     * Backward-compatible constructor for callers that do not filter by plan id.
+     */
+    public AgentTraceSearchCriteria(
+            String tenantId,
+            String subjectType,
+            String subjectId,
+            String agentCode,
+            String status,
+            int limit) {
+        this(tenantId, subjectType, subjectId, agentCode, status, null, limit);
+    }
 
     /**
      * Returns criteria with safe defaults and clipped limit.
@@ -28,6 +43,7 @@ public record AgentTraceSearchCriteria(
                 blankToNull(subjectId),
                 blankToNull(agentCode),
                 blankToNull(status),
+                blankToNull(planId),
                 Math.max(1, Math.min(limit, 100)));
     }
 

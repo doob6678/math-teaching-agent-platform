@@ -46,6 +46,7 @@ public class InMemoryAgentTraceStore implements AgentTraceStore {
                 .filter(trace -> normalized.subjectId() == null || normalized.subjectId().equals(trace.subjectId()))
                 .filter(trace -> normalized.agentCode() == null || normalized.agentCode().equals(trace.agentCode()))
                 .filter(trace -> normalized.status() == null || normalized.status().equals(trace.status()))
+                .filter(trace -> normalized.planId() == null || normalized.planId().equals(trace.planId()))
                 .sorted(Comparator.comparing(AgentTraceRecord::createdAt).reversed())
                 .limit(normalized.limit())
                 .toList();

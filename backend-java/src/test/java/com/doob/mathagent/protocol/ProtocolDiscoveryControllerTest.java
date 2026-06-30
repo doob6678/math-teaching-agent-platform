@@ -36,10 +36,17 @@ class ProtocolDiscoveryControllerTest {
         var tools = controller.tools();
 
         assertThat(tools).extracting("name")
-                .contains("search_textbook_evidence", "search_teacher_resource_evidence", "plan_agent_run");
+                .contains(
+                        "search_textbook_evidence",
+                        "search_teacher_resource_evidence",
+                        "get_teaching_ai_trace",
+                        "plan_agent_run");
         assertThat(tools).filteredOn("executionEndpointEnabled", true)
                 .extracting("name")
-                .containsExactly("search_textbook_evidence", "search_teacher_resource_evidence");
+                .containsExactly(
+                        "search_textbook_evidence",
+                        "search_teacher_resource_evidence",
+                        "get_teaching_ai_trace");
     }
 
     @Test

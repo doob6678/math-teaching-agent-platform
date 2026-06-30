@@ -27,19 +27,26 @@ public class ProtocolDiscoveryService {
             "teacher_handout_writer",
             "student_blank_handout_writer",
             "solution_reviewer");
-    private static final List<String> STUDENT_TOOLS = List.of("search_textbook_evidence", "plan_agent_run");
-    private static final List<String> STUDENT_CONFIGURABLE_TOOLS = List.of("search_textbook_evidence");
+    private static final List<String> STUDENT_TOOLS = List.of(
+            "search_textbook_evidence",
+            "get_teaching_ai_trace",
+            "plan_agent_run");
+    private static final List<String> STUDENT_CONFIGURABLE_TOOLS = List.of(
+            "search_textbook_evidence",
+            "get_teaching_ai_trace");
     private static final List<String> STUDENT_PROMPTS = List.of("student_blank_handout_writer", "solution_reviewer");
     private static final List<String> TEACHER_TOOLS = List.of(
             "search_textbook_evidence",
             "search_teacher_resource_evidence",
+            "get_teaching_ai_trace",
             "plan_agent_run",
             "create_teaching_task",
             "export_handout_pdf",
             "list_teacher_resources");
     private static final List<String> TEACHER_CONFIGURABLE_TOOLS = List.of(
             "search_textbook_evidence",
-            "search_teacher_resource_evidence");
+            "search_teacher_resource_evidence",
+            "get_teaching_ai_trace");
     private static final List<String> TEACHER_PROMPTS = ALL_PROMPTS;
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
@@ -100,6 +107,20 @@ public class ProtocolDiscoveryService {
                                         field("query", "string", "Search text submitted by the agent."),
                                         field("limit", "integer", "Maximum evidence snippets to return.")),
                                 "query")),
+                new McpToolDescriptor(
+                        "get_teaching_ai_trace",
+                        "Get teaching AI trace",
+                        "Read the safe CoursewareAgent trace linked to an owned teaching task id.",
+                        true,
+                        true,
+                        TEACHING_ROLES,
+                        "agent-trace:read",
+                        "low",
+                        false,
+                        true,
+                        schema(
+                                fields(field("taskId", "string", "Owned teaching task id linked as trace planId.")),
+                                "taskId")),
                 new McpToolDescriptor(
                         "plan_agent_run",
                         "Plan agent run",

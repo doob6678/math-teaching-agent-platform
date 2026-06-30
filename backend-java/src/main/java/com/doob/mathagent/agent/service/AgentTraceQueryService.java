@@ -86,6 +86,7 @@ public class AgentTraceQueryService {
                 admin ? null : normalizedSubject.subjectId(),
                 normalizedRequest.agentCode(),
                 normalizedRequest.status(),
+                normalizedRequest.planId(),
                 normalizedRequest.limit());
         return traceStore.search(criteria);
     }

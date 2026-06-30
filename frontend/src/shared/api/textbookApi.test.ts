@@ -1122,10 +1122,15 @@ describe("textbookApi", () => {
     });
     const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
 
-    const traces = await client.listAgentTraces({ agentCode: "CoursewareAgent", status: "COMPLETED", limit: 20 });
+    const traces = await client.listAgentTraces({
+      agentCode: "CoursewareAgent",
+      status: "COMPLETED",
+      planId: "task-1",
+      limit: 20,
+    });
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:8080/api/agents/traces?agentCode=CoursewareAgent&status=COMPLETED&limit=20",
+      "http://127.0.0.1:8080/api/agents/traces?agentCode=CoursewareAgent&status=COMPLETED&planId=task-1&limit=20",
       expect.objectContaining({
         headers: expect.objectContaining({
           satoken: "token-teacher",

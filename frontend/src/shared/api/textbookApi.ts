@@ -778,6 +778,8 @@ export interface AgentTraceQuery {
   agentCode?: string;
   /** Optional execution status filter. */
   status?: string;
+  /** Optional plan id filter; teaching AI traces use taskId as planId. */
+  planId?: string;
   /** Maximum rows to return. */
   limit?: number;
 }
@@ -1759,6 +1761,9 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
       if (query.status) {
         params.set("status", query.status);
       }
+      if (query.planId) {
+        params.set("planId", query.planId);
+      }
       if (query.limit) {
         params.set("limit", String(query.limit));
       }
@@ -1776,6 +1781,9 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
       }
       if (query.status) {
         params.set("status", query.status);
+      }
+      if (query.planId) {
+        params.set("planId", query.planId);
       }
       if (query.limit) {
         params.set("limit", String(query.limit));

@@ -5,6 +5,7 @@
 export const MCP_TOOL_OPTIONS = [
   "search_textbook_evidence",
   "search_teacher_resource_evidence",
+  "get_teaching_ai_trace",
 ] as const;
 
 /**
@@ -34,6 +35,11 @@ export const MCP_TOOL_OPTION_META: Record<string, McpToolOptionMeta> = {
     label: "Teacher resource evidence",
     badge: "read-only",
     note: "Visible Feishu/resource blocks.",
+  },
+  get_teaching_ai_trace: {
+    label: "Teaching AI trace",
+    badge: "read-only",
+    note: "Owned task diagnostics.",
   },
   plan_agent_run: {
     label: "Agent planning",

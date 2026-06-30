@@ -86,8 +86,33 @@ class AgentTraceQueryServiceTest {
                 .containsExactly("gpt-5.4", "qwen3.6-flash");
     }
 
+    @Test
+    void filtersVisibleTracesByPlanIdForTeachingTaskRecovery() {
+        InMemoryAgentTraceStore store = new InMemoryAgentTraceStore();
+        store.save(traceWithPlanId("trace-task-1", "teacher", "teacher-1", "CoursewareAgent", "task-1"));
+        store.save(traceWithPlanId("trace-task-2", "teacher", "teacher-1", "CoursewareAgent", "task-2"));
+        store.save(traceWithPlanId("trace-other-owner", "teacher", "teacher-2", "CoursewareAgent", "task-1"));
+        AgentTraceQueryService service = new AgentTraceQueryService(store);
+
+        List<AgentTraceResponse> traces = service.list(
+                new AgentTraceQueryRequest("CoursewareAgent", "COMPLETED", "task-1", 20),
+                new RequestSubject("school-a", "teacher", "teacher-1", "device-1"));
+
+        assertThat(traces).extracting(AgentTraceResponse::traceId).containsExactly("trace-task-1");
+        assertThat(traces.getFirst().planId()).isEqualTo("task-1");
+    }
+
     private static AgentTraceRecord trace(String traceId, String subjectType, String subjectId, String agentCode) {
         return traceWithUsage(traceId, subjectType, subjectId, agentCode, "openai", "gpt-5.4", 11, 7, 18);
+    }
+
+    private static AgentTraceRecord traceWithPlanId(
+            String traceId,
+            String subjectType,
+            String subjectId,
+            String agentCode,
+            String planId) {
+        return traceRecord(traceId, subjectType, subjectId, agentCode, planId, "openai", "gpt-5.4", 11, 7, 18);
     }
 
     private static AgentTraceRecord traceWithUsage(
@@ -103,6 +128,37 @@ class AgentTraceQueryServiceTest {
         return new AgentTraceRecord(
                 traceId,
                 "plan-1",
+                Instant.parse("2026-06-29T00:00:00Z"),
+                "school-a",
+                subjectType,
+                subjectId,
+                agentCode,
+                providerName,
+                modelCode,
+                "COMPLETED",
+                0.46,
+                List.of("tool:search:textbook"),
+                List.of("PUBLIC_TEXTBOOK"),
+                List.of("textbook:chapter-1"),
+                List.of(new AgentRunExecuteResponse.StageTiming("model_call", 12)),
+                new AgentRunExecuteResponse.TokenUsage(promptTokens, completionTokens, totalTokens),
+                "Live model response recorded");
+    }
+
+    private static AgentTraceRecord traceRecord(
+            String traceId,
+            String subjectType,
+            String subjectId,
+            String agentCode,
+            String planId,
+            String providerName,
+            String modelCode,
+            int promptTokens,
+            int completionTokens,
+            int totalTokens) {
+        return new AgentTraceRecord(
+                traceId,
+                planId,
                 Instant.parse("2026-06-29T00:00:00Z"),
                 "school-a",
                 subjectType,
