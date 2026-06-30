@@ -631,6 +631,38 @@ export interface AgentModelOption {
 }
 
 /**
+ * Safe backend AI provider health response.
+ */
+export interface AgentModelHealthResponse {
+  /** Backend timestamp when checks started. */
+  checkedAt: string;
+  /** Per-provider health rows. */
+  results: AgentModelHealthResult[];
+}
+
+/**
+ * One provider/model health row without keys, prompts, or raw model output.
+ */
+export interface AgentModelHealthResult {
+  /** Provider code, such as openai or dashscope. */
+  providerName: string;
+  /** Model code checked by backend. */
+  modelCode: string;
+  /** Whether backend credentials are configured. */
+  configured: boolean;
+  /** Whether the provider answered the real health request. */
+  reachable: boolean;
+  /** HTTP-style status when known. */
+  statusCode?: number;
+  /** Backend measured elapsed milliseconds. */
+  elapsedMs: number;
+  /** Short safe status reason. */
+  safeReason: string;
+  /** Backend timestamp for this provider row. */
+  checkedAt: string;
+}
+
+/**
  * Backend decision for one requested agent tool scope.
  */
 export interface AgentToolPolicyDecision {
@@ -1570,6 +1602,10 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
 
     getAgentModelCatalog(): Promise<AgentModelCatalogResponse> {
       return requestJson<AgentModelCatalogResponse>("/api/agents/model-catalog");
+    },
+
+    getAgentModelHealth(): Promise<AgentModelHealthResponse> {
+      return requestJson<AgentModelHealthResponse>("/api/agents/model-health");
     },
 
     /**

@@ -300,6 +300,79 @@ h2 {
   min-width: 112px;
 }
 
+.inline-action.compact {
+  min-width: 0;
+  justify-content: flex-start;
+}
+
+.inline-action.compact strong {
+  color: inherit;
+  font-size: 12px;
+}
+
+.inline-action.icon-only {
+  width: 36px;
+  min-width: 36px;
+  padding: 8px;
+}
+
+.agent-health-panel {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.agent-health-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.agent-health-list {
+  display: grid;
+  gap: 6px;
+}
+
+.agent-health-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid #dce5ef;
+  border-radius: 6px;
+  background: #fbfcfe;
+}
+
+.agent-health-row.unreachable {
+  border-color: #fecdd3;
+  background: #fff7f7;
+}
+
+.agent-health-row div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.agent-health-row strong,
+.agent-health-row span {
+  overflow-wrap: anywhere;
+}
+
+.agent-health-row strong {
+  color: #1e293b;
+  font-size: 13px;
+}
+
+.agent-health-row span,
+.agent-health-row em,
+.agent-health-time {
+  color: #64748b;
+  font-size: 12px;
+  font-style: normal;
+}
+
 .agent-trace-list {
   display: grid;
   gap: 10px;

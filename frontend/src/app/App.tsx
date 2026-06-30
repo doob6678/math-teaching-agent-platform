@@ -2,6 +2,7 @@ import { AlertCircle, BookOpen, Database, Loader2, Search, ShieldCheck } from "l
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   AgentRunExecuteResponse,
+  AgentModelHealthResponse,
   AgentModelCatalogResponse,
   AgentRunPlanResponse,
   AgentTraceResponse,
@@ -88,6 +89,10 @@ export function App() {
   const [agentTraceError, setAgentTraceError] = useState("");
   const [agentModelCatalog, setAgentModelCatalog] = useState<AgentModelCatalogResponse | null>(null);
   const [agentModelCatalogError, setAgentModelCatalogError] = useState("");
+  const [agentModelHealth, setAgentModelHealth] = useState<AgentModelHealthResponse | null>(null);
+  const [agentModelHealthError, setAgentModelHealthError] = useState("");
+  const [checkingAgentModelHealth, setCheckingAgentModelHealth] = useState(false);
+  const [showAgentModelHealth, setShowAgentModelHealth] = useState(false);
   const [disablePrivateSearch, setDisablePrivateSearch] = useState(true);
   const [disableTextbookSearch, setDisableTextbookSearch] = useState(false);
   const [agentProvider, setAgentProvider] = useState("openai");
@@ -190,6 +195,10 @@ export function App() {
         setAgentModelCatalogError("");
       })
       .catch((error: Error) => setAgentModelCatalogError(error.message));
+  }, [api]);
+
+  useEffect(() => {
+    refreshAgentModelHealth();
   }, [api]);
 
   function refreshTeacherResources() {
@@ -692,6 +701,16 @@ export function App() {
     setAgentModel(models[0]?.modelCode ?? "");
   }
 
+  function refreshAgentModelHealth() {
+    setCheckingAgentModelHealth(true);
+    setAgentModelHealthError("");
+    api
+      .getAgentModelHealth()
+      .then(setAgentModelHealth)
+      .catch((error: Error) => setAgentModelHealthError(error.message))
+      .finally(() => setCheckingAgentModelHealth(false));
+  }
+
   function handleMcpPromptToggle(option: string, checked: boolean) {
     setMcpSelection((current) => ({
       ...current,
@@ -828,6 +847,14 @@ export function App() {
           {agentModelCatalogError ? (
             <StatusLine icon={<AlertCircle size={16} />} text={agentModelCatalogError} tone="danger" />
           ) : null}
+          <AgentModelHealthPanel
+            health={agentModelHealth}
+            error={agentModelHealthError}
+            loading={checkingAgentModelHealth}
+            expanded={showAgentModelHealth}
+            onToggle={() => setShowAgentModelHealth((current) => !current)}
+            onRefresh={refreshAgentModelHealth}
+          />
           <form className="search-form agent-tool-form" onSubmit={handlePlanAgent}>
             <label>
               <span>Provider</span>
@@ -2037,6 +2064,62 @@ function AgentPlanPanel({
         <div className="empty-state compact">Plan an agent run to see which tools the backend will inject.</div>
       )}
     </section>
+  );
+}
+
+function AgentModelHealthPanel({
+  health,
+  error,
+  loading,
+  expanded,
+  onToggle,
+  onRefresh,
+}: {
+  health: AgentModelHealthResponse | null;
+  error: string;
+  loading: boolean;
+  expanded: boolean;
+  onToggle: () => void;
+  onRefresh: () => void;
+}) {
+  const reachableCount = health?.results.filter((result) => result.reachable).length ?? 0;
+  const totalCount = health?.results.length ?? 0;
+  const summary = totalCount > 0 ? `${reachableCount}/${totalCount} reachable` : "not checked";
+  return (
+    <div className="agent-health-panel">
+      <div className="agent-health-head">
+        <button type="button" className="inline-action compact" onClick={onToggle}>
+          <ShieldCheck size={15} />
+          <span>Model health</span>
+          <strong>{summary}</strong>
+        </button>
+        <button type="button" className="inline-action icon-only" onClick={onRefresh} disabled={loading}>
+          {loading ? <Loader2 className="spin" size={15} /> : <Search size={15} />}
+        </button>
+      </div>
+      {error ? <StatusLine icon={<AlertCircle size={16} />} text={error} tone="danger" /> : null}
+      {expanded && health ? (
+        <div className="agent-health-list">
+          {health.results.map((result) => (
+            <div
+              className={`agent-health-row ${result.reachable ? "reachable" : "unreachable"}`}
+              key={`${result.providerName}:${result.modelCode}`}
+            >
+              <div>
+                <strong>
+                  {result.providerName} / {result.modelCode}
+                </strong>
+                <span>{result.safeReason}</span>
+              </div>
+              <em>
+                {result.statusCode ?? "n/a"} · {result.elapsedMs} ms
+              </em>
+            </div>
+          ))}
+          <span className="agent-health-time">{formatDateTime(health.checkedAt)}</span>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
