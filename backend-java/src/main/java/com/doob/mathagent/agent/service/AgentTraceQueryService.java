@@ -2,6 +2,7 @@ package com.doob.mathagent.agent.service;
 
 import com.doob.mathagent.agent.dto.AgentTraceQueryRequest;
 import com.doob.mathagent.agent.vo.AgentRunExecuteResponse;
+import com.doob.mathagent.agent.vo.AgentTraceDiagnosticSummaryResponse;
 import com.doob.mathagent.agent.vo.AgentTraceResponse;
 import com.doob.mathagent.agent.vo.AgentTraceUsageSummaryResponse;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
@@ -68,6 +69,62 @@ public class AgentTraceQueryService {
                 records.size(),
                 new AgentRunExecuteResponse.TokenUsage(promptTokens, completionTokens, totalTokens),
                 modelUsages(records));
+    }
+
+    /**
+     * Summarizes safe model-call recovery diagnostics for traces visible to the backend subject.
+     *
+     * @param request query request without identity fields
+     * @param subject backend subject
+     * @return aggregated diagnostic summary
+     */
+    public AgentTraceDiagnosticSummaryResponse diagnosticSummary(
+            AgentTraceQueryRequest request,
+            RequestSubject subject) {
+        AgentTraceQueryRequest normalizedRequest = request == null
+                ? new AgentTraceQueryRequest(null, null, null).normalize()
+                : request.normalize();
+        RequestSubject normalizedSubject = subject.normalize();
+        List<AgentTraceRecord> records = visibleRecords(normalizedRequest, normalizedSubject);
+        DiagnosticAccumulator total = new DiagnosticAccumulator("", "");
+        Map<String, DiagnosticAccumulator> buckets = new TreeMap<>();
+        records.forEach(trace -> {
+            String key = trace.providerName() + "\u0000" + trace.modelCode();
+            DiagnosticAccumulator bucket = buckets.computeIfAbsent(
+                    key,
+                    ignored -> new DiagnosticAccumulator(trace.providerName(), trace.modelCode()));
+            bucket.addRun(trace);
+            total.addRun(trace);
+            trace.diagnosticEvents().forEach(event -> {
+                bucket.addEvent(event);
+                total.addEvent(event);
+            });
+            if (recoveredAfterRetry(trace)) {
+                bucket.retryRecoveredCount += 1;
+                total.retryRecoveredCount += 1;
+            }
+        });
+        return new AgentTraceDiagnosticSummaryResponse(
+                normalizedSubject.tenantId(),
+                normalizedSubject.subjectType(),
+                normalizedSubject.subjectId(),
+                normalizedRequest.agentCode(),
+                normalizedRequest.status(),
+                records.size(),
+                total.diagnosticEventCount,
+                total.jsonParseFailureCount,
+                total.retryScheduledCount,
+                total.retryRecoveredCount,
+                total.providerRotationCount,
+                total.modelCallFailureCount,
+                buckets.values().stream()
+                        .map(DiagnosticAccumulator::toResponse)
+                        .sorted(Comparator
+                                .comparingInt(AgentTraceDiagnosticSummaryResponse.ModelDiagnostic::jsonParseFailureCount)
+                                .reversed()
+                                .thenComparing(AgentTraceDiagnosticSummaryResponse.ModelDiagnostic::providerName)
+                                .thenComparing(AgentTraceDiagnosticSummaryResponse.ModelDiagnostic::modelCode))
+                        .toList());
     }
 
     /**
@@ -178,6 +235,22 @@ public class AgentTraceQueryService {
     }
 
     /**
+     * Checks whether one trace completed structured output after a retry was scheduled.
+     */
+    private static boolean recoveredAfterRetry(AgentTraceRecord trace) {
+        boolean retryScheduled = false;
+        for (AgentTraceRecord.DiagnosticEvent event : trace.diagnosticEvents()) {
+            if ("RETRY_SCHEDULED".equals(event.eventType())) {
+                retryScheduled = true;
+            }
+            if (retryScheduled && "JSON_PARSE_SUCCEEDED".equals(event.eventType())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Mutable local counter used only while building one response.
      */
     private static final class UsageAccumulator {
@@ -216,6 +289,71 @@ public class AgentTraceQueryService {
                     runCount,
                     promptTokens,
                     completionTokens,
+                    totalTokens);
+        }
+    }
+
+    /**
+     * Mutable local counter used only while building one diagnostic response.
+     */
+    private static final class DiagnosticAccumulator {
+        private final String providerName;
+        private final String modelCode;
+        private int runCount;
+        private int diagnosticEventCount;
+        private int jsonParseFailureCount;
+        private int retryScheduledCount;
+        private int retryRecoveredCount;
+        private int providerRotationCount;
+        private int modelCallFailureCount;
+        private int totalTokens;
+
+        /**
+         * Creates a diagnostic accumulator for one provider/model bucket.
+         */
+        private DiagnosticAccumulator(String providerName, String modelCode) {
+            this.providerName = providerName;
+            this.modelCode = modelCode;
+        }
+
+        /**
+         * Adds one visible trace row and its official token total.
+         */
+        private void addRun(AgentTraceRecord trace) {
+            runCount += 1;
+            totalTokens += trace.actualUsage().totalTokens();
+        }
+
+        /**
+         * Adds one safe diagnostic event without raw prompt or model content.
+         */
+        private void addEvent(AgentTraceRecord.DiagnosticEvent event) {
+            diagnosticEventCount += 1;
+            switch (event.eventType()) {
+                case "JSON_PARSE_FAILED" -> jsonParseFailureCount += 1;
+                case "RETRY_SCHEDULED" -> retryScheduledCount += 1;
+                case "PROVIDER_ROTATED" -> providerRotationCount += 1;
+                case "MODEL_CALL_FAILED" -> modelCallFailureCount += 1;
+                default -> {
+                    // Other events are counted in diagnosticEventCount only.
+                }
+            }
+        }
+
+        /**
+         * Converts the counter into a safe response row.
+         */
+        private AgentTraceDiagnosticSummaryResponse.ModelDiagnostic toResponse() {
+            return new AgentTraceDiagnosticSummaryResponse.ModelDiagnostic(
+                    providerName,
+                    modelCode,
+                    runCount,
+                    diagnosticEventCount,
+                    jsonParseFailureCount,
+                    retryScheduledCount,
+                    retryRecoveredCount,
+                    providerRotationCount,
+                    modelCallFailureCount,
                     totalTokens);
         }
     }

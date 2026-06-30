@@ -30,15 +30,18 @@ public class ProtocolDiscoveryService {
     private static final List<String> STUDENT_TOOLS = List.of(
             "search_textbook_evidence",
             "get_teaching_ai_trace",
+            "get_ai_diagnostic_summary",
             "plan_agent_run");
     private static final List<String> STUDENT_CONFIGURABLE_TOOLS = List.of(
             "search_textbook_evidence",
-            "get_teaching_ai_trace");
+            "get_teaching_ai_trace",
+            "get_ai_diagnostic_summary");
     private static final List<String> STUDENT_PROMPTS = List.of("student_blank_handout_writer", "solution_reviewer");
     private static final List<String> TEACHER_TOOLS = List.of(
             "search_textbook_evidence",
             "search_teacher_resource_evidence",
             "get_teaching_ai_trace",
+            "get_ai_diagnostic_summary",
             "plan_agent_run",
             "create_teaching_task",
             "export_handout_pdf",
@@ -46,7 +49,8 @@ public class ProtocolDiscoveryService {
     private static final List<String> TEACHER_CONFIGURABLE_TOOLS = List.of(
             "search_textbook_evidence",
             "search_teacher_resource_evidence",
-            "get_teaching_ai_trace");
+            "get_teaching_ai_trace",
+            "get_ai_diagnostic_summary");
     private static final List<String> TEACHER_PROMPTS = ALL_PROMPTS;
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
@@ -121,6 +125,22 @@ public class ProtocolDiscoveryService {
                         schema(
                                 fields(field("taskId", "string", "Owned teaching task id linked as trace planId.")),
                                 "taskId")),
+                new McpToolDescriptor(
+                        "get_ai_diagnostic_summary",
+                        "Get AI diagnostic summary",
+                        "Read aggregate retry, JSON parse, and provider fallback diagnostics visible to the registered key.",
+                        true,
+                        true,
+                        TEACHING_ROLES,
+                        "agent-trace:read",
+                        "low",
+                        false,
+                        true,
+                        schema(
+                                fields(
+                                        field("agentCode", "string", "Optional backend agent code filter."),
+                                        field("status", "string", "Optional trace status filter."),
+                                        field("limit", "integer", "Maximum visible trace rows to aggregate.")))),
                 new McpToolDescriptor(
                         "plan_agent_run",
                         "Plan agent run",

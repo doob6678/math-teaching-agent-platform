@@ -6,6 +6,7 @@ export const MCP_TOOL_OPTIONS = [
   "search_textbook_evidence",
   "search_teacher_resource_evidence",
   "get_teaching_ai_trace",
+  "get_ai_diagnostic_summary",
 ] as const;
 
 /**
@@ -40,6 +41,11 @@ export const MCP_TOOL_OPTION_META: Record<string, McpToolOptionMeta> = {
     label: "Teaching AI trace",
     badge: "read-only",
     note: "Owned task diagnostics.",
+  },
+  get_ai_diagnostic_summary: {
+    label: "AI diagnostics",
+    badge: "read-only",
+    note: "Retry and fallback summary.",
   },
   plan_agent_run: {
     label: "Agent planning",

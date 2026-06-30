@@ -40,13 +40,15 @@ class ProtocolDiscoveryControllerTest {
                         "search_textbook_evidence",
                         "search_teacher_resource_evidence",
                         "get_teaching_ai_trace",
+                        "get_ai_diagnostic_summary",
                         "plan_agent_run");
         assertThat(tools).filteredOn("executionEndpointEnabled", true)
                 .extracting("name")
                 .containsExactly(
                         "search_textbook_evidence",
                         "search_teacher_resource_evidence",
-                        "get_teaching_ai_trace");
+                        "get_teaching_ai_trace",
+                        "get_ai_diagnostic_summary");
     }
 
     @Test

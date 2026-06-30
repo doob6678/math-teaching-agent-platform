@@ -24,12 +24,17 @@ class ProtocolDiscoveryServiceTest {
                         "search_textbook_evidence",
                         "search_teacher_resource_evidence",
                         "get_teaching_ai_trace",
+                        "get_ai_diagnostic_summary",
                         "plan_agent_run",
                         "create_teaching_task",
                         "export_handout_pdf");
         assertThat(tools).filteredOn(McpToolDescriptor::executionEndpointEnabled)
                 .extracting(McpToolDescriptor::name)
-                .containsExactly("search_textbook_evidence", "search_teacher_resource_evidence", "get_teaching_ai_trace");
+                .containsExactly(
+                        "search_textbook_evidence",
+                        "search_teacher_resource_evidence",
+                        "get_teaching_ai_trace",
+                        "get_ai_diagnostic_summary");
         assertThat(tools).filteredOn(tool -> tool.requiresCapabilityToken())
                 .extracting(McpToolDescriptor::name)
                 .contains("create_teaching_task", "export_handout_pdf");
@@ -54,6 +59,14 @@ class ProtocolDiscoveryServiceTest {
                     assertThat(tool.requiredRoles()).contains("student", "teacher", "admin");
                     assertThat(tool.requiredScope()).isEqualTo("agent-trace:read");
                     assertThat(tool.inputSchema().required()).contains("taskId");
+                });
+        assertThat(tools).filteredOn(tool -> tool.name().equals("get_ai_diagnostic_summary"))
+                .singleElement()
+                .satisfies(tool -> {
+                    assertThat(tool.readOnly()).isTrue();
+                    assertThat(tool.requiredRoles()).contains("student", "teacher", "admin");
+                    assertThat(tool.requiredScope()).isEqualTo("agent-trace:read");
+                    assertThat(tool.inputSchema().required()).isEmpty();
                 });
         assertNoSecretsOrLocalPaths(objectMapper.writeValueAsString(tools));
     }

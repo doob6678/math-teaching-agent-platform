@@ -6,6 +6,7 @@ import com.doob.mathagent.agent.dto.AgentTraceQueryRequest;
 import com.doob.mathagent.agent.service.AgentTraceQueryService;
 import com.doob.mathagent.agent.service.AgentTraceRecord;
 import com.doob.mathagent.agent.service.InMemoryAgentTraceStore;
+import com.doob.mathagent.agent.vo.AgentTraceDiagnosticSummaryResponse;
 import com.doob.mathagent.agent.vo.AgentRunExecuteResponse;
 import com.doob.mathagent.agent.vo.AgentTraceResponse;
 import com.doob.mathagent.agent.vo.AgentTraceUsageSummaryResponse;
@@ -102,6 +103,58 @@ class AgentTraceQueryServiceTest {
         assertThat(traces.getFirst().planId()).isEqualTo("task-1");
     }
 
+    @Test
+    void summarizesSafeDiagnosticEventsForBackendVisibleTraces() {
+        InMemoryAgentTraceStore store = new InMemoryAgentTraceStore();
+        store.save(traceWithDiagnostics(
+                "trace-recovered",
+                "teacher",
+                "teacher-1",
+                "CoursewareAgent",
+                "openai",
+                "gpt-5.4",
+                List.of(
+                        diagnostic("MODEL_CALL_SUCCEEDED", "openai", "gpt-5.4", 0, true),
+                        diagnostic("JSON_PARSE_FAILED", "openai", "gpt-5.4", 0, true),
+                        diagnostic("RETRY_SCHEDULED", "openai", "gpt-5.4", 1, true),
+                        diagnostic("MODEL_CALL_SUCCEEDED", "openai", "gpt-5.4", 1, true),
+                        diagnostic("JSON_PARSE_SUCCEEDED", "openai", "gpt-5.4", 1, false))));
+        store.save(traceWithDiagnostics(
+                "trace-rotated",
+                "teacher",
+                "teacher-1",
+                "CoursewareAgent",
+                "dashscope",
+                "qwen3.6-flash",
+                List.of(
+                        diagnostic("MODEL_CALL_FAILED", "dashscope", "qwen3.6-flash", 0, true),
+                        diagnostic("PROVIDER_ROTATED", "openai", "gpt-5.4", 0, true))));
+        store.save(traceWithDiagnostics(
+                "trace-other-owner",
+                "teacher",
+                "teacher-2",
+                "CoursewareAgent",
+                "openai",
+                "gpt-5.4",
+                List.of(diagnostic("JSON_PARSE_FAILED", "openai", "gpt-5.4", 0, true))));
+        AgentTraceQueryService service = new AgentTraceQueryService(store);
+
+        AgentTraceDiagnosticSummaryResponse summary = service.diagnosticSummary(
+                new AgentTraceQueryRequest("CoursewareAgent", "COMPLETED", 20),
+                new RequestSubject("school-a", "teacher", "teacher-1", "device-1"));
+
+        assertThat(summary.runCount()).isEqualTo(2);
+        assertThat(summary.diagnosticEventCount()).isEqualTo(7);
+        assertThat(summary.jsonParseFailureCount()).isEqualTo(1);
+        assertThat(summary.retryScheduledCount()).isEqualTo(1);
+        assertThat(summary.retryRecoveredCount()).isEqualTo(1);
+        assertThat(summary.providerRotationCount()).isEqualTo(1);
+        assertThat(summary.modelCallFailureCount()).isEqualTo(1);
+        assertThat(summary.modelDiagnostics()).extracting(AgentTraceDiagnosticSummaryResponse.ModelDiagnostic::modelCode)
+                .containsExactly("gpt-5.4", "qwen3.6-flash");
+        assertThat(summary.modelDiagnostics().getFirst().retryRecoveredCount()).isEqualTo(1);
+    }
+
     private static AgentTraceRecord trace(String traceId, String subjectType, String subjectId, String agentCode) {
         return traceWithUsage(traceId, subjectType, subjectId, agentCode, "openai", "gpt-5.4", 11, 7, 18);
     }
@@ -143,6 +196,50 @@ class AgentTraceQueryServiceTest {
                 List.of(new AgentRunExecuteResponse.StageTiming("model_call", 12)),
                 new AgentRunExecuteResponse.TokenUsage(promptTokens, completionTokens, totalTokens),
                 "Live model response recorded");
+    }
+
+    private static AgentTraceRecord traceWithDiagnostics(
+            String traceId,
+            String subjectType,
+            String subjectId,
+            String agentCode,
+            String providerName,
+            String modelCode,
+            List<AgentTraceRecord.DiagnosticEvent> diagnosticEvents) {
+        return new AgentTraceRecord(
+                traceId,
+                "plan-1",
+                Instant.parse("2026-06-29T00:00:00Z"),
+                "school-a",
+                subjectType,
+                subjectId,
+                agentCode,
+                providerName,
+                modelCode,
+                "COMPLETED",
+                0.46,
+                List.of("tool:search:textbook"),
+                List.of("PUBLIC_TEXTBOOK"),
+                List.of("textbook:chapter-1"),
+                List.of(new AgentRunExecuteResponse.StageTiming("model_call", 12)),
+                new AgentRunExecuteResponse.TokenUsage(11, 7, 18),
+                "Live model response recorded",
+                diagnosticEvents);
+    }
+
+    private static AgentTraceRecord.DiagnosticEvent diagnostic(
+            String eventType,
+            String providerName,
+            String modelCode,
+            int attemptNo,
+            boolean retryable) {
+        return new AgentTraceRecord.DiagnosticEvent(
+                eventType,
+                providerName,
+                modelCode,
+                attemptNo,
+                retryable,
+                eventType.toLowerCase());
     }
 
     private static AgentTraceRecord traceRecord(

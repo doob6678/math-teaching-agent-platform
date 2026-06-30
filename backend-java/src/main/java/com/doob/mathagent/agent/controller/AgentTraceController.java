@@ -2,6 +2,7 @@ package com.doob.mathagent.agent.controller;
 
 import com.doob.mathagent.agent.dto.AgentTraceQueryRequest;
 import com.doob.mathagent.agent.service.AgentTraceQueryService;
+import com.doob.mathagent.agent.vo.AgentTraceDiagnosticSummaryResponse;
 import com.doob.mathagent.agent.vo.AgentTraceResponse;
 import com.doob.mathagent.agent.vo.AgentTraceUsageSummaryResponse;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
@@ -70,6 +71,25 @@ public class AgentTraceController {
         RequestSubject subject = subjectResolver.resolve(httpRequest);
         try {
             return traceQueryService.usageSummary(query, subject);
+        } catch (IllegalArgumentException exception) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, exception.getMessage(), exception);
+        }
+    }
+
+    /**
+     * Summarizes safe retry/fallback/parse diagnostics for traces visible to the backend subject.
+     *
+     * @param query optional query filters
+     * @param httpRequest HTTP request used only for backend subject resolution
+     * @return visible diagnostic summary
+     */
+    @GetMapping("/api/agents/traces/diagnostic-summary")
+    public AgentTraceDiagnosticSummaryResponse diagnosticSummary(
+            @ModelAttribute AgentTraceQueryRequest query,
+            HttpServletRequest httpRequest) {
+        RequestSubject subject = subjectResolver.resolve(httpRequest);
+        try {
+            return traceQueryService.diagnosticSummary(query, subject);
         } catch (IllegalArgumentException exception) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, exception.getMessage(), exception);
         }

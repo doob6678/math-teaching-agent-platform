@@ -867,6 +867,64 @@ export interface AgentTraceUsageSummaryResponse {
 }
 
 /**
+ * Aggregated safe retry/fallback/parse diagnostics for visible agent traces.
+ */
+export interface AgentTraceDiagnosticSummaryResponse {
+  /** Backend tenant id used for the aggregation. */
+  tenantId: string;
+  /** Backend subject type used for visibility. */
+  subjectType: string;
+  /** Backend subject id used for visibility. */
+  subjectId: string;
+  /** Optional agent code filter echoed by backend. */
+  agentCode?: string;
+  /** Optional status filter echoed by backend. */
+  status?: string;
+  /** Visible trace rows included in the summary. */
+  runCount: number;
+  /** Total safe diagnostic events included. */
+  diagnosticEventCount: number;
+  /** JSON parse failure events. */
+  jsonParseFailureCount: number;
+  /** Retry scheduled events. */
+  retryScheduledCount: number;
+  /** Traces recovered after retry. */
+  retryRecoveredCount: number;
+  /** Provider fallback rotation events. */
+  providerRotationCount: number;
+  /** Model gateway failure events. */
+  modelCallFailureCount: number;
+  /** Provider/model diagnostic breakdown. */
+  modelDiagnostics: AgentTraceModelDiagnostic[];
+}
+
+/**
+ * Diagnostic bucket for one provider/model pair.
+ */
+export interface AgentTraceModelDiagnostic {
+  /** Provider name recorded by backend events. */
+  providerName: string;
+  /** Model code recorded by backend events. */
+  modelCode: string;
+  /** Visible trace rows in this bucket. */
+  runCount: number;
+  /** Safe diagnostic events in this bucket. */
+  diagnosticEventCount: number;
+  /** JSON parse failures in this bucket. */
+  jsonParseFailureCount: number;
+  /** Scheduled retries in this bucket. */
+  retryScheduledCount: number;
+  /** Traces recovered after retry in this bucket. */
+  retryRecoveredCount: number;
+  /** Provider fallback rotations in this bucket. */
+  providerRotationCount: number;
+  /** Model gateway failures in this bucket. */
+  modelCallFailureCount: number;
+  /** Provider-reported total tokens for visible trace rows. */
+  totalTokens: number;
+}
+
+/**
  * Usage bucket for one provider/model pair.
  */
 export interface AgentTraceModelUsage {
@@ -1790,6 +1848,27 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
       }
       const suffix = params.size > 0 ? `?${params.toString()}` : "";
       return requestJson<AgentTraceUsageSummaryResponse>(`/api/agents/traces/usage-summary${suffix}`);
+    },
+
+    /**
+     * Summarizes retry/fallback/parse diagnostics for traces visible to the backend session subject.
+     */
+    getAgentTraceDiagnosticSummary(query: AgentTraceQuery = {}): Promise<AgentTraceDiagnosticSummaryResponse> {
+      const params = new URLSearchParams();
+      if (query.agentCode) {
+        params.set("agentCode", query.agentCode);
+      }
+      if (query.status) {
+        params.set("status", query.status);
+      }
+      if (query.planId) {
+        params.set("planId", query.planId);
+      }
+      if (query.limit) {
+        params.set("limit", String(query.limit));
+      }
+      const suffix = params.size > 0 ? `?${params.toString()}` : "";
+      return requestJson<AgentTraceDiagnosticSummaryResponse>(`/api/agents/traces/diagnostic-summary${suffix}`);
     },
 
     /**

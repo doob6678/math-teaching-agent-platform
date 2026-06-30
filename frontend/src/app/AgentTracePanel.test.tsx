@@ -1,7 +1,11 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { AgentTracePanel } from "./App";
-import { AgentTraceResponse, AgentTraceUsageSummaryResponse } from "../shared/api/textbookApi";
+import {
+  AgentTraceDiagnosticSummaryResponse,
+  AgentTraceResponse,
+  AgentTraceUsageSummaryResponse,
+} from "../shared/api/textbookApi";
 
 describe("AgentTracePanel", () => {
   it("renders recoverable traces with backend resolved model and evidence", () => {
@@ -55,9 +59,44 @@ describe("AgentTracePanel", () => {
         },
       ],
     };
+    const diagnosticSummary: AgentTraceDiagnosticSummaryResponse = {
+      tenantId: "school-a",
+      subjectType: "teacher",
+      subjectId: "teacher-1",
+      agentCode: "CoursewareAgent",
+      status: "COMPLETED",
+      runCount: 1,
+      diagnosticEventCount: 3,
+      jsonParseFailureCount: 1,
+      retryScheduledCount: 1,
+      retryRecoveredCount: 1,
+      providerRotationCount: 0,
+      modelCallFailureCount: 0,
+      modelDiagnostics: [
+        {
+          providerName: "openai",
+          modelCode: "gpt-5.4",
+          runCount: 1,
+          diagnosticEventCount: 3,
+          jsonParseFailureCount: 1,
+          retryScheduledCount: 1,
+          retryRecoveredCount: 1,
+          providerRotationCount: 0,
+          modelCallFailureCount: 0,
+          totalTokens: 168,
+        },
+      ],
+    };
 
     const html = renderToStaticMarkup(
-      <AgentTracePanel traces={traces} usageSummary={usageSummary} loading={false} error="" onRefresh={vi.fn()} />,
+      <AgentTracePanel
+        traces={traces}
+        usageSummary={usageSummary}
+        diagnosticSummary={diagnosticSummary}
+        loading={false}
+        error=""
+        onRefresh={vi.fn()}
+      />,
     );
 
     expect(html).toContain("trace-1");
@@ -74,6 +113,9 @@ describe("AgentTracePanel", () => {
     expect(html).toContain("1 runs");
     expect(html).toContain("123 prompt");
     expect(html).toContain("45 completion");
+    expect(html).toContain("Diagnostics");
+    expect(html).toContain("1 parse failed");
+    expect(html).toContain("1 recovered");
     expect(html).toContain("teaching-task:task-1");
     expect(html).toContain("tool:search:textbook");
   });

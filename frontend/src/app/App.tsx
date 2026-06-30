@@ -5,6 +5,7 @@ import {
   AgentModelHealthResponse,
   AgentModelCatalogResponse,
   AgentRunPlanResponse,
+  AgentTraceDiagnosticSummaryResponse,
   AgentTraceResponse,
   AgentTraceUsageSummaryResponse,
   KnowledgePointResponse,
@@ -90,6 +91,7 @@ export function App() {
   const [agentExecution, setAgentExecution] = useState<AgentRunExecuteResponse | null>(null);
   const [agentTraces, setAgentTraces] = useState<AgentTraceResponse[]>([]);
   const [agentUsageSummary, setAgentUsageSummary] = useState<AgentTraceUsageSummaryResponse | null>(null);
+  const [agentDiagnosticSummary, setAgentDiagnosticSummary] = useState<AgentTraceDiagnosticSummaryResponse | null>(null);
   const [planningAgent, setPlanningAgent] = useState(false);
   const [executingAgent, setExecutingAgent] = useState(false);
   const [loadingAgentTraces, setLoadingAgentTraces] = useState(false);
@@ -264,7 +266,13 @@ export function App() {
       .listAgentTraces({ limit: 10 })
       .then((traces) => {
         setAgentTraces(traces);
-        return api.getAgentTraceUsageSummary({ limit: 100 }).then(setAgentUsageSummary);
+        return Promise.all([
+          api.getAgentTraceUsageSummary({ limit: 100 }),
+          api.getAgentTraceDiagnosticSummary({ limit: 100 }),
+        ]).then(([usageSummary, diagnosticSummary]) => {
+          setAgentUsageSummary(usageSummary);
+          setAgentDiagnosticSummary(diagnosticSummary);
+        });
       })
       .catch((error: Error) => setAgentTraceError(error.message))
       .finally(() => setLoadingAgentTraces(false));
@@ -1060,12 +1068,13 @@ export function App() {
             onExecute={handleExecuteAgentRun}
           />
 
-          <AgentTracePanel
-            traces={agentTraces}
-            usageSummary={agentUsageSummary}
-            loading={loadingAgentTraces}
-            error={agentTraceError}
-            onRefresh={refreshAgentTraces}
+            <AgentTracePanel
+              traces={agentTraces}
+              usageSummary={agentUsageSummary}
+              diagnosticSummary={agentDiagnosticSummary}
+              loading={loadingAgentTraces}
+              error={agentTraceError}
+              onRefresh={refreshAgentTraces}
           />
 
           <McpConfigurationPanel
@@ -2370,12 +2379,14 @@ function AgentModelHealthPanel({
 export function AgentTracePanel({
   traces,
   usageSummary,
+  diagnosticSummary,
   loading,
   error,
   onRefresh,
 }: {
   traces: AgentTraceResponse[];
   usageSummary: AgentTraceUsageSummaryResponse | null;
+  diagnosticSummary: AgentTraceDiagnosticSummaryResponse | null;
   loading: boolean;
   error: string;
   onRefresh: () => void;
@@ -2413,6 +2424,38 @@ export function AgentTracePanel({
                 <strong key={`${usage.providerName}:${usage.modelCode}`}>
                   {usage.providerName}/{usage.modelCode}: {usage.totalTokens} total, {usage.promptTokens} prompt,{" "}
                   {usage.completionTokens} completion
+                </strong>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {diagnosticSummary ? (
+        <div className="agent-usage-summary">
+          <div className="result-header compact">
+            <div>
+              <p className="eyebrow">Diagnostics</p>
+              <h3>{diagnosticSummary.diagnosticEventCount} events</h3>
+            </div>
+            <strong>
+              {diagnosticSummary.jsonParseFailureCount} parse failed / {diagnosticSummary.retryRecoveredCount} recovered /{" "}
+              {diagnosticSummary.providerRotationCount} fallback
+            </strong>
+          </div>
+          <div className="trace-badge-row">
+            <span>Recovery</span>
+            <div>
+              <strong>{diagnosticSummary.retryScheduledCount} retries</strong>
+              <strong>{diagnosticSummary.modelCallFailureCount} gateway failures</strong>
+            </div>
+          </div>
+          <div className="trace-badge-row">
+            <span>Models</span>
+            <div>
+              {diagnosticSummary.modelDiagnostics.map((diagnostic) => (
+                <strong key={`${diagnostic.providerName}:${diagnostic.modelCode}`}>
+                  {diagnostic.providerName}/{diagnostic.modelCode}: {diagnostic.jsonParseFailureCount} parse failed,{" "}
+                  {diagnostic.retryRecoveredCount} recovered, {diagnostic.totalTokens} total
                 </strong>
               ))}
             </div>

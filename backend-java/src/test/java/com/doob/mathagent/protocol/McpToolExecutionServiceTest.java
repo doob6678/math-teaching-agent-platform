@@ -209,6 +209,41 @@ class McpToolExecutionServiceTest {
                 .hasMessageContaining("Teaching AI trace not found");
     }
 
+    @Test
+    void mcpSecretReadsVisibleAiDiagnosticSummaryWithoutClientSuppliedIdentity() throws Exception {
+        InMemoryAgentTraceStore traceStore = new InMemoryAgentTraceStore();
+        traceStore.save(trace("trace-own", "task-own", "teacher", "workbuddy-teacher-subject"));
+        traceStore.save(trace("trace-other", "task-other", "teacher", "teacher-2"));
+        McpToolExecutionService service = new McpToolExecutionService(
+                registryWithAiDiagnosticSummaryTool(),
+                new TextbookRetrievalService(
+                        new TextbookCatalogReader(),
+                        new TextbookChunkReader(),
+                        new LocalTextbookBm25SearchEngine(),
+                        new NoopRetrievalAuditSink()),
+                new TextbookResourceProperties(textbookCorpus()),
+                null,
+                new AgentTraceQueryService(traceStore));
+
+        var response = service.callTool(
+                "Bearer teacher_secret_1234567890abcdef",
+                "get_ai_diagnostic_summary",
+                new McpToolCallRequest(Map.of(
+                        "agentCode", "CoursewareAgent",
+                        "status", "COMPLETED",
+                        "limit", 20,
+                        "subjectId", "teacher-2")));
+
+        assertThat(response.toolName()).isEqualTo("get_ai_diagnostic_summary");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> result = (Map<String, Object>) response.result();
+        assertThat(result.get("subjectId")).isEqualTo("workbuddy-teacher-subject");
+        assertThat(result.get("runCount")).isEqualTo(1);
+        assertThat(result.get("diagnosticEventCount")).isEqualTo(1);
+        assertThat(result.get("jsonParseFailureCount")).isEqualTo(0);
+        assertThat(result.toString()).doesNotContain("teacher-2");
+    }
+
     /**
      * Creates a registry where one WorkBuddy teacher key can call only textbook evidence search.
      */
@@ -256,6 +291,23 @@ class McpToolExecutionServiceTest {
                 McpClientRegistryProperties.secretHash("teacher_secret_1234567890abcdef"),
                 true,
                 List.of("get_teaching_ai_trace"),
+                List.of("agent-trace:read"))));
+        return properties;
+    }
+
+    /**
+     * Creates a registry where one WorkBuddy teacher key can read aggregate AI diagnostics.
+     */
+    private static McpClientRegistryProperties registryWithAiDiagnosticSummaryTool() {
+        McpClientRegistryProperties properties = new McpClientRegistryProperties();
+        properties.setClients(List.of(new McpClientRegistryProperties.Client(
+                "workbuddy-teacher",
+                "teacher",
+                "default",
+                "workbuddy-teacher-subject",
+                McpClientRegistryProperties.secretHash("teacher_secret_1234567890abcdef"),
+                true,
+                List.of("get_ai_diagnostic_summary"),
                 List.of("agent-trace:read"))));
         return properties;
     }

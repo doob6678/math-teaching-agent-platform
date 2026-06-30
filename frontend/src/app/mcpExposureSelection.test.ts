@@ -18,6 +18,7 @@ describe("mcpExposureSelection", () => {
       "search_textbook_evidence",
       "search_teacher_resource_evidence",
       "get_teaching_ai_trace",
+      "get_ai_diagnostic_summary",
     ]);
     expect(selection.tools).not.toContain("create_teaching_task");
     expect(selection.tools).not.toContain("export_handout_pdf");
@@ -35,6 +36,7 @@ describe("mcpExposureSelection", () => {
     expect(disabled).toEqual([
       "search_teacher_resource_evidence",
       "get_teaching_ai_trace",
+      "get_ai_diagnostic_summary",
     ]);
     expect(enabledAgain).toEqual([...MCP_TOOL_OPTIONS]);
   });
@@ -48,6 +50,7 @@ describe("mcpExposureSelection", () => {
     ]);
     expect(MCP_TOOL_OPTION_META.search_teacher_resource_evidence.badge).toBe("read-only");
     expect(MCP_TOOL_OPTION_META.get_teaching_ai_trace.note).toBe("Owned task diagnostics.");
+    expect(MCP_TOOL_OPTION_META.get_ai_diagnostic_summary.note).toBe("Retry and fallback summary.");
     expect(MCP_TOOL_OPTION_META.export_handout_pdf.badge).toBe("protected");
   });
 });

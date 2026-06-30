@@ -2,6 +2,7 @@ package com.doob.mathagent.protocol.service;
 
 import com.doob.mathagent.agent.dto.AgentTraceQueryRequest;
 import com.doob.mathagent.agent.service.AgentTraceQueryService;
+import com.doob.mathagent.agent.vo.AgentTraceDiagnosticSummaryResponse;
 import com.doob.mathagent.agent.vo.AgentTraceResponse;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.protocol.dto.McpToolCallRequest;
@@ -27,6 +28,7 @@ public class McpToolExecutionService {
     private static final String TEXTBOOK_EVIDENCE_TOOL = "search_textbook_evidence";
     private static final String TEACHER_RESOURCE_EVIDENCE_TOOL = "search_teacher_resource_evidence";
     private static final String TEACHING_AI_TRACE_TOOL = "get_teaching_ai_trace";
+    private static final String AI_DIAGNOSTIC_SUMMARY_TOOL = "get_ai_diagnostic_summary";
 
     private final McpClientRegistryProperties registryProperties;
     private final TextbookRetrievalService textbookRetrievalService;
@@ -95,6 +97,7 @@ public class McpToolExecutionService {
             case TEXTBOOK_EVIDENCE_TOOL -> searchTextbookEvidence(client, request);
             case TEACHER_RESOURCE_EVIDENCE_TOOL -> searchTeacherResourceEvidence(client, request);
             case TEACHING_AI_TRACE_TOOL -> getTeachingAiTrace(client, request);
+            case AI_DIAGNOSTIC_SUMMARY_TOOL -> getAiDiagnosticSummary(client, request);
             default -> throw new IllegalArgumentException("MCP tool is not implemented: " + normalizedToolName);
         };
         return new McpToolCallResponse(
@@ -145,6 +148,46 @@ public class McpToolExecutionService {
         result.put("retrievalStrategy", response.retrievalStrategy());
         result.put("total", response.total());
         result.put("hits", response.hits());
+        return result;
+    }
+
+    /**
+     * Returns safe aggregate AI diagnostics visible to this MCP subject.
+     */
+    private Object getAiDiagnosticSummary(
+            McpClientRegistryProperties.Client client,
+            McpToolCallRequest request) {
+        if (agentTraceQueryService == null) {
+            throw new IllegalStateException("Agent trace query service is not configured");
+        }
+        Map<String, Object> arguments = request == null ? Map.of() : request.arguments();
+        String agentCode = stringArgument(arguments, "agentCode");
+        String status = stringArgument(arguments, "status");
+        int limit = intArgument(arguments, "limit", 100);
+        AgentTraceDiagnosticSummaryResponse summary = agentTraceQueryService.diagnosticSummary(
+                new AgentTraceQueryRequest(
+                        agentCode.isBlank() ? null : agentCode,
+                        status.isBlank() ? null : status,
+                        Math.max(1, Math.min(limit, 200))),
+                new RequestSubject(
+                        client.tenantId(),
+                        normalizedProfile(client.profile()),
+                        client.subjectId(),
+                        "mcp:" + client.clientId()));
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("tenantId", summary.tenantId());
+        result.put("subjectType", summary.subjectType());
+        result.put("subjectId", summary.subjectId());
+        result.put("agentCode", summary.agentCode());
+        result.put("status", summary.status());
+        result.put("runCount", summary.runCount());
+        result.put("diagnosticEventCount", summary.diagnosticEventCount());
+        result.put("jsonParseFailureCount", summary.jsonParseFailureCount());
+        result.put("retryScheduledCount", summary.retryScheduledCount());
+        result.put("retryRecoveredCount", summary.retryRecoveredCount());
+        result.put("providerRotationCount", summary.providerRotationCount());
+        result.put("modelCallFailureCount", summary.modelCallFailureCount());
+        result.put("modelDiagnostics", summary.modelDiagnostics());
         return result;
     }
 

@@ -39,7 +39,8 @@ class McpConfigurationServiceTest {
         assertThat(response.exposedTools()).containsExactly(
                 "search_textbook_evidence",
                 "search_teacher_resource_evidence",
-                "get_teaching_ai_trace");
+                "get_teaching_ai_trace",
+                "get_ai_diagnostic_summary");
         assertThat(response.configJson()).doesNotContain("plan_agent_run");
         assertThat(response.configJson()).doesNotContain("create_teaching_task");
         assertThat(response.configJson()).doesNotContain("export_handout_pdf");
@@ -61,11 +62,15 @@ class McpConfigurationServiceTest {
                         "search_textbook_evidence",
                         "search_teacher_resource_evidence",
                         "get_teaching_ai_trace",
+                        "get_ai_diagnostic_summary",
                         "export_handout_pdf"),
                 List.of("student_blank_handout_writer", "teacher_handout_writer")));
 
         assertThat(response.keyProfile()).isEqualTo("student");
-        assertThat(response.exposedTools()).containsExactly("search_textbook_evidence", "get_teaching_ai_trace");
+        assertThat(response.exposedTools()).containsExactly(
+                "search_textbook_evidence",
+                "get_teaching_ai_trace",
+                "get_ai_diagnostic_summary");
         assertThat(response.exposedPrompts()).containsExactly("student_blank_handout_writer");
         assertThat(response.configJson()).contains("\"tools\"");
         assertThat(response.configJson()).contains("search_textbook_evidence");
@@ -87,6 +92,7 @@ class McpConfigurationServiceTest {
                         "search_textbook_evidence",
                         "search_teacher_resource_evidence",
                         "get_teaching_ai_trace",
+                        "get_ai_diagnostic_summary",
                         "plan_agent_run",
                         "create_teaching_task",
                         "export_handout_pdf",
@@ -96,9 +102,11 @@ class McpConfigurationServiceTest {
         assertThat(response.exposedTools()).containsExactly(
                 "search_textbook_evidence",
                 "search_teacher_resource_evidence",
-                "get_teaching_ai_trace");
+                "get_teaching_ai_trace",
+                "get_ai_diagnostic_summary");
         assertThat(response.configJson()).contains("search_teacher_resource_evidence");
         assertThat(response.configJson()).contains("get_teaching_ai_trace");
+        assertThat(response.configJson()).contains("get_ai_diagnostic_summary");
         assertThat(response.configJson()).doesNotContain("plan_agent_run");
         assertThat(response.configJson()).doesNotContain("create_teaching_task");
         assertThat(response.configJson()).doesNotContain("export_handout_pdf");

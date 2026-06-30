@@ -1206,6 +1206,72 @@ describe("textbookApi", () => {
     expect(summary.totalUsage.totalTokens).toBe(336);
   });
 
+  it("summarizes visible agent trace diagnostics with backend session identity only", async () => {
+    globalThis.localStorage.setItem(
+      "math-agent:auth-session",
+      JSON.stringify({
+        userId: "teacher-1",
+        username: "teacher",
+        role: "teacher",
+        tenantId: "school-a",
+        tokenName: "satoken",
+        tokenValue: "token-teacher",
+      }),
+    );
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        tenantId: "school-a",
+        subjectType: "teacher",
+        subjectId: "teacher-1",
+        agentCode: "CoursewareAgent",
+        status: "COMPLETED",
+        runCount: 2,
+        diagnosticEventCount: 6,
+        jsonParseFailureCount: 1,
+        retryScheduledCount: 1,
+        retryRecoveredCount: 1,
+        providerRotationCount: 1,
+        modelCallFailureCount: 0,
+        modelDiagnostics: [
+          {
+            providerName: "openai",
+            modelCode: "gpt-5.4",
+            runCount: 2,
+            diagnosticEventCount: 6,
+            jsonParseFailureCount: 1,
+            retryScheduledCount: 1,
+            retryRecoveredCount: 1,
+            providerRotationCount: 1,
+            modelCallFailureCount: 0,
+            totalTokens: 336,
+          },
+        ],
+      }),
+    });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const summary = await client.getAgentTraceDiagnosticSummary({
+      agentCode: "CoursewareAgent",
+      status: "COMPLETED",
+      limit: 20,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8080/api/agents/traces/diagnostic-summary?agentCode=CoursewareAgent&status=COMPLETED&limit=20",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          satoken: "token-teacher",
+          "X-Device-Id": "local-browser-console",
+        }),
+      }),
+    );
+    expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Id");
+    expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Type");
+    expect(summary.jsonParseFailureCount).toBe(1);
+    expect(summary.retryRecoveredCount).toBe(1);
+  });
+
   it("builds copyable MCP configuration without client supplied identity headers", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
