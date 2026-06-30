@@ -144,6 +144,7 @@ public class AgentTraceQueryService {
                 normalizedRequest.agentCode(),
                 normalizedRequest.status(),
                 normalizedRequest.planId(),
+                normalizedRequest.planIdPrefix(),
                 normalizedRequest.limit());
         return traceStore.search(criteria);
     }

@@ -46,6 +46,8 @@ public class CapabilityTokenService {
             "/api/question-bank/import/teacher-resources";
     private static final String AGENT_RUN_ACTION_PREFIX = "agent-run:";
     private static final String AGENT_EXECUTE_PATH = "/api/agents/execute";
+    private static final String AGENT_WRITING_COURSEWARE_PATH = "/api/agents/writing/courseware";
+    private static final String AGENT_WRITING_COURSEWARE_ASYNC_PATH = "/api/agents/writing/courseware/async";
     private static final Set<String> CAPABILITY_ALLOWED_ROLES = Set.of("student", "teacher", "admin");
     private static final Set<String> TEACHER_RESOURCE_ALLOWED_ROLES = Set.of("teacher", "admin");
     private static final Set<String> STUDENT_MEMORY_ALLOWED_ROLES = Set.of("student");
@@ -294,7 +296,21 @@ public class CapabilityTokenService {
             validateTeachingSubject(subject);
             return;
         }
+        if (action.startsWith(AGENT_RUN_ACTION_PREFIX) && isAgentWritingCoursewarePath(path)) {
+            if (action.length() == AGENT_RUN_ACTION_PREFIX.length()) {
+                throw new IllegalArgumentException("Unsupported capability action or path");
+            }
+            validateTeacherResourceSubject(subject);
+            return;
+        }
         throw new IllegalArgumentException("Unsupported capability action or path");
+    }
+
+    /**
+     * Allows only the protected multi-agent courseware writing entrypoints.
+     */
+    private static boolean isAgentWritingCoursewarePath(String path) {
+        return AGENT_WRITING_COURSEWARE_PATH.equals(path) || AGENT_WRITING_COURSEWARE_ASYNC_PATH.equals(path);
     }
 
     /**

@@ -25,6 +25,7 @@ class ProtocolDiscoveryServiceTest {
                         "search_teacher_resource_evidence",
                         "get_teaching_ai_trace",
                         "get_ai_diagnostic_summary",
+                        "get_multi_agent_writing_trace",
                         "plan_agent_run",
                         "create_teaching_task",
                         "export_handout_pdf");
@@ -34,7 +35,8 @@ class ProtocolDiscoveryServiceTest {
                         "search_textbook_evidence",
                         "search_teacher_resource_evidence",
                         "get_teaching_ai_trace",
-                        "get_ai_diagnostic_summary");
+                        "get_ai_diagnostic_summary",
+                        "get_multi_agent_writing_trace");
         assertThat(tools).filteredOn(tool -> tool.requiresCapabilityToken())
                 .extracting(McpToolDescriptor::name)
                 .contains("create_teaching_task", "export_handout_pdf");
@@ -67,6 +69,14 @@ class ProtocolDiscoveryServiceTest {
                     assertThat(tool.requiredRoles()).contains("student", "teacher", "admin");
                     assertThat(tool.requiredScope()).isEqualTo("agent-trace:read");
                     assertThat(tool.inputSchema().required()).isEmpty();
+                });
+        assertThat(tools).filteredOn(tool -> tool.name().equals("get_multi_agent_writing_trace"))
+                .singleElement()
+                .satisfies(tool -> {
+                    assertThat(tool.readOnly()).isTrue();
+                    assertThat(tool.requiredRoles()).containsExactly("teacher", "admin");
+                    assertThat(tool.requiredScope()).isEqualTo("agent-trace:read");
+                    assertThat(tool.inputSchema().required()).containsExactly("workflowId");
                 });
         assertNoSecretsOrLocalPaths(objectMapper.writeValueAsString(tools));
     }

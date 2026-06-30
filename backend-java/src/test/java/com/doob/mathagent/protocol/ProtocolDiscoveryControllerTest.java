@@ -48,7 +48,8 @@ class ProtocolDiscoveryControllerTest {
                         "search_textbook_evidence",
                         "search_teacher_resource_evidence",
                         "get_teaching_ai_trace",
-                        "get_ai_diagnostic_summary");
+                        "get_ai_diagnostic_summary",
+                        "get_multi_agent_writing_trace");
     }
 
     @Test

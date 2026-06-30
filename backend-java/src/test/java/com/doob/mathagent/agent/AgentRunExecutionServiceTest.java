@@ -289,6 +289,9 @@ class AgentRunExecutionServiceTest {
         assertThat(traceStore.find(response.traceId()).orElseThrow().stageTimings())
                 .extracting(AgentRunExecuteResponse.StageTiming::stage)
                 .contains("model_call");
+        assertThat(traceStore.find(response.traceId()).orElseThrow().diagnosticEvents())
+                .extracting(com.doob.mathagent.agent.service.AgentTraceRecord.DiagnosticEvent::eventType)
+                .containsExactly("MODEL_CALL_SUCCEEDED");
     }
 
     @Test
@@ -296,8 +299,9 @@ class AgentRunExecutionServiceTest {
         CapturingAiChatGateway gateway = new CapturingAiChatGateway(List.of(
                 new IllegalStateException("primary unavailable"),
                 new AiChatResult("openai", "gpt-5.4", 9, 6, 15, "fallback response recorded")));
+        InMemoryAgentTraceStore traceStore = new InMemoryAgentTraceStore();
         AgentRunExecutionService service = new AgentRunExecutionService(
-                new InMemoryAgentTraceStore(),
+                traceStore,
                 new InMemoryAgentConcurrencyGuard(),
                 gateway);
         AgentRunPlanResponse plan = coursewarePlan();
@@ -313,6 +317,10 @@ class AgentRunExecutionServiceTest {
         assertThat(response.modelCode()).isEqualTo("gpt-5.4");
         assertThat(response.actualUsage().totalTokens()).isEqualTo(15);
         assertThat(response.message()).contains("fallback response recorded");
+        assertThat(traceStore.find(response.traceId()).orElseThrow().diagnosticEvents())
+                .extracting(com.doob.mathagent.agent.service.AgentTraceRecord.DiagnosticEvent::eventType)
+                .containsExactly("MODEL_CALL_FAILED", "PROVIDER_ROTATED", "MODEL_CALL_SUCCEEDED");
+        assertThat(traceStore.find(response.traceId()).orElseThrow().diagnosticEvents().getFirst().retryable()).isTrue();
     }
 
     private static AgentRunPlanResponse coursewarePlan() {

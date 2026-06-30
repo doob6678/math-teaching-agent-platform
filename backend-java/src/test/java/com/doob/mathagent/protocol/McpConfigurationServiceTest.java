@@ -40,7 +40,8 @@ class McpConfigurationServiceTest {
                 "search_textbook_evidence",
                 "search_teacher_resource_evidence",
                 "get_teaching_ai_trace",
-                "get_ai_diagnostic_summary");
+                "get_ai_diagnostic_summary",
+                "get_multi_agent_writing_trace");
         assertThat(response.configJson()).doesNotContain("plan_agent_run");
         assertThat(response.configJson()).doesNotContain("create_teaching_task");
         assertThat(response.configJson()).doesNotContain("export_handout_pdf");
@@ -93,6 +94,7 @@ class McpConfigurationServiceTest {
                         "search_teacher_resource_evidence",
                         "get_teaching_ai_trace",
                         "get_ai_diagnostic_summary",
+                        "get_multi_agent_writing_trace",
                         "plan_agent_run",
                         "create_teaching_task",
                         "export_handout_pdf",
@@ -103,10 +105,12 @@ class McpConfigurationServiceTest {
                 "search_textbook_evidence",
                 "search_teacher_resource_evidence",
                 "get_teaching_ai_trace",
-                "get_ai_diagnostic_summary");
+                "get_ai_diagnostic_summary",
+                "get_multi_agent_writing_trace");
         assertThat(response.configJson()).contains("search_teacher_resource_evidence");
         assertThat(response.configJson()).contains("get_teaching_ai_trace");
         assertThat(response.configJson()).contains("get_ai_diagnostic_summary");
+        assertThat(response.configJson()).contains("get_multi_agent_writing_trace");
         assertThat(response.configJson()).doesNotContain("plan_agent_run");
         assertThat(response.configJson()).doesNotContain("create_teaching_task");
         assertThat(response.configJson()).doesNotContain("export_handout_pdf");

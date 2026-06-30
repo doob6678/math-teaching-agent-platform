@@ -74,6 +74,7 @@ public class MyBatisAgentTraceStore implements AgentTraceStore {
         eqIfPresent(wrapper, "agent_code", normalized.agentCode());
         eqIfPresent(wrapper, "status", normalized.status());
         eqIfPresent(wrapper, "plan_id", normalized.planId());
+        likeRightIfPresent(wrapper, "plan_id", normalized.planIdPrefix());
         return mapper.selectPage(Page.of(1, normalized.limit()), wrapper)
                 .getRecords()
                 .stream()
@@ -190,6 +191,15 @@ public class MyBatisAgentTraceStore implements AgentTraceStore {
     private static void eqIfPresent(QueryWrapper<AgentRunTraceEntity> wrapper, String column, String value) {
         if (value != null) {
             wrapper.eq(column, value);
+        }
+    }
+
+    /**
+     * Adds a prefix filter only when a value is present.
+     */
+    private static void likeRightIfPresent(QueryWrapper<AgentRunTraceEntity> wrapper, String column, String value) {
+        if (value != null) {
+            wrapper.likeRight(column, value);
         }
     }
 

@@ -2,6 +2,7 @@ package com.doob.mathagent.protocol.service;
 
 import com.doob.mathagent.agent.dto.AgentTraceQueryRequest;
 import com.doob.mathagent.agent.service.AgentTraceQueryService;
+import com.doob.mathagent.agent.vo.AgentRunExecuteResponse;
 import com.doob.mathagent.agent.vo.AgentTraceDiagnosticSummaryResponse;
 import com.doob.mathagent.agent.vo.AgentTraceResponse;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
@@ -14,6 +15,8 @@ import com.doob.mathagent.retrieval.TextbookSearchRequest;
 import com.doob.mathagent.retrieval.TextbookSearchResponse;
 import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService;
 import com.doob.mathagent.teacher.vo.TeacherResourceBlockSearchResponse;
+import java.util.Comparator;
+import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -29,6 +32,7 @@ public class McpToolExecutionService {
     private static final String TEACHER_RESOURCE_EVIDENCE_TOOL = "search_teacher_resource_evidence";
     private static final String TEACHING_AI_TRACE_TOOL = "get_teaching_ai_trace";
     private static final String AI_DIAGNOSTIC_SUMMARY_TOOL = "get_ai_diagnostic_summary";
+    private static final String MULTI_AGENT_WRITING_TRACE_TOOL = "get_multi_agent_writing_trace";
 
     private final McpClientRegistryProperties registryProperties;
     private final TextbookRetrievalService textbookRetrievalService;
@@ -98,6 +102,7 @@ public class McpToolExecutionService {
             case TEACHER_RESOURCE_EVIDENCE_TOOL -> searchTeacherResourceEvidence(client, request);
             case TEACHING_AI_TRACE_TOOL -> getTeachingAiTrace(client, request);
             case AI_DIAGNOSTIC_SUMMARY_TOOL -> getAiDiagnosticSummary(client, request);
+            case MULTI_AGENT_WRITING_TRACE_TOOL -> getMultiAgentWritingTrace(client, request);
             default -> throw new IllegalArgumentException("MCP tool is not implemented: " + normalizedToolName);
         };
         return new McpToolCallResponse(
@@ -264,6 +269,45 @@ public class McpToolExecutionService {
     }
 
     /**
+     * Returns safe ordered traces for one visible multi-agent writing workflow.
+     */
+    private Object getMultiAgentWritingTrace(
+            McpClientRegistryProperties.Client client,
+            McpToolCallRequest request) {
+        if (agentTraceQueryService == null) {
+            throw new IllegalStateException("Agent trace query service is not configured");
+        }
+        Map<String, Object> arguments = request == null ? Map.of() : request.arguments();
+        String workflowId = normalizedWorkflowId(stringArgument(arguments, "workflowId"));
+        List<AgentTraceResponse> stages = agentTraceQueryService.list(
+                        new AgentTraceQueryRequest(null, null, null, workflowId + ":", 20),
+                        new RequestSubject(
+                                client.tenantId(),
+                                normalizedProfile(client.profile()),
+                                client.subjectId(),
+                                "mcp:" + client.clientId()))
+                .stream()
+                .sorted(Comparator.comparingInt(McpToolExecutionService::stageOrder)
+                        .thenComparing(AgentTraceResponse::createdAt))
+                .toList();
+        if (stages.isEmpty()) {
+            throw new IllegalArgumentException("Multi-agent writing workflow trace not found for workflowId");
+        }
+        int promptTokens = stages.stream().mapToInt(stage -> stage.actualUsage().promptTokens()).sum();
+        int completionTokens = stages.stream().mapToInt(stage -> stage.actualUsage().completionTokens()).sum();
+        int totalTokens = stages.stream().mapToInt(stage -> stage.actualUsage().totalTokens()).sum();
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("workflowId", workflowId);
+        result.put("tenantId", client.tenantId());
+        result.put("subjectType", normalizedProfile(client.profile()));
+        result.put("subjectId", client.subjectId());
+        result.put("stageCount", stages.size());
+        result.put("totalUsage", new AgentRunExecuteResponse.TokenUsage(promptTokens, completionTokens, totalTokens));
+        result.put("stages", stages);
+        return result;
+    }
+
+    /**
      * Checks the exact tool allow-list configured for this MCP client.
      */
     private static void requireToolAllowed(McpClientRegistryProperties.Client client, String toolName) {
@@ -298,6 +342,37 @@ public class McpToolExecutionService {
             throw new IllegalArgumentException("MCP tool name is required");
         }
         return toolName.strip();
+    }
+
+    /**
+     * Validates workflow id shape before using it as a trace prefix.
+     */
+    private static String normalizedWorkflowId(String workflowId) {
+        if (workflowId == null || workflowId.isBlank()) {
+            throw new IllegalArgumentException("workflowId is required for get_multi_agent_writing_trace");
+        }
+        String normalized = workflowId.strip();
+        if (!normalized.matches("[A-Za-z0-9._:-]{8,80}")) {
+            throw new IllegalArgumentException("workflowId is invalid");
+        }
+        return normalized;
+    }
+
+    /**
+     * Sorts known writing stages into the execution order.
+     */
+    private static int stageOrder(AgentTraceResponse trace) {
+        String planId = trace.planId() == null ? "" : trace.planId();
+        if (planId.endsWith(":draft")) {
+            return 0;
+        }
+        if (planId.endsWith(":review")) {
+            return 1;
+        }
+        if (planId.endsWith(":format")) {
+            return 2;
+        }
+        return 99;
     }
 
     /**

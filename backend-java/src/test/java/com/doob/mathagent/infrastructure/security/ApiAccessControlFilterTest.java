@@ -44,4 +44,14 @@ class ApiAccessControlFilterTest {
 
         assertThat(rule.level()).isEqualTo(ApiAccessLevel.USER);
     }
+
+    @Test
+    void multiAgentWritingIsTeacherUserEndpoint() {
+        ApiAccessRule rule = ApiAccessPolicy.defaultRules()
+                .findRule("/api/agents/writing/courseware/async")
+                .orElseThrow();
+
+        assertThat(rule.level()).isEqualTo(ApiAccessLevel.USER);
+        assertThat(rule.allowedSubjectTypes()).containsExactlyInAnyOrder("teacher", "admin");
+    }
 }

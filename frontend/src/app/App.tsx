@@ -11,6 +11,8 @@ import {
   KnowledgePointResponse,
   KnowledgeRelationResponse,
   McpConfigurationResponse,
+  MultiAgentWritingResponse,
+  MultiAgentWritingTraceResponse,
   QuestionBankItemResponse,
   RetrievalAuditDetail,
   StudentDashboardResponse,
@@ -41,6 +43,7 @@ import {
 const DEFAULT_BACKEND_URL = import.meta.env.VITE_BACKEND_URL ?? "http://127.0.0.1:8080";
 const DEFAULT_FEISHU_ROOT_URL = "https://my.feishu.cn/drive/folder/XVn7fXppJlQMK5dkuOkc1ePan2f";
 const TEACHING_TASK_STORAGE_KEY = "math-agent:last-teaching-task-id";
+const MULTI_AGENT_WORKFLOW_STORAGE_KEY = "math-agent:last-multi-agent-workflow-id";
 const AGENT_MODEL_OPTIONS: Record<string, string[]> = {
   openai: ["gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano"],
   dashscope: ["qwen3.6-flash", "qwen3.7-plus", "qwen3.7-max"],
@@ -92,8 +95,12 @@ export function App() {
   const [agentTraces, setAgentTraces] = useState<AgentTraceResponse[]>([]);
   const [agentUsageSummary, setAgentUsageSummary] = useState<AgentTraceUsageSummaryResponse | null>(null);
   const [agentDiagnosticSummary, setAgentDiagnosticSummary] = useState<AgentTraceDiagnosticSummaryResponse | null>(null);
+  const [multiAgentWorkflow, setMultiAgentWorkflow] = useState<MultiAgentWritingResponse | null>(null);
+  const [multiAgentWorkflowTraces, setMultiAgentWorkflowTraces] = useState<MultiAgentWritingTraceResponse | null>(null);
   const [planningAgent, setPlanningAgent] = useState(false);
   const [executingAgent, setExecutingAgent] = useState(false);
+  const [startingMultiAgentWriting, setStartingMultiAgentWriting] = useState(false);
+  const [pollingMultiAgentWriting, setPollingMultiAgentWriting] = useState(false);
   const [loadingAgentTraces, setLoadingAgentTraces] = useState(false);
   const [agentPlanError, setAgentPlanError] = useState("");
   const [agentExecutionError, setAgentExecutionError] = useState("");
@@ -108,6 +115,10 @@ export function App() {
   const [disableTextbookSearch, setDisableTextbookSearch] = useState(false);
   const [agentProvider, setAgentProvider] = useState("openai");
   const [agentModel, setAgentModel] = useState("gpt-5.4");
+  const [multiAgentWritingGoal, setMultiAgentWritingGoal] = useState("teacher handout");
+  const [multiAgentWritingQuestion, setMultiAgentWritingQuestion] = useState("space vector angle");
+  const [multiAgentDryRun, setMultiAgentDryRun] = useState(false);
+  const [multiAgentWritingError, setMultiAgentWritingError] = useState("");
   const [mcpUrl, setMcpUrl] = useState(`${DEFAULT_BACKEND_URL}/api/mcp`);
   const [mcpSecretKey, setMcpSecretKey] = useState("");
   const [mcpSecretEnvName, setMcpSecretEnvName] = useState("MATH_AGENT_MCP_SECRET");
@@ -196,6 +207,23 @@ export function App() {
   useEffect(() => {
     refreshAgentTraces();
   }, [api]);
+
+  useEffect(() => {
+    const workflowId = globalThis.localStorage?.getItem(MULTI_AGENT_WORKFLOW_STORAGE_KEY);
+    if (workflowId) {
+      refreshMultiAgentWritingWorkflow(workflowId);
+    }
+  }, [api]);
+
+  useEffect(() => {
+    if (!multiAgentWorkflow || multiAgentWorkflow.status !== "RUNNING") {
+      return;
+    }
+    const timer = globalThis.setInterval(() => {
+      refreshMultiAgentWritingWorkflow(multiAgentWorkflow.workflowId);
+    }, 3000);
+    return () => globalThis.clearInterval(timer);
+  }, [api, multiAgentWorkflow?.workflowId, multiAgentWorkflow?.status]);
 
   useEffect(() => {
     api
@@ -741,6 +769,56 @@ export function App() {
       .finally(() => setExecutingAgent(false));
   }
 
+  function handleStartMultiAgentWriting(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!multiAgentWritingGoal.trim() || !multiAgentWritingQuestion.trim()) {
+      setMultiAgentWritingError("请输入写作目标和题目。");
+      return;
+    }
+    setStartingMultiAgentWriting(true);
+    setMultiAgentWritingError("");
+    setMultiAgentWorkflowTraces(null);
+    api
+      .startAsyncMultiAgentWriting({
+        writingGoal: multiAgentWritingGoal,
+        questionText: multiAgentWritingQuestion,
+        evidenceRefs: multiAgentEvidenceRefs(searchResult),
+        dryRun: multiAgentDryRun,
+        preferredProviderName: agentProvider,
+        preferredModelCode: agentModel,
+      })
+      .then((workflow) => {
+        setMultiAgentWorkflow(workflow);
+        globalThis.localStorage?.setItem(MULTI_AGENT_WORKFLOW_STORAGE_KEY, workflow.workflowId);
+      })
+      .catch((error: Error) => setMultiAgentWritingError(error.message))
+      .finally(() => setStartingMultiAgentWriting(false));
+  }
+
+  function refreshMultiAgentWritingWorkflow(workflowId?: string) {
+    const targetWorkflowId = workflowId || multiAgentWorkflow?.workflowId;
+    if (!targetWorkflowId) {
+      return;
+    }
+    setPollingMultiAgentWriting(true);
+    setMultiAgentWritingError("");
+    api
+      .getMultiAgentWritingWorkflow(targetWorkflowId)
+      .then((workflow) => {
+        setMultiAgentWorkflow(workflow);
+        if (workflow.status === "COMPLETED" || workflow.status === "FAILED") {
+          return api
+            .getMultiAgentWritingTraces(workflow.workflowId)
+            .then(setMultiAgentWorkflowTraces)
+            .catch(() => undefined)
+            .then(() => refreshAgentTraces());
+        }
+        return undefined;
+      })
+      .catch((error: Error) => setMultiAgentWritingError(error.message))
+      .finally(() => setPollingMultiAgentWriting(false));
+  }
+
   function handleBuildMcpConfiguration(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setMcpBuilding(true);
@@ -1066,6 +1144,24 @@ export function App() {
             executing={executingAgent}
             error={agentPlanError || agentExecutionError}
             onExecute={handleExecuteAgentRun}
+          />
+
+          <MultiAgentWritingPanel
+            workflow={multiAgentWorkflow}
+            traces={multiAgentWorkflowTraces}
+            writingGoal={multiAgentWritingGoal}
+            questionText={multiAgentWritingQuestion}
+            dryRun={multiAgentDryRun}
+            providerName={agentProvider}
+            modelCode={agentModel}
+            starting={startingMultiAgentWriting}
+            polling={pollingMultiAgentWriting}
+            error={multiAgentWritingError}
+            onWritingGoalChange={setMultiAgentWritingGoal}
+            onQuestionTextChange={setMultiAgentWritingQuestion}
+            onDryRunChange={setMultiAgentDryRun}
+            onSubmit={handleStartMultiAgentWriting}
+            onRefresh={() => refreshMultiAgentWritingWorkflow()}
           />
 
             <AgentTracePanel
@@ -2215,6 +2311,161 @@ function TeachingTaskPanel({
   );
 }
 
+function MultiAgentWritingPanel({
+  workflow,
+  traces,
+  writingGoal,
+  questionText,
+  dryRun,
+  providerName,
+  modelCode,
+  starting,
+  polling,
+  error,
+  onWritingGoalChange,
+  onQuestionTextChange,
+  onDryRunChange,
+  onSubmit,
+  onRefresh,
+}: {
+  workflow: MultiAgentWritingResponse | null;
+  traces: MultiAgentWritingTraceResponse | null;
+  writingGoal: string;
+  questionText: string;
+  dryRun: boolean;
+  providerName: string;
+  modelCode: string;
+  starting: boolean;
+  polling: boolean;
+  error: string;
+  onWritingGoalChange: (value: string) => void;
+  onQuestionTextChange: (value: string) => void;
+  onDryRunChange: (value: boolean) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onRefresh: () => void;
+}) {
+  const stageCodes = ["draft", "review", "format"];
+  return (
+    <section className="agent-trace-panel">
+      <div className="result-header">
+        <div>
+          <p className="eyebrow">Multi-Agent Writing</p>
+          <h2>Courseware workflow</h2>
+        </div>
+        <button type="button" className="inline-action" onClick={onRefresh} disabled={!workflow || polling}>
+          {polling ? <Loader2 className="spin" size={16} /> : <Search size={16} />}
+          <span>Refresh</span>
+        </button>
+      </div>
+      <form className="search-form agent-tool-form" onSubmit={onSubmit}>
+        <label>
+          <span>Goal</span>
+          <input value={writingGoal} onChange={(event) => onWritingGoalChange(event.target.value)} />
+        </label>
+        <label>
+          <span>Question</span>
+          <input value={questionText} onChange={(event) => onQuestionTextChange(event.target.value)} />
+        </label>
+        <label className="toggle-row">
+          <input type="checkbox" checked={dryRun} onChange={(event) => onDryRunChange(event.target.checked)} />
+          <span>Dry run</span>
+        </label>
+        <button type="submit" disabled={starting}>
+          {starting ? <Loader2 className="spin" size={17} /> : <ShieldCheck size={17} />}
+          <span>Start async</span>
+        </button>
+      </form>
+      <div className="trace-badge-row">
+        <span>Model</span>
+        <div>
+          <strong>
+            {providerName} / {modelCode}
+          </strong>
+        </div>
+      </div>
+      {error ? <StatusLine icon={<AlertCircle size={16} />} text={error} tone="danger" /> : null}
+      {workflow ? (
+        <div className="agent-usage-summary">
+          <div className="result-header compact">
+            <div>
+              <p className="eyebrow">Workflow</p>
+              <h3>{workflow.status}</h3>
+            </div>
+            <strong>
+              {workflow.totalUsage.totalTokens} total / {workflow.totalUsage.promptTokens} prompt /{" "}
+              {workflow.totalUsage.completionTokens} completion
+            </strong>
+          </div>
+          <div className="trace-badge-row">
+            <span>ID</span>
+            <div>
+              <strong>{workflow.workflowId}</strong>
+            </div>
+          </div>
+          {workflow.message ? (
+            <div className="trace-badge-row">
+              <span>Status</span>
+              <div>
+                <strong>{workflow.message}</strong>
+              </div>
+            </div>
+          ) : null}
+          <div className="tool-decision-list compact">
+            {stageCodes.map((stageCode) => {
+              const stage = workflow.stages.find((candidate) => candidate.stageCode === stageCode);
+              return (
+                <div className={`tool-decision ${stage ? "allowed" : "denied"}`} key={stageCode}>
+                  <strong>{stageCode}</strong>
+                  <span>
+                    {stage
+                      ? `${stage.providerName}/${stage.modelCode} 路 ${stage.actualUsage.totalTokens} tokens`
+                      : workflow.status === "RUNNING"
+                        ? "waiting"
+                        : "not completed"}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : (
+        <div className="empty-state compact">Start a workflow to get a recoverable workflow id.</div>
+      )}
+      {traces ? (
+        <div className="agent-trace-list">
+          {traces.stages.map((trace) => (
+            <article className="agent-trace-item" key={trace.traceId}>
+              <div className="card-head">
+                <div>
+                  <h3>{trace.agentCode}</h3>
+                  <p>{trace.planId}</p>
+                </div>
+                <span className="quality-badge good">{trace.status}</span>
+              </div>
+              <div className="profile-strip">
+                <div>
+                  <span>Model</span>
+                  <strong>
+                    {trace.providerName} / {trace.modelCode}
+                  </strong>
+                </div>
+                <div>
+                  <span>Token usage</span>
+                  <strong>{trace.actualUsage.totalTokens}</strong>
+                </div>
+                <div>
+                  <span>Events</span>
+                  <strong>{trace.diagnosticEvents?.length ?? 0}</strong>
+                </div>
+              </div>
+            </article>
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function AgentPlanPanel({
   plan,
   execution,
@@ -2566,6 +2817,13 @@ function formatSimilarity(value?: number) {
 function formatDateTime(value: string) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString("zh-CN", { hour12: false });
+}
+
+function multiAgentEvidenceRefs(searchResult: TextbookSearchResponse | null) {
+  if (!searchResult) {
+    return [];
+  }
+  return searchResult.hits.slice(0, 3).map((hit) => `PUBLIC_TEXTBOOK:${hit.docId}:${hit.chunkId}`);
 }
 
 function countJsonArray(value: string) {

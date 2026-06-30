@@ -5,20 +5,29 @@ package com.doob.mathagent.agent.dto;
  *
  * @param agentCode optional agent code filter
  * @param status optional execution status filter
- * @param planId optional plan id filter, used by teaching task id linked traces
+ * @param planId optional exact plan id filter, used by teaching task id linked traces
+ * @param planIdPrefix optional plan id prefix filter, used by grouped workflow traces
  * @param limit maximum rows to return, clipped by backend policy
  */
 public record AgentTraceQueryRequest(
         String agentCode,
         String status,
         String planId,
+        String planIdPrefix,
         Integer limit) {
 
     /**
      * Backward-compatible constructor for callers that do not filter by plan id.
      */
     public AgentTraceQueryRequest(String agentCode, String status, Integer limit) {
-        this(agentCode, status, null, limit);
+        this(agentCode, status, null, null, limit);
+    }
+
+    /**
+     * Backward-compatible constructor for callers that filter by exact plan id only.
+     */
+    public AgentTraceQueryRequest(String agentCode, String status, String planId, Integer limit) {
+        this(agentCode, status, planId, null, limit);
     }
 
     /**
@@ -30,6 +39,7 @@ public record AgentTraceQueryRequest(
                 blankToNull(agentCode),
                 blankToNull(status),
                 blankToNull(planId),
+                blankToNull(planIdPrefix),
                 normalizedLimit);
     }
 

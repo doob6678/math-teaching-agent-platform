@@ -771,6 +771,72 @@ export interface AgentTokenUsage {
 }
 
 /**
+ * Request for protected multi-agent courseware or handout writing.
+ */
+export interface MultiAgentWritingRequest {
+  /** Writing goal, such as teacher handout, student blank handout, or courseware outline. */
+  writingGoal: string;
+  /** Source question or teaching topic submitted by the teacher. */
+  questionText: string;
+  /** Evidence anchors selected from textbook, Feishu, question bank, or teacher resources. */
+  evidenceRefs: string[];
+  /** True keeps execution in trace-only mode without live model calls. */
+  dryRun: boolean;
+  /** Optional preferred provider name; backend validates it before use. */
+  preferredProviderName?: string;
+  /** Optional preferred model code; backend validates it against provider allow-list. */
+  preferredModelCode?: string;
+}
+
+/**
+ * One stage result from the backend-owned multi-agent writing workflow.
+ */
+export interface MultiAgentWritingStageResult {
+  /** Stable stage code, such as draft, review, or format. */
+  stageCode: string;
+  /** Backend agent code executed for this stage. */
+  agentCode: string;
+  /** Trace id used for recovery and diagnostics. */
+  traceId: string;
+  /** Actual provider used after backend fallback rotation. */
+  providerName: string;
+  /** Actual model used after backend fallback rotation. */
+  modelCode: string;
+  /** Stage execution status. */
+  status: string;
+  /** Provider-reported token usage for this stage. */
+  actualUsage: AgentTokenUsage;
+  /** Safe status message without raw prompt or full model output. */
+  message: string;
+}
+
+/**
+ * Safe multi-agent writing workflow status response.
+ */
+export interface MultiAgentWritingResponse {
+  /** Backend workflow id used for recovery after leaving the page. */
+  workflowId: string;
+  /** Backend tenant id. */
+  tenantId: string;
+  /** Backend subject role. */
+  subjectType: string;
+  /** Backend subject id. */
+  subjectId: string;
+  /** Workflow status, such as RUNNING, COMPLETED, or FAILED. */
+  status: string;
+  /** Backend workflow creation time. */
+  createdAt?: string;
+  /** Backend latest workflow update time. */
+  updatedAt?: string;
+  /** Ordered stage results completed so far. */
+  stages: MultiAgentWritingStageResult[];
+  /** Summed provider-reported token usage. */
+  totalUsage: AgentTokenUsage;
+  /** Safe workflow status message without raw prompt or full model output. */
+  message?: string;
+}
+
+/**
  * Optional filters for listing visible agent traces.
  */
 export interface AgentTraceQuery {
@@ -780,6 +846,8 @@ export interface AgentTraceQuery {
   status?: string;
   /** Optional plan id filter; teaching AI traces use taskId as planId. */
   planId?: string;
+  /** Optional plan id prefix filter; multi-agent writing uses workflowId:stageCode. */
+  planIdPrefix?: string;
   /** Maximum rows to return. */
   limit?: number;
 }
@@ -824,6 +892,26 @@ export interface AgentTraceResponse {
   message: string;
   /** Safe retry/fallback/parse diagnostics without raw prompts or model outputs. */
   diagnosticEvents?: AgentTraceDiagnosticEvent[];
+}
+
+/**
+ * Safe trace recovery response for a multi-agent writing workflow.
+ */
+export interface MultiAgentWritingTraceResponse {
+  /** Backend workflow id. */
+  workflowId: string;
+  /** Backend tenant id. */
+  tenantId: string;
+  /** Backend subject role. */
+  subjectType: string;
+  /** Backend subject id. */
+  subjectId: string;
+  /** Number of visible stage traces. */
+  stageCount: number;
+  /** Summed provider-reported token usage for visible traces. */
+  totalUsage: AgentTokenUsage;
+  /** Ordered safe stage traces. */
+  stages: AgentTraceResponse[];
 }
 
 export interface AgentTraceDiagnosticEvent {
@@ -1809,6 +1897,70 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     },
 
     /**
+     * Runs protected multi-agent writing after acquiring a one-time capability token.
+     */
+    async runMultiAgentWriting(request: MultiAgentWritingRequest): Promise<MultiAgentWritingResponse> {
+      const body = JSON.stringify(request);
+      const path = "/api/agents/writing/courseware";
+      const capability = await applyCapability(
+        "agent-run:CoursewareAgent",
+        path,
+        body,
+        `multi-agent-writing:${request.writingGoal}:${request.questionText}`,
+        3,
+      );
+      return requestJson<MultiAgentWritingResponse>(path, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Capability-Token": capability.token,
+          "X-Request-Hash": capability.requestHash,
+        },
+        body,
+      });
+    },
+
+    /**
+     * Starts multi-agent writing in the background and returns a workflow id for polling.
+     */
+    async startAsyncMultiAgentWriting(request: MultiAgentWritingRequest): Promise<MultiAgentWritingResponse> {
+      const body = JSON.stringify(request);
+      const path = "/api/agents/writing/courseware/async";
+      const capability = await applyCapability(
+        "agent-run:CoursewareAgent",
+        path,
+        body,
+        `multi-agent-writing-async:${request.writingGoal}:${request.questionText}`,
+        3,
+      );
+      return requestJson<MultiAgentWritingResponse>(path, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Capability-Token": capability.token,
+          "X-Request-Hash": capability.requestHash,
+        },
+        body,
+      });
+    },
+
+    /**
+     * Reads the latest safe multi-agent writing workflow status by workflow id.
+     */
+    getMultiAgentWritingWorkflow(workflowId: string): Promise<MultiAgentWritingResponse> {
+      return requestJson<MultiAgentWritingResponse>(`/api/agents/writing/${encodeURIComponent(workflowId)}`);
+    },
+
+    /**
+     * Reads safe ordered traces for a multi-agent writing workflow.
+     */
+    getMultiAgentWritingTraces(workflowId: string): Promise<MultiAgentWritingTraceResponse> {
+      return requestJson<MultiAgentWritingTraceResponse>(
+        `/api/agents/writing/${encodeURIComponent(workflowId)}/traces`,
+      );
+    },
+
+    /**
      * Lists agent traces visible to the backend session subject.
      */
     listAgentTraces(query: AgentTraceQuery = {}): Promise<AgentTraceResponse[]> {
@@ -1821,6 +1973,9 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
       }
       if (query.planId) {
         params.set("planId", query.planId);
+      }
+      if (query.planIdPrefix) {
+        params.set("planIdPrefix", query.planIdPrefix);
       }
       if (query.limit) {
         params.set("limit", String(query.limit));
@@ -1843,6 +1998,9 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
       if (query.planId) {
         params.set("planId", query.planId);
       }
+      if (query.planIdPrefix) {
+        params.set("planIdPrefix", query.planIdPrefix);
+      }
       if (query.limit) {
         params.set("limit", String(query.limit));
       }
@@ -1863,6 +2021,9 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
       }
       if (query.planId) {
         params.set("planId", query.planId);
+      }
+      if (query.planIdPrefix) {
+        params.set("planIdPrefix", query.planIdPrefix);
       }
       if (query.limit) {
         params.set("limit", String(query.limit));

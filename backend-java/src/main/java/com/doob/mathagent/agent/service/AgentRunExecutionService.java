@@ -217,7 +217,8 @@ public class AgentRunExecutionService {
                             outcome.promptTokens(),
                             outcome.completionTokens(),
                             outcome.totalTokens()),
-                    outcome.message());
+                    outcome.message(),
+                    outcome.diagnosticEvents());
             traceStore.save(finalRecord);
 
             return new AgentRunExecuteResponse(
@@ -247,7 +248,11 @@ public class AgentRunExecutionService {
      */
     private ExecutionOutcome callModelWithFallback(AgentRunExecuteRequest request, AgentTraceRecord record) {
         RuntimeException lastFailure = null;
-        for (AiProviderCatalog.Provider provider : fallbackProviders(record.providerName(), record.modelCode())) {
+        List<AgentTraceRecord.DiagnosticEvent> diagnosticEvents = new ArrayList<>();
+        List<AiProviderCatalog.Provider> providers = fallbackProviders(record.providerName(), record.modelCode());
+        for (int index = 0; index < providers.size(); index++) {
+            AiProviderCatalog.Provider provider = providers.get(index);
+            boolean canRotateProvider = index < providers.size() - 1;
             try {
                 AiChatResult result = aiChatGateway.call(new AiChatRequest(
                         provider.name(),
@@ -255,15 +260,40 @@ public class AgentRunExecutionService {
                         record.agentCode(),
                         request.userInputSummary(),
                         request.evidenceRefs()));
+                diagnosticEvents.add(diagnosticEvent(
+                        "MODEL_CALL_SUCCEEDED",
+                        result.providerName(),
+                        result.modelCode(),
+                        index,
+                        false,
+                        result.safeMessage()));
                 return new ExecutionOutcome(
                         result.providerName(),
                         result.modelCode(),
                         Math.max(0, result.promptTokens()),
                         Math.max(0, result.completionTokens()),
                         Math.max(0, result.totalTokens()),
-                        result.safeMessage());
+                        result.safeMessage(),
+                        List.copyOf(diagnosticEvents));
             } catch (RuntimeException exception) {
                 lastFailure = exception;
+                diagnosticEvents.add(diagnosticEvent(
+                        "MODEL_CALL_FAILED",
+                        provider.name(),
+                        provider.chatModel(),
+                        index,
+                        canRotateProvider,
+                        exception.getClass().getSimpleName()));
+                if (canRotateProvider) {
+                    AiProviderCatalog.Provider nextProvider = providers.get(index + 1);
+                    diagnosticEvents.add(diagnosticEvent(
+                            "PROVIDER_ROTATED",
+                            nextProvider.name(),
+                            nextProvider.chatModel(),
+                            index + 1,
+                            true,
+                            "Switching to next enabled provider after model call failure."));
+                }
             }
         }
         throw new IllegalStateException("All configured AI providers failed", lastFailure);
@@ -371,6 +401,25 @@ public class AgentRunExecutionService {
     }
 
     /**
+     * Builds one safe model-call diagnostic event without raw prompt or generated output.
+     */
+    private static AgentTraceRecord.DiagnosticEvent diagnosticEvent(
+            String eventType,
+            String providerName,
+            String modelCode,
+            int attemptNo,
+            boolean retryable,
+            String message) {
+        return new AgentTraceRecord.DiagnosticEvent(
+                eventType,
+                providerName,
+                modelCode,
+                attemptNo,
+                retryable,
+                safeText(message));
+    }
+
+    /**
      * Lightweight execution timer for trace-level monitoring.
      */
     private static final class StageTimer {
@@ -404,7 +453,8 @@ public class AgentRunExecutionService {
             int promptTokens,
             int completionTokens,
             int totalTokens,
-            String message) {
+            String message,
+            List<AgentTraceRecord.DiagnosticEvent> diagnosticEvents) {
 
         /**
          * Returns a baseline dry-run outcome with zero provider usage.
@@ -416,7 +466,8 @@ public class AgentRunExecutionService {
                     0,
                     0,
                     0,
-                    "Baseline trace recorded; external model execution is not enabled yet.");
+                    "Baseline trace recorded; external model execution is not enabled yet.",
+                    List.of());
         }
     }
 }

@@ -563,6 +563,37 @@ class CapabilityTokenServiceTest {
     }
 
     @Test
+    void issuesMultiAgentWritingCapabilityTokensForTeachersOnly() {
+        CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
+        RequestSubject teacher = new RequestSubject("school-a", "teacher", "teacher-001", "device-1");
+        RequestSubject student = new RequestSubject("school-a", "student", "student-001", "device-1");
+
+        CapabilityTokenResponse async = service.apply(new CapabilityTokenApplyRequest(
+                "agent-run:CoursewareAgent",
+                "/api/agents/writing/courseware/async",
+                "hash-writing-body",
+                "multi-agent-writing-1",
+                3.0), teacher);
+
+        assertThat(async.action()).isEqualTo("agent-run:CoursewareAgent");
+        assertThat(async.path()).isEqualTo("/api/agents/writing/courseware/async");
+        assertThat(service.consume(
+                async.token(),
+                "agent-run:CoursewareAgent",
+                "/api/agents/writing/courseware/async",
+                "hash-writing-body",
+                teacher).allowed()).isTrue();
+        assertThatThrownBy(() -> service.apply(new CapabilityTokenApplyRequest(
+                "agent-run:CoursewareAgent",
+                "/api/agents/writing/courseware/async",
+                "hash-writing-body",
+                "multi-agent-writing-student",
+                3.0), student))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Capability subject not allowed");
+    }
+
+    @Test
     void recordsAuditEventsForIssueConsumeAndDeniedReplay() {
         CapturingCapabilityAuditSink auditSink = new CapturingCapabilityAuditSink();
         CapabilityTokenService service =

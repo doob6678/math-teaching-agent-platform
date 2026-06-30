@@ -1145,6 +1145,248 @@ describe("textbookApi", () => {
     expect(traces[0].actualUsage.totalTokens).toBe(168);
   });
 
+  it("runs multi-agent writing with capability protection and backend session identity only", async () => {
+    globalThis.localStorage.setItem(
+      "math-agent:auth-session",
+      JSON.stringify({
+        userId: "teacher-1",
+        username: "teacher",
+        role: "teacher",
+        tenantId: "school-a",
+        tokenName: "satoken",
+        tokenValue: "token-teacher",
+      }),
+    );
+    const request = {
+      writingGoal: "teacher handout",
+      questionText: "space vector angle",
+      evidenceRefs: ["PUBLIC_TEXTBOOK:space-vector:angle"],
+      dryRun: true,
+      preferredProviderName: "dashscope",
+      preferredModelCode: "qwen3.6-flash",
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          token: "writing-capability",
+          action: "agent-run:CoursewareAgent",
+          path: "/api/agents/writing/courseware",
+          requestHash: "hash-writing",
+          expiresAt: "2026-06-30T12:02:00Z",
+          maxCost: 3,
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          workflowId: "workflow-1",
+          tenantId: "school-a",
+          subjectType: "teacher",
+          subjectId: "teacher-1",
+          status: "COMPLETED",
+          stages: [{
+            stageCode: "draft",
+            agentCode: "CoursewareAgent",
+            traceId: "trace-1",
+            providerName: "dashscope",
+            modelCode: "qwen3.6-flash",
+            status: "COMPLETED",
+            actualUsage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+            message: "safe stage message",
+          }],
+          totalUsage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+        }),
+      });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const response = await client.runMultiAgentWriting(request);
+
+    const capabilityBody = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
+    expect(capabilityBody).toEqual({
+      action: "agent-run:CoursewareAgent",
+      path: "/api/agents/writing/courseware",
+      requestHash: expect.any(String),
+      idempotencyKey: "multi-agent-writing:teacher handout:space vector angle",
+      maxCost: 3,
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://127.0.0.1:8080/api/agents/writing/courseware",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "Content-Type": "application/json",
+          satoken: "token-teacher",
+          "X-Capability-Token": "writing-capability",
+          "X-Request-Hash": capabilityBody.requestHash,
+        }),
+        body: JSON.stringify(request),
+      }),
+    );
+    expect(fetchMock.mock.calls[1][1]?.headers).not.toHaveProperty("X-Subject-Id");
+    expect(fetchMock.mock.calls[1][1]?.headers).not.toHaveProperty("X-Subject-Type");
+    expect(response.workflowId).toBe("workflow-1");
+    expect(response.totalUsage.totalTokens).toBe(15);
+  });
+
+  it("recovers multi-agent writing workflow and traces by workflow id", async () => {
+    globalThis.localStorage.setItem(
+      "math-agent:auth-session",
+      JSON.stringify({
+        userId: "teacher-1",
+        username: "teacher",
+        role: "teacher",
+        tenantId: "school-a",
+        tokenName: "satoken",
+        tokenValue: "token-teacher",
+      }),
+    );
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          workflowId: "workflow-1",
+          tenantId: "school-a",
+          subjectType: "teacher",
+          subjectId: "teacher-1",
+          status: "COMPLETED",
+          stages: [],
+          totalUsage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          workflowId: "workflow-1",
+          tenantId: "school-a",
+          subjectType: "teacher",
+          subjectId: "teacher-1",
+          stageCount: 1,
+          totalUsage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+          stages: [{
+            traceId: "trace-1",
+            planId: "workflow-1:draft",
+            createdAt: "2026-06-30T00:00:00Z",
+            tenantId: "school-a",
+            subjectType: "teacher",
+            subjectId: "teacher-1",
+            agentCode: "CoursewareAgent",
+            providerName: "dashscope",
+            modelCode: "qwen3.6-flash",
+            status: "COMPLETED",
+            estimatedCost: 0,
+            allowedToolScopes: [],
+            allowedDataScopes: [],
+            evidenceRefs: [],
+            stageTimings: [],
+            actualUsage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+            message: "safe trace",
+            diagnosticEvents: [],
+          }],
+        }),
+      });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const workflow = await client.getMultiAgentWritingWorkflow("workflow-1");
+    const traces = await client.getMultiAgentWritingTraces("workflow-1");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "http://127.0.0.1:8080/api/agents/writing/workflow-1",
+      expect.objectContaining({
+        headers: expect.objectContaining({ satoken: "token-teacher" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://127.0.0.1:8080/api/agents/writing/workflow-1/traces",
+      expect.objectContaining({
+        headers: expect.objectContaining({ satoken: "token-teacher" }),
+      }),
+    );
+    expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Id");
+    expect(fetchMock.mock.calls[1][1]?.headers).not.toHaveProperty("X-Subject-Type");
+    expect(workflow.status).toBe("COMPLETED");
+    expect(traces.stages[0].planId).toBe("workflow-1:draft");
+  });
+
+  it("starts async multi-agent writing with async capability path", async () => {
+    globalThis.localStorage.setItem(
+      "math-agent:auth-session",
+      JSON.stringify({
+        userId: "teacher-1",
+        username: "teacher",
+        role: "teacher",
+        tenantId: "school-a",
+        tokenName: "satoken",
+        tokenValue: "token-teacher",
+      }),
+    );
+    const request = {
+      writingGoal: "teacher handout",
+      questionText: "space vector angle",
+      evidenceRefs: ["PUBLIC_TEXTBOOK:space-vector:angle"],
+      dryRun: false,
+      preferredProviderName: "dashscope",
+      preferredModelCode: "qwen3.6-flash",
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          token: "writing-capability",
+          action: "agent-run:CoursewareAgent",
+          path: "/api/agents/writing/courseware/async",
+          requestHash: "hash-writing",
+          expiresAt: "2026-06-30T12:02:00Z",
+          maxCost: 3,
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          workflowId: "workflow-async-1",
+          tenantId: "school-a",
+          subjectType: "teacher",
+          subjectId: "teacher-1",
+          status: "RUNNING",
+          stages: [],
+          totalUsage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+        }),
+      });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const response = await client.startAsyncMultiAgentWriting(request);
+
+    const capabilityBody = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
+    expect(capabilityBody).toEqual({
+      action: "agent-run:CoursewareAgent",
+      path: "/api/agents/writing/courseware/async",
+      requestHash: expect.any(String),
+      idempotencyKey: "multi-agent-writing-async:teacher handout:space vector angle",
+      maxCost: 3,
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://127.0.0.1:8080/api/agents/writing/courseware/async",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "Content-Type": "application/json",
+          satoken: "token-teacher",
+          "X-Capability-Token": "writing-capability",
+          "X-Request-Hash": capabilityBody.requestHash,
+        }),
+        body: JSON.stringify(request),
+      }),
+    );
+    expect(fetchMock.mock.calls[1][1]?.headers).not.toHaveProperty("X-Subject-Id");
+    expect(fetchMock.mock.calls[1][1]?.headers).not.toHaveProperty("X-Subject-Type");
+    expect(response.workflowId).toBe("workflow-async-1");
+    expect(response.status).toBe("RUNNING");
+  });
+
   it("summarizes visible agent trace usage with backend session identity only", async () => {
     globalThis.localStorage.setItem(
       "math-agent:auth-session",

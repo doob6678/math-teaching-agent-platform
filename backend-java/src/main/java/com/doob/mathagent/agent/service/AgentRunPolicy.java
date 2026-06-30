@@ -34,6 +34,12 @@ public final class AgentRunPolicy {
                     Set.of("teacher", "admin"),
                     Set.of("tool:quality:check"),
                     Set.of("PUBLIC_TEXTBOOK", "TEACHER_PRIVATE", "CLASS_AUTHORIZED"),
+                    false),
+            new AgentDefinition(
+                    "HandoutFormatterAgent",
+                    Set.of("teacher", "admin"),
+                    Set.of("tool:handout:format"),
+                    Set.of("PUBLIC_TEXTBOOK", "TEACHER_PRIVATE", "CLASS_AUTHORIZED"),
                     false));
 
     private AgentRunPolicy() {

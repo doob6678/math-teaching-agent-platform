@@ -42,6 +42,7 @@ public class ProtocolDiscoveryService {
             "search_teacher_resource_evidence",
             "get_teaching_ai_trace",
             "get_ai_diagnostic_summary",
+            "get_multi_agent_writing_trace",
             "plan_agent_run",
             "create_teaching_task",
             "export_handout_pdf",
@@ -50,7 +51,8 @@ public class ProtocolDiscoveryService {
             "search_textbook_evidence",
             "search_teacher_resource_evidence",
             "get_teaching_ai_trace",
-            "get_ai_diagnostic_summary");
+            "get_ai_diagnostic_summary",
+            "get_multi_agent_writing_trace");
     private static final List<String> TEACHER_PROMPTS = ALL_PROMPTS;
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
@@ -141,6 +143,20 @@ public class ProtocolDiscoveryService {
                                         field("agentCode", "string", "Optional backend agent code filter."),
                                         field("status", "string", "Optional trace status filter."),
                                         field("limit", "integer", "Maximum visible trace rows to aggregate.")))),
+                new McpToolDescriptor(
+                        "get_multi_agent_writing_trace",
+                        "Get multi-agent writing trace",
+                        "Read safe ordered traces for a visible teacher multi-agent writing workflow.",
+                        true,
+                        true,
+                        TEACHER_ROLES,
+                        "agent-trace:read",
+                        "low",
+                        false,
+                        true,
+                        schema(
+                                fields(field("workflowId", "string", "Workflow id returned by multi-agent writing.")),
+                                "workflowId")),
                 new McpToolDescriptor(
                         "plan_agent_run",
                         "Plan agent run",

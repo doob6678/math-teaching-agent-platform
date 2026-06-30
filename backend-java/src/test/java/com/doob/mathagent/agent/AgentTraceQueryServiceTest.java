@@ -104,6 +104,25 @@ class AgentTraceQueryServiceTest {
     }
 
     @Test
+    void filtersVisibleTracesByPlanIdPrefixForWorkflowRecovery() {
+        InMemoryAgentTraceStore store = new InMemoryAgentTraceStore();
+        store.save(traceWithPlanId("trace-draft", "teacher", "teacher-1", "CoursewareAgent", "workflow-1:draft"));
+        store.save(traceWithPlanId("trace-review", "teacher", "teacher-1", "QualityCheckAgent", "workflow-1:review"));
+        store.save(traceWithPlanId("trace-other-workflow", "teacher", "teacher-1", "CoursewareAgent", "workflow-2:draft"));
+        store.save(traceWithPlanId("trace-other-owner", "teacher", "teacher-2", "CoursewareAgent", "workflow-1:draft"));
+        AgentTraceQueryService service = new AgentTraceQueryService(store);
+
+        List<AgentTraceResponse> traces = service.list(
+                new AgentTraceQueryRequest(null, "COMPLETED", null, "workflow-1:", 20),
+                new RequestSubject("school-a", "teacher", "teacher-1", "device-1"));
+
+        assertThat(traces).extracting(AgentTraceResponse::traceId)
+                .containsExactly("trace-draft", "trace-review");
+        assertThat(traces).extracting(AgentTraceResponse::planId)
+                .containsExactly("workflow-1:draft", "workflow-1:review");
+    }
+
+    @Test
     void summarizesSafeDiagnosticEventsForBackendVisibleTraces() {
         InMemoryAgentTraceStore store = new InMemoryAgentTraceStore();
         store.save(traceWithDiagnostics(

@@ -244,6 +244,59 @@ class McpToolExecutionServiceTest {
         assertThat(result.toString()).doesNotContain("teacher-2");
     }
 
+    @Test
+    void mcpSecretReadsOwnedMultiAgentWritingTraceByWorkflowId() throws Exception {
+        InMemoryAgentTraceStore traceStore = new InMemoryAgentTraceStore();
+        traceStore.save(workflowTrace(
+                "trace-format",
+                "workflow-123:format",
+                "workbuddy-teacher-subject",
+                "HandoutFormatterAgent",
+                7));
+        traceStore.save(workflowTrace(
+                "trace-draft",
+                "workflow-123:draft",
+                "workbuddy-teacher-subject",
+                "CoursewareAgent",
+                11));
+        traceStore.save(workflowTrace(
+                "trace-other",
+                "workflow-123:review",
+                "teacher-2",
+                "QualityCheckAgent",
+                100));
+        traceStore.save(workflowTrace(
+                "trace-review",
+                "workflow-123:review",
+                "workbuddy-teacher-subject",
+                "QualityCheckAgent",
+                5));
+        McpToolExecutionService service = new McpToolExecutionService(
+                registryWithMultiAgentWritingTraceTool(),
+                new TextbookRetrievalService(
+                        new TextbookCatalogReader(),
+                        new TextbookChunkReader(),
+                        new LocalTextbookBm25SearchEngine(),
+                        new NoopRetrievalAuditSink()),
+                new TextbookResourceProperties(textbookCorpus()),
+                null,
+                new AgentTraceQueryService(traceStore));
+
+        var response = service.callTool(
+                "Bearer teacher_secret_1234567890abcdef",
+                "get_multi_agent_writing_trace",
+                new McpToolCallRequest(Map.of("workflowId", "workflow-123")));
+
+        assertThat(response.toolName()).isEqualTo("get_multi_agent_writing_trace");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> result = (Map<String, Object>) response.result();
+        assertThat(result.get("workflowId")).isEqualTo("workflow-123");
+        assertThat(result.get("stageCount")).isEqualTo(3);
+        assertThat(result.get("totalUsage").toString()).contains("totalTokens=23");
+        assertThat(result.toString()).contains("workflow-123:draft", "workflow-123:review", "workflow-123:format");
+        assertThat(result.toString()).doesNotContain("teacher-2");
+    }
+
     /**
      * Creates a registry where one WorkBuddy teacher key can call only textbook evidence search.
      */
@@ -313,6 +366,23 @@ class McpToolExecutionServiceTest {
     }
 
     /**
+     * Creates a registry where one WorkBuddy teacher key can read owned writing workflow traces.
+     */
+    private static McpClientRegistryProperties registryWithMultiAgentWritingTraceTool() {
+        McpClientRegistryProperties properties = new McpClientRegistryProperties();
+        properties.setClients(List.of(new McpClientRegistryProperties.Client(
+                "workbuddy-teacher",
+                "teacher",
+                "default",
+                "workbuddy-teacher-subject",
+                McpClientRegistryProperties.secretHash("teacher_secret_1234567890abcdef"),
+                true,
+                List.of("get_multi_agent_writing_trace"),
+                List.of("agent-trace:read"))));
+        return properties;
+    }
+
+    /**
      * Builds a safe CoursewareAgent trace linked to a teaching task id.
      */
     private static AgentTraceRecord trace(String traceId, String taskId, String subjectType, String subjectId) {
@@ -341,6 +411,42 @@ class McpToolExecutionServiceTest {
                         0,
                         false,
                         "Structured teaching draft parsed.")));
+    }
+
+    /**
+     * Builds a safe trace linked to one multi-agent writing stage.
+     */
+    private static AgentTraceRecord workflowTrace(
+            String traceId,
+            String planId,
+            String subjectId,
+            String agentCode,
+            int totalTokens) {
+        return new AgentTraceRecord(
+                traceId,
+                planId,
+                Instant.parse("2026-06-29T00:00:00Z"),
+                "default",
+                "teacher",
+                subjectId,
+                agentCode,
+                "dashscope",
+                "qwen3.6-flash",
+                "COMPLETED",
+                0.0,
+                List.of("tool:courseware:generate"),
+                List.of("PUBLIC_TEXTBOOK"),
+                List.of("PUBLIC_TEXTBOOK:Book:chunk-1"),
+                List.of(new AgentRunExecuteResponse.StageTiming("model_call", 12)),
+                new AgentRunExecuteResponse.TokenUsage(totalTokens - 2, 2, totalTokens),
+                "safe workflow trace",
+                List.of(new AgentTraceRecord.DiagnosticEvent(
+                        "MODEL_CALL_SUCCEEDED",
+                        "dashscope",
+                        "qwen3.6-flash",
+                        0,
+                        false,
+                        "Model call completed.")));
     }
 
     /**

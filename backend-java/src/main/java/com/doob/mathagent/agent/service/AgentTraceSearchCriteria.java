@@ -8,7 +8,8 @@ package com.doob.mathagent.agent.service;
  * @param subjectId optional subject id; null lets admins search tenant-wide
  * @param agentCode optional agent code
  * @param status optional execution status
- * @param planId optional plan id, used to link traces to teaching task ids
+ * @param planId optional exact plan id, used to link traces to teaching task ids
+ * @param planIdPrefix optional plan id prefix, used to recover grouped workflow traces
  * @param limit maximum rows
  */
 public record AgentTraceSearchCriteria(
@@ -18,6 +19,7 @@ public record AgentTraceSearchCriteria(
         String agentCode,
         String status,
         String planId,
+        String planIdPrefix,
         int limit) {
 
     /**
@@ -30,7 +32,21 @@ public record AgentTraceSearchCriteria(
             String agentCode,
             String status,
             int limit) {
-        this(tenantId, subjectType, subjectId, agentCode, status, null, limit);
+        this(tenantId, subjectType, subjectId, agentCode, status, null, null, limit);
+    }
+
+    /**
+     * Backward-compatible constructor for callers that filter by exact plan id only.
+     */
+    public AgentTraceSearchCriteria(
+            String tenantId,
+            String subjectType,
+            String subjectId,
+            String agentCode,
+            String status,
+            String planId,
+            int limit) {
+        this(tenantId, subjectType, subjectId, agentCode, status, planId, null, limit);
     }
 
     /**
@@ -44,6 +60,7 @@ public record AgentTraceSearchCriteria(
                 blankToNull(agentCode),
                 blankToNull(status),
                 blankToNull(planId),
+                blankToNull(planIdPrefix),
                 Math.max(1, Math.min(limit, 100)));
     }
 
