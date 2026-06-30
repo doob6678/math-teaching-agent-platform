@@ -132,6 +132,7 @@ class TeachingHandoutBatchExportServiceTest {
                 List.of(),
                 null,
                 List.of(),
+                null,
                 null);
     }
 

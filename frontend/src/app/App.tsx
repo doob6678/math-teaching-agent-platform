@@ -2018,6 +2018,23 @@ function TeachingTaskPanel({
               ))}
             </div>
           ) : null}
+          {task.aiDraft ? (
+            <div className="ai-draft-panel">
+              <div>
+                <span>AI model</span>
+                <strong>
+                  {task.aiDraft.enabled
+                    ? `${task.aiDraft.providerName}/${task.aiDraft.modelCode}`
+                    : "not enabled"}
+                </strong>
+              </div>
+              <div>
+                <span>Tokens</span>
+                <strong>{task.aiDraft.totalTokens}</strong>
+              </div>
+              <p>{task.aiDraft.content || task.aiDraft.message}</p>
+            </div>
+          ) : null}
           <div className="node-list">
             {task.nodes.map((node) => (
               <div className="node-item" key={node.code}>

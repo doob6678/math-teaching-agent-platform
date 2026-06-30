@@ -53,7 +53,8 @@ public class SpringAiOpenAiCompatibleGateway implements AiChatGateway {
                 intValue(usage == null ? null : usage.promptTokens()),
                 intValue(usage == null ? null : usage.completionTokens()),
                 intValue(usage == null ? null : usage.totalTokens()),
-                "Live model response recorded with provider usage metadata.");
+                "Live model response recorded with provider usage metadata.",
+                firstContent(body));
     }
 
     /**
@@ -84,8 +85,19 @@ public class SpringAiOpenAiCompatibleGateway implements AiChatGateway {
         return """
                 Task summary: %s
                 Evidence references: %s
-                Return a short safe execution acknowledgement and next teaching action.
+                Return classroom-ready Chinese teaching content. Keep it concise, structured, and directly usable.
                 """.formatted(request.userInputSummary(), request.evidenceRefs());
+    }
+
+    /**
+     * Extracts the first assistant message content from the provider response.
+     */
+    private static String firstContent(OpenAiApi.ChatCompletion body) {
+        if (body == null || body.choices() == null || body.choices().isEmpty()) {
+            return "";
+        }
+        OpenAiApi.ChatCompletionMessage message = body.choices().getFirst().message();
+        return message == null || message.content() == null ? "" : message.content();
     }
 
     /**

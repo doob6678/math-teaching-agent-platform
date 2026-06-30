@@ -44,6 +44,7 @@ public record TeachingTaskResponse(
         List<String> interactiveSuggestions,
         MemoryReuse memoryReuse,
         List<StageTiming> stageTimings,
+        AiDraft aiDraft,
         String errorMessage) {
 
     /**
@@ -85,5 +86,28 @@ public record TeachingTaskResponse(
      * @param elapsedMs 当前阶段耗时毫秒数。
      */
     public record StageTiming(String stage, long elapsedMs) {
+    }
+
+    /**
+     * Real AI draft metadata and content used by the teaching workflow.
+     *
+     * @param enabled whether a model call was attempted
+     * @param providerName provider that answered
+     * @param modelCode model that answered
+     * @param promptTokens provider-reported prompt tokens
+     * @param completionTokens provider-reported completion tokens
+     * @param totalTokens provider-reported total tokens
+     * @param content model-generated classroom content
+     * @param message safe model status message
+     */
+    public record AiDraft(
+            boolean enabled,
+            String providerName,
+            String modelCode,
+            int promptTokens,
+            int completionTokens,
+            int totalTokens,
+            String content,
+            String message) {
     }
 }

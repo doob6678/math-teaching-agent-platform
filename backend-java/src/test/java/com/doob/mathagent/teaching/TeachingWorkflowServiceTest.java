@@ -54,6 +54,7 @@ class TeachingWorkflowServiceTest {
                         "PRIVATE_FEISHU_PLACEHOLDER",
                         "PRACTICE_DISCOVERY_PLACEHOLDER",
                         "REACT_SOLVE",
+                        "AI_DRAFT",
                         "LATEX_HANDOUT",
                         "HUMAN_FEEDBACK",
                         "INTERACTIVE_FOLLOW_UP");
@@ -67,9 +68,11 @@ class TeachingWorkflowServiceTest {
         assertThat(response.studentHandoutLatex()).contains("\\section{学生版}", "\\vspace");
         assertThat(response.studentHandoutLatex()).doesNotContain("知识点归属");
         assertThat(response.interactiveSuggestions()).contains("继续追问定义 D(x_0)");
+        assertThat(response.aiDraft().enabled()).isFalse();
+        assertThat(response.teacherHandoutLatex()).contains("AI生成状态");
         assertThat(response.memoryReuse().reused()).isFalse();
         assertThat(response.stageTimings()).extracting(TeachingTaskResponse.StageTiming::stage)
-                .contains("memory_reuse", "textbook_retrieval", "react_trace", "handout_generation");
+                .contains("memory_reuse", "textbook_retrieval", "react_trace", "ai_draft", "handout_generation");
     }
 
     @Test
@@ -110,7 +113,7 @@ class TeachingWorkflowServiceTest {
                 .asString()
                 .contains("命中学生记忆");
         assertThat(response.stageTimings()).extracting(TeachingTaskResponse.StageTiming::stage)
-                .contains("memory_reuse", "reuse_short_circuit", "react_trace", "handout_generation");
+                .contains("memory_reuse", "reuse_short_circuit", "react_trace", "ai_draft", "handout_generation");
     }
 
     @Test

@@ -21,6 +21,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 /**
@@ -33,6 +34,7 @@ public class TeachingWorkflowService {
     private final TextbookRetrievalService retrievalService;
     private final TeachingTaskStore taskStore;
     private final StudentMemoryReuseService memoryReuseService;
+    private final TeachingAiDraftService aiDraftService;
 
     /**
      * 创建教学编排服务。
@@ -42,15 +44,29 @@ public class TeachingWorkflowService {
      * @param taskStore 任务存储，用于恢复和隔离。
      * @param memoryReuseService 学生长短期记忆复用服务。
      */
+    @Autowired
+    public TeachingWorkflowService(
+            Path processedBooksRoot,
+            TextbookRetrievalService retrievalService,
+            TeachingTaskStore taskStore,
+            StudentMemoryReuseService memoryReuseService,
+            TeachingAiDraftService aiDraftService) {
+        this.processedBooksRoot = processedBooksRoot.toAbsolutePath().normalize();
+        this.retrievalService = retrievalService;
+        this.taskStore = taskStore;
+        this.memoryReuseService = memoryReuseService;
+        this.aiDraftService = aiDraftService;
+    }
+
+    /**
+     * Creates a workflow with AI disabled for focused tests.
+     */
     public TeachingWorkflowService(
             Path processedBooksRoot,
             TextbookRetrievalService retrievalService,
             TeachingTaskStore taskStore,
             StudentMemoryReuseService memoryReuseService) {
-        this.processedBooksRoot = processedBooksRoot.toAbsolutePath().normalize();
-        this.retrievalService = retrievalService;
-        this.taskStore = taskStore;
-        this.memoryReuseService = memoryReuseService;
+        this(processedBooksRoot, retrievalService, taskStore, memoryReuseService, TeachingAiDraftService.disabled());
     }
 
     /**
@@ -106,8 +122,16 @@ public class TeachingWorkflowService {
         List<TeachingWorkflowNode> nodes = buildNodes(request, evidence, memoryResponse);
         List<TeachingReactStep> reactTrace = buildReactTrace(request, evidence, memoryResponse);
         timer.mark("react_trace");
-        String teacherHandoutLatex = buildTeacherHandoutLatex(request, evidence, memoryResponse);
-        String studentHandoutLatex = buildStudentHandoutLatex(request, evidence, memoryResponse);
+        TeachingTaskResponse.AiDraft aiDraft = aiDraftService.draft(request, evidence, memoryResponse);
+        timer.mark("ai_draft");
+        String teacherHandoutLatex = appendAiDraft(
+                buildTeacherHandoutLatex(request, evidence, memoryResponse),
+                aiDraft,
+                true);
+        String studentHandoutLatex = appendAiDraft(
+                buildStudentHandoutLatex(request, evidence, memoryResponse),
+                aiDraft,
+                false);
         timer.mark("handout_generation");
         return new TeachingTaskResponse(
                 UUID.randomUUID().toString(),
@@ -127,12 +151,34 @@ public class TeachingWorkflowService {
                 List.of("继续追问定义 D(x_0)", "生成同类练习题", "把讲义导出为 PDF"),
                 toMemoryReuse(memoryResponse),
                 timer.timings(),
+                aiDraft,
                 null);
     }
 
     /**
      * 构造学生记忆查询请求；教学任务阶段先使用学习目标作为知识点粗标签，后续会接入知识点识别器。
      */
+    /**
+     * Appends real AI-generated teaching content to the LaTeX draft.
+     */
+    private static String appendAiDraft(
+            String latex,
+            TeachingTaskResponse.AiDraft aiDraft,
+            boolean teacherVersion) {
+        if (aiDraft == null || !aiDraft.enabled()) {
+            return latex + "\n\\section{AI生成状态}\n" + escapeLatex("未启用真实模型：" + (aiDraft == null ? "" : aiDraft.message())) + "\n";
+        }
+        if (aiDraft.content() == null || aiDraft.content().isBlank()) {
+            return latex + "\n\\section{AI生成状态}\n" + escapeLatex(aiDraft.message()) + "\n";
+        }
+        String title = teacherVersion ? "AI教师讲解草稿" : "AI课堂提示";
+        return latex + "\n\\section{" + title + "}\n"
+                + escapeLatex(aiDraft.content())
+                + "\n\\paragraph{模型}"
+                + escapeLatex(aiDraft.providerName() + "/" + aiDraft.modelCode() + " tokens=" + aiDraft.totalTokens())
+                + "\n";
+    }
+
     private static StudentMemoryCommand memoryRequest(TeachingTaskRequest request, TeachingRequestContext context) {
         return StudentMemoryCommand.fromRequest(
                 context.tenantId(),
@@ -196,6 +242,7 @@ public class TeachingWorkflowService {
                 node("PRIVATE_FEISHU_PLACEHOLDER", "私有飞书文档", "预留 tenantId + subjectId + docScope 隔离的飞书资料检索节点。"),
                 node("PRACTICE_DISCOVERY_PLACEHOLDER", "练习题发现", "预留同知识点练习题和错题库召回节点。"),
                 node("REACT_SOLVE", "ReAct 解题", "基于证据生成 thought/action/observation/answer 轨迹。"),
+                node("AI_DRAFT", "AI 讲义草稿", "调用真实模型生成教师讲解、学生提示、知识点和互动问题。"),
                 node("LATEX_HANDOUT", "LaTeX 讲义", "生成可导出为 PDF 的讲义草稿。"),
                 node("HUMAN_FEEDBACK", "人类反馈", "等待学生或教师对讲义、解析和练习建议给出人工反馈。"),
                 node("INTERACTIVE_FOLLOW_UP", "交互追问", "给出继续追问、练习和导出建议。"));

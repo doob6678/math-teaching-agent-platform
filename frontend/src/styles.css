@@ -1231,6 +1231,39 @@ h2 {
   background: #f8fafc;
 }
 
+.ai-draft-panel {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #dbe4ef;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.ai-draft-panel div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+}
+
+.ai-draft-panel span {
+  color: #64748b;
+}
+
+.ai-draft-panel strong,
+.ai-draft-panel p {
+  color: #0f172a;
+}
+
+.ai-draft-panel p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .node-list,
 .react-list {
   display: grid;

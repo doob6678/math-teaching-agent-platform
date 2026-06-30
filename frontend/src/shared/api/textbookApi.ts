@@ -382,6 +382,17 @@ export interface TeachingStageTiming {
   elapsedMs: number;
 }
 
+export interface TeachingAiDraft {
+  enabled: boolean;
+  providerName: string;
+  modelCode: string;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  content: string;
+  message: string;
+}
+
 /**
  * 教学任务响应。taskId 可保存到 localStorage，用户离开页面后继续恢复结果。
  */
@@ -420,6 +431,7 @@ export interface TeachingTaskResponse {
   memoryReuse?: TeachingMemoryReuse;
   /** 后端 DAG 阶段耗时统计。 */
   stageTimings?: TeachingStageTiming[];
+  aiDraft?: TeachingAiDraft;
   /** 失败原因。 */
   errorMessage?: string;
 }
