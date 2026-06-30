@@ -29,6 +29,8 @@ import {
 } from "../shared/api/textbookApi";
 import {
   MCP_PROMPT_OPTIONS,
+  MCP_PROTECTED_TOOL_OPTIONS,
+  MCP_TOOL_OPTION_META,
   MCP_TOOL_OPTIONS,
   defaultMcpExposureSelection,
   toggleMcpExposureOption,
@@ -1487,6 +1489,7 @@ function McpConfigurationForm({
           selected={selectedTools}
           onToggle={onToolToggle}
         />
+        <McpProtectedToolGroup />
         <McpOptionGroup
           title="Prompts"
           options={MCP_PROMPT_OPTIONS}
@@ -1524,10 +1527,37 @@ function McpOptionGroup({
             checked={selected.includes(option)}
             onChange={(event) => onToggle(option, event.target.checked)}
           />
-          <span>{option}</span>
+          <span>
+            {MCP_TOOL_OPTION_META[option]?.label ?? option}
+            {MCP_TOOL_OPTION_META[option] ? (
+              <em>
+                {option} / {MCP_TOOL_OPTION_META[option].badge}
+              </em>
+            ) : null}
+          </span>
         </label>
       ))}
     </fieldset>
+  );
+}
+
+function McpProtectedToolGroup() {
+  return (
+    <details className="mcp-option-group mcp-protected-tools">
+      <summary>Protected tools</summary>
+      <div className="mcp-protected-tool-list">
+        {MCP_PROTECTED_TOOL_OPTIONS.map((option) => {
+          const meta = MCP_TOOL_OPTION_META[option];
+          return (
+            <div className="mcp-protected-tool" key={option}>
+              <strong>{meta?.label ?? option}</strong>
+              <span>{option}</span>
+              <em>{meta?.note ?? "Protected by backend policy."}</em>
+            </div>
+          );
+        })}
+      </div>
+    </details>
   );
 }
 

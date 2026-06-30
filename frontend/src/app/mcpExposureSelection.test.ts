@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   MCP_PROMPT_OPTIONS,
+  MCP_PROTECTED_TOOL_OPTIONS,
+  MCP_TOOL_OPTION_META,
   MCP_TOOL_OPTIONS,
   defaultMcpExposureSelection,
   toggleMcpExposureOption,
@@ -12,23 +14,34 @@ describe("mcpExposureSelection", () => {
 
     expect(selection.tools).toEqual([...MCP_TOOL_OPTIONS]);
     expect(selection.prompts).toEqual([...MCP_PROMPT_OPTIONS]);
+    expect(selection.tools).toEqual(["search_textbook_evidence", "search_teacher_resource_evidence"]);
+    expect(selection.tools).not.toContain("create_teaching_task");
+    expect(selection.tools).not.toContain("export_handout_pdf");
   });
 
   it("keeps deterministic ordering when manually disabling and enabling options", () => {
     const disabled = toggleMcpExposureOption(
       [...MCP_TOOL_OPTIONS],
-      "export_handout_pdf",
+      "search_textbook_evidence",
       false,
       MCP_TOOL_OPTIONS,
     );
-    const enabledAgain = toggleMcpExposureOption(disabled, "export_handout_pdf", true, MCP_TOOL_OPTIONS);
+    const enabledAgain = toggleMcpExposureOption(disabled, "search_textbook_evidence", true, MCP_TOOL_OPTIONS);
 
     expect(disabled).toEqual([
-      "search_textbook_evidence",
-      "plan_agent_run",
-      "create_teaching_task",
-      "list_teacher_resources",
+      "search_teacher_resource_evidence",
     ]);
     expect(enabledAgain).toEqual([...MCP_TOOL_OPTIONS]);
+  });
+
+  it("keeps protected tools visible as locked metadata but not selectable by default", () => {
+    expect([...MCP_PROTECTED_TOOL_OPTIONS]).toEqual([
+      "plan_agent_run",
+      "create_teaching_task",
+      "export_handout_pdf",
+      "list_teacher_resources",
+    ]);
+    expect(MCP_TOOL_OPTION_META.search_teacher_resource_evidence.badge).toBe("read-only");
+    expect(MCP_TOOL_OPTION_META.export_handout_pdf.badge).toBe("protected");
   });
 });

@@ -1360,6 +1360,56 @@ h2 {
   overflow-wrap: anywhere;
 }
 
+.mcp-option-group .toggle-row em {
+  display: block;
+  margin-top: 2px;
+  color: #64748b;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.mcp-protected-tools summary {
+  cursor: pointer;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.mcp-protected-tool-list {
+  display: grid;
+  gap: 7px;
+  margin-top: 8px;
+}
+
+.mcp-protected-tool {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px dashed #cfd8e5;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.mcp-protected-tool strong,
+.mcp-protected-tool span,
+.mcp-protected-tool em {
+  overflow-wrap: anywhere;
+}
+
+.mcp-protected-tool strong {
+  color: #1e293b;
+  font-size: 12px;
+}
+
+.mcp-protected-tool span,
+.mcp-protected-tool em {
+  color: #64748b;
+  font-size: 11px;
+  font-style: normal;
+}
+
 .mcp-config-panel {
   display: grid;
   gap: 12px;

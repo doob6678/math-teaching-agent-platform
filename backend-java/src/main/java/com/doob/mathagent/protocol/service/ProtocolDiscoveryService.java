@@ -28,6 +28,7 @@ public class ProtocolDiscoveryService {
             "student_blank_handout_writer",
             "solution_reviewer");
     private static final List<String> STUDENT_TOOLS = List.of("search_textbook_evidence", "plan_agent_run");
+    private static final List<String> STUDENT_CONFIGURABLE_TOOLS = List.of("search_textbook_evidence");
     private static final List<String> STUDENT_PROMPTS = List.of("student_blank_handout_writer", "solution_reviewer");
     private static final List<String> TEACHER_TOOLS = List.of(
             "search_textbook_evidence",
@@ -36,6 +37,9 @@ public class ProtocolDiscoveryService {
             "create_teaching_task",
             "export_handout_pdf",
             "list_teacher_resources");
+    private static final List<String> TEACHER_CONFIGURABLE_TOOLS = List.of(
+            "search_textbook_evidence",
+            "search_teacher_resource_evidence");
     private static final List<String> TEACHER_PROMPTS = ALL_PROMPTS;
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
@@ -220,7 +224,7 @@ public class ProtocolDiscoveryService {
         String keyProfile = keyProfile(secretKey, clientRegistryProperties);
         List<String> exposedTools = exposedItems(
                 safeList(request.enabledToolNames()),
-                "student".equals(keyProfile) ? STUDENT_TOOLS : TEACHER_TOOLS);
+                "student".equals(keyProfile) ? STUDENT_CONFIGURABLE_TOOLS : TEACHER_CONFIGURABLE_TOOLS);
         List<String> exposedPrompts = exposedItems(
                 safeList(request.enabledPromptNames()),
                 "student".equals(keyProfile) ? STUDENT_PROMPTS : TEACHER_PROMPTS);
@@ -402,15 +406,15 @@ public class ProtocolDiscoveryService {
                 new McpConfigurationResponse.Layer(
                         "session",
                         "Session-bound calls",
-                        "Uses backend-resolved tenant, role, and subject identity for read operations.",
+                        "Uses backend-resolved tenant, role, and subject identity for low-risk read operations.",
                         "Sa-Token session",
-                        List.of("textbook evidence search", "agent run planning", "teacher resource listing")),
+                        List.of("textbook evidence search", "teacher resource evidence search")),
                 new McpConfigurationResponse.Layer(
                         "high_value",
                         "High-value execution",
-                        "Requires one-time capability token, request hash, rate limit, and audit before execution.",
+                        "Described for future protocol compatibility but excluded from copyable MCP JSON until protected execution is implemented.",
                         "Sa-Token session plus capability token",
-                        List.of("teaching task creation", "PDF/ZIP handout export", "agent execution")));
+                        List.of("teaching task creation", "PDF/ZIP handout export", "model or agent execution")));
     }
 
     /**

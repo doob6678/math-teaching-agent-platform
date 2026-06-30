@@ -36,7 +36,10 @@ class McpConfigurationServiceTest {
         assertThat(response.configJson()).contains("\"math-agent-rag\"");
         assertThat(response.configJson()).contains("\"url\" : \"https://math.example.com/api/mcp\"");
         assertThat(response.configJson()).contains("\"Authorization\" : \"Bearer ${MATH_AGENT_MCP_SECRET}\"");
-        assertThat(response.exposedTools()).contains("search_textbook_evidence", "search_teacher_resource_evidence", "plan_agent_run");
+        assertThat(response.exposedTools()).containsExactly("search_textbook_evidence", "search_teacher_resource_evidence");
+        assertThat(response.configJson()).doesNotContain("plan_agent_run");
+        assertThat(response.configJson()).doesNotContain("create_teaching_task");
+        assertThat(response.configJson()).doesNotContain("export_handout_pdf");
         assertThat(response.exposedPrompts()).contains("teacher_handout_writer", "student_blank_handout_writer");
         assertThat(json).doesNotContain("mcp_secret_1234567890abcdef");
         assertThat(json).doesNotContain("C:\\");
@@ -63,6 +66,33 @@ class McpConfigurationServiceTest {
         assertThat(response.configJson()).doesNotContain("search_teacher_resource_evidence");
         assertThat(response.configJson()).contains("student_blank_handout_writer");
         assertThat(response.configJson()).doesNotContain("teacher_handout_writer");
+    }
+
+    @Test
+    void excludesProtectedToolsFromCopyableMcpConfigurationEvenWhenRequested() {
+        ProtocolDiscoveryService service = new ProtocolDiscoveryService();
+
+        McpConfigurationResponse response = service.mcpConfiguration(new McpConfigurationRequest(
+                "https://math.example.com/api/mcp",
+                "mcp_secret_1234567890abcdef",
+                "MATH_AGENT_MCP_SECRET",
+                List.of(
+                        "search_textbook_evidence",
+                        "search_teacher_resource_evidence",
+                        "plan_agent_run",
+                        "create_teaching_task",
+                        "export_handout_pdf",
+                        "list_teacher_resources"),
+                List.of("teacher_handout_writer")));
+
+        assertThat(response.exposedTools()).containsExactly(
+                "search_textbook_evidence",
+                "search_teacher_resource_evidence");
+        assertThat(response.configJson()).contains("search_teacher_resource_evidence");
+        assertThat(response.configJson()).doesNotContain("plan_agent_run");
+        assertThat(response.configJson()).doesNotContain("create_teaching_task");
+        assertThat(response.configJson()).doesNotContain("export_handout_pdf");
+        assertThat(response.configJson()).doesNotContain("list_teacher_resources");
     }
 
     @Test
