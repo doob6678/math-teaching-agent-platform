@@ -109,4 +109,21 @@ class DatabaseMigrationSqlContractTest {
                 .contains("FOREIGN KEY (job_id) REFERENCES source_sync_job(job_id)")
                 .contains("FOREIGN KEY (source_document_id) REFERENCES source_document(id)");
     }
+
+    @Test
+    void studentLearningSnapshotMigrationStoresProgressGraphAndAuditScope() throws Exception {
+        String migration = Files.readString(Path.of("src/main/resources/db/migration/V5__student_learning_snapshot.sql"));
+
+        assertThat(migration)
+                .contains("CREATE TABLE student_learning_snapshot")
+                .contains("tenant_id VARCHAR(64) NOT NULL")
+                .contains("student_id VARCHAR(128) NOT NULL")
+                .contains("knowledge_progress_json JSON NOT NULL")
+                .contains("knowledge_graph_json JSON NOT NULL")
+                .contains("weak_points_json JSON NOT NULL")
+                .contains("score_trend_json JSON NOT NULL")
+                .contains("resource_scopes_json JSON NOT NULL")
+                .contains("idx_student_snapshot_tenant_student")
+                .contains("idx_student_snapshot_updated_at");
+    }
 }

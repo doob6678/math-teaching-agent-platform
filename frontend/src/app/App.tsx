@@ -900,7 +900,7 @@ export function App() {
   );
 }
 
-function StudentDashboardPanel({
+export function StudentDashboardPanel({
   dashboard,
   loading,
   error,
@@ -955,6 +955,45 @@ function StudentDashboardPanel({
               ))}
             </div>
           </div>
+
+          {dashboard.knowledgeGraph ? (
+            <div className="knowledge-graph-panel">
+              <div className="knowledge-graph-head">
+                <h3>Knowledge Graph</h3>
+                <span>{dashboard.knowledgeGraph.generatedFrom}</span>
+              </div>
+              <div className="knowledge-graph-nodes">
+                {dashboard.knowledgeGraph.nodes.map((node) => (
+                  <article className={`knowledge-node risk-${node.riskLevel}`} key={node.knowledgePointId}>
+                    <div className="knowledge-node-main">
+                      <strong>{node.knowledgePointName}</strong>
+                      <span>{node.masteryPercent}%</span>
+                    </div>
+                    <p>{node.chapterPath}</p>
+                    <div className="knowledge-node-meta">
+                      <span>{node.riskLevel}</span>
+                      {node.evidenceLinks.map((link) => (
+                        <a href={link.url} key={`${node.knowledgePointId}:${link.sourceType}`}>
+                          {link.sourceType}
+                        </a>
+                      ))}
+                    </div>
+                  </article>
+                ))}
+              </div>
+              <div className="knowledge-graph-edges">
+                {dashboard.knowledgeGraph.edges.map((edge) => (
+                  <div className="knowledge-edge" key={edge.edgeId}>
+                    <strong>{edge.relationType}</strong>
+                    <span>
+                      {edge.sourceKnowledgePointId} -&gt; {edge.targetKnowledgePointId}
+                    </span>
+                    <p>{edge.evidenceSummary}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
 
           <div className="dashboard-column">
             <h3>薄弱点</h3>

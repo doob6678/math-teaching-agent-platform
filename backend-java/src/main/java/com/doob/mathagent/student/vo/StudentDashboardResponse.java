@@ -15,6 +15,7 @@ import java.util.List;
  * @param recentQuestions recoverable historical question records
  * @param scoreTrend exam score trend points
  * @param resourceScopes resource scopes currently allowed for this student
+ * @param knowledgeGraph graph nodes and edges used by the frontend mastery visualization
  */
 public record StudentDashboardResponse(
         String tenantId,
@@ -26,7 +27,8 @@ public record StudentDashboardResponse(
         List<WeakPoint> weakPoints,
         List<RecentQuestion> recentQuestions,
         List<ScorePoint> scoreTrend,
-        List<ResourceScope> resourceScopes) {
+        List<ResourceScope> resourceScopes,
+        KnowledgeGraph knowledgeGraph) {
 
     /**
      * Knowledge graph progress item.
@@ -103,5 +105,69 @@ public record StudentDashboardResponse(
             String scopeCode,
             String scopeName,
             String accessPolicy) {
+    }
+
+    /**
+     * Student knowledge graph assembled for one dashboard response.
+     *
+     * @param nodes visible knowledge point nodes with mastery and evidence
+     * @param edges visible prerequisite or related-topic edges
+     * @param generatedFrom source summary used for audit and frontend display
+     */
+    public record KnowledgeGraph(
+            List<KnowledgeGraphNode> nodes,
+            List<KnowledgeGraphEdge> edges,
+            String generatedFrom) {
+    }
+
+    /**
+     * Knowledge graph node with a stable id, progress, and evidence links.
+     *
+     * @param knowledgePointId stable knowledge point id used by graph edges
+     * @param knowledgePointName knowledge point display name
+     * @param chapterPath textbook chapter path for grouping
+     * @param masteryPercent student mastery percent from the progress model
+     * @param riskLevel risk level derived from weak point evidence
+     * @param evidenceLinks textbook, Feishu, and parsed-resource links visible to the viewer
+     */
+    public record KnowledgeGraphNode(
+            String knowledgePointId,
+            String knowledgePointName,
+            String chapterPath,
+            int masteryPercent,
+            String riskLevel,
+            List<KnowledgeEvidenceLink> evidenceLinks) {
+    }
+
+    /**
+     * Directed relation between two knowledge points.
+     *
+     * @param edgeId stable graph edge id
+     * @param sourceKnowledgePointId source knowledge point id
+     * @param targetKnowledgePointId target knowledge point id
+     * @param relationType relation type such as PREREQUISITE_FOR or RELATED_TO
+     * @param evidenceSummary human-readable evidence behind the relation
+     */
+    public record KnowledgeGraphEdge(
+            String edgeId,
+            String sourceKnowledgePointId,
+            String targetKnowledgePointId,
+            String relationType,
+            String evidenceSummary) {
+    }
+
+    /**
+     * Evidence link for one graph node.
+     *
+     * @param sourceType source type such as textbook, feishu, or teacher_resource
+     * @param title link title displayed in the frontend
+     * @param url stable source URL or local retrieval path
+     * @param permissionScope scope required to open the evidence
+     */
+    public record KnowledgeEvidenceLink(
+            String sourceType,
+            String title,
+            String url,
+            String permissionScope) {
     }
 }

@@ -842,6 +842,68 @@ export interface StudentDashboardResponse {
   scoreTrend: StudentScorePoint[];
   /** 当前学生可访问的资源域。 */
   resourceScopes: StudentResourceScope[];
+  /** Backend-assembled knowledge graph for mastery visualization. */
+  knowledgeGraph?: StudentKnowledgeGraph;
+}
+
+/**
+ * Student knowledge graph returned with the dashboard.
+ */
+export interface StudentKnowledgeGraph {
+  /** Graph nodes visible to the current viewer. */
+  nodes: StudentKnowledgeGraphNode[];
+  /** Directed relations between knowledge points. */
+  edges: StudentKnowledgeGraphEdge[];
+  /** Source summary used for audit and display. */
+  generatedFrom: string;
+}
+
+/**
+ * One visible knowledge graph node.
+ */
+export interface StudentKnowledgeGraphNode {
+  /** Stable knowledge point id. */
+  knowledgePointId: string;
+  /** Knowledge point display name. */
+  knowledgePointName: string;
+  /** Textbook chapter or section path. */
+  chapterPath: string;
+  /** Student mastery percent from 0 to 100. */
+  masteryPercent: number;
+  /** Risk label derived from weak point and mastery evidence. */
+  riskLevel: string;
+  /** Evidence links the current viewer can open or search. */
+  evidenceLinks: StudentKnowledgeEvidenceLink[];
+}
+
+/**
+ * One directed knowledge graph edge.
+ */
+export interface StudentKnowledgeGraphEdge {
+  /** Stable edge id. */
+  edgeId: string;
+  /** Source knowledge point id. */
+  sourceKnowledgePointId: string;
+  /** Target knowledge point id. */
+  targetKnowledgePointId: string;
+  /** Relation type such as PREREQUISITE_FOR or RELATED_TO. */
+  relationType: string;
+  /** Evidence summary behind the relation. */
+  evidenceSummary: string;
+}
+
+/**
+ * Evidence link attached to a knowledge graph node.
+ */
+export interface StudentKnowledgeEvidenceLink {
+  /** Evidence source type such as textbook, feishu, or teacher_resource. */
+  sourceType: string;
+  /** Evidence display title. */
+  title: string;
+  /** Evidence URL or internal retrieval path. */
+  url: string;
+  /** Permission scope required by the evidence. */
+  permissionScope: string;
 }
 
 /**

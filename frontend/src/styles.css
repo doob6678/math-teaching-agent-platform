@@ -474,6 +474,7 @@ h2 {
 
 .profile-strip div,
 .knowledge-panel,
+.knowledge-graph-panel,
 .dashboard-column {
   border: 1px solid #dce5ef;
   border-radius: 8px;
@@ -503,6 +504,7 @@ h2 {
 }
 
 .knowledge-panel,
+.knowledge-graph-panel,
 .dashboard-column {
   display: grid;
   align-content: start;
@@ -512,10 +514,117 @@ h2 {
 }
 
 .knowledge-panel h3,
+.knowledge-graph-panel h3,
 .dashboard-column h3 {
   color: #1f2a44;
   font-size: 14px;
   line-height: 1.3;
+}
+
+.knowledge-graph-panel {
+  grid-column: 1 / -1;
+}
+
+.knowledge-graph-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.knowledge-graph-head span {
+  color: #64748b;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.knowledge-graph-nodes {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.knowledge-node {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #d9e3ee;
+  border-left: 4px solid #1769aa;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.knowledge-node.risk-high {
+  border-left-color: #b42318;
+}
+
+.knowledge-node.risk-medium {
+  border-left-color: #b54708;
+}
+
+.knowledge-node-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.knowledge-node-main strong,
+.knowledge-edge strong {
+  color: #1e293b;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.knowledge-node-main span {
+  color: #1769aa;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.knowledge-node p,
+.knowledge-edge p {
+  color: #536173;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.knowledge-node-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.knowledge-node-meta span,
+.knowledge-node-meta a {
+  padding: 2px 6px;
+  border: 1px solid #dce5ef;
+  border-radius: 999px;
+  color: #334155;
+  font-size: 11px;
+  text-decoration: none;
+}
+
+.knowledge-graph-edges {
+  display: grid;
+  gap: 8px;
+}
+
+.knowledge-edge {
+  display: grid;
+  gap: 4px;
+  padding: 9px;
+  border-radius: 6px;
+  background: #eef5fb;
+}
+
+.knowledge-edge span {
+  color: #475569;
+  font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .progress-list {

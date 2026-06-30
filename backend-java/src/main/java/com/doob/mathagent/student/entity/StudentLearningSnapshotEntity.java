@@ -25,11 +25,23 @@ public class StudentLearningSnapshotEntity {
     /** JSON payload for knowledge progress graph. */
     private String knowledgeProgressJson;
 
+    /** JSON payload for the visible knowledge graph nodes, edges, and evidence links. */
+    private String knowledgeGraphJson;
+
     /** JSON payload for weak points extracted from questions and exams. */
     private String weakPointsJson;
 
+    /** JSON payload for recoverable recent question records. */
+    private String recentQuestionsJson;
+
     /** JSON payload for score trend chart. */
     private String scoreTrendJson;
+
+    /** JSON payload for resource scopes visible to this student. */
+    private String resourceScopesJson;
+
+    /** Source summary describing how the snapshot was assembled. */
+    private String sourceSummary;
 
     /**
      * Returns the snapshot id.
@@ -122,6 +134,24 @@ public class StudentLearningSnapshotEntity {
     }
 
     /**
+     * Returns the knowledge graph JSON.
+     *
+     * @return knowledge graph JSON
+     */
+    public String getKnowledgeGraphJson() {
+        return knowledgeGraphJson;
+    }
+
+    /**
+     * Sets the knowledge graph JSON.
+     *
+     * @param knowledgeGraphJson knowledge graph JSON
+     */
+    public void setKnowledgeGraphJson(String knowledgeGraphJson) {
+        this.knowledgeGraphJson = knowledgeGraphJson;
+    }
+
+    /**
      * Returns the weak points JSON.
      *
      * @return weak points JSON
@@ -140,6 +170,24 @@ public class StudentLearningSnapshotEntity {
     }
 
     /**
+     * Returns recent question JSON.
+     *
+     * @return recent question JSON
+     */
+    public String getRecentQuestionsJson() {
+        return recentQuestionsJson;
+    }
+
+    /**
+     * Sets recent question JSON.
+     *
+     * @param recentQuestionsJson recent question JSON
+     */
+    public void setRecentQuestionsJson(String recentQuestionsJson) {
+        this.recentQuestionsJson = recentQuestionsJson;
+    }
+
+    /**
      * Returns the score trend JSON.
      *
      * @return score trend JSON
@@ -155,5 +203,41 @@ public class StudentLearningSnapshotEntity {
      */
     public void setScoreTrendJson(String scoreTrendJson) {
         this.scoreTrendJson = scoreTrendJson;
+    }
+
+    /**
+     * Returns resource scope JSON.
+     *
+     * @return resource scope JSON
+     */
+    public String getResourceScopesJson() {
+        return resourceScopesJson;
+    }
+
+    /**
+     * Sets resource scope JSON.
+     *
+     * @param resourceScopesJson resource scope JSON
+     */
+    public void setResourceScopesJson(String resourceScopesJson) {
+        this.resourceScopesJson = resourceScopesJson;
+    }
+
+    /**
+     * Returns the source summary.
+     *
+     * @return source summary
+     */
+    public String getSourceSummary() {
+        return sourceSummary;
+    }
+
+    /**
+     * Sets the source summary.
+     *
+     * @param sourceSummary source summary
+     */
+    public void setSourceSummary(String sourceSummary) {
+        this.sourceSummary = sourceSummary;
     }
 }

@@ -1157,6 +1157,28 @@ describe("textbookApi", () => {
         recentQuestions: [],
         scoreTrend: [],
         resourceScopes: [{ scopeCode: "PUBLIC_TEXTBOOK" }],
+        knowledgeGraph: {
+          generatedFrom: "dashboard_progress+weak_points+textbook_anchor+feishu_anchor",
+          nodes: [
+            {
+              knowledgePointId: "math-vector-dot-product",
+              knowledgePointName: "space vector",
+              chapterPath: "space vector / page 35",
+              masteryPercent: 68,
+              riskLevel: "medium",
+              evidenceLinks: [{ sourceType: "textbook", title: "page 35", url: "/api/textbooks/search", permissionScope: "PUBLIC_TEXTBOOK" }],
+            },
+          ],
+          edges: [
+            {
+              edgeId: "edge-1",
+              sourceKnowledgePointId: "math-vector-dot-product",
+              targetKnowledgePointId: "math-solid-geometry",
+              relationType: "PREREQUISITE_FOR",
+              evidenceSummary: "dot product supports solid geometry",
+            },
+          ],
+        },
       }),
     });
     const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
@@ -1173,6 +1195,8 @@ describe("textbookApi", () => {
     );
     expect(dashboard.studentId).toBe("local-student");
     expect(dashboard.knowledgeProgress[0].progressPercent).toBe(68);
+    expect(dashboard.knowledgeGraph?.nodes[0].masteryPercent).toBe(68);
+    expect(dashboard.knowledgeGraph?.edges[0].relationType).toBe("PREREQUISITE_FOR");
   });
 
   it("manages teacher resources with capability tokens and without client supplied identity headers", async () => {

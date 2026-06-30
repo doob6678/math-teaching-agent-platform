@@ -36,6 +36,37 @@ class StudentDashboardServiceTest {
     }
 
     @Test
+    void dashboardContainsKnowledgeGraphNodesEdgesEvidenceAndMastery() {
+        StudentDashboardService service = new StudentDashboardService();
+        StudentDashboardQuery query = new StudentDashboardQuery(
+                "tenant-a",
+                "student",
+                "student-001",
+                null);
+
+        StudentDashboardResponse response = service.dashboard(query);
+
+        assertThat(response.knowledgeGraph()).isNotNull();
+        assertThat(response.knowledgeGraph().nodes())
+                .extracting(StudentDashboardResponse.KnowledgeGraphNode::knowledgePointId)
+                .contains("math-vector-dot-product", "math-solid-geometry");
+        assertThat(response.knowledgeGraph().edges())
+                .anySatisfy(edge -> {
+                    assertThat(edge.sourceKnowledgePointId()).isEqualTo("math-vector-dot-product");
+                    assertThat(edge.targetKnowledgePointId()).isEqualTo("math-solid-geometry");
+                    assertThat(edge.relationType()).isEqualTo("PREREQUISITE_FOR");
+                });
+        assertThat(response.knowledgeGraph().nodes())
+                .anySatisfy(node -> {
+                    assertThat(node.knowledgePointId()).isEqualTo("math-vector-dot-product");
+                    assertThat(node.masteryPercent()).isEqualTo(68);
+                    assertThat(node.evidenceLinks())
+                            .extracting(StudentDashboardResponse.KnowledgeEvidenceLink::sourceType)
+                            .contains("textbook", "feishu");
+                });
+    }
+
+    @Test
     void adminCanInspectSpecifiedStudentWithoutChangingStudentOwnership() {
         StudentDashboardService service = new StudentDashboardService();
         StudentDashboardQuery query = new StudentDashboardQuery(

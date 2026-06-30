@@ -23,17 +23,20 @@ public class StudentDashboardService {
     public StudentDashboardResponse dashboard(StudentDashboardQuery query) {
         StudentDashboardQuery normalized = query.normalize();
         String studentId = normalized.targetStudentId();
+        List<StudentDashboardResponse.KnowledgeProgress> progress = knowledgeProgress(studentId);
+        List<StudentDashboardResponse.WeakPoint> weakPointList = weakPoints();
         return new StudentDashboardResponse(
                 normalized.tenantId(),
                 studentId,
                 normalized.viewerRole(),
                 normalized.viewerSubjectId(),
                 normalized.adminView(),
-                knowledgeProgress(studentId),
-                weakPoints(),
+                progress,
+                weakPointList,
                 recentQuestions(studentId),
                 scoreTrend(),
-                resourceScopes(normalized.viewerRole()));
+                resourceScopes(normalized.viewerRole()),
+                StudentKnowledgeGraphAssembler.knowledgeGraph(progress, weakPointList, normalized.viewerRole()));
     }
 
     /**
