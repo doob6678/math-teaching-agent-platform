@@ -860,6 +860,56 @@ describe("textbookApi", () => {
     });
   });
 
+  it("loads agent model catalog from backend session without exposing identity headers", async () => {
+    globalThis.localStorage.setItem(
+      "math-agent:auth-session",
+      JSON.stringify({
+        userId: "teacher-1",
+        username: "teacher",
+        role: "teacher",
+        tenantId: "school-a",
+        tokenName: "satoken",
+        tokenValue: "token-teacher",
+      }),
+    );
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        defaultProviderName: "openai",
+        defaultModelCode: "gpt-5.4",
+        fallbackProviderOrder: ["openai", "dashscope"],
+        providers: [
+          {
+            name: "openai",
+            enabled: true,
+            defaultModelCode: "gpt-5.4",
+            models: [
+              { modelCode: "gpt-5.4", modelLevel: "reasoning", priceTier: "standard" },
+              { modelCode: "gpt-5.4-mini", modelLevel: "fast_text", priceTier: "cheap" },
+            ],
+          },
+        ],
+      }),
+    });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const catalog = await client.getAgentModelCatalog();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8080/api/agents/model-catalog",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          satoken: "token-teacher",
+          "X-Device-Id": "local-browser-console",
+        }),
+      }),
+    );
+    expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Id");
+    expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Type");
+    expect(catalog.defaultModelCode).toBe("gpt-5.4");
+    expect(catalog.providers[0].models[0].modelCode).toBe("gpt-5.4");
+  });
+
   it("executes high-value agent run with capability token and no client supplied identity", async () => {
     globalThis.localStorage.setItem(
       "math-agent:auth-session",

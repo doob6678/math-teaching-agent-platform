@@ -14,7 +14,7 @@ import org.springframework.stereotype.Component;
 public class AiProviderProperties {
 
     /** Default provider name used when a workflow does not specify a provider. */
-    private String defaultProvider = "dashscope";
+    private String defaultProvider = "openai";
 
     /** Alibaba Cloud Model Studio Qwen provider configuration. */
     private Provider dashscope = new Provider(

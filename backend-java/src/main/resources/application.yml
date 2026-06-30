@@ -24,7 +24,7 @@ server:
 
 math-agent:
   ai:
-    default-provider: ${MATH_AGENT_AI_DEFAULT_PROVIDER:dashscope}
+    default-provider: ${MATH_AGENT_AI_DEFAULT_PROVIDER:openai}
     dashscope:
       name: dashscope
       base-url: ${DASHSCOPE_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}

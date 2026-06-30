@@ -591,6 +591,46 @@ export interface AgentRunPlanResponse {
 }
 
 /**
+ * Backend-owned model catalog used by the frontend provider/model controls.
+ */
+export interface AgentModelCatalogResponse {
+  /** Backend default provider from environment. */
+  defaultProviderName: string;
+  /** Backend default model from environment. */
+  defaultModelCode: string;
+  /** Backend fallback provider rotation order. */
+  fallbackProviderOrder: string[];
+  /** Enabled providers and their allow-listed model options. */
+  providers: AgentModelProvider[];
+}
+
+/**
+ * One enabled AI provider in the backend model catalog.
+ */
+export interface AgentModelProvider {
+  /** Provider code, such as openai or dashscope. */
+  name: string;
+  /** Whether backend credentials are configured. */
+  enabled: boolean;
+  /** Provider default model code. */
+  defaultModelCode: string;
+  /** Allow-listed models accepted by backend planning. */
+  models: AgentModelOption[];
+}
+
+/**
+ * One backend allow-listed model option.
+ */
+export interface AgentModelOption {
+  /** Provider model code sent to the OpenAI-compatible API. */
+  modelCode: string;
+  /** Coarse capability level for display. */
+  modelLevel: string;
+  /** Coarse price label for display. */
+  priceTier: string;
+}
+
+/**
  * Backend decision for one requested agent tool scope.
  */
 export interface AgentToolPolicyDecision {
@@ -1526,6 +1566,10 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(request),
       });
+    },
+
+    getAgentModelCatalog(): Promise<AgentModelCatalogResponse> {
+      return requestJson<AgentModelCatalogResponse>("/api/agents/model-catalog");
     },
 
     /**

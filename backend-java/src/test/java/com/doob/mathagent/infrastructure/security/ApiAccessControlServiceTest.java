@@ -430,6 +430,40 @@ class ApiAccessControlServiceTest {
     }
 
     @Test
+    void agentModelCatalogRequiresLoggedInStudentTeacherOrAdmin() {
+        ApiAccessControlService service = new ApiAccessControlService(
+                FixedWindowRateLimiter.empty(),
+                Clock.fixed(Instant.parse("2026-06-28T10:00:00Z"), ZoneOffset.UTC),
+                ApiAccessPolicy.defaultRules());
+        ApiRequestIdentity anonymous = new ApiRequestIdentity(
+                "GET",
+                "/api/agents/model-catalog",
+                "default",
+                "anonymous",
+                null,
+                "127.0.0.1",
+                "device-1",
+                "JUnit");
+        ApiRequestIdentity teacher = new ApiRequestIdentity(
+                "GET",
+                "/api/agents/model-catalog",
+                "default",
+                "teacher",
+                "teacher-1",
+                "127.0.0.1",
+                "device-1",
+                "JUnit");
+
+        ApiAccessDecision denied = service.evaluate(anonymous);
+        ApiAccessDecision allowed = service.evaluate(teacher);
+
+        assertThat(denied.allowed()).isFalse();
+        assertThat(denied.httpStatus()).isEqualTo(403);
+        assertThat(allowed.allowed()).isTrue();
+        assertThat(allowed.level()).isEqualTo(ApiAccessLevel.USER);
+    }
+
+    @Test
     void agentExecuteRequiresLoggedInStudentTeacherOrAdmin() {
         ApiAccessControlService service = new ApiAccessControlService(
                 FixedWindowRateLimiter.empty(),

@@ -3,13 +3,15 @@ package com.doob.mathagent.infrastructure.ai;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 import org.springframework.stereotype.Component;
 
 /**
  * Catalog of configured AI providers.
  *
  * <p>The catalog is intentionally separate from Spring AI model beans. It lets workflows record which provider is
- * allowed for a task and prevents a provider with a missing API key from being selected silently.</p>
+ * allowed for a task, exposes a frontend-safe model catalog, and prevents a provider with a missing API key from being
+ * selected silently.</p>
  */
 @Component
 public class AiProviderCatalog {
@@ -26,20 +28,40 @@ public class AiProviderCatalog {
     }
 
     /**
-     * Returns enabled providers in deterministic priority order.
+     * Returns enabled providers in backend fallback order.
      *
      * @return enabled providers
      */
     public List<Provider> enabledProviders() {
-        return List.of(
-                        properties.getDashscope(),
-                        properties.getOpenai(),
-                        properties.getDeepseek(),
-                        properties.getArk())
+        return configuredProviders()
                 .stream()
                 .filter(AiProviderCatalog::hasUsableCredentials)
                 .map(AiProviderCatalog::toProvider)
                 .toList();
+    }
+
+    /**
+     * Returns a frontend-safe model catalog built from backend configuration and allow-lists.
+     *
+     * @return provider/model catalog without API keys
+     */
+    public ModelCatalog modelCatalog() {
+        Provider defaultProvider = defaultProvider();
+        List<ModelProvider> providers = enabledProviders().stream()
+                .map(provider -> new ModelProvider(
+                        provider.name(),
+                        true,
+                        provider.chatModel(),
+                        allowedModelOptions(provider.name())))
+                .sorted((left, right) -> Integer.compare(
+                        providerOrder(defaultProvider.name(), left.name()),
+                        providerOrder(defaultProvider.name(), right.name())))
+                .toList();
+        return new ModelCatalog(
+                defaultProvider.name(),
+                defaultProvider.chatModel(),
+                providers.stream().map(ModelProvider::name).toList(),
+                providers);
     }
 
     /**
@@ -81,6 +103,17 @@ public class AiProviderCatalog {
         return provider(properties.getDefaultProvider())
                 .or(() -> enabledProviders().stream().findFirst())
                 .orElseThrow(() -> new IllegalStateException("No AI provider is enabled by environment variables"));
+    }
+
+    /**
+     * Returns configured providers in the desired fallback baseline order.
+     */
+    private List<AiProviderProperties.Provider> configuredProviders() {
+        return List.of(
+                properties.getOpenai(),
+                properties.getDashscope(),
+                properties.getDeepseek(),
+                properties.getArk());
     }
 
     /**
@@ -127,12 +160,61 @@ public class AiProviderCatalog {
      */
     private static List<String> allowedModels(String providerName) {
         return switch (normalize(providerName)) {
+            case "openai" -> List.of("gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano");
             case "dashscope" -> List.of("qwen3.6-flash", "qwen3.7-plus", "qwen3.7-max");
-            case "openai" -> List.of("gpt-5.4", "gpt-5.4-mini");
             case "deepseek" -> List.of("deepseek-v4-flash", "deepseek-v4-pro");
-            case "ark" -> List.of("doubao-seed-2-0-lite-260428");
+            case "ark" -> List.of("doubao-seed-2-0-lite-260428", "doubao-seed-2.0-mini");
             default -> List.of();
         };
+    }
+
+    /**
+     * Returns frontend-safe model options with coarse capability and cost labels.
+     */
+    private static List<ModelOption> allowedModelOptions(String providerName) {
+        return allowedModels(providerName).stream()
+                .map(model -> new ModelOption(model, modelLevel(model), priceTier(model)))
+                .toList();
+    }
+
+    /**
+     * Keeps the default provider first and all other providers in configured fallback order.
+     */
+    private static int providerOrder(String defaultProviderName, String providerName) {
+        if (normalize(defaultProviderName).equals(normalize(providerName))) {
+            return -1;
+        }
+        return switch (normalize(providerName)) {
+            case "openai" -> 0;
+            case "dashscope" -> 1;
+            case "deepseek" -> 2;
+            case "ark" -> 3;
+            default -> 99;
+        };
+    }
+
+    /**
+     * Maps an allow-listed model to a coarse routing capability label.
+     */
+    private static String modelLevel(String modelCode) {
+        String normalized = normalize(modelCode);
+        if (normalized.contains("max") || normalized.equals("gpt-5.4") || normalized.endsWith("-pro")) {
+            return "reasoning";
+        }
+        if (normalized.contains("mini") || normalized.contains("nano")
+                || normalized.contains("flash") || normalized.contains("lite")) {
+            return "fast_text";
+        }
+        return "general";
+    }
+
+    /**
+     * Maps model codes to coarse price labels used only for UI hints.
+     */
+    private static String priceTier(String modelCode) {
+        String normalized = normalize(modelCode);
+        Set<String> cheapHints = Set.of("mini", "nano", "flash", "lite", "turbo");
+        return cheapHints.stream().anyMatch(normalized::contains) ? "cheap" : "standard";
     }
 
     /**
@@ -163,5 +245,45 @@ public class AiProviderCatalog {
      * @param chatModel chat model name
      */
     public record Provider(String name, String baseUrl, String chatModel) {
+    }
+
+    /**
+     * Frontend-safe model catalog with no provider secrets.
+     *
+     * @param defaultProviderName backend default provider
+     * @param defaultModelCode backend default model
+     * @param fallbackProviderOrder provider rotation order
+     * @param providers enabled providers and model options
+     */
+    public record ModelCatalog(
+            String defaultProviderName,
+            String defaultModelCode,
+            List<String> fallbackProviderOrder,
+            List<ModelProvider> providers) {
+    }
+
+    /**
+     * Frontend-safe provider model list.
+     *
+     * @param name provider name
+     * @param enabled whether credentials are configured
+     * @param defaultModelCode provider default model
+     * @param models allowed model options
+     */
+    public record ModelProvider(
+            String name,
+            boolean enabled,
+            String defaultModelCode,
+            List<ModelOption> models) {
+    }
+
+    /**
+     * One allow-listed model option.
+     *
+     * @param modelCode provider model code
+     * @param modelLevel coarse model capability label
+     * @param priceTier coarse price label
+     */
+    public record ModelOption(String modelCode, String modelLevel, String priceTier) {
     }
 }

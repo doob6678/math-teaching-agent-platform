@@ -2,6 +2,7 @@ import { AlertCircle, BookOpen, Database, Loader2, Search, ShieldCheck } from "l
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   AgentRunExecuteResponse,
+  AgentModelCatalogResponse,
   AgentRunPlanResponse,
   AgentTraceResponse,
   AgentTraceUsageSummaryResponse,
@@ -34,10 +35,10 @@ const DEFAULT_BACKEND_URL = import.meta.env.VITE_BACKEND_URL ?? "http://127.0.0.
 const DEFAULT_FEISHU_ROOT_URL = "https://my.feishu.cn/drive/folder/XVn7fXppJlQMK5dkuOkc1ePan2f";
 const TEACHING_TASK_STORAGE_KEY = "math-agent:last-teaching-task-id";
 const AGENT_MODEL_OPTIONS: Record<string, string[]> = {
+  openai: ["gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano"],
   dashscope: ["qwen3.6-flash", "qwen3.7-plus", "qwen3.7-max"],
-  openai: ["gpt-5.4", "gpt-5.4-mini"],
   deepseek: ["deepseek-v4-flash", "deepseek-v4-pro"],
-  ark: ["doubao-seed-2-0-lite-260428"],
+  ark: ["doubao-seed-2-0-lite-260428", "doubao-seed-2.0-mini"],
 };
 
 /**
@@ -85,6 +86,8 @@ export function App() {
   const [agentPlanError, setAgentPlanError] = useState("");
   const [agentExecutionError, setAgentExecutionError] = useState("");
   const [agentTraceError, setAgentTraceError] = useState("");
+  const [agentModelCatalog, setAgentModelCatalog] = useState<AgentModelCatalogResponse | null>(null);
+  const [agentModelCatalogError, setAgentModelCatalogError] = useState("");
   const [disablePrivateSearch, setDisablePrivateSearch] = useState(true);
   const [disableTextbookSearch, setDisableTextbookSearch] = useState(false);
   const [agentProvider, setAgentProvider] = useState("openai");
@@ -175,6 +178,18 @@ export function App() {
 
   useEffect(() => {
     refreshAgentTraces();
+  }, [api]);
+
+  useEffect(() => {
+    api
+      .getAgentModelCatalog()
+      .then((catalog) => {
+        setAgentModelCatalog(catalog);
+        setAgentProvider(catalog.defaultProviderName);
+        setAgentModel(catalog.defaultModelCode);
+        setAgentModelCatalogError("");
+      })
+      .catch((error: Error) => setAgentModelCatalogError(error.message));
   }, [api]);
 
   function refreshTeacherResources() {
@@ -672,9 +687,9 @@ export function App() {
   }
 
   function handleAgentProviderChange(provider: string) {
-    const models = AGENT_MODEL_OPTIONS[provider] ?? [];
+    const models = agentModelsForProvider(agentModelCatalog, provider);
     setAgentProvider(provider);
-    setAgentModel(models[0] ?? "");
+    setAgentModel(models[0]?.modelCode ?? "");
   }
 
   function handleMcpPromptToggle(option: string, checked: boolean) {
@@ -810,11 +825,14 @@ export function App() {
           <div className="divider" />
 
           <PanelTitle icon={<ShieldCheck size={18} />} title="Agent tool policy" />
+          {agentModelCatalogError ? (
+            <StatusLine icon={<AlertCircle size={16} />} text={agentModelCatalogError} tone="danger" />
+          ) : null}
           <form className="search-form agent-tool-form" onSubmit={handlePlanAgent}>
             <label>
               <span>Provider</span>
               <select value={agentProvider} onChange={(event) => handleAgentProviderChange(event.target.value)}>
-                {Object.keys(AGENT_MODEL_OPTIONS).map((provider) => (
+                {agentProviders(agentModelCatalog).map((provider) => (
                   <option key={provider} value={provider}>
                     {provider}
                   </option>
@@ -824,9 +842,9 @@ export function App() {
             <label>
               <span>Model</span>
               <select value={agentModel} onChange={(event) => setAgentModel(event.target.value)}>
-                {(AGENT_MODEL_OPTIONS[agentProvider] ?? []).map((model) => (
-                  <option key={model} value={model}>
-                    {model}
+                {agentModelsForProvider(agentModelCatalog, agentProvider).map((model) => (
+                  <option key={model.modelCode} value={model.modelCode}>
+                    {model.modelCode}
                   </option>
                 ))}
               </select>
@@ -2204,6 +2222,30 @@ function PanelTitle({ icon, title }: { icon: React.ReactNode; title: string }) {
       <span>{title}</span>
     </div>
   );
+}
+
+function agentProviders(catalog: AgentModelCatalogResponse | null): string[] {
+  const providers = catalog?.providers.filter((provider) => provider.enabled).map((provider) => provider.name) ?? [];
+  return providers.length > 0 ? providers : Object.keys(AGENT_MODEL_OPTIONS);
+}
+
+function agentModelsForProvider(
+  catalog: AgentModelCatalogResponse | null,
+  providerName: string,
+): { modelCode: string; modelLevel: string; priceTier: string }[] {
+  const provider = catalog?.providers.find((candidate) => candidate.name === providerName && candidate.enabled);
+  if (provider && provider.models.length > 0) {
+    return provider.models;
+  }
+  return (AGENT_MODEL_OPTIONS[providerName] ?? []).map((modelCode) => ({
+    modelCode,
+    modelLevel: modelCode.includes("mini") || modelCode.includes("flash") || modelCode.includes("lite")
+      ? "fast_text"
+      : "reasoning",
+    priceTier: modelCode.includes("mini") || modelCode.includes("flash") || modelCode.includes("lite")
+      ? "cheap"
+      : "standard",
+  }));
 }
 
 function Metric({ label, value }: { label: string; value: number }) {

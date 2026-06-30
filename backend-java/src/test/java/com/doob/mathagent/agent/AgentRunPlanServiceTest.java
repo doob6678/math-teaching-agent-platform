@@ -151,8 +151,8 @@ class AgentRunPlanServiceTest {
                 request,
                 new RequestSubject("school-a", "teacher", "teacher-001", "device-1"));
 
-        assertThat(plan.providerName()).isEqualTo("openai");
-        assertThat(plan.modelCode()).isEqualTo("gpt-5.4");
+        assertThat(plan.providerName()).isEqualTo("dashscope");
+        assertThat(plan.modelCode()).isEqualTo("qwen3.6-flash");
         assertThat(plan.modelLevel()).isEqualTo("json_stable");
         assertThat(plan.routeReason()).contains("fallback");
     }
