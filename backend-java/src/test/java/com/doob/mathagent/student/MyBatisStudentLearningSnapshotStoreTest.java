@@ -34,6 +34,35 @@ class MyBatisStudentLearningSnapshotStoreTest {
         assertThat(record.knowledgeGraphJson()).contains("mysql_snapshot");
     }
 
+    @Test
+    void saveInsertsSnapshotEntityWithTenantScopedPayloads() {
+        CapturingMapper mapper = new CapturingMapper();
+        MyBatisStudentLearningSnapshotStore store = new MyBatisStudentLearningSnapshotStore(mapper.proxy());
+
+        StudentLearningSnapshotRecord saved = store.save(new StudentLearningSnapshotRecord(
+                "snapshot-write",
+                "school-a",
+                "student-1",
+                null,
+                "[{\"knowledgePointId\":\"memory-1\"}]",
+                "{\"nodes\":[],\"edges\":[],\"generatedFrom\":\"student_memory_entry\"}",
+                "[]",
+                "[{\"recordId\":\"mem-1\"}]",
+                "[]",
+                "[{\"scopeCode\":\"STUDENT_MEMORY_PRIVATE\"}]",
+                "student_memory_entry:total=1"));
+
+        assertThat(saved.snapshotId()).isEqualTo("snapshot-write");
+        assertThat(mapper.inserted).hasSize(1);
+        StudentLearningSnapshotEntity inserted = mapper.inserted.getFirst();
+        assertThat(inserted.getTenantId()).isEqualTo("school-a");
+        assertThat(inserted.getStudentId()).isEqualTo("student-1");
+        assertThat(inserted.getKnowledgeProgressJson()).contains("memory-1");
+        assertThat(inserted.getRecentQuestionsJson()).contains("mem-1");
+        assertThat(inserted.getScoreTrendJson()).isEqualTo("[]");
+        assertThat(inserted.getSourceSummary()).isEqualTo("student_memory_entry:total=1");
+    }
+
     /**
      * Builds a snapshot entity for mapper proxy tests.
      */
@@ -61,6 +90,7 @@ class MyBatisStudentLearningSnapshotStoreTest {
 
     private static class CapturingMapper {
         private final List<StudentLearningSnapshotEntity> rows = new ArrayList<>();
+        private final List<StudentLearningSnapshotEntity> inserted = new ArrayList<>();
 
         StudentLearningSnapshotMapper proxy() {
             return (StudentLearningSnapshotMapper) Proxy.newProxyInstance(
@@ -68,6 +98,10 @@ class MyBatisStudentLearningSnapshotStoreTest {
                     new Class<?>[] {StudentLearningSnapshotMapper.class},
                     (proxy, method, args) -> switch (method.getName()) {
                         case "selectPage" -> selectPage((Page<StudentLearningSnapshotEntity>) args[0], (Wrapper<StudentLearningSnapshotEntity>) args[1]);
+                        case "insert" -> {
+                            inserted.add((StudentLearningSnapshotEntity) args[0]);
+                            yield 1;
+                        }
                         default -> throw new UnsupportedOperationException(method.getName());
                     });
         }

@@ -246,6 +246,39 @@ class CapabilityTokenServiceTest {
     }
 
     @Test
+    void issuesStudentDashboardRefreshCapabilityTokenForStudentsAndTeachers() {
+        CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
+        RequestSubject student = new RequestSubject("school-a", "student", "student-001", "device-1");
+        RequestSubject teacher = new RequestSubject("school-a", "teacher", "teacher-001", "device-1");
+
+        CapabilityTokenResponse studentRefresh = service.apply(new CapabilityTokenApplyRequest(
+                "student-dashboard:refresh",
+                "/api/students/dashboard/refresh",
+                "hash-student-refresh",
+                "student-dashboard-refresh:student-001",
+                1.0), student);
+        CapabilityTokenResponse teacherRefresh = service.apply(new CapabilityTokenApplyRequest(
+                "student-dashboard:refresh",
+                "/api/students/dashboard/refresh",
+                "hash-teacher-refresh",
+                "student-dashboard-refresh:teacher-001",
+                1.0), teacher);
+
+        assertThat(service.consume(
+                studentRefresh.token(),
+                "student-dashboard:refresh",
+                "/api/students/dashboard/refresh",
+                "hash-student-refresh",
+                student).allowed()).isTrue();
+        assertThat(service.consume(
+                teacherRefresh.token(),
+                "student-dashboard:refresh",
+                "/api/students/dashboard/refresh",
+                "hash-teacher-refresh",
+                teacher).allowed()).isTrue();
+    }
+
+    @Test
     void issuesTeachingHandoutLatexExportCapabilityTokens() {
         CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
         RequestSubject student = new RequestSubject("school-a", "student", "student-001", "device-1");

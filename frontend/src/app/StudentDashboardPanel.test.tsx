@@ -69,9 +69,12 @@ describe("StudentDashboardPanel", () => {
       },
     };
 
-    const html = renderToStaticMarkup(<StudentDashboardPanel dashboard={dashboard} loading={false} error="" />);
+    const html = renderToStaticMarkup(
+      <StudentDashboardPanel dashboard={dashboard} loading={false} error="" onRefresh={() => undefined} />,
+    );
 
     expect(html).toContain("Knowledge Graph");
+    expect(html).toContain("Refresh snapshot");
     expect(html).toContain("space vector dot product");
     expect(html).toContain("68%");
     expect(html).toContain("medium");

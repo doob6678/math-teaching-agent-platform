@@ -15,4 +15,12 @@ public interface StudentLearningSnapshotStore {
      * @return latest snapshot when present
      */
     Optional<StudentLearningSnapshotRecord> findLatest(String tenantId, String studentId);
+
+    /**
+     * Saves a newly assembled dashboard snapshot.
+     *
+     * @param record snapshot record assembled from backend-owned learning signals
+     * @return saved snapshot record
+     */
+    StudentLearningSnapshotRecord save(StudentLearningSnapshotRecord record);
 }

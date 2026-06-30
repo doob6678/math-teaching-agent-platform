@@ -1199,6 +1199,64 @@ describe("textbookApi", () => {
     expect(dashboard.knowledgeGraph?.edges[0].relationType).toBe("PREREQUISITE_FOR");
   });
 
+  it("refreshes student dashboard snapshot with one-time capability token", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          token: "dashboard-capability",
+          action: "student-dashboard:refresh",
+          path: "/api/students/dashboard/refresh",
+          requestHash: "hash-empty",
+          expiresAt: "2026-06-28T12:02:00Z",
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          tenantId: "school-a",
+          studentId: "student-1",
+          viewerRole: "student",
+          viewerSubjectId: "student-1",
+          isAdminView: false,
+          knowledgeProgress: [{ knowledgePointName: "space vector", progressPercent: 70 }],
+          weakPoints: [],
+          recentQuestions: [{ recordId: "mem-1", sourceType: "student_memory" }],
+          scoreTrend: [],
+          resourceScopes: [{ scopeCode: "STUDENT_MEMORY_PRIVATE" }],
+          knowledgeGraph: { generatedFrom: "student_memory_entry:total=1", nodes: [], edges: [] },
+        }),
+      });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const dashboard = await client.refreshStudentDashboard();
+
+    const capabilityBody = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
+    expect(capabilityBody).toEqual({
+      action: "student-dashboard:refresh",
+      path: "/api/students/dashboard/refresh",
+      requestHash: expect.any(String),
+      idempotencyKey: "student-dashboard-refresh:self",
+      maxCost: 1,
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://127.0.0.1:8080/api/students/dashboard/refresh",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "X-Capability-Token": "dashboard-capability",
+          "X-Request-Hash": capabilityBody.requestHash,
+          "X-Device-Id": "local-browser-console",
+        }),
+      }),
+    );
+    expect(fetchMock.mock.calls[1][1]?.headers).not.toHaveProperty("X-Subject-Id");
+    expect(fetchMock.mock.calls[1][1]?.headers).not.toHaveProperty("X-Subject-Type");
+    expect(dashboard.knowledgeGraph?.generatedFrom).toContain("student_memory_entry");
+  });
+
   it("manages teacher resources with capability tokens and without client supplied identity headers", async () => {
     const fetchMock = vi
       .fn()

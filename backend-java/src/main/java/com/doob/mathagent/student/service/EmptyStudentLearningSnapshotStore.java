@@ -18,4 +18,15 @@ public class EmptyStudentLearningSnapshotStore implements StudentLearningSnapsho
     public Optional<StudentLearningSnapshotRecord> findLatest(String tenantId, String studentId) {
         return Optional.empty();
     }
+
+    /**
+     * Accepts generated snapshots in database-disabled mode without pretending they were persisted.
+     *
+     * @param record snapshot record assembled by the refresh service
+     * @return input record
+     */
+    @Override
+    public StudentLearningSnapshotRecord save(StudentLearningSnapshotRecord record) {
+        return record;
+    }
 }

@@ -35,11 +35,14 @@ public class CapabilityTokenService {
     private static final String TEACHER_RESOURCES_PATH = "/api/teacher/resources";
     private static final String STUDENT_MEMORY_REMEMBER_ACTION = "student-memory:remember";
     private static final String STUDENT_MEMORY_REMEMBER_PATH = "/api/students/memory/remember";
+    private static final String STUDENT_DASHBOARD_REFRESH_ACTION = "student-dashboard:refresh";
+    private static final String STUDENT_DASHBOARD_REFRESH_PATH = "/api/students/dashboard/refresh";
     private static final String AGENT_RUN_ACTION_PREFIX = "agent-run:";
     private static final String AGENT_EXECUTE_PATH = "/api/agents/execute";
     private static final Set<String> CAPABILITY_ALLOWED_ROLES = Set.of("student", "teacher", "admin");
     private static final Set<String> TEACHER_RESOURCE_ALLOWED_ROLES = Set.of("teacher", "admin");
     private static final Set<String> STUDENT_MEMORY_ALLOWED_ROLES = Set.of("student");
+    private static final Set<String> STUDENT_DASHBOARD_REFRESH_ALLOWED_ROLES = Set.of("student", "teacher", "admin");
 
     private final CapabilityTokenStore store;
     private final Clock clock;
@@ -260,6 +263,10 @@ public class CapabilityTokenService {
             validateStudentMemorySubject(subject);
             return;
         }
+        if (STUDENT_DASHBOARD_REFRESH_ACTION.equals(action) && STUDENT_DASHBOARD_REFRESH_PATH.equals(path)) {
+            validateStudentDashboardRefreshSubject(subject);
+            return;
+        }
         if (action.startsWith(AGENT_RUN_ACTION_PREFIX) && AGENT_EXECUTE_PATH.equals(path)) {
             if (action.length() == AGENT_RUN_ACTION_PREFIX.length()) {
                 throw new IllegalArgumentException("Unsupported capability action or path");
@@ -404,6 +411,15 @@ public class CapabilityTokenService {
      */
     private static void validateStudentMemorySubject(RequestSubject subject) {
         if (!STUDENT_MEMORY_ALLOWED_ROLES.contains(subject.subjectType()) || subject.subjectId() == null) {
+            throw new IllegalArgumentException("Capability subject not allowed");
+        }
+    }
+
+    /**
+     * Validates subject for persisted student dashboard snapshot refreshes.
+     */
+    private static void validateStudentDashboardRefreshSubject(RequestSubject subject) {
+        if (!STUDENT_DASHBOARD_REFRESH_ALLOWED_ROLES.contains(subject.subjectType()) || subject.subjectId() == null) {
             throw new IllegalArgumentException("Capability subject not allowed");
         }
     }

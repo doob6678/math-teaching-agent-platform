@@ -127,13 +127,28 @@ export function App() {
   }, [api]);
 
   useEffect(() => {
+    loadStudentDashboard();
+  }, [api]);
+
+  function loadStudentDashboard() {
     setLoadingStudentDashboard(true);
+    setStudentDashboardError("");
     api
       .getStudentDashboard()
       .then(setStudentDashboard)
       .catch((error: Error) => setStudentDashboardError(error.message))
       .finally(() => setLoadingStudentDashboard(false));
-  }, [api]);
+  }
+
+  function handleRefreshStudentDashboard() {
+    setLoadingStudentDashboard(true);
+    setStudentDashboardError("");
+    api
+      .refreshStudentDashboard()
+      .then(setStudentDashboard)
+      .catch((error: Error) => setStudentDashboardError(error.message))
+      .finally(() => setLoadingStudentDashboard(false));
+  }
 
   useEffect(() => {
     refreshTeacherResources();
@@ -799,6 +814,7 @@ export function App() {
             dashboard={studentDashboard}
             loading={loadingStudentDashboard}
             error={studentDashboardError}
+            onRefresh={handleRefreshStudentDashboard}
           />
 
           <AgentPlanPanel
@@ -904,10 +920,12 @@ export function StudentDashboardPanel({
   dashboard,
   loading,
   error,
+  onRefresh,
 }: {
   dashboard: StudentDashboardResponse | null;
   loading: boolean;
   error: string;
+  onRefresh?: () => void;
 }) {
   const latestScore = dashboard?.scoreTrend.at(-1);
   return (
@@ -917,7 +935,15 @@ export function StudentDashboardPanel({
           <p className="eyebrow">Student Profile</p>
           <h2>学习画像</h2>
         </div>
-        {dashboard ? <div className="strategy-pill">{dashboard.viewerRole}</div> : null}
+        <div className="result-actions">
+          {dashboard ? <div className="strategy-pill">{dashboard.viewerRole}</div> : null}
+          {onRefresh ? (
+            <button type="button" className="inline-action" onClick={onRefresh} disabled={loading}>
+              {loading ? <Loader2 className="spin" size={16} /> : <Database size={16} />}
+              <span>Refresh snapshot</span>
+            </button>
+          ) : null}
+        </div>
       </div>
       {loading ? <StatusLine icon={<Loader2 className="spin" size={16} />} text="读取学习画像中" /> : null}
       {error ? <StatusLine icon={<AlertCircle size={16} />} text={error} tone="danger" /> : null}

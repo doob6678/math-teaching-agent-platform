@@ -42,6 +42,30 @@ public class MyBatisStudentLearningSnapshotStore implements StudentLearningSnaps
     }
 
     /**
+     * Inserts an immutable snapshot row for auditability and resume-friendly history.
+     *
+     * @param record snapshot record assembled by backend services
+     * @return saved snapshot record
+     */
+    @Override
+    public StudentLearningSnapshotRecord save(StudentLearningSnapshotRecord record) {
+        StudentLearningSnapshotEntity entity = new StudentLearningSnapshotEntity();
+        entity.setSnapshotId(record.snapshotId());
+        entity.setTenantId(record.tenantId());
+        entity.setStudentId(record.studentId());
+        entity.setGradeName(record.gradeName());
+        entity.setKnowledgeProgressJson(jsonOrEmptyArray(record.knowledgeProgressJson()));
+        entity.setKnowledgeGraphJson(jsonOrDefaultGraph(record.knowledgeGraphJson(), record.sourceSummary()));
+        entity.setWeakPointsJson(jsonOrEmptyArray(record.weakPointsJson()));
+        entity.setRecentQuestionsJson(jsonOrEmptyArray(record.recentQuestionsJson()));
+        entity.setScoreTrendJson(jsonOrEmptyArray(record.scoreTrendJson()));
+        entity.setResourceScopesJson(jsonOrEmptyArray(record.resourceScopesJson()));
+        entity.setSourceSummary(textOrDefault(record.sourceSummary(), "snapshot_refresh"));
+        mapper.insert(entity);
+        return record;
+    }
+
+    /**
      * Converts a database entity to a dashboard snapshot record.
      *
      * @param entity persisted snapshot entity

@@ -58,6 +58,34 @@ final class StudentKnowledgeGraphAssembler {
     }
 
     /**
+     * Builds a graph from backend-owned progress signals without inventing textbook or Feishu relations.
+     *
+     * @param progress current knowledge progress records
+     * @param weakPoints current weak point evidence
+     * @param generatedFrom source summary used for audit
+     * @return graph with real nodes and no inferred relation edges
+     */
+    static StudentDashboardResponse.KnowledgeGraph knowledgeGraphFromProgressOnly(
+            List<StudentDashboardResponse.KnowledgeProgress> progress,
+            List<StudentDashboardResponse.WeakPoint> weakPoints,
+            String generatedFrom) {
+        Map<String, Integer> weaknessByKnowledgeId = new HashMap<>();
+        for (StudentDashboardResponse.WeakPoint weakPoint : weakPoints) {
+            weaknessByKnowledgeId.put(weakPoint.knowledgePointId(), weakPoint.weaknessLevel());
+        }
+        List<StudentDashboardResponse.KnowledgeGraphNode> nodes = progress.stream()
+                .map(item -> new StudentDashboardResponse.KnowledgeGraphNode(
+                        item.knowledgePointId(),
+                        item.knowledgePointName(),
+                        item.textbookAnchor(),
+                        item.progressPercent(),
+                        riskLevel(item.progressPercent(), weaknessByKnowledgeId.get(item.knowledgePointId())),
+                        List.of()))
+                .toList();
+        return new StudentDashboardResponse.KnowledgeGraph(nodes, List.of(), generatedFrom);
+    }
+
+    /**
      * Converts progress and weak point evidence into a simple risk label.
      *
      * @param masteryPercent mastery percent from the dashboard progress model

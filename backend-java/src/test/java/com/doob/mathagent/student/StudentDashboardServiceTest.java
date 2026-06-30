@@ -2,6 +2,7 @@ package com.doob.mathagent.student;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.doob.mathagent.student.service.StudentLearningSnapshotStore;
 import com.doob.mathagent.student.service.StudentLearningSnapshotRecord;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.doob.mathagent.student.dto.StudentDashboardQuery;
@@ -72,30 +73,7 @@ class StudentDashboardServiceTest {
     @Test
     void dashboardUsesPersistedLearningSnapshotWhenAvailable() {
         StudentDashboardService service = new StudentDashboardService(
-                (tenantId, studentId) -> Optional.of(new StudentLearningSnapshotRecord(
-                        "snapshot-1",
-                        tenantId,
-                        studentId,
-                        "Senior Grade 2",
-                        """
-                                [{"knowledgePointId":"persisted-vector","knowledgePointName":"persisted vector method","textbookAnchor":"book/page 35","feishuDocUrl":"https://my.feishu.cn/docx/persisted","progressPercent":91}]
-                                """,
-                        """
-                                {"nodes":[{"knowledgePointId":"persisted-vector","knowledgePointName":"persisted vector method","chapterPath":"book/page 35","masteryPercent":91,"riskLevel":"low","evidenceLinks":[{"sourceType":"textbook","title":"book/page 35","url":"/api/textbooks/search?query=persisted-vector","permissionScope":"PUBLIC_TEXTBOOK"}]}],"edges":[],"generatedFrom":"mysql_snapshot"}
-                                """,
-                        """
-                                [{"knowledgePointId":"persisted-vector","knowledgePointName":"persisted vector method","weaknessLevel":1,"evidenceSummary":"latest snapshot"}]
-                                """,
-                        """
-                                [{"recordId":"question-1","sourceType":"exam_paper","questionTitle":"persisted question","knowledgePointName":"persisted vector method","status":"COMPLETED"}]
-                                """,
-                        """
-                                [{"examName":"persisted exam","score":132,"rankInGrade":12,"extractedWeakPointCount":1}]
-                                """,
-                        """
-                                [{"scopeCode":"PUBLIC_TEXTBOOK","scopeName":"Public textbook","accessPolicy":"public"}]
-                                """,
-                        "mysql_snapshot")),
+                persistedSnapshotStore(),
                 new ObjectMapper());
         StudentDashboardQuery query = new StudentDashboardQuery(
                 "tenant-a",
@@ -129,5 +107,45 @@ class StudentDashboardServiceTest {
         assertThat(response.viewerSubjectId()).isEqualTo("admin-001");
         assertThat(response.studentId()).isEqualTo("student-009");
         assertThat(response.isAdminView()).isTrue();
+    }
+
+    /**
+     * Returns a store with one persisted dashboard snapshot for read-path tests.
+     */
+    private static StudentLearningSnapshotStore persistedSnapshotStore() {
+        return new StudentLearningSnapshotStore() {
+            @Override
+            public Optional<StudentLearningSnapshotRecord> findLatest(String tenantId, String studentId) {
+                return Optional.of(new StudentLearningSnapshotRecord(
+                        "snapshot-1",
+                        tenantId,
+                        studentId,
+                        "Senior Grade 2",
+                        """
+                                [{"knowledgePointId":"persisted-vector","knowledgePointName":"persisted vector method","textbookAnchor":"book/page 35","feishuDocUrl":"https://my.feishu.cn/docx/persisted","progressPercent":91}]
+                                """,
+                        """
+                                {"nodes":[{"knowledgePointId":"persisted-vector","knowledgePointName":"persisted vector method","chapterPath":"book/page 35","masteryPercent":91,"riskLevel":"low","evidenceLinks":[{"sourceType":"textbook","title":"book/page 35","url":"/api/textbooks/search?query=persisted-vector","permissionScope":"PUBLIC_TEXTBOOK"}]}],"edges":[],"generatedFrom":"mysql_snapshot"}
+                                """,
+                        """
+                                [{"knowledgePointId":"persisted-vector","knowledgePointName":"persisted vector method","weaknessLevel":1,"evidenceSummary":"latest snapshot"}]
+                                """,
+                        """
+                                [{"recordId":"question-1","sourceType":"exam_paper","questionTitle":"persisted question","knowledgePointName":"persisted vector method","status":"COMPLETED"}]
+                                """,
+                        """
+                                [{"examName":"persisted exam","score":132,"rankInGrade":12,"extractedWeakPointCount":1}]
+                                """,
+                        """
+                                [{"scopeCode":"PUBLIC_TEXTBOOK","scopeName":"Public textbook","accessPolicy":"public"}]
+                                """,
+                        "mysql_snapshot"));
+            }
+
+            @Override
+            public StudentLearningSnapshotRecord save(StudentLearningSnapshotRecord record) {
+                return record;
+            }
+        };
     }
 }

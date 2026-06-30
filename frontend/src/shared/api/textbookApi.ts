@@ -1556,6 +1556,28 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
       return requestJson<StudentDashboardResponse>(`/api/students/dashboard${suffix}`);
     },
 
+    async refreshStudentDashboard(studentId?: string): Promise<StudentDashboardResponse> {
+      const params = new URLSearchParams();
+      if (studentId) {
+        params.set("studentId", studentId);
+      }
+      const suffix = params.size > 0 ? `?${params.toString()}` : "";
+      const path = `/api/students/dashboard/refresh${suffix}`;
+      const capability = await applyCapability(
+        "student-dashboard:refresh",
+        "/api/students/dashboard/refresh",
+        "",
+        `student-dashboard-refresh:${studentId ?? "self"}`,
+      );
+      return requestJson<StudentDashboardResponse>(path, {
+        method: "POST",
+        headers: {
+          "X-Capability-Token": capability.token,
+          "X-Request-Hash": capability.requestHash,
+        },
+      });
+    },
+
     /**
      * 读取当前教师可见的资料源列表。
      */
