@@ -43,7 +43,12 @@ class TeachingAiDraftLiveSmokeTest {
         assertThat(draft.modelCode()).isNotBlank();
         assertThat(draft.totalTokens()).isGreaterThan(0);
         assertThat(draft.content()).isNotBlank();
-        assertThat(draft.content()).containsAnyOf("教师", "学生", "知识", "函数", "D(-1)");
+        assertThat(draft.structured()).isTrue();
+        assertThat(draft.teacherExplanation()).containsAnyOf("函数", "D(-1)", "定义");
+        assertThat(draft.studentHint()).isNotBlank();
+        assertThat(draft.knowledgePoints()).isNotEmpty();
+        assertThat(draft.followUpQuestions()).isNotEmpty();
+        assertThat(draft.retryCount()).isLessThanOrEqualTo(draft.maxRetries());
     }
 
     /**

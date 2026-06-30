@@ -391,6 +391,15 @@ export interface TeachingAiDraft {
   totalTokens: number;
   content: string;
   message: string;
+  structured: boolean;
+  teacherExplanation: string;
+  studentHint: string;
+  knowledgePoints: string[];
+  followUpQuestions: string[];
+  parseError: string;
+  retryCount: number;
+  maxRetries: number;
+  recoveredAfterRetry: boolean;
 }
 
 /**

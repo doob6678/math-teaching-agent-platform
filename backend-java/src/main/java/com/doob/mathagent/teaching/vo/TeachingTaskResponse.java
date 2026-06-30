@@ -99,6 +99,15 @@ public record TeachingTaskResponse(
      * @param totalTokens provider-reported total tokens
      * @param content model-generated classroom content
      * @param message safe model status message
+     * @param structured whether content was parsed into the expected JSON schema
+     * @param teacherExplanation teacher-facing explanation parsed from model JSON
+     * @param studentHint student-facing hint parsed from model JSON
+     * @param knowledgePoints knowledge points parsed from model JSON
+     * @param followUpQuestions follow-up questions parsed from model JSON
+     * @param parseError parser error when structured is false
+     * @param retryCount actual retry count used by the AI draft stage
+     * @param maxRetries backend retry limit for this stage
+     * @param recoveredAfterRetry whether structured output succeeded after at least one retry
      */
     public record AiDraft(
             boolean enabled,
@@ -108,6 +117,31 @@ public record TeachingTaskResponse(
             int completionTokens,
             int totalTokens,
             String content,
-            String message) {
+            String message,
+            boolean structured,
+            String teacherExplanation,
+            String studentHint,
+            List<String> knowledgePoints,
+            List<String> followUpQuestions,
+            String parseError,
+            int retryCount,
+            int maxRetries,
+            boolean recoveredAfterRetry) {
+
+        /**
+         * Backward-compatible constructor for disabled and provider-failure responses.
+         */
+        public AiDraft(
+                boolean enabled,
+                String providerName,
+                String modelCode,
+                int promptTokens,
+                int completionTokens,
+                int totalTokens,
+                String content,
+                String message) {
+            this(enabled, providerName, modelCode, promptTokens, completionTokens, totalTokens, content, message,
+                    false, "", "", List.of(), List.of(), "", 0, 0, false);
+        }
     }
 }

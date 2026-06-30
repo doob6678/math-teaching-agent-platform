@@ -2032,7 +2032,39 @@ function TeachingTaskPanel({
                 <span>Tokens</span>
                 <strong>{task.aiDraft.totalTokens}</strong>
               </div>
-              <p>{task.aiDraft.content || task.aiDraft.message}</p>
+              <div>
+                <span>Parse</span>
+                <strong>{task.aiDraft.structured ? "structured" : "raw"}</strong>
+              </div>
+              <div>
+                <span>Retry</span>
+                <strong>
+                  {task.aiDraft.retryCount}/{task.aiDraft.maxRetries}
+                  {task.aiDraft.recoveredAfterRetry ? " recovered" : ""}
+                </strong>
+              </div>
+              {task.aiDraft.structured ? (
+                <div className="ai-draft-content">
+                  <p>{task.aiDraft.teacherExplanation}</p>
+                  <p>{task.aiDraft.studentHint}</p>
+                  {task.aiDraft.knowledgePoints.length ? (
+                    <ul>
+                      {task.aiDraft.knowledgePoints.map((item) => (
+                        <li key={item}>{item}</li>
+                      ))}
+                    </ul>
+                  ) : null}
+                  {task.aiDraft.followUpQuestions.length ? (
+                    <ul>
+                      {task.aiDraft.followUpQuestions.map((item) => (
+                        <li key={item}>{item}</li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </div>
+              ) : (
+                <p>{task.aiDraft.parseError || task.aiDraft.content || task.aiDraft.message}</p>
+              )}
             </div>
           ) : null}
           <div className="node-list">

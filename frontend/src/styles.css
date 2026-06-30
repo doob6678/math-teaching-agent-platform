@@ -1240,7 +1240,7 @@ h2 {
   background: #f8fafc;
 }
 
-.ai-draft-panel div {
+.ai-draft-panel > div:not(.ai-draft-content) {
   display: flex;
   justify-content: space-between;
   gap: 12px;
@@ -1261,6 +1261,23 @@ h2 {
   font-size: 13px;
   line-height: 1.55;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ai-draft-content {
+  display: grid;
+  gap: 8px;
+}
+
+.ai-draft-content ul {
+  margin: 0;
+  padding-left: 18px;
+  color: #0f172a;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.ai-draft-content li {
   overflow-wrap: anywhere;
 }
 

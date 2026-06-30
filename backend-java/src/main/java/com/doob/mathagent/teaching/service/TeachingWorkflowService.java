@@ -172,11 +172,31 @@ public class TeachingWorkflowService {
             return latex + "\n\\section{AI生成状态}\n" + escapeLatex(aiDraft.message()) + "\n";
         }
         String title = teacherVersion ? "AI教师讲解草稿" : "AI课堂提示";
-        return latex + "\n\\section{" + title + "}\n"
-                + escapeLatex(aiDraft.content())
-                + "\n\\paragraph{模型}"
+        String modelLine = "\n\\paragraph{模型}"
                 + escapeLatex(aiDraft.providerName() + "/" + aiDraft.modelCode() + " tokens=" + aiDraft.totalTokens())
                 + "\n";
+        if (!aiDraft.structured()) {
+            return latex + "\n\\section{" + title + "}\n"
+                    + "\\paragraph{结构化解析}"
+                    + escapeLatex("失败：" + aiDraft.parseError())
+                    + "\n"
+                    + escapeLatex(aiDraft.content())
+                    + modelLine;
+        }
+        if (teacherVersion) {
+            return latex + "\n\\section{" + title + "}\n"
+                    + escapeLatex(aiDraft.teacherExplanation())
+                    + "\n\\paragraph{关键知识点}"
+                    + latexItemize(aiDraft.knowledgePoints())
+                    + "\n\\paragraph{互动追问}"
+                    + latexItemize(aiDraft.followUpQuestions())
+                    + modelLine;
+        }
+        return latex + "\n\\section{" + title + "}\n"
+                + escapeLatex(aiDraft.studentHint())
+                + "\n\\paragraph{互动追问}"
+                + latexItemize(aiDraft.followUpQuestions())
+                + modelLine;
     }
 
     private static StudentMemoryCommand memoryRequest(TeachingTaskRequest request, TeachingRequestContext context) {
@@ -372,6 +392,17 @@ public class TeachingWorkflowService {
                 .replace("_", "\\_")
                 .replace("{", "\\{")
                 .replace("}", "\\}");
+    }
+
+    private static String latexItemize(List<String> items) {
+        if (items == null || items.isEmpty()) {
+            return "\n";
+        }
+        StringBuilder builder = new StringBuilder("\n\\begin{itemize}\n");
+        for (String item : items) {
+            builder.append("\\item ").append(escapeLatex(item)).append('\n');
+        }
+        return builder.append("\\end{itemize}\n").toString();
     }
 
     /**
