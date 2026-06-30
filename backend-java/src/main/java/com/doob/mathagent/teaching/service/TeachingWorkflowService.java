@@ -1,5 +1,9 @@
 package com.doob.mathagent.teaching.service;
 
+import com.doob.mathagent.agent.service.AgentTraceRecord;
+import com.doob.mathagent.agent.service.AgentTraceStore;
+import com.doob.mathagent.agent.service.InMemoryAgentTraceStore;
+import com.doob.mathagent.agent.vo.AgentRunExecuteResponse;
 import com.doob.mathagent.memory.dto.StudentMemoryRequest;
 import com.doob.mathagent.memory.service.StudentMemoryCommand;
 import com.doob.mathagent.memory.service.StudentMemoryReuseService;
@@ -17,6 +21,7 @@ import com.doob.mathagent.teaching.TeachingWorkflowNode;
 import com.doob.mathagent.teaching.dto.TeachingTaskRequest;
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -35,6 +40,7 @@ public class TeachingWorkflowService {
     private final TeachingTaskStore taskStore;
     private final StudentMemoryReuseService memoryReuseService;
     private final TeachingAiDraftService aiDraftService;
+    private final AgentTraceStore agentTraceStore;
 
     /**
      * 创建教学编排服务。
@@ -50,12 +56,27 @@ public class TeachingWorkflowService {
             TextbookRetrievalService retrievalService,
             TeachingTaskStore taskStore,
             StudentMemoryReuseService memoryReuseService,
-            TeachingAiDraftService aiDraftService) {
+            TeachingAiDraftService aiDraftService,
+            AgentTraceStore agentTraceStore) {
         this.processedBooksRoot = processedBooksRoot.toAbsolutePath().normalize();
         this.retrievalService = retrievalService;
         this.taskStore = taskStore;
         this.memoryReuseService = memoryReuseService;
         this.aiDraftService = aiDraftService;
+        this.agentTraceStore = agentTraceStore;
+    }
+
+    /**
+     * Creates a workflow with an isolated trace store for tests that only override the AI draft service.
+     */
+    public TeachingWorkflowService(
+            Path processedBooksRoot,
+            TextbookRetrievalService retrievalService,
+            TeachingTaskStore taskStore,
+            StudentMemoryReuseService memoryReuseService,
+            TeachingAiDraftService aiDraftService) {
+        this(processedBooksRoot, retrievalService, taskStore, memoryReuseService, aiDraftService,
+                new InMemoryAgentTraceStore());
     }
 
     /**
@@ -66,7 +87,8 @@ public class TeachingWorkflowService {
             TextbookRetrievalService retrievalService,
             TeachingTaskStore taskStore,
             StudentMemoryReuseService memoryReuseService) {
-        this(processedBooksRoot, retrievalService, taskStore, memoryReuseService, TeachingAiDraftService.disabled());
+        this(processedBooksRoot, retrievalService, taskStore, memoryReuseService, TeachingAiDraftService.disabled(),
+                new InMemoryAgentTraceStore());
     }
 
     /**
@@ -133,8 +155,9 @@ public class TeachingWorkflowService {
                 aiDraft,
                 false);
         timer.mark("handout_generation");
-        return new TeachingTaskResponse(
-                UUID.randomUUID().toString(),
+        String taskId = UUID.randomUUID().toString();
+        TeachingTaskResponse response = new TeachingTaskResponse(
+                taskId,
                 request.clientRequestId(),
                 context.tenantId(),
                 context.subjectType(),
@@ -153,6 +176,8 @@ public class TeachingWorkflowService {
                 timer.timings(),
                 aiDraft,
                 null);
+        saveAiDraftTrace(response, context);
+        return response;
     }
 
     /**
@@ -197,6 +222,68 @@ public class TeachingWorkflowService {
                 + "\n\\paragraph{互动追问}"
                 + latexItemize(aiDraft.followUpQuestions())
                 + modelLine;
+    }
+
+    /**
+     * Persists the CoursewareAgent trace for real AI draft runs so WorkBuddy/MCP and the frontend can recover it.
+     */
+    private void saveAiDraftTrace(TeachingTaskResponse response, TeachingRequestContext context) {
+        TeachingTaskResponse.AiDraft aiDraft = response.aiDraft();
+        if (aiDraft == null || !aiDraft.enabled()
+                || aiDraft.providerName() == null || aiDraft.providerName().isBlank()
+                || aiDraft.modelCode() == null || aiDraft.modelCode().isBlank()) {
+            return;
+        }
+        agentTraceStore.save(new AgentTraceRecord(
+                UUID.randomUUID().toString(),
+                response.taskId(),
+                Instant.now(),
+                context.tenantId(),
+                context.subjectType(),
+                context.subjectId(),
+                "CoursewareAgent",
+                aiDraft.providerName(),
+                aiDraft.modelCode(),
+                "COMPLETED",
+                0.0d,
+                List.of("tool:courseware:generate", "tool:textbook:search"),
+                List.of("data:public_textbook", "data:student_memory"),
+                response.evidence().stream().map(TeachingWorkflowService::evidenceRef).toList(),
+                response.stageTimings().stream()
+                        .map(timing -> new AgentRunExecuteResponse.StageTiming(timing.stage(), timing.elapsedMs()))
+                        .toList(),
+                new AgentRunExecuteResponse.TokenUsage(
+                        aiDraft.promptTokens(),
+                        aiDraft.completionTokens(),
+                        aiDraft.totalTokens()),
+                aiDraftTraceMessage(aiDraft),
+                aiDraft.recoveryEvents().stream()
+                        .map(event -> new AgentTraceRecord.DiagnosticEvent(
+                                event.eventType(),
+                                event.providerName(),
+                                event.modelCode(),
+                                event.attemptNo(),
+                                event.retryable(),
+                                event.message()))
+                        .toList()));
+    }
+
+    /**
+     * Builds a safe trace message without raw model content or the raw student question.
+     */
+    private static String aiDraftTraceMessage(TeachingTaskResponse.AiDraft aiDraft) {
+        String parseState = aiDraft.structured() ? "structured" : "raw";
+        return "Teaching AI draft " + parseState
+                + "; retry=" + aiDraft.retryCount() + "/" + aiDraft.maxRetries()
+                + "; recovered=" + aiDraft.recoveredAfterRetry()
+                + "; events=" + (aiDraft.recoveryEvents() == null ? 0 : aiDraft.recoveryEvents().size());
+    }
+
+    /**
+     * Converts one evidence row to a trace-safe reference id.
+     */
+    private static String evidenceRef(TeachingEvidence evidence) {
+        return evidence.sourceScope() + ":" + evidence.sourceTitle() + ":" + evidence.chunkId();
     }
 
     private static StudentMemoryCommand memoryRequest(TeachingTaskRequest request, TeachingRequestContext context) {

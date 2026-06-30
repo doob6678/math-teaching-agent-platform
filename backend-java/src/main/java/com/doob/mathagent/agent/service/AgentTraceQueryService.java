@@ -146,7 +146,16 @@ public class AgentTraceQueryService {
                 trace.evidenceRefs(),
                 trace.stageTimings(),
                 trace.actualUsage(),
-                trace.message());
+                trace.message(),
+                trace.diagnosticEvents().stream()
+                        .map(event -> new AgentTraceResponse.DiagnosticEvent(
+                                event.eventType(),
+                                event.providerName(),
+                                event.modelCode(),
+                                event.attemptNo(),
+                                event.retryable(),
+                                event.message()))
+                        .toList());
     }
 
     /**

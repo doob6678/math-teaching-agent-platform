@@ -23,6 +23,7 @@ import java.util.List;
  * @param stageTimings persisted stage timings for task recovery
  * @param actualUsage provider-reported token usage for recovered runs
  * @param message safe execution message without raw prompt or model output
+ * @param diagnosticEvents safe retry/fallback/parse events for trace monitoring
  */
 public record AgentTraceResponse(
         String traceId,
@@ -41,5 +42,51 @@ public record AgentTraceResponse(
         List<String> evidenceRefs,
         List<AgentRunExecuteResponse.StageTiming> stageTimings,
         AgentRunExecuteResponse.TokenUsage actualUsage,
-        String message) {
+        String message,
+        List<DiagnosticEvent> diagnosticEvents) {
+
+    /**
+     * Backward-compatible constructor for older tests and trace sources.
+     */
+    public AgentTraceResponse(
+            String traceId,
+            String planId,
+            Instant createdAt,
+            String tenantId,
+            String subjectType,
+            String subjectId,
+            String agentCode,
+            String providerName,
+            String modelCode,
+            String status,
+            double estimatedCost,
+            List<String> allowedToolScopes,
+            List<String> allowedDataScopes,
+            List<String> evidenceRefs,
+            List<AgentRunExecuteResponse.StageTiming> stageTimings,
+            AgentRunExecuteResponse.TokenUsage actualUsage,
+            String message) {
+        this(traceId, planId, createdAt, tenantId, subjectType, subjectId, agentCode, providerName, modelCode, status,
+                estimatedCost, allowedToolScopes, allowedDataScopes, evidenceRefs, stageTimings, actualUsage, message,
+                List.of());
+    }
+
+    /**
+     * One safe diagnostic event returned to the frontend.
+     *
+     * @param eventType stable event code
+     * @param providerName provider involved in the event
+     * @param modelCode model involved in the event
+     * @param attemptNo zero-based attempt number when applicable
+     * @param retryable whether backend still had retry/fallback capacity after this event
+     * @param message short safe message with no raw prompt or model output
+     */
+    public record DiagnosticEvent(
+            String eventType,
+            String providerName,
+            String modelCode,
+            int attemptNo,
+            boolean retryable,
+            String message) {
+    }
 }

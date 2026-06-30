@@ -820,6 +820,23 @@ export interface AgentTraceResponse {
   actualUsage: AgentTokenUsage;
   /** Safe execution message without raw prompt or raw model output. */
   message: string;
+  /** Safe retry/fallback/parse diagnostics without raw prompts or model outputs. */
+  diagnosticEvents?: AgentTraceDiagnosticEvent[];
+}
+
+export interface AgentTraceDiagnosticEvent {
+  /** Stable diagnostic event code. */
+  eventType: string;
+  /** Provider involved in this event. */
+  providerName: string;
+  /** Model involved in this event. */
+  modelCode: string;
+  /** Zero-based attempt number when applicable. */
+  attemptNo: number;
+  /** Whether retry or fallback was still available after this event. */
+  retryable: boolean;
+  /** Short safe event message. */
+  message: string;
 }
 
 /**

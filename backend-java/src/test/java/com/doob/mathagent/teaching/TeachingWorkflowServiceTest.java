@@ -2,6 +2,12 @@ package com.doob.mathagent.teaching;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.doob.mathagent.agent.service.AgentTraceRecord;
+import com.doob.mathagent.agent.service.AgentTraceSearchCriteria;
+import com.doob.mathagent.agent.service.AiChatResult;
+import com.doob.mathagent.agent.service.InMemoryAgentTraceStore;
+import com.doob.mathagent.infrastructure.ai.AiProviderCatalog;
+import com.doob.mathagent.infrastructure.ai.AiProviderProperties;
 import com.doob.mathagent.memory.service.InMemoryStudentMemoryStore;
 import com.doob.mathagent.memory.service.StudentMemoryCommand;
 import com.doob.mathagent.memory.service.StudentMemoryReuseService;
@@ -12,6 +18,7 @@ import com.doob.mathagent.retrieval.NoopRetrievalAuditSink;
 import com.doob.mathagent.retrieval.TextbookRetrievalService;
 import com.doob.mathagent.teaching.dto.TeachingTaskRequest;
 import com.doob.mathagent.teaching.service.InMemoryTeachingTaskStore;
+import com.doob.mathagent.teaching.service.TeachingAiDraftService;
 import com.doob.mathagent.teaching.service.TeachingWorkflowService;
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
 import java.nio.file.Files;
@@ -154,17 +161,61 @@ class TeachingWorkflowServiceTest {
         assertThat(service.get(created.taskId(), other)).isEmpty();
     }
 
+    @Test
+    void storesCoursewareAgentTraceForRealAiDraftRuns() throws Exception {
+        Path root = createTextbookCorpus();
+        InMemoryAgentTraceStore traceStore = new InMemoryAgentTraceStore();
+        AiProviderProperties properties = new AiProviderProperties();
+        properties.getOpenai().setApiKey("test-openai-key");
+        TeachingAiDraftService aiDraftService = new TeachingAiDraftService(
+                request -> new AiChatResult("openai", "gpt-5.4", 21, 13, 34, "ok", """
+                        {
+                          "teacherExplanation": "先读清 D(x_0) 的定义，再把 -1 代入。",
+                          "studentHint": "先找到定义里的自变量位置。",
+                          "knowledgePoints": ["函数新定义", "定义域"],
+                          "followUpQuestions": ["D(0) 如何处理？", "条件变化时如何分类？"]
+                        }
+                        """),
+                new AiProviderCatalog(properties));
+        TeachingWorkflowService service = new TeachingWorkflowService(
+                root,
+                retrievalService(),
+                new InMemoryTeachingTaskStore(),
+                memoryReuseService(),
+                aiDraftService,
+                traceStore);
+
+        TeachingTaskResponse response = service.submit(
+                new TeachingTaskRequest("req-ai-trace", "已知函数 f(x) 的定义域为 R，求 D(-1)", "理解函数新定义题", 2),
+                new TeachingRequestContext("tenant-a", "teacher", "teacher-1", "device-1"));
+
+        List<AgentTraceRecord> traces = traceStore.search(new AgentTraceSearchCriteria(
+                "tenant-a", "teacher", "teacher-1", "CoursewareAgent", "COMPLETED", 10));
+
+        assertThat(traces).hasSize(1);
+        AgentTraceRecord trace = traces.getFirst();
+        assertThat(trace.planId()).isEqualTo(response.taskId());
+        assertThat(trace.actualUsage().totalTokens()).isEqualTo(34);
+        assertThat(trace.evidenceRefs()).anyMatch(ref -> ref.contains("PUBLIC_TEXTBOOK"));
+        assertThat(trace.message()).contains("Teaching AI draft structured");
+        assertThat(trace.diagnosticEvents()).extracting(AgentTraceRecord.DiagnosticEvent::eventType)
+                .containsExactly("MODEL_CALL_SUCCEEDED", "JSON_PARSE_SUCCEEDED");
+    }
+
     private TeachingWorkflowService service(Path root) {
         return service(root, memoryReuseService());
     }
 
     private TeachingWorkflowService service(Path root, StudentMemoryReuseService memoryReuseService) {
-        TextbookRetrievalService retrievalService = new TextbookRetrievalService(
+        return new TeachingWorkflowService(root, retrievalService(), new InMemoryTeachingTaskStore(), memoryReuseService);
+    }
+
+    private TextbookRetrievalService retrievalService() {
+        return new TextbookRetrievalService(
                 new TextbookCatalogReader(),
                 new TextbookChunkReader(),
                 new LocalTextbookBm25SearchEngine(),
                 new NoopRetrievalAuditSink());
-        return new TeachingWorkflowService(root, retrievalService, new InMemoryTeachingTaskStore(), memoryReuseService);
     }
 
     private StudentMemoryReuseService memoryReuseService() {

@@ -2465,6 +2465,19 @@ export function AgentTracePanel({
                     </div>
                   ))}
                 </div>
+                {trace.diagnosticEvents?.length ? (
+                  <div className="diagnostic-event-list">
+                    {trace.diagnosticEvents.map((event, index) => (
+                      <div className="diagnostic-event" key={`${trace.traceId}:${event.eventType}:${index}`}>
+                        <strong>{event.eventType}</strong>
+                        <span>
+                          {event.providerName}/{event.modelCode} attempt {event.attemptNo}
+                        </span>
+                        <p>{event.message}</p>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
               </div>
               <TraceBadgeRow label="Tools" values={trace.allowedToolScopes} />
               <TraceBadgeRow label="Data" values={trace.allowedDataScopes} />

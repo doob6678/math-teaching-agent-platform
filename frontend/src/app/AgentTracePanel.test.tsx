@@ -24,6 +24,16 @@ describe("AgentTracePanel", () => {
         stageTimings: [{ stage: "model_call", elapsedMs: 14 }],
         actualUsage: { promptTokens: 123, completionTokens: 45, totalTokens: 168 },
         message: "Live model response recorded with provider usage metadata.",
+        diagnosticEvents: [
+          {
+            eventType: "JSON_PARSE_SUCCEEDED",
+            providerName: "openai",
+            modelCode: "gpt-5.4",
+            attemptNo: 0,
+            retryable: false,
+            message: "Structured teaching draft parsed.",
+          },
+        ],
       },
     ];
     const usageSummary: AgentTraceUsageSummaryResponse = {
@@ -58,6 +68,8 @@ describe("AgentTracePanel", () => {
     expect(html).toContain("168");
     expect(html).toContain("model_call");
     expect(html).toContain("Live model response recorded");
+    expect(html).toContain("JSON_PARSE_SUCCEEDED");
+    expect(html).toContain("Structured teaching draft parsed");
     expect(html).toContain("Usage summary");
     expect(html).toContain("1 runs");
     expect(html).toContain("123 prompt");

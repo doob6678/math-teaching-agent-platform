@@ -102,7 +102,8 @@ public class MyBatisAgentTraceStore implements AgentTraceStore {
         entity.setMetadataJson(writeMetadata(new TraceMetadata(
                 record.stageTimings(),
                 record.actualUsage(),
-                safeText(record.message()))));
+                safeText(record.message()),
+                safeDiagnosticEvents(record.diagnosticEvents()))));
         return entity;
     }
 
@@ -128,7 +129,8 @@ public class MyBatisAgentTraceStore implements AgentTraceStore {
                 readList(entity.getEvidenceRefsJson()),
                 metadata.stageTimings(),
                 metadata.actualUsage(),
-                metadata.message());
+                metadata.message(),
+                metadata.diagnosticEvents());
     }
 
     /**
@@ -198,18 +200,27 @@ public class MyBatisAgentTraceStore implements AgentTraceStore {
     }
 
     /**
+     * Returns immutable diagnostic events safe for metadata JSON.
+     */
+    private static List<AgentTraceRecord.DiagnosticEvent> safeDiagnosticEvents(
+            List<AgentTraceRecord.DiagnosticEvent> events) {
+        return events == null ? List.of() : List.copyOf(events);
+    }
+
+    /**
      * Safe metadata stored in agent_run_trace.metadata_json.
      */
     private record TraceMetadata(
             List<AgentRunExecuteResponse.StageTiming> stageTimings,
             AgentRunExecuteResponse.TokenUsage actualUsage,
-            String message) {
+            String message,
+            List<AgentTraceRecord.DiagnosticEvent> diagnosticEvents) {
 
         /**
          * Returns metadata defaults for old rows and failed metadata parsing.
          */
         private static TraceMetadata empty() {
-            return new TraceMetadata(List.of(), new AgentRunExecuteResponse.TokenUsage(0, 0, 0), "");
+            return new TraceMetadata(List.of(), new AgentRunExecuteResponse.TokenUsage(0, 0, 0), "", List.of());
         }
 
         /**
@@ -219,7 +230,8 @@ public class MyBatisAgentTraceStore implements AgentTraceStore {
             return new TraceMetadata(
                     stageTimings == null ? List.of() : List.copyOf(stageTimings),
                     actualUsage == null ? new AgentRunExecuteResponse.TokenUsage(0, 0, 0) : actualUsage,
-                    safeText(message));
+                    safeText(message),
+                    safeDiagnosticEvents(diagnosticEvents));
         }
     }
 }

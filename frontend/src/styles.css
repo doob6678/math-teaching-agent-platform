@@ -1311,6 +1311,32 @@ h2 {
   overflow-wrap: anywhere;
 }
 
+.diagnostic-event-list {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.diagnostic-event {
+  display: grid;
+  gap: 2px;
+  padding: 8px;
+  border: 1px solid #e2e8f0;
+  border-left: 3px solid #0ea5e9;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.diagnostic-event strong,
+.diagnostic-event span,
+.diagnostic-event p {
+  margin: 0;
+  color: #0f172a;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
 .node-list,
 .react-list {
   display: grid;

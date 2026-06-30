@@ -36,6 +36,8 @@ class MyBatisAgentTraceStoreTest {
         assertThat(mapper.inserted.getMetadataJson()).contains("stageTimings");
         assertThat(mapper.inserted.getMetadataJson()).contains("promptTokens");
         assertThat(mapper.inserted.getMetadataJson()).contains("model response recorded");
+        assertThat(mapper.inserted.getMetadataJson()).contains("diagnosticEvents");
+        assertThat(mapper.inserted.getMetadataJson()).contains("JSON_PARSE_SUCCEEDED");
         assertThat(mapper.inserted.toString()).doesNotContain("rawPrompt").doesNotContain("modelOutput");
     }
 
@@ -60,6 +62,25 @@ class MyBatisAgentTraceStoreTest {
         assertThat(traces.getFirst().actualUsage().totalTokens()).isEqualTo(18);
         assertThat(traces.getFirst().stageTimings()).extracting(AgentRunExecuteResponse.StageTiming::stage)
                 .containsExactly("model_call");
+        assertThat(traces.getFirst().diagnosticEvents()).extracting(AgentTraceRecord.DiagnosticEvent::eventType)
+                .containsExactly("JSON_PARSE_SUCCEEDED");
+    }
+
+    @Test
+    void readsOldMetadataRowsWithoutDiagnosticEvents() {
+        CapturingMapper mapper = new CapturingMapper();
+        AgentRunTraceEntity oldRow = entity("trace-old", "school-a", "teacher", "teacher-1", "CoursewareAgent");
+        oldRow.setMetadataJson("""
+                {"stageTimings":[{"stage":"model_call","elapsedMs":12}],"actualUsage":{"promptTokens":11,"completionTokens":7,"totalTokens":18},"message":"old trace"}
+                """);
+        mapper.rows.add(oldRow);
+        MyBatisAgentTraceStore store = new MyBatisAgentTraceStore(mapper.proxy(), new ObjectMapper());
+
+        AgentTraceRecord trace = store.find("trace-old").orElseThrow();
+
+        assertThat(trace.message()).isEqualTo("old trace");
+        assertThat(trace.actualUsage().totalTokens()).isEqualTo(18);
+        assertThat(trace.diagnosticEvents()).isEmpty();
     }
 
     private static AgentTraceRecord trace(String traceId, String subjectType, String subjectId, String agentCode) {
@@ -80,7 +101,14 @@ class MyBatisAgentTraceStoreTest {
                 List.of("textbook:chapter-1"),
                 List.of(new AgentRunExecuteResponse.StageTiming("model_call", 12)),
                 new AgentRunExecuteResponse.TokenUsage(11, 7, 18),
-                "Live model response recorded");
+                "Live model response recorded",
+                List.of(new AgentTraceRecord.DiagnosticEvent(
+                        "JSON_PARSE_SUCCEEDED",
+                        "openai",
+                        "gpt-5.4",
+                        0,
+                        false,
+                        "Structured teaching draft parsed.")));
     }
 
     private static AgentRunTraceEntity entity(
@@ -105,7 +133,7 @@ class MyBatisAgentTraceStoreTest {
         entity.setAllowedDataScopesJson("[\"TEACHER_PRIVATE\"]");
         entity.setEvidenceRefsJson("[\"textbook:chapter-1\"]");
         entity.setMetadataJson("""
-                {"stageTimings":[{"stage":"model_call","elapsedMs":12}],"actualUsage":{"promptTokens":11,"completionTokens":7,"totalTokens":18},"message":"Live model response recorded"}
+                {"stageTimings":[{"stage":"model_call","elapsedMs":12}],"actualUsage":{"promptTokens":11,"completionTokens":7,"totalTokens":18},"message":"Live model response recorded","diagnosticEvents":[{"eventType":"JSON_PARSE_SUCCEEDED","providerName":"openai","modelCode":"gpt-5.4","attemptNo":0,"retryable":false,"message":"Structured teaching draft parsed."}]}
                 """);
         return entity;
     }
