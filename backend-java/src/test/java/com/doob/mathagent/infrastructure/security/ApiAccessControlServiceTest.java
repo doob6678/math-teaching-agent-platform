@@ -150,6 +150,41 @@ class ApiAccessControlServiceTest {
     }
 
     @Test
+    void mcpToolExecutionUsesBackendResolvedSubjectAndDedicatedToolPrefix() {
+        ApiAccessControlService service = new ApiAccessControlService(
+                FixedWindowRateLimiter.empty(),
+                Clock.fixed(Instant.parse("2026-06-28T10:00:00Z"), ZoneOffset.UTC),
+                ApiAccessPolicy.defaultRules());
+        ApiRequestIdentity anonymousCall = new ApiRequestIdentity(
+                "POST",
+                "/api/mcp/tools/search_textbook_evidence/call",
+                "school-a",
+                "anonymous",
+                null,
+                "127.0.0.1",
+                "mcp:workbuddy-teacher",
+                "mcp-client");
+        ApiRequestIdentity teacherCall = new ApiRequestIdentity(
+                "POST",
+                "/api/mcp/tools/search_textbook_evidence/call",
+                "school-a",
+                "teacher",
+                "teacher-mcp-client",
+                "127.0.0.1",
+                "mcp:workbuddy-teacher",
+                "mcp-client");
+
+        ApiAccessDecision denied = service.evaluate(anonymousCall);
+        ApiAccessDecision allowed = service.evaluate(teacherCall);
+
+        assertThat(denied.allowed()).isFalse();
+        assertThat(denied.httpStatus()).isEqualTo(403);
+        assertThat(allowed.allowed()).isTrue();
+        assertThat(allowed.level()).isEqualTo(ApiAccessLevel.USER);
+        assertThat(allowed.limit()).isEqualTo(30);
+    }
+
+    @Test
     void limitsSearchEndpointByDeviceAndEndpointWindow() {
         ApiAccessControlService service = new ApiAccessControlService(
                 FixedWindowRateLimiter.empty(),

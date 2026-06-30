@@ -14,7 +14,7 @@ class ProtocolDiscoveryServiceTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Test
-    void returnsReadOnlyMcpDiscoveryMetadataWithoutExecutionEndpoints() throws Exception {
+    void returnsReadOnlyMcpDiscoveryMetadataWithOnlyTextbookExecutionEnabled() throws Exception {
         ProtocolDiscoveryService service = new ProtocolDiscoveryService();
 
         List<McpToolDescriptor> tools = service.mcpTools();
@@ -25,7 +25,9 @@ class ProtocolDiscoveryServiceTest {
                         "plan_agent_run",
                         "create_teaching_task",
                         "export_handout_pdf");
-        assertThat(tools).allSatisfy(tool -> assertThat(tool.executionEndpointEnabled()).isFalse());
+        assertThat(tools).filteredOn(McpToolDescriptor::executionEndpointEnabled)
+                .extracting(McpToolDescriptor::name)
+                .containsExactly("search_textbook_evidence");
         assertThat(tools).filteredOn(tool -> tool.requiresCapabilityToken())
                 .extracting(McpToolDescriptor::name)
                 .contains("create_teaching_task", "export_handout_pdf");

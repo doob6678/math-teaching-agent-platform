@@ -9,9 +9,6 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
 import java.net.URISyntaxException;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -71,7 +68,7 @@ public class ProtocolDiscoveryService {
                         "Search textbook evidence",
                         "Search public textbook evidence with backend tenant and role checks.",
                         true,
-                        false,
+                        true,
                         TEACHING_ROLES,
                         "query:basic",
                         "low",
@@ -324,7 +321,7 @@ public class ProtocolDiscoveryService {
     private static Optional<String> registeredKeyProfile(
             String secretKey,
             McpClientRegistryProperties registryProperties) {
-        String secretHash = secretHash(secretKey);
+        String secretHash = McpClientRegistryProperties.secretHash(secretKey);
         return registryProperties.getClients().stream()
                 .filter(McpClientRegistryProperties.Client::enabled)
                 .filter(client -> secretHash.equalsIgnoreCase(blankToEmpty(client.secretHash())))
@@ -338,24 +335,7 @@ public class ProtocolDiscoveryService {
      * Returns a SHA-256 secret hash for focused tests and local key bootstrap scripts.
      */
     public static String secretHashForTest(String secretKey) {
-        return secretHash(secretKey);
-    }
-
-    /**
-     * Hashes an MCP secret without storing or logging the raw secret.
-     */
-    private static String secretHash(String secretKey) {
-        try {
-            byte[] digest = MessageDigest.getInstance("SHA-256")
-                    .digest(secretKey.getBytes(StandardCharsets.UTF_8));
-            StringBuilder builder = new StringBuilder("sha256:");
-            for (byte value : digest) {
-                builder.append("%02x".formatted(value));
-            }
-            return builder.toString();
-        } catch (NoSuchAlgorithmException exception) {
-            throw new IllegalStateException("SHA-256 digest is unavailable", exception);
-        }
+        return McpClientRegistryProperties.secretHash(secretKey);
     }
 
     /**
