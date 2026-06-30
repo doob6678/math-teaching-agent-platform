@@ -9,6 +9,7 @@ import com.doob.mathagent.infrastructure.ai.AiProviderProperties;
 import com.doob.mathagent.memory.vo.StudentMemoryResponse;
 import com.doob.mathagent.teaching.dto.TeachingTaskRequest;
 import com.doob.mathagent.teaching.service.TeachingAiDraftService;
+import com.doob.mathagent.teaching.service.TeachingAiDraftProperties;
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -22,7 +23,8 @@ class TeachingAiDraftLiveSmokeTest {
         assumeTrue(new AiProviderCatalog(properties).enabledProviders().size() > 0, "No live AI provider credentials");
         TeachingAiDraftService service = new TeachingAiDraftService(
                 new SpringAiOpenAiCompatibleGateway(properties),
-                new AiProviderCatalog(properties));
+                new AiProviderCatalog(properties),
+                new TeachingAiDraftProperties());
 
         TeachingTaskResponse.AiDraft draft = service.draft(
                 new TeachingTaskRequest(

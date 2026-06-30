@@ -45,6 +45,9 @@ math-agent:
       base-url: ${ARK_BASE_URL:https://ark.cn-beijing.volces.com/api/v3}
       api-key: ${ARK_API_KEY:}
       chat-model: ${ARK_CHAT_MODEL:doubao-seed-2-0-lite-260428}
+  teaching:
+    ai-draft:
+      max-retries: ${MATH_AGENT_TEACHING_AI_DRAFT_MAX_RETRIES:1}
   database:
     enabled: ${MATH_AGENT_DB_ENABLED:false}
     url: ${MATH_AGENT_DB_URL:}

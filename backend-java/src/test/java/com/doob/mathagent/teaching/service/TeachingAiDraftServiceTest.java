@@ -22,26 +22,26 @@ class TeachingAiDraftServiceTest {
         TeachingAiDraftService.ParsedDraft parsed = TeachingAiDraftService.parseStructuredDraft("""
                 ```json
                 {
-                  "teacherExplanation": "先理解 D(x_0) 的定义，再代入 x_0=-1。",
-                  "studentHint": "先把 -1 代入定义，再判断不等式。",
-                  "knowledgePoints": ["函数新定义", "定义域"],
-                  "followUpQuestions": ["D(0) 怎么求？", "参数变化时条件会怎样？"]
+                  "teacherExplanation": "Explain D(x_0), then substitute x_0=-1.",
+                  "studentHint": "Substitute -1 first, then check the condition.",
+                  "knowledgePoints": ["new function definition", "domain"],
+                  "followUpQuestions": ["How to find D(0)?", "What changes when parameters move?"]
                 }
                 ```
                 """);
 
         assertThat(parsed.structured()).isTrue();
         assertThat(parsed.teacherExplanation()).contains("D(x_0)");
-        assertThat(parsed.knowledgePoints()).containsExactly("函数新定义", "定义域");
+        assertThat(parsed.knowledgePoints()).containsExactly("new function definition", "domain");
         assertThat(parsed.parseError()).isBlank();
     }
 
     @Test
     void retriesMalformedJsonAndReturnsRecoveredStructuredDraftWithAccumulatedTokens() {
         CapturingGateway gateway = new CapturingGateway(List.of(
-                new AiChatResult("openai", "gpt-5.4", 10, 4, 14, "ok", "教师讲解：不是 JSON"),
-                new AiChatResult("openai", "gpt-5.4", 12, 8, 20, "ok", structuredJson("修复后的教师讲解"))));
-        TeachingAiDraftService service = new TeachingAiDraftService(gateway, catalog(true, false));
+                new AiChatResult("openai", "gpt-5.4", 10, 4, 14, "ok", "teacher explanation: not JSON"),
+                new AiChatResult("openai", "gpt-5.4", 12, 8, 20, "ok", structuredJson("repaired teacher explanation"))));
+        TeachingAiDraftService service = new TeachingAiDraftService(gateway, catalog(true, false), defaultPolicy());
 
         TeachingTaskResponse.AiDraft draft = service.draft(request(), evidence(), memory());
 
@@ -50,7 +50,7 @@ class TeachingAiDraftServiceTest {
         assertThat(draft.retryCount()).isEqualTo(1);
         assertThat(draft.maxRetries()).isEqualTo(1);
         assertThat(draft.totalTokens()).isEqualTo(34);
-        assertThat(draft.teacherExplanation()).contains("修复后的教师讲解");
+        assertThat(draft.teacherExplanation()).contains("repaired teacher explanation");
         assertThat(draft.recoveryEvents()).extracting(TeachingTaskResponse.AiRecoveryEvent::eventType)
                 .containsExactly(
                         "MODEL_CALL_SUCCEEDED",
@@ -60,7 +60,7 @@ class TeachingAiDraftServiceTest {
                         "JSON_PARSE_SUCCEEDED");
         assertThat(draft.recoveryEvents().get(1).retryable()).isTrue();
         assertThat(gateway.requests()).hasSize(2);
-        assertThat(gateway.requests().get(1).userInputSummary()).contains("上一次输出没有通过后端 JSON schema 解析");
+        assertThat(gateway.requests().get(1).userInputSummary()).contains("JSON schema");
     }
 
     @Test
@@ -68,8 +68,8 @@ class TeachingAiDraftServiceTest {
         CapturingGateway gateway = new CapturingGateway(List.of(
                 new AiChatResult("openai", "gpt-5.4", 3, 2, 5, "ok", "bad json"),
                 new AiChatResult("openai", "gpt-5.4", 4, 2, 6, "ok", "{\"teacherExplanation\":\"only one field\"}"),
-                new AiChatResult("dashscope", "qwen3.6-flash", 7, 5, 12, "ok", structuredJson("千问接管"))));
-        TeachingAiDraftService service = new TeachingAiDraftService(gateway, catalog(true, true));
+                new AiChatResult("dashscope", "qwen3.6-flash", 7, 5, 12, "ok", structuredJson("qwen fallback"))));
+        TeachingAiDraftService service = new TeachingAiDraftService(gateway, catalog(true, true), defaultPolicy());
 
         TeachingTaskResponse.AiDraft draft = service.draft(request(), evidence(), memory());
 
@@ -94,15 +94,15 @@ class TeachingAiDraftServiceTest {
     void retriesTransientGatewayFailureBeforeProviderRotation() {
         CapturingGateway gateway = new CapturingGateway(List.of(
                 new IllegalStateException("proxy connection reset"),
-                new AiChatResult("openai", "gpt-5.4", 8, 5, 13, "ok", structuredJson("代理恢复后的教师讲解"))));
-        TeachingAiDraftService service = new TeachingAiDraftService(gateway, catalog(true, false));
+                new AiChatResult("openai", "gpt-5.4", 8, 5, 13, "ok", structuredJson("proxy recovered teacher explanation"))));
+        TeachingAiDraftService service = new TeachingAiDraftService(gateway, catalog(true, false), defaultPolicy());
 
         TeachingTaskResponse.AiDraft draft = service.draft(request(), evidence(), memory());
 
         assertThat(draft.structured()).isTrue();
         assertThat(draft.recoveredAfterRetry()).isTrue();
         assertThat(draft.retryCount()).isEqualTo(1);
-        assertThat(draft.teacherExplanation()).contains("代理恢复");
+        assertThat(draft.teacherExplanation()).contains("proxy recovered");
         assertThat(draft.recoveryEvents()).extracting(TeachingTaskResponse.AiRecoveryEvent::eventType)
                 .containsExactly(
                         "MODEL_CALL_FAILED",
@@ -117,7 +117,7 @@ class TeachingAiDraftServiceTest {
         CapturingGateway gateway = new CapturingGateway(List.of(
                 new AiChatResult("openai", "gpt-5.4", 3, 2, 5, "ok", "bad json"),
                 new AiChatResult("openai", "gpt-5.4", 4, 2, 6, "ok", "{\"teacherExplanation\":\"only one field\"}")));
-        TeachingAiDraftService service = new TeachingAiDraftService(gateway, catalog(true, false));
+        TeachingAiDraftService service = new TeachingAiDraftService(gateway, catalog(true, false), defaultPolicy());
 
         TeachingTaskResponse.AiDraft draft = service.draft(request(), evidence(), memory());
 
@@ -137,13 +137,42 @@ class TeachingAiDraftServiceTest {
         assertThat(draft.recoveryEvents().getLast().retryable()).isFalse();
     }
 
+    @Test
+    void honorsConfiguredRetryCountForJsonRepair() {
+        CapturingGateway gateway = new CapturingGateway(List.of(
+                new AiChatResult("openai", "gpt-5.4", 3, 2, 5, "ok", "bad json"),
+                new AiChatResult("openai", "gpt-5.4", 4, 2, 6, "ok", "{\"teacherExplanation\":\"only one field\"}"),
+                new AiChatResult("openai", "gpt-5.4", 9, 5, 14, "ok", structuredJson("second repair success"))));
+        TeachingAiDraftProperties policy = new TeachingAiDraftProperties();
+        policy.setMaxRetries(2);
+        TeachingAiDraftService service = new TeachingAiDraftService(gateway, catalog(true, false), policy);
+
+        TeachingTaskResponse.AiDraft draft = service.draft(request(), evidence(), memory());
+
+        assertThat(draft.structured()).isTrue();
+        assertThat(draft.retryCount()).isEqualTo(2);
+        assertThat(draft.maxRetries()).isEqualTo(2);
+        assertThat(draft.totalTokens()).isEqualTo(25);
+        assertThat(draft.recoveredAfterRetry()).isTrue();
+        assertThat(draft.recoveryEvents()).extracting(TeachingTaskResponse.AiRecoveryEvent::eventType)
+                .containsExactly(
+                        "MODEL_CALL_SUCCEEDED",
+                        "JSON_PARSE_FAILED",
+                        "RETRY_SCHEDULED",
+                        "MODEL_CALL_SUCCEEDED",
+                        "JSON_PARSE_FAILED",
+                        "RETRY_SCHEDULED",
+                        "MODEL_CALL_SUCCEEDED",
+                        "JSON_PARSE_SUCCEEDED");
+    }
+
     private static String structuredJson(String teacherExplanation) {
         return """
                 {
                   "teacherExplanation": "%s",
-                  "studentHint": "先代入定义，再判断条件。",
-                  "knowledgePoints": ["函数新定义", "定义域"],
-                  "followUpQuestions": ["D(0) 怎么求？", "条件换成小于号会怎样？"]
+                  "studentHint": "Substitute into the definition, then check the condition.",
+                  "knowledgePoints": ["new function definition", "domain"],
+                  "followUpQuestions": ["How to find D(0)?", "What changes if the sign changes?"]
                 }
                 """.formatted(teacherExplanation);
     }
@@ -151,18 +180,18 @@ class TeachingAiDraftServiceTest {
     private static TeachingTaskRequest request() {
         return new TeachingTaskRequest(
                 "req-ai-structured",
-                "已知函数 f(x) 的定义域为 R，求 D(-1)",
-                "理解函数新定义题",
+                "Given function f(x) with domain R, find D(-1).",
+                "Understand new function definition questions",
                 2);
     }
 
     private static List<TeachingEvidence> evidence() {
         return List.of(new TeachingEvidence(
                 "PUBLIC_TEXTBOOK",
-                "教材A / 函数新概念",
+                "Textbook A / New function concept",
                 "book-a-p101",
                 101,
-                "函数新定义题要先读清集合 D(x0) 的条件，再代入具体 x0。"));
+                "For new function definition questions, read condition D(x0), then substitute x0."));
     }
 
     private static StudentMemoryResponse memory() {
@@ -174,6 +203,10 @@ class TeachingAiDraftServiceTest {
         properties.getOpenai().setApiKey(openaiEnabled ? "test-openai-key" : "");
         properties.getDashscope().setApiKey(dashscopeEnabled ? "test-dashscope-key" : "");
         return new AiProviderCatalog(properties);
+    }
+
+    private static TeachingAiDraftProperties defaultPolicy() {
+        return new TeachingAiDraftProperties();
     }
 
     private static final class CapturingGateway implements AiChatGateway {

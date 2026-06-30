@@ -21,20 +21,25 @@ import org.springframework.stereotype.Service;
 public class TeachingAiDraftService {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
-    private static final int MAX_DRAFT_RETRIES = 1;
 
     private final AiChatGateway aiChatGateway;
     private final AiProviderCatalog providerCatalog;
+    private final TeachingAiDraftProperties aiDraftProperties;
 
     /**
      * Creates the teaching AI draft service.
      *
      * @param aiChatGateway real model gateway
      * @param providerCatalog enabled provider catalog
+     * @param aiDraftProperties runtime retry policy
      */
-    public TeachingAiDraftService(AiChatGateway aiChatGateway, AiProviderCatalog providerCatalog) {
+    public TeachingAiDraftService(
+            AiChatGateway aiChatGateway,
+            AiProviderCatalog providerCatalog,
+            TeachingAiDraftProperties aiDraftProperties) {
         this.aiChatGateway = aiChatGateway;
         this.providerCatalog = providerCatalog;
+        this.aiDraftProperties = aiDraftProperties;
     }
 
     /**
@@ -59,11 +64,12 @@ public class TeachingAiDraftService {
         int totalPromptTokens = 0;
         int totalCompletionTokens = 0;
         int totalTokens = 0;
+        int maxRetries = aiDraftProperties.resolvedMaxRetries();
         for (int providerIndex = 0; providerIndex < providers.size(); providerIndex++) {
             AiProviderCatalog.Provider provider = providers.get(providerIndex);
             String nextPrompt = prompt(request, evidence, memoryResponse);
-            for (int attempt = 0; attempt <= MAX_DRAFT_RETRIES; attempt++) {
-                boolean canRetryProvider = attempt < MAX_DRAFT_RETRIES;
+            for (int attempt = 0; attempt <= maxRetries; attempt++) {
+                boolean canRetryProvider = attempt < maxRetries;
                 boolean canRotateProvider = providerIndex < providers.size() - 1;
                 try {
                     AiChatResult result = aiChatGateway.call(new AiChatRequest(
@@ -100,6 +106,7 @@ public class TeachingAiDraftService {
                                 totalCompletionTokens,
                                 totalTokens,
                                 attempt,
+                                maxRetries,
                                 recoveryEvents);
                     }
                     recoveryEvents.add(event(
@@ -110,7 +117,7 @@ public class TeachingAiDraftService {
                             false,
                             canRetryProvider || canRotateProvider,
                             parsed.parseError()));
-                    if (attempt == MAX_DRAFT_RETRIES) {
+                    if (attempt == maxRetries) {
                         lastUnstructuredDraft = toAiDraft(
                                 result,
                                 parsed,
@@ -118,6 +125,7 @@ public class TeachingAiDraftService {
                                 totalCompletionTokens,
                                 totalTokens,
                                 attempt,
+                                maxRetries,
                                 recoveryEvents);
                         break;
                     }
@@ -140,7 +148,7 @@ public class TeachingAiDraftService {
                             false,
                             canRetryProvider || canRotateProvider,
                             exception.getClass().getSimpleName()));
-                    if (attempt == MAX_DRAFT_RETRIES) {
+                    if (attempt == maxRetries) {
                         break;
                     }
                     recoveryEvents.add(event(
@@ -184,8 +192,8 @@ public class TeachingAiDraftService {
                 List.of(),
                 List.of(),
                 lastFailure == null ? "" : lastFailure.getClass().getSimpleName(),
-                MAX_DRAFT_RETRIES,
-                MAX_DRAFT_RETRIES,
+                maxRetries,
+                maxRetries,
                 false,
                 List.copyOf(recoveryEvents));
     }
@@ -197,6 +205,7 @@ public class TeachingAiDraftService {
             int completionTokens,
             int totalTokens,
             int retryCount,
+            int maxRetries,
             List<TeachingTaskResponse.AiRecoveryEvent> recoveryEvents) {
         String message = parsed.structured()
                 ? result.safeMessage()
@@ -217,7 +226,7 @@ public class TeachingAiDraftService {
                 parsed.followUpQuestions(),
                 parsed.parseError(),
                 retryCount,
-                MAX_DRAFT_RETRIES,
+                maxRetries,
                 parsed.structured() && retryCount > 0,
                 List.copyOf(recoveryEvents));
     }
@@ -250,7 +259,8 @@ public class TeachingAiDraftService {
                 request -> {
                     throw new IllegalStateException("Live AI gateway is not configured");
                 },
-                new AiProviderCatalog(new com.doob.mathagent.infrastructure.ai.AiProviderProperties()));
+                new AiProviderCatalog(new com.doob.mathagent.infrastructure.ai.AiProviderProperties()),
+                new TeachingAiDraftProperties());
     }
 
     /**

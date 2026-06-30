@@ -19,6 +19,7 @@ import com.doob.mathagent.retrieval.TextbookRetrievalService;
 import com.doob.mathagent.teaching.dto.TeachingTaskRequest;
 import com.doob.mathagent.teaching.service.InMemoryTeachingTaskStore;
 import com.doob.mathagent.teaching.service.TeachingAiDraftService;
+import com.doob.mathagent.teaching.service.TeachingAiDraftProperties;
 import com.doob.mathagent.teaching.service.TeachingWorkflowService;
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
 import java.nio.file.Files;
@@ -176,7 +177,8 @@ class TeachingWorkflowServiceTest {
                           "followUpQuestions": ["D(0) 如何处理？", "条件变化时如何分类？"]
                         }
                         """),
-                new AiProviderCatalog(properties));
+                new AiProviderCatalog(properties),
+                new TeachingAiDraftProperties());
         TeachingWorkflowService service = new TeachingWorkflowService(
                 root,
                 retrievalService(),
