@@ -66,6 +66,46 @@ class TeacherResourceServiceTest {
     }
 
     @Test
+    void feishuResourceRegistrationDefaultsAndReturnsMarkdownExportFormat() {
+        TeacherResourceService service = new TeacherResourceService(new InMemoryTeacherResourceStore());
+        TeacherResourceRegistrationCommand request = new TeacherResourceRegistrationCommand(
+                "default",
+                "teacher",
+                "teacher-001",
+                "feishu",
+                "Feishu question bank",
+                "https://example.feishu.cn/docx/doc1",
+                null,
+                "TEACHER_PRIVATE");
+
+        TeacherResourceDocumentResponse response = service.register(request);
+
+        assertThat(response.feishuExportFormat()).isEqualTo("md");
+        assertThat(service.list("default", "teacher", "teacher-001"))
+                .extracting(TeacherResourceDocumentResponse::feishuExportFormat)
+                .containsExactly("md");
+    }
+
+    @Test
+    void feishuResourceRegistrationSavesSelectedPdfExportFormat() {
+        TeacherResourceService service = new TeacherResourceService(new InMemoryTeacherResourceStore());
+        TeacherResourceRegistrationCommand request = new TeacherResourceRegistrationCommand(
+                "default",
+                "teacher",
+                "teacher-001",
+                "feishu",
+                "Feishu PDF handout",
+                "https://example.feishu.cn/docx/doc1",
+                null,
+                "TEACHER_PRIVATE",
+                "pdf");
+
+        TeacherResourceDocumentResponse response = service.register(request);
+
+        assertThat(response.feishuExportFormat()).isEqualTo("pdf");
+    }
+
+    @Test
     void ownerTeacherCanArchiveOwnResource() {
         TeacherResourceService service = new TeacherResourceService(new InMemoryTeacherResourceStore());
         TeacherResourceDocumentResponse created = service.register(new TeacherResourceRegistrationCommand(

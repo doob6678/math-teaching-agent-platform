@@ -93,6 +93,33 @@ class TeacherResourceControllerTest {
     }
 
     @Test
+    void controllerRegistersFeishuResourceWithSelectedExportFormat() {
+        InMemoryTeacherResourceStore store = new InMemoryTeacherResourceStore();
+        TeacherResourceController controller = new TeacherResourceController(
+                new TeacherResourceService(store),
+                new TeacherSourceSyncJobService(store, new InMemoryTeacherSourceSyncJobStore()),
+                new TeacherSourceSyncExecutionService(
+                        store,
+                        new InMemoryTeacherSourceSyncJobStore(),
+                        new InMemoryTeacherDocumentBlockStore()),
+                request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"),
+                (token, action, path, requestHash, subject) -> true);
+
+        TeacherResourceDocumentResponse response = controller.register(new TeacherResourceRegistrationRequest(
+                "feishu",
+                "Feishu PDF source",
+                "https://example.feishu.cn/docx/doc1",
+                null,
+                "TEACHER_PRIVATE",
+                "pdf"), requestWithCapability("token-ok", "hash-register"));
+
+        assertThat(response.feishuExportFormat()).isEqualTo("pdf");
+        assertThat(controller.list(new MockHttpServletRequest()))
+                .extracting(TeacherResourceDocumentResponse::feishuExportFormat)
+                .containsExactly("pdf");
+    }
+
+    @Test
     void adminCanAssignSharedResourceScope() throws Exception {
         Path folder = tempDir.resolve("admin-shared-resource");
         Files.createDirectories(folder);

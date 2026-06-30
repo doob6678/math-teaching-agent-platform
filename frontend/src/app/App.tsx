@@ -119,6 +119,7 @@ export function App() {
   const [resourceLocation, setResourceLocation] = useState("");
   const [resourceSourceType, setResourceSourceType] = useState("local_path");
   const [resourceScope, setResourceScope] = useState("MATH_VIP");
+  const [feishuExportFormat, setFeishuExportFormat] = useState<"md" | "docx" | "pdf">("md");
   const [knowledgePointName, setKnowledgePointName] = useState("space vector dot product");
   const [knowledgeChapterPath, setKnowledgeChapterPath] = useState("selective compulsory / space vector");
   const [questionTitle, setQuestionTitle] = useState("vector angle");
@@ -376,6 +377,7 @@ export function App() {
         originalUrl: resourceSourceType === "feishu" ? resourceLocation.trim() : undefined,
         localPath: resourceSourceType === "local_path" ? resourceLocation.trim() : undefined,
         permissionScope: resourceScope,
+        feishuExportFormat: resourceSourceType === "feishu" ? feishuExportFormat : undefined,
       })
       .then((resource) => {
         setTeacherResources((current) => [resource, ...current]);
@@ -975,6 +977,7 @@ export function App() {
             location={resourceLocation}
             sourceType={resourceSourceType}
             scope={resourceScope}
+            feishuExportFormat={feishuExportFormat}
             loading={loadingTeacherResources}
             registering={registeringResource}
             searchingBlocks={searchingTeacherBlocks}
@@ -993,6 +996,7 @@ export function App() {
             onLocationChange={setResourceLocation}
             onSourceTypeChange={setResourceSourceType}
             onScopeChange={setResourceScope}
+            onFeishuExportFormatChange={setFeishuExportFormat}
             onBlockSearchQueryChange={setTeacherResourceSearchQuery}
             onBlockSearch={handleTeacherBlockSearch}
             onFeishuDiscoveryQueryChange={setFeishuDiscoveryQuery}
@@ -1325,6 +1329,19 @@ function KnowledgeQuestionBankPanel({
   onCreateQuestion: (event: FormEvent<HTMLFormElement>) => void;
   onSearchQuestions: (event: FormEvent<HTMLFormElement>) => void;
 }) {
+  const displaySpinePoints = knowledgePoints.filter((point) => point.sourceSummary?.includes("人工主干v0.1"));
+  const displayedKnowledgePoints = (displaySpinePoints.length > 0 ? displaySpinePoints : knowledgePoints).slice(0, 6);
+  const displaySpinePointIds = new Set(displaySpinePoints.map((point) => point.knowledgePointId));
+  const displaySpineRelations =
+    displaySpinePoints.length > 0
+      ? knowledgeRelations.filter(
+          (relation) =>
+            displaySpinePointIds.has(relation.sourceKnowledgePointId) &&
+            displaySpinePointIds.has(relation.targetKnowledgePointId),
+        )
+      : knowledgeRelations;
+  const displayedKnowledgeRelations = displaySpineRelations.slice(0, 6);
+
   return (
     <section className="agent-plan-panel">
       <div className="result-header">
@@ -1332,7 +1349,9 @@ function KnowledgeQuestionBankPanel({
           <p className="eyebrow">Knowledge Bank</p>
           <h2>Knowledge points and questions</h2>
         </div>
-        <div className="strategy-pill">{knowledgePoints.length} points</div>
+        <div className="strategy-pill">
+          {displaySpinePoints.length > 0 ? `${displaySpinePoints.length}/${knowledgePoints.length} spine` : `${knowledgePoints.length} points`}
+        </div>
       </div>
       {error ? <StatusLine icon={<AlertCircle size={16} />} text={error} tone="danger" /> : null}
       <div className="agent-plan-grid">
@@ -1375,7 +1394,7 @@ function KnowledgeQuestionBankPanel({
           </button>
         </form>
         <div className="tool-decision-list compact">
-          {knowledgePoints.slice(0, 6).map((point) => (
+          {displayedKnowledgePoints.map((point) => (
             <div className="tool-decision allowed" key={point.knowledgePointId}>
               <strong>{point.knowledgePointName}</strong>
               <span>{point.permissionScope}</span>
@@ -1384,8 +1403,8 @@ function KnowledgeQuestionBankPanel({
           ))}
         </div>
         <div className="knowledge-relation-list">
-          {knowledgeRelations.length > 0 ? (
-            knowledgeRelations.slice(0, 6).map((relation) => (
+          {displayedKnowledgeRelations.length > 0 ? (
+            displayedKnowledgeRelations.map((relation) => (
               <div className="knowledge-relation-row" key={relation.relationId}>
                 <strong>
                   {relation.sourceKnowledgePointId} -&gt; {relation.targetKnowledgePointId}
@@ -1589,6 +1608,7 @@ function TeacherResourcePanel({
   location,
   sourceType,
   scope,
+  feishuExportFormat,
   loading,
   registering,
   searchingBlocks,
@@ -1607,6 +1627,7 @@ function TeacherResourcePanel({
   onLocationChange,
   onSourceTypeChange,
   onScopeChange,
+  onFeishuExportFormatChange,
   onBlockSearchQueryChange,
   onBlockSearch,
   onFeishuDiscoveryQueryChange,
@@ -1623,6 +1644,7 @@ function TeacherResourcePanel({
   location: string;
   sourceType: string;
   scope: string;
+  feishuExportFormat: "md" | "docx" | "pdf";
   loading: boolean;
   registering: boolean;
   searchingBlocks: boolean;
@@ -1641,6 +1663,7 @@ function TeacherResourcePanel({
   onLocationChange: (value: string) => void;
   onSourceTypeChange: (value: string) => void;
   onScopeChange: (value: string) => void;
+  onFeishuExportFormatChange: (value: "md" | "docx" | "pdf") => void;
   onBlockSearchQueryChange: (value: string) => void;
   onBlockSearch: (event: FormEvent<HTMLFormElement>) => void;
   onFeishuDiscoveryQueryChange: (value: string) => void;
@@ -1671,6 +1694,19 @@ function TeacherResourcePanel({
           <span>{sourceType === "feishu" ? "飞书 URL" : "本地路径"}</span>
           <input value={location} onChange={(event) => onLocationChange(event.target.value)} />
         </label>
+        {sourceType === "feishu" ? (
+          <label>
+            <span>导出格式</span>
+            <select
+              value={feishuExportFormat}
+              onChange={(event) => onFeishuExportFormatChange(event.target.value as "md" | "docx" | "pdf")}
+            >
+              <option value="md">MD</option>
+              <option value="docx">DOCX</option>
+              <option value="pdf">PDF</option>
+            </select>
+          </label>
+        ) : null}
         <label>
           <span>权限域</span>
           <select value={scope} onChange={(event) => onScopeChange(event.target.value)}>
@@ -1763,7 +1799,10 @@ function TeacherResourcePanel({
           <article className="resource-item" key={resource.documentId}>
             <div>
               <strong>{resource.title}</strong>
-              <span>{resource.sourceType} / {resource.permissionScope}</span>
+              <span>
+                {resource.sourceType} / {resource.permissionScope}
+                {resource.sourceType === "feishu" ? ` / ${resource.feishuExportFormat ?? "md"}` : ""}
+              </span>
             </div>
             <div className="resource-status">
               <span>{latestJob?.status ?? resource.syncStatus}</span>

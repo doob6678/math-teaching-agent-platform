@@ -145,7 +145,7 @@ public class MyBatisTeacherResourceStore implements TeacherResourceStore {
         entity.setSyncStatus(document.syncStatus());
         entity.setParseStatus(document.parseStatus());
         entity.setEmbeddingStatus(document.embeddingStatus());
-        entity.setMetadataJson(indexMetadata(document.indexStatus()));
+        entity.setMetadataJson(indexMetadata(document.indexStatus(), document.feishuExportFormat()));
         return entity;
     }
 
@@ -169,6 +169,7 @@ public class MyBatisTeacherResourceStore implements TeacherResourceStore {
                 entity.getParseStatus(),
                 entity.getEmbeddingStatus(),
                 indexStatus(entity.getMetadataJson()),
+                feishuExportFormat(entity.getSourceType(), entity.getMetadataJson()),
                 List.of());
     }
 
@@ -176,11 +177,16 @@ public class MyBatisTeacherResourceStore implements TeacherResourceStore {
      * Builds compact metadata JSON containing index status.
      *
      * @param indexStatus index status
+     * @param feishuExportFormat native Feishu export format
      * @return metadata JSON
      */
-    private static String indexMetadata(String indexStatus) {
+    private static String indexMetadata(String indexStatus, String feishuExportFormat) {
         String value = indexStatus == null || indexStatus.isBlank() ? "waiting_rebuild" : indexStatus.strip();
-        return "{\"indexStatus\":\"" + escapeJson(value) + "\"}";
+        String exportFormat = feishuExportFormat == null || feishuExportFormat.isBlank()
+                ? ""
+                : feishuExportFormat.strip().toLowerCase();
+        return "{\"indexStatus\":\"" + escapeJson(value) + "\","
+                + "\"feishuExportFormat\":\"" + escapeJson(exportFormat) + "\"}";
     }
 
     /**
@@ -202,6 +208,48 @@ public class MyBatisTeacherResourceStore implements TeacherResourceStore {
         int secondQuote = metadataJson.indexOf('"', firstQuote + 1);
         if (colonIndex < 0 || firstQuote < 0 || secondQuote < 0) {
             return "waiting_rebuild";
+        }
+        return metadataJson.substring(firstQuote + 1, secondQuote);
+    }
+
+    /**
+     * Extracts Feishu export format from compact metadata JSON.
+     *
+     * @param sourceType source type
+     * @param metadataJson metadata JSON
+     * @return md/docx/pdf for Feishu sources, or null for non-Feishu sources
+     */
+    private static String feishuExportFormat(String sourceType, String metadataJson) {
+        if (!"feishu".equalsIgnoreCase(sourceType == null ? "" : sourceType)) {
+            return null;
+        }
+        String value = textMetadataField(metadataJson, "feishuExportFormat");
+        if ("docx".equals(value) || "pdf".equals(value) || "md".equals(value)) {
+            return value;
+        }
+        return "md";
+    }
+
+    /**
+     * Extracts a string field from compact metadata JSON.
+     *
+     * @param metadataJson metadata JSON
+     * @param fieldName field name
+     * @return extracted text or empty string
+     */
+    private static String textMetadataField(String metadataJson, String fieldName) {
+        if (metadataJson == null || metadataJson.isBlank()) {
+            return "";
+        }
+        int keyIndex = metadataJson.indexOf("\"" + fieldName + "\"");
+        if (keyIndex < 0) {
+            return "";
+        }
+        int colonIndex = metadataJson.indexOf(':', keyIndex);
+        int firstQuote = metadataJson.indexOf('"', colonIndex + 1);
+        int secondQuote = metadataJson.indexOf('"', firstQuote + 1);
+        if (colonIndex < 0 || firstQuote < 0 || secondQuote < 0) {
+            return "";
         }
         return metadataJson.substring(firstQuote + 1, secondQuote);
     }

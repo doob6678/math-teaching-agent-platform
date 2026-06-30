@@ -2,6 +2,11 @@ package com.doob.mathagent.teacher;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.doob.mathagent.knowledge.service.InMemoryKnowledgeQuestionBankStore;
+import com.doob.mathagent.knowledge.service.KnowledgeQuestionBankService;
+import com.doob.mathagent.knowledge.service.TeacherBlockQuestionImportService;
+import com.doob.mathagent.knowledge.vo.QuestionBankItemResponse;
+import com.doob.mathagent.knowledge.vo.TeacherBlockQuestionImportResponse;
 import com.doob.mathagent.teacher.service.InMemoryTeacherDocumentBlockStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherResourceStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherSourceSyncCheckpointStore;
@@ -93,6 +98,81 @@ class TeacherSourceSyncExecutionServiceTest {
         assertThat(blocks).extracting(TeacherDocumentBlockResponse::chapter).contains("空间向量");
         assertThat(blocks).extracting(TeacherDocumentBlockResponse::normalizedText)
                 .anySatisfy(text -> assertThat(text).contains("数量积用于判断垂直"));
+    }
+
+    @Test
+    void parsedMarkdownQuestionBlocksImportIntoQuestionBankWithKnowledgeLink() throws Exception {
+        Path bank = tempDir.resolve("teacher-question-bank");
+        Files.createDirectories(bank);
+        Files.writeString(bank.resolve("space-vector-question.md"), """
+                # 空间向量
+
+                ## 数量积
+
+                已知空间向量 a=(1,2,2), b=(2,0,1)，求 a*b 的值。
+                """);
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherSourceSyncJobStore jobStore = new InMemoryTeacherSourceSyncJobStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        InMemoryKnowledgeQuestionBankStore questionStore = new InMemoryKnowledgeQuestionBankStore();
+        TeacherResourceService resourceService = new TeacherResourceService(resourceStore);
+        TeacherResourceDocumentResponse resource = resourceService.register(new TeacherResourceRegistrationCommand(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                "local_path",
+                "Local vector question bank",
+                null,
+                bank.toString(),
+                "TEACHER_PRIVATE"));
+        TeacherSourceSyncJobService jobService = new TeacherSourceSyncJobService(resourceStore, jobStore);
+        TeacherSourceSyncJobResponse queued = jobService.createSyncJob(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                resource.documentId());
+        TeacherSourceSyncExecutionService executionService =
+                new TeacherSourceSyncExecutionService(resourceStore, jobStore, blockStore);
+
+        TeacherSourceSyncJobResponse completed = executionService.execute(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                resource.documentId(),
+                queued.jobId());
+        List<TeacherDocumentBlockResponse> parsedBlocks =
+                blockStore.listByDocument("school-a", resource.documentId());
+        TeacherBlockQuestionImportService importService = new TeacherBlockQuestionImportService(
+                resourceStore,
+                blockStore,
+                new KnowledgeQuestionBankService(questionStore),
+                questionStore);
+        TeacherBlockQuestionImportResponse imported = importService.importFromTeacherResource(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                resource.documentId());
+
+        assertThat(completed.status()).isEqualTo("completed");
+        assertThat(parsedBlocks)
+                .hasSize(1)
+                .first()
+                .satisfies(block -> {
+                    assertThat(block.chapter()).isEqualTo("空间向量");
+                    assertThat(block.section()).isEqualTo("数量积");
+                    assertThat(block.normalizedText()).contains("求 a*b 的值");
+                });
+        assertThat(imported.importedQuestionCount()).isEqualTo(1);
+        assertThat(imported.skippedBlockCount()).isZero();
+        assertThat(imported.linkedKnowledgePointCount()).isEqualTo(1);
+        QuestionBankItemResponse question = imported.importedQuestions().getFirst();
+        assertThat(question.sourceResourceDocumentId()).isEqualTo(resource.documentId());
+        assertThat(question.sourceBlockId()).isEqualTo(parsedBlocks.getFirst().blockId());
+        assertThat(question.sourceChecksum()).isEqualTo(parsedBlocks.getFirst().checksum());
+        assertThat(question.knowledgePointIds()).hasSize(1);
+        assertThat(importService.searchQuestions("school-a", "teacher", "teacher-1", "a*b", 10))
+                .extracting(QuestionBankItemResponse::questionId)
+                .containsExactly(question.questionId());
     }
 
     @Test
@@ -473,8 +553,9 @@ class TeacherSourceSyncExecutionServiceTest {
 
     @Test
     void realFeishuSyncJobDownloadsOneFileThroughVerifiedScript() {
-        Path script = Path.of(System.getProperty("user.home"), ".codex", "skills", "feishu-cloud-docs", "scripts",
-                "download_feishu_url.py");
+        Path script = Path.of("..", "ai-worker-python", "scripts", "download_feishu_url.py")
+                .toAbsolutePath()
+                .normalize();
         Path appkey = Path.of("D:/project2026/feishutest/APPKEY.md");
         Assumptions.assumeTrue(Files.isRegularFile(script), "Feishu downloader script is not available locally");
         Assumptions.assumeTrue(Files.isRegularFile(appkey), "Feishu APPKEY path is not available locally");

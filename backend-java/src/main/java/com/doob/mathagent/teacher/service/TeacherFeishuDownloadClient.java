@@ -20,6 +20,19 @@ public interface TeacherFeishuDownloadClient {
     }
 
     /**
+     * Downloads a Feishu browser URL in the requested native export format.
+     *
+     * @param url Feishu browser URL
+     * @param stagingRoot local staging root
+     * @param maxFiles maximum files to download; 0 means no downloader-level limit
+     * @param fileExtension selected Feishu export format; supported values are md, docx, and pdf
+     * @return download result with a local path and statistics
+     */
+    default FeishuDownloadResult download(String url, Path stagingRoot, int maxFiles, String fileExtension) {
+        return download(url, stagingRoot, maxFiles, fileExtension, FeishuDownloadCheckpoint.empty());
+    }
+
+    /**
      * Downloads a Feishu browser URL from a durable traversal checkpoint.
      *
      * @param url Feishu browser URL
@@ -34,6 +47,29 @@ public interface TeacherFeishuDownloadClient {
             int maxFiles,
             FeishuDownloadCheckpoint checkpoint) {
         return download(url, stagingRoot, maxFiles);
+    }
+
+    /**
+     * Downloads a Feishu browser URL in the requested native export format from a durable traversal checkpoint.
+     *
+     * @param url Feishu browser URL
+     * @param stagingRoot local staging root
+     * @param maxFiles maximum files to download; 0 means no downloader-level limit
+     * @param fileExtension selected Feishu export format; supported values are md, docx, and pdf
+     * @param checkpoint durable traversal checkpoint, or empty for a fresh traversal
+     * @return download result with a local path and statistics
+     */
+    default FeishuDownloadResult download(
+            String url,
+            Path stagingRoot,
+            int maxFiles,
+            String fileExtension,
+            FeishuDownloadCheckpoint checkpoint) {
+        String normalized = fileExtension == null || fileExtension.isBlank() ? "md" : fileExtension.strip().toLowerCase();
+        if (!"md".equals(normalized)) {
+            throw new IllegalStateException("Feishu downloader does not support export format: " + normalized);
+        }
+        return download(url, stagingRoot, maxFiles, checkpoint);
     }
 
     /**

@@ -26,14 +26,13 @@ public record TeacherSourceSyncProperties(
      * @return normalized teacher source sync properties
      */
     public static TeacherSourceSyncProperties fromSpringEnvironment(Environment environment) {
-        String userProfile = System.getProperty("user.home", "C:/Users/doob");
         return new TeacherSourceSyncProperties(
                 textOrDefault(
                         environment.getProperty("math-agent.teacher.sync.feishu.default-url"),
                         "https://my.feishu.cn/drive/folder/XVn7fXppJlQMK5dkuOkc1ePan2f"),
                 Path.of(textOrDefault(
                         environment.getProperty("math-agent.teacher.sync.feishu.downloader-script"),
-                        userProfile + "/.codex/skills/feishu-cloud-docs/scripts/download_feishu_url.py")),
+                        defaultFeishuDownloaderScript().toString())),
                 Path.of(textOrDefault(
                         environment.getProperty("math-agent.teacher.sync.feishu.appkey-path"),
                         "D:/project2026/feishutest/APPKEY.md")),
@@ -49,10 +48,9 @@ public record TeacherSourceSyncProperties(
      * @return default teacher source sync properties
      */
     public static TeacherSourceSyncProperties defaults() {
-        String userProfile = System.getProperty("user.home", "C:/Users/doob");
         return new TeacherSourceSyncProperties(
                 "https://my.feishu.cn/drive/folder/XVn7fXppJlQMK5dkuOkc1ePan2f",
-                Path.of(userProfile, ".codex", "skills", "feishu-cloud-docs", "scripts", "download_feishu_url.py"),
+                defaultFeishuDownloaderScript(),
                 Path.of("D:/project2026/feishutest/APPKEY.md"),
                 Path.of("D:/project2026/feishutest/codex-app-staging"),
                 1);
@@ -87,5 +85,26 @@ public record TeacherSourceSyncProperties(
         } catch (NumberFormatException exception) {
             return defaultValue;
         }
+    }
+
+    /**
+     * Resolves the project-owned Feishu downloader script from common backend and repo working directories.
+     *
+     * @return project-owned downloader script path
+     */
+    private static Path defaultFeishuDownloaderScript() {
+        Path cwd = Path.of(System.getProperty("user.dir", ".")).toAbsolutePath().normalize();
+        Path[] candidates = {
+                cwd.resolve("ai-worker-python/scripts/download_feishu_url.py"),
+                cwd.resolve("../ai-worker-python/scripts/download_feishu_url.py"),
+                cwd.resolve("../../ai-worker-python/scripts/download_feishu_url.py")
+        };
+        for (Path candidate : candidates) {
+            Path normalized = candidate.toAbsolutePath().normalize();
+            if (java.nio.file.Files.isRegularFile(normalized)) {
+                return normalized;
+            }
+        }
+        return candidates[0].toAbsolutePath().normalize();
     }
 }

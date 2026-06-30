@@ -54,13 +54,24 @@ public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownload
             Path stagingRoot,
             int maxFiles,
             FeishuDownloadCheckpoint checkpoint) {
+        return download(url, stagingRoot, maxFiles, "md", checkpoint);
+    }
+
+    @Override
+    public FeishuDownloadResult download(
+            String url,
+            Path stagingRoot,
+            int maxFiles,
+            String fileExtension,
+            FeishuDownloadCheckpoint checkpoint) {
         validateConfiguredFiles();
         Path outputRoot = stagingRoot.toAbsolutePath().normalize();
         IllegalStateException lastFailure = null;
+        String normalizedFileExtension = normalizeFileExtension(fileExtension);
         FeishuDownloadCheckpoint activeCheckpoint = checkpoint == null ? FeishuDownloadCheckpoint.empty() : checkpoint;
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
             try {
-                return runDownloader(url, outputRoot, maxFiles, activeCheckpoint, attempt);
+                return runDownloader(url, outputRoot, maxFiles, normalizedFileExtension, activeCheckpoint, attempt);
             } catch (IllegalStateException exception) {
                 lastFailure = exception;
                 FeishuDownloadCheckpoint latestCheckpoint = latestCheckpoint(exception);
@@ -91,6 +102,7 @@ public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownload
             String url,
             Path outputRoot,
             int maxFiles,
+            String fileExtension,
             FeishuDownloadCheckpoint checkpoint,
             int attempt) {
         Path summaryPath = outputRoot.resolve("summary-" + Instant.now().toEpochMilli() + "-attempt-" + attempt + ".json");
@@ -104,6 +116,7 @@ public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownload
                     summaryPath,
                     checkpointPath,
                     maxFiles,
+                    fileExtension,
                     checkpoint))
                     .redirectErrorStream(true)
                     .start();
@@ -147,6 +160,7 @@ public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownload
             Path summaryPath,
             Path checkpointPath,
             int maxFiles,
+            String fileExtension,
             FeishuDownloadCheckpoint checkpoint) throws IOException {
         List<String> command = new java.util.ArrayList<>(List.of(
                 "python",
@@ -161,6 +175,8 @@ public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownload
                 summaryPath.toString(),
                 "--max-files",
                 String.valueOf(maxFiles),
+                "--file-extension",
+                normalizeFileExtension(fileExtension),
                 "--quiet"));
         FeishuDownloadCheckpoint normalized = checkpoint == null ? FeishuDownloadCheckpoint.empty() : checkpoint;
         if (normalized.hasCursor()) {
@@ -169,6 +185,17 @@ public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownload
             command.add(checkpointPath.toString());
         }
         return command;
+    }
+
+    /**
+     * Normalizes the requested native Feishu export format.
+     */
+    private static String normalizeFileExtension(String value) {
+        String normalized = value == null || value.isBlank() ? "md" : value.strip().toLowerCase(Locale.ROOT);
+        if ("md".equals(normalized) || "docx".equals(normalized) || "pdf".equals(normalized)) {
+            return normalized;
+        }
+        throw new IllegalArgumentException("Unsupported Feishu export format: " + value);
     }
 
     /**

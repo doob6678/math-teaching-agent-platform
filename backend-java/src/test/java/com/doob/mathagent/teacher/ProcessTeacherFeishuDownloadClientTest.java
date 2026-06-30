@@ -18,6 +18,56 @@ class ProcessTeacherFeishuDownloadClientTest {
     Path tempDir;
 
     @Test
+    void processDownloaderPassesSelectedFileExtensionToPythonScript() throws Exception {
+        Path script = tempDir.resolve("format_downloader.py");
+        Files.writeString(script, """
+                import json
+                import pathlib
+                import sys
+
+                args = sys.argv[1:]
+                if "--file-extension" not in args:
+                    print("missing --file-extension")
+                    sys.exit(10)
+                if args[args.index("--file-extension") + 1] != "md":
+                    print("wrong file extension: " + args[args.index("--file-extension") + 1])
+                    sys.exit(11)
+
+                output_dir = pathlib.Path(args[args.index("--output-dir") + 1])
+                saved_path = output_dir / "downloaded"
+                saved_path.mkdir(parents=True, exist_ok=True)
+                (saved_path / "result.md").write_text("# downloaded", encoding="utf-8")
+                summary_path = pathlib.Path(args[args.index("--summary-path") + 1])
+                summary_path.write_text(json.dumps({
+                    "saved_path": str(saved_path),
+                    "files": 1,
+                    "skipped": 0,
+                    "failed": 0,
+                    "file_extension": "md"
+                }, ensure_ascii=False), encoding="utf-8")
+                """);
+        Path appkey = tempDir.resolve("APPKEY.md");
+        Files.writeString(appkey, "APPID\ncli_dummy\nAPP Secret\nsecret_dummy\n");
+        TeacherSourceSyncProperties properties = new TeacherSourceSyncProperties(
+                "https://my.feishu.cn/docx/docToken",
+                script,
+                appkey,
+                tempDir.resolve("staging"),
+                1);
+        ProcessTeacherFeishuDownloadClient client = new ProcessTeacherFeishuDownloadClient(properties);
+
+        TeacherFeishuDownloadClient.FeishuDownloadResult result = client.download(
+                "https://my.feishu.cn/docx/docToken",
+                tempDir.resolve("staging"),
+                1,
+                "md",
+                TeacherFeishuDownloadClient.FeishuDownloadCheckpoint.empty());
+
+        assertThat(result.files()).isEqualTo(1);
+        assertThat(Files.exists(result.savedPath().resolve("result.md"))).isTrue();
+    }
+
+    @Test
     void processDownloaderPassesResumeCheckpointArgumentsToPythonScript() throws Exception {
         Path script = tempDir.resolve("checkpoint_downloader.py");
         Files.writeString(script, """

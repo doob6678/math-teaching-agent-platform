@@ -17,6 +17,7 @@ import java.util.List;
  * @param parseStatus parse status for downstream file parsing tasks
  * @param embeddingStatus embedding status for downstream vector indexing tasks
  * @param indexStatus BM25/Milvus index rebuild status
+ * @param feishuExportFormat native Feishu export format for Feishu sources; supported values are md, docx, and pdf
  * @param previewFiles small local file preview list shown in teacher UI
  */
 public record TeacherResourceDocumentResponse(
@@ -32,7 +33,42 @@ public record TeacherResourceDocumentResponse(
         String parseStatus,
         String embeddingStatus,
         String indexStatus,
+        String feishuExportFormat,
         List<PreviewFile> previewFiles) {
+
+    /**
+     * Backward-compatible constructor for non-Feishu resources and older focused tests.
+     */
+    public TeacherResourceDocumentResponse(
+            String documentId,
+            String tenantId,
+            String ownerSubjectId,
+            String sourceType,
+            String title,
+            String originalUrl,
+            String localPath,
+            String permissionScope,
+            String syncStatus,
+            String parseStatus,
+            String embeddingStatus,
+            String indexStatus,
+            List<PreviewFile> previewFiles) {
+        this(
+                documentId,
+                tenantId,
+                ownerSubjectId,
+                sourceType,
+                title,
+                originalUrl,
+                localPath,
+                permissionScope,
+                syncStatus,
+                parseStatus,
+                embeddingStatus,
+                indexStatus,
+                "feishu".equalsIgnoreCase(sourceType == null ? "" : sourceType) ? "md" : null,
+                previewFiles);
+    }
 
     /**
      * Small local file preview entry.

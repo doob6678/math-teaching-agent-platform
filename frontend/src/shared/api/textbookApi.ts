@@ -1064,6 +1064,8 @@ export interface TeacherResourceRegistrationRequest {
   localPath?: string;
   /** RAG 权限域，例如 TEACHER_PRIVATE、MATH_VIP 或 PUBLIC_TEXTBOOK。 */
   permissionScope: string;
+  /** Native Feishu export format for Feishu resources; defaults to md. */
+  feishuExportFormat?: "md" | "docx" | "pdf";
 }
 
 /**
@@ -1157,6 +1159,8 @@ export interface TeacherResourceDocumentResponse {
   embeddingStatus?: string;
   /** BM25/Milvus 索引状态。 */
   indexStatus?: string;
+  /** Native Feishu export format selected for Feishu resources. */
+  feishuExportFormat?: "md" | "docx" | "pdf";
   /** 本地预览文件列表。 */
   previewFiles?: TeacherResourcePreviewFile[];
 }
@@ -1850,12 +1854,15 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     registerTeacherResource(
       request: TeacherResourceRegistrationRequest,
     ): Promise<TeacherResourceDocumentResponse> {
-      const body = JSON.stringify(request);
+      const normalizedRequest = request.sourceType === "feishu"
+        ? { ...request, feishuExportFormat: request.feishuExportFormat ?? "md" }
+        : request;
+      const body = JSON.stringify(normalizedRequest);
       return applyCapability(
         "teacher-resource:register",
         "/api/teacher/resources",
         body,
-        `teacher-resource-register:${request.sourceType}:${request.title}`,
+        `teacher-resource-register:${normalizedRequest.sourceType}:${normalizedRequest.title}`,
       ).then((capability) =>
         requestJson<TeacherResourceDocumentResponse>("/api/teacher/resources", {
           method: "POST",

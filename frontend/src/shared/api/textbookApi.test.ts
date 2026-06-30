@@ -1670,6 +1670,7 @@ describe("textbookApi", () => {
           title: "Feishu question bank",
           originalUrl: "https://example.feishu.cn/docs/doc1",
           permissionScope: "TEACHER_PRIVATE",
+          feishuExportFormat: "md",
         }),
       }),
     );
@@ -1703,6 +1704,55 @@ describe("textbookApi", () => {
     expect(list[0].documentId).toBe("doc-1");
     expect(created.syncStatus).toBe("registered");
     expect(archived.syncStatus).toBe("archived");
+  });
+
+  it("registers teacher Feishu resources with an explicit export format", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          token: "register-capability",
+          action: "teacher-resource:register",
+          path: "/api/teacher/resources",
+          requestHash: "hash-register",
+          expiresAt: "2026-06-28T12:02:00Z",
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          documentId: "doc-pdf",
+          title: "Feishu PDF source",
+          syncStatus: "registered",
+          feishuExportFormat: "pdf",
+        }),
+      });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const created = await client.registerTeacherResource({
+      sourceType: "feishu",
+      title: "Feishu PDF source",
+      originalUrl: "https://example.feishu.cn/docx/doc1",
+      permissionScope: "TEACHER_PRIVATE",
+      feishuExportFormat: "pdf",
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://127.0.0.1:8080/api/teacher/resources",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          sourceType: "feishu",
+          title: "Feishu PDF source",
+          originalUrl: "https://example.feishu.cn/docx/doc1",
+          permissionScope: "TEACHER_PRIVATE",
+          feishuExportFormat: "pdf",
+        }),
+      }),
+    );
+    expect(created.feishuExportFormat).toBe("pdf");
   });
 
   it("creates, executes, and lists teacher resource sync jobs with capability tokens", async () => {

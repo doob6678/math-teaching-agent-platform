@@ -164,6 +164,7 @@ public class TeacherSourceSyncExecutionService {
                         textOrDefault(document.originalUrl(), syncProperties.feishuDefaultUrl()),
                         syncProperties.feishuStagingRoot(),
                         syncProperties.feishuSmokeMaxFiles(),
+                        textOrDefault(document.feishuExportFormat(), "md"),
                         toDownloadCheckpoint(resumeCheckpoint));
                 TeacherResourceDocumentResponse downloaded = new TeacherResourceDocumentResponse(
                         document.documentId(),
@@ -178,6 +179,7 @@ public class TeacherSourceSyncExecutionService {
                         "pending",
                         "pending",
                         "waiting_rebuild",
+                        document.feishuExportFormat(),
                         document.previewFiles());
                 resourceStore.save(downloaded);
                 List<TeacherDocumentBlockResponse> blocks = parseResourceFiles(downloaded);
@@ -437,6 +439,7 @@ public class TeacherSourceSyncExecutionService {
                 "parsed",
                 "pending",
                 "waiting_rebuild",
+                document.feishuExportFormat(),
                 document.previewFiles());
         resourceStore.save(synced);
     }

@@ -159,4 +159,44 @@ class DatabaseMigrationSqlContractTest {
                 .contains("source_checksum CHAR(64)")
                 .contains("idx_question_bank_source_block");
     }
+
+    @Test
+    void knowledgeGraphDisplaySpineSeedsReviewedMainGraphWithoutOcrFragments() throws Exception {
+        String migration = Files.readString(Path.of("src/main/resources/db/migration/V8__knowledge_graph_display_spine_v01.sql"));
+        String source = Files.readString(Path.of("../文档/知识图谱主干/v0.1/高中数学知识图谱主干-v0.1-源数据.md"));
+
+        assertThat(source)
+                .contains("高中数学知识图谱主干 v0.1")
+                .contains("函数基础 -> 导数研究函数")
+                .contains("第一版规模控制")
+                .contains("OCR 自动图谱中的 page/formula/topic 碎片不得直接进入默认展示图谱");
+        assertThat(migration)
+                .contains("函数概念与表示")
+                .contains("导数研究函数")
+                .contains("隐零点")
+                .contains("立体几何角度距离")
+                .contains("PREREQUISITE_FOR")
+                .contains("METHOD_FOR")
+                .contains("ON DUPLICATE KEY UPDATE")
+                .doesNotContain("page_")
+                .doesNotContain("formula")
+                .doesNotContain("OCR topic");
+        assertThat(countOccurrences(migration, "人工主干v0.1; 一级模块")).isEqualTo(10);
+        assertThat(countOccurrences(migration, "知识点:")).isEqualTo(23);
+        assertThat(countOccurrences(migration, "高频题型方法")).isEqualTo(50);
+        assertThat(countOccurrences(migration, "00000000-0000-4000-9000-")).isBetween(20, 40);
+    }
+
+    /**
+     * Counts non-overlapping text occurrences.
+     */
+    private static int countOccurrences(String value, String needle) {
+        int count = 0;
+        int index = 0;
+        while ((index = value.indexOf(needle, index)) >= 0) {
+            count++;
+            index += needle.length();
+        }
+        return count;
+    }
 }

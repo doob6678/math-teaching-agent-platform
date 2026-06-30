@@ -13,6 +13,7 @@ import com.doob.mathagent.teacher.dto.TeacherResourceRegistrationRequest;
  * @param originalUrl original Feishu URL or external source URL
  * @param localPath local folder or file path configured by teacher/admin
  * @param permissionScope resource access scope, such as TEACHER_PRIVATE, MATH_VIP, or PUBLIC_TEXTBOOK
+ * @param feishuExportFormat native Feishu export format for Feishu sources; supported values are md, docx, and pdf
  */
 public record TeacherResourceRegistrationCommand(
         String tenantId,
@@ -22,7 +23,23 @@ public record TeacherResourceRegistrationCommand(
         String title,
         String originalUrl,
         String localPath,
-        String permissionScope) {
+        String permissionScope,
+        String feishuExportFormat) {
+
+    /**
+     * Backward-compatible constructor for callers that do not select a Feishu export format.
+     */
+    public TeacherResourceRegistrationCommand(
+            String tenantId,
+            String viewerRole,
+            String viewerSubjectId,
+            String sourceType,
+            String title,
+            String originalUrl,
+            String localPath,
+            String permissionScope) {
+        this(tenantId, viewerRole, viewerSubjectId, sourceType, title, originalUrl, localPath, permissionScope, null);
+    }
 
     /**
      * Builds a command from backend identity and request body fields.
@@ -47,7 +64,8 @@ public record TeacherResourceRegistrationCommand(
                 normalized.title(),
                 normalized.originalUrl(),
                 normalized.localPath(),
-                normalized.permissionScope());
+                normalized.permissionScope(),
+                normalized.feishuExportFormat());
     }
 
     /**
@@ -56,15 +74,17 @@ public record TeacherResourceRegistrationCommand(
      * @return normalized command
      */
     public TeacherResourceRegistrationCommand normalize() {
+        String normalizedSourceType = textOrDefault(sourceType, "local_path").toLowerCase();
         return new TeacherResourceRegistrationCommand(
                 textOrDefault(tenantId, "default"),
                 textOrDefault(viewerRole, "teacher").toLowerCase(),
                 textOrDefault(viewerSubjectId, "local-teacher-console"),
-                textOrDefault(sourceType, "local_path").toLowerCase(),
+                normalizedSourceType,
                 textOrDefault(title, "untitled-teacher-resource"),
                 blankToNull(originalUrl),
                 blankToNull(localPath),
-                textOrDefault(permissionScope, "TEACHER_PRIVATE"));
+                textOrDefault(permissionScope, "TEACHER_PRIVATE"),
+                normalizeFeishuExportFormat(normalizedSourceType, feishuExportFormat));
     }
 
     /**
@@ -104,5 +124,23 @@ public record TeacherResourceRegistrationCommand(
      */
     private static String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value.strip();
+    }
+
+    /**
+     * Normalizes and validates the selected native Feishu export format.
+     *
+     * @param sourceType normalized source type
+     * @param value requested export format
+     * @return md/docx/pdf for Feishu sources, or null for non-Feishu sources
+     */
+    private static String normalizeFeishuExportFormat(String sourceType, String value) {
+        if (!"feishu".equals(sourceType)) {
+            return null;
+        }
+        String normalized = textOrDefault(value, "md").toLowerCase();
+        if ("md".equals(normalized) || "docx".equals(normalized) || "pdf".equals(normalized)) {
+            return normalized;
+        }
+        throw new IllegalArgumentException("Unsupported Feishu export format: " + value);
     }
 }
