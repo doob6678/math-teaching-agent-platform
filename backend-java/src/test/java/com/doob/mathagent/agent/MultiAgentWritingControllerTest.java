@@ -11,7 +11,9 @@ import com.doob.mathagent.agent.service.AgentTraceQueryService;
 import com.doob.mathagent.agent.service.AgentTraceRecord;
 import com.doob.mathagent.agent.service.InMemoryAgentConcurrencyGuard;
 import com.doob.mathagent.agent.service.InMemoryAgentTraceStore;
+import com.doob.mathagent.agent.service.InMemoryMultiAgentWritingWorkflowStore;
 import com.doob.mathagent.agent.service.MultiAgentWritingService;
+import com.doob.mathagent.agent.service.MultiAgentWritingWorkflowRecord;
 import com.doob.mathagent.agent.vo.AgentRunExecuteResponse;
 import com.doob.mathagent.agent.vo.MultiAgentWritingResponse;
 import com.doob.mathagent.agent.vo.MultiAgentWritingTraceResponse;
@@ -90,6 +92,48 @@ class MultiAgentWritingControllerTest {
     }
 
     @Test
+    void resumesFailedWritingWithCapabilityPathBoundToWorkflowId() {
+        InMemoryAgentTraceStore traceStore = new InMemoryAgentTraceStore();
+        InMemoryMultiAgentWritingWorkflowStore workflowStore = new InMemoryMultiAgentWritingWorkflowStore();
+        workflowStore.save(new MultiAgentWritingWorkflowRecord(
+                "workflow-resume-abc",
+                "school-a",
+                "teacher",
+                "teacher-1",
+                "FAILED",
+                Instant.parse("2026-06-30T00:00:00Z"),
+                Instant.parse("2026-06-30T00:01:00Z"),
+                List.of(new MultiAgentWritingResponse.StageResult(
+                        "draft",
+                        "CoursewareAgent",
+                        "trace-draft",
+                        "dashscope",
+                        "qwen3.6-flash",
+                        "COMPLETED",
+                        new AgentRunExecuteResponse.TokenUsage(11, 7, 18),
+                        "draft recorded")),
+                new AgentRunExecuteResponse.TokenUsage(11, 7, 18),
+                "failed after draft"));
+        List<String> capabilityChecks = new ArrayList<>();
+        MultiAgentWritingController controller = new MultiAgentWritingController(
+                writingService(traceStore, workflowStore),
+                new AgentTraceQueryService(traceStore),
+                request -> new RequestSubject("school-a", "teacher", "teacher-1", "device-1"),
+                (token, action, path, requestHash, subject) -> {
+                    capabilityChecks.add(action + "|" + path + "|" + subject.subjectId());
+                    return true;
+                });
+
+        MultiAgentWritingResponse response = controller.resume("workflow-resume-abc", request(), null);
+
+        assertThat(response.status()).isEqualTo("COMPLETED");
+        assertThat(response.stages()).extracting(MultiAgentWritingResponse.StageResult::stageCode)
+                .containsExactly("draft", "review", "format");
+        assertThat(capabilityChecks)
+                .containsExactly("agent-run:CoursewareAgent|/api/agents/writing/workflow-resume-abc/resume|teacher-1");
+    }
+
+    @Test
     void rejectsAsyncWritingWithoutCapabilityToken() {
         MultiAgentWritingController controller = new MultiAgentWritingController(
                 writingService(new InMemoryAgentTraceStore()),
@@ -133,15 +177,24 @@ class MultiAgentWritingControllerTest {
                 "teacher handout",
                 "space vector angle",
                 List.of("PUBLIC_TEXTBOOK:space-vector:angle"),
-                true,
+                false,
                 "dashscope",
                 "qwen3.6-flash");
     }
 
     /**
-     * Builds a dry-run writing service with real planning and execution policies.
+     * Builds a writing service with real planning and deterministic test model execution.
      */
     private static MultiAgentWritingService writingService(InMemoryAgentTraceStore traceStore) {
+        return writingService(traceStore, new InMemoryMultiAgentWritingWorkflowStore());
+    }
+
+    /**
+     * Builds a writing service with an explicit workflow store for recovery tests.
+     */
+    private static MultiAgentWritingService writingService(
+            InMemoryAgentTraceStore traceStore,
+            InMemoryMultiAgentWritingWorkflowStore workflowStore) {
         AiProviderProperties properties = new AiProviderProperties();
         properties.setDefaultProvider("dashscope");
         properties.getDashscope().setApiKey("dashscope-key");
@@ -149,7 +202,9 @@ class MultiAgentWritingControllerTest {
         AiProviderCatalog catalog = new AiProviderCatalog(properties);
         return new MultiAgentWritingService(
                 new AgentRunPlanService(catalog),
-                new AgentRunExecutionService(traceStore, new InMemoryAgentConcurrencyGuard()));
+                AgentRunExecutionServiceFixture.deterministicModelService(traceStore, new InMemoryAgentConcurrencyGuard()),
+                workflowStore,
+                new org.springframework.core.task.SyncTaskExecutor());
     }
 
     /**

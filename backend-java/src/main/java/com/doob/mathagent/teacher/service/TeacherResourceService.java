@@ -1,8 +1,10 @@
 package com.doob.mathagent.teacher.service;
 
 import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
+import com.doob.mathagent.vector.service.VectorIndexService;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.UUID;
@@ -18,14 +20,16 @@ public class TeacherResourceService {
     private static final int MAX_PREVIEW_FILES = 8;
 
     private final TeacherResourceStore store;
+    private final VectorIndexService vectorIndexService;
 
     /**
      * Creates a teacher resource service.
      *
      * @param store resource store
      */
-    public TeacherResourceService(TeacherResourceStore store) {
+    public TeacherResourceService(TeacherResourceStore store, VectorIndexService vectorIndexService) {
         this.store = store;
+        this.vectorIndexService = vectorIndexService;
     }
 
     /**
@@ -65,9 +69,9 @@ public class TeacherResourceService {
      * @return visible resources
      */
     public List<TeacherResourceDocumentResponse> list(String tenantId, String viewerRole, String viewerSubjectId) {
-        String normalizedTenantId = textOrDefault(tenantId, "default");
-        String normalizedRole = textOrDefault(viewerRole, "teacher").toLowerCase();
-        String normalizedSubjectId = textOrDefault(viewerSubjectId, "local-teacher-console");
+        String normalizedTenantId = requireText(tenantId, "tenantId is required");
+        String normalizedRole = requireText(viewerRole, "viewerRole is required").toLowerCase();
+        String normalizedSubjectId = requireText(viewerSubjectId, "viewerSubjectId is required");
         requireTeacherOrAdmin(normalizedRole);
         return store.listVisible(normalizedTenantId, normalizedRole, normalizedSubjectId);
     }
@@ -86,9 +90,9 @@ public class TeacherResourceService {
             String viewerRole,
             String viewerSubjectId,
             String documentId) {
-        String normalizedTenantId = textOrDefault(tenantId, "default");
-        String normalizedRole = textOrDefault(viewerRole, "teacher").toLowerCase();
-        String normalizedSubjectId = textOrDefault(viewerSubjectId, "local-teacher-console");
+        String normalizedTenantId = requireText(tenantId, "tenantId is required");
+        String normalizedRole = requireText(viewerRole, "viewerRole is required").toLowerCase();
+        String normalizedSubjectId = requireText(viewerSubjectId, "viewerSubjectId is required");
         requireTeacherOrAdmin(normalizedRole);
         TeacherResourceDocumentResponse document = store.find(normalizedTenantId, documentId);
         if (document == null) {
@@ -97,6 +101,7 @@ public class TeacherResourceService {
         if (!"admin".equals(normalizedRole) && !document.ownerSubjectId().equals(normalizedSubjectId)) {
             throw new IllegalArgumentException("Teacher can archive only own resources");
         }
+        vectorIndexService.deleteTeacherResourceVectors(normalizedTenantId, documentId);
         TeacherResourceDocumentResponse archived = new TeacherResourceDocumentResponse(
                 document.documentId(),
                 document.tenantId(),
@@ -165,7 +170,12 @@ public class TeacherResourceService {
         if (localPath == null || localPath.isBlank()) {
             return List.of();
         }
-        Path root = Path.of(localPath);
+        Path root;
+        try {
+            root = Path.of(localPath);
+        } catch (InvalidPathException exception) {
+            throw new IllegalArgumentException("Local resource path is invalid: " + exception.getInput(), exception);
+        }
         if (!Files.exists(root)) {
             return List.of();
         }
@@ -214,5 +224,19 @@ public class TeacherResourceService {
      */
     private static String textOrDefault(String value, String defaultValue) {
         return value == null || value.isBlank() ? defaultValue : value.strip();
+    }
+
+    /**
+     * Returns stripped text or fails when a backend-owned identity field is missing.
+     *
+     * @param value input value
+     * @param message exception message
+     * @return stripped text
+     */
+    private static String requireText(String value, String message) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException(message);
+        }
+        return value.strip();
     }
 }

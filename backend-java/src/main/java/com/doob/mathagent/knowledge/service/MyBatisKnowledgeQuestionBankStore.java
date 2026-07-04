@@ -43,20 +43,30 @@ public class MyBatisKnowledgeQuestionBankStore implements KnowledgeQuestionBankS
     }
 
     /**
-     * Inserts one knowledge point row.
+     * Inserts or updates one knowledge point row by deterministic id.
      */
     @Override
     public KnowledgePointRecord saveKnowledgePoint(KnowledgePointRecord record) {
-        knowledgePointMapper.insert(toEntity(record));
+        KnowledgePointEntity entity = toEntity(record);
+        if (knowledgePointMapper.selectById(record.knowledgePointId()) == null) {
+            knowledgePointMapper.insert(entity);
+        } else {
+            knowledgePointMapper.updateById(entity);
+        }
         return record;
     }
 
     /**
-     * Inserts one knowledge relation row.
+     * Inserts or updates one knowledge relation row by deterministic id.
      */
     @Override
     public KnowledgeRelationRecord saveKnowledgeRelation(KnowledgeRelationRecord record) {
-        relationMapper.insert(toEntity(record));
+        KnowledgeRelationEntity entity = toEntity(record);
+        if (relationMapper.selectById(record.relationId()) == null) {
+            relationMapper.insert(entity);
+        } else {
+            relationMapper.updateById(entity);
+        }
         return record;
     }
 

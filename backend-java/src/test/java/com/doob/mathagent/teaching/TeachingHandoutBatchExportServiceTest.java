@@ -8,6 +8,8 @@ import com.doob.mathagent.teaching.service.TeachingHandoutPdfExportService;
 import com.doob.mathagent.teaching.vo.TeachingHandoutBatchExportResponse;
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
 import java.io.ByteArrayInputStream;
+import java.time.Clock;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.zip.ZipInputStream;
@@ -15,10 +17,16 @@ import org.junit.jupiter.api.Test;
 
 class TeachingHandoutBatchExportServiceTest {
 
+    private static TeachingHandoutBatchExportService service() {
+        return new TeachingHandoutBatchExportService(
+                new TeachingHandoutPdfExportService(),
+                Clock.systemUTC(),
+                Duration.ofMinutes(30));
+    }
+
     @Test
     void writesEachSelectedTaskIntoItsMatchingFolderPath() throws Exception {
-        TeachingHandoutBatchExportService service = new TeachingHandoutBatchExportService(
-                new TeachingHandoutPdfExportService());
+        TeachingHandoutBatchExportService service = service();
         List<TeachingTaskResponse> tasks = List.of(
                 task("task-algebra"),
                 task("task-geometry"));
@@ -28,10 +36,10 @@ class TeachingHandoutBatchExportServiceTest {
                         List.of("task-algebra", "task-geometry"),
                         List.of("folder-algebra", "folder-geometry"),
                         List.of("grade-10/functions", "grade-10/vectors")),
-                TeachingRequestContext.localTeacher(),
+                new TeachingRequestContext("school-a", "teacher", "teacher-001", "browser-console"),
                 tasks);
 
-        assertThat(zipEntries(service.findDownload(response.batchId(), TeachingRequestContext.localTeacher())
+        assertThat(zipEntries(service.findDownload(response.batchId(), new TeachingRequestContext("school-a", "teacher", "teacher-001", "browser-console"))
                         .orElseThrow()
                         .zipBytes()))
                 .contains(
@@ -43,18 +51,17 @@ class TeachingHandoutBatchExportServiceTest {
 
     @Test
     void removesTraversalAndAbsolutePathSegmentsFromFolderZipEntries() throws Exception {
-        TeachingHandoutBatchExportService service = new TeachingHandoutBatchExportService(
-                new TeachingHandoutPdfExportService());
+        TeachingHandoutBatchExportService service = service();
 
         TeachingHandoutBatchExportResponse response = service.create(
                 new TeachingHandoutBatchExportRequest(
                         List.of("task-safe"),
                         List.of("folder-safe"),
                         List.of("../C:/unsafe/../../grade-10//vectors")),
-                TeachingRequestContext.localTeacher(),
+                new TeachingRequestContext("school-a", "teacher", "teacher-001", "browser-console"),
                 List.of(task("task-safe")));
 
-        List<String> entries = zipEntries(service.findDownload(response.batchId(), TeachingRequestContext.localTeacher())
+        List<String> entries = zipEntries(service.findDownload(response.batchId(), new TeachingRequestContext("school-a", "teacher", "teacher-001", "browser-console"))
                 .orElseThrow()
                 .zipBytes());
         assertThat(entries).contains("grade-10/vectors/task-safe.tex", "grade-10/vectors/task-safe.pdf");
@@ -64,18 +71,17 @@ class TeachingHandoutBatchExportServiceTest {
 
     @Test
     void includesTeacherAndStudentHandoutVersionsInBatchZip() throws Exception {
-        TeachingHandoutBatchExportService service = new TeachingHandoutBatchExportService(
-                new TeachingHandoutPdfExportService());
+        TeachingHandoutBatchExportService service = service();
 
         TeachingHandoutBatchExportResponse response = service.create(
                 new TeachingHandoutBatchExportRequest(
                         List.of("task-versioned"),
                         List.of("folder-versioned"),
                         List.of("grade-10/versioned")),
-                TeachingRequestContext.localTeacher(),
+                new TeachingRequestContext("school-a", "teacher", "teacher-001", "browser-console"),
                 List.of(task("task-versioned")));
 
-        assertThat(zipEntries(service.findDownload(response.batchId(), TeachingRequestContext.localTeacher())
+        assertThat(zipEntries(service.findDownload(response.batchId(), new TeachingRequestContext("school-a", "teacher", "teacher-001", "browser-console"))
                         .orElseThrow()
                         .zipBytes()))
                 .contains(
@@ -87,8 +93,7 @@ class TeachingHandoutBatchExportServiceTest {
 
     @Test
     void studentBatchZipContainsOnlyStudentHandoutVersion() throws Exception {
-        TeachingHandoutBatchExportService service = new TeachingHandoutBatchExportService(
-                new TeachingHandoutPdfExportService());
+        TeachingHandoutBatchExportService service = service();
 
         TeachingHandoutBatchExportResponse response = service.create(
                 new TeachingHandoutBatchExportRequest(

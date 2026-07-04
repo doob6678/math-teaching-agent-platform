@@ -24,7 +24,7 @@ class AgentRunExecutionControllerTest {
     @Test
     void rejectsHighValueExecutionWithoutAcceptedCapabilityToken() {
         AgentRunExecutionController controller = new AgentRunExecutionController(
-                new AgentRunExecutionService(new InMemoryAgentTraceStore()),
+                AgentRunExecutionServiceFixture.deterministicModelService(new InMemoryAgentTraceStore()),
                 request -> new RequestSubject("school-a", "teacher", "teacher-001", "device-1"),
                 (token, action, path, requestHash, subject) -> false);
 
@@ -41,7 +41,7 @@ class AgentRunExecutionControllerTest {
             return true;
         };
         AgentRunExecutionController controller = new AgentRunExecutionController(
-                new AgentRunExecutionService(new InMemoryAgentTraceStore()),
+                AgentRunExecutionServiceFixture.deterministicModelService(new InMemoryAgentTraceStore()),
                 request -> new RequestSubject("school-a", "teacher", "teacher-001", "device-1"),
                 verifier);
 
@@ -54,7 +54,7 @@ class AgentRunExecutionControllerTest {
     @Test
     void allowsNonHighValueExecutionWithoutCapability() {
         AgentRunExecutionController controller = new AgentRunExecutionController(
-                new AgentRunExecutionService(new InMemoryAgentTraceStore()),
+                AgentRunExecutionServiceFixture.deterministicModelService(new InMemoryAgentTraceStore()),
                 request -> new RequestSubject("school-a", "student", "student-001", "device-1"),
                 (token, action, path, requestHash, subject) -> false);
 
@@ -68,7 +68,7 @@ class AgentRunExecutionControllerTest {
     void mapsConcurrencyConflictToTooManyRequests() {
         AgentConcurrencyGuard deniedGuard = (keys, traceId, leaseTime) -> Optional.empty();
         AgentRunExecutionController controller = new AgentRunExecutionController(
-                new AgentRunExecutionService(new InMemoryAgentTraceStore(), deniedGuard),
+                AgentRunExecutionServiceFixture.deterministicModelService(new InMemoryAgentTraceStore(), deniedGuard),
                 request -> new RequestSubject("school-a", "teacher", "teacher-001", "device-1"),
                 (token, action, path, requestHash, subject) -> true);
 
@@ -78,11 +78,11 @@ class AgentRunExecutionControllerTest {
     }
 
     private static AgentRunExecuteRequest highValueRequest() {
-        return new AgentRunExecuteRequest(highValuePlan(), "Generate courseware", List.of("doc-1"), true);
+        return new AgentRunExecuteRequest(highValuePlan(), "Generate courseware", List.of("doc-1"), false);
     }
 
     private static AgentRunExecuteRequest nonHighValueRequest() {
-        return new AgentRunExecuteRequest(nonHighValuePlan(), "Solve a problem", List.of("textbook-1"), true);
+        return new AgentRunExecuteRequest(nonHighValuePlan(), "Solve a problem", List.of("textbook-1"), false);
     }
 
     private static AgentRunPlanResponse highValuePlan() {

@@ -92,6 +92,15 @@ class ApiAccessControlServiceTest {
                 "127.0.0.1",
                 "device-1",
                 "JUnit");
+        ApiRequestIdentity anonymousStandardMcp = new ApiRequestIdentity(
+                "POST",
+                "/api/mcp",
+                "default",
+                "anonymous",
+                null,
+                "127.0.0.1",
+                "device-jsonrpc",
+                "WorkBuddy");
         ApiRequestIdentity studentMcp = new ApiRequestIdentity(
                 "GET",
                 "/api/mcp/tools",
@@ -130,6 +139,7 @@ class ApiAccessControlServiceTest {
                 "JUnit");
 
         ApiAccessDecision denied = service.evaluate(anonymousMcp);
+        ApiAccessDecision standardMcpAllowed = service.evaluate(anonymousStandardMcp);
         ApiAccessDecision studentAllowed = service.evaluate(studentMcp);
         ApiAccessDecision teacherAllowed = service.evaluate(teacherA2a);
         ApiAccessDecision studentConfigurationDenied = service.evaluate(studentConfiguration);
@@ -137,6 +147,9 @@ class ApiAccessControlServiceTest {
 
         assertThat(denied.allowed()).isFalse();
         assertThat(denied.httpStatus()).isEqualTo(403);
+        assertThat(standardMcpAllowed.allowed()).isTrue();
+        assertThat(standardMcpAllowed.level()).isEqualTo(ApiAccessLevel.GUEST);
+        assertThat(standardMcpAllowed.limit()).isEqualTo(60);
         assertThat(studentAllowed.allowed()).isTrue();
         assertThat(studentAllowed.level()).isEqualTo(ApiAccessLevel.USER);
         assertThat(studentAllowed.limit()).isEqualTo(30);
@@ -428,6 +441,41 @@ class ApiAccessControlServiceTest {
         assertThat(allowed.allowed()).isTrue();
         assertThat(allowed.level()).isEqualTo(ApiAccessLevel.USER);
         assertThat(allowed.limit()).isEqualTo(40);
+    }
+
+    @Test
+    void studentExplanationHistoryRequiresLoggedInStudentTeacherOrAdmin() {
+        ApiAccessControlService service = new ApiAccessControlService(
+                FixedWindowRateLimiter.empty(),
+                Clock.fixed(Instant.parse("2026-06-28T10:00:00Z"), ZoneOffset.UTC),
+                ApiAccessPolicy.defaultRules());
+        ApiRequestIdentity anonymous = new ApiRequestIdentity(
+                "GET",
+                "/api/students/explanations/history",
+                "default",
+                "anonymous",
+                null,
+                "127.0.0.1",
+                "device-1",
+                "JUnit");
+        ApiRequestIdentity student = new ApiRequestIdentity(
+                "GET",
+                "/api/students/explanations/history",
+                "default",
+                "student",
+                "student-1",
+                "127.0.0.1",
+                "device-1",
+                "JUnit");
+
+        ApiAccessDecision denied = service.evaluate(anonymous);
+        ApiAccessDecision allowed = service.evaluate(student);
+
+        assertThat(denied.allowed()).isFalse();
+        assertThat(denied.httpStatus()).isEqualTo(403);
+        assertThat(allowed.allowed()).isTrue();
+        assertThat(allowed.level()).isEqualTo(ApiAccessLevel.USER);
+        assertThat(allowed.limit()).isEqualTo(20);
     }
 
     @Test

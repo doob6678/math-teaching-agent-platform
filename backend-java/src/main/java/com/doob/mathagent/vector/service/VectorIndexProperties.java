@@ -1,0 +1,61 @@
+package com.doob.mathagent.vector.service;
+
+import org.springframework.boot.context.properties.ConfigurationProperties;
+
+/**
+ * Configuration for real embedding and Milvus indexing.
+ */
+@ConfigurationProperties(prefix = "math-agent.vector-index")
+public record VectorIndexProperties(
+        boolean enabled,
+        String milvusUri,
+        String milvusToken,
+        String collectionName,
+        int dimension,
+        String embeddingBaseUrl,
+        String embeddingApiKey,
+        String embeddingModel,
+        int requestTimeoutMs) {
+
+    public String normalizedCollectionName() {
+        return collectionName == null || collectionName.isBlank() ? "math_agent_resource_blocks" : collectionName.strip();
+    }
+
+    public int normalizedDimension() {
+        return dimension <= 0 ? 512 : dimension;
+    }
+
+    public int normalizedTimeoutMs() {
+        return requestTimeoutMs <= 0 ? 30000 : requestTimeoutMs;
+    }
+
+    public boolean fullyConfigured() {
+        return enabled
+                && hasText(milvusUri)
+                && hasText(embeddingBaseUrl)
+                && hasText(embeddingApiKey)
+                && hasText(embeddingModel);
+    }
+
+    public void requireFullyConfigured() {
+        if (!enabled) {
+            throw new IllegalStateException("MATH_AGENT_VECTOR_INDEX_ENABLED must be true; vector indexing cannot be skipped");
+        }
+        if (!hasText(milvusUri)) {
+            throw new IllegalStateException("MATH_AGENT_MILVUS_URI must point to a real Milvus endpoint");
+        }
+        if (!hasText(embeddingBaseUrl)) {
+            throw new IllegalStateException("MATH_AGENT_EMBEDDING_BASE_URL must point to a real embedding API");
+        }
+        if (!hasText(embeddingApiKey)) {
+            throw new IllegalStateException("MATH_AGENT_EMBEDDING_API_KEY or MATH_AGENT_WORKER_API_KEY must be configured");
+        }
+        if (!hasText(embeddingModel)) {
+            throw new IllegalStateException("MATH_AGENT_EMBEDDING_MODEL must be configured");
+        }
+    }
+
+    private static boolean hasText(String value) {
+        return value != null && !value.isBlank();
+    }
+}

@@ -15,8 +15,12 @@ class McpClientRegistryPropertiesTest {
         properties.setClients(List.of(new McpClientRegistryProperties.Client(
                 "student-client",
                 "student",
+                "school-a",
+                "student-mcp-client",
                 "sha256:abc123",
-                true)));
+                true,
+                List.of("search_textbook_evidence"),
+                List.of("PUBLIC_TEXTBOOK"))));
 
         assertThat(properties.getClients()).hasSize(1);
         assertThat(properties.getClients().getFirst().clientId()).isEqualTo("student-client");

@@ -8,7 +8,7 @@ import java.util.List;
 import org.springframework.stereotype.Service;
 
 /**
- * Renders a teaching handout into a baseline PDF document for protected downloads.
+ * Renders a teaching handout into a lightweight PDF preview for protected downloads.
  */
 @Service
 public class TeachingHandoutPdfExportService {
@@ -128,7 +128,7 @@ public class TeachingHandoutPdfExportService {
     }
 
     /**
-     * Keeps the baseline PDF renderer inside the WinAnsi character set.
+     * Keeps the lightweight PDF renderer inside the WinAnsi character set.
      */
     private static String safeAscii(String value) {
         if (value == null) {

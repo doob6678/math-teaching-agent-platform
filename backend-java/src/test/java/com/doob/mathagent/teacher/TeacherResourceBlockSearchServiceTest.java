@@ -11,6 +11,7 @@ import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService;
 import com.doob.mathagent.teacher.vo.TeacherDocumentBlockResponse;
 import com.doob.mathagent.teacher.vo.TeacherResourceBlockSearchResponse;
 import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
+import com.doob.mathagent.vector.service.TestVectorIndexService;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
@@ -32,7 +33,7 @@ class TeacherResourceBlockSearchServiceTest {
                 "doc-other",
                 1,
                 "Space vector dot product method from another teacher private handout.")));
-        TeacherResourceBlockSearchService service = new TeacherResourceBlockSearchService(resourceStore, blockStore);
+        TeacherResourceBlockSearchService service = com.doob.mathagent.teacher.TeacherResourceBlockSearchServiceFixture.service(resourceStore, blockStore);
 
         TeacherResourceBlockSearchResponse response = service.search(
                 "school-a",
@@ -63,7 +64,7 @@ class TeacherResourceBlockSearchServiceTest {
                 "doc-other-private",
                 1,
                 "A private vector method must not leak to another teacher.")));
-        TeacherResourceBlockSearchService service = new TeacherResourceBlockSearchService(resourceStore, blockStore);
+        TeacherResourceBlockSearchService service = com.doob.mathagent.teacher.TeacherResourceBlockSearchServiceFixture.service(resourceStore, blockStore);
 
         TeacherResourceBlockSearchResponse response = service.search(
                 "school-a",
@@ -93,7 +94,7 @@ class TeacherResourceBlockSearchServiceTest {
                 "doc-admin",
                 2,
                 "Public vector examples for inspection.")));
-        TeacherResourceBlockSearchService service = new TeacherResourceBlockSearchService(resourceStore, blockStore);
+        TeacherResourceBlockSearchService service = com.doob.mathagent.teacher.TeacherResourceBlockSearchServiceFixture.service(resourceStore, blockStore);
 
         TeacherResourceBlockSearchResponse response = service.search(
                 "school-a",
@@ -120,7 +121,8 @@ class TeacherResourceBlockSearchServiceTest {
         TeacherResourceBlockSearchService service = new TeacherResourceBlockSearchService(
                 resourceStore,
                 blockStore,
-                auditStore);
+                auditStore,
+                TestVectorIndexService.successful(resourceStore, blockStore));
 
         TeacherResourceBlockSearchResponse response = service.search(
                 "school-a",
@@ -143,7 +145,7 @@ class TeacherResourceBlockSearchServiceTest {
 
     @Test
     void studentCannotSearchTeacherResourceBlocks() {
-        TeacherResourceBlockSearchService service = new TeacherResourceBlockSearchService(
+        TeacherResourceBlockSearchService service = TeacherResourceBlockSearchServiceFixture.service(
                 new InMemoryTeacherResourceStore(),
                 new InMemoryTeacherDocumentBlockStore());
 

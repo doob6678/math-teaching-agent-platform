@@ -7,18 +7,22 @@ export const MCP_TOOL_OPTIONS = [
   "search_teacher_resource_evidence",
   "get_teaching_ai_trace",
   "get_ai_diagnostic_summary",
+  "get_multi_agent_writing_trace",
+  "plan_agent_run",
+  "start_multi_agent_writing",
+  "get_multi_agent_writing_status",
+  "get_multi_agent_writing_artifact",
+  "export_multi_agent_writing_artifact",
+  "resume_multi_agent_writing",
+  "discover_feishu_resources",
+  "download_feishu_resource",
 ] as const;
 
 /**
- * MCP tools shown as future/protected capabilities. They are not sent in the default
- * copyable configuration because protected execution is not implemented for MCP yet.
+ * MCP tool descriptors are only shown when the backend has a real execution endpoint.
+ * Keep this list empty instead of advertising future tools that would fail at runtime.
  */
-export const MCP_PROTECTED_TOOL_OPTIONS = [
-  "plan_agent_run",
-  "create_teaching_task",
-  "export_handout_pdf",
-  "list_teacher_resources",
-] as const;
+export const MCP_PROTECTED_TOOL_OPTIONS = [] as const;
 
 export interface McpToolOptionMeta {
   label: string;
@@ -47,25 +51,50 @@ export const MCP_TOOL_OPTION_META: Record<string, McpToolOptionMeta> = {
     badge: "read-only",
     note: "Retry and fallback summary.",
   },
+  get_multi_agent_writing_trace: {
+    label: "Writing trace",
+    badge: "read-only",
+    note: "Visible writing workflow trace.",
+  },
   plan_agent_run: {
     label: "Agent planning",
-    badge: "protected",
-    note: "Kept out of MCP JSON.",
+    badge: "read-only",
+    note: "Returns routing and ReAct plan only.",
   },
-  create_teaching_task: {
-    label: "Create teaching task",
+  start_multi_agent_writing: {
+    label: "Start writing",
     badge: "protected",
-    note: "Requires capability flow.",
+    note: "Runs backend multi-agent writing.",
   },
-  export_handout_pdf: {
-    label: "Export handout PDF",
-    badge: "protected",
-    note: "Requires capability flow.",
+  get_multi_agent_writing_status: {
+    label: "Writing status",
+    badge: "read-only",
+    note: "Recover workflow progress.",
   },
-  list_teacher_resources: {
-    label: "List resources",
+  get_multi_agent_writing_artifact: {
+    label: "Writing artifact",
+    badge: "read-only",
+    note: "Read generated handout content.",
+  },
+  export_multi_agent_writing_artifact: {
+    label: "Export artifact",
     badge: "protected",
-    note: "Metadata-only; closed until execution is reviewed.",
+    note: "Exports markdown, LaTeX, or ZIP.",
+  },
+  resume_multi_agent_writing: {
+    label: "Resume writing",
+    badge: "protected",
+    note: "Resumes failed writing workflow.",
+  },
+  discover_feishu_resources: {
+    label: "Find Feishu",
+    badge: "read-only",
+    note: "Lists or searches Feishu candidates.",
+  },
+  download_feishu_resource: {
+    label: "Download Feishu",
+    badge: "protected",
+    note: "Downloads, parses, and indexes resource.",
   },
 };
 

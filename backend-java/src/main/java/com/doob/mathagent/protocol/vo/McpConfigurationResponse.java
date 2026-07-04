@@ -7,7 +7,7 @@ import java.util.List;
  *
  * @param serverName stable MCP server name used in client JSON
  * @param url externally reachable MCP base URL
- * @param valid whether the supplied URL and secret key passed baseline validation
+ * @param valid whether the supplied URL and secret key passed configuration validation
  * @param secretKeyAccepted whether the submitted secret key met minimum policy
  * @param secretKeyPreview redacted preview of the submitted secret key
  * @param secretEnvName environment variable name referenced by the JSON template

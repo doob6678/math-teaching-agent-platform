@@ -51,15 +51,15 @@ public record StudentMemoryCommand(
     }
 
     /**
-     * Returns a normalized command with safe local defaults for non-web tests.
+     * Returns a normalized command after requiring backend-resolved identity fields.
      *
      * @return normalized command
      */
     public StudentMemoryCommand normalize() {
         return new StudentMemoryCommand(
-                textOrDefault(tenantId, "default"),
-                textOrDefault(viewerRole, "student").toLowerCase(),
-                textOrDefault(studentId, "local-student"),
+                requireText(tenantId, "tenantId is required"),
+                requireText(viewerRole, "viewerRole is required").toLowerCase(),
+                requireText(studentId, "studentId is required"),
                 textOrDefault(questionText, ""),
                 answerText == null ? null : answerText.strip(),
                 knowledgePointName == null ? "" : knowledgePointName.strip(),
@@ -88,5 +88,19 @@ public record StudentMemoryCommand(
      */
     private static String textOrDefault(String value, String defaultValue) {
         return value == null || value.isBlank() ? defaultValue : value.strip();
+    }
+
+    /**
+     * Returns stripped text or fails when a backend-owned identity field is missing.
+     *
+     * @param value input text
+     * @param message exception message
+     * @return stripped text
+     */
+    private static String requireText(String value, String message) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException(message);
+        }
+        return value.strip();
     }
 }

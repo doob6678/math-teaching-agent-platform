@@ -6,7 +6,7 @@ import org.springframework.core.env.Environment;
 /**
  * Teacher source synchronization runtime paths and limits.
  *
- * @param feishuDefaultUrl default Feishu test folder URL shown by the teacher UI
+ * @param feishuDefaultUrl optional display-only Feishu folder URL; runtime download/discovery requests must pass URLs explicitly
  * @param feishuDownloaderScript Python downloader script path
  * @param feishuAppkeyPath APPKEY file path used by the downloader; raw content is never returned by APIs
  * @param feishuStagingRoot local staging root for downloaded Feishu resources
@@ -22,7 +22,7 @@ public record TeacherSourceSyncProperties(
         int feishuProcessTimeoutSeconds) {
 
     /**
-     * Keeps the previous constructor shape for tests and callers that do not need a custom timeout.
+     * Keeps the shorter constructor shape for explicit call sites that do not need a custom timeout.
      */
     public TeacherSourceSyncProperties(
             String feishuDefaultUrl,
@@ -49,7 +49,7 @@ public record TeacherSourceSyncProperties(
         return new TeacherSourceSyncProperties(
                 textOrDefault(
                         environment.getProperty("math-agent.teacher.sync.feishu.default-url"),
-                        "https://my.feishu.cn/drive/folder/XVn7fXppJlQMK5dkuOkc1ePan2f"),
+                        ""),
                 Path.of(textOrDefault(
                         environment.getProperty("math-agent.teacher.sync.feishu.downloader-script"),
                         defaultFeishuDownloaderScript().toString())),
@@ -61,21 +61,6 @@ public record TeacherSourceSyncProperties(
                         "D:/project2026/feishutest/codex-app-staging")),
                 integerOrDefault(environment.getProperty("math-agent.teacher.sync.feishu.smoke-max-files"), 1),
                 integerOrDefault(environment.getProperty("math-agent.teacher.sync.feishu.process-timeout-seconds"), 30));
-    }
-
-    /**
-     * Creates safe local defaults for tests and no-Spring construction paths.
-     *
-     * @return default teacher source sync properties
-     */
-    public static TeacherSourceSyncProperties defaults() {
-        return new TeacherSourceSyncProperties(
-                "https://my.feishu.cn/drive/folder/XVn7fXppJlQMK5dkuOkc1ePan2f",
-                defaultFeishuDownloaderScript(),
-                Path.of("D:/project2026/feishutest/APPKEY.md"),
-                Path.of("D:/project2026/feishutest/codex-app-staging"),
-                1,
-                30);
     }
 
     /**

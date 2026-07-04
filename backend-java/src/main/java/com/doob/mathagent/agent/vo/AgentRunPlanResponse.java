@@ -28,6 +28,7 @@ import java.util.List;
  * @param routeReason human-readable routing decision for audit
  * @param stageTimings planning stage timings
  * @param concurrencyKeys Redis-style concurrency dimensions to acquire before execution
+ * @param requiredJsonSchema whether executor must validate model output as a JSON object
  */
 public record AgentRunPlanResponse(
         String planId,
@@ -52,7 +53,62 @@ public record AgentRunPlanResponse(
         boolean withinBudget,
         String routeReason,
         List<StageTiming> stageTimings,
-        List<String> concurrencyKeys) {
+        List<String> concurrencyKeys,
+        boolean requiredJsonSchema) {
+
+    /**
+     * Backward-compatible constructor for older tests and callers created before execution-time JSON validation.
+     */
+    public AgentRunPlanResponse(
+            String planId,
+            String tenantId,
+            String subjectType,
+            String subjectId,
+            String agentCode,
+            String providerName,
+            String modelCode,
+            String modelLevel,
+            List<String> allowedToolScopes,
+            List<String> deniedToolScopes,
+            List<ToolPolicyDecision> toolPolicyDecisions,
+            List<String> allowedDataScopes,
+            List<String> deniedDataScopes,
+            boolean capabilityRequired,
+            String capabilityAction,
+            int maxInputTokens,
+            int maxOutputTokens,
+            long estimatedTotalTokens,
+            double estimatedCost,
+            boolean withinBudget,
+            String routeReason,
+            List<StageTiming> stageTimings,
+            List<String> concurrencyKeys) {
+        this(
+                planId,
+                tenantId,
+                subjectType,
+                subjectId,
+                agentCode,
+                providerName,
+                modelCode,
+                modelLevel,
+                allowedToolScopes,
+                deniedToolScopes,
+                toolPolicyDecisions,
+                allowedDataScopes,
+                deniedDataScopes,
+                capabilityRequired,
+                capabilityAction,
+                maxInputTokens,
+                maxOutputTokens,
+                estimatedTotalTokens,
+                estimatedCost,
+                withinBudget,
+                routeReason,
+                stageTimings,
+                concurrencyKeys,
+                false);
+    }
 
     /**
      * Planning stage timing for route-performance monitoring.

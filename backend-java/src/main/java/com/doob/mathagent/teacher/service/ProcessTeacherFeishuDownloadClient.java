@@ -1,5 +1,8 @@
 package com.doob.mathagent.teacher.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -23,6 +26,7 @@ public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownload
     private static final int MAX_ATTEMPTS = 3;
     private static final long RETRY_BACKOFF_MILLIS = 800L;
     private static final int MAX_ERROR_OUTPUT_CHARS = 4000;
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final Pattern SAVED_PATH_PATTERN = Pattern.compile("\"saved_path\"\\s*:\\s*\"([^\"]+)\"");
     private static final Pattern FILES_PATTERN = Pattern.compile("\"files\"\\s*:\\s*(\\d+)");
     private static final Pattern SKIPPED_PATTERN = Pattern.compile("\"skipped\"\\s*:\\s*(\\d+)");
@@ -140,26 +144,98 @@ public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownload
                         readCheckpoint(checkpointPath));
             }
             String summary = Files.readString(summaryPath, StandardCharsets.UTF_8);
-            int failed = intField(summary, FAILED_PATTERN);
+            FeishuDownloadResult result = parseSummary(summary, outputRoot);
+            int failed = result.failed();
             if (failed > 0) {
                 throw new ProcessDownloadFailure(
                         "Feishu downloader reported failed files: " + failed,
-                        readCheckpoint(checkpointPath));
+                        result.checkpoint().hasCursor() ? result.checkpoint() : readCheckpoint(checkpointPath));
             }
-            Path savedPath = Path.of(textField(summary, SAVED_PATH_PATTERN, outputRoot.toString()));
-            int files = intField(summary, FILES_PATTERN);
-            int skipped = intField(summary, SKIPPED_PATTERN);
-            return new FeishuDownloadResult(
-                    savedPath,
-                    files,
-                    skipped,
-                    failed,
-                    "Downloaded " + files + " Feishu files; skipped " + skipped);
+            return result;
         } catch (IOException exception) {
             throw new IllegalStateException("Failed to run Feishu downloader", exception);
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Feishu downloader was interrupted", exception);
+        }
+    }
+
+    /**
+     * Parses both legacy flat summaries and the current Python worker summary shape.
+     */
+    private static FeishuDownloadResult parseSummary(String summary, Path outputRoot) {
+        try {
+            JsonNode root = OBJECT_MAPPER.readTree(summary);
+            JsonNode stats = root.path("stats");
+            Path savedPath = Path.of(textOrDefault(root.path("saved_path").asText(""), outputRoot.toString()));
+            int files = integerField(root, stats, "files");
+            int skipped = integerField(root, stats, "skipped");
+            int failed = integerField(root, stats, "failed");
+            FeishuDownloadCheckpoint checkpoint = checkpointFromSummary(root.path("checkpoint"));
+            String downloadedItemsJson = jsonArray(root.path("checkpoint").path("downloaded_items"));
+            String failedItemsJson = jsonArray(root.path("failed_items"));
+            return new FeishuDownloadResult(
+                    savedPath,
+                    files,
+                    skipped,
+                    failed,
+                    "Downloaded " + files + " Feishu files; skipped " + skipped,
+                    checkpoint,
+                    downloadedItemsJson,
+                    failedItemsJson);
+        } catch (IOException exception) {
+            Path savedPath = Path.of(textField(summary, SAVED_PATH_PATTERN, outputRoot.toString()));
+            int files = intField(summary, FILES_PATTERN);
+            int skipped = intField(summary, SKIPPED_PATTERN);
+            int failed = intField(summary, FAILED_PATTERN);
+            return new FeishuDownloadResult(
+                    savedPath,
+                    files,
+                    skipped,
+                    failed,
+                    "Downloaded " + files + " Feishu files; skipped " + skipped,
+                    FeishuDownloadCheckpoint.empty(),
+                    "[]",
+                    "[]");
+        }
+    }
+
+    /**
+     * Reads a counter from the current nested stats object or the legacy flat root object.
+     */
+    private static int integerField(JsonNode root, JsonNode stats, String fieldName) {
+        if (root.has(fieldName)) {
+            return root.path(fieldName).asInt(0);
+        }
+        return stats.path(fieldName).asInt(0);
+    }
+
+    /**
+     * Converts the Python summary checkpoint into the Java durable checkpoint protocol.
+     */
+    private static FeishuDownloadCheckpoint checkpointFromSummary(JsonNode checkpoint) {
+        if (checkpoint == null || checkpoint.isMissingNode() || checkpoint.isNull()) {
+            return FeishuDownloadCheckpoint.empty();
+        }
+        return new FeishuDownloadCheckpoint(
+                checkpoint.path("current_folder_token").asText(""),
+                checkpoint.path("current_path").asText(""),
+                checkpoint.path("page_token").asText(""),
+                jsonArray(checkpoint.path("visited_folder_tokens")),
+                jsonArray(checkpoint.path("downloaded_items")));
+    }
+
+    /**
+     * Serializes a JSON array node for checkpoint storage.
+     */
+    private static String jsonArray(JsonNode node) {
+        if (node == null || !node.isArray()) {
+            return "[]";
+        }
+        try {
+            return OBJECT_MAPPER.writeValueAsString(node);
+        } catch (JsonProcessingException exception) {
+            return "[]";
         }
     }
 
@@ -243,6 +319,13 @@ public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownload
         }
         String normalized = value.strip();
         return normalized.startsWith("[") && normalized.endsWith("]") ? normalized : "[]";
+    }
+
+    /**
+     * Returns stripped text or fallback.
+     */
+    private static String textOrDefault(String value, String defaultValue) {
+        return value == null || value.isBlank() ? defaultValue : value.strip();
     }
 
     /**

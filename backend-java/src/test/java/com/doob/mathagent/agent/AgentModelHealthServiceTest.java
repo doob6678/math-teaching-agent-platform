@@ -11,7 +11,11 @@ import com.doob.mathagent.infrastructure.ai.AiProviderProperties;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatusCode;
+import org.springframework.web.client.HttpClientErrorException;
 
 class AgentModelHealthServiceTest {
 
@@ -63,8 +67,61 @@ class AgentModelHealthServiceTest {
         assertThat(response.results().get(1).providerName()).isEqualTo("dashscope");
         assertThat(response.results().get(1).configured()).isTrue();
         assertThat(response.results().get(1).reachable()).isFalse();
-        assertThat(response.results().get(1).safeReason()).isEqualTo("Provider health check failed: IllegalStateException.");
+        assertThat(response.results().get(1).safeReason()).isEqualTo("Provider health check failed: auth_or_access_denied.");
         assertThat(response.toString()).doesNotContain("dashscope-key", "raw response body");
+    }
+
+    @Test
+    void classifiesQuotaFailuresWithoutExposingProviderBody() {
+        AiProviderProperties properties = providerProperties();
+        AiChatGateway gateway = request -> {
+            if ("dashscope".equals(request.providerName())) {
+                throw new HttpClientErrorException(
+                        HttpStatusCode.valueOf(429),
+                        "Too Many Requests",
+                        HttpHeaders.EMPTY,
+                        "{\"error\":\"insufficient_quota\",\"api_key\":\"dashscope-key\"}".getBytes(StandardCharsets.UTF_8),
+                        StandardCharsets.UTF_8);
+            }
+            return new AiChatResult(request.providerName(), request.modelCode(), 1, 1, 2, "ok");
+        };
+        AgentModelHealthService service = new AgentModelHealthService(
+                new AiProviderCatalog(properties),
+                gateway,
+                Clock.fixed(Instant.parse("2026-06-30T05:00:00Z"), ZoneOffset.UTC));
+
+        var response = service.checkHealth();
+
+        assertThat(response.results().get(1).statusCode()).isEqualTo(429);
+        assertThat(response.results().get(1).safeReason()).isEqualTo("Provider health check failed: quota_or_balance.");
+        assertThat(response.toString()).doesNotContain("dashscope-key", "insufficient_quota");
+    }
+
+    @Test
+    void classifiesInvalidJsonFailuresSeparatelyFromQuota() {
+        AiProviderProperties properties = providerProperties();
+        AiChatGateway gateway = request -> {
+            if ("dashscope".equals(request.providerName())) {
+                throw new HttpClientErrorException(
+                        HttpStatusCode.valueOf(400),
+                        "Bad Request",
+                        HttpHeaders.EMPTY,
+                        "{\"code\":\"InvalidParameter\",\"message\":\"could not parse the JSON body\"}"
+                                .getBytes(StandardCharsets.UTF_8),
+                        StandardCharsets.UTF_8);
+            }
+            return new AiChatResult(request.providerName(), request.modelCode(), 1, 1, 2, "ok");
+        };
+        AgentModelHealthService service = new AgentModelHealthService(
+                new AiProviderCatalog(properties),
+                gateway,
+                Clock.fixed(Instant.parse("2026-06-30T05:00:00Z"), ZoneOffset.UTC));
+
+        var response = service.checkHealth();
+
+        assertThat(response.results().get(1).statusCode()).isEqualTo(400);
+        assertThat(response.results().get(1).safeReason()).isEqualTo("Provider health check failed: invalid_request_or_json.");
+        assertThat(response.toString()).doesNotContain("could not parse the JSON body");
     }
 
     private static AiProviderProperties providerProperties() {

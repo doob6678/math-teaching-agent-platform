@@ -63,4 +63,17 @@ class TextbookCatalogReaderTest {
                 .extracting(TextbookCatalogItem::docId)
                 .isEqualTo("book_with_source");
     }
+    @Test
+    void stripsUtf8BomBeforeParsingCatalogJsonl() throws Exception {
+        Path catalog = tempDir.resolve("catalog.jsonl");
+        Files.writeString(catalog, "\uFEFF{\"doc_id\":\"book_bom\",\"book_name\":\"B\",\"volume\":\"required\",\"book_root\":\"C:/b\",\"manifest\":\"C:/b/manifest.json\",\"chunk_count\":1,\"page_count\":1,\"ai_ok\":false}\n");
+
+        TextbookCatalogReader reader = new TextbookCatalogReader();
+
+        assertThat(reader.read(catalog))
+                .hasSize(1)
+                .first()
+                .extracting(TextbookCatalogItem::docId)
+                .isEqualTo("book_bom");
+    }
 }

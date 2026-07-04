@@ -23,8 +23,12 @@ build/
 .env
 .env.*
 !.env.example
+.local-secrets/
 *.log
 logs/
+.local-storage/
+output/
+tmp/
 .playwright-cli/
 docs/superpowers/plans/
 

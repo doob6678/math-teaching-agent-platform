@@ -9,14 +9,13 @@ import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 /**
  * Redisson-backed distributed concurrency guard for agent execution.
  */
 @Service
-@ConditionalOnBean(RedissonClient.class)
 public class RedissonAgentConcurrencyGuard implements AgentConcurrencyGuard {
 
     private static final String DEFAULT_PREFIX = "math-agent:agent:concurrency";
@@ -29,6 +28,7 @@ public class RedissonAgentConcurrencyGuard implements AgentConcurrencyGuard {
      *
      * @param redissonClient Redisson client
      */
+    @Autowired
     public RedissonAgentConcurrencyGuard(RedissonClient redissonClient) {
         this(redissonClient, DEFAULT_PREFIX);
     }

@@ -6,6 +6,7 @@ import com.doob.mathagent.securityrisk.vo.CapabilityTokenResponse;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -44,6 +45,9 @@ public class CapabilityTokenService {
     private static final String QUESTION_BANK_IMPORT_TEACHER_RESOURCE_ACTION = "question-bank:import-teacher-resource";
     private static final String QUESTION_BANK_IMPORT_TEACHER_RESOURCE_PATH_PREFIX =
             "/api/question-bank/import/teacher-resources";
+    private static final String VECTOR_INDEX_REBUILD_ACTION = "vector-index:rebuild";
+    private static final String VECTOR_INDEX_TEACHER_RESOURCE_PATH_PREFIX =
+            "/api/vector-index/teacher-resources";
     private static final String AGENT_RUN_ACTION_PREFIX = "agent-run:";
     private static final String AGENT_EXECUTE_PATH = "/api/agents/execute";
     private static final String AGENT_WRITING_COURSEWARE_PATH = "/api/agents/writing/courseware";
@@ -68,16 +72,6 @@ public class CapabilityTokenService {
     }
 
     /**
-     * Creates a testable service.
-     *
-     * @param store token store
-     * @param clock clock
-     */
-    public CapabilityTokenService(CapabilityTokenStore store, Clock clock) {
-        this(store, clock, new NoopCapabilityAuditSink());
-    }
-
-    /**
      * Creates a testable service with explicit audit sink.
      *
      * @param store token store
@@ -85,9 +79,9 @@ public class CapabilityTokenService {
      * @param auditSink audit sink
      */
     public CapabilityTokenService(CapabilityTokenStore store, Clock clock, CapabilityAuditSink auditSink) {
-        this.store = store;
-        this.clock = clock;
-        this.auditSink = auditSink == null ? new NoopCapabilityAuditSink() : auditSink;
+        this.store = Objects.requireNonNull(store, "store is required");
+        this.clock = Objects.requireNonNull(clock, "clock is required");
+        this.auditSink = Objects.requireNonNull(auditSink, "auditSink is required");
     }
 
     /**
@@ -289,6 +283,10 @@ public class CapabilityTokenService {
             validateTeacherResourceSubject(subject);
             return;
         }
+        if (VECTOR_INDEX_REBUILD_ACTION.equals(action) && isVectorIndexTeacherResourceRebuildPath(path)) {
+            validateTeacherResourceSubject(subject);
+            return;
+        }
         if (action.startsWith(AGENT_RUN_ACTION_PREFIX) && AGENT_EXECUTE_PATH.equals(path)) {
             if (action.length() == AGENT_RUN_ACTION_PREFIX.length()) {
                 throw new IllegalArgumentException("Unsupported capability action or path");
@@ -404,6 +402,14 @@ public class CapabilityTokenService {
     private static boolean isQuestionBankTeacherResourceImportPath(String path) {
         String[] parts = pathPartsAfterPrefix(path, QUESTION_BANK_IMPORT_TEACHER_RESOURCE_PATH_PREFIX);
         return parts.length == 1 && hasText(parts[0]);
+    }
+
+    /**
+     * Validates rebuilding one teacher resource vector index.
+     */
+    private static boolean isVectorIndexTeacherResourceRebuildPath(String path) {
+        String[] parts = pathPartsAfterPrefix(path, VECTOR_INDEX_TEACHER_RESOURCE_PATH_PREFIX);
+        return parts.length == 2 && hasText(parts[0]) && "rebuild".equals(parts[1]);
     }
 
     /**

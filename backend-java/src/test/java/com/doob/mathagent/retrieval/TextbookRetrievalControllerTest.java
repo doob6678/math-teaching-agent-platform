@@ -27,7 +27,7 @@ class TextbookRetrievalControllerTest {
         Files.writeString(bookRoot.resolve("jsonl/chunks.jsonl"), """
                 {"chunk_id":"book_a_p101_text_001","doc_id":"book_a","book_name":"教材A","volume":"必修 第一册","chapter_path":["第三章 函数"],"page_no":101,"printed_page_no":"98","chunk_type":"page_summary","section_title":"分段函数","text":"分段函数是在定义域的不同部分用不同解析式表示的函数。","formula_text":"","image_rel_paths":[],"source_page_image":"pages/p101.png"}
                 """);
-        TextbookRetrievalService service = new TextbookRetrievalService(
+        TextbookRetrievalService service = com.doob.mathagent.retrieval.TextbookRetrievalServiceFixture.service(
                 new TextbookCatalogReader(),
                 new TextbookChunkReader(),
                 new LocalTextbookBm25SearchEngine(),

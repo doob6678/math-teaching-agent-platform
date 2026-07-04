@@ -64,7 +64,13 @@ public class TeacherFeishuDiscoveryController {
                     listDepth,
                     maxDepth);
         } catch (IllegalArgumentException exception) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, exception.getMessage(), exception);
+            HttpStatus status = exception.getMessage() != null
+                    && exception.getMessage().contains("requires teacher or admin role")
+                    ? HttpStatus.FORBIDDEN
+                    : HttpStatus.BAD_REQUEST;
+            throw new ResponseStatusException(status, exception.getMessage(), exception);
+        } catch (IllegalStateException exception) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, exception.getMessage(), exception);
         }
     }
 }

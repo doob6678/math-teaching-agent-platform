@@ -68,6 +68,106 @@ class ProcessTeacherFeishuDownloadClientTest {
     }
 
     @Test
+    void processDownloaderParsesNestedSummaryStatsAndCheckpointFromRealScriptShape() throws Exception {
+        Path script = tempDir.resolve("nested_summary_downloader.py");
+        Files.writeString(script, """
+                import json
+                import pathlib
+                import sys
+
+                args = sys.argv[1:]
+                output_dir = pathlib.Path(args[args.index("--output-dir") + 1])
+                saved_path = output_dir / "downloaded"
+                saved_path.mkdir(parents=True, exist_ok=True)
+                (saved_path / "result.md").write_text("# downloaded", encoding="utf-8")
+                summary_path = pathlib.Path(args[args.index("--summary-path") + 1])
+                summary_path.write_text(json.dumps({
+                    "resource_type": "folder",
+                    "saved_path": str(saved_path),
+                    "stats": {"folders": 3, "files": 1, "skipped": 2, "failed": 0, "limit_reached": 1},
+                    "checkpoint": {
+                        "current_folder_token": "rootToken",
+                        "page_token": "",
+                        "current_path": "高中数学",
+                        "visited_folder_tokens": ["rootToken", "folderToken-1"],
+                        "downloaded_items": [{
+                            "type": "docx",
+                            "token": "docx-1",
+                            "name": "期望和方差的性质",
+                            "path": "高中数学/概率统计/期望和方差的性质"
+                        }]
+                    }
+                }, ensure_ascii=False), encoding="utf-8")
+                """);
+        Path appkey = tempDir.resolve("APPKEY.md");
+        Files.writeString(appkey, "APPID\ncli_dummy\nAPP Secret\nsecret_dummy\n");
+        TeacherSourceSyncProperties properties = new TeacherSourceSyncProperties(
+                "https://my.feishu.cn/drive/folder/rootToken",
+                script,
+                appkey,
+                tempDir.resolve("staging"),
+                1);
+        ProcessTeacherFeishuDownloadClient client = new ProcessTeacherFeishuDownloadClient(properties);
+
+        TeacherFeishuDownloadClient.FeishuDownloadResult result = client.download(
+                "https://my.feishu.cn/drive/folder/rootToken",
+                tempDir.resolve("staging"),
+                1,
+                "md",
+                TeacherFeishuDownloadClient.FeishuDownloadCheckpoint.empty());
+
+        assertThat(result.files()).isEqualTo(1);
+        assertThat(result.skipped()).isEqualTo(2);
+        assertThat(result.checkpoint().currentFolderToken()).isEqualTo("rootToken");
+        assertThat(result.checkpoint().currentPath()).isEqualTo("高中数学");
+        assertThat(result.downloadedItemsJson()).contains("docx-1").contains("期望和方差的性质");
+    }
+
+    @Test
+    void processDownloaderTreatsNestedSummaryFailuresAsDownloadFailures() throws Exception {
+        Path script = tempDir.resolve("nested_summary_failure.py");
+        Files.writeString(script, """
+                import json
+                import pathlib
+                import sys
+
+                args = sys.argv[1:]
+                output_dir = pathlib.Path(args[args.index("--output-dir") + 1])
+                output_dir.mkdir(parents=True, exist_ok=True)
+                summary_path = pathlib.Path(args[args.index("--summary-path") + 1])
+                summary_path.write_text(json.dumps({
+                    "saved_path": str(output_dir / "downloaded"),
+                    "stats": {"folders": 1, "files": 0, "skipped": 0, "failed": 1},
+                    "checkpoint": {
+                        "current_folder_token": "folderToken-failed",
+                        "page_token": "pageToken-failed",
+                        "current_path": "高中数学/导数",
+                        "visited_folder_tokens": ["rootToken", "folderToken-failed"],
+                        "downloaded_items": [{"token": "docx-ok"}]
+                    }
+                }, ensure_ascii=False), encoding="utf-8")
+                """);
+        Path appkey = tempDir.resolve("APPKEY.md");
+        Files.writeString(appkey, "APPID\ncli_dummy\nAPP Secret\nsecret_dummy\n");
+        TeacherSourceSyncProperties properties = new TeacherSourceSyncProperties(
+                "https://my.feishu.cn/drive/folder/rootToken",
+                script,
+                appkey,
+                tempDir.resolve("staging"),
+                1);
+        ProcessTeacherFeishuDownloadClient client = new ProcessTeacherFeishuDownloadClient(properties);
+
+        assertThatThrownBy(() -> client.download(
+                "https://my.feishu.cn/drive/folder/rootToken",
+                tempDir.resolve("staging"),
+                1,
+                "md",
+                TeacherFeishuDownloadClient.FeishuDownloadCheckpoint.empty()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("reported failed files: 1");
+    }
+
+    @Test
     void processDownloaderPassesResumeCheckpointArgumentsToPythonScript() throws Exception {
         Path script = tempDir.resolve("checkpoint_downloader.py");
         Files.writeString(script, """

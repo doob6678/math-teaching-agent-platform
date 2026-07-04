@@ -463,8 +463,23 @@ def download_folder(
     visited_set = set(visited_folder_tokens)
     downloaded_items = [item for item in list_field(checkpoint.get("downloaded_items")) if isinstance(item, dict)]
     downloaded_tokens = {str(item.get("token", "")) for item in downloaded_items if str(item.get("token", ""))}
+    failed_items: List[Dict[str, Any]] = []
+    latest_checkpoint: Dict[str, Any] = {
+        "current_folder_token": str(checkpoint.get("current_folder_token", "") or folder_token),
+        "page_token": str(checkpoint.get("page_token", "") or ""),
+        "current_path": str(checkpoint.get("current_path", "") or resolved_folder_name),
+        "visited_folder_tokens": visited_folder_tokens,
+        "downloaded_items": downloaded_items,
+    }
 
     def remember_checkpoint(current_token: str, path_text: str, page_token: str) -> None:
+        latest_checkpoint.update({
+            "current_folder_token": current_token,
+            "page_token": page_token,
+            "current_path": path_text,
+            "visited_folder_tokens": visited_folder_tokens,
+            "downloaded_items": downloaded_items,
+        })
         write_resume_checkpoint(
             checkpoint_path,
             current_folder_token=current_token,
@@ -529,6 +544,13 @@ def download_folder(
                     remember_checkpoint(current_token, path_text, page_token)
                 except Exception as exc:
                     counters["failed"] += 1
+                    failed_items.append({
+                        "type": item_type,
+                        "token": item_token,
+                        "name": item_name,
+                        "path": item_path,
+                        "message": str(exc),
+                    })
                     remember_checkpoint(current_token, path_text, page_token)
                     client.log(f"FAILED {item_type}: {item_name}, token={item_token}, error={exc}")
             if not has_more or not next_page_token:
@@ -542,13 +564,13 @@ def download_folder(
     start_page_token = str(checkpoint.get("page_token", "") or "")
     start_dir = path_to_dir(output_base, start_path, root_dir)
     walk(start_token, start_dir, start_path, start_page_token)
-    return {"saved_path": str(root_dir), "folder_name": resolved_folder_name, "stats": counters, "checkpoint": {
-        "current_folder_token": start_token,
-        "page_token": start_page_token,
-        "current_path": start_path,
-        "visited_folder_tokens": visited_folder_tokens,
-        "downloaded_items": downloaded_items,
-    }}
+    return {
+        "saved_path": str(root_dir),
+        "folder_name": resolved_folder_name,
+        "stats": counters,
+        "checkpoint": latest_checkpoint,
+        "failed_items": failed_items,
+    }
 
 
 def download_from_url(
@@ -581,11 +603,50 @@ def download_from_url(
         else:
             content, suggested_name, size = client.export_docx(token, file_extension)
         target = save_bytes(content, output_dir, suggested_name or f"{token}.{file_extension}")
-        return {**parsed, "saved_path": str(target), "file_size": size, "file_extension": file_extension}
+        downloaded_item = {
+            "type": "docx",
+            "token": token,
+            "name": target.name,
+            "path": target.name,
+        }
+        return {
+            **parsed,
+            "saved_path": str(target),
+            "file_size": size,
+            "file_extension": file_extension,
+            "stats": {"folders": 0, "files": 1, "skipped": 0, "failed": 0, "limit_reached": 0},
+            "checkpoint": {
+                "current_folder_token": "",
+                "page_token": "",
+                "current_path": target.name,
+                "visited_folder_tokens": [],
+                "downloaded_items": [downloaded_item],
+            },
+            "failed_items": [],
+        }
     if resource_type == "file":
         content, suggested_name, size = client.download_file(token)
         target = save_bytes(content, output_dir, suggested_name or token)
-        return {**parsed, "saved_path": str(target), "file_size": size}
+        downloaded_item = {
+            "type": "file",
+            "token": token,
+            "name": target.name,
+            "path": target.name,
+        }
+        return {
+            **parsed,
+            "saved_path": str(target),
+            "file_size": size,
+            "stats": {"folders": 0, "files": 1, "skipped": 0, "failed": 0, "limit_reached": 0},
+            "checkpoint": {
+                "current_folder_token": "",
+                "page_token": "",
+                "current_path": target.name,
+                "visited_folder_tokens": [],
+                "downloaded_items": [downloaded_item],
+            },
+            "failed_items": [],
+        }
     raise RuntimeError(f"Unsupported resource type: {resource_type}")
 
 

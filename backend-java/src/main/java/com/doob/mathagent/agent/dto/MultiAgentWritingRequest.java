@@ -8,7 +8,7 @@ import java.util.List;
  * @param writingGoal short writing goal such as teacher handout or student blank handout
  * @param questionText source math question or teaching topic
  * @param evidenceRefs evidence anchors selected by RAG, Feishu, textbook, or question bank retrieval
- * @param dryRun true to trace the workflow without calling external model providers
+ * @param dryRun must be false; production entrypoints reject trace-only workflows
  * @param preferredProviderName optional provider preference validated by backend model policy
  * @param preferredModelCode optional model preference validated by backend model policy
  */

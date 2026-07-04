@@ -17,18 +17,14 @@ public record TeachingRequestContext(
     /**
      * 本地开发默认身份，供不经过 HTTP 的单元测试和控制器便捷方法使用。
      */
-    public static TeachingRequestContext localTeacher() {
-        return new TeachingRequestContext("default", "teacher", "local-teacher-console", "local-browser-console");
-    }
-
     /**
      * 归一化空身份字段，保证任务隔离 key 稳定。
      */
     public TeachingRequestContext normalize() {
         return new TeachingRequestContext(
-                blankToDefault(tenantId, "default"),
-                blankToDefault(subjectType, "anonymous"),
-                blankToDefault(subjectId, "anonymous"),
+                requireText(tenantId, "tenantId is required"),
+                requireText(subjectType, "subjectType is required"),
+                requireText(subjectId, "subjectId is required"),
                 blankToDefault(deviceId, "unknown-device"));
     }
 
@@ -52,5 +48,15 @@ public record TeachingRequestContext(
      */
     private static String blankToDefault(String value, String defaultValue) {
         return value == null || value.isBlank() ? defaultValue : value.strip();
+    }
+
+    /**
+     * Requires backend-resolved identity text.
+     */
+    private static String requireText(String value, String message) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException(message);
+        }
+        return value.strip();
     }
 }

@@ -5,13 +5,19 @@ import com.doob.mathagent.resources.TextbookCatalogReader;
 import com.doob.mathagent.resources.TextbookChunk;
 import com.doob.mathagent.resources.TextbookChunkReader;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -23,6 +29,8 @@ public class TextbookRetrievalService {
     private final TextbookChunkReader chunkReader;
     private final LocalTextbookBm25SearchEngine searchEngine;
     private final RetrievalAuditSink auditSink;
+    private final TextbookSearchCache searchCache;
+    private final RedisTextbookSearchCacheProperties searchCacheProperties;
     /**
      * 语料加载互斥锁：防止缓存未命中时多个请求同时读取大批量教材文件，降低缓存击穿风险。
      */
@@ -36,15 +44,20 @@ public class TextbookRetrievalService {
      */
     private volatile CorpusLoadFailure lastLoadFailure;
 
+    @Autowired
     public TextbookRetrievalService(
             TextbookCatalogReader catalogReader,
             TextbookChunkReader chunkReader,
             LocalTextbookBm25SearchEngine searchEngine,
-            RetrievalAuditSink auditSink) {
-        this.catalogReader = catalogReader;
-        this.chunkReader = chunkReader;
-        this.searchEngine = searchEngine;
-        this.auditSink = auditSink;
+            RetrievalAuditSink auditSink,
+            TextbookSearchCache searchCache,
+            RedisTextbookSearchCacheProperties searchCacheProperties) {
+        this.catalogReader = Objects.requireNonNull(catalogReader, "catalogReader is required");
+        this.chunkReader = Objects.requireNonNull(chunkReader, "chunkReader is required");
+        this.searchEngine = Objects.requireNonNull(searchEngine, "searchEngine is required");
+        this.auditSink = Objects.requireNonNull(auditSink, "auditSink is required");
+        this.searchCache = Objects.requireNonNull(searchCache, "searchCache is required");
+        this.searchCacheProperties = Objects.requireNonNull(searchCacheProperties, "searchCacheProperties is required");
     }
 
     /**
@@ -64,14 +77,29 @@ public class TextbookRetrievalService {
         String queryId = UUID.randomUUID().toString();
         long startedAtNanos = System.nanoTime();
         Path normalizedRoot = processedBooksRoot.toAbsolutePath().normalize();
-        List<TextbookChunk> chunks = loadCorpus(normalizedRoot).chunks();
-        List<TextbookSearchHit> hits = searchEngine.search(request.query(), chunks, request.limit());
+        CachedTextbookCorpus corpus = loadCorpus(normalizedRoot);
+        String cacheKey = searchCacheKey(corpus, request);
+        TextbookSearchCache.CachedTextbookSearch cached = searchCache.find(cacheKey).orElse(null);
+        List<TextbookSearchHit> hits = cached == null
+                ? searchEngine.search(request.query(), corpus.chunks(), request.limit())
+                : cached.hits();
+        if (cached == null && !hits.isEmpty()) {
+            searchCache.put(
+                    cacheKey,
+                    new TextbookSearchCache.CachedTextbookSearch(
+                            request.query(),
+                            request.limit(),
+                            "local_bm25_first",
+                            hits.size(),
+                            hits),
+                    searchCacheProperties.normalizedTtl());
+        }
         int elapsedMs = elapsedMs(startedAtNanos);
         TextbookSearchResponse response = new TextbookSearchResponse(
                 queryId,
                 request.query(),
                 request.limit(),
-                "local_bm25_first",
+                cached == null ? "local_bm25_first" : "redis_cache_local_bm25_first",
                 hits.size(),
                 hits);
         auditSink.record(RetrievalAuditEvent.from(queryId, request, response, elapsedMs, requestContext));
@@ -166,8 +194,12 @@ public class TextbookRetrievalService {
         for (Path chunksPath : chunkPaths) {
             chunks.addAll(chunkReader.read(chunksPath));
         }
-        CachedTextbookCorpus loaded = new CachedTextbookCorpus(processedBooksRoot, signatures, List.copyOf(chunks));
-        return loaded;
+            CachedTextbookCorpus loaded = new CachedTextbookCorpus(
+                    processedBooksRoot,
+                    signatures,
+                    corpusSignatureHash(processedBooksRoot, signatures),
+                    List.copyOf(chunks));
+            return loaded;
     }
 
     /**
@@ -222,6 +254,38 @@ public class TextbookRetrievalService {
         return elapsed > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) elapsed;
     }
 
+    private static String searchCacheKey(CachedTextbookCorpus corpus, TextbookSearchRequest request) {
+        return sha256(String.join("|",
+                corpus.processedBooksRoot().toString(),
+                corpus.signatureHash(),
+                String.valueOf(request.limit()),
+                request.query()));
+    }
+
+    private static String corpusSignatureHash(
+            Path processedBooksRoot,
+            List<SourceFileSignature> signatures) {
+        StringBuilder payload = new StringBuilder(processedBooksRoot.toString());
+        for (SourceFileSignature signature : signatures) {
+            payload.append('|')
+                    .append(signature.path())
+                    .append(':')
+                    .append(signature.size())
+                    .append(':')
+                    .append(signature.lastModifiedNanos());
+        }
+        return sha256(payload.toString());
+    }
+
+    private static String sha256(String value) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            return HexFormat.of().formatHex(digest.digest(value.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is not available", e);
+        }
+    }
+
     private record SourceFileSignature(Path path, long size, long lastModifiedNanos) {
     }
 
@@ -238,6 +302,7 @@ public class TextbookRetrievalService {
     private record CachedTextbookCorpus(
             Path processedBooksRoot,
             List<SourceFileSignature> signatures,
+            String signatureHash,
             List<TextbookChunk> chunks) {
     }
 }

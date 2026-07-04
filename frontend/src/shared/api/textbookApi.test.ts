@@ -45,6 +45,41 @@ describe("textbookApi", () => {
     expect(globalThis.localStorage.getItem("math-agent:auth-session")).toContain("token-1");
   });
 
+  it("registers a student account and stores backend issued token", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        userId: "student-new",
+        username: "new-student",
+        role: "student",
+        tenantId: "default",
+        tokenName: "satoken",
+        tokenValue: "token-new",
+      }),
+    });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const response = await client.register({
+      username: "new-student",
+      password: "student-123456",
+      tenantId: "default",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8080/api/auth/register",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "Content-Type": "application/json",
+          "X-Device-Id": "local-browser-console",
+        }),
+        body: JSON.stringify({ username: "new-student", password: "student-123456", tenantId: "default" }),
+      }),
+    );
+    expect(response.role).toBe("student");
+    expect(globalThis.localStorage.getItem("math-agent:auth-session")).toContain("token-new");
+  });
+
   it("uses saved backend token instead of client supplied identity headers", async () => {
     globalThis.localStorage.setItem(
       "math-agent:auth-session",
@@ -1003,12 +1038,12 @@ describe("textbookApi", () => {
       routeReason: "courseware_generation uses reasoning model",
       stageTimings: [{ stage: "model_route", elapsedMs: 1 }],
       concurrencyKeys: ["concurrent:user:teacher-1:CoursewareAgent"],
+      requiredJsonSchema: false,
     };
     const executeRequest = {
       plan,
       userInputSummary: "Generate teacher handout for space vectors",
       evidenceRefs: ["textbook:chapter-1"],
-      dryRun: false,
     };
     const fetchMock = vi
       .fn()
@@ -1161,7 +1196,6 @@ describe("textbookApi", () => {
       writingGoal: "teacher handout",
       questionText: "space vector angle",
       evidenceRefs: ["PUBLIC_TEXTBOOK:space-vector:angle"],
-      dryRun: true,
       preferredProviderName: "dashscope",
       preferredModelCode: "qwen3.6-flash",
     };
@@ -1327,7 +1361,6 @@ describe("textbookApi", () => {
       writingGoal: "teacher handout",
       questionText: "space vector angle",
       evidenceRefs: ["PUBLIC_TEXTBOOK:space-vector:angle"],
-      dryRun: false,
       preferredProviderName: "dashscope",
       preferredModelCode: "qwen3.6-flash",
     };
@@ -1385,6 +1418,80 @@ describe("textbookApi", () => {
     expect(fetchMock.mock.calls[1][1]?.headers).not.toHaveProperty("X-Subject-Type");
     expect(response.workflowId).toBe("workflow-async-1");
     expect(response.status).toBe("RUNNING");
+  });
+
+  it("resumes failed multi-agent writing with workflow-bound capability path", async () => {
+    globalThis.localStorage.setItem(
+      "math-agent:auth-session",
+      JSON.stringify({
+        userId: "teacher-1",
+        username: "teacher",
+        role: "teacher",
+        tenantId: "school-a",
+        tokenName: "satoken",
+        tokenValue: "token-teacher",
+      }),
+    );
+    const request = {
+      writingGoal: "teacher handout",
+      questionText: "space vector angle",
+      evidenceRefs: ["PUBLIC_TEXTBOOK:space-vector:angle"],
+      preferredProviderName: "dashscope",
+      preferredModelCode: "qwen3.6-flash",
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          token: "resume-capability",
+          action: "agent-run:CoursewareAgent",
+          path: "/api/agents/writing/workflow-async-1/resume",
+          requestHash: "hash-resume",
+          expiresAt: "2026-06-30T12:02:00Z",
+          maxCost: 3,
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          workflowId: "workflow-async-1",
+          tenantId: "school-a",
+          subjectType: "teacher",
+          subjectId: "teacher-1",
+          status: "COMPLETED",
+          stages: [],
+          totalUsage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+        }),
+      });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const response = await client.resumeMultiAgentWriting("workflow-async-1", request);
+
+    const capabilityBody = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
+    expect(capabilityBody).toEqual({
+      action: "agent-run:CoursewareAgent",
+      path: "/api/agents/writing/workflow-async-1/resume",
+      requestHash: expect.any(String),
+      idempotencyKey: "multi-agent-writing-resume:workflow-async-1:teacher handout:space vector angle",
+      maxCost: 3,
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://127.0.0.1:8080/api/agents/writing/workflow-async-1/resume",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "Content-Type": "application/json",
+          satoken: "token-teacher",
+          "X-Capability-Token": "resume-capability",
+          "X-Request-Hash": capabilityBody.requestHash,
+        }),
+        body: JSON.stringify(request),
+      }),
+    );
+    expect(fetchMock.mock.calls[1][1]?.headers).not.toHaveProperty("X-Subject-Id");
+    expect(fetchMock.mock.calls[1][1]?.headers).not.toHaveProperty("X-Subject-Type");
+    expect(response.status).toBe("COMPLETED");
   });
 
   it("summarizes visible agent trace usage with backend session identity only", async () => {
@@ -1557,6 +1664,89 @@ describe("textbookApi", () => {
     expect(config.configJson).not.toContain("mcp_secret_1234567890abcdef");
   });
 
+  it("tests standard MCP connection through initialize and tools/list without platform session headers", async () => {
+    globalThis.localStorage.setItem(
+      "math-agent:auth-session",
+      JSON.stringify({
+        userId: "teacher-1",
+        username: "teacher",
+        role: "teacher",
+        tenantId: "default",
+        tokenName: "satoken",
+        tokenValue: "token-teacher",
+      }),
+    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: new Headers({ "MCP-Protocol-Version": "2025-11-25" }),
+        text: async () => JSON.stringify({
+          jsonrpc: "2.0",
+          id: "frontend-init",
+          result: {
+            protocolVersion: "2025-11-25",
+            serverInfo: { name: "math-agent-rag", version: "0.1.0" },
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: new Headers({ "MCP-Protocol-Version": "2025-11-25" }),
+        text: async () => JSON.stringify({
+          jsonrpc: "2.0",
+          id: "frontend-tools",
+          result: {
+            tools: [
+              { name: "search_textbook_evidence" },
+              { name: "get_teaching_ai_trace" },
+            ],
+          },
+        }),
+      });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const result = await client.testMcpConnection(
+      "http://127.0.0.1:8080/api/mcp/",
+      "teacher_secret_1234567890abcdef",
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "http://127.0.0.1:8080/api/mcp",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Accept: "application/json, text/event-stream",
+          "Content-Type": "application/json",
+          "MCP-Protocol-Version": "2025-11-25",
+          Authorization: "Bearer teacher_secret_1234567890abcdef",
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://127.0.0.1:8080/api/mcp",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.not.objectContaining({
+          satoken: "token-teacher",
+          "X-Subject-Id": expect.any(String),
+          "X-Subject-Type": expect.any(String),
+        }),
+      }),
+    );
+    expect(JSON.parse(fetchMock.mock.calls[0][1]?.body as string).method).toBe("initialize");
+    expect(JSON.parse(fetchMock.mock.calls[1][1]?.body as string).method).toBe("tools/list");
+    expect(result.serverName).toBe("math-agent-rag");
+    expect(result.protocolVersion).toBe("2025-11-25");
+    expect(result.tools).toEqual(["search_textbook_evidence", "get_teaching_ai_trace"]);
+    expect(result.toolCount).toBe(2);
+  });
+
   it("loads student dashboard without client supplied identity headers", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
@@ -1611,6 +1801,172 @@ describe("textbookApi", () => {
     expect(dashboard.knowledgeProgress[0].progressPercent).toBe(68);
     expect(dashboard.knowledgeGraph?.nodes[0].masteryPercent).toBe(68);
     expect(dashboard.knowledgeGraph?.edges[0].relationType).toBe("PREREQUISITE_FOR");
+  });
+
+  it("submits student explanation request without client supplied identity headers", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        explanationId: "explain-1",
+        conversationId: "conversation-1",
+        tenantId: "default",
+        studentId: "local-student",
+        viewerRole: "student",
+        questionText: "空间向量数量积求二面角",
+        imageStatus: "none",
+        imageUnderstanding: {
+          enabled: true,
+          succeeded: true,
+          providerName: "dashscope",
+          modelCode: "qwen-vl-plus-latest",
+          problemText: "空间向量数量积求二面角",
+          confidence: 0.9,
+          promptTokens: 12,
+          completionTokens: 6,
+          totalTokens: 18,
+          message: "vision-json",
+        },
+        generatedBy: "student_explanation_card_orchestrator_v0.1",
+        aiDraft: {
+          enabled: true,
+          providerName: "openai",
+          modelCode: "gpt-5.4",
+          promptTokens: 10,
+          completionTokens: 6,
+          totalTokens: 16,
+          structured: true,
+          message: "ok",
+          recoveryEvents: [],
+        },
+        workflowStages: [{ stageKey: "search_textbook", title: "查教材", status: "completed", detail: "命中 1 条教材证据。", elapsedMs: 8 }],
+        cards: [{ cardKey: "source_links", title: "来源", summary: "来源", items: [], sourceUris: [], renderMode: "source_list" }],
+        sources: [{ sourceType: "textbook", title: "book p.12", sourceUri: "textbook://book/page/12#chunk=c1", permissionScope: "PUBLIC_TEXTBOOK", snippet: "数量积", score: 1.2 }],
+        totalElapsedMs: 15,
+      }),
+    });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const response = await client.explainStudentQuestion({
+      questionText: "空间向量数量积求二面角",
+      imageFileName: "question.png",
+      imageContentType: "image/png",
+      imageSizeBytes: 1024,
+      searchTextbook: true,
+      searchKnowledgeGraph: true,
+      searchTeacherResources: true,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8080/api/students/explanations",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "Content-Type": "application/json",
+          "X-Device-Id": "local-browser-console",
+        }),
+      }),
+    );
+    expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Id");
+    expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Type");
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).not.toHaveProperty("studentId");
+    expect(response.sources[0].sourceUri).toBe("textbook://book/page/12#chunk=c1");
+    expect(response.aiDraft.modelCode).toBe("gpt-5.4");
+  });
+
+  it("loads student explanation history without client supplied identity headers", async () => {
+    globalThis.localStorage.setItem(
+      "math-agent:auth-session",
+      JSON.stringify({
+        userId: "local-student",
+        username: "student",
+        role: "student",
+        tenantId: "default",
+        tokenName: "satoken",
+        tokenValue: "token-student",
+      }),
+    );
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            explanationId: "explain-1",
+            conversationId: "conversation-1",
+            questionText: "space vector",
+            imageStatus: "none",
+            imageProblemText: "",
+            aiProviderName: "openai",
+            aiModelCode: "gpt-5.4",
+            totalTokens: 128,
+            totalElapsedMs: 45,
+            createdAt: "2026-07-02T01:00:00",
+          },
+        ],
+      }),
+    });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const response = await client.getStudentExplanationHistory("conversation-1", 5);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8080/api/students/explanations/history?conversationId=conversation-1&limit=5",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          satoken: "token-student",
+          "X-Device-Id": "local-browser-console",
+        }),
+      }),
+    );
+    expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Id");
+    expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Type");
+    expect(response.items[0].conversationId).toBe("conversation-1");
+    expect(response.items[0].aiModelCode).toBe("gpt-5.4");
+  });
+
+  it("uploads student explanation image as multipart without client supplied identity headers", async () => {
+    globalThis.localStorage.setItem(
+      "math-agent:auth-session",
+      JSON.stringify({
+        userId: "local-student",
+        username: "student",
+        role: "student",
+        tenantId: "default",
+        tokenName: "satoken",
+        tokenValue: "token-student",
+      }),
+    );
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        uploadId: "upload-1",
+        originalFileName: "question.png",
+        contentType: "image/png",
+        sizeBytes: 3,
+        expiresAt: "2026-07-01T00:30:00Z",
+        imageStatus: "image_uploaded_ocr_not_configured",
+      }),
+    });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+    const file = new File([new Uint8Array([1, 2, 3])], "question.png", { type: "image/png" });
+
+    const response = await client.uploadStudentExplanationImage(file);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8080/api/students/explanations/images",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          satoken: "token-student",
+          "X-Device-Id": "local-browser-console",
+        }),
+        body: expect.any(FormData),
+      }),
+    );
+    expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("Content-Type");
+    expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Id");
+    expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Type");
+    expect(response.uploadId).toBe("upload-1");
+    expect(response.imageStatus).toBe("image_uploaded_ocr_not_configured");
   });
 
   it("refreshes student dashboard snapshot with one-time capability token", async () => {
@@ -1669,6 +2025,79 @@ describe("textbookApi", () => {
     expect(fetchMock.mock.calls[1][1]?.headers).not.toHaveProperty("X-Subject-Id");
     expect(fetchMock.mock.calls[1][1]?.headers).not.toHaveProperty("X-Subject-Type");
     expect(dashboard.knowledgeGraph?.generatedFrom).toContain("student_memory_entry");
+  });
+
+  it("loads curated knowledge graph spine without client supplied identity headers", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        version: "v0.1",
+        tenantId: "school-a",
+        viewerRole: "teacher",
+        nodeCount: 3,
+        edgeCount: 2,
+        nodes: [
+          {
+            id: "spine-module-functions",
+            label: "functions",
+            nodeType: "MODULE",
+            chapterPath: "1. functions",
+            permissionScope: "MATH_VIP",
+            sourceSummary: "curated spine v0.1",
+          },
+          {
+            id: "spine-topic-function-zero",
+            label: "function zeros",
+            nodeType: "TOPIC",
+            chapterPath: "1.3 function zeros",
+            permissionScope: "MATH_VIP",
+            sourceSummary: "curated spine v0.1",
+          },
+          {
+            id: "spine-method-numerical-graph",
+            label: "number-shape combination",
+            nodeType: "METHOD",
+            chapterPath: "functions / method",
+            permissionScope: "MATH_VIP",
+            sourceSummary: "curated spine v0.1",
+          },
+        ],
+        edges: [
+          {
+            id: "spine-edge-functions-zero",
+            source: "spine-module-functions",
+            target: "spine-topic-function-zero",
+            relationType: "HAS_TOPIC",
+            evidenceSummary: "functions include zero problems",
+          },
+          {
+            id: "spine-edge-zero-method",
+            source: "spine-topic-function-zero",
+            target: "spine-method-numerical-graph",
+            relationType: "USES_METHOD",
+            evidenceSummary: "zeros often use graph reasoning",
+          },
+        ],
+      }),
+    });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const graph = await client.getKnowledgeGraphSpine();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8080/api/knowledge/graph/spine",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          "X-Device-Id": "local-browser-console",
+        }),
+      }),
+    );
+    expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Id");
+    expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Type");
+    expect(graph.nodeCount).toBe(3);
+    expect(graph.edgeCount).toBe(2);
+    expect(graph.nodes[1].nodeType).toBe("TOPIC");
+    expect(graph.edges[1].relationType).toBe("USES_METHOD");
   });
 
   it("manages knowledge points and question bank items with capability tokens", async () => {
@@ -2428,5 +2857,190 @@ describe("textbookApi", () => {
     expect(fetchMock.mock.calls[0][0]).not.toContain("APPKEY");
     expect(fetchMock.mock.calls[0][0]).not.toContain("APP_SECRET");
     expect(response.candidates[0].url).toBe("https://my.feishu.cn/docx/doc-token");
+  });
+
+  it("loads runtime status without client supplied identity headers", async () => {
+    globalThis.localStorage.setItem(
+      "math-agent:auth-session",
+      JSON.stringify({
+        userId: "teacher-1",
+        username: "teacher",
+        role: "teacher",
+        tenantId: "school-a",
+        tokenName: "satoken",
+        tokenValue: "token-teacher",
+      }),
+    );
+    const fetchMock = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        deployment: {
+          ready: true,
+          mode: "deploy_ready",
+          blockingIssues: [],
+          warnings: [],
+        },
+        ai: {
+          defaultProviderName: "openai",
+          defaultModelCode: "gpt-5.4",
+          defaultProviderConfigured: true,
+          enabledProviderCount: 1,
+          providers: [
+            {
+              providerName: "openai",
+              modelCode: "gpt-5.4",
+              configured: true,
+              baseUrlConfigured: true,
+              apiKeyConfigured: true,
+              modelConfigured: true,
+            },
+          ],
+        },
+        auth: {
+          persistentStoreRequired: true,
+          mode: "mysql_only",
+        },
+        database: {
+          enabled: true,
+          configured: true,
+          urlConfigured: true,
+          usernameConfigured: true,
+          studentExplanationHistoryDurable: true,
+          migrationRunnerEnabled: true,
+          migrationLocation: "classpath:db/migration",
+          mode: "mysql",
+        },
+        redis: {
+          redissonEnabled: true,
+          redissonAddress: "redis://127.0.0.1:6379",
+          rateLimitEnabled: true,
+          rateLimitKeyPrefix: "math-agent:rate-limit:",
+          capabilityStoreEnabled: true,
+          capabilityStoreKeyPrefix: "math-agent:capability:",
+          searchCacheEnabled: true,
+          searchCacheKeyPrefix: "math-agent:search:",
+          searchCacheTtl: "PT10M",
+        },
+        vectorIndex: {
+          enabled: true,
+          configured: false,
+          collectionName: "math_agent_resource_blocks",
+          dimension: 1536,
+          embeddingModel: "text-embedding-3-small",
+          milvusUri: "",
+          status: "configuration_error",
+        },
+        feishu: {
+          processDownloaderEnabled: true,
+          downloaderScriptConfigured: true,
+          downloaderScriptExists: true,
+          appkeyPathConfigured: true,
+          appkeyFileExists: true,
+          stagingRootConfigured: true,
+          stagingRootExistsOrCreatable: true,
+          defaultUrlHost: "my.feishu.cn",
+          smokeMaxFiles: 1,
+          processTimeoutSeconds: 30,
+          mode: "process_ready",
+        },
+      }),
+    });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const status = await client.getSystemRuntimeStatus();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8080/api/system/runtime",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          satoken: "token-teacher",
+          "X-Device-Id": "local-browser-console",
+        }),
+      }),
+    );
+    expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Id");
+    expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Type");
+    expect(status.deployment.ready).toBe(true);
+    expect(status.deployment.mode).toBe("deploy_ready");
+    expect(status.ai.defaultProviderName).toBe("openai");
+    expect(status.ai.defaultProviderConfigured).toBe(true);
+    expect(status.auth.mode).toBe("mysql_only");
+    expect(status.database.mode).toBe("mysql");
+    expect(status.database.studentExplanationHistoryDurable).toBe(true);
+    expect(status.database.migrationRunnerEnabled).toBe(true);
+    expect(status.database.migrationLocation).toBe("classpath:db/migration");
+    expect(status.redis.searchCacheEnabled).toBe(true);
+    expect(status.vectorIndex.status).toBe("configuration_error");
+    expect(status.feishu.mode).toBe("process_ready");
+    expect(status.feishu.appkeyFileExists).toBe(true);
+  });
+
+  it("rebuilds teacher resource vector index with capability token and backend identity", async () => {
+    globalThis.localStorage.setItem(
+      "math-agent:auth-session",
+      JSON.stringify({
+        userId: "teacher-1",
+        username: "teacher",
+        role: "teacher",
+        tenantId: "school-a",
+        tokenName: "satoken",
+        tokenValue: "token-teacher",
+      }),
+    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          token: "vector-capability",
+          action: "vector-index:rebuild",
+          path: "/api/vector-index/teacher-resources/doc-vector/rebuild",
+          requestHash: "hash-vector",
+          expiresAt: "2026-07-01T00:00:00Z",
+          maxCost: 2,
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          status: "indexed",
+          documentId: "doc-vector",
+          collectionName: "math_agent_resource_blocks",
+          blockCount: 3,
+          embeddedCount: 3,
+          upsertedCount: 3,
+          embeddingModel: "text-embedding-3-small",
+          promptTokens: 42,
+          message: "Milvus upsert completed.",
+        }),
+      });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const response = await client.rebuildTeacherResourceVectorIndex("doc-vector");
+
+    const capabilityBody = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
+    expect(capabilityBody).toEqual({
+      action: "vector-index:rebuild",
+      path: "/api/vector-index/teacher-resources/doc-vector/rebuild",
+      requestHash: expect.any(String),
+      idempotencyKey: "vector-index-rebuild:doc-vector",
+      maxCost: 2,
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://127.0.0.1:8080/api/vector-index/teacher-resources/doc-vector/rebuild",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          satoken: "token-teacher",
+          "X-Capability-Token": "vector-capability",
+          "X-Request-Hash": capabilityBody.requestHash,
+        }),
+      }),
+    );
+    expect(fetchMock.mock.calls[1][1]?.headers).not.toHaveProperty("X-Subject-Id");
+    expect(fetchMock.mock.calls[1][1]?.headers).not.toHaveProperty("X-Subject-Type");
+    expect(response.status).toBe("indexed");
+    expect(response.upsertedCount).toBe(3);
   });
 });

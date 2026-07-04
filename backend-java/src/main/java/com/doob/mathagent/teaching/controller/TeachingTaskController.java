@@ -6,7 +6,6 @@ import com.doob.mathagent.teaching.TeachingRequestContext;
 import com.doob.mathagent.teaching.dto.TeachingHandoutBatchExportRequest;
 import com.doob.mathagent.teaching.dto.TeachingHumanFeedbackRequest;
 import com.doob.mathagent.teaching.dto.TeachingTaskRequest;
-import com.doob.mathagent.teaching.service.InMemoryTeachingHumanFeedbackStore;
 import com.doob.mathagent.teaching.service.TeachingHandoutBatchExportRecord;
 import com.doob.mathagent.teaching.service.TeachingHandoutBatchExportService;
 import com.doob.mathagent.teaching.service.TeachingCapabilityVerifier;
@@ -73,24 +72,6 @@ public class TeachingTaskController {
         this.pdfExportService = pdfExportService;
         this.batchExportService = batchExportService;
         this.feedbackService = feedbackService;
-    }
-
-    /**
-     * Backward-compatible constructor for focused controller tests that do not inject feedback infrastructure.
-     */
-    public TeachingTaskController(
-            TeachingWorkflowService workflowService,
-            RequestSubjectResolver subjectResolver,
-            TeachingCapabilityVerifier capabilityVerifier,
-            TeachingHandoutPdfExportService pdfExportService,
-            TeachingHandoutBatchExportService batchExportService) {
-        this(
-                workflowService,
-                subjectResolver,
-                capabilityVerifier,
-                pdfExportService,
-                batchExportService,
-                new TeachingHumanFeedbackService(new InMemoryTeachingHumanFeedbackStore()));
     }
 
     /**

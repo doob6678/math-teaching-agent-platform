@@ -18,6 +18,7 @@ import com.doob.mathagent.teacher.vo.TeacherSourceSyncCheckpointResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncJobResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
@@ -68,83 +69,14 @@ public class TeacherResourceController {
             TeacherSourceSyncCheckpointQueryService checkpointQueryService,
             RequestSubjectResolver subjectResolver,
             TeacherResourceCapabilityVerifier capabilityVerifier) {
-        this.teacherResourceService = teacherResourceService;
-        this.syncJobService = syncJobService;
-        this.syncExecutionService = syncExecutionService;
-        this.blockSearchService = blockSearchService;
-        this.blockSearchAuditLookup = blockSearchAuditLookup;
-        this.checkpointQueryService = checkpointQueryService;
-        this.subjectResolver = subjectResolver;
-        this.capabilityVerifier = capabilityVerifier;
-    }
-
-    /**
-     * Creates a controller without block search for older direct unit tests.
-     *
-     * @param teacherResourceService teacher resource service
-     * @param syncJobService sync job service
-     * @param syncExecutionService sync execution service
-     * @param subjectResolver backend subject resolver
-     * @param capabilityVerifier capability verifier
-     */
-    public TeacherResourceController(
-            TeacherResourceService teacherResourceService,
-            TeacherSourceSyncJobService syncJobService,
-            TeacherSourceSyncExecutionService syncExecutionService,
-            RequestSubjectResolver subjectResolver,
-            TeacherResourceCapabilityVerifier capabilityVerifier) {
-        this(
-                teacherResourceService,
-                syncJobService,
-                syncExecutionService,
-                null,
-                null,
-                null,
-                subjectResolver,
-                capabilityVerifier);
-    }
-
-    /**
-     * Creates a controller with block search but without checkpoint query for focused tests.
-     */
-    public TeacherResourceController(
-            TeacherResourceService teacherResourceService,
-            TeacherSourceSyncJobService syncJobService,
-            TeacherSourceSyncExecutionService syncExecutionService,
-            TeacherResourceBlockSearchService blockSearchService,
-            TeacherSourceSyncCheckpointQueryService checkpointQueryService,
-            RequestSubjectResolver subjectResolver,
-            TeacherResourceCapabilityVerifier capabilityVerifier) {
-        this(
-                teacherResourceService,
-                syncJobService,
-                syncExecutionService,
-                blockSearchService,
-                null,
-                checkpointQueryService,
-                subjectResolver,
-                capabilityVerifier);
-    }
-
-    /**
-     * Creates a controller with block search but without checkpoint query for focused tests.
-     */
-    public TeacherResourceController(
-            TeacherResourceService teacherResourceService,
-            TeacherSourceSyncJobService syncJobService,
-            TeacherSourceSyncExecutionService syncExecutionService,
-            TeacherResourceBlockSearchService blockSearchService,
-            RequestSubjectResolver subjectResolver,
-            TeacherResourceCapabilityVerifier capabilityVerifier) {
-        this(
-                teacherResourceService,
-                syncJobService,
-                syncExecutionService,
-                blockSearchService,
-                null,
-                null,
-                subjectResolver,
-                capabilityVerifier);
+        this.teacherResourceService = Objects.requireNonNull(teacherResourceService, "teacherResourceService");
+        this.syncJobService = Objects.requireNonNull(syncJobService, "syncJobService");
+        this.syncExecutionService = Objects.requireNonNull(syncExecutionService, "syncExecutionService");
+        this.blockSearchService = Objects.requireNonNull(blockSearchService, "blockSearchService");
+        this.blockSearchAuditLookup = Objects.requireNonNull(blockSearchAuditLookup, "blockSearchAuditLookup");
+        this.checkpointQueryService = Objects.requireNonNull(checkpointQueryService, "checkpointQueryService");
+        this.subjectResolver = Objects.requireNonNull(subjectResolver, "subjectResolver");
+        this.capabilityVerifier = Objects.requireNonNull(capabilityVerifier, "capabilityVerifier");
     }
 
     /**
@@ -167,7 +99,11 @@ public class TeacherResourceController {
                 subject)) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for teacher resource register");
         }
-        return teacherResourceService.register(enrich(request, subject));
+        try {
+            return teacherResourceService.register(enrich(request, subject));
+        } catch (IllegalArgumentException exception) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, exception.getMessage(), exception);
+        }
     }
 
     /**
@@ -195,9 +131,6 @@ public class TeacherResourceController {
             @RequestParam String query,
             @RequestParam(defaultValue = "10") int limit,
             HttpServletRequest httpRequest) {
-        if (blockSearchService == null) {
-            throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED, "Teacher resource block search is not configured");
-        }
         RequestSubject subject = subjectResolver.resolve(httpRequest).normalize();
         try {
             return blockSearchService.search(
@@ -222,9 +155,6 @@ public class TeacherResourceController {
     public TeacherResourceBlockSearchAuditEvent searchAudit(
             @PathVariable String queryId,
             HttpServletRequest httpRequest) {
-        if (blockSearchAuditLookup == null) {
-            throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED, "Teacher resource search audit is not configured");
-        }
         RequestSubject subject = subjectResolver.resolve(httpRequest).normalize();
         requireTeacherOrAdmin(subject);
         TeacherResourceBlockSearchAuditEvent event = blockSearchAuditLookup.findByQueryId(queryId)
@@ -388,9 +318,6 @@ public class TeacherResourceController {
             @PathVariable String documentId,
             @PathVariable String jobId,
             HttpServletRequest httpRequest) {
-        if (checkpointQueryService == null) {
-            throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED, "Teacher source sync checkpoint query is not configured");
-        }
         RequestSubject subject = subjectResolver.resolve(httpRequest).normalize();
         try {
             return checkpointQueryService.findCheckpoint(

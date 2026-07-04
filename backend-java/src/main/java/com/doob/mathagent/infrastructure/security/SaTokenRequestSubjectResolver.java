@@ -46,7 +46,7 @@ public class SaTokenRequestSubjectResolver implements RequestSubjectResolver {
     @Override
     public RequestSubject resolve(HttpServletRequest request) {
         if (request == null) {
-            return RequestSubject.localStudent();
+            return RequestSubject.anonymous("default", "unknown-device");
         }
         RequestSubject mcpSubject = resolveMcpBearerSubject(request);
         if (mcpSubject != null) {

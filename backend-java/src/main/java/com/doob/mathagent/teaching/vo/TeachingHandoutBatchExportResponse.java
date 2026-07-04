@@ -7,7 +7,7 @@ import java.util.List;
  * Response returned after creating a temporary teaching handout ZIP package.
  *
  * @param batchId temporary package id used by the protected download endpoint
- * @param status export status; the current baseline completes synchronously
+ * @param status export status; the current in-memory temporary ZIP completes synchronously
  * @param subjectType backend-resolved requester role that controls teacher/student package content
  * @param requestedCount number of task ids requested by the caller
  * @param exportedCount number of owned task handouts written into the ZIP

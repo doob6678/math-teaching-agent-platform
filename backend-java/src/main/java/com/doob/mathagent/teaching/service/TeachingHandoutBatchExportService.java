@@ -48,15 +48,6 @@ public class TeachingHandoutBatchExportService {
     }
 
     /**
-     * Creates a service with the default TTL for focused tests and local utility usage.
-     *
-     * @param pdfExportService PDF renderer reused for each task in the package
-     */
-    public TeachingHandoutBatchExportService(TeachingHandoutPdfExportService pdfExportService) {
-        this(pdfExportService, Clock.systemUTC(), DEFAULT_TTL);
-    }
-
-    /**
      * Creates a testable batch export service with explicit clock and TTL.
      *
      * @param pdfExportService PDF renderer reused for each task in the package
@@ -140,7 +131,7 @@ public class TeachingHandoutBatchExportService {
     }
 
     /**
-     * Builds a ZIP containing LaTeX, baseline PDF, and manifest entries.
+     * Builds a ZIP containing LaTeX, lightweight PDF previews, and manifest entries.
      */
     private byte[] zipBytes(TeachingHandoutBatchExportResponse response, List<TeachingTaskResponse> tasks) {
         try {

@@ -9,7 +9,7 @@ import java.util.List;
  * @param plan frontend-returned plan snapshot; the backend still rechecks owner and high-value policy
  * @param userInputSummary short task summary for trace audit, never treated as user identity
  * @param evidenceRefs evidence ids or resource anchors selected for this run
- * @param dryRun true when the executor should only record a baseline trace without calling external models
+ * @param dryRun must be false; production entrypoints reject trace-only execution
  */
 public record AgentRunExecuteRequest(
         AgentRunPlanResponse plan,

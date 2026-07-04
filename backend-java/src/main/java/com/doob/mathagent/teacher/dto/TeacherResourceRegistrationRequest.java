@@ -19,18 +19,6 @@ public record TeacherResourceRegistrationRequest(
         String feishuExportFormat) {
 
     /**
-     * Backward-compatible constructor for callers that do not select a Feishu export format.
-     */
-    public TeacherResourceRegistrationRequest(
-            String sourceType,
-            String title,
-            String originalUrl,
-            String localPath,
-            String permissionScope) {
-        this(sourceType, title, originalUrl, localPath, permissionScope, null);
-    }
-
-    /**
      * Returns a normalized request body without adding identity defaults.
      *
      * @return normalized request body

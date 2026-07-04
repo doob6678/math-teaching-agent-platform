@@ -124,6 +124,8 @@ class MyBatisKnowledgeQuestionBankStoreTest {
                             inserted.add((KnowledgePointEntity) args[0]);
                             yield 1;
                         }
+                        case "selectById" -> null;
+                        case "updateById" -> 1;
                         case "selectList" -> List.of();
                         default -> throw new UnsupportedOperationException(method.getName());
                     });

@@ -17,7 +17,7 @@ class TeacherSourceSyncJobServiceTest {
     @Test
     void teacherCreatesQueuedFeishuSyncJobForOwnResource() {
         InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
-        TeacherResourceService resourceService = new TeacherResourceService(resourceStore);
+        TeacherResourceService resourceService = TeacherResourceServiceFixture.service(resourceStore);
         TeacherResourceDocumentResponse resource = resourceService.register(new TeacherResourceRegistrationCommand(
                 "school-a",
                 "teacher",
@@ -26,7 +26,8 @@ class TeacherSourceSyncJobServiceTest {
                 "Feishu question bank",
                 "https://example.feishu.cn/docx/doc-token",
                 null,
-                "TEACHER_PRIVATE"));
+                "TEACHER_PRIVATE",
+                "md"));
         TeacherSourceSyncJobService syncJobService =
                 new TeacherSourceSyncJobService(resourceStore, new InMemoryTeacherSourceSyncJobStore());
 
@@ -48,7 +49,7 @@ class TeacherSourceSyncJobServiceTest {
     @Test
     void teacherCannotCreateSyncJobForAnotherTeacherResource() {
         InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
-        TeacherResourceService resourceService = new TeacherResourceService(resourceStore);
+        TeacherResourceService resourceService = TeacherResourceServiceFixture.service(resourceStore);
         TeacherResourceDocumentResponse resource = resourceService.register(new TeacherResourceRegistrationCommand(
                 "school-a",
                 "teacher",
@@ -57,7 +58,8 @@ class TeacherSourceSyncJobServiceTest {
                 "Local question bank",
                 null,
                 "C:/math/question-bank",
-                "TEACHER_PRIVATE"));
+                "TEACHER_PRIVATE",
+                null));
         TeacherSourceSyncJobService syncJobService =
                 new TeacherSourceSyncJobService(resourceStore, new InMemoryTeacherSourceSyncJobStore());
 

@@ -46,7 +46,7 @@ public interface TeacherFeishuDownloadClient {
             Path stagingRoot,
             int maxFiles,
             FeishuDownloadCheckpoint checkpoint) {
-        return download(url, stagingRoot, maxFiles);
+        return download(url, stagingRoot, maxFiles, "md", checkpoint);
     }
 
     /**
@@ -59,18 +59,12 @@ public interface TeacherFeishuDownloadClient {
      * @param checkpoint durable traversal checkpoint, or empty for a fresh traversal
      * @return download result with a local path and statistics
      */
-    default FeishuDownloadResult download(
+    FeishuDownloadResult download(
             String url,
             Path stagingRoot,
             int maxFiles,
             String fileExtension,
-            FeishuDownloadCheckpoint checkpoint) {
-        String normalized = fileExtension == null || fileExtension.isBlank() ? "md" : fileExtension.strip().toLowerCase();
-        if (!"md".equals(normalized)) {
-            throw new IllegalStateException("Feishu downloader does not support export format: " + normalized);
-        }
-        return download(url, stagingRoot, maxFiles, checkpoint);
-    }
+            FeishuDownloadCheckpoint checkpoint);
 
     /**
      * Durable Feishu traversal cursor passed to process-backed downloaders.
@@ -115,7 +109,38 @@ public interface TeacherFeishuDownloadClient {
      * @param skipped skipped resource count
      * @param failed failed resource count
      * @param message concise downloader message
+     * @param checkpoint latest traversal checkpoint returned by the downloader
+     * @param downloadedItemsJson JSON array of successfully downloaded Feishu items
+     * @param failedItemsJson JSON array of failed Feishu items, when the worker reports item-level failures
      */
-    record FeishuDownloadResult(Path savedPath, int files, int skipped, int failed, String message) {
+    record FeishuDownloadResult(
+            Path savedPath,
+            int files,
+            int skipped,
+            int failed,
+            String message,
+            FeishuDownloadCheckpoint checkpoint,
+            String downloadedItemsJson,
+            String failedItemsJson) {
+
+        /**
+         * Normalizes optional JSON and checkpoint fields.
+         */
+        public FeishuDownloadResult {
+            checkpoint = checkpoint == null ? FeishuDownloadCheckpoint.empty() : checkpoint;
+            downloadedItemsJson = jsonArrayOrEmpty(downloadedItemsJson);
+            failedItemsJson = jsonArrayOrEmpty(failedItemsJson);
+        }
+
+        /**
+         * Keeps persisted JSON arrays valid.
+         */
+        private static String jsonArrayOrEmpty(String value) {
+            if (value == null || value.isBlank()) {
+                return "[]";
+            }
+            String normalized = value.strip();
+            return normalized.startsWith("[") && normalized.endsWith("]") ? normalized : "[]";
+        }
     }
 }

@@ -2,84 +2,66 @@ package com.doob.mathagent.student;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.doob.mathagent.student.service.StudentLearningSnapshotStore;
-import com.doob.mathagent.student.service.StudentLearningSnapshotRecord;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.doob.mathagent.memory.service.StudentMemoryEntry;
+import com.doob.mathagent.memory.service.StudentMemoryStore;
 import com.doob.mathagent.student.dto.StudentDashboardQuery;
 import com.doob.mathagent.student.service.StudentDashboardService;
+import com.doob.mathagent.student.service.StudentLearningSnapshotRecord;
+import com.doob.mathagent.student.service.StudentLearningSnapshotRefreshService;
+import com.doob.mathagent.student.service.StudentLearningSnapshotStore;
 import com.doob.mathagent.student.vo.StudentDashboardResponse;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
 class StudentDashboardServiceTest {
 
     @Test
-    void studentSeesOwnProgressWeaknessesHistoryScoresAndResourceScopes() {
-        StudentDashboardService service = new StudentDashboardService();
-        StudentDashboardQuery query = new StudentDashboardQuery(
-                "tenant-a",
-                "student",
-                "student-001",
-                null);
+    void dashboardWithoutSnapshotDoesNotInventDemoData() {
+        StudentDashboardService service = dashboardService(emptyMemoryStore());
+        StudentDashboardQuery query = new StudentDashboardQuery("tenant-a", "student", "student-001", null);
 
         StudentDashboardResponse response = service.dashboard(query);
 
         assertThat(response.tenantId()).isEqualTo("tenant-a");
         assertThat(response.studentId()).isEqualTo("student-001");
         assertThat(response.viewerRole()).isEqualTo("student");
-        assertThat(response.knowledgeProgress()).isNotEmpty();
-        assertThat(response.knowledgeProgress().getFirst().progressPercent()).isBetween(0, 100);
-        assertThat(response.weakPoints()).extracting(StudentDashboardResponse.WeakPoint::knowledgePointName)
-                .contains("空间向量数量积");
-        assertThat(response.recentQuestions()).extracting(StudentDashboardResponse.RecentQuestion::sourceType)
-                .contains("teaching_task");
-        assertThat(response.scoreTrend()).extracting(StudentDashboardResponse.ScorePoint::examName)
-                .contains("最近一次周测");
-        assertThat(response.resourceScopes()).extracting(StudentDashboardResponse.ResourceScope::scopeCode)
-                .contains("PUBLIC_TEXTBOOK", "MATH_VIP");
+        assertThat(response.knowledgeProgress()).isEmpty();
+        assertThat(response.weakPoints()).isEmpty();
+        assertThat(response.recentQuestions()).isEmpty();
+        assertThat(response.scoreTrend()).isEmpty();
+        assertThat(response.resourceScopes()).isEmpty();
+        assertThat(response.knowledgeGraph().nodes()).isEmpty();
+        assertThat(response.knowledgeGraph().generatedFrom())
+                .isEqualTo("student_memory_entry:total=0,private=0,public=0,knowledgePoints=0");
     }
 
     @Test
-    void dashboardContainsKnowledgeGraphNodesEdgesEvidenceAndMastery() {
-        StudentDashboardService service = new StudentDashboardService();
-        StudentDashboardQuery query = new StudentDashboardQuery(
-                "tenant-a",
-                "student",
-                "student-001",
-                null);
+    void dashboardRefreshesFromRealMemoryEntriesWhenSnapshotMissing() {
+        StudentDashboardService service = dashboardService(memoryStore(List.of(
+                memory("memory-1", "tenant-a", "student-001", "private", "函数零点", "零点个数题", "answer"),
+                memory("memory-2", "tenant-a", "student-001", "private", "函数零点", "参数分类讨论", "answer"))));
+        StudentDashboardQuery query = new StudentDashboardQuery("tenant-a", "student", "student-001", null);
 
         StudentDashboardResponse response = service.dashboard(query);
 
-        assertThat(response.knowledgeGraph()).isNotNull();
-        assertThat(response.knowledgeGraph().nodes())
-                .extracting(StudentDashboardResponse.KnowledgeGraphNode::knowledgePointId)
-                .contains("math-vector-dot-product", "math-solid-geometry");
-        assertThat(response.knowledgeGraph().edges())
-                .anySatisfy(edge -> {
-                    assertThat(edge.sourceKnowledgePointId()).isEqualTo("math-vector-dot-product");
-                    assertThat(edge.targetKnowledgePointId()).isEqualTo("math-solid-geometry");
-                    assertThat(edge.relationType()).isEqualTo("PREREQUISITE_FOR");
-                });
-        assertThat(response.knowledgeGraph().nodes())
-                .anySatisfy(node -> {
-                    assertThat(node.knowledgePointId()).isEqualTo("math-vector-dot-product");
-                    assertThat(node.masteryPercent()).isEqualTo(68);
-                    assertThat(node.evidenceLinks())
-                            .extracting(StudentDashboardResponse.KnowledgeEvidenceLink::sourceType)
-                            .contains("textbook", "feishu");
-        });
+        assertThat(response.knowledgeProgress())
+                .extracting(StudentDashboardResponse.KnowledgeProgress::knowledgePointName)
+                .containsExactly("函数零点");
+        assertThat(response.knowledgeProgress().getFirst().progressPercent()).isEqualTo(70);
+        assertThat(response.recentQuestions())
+                .extracting(StudentDashboardResponse.RecentQuestion::sourceType)
+                .containsOnly("student_memory");
+        assertThat(response.knowledgeGraph().generatedFrom())
+                .isEqualTo("student_memory_entry:total=2,private=2,public=0,knowledgePoints=1");
     }
 
     @Test
     void dashboardUsesPersistedLearningSnapshotWhenAvailable() {
-        StudentDashboardService service = new StudentDashboardService(
-                persistedSnapshotStore(),
-                new ObjectMapper());
-        StudentDashboardQuery query = new StudentDashboardQuery(
-                "tenant-a",
-                "student",
-                "student-001",
-                null);
+        StudentDashboardService service = dashboardService(persistedSnapshotStore(), emptyMemoryStore());
+        StudentDashboardQuery query = new StudentDashboardQuery("tenant-a", "student", "student-001", null);
 
         StudentDashboardResponse response = service.dashboard(query);
 
@@ -93,13 +75,9 @@ class StudentDashboardServiceTest {
     }
 
     @Test
-    void adminCanInspectSpecifiedStudentWithoutChangingStudentOwnership() {
-        StudentDashboardService service = new StudentDashboardService();
-        StudentDashboardQuery query = new StudentDashboardQuery(
-                "tenant-a",
-                "admin",
-                "admin-001",
-                "student-009");
+    void adminCanInspectSpecifiedStudentWithoutChangingViewerIdentity() {
+        StudentDashboardService service = dashboardService(emptyMemoryStore());
+        StudentDashboardQuery query = new StudentDashboardQuery("tenant-a", "admin", "admin-001", "student-009");
 
         StudentDashboardResponse response = service.dashboard(query);
 
@@ -109,9 +87,19 @@ class StudentDashboardServiceTest {
         assertThat(response.isAdminView()).isTrue();
     }
 
-    /**
-     * Returns a store with one persisted dashboard snapshot for read-path tests.
-     */
+    private static StudentDashboardService dashboardService(StudentMemoryStore memoryStore) {
+        return dashboardService(emptySnapshotStore(), memoryStore);
+    }
+
+    private static StudentDashboardService dashboardService(
+            StudentLearningSnapshotStore snapshotStore,
+            StudentMemoryStore memoryStore) {
+        ObjectMapper objectMapper = new ObjectMapper();
+        StudentLearningSnapshotRefreshService refreshService =
+                new StudentLearningSnapshotRefreshService(memoryStore, snapshotStore, objectMapper);
+        return new StudentDashboardService(snapshotStore, refreshService, objectMapper);
+    }
+
     private static StudentLearningSnapshotStore persistedSnapshotStore() {
         return new StudentLearningSnapshotStore() {
             @Override
@@ -147,5 +135,60 @@ class StudentDashboardServiceTest {
                 return record;
             }
         };
+    }
+
+    private static StudentLearningSnapshotStore emptySnapshotStore() {
+        return new StudentLearningSnapshotStore() {
+            @Override
+            public Optional<StudentLearningSnapshotRecord> findLatest(String tenantId, String studentId) {
+                return Optional.empty();
+            }
+
+            @Override
+            public StudentLearningSnapshotRecord save(StudentLearningSnapshotRecord record) {
+                return record;
+            }
+        };
+    }
+
+    private static StudentMemoryStore emptyMemoryStore() {
+        return memoryStore(List.of());
+    }
+
+    private static StudentMemoryStore memoryStore(List<StudentMemoryEntry> entries) {
+        return new StudentMemoryStore() {
+            @Override
+            public StudentMemoryEntry save(StudentMemoryEntry entry) {
+                return entry;
+            }
+
+            @Override
+            public List<StudentMemoryEntry> candidates(String tenantId, String studentId) {
+                return entries.stream()
+                        .filter(entry -> tenantId.equals(entry.tenantId()))
+                        .filter(entry -> "public".equals(entry.memoryScope()) || studentId.equals(entry.studentId()))
+                        .toList();
+            }
+        };
+    }
+
+    private static StudentMemoryEntry memory(
+            String memoryId,
+            String tenantId,
+            String studentId,
+            String scope,
+            String knowledgePoint,
+            String question,
+            String answer) {
+        return new StudentMemoryEntry(
+                memoryId,
+                tenantId,
+                studentId,
+                scope,
+                knowledgePoint,
+                question,
+                answer,
+                "active",
+                Instant.parse("2026-01-01T00:00:00Z"));
     }
 }

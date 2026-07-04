@@ -10,7 +10,7 @@ public record DatabaseMigrationProperties(
 
     public static DatabaseMigrationProperties from(Environment environment) {
         return new DatabaseMigrationProperties(
-                environment.getProperty("math-agent.database.enabled", Boolean.class, false),
+                environment.getProperty("math-agent.database.enabled", Boolean.class, true),
                 environment.getProperty("math-agent.database.url", ""),
                 environment.getProperty("math-agent.database.username", ""),
                 environment.getProperty("math-agent.database.password", ""));
@@ -18,7 +18,7 @@ public record DatabaseMigrationProperties(
 
     public void validate() {
         if (!enabled) {
-            return;
+            throw new IllegalStateException("MATH_AGENT_DB_ENABLED=false is not supported; configure a real MySQL database");
         }
         if (url == null || url.isBlank()) {
             throw new IllegalStateException("MATH_AGENT_DB_URL must be set when MATH_AGENT_DB_ENABLED=true");

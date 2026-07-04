@@ -3,7 +3,7 @@ package com.doob.mathagent.agent.vo;
 import java.util.List;
 
 /**
- * Baseline agent execution trace response.
+ * Agent execution trace response.
  *
  * @param traceId trace id used for later execution detail lookup
  * @param planId plan id linked to the execution
@@ -13,7 +13,7 @@ import java.util.List;
  * @param agentCode executed agent code
  * @param providerName selected provider name copied from the validated plan
  * @param modelCode selected model code copied from the validated plan
- * @param status baseline execution status
+ * @param status execution status
  * @param estimatedCost estimated local cost copied from the plan for monitoring
  * @param allowedToolScopes tool scopes allowed by the plan and recorded for audit
  * @param allowedDataScopes data scopes allowed by the plan and recorded for audit
@@ -21,6 +21,7 @@ import java.util.List;
  * @param stageTimings execution stage timing rows
  * @param actualUsage provider-reported token usage; zero values mean no live call was made or provider omitted usage
  * @param message safe status message; raw prompt and raw model output are intentionally omitted
+ * @param generatedContent model-generated content returned only to the immediate owner-facing caller
  */
 public record AgentRunExecuteResponse(
         String traceId,
@@ -38,7 +39,8 @@ public record AgentRunExecuteResponse(
         List<String> concurrencyKeys,
         List<StageTiming> stageTimings,
         TokenUsage actualUsage,
-        String message) {
+        String message,
+        String generatedContent) {
 
     /**
      * Execution stage timing for monitoring dashboards.

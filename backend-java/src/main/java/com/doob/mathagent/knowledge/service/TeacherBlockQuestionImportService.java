@@ -54,9 +54,9 @@ public class TeacherBlockQuestionImportService {
             String viewerRole,
             String viewerSubjectId,
             String documentId) {
-        String normalizedTenantId = textOrDefault(tenantId, "default");
-        String normalizedRole = textOrDefault(viewerRole, "anonymous").toLowerCase(Locale.ROOT);
-        String normalizedSubjectId = textOrDefault(viewerSubjectId, "");
+        String normalizedTenantId = requireText(tenantId, "tenantId");
+        String normalizedRole = requireText(viewerRole, "viewerRole").toLowerCase(Locale.ROOT);
+        String normalizedSubjectId = requireText(viewerSubjectId, "viewerSubjectId");
         String normalizedDocumentId = requireText(documentId, "documentId");
         requireTeacherOrAdmin(normalizedRole);
         TeacherResourceDocumentResponse document = resourceStore.find(normalizedTenantId, normalizedDocumentId);

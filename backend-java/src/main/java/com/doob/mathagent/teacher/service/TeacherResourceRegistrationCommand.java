@@ -27,21 +27,6 @@ public record TeacherResourceRegistrationCommand(
         String feishuExportFormat) {
 
     /**
-     * Backward-compatible constructor for callers that do not select a Feishu export format.
-     */
-    public TeacherResourceRegistrationCommand(
-            String tenantId,
-            String viewerRole,
-            String viewerSubjectId,
-            String sourceType,
-            String title,
-            String originalUrl,
-            String localPath,
-            String permissionScope) {
-        this(tenantId, viewerRole, viewerSubjectId, sourceType, title, originalUrl, localPath, permissionScope, null);
-    }
-
-    /**
      * Builds a command from backend identity and request body fields.
      *
      * @param tenantId backend resolved tenant id
@@ -69,16 +54,16 @@ public record TeacherResourceRegistrationCommand(
     }
 
     /**
-     * Returns a normalized command with local development defaults for non-web tests.
+     * Returns a normalized command after requiring backend-resolved identity fields.
      *
      * @return normalized command
      */
     public TeacherResourceRegistrationCommand normalize() {
         String normalizedSourceType = textOrDefault(sourceType, "local_path").toLowerCase();
         return new TeacherResourceRegistrationCommand(
-                textOrDefault(tenantId, "default"),
-                textOrDefault(viewerRole, "teacher").toLowerCase(),
-                textOrDefault(viewerSubjectId, "local-teacher-console"),
+                requireText(tenantId, "tenantId is required"),
+                requireText(viewerRole, "viewerRole is required").toLowerCase(),
+                requireText(viewerSubjectId, "viewerSubjectId is required"),
                 normalizedSourceType,
                 textOrDefault(title, "untitled-teacher-resource"),
                 blankToNull(originalUrl),
@@ -114,6 +99,20 @@ public record TeacherResourceRegistrationCommand(
      */
     private static String textOrDefault(String value, String defaultValue) {
         return value == null || value.isBlank() ? defaultValue : value.strip();
+    }
+
+    /**
+     * Returns stripped text or fails when a backend-owned identity field is missing.
+     *
+     * @param value input value
+     * @param message exception message
+     * @return stripped text
+     */
+    private static String requireText(String value, String message) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException(message);
+        }
+        return value.strip();
     }
 
     /**

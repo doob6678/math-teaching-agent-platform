@@ -1,17 +1,28 @@
 package com.doob.mathagent.infrastructure.database;
 
-import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.mock.env.MockEnvironment;
 
 class DatabaseMigrationPropertiesTest {
 
     @Test
-    void allowsBlankConnectionSettingsWhenDatabaseMigrationIsDisabled() {
+    void rejectsDisabledDatabaseBecauseRuntimeMustBePersistent() {
         DatabaseMigrationProperties properties = new DatabaseMigrationProperties(false, "", "", "");
 
-        assertThatCode(properties::validate).doesNotThrowAnyException();
+        assertThatThrownBy(properties::validate)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("MATH_AGENT_DB_ENABLED=false is not supported");
+    }
+
+    @Test
+    void enablesDatabaseByDefaultForDeployableRuntime() {
+        DatabaseMigrationProperties properties = DatabaseMigrationProperties.from(new MockEnvironment());
+
+        assertThatThrownBy(properties::validate)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("MATH_AGENT_DB_URL");
     }
 
     @Test

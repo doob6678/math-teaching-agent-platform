@@ -19,6 +19,15 @@ describe("mcpExposureSelection", () => {
       "search_teacher_resource_evidence",
       "get_teaching_ai_trace",
       "get_ai_diagnostic_summary",
+      "get_multi_agent_writing_trace",
+      "plan_agent_run",
+      "start_multi_agent_writing",
+      "get_multi_agent_writing_status",
+      "get_multi_agent_writing_artifact",
+      "export_multi_agent_writing_artifact",
+      "resume_multi_agent_writing",
+      "discover_feishu_resources",
+      "download_feishu_resource",
     ]);
     expect(selection.tools).not.toContain("create_teaching_task");
     expect(selection.tools).not.toContain("export_handout_pdf");
@@ -37,20 +46,27 @@ describe("mcpExposureSelection", () => {
       "search_teacher_resource_evidence",
       "get_teaching_ai_trace",
       "get_ai_diagnostic_summary",
+      "get_multi_agent_writing_trace",
+      "plan_agent_run",
+      "start_multi_agent_writing",
+      "get_multi_agent_writing_status",
+      "get_multi_agent_writing_artifact",
+      "export_multi_agent_writing_artifact",
+      "resume_multi_agent_writing",
+      "discover_feishu_resources",
+      "download_feishu_resource",
     ]);
     expect(enabledAgain).toEqual([...MCP_TOOL_OPTIONS]);
   });
 
-  it("keeps protected tools visible as locked metadata but not selectable by default", () => {
-    expect([...MCP_PROTECTED_TOOL_OPTIONS]).toEqual([
-      "plan_agent_run",
-      "create_teaching_task",
-      "export_handout_pdf",
-      "list_teacher_resources",
-    ]);
+  it("does not advertise future MCP tools without backend execution endpoints", () => {
+    expect([...MCP_PROTECTED_TOOL_OPTIONS]).toEqual([]);
     expect(MCP_TOOL_OPTION_META.search_teacher_resource_evidence.badge).toBe("read-only");
     expect(MCP_TOOL_OPTION_META.get_teaching_ai_trace.note).toBe("Owned task diagnostics.");
     expect(MCP_TOOL_OPTION_META.get_ai_diagnostic_summary.note).toBe("Retry and fallback summary.");
-    expect(MCP_TOOL_OPTION_META.export_handout_pdf.badge).toBe("protected");
+    expect(MCP_TOOL_OPTION_META.download_feishu_resource.badge).toBe("protected");
+    expect(MCP_TOOL_OPTIONS).not.toContain("create_teaching_task");
+    expect(MCP_TOOL_OPTIONS).not.toContain("export_handout_pdf");
+    expect(MCP_TOOL_OPTIONS).not.toContain("list_teacher_resources");
   });
 });

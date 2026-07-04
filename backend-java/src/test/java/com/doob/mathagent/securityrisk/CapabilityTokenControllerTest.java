@@ -6,8 +6,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.securityrisk.controller.CapabilityTokenController;
 import com.doob.mathagent.securityrisk.dto.CapabilityTokenApplyRequest;
-import com.doob.mathagent.securityrisk.service.CapabilityTokenService;
-import com.doob.mathagent.securityrisk.service.InMemoryCapabilityTokenStore;
 import com.doob.mathagent.securityrisk.vo.CapabilityTokenResponse;
 import java.time.Clock;
 import java.time.Instant;
@@ -22,8 +20,7 @@ class CapabilityTokenControllerTest {
     @Test
     void appliesCapabilityTokenForBackendResolvedSubject() {
         CapabilityTokenController controller = new CapabilityTokenController(
-                new CapabilityTokenService(
-                        new InMemoryCapabilityTokenStore(),
+                CapabilityTokenServiceFixture.service(
                         Clock.fixed(Instant.parse("2026-06-28T08:00:00Z"), ZoneOffset.UTC)),
                 request -> new RequestSubject("school-a", "student", "student-001", "device-1"));
         MockHttpServletRequest httpRequest = new MockHttpServletRequest();
@@ -43,8 +40,7 @@ class CapabilityTokenControllerTest {
     @Test
     void unsupportedCapabilityActionReturnsBadRequest() {
         CapabilityTokenController controller = new CapabilityTokenController(
-                new CapabilityTokenService(
-                        new InMemoryCapabilityTokenStore(),
+                CapabilityTokenServiceFixture.service(
                         Clock.fixed(Instant.parse("2026-06-28T08:00:00Z"), ZoneOffset.UTC)),
                 request -> new RequestSubject("school-a", "student", "student-001", "device-1"));
 
@@ -61,8 +57,7 @@ class CapabilityTokenControllerTest {
     @Test
     void anonymousCapabilityApplicationReturnsForbidden() {
         CapabilityTokenController controller = new CapabilityTokenController(
-                new CapabilityTokenService(
-                        new InMemoryCapabilityTokenStore(),
+                CapabilityTokenServiceFixture.service(
                         Clock.fixed(Instant.parse("2026-06-28T08:00:00Z"), ZoneOffset.UTC)),
                 request -> RequestSubject.anonymous("school-a", "device-1"));
 

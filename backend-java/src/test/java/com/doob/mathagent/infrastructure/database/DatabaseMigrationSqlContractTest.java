@@ -2,6 +2,7 @@ package com.doob.mathagent.infrastructure.database;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
@@ -163,28 +164,24 @@ class DatabaseMigrationSqlContractTest {
     @Test
     void knowledgeGraphDisplaySpineSeedsReviewedMainGraphWithoutOcrFragments() throws Exception {
         String migration = Files.readString(Path.of("src/main/resources/db/migration/V8__knowledge_graph_display_spine_v01.sql"));
-        String source = Files.readString(Path.of("../文档/知识图谱主干/v0.1/高中数学知识图谱主干-v0.1-源数据.md"));
+        String source = Files.readString(
+                Path.of("src/main/resources/knowledge/graph-spine-v0.1.md"),
+                StandardCharsets.UTF_8);
 
         assertThat(source)
-                .contains("高中数学知识图谱主干 v0.1")
-                .contains("函数基础 -> 导数研究函数")
-                .contains("第一版规模控制")
-                .contains("OCR 自动图谱中的 page/formula/topic 碎片不得直接进入默认展示图谱");
+                .contains("\u9ad8\u4e2d\u6570\u5b66\u77e5\u8bc6\u56fe\u8c31\u4e3b\u5e72 v0.1")
+                .contains("\u51fd\u6570\u57fa\u7840 -> \u5bfc\u6570\u7814\u7a76\u51fd\u6570")
+                .contains("\u7b2c\u4e00\u7248\u89c4\u6a21\u63a7\u5236")
+                .contains("page\u3001formula\u3001topic");
         assertThat(migration)
-                .contains("函数概念与表示")
-                .contains("导数研究函数")
-                .contains("隐零点")
-                .contains("立体几何角度距离")
-                .contains("PREREQUISITE_FOR")
-                .contains("METHOD_FOR")
-                .contains("ON DUPLICATE KEY UPDATE")
+                .contains("KnowledgeGraphSpineSeedService")
+                .contains("knowledge/graph-spine-v0.1.md")
+                .contains("deterministic IDs")
+                .doesNotContain("INSERT INTO knowledge_point")
+                .doesNotContain("INSERT INTO knowledge_relation")
                 .doesNotContain("page_")
                 .doesNotContain("formula")
                 .doesNotContain("OCR topic");
-        assertThat(countOccurrences(migration, "人工主干v0.1; 一级模块")).isEqualTo(10);
-        assertThat(countOccurrences(migration, "知识点:")).isEqualTo(23);
-        assertThat(countOccurrences(migration, "高频题型方法")).isEqualTo(50);
-        assertThat(countOccurrences(migration, "00000000-0000-4000-9000-")).isBetween(20, 40);
     }
 
     @Test
@@ -204,6 +201,45 @@ class DatabaseMigrationSqlContractTest {
                 .doesNotContain("token")
                 .doesNotContain("secret")
                 .doesNotContain("raw_text");
+    }
+
+    @Test
+    void authAccountMigrationStoresDeployableLoginAccountsWithoutPlaintextPasswords() throws Exception {
+        String migration = Files.readString(Path.of("src/main/resources/db/migration/V11__auth_account.sql"));
+
+        assertThat(migration)
+                .contains("CREATE TABLE auth_account")
+                .contains("account_id CHAR(36) NOT NULL")
+                .contains("user_id VARCHAR(128) NOT NULL")
+                .contains("tenant_id VARCHAR(64) NOT NULL")
+                .contains("username_normalized VARCHAR(128) NOT NULL")
+                .contains("password_hash VARCHAR(512) NOT NULL")
+                .contains("role VARCHAR(32) NOT NULL")
+                .contains("status VARCHAR(32) NOT NULL")
+                .contains("uk_auth_account_username_normalized")
+                .contains("idx_auth_account_tenant_role")
+                .doesNotContain("password VARCHAR")
+                .doesNotContain("plain_password")
+                .doesNotContain("secret");
+    }
+
+    @Test
+    void studentExplanationHistoryMigrationStoresDurableConversationAndMessagePayloads() throws Exception {
+        String migration = Files.readString(Path.of("src/main/resources/db/migration/V12__student_explanation_history.sql"));
+
+        assertThat(migration)
+                .contains("CREATE TABLE student_explanation_session")
+                .contains("CREATE TABLE student_explanation_message")
+                .contains("conversation_id CHAR(36) NOT NULL")
+                .contains("request_json JSON NOT NULL")
+                .contains("image_understanding_json JSON NOT NULL")
+                .contains("ai_draft_json JSON NOT NULL")
+                .contains("workflow_stages_json JSON NOT NULL")
+                .contains("cards_json JSON NOT NULL")
+                .contains("sources_json JSON NOT NULL")
+                .contains("idx_student_explanation_message_conversation")
+                .contains("idx_student_explanation_message_owner")
+                .contains("FOREIGN KEY (conversation_id) REFERENCES student_explanation_session(conversation_id)");
     }
 
     /**

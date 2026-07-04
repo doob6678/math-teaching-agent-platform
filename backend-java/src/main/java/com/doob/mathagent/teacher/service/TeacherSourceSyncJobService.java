@@ -41,9 +41,9 @@ public class TeacherSourceSyncJobService {
             String viewerRole,
             String viewerSubjectId,
             String documentId) {
-        String normalizedTenantId = textOrDefault(tenantId, "default");
-        String normalizedRole = textOrDefault(viewerRole, "teacher").toLowerCase();
-        String normalizedSubjectId = textOrDefault(viewerSubjectId, "local-teacher-console");
+        String normalizedTenantId = requireText(tenantId, "tenantId is required");
+        String normalizedRole = requireText(viewerRole, "viewerRole is required").toLowerCase();
+        String normalizedSubjectId = requireText(viewerSubjectId, "viewerSubjectId is required");
         requireTeacherOrAdmin(normalizedRole);
         TeacherResourceDocumentResponse document = requireVisibleDocument(
                 normalizedTenantId,
@@ -82,9 +82,9 @@ public class TeacherSourceSyncJobService {
             String viewerRole,
             String viewerSubjectId,
             String documentId) {
-        String normalizedTenantId = textOrDefault(tenantId, "default");
-        String normalizedRole = textOrDefault(viewerRole, "teacher").toLowerCase();
-        String normalizedSubjectId = textOrDefault(viewerSubjectId, "local-teacher-console");
+        String normalizedTenantId = requireText(tenantId, "tenantId is required");
+        String normalizedRole = requireText(viewerRole, "viewerRole is required").toLowerCase();
+        String normalizedSubjectId = requireText(viewerSubjectId, "viewerSubjectId is required");
         requireTeacherOrAdmin(normalizedRole);
         TeacherResourceDocumentResponse document = requireVisibleDocument(
                 normalizedTenantId,
@@ -142,5 +142,12 @@ public class TeacherSourceSyncJobService {
 
     private static String textOrDefault(String value, String defaultValue) {
         return value == null || value.isBlank() ? defaultValue : value.strip();
+    }
+
+    private static String requireText(String value, String message) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException(message);
+        }
+        return value.strip();
     }
 }

@@ -71,6 +71,32 @@ class AiProviderCatalogTest {
     }
 
     @Test
+    void keepsConfiguredDefaultProviderFirstInRuntimeFallbackOrder() {
+        AiProviderProperties properties = new AiProviderProperties();
+        properties.setDefaultProvider("deepseek");
+        properties.getDashscope().setApiKey("dashscope-key");
+        properties.getDashscope().setChatModel("qwen3.6-flash");
+        properties.getOpenai().setApiKey("openai-key");
+        properties.getOpenai().setChatModel("gpt-5.4");
+        properties.getDeepseek().setApiKey("deepseek-key");
+        properties.getDeepseek().setChatModel("deepseek-v4-flash");
+        properties.getArk().setApiKey("ark-key");
+        properties.getArk().setChatModel("doubao-seed-2-0-lite-260428");
+
+        AiProviderCatalog catalog = new AiProviderCatalog(properties);
+
+        assertThat(catalog.defaultProvider().name()).isEqualTo("deepseek");
+        assertThat(catalog.enabledProviders())
+                .extracting(AiProviderCatalog.Provider::name)
+                .containsExactly("deepseek", "openai", "dashscope", "ark");
+        assertThat(catalog.modelCatalog().fallbackProviderOrder())
+                .containsExactly("deepseek", "openai", "dashscope", "ark");
+        assertThat(catalog.modelCatalog().providers())
+                .extracting(AiProviderCatalog.ModelProvider::name)
+                .containsExactly("deepseek", "openai", "dashscope", "ark");
+    }
+
+    @Test
     void disablesProviderWhenApiKeyIsBlank() {
         AiProviderProperties properties = new AiProviderProperties();
         properties.getDashscope().setApiKey("");

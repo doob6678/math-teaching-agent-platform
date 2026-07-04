@@ -22,6 +22,6 @@ public interface RequestSubjectResolver {
      * @return local development resolver
      */
     static RequestSubjectResolver localDevelopment() {
-        return request -> request == null ? RequestSubject.localStudent() : RequestSubject.anonymous("default", "unknown-device");
+        return request -> RequestSubject.anonymous("default", "unknown-device");
     }
 }

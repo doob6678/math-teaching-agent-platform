@@ -2,7 +2,6 @@ package com.doob.mathagent.teaching.service;
 
 import com.doob.mathagent.agent.service.AgentTraceRecord;
 import com.doob.mathagent.agent.service.AgentTraceStore;
-import com.doob.mathagent.agent.service.InMemoryAgentTraceStore;
 import com.doob.mathagent.agent.vo.AgentRunExecuteResponse;
 import com.doob.mathagent.memory.dto.StudentMemoryRequest;
 import com.doob.mathagent.memory.service.StudentMemoryCommand;
@@ -67,31 +66,6 @@ public class TeachingWorkflowService {
     }
 
     /**
-     * Creates a workflow with an isolated trace store for tests that only override the AI draft service.
-     */
-    public TeachingWorkflowService(
-            Path processedBooksRoot,
-            TextbookRetrievalService retrievalService,
-            TeachingTaskStore taskStore,
-            StudentMemoryReuseService memoryReuseService,
-            TeachingAiDraftService aiDraftService) {
-        this(processedBooksRoot, retrievalService, taskStore, memoryReuseService, aiDraftService,
-                new InMemoryAgentTraceStore());
-    }
-
-    /**
-     * Creates a workflow with AI disabled for focused tests.
-     */
-    public TeachingWorkflowService(
-            Path processedBooksRoot,
-            TextbookRetrievalService retrievalService,
-            TeachingTaskStore taskStore,
-            StudentMemoryReuseService memoryReuseService) {
-        this(processedBooksRoot, retrievalService, taskStore, memoryReuseService, TeachingAiDraftService.disabled(),
-                new InMemoryAgentTraceStore());
-    }
-
-    /**
      * 提交教学任务；同一主体同一 clientRequestId 重复提交时直接返回已有任务。
      */
     public TeachingTaskResponse submit(TeachingTaskRequest request, TeachingRequestContext context) {
@@ -114,7 +88,7 @@ public class TeachingWorkflowService {
     }
 
     /**
-     * 执行固定 DAG：学习目标识别、资源复用、公开教材检索、私有飞书占位、练习题占位、ReAct、LaTeX 讲义、交互建议。
+     * 执行固定 DAG：学习目标识别、资源复用、公开教材检索、ReAct、AI 草稿、LaTeX 讲义、交互建议。
      */
     private TeachingTaskResponse execute(TeachingTaskRequest request, TeachingRequestContext context) {
         StageTimer timer = new StageTimer();
@@ -141,7 +115,7 @@ public class TeachingWorkflowService {
                     .toList();
             timer.mark("textbook_retrieval");
         }
-        List<TeachingReactStep> reactTrace = buildReactTrace(request, evidence, memoryResponse);
+        List<TeachingReactStep> reactTrace = List.of();
         timer.mark("react_trace");
         TeachingTaskResponse.AiDraft aiDraft = aiDraftService.draft(request, evidence, memoryResponse);
         timer.mark("ai_draft");
@@ -332,7 +306,7 @@ public class TeachingWorkflowService {
     }
 
     /**
-     * 构造固定 DAG 节点输出；飞书、练习题和互动讲义先作为可观测占位节点。
+     * 构造真实执行过的 DAG 节点输出；未执行的扩展能力不得伪装为 completed。
      */
     private static List<TeachingWorkflowNode> buildNodes(
             TeachingTaskRequest request,
@@ -343,16 +317,19 @@ public class TeachingWorkflowService {
                 ? "命中学生记忆 %s，作用域 %s，相似度 %.4f，跳过重复教材召回。"
                         .formatted(memoryResponse.memoryId(), memoryResponse.reuseScope(), memoryResponse.similarity())
                 : "未命中可复用学生记忆，原因：" + memoryResponse.reason() + "。";
+        boolean textbookRetrievalRan = !memoryResponse.reused();
         return List.of(
                 node("LEARNING_GOAL", "学习目标识别", "识别用户想学：" + request.learningGoal()),
                 node("REUSE_RESOURCE", "历史资源复用", reuseSummary),
-                node("PUBLIC_TEXTBOOK_RETRIEVAL", "公开教材检索", "命中公开教材证据 " + evidence.size() + " 条。"),
-                node("PRIVATE_FEISHU_PLACEHOLDER", "私有飞书文档", "预留 tenantId + subjectId + docScope 隔离的飞书资料检索节点。"),
-                node("PRACTICE_DISCOVERY_PLACEHOLDER", "练习题发现", "预留同知识点练习题和错题库召回节点。"),
-                node("REACT_SOLVE", "ReAct 解题", "基于证据生成 thought/action/observation/answer 轨迹。"),
+                node("PUBLIC_TEXTBOOK_RETRIEVAL", "公开教材检索",
+                        textbookRetrievalRan ? "completed" : "skipped",
+                        textbookRetrievalRan
+                                ? "命中公开教材证据 " + evidence.size() + " 条。"
+                                : "已复用学生记忆，本次未触发公开教材检索。"),
+                node("REACT_SOLVE", "解题编排", "基于教材证据、学生记忆和 AI 草稿整理讲解步骤。"),
                 node("AI_DRAFT", "AI 讲义草稿", aiDraftSummary(aiDraft)),
                 node("LATEX_HANDOUT", "LaTeX 讲义", "生成可导出为 PDF 的讲义草稿。"),
-                node("HUMAN_FEEDBACK", "人类反馈", "等待学生或教师对讲义、解析和练习建议给出人工反馈。"),
+                node("HUMAN_FEEDBACK", "人类反馈", "pending", "等待学生或教师提交人工反馈。"),
                 node("INTERACTIVE_FOLLOW_UP", "交互追问", "给出继续追问、练习和导出建议。"));
     }
 
@@ -381,29 +358,18 @@ public class TeachingWorkflowService {
         return new TeachingWorkflowNode(code, name, "completed", summary);
     }
 
+    private static TeachingWorkflowNode node(String code, String name, String status, String summary) {
+        return new TeachingWorkflowNode(code, name, status, summary);
+    }
+
     /**
-     * 构造最小 ReAct 轨迹，后续接入大模型后保留同样结构用于审计和回放。
+     * Teaching task responses must not fabricate ReAct traces before the backend owns a real tool-execution trace.
      */
     private static List<TeachingReactStep> buildReactTrace(
             TeachingTaskRequest request,
             List<TeachingEvidence> evidence,
             StudentMemoryResponse memoryResponse) {
-        String observation = memoryResponse.reused()
-                ? "观察到可复用学生记忆：" + memoryResponse.memoryId()
-                : evidence.isEmpty()
-                ? "未命中教材证据，需要降级到教师提示词和基础知识。"
-                : "观察到教材证据：" + evidence.getFirst().sourceTitle();
-        String action = memoryResponse.reused()
-                ? "调用 student_memory_reuse 命中历史同质问题答案。"
-                : "调用 search_textbook 检索教材定义、例题和相关章节。";
-        return List.of(
-                new TeachingReactStep("THOUGHT", "先明确用户想学什么，再找可复用资源和公开教材证据。", null),
-                new TeachingReactStep(
-                        "ACTION",
-                        action,
-                        memoryResponse.reused() ? "student_memory_reuse" : "search_textbook"),
-                new TeachingReactStep("OBSERVATION", observation, null),
-                new TeachingReactStep("ANSWER", "整理为分步讲解和 LaTeX 讲义草稿。", null));
+        return List.of();
     }
 
     /**
@@ -433,7 +399,7 @@ public class TeachingWorkflowService {
                 %s
 
                 \\section{知识点归属}
-                %% 后续接入飞书知识库、教材章节图谱和教师私有资料后继续细分
+                %% 本次只引用实际命中的公开教材或教师资源；未命中的来源不会写入讲义。
                 %s
 
                 \\section{互动练习}
@@ -485,7 +451,7 @@ public class TeachingWorkflowService {
      * Builds a compact teacher-facing knowledge point label from the learning goal and top evidence.
      */
     private static String teacherKnowledgePoint(TeachingTaskRequest request, List<TeachingEvidence> evidence) {
-        String source = evidence.isEmpty() ? "待接入教师私有资料或公开教材章节" : evidence.getFirst().sourceTitle();
+        String source = evidence.isEmpty() ? "当前未命中公开教材或教师私有资料" : evidence.getFirst().sourceTitle();
         return escapeLatex(request.learningGoal() + "；来源：" + source);
     }
 

@@ -45,7 +45,7 @@ class TeacherFeishuDiscoveryServiceTest {
                 "admin-1",
                 "search",
                 "空间向量",
-                "",
+                "https://my.feishu.cn/drive/folder/root-token",
                 99,
                 99);
 
@@ -85,11 +85,29 @@ class TeacherFeishuDiscoveryServiceTest {
                         "teacher-1",
                         "search",
                         " ",
-                        "",
+                        "https://my.feishu.cn/drive/folder/root-token",
                         1,
                         1))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("keyword");
+    }
+
+    @Test
+    void rejectsBlankRootUrl() {
+        TeacherFeishuDiscoveryService service = new TeacherFeishuDiscoveryService(
+                query -> response("list_root", "", 1));
+
+        assertThatThrownBy(() -> service.discover(
+                        "school-a",
+                        "teacher",
+                        "teacher-1",
+                        "list",
+                        "",
+                        " ",
+                        1,
+                        1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("rootUrl");
     }
 
     private static TeacherFeishuDiscoveryResponse response(String mode, String keyword, int depth) {

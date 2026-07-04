@@ -29,7 +29,7 @@ public class AgentRunExecutionController {
     /**
      * Creates the controller.
      *
-     * @param executionService baseline execution service
+     * @param executionService live execution service
      * @param subjectResolver trusted backend subject resolver
      * @param capabilityVerifier one-time capability verifier
      */
@@ -55,6 +55,9 @@ public class AgentRunExecutionController {
             HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest);
         AgentRunExecuteRequest normalized = request.normalize();
+        if (normalized.dryRun()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Agent dryRun is disabled in production");
+        }
         if (executionService.requiresCapability(normalized)
                 && !capabilityVerifier.verify(
                         headerOrEmpty(httpRequest, "X-Capability-Token"),

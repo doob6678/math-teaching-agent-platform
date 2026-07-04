@@ -183,6 +183,18 @@ export interface LoginRequest {
 }
 
 /**
+ * Public student registration request. The backend always creates a student role.
+ */
+export interface RegisterRequest {
+  /** Unique login username. */
+  username: string;
+  /** Password sent to the backend over the current HTTP connection. */
+  password: string;
+  /** Optional tenant id; backend defaults it when omitted. */
+  tenantId?: string;
+}
+
+/**
  * 登录响应。tokenName/tokenValue 由 Sa-Token 生成，后续请求按后端要求携带。
  */
 export interface LoginResponse {
@@ -474,7 +486,7 @@ export interface TeachingHandoutBatchExportRequest {
 export interface TeachingHandoutBatchExportResponse {
   /** Temporary batch id used by the protected download endpoint. */
   batchId: string;
-  /** Export status; current baseline returns COMPLETED synchronously. */
+  /** Export status; temporary ZIP export returns COMPLETED synchronously. */
   status: string;
   /** Backend-resolved requester role that controls whether teacher handouts are packaged. */
   subjectType: string;
@@ -620,6 +632,8 @@ export interface AgentRunPlanResponse {
   stageTimings: TeachingStageTiming[];
   /** Redis-style concurrency keys for later execution. */
   concurrencyKeys: string[];
+  /** Whether the executor must validate model output as a JSON object and retry repair on parse failure. */
+  requiredJsonSchema: boolean;
 }
 
 /**
@@ -716,12 +730,10 @@ export interface AgentRunExecuteRequest {
   userInputSummary: string;
   /** Evidence ids or resource anchors used by this run. */
   evidenceRefs: string[];
-  /** True keeps this stage in trace-only mode without external model calls. */
-  dryRun: boolean;
 }
 
 /**
- * Safe baseline execution response; raw prompt and model output are intentionally omitted.
+ * Safe live execution response; raw prompt and full model output are intentionally omitted.
  */
 export interface AgentRunExecuteResponse {
   /** Trace id used for later monitoring and audit. */
@@ -780,8 +792,6 @@ export interface MultiAgentWritingRequest {
   questionText: string;
   /** Evidence anchors selected from textbook, Feishu, question bank, or teacher resources. */
   evidenceRefs: string[];
-  /** True keeps execution in trace-only mode without live model calls. */
-  dryRun: boolean;
   /** Optional preferred provider name; backend validates it before use. */
   preferredProviderName?: string;
   /** Optional preferred model code; backend validates it against provider allow-list. */
@@ -1090,6 +1100,24 @@ export interface McpConfigurationLayer {
   allowedOperations: string[];
 }
 
+/**
+ * Result of a real standard MCP connection smoke test from the browser.
+ */
+export interface McpConnectionTestResult {
+  /** HTTP MCP endpoint that was tested. */
+  url: string;
+  /** Protocol version requested and echoed by the server. */
+  protocolVersion: string;
+  /** Server name returned by initialize. */
+  serverName: string;
+  /** Server version returned by initialize. */
+  serverVersion: string;
+  /** Tool names returned by tools/list for this Bearer secret. */
+  tools: string[];
+  /** Number of tools visible to this MCP key. */
+  toolCount: number;
+}
+
 export interface StudentDashboardResponse {
   /** 租户 ID，用于学校或机构维度的数据隔离。 */
   tenantId: string;
@@ -1176,6 +1204,232 @@ export interface StudentKnowledgeEvidenceLink {
 }
 
 /**
+ * Request body for student-side question explanation cards.
+ */
+export interface StudentExplanationRequest {
+  /** Durable conversation id returned by a previous explanation response. */
+  conversationId?: string;
+  /** Question text typed by the student or produced by a real OCR/vision step. */
+  questionText?: string;
+  /** Backend-issued temporary upload id from the real image upload endpoint. */
+  imageUploadId?: string;
+  /** Optional image file name; this is metadata only unless OCR is configured on the backend. */
+  imageFileName?: string;
+  /** Optional image MIME type. */
+  imageContentType?: string;
+  /** Optional image size in bytes. */
+  imageSizeBytes?: number;
+  /** Allows the backend to search public textbook resources. */
+  searchTextbook?: boolean;
+  /** Allows the backend to match the curated display knowledge graph. */
+  searchKnowledgeGraph?: boolean;
+  /** Requests teacher resource search; backend still restricts this to teacher/admin subjects. */
+  searchTeacherResources?: boolean;
+  /** Maximum textbook hits used by the card orchestrator. */
+  maxTextbookHits?: number;
+  /** Maximum teacher resource hits used by the card orchestrator. */
+  maxTeacherResourceHits?: number;
+}
+
+/**
+ * Response returned after uploading a real temporary image binary for student explanation.
+ */
+export interface StudentExplanationImageUploadResponse {
+  /** Backend-issued temporary upload id used by the explanation request. */
+  uploadId: string;
+  /** Sanitized original file name. */
+  originalFileName: string;
+  /** Validated image MIME type. */
+  contentType: string;
+  /** Stored file size in bytes. */
+  sizeBytes: number;
+  /** Backend expiration timestamp for the temporary file. */
+  expiresAt: string;
+  /** Explicit status; upload does not mean OCR has run. */
+  imageStatus: string;
+}
+
+/**
+ * Compact durable explanation history for resuming a student conversation.
+ */
+export interface StudentExplanationHistoryResponse {
+  /** Recent history items visible to the backend-resolved subject. */
+  items: StudentExplanationHistoryItem[];
+}
+
+/**
+ * One durable explanation history item.
+ */
+export interface StudentExplanationHistoryItem {
+  explanationId: string;
+  conversationId: string;
+  questionText?: string;
+  imageStatus: string;
+  imageProblemText?: string;
+  aiProviderName: string;
+  aiModelCode: string;
+  totalTokens: number;
+  totalElapsedMs: number;
+  createdAt: string;
+}
+
+/**
+ * Backend response for student-side explanation cards.
+ */
+export interface StudentExplanationResponse {
+  /** Server-generated explanation id for trace and retry correlation. */
+  explanationId: string;
+  /** Durable conversation id for follow-up context and history recovery. */
+  conversationId: string;
+  /** Backend-resolved tenant id. */
+  tenantId: string;
+  /** Backend-resolved student id when the viewer is a student. */
+  studentId?: string;
+  /** Backend-resolved viewer role. */
+  viewerRole: string;
+  /** Normalized question text used by retrieval. */
+  questionText?: string;
+  /** Image handling status; never means OCR unless backend says so explicitly. */
+  imageStatus: string;
+  /** Safe metadata from the real vision/OCR image understanding stage. */
+  imageUnderstanding: StudentExplanationImageUnderstanding;
+  /** Orchestrator name and version. */
+  generatedBy: string;
+  /** Safe AI generation metadata for model, token, parse, and fallback status. */
+  aiDraft: StudentExplanationAiDraft;
+  /** DAG stage states with timing and skip/failure detail. */
+  workflowStages: StudentExplanationStage[];
+  /** Frontend-ready explanation cards. */
+  cards: StudentExplanationCard[];
+  /** Source anchors used by cards. */
+  sources: StudentExplanationSource[];
+  /** Total backend elapsed time in milliseconds. */
+  totalElapsedMs: number;
+}
+
+/**
+ * Safe metadata from the backend image understanding stage.
+ */
+export interface StudentExplanationImageUnderstanding {
+  /** Whether a real vision model call was attempted. */
+  enabled: boolean;
+  /** Whether visible problem text was extracted. */
+  succeeded: boolean;
+  /** Provider used by the vision stage. */
+  providerName: string;
+  /** Model used by the vision stage. */
+  modelCode: string;
+  /** Extracted visible problem text. */
+  problemText: string;
+  /** Model confidence from 0 to 1. */
+  confidence: number;
+  /** Provider-reported prompt tokens. */
+  promptTokens: number;
+  /** Provider-reported completion tokens. */
+  completionTokens: number;
+  /** Provider-reported total tokens. */
+  totalTokens: number;
+  /** Safe status message. */
+  message: string;
+}
+
+/**
+ * One explanation workflow stage.
+ */
+export interface StudentExplanationStage {
+  /** Stable stage key. */
+  stageKey: string;
+  /** Short display title. */
+  title: string;
+  /** completed, skipped, or failed. */
+  status: string;
+  /** Stage detail or failure reason. */
+  detail: string;
+  /** Stage elapsed time in milliseconds. */
+  elapsedMs: number;
+}
+
+/**
+ * One card in the student explanation result.
+ */
+export interface StudentExplanationCard {
+  /** Stable card key. */
+  cardKey: string;
+  /** Card title. */
+  title: string;
+  /** Card summary. */
+  summary: string;
+  /** Scannable card items. */
+  items: string[];
+  /** Source URI anchors used by this card. */
+  sourceUris: string[];
+  /** Frontend render hint such as text, formula, or source_list. */
+  renderMode: string;
+}
+
+/**
+ * One evidence source shown beside explanation cards.
+ */
+export interface StudentExplanationSource {
+  /** textbook, teacher_resource, or knowledge_graph. */
+  sourceType: string;
+  /** Source display title. */
+  title: string;
+  /** Stable source URI. */
+  sourceUri: string;
+  /** Backend-controlled permission scope. */
+  permissionScope: string;
+  /** Compact evidence text. */
+  snippet: string;
+  /** Retrieval or match score. */
+  score: number;
+}
+
+/**
+ * Safe AI metadata returned by the student explanation card composer.
+ */
+export interface StudentExplanationAiDraft {
+  /** Whether a live model call was attempted. */
+  enabled: boolean;
+  /** Provider that answered or was attempted. */
+  providerName: string;
+  /** Model that answered or was attempted. */
+  modelCode: string;
+  /** Provider-reported prompt tokens. */
+  promptTokens: number;
+  /** Provider-reported completion tokens. */
+  completionTokens: number;
+  /** Provider-reported total tokens. */
+  totalTokens: number;
+  /** Whether model output parsed into the expected card schema. */
+  structured: boolean;
+  /** Safe status message. */
+  message: string;
+  /** Retry, parse, and provider-rotation events. */
+  recoveryEvents: StudentExplanationAiRecoveryEvent[];
+}
+
+/**
+ * Safe AI retry and recovery event.
+ */
+export interface StudentExplanationAiRecoveryEvent {
+  /** Event type such as MODEL_CALL_SUCCEEDED or JSON_PARSE_FAILED. */
+  eventType: string;
+  /** Provider involved in the event. */
+  providerName: string;
+  /** Model involved in the event. */
+  modelCode: string;
+  /** Zero-based attempt number. */
+  attemptNo: number;
+  /** Whether the event produced structured card output. */
+  structured: boolean;
+  /** Whether retry or provider rotation was still available. */
+  retryable: boolean;
+  /** Short safe message. */
+  message: string;
+}
+
+/**
  * 单个知识点进度，用于绘制学生端动态进度条和知识图谱节点。
  */
 export interface StudentKnowledgeProgress {
@@ -1185,7 +1439,7 @@ export interface StudentKnowledgeProgress {
   knowledgePointName: string;
   /** 教材章节或页码定位。 */
   textbookAnchor?: string;
-  /** 飞书知识库链接或占位链接。 */
+  /** 实际可访问的飞书知识库链接；为空表示当前记录没有来源链接。 */
   feishuDocUrl?: string;
   /** 掌握百分比，范围 0 到 100。 */
   progressPercent: number;
@@ -1294,6 +1548,60 @@ export interface KnowledgeRelationResponse {
   relationType: string;
   evidenceSummary?: string;
   status: string;
+}
+
+/**
+ * Curated frontend graph spine assembled by the backend from trusted source files and MySQL records.
+ */
+export interface KnowledgeGraphSpineResponse {
+  /** Curated source version, for example v0.1. */
+  version: string;
+  /** Backend-resolved tenant used for visibility filtering. */
+  tenantId: string;
+  /** Backend-resolved viewer role; never supplied by the frontend. */
+  viewerRole: string;
+  /** Number of visible nodes returned by the backend. */
+  nodeCount: number;
+  /** Number of visible directed edges returned by the backend. */
+  edgeCount: number;
+  /** Visible module/topic/method nodes. */
+  nodes: KnowledgeGraphSpineNode[];
+  /** Visible curated relations between nodes. */
+  edges: KnowledgeGraphSpineEdge[];
+}
+
+/**
+ * One display node in the curated high-school math spine.
+ */
+export interface KnowledgeGraphSpineNode {
+  /** Stable knowledge point id. */
+  id: string;
+  /** Display label from the curated source. */
+  label: string;
+  /** MODULE, TOPIC, or METHOD. */
+  nodeType: "MODULE" | "TOPIC" | "METHOD" | string;
+  /** Chapter path or teaching method path. */
+  chapterPath: string;
+  /** Permission scope enforced by the backend. */
+  permissionScope: string;
+  /** Short source summary preserved for audit. */
+  sourceSummary: string;
+}
+
+/**
+ * One directed edge in the curated high-school math spine.
+ */
+export interface KnowledgeGraphSpineEdge {
+  /** Stable relation id. */
+  id: string;
+  /** Source node id. */
+  source: string;
+  /** Target node id. */
+  target: string;
+  /** Relation type for display and filtering. */
+  relationType: string;
+  /** Short evidence summary preserved for audit. */
+  evidenceSummary: string;
 }
 
 export interface QuestionBankItemCreateRequest {
@@ -1495,10 +1803,110 @@ export interface TeacherSourceSyncCheckpointResponse {
   updatedAt: string;
 }
 
+export interface VectorIndexStatusResponse {
+  enabled: boolean;
+  configured: boolean;
+  collectionName: string;
+  dimension: number;
+  embeddingModel: string;
+  milvusUri: string;
+  collectionState: string;
+  indexState: string;
+  loadState: string;
+  rowCount: number;
+  status: string;
+}
+
+export interface VectorIndexRebuildResponse {
+  status: string;
+  documentId: string;
+  collectionName: string;
+  blockCount: number;
+  embeddedCount: number;
+  upsertedCount: number;
+  embeddingModel: string;
+  promptTokens: number;
+  message: string;
+}
+
+export interface SystemRuntimeStatusResponse {
+  deployment: {
+    ready: boolean;
+    mode: string;
+    blockingIssues: string[];
+    warnings: string[];
+  };
+  ai: {
+    defaultProviderName: string;
+    defaultModelCode: string;
+    defaultProviderConfigured: boolean;
+    enabledProviderCount: number;
+    providers: Array<{
+      providerName: string;
+      modelCode: string;
+      configured: boolean;
+      baseUrlConfigured: boolean;
+      apiKeyConfigured: boolean;
+      modelConfigured: boolean;
+    }>;
+  };
+  auth: {
+    persistentStoreRequired: boolean;
+    mode: string;
+  };
+  database: {
+    enabled: boolean;
+    configured: boolean;
+    urlConfigured: boolean;
+    usernameConfigured: boolean;
+    studentExplanationHistoryDurable: boolean;
+    migrationRunnerEnabled: boolean;
+    migrationLocation: string;
+    mode: string;
+  };
+  redis: {
+    redissonEnabled: boolean;
+    redissonAddress: string;
+    rateLimitEnabled: boolean;
+    rateLimitKeyPrefix: string;
+    capabilityStoreEnabled: boolean;
+    capabilityStoreKeyPrefix: string;
+    searchCacheEnabled: boolean;
+    searchCacheKeyPrefix: string;
+    searchCacheTtl: string;
+  };
+  vectorIndex: {
+    enabled: boolean;
+    configured: boolean;
+    collectionName: string;
+    dimension: number;
+    embeddingModel: string;
+    milvusUri: string;
+    collectionState: string;
+    indexState: string;
+    loadState: string;
+    rowCount: number;
+    status: string;
+  };
+  feishu: {
+    processDownloaderEnabled: boolean;
+    downloaderScriptConfigured: boolean;
+    downloaderScriptExists: boolean;
+    appkeyPathConfigured: boolean;
+    appkeyFileExists: boolean;
+    stagingRootConfigured: boolean;
+    stagingRootExistsOrCreatable: boolean;
+    defaultUrlHost: string;
+    smokeMaxFiles: number;
+    processTimeoutSeconds: number;
+    mode: string;
+  };
+}
+
 type FetchLike = (
   input: string,
   init?: RequestInit,
-) => Promise<Pick<Response, "ok" | "status" | "json" | "text" | "arrayBuffer">>;
+) => Promise<Pick<Response, "ok" | "status" | "json" | "text" | "arrayBuffer" | "headers">>;
 
 const AUTH_STORAGE_KEY = "math-agent:auth-session";
 const DEVICE_ID_HEADER = { "X-Device-Id": "local-browser-console" };
@@ -1570,6 +1978,29 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
   }
 
   /**
+   * Uploads multipart form data while preserving backend session headers and browser-generated boundaries.
+   */
+  async function requestFormJson<T>(path: string, formData: FormData, init: RequestInit = {}): Promise<T> {
+    const auth = readAuthSession();
+    const authHeader = auth ? { [auth.tokenName]: auth.tokenValue } : {};
+    const response = await fetchImpl(`${normalizedBaseUrl}${path}`, {
+      ...init,
+      method: init.method ?? "POST",
+      headers: {
+        ...DEVICE_ID_HEADER,
+        ...authHeader,
+        ...init.headers,
+      },
+      body: formData,
+    });
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`Backend request failed: ${response.status} ${body}`.trim());
+    }
+    return response.json() as Promise<T>;
+  }
+
+  /**
    * Applies for a one-time capability token bound to the exact consuming request body.
    */
   async function applyCapability(
@@ -1594,6 +2025,37 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     return { ...capability, requestHash };
   }
 
+  /**
+   * Sends one standard MCP JSON-RPC request to an absolute MCP URL without platform session headers.
+   */
+  async function requestMcpJsonRpc(url: string, secretKey: string, body: unknown): Promise<{
+    protocolVersion: string;
+    body: Record<string, unknown>;
+  }> {
+    const response = await fetchImpl(url, {
+      method: "POST",
+      headers: {
+        Accept: "application/json, text/event-stream",
+        "Content-Type": "application/json",
+        "MCP-Protocol-Version": "2025-11-25",
+        Authorization: `Bearer ${secretKey}`,
+      },
+      body: JSON.stringify(body),
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`MCP request failed: ${response.status} ${text}`.trim());
+    }
+    const parsed = text ? JSON.parse(text) as Record<string, unknown> : {};
+    if (parsed.error) {
+      throw new Error(`MCP JSON-RPC error: ${JSON.stringify(parsed.error)}`);
+    }
+    return {
+      protocolVersion: response.headers.get("MCP-Protocol-Version") ?? "unknown",
+      body: parsed,
+    };
+  }
+
   return {
     /**
      * 登录并保存后端会话 token；后续请求只携带 token，不携带 userId/role/studentId。
@@ -1609,8 +2071,27 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     },
 
     /**
+     * Registers a student account and stores the backend-issued session token.
+     */
+    async register(request: RegisterRequest): Promise<LoginResponse> {
+      const response = await requestJson<LoginResponse>("/api/auth/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
+      });
+      globalThis.localStorage?.setItem(AUTH_STORAGE_KEY, JSON.stringify(response));
+      return response;
+    },
+
+    /**
      * 读取教材资源摘要。
      */
+    async currentSession(): Promise<LoginResponse> {
+      const response = await requestJson<LoginResponse>("/api/auth/session");
+      globalThis.localStorage?.setItem(AUTH_STORAGE_KEY, JSON.stringify(response));
+      return response;
+    },
+
     getSummary(): Promise<TextbookSummary> {
       return requestJson<TextbookSummary>("/api/resources/textbooks/summary");
     },
@@ -1871,6 +2352,14 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
       return requestJson<AgentModelHealthResponse>("/api/agents/model-health");
     },
 
+    getSystemRuntimeStatus(): Promise<SystemRuntimeStatusResponse> {
+      return requestJson<SystemRuntimeStatusResponse>("/api/system/runtime");
+    },
+
+    getVectorIndexStatus(): Promise<VectorIndexStatusResponse> {
+      return requestJson<VectorIndexStatusResponse>("/api/vector-index/status");
+    },
+
     /**
      * Executes a planned AI agent run. High-value runs first acquire a one-time capability token.
      */
@@ -1931,6 +2420,34 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
         path,
         body,
         `multi-agent-writing-async:${request.writingGoal}:${request.questionText}`,
+        3,
+      );
+      return requestJson<MultiAgentWritingResponse>(path, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Capability-Token": capability.token,
+          "X-Request-Hash": capability.requestHash,
+        },
+        body,
+      });
+    },
+
+    /**
+     * Resumes a failed multi-agent writing workflow from the first missing stage.
+     */
+    async resumeMultiAgentWriting(
+      workflowId: string,
+      request: MultiAgentWritingRequest,
+    ): Promise<MultiAgentWritingResponse> {
+      const body = JSON.stringify(request);
+      const encodedWorkflowId = encodeURIComponent(workflowId);
+      const path = `/api/agents/writing/${encodedWorkflowId}/resume`;
+      const capability = await applyCapability(
+        "agent-run:CoursewareAgent",
+        path,
+        body,
+        `multi-agent-writing-resume:${workflowId}:${request.writingGoal}:${request.questionText}`,
         3,
       );
       return requestJson<MultiAgentWritingResponse>(path, {
@@ -2043,6 +2560,52 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
       });
     },
 
+    /**
+     * Runs a real standard MCP connection smoke test against the configured URL and Bearer secret.
+     */
+    async testMcpConnection(url: string, secretKey: string): Promise<McpConnectionTestResult> {
+      const normalizedUrl = url.trim().replace(/\/+$/, "");
+      const normalizedSecret = secretKey.trim();
+      if (!normalizedUrl) {
+        throw new Error("MCP URL is required");
+      }
+      if (!normalizedSecret) {
+        throw new Error("MCP secretKey is required");
+      }
+      const initialize = await requestMcpJsonRpc(normalizedUrl, normalizedSecret, {
+        jsonrpc: "2.0",
+        id: "frontend-init",
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "math-agent-frontend", version: "0.1.0" },
+        },
+      });
+      const initializeResult = (initialize.body.result ?? {}) as Record<string, unknown>;
+      const serverInfo = (initializeResult.serverInfo ?? {}) as Record<string, unknown>;
+      const toolsList = await requestMcpJsonRpc(normalizedUrl, normalizedSecret, {
+        jsonrpc: "2.0",
+        id: "frontend-tools",
+        method: "tools/list",
+        params: {},
+      });
+      const toolsResult = (toolsList.body.result ?? {}) as Record<string, unknown>;
+      const tools = Array.isArray(toolsResult.tools)
+        ? toolsResult.tools
+            .map((tool) => ((tool as Record<string, unknown>).name ?? "").toString())
+            .filter(Boolean)
+        : [];
+      return {
+        url: normalizedUrl,
+        protocolVersion: toolsList.protocolVersion || initialize.protocolVersion,
+        serverName: (serverInfo.name ?? "unknown").toString(),
+        serverVersion: (serverInfo.version ?? "unknown").toString(),
+        tools,
+        toolCount: tools.length,
+      };
+    },
+
     getStudentDashboard(studentId?: string): Promise<StudentDashboardResponse> {
       const params = new URLSearchParams();
       if (studentId) {
@@ -2050,6 +2613,29 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
       }
       const suffix = params.size > 0 ? `?${params.toString()}` : "";
       return requestJson<StudentDashboardResponse>(`/api/students/dashboard${suffix}`);
+    },
+
+    explainStudentQuestion(request: StudentExplanationRequest): Promise<StudentExplanationResponse> {
+      return requestJson<StudentExplanationResponse>("/api/students/explanations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
+      });
+    },
+
+    uploadStudentExplanationImage(file: File): Promise<StudentExplanationImageUploadResponse> {
+      const formData = new FormData();
+      formData.append("file", file);
+      return requestFormJson<StudentExplanationImageUploadResponse>("/api/students/explanations/images", formData);
+    },
+
+    getStudentExplanationHistory(conversationId?: string, limit = 20): Promise<StudentExplanationHistoryResponse> {
+      const params = new URLSearchParams();
+      if (conversationId) {
+        params.set("conversationId", conversationId);
+      }
+      params.set("limit", String(limit));
+      return requestJson<StudentExplanationHistoryResponse>(`/api/students/explanations/history?${params.toString()}`);
     },
 
     async refreshStudentDashboard(studentId?: string): Promise<StudentDashboardResponse> {
@@ -2080,6 +2666,10 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
 
     listKnowledgeRelations(): Promise<KnowledgeRelationResponse[]> {
       return requestJson<KnowledgeRelationResponse[]>("/api/knowledge/relations");
+    },
+
+    getKnowledgeGraphSpine(): Promise<KnowledgeGraphSpineResponse> {
+      return requestJson<KnowledgeGraphSpineResponse>("/api/knowledge/graph/spine");
     },
 
     async createKnowledgePoint(request: KnowledgePointCreateRequest): Promise<KnowledgePointResponse> {
@@ -2290,6 +2880,24 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
         2,
       );
       return requestJson<TeacherSourceSyncJobResponse>(path, {
+        method: "POST",
+        headers: {
+          "X-Capability-Token": capability.token,
+          "X-Request-Hash": capability.requestHash,
+        },
+      });
+    },
+
+    async rebuildTeacherResourceVectorIndex(documentId: string): Promise<VectorIndexRebuildResponse> {
+      const path = `/api/vector-index/teacher-resources/${encodeURIComponent(documentId)}/rebuild`;
+      const capability = await applyCapability(
+        "vector-index:rebuild",
+        path,
+        "",
+        `vector-index-rebuild:${documentId}`,
+        2,
+      );
+      return requestJson<VectorIndexRebuildResponse>(path, {
         method: "POST",
         headers: {
           "X-Capability-Token": capability.token,

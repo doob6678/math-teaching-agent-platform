@@ -59,16 +59,12 @@ class TeachingWorkflowServiceTest {
                         "LEARNING_GOAL",
                         "REUSE_RESOURCE",
                         "PUBLIC_TEXTBOOK_RETRIEVAL",
-                        "PRIVATE_FEISHU_PLACEHOLDER",
-                        "PRACTICE_DISCOVERY_PLACEHOLDER",
                         "REACT_SOLVE",
                         "AI_DRAFT",
                         "LATEX_HANDOUT",
                         "HUMAN_FEEDBACK",
                         "INTERACTIVE_FOLLOW_UP");
-        assertThat(response.reactTrace())
-                .extracting(TeachingReactStep::phase)
-                .containsExactly("THOUGHT", "ACTION", "OBSERVATION", "ANSWER");
+        assertThat(response.reactTrace()).isEmpty();
         assertThat(response.evidence()).isNotEmpty();
         assertThat(response.evidence().getFirst().sourceScope()).isEqualTo("PUBLIC_TEXTBOOK");
         assertThat(response.handoutLatex()).contains("\\section{学习目标}");
@@ -209,11 +205,17 @@ class TeachingWorkflowServiceTest {
     }
 
     private TeachingWorkflowService service(Path root, StudentMemoryReuseService memoryReuseService) {
-        return new TeachingWorkflowService(root, retrievalService(), new InMemoryTeachingTaskStore(), memoryReuseService);
+        return new TeachingWorkflowService(
+                root,
+                retrievalService(),
+                new InMemoryTeachingTaskStore(),
+                memoryReuseService,
+                TeachingAiDraftServiceFixture.disabled(),
+                new InMemoryAgentTraceStore());
     }
 
     private TextbookRetrievalService retrievalService() {
-        return new TextbookRetrievalService(
+        return com.doob.mathagent.retrieval.TextbookRetrievalServiceFixture.service(
                 new TextbookCatalogReader(),
                 new TextbookChunkReader(),
                 new LocalTextbookBm25SearchEngine(),

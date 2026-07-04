@@ -3,10 +3,18 @@ package com.doob.mathagent.teacher.service;
 import com.doob.mathagent.teacher.vo.TeacherDocumentBlockResponse;
 import com.doob.mathagent.teacher.vo.TeacherResourceBlockSearchResponse;
 import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
+import com.doob.mathagent.vector.service.VectorIndexService;
+import com.doob.mathagent.vector.service.VectorSearchHit;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -24,6 +32,7 @@ public class TeacherResourceBlockSearchService {
     private final TeacherResourceStore resourceStore;
     private final TeacherDocumentBlockStore blockStore;
     private final TeacherResourceBlockSearchAuditSink auditSink;
+    private final VectorIndexService vectorIndexService;
 
     /**
      * Creates a parsed block search service.
@@ -36,19 +45,12 @@ public class TeacherResourceBlockSearchService {
     public TeacherResourceBlockSearchService(
             TeacherResourceStore resourceStore,
             TeacherDocumentBlockStore blockStore,
-            TeacherResourceBlockSearchAuditSink auditSink) {
-        this.resourceStore = resourceStore;
-        this.blockStore = blockStore;
-        this.auditSink = auditSink == null ? NoopTeacherResourceBlockSearchAuditSink.INSTANCE : auditSink;
-    }
-
-    /**
-     * Creates a parsed block search service without audit recording for legacy focused tests.
-     */
-    public TeacherResourceBlockSearchService(
-            TeacherResourceStore resourceStore,
-            TeacherDocumentBlockStore blockStore) {
-        this(resourceStore, blockStore, NoopTeacherResourceBlockSearchAuditSink.INSTANCE);
+            TeacherResourceBlockSearchAuditSink auditSink,
+            VectorIndexService vectorIndexService) {
+        this.resourceStore = Objects.requireNonNull(resourceStore, "resourceStore is required");
+        this.blockStore = Objects.requireNonNull(blockStore, "blockStore is required");
+        this.auditSink = Objects.requireNonNull(auditSink, "auditSink is required");
+        this.vectorIndexService = Objects.requireNonNull(vectorIndexService, "vectorIndexService is required");
     }
 
     /**
@@ -89,22 +91,142 @@ public class TeacherResourceBlockSearchService {
             int limit,
             String endpoint) {
         long startedNanos = System.nanoTime();
-        String normalizedTenantId = textOrDefault(tenantId, "default");
-        String normalizedRole = textOrDefault(viewerRole, "anonymous").toLowerCase(Locale.ROOT);
-        String normalizedSubjectId = textOrDefault(viewerSubjectId, "");
+        String normalizedTenantId = requireText(tenantId, "tenantId is required");
+        String normalizedRole = requireText(viewerRole, "viewerRole is required").toLowerCase(Locale.ROOT);
+        String normalizedSubjectId = requireText(viewerSubjectId, "viewerSubjectId is required");
         requireTeacherOrAdmin(normalizedRole);
         String normalizedQuery = normalizeQuery(query);
         int safeLimit = clampLimit(limit);
         if (normalizedQuery.isBlank()) {
-            TeacherResourceBlockSearchResponse emptyResponse = response(normalizedQuery, safeLimit, List.of());
+            TeacherResourceBlockSearchResponse emptyResponse = response(
+                    normalizedQuery,
+                    safeLimit,
+                    "teacher_block_empty",
+                    List.of());
             recordAudit(normalizedTenantId, normalizedRole, normalizedSubjectId, endpoint, emptyResponse, startedNanos);
             return emptyResponse;
         }
         String[] terms = searchTerms(normalizedQuery);
         List<TeacherResourceDocumentResponse> documents =
                 resourceStore.listSearchable(normalizedTenantId, normalizedRole, normalizedSubjectId);
-        List<TeacherResourceBlockSearchResponse.Hit> hits = documents.stream()
-                .flatMap(document -> blockStore.listByDocument(normalizedTenantId, document.documentId()).stream()
+        TeacherResourceBlockSearchResponse searchResponse = hybridResponse(
+                normalizedTenantId,
+                documents,
+                normalizedQuery,
+                terms,
+                safeLimit);
+        recordAudit(normalizedTenantId, normalizedRole, normalizedSubjectId, endpoint, searchResponse, startedNanos);
+        return searchResponse;
+    }
+
+    private TeacherResourceBlockSearchResponse hybridResponse(
+            String tenantId,
+            List<TeacherResourceDocumentResponse> documents,
+            String normalizedQuery,
+            String[] terms,
+            int safeLimit) {
+        if (documents.isEmpty()) {
+            return response(normalizedQuery, safeLimit, "teacher_block_no_visible_documents", List.of());
+        }
+        Map<String, TeacherResourceDocumentResponse> documentsById = documents.stream()
+                .collect(Collectors.toMap(
+                        TeacherResourceDocumentResponse::documentId,
+                        Function.identity(),
+                        (left, ignored) -> left,
+                        LinkedHashMap::new));
+        Set<String> visibleDocumentIds = documentsById.keySet();
+        Map<String, TeacherDocumentBlockResponse> blocksById = new LinkedHashMap<>();
+        for (TeacherResourceDocumentResponse document : documents) {
+            for (TeacherDocumentBlockResponse block : blockStore.listByDocument(document.tenantId(), document.documentId())) {
+                blocksById.put(block.blockId(), block);
+            }
+        }
+        List<TeacherResourceBlockSearchResponse.Hit> vectorHits = vectorIndexService
+                .searchTeacherResourceBlocks(normalizedQuery, Math.max(safeLimit * 10, 50))
+                .stream()
+                .filter(hit -> visibleDocumentIds.contains(hit.documentId()))
+                .map(hit -> toVectorHit(documentsById.get(hit.documentId()), blocksById.get(hit.blockId()), hit, normalizedQuery, terms))
+                .filter(Objects::nonNull)
+                .toList();
+        List<TeacherResourceBlockSearchResponse.Hit> lexicalHits = lexicalHits(
+                tenantId,
+                documents,
+                normalizedQuery,
+                terms,
+                Math.max(safeLimit * 4, safeLimit));
+        List<TeacherResourceBlockSearchResponse.Hit> hits = mergeHybridHits(vectorHits, lexicalHits, safeLimit);
+        return response(normalizedQuery, safeLimit, "teacher_block_hybrid", hits);
+    }
+
+    private static List<TeacherResourceBlockSearchResponse.Hit> mergeHybridHits(
+            List<TeacherResourceBlockSearchResponse.Hit> vectorHits,
+            List<TeacherResourceBlockSearchResponse.Hit> lexicalHits,
+            int safeLimit) {
+        Map<String, TeacherResourceBlockSearchResponse.Hit> merged = new LinkedHashMap<>();
+        for (TeacherResourceBlockSearchResponse.Hit hit : vectorHits) {
+            merged.put(hit.documentId() + ":" + hit.blockId(), hit);
+        }
+        for (TeacherResourceBlockSearchResponse.Hit lexicalHit : lexicalHits) {
+            String key = lexicalHit.documentId() + ":" + lexicalHit.blockId();
+            TeacherResourceBlockSearchResponse.Hit vectorHit = merged.get(key);
+            merged.put(key, vectorHit == null ? lexicalHit : boostLexicalHit(lexicalHit, vectorHit.score()));
+        }
+        return merged.values().stream()
+                .sorted(Comparator.comparingDouble(TeacherResourceBlockSearchResponse.Hit::score).reversed()
+                        .thenComparing(TeacherResourceBlockSearchResponse.Hit::documentTitle)
+                        .thenComparingInt(TeacherResourceBlockSearchResponse.Hit::blockOrder))
+                .limit(safeLimit)
+                .toList();
+    }
+
+    private static TeacherResourceBlockSearchResponse.Hit boostLexicalHit(
+            TeacherResourceBlockSearchResponse.Hit lexicalHit,
+            double vectorScore) {
+        return new TeacherResourceBlockSearchResponse.Hit(
+                lexicalHit.documentId(),
+                lexicalHit.documentTitle(),
+                lexicalHit.permissionScope(),
+                lexicalHit.blockId(),
+                lexicalHit.blockType(),
+                lexicalHit.blockOrder(),
+                lexicalHit.chapter(),
+                lexicalHit.section(),
+                lexicalHit.pageNo(),
+                lexicalHit.snippet(),
+                lexicalHit.score() + Math.max(vectorScore, 0));
+    }
+
+    private static TeacherResourceBlockSearchResponse.Hit toVectorHit(
+            TeacherResourceDocumentResponse document,
+            TeacherDocumentBlockResponse block,
+            VectorSearchHit vectorHit,
+            String normalizedQuery,
+            String[] terms) {
+        if (document == null || block == null) {
+            return null;
+        }
+        return new TeacherResourceBlockSearchResponse.Hit(
+                document.documentId(),
+                document.title(),
+                document.permissionScope(),
+                block.blockId(),
+                block.blockType(),
+                block.blockOrder(),
+                block.chapter(),
+                block.section(),
+                block.pageNo(),
+                snippet(textOrDefault(block.rawText(), vectorHit.text()), normalizedQuery, terms),
+                vectorHit.score());
+    }
+
+    private List<TeacherResourceBlockSearchResponse.Hit> lexicalHits(
+            String tenantId,
+            List<TeacherResourceDocumentResponse> documents,
+            String normalizedQuery,
+            String[] terms,
+            int safeLimit) {
+        return documents.stream()
+                .flatMap(document -> blockStore.listByDocument(tenantId, document.documentId()).stream()
                         .map(block -> hit(document, block, normalizedQuery, terms)))
                 .filter(candidate -> candidate.score() > 0)
                 .sorted(Comparator.comparingDouble(TeacherResourceBlockSearchResponse.Hit::score).reversed()
@@ -112,9 +234,6 @@ public class TeacherResourceBlockSearchService {
                         .thenComparingInt(TeacherResourceBlockSearchResponse.Hit::blockOrder))
                 .limit(safeLimit)
                 .toList();
-        TeacherResourceBlockSearchResponse searchResponse = response(normalizedQuery, safeLimit, hits);
-        recordAudit(normalizedTenantId, normalizedRole, normalizedSubjectId, endpoint, searchResponse, startedNanos);
-        return searchResponse;
     }
 
     /**
@@ -208,12 +327,13 @@ public class TeacherResourceBlockSearchService {
     private static TeacherResourceBlockSearchResponse response(
             String normalizedQuery,
             int safeLimit,
+            String retrievalMode,
             List<TeacherResourceBlockSearchResponse.Hit> hits) {
         return new TeacherResourceBlockSearchResponse(
                 UUID.randomUUID().toString(),
                 normalizedQuery,
                 safeLimit,
-                "teacher_block_lexical",
+                retrievalMode,
                 hits.size(),
                 hits);
     }
@@ -265,5 +385,15 @@ public class TeacherResourceBlockSearchService {
      */
     private static String textOrDefault(String value, String defaultValue) {
         return value == null || value.isBlank() ? defaultValue : value.strip();
+    }
+
+    /**
+     * Returns stripped text or fails when backend identity is missing.
+     */
+    private static String requireText(String value, String message) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException(message);
+        }
+        return value.strip();
     }
 }

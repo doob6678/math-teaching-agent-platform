@@ -39,8 +39,8 @@ public class KnowledgeQuestionBankService {
         requireTeacherOrAdmin(role);
         KnowledgePointRecord record = new KnowledgePointRecord(
                 UUID.randomUUID().toString(),
-                textOrDefault(tenantId, "default"),
-                textOrDefault(viewerSubjectId, "local-teacher-console"),
+                requireText(tenantId, "tenantId"),
+                requireText(viewerSubjectId, "viewerSubjectId"),
                 normalizePermissionScope(request.permissionScope(), role),
                 requireText(request.knowledgePointName(), "knowledgePointName"),
                 textOrDefault(request.chapterPath(), ""),
@@ -61,8 +61,8 @@ public class KnowledgeQuestionBankService {
         requireTeacherOrAdmin(role);
         QuestionBankItemRecord record = new QuestionBankItemRecord(
                 UUID.randomUUID().toString(),
-                textOrDefault(tenantId, "default"),
-                textOrDefault(viewerSubjectId, "local-teacher-console"),
+                requireText(tenantId, "tenantId"),
+                requireText(viewerSubjectId, "viewerSubjectId"),
                 normalizePermissionScope(request.permissionScope(), role),
                 requireText(request.questionTitle(), "questionTitle"),
                 requireText(request.questionText(), "questionText"),
@@ -86,8 +86,8 @@ public class KnowledgeQuestionBankService {
             String sourceSummary) {
         String role = normalizeRole(viewerRole);
         requireTeacherOrAdmin(role);
-        String normalizedTenantId = textOrDefault(tenantId, "default");
-        String normalizedOwner = textOrDefault(viewerSubjectId, "local-teacher-console");
+        String normalizedTenantId = requireText(tenantId, "tenantId");
+        String normalizedOwner = requireText(viewerSubjectId, "viewerSubjectId");
         String effectiveScope = normalizePermissionScope(permissionScope, role);
         String normalizedName = requireText(knowledgePointName, "knowledgePointName");
         String normalizedChapterPath = textOrDefault(chapterPath, "");
@@ -131,8 +131,8 @@ public class KnowledgeQuestionBankService {
         requireTeacherOrAdmin(role);
         QuestionBankItemRecord record = new QuestionBankItemRecord(
                 UUID.randomUUID().toString(),
-                textOrDefault(tenantId, "default"),
-                textOrDefault(viewerSubjectId, "local-teacher-console"),
+                requireText(tenantId, "tenantId"),
+                requireText(viewerSubjectId, "viewerSubjectId"),
                 normalizePermissionScope(permissionScope, role),
                 requireText(questionTitle, "questionTitle"),
                 requireText(questionText, "questionText"),
@@ -156,9 +156,9 @@ public class KnowledgeQuestionBankService {
         String role = normalizeRole(viewerRole);
         requireTeacherOrAdmin(role);
         return store.listKnowledgePoints(
-                        textOrDefault(tenantId, "default"),
+                        requireText(tenantId, "tenantId"),
                         role,
-                        textOrDefault(viewerSubjectId, "local-teacher-console"))
+                        requireText(viewerSubjectId, "viewerSubjectId"))
                 .stream()
                 .map(KnowledgeQuestionBankService::toResponse)
                 .toList();
@@ -174,9 +174,9 @@ public class KnowledgeQuestionBankService {
         String role = normalizeRole(viewerRole);
         requireTeacherOrAdmin(role);
         return store.listKnowledgeRelations(
-                        textOrDefault(tenantId, "default"),
+                        requireText(tenantId, "tenantId"),
                         role,
-                        textOrDefault(viewerSubjectId, "local-teacher-console"))
+                        requireText(viewerSubjectId, "viewerSubjectId"))
                 .stream()
                 .map(KnowledgeQuestionBankService::toResponse)
                 .toList();
@@ -194,9 +194,9 @@ public class KnowledgeQuestionBankService {
         String role = normalizeRole(viewerRole);
         requireTeacherOrAdmin(role);
         return store.searchQuestions(
-                        textOrDefault(tenantId, "default"),
+                        requireText(tenantId, "tenantId"),
                         role,
-                        textOrDefault(viewerSubjectId, "local-teacher-console"),
+                        requireText(viewerSubjectId, "viewerSubjectId"),
                         textOrDefault(query, ""),
                         limit)
                 .stream()
@@ -280,7 +280,7 @@ public class KnowledgeQuestionBankService {
      * Normalizes the backend viewer role.
      */
     private static String normalizeRole(String viewerRole) {
-        return textOrDefault(viewerRole, "teacher").toLowerCase();
+        return requireText(viewerRole, "viewerRole").toLowerCase();
     }
 
     /**

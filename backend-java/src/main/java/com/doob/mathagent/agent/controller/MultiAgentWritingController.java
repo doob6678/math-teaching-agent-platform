@@ -31,6 +31,7 @@ public class MultiAgentWritingController {
 
     private static final String PATH = "/api/agents/writing/courseware";
     private static final String ASYNC_PATH = "/api/agents/writing/courseware/async";
+    private static final String RESUME_PATH = "/api/agents/writing/{workflowId}/resume";
 
     private final MultiAgentWritingService writingService;
     private final AgentTraceQueryService traceQueryService;
@@ -131,6 +132,38 @@ public class MultiAgentWritingController {
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Multi-agent writing workflow not found"));
         } catch (IllegalArgumentException exception) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, exception.getMessage(), exception);
+        }
+    }
+
+    /**
+     * Resumes a failed protected multi-agent writing workflow from its first missing stage.
+     *
+     * @param workflowId workflow id returned by the write endpoint
+     * @param request latest writing request for remaining stages
+     * @param httpRequest HTTP request used only for trusted backend subject and capability headers
+     * @return resumed workflow status
+     */
+    @PostMapping(RESUME_PATH)
+    public MultiAgentWritingResponse resume(
+            @PathVariable String workflowId,
+            @Valid @RequestBody MultiAgentWritingRequest request,
+            HttpServletRequest httpRequest) {
+        RequestSubject subject = subjectResolver.resolve(httpRequest);
+        String normalizedPath = "/api/agents/writing/" + normalizedWorkflowId(workflowId) + "/resume";
+        if (!capabilityVerifier.verify(
+                headerOrEmpty(httpRequest, "X-Capability-Token"),
+                writingService.capabilityAction(),
+                normalizedPath,
+                headerOrEmpty(httpRequest, "X-Request-Hash"),
+                subject)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for multi-agent writing resume");
+        }
+        try {
+            return writingService.resume(workflowId, request, subject);
+        } catch (IllegalArgumentException exception) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, exception.getMessage(), exception);
+        } catch (IllegalStateException exception) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, exception.getMessage(), exception);
         }
     }
 

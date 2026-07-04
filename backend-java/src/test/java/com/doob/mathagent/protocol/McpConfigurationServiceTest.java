@@ -17,7 +17,10 @@ class McpConfigurationServiceTest {
 
     @Test
     void returnsCopyableMcpConfigurationWithoutEchoingSecretKey() throws Exception {
-        ProtocolDiscoveryService service = new ProtocolDiscoveryService();
+        ProtocolDiscoveryService service = serviceWithClient(
+                "workbuddy-teacher",
+                "teacher",
+                "mcp_secret_1234567890abcdef");
 
         McpConfigurationResponse response = service.mcpConfiguration(new McpConfigurationRequest(
                 "https://math.example.com/api/mcp",
@@ -41,7 +44,15 @@ class McpConfigurationServiceTest {
                 "search_teacher_resource_evidence",
                 "get_teaching_ai_trace",
                 "get_ai_diagnostic_summary",
-                "get_multi_agent_writing_trace");
+                "get_multi_agent_writing_trace",
+                "plan_agent_run",
+                "start_multi_agent_writing",
+                "get_multi_agent_writing_status",
+                "get_multi_agent_writing_artifact",
+                "export_multi_agent_writing_artifact",
+                "resume_multi_agent_writing",
+                "discover_feishu_resources",
+                "download_feishu_resource");
         assertThat(response.configJson()).doesNotContain("plan_agent_run");
         assertThat(response.configJson()).doesNotContain("create_teaching_task");
         assertThat(response.configJson()).doesNotContain("export_handout_pdf");
@@ -53,7 +64,10 @@ class McpConfigurationServiceTest {
 
     @Test
     void intersectsRequestedToolsAndPromptsWithBackendKeyProfile() {
-        ProtocolDiscoveryService service = new ProtocolDiscoveryService();
+        ProtocolDiscoveryService service = serviceWithClient(
+                "workbuddy-student",
+                "student",
+                "student_secret_1234567890abcdef");
 
         McpConfigurationResponse response = service.mcpConfiguration(new McpConfigurationRequest(
                 "https://math.example.com/api/mcp",
@@ -73,17 +87,20 @@ class McpConfigurationServiceTest {
                 "get_teaching_ai_trace",
                 "get_ai_diagnostic_summary");
         assertThat(response.exposedPrompts()).containsExactly("student_blank_handout_writer");
-        assertThat(response.configJson()).contains("\"tools\"");
-        assertThat(response.configJson()).contains("search_textbook_evidence");
+        assertThat(response.configJson()).doesNotContain("\"tools\"");
+        assertThat(response.configJson()).doesNotContain("search_textbook_evidence");
         assertThat(response.configJson()).doesNotContain("export_handout_pdf");
         assertThat(response.configJson()).doesNotContain("search_teacher_resource_evidence");
-        assertThat(response.configJson()).contains("student_blank_handout_writer");
+        assertThat(response.configJson()).doesNotContain("student_blank_handout_writer");
         assertThat(response.configJson()).doesNotContain("teacher_handout_writer");
     }
 
     @Test
-    void excludesProtectedToolsFromCopyableMcpConfigurationEvenWhenRequested() {
-        ProtocolDiscoveryService service = new ProtocolDiscoveryService();
+    void exposesOnlyRealExecutableMcpToolsWhenRequested() {
+        ProtocolDiscoveryService service = serviceWithClient(
+                "workbuddy-teacher",
+                "teacher",
+                "mcp_secret_1234567890abcdef");
 
         McpConfigurationResponse response = service.mcpConfiguration(new McpConfigurationRequest(
                 "https://math.example.com/api/mcp",
@@ -96,6 +113,7 @@ class McpConfigurationServiceTest {
                         "get_ai_diagnostic_summary",
                         "get_multi_agent_writing_trace",
                         "plan_agent_run",
+                        "download_feishu_resource",
                         "create_teaching_task",
                         "export_handout_pdf",
                         "list_teacher_resources"),
@@ -106,11 +124,13 @@ class McpConfigurationServiceTest {
                 "search_teacher_resource_evidence",
                 "get_teaching_ai_trace",
                 "get_ai_diagnostic_summary",
-                "get_multi_agent_writing_trace");
-        assertThat(response.configJson()).contains("search_teacher_resource_evidence");
-        assertThat(response.configJson()).contains("get_teaching_ai_trace");
-        assertThat(response.configJson()).contains("get_ai_diagnostic_summary");
-        assertThat(response.configJson()).contains("get_multi_agent_writing_trace");
+                "get_multi_agent_writing_trace",
+                "plan_agent_run",
+                "download_feishu_resource");
+        assertThat(response.configJson()).doesNotContain("search_teacher_resource_evidence");
+        assertThat(response.configJson()).doesNotContain("get_teaching_ai_trace");
+        assertThat(response.configJson()).doesNotContain("get_ai_diagnostic_summary");
+        assertThat(response.configJson()).doesNotContain("get_multi_agent_writing_trace");
         assertThat(response.configJson()).doesNotContain("plan_agent_run");
         assertThat(response.configJson()).doesNotContain("create_teaching_task");
         assertThat(response.configJson()).doesNotContain("export_handout_pdf");
@@ -123,8 +143,12 @@ class McpConfigurationServiceTest {
         properties.setClients(List.of(new McpClientRegistryProperties.Client(
                 "student-client-1",
                 "student",
+                "school-a",
+                "student-mcp-client-1",
                 ProtocolDiscoveryService.secretHashForTest("teacher_named_secret_1234567890"),
-                true)));
+                true,
+                List.of("search_textbook_evidence"),
+                List.of("PUBLIC_TEXTBOOK"))));
         ProtocolDiscoveryService service = new ProtocolDiscoveryService(properties);
 
         McpConfigurationResponse response = service.mcpConfiguration(new McpConfigurationRequest(
@@ -144,7 +168,10 @@ class McpConfigurationServiceTest {
 
     @Test
     void rejectsUnsafeMcpConfigurationInput() {
-        ProtocolDiscoveryService service = new ProtocolDiscoveryService();
+        ProtocolDiscoveryService service = serviceWithClient(
+                "workbuddy-teacher",
+                "teacher",
+                "mcp_secret_1234567890abcdef");
 
         assertThatThrownBy(() -> service.mcpConfiguration(new McpConfigurationRequest(
                 "file:///C:/Users/doob/secret",
@@ -163,5 +190,33 @@ class McpConfigurationServiceTest {
                 List.of())))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("secretKey");
+    }
+
+    @Test
+    void rejectsUnregisteredSecretInsteadOfGeneratingFakeConfig() {
+        ProtocolDiscoveryService service = new ProtocolDiscoveryService();
+
+        assertThatThrownBy(() -> service.mcpConfiguration(new McpConfigurationRequest(
+                "https://math.example.com/api/mcp",
+                "mcp_secret_1234567890abcdef",
+                "MATH_AGENT_MCP_SECRET",
+                List.of(),
+                List.of())))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("not registered");
+    }
+
+    private static ProtocolDiscoveryService serviceWithClient(String clientId, String profile, String secret) {
+        McpClientRegistryProperties properties = new McpClientRegistryProperties();
+        properties.setClients(List.of(new McpClientRegistryProperties.Client(
+                clientId,
+                profile,
+                "school-a",
+                clientId + "-subject",
+                McpClientRegistryProperties.secretHash(secret),
+                true,
+                List.of("search_textbook_evidence"),
+                List.of("PUBLIC_TEXTBOOK"))));
+        return new ProtocolDiscoveryService(properties);
     }
 }

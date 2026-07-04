@@ -4,8 +4,9 @@ import com.doob.mathagent.agent.dto.AgentRunExecuteRequest;
 import com.doob.mathagent.agent.vo.AgentRunExecuteResponse;
 import com.doob.mathagent.agent.vo.AgentRunPlanResponse;
 import com.doob.mathagent.infrastructure.ai.AiProviderCatalog;
-import com.doob.mathagent.infrastructure.ai.AiProviderProperties;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -17,13 +18,15 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 /**
- * Records a baseline AI agent execution trace without invoking external model providers yet.
+ * Executes a planned AI agent run through the configured live model gateway and records a safe trace.
  */
 @Service
 public class AgentRunExecutionService {
 
     private static final String COMPLETED = "COMPLETED";
     private static final Duration CONCURRENCY_LEASE_TIME = Duration.ofMinutes(10);
+    private static final int JSON_REPAIR_MAX_RETRIES = 2;
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private final AgentTraceStore traceStore;
     private final AgentConcurrencyGuard concurrencyGuard;
@@ -43,63 +46,6 @@ public class AgentRunExecutionService {
             AiChatGateway aiChatGateway,
             AiProviderCatalog providerCatalog) {
         this(traceStore, concurrencyGuard, aiChatGateway, providerCatalog, Clock.systemUTC());
-    }
-
-    /**
-     * Creates a service with local concurrency protection for tests that only provide a trace store.
-     *
-     * @param traceStore trace storage boundary
-     */
-    public AgentRunExecutionService(AgentTraceStore traceStore) {
-        this(traceStore, new InMemoryAgentConcurrencyGuard(), new NoopAiChatGateway(), emptyProviderCatalog(), Clock.systemUTC());
-    }
-
-    /**
-     * Creates a testable execution service.
-     *
-     * @param traceStore trace storage boundary
-     * @param clock clock used for trace timestamps
-     */
-    public AgentRunExecutionService(AgentTraceStore traceStore, Clock clock) {
-        this(traceStore, new InMemoryAgentConcurrencyGuard(), new NoopAiChatGateway(), emptyProviderCatalog(), clock);
-    }
-
-    /**
-     * Creates a testable execution service with explicit concurrency guard.
-     *
-     * @param traceStore trace storage boundary
-     * @param concurrencyGuard concurrency guard
-     */
-    public AgentRunExecutionService(AgentTraceStore traceStore, AgentConcurrencyGuard concurrencyGuard) {
-        this(traceStore, concurrencyGuard, new NoopAiChatGateway(), emptyProviderCatalog(), Clock.systemUTC());
-    }
-
-    /**
-     * Creates a testable execution service with a fake model gateway.
-     *
-     * @param traceStore trace storage boundary
-     * @param concurrencyGuard concurrency guard
-     * @param aiChatGateway model gateway
-     */
-    public AgentRunExecutionService(
-            AgentTraceStore traceStore,
-            AgentConcurrencyGuard concurrencyGuard,
-            AiChatGateway aiChatGateway) {
-        this(traceStore, concurrencyGuard, aiChatGateway, defaultTestProviderCatalog(), Clock.systemUTC());
-    }
-
-    /**
-     * Creates a testable execution service with explicit dependencies.
-     *
-     * @param traceStore trace storage boundary
-     * @param concurrencyGuard concurrency guard
-     * @param clock clock used for trace timestamps
-     */
-    public AgentRunExecutionService(
-            AgentTraceStore traceStore,
-            AgentConcurrencyGuard concurrencyGuard,
-            Clock clock) {
-        this(traceStore, concurrencyGuard, new NoopAiChatGateway(), emptyProviderCatalog(), clock);
     }
 
     /**
@@ -150,7 +96,7 @@ public class AgentRunExecutionService {
     }
 
     /**
-     * Executes the baseline run by validating ownership and writing a trace record.
+     * Executes the run by validating ownership, calling the model gateway, and writing a trace record.
      *
      * @param request execution request
      * @param subject backend authenticated subject
@@ -192,10 +138,11 @@ public class AgentRunExecutionService {
         try {
             timer.mark("trace_start");
 
-            ExecutionOutcome outcome = normalized.dryRun()
-                    ? ExecutionOutcome.baseline(record.providerName(), record.modelCode())
-                    : callModelWithFallback(normalized, record);
-            timer.mark(normalized.dryRun() ? "baseline_execute" : "model_call");
+            if (normalized.dryRun()) {
+                throw new IllegalArgumentException("Agent dryRun is disabled in production");
+            }
+            ExecutionOutcome outcome = callModelWithFallback(normalized, record);
+            timer.mark("model_call");
             timer.mark("trace_finish");
             AgentTraceRecord finalRecord = new AgentTraceRecord(
                     record.traceId(),
@@ -237,7 +184,8 @@ public class AgentRunExecutionService {
                     concurrencyKeys,
                     finalRecord.stageTimings(),
                     finalRecord.actualUsage(),
-                    finalRecord.message());
+                    finalRecord.message(),
+                    outcome.generatedContent());
         } finally {
             lease.close();
         }
@@ -253,50 +201,168 @@ public class AgentRunExecutionService {
         for (int index = 0; index < providers.size(); index++) {
             AiProviderCatalog.Provider provider = providers.get(index);
             boolean canRotateProvider = index < providers.size() - 1;
-            try {
-                AiChatResult result = aiChatGateway.call(new AiChatRequest(
-                        provider.name(),
-                        provider.chatModel(),
-                        record.agentCode(),
-                        request.userInputSummary(),
-                        request.evidenceRefs()));
-                diagnosticEvents.add(diagnosticEvent(
-                        "MODEL_CALL_SUCCEEDED",
-                        result.providerName(),
-                        result.modelCode(),
-                        index,
-                        false,
-                        result.safeMessage()));
-                return new ExecutionOutcome(
-                        result.providerName(),
-                        result.modelCode(),
-                        Math.max(0, result.promptTokens()),
-                        Math.max(0, result.completionTokens()),
-                        Math.max(0, result.totalTokens()),
-                        result.safeMessage(),
-                        List.copyOf(diagnosticEvents));
-            } catch (RuntimeException exception) {
-                lastFailure = exception;
-                diagnosticEvents.add(diagnosticEvent(
-                        "MODEL_CALL_FAILED",
-                        provider.name(),
-                        provider.chatModel(),
-                        index,
-                        canRotateProvider,
-                        exception.getClass().getSimpleName()));
-                if (canRotateProvider) {
-                    AiProviderCatalog.Provider nextProvider = providers.get(index + 1);
+            String nextInputSummary = request.userInputSummary();
+            int accumulatedPromptTokens = 0;
+            int accumulatedCompletionTokens = 0;
+            int accumulatedTotalTokens = 0;
+            int maxAttempts = request.plan().requiredJsonSchema() ? JSON_REPAIR_MAX_RETRIES : 0;
+            for (int attempt = 0; attempt <= maxAttempts; attempt++) {
+                boolean canRetryJson = attempt < maxAttempts;
+                try {
+                    AiChatResult result = aiChatGateway.call(new AiChatRequest(
+                            provider.name(),
+                            provider.chatModel(),
+                            record.agentCode(),
+                            nextInputSummary,
+                            request.evidenceRefs()));
+                    accumulatedPromptTokens += Math.max(0, result.promptTokens());
+                    accumulatedCompletionTokens += Math.max(0, result.completionTokens());
+                    accumulatedTotalTokens += Math.max(0, result.totalTokens());
                     diagnosticEvents.add(diagnosticEvent(
-                            "PROVIDER_ROTATED",
-                            nextProvider.name(),
-                            nextProvider.chatModel(),
-                            index + 1,
+                            "MODEL_CALL_SUCCEEDED",
+                            result.providerName(),
+                            result.modelCode(),
+                            attempt,
+                            false,
+                            result.safeMessage()));
+                    JsonValidationResult validation = validateJsonIfRequired(request.plan(), result.generatedContent());
+                    if (validation.valid()) {
+                        if (request.plan().requiredJsonSchema()) {
+                            diagnosticEvents.add(diagnosticEvent(
+                                    "JSON_PARSE_SUCCEEDED",
+                                    result.providerName(),
+                                    result.modelCode(),
+                                    attempt,
+                                    false,
+                                    "Agent output parsed as a JSON object."));
+                        }
+                        return new ExecutionOutcome(
+                                result.providerName(),
+                                result.modelCode(),
+                                accumulatedPromptTokens,
+                                accumulatedCompletionTokens,
+                                accumulatedTotalTokens,
+                                result.safeMessage(),
+                                safeGeneratedContent(result.generatedContent()),
+                                List.copyOf(diagnosticEvents));
+                    }
+                    diagnosticEvents.add(diagnosticEvent(
+                            "JSON_PARSE_FAILED",
+                            result.providerName(),
+                            result.modelCode(),
+                            attempt,
+                            canRetryJson || canRotateProvider,
+                            validation.error()));
+                    if (!canRetryJson) {
+                        lastFailure = new IllegalStateException(validation.error());
+                        break;
+                    }
+                    diagnosticEvents.add(diagnosticEvent(
+                            "RETRY_SCHEDULED",
+                            provider.name(),
+                            provider.chatModel(),
+                            attempt + 1,
                             true,
-                            "Switching to next enabled provider after model call failure."));
+                            "Retrying model output repair after JSON parse failure."));
+                    nextInputSummary = jsonRepairPrompt(request.userInputSummary(), result.generatedContent(), validation.error());
+                } catch (RuntimeException exception) {
+                    lastFailure = exception;
+                    diagnosticEvents.add(diagnosticEvent(
+                            "MODEL_CALL_FAILED",
+                            provider.name(),
+                            provider.chatModel(),
+                            attempt,
+                            canRetryJson || canRotateProvider,
+                            exception.getClass().getSimpleName()));
+                    if (!canRetryJson) {
+                        break;
+                    }
+                    diagnosticEvents.add(diagnosticEvent(
+                            "RETRY_SCHEDULED",
+                            provider.name(),
+                            provider.chatModel(),
+                            attempt + 1,
+                            true,
+                            "Retrying after transient model gateway failure."));
                 }
+            }
+            if (canRotateProvider) {
+                AiProviderCatalog.Provider nextProvider = providers.get(index + 1);
+                diagnosticEvents.add(diagnosticEvent(
+                        "PROVIDER_ROTATED",
+                        nextProvider.name(),
+                        nextProvider.chatModel(),
+                        index + 1,
+                        true,
+                        "Switching to next enabled provider after failed attempts."));
             }
         }
         throw new IllegalStateException("All configured AI providers failed", lastFailure);
+    }
+
+    /**
+     * Validates required structured output as a single JSON object.
+     */
+    private static JsonValidationResult validateJsonIfRequired(AgentRunPlanResponse plan, String generatedContent) {
+        if (!plan.requiredJsonSchema()) {
+            return JsonValidationResult.ok();
+        }
+        String content = safeText(generatedContent);
+        if (content.isBlank()) {
+            return JsonValidationResult.failed("empty model content");
+        }
+        String json = extractJsonObject(stripCodeFence(content));
+        try {
+            if (!OBJECT_MAPPER.readTree(json).isObject()) {
+                return JsonValidationResult.failed("model output is not a JSON object");
+            }
+            return JsonValidationResult.ok();
+        } catch (JsonProcessingException exception) {
+            return JsonValidationResult.failed(exception.getClass().getSimpleName() + ": " + safeText(exception.getOriginalMessage()));
+        }
+    }
+
+    /**
+     * Builds a concise repair prompt without storing raw prompts in traces.
+     */
+    private static String jsonRepairPrompt(String originalSummary, String previousContent, String parseError) {
+        return """
+                The previous model output failed backend JSON validation.
+                Return exactly one JSON object. Do not wrap it in Markdown fences. Do not add explanations.
+                Parse error: %s
+                Original task: %s
+                Previous output: %s
+                """.formatted(
+                safeText(parseError),
+                safeText(originalSummary),
+                safeText(previousContent));
+    }
+
+    /**
+     * Removes a Markdown code fence before JSON object extraction.
+     */
+    private static String stripCodeFence(String content) {
+        if (!content.startsWith("```")) {
+            return content;
+        }
+        int firstLineEnd = content.indexOf('\n');
+        int lastFenceStart = content.lastIndexOf("```");
+        if (firstLineEnd >= 0 && lastFenceStart > firstLineEnd) {
+            return content.substring(firstLineEnd + 1, lastFenceStart).strip();
+        }
+        return content;
+    }
+
+    /**
+     * Extracts the outermost object span from text that may include provider boilerplate.
+     */
+    private static String extractJsonObject(String content) {
+        int start = content.indexOf('{');
+        int end = content.lastIndexOf('}');
+        if (start < 0 || end <= start) {
+            return content;
+        }
+        return content.substring(start, end + 1);
     }
 
     /**
@@ -367,30 +433,17 @@ public class AgentRunExecutionService {
     }
 
     /**
+     * Normalizes owner-facing generated content without writing it to generic trace rows.
+     */
+    private static String safeGeneratedContent(String value) {
+        return value == null || value.isBlank() ? "" : value.strip();
+    }
+
+    /**
      * Returns a null-safe stripped immutable list.
      */
     private static List<String> safeList(List<String> values) {
         return values == null ? List.of() : values.stream().map(AgentRunExecutionService::safeText).toList();
-    }
-
-    /**
-     * Builds an empty provider catalog for dry-run-only tests.
-     */
-    private static AiProviderCatalog emptyProviderCatalog() {
-        return new AiProviderCatalog(new AiProviderProperties());
-    }
-
-    /**
-     * Builds a deterministic provider catalog for gateway unit tests.
-     */
-    private static AiProviderCatalog defaultTestProviderCatalog() {
-        AiProviderProperties properties = new AiProviderProperties();
-        properties.setDefaultProvider("dashscope");
-        properties.getDashscope().setApiKey("dashscope-key");
-        properties.getDashscope().setChatModel("qwen3.6-flash");
-        properties.getOpenai().setApiKey("openai-key");
-        properties.getOpenai().setChatModel("gpt-5.4");
-        return new AiProviderCatalog(properties);
     }
 
     /**
@@ -454,20 +507,28 @@ public class AgentRunExecutionService {
             int completionTokens,
             int totalTokens,
             String message,
+            String generatedContent,
             List<AgentTraceRecord.DiagnosticEvent> diagnosticEvents) {
 
+    }
+
+    /**
+     * JSON validation result for model-output repair loops.
+     */
+    private record JsonValidationResult(boolean valid, String error) {
+
         /**
-         * Returns a baseline dry-run outcome with zero provider usage.
+         * Successful validation.
          */
-        private static ExecutionOutcome baseline(String providerName, String modelCode) {
-            return new ExecutionOutcome(
-                    providerName,
-                    modelCode,
-                    0,
-                    0,
-                    0,
-                    "Baseline trace recorded; external model execution is not enabled yet.",
-                    List.of());
+        private static JsonValidationResult ok() {
+            return new JsonValidationResult(true, "");
+        }
+
+        /**
+         * Failed validation with a safe short reason.
+         */
+        private static JsonValidationResult failed(String error) {
+            return new JsonValidationResult(false, safeText(error));
         }
     }
 }

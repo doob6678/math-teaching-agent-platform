@@ -1,9 +1,12 @@
 package com.doob.mathagent.student.service;
 
+import com.doob.mathagent.knowledge.vo.KnowledgeGraphSpineResponse;
 import com.doob.mathagent.student.vo.StudentDashboardResponse;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Assembles a student-visible knowledge graph from progress records and source evidence.
@@ -24,37 +27,61 @@ final class StudentKnowledgeGraphAssembler {
     static StudentDashboardResponse.KnowledgeGraph knowledgeGraph(
             List<StudentDashboardResponse.KnowledgeProgress> progress,
             List<StudentDashboardResponse.WeakPoint> weakPoints,
-            String viewerRole) {
+            String viewerRole,
+            KnowledgeGraphSpineResponse spine) {
         Map<String, Integer> weaknessByKnowledgeId = new HashMap<>();
         for (StudentDashboardResponse.WeakPoint weakPoint : weakPoints) {
             weaknessByKnowledgeId.put(weakPoint.knowledgePointId(), weakPoint.weaknessLevel());
         }
+        Set<String> visibleNodeIds = new HashSet<>();
         List<StudentDashboardResponse.KnowledgeGraphNode> nodes = progress.stream()
-                .map(item -> new StudentDashboardResponse.KnowledgeGraphNode(
-                        item.knowledgePointId(),
-                        item.knowledgePointName(),
-                        item.textbookAnchor(),
-                        item.progressPercent(),
-                        riskLevel(item.progressPercent(), weaknessByKnowledgeId.get(item.knowledgePointId())),
-                        evidenceLinks(item, viewerRole)))
+                .map(item -> {
+                    visibleNodeIds.add(item.knowledgePointId());
+                    return new StudentDashboardResponse.KnowledgeGraphNode(
+                            item.knowledgePointId(),
+                            item.knowledgePointName(),
+                            chapterPath(item, spine),
+                            item.progressPercent(),
+                            riskLevel(item.progressPercent(), weaknessByKnowledgeId.get(item.knowledgePointId())),
+                            evidenceLinks(item, viewerRole));
+                })
                 .toList();
-        List<StudentDashboardResponse.KnowledgeGraphEdge> edges = List.of(
-                new StudentDashboardResponse.KnowledgeGraphEdge(
-                        "edge-vector-dot-solid-geometry",
-                        "math-vector-dot-product",
-                        "math-solid-geometry",
-                        "PREREQUISITE_FOR",
-                        "Vector dot product supports angle and perpendicularity judgments in solid geometry."),
-                new StudentDashboardResponse.KnowledgeGraphEdge(
-                        "edge-function-piecewise-vector-method",
-                        "math-function-piecewise",
-                        "math-vector-dot-product",
-                        "RELATED_TO",
-                        "Both topics require checking domain constraints before formula substitution."));
+        List<StudentDashboardResponse.KnowledgeGraphEdge> edges = visibleEdges(visibleNodeIds, spine);
         return new StudentDashboardResponse.KnowledgeGraph(
                 nodes,
                 edges,
-                "dashboard_progress+weak_points+textbook_anchor+feishu_anchor");
+                generatedFrom(spine));
+    }
+
+    /**
+     * Builds a graph when only progress records are available and no curated relation graph is visible.
+     */
+    static StudentDashboardResponse.KnowledgeGraph knowledgeGraph(
+            List<StudentDashboardResponse.KnowledgeProgress> progress,
+            List<StudentDashboardResponse.WeakPoint> weakPoints,
+            String viewerRole) {
+        return knowledgeGraph(progress, weakPoints, viewerRole, null);
+    }
+
+    /**
+     * Returns visible curated edges only when both endpoints exist in the current student graph.
+     */
+    private static List<StudentDashboardResponse.KnowledgeGraphEdge> visibleEdges(
+            Set<String> visibleNodeIds,
+            KnowledgeGraphSpineResponse spine) {
+        if (spine == null || spine.edges() == null || spine.edges().isEmpty()) {
+            return List.of();
+        }
+        return spine.edges().stream()
+                .filter(edge -> visibleNodeIds.contains(edge.source()))
+                .filter(edge -> visibleNodeIds.contains(edge.target()))
+                .map(edge -> new StudentDashboardResponse.KnowledgeGraphEdge(
+                        edge.id(),
+                        edge.source(),
+                        edge.target(),
+                        edge.relationType(),
+                        edge.evidenceSummary()))
+                .toList();
     }
 
     /**
@@ -136,5 +163,32 @@ final class StudentKnowledgeGraphAssembler {
                             "TEACHER_PRIVATE"));
         }
         return List.of(textbook, feishu);
+    }
+
+    /**
+     * Returns chapter path from the curated spine when visible, otherwise keeps the progress anchor.
+     */
+    private static String chapterPath(
+            StudentDashboardResponse.KnowledgeProgress progress,
+            KnowledgeGraphSpineResponse spine) {
+        if (spine == null || spine.nodes() == null) {
+            return progress.textbookAnchor();
+        }
+        return spine.nodes().stream()
+                .filter(node -> progress.knowledgePointId().equals(node.id()))
+                .map(KnowledgeGraphSpineResponse.Node::chapterPath)
+                .findFirst()
+                .filter(value -> value != null && !value.isBlank())
+                .orElse(progress.textbookAnchor());
+    }
+
+    /**
+     * Builds an audit tag that reflects whether curated graph data was used.
+     */
+    private static String generatedFrom(KnowledgeGraphSpineResponse spine) {
+        if (spine == null) {
+            return "dashboard_progress+weak_points";
+        }
+        return "dashboard_progress+weak_points+" + spine.version();
     }
 }

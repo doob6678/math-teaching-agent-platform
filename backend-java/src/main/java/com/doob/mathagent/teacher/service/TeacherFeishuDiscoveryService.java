@@ -48,17 +48,20 @@ public class TeacherFeishuDiscoveryService {
             String rootUrl,
             int listDepth,
             int maxDepth) {
-        String normalizedRole = textOrDefault(viewerRole, "anonymous").toLowerCase(Locale.ROOT);
+        requireText(tenantId, "tenantId is required");
+        String normalizedRole = requireText(viewerRole, "viewerRole is required").toLowerCase(Locale.ROOT);
+        requireText(viewerSubjectId, "viewerSubjectId is required");
         requireTeacherOrAdmin(normalizedRole);
         String normalizedMode = normalizeMode(mode);
         String normalizedKeyword = textOrDefault(keyword, "");
+        String normalizedRootUrl = requireText(rootUrl, "Feishu discovery rootUrl is required");
         if ("search".equals(normalizedMode) && normalizedKeyword.isBlank()) {
             throw new IllegalArgumentException("Feishu discovery search keyword is required");
         }
         TeacherFeishuDiscoveryQuery query = new TeacherFeishuDiscoveryQuery(
                 normalizedMode,
                 normalizedKeyword,
-                textOrDefault(rootUrl, ""),
+                normalizedRootUrl,
                 clamp(listDepth, DEFAULT_LIST_DEPTH, MAX_LIST_DEPTH),
                 clamp(maxDepth, DEFAULT_SEARCH_DEPTH, MAX_SEARCH_DEPTH));
         return discoveryClient.discover(query);
@@ -99,5 +102,15 @@ public class TeacherFeishuDiscoveryService {
      */
     private static String textOrDefault(String value, String defaultValue) {
         return value == null || value.isBlank() ? defaultValue : value.strip();
+    }
+
+    /**
+     * Returns stripped text or fails when a network root must be explicit.
+     */
+    private static String requireText(String value, String message) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException(message);
+        }
+        return value.strip();
     }
 }

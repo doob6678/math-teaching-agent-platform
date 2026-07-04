@@ -21,18 +21,19 @@ class TeacherResourceServiceTest {
     void teacherCanRegisterLocalFolderAndPreviewFiles() throws Exception {
         Path folder = tempDir.resolve("math-notes");
         Files.createDirectories(folder);
-        Files.writeString(folder.resolve("vector.md"), "# 空间向量\n数量积方法");
+        Files.writeString(folder.resolve("vector.md"), "# Space Vector\nVector dot product method.");
 
-        TeacherResourceService service = new TeacherResourceService(new InMemoryTeacherResourceStore());
+        TeacherResourceService service = TeacherResourceServiceFixture.service(new InMemoryTeacherResourceStore());
         TeacherResourceRegistrationCommand request = new TeacherResourceRegistrationCommand(
                 "default",
                 "teacher",
                 "teacher-001",
                 "local_path",
-                "空间向量讲义",
+                "Space Vector Notes",
                 null,
                 folder.toString(),
-                "MATH_VIP");
+                "MATH_VIP",
+                null);
 
         TeacherResourceDocumentResponse response = service.register(request);
 
@@ -49,16 +50,17 @@ class TeacherResourceServiceTest {
 
     @Test
     void studentCannotRegisterTeacherResource() {
-        TeacherResourceService service = new TeacherResourceService(new InMemoryTeacherResourceStore());
+        TeacherResourceService service = TeacherResourceServiceFixture.service(new InMemoryTeacherResourceStore());
         TeacherResourceRegistrationCommand request = new TeacherResourceRegistrationCommand(
                 "default",
                 "student",
                 "student-001",
                 "feishu",
-                "飞书题库",
+                "Feishu question bank",
                 "https://example.feishu.cn/docs/doc1",
                 null,
-                "TEACHER_PRIVATE");
+                "TEACHER_PRIVATE",
+                "md");
 
         assertThatThrownBy(() -> service.register(request))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -66,8 +68,29 @@ class TeacherResourceServiceTest {
     }
 
     @Test
+    void invalidLocalPathFailsBeforePersistingResource() {
+        TeacherResourceService service = TeacherResourceServiceFixture.service(new InMemoryTeacherResourceStore());
+        TeacherResourceRegistrationCommand request = new TeacherResourceRegistrationCommand(
+                "default",
+                "teacher",
+                "teacher-001",
+                "local_path",
+                "Broken Path",
+                null,
+                "C:\\workspace\\??\\resource",
+                "TEACHER_PRIVATE",
+                null);
+
+        assertThatThrownBy(() -> service.register(request))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Local resource path is invalid");
+
+        assertThat(service.list("default", "teacher", "teacher-001")).isEmpty();
+    }
+
+    @Test
     void feishuResourceRegistrationDefaultsAndReturnsMarkdownExportFormat() {
-        TeacherResourceService service = new TeacherResourceService(new InMemoryTeacherResourceStore());
+        TeacherResourceService service = TeacherResourceServiceFixture.service(new InMemoryTeacherResourceStore());
         TeacherResourceRegistrationCommand request = new TeacherResourceRegistrationCommand(
                 "default",
                 "teacher",
@@ -76,7 +99,8 @@ class TeacherResourceServiceTest {
                 "Feishu question bank",
                 "https://example.feishu.cn/docx/doc1",
                 null,
-                "TEACHER_PRIVATE");
+                "TEACHER_PRIVATE",
+                "md");
 
         TeacherResourceDocumentResponse response = service.register(request);
 
@@ -88,7 +112,7 @@ class TeacherResourceServiceTest {
 
     @Test
     void feishuResourceRegistrationSavesSelectedPdfExportFormat() {
-        TeacherResourceService service = new TeacherResourceService(new InMemoryTeacherResourceStore());
+        TeacherResourceService service = TeacherResourceServiceFixture.service(new InMemoryTeacherResourceStore());
         TeacherResourceRegistrationCommand request = new TeacherResourceRegistrationCommand(
                 "default",
                 "teacher",
@@ -107,16 +131,17 @@ class TeacherResourceServiceTest {
 
     @Test
     void ownerTeacherCanArchiveOwnResource() {
-        TeacherResourceService service = new TeacherResourceService(new InMemoryTeacherResourceStore());
+        TeacherResourceService service = TeacherResourceServiceFixture.service(new InMemoryTeacherResourceStore());
         TeacherResourceDocumentResponse created = service.register(new TeacherResourceRegistrationCommand(
                 "default",
                 "teacher",
                 "teacher-001",
                 "feishu",
-                "飞书题库",
+                "Feishu question bank",
                 "https://example.feishu.cn/docs/doc1",
                 null,
-                "TEACHER_PRIVATE"));
+                "TEACHER_PRIVATE",
+                "md"));
 
         TeacherResourceDocumentResponse archived = service.archive(
                 "default",

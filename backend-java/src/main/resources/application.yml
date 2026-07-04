@@ -4,7 +4,7 @@ spring:
   ai:
     model:
       chat: ${MATH_AGENT_AI_CHAT_MODEL:openai}
-      embedding: ${MATH_AGENT_AI_EMBEDDING_MODEL:none}
+      embedding: ${MATH_AGENT_AI_EMBEDDING_MODEL:local-clip-vit-large-patch14-zh}
       image: ${MATH_AGENT_AI_IMAGE_MODEL:none}
       audio:
         speech: ${MATH_AGENT_AI_AUDIO_SPEECH_MODEL:none}
@@ -42,31 +42,58 @@ math-agent:
       chat-model: ${DEEPSEEK_CHAT_MODEL:deepseek-v4-flash}
     ark:
       name: ark
+      # Volcengine Ark OpenAI-compatible online inference uses /api/v3.
+      # Official guide: https://www.volcengine.com/docs/82379/1330626
+      # Do not use /api/coding/v3 here; that endpoint is for Coding Plan APIs and uses different routing.
       base-url: ${ARK_BASE_URL:https://ark.cn-beijing.volces.com/api/v3}
       api-key: ${ARK_API_KEY:}
+      # This must be an Ark model ID/endpoint accepted by /api/v3/chat/completions.
       chat-model: ${ARK_CHAT_MODEL:doubao-seed-2-0-lite-260428}
   teaching:
     ai-draft:
       max-retries: ${MATH_AGENT_TEACHING_AI_DRAFT_MAX_RETRIES:1}
   database:
-    enabled: ${MATH_AGENT_DB_ENABLED:false}
+    enabled: ${MATH_AGENT_DB_ENABLED:true}
     url: ${MATH_AGENT_DB_URL:}
     username: ${MATH_AGENT_DB_USERNAME:}
     password: ${MATH_AGENT_DB_PASSWORD:}
   redis:
     redisson:
-      enabled: ${MATH_AGENT_REDIS_REDISSON_ENABLED:false}
+      enabled: ${MATH_AGENT_REDIS_REDISSON_ENABLED:true}
       address: ${MATH_AGENT_REDIS_REDISSON_ADDRESS:redis://127.0.0.1:6379}
     capability-store:
-      enabled: ${MATH_AGENT_REDIS_CAPABILITY_STORE_ENABLED:false}
+      enabled: ${MATH_AGENT_REDIS_CAPABILITY_STORE_ENABLED:true}
       key-prefix: ${MATH_AGENT_REDIS_CAPABILITY_STORE_KEY_PREFIX:math-agent:security:capability}
     rate-limit:
-      enabled: ${MATH_AGENT_REDIS_RATE_LIMIT_ENABLED:false}
+      enabled: ${MATH_AGENT_REDIS_RATE_LIMIT_ENABLED:true}
       key-prefix: ${MATH_AGENT_REDIS_RATE_LIMIT_KEY_PREFIX:math-agent:api:rate-limit}
+    search-cache:
+      enabled: ${MATH_AGENT_REDIS_SEARCH_CACHE_ENABLED:true}
+      key-prefix: ${MATH_AGENT_REDIS_SEARCH_CACHE_KEY_PREFIX:math-agent:retrieval:textbook-search}
+      ttl: ${MATH_AGENT_REDIS_SEARCH_CACHE_TTL:10m}
+  vector-index:
+    enabled: ${MATH_AGENT_VECTOR_INDEX_ENABLED:true}
+    milvus-uri: ${MATH_AGENT_MILVUS_URI:http://127.0.0.1:19530}
+    milvus-token: ${MATH_AGENT_MILVUS_TOKEN:}
+    collection-name: ${MATH_AGENT_MILVUS_COLLECTION:math_agent_resource_blocks}
+    dimension: ${MATH_AGENT_EMBEDDING_DIMENSION:512}
+    # Local worker is the primary embedding path. Cloud embeddings remain available
+    # only when explicitly configured through MATH_AGENT_EMBEDDING_BASE_URL/API_KEY.
+    embedding-base-url: ${MATH_AGENT_EMBEDDING_BASE_URL:http://127.0.0.1:8091/v1}
+    embedding-api-key: ${MATH_AGENT_EMBEDDING_API_KEY:${MATH_AGENT_WORKER_API_KEY:}}
+    embedding-model: ${MATH_AGENT_EMBEDDING_MODEL:local-clip-vit-large-patch14-zh}
+    request-timeout-ms: ${MATH_AGENT_VECTOR_INDEX_TIMEOUT_MS:30000}
   protocol:
     mcp:
       registry:
         clients: []
+  knowledge:
+    graph-spine:
+      seed-enabled: ${MATH_AGENT_KNOWLEDGE_GRAPH_SPINE_SEED_ENABLED:true}
+      tenant-id: ${MATH_AGENT_KNOWLEDGE_GRAPH_SPINE_TENANT_ID:school-a}
+      permission-scope: ${MATH_AGENT_KNOWLEDGE_GRAPH_SPINE_PERMISSION_SCOPE:MATH_VIP}
+      method-node-limit: ${MATH_AGENT_KNOWLEDGE_GRAPH_SPINE_METHOD_NODE_LIMIT:50}
+      source-location: ${MATH_AGENT_KNOWLEDGE_GRAPH_SPINE_SOURCE_LOCATION:classpath:knowledge/graph-spine-v0.1.md}
   resources:
     processed-books-root: ${MATH_AGENT_PROCESSED_BOOKS_ROOT:C:/Users/doob/Desktop/个人资料/高中数学/下载课本代码/tchMaterial-parser-main/tchMaterial-parser-main/processed_books}
     project-test-data-root: ${MATH_AGENT_PROJECT_TEST_DATA_ROOT:C:/Users/doob/Desktop/code/dev/math_agent_rag/文档/项目测试数据位置}

@@ -37,6 +37,9 @@ public class AiProviderCatalog {
                 .stream()
                 .filter(AiProviderCatalog::hasUsableCredentials)
                 .map(AiProviderCatalog::toProvider)
+                .sorted((left, right) -> Integer.compare(
+                        providerOrder(properties.getDefaultProvider(), left.name()),
+                        providerOrder(properties.getDefaultProvider(), right.name())))
                 .toList();
     }
 
@@ -106,7 +109,7 @@ public class AiProviderCatalog {
     }
 
     /**
-     * Returns configured providers in the desired fallback baseline order.
+     * Returns configured providers in the desired fallback order.
      */
     private List<AiProviderProperties.Provider> configuredProviders() {
         return List.of(

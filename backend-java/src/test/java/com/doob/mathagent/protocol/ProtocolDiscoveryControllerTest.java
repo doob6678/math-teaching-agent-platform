@@ -49,7 +49,15 @@ class ProtocolDiscoveryControllerTest {
                         "search_teacher_resource_evidence",
                         "get_teaching_ai_trace",
                         "get_ai_diagnostic_summary",
-                        "get_multi_agent_writing_trace");
+                        "get_multi_agent_writing_trace",
+                        "plan_agent_run",
+                        "start_multi_agent_writing",
+                        "get_multi_agent_writing_status",
+                        "get_multi_agent_writing_artifact",
+                        "export_multi_agent_writing_artifact",
+                        "resume_multi_agent_writing",
+                        "discover_feishu_resources",
+                        "download_feishu_resource");
     }
 
     @Test
@@ -67,12 +75,12 @@ class ProtocolDiscoveryControllerTest {
 
     @Test
     void exposesCopyableMcpConfigurationThroughService() {
-        ProtocolDiscoveryService service = new ProtocolDiscoveryService();
+        ProtocolDiscoveryService service = new ProtocolDiscoveryService(registryWithTextbookSearch());
         McpDiscoveryController controller = new McpDiscoveryController(service);
 
         var config = controller.configuration(new McpConfigurationRequest(
                 "https://math.example.com/api/mcp",
-                "mcp_secret_1234567890abcdef",
+                "teacher_secret_1234567890abcdef",
                 "MATH_AGENT_MCP_SECRET",
                 java.util.List.of(),
                 java.util.List.of()));
@@ -80,14 +88,14 @@ class ProtocolDiscoveryControllerTest {
         assertThat(config.valid()).isTrue();
         assertThat(config.configJson()).contains("\"math-agent-rag\"");
         assertThat(config.configJson()).contains("${MATH_AGENT_MCP_SECRET}");
-        assertThat(config.configJson()).doesNotContain("mcp_secret_1234567890abcdef");
+        assertThat(config.configJson()).doesNotContain("teacher_secret_1234567890abcdef");
     }
 
     @Test
     void exposesMcpToolExecutionEndpointThroughService() throws Exception {
-        McpToolExecutionController controller = new McpToolExecutionController(new McpToolExecutionService(
+        McpToolExecutionController controller = new McpToolExecutionController(McpToolExecutionServiceFixture.service(
                 registryWithTextbookSearch(),
-                new TextbookRetrievalService(
+                com.doob.mathagent.retrieval.TextbookRetrievalServiceFixture.service(
                         new TextbookCatalogReader(),
                         new TextbookChunkReader(),
                         new LocalTextbookBm25SearchEngine(),

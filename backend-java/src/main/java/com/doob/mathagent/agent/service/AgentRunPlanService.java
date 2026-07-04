@@ -85,7 +85,8 @@ public class AgentRunPlanService {
                 budget.withinBudget(),
                 route.reason(),
                 timer.timings(),
-                concurrencyKeys(normalizedSubject, agent.code(), route.provider().chatModel()));
+                concurrencyKeys(normalizedSubject, agent.code(), route.provider().chatModel()),
+                normalized.requiredJsonSchema());
     }
 
     /**
@@ -96,10 +97,12 @@ public class AgentRunPlanService {
         if (providers.isEmpty()) {
             throw new IllegalStateException("No AI provider is enabled by environment variables");
         }
-        AiProviderCatalog.Provider provider = request.previousFailureCount() >= 2 && providers.size() > 1
-                ? providers.get(1)
-                : providerCatalog.preferredProvider(request.preferredProviderName(), request.preferredModelCode())
+        AiProviderCatalog.Provider primary = providerCatalog
+                .preferredProvider(request.preferredProviderName(), request.preferredModelCode())
                 .orElseGet(providerCatalog::defaultProvider);
+        AiProviderCatalog.Provider provider = request.previousFailureCount() >= 2 && providers.size() > 1
+                ? fallbackAfter(primary, providers)
+                : primary;
         String level;
         if (request.requiredJsonSchema()) {
             level = "json_stable";
@@ -112,6 +115,25 @@ public class AgentRunPlanService {
         }
         String reason = routeReason(request, providers, level, provider);
         return new RouteDecision(provider, level, reason);
+    }
+
+    /**
+     * Selects the next configured provider after the provider that just failed.
+     */
+    private static AiProviderCatalog.Provider fallbackAfter(
+            AiProviderCatalog.Provider primary,
+            List<AiProviderCatalog.Provider> providers) {
+        int primaryIndex = -1;
+        for (int index = 0; index < providers.size(); index++) {
+            if (providers.get(index).name().equals(primary.name())) {
+                primaryIndex = index;
+                break;
+            }
+        }
+        if (primaryIndex < 0) {
+            return providers.getFirst();
+        }
+        return providers.get((primaryIndex + 1) % providers.size());
     }
 
     /**

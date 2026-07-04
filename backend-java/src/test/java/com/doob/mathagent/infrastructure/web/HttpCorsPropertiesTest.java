@@ -12,7 +12,11 @@ class HttpCorsPropertiesTest {
         HttpCorsProperties properties = HttpCorsProperties.fromEnvironment(Map.of());
 
         assertThat(properties.allowedOrigins())
-                .containsExactly("http://127.0.0.1:5173", "http://localhost:5173");
+                .contains(
+                        "http://127.0.0.1:5173",
+                        "http://127.0.0.1:5174",
+                        "http://localhost:5173",
+                        "http://localhost:5174");
     }
 
     @Test

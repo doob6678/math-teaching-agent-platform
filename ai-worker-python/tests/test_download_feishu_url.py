@@ -39,8 +39,17 @@ class FakeFeishuClient:
         content = b"docx-or-pdf-bytes"
         return content, f"{document_token}.{file_extension}", len(content)
 
+    def download_file(self, file_token):
+        content = b"file-bytes"
+        return content, f"{file_token}.bin", len(content)
+
     def log(self, message):
         return None
+
+
+class FailingFeishuClient(FakeFeishuClient):
+    def download_docx_markdown(self, document_token):
+        raise RuntimeError("ProxyError: connection reset")
 
 
 class DownloadFeishuUrlTest(unittest.TestCase):
@@ -70,6 +79,10 @@ class DownloadFeishuUrlTest(unittest.TestCase):
             self.assertEqual(saved_path.suffix, ".md")
             self.assertIn("数量积用于判断垂直", saved_path.read_text(encoding="utf-8"))
             self.assertEqual(result["file_extension"], "md")
+            self.assertEqual(result["stats"]["files"], 1)
+            self.assertEqual(result["stats"]["failed"], 0)
+            self.assertEqual(result["failed_items"], [])
+            self.assertEqual(result["checkpoint"]["downloaded_items"][0]["token"], "docToken")
 
     def test_folder_download_uses_selected_export_format_for_docx_items(self):
         client = FakeFeishuClient()
@@ -85,6 +98,38 @@ class DownloadFeishuUrlTest(unittest.TestCase):
             self.assertEqual(client.markdown_tokens, ["doc_token_1"])
             self.assertEqual(client.docx_exports, [])
             self.assertTrue(saved_file.exists())
+            self.assertEqual(result["stats"]["files"], 1)
+            self.assertEqual(result["checkpoint"]["downloaded_items"][0]["token"], "doc_token_1")
+            self.assertEqual(result["failed_items"], [])
+
+    def test_file_url_summary_reports_one_file(self):
+        client = FakeFeishuClient()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = download_feishu_url.download_from_url(
+                client,
+                "https://my.feishu.cn/file/fileToken",
+                Path(temp_dir),
+            )
+
+            saved_path = Path(result["saved_path"])
+            self.assertEqual(saved_path.name, "fileToken.bin")
+            self.assertEqual(result["stats"]["files"], 1)
+            self.assertEqual(result["checkpoint"]["downloaded_items"][0]["type"], "file")
+
+    def test_folder_download_records_failed_items(self):
+        client = FailingFeishuClient()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = download_feishu_url.download_from_url(
+                client,
+                "https://my.feishu.cn/drive/folder/folderToken",
+                Path(temp_dir),
+                file_extension="md",
+            )
+
+            self.assertEqual(result["stats"]["files"], 0)
+            self.assertEqual(result["stats"]["failed"], 1)
+            self.assertEqual(result["failed_items"][0]["token"], "doc_token_1")
+            self.assertIn("ProxyError", result["failed_items"][0]["message"])
 
 
 if __name__ == "__main__":

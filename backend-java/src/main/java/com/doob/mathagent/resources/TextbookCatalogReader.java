@@ -26,13 +26,21 @@ public class TextbookCatalogReader {
         try {
             List<TextbookCatalogItem> items = new ArrayList<>();
             for (String line : Files.readAllLines(catalogJsonl, StandardCharsets.UTF_8)) {
-                if (!line.isBlank()) {
-                    items.add(objectMapper.readValue(line, TextbookCatalogItem.class));
+                String normalizedLine = stripUtf8Bom(line);
+                if (!normalizedLine.isBlank()) {
+                    items.add(objectMapper.readValue(normalizedLine, TextbookCatalogItem.class));
                 }
             }
             return List.copyOf(items);
         } catch (IOException e) {
             throw new IllegalStateException("Failed to read textbook catalog: " + catalogJsonl, e);
         }
+    }
+
+    /**
+     * Tolerates UTF-8 BOM emitted by Windows tools at the beginning of JSONL files.
+     */
+    private static String stripUtf8Bom(String line) {
+        return line != null && line.startsWith("\uFEFF") ? line.substring(1) : line;
     }
 }

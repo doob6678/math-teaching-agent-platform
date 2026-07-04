@@ -13,6 +13,7 @@ import com.doob.mathagent.knowledge.vo.QuestionBankItemResponse;
 import com.doob.mathagent.knowledge.vo.TeacherBlockQuestionImportResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.List;
+import java.util.Objects;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -56,20 +57,12 @@ public class KnowledgeQuestionBankController {
             TeacherBlockQuestionImportService teacherBlockQuestionImportService,
             RequestSubjectResolver subjectResolver,
             KnowledgeQuestionBankCapabilityVerifier capabilityVerifier) {
-        this.service = service;
-        this.teacherBlockQuestionImportService = teacherBlockQuestionImportService;
-        this.subjectResolver = subjectResolver;
-        this.capabilityVerifier = capabilityVerifier;
-    }
-
-    /**
-     * Backward-compatible constructor for focused tests that do not exercise import.
-     */
-    public KnowledgeQuestionBankController(
-            KnowledgeQuestionBankService service,
-            RequestSubjectResolver subjectResolver,
-            KnowledgeQuestionBankCapabilityVerifier capabilityVerifier) {
-        this(service, null, subjectResolver, capabilityVerifier);
+        this.service = Objects.requireNonNull(service, "service");
+        this.teacherBlockQuestionImportService = Objects.requireNonNull(
+                teacherBlockQuestionImportService,
+                "teacherBlockQuestionImportService");
+        this.subjectResolver = Objects.requireNonNull(subjectResolver, "subjectResolver");
+        this.capabilityVerifier = Objects.requireNonNull(capabilityVerifier, "capabilityVerifier");
     }
 
     /**
@@ -148,9 +141,6 @@ public class KnowledgeQuestionBankController {
         RequestSubject subject = subjectResolver.resolve(httpRequest).normalize();
         String path = QUESTION_BANK_IMPORT_TEACHER_RESOURCE_PATH_PREFIX + documentId;
         verifyCapability(QUESTION_BANK_IMPORT_TEACHER_RESOURCE_ACTION, path, subject, httpRequest);
-        if (teacherBlockQuestionImportService == null) {
-            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Teacher block question import is not configured");
-        }
         try {
             return teacherBlockQuestionImportService.importFromTeacherResource(
                     subject.tenantId(),

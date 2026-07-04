@@ -2,6 +2,7 @@ package com.doob.mathagent.memory.entity;
 
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import java.time.LocalDateTime;
 
 /**
  * MyBatis-Plus entity for student long/short term memory entries.
@@ -36,6 +37,9 @@ public class StudentMemoryEntryEntity {
 
     /** Metadata JSON for future prompt version, source task id, and expiry fields. */
     private String metadataJson;
+
+    /** Database creation time used for latest-first reuse and dashboard refresh. */
+    private LocalDateTime createdAt;
 
     /**
      * Returns memory id.
@@ -197,5 +201,23 @@ public class StudentMemoryEntryEntity {
      */
     public void setMetadataJson(String metadataJson) {
         this.metadataJson = metadataJson;
+    }
+
+    /**
+     * Returns database creation time.
+     *
+     * @return creation time
+     */
+    public LocalDateTime getCreatedAt() {
+        return createdAt;
+    }
+
+    /**
+     * Sets database creation time.
+     *
+     * @param createdAt creation time
+     */
+    public void setCreatedAt(LocalDateTime createdAt) {
+        this.createdAt = createdAt;
     }
 }

@@ -4,6 +4,7 @@ import com.doob.mathagent.agent.service.AiChatGateway;
 import com.doob.mathagent.agent.service.AiChatRequest;
 import com.doob.mathagent.agent.service.AiChatResult;
 import com.doob.mathagent.infrastructure.ai.AiProviderCatalog;
+import com.doob.mathagent.infrastructure.text.FormulaMarkupSanitizer;
 import com.doob.mathagent.memory.vo.StudentMemoryResponse;
 import com.doob.mathagent.teaching.TeachingEvidence;
 import com.doob.mathagent.teaching.dto.TeachingTaskRequest;
@@ -250,20 +251,6 @@ public class TeachingAiDraftService {
     }
 
     /**
-     * Returns a disabled service for focused tests that do not configure real provider credentials.
-     *
-     * @return disabled draft service
-     */
-    public static TeachingAiDraftService disabled() {
-        return new TeachingAiDraftService(
-                request -> {
-                    throw new IllegalStateException("Live AI gateway is not configured");
-                },
-                new AiProviderCatalog(new com.doob.mathagent.infrastructure.ai.AiProviderProperties()),
-                new TeachingAiDraftProperties());
-    }
-
-    /**
      * Builds a classroom-ready prompt from real task data and retrieved evidence.
      */
     private static String prompt(
@@ -271,20 +258,24 @@ public class TeachingAiDraftService {
             List<TeachingEvidence> evidence,
             StudentMemoryResponse memoryResponse) {
         return """
-                你是高中数学备课智能体。基于给定证据生成可直接放入讲义的内容。
-                只输出一个 JSON 对象，不要 Markdown，不要代码块，不要额外解释。
-                JSON schema：
+                You are a high-school math lesson-preparation agent.
+                Generate evidence-grounded content that can be placed directly into a handout.
+                Return exactly one valid JSON object. Do not output Markdown, code fences, or extra explanation.
+                All user-facing text values must be written in concise Chinese.
+                Math must use Feishu-supported delimiters only: inline $...$ or display $$...$$.
+                Do not use \\[...\\], \\(...\\), \\begin{align}, \\begin{aligned}, \\begin{equation}, or Markdown code fences.
+                JSON schema:
                 {
-                  "teacherExplanation": "教师版讲解，2-5 句话，必须贴合题目和证据",
-                  "studentHint": "学生版提示，1-3 句话，只给思路不直接泄露完整答案",
-                  "knowledgePoints": ["关键知识点，2-6 条"],
-                  "followUpQuestions": ["后续互动问题，2-5 条"]
+                  "teacherExplanation": "2-5 Chinese sentences, aligned with the task and evidence",
+                  "studentHint": "1-3 Chinese sentences, hint only, do not reveal the full answer directly",
+                  "knowledgePoints": ["2-6 Chinese knowledge points"],
+                  "followUpQuestions": ["2-5 Chinese follow-up questions"]
                 }
-                不要写“作为AI”，不要编造没有给出的来源。
-                学习目标：%s
-                题目：%s
-                记忆复用：%s
-                检索证据：%s
+                Do not write "as an AI". Do not invent sources not provided below.
+                Learning goal: %s
+                Problem: %s
+                Reused memory: %s
+                Retrieved evidence: %s
                 """.formatted(
                 request.learningGoal(),
                 request.questionText(),
@@ -299,21 +290,24 @@ public class TeachingAiDraftService {
             String previousContent,
             String parseError) {
         return """
-                上一次输出没有通过后端 JSON schema 解析。请只修复格式，不要扩展来源，不要输出 Markdown。
-                解析错误：%s
-                上一次输出：%s
+                The previous output failed backend JSON schema parsing.
+                Fix format only. Do not add sources. Do not output Markdown.
+                All user-facing text values must be written in concise Chinese.
+                Math must use only $...$ or $$...$$; never use \\[...\\], \\(...\\), or align/equation environments.
+                Parse error: %s
+                Previous output: %s
 
-                重新输出唯一 JSON 对象，字段必须完整且非空：
+                Return exactly one valid JSON object with all fields present and non-empty:
                 {
                   "teacherExplanation": "...",
                   "studentHint": "...",
                   "knowledgePoints": ["..."],
                   "followUpQuestions": ["..."]
                 }
-                学习目标：%s
-                题目：%s
-                记忆复用：%s
-                检索证据：%s
+                Learning goal: %s
+                Problem: %s
+                Reused memory: %s
+                Retrieved evidence: %s
                 """.formatted(
                 parseError,
                 previousContent == null ? "" : previousContent,
@@ -329,8 +323,8 @@ public class TeachingAiDraftService {
             StudentMemoryResponse memoryResponse,
             RuntimeException exception) {
         return prompt(request, evidence, memoryResponse)
-                + "\n上一次调用异常：" + exception.getClass().getSimpleName()
-                + "。这是后端自动重试，请仍然只输出合法 JSON。";
+                + "\nPrevious provider call failed with: " + exception.getClass().getSimpleName()
+                + ". This is an automatic backend retry. Still return only valid JSON.";
     }
 
     /**
@@ -403,7 +397,7 @@ public class TeachingAiDraftService {
     }
 
     private static String normalizeText(String value) {
-        return value == null ? "" : value.strip();
+        return FormulaMarkupSanitizer.sanitizeFeishuMath(value);
     }
 
     private static List<String> normalizeList(List<String> values) {

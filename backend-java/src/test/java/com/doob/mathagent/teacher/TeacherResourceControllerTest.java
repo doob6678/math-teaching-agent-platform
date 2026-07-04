@@ -3,6 +3,7 @@ package com.doob.mathagent.teacher;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.doob.mathagent.infrastructure.security.RequestSubject;
+import com.doob.mathagent.infrastructure.security.RequestSubjectResolver;
 import com.doob.mathagent.teacher.controller.TeacherResourceController;
 import com.doob.mathagent.teacher.dto.TeacherResourceRegistrationRequest;
 import com.doob.mathagent.teacher.service.InMemoryTeacherDocumentBlockStore;
@@ -10,7 +11,9 @@ import com.doob.mathagent.teacher.service.InMemoryTeacherResourceStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherSourceSyncCheckpointStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherSourceSyncJobStore;
 import com.doob.mathagent.teacher.service.RecentTeacherResourceBlockSearchAuditStore;
+import com.doob.mathagent.teacher.service.TeacherResourceCapabilityVerifier;
 import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchAuditEvent;
+import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchAuditLookup;
 import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService;
 import com.doob.mathagent.teacher.service.TeacherFeishuDownloadClient;
 import com.doob.mathagent.teacher.service.TeacherFeishuDownloadException;
@@ -24,6 +27,7 @@ import com.doob.mathagent.teacher.vo.TeacherResourceBlockSearchResponse;
 import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncCheckpointResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncJobResponse;
+import com.doob.mathagent.vector.service.TestVectorIndexService;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
@@ -36,19 +40,131 @@ class TeacherResourceControllerTest {
     @TempDir
     Path tempDir;
 
+    private static TeacherSourceSyncExecutionService syncExecutionService(
+            InMemoryTeacherResourceStore resourceStore,
+            InMemoryTeacherSourceSyncJobStore jobStore,
+            InMemoryTeacherDocumentBlockStore blockStore) {
+        return syncExecutionService(
+                resourceStore,
+                jobStore,
+                blockStore,
+                new EmptyFeishuDownloadClient(),
+                testSyncProperties(),
+                new InMemoryTeacherSourceSyncCheckpointStore());
+    }
+
+    private static TeacherSourceSyncExecutionService syncExecutionService(
+            InMemoryTeacherResourceStore resourceStore,
+            InMemoryTeacherSourceSyncJobStore jobStore,
+            InMemoryTeacherDocumentBlockStore blockStore,
+            TeacherFeishuDownloadClient feishuDownloadClient,
+            TeacherSourceSyncProperties syncProperties,
+            InMemoryTeacherSourceSyncCheckpointStore checkpointStore) {
+        return new TeacherSourceSyncExecutionService(
+                resourceStore,
+                jobStore,
+                blockStore,
+                feishuDownloadClient,
+                syncProperties,
+                checkpointStore,
+                TestVectorIndexService.successful(resourceStore, blockStore));
+    }
+
+    private static TeacherResourceController controller(
+            TeacherResourceService resourceService,
+            TeacherSourceSyncJobService jobService,
+            TeacherSourceSyncExecutionService executionService,
+            RequestSubjectResolver subjectResolver,
+            TeacherResourceCapabilityVerifier capabilityVerifier) {
+        return controller(
+                resourceService,
+                jobService,
+                executionService,
+                null,
+                null,
+                null,
+                subjectResolver,
+                capabilityVerifier);
+    }
+
+    private static TeacherResourceController controller(
+            TeacherResourceService resourceService,
+            TeacherSourceSyncJobService jobService,
+            TeacherSourceSyncExecutionService executionService,
+            TeacherResourceBlockSearchService searchService,
+            RequestSubjectResolver subjectResolver,
+            TeacherResourceCapabilityVerifier capabilityVerifier) {
+        return controller(
+                resourceService,
+                jobService,
+                executionService,
+                searchService,
+                null,
+                null,
+                subjectResolver,
+                capabilityVerifier);
+    }
+
+    private static TeacherResourceController controller(
+            TeacherResourceService resourceService,
+            TeacherSourceSyncJobService jobService,
+            TeacherSourceSyncExecutionService executionService,
+            TeacherResourceBlockSearchService searchService,
+            TeacherSourceSyncCheckpointQueryService checkpointQueryService,
+            RequestSubjectResolver subjectResolver,
+            TeacherResourceCapabilityVerifier capabilityVerifier) {
+        return controller(
+                resourceService,
+                jobService,
+                executionService,
+                searchService,
+                null,
+                checkpointQueryService,
+                subjectResolver,
+                capabilityVerifier);
+    }
+
+    private static TeacherResourceController controller(
+            TeacherResourceService resourceService,
+            TeacherSourceSyncJobService jobService,
+            TeacherSourceSyncExecutionService executionService,
+            TeacherResourceBlockSearchService searchService,
+            TeacherResourceBlockSearchAuditLookup auditLookup,
+            TeacherSourceSyncCheckpointQueryService checkpointQueryService,
+            RequestSubjectResolver subjectResolver,
+            TeacherResourceCapabilityVerifier capabilityVerifier) {
+        InMemoryTeacherResourceStore fallbackResourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore fallbackBlockStore = new InMemoryTeacherDocumentBlockStore();
+        InMemoryTeacherSourceSyncJobStore fallbackJobStore = new InMemoryTeacherSourceSyncJobStore();
+        InMemoryTeacherSourceSyncCheckpointStore fallbackCheckpointStore = new InMemoryTeacherSourceSyncCheckpointStore();
+        RecentTeacherResourceBlockSearchAuditStore fallbackAuditStore = new RecentTeacherResourceBlockSearchAuditStore(20);
+        return new TeacherResourceController(
+                resourceService,
+                jobService,
+                executionService,
+                searchService == null
+                        ? com.doob.mathagent.teacher.TeacherResourceBlockSearchServiceFixture.service(
+                                fallbackResourceStore, fallbackBlockStore)
+                        : searchService,
+                auditLookup == null ? fallbackAuditStore : auditLookup,
+                checkpointQueryService == null
+                        ? new TeacherSourceSyncCheckpointQueryService(
+                                fallbackResourceStore, fallbackJobStore, fallbackCheckpointStore)
+                        : checkpointQueryService,
+                subjectResolver,
+                capabilityVerifier);
+    }
+
     @Test
     void controllerBuildsTeacherContextFromBackendSubject() throws Exception {
         Path folder = tempDir.resolve("teacher-bank");
         Files.createDirectories(folder);
         Files.writeString(folder.resolve("function.md"), "# function");
 
-        TeacherResourceController controller = new TeacherResourceController(
-                new TeacherResourceService(new InMemoryTeacherResourceStore()),
+        TeacherResourceController controller = controller(
+                TeacherResourceServiceFixture.service(new InMemoryTeacherResourceStore()),
                 new TeacherSourceSyncJobService(new InMemoryTeacherResourceStore(), new InMemoryTeacherSourceSyncJobStore()),
-                new TeacherSourceSyncExecutionService(
-                        new InMemoryTeacherResourceStore(),
-                        new InMemoryTeacherSourceSyncJobStore(),
-                        new InMemoryTeacherDocumentBlockStore()),
+                syncExecutionService(new InMemoryTeacherResourceStore(), new InMemoryTeacherSourceSyncJobStore(), new InMemoryTeacherDocumentBlockStore()),
                 request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"),
                 (token, action, path, requestHash, subject) -> true);
         MockHttpServletRequest request = new MockHttpServletRequest();
@@ -60,7 +176,8 @@ class TeacherResourceControllerTest {
                 "function local bank",
                 null,
                 folder.toString(),
-                "MATH_VIP"), request);
+                "MATH_VIP",
+                null), request);
 
         assertThat(response.tenantId()).isEqualTo("school-a");
         assertThat(response.ownerSubjectId()).isEqualTo("teacher-88");
@@ -74,13 +191,10 @@ class TeacherResourceControllerTest {
         Files.createDirectories(folder);
         Files.writeString(folder.resolve("function.md"), "# function");
 
-        TeacherResourceController controller = new TeacherResourceController(
-                new TeacherResourceService(new InMemoryTeacherResourceStore()),
+        TeacherResourceController controller = controller(
+                TeacherResourceServiceFixture.service(new InMemoryTeacherResourceStore()),
                 new TeacherSourceSyncJobService(new InMemoryTeacherResourceStore(), new InMemoryTeacherSourceSyncJobStore()),
-                new TeacherSourceSyncExecutionService(
-                        new InMemoryTeacherResourceStore(),
-                        new InMemoryTeacherSourceSyncJobStore(),
-                        new InMemoryTeacherDocumentBlockStore()),
+                syncExecutionService(new InMemoryTeacherResourceStore(), new InMemoryTeacherSourceSyncJobStore(), new InMemoryTeacherDocumentBlockStore()),
                 request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"),
                 (token, action, path, requestHash, subject) -> true);
 
@@ -89,7 +203,8 @@ class TeacherResourceControllerTest {
                 "teacher public claim",
                 null,
                 folder.toString(),
-                "PUBLIC_TEXTBOOK"), new MockHttpServletRequest());
+                "PUBLIC_TEXTBOOK",
+                null), new MockHttpServletRequest());
 
         assertThat(response.permissionScope()).isEqualTo("TEACHER_PRIVATE");
     }
@@ -97,13 +212,10 @@ class TeacherResourceControllerTest {
     @Test
     void controllerRegistersFeishuResourceWithSelectedExportFormat() {
         InMemoryTeacherResourceStore store = new InMemoryTeacherResourceStore();
-        TeacherResourceController controller = new TeacherResourceController(
-                new TeacherResourceService(store),
+        TeacherResourceController controller = controller(
+                TeacherResourceServiceFixture.service(store),
                 new TeacherSourceSyncJobService(store, new InMemoryTeacherSourceSyncJobStore()),
-                new TeacherSourceSyncExecutionService(
-                        store,
-                        new InMemoryTeacherSourceSyncJobStore(),
-                        new InMemoryTeacherDocumentBlockStore()),
+                syncExecutionService(store, new InMemoryTeacherSourceSyncJobStore(), new InMemoryTeacherDocumentBlockStore()),
                 request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"),
                 (token, action, path, requestHash, subject) -> true);
 
@@ -127,13 +239,10 @@ class TeacherResourceControllerTest {
         Files.createDirectories(folder);
         Files.writeString(folder.resolve("vector.md"), "# vector");
 
-        TeacherResourceController controller = new TeacherResourceController(
-                new TeacherResourceService(new InMemoryTeacherResourceStore()),
+        TeacherResourceController controller = controller(
+                TeacherResourceServiceFixture.service(new InMemoryTeacherResourceStore()),
                 new TeacherSourceSyncJobService(new InMemoryTeacherResourceStore(), new InMemoryTeacherSourceSyncJobStore()),
-                new TeacherSourceSyncExecutionService(
-                        new InMemoryTeacherResourceStore(),
-                        new InMemoryTeacherSourceSyncJobStore(),
-                        new InMemoryTeacherDocumentBlockStore()),
+                syncExecutionService(new InMemoryTeacherResourceStore(), new InMemoryTeacherSourceSyncJobStore(), new InMemoryTeacherDocumentBlockStore()),
                 request -> new RequestSubject("school-a", "admin", "admin-1", "device-1"),
                 (token, action, path, requestHash, subject) -> true);
 
@@ -142,7 +251,8 @@ class TeacherResourceControllerTest {
                 "admin shared resource",
                 null,
                 folder.toString(),
-                "MATH_VIP"), new MockHttpServletRequest());
+                "MATH_VIP",
+                null), new MockHttpServletRequest());
 
         assertThat(response.permissionScope()).isEqualTo("MATH_VIP");
     }
@@ -153,13 +263,10 @@ class TeacherResourceControllerTest {
         Files.createDirectories(folder);
         Files.writeString(folder.resolve("vector.md"), "# vector");
         InMemoryTeacherResourceStore store = new InMemoryTeacherResourceStore();
-        TeacherResourceController setupController = new TeacherResourceController(
-                new TeacherResourceService(store),
+        TeacherResourceController setupController = controller(
+                TeacherResourceServiceFixture.service(store),
                 new TeacherSourceSyncJobService(store, new InMemoryTeacherSourceSyncJobStore()),
-                new TeacherSourceSyncExecutionService(
-                        store,
-                        new InMemoryTeacherSourceSyncJobStore(),
-                        new InMemoryTeacherDocumentBlockStore()),
+                syncExecutionService(store, new InMemoryTeacherSourceSyncJobStore(), new InMemoryTeacherDocumentBlockStore()),
                 request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"),
                 (token, action, path, requestHash, subject) -> true);
         TeacherResourceDocumentResponse created = setupController.register(new TeacherResourceRegistrationRequest(
@@ -167,14 +274,12 @@ class TeacherResourceControllerTest {
                 "protected resource",
                 null,
                 folder.toString(),
-                "TEACHER_PRIVATE"), requestWithCapability("token-ok", "hash-ok"));
-        TeacherResourceController protectedController = new TeacherResourceController(
-                new TeacherResourceService(store),
+                "TEACHER_PRIVATE",
+                null), requestWithCapability("token-ok", "hash-ok"));
+        TeacherResourceController protectedController = controller(
+                TeacherResourceServiceFixture.service(store),
                 new TeacherSourceSyncJobService(store, new InMemoryTeacherSourceSyncJobStore()),
-                new TeacherSourceSyncExecutionService(
-                        store,
-                        new InMemoryTeacherSourceSyncJobStore(),
-                        new InMemoryTeacherDocumentBlockStore()),
+                syncExecutionService(store, new InMemoryTeacherSourceSyncJobStore(), new InMemoryTeacherDocumentBlockStore()),
                 request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"),
                 (token, action, path, requestHash, subject) -> false);
 
@@ -184,7 +289,8 @@ class TeacherResourceControllerTest {
                                 "blocked resource",
                                 null,
                                 folder.toString(),
-                                "TEACHER_PRIVATE"),
+                                "TEACHER_PRIVATE",
+                                null),
                         requestWithCapability("bad-token", "hash-register")))
                 .isInstanceOf(ResponseStatusException.class)
                 .hasMessageContaining("Capability token");
@@ -199,13 +305,10 @@ class TeacherResourceControllerTest {
     void createsSyncJobWithCapabilityTokenAndBackendSubject() throws Exception {
         InMemoryTeacherResourceStore store = new InMemoryTeacherResourceStore();
         InMemoryTeacherSourceSyncJobStore jobStore = new InMemoryTeacherSourceSyncJobStore();
-        TeacherResourceController controller = new TeacherResourceController(
-                new TeacherResourceService(store),
+        TeacherResourceController controller = controller(
+                TeacherResourceServiceFixture.service(store),
                 new TeacherSourceSyncJobService(store, jobStore),
-                new TeacherSourceSyncExecutionService(
-                        store,
-                        jobStore,
-                        new InMemoryTeacherDocumentBlockStore()),
+                syncExecutionService(store, jobStore, new InMemoryTeacherDocumentBlockStore()),
                 request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"),
                 (token, action, path, requestHash, subject) ->
                         (("teacher-resource:register".equals(action) && "/api/teacher/resources".equals(path))
@@ -216,7 +319,8 @@ class TeacherResourceControllerTest {
                 "Feishu question bank",
                 "https://example.feishu.cn/docx/doc-token",
                 null,
-                "TEACHER_PRIVATE"), requestWithCapability("token-ok", "hash-register"));
+                "TEACHER_PRIVATE",
+                "md"), requestWithCapability("token-ok", "hash-register"));
 
         TeacherSourceSyncJobResponse job = controller.createSyncJob(
                 resource.documentId(),
@@ -237,10 +341,10 @@ class TeacherResourceControllerTest {
         InMemoryTeacherResourceStore store = new InMemoryTeacherResourceStore();
         InMemoryTeacherSourceSyncJobStore jobStore = new InMemoryTeacherSourceSyncJobStore();
         InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
-        TeacherResourceController controller = new TeacherResourceController(
-                new TeacherResourceService(store),
+        TeacherResourceController controller = controller(
+                TeacherResourceServiceFixture.service(store),
                 new TeacherSourceSyncJobService(store, jobStore),
-                new TeacherSourceSyncExecutionService(store, jobStore, blockStore),
+                syncExecutionService(store, jobStore, blockStore),
                 request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"),
                 (token, action, path, requestHash, subject) ->
                         (("teacher-resource:register".equals(action) && "/api/teacher/resources".equals(path))
@@ -252,7 +356,8 @@ class TeacherResourceControllerTest {
                 "Executable local resource",
                 null,
                 folder.toString(),
-                "TEACHER_PRIVATE"), requestWithCapability("token-ok", "hash-register"));
+                "TEACHER_PRIVATE",
+                null), requestWithCapability("token-ok", "hash-register"));
         TeacherSourceSyncJobResponse queued = controller.createSyncJob(
                 resource.documentId(),
                 requestWithCapability("token-ok", "hash-sync"));
@@ -275,15 +380,15 @@ class TeacherResourceControllerTest {
         InMemoryTeacherSourceSyncCheckpointStore checkpointStore = new InMemoryTeacherSourceSyncCheckpointStore();
         FailsOnceThenSucceedsFeishuClient feishuClient =
                 new FailsOnceThenSucceedsFeishuClient(tempDir.resolve("feishu-resumed"));
-        TeacherResourceController controller = new TeacherResourceController(
-                new TeacherResourceService(store),
+        TeacherResourceController controller = controller(
+                TeacherResourceServiceFixture.service(store),
                 new TeacherSourceSyncJobService(store, jobStore),
-                new TeacherSourceSyncExecutionService(
+                syncExecutionService(
                         store,
                         jobStore,
                         new InMemoryTeacherDocumentBlockStore(),
                         feishuClient,
-                        TeacherSourceSyncProperties.defaults(),
+                        testSyncProperties(),
                         checkpointStore),
                 request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"),
                 (token, action, path, requestHash, subject) ->
@@ -297,7 +402,8 @@ class TeacherResourceControllerTest {
                 "Retryable Feishu resource",
                 "https://my.feishu.cn/drive/folder/XVn7fXppJlQMK5dkuOkc1ePan2f",
                 null,
-                "TEACHER_PRIVATE"), requestWithCapability("token-ok", "hash-register"));
+                "TEACHER_PRIVATE",
+                "md"), requestWithCapability("token-ok", "hash-register"));
         TeacherSourceSyncJobResponse queued = controller.createSyncJob(
                 resource.documentId(),
                 requestWithCapability("token-ok", "hash-sync"));
@@ -324,15 +430,15 @@ class TeacherResourceControllerTest {
         InMemoryTeacherResourceStore store = new InMemoryTeacherResourceStore();
         InMemoryTeacherSourceSyncJobStore jobStore = new InMemoryTeacherSourceSyncJobStore();
         InMemoryTeacherSourceSyncCheckpointStore checkpointStore = new InMemoryTeacherSourceSyncCheckpointStore();
-        TeacherResourceController controller = new TeacherResourceController(
-                new TeacherResourceService(store),
+        TeacherResourceController controller = controller(
+                TeacherResourceServiceFixture.service(store),
                 new TeacherSourceSyncJobService(store, jobStore),
-                new TeacherSourceSyncExecutionService(
+                syncExecutionService(
                         store,
                         jobStore,
                         new InMemoryTeacherDocumentBlockStore(),
                         new FailsOnceThenSucceedsFeishuClient(tempDir.resolve("feishu-resumed")),
-                        TeacherSourceSyncProperties.defaults(),
+                        testSyncProperties(),
                         checkpointStore),
                 null,
                 new TeacherSourceSyncCheckpointQueryService(store, jobStore, checkpointStore),
@@ -343,7 +449,8 @@ class TeacherResourceControllerTest {
                 "Checkpoint visible Feishu",
                 "https://my.feishu.cn/drive/folder/rootToken",
                 null,
-                "TEACHER_PRIVATE"), requestWithCapability("token-ok", "hash-register"));
+                "TEACHER_PRIVATE",
+                "md"), requestWithCapability("token-ok", "hash-register"));
         TeacherSourceSyncJobResponse queued = controller.createSyncJob(
                 resource.documentId(),
                 requestWithCapability("token-ok", "hash-sync"));
@@ -353,7 +460,7 @@ class TeacherResourceControllerTest {
                 resource.documentId(),
                 "rootToken",
                 "folderToken-2",
-                "高中数学/空间向量",
+                "妤傛ü鑵戦弫鏉款劅/缁屾椽妫块崥鎴﹀櫤",
                 "pageToken-3",
                 "[\"rootToken\",\"folderToken-2\"]",
                 "[{\"token\":\"docx-1\"}]",
@@ -366,7 +473,7 @@ class TeacherResourceControllerTest {
                 queued.jobId(),
                 new MockHttpServletRequest()).orElseThrow();
 
-        assertThat(checkpoint.currentPath()).isEqualTo("高中数学/空间向量");
+        assertThat(checkpoint.currentPath()).isEqualTo("妤傛ü鑵戦弫鏉款劅/缁屾椽妫块崥鎴﹀櫤");
         assertThat(checkpoint.pageToken()).isEqualTo("pageToken-3");
         assertThat(checkpoint.downloadedItemsJson()).contains("docx-1");
         assertThat(checkpoint.failedItemsJson()).contains("ProxyError");
@@ -412,11 +519,11 @@ class TeacherResourceControllerTest {
                 "block-spoofed",
                 "doc-spoofed",
                 "spoofed private vector theorem")));
-        TeacherResourceController controller = new TeacherResourceController(
-                new TeacherResourceService(store),
+        TeacherResourceController controller = controller(
+                TeacherResourceServiceFixture.service(store),
                 new TeacherSourceSyncJobService(store, new InMemoryTeacherSourceSyncJobStore()),
-                new TeacherSourceSyncExecutionService(store, new InMemoryTeacherSourceSyncJobStore(), blockStore),
-                new TeacherResourceBlockSearchService(store, blockStore),
+                syncExecutionService(store, new InMemoryTeacherSourceSyncJobStore(), blockStore),
+                com.doob.mathagent.teacher.TeacherResourceBlockSearchServiceFixture.service(store, blockStore),
                 request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"),
                 (token, action, path, requestHash, subject) -> true);
         MockHttpServletRequest request = new MockHttpServletRequest();
@@ -433,11 +540,11 @@ class TeacherResourceControllerTest {
     void rejectsStudentTeacherBlockSearch() {
         InMemoryTeacherResourceStore store = new InMemoryTeacherResourceStore();
         InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
-        TeacherResourceController controller = new TeacherResourceController(
-                new TeacherResourceService(store),
+        TeacherResourceController controller = controller(
+                TeacherResourceServiceFixture.service(store),
                 new TeacherSourceSyncJobService(store, new InMemoryTeacherSourceSyncJobStore()),
-                new TeacherSourceSyncExecutionService(store, new InMemoryTeacherSourceSyncJobStore(), blockStore),
-                new TeacherResourceBlockSearchService(store, blockStore),
+                syncExecutionService(store, new InMemoryTeacherSourceSyncJobStore(), blockStore),
+                com.doob.mathagent.teacher.TeacherResourceBlockSearchServiceFixture.service(store, blockStore),
                 request -> new RequestSubject("school-a", "student", "student-1", "device-1"),
                 (token, action, path, requestHash, subject) -> true);
 
@@ -474,11 +581,12 @@ class TeacherResourceControllerTest {
         TeacherResourceBlockSearchService searchService = new TeacherResourceBlockSearchService(
                 store,
                 blockStore,
-                auditStore);
-        TeacherResourceController ownerController = new TeacherResourceController(
-                new TeacherResourceService(store),
+                auditStore,
+                TestVectorIndexService.successful(store, blockStore));
+        TeacherResourceController ownerController = controller(
+                TeacherResourceServiceFixture.service(store),
                 new TeacherSourceSyncJobService(store, new InMemoryTeacherSourceSyncJobStore()),
-                new TeacherSourceSyncExecutionService(store, new InMemoryTeacherSourceSyncJobStore(), blockStore),
+                syncExecutionService(store, new InMemoryTeacherSourceSyncJobStore(), blockStore),
                 searchService,
                 auditStore,
                 null,
@@ -495,10 +603,10 @@ class TeacherResourceControllerTest {
         assertThat(event.hits()).extracting(TeacherResourceBlockSearchAuditEvent.Hit::blockId)
                 .containsExactly("block-own");
 
-        TeacherResourceController otherTeacherController = new TeacherResourceController(
-                new TeacherResourceService(store),
+        TeacherResourceController otherTeacherController = controller(
+                TeacherResourceServiceFixture.service(store),
                 new TeacherSourceSyncJobService(store, new InMemoryTeacherSourceSyncJobStore()),
-                new TeacherSourceSyncExecutionService(store, new InMemoryTeacherSourceSyncJobStore(), blockStore),
+                syncExecutionService(store, new InMemoryTeacherSourceSyncJobStore(), blockStore),
                 searchService,
                 auditStore,
                 null,
@@ -517,10 +625,10 @@ class TeacherResourceControllerTest {
         Files.writeString(folder.resolve("vector.md"), "# Space vector\n\nA vector has magnitude and direction.");
         InMemoryTeacherResourceStore store = new InMemoryTeacherResourceStore();
         InMemoryTeacherSourceSyncJobStore jobStore = new InMemoryTeacherSourceSyncJobStore();
-        TeacherResourceController setupController = new TeacherResourceController(
-                new TeacherResourceService(store),
+        TeacherResourceController setupController = controller(
+                TeacherResourceServiceFixture.service(store),
                 new TeacherSourceSyncJobService(store, jobStore),
-                new TeacherSourceSyncExecutionService(store, jobStore, new InMemoryTeacherDocumentBlockStore()),
+                syncExecutionService(store, jobStore, new InMemoryTeacherDocumentBlockStore()),
                 request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"),
                 (token, action, path, requestHash, subject) -> true);
         TeacherResourceDocumentResponse resource = setupController.register(new TeacherResourceRegistrationRequest(
@@ -528,14 +636,15 @@ class TeacherResourceControllerTest {
                 "Blocked executable local resource",
                 null,
                 folder.toString(),
-                "TEACHER_PRIVATE"), requestWithCapability("token-ok", "hash-register"));
+                "TEACHER_PRIVATE",
+                null), requestWithCapability("token-ok", "hash-register"));
         TeacherSourceSyncJobResponse queued = setupController.createSyncJob(
                 resource.documentId(),
                 requestWithCapability("token-ok", "hash-sync"));
-        TeacherResourceController protectedController = new TeacherResourceController(
-                new TeacherResourceService(store),
+        TeacherResourceController protectedController = controller(
+                TeacherResourceServiceFixture.service(store),
                 new TeacherSourceSyncJobService(store, jobStore),
-                new TeacherSourceSyncExecutionService(store, jobStore, new InMemoryTeacherDocumentBlockStore()),
+                syncExecutionService(store, jobStore, new InMemoryTeacherDocumentBlockStore()),
                 request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"),
                 (token, action, path, requestHash, subject) -> false);
 
@@ -545,6 +654,32 @@ class TeacherResourceControllerTest {
                         requestWithCapability("bad-token", "hash-execute")))
                 .isInstanceOf(ResponseStatusException.class)
                 .hasMessageContaining("Capability token");
+    }
+
+    private static final class EmptyFeishuDownloadClient implements TeacherFeishuDownloadClient {
+
+        @Override
+        public FeishuDownloadResult download(
+                String url,
+                Path stagingRoot,
+                int maxFiles,
+                String fileExtension,
+                FeishuDownloadCheckpoint checkpoint) {
+            try {
+                Files.createDirectories(stagingRoot);
+            } catch (java.io.IOException exception) {
+                throw new IllegalStateException("Failed to create empty Feishu fixture", exception);
+            }
+            return new FeishuDownloadResult(
+                    stagingRoot,
+                    0,
+                    0,
+                    0,
+                    "No Feishu files in this test fixture",
+                    FeishuDownloadCheckpoint.empty(),
+                    "[]",
+                    "[]");
+        }
     }
 
     private static final class FailsOnceThenSucceedsFeishuClient implements TeacherFeishuDownloadClient {
@@ -557,7 +692,12 @@ class TeacherResourceControllerTest {
         }
 
         @Override
-        public FeishuDownloadResult download(String url, Path stagingRoot, int maxFiles) {
+        public FeishuDownloadResult download(
+                String url,
+                Path stagingRoot,
+                int maxFiles,
+                String fileExtension,
+                FeishuDownloadCheckpoint checkpoint) {
             calls += 1;
             if (calls == 1) {
                 throw new TeacherFeishuDownloadException("ProxyError: proxy connection reset", true);
@@ -568,8 +708,30 @@ class TeacherResourceControllerTest {
             } catch (java.io.IOException exception) {
                 throw new IllegalStateException("Failed to create resumed Feishu fixture", exception);
             }
-            return new FeishuDownloadResult(savedPath, 1, 0, 0, "Downloaded 1 Feishu files after resume");
+            return new FeishuDownloadResult(
+                    savedPath,
+                    1,
+                    0,
+                    0,
+                    "Downloaded 1 Feishu files after resume",
+                    checkpoint == null ? FeishuDownloadCheckpoint.empty() : checkpoint,
+                    checkpoint == null ? "[]" : checkpoint.downloadedItemsJson(),
+                    "[]");
         }
+    }
+
+    /**
+     * Explicit Feishu sync fixture config. Production code must not expose a default Feishu URL.
+     */
+    private static TeacherSourceSyncProperties testSyncProperties() {
+        Path root = Path.of(System.getProperty("java.io.tmpdir")).resolve("math-agent-teacher-controller-test");
+        return new TeacherSourceSyncProperties(
+                "",
+                Path.of("ai-worker-python/scripts/download_feishu_url.py"),
+                root.resolve("APPKEY.md"),
+                root.resolve("feishu-staging"),
+                1,
+                30);
     }
 
     /**
@@ -605,3 +767,4 @@ class TeacherResourceControllerTest {
                 "active");
     }
 }
+

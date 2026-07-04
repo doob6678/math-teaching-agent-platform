@@ -40,6 +40,7 @@ public record MultiAgentWritingResponse(
      * @param status execution status
      * @param actualUsage provider-reported token usage
      * @param message safe status message without raw model output
+     * @param generatedContent model-generated content for this owned writing workflow stage
      */
     public record StageResult(
             String stageCode,
@@ -49,6 +50,22 @@ public record MultiAgentWritingResponse(
             String modelCode,
             String status,
             AgentRunExecuteResponse.TokenUsage actualUsage,
-            String message) {
+            String message,
+            String generatedContent) {
+
+        /**
+         * Backward-compatible constructor for stored rows created before generated content snapshots existed.
+         */
+        public StageResult(
+                String stageCode,
+                String agentCode,
+                String traceId,
+                String providerName,
+                String modelCode,
+                String status,
+                AgentRunExecuteResponse.TokenUsage actualUsage,
+                String message) {
+            this(stageCode, agentCode, traceId, providerName, modelCode, status, actualUsage, message, "");
+        }
     }
 }

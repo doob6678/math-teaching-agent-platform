@@ -22,7 +22,7 @@ class TeacherSourceSyncCheckpointQueryServiceTest {
         InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
         InMemoryTeacherSourceSyncJobStore jobStore = new InMemoryTeacherSourceSyncJobStore();
         InMemoryTeacherSourceSyncCheckpointStore checkpointStore = new InMemoryTeacherSourceSyncCheckpointStore();
-        TeacherResourceService resourceService = new TeacherResourceService(resourceStore);
+        TeacherResourceService resourceService = TeacherResourceServiceFixture.service(resourceStore);
         TeacherSourceSyncJobService jobService = new TeacherSourceSyncJobService(resourceStore, jobStore);
         TeacherResourceDocumentResponse resource = resourceService.register(new TeacherResourceRegistrationCommand(
                 "school-a",
@@ -32,7 +32,8 @@ class TeacherSourceSyncCheckpointQueryServiceTest {
                 "Feishu vector root",
                 "https://my.feishu.cn/drive/folder/rootToken",
                 null,
-                "TEACHER_PRIVATE"));
+                "TEACHER_PRIVATE",
+                "md"));
         TeacherSourceSyncJobResponse job = jobService.createSyncJob(
                 "school-a",
                 "teacher",
@@ -44,7 +45,7 @@ class TeacherSourceSyncCheckpointQueryServiceTest {
                 resource.documentId(),
                 "rootToken",
                 "folderToken-2",
-                "高中数学/空间向量",
+                "楂樹腑鏁板/绌洪棿鍚戦噺",
                 "pageToken-3",
                 "[\"rootToken\",\"folderToken-2\"]",
                 "[{\"token\":\"docx-1\"},{\"token\":\"docx-2\"}]",
@@ -62,7 +63,7 @@ class TeacherSourceSyncCheckpointQueryServiceTest {
                 job.jobId()).orElseThrow();
 
         assertThat(checkpoint.currentFolderToken()).isEqualTo("folderToken-2");
-        assertThat(checkpoint.currentPath()).isEqualTo("高中数学/空间向量");
+        assertThat(checkpoint.currentPath()).isEqualTo("楂樹腑鏁板/绌洪棿鍚戦噺");
         assertThat(checkpoint.pageToken()).isEqualTo("pageToken-3");
         assertThat(checkpoint.downloadedItemsJson()).contains("docx-1", "docx-2");
         assertThat(checkpoint.failedItemsJson()).contains("ProxyError");
@@ -81,7 +82,7 @@ class TeacherSourceSyncCheckpointQueryServiceTest {
         InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
         InMemoryTeacherSourceSyncJobStore jobStore = new InMemoryTeacherSourceSyncJobStore();
         InMemoryTeacherSourceSyncCheckpointStore checkpointStore = new InMemoryTeacherSourceSyncCheckpointStore();
-        TeacherResourceService resourceService = new TeacherResourceService(resourceStore);
+        TeacherResourceService resourceService = TeacherResourceServiceFixture.service(resourceStore);
         TeacherSourceSyncJobService jobService = new TeacherSourceSyncJobService(resourceStore, jobStore);
         TeacherResourceDocumentResponse resource = resourceService.register(new TeacherResourceRegistrationCommand(
                 "school-a",
@@ -91,7 +92,8 @@ class TeacherSourceSyncCheckpointQueryServiceTest {
                 "Feishu vector root",
                 "https://my.feishu.cn/drive/folder/rootToken",
                 null,
-                "TEACHER_PRIVATE"));
+                "TEACHER_PRIVATE",
+                "md"));
         TeacherSourceSyncJobResponse job = jobService.createSyncJob(
                 "school-a",
                 "teacher",

@@ -1,10 +1,12 @@
 package com.doob.mathagent.teacher;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.doob.mathagent.teacher.config.TeacherResourceSearchAuditConfiguration;
 import com.doob.mathagent.teacher.service.CompositeTeacherResourceBlockSearchAuditLookup;
 import com.doob.mathagent.teacher.service.CompositeTeacherResourceBlockSearchAuditSink;
+import com.doob.mathagent.teacher.service.MyBatisTeacherResourceBlockSearchAuditStore;
 import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchAuditLookup;
 import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchAuditSink;
 import org.junit.jupiter.api.Test;
@@ -13,9 +15,22 @@ import org.springframework.context.annotation.AnnotationConfigApplicationContext
 class TeacherResourceSearchAuditConfigurationTest {
 
     @Test
-    void exposesPrimaryRecentSinkAndLookupWhenDatabaseStoreIsUnavailable() {
+    void refusesToExposeRecentOnlyAuditWhenDatabaseStoreIsUnavailable() {
         try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext()) {
             context.register(TeacherResourceSearchAuditConfiguration.class);
+
+            assertThatThrownBy(context::refresh)
+                    .hasMessageContaining("MyBatisTeacherResourceBlockSearchAuditStore");
+        }
+    }
+
+    @Test
+    void exposesPrimaryPersistentSinkAndLookupWhenDatabaseStoreIsAvailable() {
+        try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext()) {
+            context.getEnvironment().getSystemProperties().put("math-agent.database.enabled", "true");
+            context.register(TeacherResourceSearchAuditConfiguration.class);
+            context.registerBean(MyBatisTeacherResourceBlockSearchAuditStore.class,
+                    () -> new MyBatisTeacherResourceBlockSearchAuditStore(null, null));
             context.refresh();
 
             TeacherResourceBlockSearchAuditSink sink = context.getBean(TeacherResourceBlockSearchAuditSink.class);

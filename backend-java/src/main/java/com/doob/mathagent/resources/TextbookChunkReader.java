@@ -26,13 +26,21 @@ public class TextbookChunkReader {
         try {
             List<TextbookChunk> chunks = new ArrayList<>();
             for (String line : Files.readAllLines(chunksJsonl, StandardCharsets.UTF_8)) {
-                if (!line.isBlank()) {
-                    chunks.add(objectMapper.readValue(line, TextbookChunk.class));
+                String normalizedLine = stripUtf8Bom(line);
+                if (!normalizedLine.isBlank()) {
+                    chunks.add(objectMapper.readValue(normalizedLine, TextbookChunk.class));
                 }
             }
             return List.copyOf(chunks);
         } catch (IOException e) {
             throw new IllegalStateException("Failed to read textbook chunks: " + chunksJsonl, e);
         }
+    }
+
+    /**
+     * Tolerates UTF-8 BOM emitted by Windows tools at the beginning of JSONL files.
+     */
+    private static String stripUtf8Bom(String line) {
+        return line != null && line.startsWith("\uFEFF") ? line.substring(1) : line;
     }
 }

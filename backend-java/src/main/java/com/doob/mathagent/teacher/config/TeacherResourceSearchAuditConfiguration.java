@@ -7,7 +7,6 @@ import com.doob.mathagent.teacher.service.RecentTeacherResourceBlockSearchAuditS
 import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchAuditLookup;
 import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchAuditSink;
 import java.util.List;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
@@ -19,9 +18,9 @@ import org.springframework.context.annotation.Primary;
 public class TeacherResourceSearchAuditConfiguration {
 
     /**
-     * Provides the bounded recent audit store used for fast queryId lookup and fallback.
+     * Provides the bounded recent audit cache used for fast queryId lookup after the event is persisted.
      *
-     * @return recent in-memory audit store
+     * @return recent in-memory audit cache
      */
     @Bean
     public RecentTeacherResourceBlockSearchAuditStore recentTeacherResourceBlockSearchAuditStore() {
@@ -29,40 +28,32 @@ public class TeacherResourceSearchAuditConfiguration {
     }
 
     /**
-     * Provides the primary audit sink. When MySQL is enabled it writes both recent and persistent logs.
+     * Provides the primary audit sink. Persistent MySQL audit is required; recent memory is only a cache.
      *
-     * @param recentAuditStore in-memory recent store
-     * @param myBatisStore optional MyBatis-backed store
+     * @param recentAuditStore in-memory recent cache
+     * @param persistentStore MyBatis-backed audit store
      * @return primary audit sink
      */
     @Bean
     @Primary
     public TeacherResourceBlockSearchAuditSink teacherResourceBlockSearchAuditSink(
             RecentTeacherResourceBlockSearchAuditStore recentAuditStore,
-            ObjectProvider<MyBatisTeacherResourceBlockSearchAuditStore> myBatisStore) {
-        MyBatisTeacherResourceBlockSearchAuditStore persistentStore = myBatisStore.getIfAvailable();
-        if (persistentStore == null) {
-            return new CompositeTeacherResourceBlockSearchAuditSink(List.of(recentAuditStore));
-        }
-        return new CompositeTeacherResourceBlockSearchAuditSink(List.of(recentAuditStore, persistentStore));
+            MyBatisTeacherResourceBlockSearchAuditStore persistentStore) {
+        return new CompositeTeacherResourceBlockSearchAuditSink(List.of(persistentStore, recentAuditStore));
     }
 
     /**
-     * Provides the primary audit lookup. Persistent logs are preferred, recent logs are fallback.
+     * Provides the primary audit lookup. Persistent logs are authoritative; recent memory is a short-lived cache.
      *
-     * @param recentAuditStore in-memory recent store
-     * @param myBatisStore optional MyBatis-backed store
+     * @param recentAuditStore in-memory recent cache
+     * @param persistentStore MyBatis-backed audit store
      * @return primary audit lookup
      */
     @Bean
     @Primary
     public TeacherResourceBlockSearchAuditLookup teacherResourceBlockSearchAuditLookup(
             RecentTeacherResourceBlockSearchAuditStore recentAuditStore,
-            ObjectProvider<MyBatisTeacherResourceBlockSearchAuditStore> myBatisStore) {
-        MyBatisTeacherResourceBlockSearchAuditStore persistentStore = myBatisStore.getIfAvailable();
-        if (persistentStore == null) {
-            return new CompositeTeacherResourceBlockSearchAuditLookup(List.of(recentAuditStore));
-        }
+            MyBatisTeacherResourceBlockSearchAuditStore persistentStore) {
         return new CompositeTeacherResourceBlockSearchAuditLookup(List.of(persistentStore, recentAuditStore));
     }
 }

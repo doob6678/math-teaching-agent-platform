@@ -52,4 +52,17 @@ class TextbookChunkReaderTest {
                 .extracting(TextbookChunk::chunkId)
                 .isEqualTo("c1");
     }
+    @Test
+    void stripsUtf8BomBeforeParsingChunkJsonl() throws Exception {
+        Path chunks = tempDir.resolve("chunks.jsonl");
+        Files.writeString(chunks, "\uFEFF{\"chunk_id\":\"c_bom\",\"doc_id\":\"book_b\",\"book_name\":\"B\",\"volume\":\"required\",\"chapter_path\":[],\"page_no\":1,\"printed_page_no\":\"1\",\"chunk_type\":\"page_summary\",\"section_title\":\"Vector\",\"text\":\"space vector\",\"formula_text\":\"\",\"image_rel_paths\":[],\"source_page_image\":\"pages/p001.png\"}\n");
+
+        TextbookChunkReader reader = new TextbookChunkReader();
+
+        assertThat(reader.read(chunks))
+                .hasSize(1)
+                .first()
+                .extracting(TextbookChunk::chunkId)
+                .isEqualTo("c_bom");
+    }
 }

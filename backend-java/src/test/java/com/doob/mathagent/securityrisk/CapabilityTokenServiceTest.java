@@ -8,7 +8,6 @@ import com.doob.mathagent.securityrisk.dto.CapabilityTokenApplyRequest;
 import com.doob.mathagent.securityrisk.service.CapabilityAuditEvent;
 import com.doob.mathagent.securityrisk.service.CapabilityAuditSink;
 import com.doob.mathagent.securityrisk.service.CapabilityTokenService;
-import com.doob.mathagent.securityrisk.service.InMemoryCapabilityTokenStore;
 import com.doob.mathagent.securityrisk.vo.CapabilityTokenResponse;
 import java.time.Clock;
 import java.time.Instant;
@@ -23,7 +22,7 @@ class CapabilityTokenServiceTest {
 
     @Test
     void issuesCapabilityTokenBoundToSubjectActionPathAndRequestHash() {
-        CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
+        CapabilityTokenService service = CapabilityTokenServiceFixture.service(clock);
 
         CapabilityTokenResponse response = service.apply(new CapabilityTokenApplyRequest(
                 "teaching:submit",
@@ -40,7 +39,7 @@ class CapabilityTokenServiceTest {
 
     @Test
     void consumesCapabilityTokenOnlyOnceForMatchingRequestHash() {
-        CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
+        CapabilityTokenService service = CapabilityTokenServiceFixture.service(clock);
         CapabilityTokenResponse response = service.apply(new CapabilityTokenApplyRequest(
                 "teaching:submit",
                 "/api/teaching/tasks",
@@ -64,7 +63,7 @@ class CapabilityTokenServiceTest {
 
     @Test
     void rejectsTokenWhenSubjectOrHashDoesNotMatch() {
-        CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
+        CapabilityTokenService service = CapabilityTokenServiceFixture.service(clock);
         CapabilityTokenResponse response = service.apply(new CapabilityTokenApplyRequest(
                 "teaching:submit",
                 "/api/teaching/tasks",
@@ -88,7 +87,7 @@ class CapabilityTokenServiceTest {
 
     @Test
     void rejectsCapabilityApplicationForUnsupportedActionOrAnonymousSubject() {
-        CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
+        CapabilityTokenService service = CapabilityTokenServiceFixture.service(clock);
 
         assertThatThrownBy(() -> service.apply(new CapabilityTokenApplyRequest(
                 "teacher:archive-resource",
@@ -111,7 +110,7 @@ class CapabilityTokenServiceTest {
 
     @Test
     void issuesTeacherResourceCapabilityTokensForRegisterArchiveAndSync() {
-        CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
+        CapabilityTokenService service = CapabilityTokenServiceFixture.service(clock);
         RequestSubject teacher = new RequestSubject("school-a", "teacher", "teacher-001", "device-1");
 
         CapabilityTokenResponse register = service.apply(new CapabilityTokenApplyRequest(
@@ -155,7 +154,7 @@ class CapabilityTokenServiceTest {
 
     @Test
     void issuesTeacherResourceSyncExecuteCapabilityTokenForExactJobPath() {
-        CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
+        CapabilityTokenService service = CapabilityTokenServiceFixture.service(clock);
         RequestSubject teacher = new RequestSubject("school-a", "teacher", "teacher-001", "device-1");
 
         CapabilityTokenResponse execute = service.apply(new CapabilityTokenApplyRequest(
@@ -175,7 +174,7 @@ class CapabilityTokenServiceTest {
 
     @Test
     void issuesTeacherResourceSyncResumeCapabilityTokenForExactJobPath() {
-        CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
+        CapabilityTokenService service = CapabilityTokenServiceFixture.service(clock);
         RequestSubject teacher = new RequestSubject("school-a", "teacher", "teacher-001", "device-1");
 
         CapabilityTokenResponse resume = service.apply(new CapabilityTokenApplyRequest(
@@ -194,8 +193,28 @@ class CapabilityTokenServiceTest {
     }
 
     @Test
+    void issuesVectorIndexRebuildCapabilityTokenForExactTeacherResourcePath() {
+        CapabilityTokenService service = CapabilityTokenServiceFixture.service(clock);
+        RequestSubject teacher = new RequestSubject("school-a", "teacher", "teacher-001", "device-1");
+
+        CapabilityTokenResponse rebuild = service.apply(new CapabilityTokenApplyRequest(
+                "vector-index:rebuild",
+                "/api/vector-index/teacher-resources/doc-1/rebuild",
+                "hash-vector",
+                "vector-index-rebuild-doc-1",
+                2.0), teacher);
+
+        assertThat(service.consume(
+                rebuild.token(),
+                "vector-index:rebuild",
+                "/api/vector-index/teacher-resources/doc-1/rebuild",
+                "hash-vector",
+                teacher).allowed()).isTrue();
+    }
+
+    @Test
     void rejectsMalformedTeacherResourceSyncExecuteCapabilityPaths() {
-        CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
+        CapabilityTokenService service = CapabilityTokenServiceFixture.service(clock);
         RequestSubject teacher = new RequestSubject("school-a", "teacher", "teacher-001", "device-1");
 
         assertThatThrownBy(() -> service.apply(new CapabilityTokenApplyRequest(
@@ -219,7 +238,7 @@ class CapabilityTokenServiceTest {
 
     @Test
     void issuesStudentMemoryCapabilityTokenOnlyForStudents() {
-        CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
+        CapabilityTokenService service = CapabilityTokenServiceFixture.service(clock);
         RequestSubject student = new RequestSubject("school-a", "student", "student-001", "device-1");
 
         CapabilityTokenResponse remember = service.apply(new CapabilityTokenApplyRequest(
@@ -247,7 +266,7 @@ class CapabilityTokenServiceTest {
 
     @Test
     void issuesStudentDashboardRefreshCapabilityTokenForStudentsAndTeachers() {
-        CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
+        CapabilityTokenService service = CapabilityTokenServiceFixture.service(clock);
         RequestSubject student = new RequestSubject("school-a", "student", "student-001", "device-1");
         RequestSubject teacher = new RequestSubject("school-a", "teacher", "teacher-001", "device-1");
 
@@ -280,7 +299,7 @@ class CapabilityTokenServiceTest {
 
     @Test
     void issuesKnowledgeAndQuestionBankCapabilityTokensOnlyForTeacherOrAdmin() {
-        CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
+        CapabilityTokenService service = CapabilityTokenServiceFixture.service(clock);
         RequestSubject teacher = new RequestSubject("school-a", "teacher", "teacher-001", "device-1");
         RequestSubject admin = new RequestSubject("school-a", "admin", "admin-001", "device-1");
 
@@ -341,7 +360,7 @@ class CapabilityTokenServiceTest {
 
     @Test
     void issuesTeachingHandoutLatexExportCapabilityTokens() {
-        CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
+        CapabilityTokenService service = CapabilityTokenServiceFixture.service(clock);
         RequestSubject student = new RequestSubject("school-a", "student", "student-001", "device-1");
 
         CapabilityTokenResponse export = service.apply(new CapabilityTokenApplyRequest(
@@ -361,7 +380,7 @@ class CapabilityTokenServiceTest {
 
     @Test
     void issuesTeachingHandoutPdfExportCapabilityTokens() {
-        CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
+        CapabilityTokenService service = CapabilityTokenServiceFixture.service(clock);
         RequestSubject student = new RequestSubject("school-a", "student", "student-001", "device-1");
 
         CapabilityTokenResponse export = service.apply(new CapabilityTokenApplyRequest(
@@ -381,7 +400,7 @@ class CapabilityTokenServiceTest {
 
     @Test
     void issuesTeachingHandoutLatexPreviewCapabilityTokens() {
-        CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
+        CapabilityTokenService service = CapabilityTokenServiceFixture.service(clock);
         RequestSubject student = new RequestSubject("school-a", "student", "student-001", "device-1");
 
         CapabilityTokenResponse preview = service.apply(new CapabilityTokenApplyRequest(
@@ -401,7 +420,7 @@ class CapabilityTokenServiceTest {
 
     @Test
     void issuesVersionBoundTeachingHandoutCapabilityTokens() {
-        CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
+        CapabilityTokenService service = CapabilityTokenServiceFixture.service(clock);
         RequestSubject teacher = new RequestSubject("school-a", "teacher", "teacher-001", "device-1");
 
         CapabilityTokenResponse teacherPreview = service.apply(new CapabilityTokenApplyRequest(
@@ -439,7 +458,7 @@ class CapabilityTokenServiceTest {
 
     @Test
     void issuesTeachingHandoutBatchZipCapabilityTokens() {
-        CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
+        CapabilityTokenService service = CapabilityTokenServiceFixture.service(clock);
         RequestSubject teacher = new RequestSubject("school-a", "teacher", "teacher-001", "device-1");
 
         CapabilityTokenResponse export = service.apply(new CapabilityTokenApplyRequest(
@@ -471,7 +490,7 @@ class CapabilityTokenServiceTest {
 
     @Test
     void issuesTeachingHumanFeedbackCapabilityTokens() {
-        CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
+        CapabilityTokenService service = CapabilityTokenServiceFixture.service(clock);
         RequestSubject student = new RequestSubject("school-a", "student", "student-001", "device-1");
 
         CapabilityTokenResponse feedback = service.apply(new CapabilityTokenApplyRequest(
@@ -491,7 +510,7 @@ class CapabilityTokenServiceTest {
 
     @Test
     void rejectsMalformedTeachingHumanFeedbackCapabilityPaths() {
-        CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
+        CapabilityTokenService service = CapabilityTokenServiceFixture.service(clock);
         RequestSubject student = new RequestSubject("school-a", "student", "student-001", "device-1");
 
         assertThatThrownBy(() -> service.apply(new CapabilityTokenApplyRequest(
@@ -506,7 +525,7 @@ class CapabilityTokenServiceTest {
 
     @Test
     void rejectsMalformedTeachingBatchDownloadCapabilityPaths() {
-        CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
+        CapabilityTokenService service = CapabilityTokenServiceFixture.service(clock);
         RequestSubject teacher = new RequestSubject("school-a", "teacher", "teacher-001", "device-1");
 
         assertThatThrownBy(() -> service.apply(new CapabilityTokenApplyRequest(
@@ -521,7 +540,7 @@ class CapabilityTokenServiceTest {
 
     @Test
     void rejectsMalformedTeachingHandoutCapabilityPaths() {
-        CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
+        CapabilityTokenService service = CapabilityTokenServiceFixture.service(clock);
         RequestSubject teacher = new RequestSubject("school-a", "teacher", "teacher-001", "device-1");
 
         assertThatThrownBy(() -> service.apply(new CapabilityTokenApplyRequest(
@@ -536,7 +555,7 @@ class CapabilityTokenServiceTest {
 
     @Test
     void issuesAgentRunCapabilityTokensForLoggedInSubjects() {
-        CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
+        CapabilityTokenService service = CapabilityTokenServiceFixture.service(clock);
         RequestSubject teacher = new RequestSubject("school-a", "teacher", "teacher-001", "device-1");
 
         CapabilityTokenResponse execute = service.apply(new CapabilityTokenApplyRequest(
@@ -564,7 +583,7 @@ class CapabilityTokenServiceTest {
 
     @Test
     void issuesMultiAgentWritingCapabilityTokensForTeachersOnly() {
-        CapabilityTokenService service = new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock);
+        CapabilityTokenService service = CapabilityTokenServiceFixture.service(clock);
         RequestSubject teacher = new RequestSubject("school-a", "teacher", "teacher-001", "device-1");
         RequestSubject student = new RequestSubject("school-a", "student", "student-001", "device-1");
 
@@ -597,7 +616,7 @@ class CapabilityTokenServiceTest {
     void recordsAuditEventsForIssueConsumeAndDeniedReplay() {
         CapturingCapabilityAuditSink auditSink = new CapturingCapabilityAuditSink();
         CapabilityTokenService service =
-                new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock, auditSink);
+                CapabilityTokenServiceFixture.service(clock, auditSink);
 
         CapabilityTokenResponse response = service.apply(new CapabilityTokenApplyRequest(
                 "teaching:submit",
@@ -635,7 +654,7 @@ class CapabilityTokenServiceTest {
     void recordsAuditEventWhenCapabilityApplicationIsRejected() {
         CapturingCapabilityAuditSink auditSink = new CapturingCapabilityAuditSink();
         CapabilityTokenService service =
-                new CapabilityTokenService(new InMemoryCapabilityTokenStore(), clock, auditSink);
+                CapabilityTokenServiceFixture.service(clock, auditSink);
 
         assertThatThrownBy(() -> service.apply(new CapabilityTokenApplyRequest(
                 "teacher:archive-resource",

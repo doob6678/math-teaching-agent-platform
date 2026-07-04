@@ -16,15 +16,25 @@ public class RetrievalAuditConfiguration {
     }
 
     @Bean
-    @Primary
-    public RetrievalAuditSink retrievalAuditSink(Environment environment, RecentRetrievalAuditStore recentAuditStore) {
+    public JdbcRetrievalAuditSink jdbcRetrievalAuditSink(Environment environment) {
         DatabaseMigrationProperties properties = DatabaseMigrationProperties.from(environment);
-        if (!properties.enabled()) {
-            return recentAuditStore;
-        }
         properties.validate();
+        return new JdbcRetrievalAuditSink(properties);
+    }
+
+    @Bean
+    @Primary
+    public RetrievalAuditSink retrievalAuditSink(
+            JdbcRetrievalAuditSink persistentAuditStore,
+            RecentRetrievalAuditStore recentAuditStore) {
         return new CompositeRetrievalAuditSink(List.of(
-                recentAuditStore,
-                new JdbcRetrievalAuditSink(properties)));
+                persistentAuditStore,
+                recentAuditStore));
+    }
+
+    @Bean
+    @Primary
+    public RetrievalAuditLookup retrievalAuditLookup(JdbcRetrievalAuditSink persistentAuditStore) {
+        return persistentAuditStore::findByQueryId;
     }
 }

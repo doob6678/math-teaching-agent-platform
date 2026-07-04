@@ -17,7 +17,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 /**
- * Feishu discovery client backed by the verified Python URL downloader script in dry-run/list mode.
+ * Feishu discovery client backed by the verified Python URL downloader script in discovery-only mode.
  */
 @Component
 @ConditionalOnProperty(prefix = "math-agent.teacher.sync.feishu", name = "process-downloader-enabled", havingValue = "true")
@@ -114,15 +114,12 @@ public class ProcessTeacherFeishuDiscoveryClient implements TeacherFeishuDiscove
         command.add("--summary-path");
         command.add(summaryPath.toString());
         command.add("--quiet");
-        String rootUrl = textOrDefault(query.rootUrl(), properties.feishuDefaultUrl());
-        if (!rootUrl.isBlank()) {
-            command.add("--root-url");
-            command.add(rootUrl);
-        }
+        String rootUrl = requireText(query.rootUrl(), "Feishu discovery rootUrl is required");
+        command.add("--root-url");
+        command.add(rootUrl);
         if ("search".equals(query.mode())) {
             command.add("--search-root");
             command.add(query.keyword());
-            command.add("--dry-run");
             command.add("--max-depth");
             command.add(String.valueOf(query.maxDepth()));
         } else {
@@ -244,5 +241,15 @@ public class ProcessTeacherFeishuDiscoveryClient implements TeacherFeishuDiscove
      */
     private static String textOrDefault(String value, String defaultValue) {
         return value == null || value.isBlank() ? defaultValue : value.strip();
+    }
+
+    /**
+     * Returns stripped text or fails when the caller did not provide the remote root explicitly.
+     */
+    private static String requireText(String value, String message) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException(message);
+        }
+        return value.strip();
     }
 }

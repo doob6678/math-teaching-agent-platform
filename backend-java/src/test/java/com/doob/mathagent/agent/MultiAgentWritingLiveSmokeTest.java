@@ -9,6 +9,7 @@ import com.doob.mathagent.agent.service.AgentRunPlanService;
 import com.doob.mathagent.agent.service.AgentTraceRecord;
 import com.doob.mathagent.agent.service.InMemoryAgentConcurrencyGuard;
 import com.doob.mathagent.agent.service.InMemoryAgentTraceStore;
+import com.doob.mathagent.agent.service.InMemoryMultiAgentWritingWorkflowStore;
 import com.doob.mathagent.agent.service.MultiAgentWritingService;
 import com.doob.mathagent.agent.service.SpringAiOpenAiCompatibleGateway;
 import com.doob.mathagent.agent.vo.MultiAgentWritingResponse;
@@ -38,7 +39,9 @@ class MultiAgentWritingLiveSmokeTest {
                         new InMemoryAgentConcurrencyGuard(),
                         new SpringAiOpenAiCompatibleGateway(properties),
                         catalog,
-                        java.time.Clock.systemUTC()));
+                        java.time.Clock.systemUTC()),
+                new InMemoryMultiAgentWritingWorkflowStore(),
+                new org.springframework.core.task.SyncTaskExecutor());
 
         MultiAgentWritingResponse response = service.run(
                 new MultiAgentWritingRequest(

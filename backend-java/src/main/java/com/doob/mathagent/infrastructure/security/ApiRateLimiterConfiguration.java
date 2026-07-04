@@ -16,12 +16,6 @@ public class ApiRateLimiterConfiguration {
     /**
      * 本地内存限流器：适合单机开发和无 Redis 的测试环境。
      */
-    @Bean
-    @ConditionalOnProperty(name = "math-agent.redis.rate-limit.enabled", havingValue = "false", matchIfMissing = true)
-    public ApiRateLimiter localApiRateLimiter() {
-        return FixedWindowRateLimiter.empty();
-    }
-
     /**
      * Redis 分布式限流器：适合部署阶段共享请求次数统计。
      */

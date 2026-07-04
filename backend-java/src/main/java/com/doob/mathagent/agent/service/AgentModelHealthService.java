@@ -6,6 +6,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Locale;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.stereotype.Service;
@@ -91,7 +92,7 @@ public class AgentModelHealthService {
                     false,
                     statusCode(exception),
                     elapsedMs(startedNanos),
-                    "Provider health check failed: " + exception.getClass().getSimpleName() + ".",
+                    safeFailureReason(exception),
                     responseCheckedAt);
         }
     }
@@ -101,11 +102,8 @@ public class AgentModelHealthService {
     }
 
     private static Integer statusCode(Exception exception) {
-        if (exception instanceof RestClientResponseException responseException) {
-            return responseException.getStatusCode().value();
-        }
-        Throwable cause = exception.getCause();
-        if (cause instanceof RestClientResponseException responseException) {
+        RestClientResponseException responseException = responseException(exception);
+        if (responseException != null) {
             return responseException.getStatusCode().value();
         }
         if (exception instanceof org.springframework.web.client.RestClientException) {
@@ -115,5 +113,65 @@ public class AgentModelHealthService {
             return HttpStatusCode.valueOf(400).value();
         }
         return null;
+    }
+
+    /**
+     * Returns a frontend-safe category for provider failures without exposing keys, prompts, or raw bodies.
+     */
+    private static String safeFailureReason(Exception exception) {
+        RestClientResponseException responseException = responseException(exception);
+        Integer statusCode = statusCode(exception);
+        String lower = safeSearchText(exception, responseException).toLowerCase(Locale.ROOT);
+        String prefix = "Provider health check failed";
+        if (lower.contains("quota")
+                || lower.contains("insufficient_quota")
+                || lower.contains("balance")
+                || lower.contains("billing")
+                || lower.contains("\u4f59\u989d")
+                || lower.contains("\u989d\u5ea6")) {
+            return prefix + ": quota_or_balance.";
+        }
+        if (statusCode != null && statusCode == 429 || lower.contains("rate limit") || lower.contains("too many requests")) {
+            return prefix + ": rate_limited.";
+        }
+        if (statusCode != null && (statusCode == 401 || statusCode == 403)
+                || lower.contains("invalid api key")
+                || lower.contains("access_denied")
+                || lower.contains("unauthorized")) {
+            return prefix + ": auth_or_access_denied.";
+        }
+        if (statusCode != null && statusCode == 400 || lower.contains("invalidparameter") || lower.contains("parse the json body")) {
+            return prefix + ": invalid_request_or_json.";
+        }
+        if (lower.contains("timeout") || lower.contains("timed out")) {
+            return prefix + ": timeout.";
+        }
+        return prefix + ": " + exception.getClass().getSimpleName() + ".";
+    }
+
+    private static RestClientResponseException responseException(Throwable throwable) {
+        Throwable current = throwable;
+        while (current != null) {
+            if (current instanceof RestClientResponseException responseException) {
+                return responseException;
+            }
+            current = current.getCause();
+        }
+        return null;
+    }
+
+    private static String safeSearchText(Exception exception, RestClientResponseException responseException) {
+        StringBuilder text = new StringBuilder(exception.getClass().getSimpleName());
+        if (exception.getMessage() != null) {
+            text.append(' ').append(exception.getMessage());
+        }
+        if (responseException != null) {
+            text.append(' ').append(responseException.getStatusCode().value());
+            String body = responseException.getResponseBodyAsString();
+            if (body != null) {
+                text.append(' ').append(body);
+            }
+        }
+        return text.toString();
     }
 }

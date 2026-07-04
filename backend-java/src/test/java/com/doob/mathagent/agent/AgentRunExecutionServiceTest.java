@@ -30,15 +30,14 @@ class AgentRunExecutionServiceTest {
 
     @Test
     void recordsBaselineTraceWithoutRawModelOutput() {
-        AgentRunExecutionService service = new AgentRunExecutionService(
+        AgentRunExecutionService service = AgentRunExecutionServiceFixture.deterministicModelService(
                 new InMemoryAgentTraceStore(),
                 new InMemoryAgentConcurrencyGuard());
         AgentRunPlanResponse plan = coursewarePlan();
         AgentRunExecuteRequest request = new AgentRunExecuteRequest(
                 plan,
                 "Generate teacher handout for space vectors",
-                List.of("textbook:chapter-1"),
-                true);
+                List.of("textbook:chapter-1"), false);
 
         AgentRunExecuteResponse response = service.execute(
                 request,
@@ -46,7 +45,7 @@ class AgentRunExecutionServiceTest {
 
         assertThat(response.traceId()).isNotBlank();
         assertThat(response.status()).isEqualTo("COMPLETED");
-        assertThat(response.message()).contains("Baseline trace recorded");
+        assertThat(response.message()).contains("deterministic test model response");
         assertThat(response.planId()).isEqualTo(plan.planId());
         assertThat(response.agentCode()).isEqualTo("CoursewareAgent");
         assertThat(response.providerName()).isEqualTo("dashscope");
@@ -55,20 +54,20 @@ class AgentRunExecutionServiceTest {
         assertThat(response.allowedDataScopes()).containsExactlyElementsOf(plan.allowedDataScopes());
         assertThat(response.concurrencyKeys()).containsExactlyElementsOf(plan.concurrencyKeys());
         assertThat(response.estimatedCost()).isEqualTo(plan.estimatedCost());
+        assertThat(response.actualUsage().totalTokens()).isEqualTo(8);
         assertThat(response.stageTimings()).extracting(AgentRunExecuteResponse.StageTiming::stage)
-                .containsExactly("capability_guard", "concurrency_guard", "trace_start", "baseline_execute", "trace_finish");
+                .containsExactly("capability_guard", "concurrency_guard", "trace_start", "model_call", "trace_finish");
     }
 
     @Test
     void rejectsExecutionWhenBackendSubjectDoesNotOwnPlan() {
-        AgentRunExecutionService service = new AgentRunExecutionService(
+        AgentRunExecutionService service = AgentRunExecutionServiceFixture.deterministicModelService(
                 new InMemoryAgentTraceStore(),
                 new InMemoryAgentConcurrencyGuard());
         AgentRunExecuteRequest request = new AgentRunExecuteRequest(
                 coursewarePlan(),
                 "Generate teacher handout for space vectors",
-                List.of(),
-                true);
+                List.of(), false);
 
         assertThatThrownBy(() -> service.execute(
                 request,
@@ -79,7 +78,7 @@ class AgentRunExecutionServiceTest {
 
     @Test
     void rejectsExecutionWhenPlanContainsToolScopeOutsideServerPolicy() {
-        AgentRunExecutionService service = new AgentRunExecutionService(
+        AgentRunExecutionService service = AgentRunExecutionServiceFixture.deterministicModelService(
                 new InMemoryAgentTraceStore(),
                 new InMemoryAgentConcurrencyGuard());
         AgentRunPlanResponse plan = coursewarePlan();
@@ -109,7 +108,7 @@ class AgentRunExecutionServiceTest {
                 plan.concurrencyKeys());
 
         assertThatThrownBy(() -> service.execute(
-                new AgentRunExecuteRequest(tampered, "tampered", List.of(), true),
+                new AgentRunExecuteRequest(tampered, "tampered", List.of(), false),
                 new RequestSubject("school-a", "teacher", "teacher-001", "device-1")))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Agent plan tool scope not allowed");
@@ -117,7 +116,7 @@ class AgentRunExecutionServiceTest {
 
     @Test
     void rejectsExecutionWhenPlanRoleIsNotAllowedForAgent() {
-        AgentRunExecutionService service = new AgentRunExecutionService(
+        AgentRunExecutionService service = AgentRunExecutionServiceFixture.deterministicModelService(
                 new InMemoryAgentTraceStore(),
                 new InMemoryAgentConcurrencyGuard());
         AgentRunPlanResponse plan = coursewarePlan();
@@ -147,7 +146,7 @@ class AgentRunExecutionServiceTest {
                 plan.concurrencyKeys());
 
         assertThatThrownBy(() -> service.execute(
-                new AgentRunExecuteRequest(tampered, "tampered", List.of(), true),
+                new AgentRunExecuteRequest(tampered, "tampered", List.of(), false),
                 new RequestSubject("school-a", "student", "student-001", "device-1")))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Agent subject not allowed");
@@ -155,7 +154,7 @@ class AgentRunExecutionServiceTest {
 
     @Test
     void requiresCapabilityFromServerSideAgentPolicyEvenWhenPlanIsTampered() {
-        AgentRunExecutionService service = new AgentRunExecutionService(
+        AgentRunExecutionService service = AgentRunExecutionServiceFixture.deterministicModelService(
                 new InMemoryAgentTraceStore(),
                 new InMemoryAgentConcurrencyGuard());
         AgentRunPlanResponse plan = coursewarePlan();
@@ -184,14 +183,14 @@ class AgentRunExecutionServiceTest {
                 plan.stageTimings(),
                 plan.concurrencyKeys());
 
-        assertThat(service.requiresCapability(new AgentRunExecuteRequest(tampered, "tampered", List.of(), true)))
+        assertThat(service.requiresCapability(new AgentRunExecuteRequest(tampered, "tampered", List.of(), false)))
                 .isTrue();
         assertThat(service.capabilityAction(tampered)).isEqualTo("agent-run:CoursewareAgent");
     }
 
     @Test
     void rejectsExecutionWhenFrontendReAddsUserDisabledTool() {
-        AgentRunExecutionService service = new AgentRunExecutionService(
+        AgentRunExecutionService service = AgentRunExecutionServiceFixture.deterministicModelService(
                 new InMemoryAgentTraceStore(),
                 new InMemoryAgentConcurrencyGuard());
         AgentRunPlanResponse plan = disabledPrivateSearchPlan();
@@ -221,7 +220,7 @@ class AgentRunExecutionServiceTest {
                 plan.concurrencyKeys());
 
         assertThatThrownBy(() -> service.execute(
-                new AgentRunExecuteRequest(tampered, "tampered", List.of(), true),
+                new AgentRunExecuteRequest(tampered, "tampered", List.of(), false),
                 new RequestSubject("school-a", "teacher", "teacher-001", "device-1")))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Agent plan tool scope disabled by user");
@@ -232,10 +231,10 @@ class AgentRunExecutionServiceTest {
         InMemoryAgentConcurrencyGuard guard = new InMemoryAgentConcurrencyGuard();
         AgentRunPlanResponse plan = coursewarePlan();
         guard.tryAcquire(plan.concurrencyKeys(), "trace-active", Duration.ofSeconds(30)).orElseThrow();
-        AgentRunExecutionService service = new AgentRunExecutionService(new InMemoryAgentTraceStore(), guard);
+        AgentRunExecutionService service = AgentRunExecutionServiceFixture.deterministicModelService(new InMemoryAgentTraceStore(), guard);
 
         assertThatThrownBy(() -> service.execute(
-                new AgentRunExecuteRequest(plan, "Generate handout", List.of(), true),
+                new AgentRunExecuteRequest(plan, "Generate handout", List.of(), false),
                 new RequestSubject("school-a", "teacher", "teacher-001", "device-1")))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("Agent concurrency limit exceeded");
@@ -245,10 +244,10 @@ class AgentRunExecutionServiceTest {
     void releasesConcurrencyLeaseAfterBaselineExecution() {
         TrackingConcurrencyGuard guard = new TrackingConcurrencyGuard();
         AgentRunPlanResponse plan = coursewarePlan();
-        AgentRunExecutionService service = new AgentRunExecutionService(new InMemoryAgentTraceStore(), guard);
+        AgentRunExecutionService service = AgentRunExecutionServiceFixture.deterministicModelService(new InMemoryAgentTraceStore(), guard);
 
         service.execute(
-                new AgentRunExecuteRequest(plan, "Generate handout", List.of(), true),
+                new AgentRunExecuteRequest(plan, "Generate handout", List.of(), false),
                 new RequestSubject("school-a", "teacher", "teacher-001", "device-1"));
 
         assertThat(guard.requestedKeys).containsExactlyElementsOf(plan.concurrencyKeys());
@@ -263,9 +262,10 @@ class AgentRunExecutionServiceTest {
                 11,
                 7,
                 18,
-                "model response recorded")));
+                "model response recorded",
+                validJson("draft"))));
         InMemoryAgentTraceStore traceStore = new InMemoryAgentTraceStore();
-        AgentRunExecutionService service = new AgentRunExecutionService(
+        AgentRunExecutionService service = AgentRunExecutionServiceFixture.modelService(
                 traceStore,
                 new InMemoryAgentConcurrencyGuard(),
                 gateway);
@@ -291,16 +291,18 @@ class AgentRunExecutionServiceTest {
                 .contains("model_call");
         assertThat(traceStore.find(response.traceId()).orElseThrow().diagnosticEvents())
                 .extracting(com.doob.mathagent.agent.service.AgentTraceRecord.DiagnosticEvent::eventType)
-                .containsExactly("MODEL_CALL_SUCCEEDED");
+                .containsExactly("MODEL_CALL_SUCCEEDED", "JSON_PARSE_SUCCEEDED");
     }
 
     @Test
     void rotatesToFallbackModelWhenPrimaryModelCallFails() {
         CapturingAiChatGateway gateway = new CapturingAiChatGateway(List.of(
                 new IllegalStateException("primary unavailable"),
-                new AiChatResult("openai", "gpt-5.4", 9, 6, 15, "fallback response recorded")));
+                new IllegalStateException("primary still unavailable"),
+                new IllegalStateException("primary exhausted"),
+                new AiChatResult("openai", "gpt-5.4", 9, 6, 15, "fallback response recorded", validJson("fallback"))));
         InMemoryAgentTraceStore traceStore = new InMemoryAgentTraceStore();
-        AgentRunExecutionService service = new AgentRunExecutionService(
+        AgentRunExecutionService service = AgentRunExecutionServiceFixture.modelService(
                 traceStore,
                 new InMemoryAgentConcurrencyGuard(),
                 gateway);
@@ -310,17 +312,57 @@ class AgentRunExecutionServiceTest {
                 new AgentRunExecuteRequest(plan, "Generate handout", List.of("doc-1"), false),
                 new RequestSubject("school-a", "teacher", "teacher-001", "device-1"));
 
-        assertThat(gateway.requests).hasSize(2);
+        assertThat(gateway.requests).hasSize(4);
         assertThat(gateway.requests.get(0).providerName()).isEqualTo("dashscope");
-        assertThat(gateway.requests.get(1).providerName()).isEqualTo("openai");
+        assertThat(gateway.requests.get(1).providerName()).isEqualTo("dashscope");
+        assertThat(gateway.requests.get(2).providerName()).isEqualTo("dashscope");
+        assertThat(gateway.requests.get(3).providerName()).isEqualTo("openai");
         assertThat(response.providerName()).isEqualTo("openai");
         assertThat(response.modelCode()).isEqualTo("gpt-5.4");
         assertThat(response.actualUsage().totalTokens()).isEqualTo(15);
         assertThat(response.message()).contains("fallback response recorded");
         assertThat(traceStore.find(response.traceId()).orElseThrow().diagnosticEvents())
                 .extracting(com.doob.mathagent.agent.service.AgentTraceRecord.DiagnosticEvent::eventType)
-                .containsExactly("MODEL_CALL_FAILED", "PROVIDER_ROTATED", "MODEL_CALL_SUCCEEDED");
+                .containsExactly(
+                        "MODEL_CALL_FAILED",
+                        "RETRY_SCHEDULED",
+                        "MODEL_CALL_FAILED",
+                        "RETRY_SCHEDULED",
+                        "MODEL_CALL_FAILED",
+                        "PROVIDER_ROTATED",
+                        "MODEL_CALL_SUCCEEDED",
+                        "JSON_PARSE_SUCCEEDED");
         assertThat(traceStore.find(response.traceId()).orElseThrow().diagnosticEvents().getFirst().retryable()).isTrue();
+    }
+
+    @Test
+    void retriesJsonRepairWhenRequiredSchemaOutputCannotBeParsed() {
+        CapturingAiChatGateway gateway = new CapturingAiChatGateway(List.of(
+                new AiChatResult("dashscope", "qwen3.6-flash", 5, 2, 7, "bad json", "not json"),
+                new AiChatResult("dashscope", "qwen3.6-flash", 8, 4, 12, "repaired json", validJson("repaired"))));
+        InMemoryAgentTraceStore traceStore = new InMemoryAgentTraceStore();
+        AgentRunExecutionService service = AgentRunExecutionServiceFixture.modelService(
+                traceStore,
+                new InMemoryAgentConcurrencyGuard(),
+                gateway);
+        AgentRunPlanResponse plan = coursewarePlan();
+
+        AgentRunExecuteResponse response = service.execute(
+                new AgentRunExecuteRequest(plan, "Generate structured handout", List.of("doc-1"), false),
+                new RequestSubject("school-a", "teacher", "teacher-001", "device-1"));
+
+        assertThat(gateway.requests).hasSize(2);
+        assertThat(gateway.requests.get(1).userInputSummary()).contains("failed backend JSON validation");
+        assertThat(response.generatedContent()).contains("repaired");
+        assertThat(response.actualUsage().totalTokens()).isEqualTo(19);
+        assertThat(traceStore.find(response.traceId()).orElseThrow().diagnosticEvents())
+                .extracting(com.doob.mathagent.agent.service.AgentTraceRecord.DiagnosticEvent::eventType)
+                .containsExactly(
+                        "MODEL_CALL_SUCCEEDED",
+                        "JSON_PARSE_FAILED",
+                        "RETRY_SCHEDULED",
+                        "MODEL_CALL_SUCCEEDED",
+                        "JSON_PARSE_SUCCEEDED");
     }
 
     private static AgentRunPlanResponse coursewarePlan() {
@@ -339,8 +381,7 @@ class AgentRunExecutionServiceTest {
                         true,
                         List.of("tool:courseware:generate", "tool:search:private"),
                         List.of(),
-                        List.of("TEACHER_PRIVATE", "CLASS_AUTHORIZED"),
-                        true),
+                        List.of("TEACHER_PRIVATE", "CLASS_AUTHORIZED"), false),
                 new RequestSubject("school-a", "teacher", "teacher-001", "device-1"));
     }
 
@@ -373,6 +414,11 @@ class AgentRunExecutionServiceTest {
         properties.getOpenai().setApiKey("openai-key");
         properties.getOpenai().setChatModel("gpt-5.4");
         return new AiProviderCatalog(properties);
+    }
+
+    private static String validJson(String marker) {
+        return "{\"teacherExplanation\":\"" + marker + "\",\"studentHint\":\"hint\",\"knowledgePoints\":[\"kp\"],"
+                + "\"followUpQuestions\":[\"q\"]}";
     }
 
     private static final class TrackingConcurrencyGuard implements AgentConcurrencyGuard {

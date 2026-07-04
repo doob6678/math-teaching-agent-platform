@@ -9,9 +9,12 @@ import com.doob.mathagent.knowledge.dto.QuestionBankItemCreateRequest;
 import com.doob.mathagent.knowledge.service.InMemoryKnowledgeQuestionBankStore;
 import com.doob.mathagent.knowledge.service.KnowledgeQuestionBankService;
 import com.doob.mathagent.knowledge.service.KnowledgeRelationRecord;
+import com.doob.mathagent.knowledge.service.TeacherBlockQuestionImportService;
 import com.doob.mathagent.knowledge.vo.KnowledgePointResponse;
 import com.doob.mathagent.knowledge.vo.KnowledgeRelationResponse;
 import com.doob.mathagent.knowledge.vo.QuestionBankItemResponse;
+import com.doob.mathagent.teacher.service.InMemoryTeacherDocumentBlockStore;
+import com.doob.mathagent.teacher.service.InMemoryTeacherResourceStore;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletRequest;
@@ -98,8 +101,10 @@ class KnowledgeQuestionBankControllerTest {
     @Test
     void listsKnowledgeRelationsFromBackendSubjectWithoutCapabilityToken() {
         InMemoryKnowledgeQuestionBankStore store = new InMemoryKnowledgeQuestionBankStore();
+        KnowledgeQuestionBankService service = new KnowledgeQuestionBankService(store);
         KnowledgeQuestionBankController controller = new KnowledgeQuestionBankController(
-                new KnowledgeQuestionBankService(store),
+                service,
+                importService(service, store),
                 request -> new RequestSubject("school-a", "teacher", "teacher-1", "device-1"),
                 (token, action, path, requestHash, subject) -> true);
         MockHttpServletRequest request = new MockHttpServletRequest();
@@ -135,10 +140,23 @@ class KnowledgeQuestionBankControllerTest {
     private static KnowledgeQuestionBankController controller(
             com.doob.mathagent.infrastructure.security.RequestSubjectResolver resolver,
             com.doob.mathagent.knowledge.service.KnowledgeQuestionBankCapabilityVerifier verifier) {
+        InMemoryKnowledgeQuestionBankStore store = new InMemoryKnowledgeQuestionBankStore();
+        KnowledgeQuestionBankService service = new KnowledgeQuestionBankService(store);
         return new KnowledgeQuestionBankController(
-                new KnowledgeQuestionBankService(new InMemoryKnowledgeQuestionBankStore()),
+                service,
+                importService(service, store),
                 resolver,
                 verifier);
+    }
+
+    private static TeacherBlockQuestionImportService importService(
+            KnowledgeQuestionBankService service,
+            InMemoryKnowledgeQuestionBankStore store) {
+        return new TeacherBlockQuestionImportService(
+                new InMemoryTeacherResourceStore(),
+                new InMemoryTeacherDocumentBlockStore(),
+                service,
+                store);
     }
 
     /**

@@ -8,8 +8,12 @@ import com.doob.mathagent.resources.TextbookChunk;
 import com.doob.mathagent.resources.TextbookChunkReader;
 import java.nio.file.Path;
 import java.nio.file.Files;
+import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -35,7 +39,7 @@ class TextbookRetrievalServiceTest {
                 {"chunk_id":"book_a_p101_text_001","doc_id":"book_a","book_name":"教材A","volume":"必修 第一册","chapter_path":["第三章 函数"],"page_no":101,"printed_page_no":"98","chunk_type":"page_summary","section_title":"分段函数","text":"分段函数是在定义域的不同部分用不同解析式表示的函数。","formula_text":"","image_rel_paths":[],"source_page_image":"pages/p101.png"}
                 """);
 
-        TextbookRetrievalService service = new TextbookRetrievalService(
+        TextbookRetrievalService service = com.doob.mathagent.retrieval.TextbookRetrievalServiceFixture.service(
                 new TextbookCatalogReader(),
                 new TextbookChunkReader(),
                 new LocalTextbookBm25SearchEngine(),
@@ -65,7 +69,7 @@ class TextbookRetrievalServiceTest {
                 {"chunk_id":"book_a_p020_text_001","doc_id":"book_a","book_name":"Textbook A","volume":"required 1","chapter_path":["Geometry"],"page_no":20,"printed_page_no":"18","chunk_type":"page_summary","section_title":"Triangle","text":"triangle angle side proof","formula_text":"","image_rel_paths":[],"source_page_image":"pages/p020.png"}
                 """);
         CapturingRetrievalAuditSink auditSink = new CapturingRetrievalAuditSink();
-        TextbookRetrievalService service = new TextbookRetrievalService(
+        TextbookRetrievalService service = com.doob.mathagent.retrieval.TextbookRetrievalServiceFixture.service(
                 new TextbookCatalogReader(),
                 new TextbookChunkReader(),
                 new LocalTextbookBm25SearchEngine(),
@@ -106,7 +110,7 @@ class TextbookRetrievalServiceTest {
                 {"chunk_id":"book_a_p101_text_001","doc_id":"book_a","book_name":"教材A","volume":"必修 第一册","chapter_path":["第三章 函数"],"page_no":101,"printed_page_no":"98","chunk_type":"page_summary","section_title":"分段函数","text":"分段函数是在定义域的不同部分用不同解析式表示的函数。","formula_text":"","image_rel_paths":[],"source_page_image":"pages/p101.png"}
                 """);
         CountingTextbookChunkReader chunkReader = new CountingTextbookChunkReader();
-        TextbookRetrievalService service = new TextbookRetrievalService(
+        TextbookRetrievalService service = com.doob.mathagent.retrieval.TextbookRetrievalServiceFixture.service(
                 new TextbookCatalogReader(),
                 chunkReader,
                 new LocalTextbookBm25SearchEngine(),
@@ -116,6 +120,38 @@ class TextbookRetrievalServiceTest {
         service.search(root, new TextbookSearchRequest("函数", 5));
 
         assertThat(chunkReader.readCount()).isEqualTo(1);
+    }
+
+    @Test
+    void usesDistributedSearchCacheWhenCorpusQueryAndLimitAreUnchanged() throws Exception {
+        Path root = tempDir.resolve("processed_books");
+        Path bookRoot = root.resolve("book_a");
+        Files.createDirectories(bookRoot.resolve("jsonl"));
+        Files.writeString(root.resolve("catalog.jsonl"), """
+                {"doc_id":"book_a","book_name":"Textbook A","volume":"required 1","book_root":"%s","manifest":"%s","chunk_count":1,"page_count":1,"ai_ok":false}
+                """.formatted(escape(bookRoot), escape(bookRoot.resolve("manifest.json"))));
+        Files.writeString(bookRoot.resolve("jsonl/chunks.jsonl"), """
+                {"chunk_id":"book_a_p101_text_001","doc_id":"book_a","book_name":"Textbook A","volume":"required 1","chapter_path":["Functions"],"page_no":101,"printed_page_no":"98","chunk_type":"page_summary","section_title":"Piecewise function","text":"piecewise function mapping","formula_text":"","image_rel_paths":[],"source_page_image":"pages/p101.png"}
+                """);
+        CountingSearchEngine searchEngine = new CountingSearchEngine();
+        InMemoryTextbookSearchCache cache = new InMemoryTextbookSearchCache();
+        TextbookRetrievalService service = com.doob.mathagent.retrieval.TextbookRetrievalServiceFixture.service(
+                new TextbookCatalogReader(),
+                new TextbookChunkReader(),
+                searchEngine,
+                new NoopRetrievalAuditSink(),
+                cache,
+                new RedisTextbookSearchCacheProperties(true, "math-agent:test:retrieval", Duration.ofMinutes(5)));
+
+        TextbookSearchResponse first = service.search(root, new TextbookSearchRequest("piecewise function", 5));
+        TextbookSearchResponse second = service.search(root, new TextbookSearchRequest("piecewise function", 5));
+
+        assertThat(first.retrievalStrategy()).isEqualTo("local_bm25_first");
+        assertThat(second.retrievalStrategy()).isEqualTo("redis_cache_local_bm25_first");
+        assertThat(second.queryId()).isNotEqualTo(first.queryId());
+        assertThat(second.hits()).extracting(TextbookSearchHit::chunkId).containsExactly("book_a_p101_text_001");
+        assertThat(searchEngine.searchCount()).isEqualTo(1);
+        assertThat(cache.putCount()).isEqualTo(1);
     }
 
     @Test
@@ -130,7 +166,7 @@ class TextbookRetrievalServiceTest {
                 {"chunk_id":"book_a_p101_text_001","doc_id":"book_a","book_name":"Textbook A","volume":"required 1","chapter_path":["Functions"],"page_no":101,"printed_page_no":"98","chunk_type":"page_summary","section_title":"Piecewise function","text":"piecewise function mapping","formula_text":"","image_rel_paths":[],"source_page_image":"pages/p101.png"}
                 """);
         SlowCountingTextbookChunkReader chunkReader = new SlowCountingTextbookChunkReader(4);
-        TextbookRetrievalService service = new TextbookRetrievalService(
+        TextbookRetrievalService service = com.doob.mathagent.retrieval.TextbookRetrievalServiceFixture.service(
                 new TextbookCatalogReader(),
                 chunkReader,
                 new LocalTextbookBm25SearchEngine(),
@@ -161,7 +197,7 @@ class TextbookRetrievalServiceTest {
         Files.writeString(chunksPath, """
                 {"chunk_id":"book_a_p101_text_001","doc_id":"book_a","book_name":"Textbook A","volume":"required 1","chapter_path":["Functions"],"page_no":101,"printed_page_no":"98","chunk_type":"page_summary","section_title":"Piecewise function","text":"piecewise function mapping","formula_text":"","image_rel_paths":[],"source_page_image":"pages/p101.png"}
                 """);
-        TextbookRetrievalService service = new TextbookRetrievalService(
+        TextbookRetrievalService service = com.doob.mathagent.retrieval.TextbookRetrievalServiceFixture.service(
                 new TextbookCatalogReader(),
                 new TextbookChunkReader(),
                 new LocalTextbookBm25SearchEngine(),
@@ -188,7 +224,7 @@ class TextbookRetrievalServiceTest {
                 {"chunk_id":"book_a_p101_text_001","doc_id":"book_a","book_name":"Textbook A","volume":"required 1","chapter_path":["Functions"],"page_no":101,"printed_page_no":"98","chunk_type":"page_summary","section_title":"Piecewise function","text":"piecewise function mapping","formula_text":"","image_rel_paths":[],"source_page_image":"pages/p101.png"}
                 """);
         AlwaysFailingTextbookChunkReader chunkReader = new AlwaysFailingTextbookChunkReader();
-        TextbookRetrievalService service = new TextbookRetrievalService(
+        TextbookRetrievalService service = com.doob.mathagent.retrieval.TextbookRetrievalServiceFixture.service(
                 new TextbookCatalogReader(),
                 chunkReader,
                 new LocalTextbookBm25SearchEngine(),
@@ -258,6 +294,45 @@ class TextbookRetrievalServiceTest {
 
         int readCount() {
             return readCount;
+        }
+    }
+
+    private static class CountingSearchEngine extends LocalTextbookBm25SearchEngine {
+        private int searchCount;
+
+        @Override
+        public List<TextbookSearchHit> search(String query, List<TextbookChunk> chunks, int limit) {
+            searchCount++;
+            return super.search(query, chunks, limit);
+        }
+
+        int searchCount() {
+            return searchCount;
+        }
+    }
+
+    private static class InMemoryTextbookSearchCache implements TextbookSearchCache {
+        private final Map<String, CachedTextbookSearch> entries = new HashMap<>();
+        private int putCount;
+
+        @Override
+        public boolean distributed() {
+            return true;
+        }
+
+        @Override
+        public Optional<CachedTextbookSearch> find(String cacheKey) {
+            return Optional.ofNullable(entries.get(cacheKey));
+        }
+
+        @Override
+        public void put(String cacheKey, CachedTextbookSearch value, Duration ttl) {
+            putCount++;
+            entries.put(cacheKey, value);
+        }
+
+        int putCount() {
+            return putCount;
         }
     }
 

@@ -15,14 +15,14 @@ public record StudentDashboardQuery(
         String requestedStudentId) {
 
     /**
-     * Returns a normalized query with safe defaults for local development.
+     * Returns a normalized query after requiring backend-resolved identity fields.
      *
      * @return normalized query
      */
     public StudentDashboardQuery normalize() {
-        String normalizedTenantId = textOrDefault(tenantId, "default");
-        String normalizedViewerRole = textOrDefault(viewerRole, "student").toLowerCase();
-        String normalizedViewerSubjectId = textOrDefault(viewerSubjectId, "local-student");
+        String normalizedTenantId = requireText(tenantId, "tenantId is required");
+        String normalizedViewerRole = requireText(viewerRole, "viewerRole is required").toLowerCase();
+        String normalizedViewerSubjectId = requireText(viewerSubjectId, "viewerSubjectId is required");
         String normalizedRequestedStudentId = requestedStudentId == null || requestedStudentId.isBlank()
                 ? null
                 : requestedStudentId.strip();
@@ -76,5 +76,15 @@ public record StudentDashboardQuery(
      */
     private static String textOrDefault(String value, String defaultValue) {
         return value == null || value.isBlank() ? defaultValue : value.strip();
+    }
+
+    /**
+     * Returns stripped text or fails when a backend-owned identity field is missing.
+     */
+    private static String requireText(String value, String message) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException(message);
+        }
+        return value.strip();
     }
 }

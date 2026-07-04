@@ -4,6 +4,8 @@ import com.doob.mathagent.teacher.vo.TeacherDocumentBlockResponse;
 import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncCheckpointResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncJobResponse;
+import com.doob.mathagent.vector.service.VectorIndexRebuildResponse;
+import com.doob.mathagent.vector.service.VectorIndexService;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -16,6 +18,7 @@ import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.stream.Stream;
 import org.apache.pdfbox.Loader;
@@ -40,6 +43,7 @@ public class TeacherSourceSyncExecutionService {
     private final TeacherFeishuDownloadClient feishuDownloadClient;
     private final TeacherSourceSyncProperties syncProperties;
     private final TeacherSourceSyncCheckpointStore checkpointStore;
+    private final VectorIndexService vectorIndexService;
 
     /**
      * Creates a sync execution service.
@@ -55,57 +59,15 @@ public class TeacherSourceSyncExecutionService {
             TeacherDocumentBlockStore blockStore,
             TeacherFeishuDownloadClient feishuDownloadClient,
             TeacherSourceSyncProperties syncProperties,
-            TeacherSourceSyncCheckpointStore checkpointStore) {
+            TeacherSourceSyncCheckpointStore checkpointStore,
+            VectorIndexService vectorIndexService) {
         this.resourceStore = resourceStore;
         this.jobStore = jobStore;
         this.blockStore = blockStore;
         this.feishuDownloadClient = feishuDownloadClient;
         this.syncProperties = syncProperties;
         this.checkpointStore = checkpointStore;
-    }
-
-    /**
-     * Creates a sync execution service with a no-op local checkpoint store for older focused tests.
-     *
-     * @param resourceStore source document store
-     * @param jobStore sync job store
-     * @param blockStore parsed block store
-     * @param feishuDownloadClient Feishu downloader
-     * @param syncProperties sync properties
-     */
-    public TeacherSourceSyncExecutionService(
-            TeacherResourceStore resourceStore,
-            TeacherSourceSyncJobStore jobStore,
-            TeacherDocumentBlockStore blockStore,
-            TeacherFeishuDownloadClient feishuDownloadClient,
-            TeacherSourceSyncProperties syncProperties) {
-        this(
-                resourceStore,
-                jobStore,
-                blockStore,
-                feishuDownloadClient,
-                syncProperties,
-                new InMemoryTeacherSourceSyncCheckpointStore());
-    }
-
-    /**
-     * Creates a sync execution service for focused unit tests that do not exercise Feishu downloading.
-     *
-     * @param resourceStore source document store
-     * @param jobStore sync job store
-     * @param blockStore parsed block store
-     */
-    public TeacherSourceSyncExecutionService(
-            TeacherResourceStore resourceStore,
-            TeacherSourceSyncJobStore jobStore,
-            TeacherDocumentBlockStore blockStore) {
-        this(
-                resourceStore,
-                jobStore,
-                blockStore,
-                new UnconfiguredTeacherFeishuDownloadClient(),
-                TeacherSourceSyncProperties.defaults(),
-                new InMemoryTeacherSourceSyncCheckpointStore());
+        this.vectorIndexService = Objects.requireNonNull(vectorIndexService, "vectorIndexService is required");
     }
 
     /**
@@ -137,9 +99,9 @@ public class TeacherSourceSyncExecutionService {
             String documentId,
             String jobId,
             TeacherSourceSyncCheckpointResponse resumeCheckpoint) {
-        String normalizedTenantId = textOrDefault(tenantId, "default");
-        String normalizedRole = textOrDefault(viewerRole, "teacher").toLowerCase(Locale.ROOT);
-        String normalizedSubjectId = textOrDefault(viewerSubjectId, "local-teacher-console");
+        String normalizedTenantId = requireText(tenantId, "tenantId is required");
+        String normalizedRole = requireText(viewerRole, "viewerRole is required").toLowerCase(Locale.ROOT);
+        String normalizedSubjectId = requireText(viewerSubjectId, "viewerSubjectId is required");
         requireTeacherOrAdmin(normalizedRole);
         TeacherResourceDocumentResponse document = requireVisibleDocument(
                 normalizedTenantId,
@@ -161,7 +123,7 @@ public class TeacherSourceSyncExecutionService {
                     saveFeishuCheckpoint(document, running, "[]", "[]", 1);
                 }
                 TeacherFeishuDownloadClient.FeishuDownloadResult result = feishuDownloadClient.download(
-                        textOrDefault(document.originalUrl(), syncProperties.feishuDefaultUrl()),
+                        requireText(document.originalUrl(), "Feishu resource originalUrl is required"),
                         syncProperties.feishuStagingRoot(),
                         syncProperties.feishuSmokeMaxFiles(),
                         textOrDefault(document.feishuExportFormat(), "md"),
@@ -183,9 +145,11 @@ public class TeacherSourceSyncExecutionService {
                         document.previewFiles());
                 resourceStore.save(downloaded);
                 List<TeacherDocumentBlockResponse> blocks = parseResourceFiles(downloaded);
+                String vectorMessage = "";
                 if (!blocks.isEmpty()) {
                     blockStore.replaceActiveBlocks(document.tenantId(), document.documentId(), blocks);
-                    markLocalResourceSynced(downloaded);
+                    TeacherResourceDocumentResponse synced = markLocalResourceSynced(downloaded);
+                    vectorMessage = autoRebuildVectorIndex(synced, normalizedRole, normalizedSubjectId);
                 }
                 TeacherSourceSyncJobResponse completed = updateJob(
                         running,
@@ -194,21 +158,40 @@ public class TeacherSourceSyncExecutionService {
                         result.savedPath().toString(),
                         blocks.isEmpty()
                                 ? result.message() + "; no supported files parsed"
-                                : result.message() + "; Parsed " + blocks.size() + " blocks");
-                saveFeishuCheckpoint(document, completed, downloadedItemsJson(result), "[]", 2);
+                                : result.message() + "; Parsed " + blocks.size() + " blocks" + vectorMessage);
+                TeacherSourceSyncCheckpointResponse successCheckpoint = result.checkpoint().hasCursor()
+                        ? toStoredCheckpoint(document, completed, result.checkpoint(), result.failedItemsJson())
+                        : null;
+                saveFeishuCheckpoint(
+                        document,
+                        completed,
+                        successCheckpoint,
+                        mergeDownloadedItemsJson(result),
+                        result.failedItemsJson(),
+                        2);
                 return jobStore.save(completed);
             }
             List<TeacherDocumentBlockResponse> blocks = parseResourceFiles(document);
             blockStore.replaceActiveBlocks(document.tenantId(), document.documentId(), blocks);
-            markLocalResourceSynced(document);
+            TeacherResourceDocumentResponse synced = markLocalResourceSynced(document);
+            String vectorMessage = autoRebuildVectorIndex(synced, normalizedRole, normalizedSubjectId);
             TeacherSourceSyncJobResponse completed = updateJob(
                     running,
                     "completed",
                     "parse_completed",
                     null,
-                    "Parsed " + blocks.size() + " blocks from local source");
+                    "Parsed " + blocks.size() + " blocks from local source" + vectorMessage);
             return jobStore.save(completed);
         } catch (RuntimeException exception) {
+            if (exception instanceof VectorIndexSyncException) {
+                TeacherSourceSyncJobResponse failed = updateJob(
+                        running,
+                        "failed",
+                        "vector_index_failed",
+                        null,
+                        exception.getMessage());
+                return jobStore.save(failed);
+            }
             if (feishuSource) {
                 TeacherFeishuDownloadClient.FeishuDownloadCheckpoint failureCheckpoint =
                         TeacherFeishuDownloadClient.FeishuDownloadCheckpoint.empty();
@@ -218,7 +201,7 @@ public class TeacherSourceSyncExecutionService {
                     failureCheckpoint = feishuException.checkpoint();
                 }
                 TeacherSourceSyncCheckpointResponse checkpointToSave = failureCheckpoint.hasCursor()
-                        ? toStoredCheckpoint(document, running, failureCheckpoint)
+                        ? toStoredCheckpoint(document, running, failureCheckpoint, "[]")
                         : resumeCheckpoint;
                 TeacherSourceSyncJobResponse pausedOrFailed = updateJob(
                         running,
@@ -261,9 +244,9 @@ public class TeacherSourceSyncExecutionService {
             String viewerSubjectId,
             String documentId,
             String jobId) {
-        String normalizedTenantId = textOrDefault(tenantId, "default");
-        String normalizedRole = textOrDefault(viewerRole, "teacher").toLowerCase(Locale.ROOT);
-        String normalizedSubjectId = textOrDefault(viewerSubjectId, "local-teacher-console");
+        String normalizedTenantId = requireText(tenantId, "tenantId is required");
+        String normalizedRole = requireText(viewerRole, "viewerRole is required").toLowerCase(Locale.ROOT);
+        String normalizedSubjectId = requireText(viewerSubjectId, "viewerSubjectId is required");
         requireTeacherOrAdmin(normalizedRole);
         TeacherResourceDocumentResponse document = requireVisibleDocument(
                 normalizedTenantId,
@@ -307,7 +290,7 @@ public class TeacherSourceSyncExecutionService {
             String downloadedItemsJson,
             String failedItemsJson,
             int cursorVersion) {
-        String rootToken = extractFeishuToken(textOrDefault(document.originalUrl(), syncProperties.feishuDefaultUrl()));
+        String rootToken = extractFeishuToken(requireText(document.originalUrl(), "Feishu resource originalUrl is required"));
         String currentFolderToken = previousCheckpoint == null
                 ? rootToken
                 : textOrDefault(previousCheckpoint.currentFolderToken(), rootToken);
@@ -355,7 +338,8 @@ public class TeacherSourceSyncExecutionService {
     private static TeacherSourceSyncCheckpointResponse toStoredCheckpoint(
             TeacherResourceDocumentResponse document,
             TeacherSourceSyncJobResponse job,
-            TeacherFeishuDownloadClient.FeishuDownloadCheckpoint checkpoint) {
+            TeacherFeishuDownloadClient.FeishuDownloadCheckpoint checkpoint,
+            String failedItemsJson) {
         String rootToken = extractFeishuToken(textOrDefault(document.originalUrl(), ""));
         return new TeacherSourceSyncCheckpointResponse(
                 job.jobId(),
@@ -367,7 +351,7 @@ public class TeacherSourceSyncExecutionService {
                 textOrDefault(checkpoint.pageToken(), null),
                 jsonOrEmptyArray(checkpoint.visitedFolderTokensJson()),
                 jsonOrEmptyArray(checkpoint.downloadedItemsJson()),
-                "[]",
+                jsonOrEmptyArray(failedItemsJson),
                 2,
                 Instant.now().toString());
     }
@@ -380,6 +364,14 @@ public class TeacherSourceSyncExecutionService {
                 + "\"files\":" + result.files() + ","
                 + "\"skipped\":" + result.skipped() + ","
                 + "\"failed\":" + result.failed() + "}]";
+    }
+
+    /**
+     * Prefers provider item-level downloaded records and falls back to a compact aggregate row.
+     */
+    private static String mergeDownloadedItemsJson(TeacherFeishuDownloadClient.FeishuDownloadResult result) {
+        String itemLevel = jsonOrEmptyArray(result.downloadedItemsJson());
+        return "[]".equals(itemLevel) ? downloadedItemsJson(result) : itemLevel;
     }
 
     /**
@@ -425,7 +417,7 @@ public class TeacherSourceSyncExecutionService {
     /**
      * Marks a local resource as parsed while keeping embedding/index rebuild pending.
      */
-    private void markLocalResourceSynced(TeacherResourceDocumentResponse document) {
+    private TeacherResourceDocumentResponse markLocalResourceSynced(TeacherResourceDocumentResponse document) {
         TeacherResourceDocumentResponse synced = new TeacherResourceDocumentResponse(
                 document.documentId(),
                 document.tenantId(),
@@ -442,6 +434,40 @@ public class TeacherSourceSyncExecutionService {
                 document.feishuExportFormat(),
                 document.previewFiles());
         resourceStore.save(synced);
+        return synced;
+    }
+
+    /**
+     * Rebuilds vector indexing after parsing. Sync must fail instead of pretending to complete when Milvus or
+     * embeddings are unavailable.
+     */
+    private String autoRebuildVectorIndex(
+            TeacherResourceDocumentResponse document,
+            String viewerRole,
+            String viewerSubjectId) {
+        VectorIndexRebuildResponse response;
+        try {
+            response = vectorIndexService.rebuildTeacherResource(
+                    document.tenantId(),
+                    viewerRole,
+                    viewerSubjectId,
+                    document.documentId());
+        } catch (RuntimeException exception) {
+            throw new VectorIndexSyncException("Vector index rebuild failed: " + exception.getMessage(), exception);
+        }
+        if ("failed".equalsIgnoreCase(response.status())) {
+            throw new VectorIndexSyncException(
+                    "Vector index rebuild failed: " + textOrDefault(response.message(), "unknown error"),
+                    null);
+        }
+        return "; Vector index " + response.status() + ": " + textOrDefault(response.message(), "");
+    }
+
+    private static final class VectorIndexSyncException extends RuntimeException {
+
+        private VectorIndexSyncException(String message, Throwable cause) {
+            super(message, cause);
+        }
     }
 
     /**
@@ -454,7 +480,7 @@ public class TeacherSourceSyncExecutionService {
         }
         List<Path> files = listSupportedFiles(root);
         if (files.isEmpty()) {
-            throw new IllegalArgumentException("Local resource path contains no .md or .txt files: " + root);
+            throw new IllegalArgumentException("Local resource path contains no supported .md, .txt, .docx, or .pdf files: " + root);
         }
         List<TeacherDocumentBlockResponse> blocks = new ArrayList<>();
         int order = 0;
@@ -486,7 +512,7 @@ public class TeacherSourceSyncExecutionService {
     }
 
     /**
-     * Checks whether the file can be parsed by the current local sync baseline.
+     * Checks whether the file can be parsed by the current local sync parser set.
      */
     private static boolean isSupportedFile(Path file) {
         String fileName = file.getFileName().toString().toLowerCase(Locale.ROOT);
@@ -727,6 +753,13 @@ public class TeacherSourceSyncExecutionService {
      */
     private static String textOrDefault(String value, String defaultValue) {
         return value == null || value.isBlank() ? defaultValue : value.strip();
+    }
+
+    private static String requireText(String value, String message) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException(message);
+        }
+        return value.strip();
     }
 
     /**

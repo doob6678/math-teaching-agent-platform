@@ -22,17 +22,18 @@ class TeachingAiDraftServiceTest {
         TeachingAiDraftService.ParsedDraft parsed = TeachingAiDraftService.parseStructuredDraft("""
                 ```json
                 {
-                  "teacherExplanation": "Explain D(x_0), then substitute x_0=-1.",
-                  "studentHint": "Substitute -1 first, then check the condition.",
-                  "knowledgePoints": ["new function definition", "domain"],
+                  "teacherExplanation": "Explain \\\\(D(x_0)\\\\), then substitute x_0=-1.",
+                  "studentHint": "Use \\\\[f(x)=x^2-4x+3\\\\] first, then check the condition.",
+                  "knowledgePoints": ["new function definition", "\\\\begin{align} f(x)&=x^2-4x+3 \\\\\\\\ &= (x-1)(x-3) \\\\end{align}"],
                   "followUpQuestions": ["How to find D(0)?", "What changes when parameters move?"]
                 }
                 ```
                 """);
 
         assertThat(parsed.structured()).isTrue();
-        assertThat(parsed.teacherExplanation()).contains("D(x_0)");
-        assertThat(parsed.knowledgePoints()).containsExactly("new function definition", "domain");
+        assertThat(parsed.teacherExplanation()).contains("$D(x_0)$").doesNotContain("\\(");
+        assertThat(parsed.studentHint()).contains("$$").doesNotContain("\\[");
+        assertThat(parsed.knowledgePoints().get(1)).contains("$$", "f(x)=x^2-4x+3").doesNotContain("\\begin{align}");
         assertThat(parsed.parseError()).isBlank();
     }
 

@@ -1,7 +1,14 @@
 package com.doob.mathagent.protocol.config;
 
+import com.doob.mathagent.knowledge.service.KnowledgeGraphSpineService;
 import com.doob.mathagent.protocol.service.McpClientRegistryProperties;
+import com.doob.mathagent.protocol.service.McpJsonRpcService;
+import com.doob.mathagent.protocol.service.McpToolExecutionService;
+import com.doob.mathagent.protocol.service.ProtocolDiscoveryService;
+import com.doob.mathagent.resources.TextbookResourceProperties;
+import com.doob.mathagent.resources.TextbookResourceService;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 /**
@@ -10,4 +17,24 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 @EnableConfigurationProperties(McpClientRegistryProperties.class)
 public class McpProtocolConfiguration {
+
+    /**
+     * Creates the standard MCP JSON-RPC service with safe resource readers wired in.
+     */
+    @Bean
+    McpJsonRpcService mcpJsonRpcService(
+            ProtocolDiscoveryService discoveryService,
+            McpToolExecutionService toolExecutionService,
+            McpClientRegistryProperties registryProperties,
+            TextbookResourceService textbookResourceService,
+            TextbookResourceProperties textbookResourceProperties,
+            KnowledgeGraphSpineService knowledgeGraphSpineService) {
+        return new McpJsonRpcService(
+                discoveryService,
+                toolExecutionService,
+                registryProperties,
+                textbookResourceService,
+                textbookResourceProperties,
+                knowledgeGraphSpineService);
+    }
 }
