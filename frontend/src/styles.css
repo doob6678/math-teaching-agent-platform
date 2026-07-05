@@ -1907,9 +1907,21 @@ h1, h2, h3, h4, h5, h6 {
     var(--white);
 }
 
+.template-card-skill {
+  border-color: rgba(138, 111, 42, 0.24);
+  background:
+    linear-gradient(180deg, rgba(255, 248, 231, 0.76), rgba(255, 255, 255, 0.98)),
+    var(--white);
+}
+
 .template-card-reference.selected {
   border-color: rgba(15, 118, 110, 0.44);
   box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.1);
+}
+
+.template-card-skill.selected {
+  border-color: rgba(138, 111, 42, 0.46);
+  box-shadow: 0 0 0 2px rgba(138, 111, 42, 0.1);
 }
 
 .template-card-empty {
@@ -1995,6 +2007,15 @@ h1, h2, h3, h4, h5, h6 {
   font-weight: 720;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.template-skill-strip {
+  border-color: rgba(138, 111, 42, 0.18);
+  background: rgba(255, 248, 231, 0.82);
+}
+
+.template-skill-strip span {
+  color: #8a6f2a;
 }
 
 .template-chip-row span {

@@ -1964,7 +1964,8 @@ function TemplateShelf({
       <div className="template-shelf-grid">
         {templates.map((template) => {
           const selected = template.templateCode === selectedCode;
-          const localReference = template.sourceType === "local_reference" || Boolean(template.referenceTitle);
+          const dynamicSkill = template.sourceType === "skill_config";
+          const localReference = !dynamicSkill && (template.sourceType === "local_reference" || Boolean(template.referenceTitle));
           return (
             <article
               key={template.templateCode}
@@ -1972,6 +1973,7 @@ function TemplateShelf({
                 "template-card",
                 selected ? "selected" : "",
                 localReference ? "template-card-reference" : "",
+                dynamicSkill ? "template-card-skill" : "",
               ].filter(Boolean).join(" ")}
             >
               <button type="button" className="template-card-select" onClick={() => onSelect(template.templateCode)}>
@@ -1985,6 +1987,12 @@ function TemplateShelf({
                   <div className="template-reference-strip">
                     <span>本机 PDF</span>
                     <strong>{template.referenceTitle || template.displayName}</strong>
+                  </div>
+                ) : null}
+                {dynamicSkill ? (
+                  <div className="template-reference-strip template-skill-strip">
+                    <span>动态 Skill</span>
+                    <strong>{template.referenceTitle || "可配置提示词模板"}</strong>
                   </div>
                 ) : null}
                 <div className="template-chip-row">
@@ -2026,6 +2034,7 @@ function sourceTypeLabel(sourceType?: string | null) {
   const labels: Record<string, string> = {
     builtin: "内置",
     local_reference: "本机参考",
+    skill_config: "动态 Skill",
     pdf: "PDF 模板",
     latex: "LaTeX 模板",
   };

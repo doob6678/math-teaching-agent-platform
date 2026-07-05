@@ -1,6 +1,13 @@
 package com.doob.mathagent.teaching.service;
 
 import com.doob.mathagent.teaching.vo.TeachingHandoutTemplateResponse;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -14,6 +21,9 @@ import org.springframework.stereotype.Service;
  */
 @Service
 public class TeachingHandoutTemplateService {
+
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final String DEFAULT_SKILL_CONFIG = "文档/开发知识库/讲义模板skills.json";
 
     private final Map<String, TeachingHandoutTemplateProfile> templates;
 
@@ -135,6 +145,9 @@ public class TeachingHandoutTemplateService {
         for (TeachingHandoutTemplateProfile profile : new TeachingHandoutLocalReferenceScanner().scan()) {
             map.putIfAbsent(profile.summary().templateCode(), profile);
         }
+        for (TeachingHandoutTemplateProfile profile : configuredTemplateSkills()) {
+            map.put(profile.summary().templateCode(), profile);
+        }
         this.templates = Collections.unmodifiableMap(map);
     }
 
@@ -156,5 +169,127 @@ public class TeachingHandoutTemplateService {
         }
         return Optional.ofNullable(templates.get(templateCode.strip()))
                 .orElseGet(() -> templates.get("default_standard"));
+    }
+
+    private static List<TeachingHandoutTemplateProfile> configuredTemplateSkills() {
+        List<TeachingHandoutTemplateProfile> profiles = new ArrayList<>();
+        for (Path path : configuredSkillFiles()) {
+            if (!Files.isRegularFile(path)) {
+                continue;
+            }
+            try {
+                List<ConfiguredTemplateSkill> items = readConfiguredTemplateSkills(path);
+                for (ConfiguredTemplateSkill item : items) {
+                    toProfile(item).ifPresent(profiles::add);
+                }
+            } catch (IOException | RuntimeException ignored) {
+                // Bad local skill config must not break the backend template registry.
+            }
+        }
+        return profiles;
+    }
+
+    private static List<ConfiguredTemplateSkill> readConfiguredTemplateSkills(Path path) throws IOException {
+        JsonNode root = OBJECT_MAPPER.readTree(path.toFile());
+        JsonNode templatesNode = root.isArray() ? root : root.get("templates");
+        if (templatesNode == null || !templatesNode.isArray()) {
+            return List.of();
+        }
+        return OBJECT_MAPPER.convertValue(
+                templatesNode,
+                new TypeReference<List<ConfiguredTemplateSkill>>() {
+                });
+    }
+
+    private static List<Path> configuredSkillFiles() {
+        List<Path> paths = new ArrayList<>();
+        paths.add(repoRoot(Path.of("").toAbsolutePath().normalize()).resolve(DEFAULT_SKILL_CONFIG));
+        String configured = System.getenv("MATH_AGENT_HANDOUT_TEMPLATE_SKILL_FILES");
+        if (configured == null || configured.isBlank()) {
+            configured = System.getProperty("math.agent.handout.template.skill.files", "");
+        }
+        for (String item : configured.split(";")) {
+            if (!item.isBlank()) {
+                paths.add(Path.of(item.strip()).toAbsolutePath().normalize());
+            }
+        }
+        return paths;
+    }
+
+    private static Optional<TeachingHandoutTemplateProfile> toProfile(ConfiguredTemplateSkill item) {
+        if (item == null || isBlank(item.templateCode()) || isBlank(item.displayName()) || isBlank(item.promptInstructions())) {
+            return Optional.empty();
+        }
+        String sourceType = isBlank(item.sourceType()) ? "skill_config" : item.sourceType().strip();
+        return Optional.of(new TeachingHandoutTemplateProfile(
+                new TeachingHandoutTemplateResponse(
+                        item.templateCode().strip(),
+                        item.displayName().strip(),
+                        sourceType,
+                        defaultText(item.audience(), "mixed"),
+                        defaultText(item.description(), "来自动态 skill 配置的讲义模板。"),
+                        defaultText(item.category(), "动态模板"),
+                        defaultText(item.visualStyle(), "配置模板"),
+                        safeList(item.difficultyBands(), List.of("基础", "提高")),
+                        safeList(item.tags(), List.of("动态配置")),
+                        emptyToNull(item.referenceTitle()),
+                        emptyToNull(item.referencePath()),
+                        emptyToNull(item.referencePreview())),
+                item.promptInstructions().strip(),
+                item.studentLectureStyle()));
+    }
+
+    private static Path repoRoot(Path cwd) {
+        Path current = cwd;
+        for (int depth = 0; depth < 5 && current != null; depth += 1) {
+            if (Files.isDirectory(current.resolve("文档"))
+                    && Files.isDirectory(current.resolve("backend-java"))
+                    && Files.isDirectory(current.resolve("frontend"))) {
+                return current;
+            }
+            current = current.getParent();
+        }
+        return cwd;
+    }
+
+    private static List<String> safeList(List<String> values, List<String> fallback) {
+        if (values == null || values.isEmpty()) {
+            return fallback;
+        }
+        return values.stream()
+                .filter(value -> value != null && !value.isBlank())
+                .map(String::strip)
+                .distinct()
+                .limit(8)
+                .toList();
+    }
+
+    private static String defaultText(String value, String fallback) {
+        return isBlank(value) ? fallback : value.strip();
+    }
+
+    private static String emptyToNull(String value) {
+        return isBlank(value) ? null : value.strip();
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.isBlank();
+    }
+
+    private record ConfiguredTemplateSkill(
+            String templateCode,
+            String displayName,
+            String sourceType,
+            String audience,
+            String description,
+            String category,
+            String visualStyle,
+            List<String> difficultyBands,
+            List<String> tags,
+            String referenceTitle,
+            String referencePath,
+            String referencePreview,
+            String promptInstructions,
+            boolean studentLectureStyle) {
     }
 }
