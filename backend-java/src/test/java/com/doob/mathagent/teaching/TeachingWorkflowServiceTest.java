@@ -59,11 +59,17 @@ class TeachingWorkflowServiceTest {
                         "LEARNING_GOAL",
                         "REUSE_RESOURCE",
                         "PUBLIC_TEXTBOOK_RETRIEVAL",
+                        "QUESTION_BANK_RETRIEVAL",
                         "REACT_SOLVE",
+                        "HANDOUT_TEMPLATE",
                         "AI_DRAFT",
                         "LATEX_HANDOUT",
                         "HUMAN_FEEDBACK",
                         "INTERACTIVE_FOLLOW_UP");
+        assertThat(response.selectedTemplate()).isNotNull();
+        assertThat(response.selectedTemplate().templateCode()).isEqualTo("default_standard");
+        assertThat(response.selectedTemplate().category()).isEqualTo("基础讲义");
+        assertThat(response.selectedTemplate().difficultyBands()).contains("基础", "提高");
         assertThat(response.reactTrace()).isEmpty();
         assertThat(response.evidence()).isNotEmpty();
         assertThat(response.evidence().getFirst().sourceScope()).isEqualTo("PUBLIC_TEXTBOOK");
@@ -73,7 +79,7 @@ class TeachingWorkflowServiceTest {
         assertThat(response.studentHandoutLatex()).doesNotContain("知识点归属");
         assertThat(response.interactiveSuggestions()).contains("继续追问定义 D(x_0)");
         assertThat(response.aiDraft().enabled()).isFalse();
-        assertThat(response.teacherHandoutLatex()).contains("AI生成状态");
+        assertThat(response.teacherHandoutLatex()).doesNotContain("AI生成状态", "AI 讲义草稿");
         assertThat(response.memoryReuse().reused()).isFalse();
         assertThat(response.stageTimings()).extracting(TeachingTaskResponse.StageTiming::stage)
                 .contains("memory_reuse", "textbook_retrieval", "react_trace", "ai_draft", "handout_generation");
@@ -198,6 +204,8 @@ class TeachingWorkflowServiceTest {
         assertThat(trace.message()).contains("Teaching AI draft structured");
         assertThat(trace.diagnosticEvents()).extracting(AgentTraceRecord.DiagnosticEvent::eventType)
                 .containsExactly("MODEL_CALL_SUCCEEDED", "JSON_PARSE_SUCCEEDED");
+        assertThat(response.teacherHandoutLatex()).contains("教师讲解稿与练习设计", "知识点与方法卡");
+        assertThat(response.teacherHandoutLatex()).doesNotContain("tokens=", "\\paragraph{模型}");
     }
 
     private TeachingWorkflowService service(Path root) {

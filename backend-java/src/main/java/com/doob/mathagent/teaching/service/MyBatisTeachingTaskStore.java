@@ -7,6 +7,7 @@ import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Repository;
@@ -46,6 +47,21 @@ public class MyBatisTeachingTaskStore implements TeachingTaskStore {
             return Optional.empty();
         }
         return Optional.of(readResponse(entity));
+    }
+
+    @Override
+    public List<TeachingTaskResponse> listRecentByOwnerKey(String ownerKey, int limit) {
+        if (ownerKey == null || ownerKey.isBlank()) {
+            return List.of();
+        }
+        int safeLimit = Math.max(1, Math.min(50, limit));
+        return mapper.selectList(new LambdaQueryWrapper<TeachingTaskEntity>()
+                .eq(TeachingTaskEntity::getOwnerKey, ownerKey.strip())
+                .orderByDesc(TeachingTaskEntity::getUpdatedAt)
+                .last("LIMIT " + safeLimit))
+                .stream()
+                .map(this::readResponse)
+                .toList();
     }
 
     @Override

@@ -1,6 +1,7 @@
 package com.doob.mathagent.teaching.service;
 
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -17,6 +18,11 @@ public interface TeachingTaskStore {
      * 按 taskId 和 ownerKey 查询任务，保证用户和公开/私有资源隔离。
      */
     Optional<TeachingTaskResponse> findByTaskIdAndOwnerKey(String taskId, String ownerKey);
+
+    /**
+     * Lists recent teaching tasks owned by the current backend session subject.
+     */
+    List<TeachingTaskResponse> listRecentByOwnerKey(String ownerKey, int limit);
 
     /**
      * 保存任务结果及其归属关系。

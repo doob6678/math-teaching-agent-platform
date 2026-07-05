@@ -11,8 +11,10 @@ import com.doob.mathagent.teaching.service.TeachingHandoutBatchExportService;
 import com.doob.mathagent.teaching.service.TeachingCapabilityVerifier;
 import com.doob.mathagent.teaching.service.TeachingHumanFeedbackService;
 import com.doob.mathagent.teaching.service.TeachingHandoutPdfExportService;
+import com.doob.mathagent.teaching.service.TeachingHandoutTemplateService;
 import com.doob.mathagent.teaching.service.TeachingWorkflowService;
 import com.doob.mathagent.teaching.vo.TeachingHandoutBatchExportResponse;
+import com.doob.mathagent.teaching.vo.TeachingHandoutTemplateResponse;
 import com.doob.mathagent.teaching.vo.TeachingHumanFeedbackResponse;
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
 import jakarta.servlet.http.HttpServletRequest;
@@ -29,6 +31,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -54,6 +57,7 @@ public class TeachingTaskController {
     private final TeachingHandoutPdfExportService pdfExportService;
     private final TeachingHandoutBatchExportService batchExportService;
     private final TeachingHumanFeedbackService feedbackService;
+    private final TeachingHandoutTemplateService handoutTemplateService;
 
     /**
      * 注入教学编排服务。
@@ -65,13 +69,35 @@ public class TeachingTaskController {
             TeachingCapabilityVerifier capabilityVerifier,
             TeachingHandoutPdfExportService pdfExportService,
             TeachingHandoutBatchExportService batchExportService,
-            TeachingHumanFeedbackService feedbackService) {
+            TeachingHumanFeedbackService feedbackService,
+            TeachingHandoutTemplateService handoutTemplateService) {
         this.workflowService = workflowService;
         this.subjectResolver = subjectResolver;
         this.capabilityVerifier = capabilityVerifier;
         this.pdfExportService = pdfExportService;
         this.batchExportService = batchExportService;
         this.feedbackService = feedbackService;
+        this.handoutTemplateService = handoutTemplateService;
+    }
+
+    /**
+     * Backward-compatible constructor that uses the built-in template registry.
+     */
+    public TeachingTaskController(
+            TeachingWorkflowService workflowService,
+            RequestSubjectResolver subjectResolver,
+            TeachingCapabilityVerifier capabilityVerifier,
+            TeachingHandoutPdfExportService pdfExportService,
+            TeachingHandoutBatchExportService batchExportService,
+            TeachingHumanFeedbackService feedbackService) {
+        this(
+                workflowService,
+                subjectResolver,
+                capabilityVerifier,
+                pdfExportService,
+                batchExportService,
+                feedbackService,
+                new TeachingHandoutTemplateService());
     }
 
     /**
@@ -91,6 +117,24 @@ public class TeachingTaskController {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for teaching submit");
         }
         return workflowService.submit(request, requestContext(subject));
+    }
+
+    /**
+     * Lists recent teaching tasks owned by the backend-resolved session subject.
+     */
+    @GetMapping("/api/teaching/tasks")
+    public List<TeachingTaskResponse> list(
+            @RequestParam(defaultValue = "20") int limit,
+            HttpServletRequest httpRequest) {
+        return workflowService.listRecent(requestContext(subjectResolver.resolve(httpRequest)), limit);
+    }
+
+    /**
+     * Lists backend-owned handout templates that may be selected during teaching-task creation.
+     */
+    @GetMapping("/api/teaching/handout-templates")
+    public List<TeachingHandoutTemplateResponse> listTemplates() {
+        return handoutTemplateService.list();
     }
 
     /**

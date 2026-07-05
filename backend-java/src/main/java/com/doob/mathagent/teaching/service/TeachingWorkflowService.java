@@ -3,6 +3,8 @@ package com.doob.mathagent.teaching.service;
 import com.doob.mathagent.agent.service.AgentTraceRecord;
 import com.doob.mathagent.agent.service.AgentTraceStore;
 import com.doob.mathagent.agent.vo.AgentRunExecuteResponse;
+import com.doob.mathagent.knowledge.service.KnowledgeQuestionBankService;
+import com.doob.mathagent.knowledge.vo.QuestionBankItemResponse;
 import com.doob.mathagent.memory.dto.StudentMemoryRequest;
 import com.doob.mathagent.memory.service.StudentMemoryCommand;
 import com.doob.mathagent.memory.service.StudentMemoryReuseService;
@@ -26,6 +28,8 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.core.task.TaskExecutor;
 import org.springframework.stereotype.Service;
 
 /**
@@ -40,6 +44,10 @@ public class TeachingWorkflowService {
     private final StudentMemoryReuseService memoryReuseService;
     private final TeachingAiDraftService aiDraftService;
     private final AgentTraceStore agentTraceStore;
+    private final TeachingHandoutTemplateService handoutTemplateService;
+    private final KnowledgeQuestionBankService questionBankService;
+    private final TaskExecutor taskExecutor;
+    private boolean returnCompletedWhenExecutorIsSynchronous;
 
     /**
      * 创建教学编排服务。
@@ -56,28 +64,104 @@ public class TeachingWorkflowService {
             TeachingTaskStore taskStore,
             StudentMemoryReuseService memoryReuseService,
             TeachingAiDraftService aiDraftService,
-            AgentTraceStore agentTraceStore) {
+            AgentTraceStore agentTraceStore,
+            TeachingHandoutTemplateService handoutTemplateService,
+            Optional<KnowledgeQuestionBankService> questionBankService,
+            @Qualifier("multiAgentWritingTaskExecutor") TaskExecutor taskExecutor) {
         this.processedBooksRoot = processedBooksRoot.toAbsolutePath().normalize();
         this.retrievalService = retrievalService;
         this.taskStore = taskStore;
         this.memoryReuseService = memoryReuseService;
         this.aiDraftService = aiDraftService;
         this.agentTraceStore = agentTraceStore;
+        this.handoutTemplateService = handoutTemplateService;
+        this.questionBankService = questionBankService.orElse(null);
+        this.taskExecutor = taskExecutor;
+        this.returnCompletedWhenExecutorIsSynchronous = false;
     }
 
     /**
-     * 提交教学任务；同一主体同一 clientRequestId 重复提交时直接返回已有任务。
+     * Backward-compatible constructor that uses the built-in template registry.
+     */
+    public TeachingWorkflowService(
+            Path processedBooksRoot,
+            TextbookRetrievalService retrievalService,
+            TeachingTaskStore taskStore,
+            StudentMemoryReuseService memoryReuseService,
+            TeachingAiDraftService aiDraftService,
+            AgentTraceStore agentTraceStore) {
+        this(
+                processedBooksRoot,
+                retrievalService,
+                taskStore,
+                memoryReuseService,
+                aiDraftService,
+                agentTraceStore,
+                new TeachingHandoutTemplateService(),
+                Optional.empty(),
+                Runnable::run);
+        this.returnCompletedWhenExecutorIsSynchronous = true;
+    }
+
+    /**
+     * 提交教学任务；异步执行 DAG，立即返回 CREATED 状态。
+     * 同一主体同一 clientRequestId 重复提交时直接返回已有任务。
+     * 任务通过 multiAgentWritingTaskExecutor 在后台执行，前端轮询 GET /api/teaching/tasks/{taskId} 获取最终结果。
+     * 生命周期：CREATED → RUNNING → COMPLETED / FAILED。
      */
     public TeachingTaskResponse submit(TeachingTaskRequest request, TeachingRequestContext context) {
         TeachingRequestContext normalizedContext = context.normalize();
+        TeachingTaskRequest normalizedRequest = request.normalize();
         String ownerKey = normalizedContext.ownerKey();
-        String idempotencyKey = normalizedContext.idempotencyKey(request.clientRequestId());
+        String idempotencyKey = normalizedContext.idempotencyKey(normalizedRequest.clientRequestId());
         Optional<TeachingTaskResponse> existing = taskStore.findByIdempotencyKey(idempotencyKey);
         if (existing.isPresent()) {
             return existing.get();
         }
-        TeachingTaskResponse created = execute(request, normalizedContext);
-        return taskStore.save(ownerKey, idempotencyKey, created);
+        String taskId = UUID.randomUUID().toString();
+        Instant now = Instant.now();
+        TeachingTaskResponse created = new TeachingTaskResponse(
+                taskId,
+                normalizedRequest.clientRequestId(),
+                normalizedContext.tenantId(),
+                normalizedContext.subjectType(),
+                normalizedContext.subjectId(),
+                null,
+                TeachingTaskStatus.CREATED,
+                normalizedRequest.questionText(),
+                normalizedRequest.learningGoal(),
+                List.of(), List.of(), List.of(),
+                "", "", "", List.of(), null, List.of(), null, null);
+        taskStore.save(ownerKey, idempotencyKey, created);
+        taskExecutor.execute(() -> {
+            try {
+                TeachingTaskResponse completed = execute(normalizedRequest, normalizedContext, taskId, ownerKey, idempotencyKey);
+                taskStore.save(ownerKey, idempotencyKey, completed);
+            } catch (Exception executionException) {
+                try {
+                    TeachingTaskResponse failed = new TeachingTaskResponse(
+                            taskId,
+                            normalizedRequest.clientRequestId(),
+                            normalizedContext.tenantId(),
+                            normalizedContext.subjectType(),
+                            normalizedContext.subjectId(),
+                            null,
+                            TeachingTaskStatus.FAILED,
+                            normalizedRequest.questionText(),
+                            normalizedRequest.learningGoal(),
+                            List.of(), List.of(), List.of(),
+                            "", "", "", List.of(), null, List.of(), null,
+                            executionException.getMessage());
+                    taskStore.save(ownerKey, idempotencyKey, failed);
+                } catch (Exception saveException) {
+                    throw new RuntimeException("Async teaching task execution AND failure persistence both failed", saveException);
+                }
+            }
+        });
+        if (returnCompletedWhenExecutorIsSynchronous) {
+            return taskStore.findByIdempotencyKey(idempotencyKey).orElse(created);
+        }
+        return created;
     }
 
     /**
@@ -88,14 +172,57 @@ public class TeachingWorkflowService {
     }
 
     /**
-     * 执行固定 DAG：学习目标识别、资源复用、公开教材检索、ReAct、AI 草稿、LaTeX 讲义、交互建议。
+     * Lists recent tasks for the current backend session subject.
+     */
+    public List<TeachingTaskResponse> listRecent(TeachingRequestContext context, int limit) {
+        return taskStore.listRecentByOwnerKey(context.normalize().ownerKey(), limit);
+    }
+
+    /**
+     * 同步执行 DAG 的兼容入口（无 taskId/owner/idempotencyKey，用于测试或非异步场景）。
      */
     private TeachingTaskResponse execute(TeachingTaskRequest request, TeachingRequestContext context) {
+        return execute(request, context, UUID.randomUUID().toString(), null, null);
+    }
+
+    /**
+     * 执行固定 DAG：学习目标识别、资源复用、公开教材检索、ReAct、AI 草稿、LaTeX 讲义、交互建议。
+     * 异步路径下先持久化 RUNNING 状态，完成后更新为 COMPLETED，异常时更新为 FAILED。
+     *
+     * @param taskId 异步任务的 taskId，来自 submit() 中预生成的 UUID
+     * @param ownerKey 用于 RUNNING/COMPLETED 状态的持久化
+     * @param idempotencyKey 幂等 key，异步完成后更新已有记录
+     */
+    private TeachingTaskResponse execute(TeachingTaskRequest request, TeachingRequestContext context, String taskId, String ownerKey, String idempotencyKey) {
         StageTimer timer = new StageTimer();
+        /* 异步路径下先将任务状态更新为 RUNNING，前端轮询时可见。 */
+        if (taskId != null && ownerKey != null && idempotencyKey != null) {
+            try {
+                TeachingTaskResponse running = new TeachingTaskResponse(
+                        taskId,
+                        request.clientRequestId(),
+                        context.tenantId(),
+                        context.subjectType(),
+                        context.subjectId(),
+                        null,
+                        TeachingTaskStatus.RUNNING,
+                        request.questionText(),
+                        request.learningGoal(),
+                        List.of(), List.of(), List.of(),
+                        "", "", "", List.of(), null, List.of(), null, null);
+                taskStore.save(ownerKey, idempotencyKey, running);
+            } catch (Exception ignored) {
+            }
+        }
+        TeachingHandoutTemplateProfile template = handoutTemplateService.resolve(request.handoutTemplateCode());
         StudentMemoryResponse memoryResponse = memoryReuseService.reuse(memoryRequest(request, context));
         timer.mark("memory_reuse");
         List<TeachingEvidence> evidence;
+        List<TeachingEvidence> textbookEvidence;
+        List<TeachingEvidence> questionEvidence;
         if (memoryResponse.reused()) {
+            textbookEvidence = List.of();
+            questionEvidence = List.of();
             evidence = List.of();
             timer.mark("reuse_short_circuit");
         } else {
@@ -110,32 +237,38 @@ public class TeachingWorkflowService {
                             context.deviceId(),
                             "teaching-workflow",
                             "/api/teaching/tasks"));
-            evidence = retrieval.hits().stream()
+            textbookEvidence = retrieval.hits().stream()
                     .map(this::toEvidence)
                     .toList();
             timer.mark("textbook_retrieval");
+            questionEvidence = retrieveQuestionBankEvidence(request, context);
+            timer.mark("question_bank_retrieval");
+            evidence = concatEvidence(textbookEvidence, questionEvidence);
         }
         List<TeachingReactStep> reactTrace = List.of();
         timer.mark("react_trace");
-        TeachingTaskResponse.AiDraft aiDraft = aiDraftService.draft(request, evidence, memoryResponse);
+        TeachingTaskResponse.AiDraft aiDraft = aiDraftService.draft(request, evidence, memoryResponse, template);
         timer.mark("ai_draft");
-        List<TeachingWorkflowNode> nodes = buildNodes(request, evidence, memoryResponse, aiDraft);
+        List<TeachingWorkflowNode> nodes = buildNodes(request, evidence, questionEvidence, memoryResponse, aiDraft, template, canUseQuestionBank(context));
         String teacherHandoutLatex = appendAiDraft(
-                buildTeacherHandoutLatex(request, evidence, memoryResponse),
+                buildTeacherHandoutLatex(request, evidence, memoryResponse, template),
                 aiDraft,
                 true);
         String studentHandoutLatex = appendAiDraft(
-                buildStudentHandoutLatex(request, evidence, memoryResponse),
+                buildStudentHandoutLatex(request, evidence, memoryResponse, template),
                 aiDraft,
                 false);
         timer.mark("handout_generation");
-        String taskId = UUID.randomUUID().toString();
+        if (taskId == null) {
+            taskId = UUID.randomUUID().toString();
+        }
         TeachingTaskResponse response = new TeachingTaskResponse(
                 taskId,
                 request.clientRequestId(),
                 context.tenantId(),
                 context.subjectType(),
                 context.subjectId(),
+                template.summary(),
                 TeachingTaskStatus.COMPLETED,
                 request.questionText(),
                 request.learningGoal(),
@@ -150,6 +283,9 @@ public class TeachingWorkflowService {
                 timer.timings(),
                 aiDraft,
                 null);
+        if (ownerKey != null && idempotencyKey != null) {
+            taskStore.save(ownerKey, idempotencyKey, response);
+        }
         saveAiDraftTrace(response, context);
         return response;
     }
@@ -158,44 +294,35 @@ public class TeachingWorkflowService {
      * 构造学生记忆查询请求；教学任务阶段先使用学习目标作为知识点粗标签，后续会接入知识点识别器。
      */
     /**
-     * Appends real AI-generated teaching content to the LaTeX draft.
+     * Appends model-produced teaching content to printable handouts without exposing backend diagnostics.
      */
     private static String appendAiDraft(
             String latex,
             TeachingTaskResponse.AiDraft aiDraft,
             boolean teacherVersion) {
         if (aiDraft == null || !aiDraft.enabled()) {
-            return latex + "\n\\section{AI生成状态}\n" + escapeLatex("未启用真实模型：" + (aiDraft == null ? "" : aiDraft.message())) + "\n";
+            return latex;
         }
         if (aiDraft.content() == null || aiDraft.content().isBlank()) {
-            return latex + "\n\\section{AI生成状态}\n" + escapeLatex(aiDraft.message()) + "\n";
+            return latex;
         }
-        String title = teacherVersion ? "AI教师讲解草稿" : "AI课堂提示";
-        String modelLine = "\n\\paragraph{模型}"
-                + escapeLatex(aiDraft.providerName() + "/" + aiDraft.modelCode() + " tokens=" + aiDraft.totalTokens())
-                + "\n";
+        String title = teacherVersion ? "教师讲解稿与练习设计" : "课堂练习与作答区";
         if (!aiDraft.structured()) {
-            return latex + "\n\\section{" + title + "}\n"
-                    + "\\paragraph{结构化解析}"
-                    + escapeLatex("失败：" + aiDraft.parseError())
-                    + "\n"
-                    + escapeLatex(aiDraft.content())
-                    + modelLine;
+            return latex;
         }
         if (teacherVersion) {
             return latex + "\n\\section{" + title + "}\n"
                     + escapeLatex(aiDraft.teacherExplanation())
-                    + "\n\\paragraph{关键知识点}"
+                    + "\n\\paragraph{知识点与方法卡}"
                     + latexItemize(aiDraft.knowledgePoints())
-                    + "\n\\paragraph{互动追问}"
-                    + latexItemize(aiDraft.followUpQuestions())
-                    + modelLine;
+                    + "\n\\paragraph{分层练习与追问}"
+                    + latexItemize(aiDraft.followUpQuestions());
         }
         return latex + "\n\\section{" + title + "}\n"
                 + escapeLatex(aiDraft.studentHint())
-                + "\n\\paragraph{互动追问}"
+                + "\n\\paragraph{练习任务}"
                 + latexItemize(aiDraft.followUpQuestions())
-                + modelLine;
+                + "\n\\paragraph{作答区}\n\\vspace{8em}\n";
     }
 
     /**
@@ -305,30 +432,89 @@ public class TeachingWorkflowService {
                 hit.textSnippet());
     }
 
+    private List<TeachingEvidence> retrieveQuestionBankEvidence(TeachingTaskRequest request, TeachingRequestContext context) {
+        if (!canUseQuestionBank(context) || questionBankService == null) {
+            return List.of();
+        }
+        try {
+            return questionBankService.searchQuestions(
+                            context.tenantId(),
+                            context.subjectType(),
+                            context.subjectId(),
+                            retrievalQuery(request),
+                            3)
+                    .stream()
+                    .map(TeachingWorkflowService::toQuestionEvidence)
+                    .toList();
+        } catch (IllegalArgumentException exception) {
+            return List.of();
+        }
+    }
+
+    private static TeachingEvidence toQuestionEvidence(QuestionBankItemResponse question) {
+        String difficulty = question.difficulty() == null || question.difficulty().isBlank()
+                ? "未标难度"
+                : question.difficulty();
+        String title = question.questionTitle() + " / 难度：" + difficulty;
+        String snippet = question.questionText();
+        if (question.answerJson() != null && !question.answerJson().isBlank() && !"{}".equals(question.answerJson().strip())) {
+            snippet = snippet + "\n答案要点：" + question.answerJson();
+        }
+        return new TeachingEvidence(
+                "QUESTION_BANK",
+                title,
+                question.questionId(),
+                0,
+                snippet);
+    }
+
+    private static List<TeachingEvidence> concatEvidence(List<TeachingEvidence> first, List<TeachingEvidence> second) {
+        List<TeachingEvidence> merged = new ArrayList<>();
+        if (first != null) {
+            merged.addAll(first);
+        }
+        if (second != null) {
+            merged.addAll(second);
+        }
+        return List.copyOf(merged);
+    }
+
     /**
      * 构造真实执行过的 DAG 节点输出；未执行的扩展能力不得伪装为 completed。
      */
     private static List<TeachingWorkflowNode> buildNodes(
             TeachingTaskRequest request,
             List<TeachingEvidence> evidence,
+            List<TeachingEvidence> questionEvidence,
             StudentMemoryResponse memoryResponse,
-            TeachingTaskResponse.AiDraft aiDraft) {
+            TeachingTaskResponse.AiDraft aiDraft,
+            TeachingHandoutTemplateProfile template,
+            boolean questionBankAllowed) {
         String reuseSummary = memoryResponse.reused()
                 ? "命中学生记忆 %s，作用域 %s，相似度 %.4f，跳过重复教材召回。"
                         .formatted(memoryResponse.memoryId(), memoryResponse.reuseScope(), memoryResponse.similarity())
                 : "未命中可复用学生记忆，原因：" + memoryResponse.reason() + "。";
         boolean textbookRetrievalRan = !memoryResponse.reused();
+        long publicTextbookCount = evidence.stream()
+                .filter(item -> "PUBLIC_TEXTBOOK".equals(item.sourceScope()))
+                .count();
         return List.of(
                 node("LEARNING_GOAL", "学习目标识别", "识别用户想学：" + request.learningGoal()),
                 node("REUSE_RESOURCE", "历史资源复用", reuseSummary),
                 node("PUBLIC_TEXTBOOK_RETRIEVAL", "公开教材检索",
                         textbookRetrievalRan ? "completed" : "skipped",
                         textbookRetrievalRan
-                                ? "命中公开教材证据 " + evidence.size() + " 条。"
+                                ? "命中公开教材证据 " + publicTextbookCount + " 条。"
                                 : "已复用学生记忆，本次未触发公开教材检索。"),
-                node("REACT_SOLVE", "解题编排", "基于教材证据、学生记忆和 AI 草稿整理讲解步骤。"),
-                node("AI_DRAFT", "AI 讲义草稿", aiDraftSummary(aiDraft)),
-                node("LATEX_HANDOUT", "LaTeX 讲义", "生成可导出为 PDF 的讲义草稿。"),
+                node("QUESTION_BANK_RETRIEVAL", "题库检索",
+                        textbookRetrievalRan && questionBankAllowed ? "completed" : "skipped",
+                        textbookRetrievalRan && questionBankAllowed
+                                ? "命中题库题目 " + questionEvidence.size() + " 条，已按难度作为讲义证据。"
+                                : "当前身份或复用路径未触发题库检索。"),
+                node("REACT_SOLVE", "解题编排", "基于教材证据、学生记忆和题型方法整理讲解步骤。"),
+                node("HANDOUT_TEMPLATE", "讲义模板", "使用模板：" + template.summary().displayName() + "。"),
+                node("AI_DRAFT", "讲义内容生成", aiDraftSummary(aiDraft)),
+                node("LATEX_HANDOUT", "讲义排版", "生成教师版和学生版，可预览并导出 PDF。"),
                 node("HUMAN_FEEDBACK", "人类反馈", "pending", "等待学生或教师提交人工反馈。"),
                 node("INTERACTIVE_FOLLOW_UP", "交互追问", "给出继续追问、练习和导出建议。"));
     }
@@ -338,14 +524,13 @@ public class TeachingWorkflowService {
      */
     private static String aiDraftSummary(TeachingTaskResponse.AiDraft aiDraft) {
         if (aiDraft == null || !aiDraft.enabled()) {
-            return "真实模型未启用：" + (aiDraft == null ? "" : aiDraft.message());
+            return "未生成模型内容，讲义仅使用教材、题库和模板内容。";
         }
         String parseState = aiDraft.structured() ? "结构化解析成功" : "结构化解析失败";
-        return "%s，模型 %s/%s，tokens=%d，retry=%d/%d，events=%d。".formatted(
+        return "%s，当前模型 %s/%s，重试 %d/%d，诊断事件 %d 条。".formatted(
                 parseState,
                 aiDraft.providerName(),
                 aiDraft.modelCode(),
-                aiDraft.totalTokens(),
                 aiDraft.retryCount(),
                 aiDraft.maxRetries(),
                 aiDraft.recoveryEvents() == null ? 0 : aiDraft.recoveryEvents().size());
@@ -378,23 +563,30 @@ public class TeachingWorkflowService {
     private static String buildTeacherHandoutLatex(
             TeachingTaskRequest request,
             List<TeachingEvidence> evidence,
-            StudentMemoryResponse memoryResponse) {
+            StudentMemoryResponse memoryResponse,
+            TeachingHandoutTemplateProfile template) {
         String evidenceSnippet = memoryResponse.reused()
                 ? "复用学生记忆：" + escapeLatex(memoryResponse.answer())
-                : evidence.isEmpty() ? "暂无教材证据。" : escapeLatex(evidence.getFirst().snippet());
+                : evidence.isEmpty() ? "暂无教材证据。" : evidenceSummary(evidence);
+        String templateLine = escapeLatex(template.summary().displayName() + " / " + template.summary().description());
+        String questionSection = safeQuestionText(request).isBlank()
+                ? "围绕学习目标设计例题、变式题和课堂追问。"
+                : safeQuestionText(request);
         return """
                 \\section{教师版}
-                本讲义面向教师备课使用，包含知识点归属、证据来源和详细讲解。
+                供教师备课、课堂讲评和课后审校使用，保留来源、讲解路径、答案要点和练习设计。
+
+                \\section{模板}
+                %s
 
                 \\section{学习目标}
                 %% 用户想学什么
                 %s
 
                 \\section{题目}
-                %% 原始题目
                 %s
 
-                \\section{证据与讲解}
+                \\section{教材与资料证据}
                 %% 公开教材证据，私有资料需按 tenantId/subjectId 隔离后再引用
                 %s
 
@@ -402,13 +594,45 @@ public class TeachingWorkflowService {
                 %% 本次只引用实际命中的公开教材或教师资源；未命中的来源不会写入讲义。
                 %s
 
-                \\section{互动练习}
-                继续追问定义 D(x_0)，再生成同类练习题，并根据学生回答补充追问。
+                \\section{讲义检查清单}
+                \\begin{itemize}
+                \\item 是否有清晰页眉、标题、知识点和练习分区。
+                \\item 是否区分教师版答案和学生版留白。
+                \\item 公式是否使用 $...$ 或 $$...$$，没有混入 OCR 碎片。
+                \\item 题型是否按基础、提高、压轴或课堂顺序组织。
+                \\end{itemize}
                 """.formatted(
+                templateLine,
                 escapeLatex(request.learningGoal()),
-                escapeLatex(request.questionText()),
+                escapeLatex(questionSection),
                 evidenceSnippet,
                 teacherKnowledgePoint(request, evidence));
+    }
+
+    private static boolean canUseQuestionBank(TeachingRequestContext context) {
+        String subjectType = context == null ? "" : context.subjectType();
+        return "teacher".equalsIgnoreCase(subjectType) || "admin".equalsIgnoreCase(subjectType);
+    }
+
+    /**
+     * Builds a compact evidence summary instead of dumping raw OCR chunks into the handout.
+     */
+    private static String evidenceSummary(List<TeachingEvidence> evidence) {
+        if (evidence.isEmpty()) {
+            return "暂无教材证据。";
+        }
+        return evidence.stream()
+                .limit(3)
+                .map(item -> escapeLatex(item.sourceTitle() + " / PDF " + item.pageNo() + "：" + compactEvidenceSnippet(item.snippet())))
+                .collect(java.util.stream.Collectors.joining("\n\n"));
+    }
+
+    private static String compactEvidenceSnippet(String snippet) {
+        if (snippet == null || snippet.isBlank()) {
+            return "已命中资料片段。";
+        }
+        String cleaned = snippet.replaceAll("\\s+", " ").strip();
+        return cleaned.length() <= 120 ? cleaned : cleaned.substring(0, 120) + "...";
     }
 
     /**
@@ -417,12 +641,50 @@ public class TeachingWorkflowService {
     private static String buildStudentHandoutLatex(
             TeachingTaskRequest request,
             List<TeachingEvidence> evidence,
-            StudentMemoryResponse memoryResponse) {
+            StudentMemoryResponse memoryResponse,
+            TeachingHandoutTemplateProfile template) {
         String hint = memoryResponse.reused()
                 ? "回忆同类问题的方法，先写出已知条件，再判断可用公式。"
                 : evidence.isEmpty()
                 ? "先圈出题目中的关键词，再尝试写出相关定义。"
                 : "先阅读教材证据中的定义或公式，再补全自己的推理。";
+        if (template.studentLectureStyle()) {
+            String questionText = safeQuestionText(request).isBlank()
+                    ? "根据本节主题完成下面的知识梳理与分层练习。"
+                    : safeQuestionText(request);
+            return """
+                    \\section{%s}
+                    \\paragraph{讲次定位}
+                    参考模板：%s
+
+                    \\subsection*{知识点梳理}
+                    %s
+
+                    \\subsection*{注意}
+                    %s
+
+                    \\subsection*{题目与例题}
+                    %s
+
+                    \\subsection*{分层练习}
+                    \\begin{enumerate}
+                    \\item 根据定义写出本节核心关系式。
+                    \\item 对照题目条件判断应先求比例系数还是先判断函数类型。
+                    \\item 在空白处完成关键步骤，并标出易错点。
+                    \\end{enumerate}
+
+                    \\subsection*{我的解答}
+                    \\vspace{8em}
+                    """.formatted(
+                    escapeLatex(request.learningGoal()),
+                    escapeLatex(template.summary().displayName()),
+                    escapeLatex(hint),
+                    escapeLatex("先核对定义域、符号条件和参数不为 0 等边界。"),
+                    escapeLatex(questionText));
+        }
+        String questionText = safeQuestionText(request).isBlank()
+                ? "根据本讲主题完成例题、变式和订正。"
+                : safeQuestionText(request);
         return """
                 \\section{学生版}
                 本讲义用于课堂练习和课后复盘，请先独立完成空白区，再查看教师讲解。
@@ -443,7 +705,7 @@ public class TeachingWorkflowService {
                 \\vspace{6em}
                 """.formatted(
                 escapeLatex(request.learningGoal()),
-                escapeLatex(request.questionText()),
+                escapeLatex(questionText),
                 escapeLatex(hint));
     }
 
@@ -459,11 +721,64 @@ public class TeachingWorkflowService {
      * 最小 LaTeX 转义，避免用户输入中的特殊字符破坏讲义结构。
      */
     private static String escapeLatex(String value) {
-        return value == null ? "" : value
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        StringBuilder builder = new StringBuilder();
+        StringBuilder segment = new StringBuilder();
+        boolean math = false;
+        for (int index = 0; index < value.length(); index += 1) {
+            char character = value.charAt(index);
+            if (character == '$') {
+                builder.append(math ? sanitizeMathSegment(segment.toString()) : escapeLatexText(segment.toString()));
+                segment.setLength(0);
+                builder.append('$');
+                math = !math;
+            } else {
+                segment.append(character);
+            }
+        }
+        builder.append(math ? sanitizeMathSegment(segment.toString()) : escapeLatexText(segment.toString()));
+        return builder.toString();
+    }
+
+    private static String escapeLatexText(String value) {
+        return value
                 .replace("\\", "\\textbackslash{}")
+                .replace("&", "\\&")
+                .replace("%", "\\%")
+                .replace("#", "\\#")
                 .replace("_", "\\_")
                 .replace("{", "\\{")
                 .replace("}", "\\}");
+    }
+
+    private static String sanitizeMathSegment(String value) {
+        return value
+                .replace("\\textbackslash{}frac", "\\frac")
+                .replace("\\textbackslash{}sqrt", "\\sqrt")
+                .replace("\\textbackslash{}sin", "\\sin")
+                .replace("\\textbackslash{}cos", "\\cos")
+                .replace("\\textbackslash{}tan", "\\tan")
+                .replace("\\textbackslash{}ln", "\\ln")
+                .replace("\\textbackslash{}log", "\\log")
+                .replace("\\textbackslash{}pi", "\\pi")
+                .replace("\\textbackslash{}theta", "\\theta")
+                .replace("\\textbackslash{}alpha", "\\alpha")
+                .replace("\\textbackslash{}beta", "\\beta")
+                .replace("\\textbackslash{}gamma", "\\gamma")
+                .replace("\\textbackslash{}Delta", "\\Delta")
+                .replace("\\textbackslash{}infty", "\\infty")
+                .replace("\\textbackslash{}leq", "\\leq")
+                .replace("\\textbackslash{}geq", "\\geq")
+                .replace("\\textbackslash{}neq", "\\neq")
+                .replace("\\textbackslash{}cdot", "\\cdot")
+                .replace("\\textbackslash{}times", "\\times")
+                .replace("\\textbackslash{}to", "\\to");
+    }
+
+    private static String safeQuestionText(TeachingTaskRequest request) {
+        return request.questionText() == null ? "" : request.questionText().strip();
     }
 
     private static String latexItemize(List<String> items) {

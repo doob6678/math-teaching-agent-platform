@@ -1,6 +1,8 @@
 package com.doob.mathagent.teaching.service;
 
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
+import java.util.Comparator;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -32,6 +34,16 @@ public class InMemoryTeachingTaskStore implements TeachingTaskStore {
             return Optional.empty();
         }
         return Optional.ofNullable(tasksById.get(taskId));
+    }
+
+    @Override
+    public List<TeachingTaskResponse> listRecentByOwnerKey(String ownerKey, int limit) {
+        int safeLimit = Math.max(1, Math.min(50, limit));
+        return tasksById.values().stream()
+                .filter(task -> ownerKey.equals(ownerKeysByTaskId.get(task.taskId())))
+                .sorted(Comparator.comparing(TeachingTaskResponse::taskId).reversed())
+                .limit(safeLimit)
+                .toList();
     }
 
     /**

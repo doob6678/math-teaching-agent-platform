@@ -14,6 +14,7 @@ import java.util.List;
  * @param tenantId 租户 ID，用于说明任务归属。
  * @param subjectType 主体类型，用于权限审计。
  * @param subjectId 主体 ID，用于私有任务隔离。
+ * @param selectedTemplate backend-owned handout template applied to this task
  * @param status 任务状态。
  * @param questionText 原始题目或学习问题。
  * @param learningGoal 用户学习目标。
@@ -32,6 +33,7 @@ public record TeachingTaskResponse(
         String tenantId,
         String subjectType,
         String subjectId,
+        TeachingHandoutTemplateResponse selectedTemplate,
         TeachingTaskStatus status,
         String questionText,
         String learningGoal,
@@ -46,6 +48,52 @@ public record TeachingTaskResponse(
         List<StageTiming> stageTimings,
         AiDraft aiDraft,
         String errorMessage) {
+
+    /**
+     * Backward-compatible constructor for older call sites that do not set a selected template.
+     */
+    public TeachingTaskResponse(
+            String taskId,
+            String clientRequestId,
+            String tenantId,
+            String subjectType,
+            String subjectId,
+            TeachingTaskStatus status,
+            String questionText,
+            String learningGoal,
+            List<TeachingWorkflowNode> nodes,
+            List<TeachingReactStep> reactTrace,
+            List<TeachingEvidence> evidence,
+            String handoutLatex,
+            String teacherHandoutLatex,
+            String studentHandoutLatex,
+            List<String> interactiveSuggestions,
+            MemoryReuse memoryReuse,
+            List<StageTiming> stageTimings,
+            AiDraft aiDraft,
+            String errorMessage) {
+        this(
+                taskId,
+                clientRequestId,
+                tenantId,
+                subjectType,
+                subjectId,
+                null,
+                status,
+                questionText,
+                learningGoal,
+                nodes,
+                reactTrace,
+                evidence,
+                handoutLatex,
+                teacherHandoutLatex,
+                studentHandoutLatex,
+                interactiveSuggestions,
+                memoryReuse,
+                stageTimings,
+                aiDraft,
+                errorMessage);
+    }
 
     /**
      * Returns the requested LaTeX handout version, using the teacher version as the default for compatibility.

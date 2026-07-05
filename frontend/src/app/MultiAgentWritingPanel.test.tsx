@@ -4,7 +4,7 @@ import { MultiAgentWritingPanel } from "./App";
 import { MultiAgentWritingResponse, MultiAgentWritingTraceResponse } from "../shared/api/textbookApi";
 
 describe("MultiAgentWritingPanel", () => {
-  it("renders requested model, actual fallback model usage, tokens, and diagnostics", () => {
+  it("renders requested model, actual fallback model usage, Chinese usage labels, and diagnostics", () => {
     const workflow: MultiAgentWritingResponse = {
       workflowId: "workflow-1",
       tenantId: "school-a",
@@ -97,14 +97,17 @@ describe("MultiAgentWritingPanel", () => {
       />,
     );
 
-    expect(html).toContain("Requested");
-    expect(html).toContain("openai / gpt-5.4");
-    expect(html).toContain("Current");
-    expect(html).toContain("dashscope / qwen3.6-flash");
-    expect(html).toContain("250 total");
-    expect(html).toContain("openai/gpt-5.4: 140 total");
-    expect(html).toContain("dashscope/qwen3.6-flash: 110 total");
-    expect(html).toContain("PROVIDER_ROTATED");
-    expect(html).toContain("Switching to next enabled provider");
+    expect(html).toContain("讲义已生成");
+    expect(html).toContain("实际模型");
+    expect(html).toContain("通义千问 / qwen3.6-flash");
+    expect(html).toContain("讲义初稿");
+    expect(html).toContain("OpenAI / gpt-5.4");
+    expect(html).toContain("质量审校");
+    expect(html).toContain("通义千问 / qwen3.6-flash");
+    expect(html).not.toContain("tokens");
+    expect(html).toContain("建议先预览 PDF");
+    expect(html).toContain("成果文件");
+    expect(html).toContain("打开成果");
+    expect(html).toContain("执行追踪 1 条");
   });
 });

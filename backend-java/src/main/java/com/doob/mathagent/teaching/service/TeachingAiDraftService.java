@@ -22,6 +22,8 @@ import org.springframework.stereotype.Service;
 public class TeachingAiDraftService {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final TeachingHandoutTemplateProfile DEFAULT_TEMPLATE =
+            new TeachingHandoutTemplateService().resolve("default_standard");
 
     private final AiChatGateway aiChatGateway;
     private final AiProviderCatalog providerCatalog;
@@ -54,7 +56,8 @@ public class TeachingAiDraftService {
     public TeachingTaskResponse.AiDraft draft(
             TeachingTaskRequest request,
             List<TeachingEvidence> evidence,
-            StudentMemoryResponse memoryResponse) {
+            StudentMemoryResponse memoryResponse,
+            TeachingHandoutTemplateProfile template) {
         List<AiProviderCatalog.Provider> providers = providerCatalog.enabledProviders();
         if (providers.isEmpty()) {
             return new TeachingTaskResponse.AiDraft(false, "", "", 0, 0, 0, "", "No enabled AI provider.");
@@ -68,7 +71,7 @@ public class TeachingAiDraftService {
         int maxRetries = aiDraftProperties.resolvedMaxRetries();
         for (int providerIndex = 0; providerIndex < providers.size(); providerIndex++) {
             AiProviderCatalog.Provider provider = providers.get(providerIndex);
-            String nextPrompt = prompt(request, evidence, memoryResponse);
+            String nextPrompt = prompt(request, evidence, memoryResponse, template);
             for (int attempt = 0; attempt <= maxRetries; attempt++) {
                 boolean canRetryProvider = attempt < maxRetries;
                 boolean canRotateProvider = providerIndex < providers.size() - 1;
@@ -138,7 +141,7 @@ public class TeachingAiDraftService {
                             false,
                             true,
                             "Retrying model output repair after JSON parse failure."));
-                    nextPrompt = retryPrompt(request, evidence, memoryResponse, result.generatedContent(), parsed.parseError());
+                    nextPrompt = retryPrompt(request, evidence, memoryResponse, template, result.generatedContent(), parsed.parseError());
                 } catch (RuntimeException exception) {
                     lastFailure = exception;
                     recoveryEvents.add(event(
@@ -160,7 +163,7 @@ public class TeachingAiDraftService {
                             false,
                             true,
                             "Retrying after transient model gateway failure."));
-                    nextPrompt = transientFailureRetryPrompt(request, evidence, memoryResponse, exception);
+                    nextPrompt = transientFailureRetryPrompt(request, evidence, memoryResponse, template, exception);
                 }
             }
             if (providerIndex < providers.size() - 1) {
@@ -197,6 +200,16 @@ public class TeachingAiDraftService {
                 maxRetries,
                 false,
                 List.copyOf(recoveryEvents));
+    }
+
+    /**
+     * Backward-compatible overload used by older tests and internal call sites.
+     */
+    public TeachingTaskResponse.AiDraft draft(
+            TeachingTaskRequest request,
+            List<TeachingEvidence> evidence,
+            StudentMemoryResponse memoryResponse) {
+        return draft(request, evidence, memoryResponse, DEFAULT_TEMPLATE);
     }
 
     private static TeachingTaskResponse.AiDraft toAiDraft(
@@ -256,27 +269,34 @@ public class TeachingAiDraftService {
     private static String prompt(
             TeachingTaskRequest request,
             List<TeachingEvidence> evidence,
-            StudentMemoryResponse memoryResponse) {
+            StudentMemoryResponse memoryResponse,
+            TeachingHandoutTemplateProfile template) {
         return """
                 You are a high-school math lesson-preparation agent.
-                Generate evidence-grounded content that can be placed directly into a handout.
+                Generate evidence-grounded content that can be placed directly into a polished printable handout.
                 Return exactly one valid JSON object. Do not output Markdown, code fences, or extra explanation.
                 All user-facing text values must be written in concise Chinese.
                 Math must use Feishu-supported delimiters only: inline $...$ or display $$...$$.
                 Do not use \\[...\\], \\(...\\), \\begin{align}, \\begin{aligned}, \\begin{equation}, or Markdown code fences.
                 JSON schema:
                 {
-                  "teacherExplanation": "2-5 Chinese sentences, aligned with the task and evidence",
-                  "studentHint": "1-3 Chinese sentences, hint only, do not reveal the full answer directly",
-                  "knowledgePoints": ["2-6 Chinese knowledge points"],
-                  "followUpQuestions": ["2-5 Chinese follow-up questions"]
+                  "teacherExplanation": "Chinese handout body with short labeled parts: 知识定位、方法步骤、例题拆解、易错提醒、课堂追问. Keep it printable, not chatty.",
+                  "studentHint": "Chinese student-facing worksheet hint with short labeled parts: 先看什么、怎么下手、留白任务. Hint only, do not reveal full answers.",
+                  "knowledgePoints": ["3-8 Chinese knowledge points or method cards, formula-first when useful"],
+                  "followUpQuestions": ["3-8 Chinese exercises/questions, include easy/medium/hard progression when possible"]
                 }
                 Do not write "as an AI". Do not invent sources not provided below.
+                Do not output raw page OCR fragments, raw source ids, model names, token usage, or backend diagnostics.
+                If the user only gives a topic rather than a problem, create a complete mini-handout around that topic.
+                Selected handout template: %s
+                Template instructions: %s
                 Learning goal: %s
                 Problem: %s
                 Reused memory: %s
                 Retrieved evidence: %s
                 """.formatted(
+                template.summary().displayName(),
+                template.promptInstructions(),
                 request.learningGoal(),
                 request.questionText(),
                 memoryResponse.reused() ? memoryResponse.answer() : memoryResponse.reason(),
@@ -287,6 +307,7 @@ public class TeachingAiDraftService {
             TeachingTaskRequest request,
             List<TeachingEvidence> evidence,
             StudentMemoryResponse memoryResponse,
+            TeachingHandoutTemplateProfile template,
             String previousContent,
             String parseError) {
         return """
@@ -299,11 +320,13 @@ public class TeachingAiDraftService {
 
                 Return exactly one valid JSON object with all fields present and non-empty:
                 {
-                  "teacherExplanation": "...",
-                  "studentHint": "...",
+                  "teacherExplanation": "printable Chinese teacher handout body",
+                  "studentHint": "printable Chinese student worksheet hint",
                   "knowledgePoints": ["..."],
                   "followUpQuestions": ["..."]
                 }
+                Selected handout template: %s
+                Template instructions: %s
                 Learning goal: %s
                 Problem: %s
                 Reused memory: %s
@@ -311,6 +334,8 @@ public class TeachingAiDraftService {
                 """.formatted(
                 parseError,
                 previousContent == null ? "" : previousContent,
+                template.summary().displayName(),
+                template.promptInstructions(),
                 request.learningGoal(),
                 request.questionText(),
                 memoryResponse.reused() ? memoryResponse.answer() : memoryResponse.reason(),
@@ -321,8 +346,9 @@ public class TeachingAiDraftService {
             TeachingTaskRequest request,
             List<TeachingEvidence> evidence,
             StudentMemoryResponse memoryResponse,
+            TeachingHandoutTemplateProfile template,
             RuntimeException exception) {
-        return prompt(request, evidence, memoryResponse)
+        return prompt(request, evidence, memoryResponse, template)
                 + "\nPrevious provider call failed with: " + exception.getClass().getSimpleName()
                 + ". This is an automatic backend retry. Still return only valid JSON.";
     }
