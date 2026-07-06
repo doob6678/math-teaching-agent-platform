@@ -44,6 +44,7 @@ class TeachingHandoutPdfExportServiceTest {
         try (PDDocument document = Loader.loadPDF(pdf)) {
             String text = new PDFTextStripper().getText(document);
             assertThat(text).contains("教师版讲义", "模板：标准讲义", "双曲线定义", "参数关系");
+            assertThat(text).contains("1页", "/");
             assertThat(text).doesNotContain("\\section", "\\item", "\\frac", "c^2", "a^2", "b^2", "![p159]", "../../pages", "tokens", "gpt-5.5", "AI教师", "AI 讲义草稿", "????");
         }
     }
@@ -159,8 +160,8 @@ class TeachingHandoutPdfExportServiceTest {
         try (PDDocument teacherDocument = Loader.loadPDF(teacherPdf);
                 PDDocument studentDocument = Loader.loadPDF(studentPdf)) {
             PDFTextStripper stripper = new PDFTextStripper();
-            assertThat(stripper.getText(teacherDocument)).contains("教师版讲义", "教师版", "教师讲解");
-            assertThat(stripper.getText(studentDocument)).contains("学生版讲义", "学生版", "学生任务");
+            assertThat(stripper.getText(teacherDocument)).contains("教师版讲义", "教师版", "教师讲解", "模板：标准讲义", "1页", "/");
+            assertThat(stripper.getText(studentDocument)).contains("学生版讲义", "学生版", "学生任务", "模板：标准讲义", "1页", "/");
         }
     }
 
@@ -211,6 +212,7 @@ class TeachingHandoutPdfExportServiceTest {
             try (PDDocument document = Loader.loadPDF(pdf)) {
                 String text = new PDFTextStripper().getText(document);
                 assertThat(text).contains("XeLaTeX", "x2");
+                assertThat(text).contains("共", "页");
                 assertThat(text).doesNotContain("任务编号", "task-real-xelatex", "\\section", "$$");
             }
         } finally {

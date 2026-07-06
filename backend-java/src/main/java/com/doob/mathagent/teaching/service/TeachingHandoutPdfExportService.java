@@ -135,21 +135,18 @@ public class TeachingHandoutPdfExportService {
             Path source = workDir.resolve("handout.tex");
             Path compilerOutput = workDir.resolve("xelatex.out");
             Files.writeString(source, fullLatexDocument(task, version));
-            Process process = new ProcessBuilder(
-                    engine.get().toString(),
-                    "-interaction=nonstopmode",
-                    "-halt-on-error",
-                    "-file-line-error",
-                    source.getFileName().toString())
-                    .directory(workDir.toFile())
-                    .redirectErrorStream(true)
-                    .redirectOutput(compilerOutput.toFile())
-                    .start();
-            boolean finished = process.waitFor(LATEX_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
-            if (!finished) {
-                process.destroyForcibly();
+            Process process = runXeLaTeX(engine.get(), workDir, source, compilerOutput);
+            if (process == null) {
                 LOGGER.warn("XeLaTeX timed out for teaching handout {}", task.taskId());
                 return Optional.empty();
+            }
+            if (process.exitValue() == 0) {
+                Process secondPass = runXeLaTeX(engine.get(), workDir, source, compilerOutput);
+                if (secondPass == null) {
+                    LOGGER.warn("XeLaTeX second pass timed out for teaching handout {}", task.taskId());
+                    return Optional.empty();
+                }
+                process = secondPass;
             }
             Path pdf = workDir.resolve("handout.pdf");
             if (process.exitValue() == 0 && Files.isRegularFile(pdf)) {
@@ -171,6 +168,28 @@ public class TeachingHandoutPdfExportService {
                 deleteRecursively(workDir);
             }
         }
+    }
+
+    /**
+     * Runs one XeLaTeX pass and returns null on timeout.
+     */
+    private static Process runXeLaTeX(Path engine, Path workDir, Path source, Path compilerOutput) throws IOException, InterruptedException {
+        Process process = new ProcessBuilder(
+                engine.toString(),
+                "-interaction=nonstopmode",
+                "-halt-on-error",
+                "-file-line-error",
+                source.getFileName().toString())
+                .directory(workDir.toFile())
+                .redirectErrorStream(true)
+                .redirectOutput(compilerOutput.toFile())
+                .start();
+        boolean finished = process.waitFor(LATEX_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
+        if (!finished) {
+            process.destroyForcibly();
+            return null;
+        }
+        return process;
     }
 
     private static Optional<Path> latexEnginePath() {
@@ -217,11 +236,14 @@ public class TeachingHandoutPdfExportService {
                 \\usepackage{amsmath,amssymb}
                 \\usepackage{enumitem}
                 \\usepackage{fancyhdr}
+                \\usepackage{lastpage}
                 \\usepackage{titlesec}
                 \\IfFontExistsTF{Noto Sans SC}{\\setCJKmainfont{Noto Sans SC}}{\\IfFontExistsTF{Microsoft YaHei UI}{\\setCJKmainfont{Microsoft YaHei UI}}{\\IfFontExistsTF{SimSun}{\\setCJKmainfont{SimSun}}{}}}
                 \\IfFontExistsTF{Arial}{\\setmainfont{Arial}}{}
                 \\setlength{\\parindent}{0pt}
                 \\setlength{\\parskip}{0.72em}
+                \\setlength{\\headheight}{15pt}
+                \\setlength{\\footskip}{14mm}
                 \\setlist[itemize]{leftmargin=2em,itemsep=0.28em,topsep=0.35em}
                 \\setlist[enumerate]{leftmargin=2em,itemsep=0.28em,topsep=0.35em}
                 \\definecolor{HandoutAccent}{HTML}{%s}
@@ -232,9 +254,10 @@ public class TeachingHandoutPdfExportService {
                 \\lhead{%s}
                 \\rhead{%s}
                 \\lfoot{%s}
-                \\rfoot{第 \\thepage 页}
+                \\rfoot{第 \\thepage 页 / 共 \\pageref{LastPage} 页}
                 \\renewcommand{\\headrulewidth}{0.4pt}
                 \\renewcommand{\\footrulewidth}{0.3pt}
+                \\color{HandoutText}
                 \\titleformat{\\section}
                   {\\Large\\bfseries\\color{HandoutAccent}}
                   {}{0pt}{\\makebox[0pt][r]{\\color{HandoutAccent}\\rule{4pt}{1.15em}\\hspace{0.7em}}}
