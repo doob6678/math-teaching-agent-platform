@@ -8,7 +8,7 @@ import {
 } from "../shared/api/textbookApi";
 
 describe("AgentTracePanel", () => {
-  it("renders recoverable traces with backend resolved model and evidence", () => {
+  it("renders recoverable traces as a Chinese conversation process timeline", () => {
     const traces: AgentTraceResponse[] = [
       {
         traceId: "trace-1",
@@ -99,24 +99,25 @@ describe("AgentTracePanel", () => {
       />,
     );
 
-    expect(html).toContain("trace-1");
-    expect(html).toContain("CoursewareAgent");
-    expect(html).toContain("openai");
+    expect(html).toContain("过程流");
+    expect(html).toContain("AI 运行、工具调用与恢复记录");
+    expect(html).toContain("讲义生成");
+    expect(html).toContain("OpenAI");
     expect(html).toContain("gpt-5.4");
-    expect(html).toContain("COMPLETED");
-    expect(html).toContain("168");
-    expect(html).toContain("model_call");
-    expect(html).toContain("Live model response recorded");
-    expect(html).toContain("JSON_PARSE_SUCCEEDED");
-    expect(html).toContain("Structured teaching draft parsed");
-    expect(html).toContain("Usage summary");
-    expect(html).toContain("1 runs");
-    expect(html).toContain("123 prompt");
-    expect(html).toContain("45 completion");
-    expect(html).toContain("Diagnostics");
-    expect(html).toContain("1 parse failed");
-    expect(html).toContain("1 recovered");
-    expect(html).toContain("teaching-task:task-1");
-    expect(html).toContain("tool:search:textbook");
+    expect(html).toContain("已完成");
+    expect(html).toContain("用量 168");
+    expect(html).toContain("明确运行边界");
+    expect(html).toContain("准备工具调用");
+    expect(html).toContain("查找并绑定证据");
+    expect(html).toContain("执行阶段记录");
+    expect(html).toContain("结构化解析完成");
+    expect(html).toContain("生成可恢复记录");
+    expect(html).toContain("模型调用成功，已记录服务商返回的用量。");
+    expect(html).toContain("重试、解析和模型切换统计");
+    expect(html).toContain("JSON 解析失败 1 次");
+    expect(html).toContain("重试恢复 1 次");
+    expect(html).toContain("公开教材");
+    expect(html).not.toContain("tokens");
+    expect(html).not.toContain("Model health");
   });
 });

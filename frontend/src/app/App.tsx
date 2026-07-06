@@ -430,9 +430,13 @@ export function App() {
       .getTeachingTask(taskId)
       .then((task) => {
         setTeachingTask(task);
-        previewTeachingTaskPdf(task.taskId, handoutVersion);
+        if (task.status === "COMPLETED") {
+          previewTeachingTaskPdf(task.taskId, handoutVersion);
+        } else if (task.status === "CREATED" || task.status === "RUNNING") {
+          pollTeachingTask(task.taskId);
+        }
       })
-      .catch((error: Error) => setTeachingError(error.message))
+      .catch((error: Error) => setTeachingError(toUserFacingError(error)))
       .finally(() => setLoadingTeachingTask(false));
   }, [api, hasVerifiedSession]);
 
@@ -592,9 +596,13 @@ export function App() {
         setHandoutExportMessage("");
         setFeedbackMessage("");
         refreshTeachingHistory();
-        previewTeachingTaskPdf(task.taskId, handoutVersion);
+        if (task.status === "COMPLETED") {
+          previewTeachingTaskPdf(task.taskId, handoutVersion);
+        } else {
+          pollTeachingTask(task.taskId);
+        }
       })
-      .catch((error: Error) => setTeachingError(error.message))
+      .catch((error: Error) => setTeachingError(toUserFacingError(error)))
       .finally(() => setSubmittingTeachingTask(false));
   }
 
@@ -632,6 +640,11 @@ export function App() {
         setTeachingTask(task);
         if (task.status === "CREATED" || task.status === "RUNNING") {
           globalThis.setTimeout(poll, 2000);
+          return;
+        }
+        refreshTeachingHistory();
+        if (task.status === "COMPLETED") {
+          previewTeachingTaskPdf(task.taskId, handoutVersion);
         }
       }).catch(() => {
         globalThis.setTimeout(poll, 3000);
@@ -914,7 +927,11 @@ export function App() {
     setHandoutPreviewPdfTaskId("");
     setHandoutExportMessage("");
     setTeachingError("");
-    previewTeachingTaskPdf(task.taskId, handoutVersion);
+    if (task.status === "COMPLETED") {
+      previewTeachingTaskPdf(task.taskId, handoutVersion);
+    } else if (task.status === "CREATED" || task.status === "RUNNING") {
+      pollTeachingTask(task.taskId);
+    }
   }
 
   function handleSubmitFeedback(event: FormEvent<HTMLFormElement>) {
@@ -1478,8 +1495,8 @@ export function App() {
           <h1 className="page-title">AI 能力控制台</h1>
           <p className="page-subtitle">管理模型选择、真实调用、讲义生成能力和执行记录</p>
         </div>
-        <div className="card-grid">
-          <div className="card">
+        <div className="card-grid agent-console-grid">
+          <div className="card agent-config-card">
             <div className="card-header">
               <h2 className="card-title"><ShieldCheck size={16} /> 模型与工具</h2>
             </div>
@@ -1529,7 +1546,7 @@ export function App() {
               {agentPlanError ? <StatusLine icon={<AlertCircle size={16} />} text={agentPlanError} tone="danger" /> : null}
             </div>
           </div>
-          <div className="card">
+          <div className="card agent-plan-card">
             <div className="card-header">
               <h2 className="card-title"><Bot size={16} /> 真实调用</h2>
             </div>
@@ -1544,12 +1561,9 @@ export function App() {
               />
             </div>
           </div>
-          <div className="card card-full">
+          <div className="card card-full agent-trace-card">
             <div className="card-header">
               <h2 className="card-title"><Network size={16} /> 调用记录</h2>
-              <button className="btn btn-ghost btn-sm" onClick={refreshAgentTraces} disabled={loadingAgentTraces}>
-                <RefreshCw size={14} className={loadingAgentTraces ? "spin" : ""} />
-              </button>
             </div>
             <div className="card-body">
               <AgentTracePanel
