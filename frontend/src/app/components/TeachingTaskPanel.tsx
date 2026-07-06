@@ -1,5 +1,7 @@
-import { FormEvent } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import katex from "katex";
+import * as pdfjsLib from "pdfjs-dist";
+import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.mjs?url";
 import {
   AlertCircle,
   BookOpen,
@@ -34,6 +36,7 @@ export function TeachingTaskPanel({
   version,
   previewLatex,
   previewPdfUrl,
+  previewPdfBytes,
   action,
   exportMessage,
   feedbackRating,
@@ -63,6 +66,7 @@ export function TeachingTaskPanel({
   version: HandoutVersion;
   previewLatex: string;
   previewPdfUrl: string;
+  previewPdfBytes: Uint8Array | null;
   action: string;
   exportMessage: string;
   feedbackRating: number;
@@ -173,9 +177,7 @@ export function TeachingTaskPanel({
             {exportMessage ? <StatusLine icon={<ShieldCheck size={16} />} text={exportMessage} /> : null}
 
             {previewPdfUrl ? (
-              <div className="pdf-preview-frame">
-                <iframe src={previewPdfUrl} title="讲义 PDF 预览" />
-              </div>
+              <PdfCanvasPreview pdfBytes={previewPdfBytes} pdfUrl={previewPdfUrl} />
             ) : selectedDraft ? (
               <HandoutStructuredPreview latex={selectedDraft} version={version} />
             ) : (
@@ -347,6 +349,83 @@ export function TeachingTaskPanel({
         </div>
       ) : null}
     </section>
+  );
+}
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+
+function PdfCanvasPreview({ pdfBytes, pdfUrl }: { pdfBytes: Uint8Array | null; pdfUrl: string }) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [state, setState] = useState<"loading" | "ready" | "failed">("loading");
+  const [pageInfo, setPageInfo] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    async function renderPdf() {
+      const canvas = canvasRef.current;
+      if (!canvas || !pdfBytes?.byteLength) {
+        setState(pdfBytes?.byteLength ? "loading" : "failed");
+        return;
+      }
+      setState("loading");
+      try {
+        const loadingTask = pdfjsLib.getDocument({ data: pdfBytes.slice() });
+        const pdf = await loadingTask.promise;
+        const page = await pdf.getPage(1);
+        const baseViewport = page.getViewport({ scale: 1 });
+        const containerWidth = Math.min(880, canvas.parentElement?.clientWidth ?? 880);
+        const scale = Math.max(1, Math.min(1.6, containerWidth / baseViewport.width));
+        const viewport = page.getViewport({ scale });
+        const pixelRatio = window.devicePixelRatio || 1;
+        canvas.width = Math.floor(viewport.width * pixelRatio);
+        canvas.height = Math.floor(viewport.height * pixelRatio);
+        canvas.style.width = `${Math.floor(viewport.width)}px`;
+        canvas.style.height = `${Math.floor(viewport.height)}px`;
+        const context = canvas.getContext("2d");
+        if (!context) {
+          throw new Error("canvas context unavailable");
+        }
+        context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+        await page.render({ canvas, canvasContext: context, viewport }).promise;
+        const totalPages = pdf.numPages;
+        await pdf.cleanup();
+        if (!cancelled) {
+          setPageInfo(`第 1 页 / 共 ${totalPages} 页`);
+          setState("ready");
+        }
+      } catch {
+        if (!cancelled) {
+          setState("failed");
+        }
+      }
+    }
+    renderPdf();
+    return () => {
+      cancelled = true;
+    };
+  }, [pdfBytes]);
+
+  return (
+    <div className="pdf-canvas-preview">
+      <div className="pdf-canvas-toolbar">
+        <div>
+          <strong>PDF 真实渲染预览</strong>
+          <span>{state === "ready" ? pageInfo : state === "loading" ? "正在渲染首页" : "Canvas 预览不可用"}</span>
+        </div>
+        <a href={pdfUrl} target="_blank" rel="noreferrer">打开原始 PDF</a>
+      </div>
+      <div className={state === "ready" ? "pdf-canvas-page" : "pdf-canvas-page loading"}>
+        {state === "loading" ? <Loader2 className="spin" size={18} /> : null}
+        {state === "failed" ? (
+          <div className="handout-preview-placeholder compact">
+            <FileText size={20} />
+            <strong>PDF 已生成</strong>
+            <span>当前浏览器无法渲染 Canvas 预览，可以打开原始 PDF 或直接下载。</span>
+          </div>
+        ) : null}
+        <canvas ref={canvasRef} aria-label="讲义 PDF 首页预览" />
+      </div>
+    </div>
   );
 }
 

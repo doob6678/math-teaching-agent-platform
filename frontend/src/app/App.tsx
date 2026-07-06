@@ -178,6 +178,7 @@ export function App() {
   const [handoutPreviewLatex, setHandoutPreviewLatex] = useState("");
   const [handoutPreviewTaskId, setHandoutPreviewTaskId] = useState("");
   const [handoutPreviewPdfUrl, setHandoutPreviewPdfUrl] = useState("");
+  const [handoutPreviewPdfBytes, setHandoutPreviewPdfBytes] = useState<Uint8Array | null>(null);
   const [handoutPreviewPdfTaskId, setHandoutPreviewPdfTaskId] = useState("");
   const [teachingHistory, setTeachingHistory] = useState<TeachingTaskResponse[]>([]);
   const [loadingTeachingHistory, setLoadingTeachingHistory] = useState(false);
@@ -592,6 +593,7 @@ export function App() {
           if (current) URL.revokeObjectURL(current);
           return "";
         });
+        setHandoutPreviewPdfBytes(null);
         setHandoutPreviewPdfTaskId("");
         setHandoutExportMessage("");
         setFeedbackMessage("");
@@ -845,6 +847,7 @@ export function App() {
       if (current) URL.revokeObjectURL(current);
       return "";
     });
+    setHandoutPreviewPdfBytes(null);
     setHandoutPreviewPdfTaskId("");
     api
       .previewTeachingTaskLatex(teachingTask.taskId, handoutVersion)
@@ -867,10 +870,11 @@ export function App() {
       .then((pdf) => {
         setHandoutPreviewLatex("");
         setHandoutPreviewTaskId("");
+        const bytes = new Uint8Array(pdf.byteLength);
+        bytes.set(pdf);
+        setHandoutPreviewPdfBytes(bytes);
         setHandoutPreviewPdfUrl((current) => {
           if (current) URL.revokeObjectURL(current);
-          const bytes = new Uint8Array(pdf.byteLength);
-          bytes.set(pdf);
           return URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
         });
         setHandoutPreviewPdfTaskId(`${taskId}:${version}`);
@@ -924,6 +928,7 @@ export function App() {
       if (current) URL.revokeObjectURL(current);
       return "";
     });
+    setHandoutPreviewPdfBytes(null);
     setHandoutPreviewPdfTaskId("");
     setHandoutExportMessage("");
     setTeachingError("");
@@ -1448,6 +1453,7 @@ export function App() {
                 version={handoutVersion}
                 previewLatex={handoutPreviewTaskId === `${teachingTask?.taskId}:${handoutVersion}` ? handoutPreviewLatex : ""}
                 previewPdfUrl={handoutPreviewPdfTaskId === `${teachingTask?.taskId}:${handoutVersion}` ? handoutPreviewPdfUrl : ""}
+                previewPdfBytes={handoutPreviewPdfTaskId === `${teachingTask?.taskId}:${handoutVersion}` ? handoutPreviewPdfBytes : null}
                 history={teachingHistory}
                 loadingHistory={loadingTeachingHistory}
                 action={handoutAction}
@@ -1466,6 +1472,7 @@ export function App() {
                     if (current) URL.revokeObjectURL(current);
                     return "";
                   });
+                  setHandoutPreviewPdfBytes(null);
                   setHandoutPreviewPdfTaskId("");
                   setHandoutExportMessage("");
                 }}

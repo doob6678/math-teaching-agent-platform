@@ -3139,6 +3139,73 @@ h1, h2, h3, h4, h5, h6 {
   background: var(--white);
 }
 
+.pdf-canvas-preview {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--slate-lightest);
+  border-radius: var(--radius-md);
+  background:
+    linear-gradient(180deg, rgba(248, 250, 252, 0.96), rgba(226, 232, 240, 0.82)),
+    var(--gray-subtle);
+  box-shadow: var(--shadow-md);
+}
+
+.pdf-canvas-toolbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.pdf-canvas-toolbar > div {
+  display: grid;
+  gap: 3px;
+}
+
+.pdf-canvas-toolbar strong {
+  color: var(--navy);
+  font-size: 14px;
+}
+
+.pdf-canvas-toolbar span,
+.pdf-canvas-toolbar a {
+  color: var(--slate);
+  font-size: 12px;
+}
+
+.pdf-canvas-toolbar a {
+  padding: 6px 10px;
+  border: 1px solid var(--slate-lightest);
+  border-radius: 999px;
+  background: var(--white);
+  color: var(--blue);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.pdf-canvas-page {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  min-height: 680px;
+  padding: 18px;
+  overflow: auto;
+}
+
+.pdf-canvas-page.loading {
+  place-items: center;
+}
+
+.pdf-canvas-page canvas {
+  max-width: 100%;
+  border-radius: 4px;
+  background: var(--white);
+  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.14);
+}
+
 .handout-review-card {
   display: grid;
   gap: 0;
