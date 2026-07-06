@@ -163,14 +163,14 @@ final class TeachingHandoutLocalReferenceScanner {
         String visualStyle = inferVisualStyle(title);
         String prompt = """
                 参考本机真实 PDF 讲义模板，不要照抄原文。
-                参考文件：%s
+                参考标题：%s
                 参考摘要：%s
-                版式要求：
-                1. 保留讲义感：页眉、讲次/专题标题、知识点、题型方法、例题、练习、总结、页脚；
-                2. 题型训练要按基础、提高、压轴递进；
-                3. 教师版写答案、板书步骤和追问；学生版保留提示、留白和练习；
-                4. 颜色要克制：教师版可用深蓝/墨绿强调方法，学生版用浅色提示块；
-                5. 输出要适合 PDF 打印，不要写模型名、token、后端诊断、文件路径。
+                结构参考：
+                1. 保留讲义感：讲次/专题标题、知识点、题型方法、例题、练习、总结；
+                2. 题型训练按 A 基础、B 提高、C 压轴递进，能匹配题库难度时优先使用真实题库题目；
+                3. 教师版写知识来源、板书步骤、完整答案、评分点、追问和变式；
+                4. 学生版只写知识点、题目、提示和作答区，必须隐藏答案、评分点和完整解析；
+                5. PDF 视觉版式由系统渲染负责，正文不要写模型名、token、后端诊断、文件路径或任何渲染规则。
                 """.formatted(title, preview.isBlank() ? "未能抽取文字，按文件名和模板标签参考。" : preview);
         return new TeachingHandoutTemplateProfile(
                 new TeachingHandoutTemplateResponse(

@@ -110,7 +110,9 @@ class TeachingHandoutTemplateServiceTest {
                 .anySatisfy(template -> {
                     assertThat(template.summary().displayName()).contains("zhao_lixian_daoshu_gaokao_handout");
                     assertThat(template.summary().tags()).contains("赵礼显", "导数", "高考");
-                    assertThat(template.promptInstructions()).contains("PDF", "token");
+                    assertThat(template.promptInstructions())
+                            .contains("系统渲染负责", "A 基础", "B 提高", "C 压轴", "真实题库题目", "token")
+                            .doesNotContain("页眉", "页脚", "颜色");
                 });
     }
 }
