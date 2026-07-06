@@ -1851,7 +1851,13 @@ h1, h2, h3, h4, h5, h6 {
 
 .template-shelf {
   display: grid;
-  gap: 10px;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(248, 250, 252, 0.92), rgba(255, 255, 255, 0.96)),
+    var(--white);
 }
 
 .teaching-create-card .search-form {
@@ -1891,18 +1897,24 @@ h1, h2, h3, h4, h5, h6 {
 
 .template-shelf-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px;
+  max-height: 430px;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
 .template-card {
+  position: relative;
   display: grid;
   gap: 8px;
   min-height: 154px;
-  padding: 12px;
+  padding: 13px 13px 13px 17px;
   border: 1px solid var(--slate-lightest);
   border-radius: 8px;
-  background: linear-gradient(180deg, var(--white), var(--gray-subtle));
+  background:
+    linear-gradient(90deg, rgba(15, 23, 42, 0.1) 0, rgba(15, 23, 42, 0.1) 4px, transparent 4px),
+    linear-gradient(180deg, var(--white), var(--gray-subtle));
   color: inherit;
   text-align: left;
   transition: var(--transition);
@@ -1928,12 +1940,14 @@ h1, h2, h3, h4, h5, h6 {
 
 .template-card:hover {
   border-color: var(--blue-border);
-  box-shadow: var(--shadow-sm);
+  transform: translateY(-1px);
+  box-shadow: 0 12px 26px rgba(15, 23, 42, 0.08);
 }
 
 .template-card.selected {
   border-color: rgba(37, 99, 235, 0.42);
   background:
+    linear-gradient(90deg, rgba(37, 99, 235, 0.72) 0, rgba(37, 99, 235, 0.72) 4px, transparent 4px),
     linear-gradient(180deg, rgba(239, 246, 255, 0.96), rgba(255, 255, 255, 0.98)),
     var(--white);
   box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.08);
@@ -1942,6 +1956,7 @@ h1, h2, h3, h4, h5, h6 {
 .template-card-reference {
   border-color: rgba(15, 118, 110, 0.22);
   background:
+    linear-gradient(90deg, rgba(15, 118, 110, 0.72) 0, rgba(15, 118, 110, 0.72) 4px, transparent 4px),
     linear-gradient(180deg, rgba(240, 253, 250, 0.76), rgba(255, 255, 255, 0.98)),
     var(--white);
 }
@@ -1949,6 +1964,7 @@ h1, h2, h3, h4, h5, h6 {
 .template-card-skill {
   border-color: rgba(138, 111, 42, 0.24);
   background:
+    linear-gradient(90deg, rgba(138, 111, 42, 0.72) 0, rgba(138, 111, 42, 0.72) 4px, transparent 4px),
     linear-gradient(180deg, rgba(255, 248, 231, 0.76), rgba(255, 255, 255, 0.98)),
     var(--white);
 }
@@ -3106,17 +3122,19 @@ h1, h2, h3, h4, h5, h6 {
 
 .pdf-preview-frame {
   width: 100%;
-  min-height: 560px;
+  min-height: 680px;
   border: 1px solid var(--slate-lightest);
   border-radius: var(--radius-md);
   overflow: hidden;
-  background: var(--gray-subtle);
-  box-shadow: var(--shadow-sm);
+  background:
+    linear-gradient(180deg, rgba(248, 250, 252, 0.92), rgba(226, 232, 240, 0.78)),
+    var(--gray-subtle);
+  box-shadow: var(--shadow-md);
 }
 
 .pdf-preview-frame iframe {
   width: 100%;
-  height: 560px;
+  height: 680px;
   border: 0;
   background: var(--white);
 }
@@ -3127,8 +3145,8 @@ h1, h2, h3, h4, h5, h6 {
   border: 1px solid var(--slate-lightest);
   border-radius: var(--radius-md);
   overflow: hidden;
-  background: var(--white);
-  box-shadow: var(--shadow-sm);
+  background: #eef2f7;
+  box-shadow: var(--shadow-md);
 }
 
 .handout-review-head {
@@ -3168,28 +3186,43 @@ h1, h2, h3, h4, h5, h6 {
 
 .handout-review-body {
   display: grid;
-  gap: 12px;
-  padding: 18px;
-  background: #fcfdff;
+  gap: 13px;
+  width: min(100%, 860px);
+  margin: 18px auto;
+  padding: 26px 30px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 6px;
+  background: #ffffff;
+  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.09);
 }
 
 .handout-review-section {
-  margin: 0;
-  padding-bottom: 8px;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+  margin: 8px 0 2px;
+  padding: 0 0 9px 12px;
+  border-bottom: 1px solid rgba(15, 118, 110, 0.16);
+  border-left: 4px solid #0f766e;
   color: var(--navy);
-  font-size: 18px;
+  font-size: 19px;
   line-height: 1.35;
 }
 
 .handout-review-subsection {
-  margin: 6px 0 0;
+  margin: 8px 0 0;
+  padding-left: 10px;
+  border-left: 3px solid rgba(37, 99, 235, 0.34);
   color: var(--navy-mid);
   font-size: 15px;
   line-height: 1.4;
 }
 
 .handout-review-paragraph {
+  width: fit-content;
+  max-width: 100%;
+  margin-top: 4px;
+  padding: 5px 9px;
+  border: 1px solid rgba(37, 99, 235, 0.14);
+  border-radius: 6px;
+  background: #eff6ff;
   color: var(--blue);
   font-size: 13px;
   font-weight: 700;
@@ -3200,28 +3233,51 @@ h1, h2, h3, h4, h5, h6 {
   margin: 0;
   color: var(--navy);
   font-size: 14px;
-  line-height: 1.78;
+  line-height: 1.85;
+  overflow-wrap: anywhere;
 }
 
 .handout-review-list {
   display: grid;
-  gap: 8px;
+  gap: 9px;
   margin: 0;
-  padding-left: 20px;
+  padding: 0;
+  list-style-position: inside;
   color: var(--navy);
   font-size: 14px;
   line-height: 1.72;
 }
 
 .handout-review-list.ordered {
-  padding-left: 24px;
+  padding-left: 0;
+}
+
+.handout-review-list li {
+  padding: 9px 11px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 6px;
+  background: #f8fafc;
 }
 
 .handout-review-space {
-  min-height: 72px;
-  border-radius: 10px;
+  min-height: 112px;
+  border-radius: 6px;
   border: 1px dashed rgba(148, 163, 184, 0.5);
-  background: linear-gradient(180deg, rgba(248, 250, 252, 0.88), rgba(255, 255, 255, 0.96));
+  background:
+    repeating-linear-gradient(0deg, transparent, transparent 27px, rgba(148, 163, 184, 0.22) 28px),
+    linear-gradient(180deg, rgba(248, 250, 252, 0.88), rgba(255, 255, 255, 0.96));
+}
+
+.math-render.display {
+  display: block;
+  margin: 10px 0;
+  overflow-x: auto;
+}
+
+.math-render.inline {
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: baseline;
 }
 
 .artifact-pdf-preview {

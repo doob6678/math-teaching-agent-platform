@@ -278,6 +278,7 @@ public class TeachingAiDraftService {
                 All user-facing text values must be written in concise Chinese.
                 Math must use Feishu-supported delimiters only: inline $...$ or display $$...$$.
                 Do not use \\[...\\], \\(...\\), \\begin{align}, \\begin{aligned}, \\begin{equation}, or Markdown code fences.
+                Treat template layout instructions as rendering constraints only. Do not write header/footer/color/PDF layout rules in any JSON value.
                 JSON schema:
                 {
                   "teacherExplanation": "Chinese teacher handout body with labeled parts: 【知识定位】【题型识别】【方法步骤】【例题详解】【答案与评分点】【易错提醒】【课堂追问】. It must be printable and complete, not chatty.",
@@ -286,7 +287,8 @@ public class TeachingAiDraftService {
                   "followUpQuestions": ["3-8 Chinese exercises/questions, include easy/medium/hard progression when possible"]
                 }
                 Do not write "as an AI". Do not invent sources not provided below.
-                Do not output raw page OCR fragments, raw source ids, model names, token usage, or backend diagnostics.
+                Do not output raw page OCR fragments, raw source ids, model names, token usage, backend diagnostics, JSON/parse/debug words, or model-health wording.
+                Do not mention page header, page footer, colors, rendering engines, prompt rules, template rules, or "PDF layout requirements" as handout content.
                 Teacher content must include answers when enough information is available from the problem/evidence; student content must leave blanks instead of answers.
                 Respect printable handout layout, but do not describe layout rules such as header/footer or color requirements as user-facing content.
                 If the user only gives a topic rather than a problem, create a complete mini-handout around that topic.
@@ -317,6 +319,7 @@ public class TeachingAiDraftService {
                 Fix format only. Do not add sources. Do not output Markdown.
                 All user-facing text values must be written in concise Chinese.
                 Math must use only $...$ or $$...$$; never use \\[...\\], \\(...\\), or align/equation environments.
+                Do not write header/footer/color/PDF layout rules, AI, token, debug, JSON, or model-health wording inside user-facing values.
                 Parse error: %s
                 Previous output: %s
 

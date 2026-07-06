@@ -312,11 +312,14 @@ public class TeachingWorkflowService {
         }
         if (teacherVersion) {
             return latex + "\n\\section{" + title + "}\n"
+                    + "\\paragraph{讲评主线}\n"
                     + escapeLatex(aiDraft.teacherExplanation())
                     + "\n\\paragraph{知识点与方法卡}"
                     + latexItemize(aiDraft.knowledgePoints())
-                    + "\n\\paragraph{分层练习、追问与答案审查}"
-                    + latexEnumerate(aiDraft.followUpQuestions());
+                    + "\n\\paragraph{课堂追问与变式训练}"
+                    + latexEnumerate(aiDraft.followUpQuestions())
+                    + "\n\\paragraph{讲评备注}\n"
+                    + "用于记录课堂生成问题、学生典型错误和二次讲评安排。\\vspace{5em}\n";
         }
         return latex + "\n\\section{" + title + "}\n"
                 + escapeLatex(aiDraft.studentHint())
@@ -576,43 +579,40 @@ public class TeachingWorkflowService {
         return """
                 \\section{讲义信息}
                 \\begin{itemize}
-                \\item 版本：教师版，用于备课、课堂讲评和课后审校。
                 \\item 模板：%s
                 \\item 难度：%s
-                \\item 内容边界：保留来源、讲解路径、答案要点和练习设计；不向学生版暴露完整答案。
+                \\item 使用场景：教师备课、课堂讲评、课后订正。
                 \\end{itemize}
 
                 \\section{学习目标}
-                %% 用户想学什么
                 %s
 
-                \\section{题目}
+                \\section{本讲任务}
                 %s
 
-                \\section{教材与资料证据}
-                %% 公开教材证据，私有资料需按 tenantId/subjectId 隔离后再引用
+                \\section{来源索引}
                 %s
 
                 \\section{知识点归属}
-                %% 本次只引用实际命中的公开教材或教师资源；未命中的来源不会写入讲义。
                 %s
 
-                \\section{教学主线}
+                \\section{板书与讲评主线}
                 \\begin{enumerate}
-                \\item 先用定义、公式或图像定位本讲主题，明确学生必须会写的核心关系。
-                \\item 再识别题型信号，决定使用定义法、代数计算、数形结合或分类讨论。
-                \\item 例题讲评时写清“为什么这样做”，最后给答案、评分点和易错提醒。
+                \\item 定位：先写本讲核心定义、公式或图像特征，让学生知道从哪里入手。
+                \\item 识别：圈出题目条件中的题型信号，判断使用定义法、代数计算、数形结合还是分类讨论。
+                \\item 推进：每一步板书都说明依据，遇到参数、范围或符号先处理边界。
+                \\item 收束：给出答案、评分点、易错提醒和可继续追问的变式。
                 \\end{enumerate}
                 
-                \\section{例题与答案区}
+                \\section{例题讲评}
                 \\paragraph{例题}
                 %s
                 
                 \\paragraph{讲解路径}
-                先提取条件，再写对应知识点和公式；若有参数或范围条件，必须单独讨论边界。
+                先提取条件，再写对应知识点和公式；若有参数或范围条件，单独讨论边界。
                 
                 \\paragraph{答案与评分点}
-                由模型生成或教师审查后补全；若证据来自题库，答案要点只保留在教师版。
+                教师版保留完整答案、关键等式、评分点和学生常见失分位置。
                 
                 \\section{课堂追问预设}
                 \\begin{itemize}
@@ -621,13 +621,8 @@ public class TeachingWorkflowService {
                 \\item 学生最容易在定义域、符号、参数范围还是计算细节上出错？
                 \\end{itemize}
                 
-                \\section{讲义检查清单}
-                \\begin{itemize}
-                \\item 是否有清晰页眉、标题、知识点和练习分区。
-                \\item 是否区分教师版答案和学生版留白。
-                \\item 公式是否使用 $...$ 或 $$...$$，没有混入 OCR 碎片。
-                \\item 题型是否按基础、提高、压轴或课堂顺序组织。
-                \\end{itemize}
+                \\section{课后订正记录}
+                \\vspace{5em}
                 """.formatted(
                 templateLine,
                 difficultyLine,
@@ -698,11 +693,10 @@ public class TeachingWorkflowService {
                     ? "根据本节主题完成下面的知识梳理与分层练习。"
                     : safeQuestionText(request);
             return """
-                    \\section{讲义信息}
+                    \\section{学习主题}
                     \\begin{itemize}
-                    \\item 版本：学生版，用于课堂练习和课后复盘。
-                    \\item 模板：%s
                     \\item 学习主题：%s
+                    \\item 课堂任务：先完成例题任务，再做分层练习，最后记录错因。
                     \\end{itemize}
 
                     \\subsection*{知识点速记}
@@ -727,7 +721,6 @@ public class TeachingWorkflowService {
                     \\subsection*{订正与错因}
                     \\vspace{6em}
                     """.formatted(
-                    escapeLatex(template.summary().displayName()),
                     escapeLatex(request.learningGoal()),
                     escapeLatex(hint),
                     escapeLatex("先核对定义域、符号条件和参数不为 0 等边界。"),
@@ -737,16 +730,13 @@ public class TeachingWorkflowService {
                 ? "根据本讲主题完成例题、变式和订正。"
                 : safeQuestionText(request);
         return """
-                \\section{讲义信息}
+                \\section{学习主题}
                 \\begin{itemize}
-                \\item 版本：学生版，用于课堂练习和课后复盘。
-                \\item 要求：先独立完成空白区，再查看教师讲解。
+                \\item 主题：%s
+                \\item 课堂任务：先独立完成空白区，再订正关键步骤。
                 \\end{itemize}
 
-                \\section{学习目标}
-                %s
-
-                \\section{题目}
+                \\section{例题任务}
                 %s
 
                 \\section{思路提示}

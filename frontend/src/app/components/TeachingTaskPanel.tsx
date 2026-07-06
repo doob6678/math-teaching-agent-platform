@@ -15,6 +15,16 @@ import {
 import { TeachingTaskResponse } from "../../shared/api/textbookApi";
 import { formatSimilarity, stageLabel, StatusLine } from "./panelShared";
 
+type HandoutVersion = "teacher" | "student";
+
+type ReviewBlock =
+  | { type: "section"; title: string }
+  | { type: "subsection"; title: string }
+  | { type: "paragraph"; title: string }
+  | { type: "text"; text: string }
+  | { type: "list"; ordered: boolean; items: string[] }
+  | { type: "space" };
+
 export function TeachingTaskPanel({
   task,
   loading,
@@ -50,7 +60,7 @@ export function TeachingTaskPanel({
   error: string;
   history: TeachingTaskResponse[];
   loadingHistory: boolean;
-  version: "teacher" | "student";
+  version: HandoutVersion;
   previewLatex: string;
   previewPdfUrl: string;
   action: string;
@@ -61,7 +71,7 @@ export function TeachingTaskPanel({
   submittingFeedback: boolean;
   feedbackMessage: string;
   batchFolderPath: string;
-  onVersionChange: (value: "teacher" | "student") => void;
+  onVersionChange: (value: HandoutVersion) => void;
   onBatchFolderPathChange: (value: string) => void;
   onPreviewLatex: () => void;
   onPreviewPdf: () => void;
@@ -79,21 +89,23 @@ export function TeachingTaskPanel({
   const selectedDraft = version === "student"
     ? task?.studentHandoutLatex ?? task?.handoutLatex ?? ""
     : task?.teacherHandoutLatex ?? task?.handoutLatex ?? "";
-  const completed = normalizedStatus === "COMPLETED" || normalizedStatus === "SUCCESS";
+  const completed = normalizedStatus === "COMPLETED";
+  const pending = normalizedStatus === "CREATED" || normalizedStatus === "RUNNING";
 
   return (
     <section className="teaching-task">
       <div className="result-header">
         <div>
           <p className="eyebrow">讲义中心</p>
-          <h2>生成结果、预览与下载</h2>
+          <h2>讲义生成、审查与导出</h2>
         </div>
         {task ? <div className="strategy-pill">{statusLabel(task.status)}</div> : null}
       </div>
 
-      {loading ? <StatusLine icon={<Loader2 className="spin" size={16} />} text="正在恢复上次教学任务" /> : null}
+      {loading ? <StatusLine icon={<Loader2 className="spin" size={16} />} text="正在恢复上次教学任务。" /> : null}
       {error ? <StatusLine icon={<AlertCircle size={16} />} text={error} tone="danger" /> : null}
-      {completed ? <StatusLine icon={<Check size={16} />} text="讲义已生成。可以直接预览 PDF、下载 PDF，或打开 TeX 做人工审查。" /> : null}
+      {pending ? <StatusLine icon={<Loader2 className="spin" size={16} />} text="讲义仍在生成中，页面会自动刷新；生成完成后会自动打开 PDF 预览。" /> : null}
+      {completed ? <StatusLine icon={<Check size={16} />} text="讲义已生成。优先查看 PDF，TeX 仅用于人工复核。" /> : null}
 
       <HistoryPanel
         history={history}
@@ -103,7 +115,7 @@ export function TeachingTaskPanel({
       />
 
       {!task && !loading && !error ? (
-        <div className="empty-state compact">提交讲义主题后，这里会显示 PDF 预览、下载入口、历史记录和人工反馈。</div>
+        <div className="empty-state compact">提交讲义主题后，这里会显示预览、下载、历史记录和人工复核入口。</div>
       ) : null}
 
       {task ? (
@@ -117,7 +129,7 @@ export function TeachingTaskPanel({
               </div>
               <label>
                 <span>版本</span>
-                <select className="form-select" value={version} onChange={(event) => onVersionChange(event.target.value as "teacher" | "student")}>
+                <select className="form-select" value={version} onChange={(event) => onVersionChange(event.target.value as HandoutVersion)}>
                   <option value="teacher">教师版</option>
                   <option value="student">学生版</option>
                 </select>
@@ -154,7 +166,7 @@ export function TeachingTaskPanel({
               </label>
               <button type="button" className="btn btn-secondary" onClick={onExportBatchZip} disabled={busy || !selectedDraft}>
                 {action === "zip" ? <Loader2 className="spin" size={16} /> : <Database size={16} />}
-                <span>打包下载</span>
+                <span>打包导出</span>
               </button>
             </div>
 
@@ -162,20 +174,25 @@ export function TeachingTaskPanel({
 
             {previewPdfUrl ? (
               <div className="pdf-preview-frame">
-                <iframe src={previewPdfUrl} title="PDF 讲义预览" />
+                <iframe src={previewPdfUrl} title="讲义 PDF 预览" />
               </div>
+            ) : selectedDraft ? (
+              <HandoutStructuredPreview latex={selectedDraft} version={version} />
             ) : (
               <div className="handout-preview-placeholder">
                 <FileText size={22} />
-                <strong>{selectedDraft ? "讲义文件已生成" : "当前版本暂无讲义内容"}</strong>
-                <span>{selectedDraft ? "点击“预览 PDF”查看真实渲染效果，或直接下载给老师/管理员审查。" : "请重新生成或切换版本。"}</span>
-                {selectedDraft ? <small>{selectedDraft.length.toLocaleString("zh-CN")} 字符 TeX 源码</small> : null}
+                <strong>{pending ? "正在等待讲义完成" : "当前版本暂无讲义内容"}</strong>
+                <span>
+                  {pending
+                    ? "后端生成结束后会自动拉取可审查内容，并优先显示 PDF。"
+                    : "请重新生成讲义，或切换到已有内容的版本。"}
+                </span>
               </div>
             )}
 
             {previewLatex ? (
-              <details className="latex-review-panel" open>
-                <summary>TeX 源码审查</summary>
+              <details className="latex-review-panel">
+                <summary>查看 TeX 源码</summary>
                 <pre className="formula-block handout preview">{previewLatex}</pre>
               </details>
             ) : null}
@@ -183,7 +200,7 @@ export function TeachingTaskPanel({
 
           <section className="teaching-summary-grid">
             <InfoTile label="模板" value={task.selectedTemplate?.displayName ?? "标准讲义"} />
-            <InfoTile label="生成方式" value={task.aiDraft?.enabled ? "模型辅助生成" : "模板与检索生成"} />
+            <InfoTile label="内容来源" value={task.aiDraft?.enabled ? "检索 + 模型生成" : "检索 + 模板生成"} />
             <InfoTile label="当前状态" value={statusLabel(task.status)} />
             <InfoTile label="记忆复用" value={task.memoryReuse?.reused ? "已复用" : "未复用"} />
           </section>
@@ -193,9 +210,9 @@ export function TeachingTaskPanel({
               <summary>
                 <div>
                   <p className="eyebrow">生成诊断</p>
-                  <h3>{task.aiDraft.structured ? "内容结构已解析" : "内容需要人工复核"}</h3>
+                  <h3>{task.aiDraft.structured ? "讲义内容已结构化" : "模型返回仍需人工复核"}</h3>
                 </div>
-                <StatusBadgeText text={`${task.aiDraft.retryCount}/${task.aiDraft.maxRetries} 次重试`} />
+                <StatusBadgeText text={`重试 ${task.aiDraft.retryCount}/${task.aiDraft.maxRetries}`} />
               </summary>
               <div className="diagnostic-meta">
                 <span>模型：{task.aiDraft.enabled ? `${providerLabel(task.aiDraft.providerName)} / ${task.aiDraft.modelCode}` : "未启用"}</span>
@@ -204,25 +221,21 @@ export function TeachingTaskPanel({
               {task.aiDraft.structured ? (
                 <div className="ai-draft-content">
                   <div className="summary-card">
-                    <span>教师讲解要点</span>
-                    <strong><InlineMathText text={shortText(task.aiDraft.teacherExplanation, 120)} /></strong>
-                    <details>
-                      <summary>查看后台生成文本</summary>
-                      <p><InlineMathText text={task.aiDraft.teacherExplanation} /></p>
-                    </details>
+                    <span>教师讲解主线</span>
+                    <strong><MathRichText text={shortText(task.aiDraft.teacherExplanation, 140)} /></strong>
                   </div>
                   <div className="summary-card">
                     <span>学生提示</span>
-                    <strong><InlineMathText text={shortText(task.aiDraft.studentHint, 100)} /></strong>
+                    <strong><MathRichText text={shortText(task.aiDraft.studentHint, 120)} /></strong>
                   </div>
                   {task.aiDraft.knowledgePoints.length ? (
-                    <div className="tag-list">{task.aiDraft.knowledgePoints.map((item) => <span key={item}><InlineMathText text={item} /></span>)}</div>
+                    <div className="tag-list">{task.aiDraft.knowledgePoints.map((item) => <span key={item}><MathRichText text={item} /></span>)}</div>
                   ) : null}
                 </div>
               ) : (
                 <div className="summary-card">
-                  <span>返回摘要</span>
-                  <strong><InlineMathText text={shortText(task.aiDraft.parseError || task.aiDraft.content || task.aiDraft.message, 140)} /></strong>
+                  <span>错误摘要</span>
+                  <strong><MathRichText text={shortText(task.aiDraft.parseError || task.aiDraft.content || task.aiDraft.message, 160)} /></strong>
                 </div>
               )}
             </details>
@@ -231,18 +244,22 @@ export function TeachingTaskPanel({
           <details className="review-details">
             <summary>流程与证据</summary>
             <div className="node-list">
-              {task.nodes.map((node) => (
-                <div className="node-item" key={node.code}>
-                  <strong>{node.name}</strong>
-                  <span>{shortText(node.summary, 96)}</span>
+              {task.nodes.map((node, index) => (
+                <div className="node-item node-item-rich" key={node.code}>
+                  <div className="node-item-top">
+                    <span className="node-index">{index + 1}</span>
+                    <strong>{node.name}</strong>
+                    <em>{nodeStatusLabel(node.status)}</em>
+                  </div>
+                  <span>{shortText(node.summary, 120)}</span>
                 </div>
               ))}
             </div>
             {task.stageTimings?.length ? (
               <div className="timing-list">
-                {task.stageTimings.map((timing) => (
+                {task.stageTimings.map((timing, index) => (
                   <div className="timing-item" key={timing.stage}>
-                    <span>{stageLabel(timing.stage)}</span>
+                    <span>{index + 1}. {stageLabel(timing.stage)}</span>
                     <strong>{timing.elapsedMs} ms</strong>
                   </div>
                 ))}
@@ -261,7 +278,7 @@ export function TeachingTaskPanel({
                         <span>{shortText(item.chunkId, 28)}</span>
                         <span>{item.sourceScope === "QUESTION_BANK" || item.pageNo <= 0 ? "题库题目" : `PDF ${item.pageNo}`}</span>
                       </div>
-                      <p className="snippet">{shortText(cleanSnippet(item.snippet), 96)}</p>
+                      <p className="snippet">{shortText(cleanSnippet(item.snippet), 120)}</p>
                     </div>
                   </article>
                 ))}
@@ -274,13 +291,13 @@ export function TeachingTaskPanel({
               <strong>人工反馈</strong>
               {feedbackMessage ? <span>{feedbackMessage}</span> : null}
             </div>
-            <div className="feedback-quality-list" aria-label="讲义质量审查项">
+            <div className="feedback-quality-list" aria-label="讲义质量审查要点">
               {[
                 "页眉页脚完整",
                 "教师/学生版区分清楚",
                 "公式渲染正确",
-                "PDF 排版无重叠",
-                "教材/题型来源可追溯",
+                "版式无重叠",
+                "来源可追溯",
               ].map((item) => (
                 <span key={item}><Check size={13} />{item}</span>
               ))}
@@ -312,7 +329,7 @@ export function TeachingTaskPanel({
                 className="form-textarea"
                 value={feedbackComment}
                 onChange={(event) => onFeedbackCommentChange(event.target.value)}
-                placeholder="记录要保留、重写或补充的地方。"
+                placeholder="记录需要保留、重写或补充的部分。"
               />
             </label>
             <button type="submit" className="btn btn-secondary" disabled={submittingFeedback}>
@@ -330,6 +347,50 @@ export function TeachingTaskPanel({
         </div>
       ) : null}
     </section>
+  );
+}
+
+function HandoutStructuredPreview({ latex, version }: { latex: string; version: HandoutVersion }) {
+  const blocks = parseHandoutLatex(latex);
+  const title = version === "teacher" ? "教师版讲义审查视图" : "学生版讲义审查视图";
+
+  return (
+    <div className="handout-review-card">
+      <div className="handout-review-head">
+        <div>
+          <span>{title}</span>
+          <strong>未打开 PDF 时，先按结构预览内容与公式</strong>
+        </div>
+        <em>{version === "teacher" ? "教师版" : "学生版"}</em>
+      </div>
+      <div className="handout-review-body">
+        {blocks.map((block, index) => {
+          if (block.type === "section") {
+            return <h4 className="handout-review-section" key={`section-${index}`}>{block.title}</h4>;
+          }
+          if (block.type === "subsection") {
+            return <h5 className="handout-review-subsection" key={`subsection-${index}`}>{block.title}</h5>;
+          }
+          if (block.type === "paragraph") {
+            return <div className="handout-review-paragraph" key={`paragraph-${index}`}>{block.title}</div>;
+          }
+          if (block.type === "list") {
+            const ListTag = block.ordered ? "ol" : "ul";
+            return (
+              <ListTag className={block.ordered ? "handout-review-list ordered" : "handout-review-list"} key={`list-${index}`}>
+                {block.items.map((item, itemIndex) => (
+                  <li key={`item-${index}-${itemIndex}`}><MathRichText text={item} /></li>
+                ))}
+              </ListTag>
+            );
+          }
+          if (block.type === "space") {
+            return <div className="handout-review-space" key={`space-${index}`} />;
+          }
+          return <p className="handout-review-text" key={`text-${index}`}><MathRichText text={block.text} /></p>;
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -366,7 +427,7 @@ function HistoryPanel({
                 <strong>{item.learningGoal || item.questionText || "未命名讲义"}</strong>
                 <span>{statusLabel(item.status)} · {shortText(item.taskId, 22)}</span>
                 <span className={hasHandout ? "teaching-history-action" : "teaching-history-action muted"}>
-                  {hasHandout ? "打开并预览 PDF，可下载/审查" : "暂无可预览讲义"}
+                  {hasHandout ? "打开并预览内容，可下载或复核" : "任务尚未产出可预览讲义"}
                 </span>
               </button>
             );
@@ -390,50 +451,188 @@ function StatusBadgeText({ text }: { text: string }) {
   return <div className="strategy-pill">{text}</div>;
 }
 
-function InlineMathText({ text }: { text: string }) {
+function MathRichText({ text }: { text: string }) {
   return (
     <>
-      {splitMathText(text).map((segment) => {
+      {splitMathText(decodeLatexText(text)).map((segment) => {
         if (!segment.math) {
           return <span key={segment.key}>{segment.text}</span>;
         }
         const html = katex.renderToString(normalizeLatexExpression(segment.text), {
-          displayMode: false,
+          displayMode: segment.display,
           throwOnError: false,
           strict: false,
           trust: false,
         });
-        return <span className="math-render inline" dangerouslySetInnerHTML={{ __html: html }} key={segment.key} />;
+        return <span className={segment.display ? "math-render display" : "math-render inline"} dangerouslySetInnerHTML={{ __html: html }} key={segment.key} />;
       })}
     </>
   );
 }
 
+function parseHandoutLatex(latex: string): ReviewBlock[] {
+  const blocks: ReviewBlock[] = [];
+  const lines = latex.replace(/\r/g, "").split("\n");
+  let listMode: { ordered: boolean; items: string[] } | null = null;
+
+  const flushList = () => {
+    if (listMode && listMode.items.length) {
+      blocks.push({ type: "list", ordered: listMode.ordered, items: [...listMode.items] });
+    }
+    listMode = null;
+  };
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line || line === "%") {
+      flushList();
+      continue;
+    }
+    if (line.startsWith("%")) {
+      continue;
+    }
+    if (line.startsWith("\\begin{itemize}")) {
+      flushList();
+      listMode = { ordered: false, items: [] };
+      continue;
+    }
+    if (line.startsWith("\\begin{enumerate}")) {
+      flushList();
+      listMode = { ordered: true, items: [] };
+      continue;
+    }
+    if (line.startsWith("\\end{itemize}") || line.startsWith("\\end{enumerate}")) {
+      flushList();
+      continue;
+    }
+    if (line.startsWith("\\item")) {
+      if (!listMode) {
+        listMode = { ordered: false, items: [] };
+      }
+      listMode.items.push(cleanPreviewText(line.replace(/^\\item\s*/, "")));
+      continue;
+    }
+    flushList();
+
+    const section = line.match(/^\\section\{(.+)\}$/);
+    if (section) {
+      blocks.push({ type: "section", title: cleanPreviewText(section[1]) });
+      continue;
+    }
+    const subsection = line.match(/^\\subsection\*?\{(.+)\}$/);
+    if (subsection) {
+      blocks.push({ type: "subsection", title: cleanPreviewText(subsection[1]) });
+      continue;
+    }
+    const paragraph = line.match(/^\\paragraph\{(.+?)\}(.*)$/);
+    if (paragraph) {
+      blocks.push({ type: "paragraph", title: cleanPreviewText(paragraph[1]) });
+      const inlineText = cleanPreviewText(paragraph[2] ?? "");
+      if (inlineText) {
+        pushRichTextBlocks(blocks, inlineText);
+      }
+      continue;
+    }
+    if (line.startsWith("\\vspace")) {
+      blocks.push({ type: "space" });
+      continue;
+    }
+    pushRichTextBlocks(blocks, cleanPreviewText(line));
+  }
+
+  flushList();
+  return blocks;
+}
+
+function pushRichTextBlocks(blocks: ReviewBlock[], text: string) {
+  const cleaned = cleanPreviewText(text);
+  if (!cleaned) {
+    return;
+  }
+  const labelPattern = /【([^】]{2,16})】/g;
+  const matches = [...cleaned.matchAll(labelPattern)];
+  if (!matches.length) {
+    blocks.push({ type: "text", text: cleaned });
+    return;
+  }
+  let cursor = 0;
+  for (let index = 0; index < matches.length; index += 1) {
+    const match = matches[index];
+    const labelStart = match.index ?? 0;
+    if (labelStart > cursor) {
+      const before = cleaned.slice(cursor, labelStart).trim();
+      if (before) {
+        blocks.push({ type: "text", text: before });
+      }
+    }
+    const nextStart = matches[index + 1]?.index ?? cleaned.length;
+    const labelEnd = labelStart + match[0].length;
+    blocks.push({ type: "paragraph", title: match[1] });
+    const body = cleaned.slice(labelEnd, nextStart).trim();
+    if (body) {
+      blocks.push({ type: "text", text: body });
+    }
+    cursor = nextStart;
+  }
+  const tail = cleaned.slice(cursor).trim();
+  if (tail) {
+    blocks.push({ type: "text", text: tail });
+  }
+}
+
 function splitMathText(text: string) {
-  const segments: Array<{ key: string; text: string; math: boolean }> = [];
+  const segments: Array<{ key: string; text: string; math: boolean; display: boolean }> = [];
   let index = 0;
   let key = 0;
   while (index < text.length) {
-    const start = text.indexOf("$", index);
-    if (start < 0) {
-      segments.push({ key: `text-${key++}`, text: text.slice(index), math: false });
+    const displayStart = text.indexOf("$$", index);
+    const inlineStart = text.indexOf("$", index);
+    const nextStart = displayStart >= 0 && (inlineStart < 0 || displayStart <= inlineStart) ? displayStart : inlineStart;
+    if (nextStart < 0) {
+      segments.push({ key: `text-${key++}`, text: text.slice(index), math: false, display: false });
       break;
     }
-    if (start > index) {
-      segments.push({ key: `text-${key++}`, text: text.slice(index, start), math: false });
+    if (nextStart > index) {
+      segments.push({ key: `text-${key++}`, text: text.slice(index, nextStart), math: false, display: false });
     }
-    const end = text.indexOf("$", start + 1);
+    const display = text.startsWith("$$", nextStart);
+    const delimiter = display ? "$$" : "$";
+    const start = nextStart + delimiter.length;
+    const end = text.indexOf(delimiter, start);
     if (end < 0) {
-      segments.push({ key: `text-${key++}`, text: text.slice(start), math: false });
+      segments.push({ key: `text-${key++}`, text: text.slice(nextStart), math: false, display: false });
       break;
     }
-    const expression = text.slice(start + 1, end).trim();
+    const expression = text.slice(start, end).trim();
     if (expression) {
-      segments.push({ key: `math-${key++}`, text: expression, math: true });
+      segments.push({ key: `math-${key++}`, text: expression, math: true, display });
     }
-    index = end + 1;
+    index = end + delimiter.length;
   }
-  return segments.length ? segments : [{ key: "text-0", text, math: false }];
+  return segments.length ? segments : [{ key: "text-0", text, math: false, display: false }];
+}
+
+function decodeLatexText(value: string) {
+  return value
+    .replace(/\\textbackslash\{\}/g, "\\")
+    .replace(/\\_/g, "_")
+    .replace(/\\%/g, "%")
+    .replace(/\\#/g, "#")
+    .replace(/\\&/g, "&")
+    .replace(/\\\{/g, "{")
+    .replace(/\\\}/g, "}")
+    .replace(/\\\\/g, "\\");
+}
+
+function cleanPreviewText(value: string) {
+  return decodeLatexText(value)
+    .replace(/\\subsection\*?\{.+?\}/g, " ")
+    .replace(/\\section\{.+?\}/g, " ")
+    .replace(/\\paragraph\{.+?\}/g, " ")
+    .replace(/\\vspace\{.+?\}/g, " ")
+    .replace(/\\\\/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function normalizeLatexExpression(value: string) {
@@ -449,6 +648,18 @@ function statusLabel(status: string) {
     CREATED: "已创建",
   };
   return labels[status] ?? status;
+}
+
+function nodeStatusLabel(status?: string) {
+  const normalized = (status ?? "").toUpperCase();
+  const labels: Record<string, string> = {
+    COMPLETED: "完成",
+    RUNNING: "进行中",
+    PENDING: "等待",
+    SKIPPED: "跳过",
+    FAILED: "失败",
+  };
+  return labels[normalized] ?? (status || "完成");
 }
 
 function providerLabel(provider: string) {
