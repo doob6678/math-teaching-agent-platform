@@ -10,11 +10,9 @@ import com.doob.mathagent.teaching.TeachingEvidence;
 import com.doob.mathagent.teaching.dto.TeachingTaskRequest;
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
 import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.regex.Pattern;
 import org.springframework.stereotype.Service;
 
@@ -440,7 +438,7 @@ public class TeachingAiDraftService {
         if (parts.length < 2 || parts[1].isBlank()) {
             return "";
         }
-        return formatQuestionBankAnswer(parts[1].strip());
+        return QuestionBankAnswerFormatter.format(parts[1].strip());
     }
 
     private static String[] splitAnswerMarker(String snippet) {
@@ -454,46 +452,6 @@ public class TeachingAiDraftService {
             return asciiParts;
         }
         return new String[] {normalized};
-    }
-
-    private static String formatQuestionBankAnswer(String answer) {
-        if (answer.startsWith("{") && answer.endsWith("}")) {
-            try {
-                Map<String, Object> parsed = OBJECT_MAPPER.readValue(answer, new TypeReference<>() {
-                });
-                String answerText = valueText(parsed.get("answer"));
-                String scoringText = valueText(parsed.get("scoring"));
-                if (!answerText.isBlank() || !scoringText.isBlank()) {
-                    List<String> parts = new ArrayList<>();
-                    if (!answerText.isBlank()) {
-                        parts.add("答案：" + answerText);
-                    }
-                    if (!scoringText.isBlank()) {
-                        parts.add("评分点：" + scoringText);
-                    }
-                    return String.join("；", parts);
-                }
-            } catch (JsonProcessingException ignored) {
-                // Fall through to tolerant text cleanup for partially malformed question-bank metadata.
-            }
-        }
-        return answer
-                .replace("\"answer\"", "答案")
-                .replace("\"scoring\"", "评分点")
-                .replace("\"", "")
-                .replace("{", "")
-                .replace("}", "")
-                .replace(":", "：")
-                .replace(",", "；")
-                .replaceAll("\\s+", " ")
-                .strip();
-    }
-
-    private static String valueText(Object value) {
-        if (value == null) {
-            return "";
-        }
-        return String.valueOf(value).replaceAll("\\s+", " ").strip();
     }
 
     /**

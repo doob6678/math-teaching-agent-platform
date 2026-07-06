@@ -462,7 +462,10 @@ public class TeachingWorkflowService {
         String title = question.questionTitle() + " / 难度：" + difficulty;
         String snippet = question.questionText();
         if (question.answerJson() != null && !question.answerJson().isBlank() && !"{}".equals(question.answerJson().strip())) {
-            snippet = snippet + "\n答案要点：" + question.answerJson();
+            String formattedAnswer = QuestionBankAnswerFormatter.format(question.answerJson());
+            if (!formattedAnswer.isBlank()) {
+                snippet = snippet + "\n答案要点：" + formattedAnswer;
+            }
         }
         return new TeachingEvidence(
                 "QUESTION_BANK",
@@ -899,18 +902,7 @@ public class TeachingWorkflowService {
         if (parts.length < 2) {
             return "";
         }
-        String answer = parts[1].replaceAll("\\s+", " ").strip();
-        if (answer.startsWith("{") && answer.endsWith("}")) {
-            answer = answer
-                    .replace("\"answer\"", "答案")
-                    .replace("\"scoring\"", "评分点")
-                    .replace("\"", "")
-                    .replace("{", "")
-                    .replace("}", "")
-                    .replace(":", "：")
-                    .replace(",", "；")
-                    .strip();
-        }
+        String answer = QuestionBankAnswerFormatter.format(parts[1]);
         return "答案要点：" + answer;
     }
 

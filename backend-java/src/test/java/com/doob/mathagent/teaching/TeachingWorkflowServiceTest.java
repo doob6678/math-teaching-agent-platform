@@ -189,7 +189,10 @@ class TeachingWorkflowServiceTest {
                 new QuestionBankItemCreateRequest(
                         "双曲线定义与参数关系基础题",
                         "已知双曲线焦距为 $10$，且 $2a=6$，求 $a,c,b^2$。",
-                        "{\"answer\":\"a=3,c=5,b^2=16\",\"scoring\":\"写出参数关系得分\"}",
+                        "{\"answer\":\"a=3,c=5,b^2=16\","
+                                + "\"steps\":[\"由 2a=6 得 a=3\",\"由焦距 10 得 c=5\"],"
+                                + "\"scoring\":{\"formula\":\"写出参数关系得分\"},"
+                                + "\"extraNote\":\"注意 b^2 不是 b\"}",
                         "A 基础",
                         "tenant",
                         List.of()));
@@ -214,12 +217,15 @@ class TeachingWorkflowServiceTest {
         assertThat(response.evidence())
                 .anySatisfy(item -> assertThat(item.sourceScope()).isEqualTo("QUESTION_BANK"));
         assertThat(response.teacherHandoutLatex())
-                .contains("A ", "双曲线定义与参数关系基础题", "$c=5$", "$b^2=16$", "课前定位", "易错提醒")
-                .doesNotContain("\"answer\"", "\"scoring\"", "双曲线定义与参数关系基础题 / 难度：A 基础", "教师版保留完整答案");
+                .contains("A ", "双曲线定义与参数关系基础题", "$c=5$", "$b^2=16$",
+                        "步骤：1. 由 $2a=6$ 得 $a=3$", "评分点：补充1：写出参数关系得分",
+                        "补充1：注意 $b^2$ 不是 b", "课前定位", "易错提醒")
+                .doesNotContain("\"answer\"", "\"steps\"", "\"scoring\"", "\"extraNote\"",
+                        "双曲线定义与参数关系基础题 / 难度：A 基础", "教师版保留完整答案");
         assertThat(response.studentHandoutLatex())
                 .contains("\\section{", "A ", "\\vspace{5em}");
         assertThat(response.studentHandoutLatex())
-                .doesNotContain("答案要点", "answer", "c=5", "scoring", "评分", "得分");
+                .doesNotContain("答案要点", "answer", "steps", "extraNote", "c=5", "scoring", "评分", "得分");
     }
 
     @Test

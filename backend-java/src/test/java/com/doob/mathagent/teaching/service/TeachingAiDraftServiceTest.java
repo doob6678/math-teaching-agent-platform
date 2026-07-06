@@ -147,14 +147,19 @@ class TeachingAiDraftServiceTest {
                 "question-1",
                 0,
                 "已知双曲线焦距为 $10$，且 $2a=6$，求 $a,c,b^2$。\n"
-                        + "答案要点：{\"answer\":\"a=3,c=5,b^2=16\",\"scoring\":\"写出参数关系得分\"}");
+                        + "答案要点：{\"answer\":\"a=3,c=5,b^2=16\","
+                        + "\"steps\":[\"由 2a=6 得 a=3\",\"由焦距 10 得 c=5\"],"
+                        + "\"scoring\":{\"formula\":\"写出参数关系得分\"},"
+                        + "\"extraNote\":\"注意 b^2 不是 b\"}");
 
         service.draft(request(), List.of(questionBankEvidence), memory());
 
         assertThat(gateway.requests()).hasSize(1);
         assertThat(gateway.requests().getFirst().userInputSummary())
-                .contains("QUESTION_BANK", "A 基础", "答案要点", "c=5", "b^2=16")
-                .doesNotContain("\"answer\"", "\"scoring\"");
+                .contains("QUESTION_BANK", "A 基础", "答案要点", "答案：$a=3$，$c=5$，$b^2=16$",
+                        "步骤：1. 由 $2a=6$ 得 $a=3$", "评分点：补充1：写出参数关系得分",
+                        "补充1：注意 $b^2$ 不是 b")
+                .doesNotContain("\"answer\"", "\"steps\"", "\"scoring\"", "\"extraNote\"");
     }
 
     @Test
