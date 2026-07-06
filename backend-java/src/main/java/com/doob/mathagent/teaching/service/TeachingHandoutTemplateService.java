@@ -132,7 +132,7 @@ public class TeachingHandoutTemplateService {
                         List.of("提高", "压轴"),
                         List.of("空间向量", "立体几何", "本机参考"),
                         "参考讲义数学空间向量.pdf",
-                        "文档/项目测试数据位置/参考讲义数学空间向量.pdf",
+                        null,
                         "本机项目测试资料中的空间向量专题讲义。"),
                 """
                 参考本机真实空间向量专题讲义风格。
@@ -233,7 +233,7 @@ public class TeachingHandoutTemplateService {
                         safeList(item.difficultyBands(), List.of("基础", "提高")),
                         safeList(item.tags(), List.of("动态配置")),
                         emptyToNull(item.referenceTitle()),
-                        emptyToNull(item.referencePath()),
+                        null,
                         emptyToNull(item.referencePreview())),
                 item.promptInstructions().strip(),
                 item.studentLectureStyle()));

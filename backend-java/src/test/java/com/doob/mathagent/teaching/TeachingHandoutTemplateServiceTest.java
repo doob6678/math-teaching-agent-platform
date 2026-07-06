@@ -36,6 +36,7 @@ class TeachingHandoutTemplateServiceTest {
                       "difficultyBands": ["基础", "提高"],
                       "tags": ["测试", "配置"],
                       "referenceTitle": "测试引用",
+                      "referencePath": "C:/Users/doob/Desktop/private/teacher-template.pdf",
                       "referencePreview": "测试摘要",
                       "promptInstructions": "生成正式讲义，教师版给答案，学生版留白。"
                     }
@@ -52,9 +53,11 @@ class TeachingHandoutTemplateServiceTest {
                     assertThat(template.sourceType()).isEqualTo("skill_config");
                     assertThat(template.displayName()).isEqualTo("单元测试 Skill");
                     assertThat(template.tags()).contains("测试", "配置");
+                    assertThat(template.referencePath()).isNull();
                 });
         TeachingHandoutTemplateProfile resolved = service.resolve("unit_test_skill_v1");
         assertThat(resolved.summary().displayName()).isEqualTo("单元测试 Skill");
+        assertThat(resolved.summary().referencePath()).isNull();
         assertThat(resolved.promptInstructions()).contains("教师版给答案", "学生版留白");
     }
 
@@ -67,6 +70,15 @@ class TeachingHandoutTemplateServiceTest {
         TeachingHandoutTemplateService service = new TeachingHandoutTemplateService();
 
         assertThat(service.resolve("missing").summary().templateCode()).isEqualTo("default_standard");
+    }
+
+    @Test
+    void doesNotExposeReferencePathsInTemplateShelfMetadata() {
+        TeachingHandoutTemplateService service = new TeachingHandoutTemplateService();
+
+        assertThat(service.list())
+                .isNotEmpty()
+                .allSatisfy(template -> assertThat(template.referencePath()).isNull());
     }
 
     @Test
