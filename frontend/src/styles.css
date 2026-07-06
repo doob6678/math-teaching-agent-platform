@@ -2995,6 +2995,32 @@ h1, h2, h3, h4, h5, h6 {
   background: var(--white);
 }
 
+.handout-operation-status {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 12px 14px;
+  border: 1px solid rgba(37, 99, 235, 0.18);
+  border-radius: 8px;
+  background: linear-gradient(180deg, #eff6ff, #ffffff);
+  color: var(--navy);
+}
+
+.handout-operation-status strong {
+  display: block;
+  margin-bottom: 3px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.handout-operation-status span {
+  display: block;
+  color: var(--slate);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 .teaching-summary-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -3798,11 +3824,11 @@ h1, h2, h3, h4, h5, h6 {
 
 .handout-review-body {
   display: grid;
-  gap: 16px;
-  width: min(100% - 28px, 820px);
-  min-height: 760px;
-  margin: 28px auto 34px;
-  padding: clamp(28px, 5vw, 52px);
+  gap: 20px;
+  width: min(100% - 34px, 860px);
+  min-height: 820px;
+  margin: 32px auto 38px;
+  padding: clamp(34px, 5vw, 58px);
   border: 1px solid rgba(15, 23, 42, 0.08);
   border-radius: 4px;
   background:
@@ -3812,28 +3838,29 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .handout-review-section {
-  margin: 12px 0 2px;
-  padding: 0 0 9px;
-  border-bottom: 1px solid rgba(15, 23, 42, 0.14);
+  margin: 18px 0 4px;
+  padding: 0 0 11px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.16);
   color: var(--navy);
-  font-size: 21px;
+  font-size: 22px;
   line-height: 1.35;
 }
 
 .handout-review-subsection {
-  margin: 8px 0 0;
-  padding-left: 9px;
-  border-left: 3px solid rgba(15, 118, 110, 0.42);
+  margin: 12px 0 0;
+  padding: 8px 0 8px 12px;
+  border-left: 3px solid rgba(15, 118, 110, 0.44);
+  background: linear-gradient(90deg, rgba(240, 253, 250, 0.72), rgba(255, 255, 255, 0));
   color: var(--navy-mid);
-  font-size: 15px;
+  font-size: 15.5px;
   line-height: 1.4;
 }
 
 .handout-review-paragraph {
   width: fit-content;
   max-width: 100%;
-  margin-top: 4px;
-  padding: 5px 0 3px;
+  margin-top: 8px;
+  padding: 6px 0 4px;
   border-bottom: 2px solid rgba(15, 118, 110, 0.2);
   color: #0f766e;
   font-size: 13px;
@@ -3845,33 +3872,33 @@ h1, h2, h3, h4, h5, h6 {
   margin: 0;
   color: var(--navy);
   font-size: 14px;
-  line-height: 1.95;
+  line-height: 2.05;
   overflow-wrap: anywhere;
 }
 
 .handout-review-list {
   display: grid;
-  gap: 9px;
+  gap: 11px;
   margin: 0;
-  padding: 0;
-  list-style-position: inside;
+  padding: 0 0 0 1.25em;
+  list-style-position: outside;
   color: var(--navy);
   font-size: 14px;
-  line-height: 1.72;
+  line-height: 1.82;
 }
 
 .handout-review-list.ordered {
-  padding-left: 0;
+  padding-left: 1.5em;
 }
 
 .handout-review-list li {
-  padding: 7px 0 9px 2px;
+  padding: 8px 8px 10px 4px;
   border-bottom: 1px solid rgba(148, 163, 184, 0.14);
   background: transparent;
 }
 
 .handout-review-space {
-  min-height: 112px;
+  min-height: 150px;
   border-radius: 6px;
   border: 1px dashed rgba(148, 163, 184, 0.5);
   background:
@@ -3881,8 +3908,8 @@ h1, h2, h3, h4, h5, h6 {
 
 .math-render.display {
   display: block;
-  margin: 12px 0;
-  padding: 12px 14px;
+  margin: 16px 0;
+  padding: 14px 16px;
   border: 1px solid rgba(37, 99, 235, 0.13);
   border-radius: 6px;
   background: #f8fafc;

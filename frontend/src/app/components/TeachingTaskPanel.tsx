@@ -215,6 +215,16 @@ export function TeachingTaskPanel({
               </button>
             </div>
 
+            {action ? (
+              <div className="handout-operation-status" role="status" aria-live="polite">
+                <Loader2 className="spin" size={16} />
+                <div>
+                  <strong>{handoutActionTitle(action)}</strong>
+                  <span>{handoutActionDescription(action, version)}</span>
+                </div>
+              </div>
+            ) : null}
+
             {exportMessage ? <StatusLine icon={<ShieldCheck size={16} />} text={exportMessage} /> : null}
 
             {selectedDraft ? <HandoutReviewChecks latex={selectedDraft} version={version} /> : null}
@@ -1221,6 +1231,29 @@ function pdfRendererLabel(renderer: string) {
     pdfbox_fallback: "后备排版",
   };
   return labels[renderer] ?? (renderer || "渲染方式未知");
+}
+
+function handoutActionTitle(action: string) {
+  const labels: Record<string, string> = {
+    "preview-pdf": "正在生成真实 PDF 预览",
+    preview: "正在打开 TeX 审查视图",
+    pdf: "正在导出 PDF",
+    latex: "正在导出 TeX",
+    zip: "正在打包 ZIP",
+  };
+  return labels[action] ?? "正在处理讲义";
+}
+
+function handoutActionDescription(action: string, version: HandoutVersion) {
+  const versionLabel = version === "teacher" ? "教师版" : "学生版";
+  const labels: Record<string, string> = {
+    "preview-pdf": `${versionLabel}会经过后端权限校验和 XeLaTeX/PDF 渲染，完成后直接显示页面预览。`,
+    preview: `${versionLabel}源码仅用于人工复核，页面会先渲染结构和公式。`,
+    pdf: `${versionLabel}PDF 生成后会自动下载。`,
+    latex: `${versionLabel}TeX 源文件生成后会自动下载。`,
+    zip: "会按填写的文件夹路径组织压缩包，并显示临时文件有效期。",
+  };
+  return labels[action] ?? "请等待当前操作完成。";
 }
 
 function decisionLabel(decision: string) {
