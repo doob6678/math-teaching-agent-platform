@@ -1917,6 +1917,57 @@ h1, h2, h3, h4, h5, h6 {
   box-shadow: var(--shadow-sm);
 }
 
+.template-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  align-items: center;
+}
+
+.template-filter-row button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 999px;
+  padding: 5px 9px;
+  background: var(--white);
+  color: var(--navy-mid);
+  font-size: 12px;
+  font-weight: 680;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.template-filter-row button:hover {
+  border-color: var(--blue-border);
+  box-shadow: var(--shadow-sm);
+}
+
+.template-filter-row button.active {
+  border-color: rgba(37, 99, 235, 0.32);
+  background: #eff6ff;
+  color: var(--blue);
+}
+
+.template-filter-row em {
+  min-width: 18px;
+  border-radius: 999px;
+  padding: 2px 5px;
+  background: rgba(15, 23, 42, 0.07);
+  color: var(--slate);
+  font-size: 10px;
+  font-style: normal;
+  line-height: 1;
+  text-align: center;
+}
+
+.template-filter-row button.active em {
+  background: rgba(37, 99, 235, 0.12);
+  color: var(--blue);
+}
+
 .template-shelf-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));

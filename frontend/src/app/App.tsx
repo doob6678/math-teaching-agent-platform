@@ -2005,7 +2005,9 @@ function base64ToBytes(base64: string) {
   return bytes;
 }
 
-function TemplateShelf({
+type TemplateShelfFilter = "all" | "local" | "skill" | "teacher" | "student" | "exam";
+
+export function TemplateShelf({
   templates,
   selectedCode,
   loading,
@@ -2017,6 +2019,7 @@ function TemplateShelf({
   onSelect: (templateCode: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [filter, setFilter] = useState<TemplateShelfFilter>("all");
   if (loading) {
     return (
       <div className="template-shelf">
@@ -2042,20 +2045,39 @@ function TemplateShelf({
     );
   }
   const selectedTemplate = templates.find((template) => template.templateCode === selectedCode) ?? templates[0];
-  const recommendedTemplates = templates
+  const filterOptions = templateShelfFilters(templates);
+  const filteredTemplates = templates.filter((template) => templateMatchesShelfFilter(template, filter));
+  const shelfTemplates = filteredTemplates.length ? filteredTemplates : templates;
+  const recommendedTemplates = shelfTemplates
     .filter((template) => template.templateCode !== selectedTemplate.templateCode)
     .slice(0, 5);
-  const visibleTemplates = expanded ? templates : [selectedTemplate, ...recommendedTemplates];
+  const visibleTemplates = expanded ? shelfTemplates : uniqueTemplates([selectedTemplate, ...recommendedTemplates]);
   return (
     <div className="template-shelf">
       <div className="template-shelf-head">
         <div>
-          <span>讲义模板</span>
-          <small>当前：{selectedTemplate.displayName}</small>
+          <span>讲义模板书架</span>
+          <small>当前：{selectedTemplate.displayName} · 显示 {shelfTemplates.length}/{templates.length}</small>
         </div>
         <button type="button" className="template-shelf-toggle" onClick={() => setExpanded((value) => !value)}>
           {expanded ? "收起书架" : `展开全部 ${templates.length} 个模板`}
         </button>
+      </div>
+      <div className="template-filter-row" aria-label="模板筛选">
+        {filterOptions.map((option) => (
+          <button
+            type="button"
+            className={filter === option.value ? "active" : ""}
+            key={option.value}
+            onClick={() => {
+              setFilter(option.value);
+              setExpanded(option.value !== "all");
+            }}
+          >
+            <span>{option.label}</span>
+            <em>{option.count}</em>
+          </button>
+        ))}
       </div>
       <div className={expanded ? "template-shelf-grid expanded" : "template-shelf-grid compact"}>
         {visibleTemplates.map((template) => {
@@ -2113,6 +2135,53 @@ function TemplateShelf({
       </div>
     </div>
   );
+}
+
+function uniqueTemplates(templates: TeachingHandoutTemplateResponse[]) {
+  const seen = new Set<string>();
+  return templates.filter((template) => {
+    if (seen.has(template.templateCode)) {
+      return false;
+    }
+    seen.add(template.templateCode);
+    return true;
+  });
+}
+
+function templateShelfFilters(templates: TeachingHandoutTemplateResponse[]): Array<{ value: TemplateShelfFilter; label: string; count: number }> {
+  const options: Array<{ value: TemplateShelfFilter; label: string; count: number }> = [
+    { value: "all", label: "全部", count: templates.length },
+    { value: "local", label: "本机参考", count: templates.filter((template) => templateMatchesShelfFilter(template, "local")).length },
+    { value: "skill", label: "动态 Skill", count: templates.filter((template) => templateMatchesShelfFilter(template, "skill")).length },
+    { value: "teacher", label: "教师版", count: templates.filter((template) => templateMatchesShelfFilter(template, "teacher")).length },
+    { value: "student", label: "学生版", count: templates.filter((template) => templateMatchesShelfFilter(template, "student")).length },
+    { value: "exam", label: "高考压轴", count: templates.filter((template) => templateMatchesShelfFilter(template, "exam")).length },
+  ];
+  return options.filter((option) => option.value === "all" || option.count > 0);
+}
+
+function templateMatchesShelfFilter(template: TeachingHandoutTemplateResponse, filter: TemplateShelfFilter) {
+  const sourceType = (template.sourceType ?? "").toLowerCase();
+  const audience = (template.audience ?? "").toLowerCase();
+  const tags = (template.tags ?? []).join(" ");
+  const difficulty = (template.difficultyBands ?? []).join(" ");
+  const searchable = `${template.displayName} ${template.description} ${template.category ?? ""} ${template.visualStyle ?? ""} ${tags} ${difficulty}`.toLowerCase();
+  if (filter === "all") {
+    return true;
+  }
+  if (filter === "local") {
+    return sourceType === "local_reference" || sourceType === "pdf" || sourceType === "latex";
+  }
+  if (filter === "skill") {
+    return sourceType === "skill_config";
+  }
+  if (filter === "teacher") {
+    return audience === "teacher" || audience === "mixed" || searchable.includes("教师");
+  }
+  if (filter === "student") {
+    return audience === "student" || audience === "mixed" || searchable.includes("学生");
+  }
+  return searchable.includes("高考") || searchable.includes("压轴") || searchable.includes("竞赛");
 }
 
 function audienceLabel(audience?: string | null) {
