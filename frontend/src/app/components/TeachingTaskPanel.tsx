@@ -33,6 +33,12 @@ type ReviewCheck = {
   state: "good" | "warning";
 };
 
+type WorkflowConversationGroup = {
+  title: string;
+  summary: string;
+  nodes: TeachingTaskResponse["nodes"];
+};
+
 export function TeachingTaskPanel({
   task,
   loading,
@@ -519,13 +525,15 @@ function GenerationReviewPanel({ task }: { task: TeachingTaskResponse }) {
   const templateName = task.selectedTemplate?.displayName ?? "标准讲义";
   const evidenceCount = task.evidence.length;
   const knowledgePoints = aiDraft?.knowledgePoints ?? [];
+  const workflowGroups = buildWorkflowConversationGroups(task.nodes);
 
   return (
     <section className="generation-review-panel">
       <div className="generation-review-head">
         <div>
-          <p className="eyebrow">审查记录</p>
+          <p className="eyebrow">过程对话</p>
           <h3>{structured ? "讲义内容已整理成可审查结构" : "讲义需要人工复核后再使用"}</h3>
+          <small>把检索、生成、排版和人工审校折叠成可追踪步骤。</small>
         </div>
         <span className={structured ? "review-state good" : "review-state warning"}>{structured ? "可进入审校" : "待修订"}</span>
       </div>
@@ -539,19 +547,33 @@ function GenerationReviewPanel({ task }: { task: TeachingTaskResponse }) {
           </div>
         </article>
 
-        {task.nodes.map((node, index) => (
-          <article className="review-message tool" key={node.code}>
-            <span className="review-avatar">{index + 2}</span>
-            <div>
-              <strong>{node.name}<em>{nodeStatusLabel(node.status)}</em></strong>
-              <p>{cleanReviewSummary(node.summary)}</p>
+        {workflowGroups.map((group, groupIndex) => (
+          <details className="review-process-group" open={groupIndex < 2} key={group.title}>
+            <summary>
+              <span className="review-avatar">{groupIndex + 2}</span>
+              <div>
+                <strong>{group.title}</strong>
+                <p>{group.summary}</p>
+              </div>
+              <em>{group.nodes.length} 个步骤</em>
+            </summary>
+            <div className="review-process-steps">
+              {group.nodes.map((node) => (
+                <article className="review-message tool compact" key={node.code}>
+                  <span className="review-step-dot" />
+                  <div>
+                    <strong>{node.name}<em>{nodeStatusLabel(node.status)}</em></strong>
+                    <p>{cleanReviewSummary(node.summary)}</p>
+                  </div>
+                </article>
+              ))}
             </div>
-          </article>
+          </details>
         ))}
 
         {aiDraft ? (
           <article className={structured ? "review-message assistant" : "review-message warning"}>
-            <span className="review-avatar">{task.nodes.length + 2}</span>
+            <span className="review-avatar">{workflowGroups.length + 2}</span>
             <div>
               <strong>{structured ? "生成讲义草稿" : "需要复核的问题"}</strong>
               {structured ? (
@@ -612,6 +634,30 @@ function GenerationReviewPanel({ task }: { task: TeachingTaskResponse }) {
       </details>
     </section>
   );
+}
+
+function buildWorkflowConversationGroups(nodes: TeachingTaskResponse["nodes"]): WorkflowConversationGroup[] {
+  const groups: WorkflowConversationGroup[] = [
+    { title: "理解任务", summary: "识别学习目标、复用历史记忆，并确定本次讲义边界。", nodes: [] },
+    { title: "工具调用与检索", summary: "调用教材、题库或教师资源检索，收集可追溯证据。", nodes: [] },
+    { title: "内容生成与排版", summary: "整理讲解路径，生成教师版和学生版，并完成 LaTeX 排版。", nodes: [] },
+    { title: "审查与交付", summary: "等待人工反馈，保留后续追问和导出入口。", nodes: [] },
+  ];
+
+  for (const node of nodes) {
+    const code = node.code.toUpperCase();
+    if (code.includes("RETRIEVAL") || code.includes("RESOURCE")) {
+      groups[1].nodes.push(node);
+    } else if (code.includes("DRAFT") || code.includes("HANDOUT") || code.includes("SOLVE") || code.includes("TEMPLATE")) {
+      groups[2].nodes.push(node);
+    } else if (code.includes("FEEDBACK") || code.includes("FOLLOW_UP") || code.includes("EXPORT")) {
+      groups[3].nodes.push(node);
+    } else {
+      groups[0].nodes.push(node);
+    }
+  }
+
+  return groups.filter((group) => group.nodes.length);
 }
 
 function MathRichText({ text }: { text: string }) {

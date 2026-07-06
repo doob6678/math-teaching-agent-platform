@@ -3034,6 +3034,14 @@ h1, h2, h3, h4, h5, h6 {
   font-size: 15px;
 }
 
+.generation-review-head small {
+  display: block;
+  margin-top: 5px;
+  color: var(--slate);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .review-state {
   display: inline-flex;
   align-items: center;
@@ -3083,6 +3091,12 @@ h1, h2, h3, h4, h5, h6 {
   background: var(--gray-subtle);
 }
 
+.review-message.tool.compact {
+  grid-template-columns: 18px minmax(0, 1fr);
+  padding: 9px 10px;
+  box-shadow: none;
+}
+
 .review-message.assistant {
   border-color: rgba(15, 118, 110, 0.18);
   background: linear-gradient(180deg, rgba(240, 253, 250, 0.86), rgba(255, 255, 255, 0.98));
@@ -3104,6 +3118,68 @@ h1, h2, h3, h4, h5, h6 {
   color: var(--white);
   font-size: 12px;
   font-weight: 760;
+}
+
+.review-step-dot {
+  width: 9px;
+  height: 9px;
+  margin: 7px auto 0;
+  border-radius: 999px;
+  border: 2px solid #0f766e;
+  background: #ffffff;
+}
+
+.review-process-group {
+  border: 1px solid var(--slate-lightest);
+  border-radius: 8px;
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.review-process-group > summary {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 11px 12px;
+  cursor: pointer;
+  list-style: none;
+  background: linear-gradient(180deg, #ffffff, #f8fafc);
+}
+
+.review-process-group > summary::-webkit-details-marker {
+  display: none;
+}
+
+.review-process-group > summary strong {
+  color: var(--navy);
+  font-size: 13px;
+}
+
+.review-process-group > summary p {
+  margin: 4px 0 0;
+  color: var(--slate);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.review-process-group > summary em {
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(37, 99, 235, 0.14);
+  background: #eff6ff;
+  color: var(--blue);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 720;
+  white-space: nowrap;
+}
+
+.review-process-steps {
+  display: grid;
+  gap: 8px;
+  padding: 0 12px 12px 52px;
+  background: #ffffff;
 }
 
 .review-message strong {
