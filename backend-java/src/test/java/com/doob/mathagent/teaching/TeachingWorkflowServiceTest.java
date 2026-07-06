@@ -183,7 +183,7 @@ class TeachingWorkflowServiceTest {
                 request -> new AiChatResult("openai", "gpt-5.4", 21, 13, 34, "ok", """
                         {
                           "teacherExplanation": "先读清 D(x_0) 的定义，再把 -1 代入。",
-                          "studentHint": "先找到定义里的自变量位置。",
+                          "studentHint": "【知识速记】先找到定义里的自变量位置。\\n【答案与评分点】答案：把 -1 代入即可得分。\\n【练习任务】独立完成 D(0)。",
                           "knowledgePoints": ["函数新定义", "定义域"],
                           "followUpQuestions": ["D(0) 如何处理？", "条件变化时如何分类？"]
                         }
@@ -215,6 +215,8 @@ class TeachingWorkflowServiceTest {
                 .containsExactly("MODEL_CALL_SUCCEEDED", "JSON_PARSE_SUCCEEDED");
         assertThat(response.teacherHandoutLatex()).contains("教师讲解稿与练习设计", "知识点与方法卡", "课堂追问与变式训练", "讲评备注");
         assertThat(response.studentHandoutLatex()).contains("课堂练习与作答区", "\\vspace{10em}");
+        assertThat(response.studentHandoutLatex()).contains("【知识速记】", "【练习任务】");
+        assertThat(response.studentHandoutLatex()).doesNotContain("【答案与评分点】", "答案：", "得分");
         assertThat(response.teacherHandoutLatex()).doesNotContain("tokens=", "\\paragraph{模型}");
         assertThat(response.nodes())
                 .filteredOn(node -> "AI_DRAFT".equals(node.code()))

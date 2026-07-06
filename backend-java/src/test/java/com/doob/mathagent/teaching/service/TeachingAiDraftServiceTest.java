@@ -61,7 +61,29 @@ class TeachingAiDraftServiceTest {
                         "JSON_PARSE_SUCCEEDED");
         assertThat(draft.recoveryEvents().get(1).retryable()).isTrue();
         assertThat(gateway.requests()).hasSize(2);
+        assertThat(gateway.requests().getFirst().userInputSummary())
+                .contains("【知识定位】", "【答案与评分点】", "【知识速记】", "never reveal final answers");
         assertThat(gateway.requests().get(1).userInputSummary()).contains("JSON schema");
+        assertThat(gateway.requests().get(1).userInputSummary())
+                .contains("【知识定位】", "【知识速记】", "no answer/scoring/solution leakage");
+    }
+
+    @Test
+    void removesTeacherOnlyAnswerSectionsFromStudentWorksheet() {
+        TeachingAiDraftService.ParsedDraft parsed = TeachingAiDraftService.parseStructuredDraft("""
+                {
+                  "teacherExplanation": "【知识定位】函数新定义\\n【题型识别】代入求值\\n【方法步骤】先读定义\\n【例题详解】把 $x_0=-1$ 代入。\\n【答案与评分点】答案为 $2$。\\n【易错提醒】不要代错。\\n【课堂追问】D(0) 呢？",
+                  "studentHint": "【知识速记】先找到定义里的自变量位置。\\n【例题详解】把 $x_0=-1$ 代入得到 $2$。\\n【答案与评分点】答案：$2$，写出代入过程得 2 分。\\n【练习任务】完成同类题，过程写在作答区。",
+                  "knowledgePoints": ["函数新定义", "代入求值"],
+                  "followUpQuestions": ["D(0) 如何处理？", "条件变化时如何分类？"]
+                }
+                """);
+
+        assertThat(parsed.structured()).isTrue();
+        assertThat(parsed.studentHint())
+                .contains("【知识速记】", "【练习任务】")
+                .doesNotContain("【例题详解】", "【答案与评分点】", "答案：", "评分点", "$2$");
+        assertThat(parsed.teacherExplanation()).contains("【答案与评分点】", "$2$");
     }
 
     @Test

@@ -13,6 +13,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Pattern;
 import org.springframework.stereotype.Service;
 
 /**
@@ -24,6 +25,10 @@ public class TeachingAiDraftService {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final TeachingHandoutTemplateProfile DEFAULT_TEMPLATE =
             new TeachingHandoutTemplateService().resolve("default_standard");
+    private static final Pattern STUDENT_FORBIDDEN_SECTION = Pattern.compile(
+            "【(?:答案与评分点|参考答案|评分标准|例题详解|完整解析|教师讲解|讲评主线|教师备注|板书设计)】[\\s\\S]*?(?=【|$)");
+    private static final Pattern STUDENT_FORBIDDEN_LINE = Pattern.compile(
+            "(?m)^.*(?:答案[：:]|参考答案|评分点|评分标准|完整解析|解答如下|因此答案为|故答案为).*$");
 
     private final AiChatGateway aiChatGateway;
     private final AiProviderCatalog providerCatalog;
@@ -281,8 +286,8 @@ public class TeachingAiDraftService {
                 Treat template layout instructions as rendering constraints only. Do not write header/footer/color/PDF layout rules in any JSON value.
                 JSON schema:
                 {
-                  "teacherExplanation": "Chinese teacher handout body with labeled parts: 【知识定位】【题型识别】【方法步骤】【例题详解】【答案与评分点】【易错提醒】【课堂追问】. It must be printable and complete, not chatty.",
-                  "studentHint": "Chinese student worksheet body with labeled parts: 【知识速记】【题型识别】【例题任务】【练习任务】【作答提醒】. Hint only; do not reveal full answers or scoring points.",
+                  "teacherExplanation": "Chinese teacher handout body. Required labels in this order: 【知识定位】【题型识别】【方法步骤】【例题详解】【答案与评分点】【易错提醒】【课堂追问】. Include source-grounded reasoning, answer path, scoring points, board-writing sequence, and preset questions. It must be printable and complete, not chatty.",
+                  "studentHint": "Chinese student worksheet body. Required labels in this order: 【知识速记】【题型识别】【例题任务】【练习任务】【作答提醒】. Leave blanks with ___ or 作答区; hint only; never reveal final answers, full worked solutions, scoring points, or teacher-only notes.",
                   "knowledgePoints": ["3-8 Chinese knowledge points or method cards, formula-first when useful"],
                   "followUpQuestions": ["3-8 Chinese exercises/questions, include easy/medium/hard progression when possible"]
                 }
@@ -290,6 +295,7 @@ public class TeachingAiDraftService {
                 Do not output raw page OCR fragments, raw source ids, model names, token usage, backend diagnostics, JSON/parse/debug words, or model-health wording.
                 Do not mention page header, page footer, colors, rendering engines, prompt rules, template rules, or "PDF layout requirements" as handout content.
                 Teacher content must include answers when enough information is available from the problem/evidence; student content must leave blanks instead of answers.
+                Teacher content is for human teacher review and printing. Student content is for classroom use and must not contain 【答案与评分点】, 【例题详解】, 参考答案, 评分标准, or complete solution paragraphs.
                 Respect printable handout layout, but do not describe layout rules such as header/footer or color requirements as user-facing content.
                 If the user only gives a topic rather than a problem, create a complete mini-handout around that topic.
                 Selected handout template: %s
@@ -325,11 +331,12 @@ public class TeachingAiDraftService {
 
                 Return exactly one valid JSON object with all fields present and non-empty:
                 {
-                  "teacherExplanation": "printable Chinese teacher handout body",
-                  "studentHint": "printable Chinese student worksheet hint",
+                  "teacherExplanation": "printable Chinese teacher handout body with labels 【知识定位】【题型识别】【方法步骤】【例题详解】【答案与评分点】【易错提醒】【课堂追问】",
+                  "studentHint": "printable Chinese student worksheet body with labels 【知识速记】【题型识别】【例题任务】【练习任务】【作答提醒】 and no answer/scoring/solution leakage",
                   "knowledgePoints": ["..."],
                   "followUpQuestions": ["..."]
                 }
+                Student content must not contain 【答案与评分点】, 【例题详解】, 参考答案, 评分标准, or complete solution paragraphs.
                 Selected handout template: %s
                 Template instructions: %s
                 Learning goal: %s
@@ -391,7 +398,7 @@ public class TeachingAiDraftService {
         try {
             StructuredDraftJson parsed = OBJECT_MAPPER.readValue(json, StructuredDraftJson.class);
             String teacherExplanation = normalizeText(parsed.teacherExplanation());
-            String studentHint = normalizeText(parsed.studentHint());
+            String studentHint = normalizeStudentWorksheetText(normalizeText(parsed.studentHint()));
             List<String> knowledgePoints = normalizeList(parsed.knowledgePoints());
             List<String> followUpQuestions = normalizeList(parsed.followUpQuestions());
             if (teacherExplanation.isBlank()
@@ -435,6 +442,23 @@ public class TeachingAiDraftService {
 
     private static String normalizeText(String value) {
         return FormulaMarkupSanitizer.sanitizeFeishuMath(value);
+    }
+
+    private static String normalizeStudentWorksheetText(String value) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        String sanitized = STUDENT_FORBIDDEN_SECTION.matcher(value).replaceAll("");
+        sanitized = STUDENT_FORBIDDEN_LINE.matcher(sanitized).replaceAll("");
+        sanitized = sanitized.replaceAll("\\n{3,}", "\n\n").strip();
+        if (sanitized.isBlank()) {
+            return """
+                    【知识速记】先写出本题对应的定义、公式或图像特征。
+                    【例题任务】独立完成关键步骤，计算过程写在作答区。
+                    【作答提醒】本页只保留提示和空白，完整解析由教师版审查。
+                    """.strip();
+        }
+        return sanitized;
     }
 
     private static List<String> normalizeList(List<String> values) {
