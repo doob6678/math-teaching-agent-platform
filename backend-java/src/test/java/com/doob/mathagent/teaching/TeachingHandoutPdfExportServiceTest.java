@@ -4,10 +4,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.doob.mathagent.teaching.service.TeachingHandoutPdfExportService;
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 
 class TeachingHandoutPdfExportServiceTest {
@@ -117,5 +120,73 @@ class TeachingHandoutPdfExportServiceTest {
             assertThat(stripper.getText(teacherDocument)).contains("教师版讲义", "教师版", "教师讲解");
             assertThat(stripper.getText(studentDocument)).contains("学生版讲义", "学生版", "学生任务");
         }
+    }
+
+    @Test
+    void usesRealXeLaTeXWhenConfiguredAndAvailable() throws Exception {
+        Path engine = firstExistingPath(
+                "C:/Users/doob/AppData/Local/Programs/MiKTeX/miktex/bin/x64/xelatex.exe",
+                "C:/Program Files/MiKTeX/miktex/bin/x64/xelatex.exe",
+                "/usr/bin/xelatex",
+                "/usr/local/bin/xelatex");
+        Assumptions.assumeTrue(engine != null, "XeLaTeX is not installed on this machine");
+        String previous = System.getProperty("math.agent.xelatex.path");
+        System.setProperty("math.agent.xelatex.path", engine.toString());
+        try {
+            TeachingTaskResponse task = new TeachingTaskResponse(
+                    "task-real-xelatex",
+                    "client-real-xelatex",
+                    "school-a",
+                    "teacher",
+                    "teacher-001",
+                    TeachingTaskStatus.COMPLETED,
+                    "真实 LaTeX 编译验证",
+                    "检查公式 $x^2+y^2=1$ 的 PDF 渲染",
+                    List.of(),
+                    List.of(),
+                    List.of(),
+                    "",
+                    """
+                    \\section{学习目标}
+                    用真实 XeLaTeX 编译讲义，而不是只走后备 PDF 文本绘制。
+
+                    \\section{公式检查}
+                    $$x^2+y^2=1$$
+
+                    \\section{讲评}
+                    教师版保留答案、步骤和评分点。
+                    """,
+                    "\\section{学生版}\n完成公式识别与作答区。\n\\vspace{8em}",
+                    List.of(),
+                    null,
+                    List.of(),
+                    null,
+                    null);
+
+            byte[] pdf = new TeachingHandoutPdfExportService().render(task, "teacher");
+
+            assertThat(pdf).startsWith(new byte[] {'%', 'P', 'D', 'F'});
+            try (PDDocument document = Loader.loadPDF(pdf)) {
+                String text = new PDFTextStripper().getText(document);
+                assertThat(text).contains("XeLaTeX", "x2");
+                assertThat(text).doesNotContain("任务编号", "task-real-xelatex", "\\section", "$$");
+            }
+        } finally {
+            if (previous == null) {
+                System.clearProperty("math.agent.xelatex.path");
+            } else {
+                System.setProperty("math.agent.xelatex.path", previous);
+            }
+        }
+    }
+
+    private static Path firstExistingPath(String... candidates) {
+        for (String candidate : candidates) {
+            Path path = Path.of(candidate);
+            if (Files.isRegularFile(path)) {
+                return path;
+            }
+        }
+        return null;
     }
 }
