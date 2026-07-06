@@ -3525,6 +3525,26 @@ h1, h2, h3, h4, h5, h6 {
   line-height: 1.6;
 }
 
+.feedback-context-summary {
+  display: grid;
+  gap: 8px;
+}
+
+.feedback-review-brief {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid rgba(15, 118, 110, 0.16);
+  border-radius: 8px;
+  background: #f0fdfa;
+}
+
+.feedback-review-brief span {
+  color: #115e59;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .feedback-context-tags {
   display: flex;
   flex-wrap: wrap;

@@ -110,18 +110,38 @@ describe("TeachingTaskPanel", () => {
           decision: "needs_revision",
           comment: "保留结构，补充来源说明。",
           reviewContext: {
+            schemaVersion: "teaching-feedback-review-v2",
             handoutVersion: "teacher",
             pdfRenderer: "xelatex",
             pdfPageCount: 4,
             pdfPreviewReady: true,
             evidenceCount: 2,
             sourceTraceable: true,
+            aiReviewBrief: [
+              "版本：教师版",
+              "模板：教师详解版",
+              "结构：5/6 核心栏目",
+              "PDF：xelatex / 4页",
+              "安全：未发现内部词泄漏",
+            ],
+            reviewEvidence: {
+              safety: {
+                internalDebugLeak: false,
+                layoutRuleLeak: false,
+                answerLeak: false,
+                studentAnswerIsolated: true,
+                teacherAnswerPresent: true,
+              },
+            },
             checks: {
               matchedCoreColumns: 5,
               coreColumnTotal: 6,
               hasMath: true,
               hasWorkspace: true,
               answerLeak: false,
+              internalDebugLeak: false,
+              layoutRuleLeak: false,
+              teacherAnswerPresent: true,
             },
           },
           createdAt: "2026-07-06T10:00:00Z",
@@ -171,9 +191,14 @@ describe("TeachingTaskPanel", () => {
     expect(html).toContain("审校记录");
     expect(html).toContain("需要修改");
     expect(html).toContain("PDF：XeLaTeX 编译 · 4 页");
+    expect(html).toContain("PDF：xelatex / 4页");
     expect(html).toContain("PDF已预览");
     expect(html).toContain("来源：2 条");
     expect(html).toContain("结构：5/6 栏");
+    expect(html).toContain("结构：5/6 核心栏目");
+    expect(html).toContain("安全：未发现内部词泄漏");
+    expect(html).toContain("无调试词泄漏");
+    expect(html).toContain("无版式规则泄漏");
     expect(html).not.toContain("打印版式完整");
     expect(html).not.toContain("版式无重叠");
     expect(html).not.toContain("$y=-");

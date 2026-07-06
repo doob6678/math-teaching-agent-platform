@@ -364,6 +364,9 @@ function FeedbackHistoryPanel({
 
 function FeedbackContextSummary({ context }: { context?: Record<string, unknown> }) {
   const checks = isRecord(context?.checks) ? context.checks : {};
+  const reviewEvidence = isRecord(context?.reviewEvidence) ? context.reviewEvidence : {};
+  const safety = isRecord(reviewEvidence.safety) ? reviewEvidence.safety : {};
+  const aiReviewBrief = stringArrayValue(context?.aiReviewBrief).slice(0, 5);
   const handoutVersion = stringValue(context?.handoutVersion);
   const renderer = stringValue(context?.pdfRenderer);
   const pageCount = numberValue(context?.pdfPageCount);
@@ -375,6 +378,14 @@ function FeedbackContextSummary({ context }: { context?: Record<string, unknown>
   const hasMath = booleanValue(checks.hasMath);
   const hasWorkspace = booleanValue(checks.hasWorkspace);
   const answerLeak = booleanValue(checks.answerLeak);
+  const internalDebugLeak = booleanValue(checks.internalDebugLeak) || booleanValue(safety.internalDebugLeak);
+  const layoutRuleLeak = booleanValue(checks.layoutRuleLeak) || booleanValue(safety.layoutRuleLeak);
+  const studentAnswerIsolated = context?.handoutVersion === "student"
+    ? booleanValue(checks.studentAnswerIsolated) || booleanValue(safety.studentAnswerIsolated)
+    : true;
+  const teacherAnswerPresent = context?.handoutVersion === "teacher"
+    ? booleanValue(checks.teacherAnswerPresent) || booleanValue(safety.teacherAnswerPresent)
+    : true;
   const items = [
     handoutVersion ? `版本：${handoutVersion === "student" ? "学生版" : "教师版"}` : "",
     renderer ? `PDF：${pdfRendererLabel(renderer)}${pageCount ? ` · ${pageCount} 页` : ""}` : "",
@@ -383,16 +394,40 @@ function FeedbackContextSummary({ context }: { context?: Record<string, unknown>
     coreColumnTotal ? `结构：${matchedCoreColumns}/${coreColumnTotal} 栏` : "",
     hasMath ? "含公式" : "",
     hasWorkspace ? "有作答区" : "",
+    internalDebugLeak ? "疑似内部调试词" : "无调试词泄漏",
+    layoutRuleLeak ? "疑似版式规则泄漏" : "无版式规则泄漏",
+    !studentAnswerIsolated ? "学生版疑似露出答案" : "",
+    !teacherAnswerPresent ? "教师版缺少答案" : "",
     answerLeak && handoutVersion === "student" ? "学生版疑似露出答案" : "",
   ].filter(Boolean);
-  if (!items.length) {
+  if (!items.length && !aiReviewBrief.length) {
     return null;
   }
   return (
-    <div className="feedback-context-tags">
-      {items.map((item) => <span className={item.includes("露出答案") || item.includes("缺少来源") ? "warning" : ""} key={item}>{item}</span>)}
+    <div className="feedback-context-summary">
+      {aiReviewBrief.length ? (
+        <div className="feedback-review-brief" aria-label="AI 审稿摘要">
+          {aiReviewBrief.map((item) => <span key={item}>{item}</span>)}
+        </div>
+      ) : null}
+      {items.length ? (
+        <div className="feedback-context-tags">
+          {items.map((item) => (
+            <span
+              className={feedbackContextTagTone(item) === "warning" ? "warning" : ""}
+              key={item}
+            >
+              {item}
+            </span>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
+}
+
+function feedbackContextTagTone(item: string) {
+  return /疑似|缺少|未预览|露出答案/.test(item) ? "warning" : "good";
 }
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
@@ -1295,6 +1330,15 @@ function numberValue(value: unknown) {
 
 function booleanValue(value: unknown) {
   return value === true;
+}
+
+function stringArrayValue(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    .map((item) => item.trim());
 }
 
 function shortText(value: string | undefined, maxLength: number) {
