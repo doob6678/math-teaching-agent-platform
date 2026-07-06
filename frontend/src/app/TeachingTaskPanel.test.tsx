@@ -100,7 +100,32 @@ describe("TeachingTaskPanel", () => {
         feedbackComment=""
         submittingFeedback={false}
         feedbackMessage=""
-        feedbackHistory={[]}
+        feedbackHistory={[{
+          feedbackId: "feedback-1",
+          taskId: "task-teaching-1",
+          tenantId: "school-a",
+          subjectType: "teacher",
+          subjectId: "teacher-1",
+          rating: 4,
+          decision: "needs_revision",
+          comment: "保留结构，补充来源说明。",
+          reviewContext: {
+            handoutVersion: "teacher",
+            pdfRenderer: "xelatex",
+            pdfPageCount: 4,
+            pdfPreviewReady: true,
+            evidenceCount: 2,
+            sourceTraceable: true,
+            checks: {
+              matchedCoreColumns: 5,
+              coreColumnTotal: 6,
+              hasMath: true,
+              hasWorkspace: true,
+              answerLeak: false,
+            },
+          },
+          createdAt: "2026-07-06T10:00:00Z",
+        }]}
         loadingFeedbackHistory={false}
         batchFolderPath="handouts/task-teaching-1"
         onVersionChange={vi.fn()}
@@ -141,6 +166,12 @@ describe("TeachingTaskPanel", () => {
     expect(html).toContain("教师版内容");
     expect(html).toContain("来源追溯");
     expect(html).toContain("缺少教材/题库来源");
+    expect(html).toContain("审校记录");
+    expect(html).toContain("需要修改");
+    expect(html).toContain("PDF：XeLaTeX 编译 · 4 页");
+    expect(html).toContain("PDF已预览");
+    expect(html).toContain("来源：2 条");
+    expect(html).toContain("结构：5/6 栏");
     expect(html).not.toContain("打印版式完整");
     expect(html).not.toContain("版式无重叠");
     expect(html).not.toContain("$y=-");

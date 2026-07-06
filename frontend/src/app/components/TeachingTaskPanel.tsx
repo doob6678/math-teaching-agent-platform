@@ -357,6 +357,9 @@ function FeedbackContextSummary({ context }: { context?: Record<string, unknown>
   const handoutVersion = stringValue(context?.handoutVersion);
   const renderer = stringValue(context?.pdfRenderer);
   const pageCount = numberValue(context?.pdfPageCount);
+  const pdfPreviewReady = booleanValue(context?.pdfPreviewReady) || booleanValue(checks.pdfPreviewReady);
+  const evidenceCount = numberValue(context?.evidenceCount);
+  const sourceTraceable = booleanValue(context?.sourceTraceable) || booleanValue(checks.sourceTraceable);
   const matchedCoreColumns = numberValue(checks.matchedCoreColumns);
   const coreColumnTotal = numberValue(checks.coreColumnTotal);
   const hasMath = booleanValue(checks.hasMath);
@@ -365,6 +368,8 @@ function FeedbackContextSummary({ context }: { context?: Record<string, unknown>
   const items = [
     handoutVersion ? `版本：${handoutVersion === "student" ? "学生版" : "教师版"}` : "",
     renderer ? `PDF：${pdfRendererLabel(renderer)}${pageCount ? ` · ${pageCount} 页` : ""}` : "",
+    pdfPreviewReady ? "PDF已预览" : "",
+    evidenceCount ? `来源：${evidenceCount} 条` : (sourceTraceable ? "来源可追溯" : ""),
     coreColumnTotal ? `结构：${matchedCoreColumns}/${coreColumnTotal} 栏` : "",
     hasMath ? "含公式" : "",
     hasWorkspace ? "有作答区" : "",
@@ -375,7 +380,7 @@ function FeedbackContextSummary({ context }: { context?: Record<string, unknown>
   }
   return (
     <div className="feedback-context-tags">
-      {items.map((item) => <span className={item.includes("露出答案") ? "warning" : ""} key={item}>{item}</span>)}
+      {items.map((item) => <span className={item.includes("露出答案") || item.includes("缺少来源") ? "warning" : ""} key={item}>{item}</span>)}
     </div>
   );
 }

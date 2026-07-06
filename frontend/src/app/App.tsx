@@ -2181,6 +2181,10 @@ function buildTeachingFeedbackReviewContext(
   const hasWorkspace = /作答区|我的解答|订正|留白|\\vspace|___/.test(latex);
   const answerLeak = /答案与评分点|参考答案|评分标准|答案[:：]|答案为|故答案|因此答案|得分/.test(plainText);
   const teacherHasAnswer = /答案与评分点|答案|解析|讲评|评分/.test(plainText);
+  const evidenceCount = task.evidence.length;
+  const evidenceScopes = Array.from(new Set(task.evidence.map((item) => item.sourceScope).filter(Boolean)));
+  const pdfPreviewReady = Boolean(pdfMeta) && pdfPreviewKey === `${task.taskId}:${version}`;
+  const sourceTraceable = evidenceCount > 0;
   const groups = version === "teacher" ? [
     ["讲义信息", "学习目标", "本讲任务", "课前定位"],
     ["来源索引", "知识点归属", "知识定位", "教材", "题库", "证据"],
@@ -2205,7 +2209,11 @@ function buildTeachingFeedbackReviewContext(
     templateName: task.selectedTemplate?.displayName ?? "标准讲义",
     pdfRenderer: pdfMeta?.renderer ?? "",
     pdfPageCount: pdfMeta?.pageCount ?? 0,
-    pdfPreviewReady: pdfPreviewKey === `${task.taskId}:${version}`,
+    pdfPreviewReady,
+    pdfRendererIsXeLaTeX: pdfMeta?.renderer === "xelatex",
+    evidenceCount,
+    evidenceScopes,
+    sourceTraceable,
     checks: {
       sectionCount,
       matchedCoreColumns,
@@ -2214,6 +2222,8 @@ function buildTeachingFeedbackReviewContext(
       hasWorkspace,
       teacherHasAnswer,
       answerLeak,
+      pdfPreviewReady,
+      sourceTraceable,
     },
   };
 }
