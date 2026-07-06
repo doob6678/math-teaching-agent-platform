@@ -87,6 +87,23 @@ class TeachingAiDraftServiceTest {
     }
 
     @Test
+    void removesAnswerLeakageFromFollowUpQuestionsUsedByStudentHandouts() {
+        TeachingAiDraftService.ParsedDraft parsed = TeachingAiDraftService.parseStructuredDraft("""
+                {
+                  "teacherExplanation": "【知识定位】函数新定义\\n【题型识别】代入求值\\n【方法步骤】先读定义\\n【例题详解】把 $x_0=-1$ 代入。\\n【答案与评分点】答案为 $2$。\\n【易错提醒】不要代错。\\n【课堂追问】D(0) 呢？",
+                  "studentHint": "【知识速记】先找到定义里的自变量位置。\\n【练习任务】完成同类题，过程写在作答区。",
+                  "knowledgePoints": ["函数新定义", "代入求值"],
+                  "followUpQuestions": ["已知 $D(x_0)$，求 $D(0)$。答案：$2$，写出过程得 2 分。", "条件变化时如何分类？评分点：讨论定义域。"]
+                }
+                """);
+
+        assertThat(parsed.structured()).isTrue();
+        assertThat(parsed.followUpQuestions())
+                .containsExactly("已知 $D(x_0)$，求 $D(0)$。", "条件变化时如何分类？")
+                .allSatisfy(item -> assertThat(item).doesNotContain("答案", "评分点", "得分", "$2$"));
+    }
+
+    @Test
     void rotatesToNextProviderWhenJsonRetryStillFails() {
         CapturingGateway gateway = new CapturingGateway(List.of(
                 new AiChatResult("openai", "gpt-5.4", 3, 2, 5, "ok", "bad json"),

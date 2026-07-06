@@ -289,7 +289,7 @@ public class TeachingAiDraftService {
                   "teacherExplanation": "Chinese teacher handout body. Required labels in this order: 【知识定位】【题型识别】【方法步骤】【例题详解】【答案与评分点】【易错提醒】【课堂追问】. Include source-grounded reasoning, answer path, scoring points, board-writing sequence, and preset questions. It must be printable and complete, not chatty.",
                   "studentHint": "Chinese student worksheet body. Required labels in this order: 【知识速记】【题型识别】【例题任务】【练习任务】【作答提醒】. Leave blanks with ___ or 作答区; hint only; never reveal final answers, full worked solutions, scoring points, or teacher-only notes.",
                   "knowledgePoints": ["3-8 Chinese knowledge points or method cards, formula-first when useful"],
-                  "followUpQuestions": ["3-8 Chinese exercises/questions, include easy/medium/hard progression when possible"]
+                  "followUpQuestions": ["3-8 Chinese exercises/questions only, include easy/medium/hard progression when possible; no answers, no scoring points, no worked solutions"]
                 }
                 Do not write "as an AI". Do not invent sources not provided below.
                 Do not output raw page OCR fragments, raw source ids, model names, token usage, backend diagnostics, JSON/parse/debug words, or model-health wording.
@@ -334,7 +334,7 @@ public class TeachingAiDraftService {
                   "teacherExplanation": "printable Chinese teacher handout body with labels 【知识定位】【题型识别】【方法步骤】【例题详解】【答案与评分点】【易错提醒】【课堂追问】",
                   "studentHint": "printable Chinese student worksheet body with labels 【知识速记】【题型识别】【例题任务】【练习任务】【作答提醒】 and no answer/scoring/solution leakage",
                   "knowledgePoints": ["..."],
-                  "followUpQuestions": ["..."]
+                  "followUpQuestions": ["student-safe questions only; no answer/scoring/solution leakage"]
                 }
                 Student content must not contain 【答案与评分点】, 【例题详解】, 参考答案, 评分标准, or complete solution paragraphs.
                 Selected handout template: %s
@@ -400,7 +400,7 @@ public class TeachingAiDraftService {
             String teacherExplanation = normalizeText(parsed.teacherExplanation());
             String studentHint = normalizeStudentWorksheetText(normalizeText(parsed.studentHint()));
             List<String> knowledgePoints = normalizeList(parsed.knowledgePoints());
-            List<String> followUpQuestions = normalizeList(parsed.followUpQuestions());
+            List<String> followUpQuestions = normalizeStudentExerciseList(parsed.followUpQuestions());
             if (teacherExplanation.isBlank()
                     || studentHint.isBlank()
                     || knowledgePoints.isEmpty()
@@ -473,6 +473,33 @@ public class TeachingAiDraftService {
             }
         }
         return List.copyOf(normalized);
+    }
+
+    private static List<String> normalizeStudentExerciseList(List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return List.of();
+        }
+        List<String> normalized = new ArrayList<>();
+        for (String value : values) {
+            String item = studentSafeExerciseText(normalizeText(value));
+            if (!item.isBlank()) {
+                normalized.add(item);
+            }
+        }
+        return List.copyOf(normalized);
+    }
+
+    private static String studentSafeExerciseText(String value) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        String sanitized = STUDENT_FORBIDDEN_SECTION.matcher(value).replaceAll("");
+        sanitized = sanitized
+                .replaceAll("(?i)(参考答案|答案|评分点|评分标准|完整解析|解答如下|因此答案为|故答案为)[：:].*$", "")
+                .replaceAll("(?i)(参考答案|答案|评分点|评分标准|完整解析|解答如下|因此答案为|故答案为).*$", "")
+                .replaceAll("\\s+", " ")
+                .strip();
+        return sanitized;
     }
 
     private static String safeErrorMessage(Exception exception) {
