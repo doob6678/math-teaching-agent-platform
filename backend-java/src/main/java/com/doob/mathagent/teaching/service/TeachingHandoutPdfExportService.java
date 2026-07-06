@@ -280,6 +280,7 @@ public class TeachingHandoutPdfExportService {
         boolean inEvidenceSection = false;
         boolean skippingTextbookBody = false;
         boolean skippingLegacyMetadataSection = false;
+        int evidenceLineCount = 0;
         for (String rawLine : normalized.replace("\r\n", "\n").replace('\r', '\n').split("\n")) {
             String line = rawLine.strip();
             line = line
@@ -300,6 +301,12 @@ public class TeachingHandoutPdfExportService {
                     continue;
                 }
                 inEvidenceSection = isEvidenceHeading(heading);
+                if (inEvidenceSection) {
+                    lines.add("\\section{来源索引}");
+                    evidenceLineCount = 0;
+                    skippingTextbookBody = false;
+                    continue;
+                }
                 skippingTextbookBody = false;
             }
             if (line.isBlank()) {
@@ -336,10 +343,12 @@ public class TeachingHandoutPdfExportService {
                 continue;
             }
             if (inEvidenceSection) {
-                line = TeachingEvidenceSnippetSanitizer.sanitizeCompact(line);
-                if (line.isBlank() || "已命中资料片段。".equals(line)) {
+                line = compactEvidenceReference(line);
+                if (line.isBlank() || evidenceLineCount >= 4) {
                     continue;
                 }
+                evidenceLineCount += 1;
+                line = "- " + line;
             }
             if (MARKDOWN_IMAGE.matcher(line).find()) {
                 line = MARKDOWN_IMAGE.matcher(line).replaceAll("").strip();
@@ -494,6 +503,7 @@ public class TeachingHandoutPdfExportService {
         boolean inEvidenceSection = false;
         boolean skippingTextbookBody = false;
         boolean skippingLegacyMetadataSection = false;
+        int evidenceLineCount = 0;
         for (String rawLine : safeText(latex).replace("\r\n", "\n").replace('\r', '\n').split("\n")) {
             String line = rawLine.strip();
             if (line.isBlank()) {
@@ -542,6 +552,10 @@ public class TeachingHandoutPdfExportService {
                     continue;
                 }
                 inEvidenceSection = isEvidenceHeading(heading);
+                if (inEvidenceSection) {
+                    heading = "来源索引";
+                    evidenceLineCount = 0;
+                }
                 skippingTextbookBody = false;
                 lines.add(new ReadableLine(LineType.HEADING, heading));
                 continue;
@@ -580,10 +594,14 @@ public class TeachingHandoutPdfExportService {
             }
             String cleaned = cleanText(line);
             if (inEvidenceSection) {
-                cleaned = TeachingEvidenceSnippetSanitizer.sanitizeCompact(cleaned);
+                cleaned = compactEvidenceReference(cleaned);
+                if (cleaned.isBlank() || evidenceLineCount >= 4) {
+                    continue;
+                }
+                evidenceLineCount += 1;
             }
             if (!cleaned.isBlank()) {
-                lines.add(new ReadableLine(LineType.PARAGRAPH, cleaned));
+                lines.add(new ReadableLine(inEvidenceSection ? LineType.BULLET : LineType.PARAGRAPH, cleaned));
             }
         }
         return lines.isEmpty() ? List.of(new ReadableLine(LineType.PARAGRAPH, "暂无可展示讲义内容。")) : compactBlanks(lines);
@@ -653,6 +671,31 @@ public class TeachingHandoutPdfExportService {
                 .replace(":", "")
                 .strip();
         return withoutImage.isBlank() || withoutImage.equals("页图") || withoutImage.equals("图片");
+    }
+
+    private static String compactEvidenceReference(String value) {
+        String text = TeachingEvidenceSnippetSanitizer.sanitizeCompact(cleanText(value))
+                .replaceAll("\\s+", " ")
+                .strip();
+        if (text.isBlank()
+                || "已命中资料片段。".equals(text)
+                || text.equals("正文")
+                || text.equals("原文")
+                || text.matches("(?i)^#?\\s*p\\d+.*")
+                || text.contains("页图")
+                || text.contains("OCR")
+                || text.contains("![")
+                || text.contains("## 正文")) {
+            return "";
+        }
+        text = text
+                .replace("PUBLIC_TEXTBOOK", "公开教材")
+                .replace("QUESTION_BANK", "题库")
+                .replace("TEACHER_PRIVATE", "教师资料");
+        if (text.length() > 88) {
+            text = text.substring(0, 88).strip() + "...";
+        }
+        return text;
     }
 
     /**

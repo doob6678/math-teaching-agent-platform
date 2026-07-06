@@ -20,7 +20,7 @@ import org.apache.pdfbox.text.PDFTextStripper;
  */
 final class TeachingHandoutLocalReferenceScanner {
 
-    private static final int MAX_FILES = 12;
+    private static final int MAX_FILES = 24;
     private static final int MAX_DEPTH = 5;
     private static final int PREVIEW_LIMIT = 260;
 
@@ -38,7 +38,9 @@ final class TeachingHandoutLocalReferenceScanner {
                     root,
                     MAX_DEPTH,
                     (path, attributes) -> attributes.isRegularFile() && isCandidatePdf(path))) {
-                stream.sorted(Comparator.comparing(path -> path.getFileName().toString()))
+                stream.sorted(Comparator
+                        .comparingInt(TeachingHandoutLocalReferenceScanner::candidatePriority)
+                        .thenComparing(path -> path.getFileName().toString()))
                         .limit(MAX_FILES)
                         .map(this::toTemplate)
                         .forEach(profiles::add);
@@ -48,7 +50,7 @@ final class TeachingHandoutLocalReferenceScanner {
         }
         return profiles.stream()
                 .collect(java.util.stream.Collectors.toMap(
-                        profile -> profile.summary().templateCode(),
+                        profile -> canonicalTitle(profile.summary().displayName()),
                         profile -> profile,
                         (left, right) -> left,
                         java.util.LinkedHashMap::new))
@@ -63,6 +65,7 @@ final class TeachingHandoutLocalReferenceScanner {
         Path cwd = Path.of("").toAbsolutePath().normalize();
         Path repoRoot = repoRoot(cwd);
         roots.add(repoRoot.resolve("文档").resolve("项目测试数据位置"));
+        roots.addAll(defaultDesktopReferenceRoots());
         roots.add(repoRoot.getParent() == null
                 ? repoRoot.resolve("workspace_data")
                 : repoRoot.getParent().resolve("math_agent").resolve("workspace_data"));
@@ -76,6 +79,30 @@ final class TeachingHandoutLocalReferenceScanner {
             }
         }
         return roots.stream().toList();
+    }
+
+    static List<Path> defaultDesktopReferenceRoots() {
+        String userHome = System.getProperty("user.home", "");
+        if (userHome == null || userHome.isBlank()) {
+            return List.of();
+        }
+        Path desktop = Path.of(userHome).resolve("Desktop");
+        return List.of(
+                desktop.resolve("个人资料")
+                        .resolve("初中数学")
+                        .resolve("初中数学资料下载")
+                        .resolve("02-专题讲义"),
+                desktop.resolve("个人资料")
+                        .resolve("初中数学")
+                        .resolve("初中数学资料下载")
+                        .resolve("03-综合复习与冲刺"),
+                desktop.resolve("个人资料")
+                        .resolve("初中数学")
+                        .resolve("初中数学资料下载")
+                        .resolve("07-地区试题"),
+                Path.of(userHome)
+                        .resolve("Documents")
+                        .resolve("xwechat_files"));
     }
 
     private static Path repoRoot(Path cwd) {
@@ -142,6 +169,9 @@ final class TeachingHandoutLocalReferenceScanner {
         if (title.isBlank() || title.equalsIgnoreCase("input") || title.equalsIgnoreCase("output")) {
             return false;
         }
+        if ("参考讲义数学空间向量".equals(title)) {
+            return false;
+        }
         String fullPath = path.toAbsolutePath().normalize().toString().toLowerCase(Locale.ROOT);
         return !fullPath.contains("\\tmp\\")
                 && !fullPath.contains("/tmp/")
@@ -149,6 +179,26 @@ final class TeachingHandoutLocalReferenceScanner {
                 && !fullPath.contains("/temp/")
                 && !fullPath.contains("\\target\\")
                 && !fullPath.contains("/target/");
+    }
+
+    private static int candidatePriority(Path path) {
+        String value = (path.getFileName() + " " + path).toLowerCase(Locale.ROOT);
+        int score = 100;
+        score -= containsAnyText(value, "反比例", "函数", "学霸笔记") ? 35 : 0;
+        score -= containsAnyText(value, "讲义", "专题", "题型", "知识点") ? 25 : 0;
+        score -= containsAnyText(value, "压轴", "高考", "中考", "综合") ? 15 : 0;
+        score -= containsAnyText(value, "学生版", "教师版") ? 10 : 0;
+        score += containsAnyText(value, "副本", "备用", "copy") ? 12 : 0;
+        return score;
+    }
+
+    private static boolean containsAnyText(String value, String... needles) {
+        for (String needle : needles) {
+            if (value.contains(needle.toLowerCase(Locale.ROOT))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private String extractPreview(Path path) {
@@ -165,6 +215,15 @@ final class TeachingHandoutLocalReferenceScanner {
     private static String stableCode(Path path) {
         String normalized = path.toAbsolutePath().normalize().toString().toLowerCase(Locale.ROOT);
         return Integer.toUnsignedString(normalized.hashCode(), 36);
+    }
+
+    private static String canonicalTitle(String title) {
+        return title == null ? "" : title
+                .replaceFirst("^(ykm_\\d+_|网易_|有道_|新东方_)", "")
+                .replaceAll("(_?副本\\d*|_?备用\\d*|_?主副本\\d*)$", "")
+                .replaceAll("\\s+", " ")
+                .strip()
+                .toLowerCase(Locale.ROOT);
     }
 
     private static String inferAudience(String title) {

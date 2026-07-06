@@ -1,9 +1,7 @@
-package com.doob.mathagent.teaching;
+package com.doob.mathagent.teaching.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.doob.mathagent.teaching.service.TeachingHandoutTemplateProfile;
-import com.doob.mathagent.teaching.service.TeachingHandoutTemplateService;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import org.junit.jupiter.api.AfterEach;
@@ -51,11 +49,12 @@ class TeachingHandoutTemplateServiceTest {
                 .anySatisfy(template -> {
                     assertThat(template.templateCode()).isEqualTo("unit_test_skill_v1");
                     assertThat(template.sourceType()).isEqualTo("skill_config");
+                    assertThat(template.displayName()).isEqualTo("单元测试 Skill");
                     assertThat(template.tags()).contains("测试", "配置");
                 });
         TeachingHandoutTemplateProfile resolved = service.resolve("unit_test_skill_v1");
         assertThat(resolved.summary().displayName()).isEqualTo("单元测试 Skill");
-        assertThat(resolved.promptInstructions()).contains("教师版给答案");
+        assertThat(resolved.promptInstructions()).contains("教师版给答案", "学生版留白");
     }
 
     @Test
@@ -67,5 +66,14 @@ class TeachingHandoutTemplateServiceTest {
         TeachingHandoutTemplateService service = new TeachingHandoutTemplateService();
 
         assertThat(service.resolve("missing").summary().templateCode()).isEqualTo("default_standard");
+    }
+
+    @Test
+    void defaultDesktopReferenceRootsIncludeLocalMathHandoutFolders() {
+        assertThat(TeachingHandoutLocalReferenceScanner.defaultDesktopReferenceRoots())
+                .anySatisfy(path -> assertThat(path.toString()).contains("02-专题讲义"))
+                .anySatisfy(path -> assertThat(path.toString()).contains("03-综合复习与冲刺"))
+                .anySatisfy(path -> assertThat(path.toString()).contains("07-地区试题"))
+                .anySatisfy(path -> assertThat(path.toString()).contains("xwechat_files"));
     }
 }
