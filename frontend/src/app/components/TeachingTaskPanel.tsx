@@ -207,86 +207,7 @@ export function TeachingTaskPanel({
             <InfoTile label="记忆复用" value={task.memoryReuse?.reused ? "已复用" : "未复用"} />
           </section>
 
-          {task.aiDraft ? (
-            <details className="ai-draft-panel">
-              <summary>
-                <div>
-                  <p className="eyebrow">生成诊断</p>
-                  <h3>{task.aiDraft.structured ? "讲义内容已结构化" : "模型返回仍需人工复核"}</h3>
-                </div>
-                <StatusBadgeText text={`重试 ${task.aiDraft.retryCount}/${task.aiDraft.maxRetries}`} />
-              </summary>
-              <div className="diagnostic-meta">
-                <span>模型：{task.aiDraft.enabled ? `${providerLabel(task.aiDraft.providerName)} / ${task.aiDraft.modelCode}` : "未启用"}</span>
-                <span>Token：{task.aiDraft.totalTokens ?? 0}</span>
-              </div>
-              {task.aiDraft.structured ? (
-                <div className="ai-draft-content">
-                  <div className="summary-card">
-                    <span>教师讲解主线</span>
-                    <strong><MathRichText text={shortText(task.aiDraft.teacherExplanation, 140)} /></strong>
-                  </div>
-                  <div className="summary-card">
-                    <span>学生提示</span>
-                    <strong><MathRichText text={shortText(task.aiDraft.studentHint, 120)} /></strong>
-                  </div>
-                  {task.aiDraft.knowledgePoints.length ? (
-                    <div className="tag-list">{task.aiDraft.knowledgePoints.map((item) => <span key={item}><MathRichText text={item} /></span>)}</div>
-                  ) : null}
-                </div>
-              ) : (
-                <div className="summary-card">
-                  <span>错误摘要</span>
-                  <strong><MathRichText text={shortText(task.aiDraft.parseError || task.aiDraft.content || task.aiDraft.message, 160)} /></strong>
-                </div>
-              )}
-            </details>
-          ) : null}
-
-          <details className="review-details">
-            <summary>流程与证据</summary>
-            <div className="node-list">
-              {task.nodes.map((node, index) => (
-                <div className="node-item node-item-rich" key={node.code}>
-                  <div className="node-item-top">
-                    <span className="node-index">{index + 1}</span>
-                    <strong>{node.name}</strong>
-                    <em>{nodeStatusLabel(node.status)}</em>
-                  </div>
-                  <span>{shortText(node.summary, 120)}</span>
-                </div>
-              ))}
-            </div>
-            {task.stageTimings?.length ? (
-              <div className="timing-list">
-                {task.stageTimings.map((timing, index) => (
-                  <div className="timing-item" key={timing.stage}>
-                    <span>{index + 1}. {stageLabel(timing.stage)}</span>
-                    <strong>{timing.elapsedMs} ms</strong>
-                  </div>
-                ))}
-              </div>
-            ) : null}
-            {task.evidence.length ? (
-              <div className="hit-list">
-                {task.evidence.slice(0, 5).map((item) => (
-                  <article className="evidence-card teaching-evidence-card" key={item.chunkId}>
-                    <div className="scope-badge">{scopeLabel(item.sourceScope)}</div>
-                    <div className="card-main">
-                      <div className="card-head">
-                        <h3>{item.sourceTitle}</h3>
-                      </div>
-                      <div className="meta-row">
-                        <span>{shortText(item.chunkId, 28)}</span>
-                        <span>{item.sourceScope === "QUESTION_BANK" || item.pageNo <= 0 ? "题库题目" : `PDF ${item.pageNo}`}</span>
-                      </div>
-                      <p className="snippet">{shortText(cleanSnippet(item.snippet), 120)}</p>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            ) : null}
-          </details>
+          <GenerationReviewPanel task={task} />
 
           <form className="human-feedback-panel" onSubmit={onSubmitFeedback}>
             <div className="feedback-head">
@@ -295,7 +216,7 @@ export function TeachingTaskPanel({
             </div>
             <div className="feedback-quality-list" aria-label="讲义质量审查要点">
               {[
-                "页眉页脚完整",
+                "打印版式完整",
                 "教师/学生版区分清楚",
                 "公式渲染正确",
                 "版式无重叠",
@@ -526,8 +447,105 @@ function InfoTile({ label, value }: { label: string; value: string }) {
   );
 }
 
-function StatusBadgeText({ text }: { text: string }) {
-  return <div className="strategy-pill">{text}</div>;
+function GenerationReviewPanel({ task }: { task: TeachingTaskResponse }) {
+  const aiDraft = task.aiDraft;
+  const structured = Boolean(aiDraft?.structured);
+  const templateName = task.selectedTemplate?.displayName ?? "标准讲义";
+  const evidenceCount = task.evidence.length;
+  const knowledgePoints = aiDraft?.knowledgePoints ?? [];
+
+  return (
+    <section className="generation-review-panel">
+      <div className="generation-review-head">
+        <div>
+          <p className="eyebrow">审查记录</p>
+          <h3>{structured ? "讲义内容已整理成可审查结构" : "讲义需要人工复核后再使用"}</h3>
+        </div>
+        <span className={structured ? "review-state good" : "review-state warning"}>{structured ? "可进入审校" : "待修订"}</span>
+      </div>
+
+      <div className="review-chat-list">
+        <article className="review-message system">
+          <span className="review-avatar">1</span>
+          <div>
+            <strong>确定讲义框架</strong>
+            <p>使用「{templateName}」组织教师版和学生版；本次引用 {evidenceCount} 条教材、题库或教师资料作为来源。</p>
+          </div>
+        </article>
+
+        {task.nodes.map((node, index) => (
+          <article className="review-message tool" key={node.code}>
+            <span className="review-avatar">{index + 2}</span>
+            <div>
+              <strong>{node.name}<em>{nodeStatusLabel(node.status)}</em></strong>
+              <p>{cleanReviewSummary(node.summary)}</p>
+            </div>
+          </article>
+        ))}
+
+        {aiDraft ? (
+          <article className={structured ? "review-message assistant" : "review-message warning"}>
+            <span className="review-avatar">{task.nodes.length + 2}</span>
+            <div>
+              <strong>{structured ? "生成讲义草稿" : "需要复核的问题"}</strong>
+              {structured ? (
+                <>
+                  <p><MathRichText text={shortText(aiDraft.teacherExplanation, 180)} /></p>
+                  <p className="muted-line"><MathRichText text={shortText(aiDraft.studentHint, 140)} /></p>
+                  {knowledgePoints.length ? (
+                    <div className="tag-list compact">{knowledgePoints.slice(0, 8).map((item) => <span key={item}><MathRichText text={item} /></span>)}</div>
+                  ) : null}
+                </>
+              ) : (
+                <p>{shortText(aiDraft.parseError || aiDraft.content || aiDraft.message, 180)}</p>
+              )}
+            </div>
+          </article>
+        ) : null}
+      </div>
+
+      <details className="review-source-drawer">
+        <summary>查看来源与运行明细</summary>
+        {aiDraft ? (
+          <div className="diagnostic-meta">
+            <span>模型：{aiDraft.enabled ? `${providerLabel(aiDraft.providerName)} / ${aiDraft.modelCode}` : "未启用"}</span>
+            <span>用量：{aiDraft.totalTokens ?? 0}</span>
+            <span>重试：{aiDraft.retryCount}/{aiDraft.maxRetries}</span>
+          </div>
+        ) : null}
+        {task.stageTimings?.length ? (
+          <div className="timing-list">
+            {task.stageTimings.map((timing, index) => (
+              <div className="timing-item" key={timing.stage}>
+                <span>{index + 1}. {stageLabel(timing.stage)}</span>
+                <strong>{timing.elapsedMs} ms</strong>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {task.evidence.length ? (
+          <div className="hit-list source-hit-list">
+            {task.evidence.slice(0, 6).map((item) => (
+              <article className="evidence-card teaching-evidence-card" key={item.chunkId}>
+                <div className="scope-badge">{scopeLabel(item.sourceScope)}</div>
+                <div className="card-main">
+                  <div className="card-head">
+                    <h3>{item.sourceTitle}</h3>
+                  </div>
+                  <div className="meta-row">
+                    <span>{item.sourceScope === "QUESTION_BANK" || item.pageNo <= 0 ? "题库题目" : `PDF ${item.pageNo}`}</span>
+                  </div>
+                  <p className="snippet">{shortText(cleanSnippet(item.snippet), 120)}</p>
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <div className="empty-state compact">本次没有命中可展示来源。</div>
+        )}
+      </details>
+    </section>
+  );
 }
 
 function MathRichText({ text }: { text: string }) {
@@ -770,6 +788,23 @@ function humanMemoryReason(value: string | undefined) {
   return shortText(text, 120);
 }
 
+function cleanReviewSummary(value: string | undefined) {
+  const cleaned = (value ?? "")
+    .replace(/No reusable memory matched\.?/gi, "未找到适合复用的历史学习记录")
+    .replace(/MODEL_CALL_SUCCEEDED[^。]*。?/gi, "")
+    .replace(/JSON_PARSE_SUCCEEDED[^。]*。?/gi, "")
+    .replace(/当前模型\s*[^，。]*[，。]?/g, "")
+    .replace(/模型\s*[A-Za-z0-9_./:-]+[，。]?/g, "")
+    .replace(/重试\s*\d+\s*\/\s*\d+[，。]?/g, "")
+    .replace(/诊断事件\s*\d+\s*条[，。]?/g, "")
+    .replace(/question_bank_retrieval/gi, "题库检索")
+    .replace(/\s+/g, " ")
+    .replace(/，。/g, "。")
+    .replace(/[，,、\s]+$/g, "")
+    .trim();
+  return shortText(cleaned, 140);
+}
+
 function scopeLabel(scope: string) {
   const labels: Record<string, string> = {
     PUBLIC_TEXTBOOK: "公开教材",
@@ -783,6 +818,12 @@ function scopeLabel(scope: string) {
 function cleanSnippet(value: string | undefined) {
   return (value ?? "")
     .replace(/!\[[^\]]*]\([^)]*\)/g, " ")
+    .replace(/p\d+\s*-\s*书名：[\s\S]*?正文\s*/g, "")
+    .replace(/^p\d+\s*-\s*/i, "")
+    .replace(/书名：[^#]*?正文/g, "")
+    .replace(/PDF页码：\d+/g, "")
+    .replace(/印刷页码：[^-#]*/g, "")
+    .replace(/页图：/g, "")
     .replace(/[#*_`>$]/g, " ")
     .replace(/\s+/g, " ")
     .trim();

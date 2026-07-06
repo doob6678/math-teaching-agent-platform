@@ -1882,6 +1882,11 @@ h1, h2, h3, h4, h5, h6 {
   gap: 12px;
 }
 
+.template-shelf-head > div {
+  display: grid;
+  gap: 3px;
+}
+
 .template-shelf-head span {
   color: var(--slate);
   font-size: 12px;
@@ -1895,13 +1900,37 @@ h1, h2, h3, h4, h5, h6 {
   text-align: right;
 }
 
+.template-shelf-toggle {
+  border: 1px solid var(--slate-lightest);
+  border-radius: 999px;
+  padding: 7px 11px;
+  background: var(--white);
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 720;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.template-shelf-toggle:hover {
+  border-color: var(--blue-border);
+  box-shadow: var(--shadow-sm);
+}
+
 .template-shelf-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
   gap: 12px;
-  max-height: 430px;
   overflow-y: auto;
   padding-right: 4px;
+}
+
+.template-shelf-grid.compact {
+  max-height: 260px;
+}
+
+.template-shelf-grid.expanded {
+  max-height: 430px;
 }
 
 .template-card {
@@ -2832,6 +2861,7 @@ h1, h2, h3, h4, h5, h6 {
 
 .handout-primary-panel,
 .ai-draft-panel,
+.generation-review-panel,
 .human-feedback-panel,
 .teaching-summary-grid,
 .review-details {
@@ -2940,6 +2970,7 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .ai-draft-panel,
+.generation-review-panel,
 .human-feedback-panel,
 .review-details {
   padding: 14px;
@@ -2983,6 +3014,146 @@ h1, h2, h3, h4, h5, h6 {
 .ai-draft-content {
   display: grid;
   gap: 10px;
+}
+
+.generation-review-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.generation-review-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: start;
+}
+
+.generation-review-head h3 {
+  margin: 2px 0 0;
+  color: var(--navy);
+  font-size: 15px;
+}
+
+.review-state {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 5px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--slate-lightest);
+  background: var(--gray-subtle);
+  color: var(--slate);
+  font-size: 12px;
+  font-weight: 720;
+  white-space: nowrap;
+}
+
+.review-state.good {
+  border-color: rgba(15, 118, 110, 0.18);
+  background: #f0fdfa;
+  color: #0f766e;
+}
+
+.review-state.warning {
+  border-color: rgba(180, 83, 9, 0.22);
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.review-chat-list {
+  display: grid;
+  gap: 10px;
+}
+
+.review-message {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 10px;
+  padding: 11px 12px;
+  border: 1px solid var(--slate-lightest);
+  border-radius: 8px;
+  background: var(--white);
+}
+
+.review-message.system {
+  background: linear-gradient(180deg, rgba(239, 246, 255, 0.9), rgba(255, 255, 255, 0.98));
+}
+
+.review-message.tool {
+  background: var(--gray-subtle);
+}
+
+.review-message.assistant {
+  border-color: rgba(15, 118, 110, 0.18);
+  background: linear-gradient(180deg, rgba(240, 253, 250, 0.86), rgba(255, 255, 255, 0.98));
+}
+
+.review-message.warning {
+  border-color: rgba(180, 83, 9, 0.22);
+  background: #fffbeb;
+}
+
+.review-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: var(--navy);
+  color: var(--white);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.review-message strong {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  color: var(--navy);
+  font-size: 13px;
+}
+
+.review-message strong em {
+  padding: 3px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--slate-lightest);
+  background: var(--white);
+  color: var(--slate);
+  font-size: 11px;
+  font-style: normal;
+}
+
+.review-message p {
+  margin: 5px 0 0;
+  color: var(--navy-mid);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.review-message .muted-line {
+  color: var(--slate);
+}
+
+.tag-list.compact {
+  margin-top: 8px;
+}
+
+.review-source-drawer {
+  border-top: 1px solid var(--slate-lightest);
+  padding-top: 10px;
+}
+
+.review-source-drawer summary {
+  cursor: pointer;
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.source-hit-list {
+  margin-top: 12px;
 }
 
 .human-feedback-panel {

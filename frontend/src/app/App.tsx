@@ -1952,6 +1952,7 @@ function TemplateShelf({
   loading: boolean;
   onSelect: (templateCode: string) => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
   if (loading) {
     return (
       <div className="template-shelf">
@@ -1976,14 +1977,24 @@ function TemplateShelf({
       </div>
     );
   }
+  const selectedTemplate = templates.find((template) => template.templateCode === selectedCode) ?? templates[0];
+  const recommendedTemplates = templates
+    .filter((template) => template.templateCode !== selectedTemplate.templateCode)
+    .slice(0, 5);
+  const visibleTemplates = expanded ? templates : [selectedTemplate, ...recommendedTemplates];
   return (
     <div className="template-shelf">
       <div className="template-shelf-head">
-        <span>讲义模板</span>
-        <small>选择后会影响 AI 提示词、双版本和导出结构</small>
+        <div>
+          <span>讲义模板</span>
+          <small>当前：{selectedTemplate.displayName}</small>
+        </div>
+        <button type="button" className="template-shelf-toggle" onClick={() => setExpanded((value) => !value)}>
+          {expanded ? "收起书架" : `展开全部 ${templates.length} 个模板`}
+        </button>
       </div>
-      <div className="template-shelf-grid">
-        {templates.map((template) => {
+      <div className={expanded ? "template-shelf-grid expanded" : "template-shelf-grid compact"}>
+        {visibleTemplates.map((template) => {
           const selected = template.templateCode === selectedCode;
           const dynamicSkill = template.sourceType === "skill_config";
           const localReference = !dynamicSkill && (template.sourceType === "local_reference" || Boolean(template.referenceTitle));
