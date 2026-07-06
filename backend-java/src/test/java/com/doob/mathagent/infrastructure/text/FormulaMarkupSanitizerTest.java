@@ -42,4 +42,12 @@ class FormulaMarkupSanitizerTest {
         assertThat(sanitized).contains("$c^2=a^2+b^2$", "$x^2/a^2-y^2/b^2=1$");
         assertThat(sanitized).doesNotContain("$$c^2=a^2+b^2$$");
     }
+
+    @Test
+    void wrapsSubscriptEquationsUsedInHandoutHints() {
+        String sanitized = FormulaMarkupSanitizer.sanitizeFeishuMath(
+                "先比较 a_1=a^2，再写出 Sn=an+bn。");
+
+        assertThat(sanitized).contains("$a_1=a^2$", "$Sn=an+bn$");
+    }
 }

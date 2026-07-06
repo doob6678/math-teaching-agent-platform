@@ -69,7 +69,7 @@ describe("TeachingTaskPanel", () => {
         content: "{}",
         message: "ok",
         structured: true,
-        teacherExplanation: "【知识定位】双曲线。 【答案与评分点】答案为 $b^2=16$。",
+        teacherExplanation: "【知识定位】双曲线标准方程 x²/a²-y²/b²=1。 【答案与评分点】答案为 $b^2=16$。",
         studentHint: "【知识速记】先写 $c^2=a^2+b^2$。 【练习任务】完成参数计算。",
         knowledgePoints: ["参数关系 $c^2=a^2+b^2$"],
         followUpQuestions: ["已知焦距为 10，求 c。"],
@@ -125,6 +125,7 @@ describe("TeachingTaskPanel", () => {
     expect(html).toContain("讲义排版");
     expect(html).toContain("审查与交付");
     expect(html).toContain("人类反馈");
+    expect(html).not.toContain("ParseError");
     expect(html).not.toContain("MODEL_CALL_SUCCEEDED");
     expect(html).not.toContain("tokens");
   });

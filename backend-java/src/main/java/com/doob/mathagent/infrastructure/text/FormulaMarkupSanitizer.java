@@ -16,8 +16,12 @@ public final class FormulaMarkupSanitizer {
     private static final Pattern BARE_COORDINATE = Pattern.compile(
             "(?<![$A-Za-z0-9])\\((?:\\\\pm\\s*)?[A-Za-z](?:\\^[-+]?\\d+)?,\\s*-?\\d+\\)");
     private static final Pattern BARE_FORMULA = Pattern.compile(
-            "(?<![$A-Za-z0-9])((?:\\\\pm\\s*)?[A-Za-z0-9]+(?:\\^[-+]?\\d+)?"
-                    + "(?:\\s*[+\\-*/=]\\s*(?:\\\\pm\\s*)?[A-Za-z0-9]+(?:\\^[-+]?\\d+)?)+)(?![$A-Za-z0-9])");
+            "(?<![$A-Za-z0-9])((?:\\\\pm\\s*)?[A-Za-z0-9]+(?:[_^][-+]?\\d+)?"
+                    + "(?:\\s*[+\\-*/=]\\s*(?:\\\\pm\\s*)?[A-Za-z0-9]+(?:[_^][-+]?\\d+)?)+)(?![$A-Za-z0-9])");
+    private static final Pattern BARE_FRACTION_FORMULA = Pattern.compile(
+            "(?<![$A-Za-z0-9])([A-Za-z0-9]+(?:\\^[-+]?\\d+)?/[A-Za-z0-9]+(?:\\^[-+]?\\d+)?"
+                    + "(?:\\s*[+\\-=]\\s*[A-Za-z0-9]+(?:\\^[-+]?\\d+)?/[A-Za-z0-9]+(?:\\^[-+]?\\d+)?)+"
+                    + "(?:\\s*=\\s*-?\\d+)?)");
 
     private FormulaMarkupSanitizer() {
     }
@@ -109,10 +113,38 @@ public final class FormulaMarkupSanitizer {
 
     private static String wrapBareMathText(String value) {
         String withCoordinates = wrapMatches(value, BARE_COORDINATE);
-        return wrapMatches(withCoordinates, BARE_FORMULA);
+        String withFractions = wrapMatches(withCoordinates, BARE_FRACTION_FORMULA);
+        return wrapMatches(withFractions, BARE_FORMULA);
     }
 
     private static String wrapMatches(String value, Pattern pattern) {
+        StringBuilder builder = new StringBuilder();
+        StringBuilder segment = new StringBuilder();
+        boolean math = false;
+        for (int index = 0; index < value.length(); index += 1) {
+            if (value.startsWith("$$", index)) {
+                builder.append(math ? segment : wrapMatchesInSegment(segment.toString(), pattern));
+                segment.setLength(0);
+                builder.append("$$");
+                math = !math;
+                index += 1;
+                continue;
+            }
+            char character = value.charAt(index);
+            if (character == '$') {
+                builder.append(math ? segment : wrapMatchesInSegment(segment.toString(), pattern));
+                segment.setLength(0);
+                builder.append(character);
+                math = !math;
+            } else {
+                segment.append(character);
+            }
+        }
+        builder.append(math ? segment : wrapMatchesInSegment(segment.toString(), pattern));
+        return builder.toString();
+    }
+
+    private static String wrapMatchesInSegment(String value, Pattern pattern) {
         Matcher matcher = pattern.matcher(value);
         StringBuffer buffer = new StringBuffer();
         while (matcher.find()) {

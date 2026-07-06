@@ -3459,7 +3459,9 @@ h1, h2, h3, h4, h5, h6 {
   border: 1px solid var(--slate-lightest);
   border-radius: var(--radius-md);
   overflow: hidden;
-  background: #eef2f7;
+  background:
+    linear-gradient(135deg, rgba(239, 246, 255, 0.65), rgba(240, 253, 250, 0.42)),
+    #eef2f7;
   box-shadow: var(--shadow-md);
 }
 
@@ -3539,23 +3541,26 @@ h1, h2, h3, h4, h5, h6 {
 
 .handout-review-body {
   display: grid;
-  gap: 13px;
+  gap: 16px;
   width: min(100%, 860px);
-  margin: 18px auto;
-  padding: 26px 30px;
+  margin: 22px auto;
+  padding: 34px 38px;
   border: 1px solid rgba(148, 163, 184, 0.22);
   border-radius: 6px;
-  background: #ffffff;
+  background:
+    linear-gradient(90deg, rgba(37, 99, 235, 0.05) 0 1px, transparent 1px 100%),
+    linear-gradient(180deg, #ffffff 0%, #ffffff 100%);
+  background-size: 28px 100%, auto;
   box-shadow: 0 18px 44px rgba(15, 23, 42, 0.09);
 }
 
 .handout-review-section {
-  margin: 8px 0 2px;
-  padding: 0 0 9px 12px;
+  margin: 14px 0 4px;
+  padding: 0 0 10px 14px;
   border-bottom: 1px solid rgba(15, 118, 110, 0.16);
   border-left: 4px solid #0f766e;
   color: var(--navy);
-  font-size: 19px;
+  font-size: 20px;
   line-height: 1.35;
 }
 
@@ -3586,7 +3591,7 @@ h1, h2, h3, h4, h5, h6 {
   margin: 0;
   color: var(--navy);
   font-size: 14px;
-  line-height: 1.85;
+  line-height: 1.95;
   overflow-wrap: anywhere;
 }
 
@@ -3623,13 +3628,18 @@ h1, h2, h3, h4, h5, h6 {
 
 .math-render.display {
   display: block;
-  margin: 10px 0;
+  margin: 12px 0;
+  padding: 12px 14px;
+  border: 1px solid rgba(37, 99, 235, 0.13);
+  border-radius: 6px;
+  background: #f8fafc;
   overflow-x: auto;
 }
 
 .math-render.inline {
-  display: inline-block;
+  display: inline-flex;
   max-width: 100%;
+  padding: 0 2px;
   vertical-align: baseline;
 }
 

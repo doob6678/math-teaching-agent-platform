@@ -742,7 +742,7 @@ public class TeachingWorkflowService {
                 \\begin{itemize}
                 \\item 先写定义、公式或图像特征，再代入题目条件。
                 \\item 遇到参数、范围、符号时先标记边界，不急着计算。
-                \\item 本页不展示答案，完整解析在教师版审查。
+                \\item 本页只保留提示和作答区，详细讲评在教师版审查。
                 \\end{itemize}
                 
                 \\section{课堂练习}
@@ -778,11 +778,20 @@ public class TeachingWorkflowService {
         if (value == null || value.isBlank()) {
             return "";
         }
+        String normalized = com.doob.mathagent.infrastructure.text.FormulaMarkupSanitizer.sanitizeFeishuMath(value);
         StringBuilder builder = new StringBuilder();
         StringBuilder segment = new StringBuilder();
         boolean math = false;
-        for (int index = 0; index < value.length(); index += 1) {
-            char character = value.charAt(index);
+        for (int index = 0; index < normalized.length(); index += 1) {
+            if (normalized.startsWith("$$", index)) {
+                builder.append(math ? sanitizeMathSegment(segment.toString()) : escapeLatexText(segment.toString()));
+                segment.setLength(0);
+                builder.append("$$");
+                math = !math;
+                index += 1;
+                continue;
+            }
+            char character = normalized.charAt(index);
             if (character == '$') {
                 builder.append(math ? sanitizeMathSegment(segment.toString()) : escapeLatexText(segment.toString()));
                 segment.setLength(0);

@@ -182,9 +182,9 @@ class TeachingWorkflowServiceTest {
         TeachingAiDraftService aiDraftService = new TeachingAiDraftService(
                 request -> new AiChatResult("openai", "gpt-5.4", 21, 13, 34, "ok", """
                         {
-                          "teacherExplanation": "先读清 D(x_0) 的定义，再把 -1 代入。",
-                          "studentHint": "【知识速记】先找到定义里的自变量位置。\\n【答案与评分点】答案：把 -1 代入即可得分。\\n【练习任务】独立完成 D(0)。",
-                          "knowledgePoints": ["函数新定义", "定义域"],
+                          "teacherExplanation": "【知识定位】先读清 $D(x_0)$ 的定义。\\n【方法步骤】用 $$c^2=a^2+b^2$$ 这类参数关系示范公式排版，再把 -1 代入。\\n【答案与评分点】关键是代入位置与定义域检查。",
+                          "studentHint": "【知识速记】先找到 $D(x_0)$ 里的自变量位置，记住 c²=a²+b² 这类公式要先写清。\\n【答案与评分点】答案：把 -1 代入即可得分。\\n【练习任务】独立完成 D(0)。",
+                          "knowledgePoints": ["函数新定义", "定义域", "参数关系 c²=a²+b²"],
                           "followUpQuestions": ["D(0) 如何处理？", "条件变化时如何分类？"]
                         }
                         """),
@@ -214,8 +214,10 @@ class TeachingWorkflowServiceTest {
         assertThat(trace.diagnosticEvents()).extracting(AgentTraceRecord.DiagnosticEvent::eventType)
                 .containsExactly("MODEL_CALL_SUCCEEDED", "JSON_PARSE_SUCCEEDED");
         assertThat(response.teacherHandoutLatex()).contains("教师讲解稿与练习设计", "知识点与方法卡", "课堂追问与变式训练", "讲评备注");
+        assertThat(response.teacherHandoutLatex()).contains("$D(x_0)$", "$$c^2=a^2+b^2$$", "$c^2=a^2+b^2$");
+        assertThat(response.teacherHandoutLatex()).doesNotContain("\\$D", "c\\textasciicircum{}2");
         assertThat(response.studentHandoutLatex()).contains("课堂练习与作答区", "\\vspace{10em}");
-        assertThat(response.studentHandoutLatex()).contains("【知识速记】", "【练习任务】");
+        assertThat(response.studentHandoutLatex()).contains("【知识速记】", "【练习任务】", "$D(x_0)$", "$c^2=a^2+b^2$");
         assertThat(response.studentHandoutLatex()).doesNotContain("【答案与评分点】", "答案：", "得分");
         assertThat(response.teacherHandoutLatex()).doesNotContain("tokens=", "\\paragraph{模型}");
         assertThat(response.nodes())

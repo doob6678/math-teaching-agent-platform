@@ -153,7 +153,7 @@ final class TeachingHandoutLocalReferenceScanner {
                         difficulty,
                         tags,
                         fileName,
-                        path.toAbsolutePath().normalize().toString(),
+                        null,
                         preview),
                 prompt,
                 "student".equals(audience) || title.contains("学霸笔记"));

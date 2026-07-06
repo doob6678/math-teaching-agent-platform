@@ -428,7 +428,7 @@ function buildHandoutReviewChecks(blocks: ReviewBlock[], latex: string, version:
   const hasMath = /\${1,2}[^$]+\${1,2}/.test(latex);
   const hasWorkspace = blocks.some((block) => block.type === "space") || /作答区|订正|留白|___/.test(latex);
   const plainText = cleanPreviewText(latex);
-  const answerLeak = /【答案与评分点】|参考答案|评分标准|完整解析|答案[:：]|得分/.test(plainText);
+  const answerLeak = /【答案与评分点】|参考答案|评分标准|答案[:：]|答案为|故答案|因此答案|得分/.test(plainText);
   const teacherHasAnswer = /【答案与评分点】|答案|解析|讲评|评分/.test(plainText);
   const labels = blocks
     .filter((block): block is Extract<ReviewBlock, { type: "paragraph" }> => block.type === "paragraph")
@@ -661,9 +661,10 @@ function buildWorkflowConversationGroups(nodes: TeachingTaskResponse["nodes"]): 
 }
 
 function MathRichText({ text }: { text: string }) {
+  const normalizedText = normalizePreviewMath(decodeLatexText(text));
   return (
     <>
-      {splitMathText(decodeLatexText(text)).map((segment) => {
+      {splitMathText(normalizedText).map((segment) => {
         if (!segment.math) {
           return <span key={segment.key}>{segment.text}</span>;
         }
@@ -831,6 +832,52 @@ function decodeLatexText(value: string) {
     .replace(/\\\{/g, "{")
     .replace(/\\\}/g, "}")
     .replace(/\\\\/g, "\\");
+}
+
+function normalizePreviewMath(value: string) {
+  return wrapBarePreviewMath(value
+    .replace(/⁰/g, "^0")
+    .replace(/¹/g, "^1")
+    .replace(/²/g, "^2")
+    .replace(/³/g, "^3")
+    .replace(/⁴/g, "^4")
+    .replace(/⁵/g, "^5")
+    .replace(/⁶/g, "^6")
+    .replace(/⁷/g, "^7")
+    .replace(/⁸/g, "^8")
+    .replace(/⁹/g, "^9")
+    .replace(/₀/g, "_0")
+    .replace(/₁/g, "_1")
+    .replace(/₂/g, "_2")
+    .replace(/₃/g, "_3")
+    .replace(/₄/g, "_4")
+    .replace(/₅/g, "_5")
+    .replace(/₆/g, "_6")
+    .replace(/₇/g, "_7")
+    .replace(/₈/g, "_8")
+    .replace(/₉/g, "_9")
+    .replace(/±/g, "\\pm "));
+}
+
+function wrapBarePreviewMath(value: string) {
+  const withFractions = wrapRegexOutsideMath(
+    value,
+    /(?<![$\w])([A-Za-z0-9]+(?:\^[-+]?\d+)?\/[A-Za-z0-9]+(?:\^[-+]?\d+)?(?:\s*[+\-=]\s*[A-Za-z0-9]+(?:\^[-+]?\d+)?\/[A-Za-z0-9]+(?:\^[-+]?\d+)?)+(?:\s*=\s*-?\d+)?)(?![$\w])/g,
+  );
+  return wrapRegexOutsideMath(
+    withFractions,
+    /(?<![$\w])((?:\\pm\s*)?[A-Za-z0-9]+(?:[_^][-+]?\d+)?(?:\s*[+\-*/=]\s*(?:\\pm\s*)?[A-Za-z0-9]+(?:[_^][-+]?\d+)?)+)(?![$\w])/g,
+  );
+}
+
+function wrapRegexOutsideMath(value: string, pattern: RegExp) {
+  const segments = value.split(/(\$\$[\s\S]*?\$\$|\$[^$]+\$)/g);
+  return segments.map((segment) => {
+    if (!segment || segment.startsWith("$")) {
+      return segment;
+    }
+    return segment.replace(pattern, "$$$1$$");
+  }).join("");
 }
 
 function cleanPreviewText(value: string) {
