@@ -104,6 +104,33 @@ class TeachingAiDraftServiceTest {
     }
 
     @Test
+    void formatsQuestionBankEvidenceForPromptWithoutRawAnswerJsonKeys() {
+        CapturingGateway gateway = new CapturingGateway(List.of(new AiChatResult(
+                "openai",
+                "gpt-5.4",
+                16,
+                8,
+                24,
+                "ok",
+                structuredJson("question bank grounded teacher explanation"))));
+        TeachingAiDraftService service = new TeachingAiDraftService(gateway, catalog(true, false), defaultPolicy());
+        TeachingEvidence questionBankEvidence = new TeachingEvidence(
+                "QUESTION_BANK",
+                "双曲线定义与参数关系基础题 / 难度：A 基础",
+                "question-1",
+                0,
+                "已知双曲线焦距为 $10$，且 $2a=6$，求 $a,c,b^2$。\n"
+                        + "答案要点：{\"answer\":\"a=3,c=5,b^2=16\",\"scoring\":\"写出参数关系得分\"}");
+
+        service.draft(request(), List.of(questionBankEvidence), memory());
+
+        assertThat(gateway.requests()).hasSize(1);
+        assertThat(gateway.requests().getFirst().userInputSummary())
+                .contains("QUESTION_BANK", "A 基础", "答案要点", "c=5", "b^2=16")
+                .doesNotContain("\"answer\"", "\"scoring\"");
+    }
+
+    @Test
     void rotatesToNextProviderWhenJsonRetryStillFails() {
         CapturingGateway gateway = new CapturingGateway(List.of(
                 new AiChatResult("openai", "gpt-5.4", 3, 2, 5, "ok", "bad json"),

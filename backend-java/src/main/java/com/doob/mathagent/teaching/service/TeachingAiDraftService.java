@@ -10,9 +10,11 @@ import com.doob.mathagent.teaching.TeachingEvidence;
 import com.doob.mathagent.teaching.dto.TeachingTaskRequest;
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Pattern;
 import org.springframework.stereotype.Service;
 
@@ -378,6 +380,9 @@ public class TeachingAiDraftService {
      * Converts one evidence row to prompt text.
      */
     private static String evidenceLine(TeachingEvidence evidence) {
+        if ("QUESTION_BANK".equals(evidence.sourceScope())) {
+            return questionBankEvidenceLine(evidence);
+        }
         return evidence.sourceScope()
                 + "/"
                 + evidence.sourceTitle()
@@ -385,6 +390,104 @@ public class TeachingAiDraftService {
                 + evidence.pageNo()
                 + ": "
                 + TeachingEvidenceSnippetSanitizer.sanitizeCompact(evidence.snippet());
+    }
+
+    private static String questionBankEvidenceLine(TeachingEvidence evidence) {
+        String answer = questionAnswerOnly(evidence.snippet());
+        String line = "QUESTION_BANK/"
+                + evidence.sourceTitle()
+                + "/difficulty:"
+                + questionDifficulty(evidence)
+                + ": 题目："
+                + TeachingEvidenceSnippetSanitizer.sanitizeCompact(questionTextOnly(evidence.snippet()));
+        if (!answer.isBlank()) {
+            line += "；答案要点：" + TeachingEvidenceSnippetSanitizer.sanitizeCompact(answer);
+        }
+        return line;
+    }
+
+    private static String questionDifficulty(TeachingEvidence evidence) {
+        String title = evidence.sourceTitle() == null ? "" : evidence.sourceTitle();
+        int index = title.indexOf("难度：");
+        if (index >= 0) {
+            return title.substring(index + "难度：".length()).strip();
+        }
+        index = title.indexOf("难度:");
+        if (index >= 0) {
+            return title.substring(index + "难度:".length()).strip();
+        }
+        return "未标难度";
+    }
+
+    private static String questionTextOnly(String snippet) {
+        if (snippet == null || snippet.isBlank()) {
+            return "题目内容待补充";
+        }
+        return splitAnswerMarker(snippet)[0].replaceAll("\\s+", " ").strip();
+    }
+
+    private static String questionAnswerOnly(String snippet) {
+        if (snippet == null || snippet.isBlank()) {
+            return "";
+        }
+        String[] parts = splitAnswerMarker(snippet);
+        if (parts.length < 2 || parts[1].isBlank()) {
+            return "";
+        }
+        return formatQuestionBankAnswer(parts[1].strip());
+    }
+
+    private static String[] splitAnswerMarker(String snippet) {
+        String normalized = snippet.replace("\r", "\n");
+        String[] chineseParts = normalized.split("答案要点：", 2);
+        if (chineseParts.length == 2) {
+            return chineseParts;
+        }
+        String[] asciiParts = normalized.split("答案要点:", 2);
+        if (asciiParts.length == 2) {
+            return asciiParts;
+        }
+        return new String[] {normalized};
+    }
+
+    private static String formatQuestionBankAnswer(String answer) {
+        if (answer.startsWith("{") && answer.endsWith("}")) {
+            try {
+                Map<String, Object> parsed = OBJECT_MAPPER.readValue(answer, new TypeReference<>() {
+                });
+                String answerText = valueText(parsed.get("answer"));
+                String scoringText = valueText(parsed.get("scoring"));
+                if (!answerText.isBlank() || !scoringText.isBlank()) {
+                    List<String> parts = new ArrayList<>();
+                    if (!answerText.isBlank()) {
+                        parts.add("答案：" + answerText);
+                    }
+                    if (!scoringText.isBlank()) {
+                        parts.add("评分点：" + scoringText);
+                    }
+                    return String.join("；", parts);
+                }
+            } catch (JsonProcessingException ignored) {
+                // Fall through to tolerant text cleanup for partially malformed question-bank metadata.
+            }
+        }
+        return answer
+                .replace("\"answer\"", "答案")
+                .replace("\"scoring\"", "评分点")
+                .replace("\"", "")
+                .replace("{", "")
+                .replace("}", "")
+                .replace(":", "：")
+                .replace(",", "；")
+                .replaceAll("\\s+", " ")
+                .strip();
+    }
+
+    private static String valueText(Object value) {
+        if (value == null) {
+            return "";
+        }
+        return String.valueOf(value).replaceAll("\\s+", " ").strip();
     }
 
     /**
