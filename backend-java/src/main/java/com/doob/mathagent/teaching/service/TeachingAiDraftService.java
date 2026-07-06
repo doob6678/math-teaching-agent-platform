@@ -30,7 +30,9 @@ public class TeachingAiDraftService {
     private static final Pattern STUDENT_FORBIDDEN_SECTION = Pattern.compile(
             "【(?:答案与评分点|参考答案|评分标准|例题详解|完整解析|教师讲解|讲评主线|教师备注|板书设计)】[\\s\\S]*?(?=【|$)");
     private static final Pattern STUDENT_FORBIDDEN_LINE = Pattern.compile(
-            "(?m)^.*(?:答案[：:]|参考答案|评分点|评分标准|完整解析|解答如下|因此答案为|故答案为).*$");
+            "(?m)^.*(?:答案[：:]|参考答案|评分点|评分标准|完整解析|解答如下|解：|因此答案为|故答案为).*$");
+    private static final Pattern INTERNAL_HANDOUT_LINE = Pattern.compile(
+            "(?mi)^.*(?:MODEL_CALL|JSON_PARSE|\\btokens?\\b|模型健康|model health|debug|调试|JSON|页眉|页脚|颜色|PDF\\s*规则|渲染引擎|作为\\s*AI|as an AI).*$");
 
     private final AiChatGateway aiChatGateway;
     private final AiProviderCatalog providerCatalog;
@@ -285,6 +287,7 @@ public class TeachingAiDraftService {
                 All user-facing text values must be written in concise Chinese.
                 Math must use Feishu-supported delimiters only: inline $...$ or display $$...$$.
                 Do not use \\[...\\], \\(...\\), \\begin{align}, \\begin{aligned}, \\begin{equation}, or Markdown code fences.
+                Separate capabilities strictly: AI live explanation belongs to chat/dialogue features; this task generates printable handouts for teachers and students only.
                 Treat template layout instructions as rendering constraints only. Do not write header/footer/color/PDF layout rules in any JSON value.
                 JSON schema:
                 {
@@ -298,6 +301,8 @@ public class TeachingAiDraftService {
                 Do not mention page header, page footer, colors, rendering engines, prompt rules, template rules, or "PDF layout requirements" as handout content.
                 Teacher content must include answers when enough information is available from the problem/evidence; student content must leave blanks instead of answers.
                 Teacher content is for human teacher review and printing. Student content is for classroom use and must not contain 【答案与评分点】, 【例题详解】, 参考答案, 评分标准, or complete solution paragraphs.
+                Use question-bank difficulty and answer evidence only to organize teacher answers and student exercises; never expose raw JSON keys from question-bank metadata.
+                Keep each labeled block compact: prefer formulas, numbered steps, short bullets, and explicit blanks over long prose.
                 Respect printable handout layout, but do not describe layout rules such as header/footer or color requirements as user-facing content.
                 If the user only gives a topic rather than a problem, create a complete mini-handout around that topic.
                 Selected handout template: %s
@@ -328,6 +333,7 @@ public class TeachingAiDraftService {
                 All user-facing text values must be written in concise Chinese.
                 Math must use only $...$ or $$...$$; never use \\[...\\], \\(...\\), or align/equation environments.
                 Do not write header/footer/color/PDF layout rules, AI, token, debug, JSON, or model-health wording inside user-facing values.
+                AI live explanation belongs to chat/dialogue features; this retry still generates printable handouts only.
                 Parse error: %s
                 Previous output: %s
 
@@ -544,7 +550,18 @@ public class TeachingAiDraftService {
     }
 
     private static String normalizeText(String value) {
-        return FormulaMarkupSanitizer.sanitizeFeishuMath(value);
+        String normalized = FormulaMarkupSanitizer.sanitizeFeishuMath(value);
+        return removeInternalHandoutLines(normalized);
+    }
+
+    private static String removeInternalHandoutLines(String value) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        return INTERNAL_HANDOUT_LINE.matcher(value)
+                .replaceAll("")
+                .replaceAll("\\n{3,}", "\n\n")
+                .strip();
     }
 
     private static String normalizeStudentWorksheetText(String value) {
@@ -598,8 +615,8 @@ public class TeachingAiDraftService {
         }
         String sanitized = STUDENT_FORBIDDEN_SECTION.matcher(value).replaceAll("");
         sanitized = sanitized
-                .replaceAll("(?i)(参考答案|答案|评分点|评分标准|完整解析|解答如下|因此答案为|故答案为)[：:].*$", "")
-                .replaceAll("(?i)(参考答案|答案|评分点|评分标准|完整解析|解答如下|因此答案为|故答案为).*$", "")
+                .replaceAll("(?i)(参考答案|答案|评分点|评分标准|完整解析|解答如下|解：|因此答案为|故答案为)[：:].*$", "")
+                .replaceAll("(?i)(参考答案|答案|评分点|评分标准|完整解析|解答如下|解：|因此答案为|故答案为).*$", "")
                 .replaceAll("\\s+", " ")
                 .strip();
         return sanitized;
