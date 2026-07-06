@@ -169,7 +169,7 @@ export function TeachingTaskPanel({
             <div className="handout-primary-head">
               <div>
                 <p className="eyebrow">当前讲义</p>
-                <h3>{task.learningGoal || task.questionText || "未命名讲义"}</h3>
+                <h3>{displayTaskTitle(task)}</h3>
                 <span>{task.taskId}</span>
               </div>
               <label>
@@ -775,7 +775,7 @@ function HistoryPanel({
                 key={item.taskId}
                 onClick={() => onSelectHistory(item)}
               >
-                <strong>{item.learningGoal || item.questionText || "未命名讲义"}</strong>
+                <strong>{displayTaskTitle(item)}</strong>
                 <span>{statusLabel(item.status)} · {shortText(item.taskId, 22)}</span>
                 <span className={hasHandout ? "teaching-history-action" : "teaching-history-action muted"}>
                   {hasHandout ? "打开并预览内容，可下载或复核" : "任务尚未产出可预览讲义"}
@@ -1016,6 +1016,7 @@ function parseHandoutLatex(latex: string): ReviewBlock[] {
   const blocks: ReviewBlock[] = [];
   const lines = latex.replace(/\r/g, "").split("\n");
   let listMode: { ordered: boolean; items: string[] } | null = null;
+  let skippedSection = false;
 
   const flushList = () => {
     if (listMode && listMode.items.length) {
@@ -1031,6 +1032,19 @@ function parseHandoutLatex(latex: string): ReviewBlock[] {
       continue;
     }
     if (line.startsWith("%")) {
+      continue;
+    }
+    const section = line.match(/^\\section\{(.+)\}$/);
+    if (section) {
+      flushList();
+      const title = cleanPreviewText(section[1]);
+      skippedSection = isReviewNoiseSection(title);
+      if (!skippedSection) {
+        blocks.push({ type: "section", title });
+      }
+      continue;
+    }
+    if (skippedSection) {
       continue;
     }
     if (line.startsWith("\\begin{itemize}")) {
@@ -1051,27 +1065,32 @@ function parseHandoutLatex(latex: string): ReviewBlock[] {
       if (!listMode) {
         listMode = { ordered: false, items: [] };
       }
-      listMode.items.push(cleanPreviewText(line.replace(/^\\item\s*/, "")));
+      const itemText = cleanPreviewText(line.replace(/^\\item\s*/, ""));
+      if (itemText && !isReviewNoiseText(itemText)) {
+        listMode.items.push(compactReviewText(itemText));
+      }
       continue;
     }
     flushList();
 
-    const section = line.match(/^\\section\{(.+)\}$/);
-    if (section) {
-      blocks.push({ type: "section", title: cleanPreviewText(section[1]) });
-      continue;
-    }
     const subsection = line.match(/^\\subsection\*?\{(.+)\}$/);
     if (subsection) {
-      blocks.push({ type: "subsection", title: cleanPreviewText(subsection[1]) });
+      const title = cleanPreviewText(subsection[1]);
+      if (title && !isReviewNoiseText(title)) {
+        blocks.push({ type: "subsection", title });
+      }
       continue;
     }
     const paragraph = line.match(/^\\paragraph\{(.+?)\}(.*)$/);
     if (paragraph) {
-      blocks.push({ type: "paragraph", title: cleanPreviewText(paragraph[1]) });
+      const title = cleanPreviewText(paragraph[1]);
+      if (!title || isReviewNoiseText(title)) {
+        continue;
+      }
+      blocks.push({ type: "paragraph", title });
       const inlineText = cleanPreviewText(paragraph[2] ?? "");
       if (inlineText) {
-        pushRichTextBlocks(blocks, inlineText);
+        pushRichTextBlocks(blocks, compactReviewText(inlineText));
       }
       continue;
     }
@@ -1079,7 +1098,11 @@ function parseHandoutLatex(latex: string): ReviewBlock[] {
       blocks.push({ type: "space" });
       continue;
     }
-    pushRichTextBlocks(blocks, cleanPreviewText(line));
+    const cleanedLine = cleanPreviewText(line);
+    if (!cleanedLine || isReviewNoiseText(cleanedLine)) {
+      continue;
+    }
+    pushRichTextBlocks(blocks, compactReviewText(cleanedLine));
   }
 
   flushList();
@@ -1214,6 +1237,15 @@ function wrapRegexOutsideMath(value: string, pattern: RegExp) {
 
 function cleanPreviewText(value: string) {
   return decodeLatexText(value)
+    .replace(/!\[[^\]]*]\([^)]*\)/g, " ")
+    .replace(/\[[^\]]*]\([^)]*\)/g, " ")
+    .replace(/#\s*p\d+\s*-\s*/gi, " ")
+    .replace(/##+\s*正文/g, " ")
+    .replace(/\.\.\/\.\.\/pages\/[^\s，。；;)]*/g, " ")
+    .replace(/\s*-\s*(书名|章节|PDF页码|印刷页码|页图)[:：][^-#，。；;]*/g, " ")
+    .replace(/PDF页码[:：]?\s*\d*/g, " ")
+    .replace(/印刷页码[:：]?\s*[^\s，。；;]*/g, " ")
+    .replace(/页图[:：]?\s*/g, " ")
     .replace(/\\subsection\*?\{.+?\}/g, " ")
     .replace(/\\section\{.+?\}/g, " ")
     .replace(/\\paragraph\{.+?\}/g, " ")
@@ -1351,6 +1383,19 @@ function shortText(value: string | undefined, maxLength: number) {
   return `${safeCut || rawCut.replace(/[$\\{}_^]+/g, "").trim() || "暂无内容"}…`;
 }
 
+function displayTaskTitle(task: TeachingTaskResponse) {
+  const raw = (task.learningGoal || task.questionText || "").replace(/\s+/g, " ").trim();
+  if (!raw || isLikelyBrokenTitle(raw)) {
+    return `历史讲义 ${shortText(task.taskId, 8)}`;
+  }
+  return shortText(raw, 42);
+}
+
+function isLikelyBrokenTitle(value: string) {
+  const questionMarks = (value.match(/\?/g) ?? []).length;
+  return questionMarks >= 6 && questionMarks / Math.max(1, value.length) > 0.35;
+}
+
 function trimDanglingMathPreview(value: string) {
   let text = value.trim();
   const dollarCount = (text.match(/\$/g) ?? []).length;
@@ -1371,6 +1416,28 @@ function trimDanglingMathPreview(value: string) {
     .replace(/\s+\\(?:frac|sqrt|left|right)?[A-Za-z]*\{?[^，。；、,.!?！？]*$/g, "")
     .replace(/\s+\$?\\?[A-Za-z0-9+\-=*/_^{}()[\],. ]{1,24}$/g, "")
     .trim();
+}
+
+function isReviewNoiseSection(title: string) {
+  return /讲义模板与版式|版式要求|页面样式|渲染规则|系统规则/.test(title);
+}
+
+function isReviewNoiseText(value: string) {
+  return /页眉|页脚|讲评色|练习色|PDF\s*版式要求|版式要求|系统渲染|渲染引擎|模板规则|不要写|颜色/.test(value)
+    || /^p\d+\b/i.test(value)
+    || /pages\/p\d+\.png/i.test(value);
+}
+
+function compactReviewText(value: string) {
+  const cleaned = value
+    .replace(/\s*书名[:：]\s*/g, "")
+    .replace(/\s*章节[:：]\s*/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (/教材|教科书|PDF|题库|来源|证据/.test(cleaned) && cleaned.length > 260) {
+    return shortText(cleaned, 260);
+  }
+  return cleaned;
 }
 
 function humanMemoryReason(value: string | undefined) {
