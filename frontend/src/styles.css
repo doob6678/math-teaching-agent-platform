@@ -3422,6 +3422,45 @@ h1, h2, h3, h4, h5, h6 {
   font-weight: 700;
 }
 
+.handout-review-checks {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 2px 0;
+}
+
+.handout-review-check {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 7px;
+  background: #ffffff;
+}
+
+.handout-review-check span {
+  color: var(--slate);
+  font-size: 12px;
+}
+
+.handout-review-check strong {
+  color: var(--navy);
+  font-size: 13px;
+  line-height: 1.42;
+  overflow-wrap: anywhere;
+}
+
+.handout-review-check.good {
+  border-color: rgba(15, 118, 110, 0.18);
+  background: #f0fdfa;
+}
+
+.handout-review-check.warning {
+  border-color: rgba(180, 83, 9, 0.22);
+  background: #fffbeb;
+}
+
 .handout-review-body {
   display: grid;
   gap: 13px;
@@ -3569,6 +3608,10 @@ h1, h2, h3, h4, h5, h6 {
   }
 
   .teaching-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .handout-review-checks {
     grid-template-columns: 1fr;
   }
 

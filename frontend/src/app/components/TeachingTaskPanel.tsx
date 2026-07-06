@@ -27,6 +27,12 @@ type ReviewBlock =
   | { type: "list"; ordered: boolean; items: string[] }
   | { type: "space" };
 
+type ReviewCheck = {
+  label: string;
+  value: string;
+  state: "good" | "warning";
+};
+
 export function TeachingTaskPanel({
   task,
   loading,
@@ -175,6 +181,8 @@ export function TeachingTaskPanel({
             </div>
 
             {exportMessage ? <StatusLine icon={<ShieldCheck size={16} />} text={exportMessage} /> : null}
+
+            {selectedDraft ? <HandoutReviewChecks latex={selectedDraft} version={version} /> : null}
 
             {previewPdfUrl ? (
               <PdfCanvasPreview pdfBytes={previewPdfBytes} pdfUrl={previewPdfUrl} />
@@ -392,6 +400,64 @@ function HandoutStructuredPreview({ latex, version }: { latex: string; version: 
       </div>
     </div>
   );
+}
+
+function HandoutReviewChecks({ latex, version }: { latex: string; version: HandoutVersion }) {
+  const checks = buildHandoutReviewChecks(parseHandoutLatex(latex), latex, version);
+
+  return (
+    <div className="handout-review-checks" aria-label="讲义结构审查">
+      {checks.map((check) => (
+        <div className={`handout-review-check ${check.state}`} key={check.label}>
+          <span>{check.label}</span>
+          <strong>{check.value}</strong>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function buildHandoutReviewChecks(blocks: ReviewBlock[], latex: string, version: HandoutVersion): ReviewCheck[] {
+  const sectionCount = blocks.filter((block) => block.type === "section").length;
+  const hasMath = /\${1,2}[^$]+\${1,2}/.test(latex);
+  const hasWorkspace = blocks.some((block) => block.type === "space") || /作答区|订正|留白|___/.test(latex);
+  const plainText = cleanPreviewText(latex);
+  const answerLeak = /【答案与评分点】|参考答案|评分标准|完整解析|答案[:：]|得分/.test(plainText);
+  const teacherHasAnswer = /【答案与评分点】|答案|解析|讲评|评分/.test(plainText);
+  const labels = blocks
+    .filter((block): block is Extract<ReviewBlock, { type: "paragraph" }> => block.type === "paragraph")
+    .map((block) => block.title);
+  const requiredLabels = version === "teacher"
+    ? ["知识定位", "题型识别", "方法步骤", "例题详解", "答案与评分点", "易错提醒", "课堂追问"]
+    : ["知识速记", "题型识别", "例题任务", "练习任务", "作答提醒"];
+  const matchedLabels = requiredLabels.filter((label) => labels.some((item) => item.includes(label))).length;
+
+  return [
+    {
+      label: "结构",
+      value: `${sectionCount} 个章节，${matchedLabels}/${requiredLabels.length} 个核心栏目`,
+      state: sectionCount >= 3 && matchedLabels >= Math.min(3, requiredLabels.length) ? "good" : "warning",
+    },
+    {
+      label: "公式",
+      value: hasMath ? "已按 KaTeX 渲染" : "暂无公式",
+      state: hasMath ? "good" : "warning",
+    },
+    {
+      label: version === "teacher" ? "教师解析" : "学生作答",
+      value: version === "teacher"
+        ? (teacherHasAnswer ? "包含解析与讲评信息" : "缺少答案或讲评")
+        : (hasWorkspace ? "保留空白作答区" : "缺少作答留白"),
+      state: version === "teacher" ? (teacherHasAnswer ? "good" : "warning") : (hasWorkspace ? "good" : "warning"),
+    },
+    {
+      label: version === "teacher" ? "答案区分" : "答案隔离",
+      value: version === "teacher"
+        ? "答案仅用于教师审查"
+        : (answerLeak ? "发现疑似答案词" : "未发现答案泄漏"),
+      state: version === "teacher" ? "good" : (answerLeak ? "warning" : "good"),
+    },
+  ];
 }
 
 function HistoryPanel({
