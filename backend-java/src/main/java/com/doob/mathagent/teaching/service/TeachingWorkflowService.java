@@ -579,7 +579,15 @@ public class TeachingWorkflowService {
                 \\begin{itemize}
                 \\item 模板：%s
                 \\item 难度：%s
-                \\item 使用场景：教师备课、课堂讲评、课后订正。
+                \\item 使用场景：教师备课、课堂讲评、学生订正。
+                \\item 版式：PDF 导出使用页眉、页脚页码和教师版讲评色；课堂发放以 PDF 为准。
+                \\end{itemize}
+
+                \\section{课前定位}
+                \\begin{itemize}
+                \\item 学习目标：%s
+                \\item 本讲边界：只围绕本次目标组织知识点、例题、追问和分层练习，不混入无关章节。
+                \\item 课堂产物：教师版保留讲解、答案、评分点；学生版只保留题目、提示和作答空间。
                 \\end{itemize}
 
                 \\section{学习目标}
@@ -607,10 +615,13 @@ public class TeachingWorkflowService {
                 %s
                 
                 \\paragraph{讲解路径}
-                先提取条件，再写对应知识点和公式；若有参数或范围条件，单独讨论边界。
+                先提取题目条件，再写对应知识点和公式；若有参数或范围条件，单独处理边界，再进入计算。
                 
                 \\paragraph{答案与评分点}
-                教师版保留完整答案、关键等式、评分点和学生常见失分位置。
+                答案要点先写关键等式，再写最终结论；评分时分开记录“条件识别、公式依据、计算结论、易错提醒”。
+                
+                \\paragraph{易错提醒}
+                学生常见问题通常出现在条件漏读、符号方向、参数范围和公式记忆混淆；讲评时先让学生说出依据，再展示完整解法。
                 
                 \\section{课堂追问}
                 \\begin{itemize}
@@ -626,6 +637,7 @@ public class TeachingWorkflowService {
                 """.formatted(
                 templateLine,
                 difficultyLine,
+                escapeLatex(request.learningGoal()),
                 escapeLatex(request.learningGoal()),
                 escapeLatex(questionSection),
                 evidenceSnippet,
@@ -663,7 +675,7 @@ public class TeachingWorkflowService {
 
     private static String evidenceLabel(TeachingEvidence item) {
         if ("QUESTION_BANK".equals(item.sourceScope()) || item.pageNo() <= 0) {
-            return "题库：" + item.sourceTitle();
+            return "题库：" + questionTitleWithoutDifficulty(item);
         }
         return item.sourceTitle() + " / PDF " + item.pageNo();
     }
@@ -796,11 +808,11 @@ public class TeachingWorkflowService {
             String question = questionTextOnly(item.snippet());
             String answer = questionAnswerOnly(item.snippet());
             builder.append("\\item ")
-                    .append(escapeLatex(difficulty + "：" + item.sourceTitle()))
+                    .append(escapeLatex(difficulty + "：" + questionTitleWithoutDifficulty(item)))
                     .append("\\\\\n")
                     .append(escapeLatex(question))
                     .append("\\\\\n")
-                    .append(escapeLatex(answer.isBlank() ? "答案要点：请教师结合课堂讲评补充。" : answer))
+                    .append(escapeLatex(answer.isBlank() ? "答案要点：题库未提供答案，需教师审校后补充。" : answer))
                     .append('\n');
         }
         builder.append("\\end{enumerate}\n");
@@ -851,10 +863,25 @@ public class TeachingWorkflowService {
     private static String questionDifficulty(TeachingEvidence item) {
         String title = item.sourceTitle() == null ? "" : item.sourceTitle();
         int index = title.indexOf("难度：");
-        if (index < 0) {
-            return "未标难度";
+        if (index >= 0) {
+            return title.substring(index + "难度：".length()).strip();
         }
-        return title.substring(index + "难度：".length()).strip();
+        index = title.indexOf("难度:");
+        if (index >= 0) {
+            return title.substring(index + "难度:".length()).strip();
+        }
+        return "未标难度";
+    }
+
+    private static String questionTitleWithoutDifficulty(TeachingEvidence item) {
+        String title = item.sourceTitle() == null ? "" : item.sourceTitle().strip();
+        if (title.isBlank()) {
+            return "题库题目";
+        }
+        return title
+                .replaceAll("\\s*/\\s*难度[:：].*$", "")
+                .replaceAll("\\s*（?难度[:：].*?）?\\s*$", "")
+                .strip();
     }
 
     private static String questionTextOnly(String snippet) {

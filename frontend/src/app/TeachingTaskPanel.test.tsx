@@ -47,7 +47,7 @@ describe("TeachingTaskPanel", () => {
       reactTrace: [],
       evidence: [],
       handoutLatex: "\\section{学习目标}\n学会双曲线定义与参数关系",
-      teacherHandoutLatex: "\\section{学习目标}\n学会双曲线定义与参数关系\n\\paragraph{知识定位}双曲线\n\\paragraph{答案与评分点}答案为 $b^2=16$。",
+      teacherHandoutLatex: "\\section{学习目标}\n学会双曲线定义与参数关系\n\\paragraph{知识定位}双曲线\n\\paragraph{答案与评分点}答案为 $b^2=16$。\n参数关系 c\\textasciicircum{}2=a\\textasciicircum{}2+b\\textasciicircum{}2。",
       studentHandoutLatex: "\\section{学习主题}\n学会双曲线定义与参数关系\n\\section{我的解答}\n\\vspace{10em}",
       interactiveSuggestions: [],
       memoryReuse: {
@@ -156,6 +156,8 @@ describe("TeachingTaskPanel", () => {
     expect(html).toContain("讲义结构摘要");
     expect(html).toContain("mfrac");
     expect(html).toContain("msup");
+    expect(html).toContain("纸面审查视图：未打开 PDF 时先检查结构、公式和留白");
+    expect(html).not.toContain("textasciicircum");
     expect(html).toContain("教师版");
     expect(html).toContain("学生版");
     expect(html).toContain("知识定位");

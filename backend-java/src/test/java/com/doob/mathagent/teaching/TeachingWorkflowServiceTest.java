@@ -213,8 +213,8 @@ class TeachingWorkflowServiceTest {
         assertThat(response.evidence())
                 .anySatisfy(item -> assertThat(item.sourceScope()).isEqualTo("QUESTION_BANK"));
         assertThat(response.teacherHandoutLatex())
-                .contains("A ", "c=5", "b^2=16")
-                .doesNotContain("\"answer\"", "\"scoring\"");
+                .contains("A ", "双曲线定义与参数关系基础题", "$c=5$", "$b^2=16$", "课前定位", "易错提醒")
+                .doesNotContain("\"answer\"", "\"scoring\"", "双曲线定义与参数关系基础题 / 难度：A 基础", "教师版保留完整答案");
         assertThat(response.studentHandoutLatex())
                 .contains("\\section{", "A ", "\\vspace{5em}");
         assertThat(response.studentHandoutLatex())

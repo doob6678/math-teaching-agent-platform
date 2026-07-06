@@ -519,7 +519,7 @@ function HandoutStructuredPreview({ latex, version }: { latex: string; version: 
       <div className="handout-review-head">
         <div>
           <span>{title}</span>
-          <strong>未打开 PDF 时，先按结构预览内容与公式</strong>
+          <strong>纸面审查视图：未打开 PDF 时先检查结构、公式和留白</strong>
         </div>
         <em>{version === "teacher" ? "教师版" : "学生版"}</em>
       </div>
@@ -1109,6 +1109,8 @@ function splitMathText(text: string) {
 function decodeLatexText(value: string) {
   return value
     .replace(/\\textbackslash\{\}/g, "\\")
+    .replace(/\\textasciicircum\{\}/g, "^")
+    .replace(/\\textasciitilde\{\}/g, "~")
     .replace(/\\_/g, "_")
     .replace(/\\%/g, "%")
     .replace(/\\#/g, "#")
