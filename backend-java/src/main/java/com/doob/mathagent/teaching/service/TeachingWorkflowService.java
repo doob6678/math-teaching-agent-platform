@@ -315,14 +315,14 @@ public class TeachingWorkflowService {
                     + escapeLatex(aiDraft.teacherExplanation())
                     + "\n\\paragraph{知识点与方法卡}"
                     + latexItemize(aiDraft.knowledgePoints())
-                    + "\n\\paragraph{分层练习与追问}"
-                    + latexItemize(aiDraft.followUpQuestions());
+                    + "\n\\paragraph{分层练习、追问与答案审查}"
+                    + latexEnumerate(aiDraft.followUpQuestions());
         }
         return latex + "\n\\section{" + title + "}\n"
                 + escapeLatex(aiDraft.studentHint())
                 + "\n\\paragraph{练习任务}"
-                + latexItemize(aiDraft.followUpQuestions())
-                + "\n\\paragraph{作答区}\n\\vspace{8em}\n";
+                + latexEnumerate(aiDraft.followUpQuestions())
+                + "\n\\paragraph{作答区}\n\\vspace{10em}\n";
     }
 
     /**
@@ -569,15 +569,18 @@ public class TeachingWorkflowService {
                 ? "复用学生记忆：" + escapeLatex(memoryResponse.answer())
                 : evidence.isEmpty() ? "暂无教材证据。" : evidenceSummary(evidence);
         String templateLine = escapeLatex(template.summary().displayName() + " / " + template.summary().description());
+        String difficultyLine = escapeLatex(difficultyBands(template));
         String questionSection = safeQuestionText(request).isBlank()
                 ? "围绕学习目标设计例题、变式题和课堂追问。"
                 : safeQuestionText(request);
         return """
-                \\section{教师版}
-                供教师备课、课堂讲评和课后审校使用，保留来源、讲解路径、答案要点和练习设计。
-
-                \\section{模板}
-                %s
+                \\section{讲义信息}
+                \\begin{itemize}
+                \\item 版本：教师版，用于备课、课堂讲评和课后审校。
+                \\item 模板：%s
+                \\item 难度：%s
+                \\item 内容边界：保留来源、讲解路径、答案要点和练习设计；不向学生版暴露完整答案。
+                \\end{itemize}
 
                 \\section{学习目标}
                 %% 用户想学什么
@@ -594,6 +597,30 @@ public class TeachingWorkflowService {
                 %% 本次只引用实际命中的公开教材或教师资源；未命中的来源不会写入讲义。
                 %s
 
+                \\section{教学主线}
+                \\begin{enumerate}
+                \\item 先用定义、公式或图像定位本讲主题，明确学生必须会写的核心关系。
+                \\item 再识别题型信号，决定使用定义法、代数计算、数形结合或分类讨论。
+                \\item 例题讲评时写清“为什么这样做”，最后给答案、评分点和易错提醒。
+                \\end{enumerate}
+                
+                \\section{例题与答案区}
+                \\paragraph{例题}
+                %s
+                
+                \\paragraph{讲解路径}
+                先提取条件，再写对应知识点和公式；若有参数或范围条件，必须单独讨论边界。
+                
+                \\paragraph{答案与评分点}
+                由模型生成或教师审查后补全；若证据来自题库，答案要点只保留在教师版。
+                
+                \\section{课堂追问预设}
+                \\begin{itemize}
+                \\item 这道题第一步为什么不能直接套公式？
+                \\item 如果条件少一个，应该先补哪个量？
+                \\item 学生最容易在定义域、符号、参数范围还是计算细节上出错？
+                \\end{itemize}
+                
                 \\section{讲义检查清单}
                 \\begin{itemize}
                 \\item 是否有清晰页眉、标题、知识点和练习分区。
@@ -603,10 +630,12 @@ public class TeachingWorkflowService {
                 \\end{itemize}
                 """.formatted(
                 templateLine,
+                difficultyLine,
                 escapeLatex(request.learningGoal()),
                 escapeLatex(questionSection),
                 evidenceSnippet,
-                teacherKnowledgePoint(request, evidence));
+                teacherKnowledgePoint(request, evidence),
+                escapeLatex(questionSection));
     }
 
     private static boolean canUseQuestionBank(TeachingRequestContext context) {
@@ -623,15 +652,31 @@ public class TeachingWorkflowService {
         }
         return evidence.stream()
                 .limit(3)
-                .map(item -> escapeLatex(item.sourceTitle() + " / PDF " + item.pageNo() + "：" + compactEvidenceSnippet(item.snippet())))
+                .map(item -> escapeLatex(evidenceLabel(item) + "：" + TeachingEvidenceSnippetSanitizer.sanitizeCompact(item.snippet())))
                 .collect(java.util.stream.Collectors.joining("\n\n"));
+    }
+
+    private static String evidenceLabel(TeachingEvidence item) {
+        if ("QUESTION_BANK".equals(item.sourceScope()) || item.pageNo() <= 0) {
+            return "题库：" + item.sourceTitle();
+        }
+        return item.sourceTitle() + " / PDF " + item.pageNo();
     }
 
     private static String compactEvidenceSnippet(String snippet) {
         if (snippet == null || snippet.isBlank()) {
             return "已命中资料片段。";
         }
-        String cleaned = snippet.replaceAll("\\s+", " ").strip();
+        String cleaned = snippet
+                .replace("\r", "\n")
+                .replaceAll("!\\[[^\\]]*]\\([^)]*\\)", " ")
+                .replaceAll("(?m)^#.*$", " ")
+                .replaceAll("(?m)^##\\s*正文.*$", " ")
+                .replaceAll("(?m)^-\\s*(书名|章节|PDF页码|印刷页码|页图).*?$", " ")
+                .replace("$$", " ")
+                .replace("###", " ")
+                .replaceAll("\\s+", " ")
+                .strip();
         return cleaned.length() <= 120 ? cleaned : cleaned.substring(0, 120) + "...";
     }
 
@@ -653,31 +698,37 @@ public class TeachingWorkflowService {
                     ? "根据本节主题完成下面的知识梳理与分层练习。"
                     : safeQuestionText(request);
             return """
-                    \\section{%s}
-                    \\paragraph{讲次定位}
-                    参考模板：%s
+                    \\section{讲义信息}
+                    \\begin{itemize}
+                    \\item 版本：学生版，用于课堂练习和课后复盘。
+                    \\item 模板：%s
+                    \\item 学习主题：%s
+                    \\end{itemize}
 
-                    \\subsection*{知识点梳理}
+                    \\subsection*{知识点速记}
                     %s
 
                     \\subsection*{注意}
                     %s
 
-                    \\subsection*{题目与例题}
+                    \\subsection*{例题任务}
                     %s
 
                     \\subsection*{分层练习}
                     \\begin{enumerate}
-                    \\item 根据定义写出本节核心关系式。
-                    \\item 对照题目条件判断应先求比例系数还是先判断函数类型。
-                    \\item 在空白处完成关键步骤，并标出易错点。
+                    \\item A 基础：写出本讲涉及的定义、公式或图像特征。
+                    \\item B 提高：根据题目条件列出关键等式，并说明每一步依据。
+                    \\item C 挑战：改变一个条件后，判断方法是否还成立。
                     \\end{enumerate}
 
-                    \\subsection*{我的解答}
-                    \\vspace{8em}
+                    \\subsection*{课堂作答区}
+                    \\vspace{10em}
+                    
+                    \\subsection*{订正与错因}
+                    \\vspace{6em}
                     """.formatted(
-                    escapeLatex(request.learningGoal()),
                     escapeLatex(template.summary().displayName()),
+                    escapeLatex(request.learningGoal()),
                     escapeLatex(hint),
                     escapeLatex("先核对定义域、符号条件和参数不为 0 等边界。"),
                     escapeLatex(questionText));
@@ -686,8 +737,11 @@ public class TeachingWorkflowService {
                 ? "根据本讲主题完成例题、变式和订正。"
                 : safeQuestionText(request);
         return """
-                \\section{学生版}
-                本讲义用于课堂练习和课后复盘，请先独立完成空白区，再查看教师讲解。
+                \\section{讲义信息}
+                \\begin{itemize}
+                \\item 版本：学生版，用于课堂练习和课后复盘。
+                \\item 要求：先独立完成空白区，再查看教师讲解。
+                \\end{itemize}
 
                 \\section{学习目标}
                 %s
@@ -697,9 +751,23 @@ public class TeachingWorkflowService {
 
                 \\section{思路提示}
                 %s
+                
+                \\section{知识点速记}
+                \\begin{itemize}
+                \\item 先写定义、公式或图像特征，再代入题目条件。
+                \\item 遇到参数、范围、符号时先标记边界，不急着计算。
+                \\item 本页不展示答案，完整解析在教师版审查。
+                \\end{itemize}
+                
+                \\section{课堂练习}
+                \\begin{enumerate}
+                \\item A 基础：复述本题对应的核心知识点。
+                \\item B 提高：写出第一步等式或图形关系。
+                \\item C 挑战：说明如果条件变化，方法需要怎样调整。
+                \\end{enumerate}
 
                 \\section{我的解答}
-                \\vspace{8em}
+                \\vspace{10em}
 
                 \\section{订正记录}
                 \\vspace{6em}
@@ -750,7 +818,9 @@ public class TeachingWorkflowService {
                 .replace("#", "\\#")
                 .replace("_", "\\_")
                 .replace("{", "\\{")
-                .replace("}", "\\}");
+                .replace("}", "\\}")
+                .replace("^", "\\textasciicircum{}")
+                .replace("~", "\\textasciitilde{}");
     }
 
     private static String sanitizeMathSegment(String value) {
@@ -790,6 +860,25 @@ public class TeachingWorkflowService {
             builder.append("\\item ").append(escapeLatex(item)).append('\n');
         }
         return builder.append("\\end{itemize}\n").toString();
+    }
+
+    private static String latexEnumerate(List<String> items) {
+        if (items == null || items.isEmpty()) {
+            return "\n";
+        }
+        StringBuilder builder = new StringBuilder("\n\\begin{enumerate}\n");
+        for (String item : items) {
+            builder.append("\\item ").append(escapeLatex(item)).append('\n');
+        }
+        return builder.append("\\end{enumerate}\n").toString();
+    }
+
+    private static String difficultyBands(TeachingHandoutTemplateProfile template) {
+        List<String> bands = template.summary().difficultyBands();
+        if (bands == null || bands.isEmpty()) {
+            return "基础、提高";
+        }
+        return String.join("、", bands);
     }
 
     /**

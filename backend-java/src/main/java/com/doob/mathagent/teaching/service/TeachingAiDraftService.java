@@ -280,13 +280,15 @@ public class TeachingAiDraftService {
                 Do not use \\[...\\], \\(...\\), \\begin{align}, \\begin{aligned}, \\begin{equation}, or Markdown code fences.
                 JSON schema:
                 {
-                  "teacherExplanation": "Chinese handout body with short labeled parts: 知识定位、方法步骤、例题拆解、易错提醒、课堂追问. Keep it printable, not chatty.",
-                  "studentHint": "Chinese student-facing worksheet hint with short labeled parts: 先看什么、怎么下手、留白任务. Hint only, do not reveal full answers.",
+                  "teacherExplanation": "Chinese teacher handout body with labeled parts: 【知识定位】【题型识别】【方法步骤】【例题详解】【答案与评分点】【易错提醒】【课堂追问】. It must be printable and complete, not chatty.",
+                  "studentHint": "Chinese student worksheet body with labeled parts: 【知识速记】【题型识别】【例题任务】【练习任务】【作答提醒】. Hint only; do not reveal full answers or scoring points.",
                   "knowledgePoints": ["3-8 Chinese knowledge points or method cards, formula-first when useful"],
                   "followUpQuestions": ["3-8 Chinese exercises/questions, include easy/medium/hard progression when possible"]
                 }
                 Do not write "as an AI". Do not invent sources not provided below.
                 Do not output raw page OCR fragments, raw source ids, model names, token usage, or backend diagnostics.
+                Teacher content must include answers when enough information is available from the problem/evidence; student content must leave blanks instead of answers.
+                Respect printable handout layout, but do not describe layout rules such as header/footer or color requirements as user-facing content.
                 If the user only gives a topic rather than a problem, create a complete mini-handout around that topic.
                 Selected handout template: %s
                 Template instructions: %s
@@ -366,7 +368,13 @@ public class TeachingAiDraftService {
      * Converts one evidence row to prompt text.
      */
     private static String evidenceLine(TeachingEvidence evidence) {
-        return evidence.sourceScope() + "/" + evidence.sourceTitle() + "/p." + evidence.pageNo() + ": " + evidence.snippet();
+        return evidence.sourceScope()
+                + "/"
+                + evidence.sourceTitle()
+                + "/p."
+                + evidence.pageNo()
+                + ": "
+                + TeachingEvidenceSnippetSanitizer.sanitizeCompact(evidence.snippet());
     }
 
     /**

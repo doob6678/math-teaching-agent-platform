@@ -82,19 +82,22 @@ public class TeachingHandoutPdfExportService {
             PdfStyle style = PdfStyle.forVersion(version);
             String title = versionTitle(version);
             String templateName = task.selectedTemplate() == null ? "标准讲义" : task.selectedTemplate().displayName();
+            String handoutSource = task.handoutLatexFor(version);
+            boolean hasStructuredBody = containsStructuredSections(handoutSource);
             PdfWriter writer = new PdfWriter(document, font, style, title, templateName);
-            writer.writeTitle(title);
             writer.writeMuted("任务编号：" + safeText(task.taskId()));
             writer.writeMuted("模板：" + templateName + "　版本：" + title);
             writer.writeBlank();
-            writer.writeHeading("学习目标");
-            writer.writeParagraph(nonBlank(task.learningGoal(), "未填写"));
-            if (!safeText(task.questionText()).isBlank()) {
-                writer.writeHeading("题目 / 要求");
-                writer.writeParagraph(task.questionText());
+            if (!hasStructuredBody) {
+                writer.writeHeading("学习目标");
+                writer.writeParagraph(nonBlank(task.learningGoal(), "未填写"));
+                if (!safeText(task.questionText()).isBlank()) {
+                    writer.writeHeading("题目 / 要求");
+                    writer.writeParagraph(task.questionText());
+                }
+                writer.writeHeading("讲义内容");
             }
-            writer.writeHeading("讲义内容");
-            for (ReadableLine line : readableLines(task.handoutLatexFor(version))) {
+            for (ReadableLine line : readableLines(handoutSource)) {
                 writer.write(line);
             }
             writer.close();
@@ -178,6 +181,15 @@ public class TeachingHandoutPdfExportService {
             }
         }
         return Optional.empty();
+    }
+
+    private static boolean containsStructuredSections(String source) {
+        for (String rawLine : safeText(source).replace("\r\n", "\n").replace('\r', '\n').split("\n")) {
+            if (SECTION_COMMAND.matcher(rawLine.strip()).matches()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static String fullLatexDocument(TeachingTaskResponse task, String version) {
@@ -267,6 +279,7 @@ public class TeachingHandoutPdfExportService {
         List<String> lines = new ArrayList<>();
         boolean inEvidenceSection = false;
         boolean skippingTextbookBody = false;
+        boolean skippingLegacyMetadataSection = false;
         for (String rawLine : normalized.replace("\r\n", "\n").replace('\r', '\n').split("\n")) {
             String line = rawLine.strip();
             line = line
@@ -276,16 +289,32 @@ public class TeachingHandoutPdfExportService {
             Matcher section = SECTION_COMMAND.matcher(line);
             if (section.matches()) {
                 String heading = cleanText(section.group(1));
+                if (isVersionOnlyHeading(heading)) {
+                    skippingLegacyMetadataSection = false;
+                    inEvidenceSection = false;
+                    skippingTextbookBody = false;
+                    continue;
+                }
+                skippingLegacyMetadataSection = isLegacyMetadataHeading(heading);
+                if (skippingLegacyMetadataSection) {
+                    continue;
+                }
                 inEvidenceSection = isEvidenceHeading(heading);
                 skippingTextbookBody = false;
             }
             if (line.isBlank()) {
-                if (!skippingTextbookBody) {
+                if (!skippingTextbookBody && !skippingLegacyMetadataSection) {
                     lines.add("");
                 }
                 continue;
             }
+            if (skippingLegacyMetadataSection) {
+                continue;
+            }
             if (line.startsWith("%") || isDiagnosticLine(line) || isMarkdownImageOnlyLine(line)) {
+                continue;
+            }
+            if (isInternalLayoutInstruction(line)) {
                 continue;
             }
             Matcher markdownHeading = MARKDOWN_HEADING.matcher(line);
@@ -306,6 +335,12 @@ public class TeachingHandoutPdfExportService {
             if (skippingTextbookBody) {
                 continue;
             }
+            if (inEvidenceSection) {
+                line = TeachingEvidenceSnippetSanitizer.sanitizeCompact(line);
+                if (line.isBlank() || "已命中资料片段。".equals(line)) {
+                    continue;
+                }
+            }
             if (MARKDOWN_IMAGE.matcher(line).find()) {
                 line = MARKDOWN_IMAGE.matcher(line).replaceAll("").strip();
                 if (line.isBlank()) {
@@ -321,6 +356,12 @@ public class TeachingHandoutPdfExportService {
         StringBuilder builder = new StringBuilder();
         boolean math = false;
         for (int index = 0; index < value.length(); index += 1) {
+            if (value.startsWith("$$", index)) {
+                math = !math;
+                builder.append("$$");
+                index += 1;
+                continue;
+            }
             char character = value.charAt(index);
             char previous = index > 0 ? value.charAt(index - 1) : '\0';
             if (character == '$') {
@@ -345,6 +386,14 @@ public class TeachingHandoutPdfExportService {
                     builder.append("\\%");
                     continue;
                 }
+                if (character == '^') {
+                    builder.append("\\textasciicircum{}");
+                    continue;
+                }
+                if (character == '~') {
+                    builder.append("\\textasciitilde{}");
+                    continue;
+                }
             }
             builder.append(character);
         }
@@ -359,7 +408,9 @@ public class TeachingHandoutPdfExportService {
                 .replace("#", "\\#")
                 .replace("_", "\\_")
                 .replace("{", "\\{")
-                .replace("}", "\\}");
+                .replace("}", "\\}")
+                .replace("^", "\\textasciicircum{}")
+                .replace("~", "\\textasciitilde{}");
     }
 
     private static String hex(Color color) {
@@ -442,10 +493,11 @@ public class TeachingHandoutPdfExportService {
         List<ReadableLine> lines = new ArrayList<>();
         boolean inEvidenceSection = false;
         boolean skippingTextbookBody = false;
+        boolean skippingLegacyMetadataSection = false;
         for (String rawLine : safeText(latex).replace("\r\n", "\n").replace('\r', '\n').split("\n")) {
             String line = rawLine.strip();
             if (line.isBlank()) {
-                if (!skippingTextbookBody) {
+                if (!skippingTextbookBody && !skippingLegacyMetadataSection) {
                     addBlank(lines);
                 }
                 continue;
@@ -465,6 +517,9 @@ public class TeachingHandoutPdfExportService {
                     || line.startsWith("\\end{enumerate}")) {
                 continue;
             }
+            if (isInternalLayoutInstruction(line)) {
+                continue;
+            }
             Matcher vspace = VSPACE_COMMAND.matcher(line);
             if (vspace.matches()) {
                 int blankRows = Math.max(2, Math.min(12, Math.round(Float.parseFloat(vspace.group(1)) / 1.6f)));
@@ -476,6 +531,16 @@ public class TeachingHandoutPdfExportService {
             Matcher section = SECTION_COMMAND.matcher(line);
             if (section.matches()) {
                 String heading = cleanText(section.group(1));
+                if (isVersionOnlyHeading(heading)) {
+                    skippingLegacyMetadataSection = false;
+                    inEvidenceSection = false;
+                    skippingTextbookBody = false;
+                    continue;
+                }
+                skippingLegacyMetadataSection = isLegacyMetadataHeading(heading);
+                if (skippingLegacyMetadataSection) {
+                    continue;
+                }
                 inEvidenceSection = isEvidenceHeading(heading);
                 skippingTextbookBody = false;
                 lines.add(new ReadableLine(LineType.HEADING, heading));
@@ -499,6 +564,9 @@ public class TeachingHandoutPdfExportService {
             if (skippingTextbookBody) {
                 continue;
             }
+            if (skippingLegacyMetadataSection) {
+                continue;
+            }
             if (line.startsWith("\\item")) {
                 lines.add(new ReadableLine(LineType.BULLET, cleanText(line.substring("\\item".length()))));
                 continue;
@@ -511,6 +579,9 @@ public class TeachingHandoutPdfExportService {
                 continue;
             }
             String cleaned = cleanText(line);
+            if (inEvidenceSection) {
+                cleaned = TeachingEvidenceSnippetSanitizer.sanitizeCompact(cleaned);
+            }
             if (!cleaned.isBlank()) {
                 lines.add(new ReadableLine(LineType.PARAGRAPH, cleaned));
             }
@@ -544,12 +615,31 @@ public class TeachingHandoutPdfExportService {
                 || text.contains("资料证据");
     }
 
+    private static boolean isLegacyMetadataHeading(String heading) {
+        String text = safeText(heading).replaceAll("\\s+", "");
+        return "讲义模板与版式".equals(text);
+    }
+
+    private static boolean isVersionOnlyHeading(String heading) {
+        String text = safeText(heading).replaceAll("\\s+", "");
+        return "教师版".equals(text) || "学生版".equals(text);
+    }
+
     private static boolean isTextbookBodyHeading(String heading) {
         String text = safeText(heading).replaceAll("\\s+", "");
         return "正文".equals(text)
                 || "原文".equals(text)
                 || "OCR正文".equalsIgnoreCase(text)
                 || "教材正文".equals(text);
+    }
+
+    private static boolean isInternalLayoutInstruction(String line) {
+        String text = safeText(line).replaceAll("\\s+", "");
+        return text.contains("PDF版式要求")
+                || text.contains("页眉展示主题和版本")
+                || text.contains("页脚展示页码")
+                || text.contains("教师版使用讲评色")
+                || text.contains("学生版使用练习色");
     }
 
     private static boolean isMarkdownImageOnlyLine(String line) {

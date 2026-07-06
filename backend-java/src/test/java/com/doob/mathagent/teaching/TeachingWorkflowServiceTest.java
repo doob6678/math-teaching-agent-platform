@@ -74,8 +74,17 @@ class TeachingWorkflowServiceTest {
         assertThat(response.evidence()).isNotEmpty();
         assertThat(response.evidence().getFirst().sourceScope()).isEqualTo("PUBLIC_TEXTBOOK");
         assertThat(response.handoutLatex()).contains("\\section{学习目标}");
-        assertThat(response.teacherHandoutLatex()).contains("\\section{教师版}", "\\section{知识点归属}");
-        assertThat(response.studentHandoutLatex()).contains("\\section{学生版}", "\\vspace");
+        assertThat(response.teacherHandoutLatex()).contains(
+                "\\section{讲义信息}",
+                "版本：教师版",
+                "模板：",
+                "\\section{教学主线}",
+                "\\section{例题与答案区}",
+                "\\section{课堂追问预设}",
+                "\\section{知识点归属}");
+        assertThat(response.teacherHandoutLatex()).doesNotContain("PDF 版式要求", "页眉展示主题和版本", "页脚展示页码");
+        assertThat(response.teacherHandoutLatex()).doesNotContain("![p", "## 正文", "书名：");
+        assertThat(response.studentHandoutLatex()).contains("\\section{讲义信息}", "版本：学生版", "\\section{知识点速记}", "\\section{课堂练习}", "\\vspace");
         assertThat(response.studentHandoutLatex()).doesNotContain("知识点归属");
         assertThat(response.interactiveSuggestions()).contains("继续追问定义 D(x_0)");
         assertThat(response.aiDraft().enabled()).isFalse();
@@ -204,7 +213,8 @@ class TeachingWorkflowServiceTest {
         assertThat(trace.message()).contains("Teaching AI draft structured");
         assertThat(trace.diagnosticEvents()).extracting(AgentTraceRecord.DiagnosticEvent::eventType)
                 .containsExactly("MODEL_CALL_SUCCEEDED", "JSON_PARSE_SUCCEEDED");
-        assertThat(response.teacherHandoutLatex()).contains("教师讲解稿与练习设计", "知识点与方法卡");
+        assertThat(response.teacherHandoutLatex()).contains("教师讲解稿与练习设计", "知识点与方法卡", "分层练习、追问与答案审查");
+        assertThat(response.studentHandoutLatex()).contains("课堂练习与作答区", "\\vspace{10em}");
         assertThat(response.teacherHandoutLatex()).doesNotContain("tokens=", "\\paragraph{模型}");
     }
 

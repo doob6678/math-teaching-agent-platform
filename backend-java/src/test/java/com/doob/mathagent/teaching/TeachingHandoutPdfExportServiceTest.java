@@ -46,6 +46,45 @@ class TeachingHandoutPdfExportServiceTest {
     }
 
     @Test
+    void doesNotExposeInternalLayoutInstructionsInPdfBody() throws Exception {
+        TeachingTaskResponse task = new TeachingTaskResponse(
+                "task-layout-instruction",
+                "client-layout-instruction",
+                "school-a",
+                "teacher",
+                "teacher-001",
+                TeachingTaskStatus.COMPLETED,
+                "验证公式渲染",
+                "输出可打印讲义",
+                List.of(),
+                List.of(),
+                List.of(),
+                "",
+                """
+                \\section{学习目标}
+                掌握公式 $$x^2+y^2=1$$ 的表达。
+                PDF 版式要求：页眉展示主题和版本，页脚展示页码；教师版使用讲评色。
+                \\section{题目}
+                说明 $a_1$ 与 $a^2$ 的区别。
+                """,
+                "\\section{学生版}\n完成空白区。",
+                List.of(),
+                null,
+                List.of(),
+                null,
+                null);
+
+        byte[] pdf = new TeachingHandoutPdfExportService().render(task, "teacher");
+
+        try (PDDocument document = Loader.loadPDF(pdf)) {
+            String text = new PDFTextStripper().getText(document);
+            assertThat(text).contains("教师版讲义", "学习目标", "题目");
+            assertThat(text).containsOnlyOnce("学习目标");
+            assertThat(text).doesNotContain("PDF 版式要求", "页眉展示主题和版本", "\\section", "$$");
+        }
+    }
+
+    @Test
     void rendersDifferentTeacherAndStudentVersionHeaders() throws Exception {
         TeachingTaskResponse task = new TeachingTaskResponse(
                 "task-versioned-pdf",
