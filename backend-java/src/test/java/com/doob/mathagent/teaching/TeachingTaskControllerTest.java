@@ -112,6 +112,7 @@ class TeachingTaskControllerTest {
         ResponseEntity<byte[]> exportedPdf = controller.exportPdf(submitted.taskId(), null);
         ResponseEntity<String> studentPreview = controller.previewLatexVersion(submitted.taskId(), "student", null);
         ResponseEntity<byte[]> teacherPdf = controller.exportPdfVersion(submitted.taskId(), "teacher", null);
+        ResponseEntity<byte[]> teacherPdfPreview = controller.previewPdfVersion(submitted.taskId(), "teacher", null);
 
         assertThat(loaded.taskId()).isEqualTo(submitted.taskId());
         assertThat(loaded.status()).isEqualTo(TeachingTaskStatus.COMPLETED);
@@ -122,6 +123,8 @@ class TeachingTaskControllerTest {
         assertThat(exported.getHeaders().getContentDisposition().getFilename()).isEqualTo(submitted.taskId() + ".tex");
         assertThat(exportedPdf.getBody()).startsWith(new byte[] {'%', 'P', 'D', 'F'});
         assertThat(teacherPdf.getBody()).startsWith(new byte[] {'%', 'P', 'D', 'F'});
+        assertThat(teacherPdfPreview.getBody()).startsWith(new byte[] {'%', 'P', 'D', 'F'});
+        assertThat(teacherPdfPreview.getHeaders().getContentDisposition().isInline()).isTrue();
         assertThat(exportedPdf.getHeaders().getContentDisposition().getFilename()).isEqualTo(submitted.taskId() + ".pdf");
         assertThat(exportedPdf.getHeaders().getFirst("X-Handout-Renderer")).isNotBlank();
         assertThat(Integer.parseInt(exportedPdf.getHeaders().getFirst("X-Handout-Page-Count"))).isPositive();
@@ -257,6 +260,9 @@ class TeachingTaskControllerTest {
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> protectedController.previewLatex(submitted.taskId(), null))
                 .isInstanceOf(ResponseStatusException.class)
                 .hasMessageContaining("Capability token");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> protectedController.previewPdf(submitted.taskId(), null))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("Capability token");
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> protectedController.createBatchZip(
                         new TeachingHandoutBatchExportRequest(List.of(submitted.taskId()), List.of(), List.of()),
                         null))
@@ -307,9 +313,17 @@ class TeachingTaskControllerTest {
                         null))
                 .isInstanceOfSatisfying(ResponseStatusException.class, exception ->
                         assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.previewPdfVersion(
+                        submitted.taskId(),
+                        "teacher",
+                        null))
+                .isInstanceOfSatisfying(ResponseStatusException.class, exception ->
+                        assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
         assertThat(controller.previewLatexVersion(submitted.taskId(), "student", null).getBody())
                 .contains("\\section", "\\vspace")
                 .doesNotContain("Teacher");
+        assertThat(controller.previewPdfVersion(submitted.taskId(), "student", null).getBody())
+                .startsWith(new byte[] {'%', 'P', 'D', 'F'});
     }
 
     @Test

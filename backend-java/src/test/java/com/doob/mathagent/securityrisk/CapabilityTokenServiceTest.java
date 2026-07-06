@@ -435,6 +435,12 @@ class CapabilityTokenServiceTest {
                 "hash-empty-body",
                 "teaching-handout-export-pdf:task-1:student",
                 2.0), teacher);
+        CapabilityTokenResponse teacherPdfPreview = service.apply(new CapabilityTokenApplyRequest(
+                "teaching-handout:preview-pdf",
+                "/api/teaching/tasks/task-1/handout/teacher/pdf/preview",
+                "hash-empty-body",
+                "teaching-handout-preview-pdf:task-1:teacher",
+                2.0), teacher);
 
         assertThat(service.consume(
                 teacherPreview.token(),
@@ -452,6 +458,12 @@ class CapabilityTokenServiceTest {
                 studentPdf.token(),
                 "teaching-handout:export-pdf",
                 "/api/teaching/tasks/task-1/handout/student/pdf",
+                "hash-empty-body",
+                teacher).allowed()).isTrue();
+        assertThat(service.consume(
+                teacherPdfPreview.token(),
+                "teaching-handout:preview-pdf",
+                "/api/teaching/tasks/task-1/handout/teacher/pdf/preview",
                 "hash-empty-body",
                 teacher).allowed()).isTrue();
     }

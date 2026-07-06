@@ -2404,6 +2404,33 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     },
 
     /**
+     * Loads the PDF handout for inline frontend preview after applying a preview-specific capability token.
+     */
+    async previewTeachingTaskPdf(taskId: string, version: "teacher" | "student" = "teacher"): Promise<TeachingHandoutPdfResponse> {
+      const encodedTaskId = encodeURIComponent(taskId);
+      const path = `/api/teaching/tasks/${encodedTaskId}/handout/${version}/pdf/preview`;
+      const capability = await applyCapability(
+        "teaching-handout:preview-pdf",
+        path,
+        "",
+        `teaching-handout-preview-pdf:${taskId}:${version}`,
+        2,
+      );
+      const response = await requestBytesWithHeaders(path, {
+        method: "GET",
+        headers: {
+          "X-Capability-Token": capability.token,
+          "X-Request-Hash": capability.requestHash,
+        },
+      });
+      return {
+        bytes: response.bytes,
+        renderer: response.headers.get("X-Handout-Renderer") ?? "",
+        pageCount: Number(response.headers.get("X-Handout-Page-Count") ?? "0") || 0,
+      };
+    },
+
+    /**
      * Creates a short-lived backend ZIP package for selected handouts and folder grouping.
      */
     async createTeachingHandoutBatchZip(

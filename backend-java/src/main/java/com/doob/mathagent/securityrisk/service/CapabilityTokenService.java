@@ -24,6 +24,7 @@ public class CapabilityTokenService {
     private static final String TEACHING_HANDOUT_LATEX_EXPORT_ACTION = "teaching-handout:export-latex";
     private static final String TEACHING_HANDOUT_LATEX_PREVIEW_ACTION = "teaching-handout:preview-latex";
     private static final String TEACHING_HANDOUT_PDF_EXPORT_ACTION = "teaching-handout:export-pdf";
+    private static final String TEACHING_HANDOUT_PDF_PREVIEW_ACTION = "teaching-handout:preview-pdf";
     private static final String TEACHING_HANDOUT_BATCH_ZIP_EXPORT_ACTION = "teaching-handout:batch-export-zip";
     private static final String TEACHING_HANDOUT_BATCH_ZIP_DOWNLOAD_ACTION = "teaching-handout:batch-download-zip";
     private static final String TEACHING_FEEDBACK_SUBMIT_ACTION = "teaching-feedback:submit";
@@ -227,6 +228,11 @@ public class CapabilityTokenService {
             validateTeachingSubject(subject);
             return;
         }
+        if (TEACHING_HANDOUT_PDF_PREVIEW_ACTION.equals(action)
+                && isTeachingHandoutPath(path, "/pdf/preview")) {
+            validateTeachingSubject(subject);
+            return;
+        }
         if (TEACHING_HANDOUT_BATCH_ZIP_EXPORT_ACTION.equals(action)
                 && TEACHING_BATCH_ZIP_PATH.equals(path)) {
             validateTeachingSubject(subject);
@@ -342,6 +348,13 @@ public class CapabilityTokenService {
         if ("/pdf".equals(suffix)) {
             return (parts.length == 3 && "pdf".equals(parts[2]))
                     || (parts.length == 4 && isHandoutVersion(parts[2]) && "pdf".equals(parts[3]));
+        }
+        if ("/pdf/preview".equals(suffix)) {
+            return (parts.length == 4 && "pdf".equals(parts[2]) && "preview".equals(parts[3]))
+                    || (parts.length == 5
+                    && isHandoutVersion(parts[2])
+                    && "pdf".equals(parts[3])
+                    && "preview".equals(parts[4]));
         }
         return false;
     }

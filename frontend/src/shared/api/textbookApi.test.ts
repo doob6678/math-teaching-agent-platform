@@ -508,6 +508,60 @@ describe("textbookApi", () => {
     expect(pdf.pageCount).toBe(3);
   });
 
+  it("previews teaching task pdf with preview-specific capability token", async () => {
+    const pdfBytes = new Uint8Array([37, 80, 68, 70, 45, 49, 46, 52]).buffer;
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          token: "pdf-preview-capability",
+          action: "teaching-handout:preview-pdf",
+          path: "/api/teaching/tasks/task-1/handout/teacher/pdf/preview",
+          requestHash: "hash-empty",
+          expiresAt: "2026-06-28T12:02:00Z",
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        arrayBuffer: async () => pdfBytes,
+        text: async () => "",
+        headers: {
+          get: (name: string) => {
+            if (name === "X-Handout-Renderer") return "xelatex";
+            if (name === "X-Handout-Page-Count") return "3";
+            return null;
+          },
+        },
+      });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const pdf = await client.previewTeachingTaskPdf("task-1");
+
+    const capabilityBody = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
+    expect(capabilityBody).toEqual({
+      action: "teaching-handout:preview-pdf",
+      path: "/api/teaching/tasks/task-1/handout/teacher/pdf/preview",
+      requestHash: expect.any(String),
+      idempotencyKey: "teaching-handout-preview-pdf:task-1:teacher",
+      maxCost: 2,
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://127.0.0.1:8080/api/teaching/tasks/task-1/handout/teacher/pdf/preview",
+      expect.objectContaining({
+        method: "GET",
+        headers: expect.objectContaining({
+          "X-Capability-Token": "pdf-preview-capability",
+          "X-Request-Hash": capabilityBody.requestHash,
+        }),
+      }),
+    );
+    expect(Array.from(pdf.bytes.slice(0, 4))).toEqual([37, 80, 68, 70]);
+    expect(pdf.renderer).toBe("xelatex");
+    expect(pdf.pageCount).toBe(3);
+  });
+
   it("previews teaching task latex with one-time capability token", async () => {
     const fetchMock = vi
       .fn()

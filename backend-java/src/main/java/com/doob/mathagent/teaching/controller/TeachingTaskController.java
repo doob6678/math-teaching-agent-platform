@@ -45,6 +45,7 @@ public class TeachingTaskController {
     private static final String TEACHING_HANDOUT_LATEX_EXPORT_ACTION = "teaching-handout:export-latex";
     private static final String TEACHING_HANDOUT_LATEX_PREVIEW_ACTION = "teaching-handout:preview-latex";
     private static final String TEACHING_HANDOUT_PDF_EXPORT_ACTION = "teaching-handout:export-pdf";
+    private static final String TEACHING_HANDOUT_PDF_PREVIEW_ACTION = "teaching-handout:preview-pdf";
     private static final String TEACHING_HANDOUT_BATCH_ZIP_EXPORT_ACTION = "teaching-handout:batch-export-zip";
     private static final String TEACHING_HANDOUT_BATCH_ZIP_DOWNLOAD_ACTION = "teaching-handout:batch-download-zip";
     private static final String TEACHING_FEEDBACK_SUBMIT_ACTION = "teaching-feedback:submit";
@@ -294,15 +295,7 @@ public class TeachingTaskController {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Teaching task not found"));
         String effectiveVersion = defaultHandoutVersion(subject);
         TeachingHandoutPdfExportService.RenderedHandoutPdf rendered = pdfExportService.renderDetailed(task, effectiveVersion);
-        return ResponseEntity.ok()
-                .contentType(MediaType.APPLICATION_PDF)
-                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
-                        .filename(task.taskId() + ".pdf", StandardCharsets.UTF_8)
-                        .build()
-                        .toString())
-                .header(HANDOUT_RENDERER_HEADER, rendered.renderer())
-                .header(HANDOUT_PAGE_COUNT_HEADER, Integer.toString(rendered.pageCount()))
-                .body(rendered.bytes());
+        return pdfResponse(rendered, task.taskId() + ".pdf", false);
     }
 
     /**
@@ -328,12 +321,69 @@ public class TeachingTaskController {
         TeachingTaskResponse task = workflowService.get(taskId, requestContext(subject))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Teaching task not found"));
         TeachingHandoutPdfExportService.RenderedHandoutPdf rendered = pdfExportService.renderDetailed(task, normalizedVersion);
+        return pdfResponse(rendered, task.taskId() + "-" + normalizedVersion + ".pdf", false);
+    }
+
+    /**
+     * Previews the default PDF handout inline after consuming a preview-specific capability token.
+     */
+    @GetMapping("/api/teaching/tasks/{taskId}/handout/pdf/preview")
+    public ResponseEntity<byte[]> previewPdf(
+            @PathVariable String taskId,
+            HttpServletRequest httpRequest) {
+        RequestSubject subject = subjectResolver.resolve(httpRequest);
+        String path = TEACHING_TASKS_PATH + "/" + taskId + "/handout/pdf/preview";
+        if (!capabilityVerifier.verify(
+                headerOrNull(httpRequest, "X-Capability-Token"),
+                TEACHING_HANDOUT_PDF_PREVIEW_ACTION,
+                path,
+                headerOrNull(httpRequest, "X-Request-Hash"),
+                subject)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for PDF preview");
+        }
+        TeachingTaskResponse task = workflowService.get(taskId, requestContext(subject))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Teaching task not found"));
+        String effectiveVersion = defaultHandoutVersion(subject);
+        TeachingHandoutPdfExportService.RenderedHandoutPdf rendered = pdfExportService.renderDetailed(task, effectiveVersion);
+        return pdfResponse(rendered, task.taskId() + ".pdf", true);
+    }
+
+    /**
+     * Previews a specific PDF handout version inline after capability and owner checks.
+     */
+    @GetMapping("/api/teaching/tasks/{taskId}/handout/{version}/pdf/preview")
+    public ResponseEntity<byte[]> previewPdfVersion(
+            @PathVariable String taskId,
+            @PathVariable String version,
+            HttpServletRequest httpRequest) {
+        String normalizedVersion = normalizeHandoutVersion(version);
+        RequestSubject subject = subjectResolver.resolve(httpRequest);
+        requireHandoutVersionAllowed(normalizedVersion, subject);
+        String path = TEACHING_TASKS_PATH + "/" + taskId + "/handout/" + normalizedVersion + "/pdf/preview";
+        if (!capabilityVerifier.verify(
+                headerOrNull(httpRequest, "X-Capability-Token"),
+                TEACHING_HANDOUT_PDF_PREVIEW_ACTION,
+                path,
+                headerOrNull(httpRequest, "X-Request-Hash"),
+                subject)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for PDF preview");
+        }
+        TeachingTaskResponse task = workflowService.get(taskId, requestContext(subject))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Teaching task not found"));
+        TeachingHandoutPdfExportService.RenderedHandoutPdf rendered = pdfExportService.renderDetailed(task, normalizedVersion);
+        return pdfResponse(rendered, task.taskId() + "-" + normalizedVersion + ".pdf", true);
+    }
+
+    private static ResponseEntity<byte[]> pdfResponse(
+            TeachingHandoutPdfExportService.RenderedHandoutPdf rendered,
+            String fileName,
+            boolean inline) {
+        ContentDisposition disposition = inline
+                ? ContentDisposition.inline().filename(fileName, StandardCharsets.UTF_8).build()
+                : ContentDisposition.attachment().filename(fileName, StandardCharsets.UTF_8).build();
         return ResponseEntity.ok()
                 .contentType(MediaType.APPLICATION_PDF)
-                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
-                        .filename(task.taskId() + "-" + normalizedVersion + ".pdf", StandardCharsets.UTF_8)
-                        .build()
-                        .toString())
+                .header(HttpHeaders.CONTENT_DISPOSITION, disposition.toString())
                 .header(HANDOUT_RENDERER_HEADER, rendered.renderer())
                 .header(HANDOUT_PAGE_COUNT_HEADER, Integer.toString(rendered.pageCount()))
                 .body(rendered.bytes());

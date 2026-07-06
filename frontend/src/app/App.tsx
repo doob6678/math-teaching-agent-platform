@@ -892,7 +892,7 @@ export function App() {
     setTeachingError("");
     setHandoutExportMessage("");
     api
-      .exportTeachingTaskPdf(taskId, version)
+      .previewTeachingTaskPdf(taskId, version)
       .then((pdf) => {
         setHandoutPreviewLatex("");
         setHandoutPreviewTaskId("");
