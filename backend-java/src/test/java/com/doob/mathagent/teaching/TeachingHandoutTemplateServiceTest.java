@@ -16,6 +16,7 @@ class TeachingHandoutTemplateServiceTest {
     @AfterEach
     void clearConfigProperty() {
         System.clearProperty("math.agent.handout.template.skill.files");
+        System.clearProperty("math.agent.handout.template.dirs");
     }
 
     @Test
@@ -74,6 +75,30 @@ class TeachingHandoutTemplateServiceTest {
                 .anySatisfy(path -> assertThat(path.toString()).contains("02-专题讲义"))
                 .anySatisfy(path -> assertThat(path.toString()).contains("03-综合复习与冲刺"))
                 .anySatisfy(path -> assertThat(path.toString()).contains("07-地区试题"))
+                .anySatisfy(path -> assertThat(path.toString()).contains("documents_full").contains("高中数学"))
+                .anySatisfy(path -> assertThat(path.toString()).contains("高考历年真题"))
+                .anySatisfy(path -> assertThat(path.toString()).contains("高考真题"))
                 .anySatisfy(path -> assertThat(path.toString()).contains("xwechat_files"));
+    }
+
+    @Test
+    void localReferenceScannerKeepsHighPriorityMathHandoutTemplates() throws Exception {
+        Path referenceRoot = tempDir.resolve("reference-root");
+        Path ordinaryFolder = referenceRoot.resolve("普通资料");
+        Path zhaoFolder = referenceRoot.resolve("zhao_lixian_gaokao_topic");
+        Files.createDirectories(ordinaryFolder);
+        Files.createDirectories(zhaoFolder);
+        for (int index = 0; index < 12; index += 1) {
+            Files.writeString(ordinaryFolder.resolve("普通讲义" + index + ".pdf"), "not a real pdf");
+        }
+        Files.writeString(zhaoFolder.resolve("zhao_lixian_daoshu_gaokao_handout.pdf"), "not a real pdf");
+        System.setProperty("math.agent.handout.template.dirs", referenceRoot.toString());
+
+        assertThat(new TeachingHandoutLocalReferenceScanner().scan())
+                .anySatisfy(template -> {
+                    assertThat(template.summary().displayName()).contains("zhao_lixian_daoshu_gaokao_handout");
+                    assertThat(template.summary().tags()).contains("赵礼显", "导数", "高考");
+                    assertThat(template.promptInstructions()).contains("PDF", "token");
+                });
     }
 }

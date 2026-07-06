@@ -142,11 +142,11 @@ public class TeachingHandoutTemplateService {
                 正文只保留专题讲解、题目、步骤、答案或留白，不写页眉页脚和渲染规则。
                 """,
                 false));
-        for (TeachingHandoutTemplateProfile profile : new TeachingHandoutLocalReferenceScanner().scan()) {
-            map.putIfAbsent(profile.summary().templateCode(), profile);
-        }
         for (TeachingHandoutTemplateProfile profile : configuredTemplateSkills()) {
             map.put(profile.summary().templateCode(), profile);
+        }
+        for (TeachingHandoutTemplateProfile profile : new TeachingHandoutLocalReferenceScanner().scan()) {
+            map.putIfAbsent(profile.summary().templateCode(), profile);
         }
         this.templates = Collections.unmodifiableMap(map);
     }

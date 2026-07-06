@@ -6,9 +6,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Stream;
 import org.apache.pdfbox.Loader;
@@ -20,8 +22,9 @@ import org.apache.pdfbox.text.PDFTextStripper;
  */
 final class TeachingHandoutLocalReferenceScanner {
 
-    private static final int MAX_FILES = 24;
-    private static final int MAX_DEPTH = 5;
+    private static final int MAX_FILES = 60;
+    private static final int MAX_PER_DIRECTORY = 4;
+    private static final int MAX_DEPTH = 7;
     private static final int PREVIEW_LIMIT = 260;
 
     /**
@@ -29,27 +32,17 @@ final class TeachingHandoutLocalReferenceScanner {
      * MATH_AGENT_HANDOUT_TEMPLATE_DIRS with semicolon-separated absolute paths.
      */
     List<TeachingHandoutTemplateProfile> scan() {
-        List<TeachingHandoutTemplateProfile> profiles = new ArrayList<>();
-        for (Path root : referenceRoots()) {
-            if (!Files.isDirectory(root)) {
-                continue;
-            }
-            try (Stream<Path> stream = Files.find(
-                    root,
-                    MAX_DEPTH,
-                    (path, attributes) -> attributes.isRegularFile() && isCandidatePdf(path))) {
-                stream.limit(MAX_FILES * 4L)
-                        .sorted(Comparator
+        LinkedHashSet<Path> candidates = new LinkedHashSet<>();
+        collectCandidates(candidates, defaultReferenceRoots(), false);
+        collectCandidates(candidates, configuredReferenceRoots(), true);
+        Map<Path, Integer> directoryCounts = new HashMap<>();
+        return candidates.stream()
+                .sorted(Comparator
                         .comparingInt(TeachingHandoutLocalReferenceScanner::candidatePriority)
                         .thenComparing(path -> path.getFileName().toString()))
-                        .limit(MAX_FILES)
-                        .map(this::toTemplate)
-                        .forEach(profiles::add);
-            } catch (IOException ignored) {
-                // A missing or locked reference folder should not break the teaching template API.
-            }
-        }
-        return profiles.stream()
+                .filter(path -> withinDirectoryBudget(directoryCounts, path))
+                .limit(MAX_FILES)
+                .map(this::toTemplate)
                 .collect(java.util.stream.Collectors.toMap(
                         profile -> canonicalTitle(profile.summary().displayName()),
                         profile -> profile,
@@ -61,7 +54,35 @@ final class TeachingHandoutLocalReferenceScanner {
                 .toList();
     }
 
-    private List<Path> referenceRoots() {
+    private static void collectCandidates(LinkedHashSet<Path> candidates, List<Path> roots, boolean allowVolatilePaths) {
+        for (Path root : roots) {
+            if (!Files.isDirectory(root)) {
+                continue;
+            }
+            try (Stream<Path> stream = Files.find(
+                    root,
+                    MAX_DEPTH,
+                    (path, attributes) -> attributes.isRegularFile() && isCandidatePdf(path, allowVolatilePaths))) {
+                stream.limit(MAX_FILES * 16L)
+                        .map(path -> path.toAbsolutePath().normalize())
+                        .forEach(candidates::add);
+            } catch (IOException ignored) {
+                // A missing or locked reference folder should not break the teaching template API.
+            }
+        }
+    }
+
+    private static boolean withinDirectoryBudget(Map<Path, Integer> directoryCounts, Path path) {
+        Path parent = path.getParent() == null ? Path.of("") : path.getParent().toAbsolutePath().normalize();
+        int count = directoryCounts.getOrDefault(parent, 0);
+        if (count >= MAX_PER_DIRECTORY) {
+            return false;
+        }
+        directoryCounts.put(parent, count + 1);
+        return true;
+    }
+
+    private List<Path> defaultReferenceRoots() {
         LinkedHashSet<Path> roots = new LinkedHashSet<>();
         Path cwd = Path.of("").toAbsolutePath().normalize();
         Path repoRoot = repoRoot(cwd);
@@ -70,15 +91,13 @@ final class TeachingHandoutLocalReferenceScanner {
         roots.add(repoRoot.getParent() == null
                 ? repoRoot.resolve("workspace_data")
                 : repoRoot.getParent().resolve("math_agent").resolve("workspace_data"));
-        String configured = System.getenv("MATH_AGENT_HANDOUT_TEMPLATE_DIRS");
-        if (configured == null || configured.isBlank()) {
-            configured = System.getProperty("math.agent.handout.template.dirs", "");
-        }
-        for (String item : configured.split(";")) {
-            if (!item.isBlank()) {
-                roots.add(Path.of(item.strip()).toAbsolutePath().normalize());
-            }
-        }
+        return roots.stream().toList();
+    }
+
+    private List<Path> configuredReferenceRoots() {
+        LinkedHashSet<Path> roots = new LinkedHashSet<>();
+        addConfiguredRoots(roots, System.getenv("MATH_AGENT_HANDOUT_TEMPLATE_DIRS"));
+        addConfiguredRoots(roots, System.getProperty("math.agent.handout.template.dirs", ""));
         return roots.stream().toList();
     }
 
@@ -101,6 +120,17 @@ final class TeachingHandoutLocalReferenceScanner {
                         .resolve("初中数学")
                         .resolve("初中数学资料下载")
                         .resolve("07-地区试题"),
+                desktop.resolve("个人资料")
+                        .resolve("高中数学")
+                        .resolve("feishu-doc-sync")
+                        .resolve("data")
+                        .resolve("documents_full")
+                        .resolve("高中数学"),
+                desktop.resolve("个人资料")
+                        .resolve("高中数学")
+                        .resolve("高考历年真题"),
+                desktop.resolve("个人资料")
+                        .resolve("高考真题"),
                 Path.of(userHome)
                         .resolve("Documents")
                         .resolve("xwechat_files"));
@@ -160,7 +190,18 @@ final class TeachingHandoutLocalReferenceScanner {
                 "student".equals(audience) || title.contains("学霸笔记"));
     }
 
-    private static boolean isCandidatePdf(Path path) {
+    private static void addConfiguredRoots(LinkedHashSet<Path> roots, String configured) {
+        if (configured == null || configured.isBlank()) {
+            return;
+        }
+        for (String item : configured.split(";")) {
+            if (!item.isBlank()) {
+                roots.add(Path.of(item.strip()).toAbsolutePath().normalize());
+            }
+        }
+    }
+
+    private static boolean isCandidatePdf(Path path, boolean allowVolatilePaths) {
         String fileName = path.getFileName().toString();
         String normalized = fileName.toLowerCase(Locale.ROOT);
         if (!normalized.endsWith(".pdf")) {
@@ -176,6 +217,9 @@ final class TeachingHandoutLocalReferenceScanner {
         if ("参考讲义数学空间向量".equals(title)) {
             return false;
         }
+        if (allowVolatilePaths) {
+            return true;
+        }
         String fullPath = path.toAbsolutePath().normalize().toString().toLowerCase(Locale.ROOT);
         return !fullPath.contains("\\tmp\\")
                 && !fullPath.contains("/tmp/")
@@ -188,10 +232,17 @@ final class TeachingHandoutLocalReferenceScanner {
     private static int candidatePriority(Path path) {
         String value = (path.getFileName() + " " + path).toLowerCase(Locale.ROOT);
         int score = 100;
+        score -= containsAnyText(value, "赵礼显", "zhao_lixian", "zhaolixian", "礼显") ? 90 : 0;
+        score -= containsAnyText(value,
+                "高考", "高中", "导数", "圆锥", "数列", "解析几何", "立体几何", "空间向量",
+                "gaokao", "gaozhong", "daoshu", "yuan zhui", "yuanzhui", "shulie", "jiexi",
+                "litijihe", "kongjianxiangliang") ? 75 : 0;
         score -= containsAnyText(value, "反比例", "函数", "学霸笔记") ? 35 : 0;
         score -= containsAnyText(value, "讲义", "专题", "题型", "知识点") ? 25 : 0;
-        score -= containsAnyText(value, "压轴", "高考", "中考", "综合") ? 15 : 0;
+        score -= containsAnyText(value, "压轴", "高考", "综合") ? 15 : 0;
         score -= containsAnyText(value, "学生版", "教师版") ? 10 : 0;
+        score += containsAnyText(value, "初中", "中考", "八年级", "九年级") ? 28 : 0;
+        score += containsAnyText(value, "课本", "教科书", "教材") ? 25 : 0;
         score += containsAnyText(value, "副本", "备用", "copy") ? 12 : 0;
         return score;
     }
@@ -287,7 +338,21 @@ final class TeachingHandoutLocalReferenceScanner {
         addIf(tags, title, "反比例", "反比例函数");
         addIf(tags, title, "函数", "函数");
         addIf(tags, title, "高考", "高考");
+        addIf(tags, title, "gaokao", "高考");
+        addIf(tags, title, "高中", "高中");
+        addIf(tags, title, "gaozhong", "高中");
+        addIf(tags, title, "导数", "导数");
+        addIf(tags, title, "daoshu", "导数");
+        addIf(tags, title, "圆锥", "圆锥曲线");
+        addIf(tags, title, "yuanzhui", "圆锥曲线");
+        addIf(tags, title, "解析几何", "解析几何");
+        addIf(tags, title, "jiexi", "解析几何");
+        addIf(tags, title, "立体几何", "立体几何");
+        addIf(tags, title, "litijihe", "立体几何");
         addIf(tags, title, "压轴", "压轴");
+        addIf(tags, title, "赵礼显", "赵礼显");
+        addIf(tags, title, "zhao_lixian", "赵礼显");
+        addIf(tags, title, "zhaolixian", "赵礼显");
         addIf(tags, title, "教师", "教师版");
         addIf(tags, title, "学生", "学生版");
         addIf(tags, title, "学霸笔记", "学霸笔记");
