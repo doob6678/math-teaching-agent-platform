@@ -88,6 +88,48 @@ class TeachingHandoutPdfExportServiceTest {
     }
 
     @Test
+    void cleansLegacyOcrGarbageFromRenderedSourceIndex() throws Exception {
+        TeachingTaskResponse task = new TeachingTaskResponse(
+                "task-legacy-source-clean",
+                "client-legacy-source-clean",
+                "school-a",
+                "teacher",
+                "teacher-001",
+                TeachingTaskStatus.COMPLETED,
+                "反比例函数",
+                "清理旧讲义来源片段",
+                List.of(),
+                List.of(),
+                List.of(),
+                "",
+                """
+                \\section{来源索引}
+                人教B版必修一数学 / 3.1.$1 / PDF$ 96：3.1 函数的概念与性质89 3.1.1 Ѧ ԣХ᛫ ܪ+ắᔢ 我们已经学习过一些函数的知识
+
+                人教B版必修一数学 / 第三章函数 / PDF 129：第三章 函 数 一般地,解析式是多项式的函数的图象都是连续不断的.
+
+                \\section{教师讲评页}
+                \\subsection*{方法步骤}
+                设解析式 $y=\\frac{k}{x}$，再代入点坐标求 $k$。
+                """,
+                "\\section{学生版}\n完成练习。\n\\vspace{8em}",
+                List.of(),
+                null,
+                List.of(),
+                null,
+                null);
+
+        byte[] pdf = new TeachingHandoutPdfExportService().render(task, "teacher");
+
+        try (PDDocument document = Loader.loadPDF(pdf)) {
+            String text = new PDFTextStripper().getText(document);
+            assertThat(text)
+                    .contains("来源索引", "函数", "教师讲评页")
+                    .doesNotContain("Ѧ", "ԣ", "᛫", "ܪ", "ắ", "ᔢ");
+        }
+    }
+
+    @Test
     void rendersDifferentTeacherAndStudentVersionHeaders() throws Exception {
         TeachingTaskResponse task = new TeachingTaskResponse(
                 "task-versioned-pdf",

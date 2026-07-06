@@ -69,6 +69,9 @@ class KnowledgeQuestionBankControllerTest {
         assertThat(controller.searchQuestions("向量", 10, request))
                 .extracting(QuestionBankItemResponse::questionId)
                 .containsExactly(question.questionId());
+        assertThat(controller.searchQuestions("", 10, request))
+                .extracting(QuestionBankItemResponse::questionId)
+                .containsExactly(question.questionId());
     }
 
     @Test

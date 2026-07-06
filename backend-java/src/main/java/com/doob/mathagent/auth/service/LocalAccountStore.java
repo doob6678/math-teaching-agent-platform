@@ -16,6 +16,14 @@ public interface LocalAccountStore {
     Optional<LocalAccount> findByUsername(String username);
 
     /**
+     * Finds an account by backend user id.
+     *
+     * @param userId backend user id stored in session and domain records
+     * @return account when present
+     */
+    Optional<LocalAccount> findByUserId(String userId);
+
+    /**
      * Creates a new student account for public registration.
      *
      * @param username unique login username

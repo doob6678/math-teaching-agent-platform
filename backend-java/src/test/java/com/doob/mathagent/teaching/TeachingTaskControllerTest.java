@@ -34,6 +34,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.util.List;
+import java.util.Map;
 import java.util.zip.ZipInputStream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -122,6 +123,9 @@ class TeachingTaskControllerTest {
         assertThat(exportedPdf.getBody()).startsWith(new byte[] {'%', 'P', 'D', 'F'});
         assertThat(teacherPdf.getBody()).startsWith(new byte[] {'%', 'P', 'D', 'F'});
         assertThat(exportedPdf.getHeaders().getContentDisposition().getFilename()).isEqualTo(submitted.taskId() + ".pdf");
+        assertThat(exportedPdf.getHeaders().getFirst("X-Handout-Renderer")).isNotBlank();
+        assertThat(Integer.parseInt(exportedPdf.getHeaders().getFirst("X-Handout-Page-Count"))).isPositive();
+        assertThat(teacherPdf.getHeaders().getFirst("X-Handout-Renderer")).isNotBlank();
         assertThat(loaded.handoutLatex()).contains("\\section");
     }
 
@@ -413,7 +417,11 @@ class TeachingTaskControllerTest {
 
         TeachingHumanFeedbackResponse feedback = controller.submitHumanFeedback(
                 task.taskId(),
-                new TeachingHumanFeedbackRequest(4, "needs_revision", "second step needs more detail"),
+                new TeachingHumanFeedbackRequest(4, "needs_revision", "second step needs more detail", Map.of(
+                        "handoutVersion", "teacher",
+                        "pdfRenderer", "xelatex",
+                        "pdfPageCount", 2,
+                        "checks", Map.of("matchedCoreColumns", 5, "coreColumnTotal", 6))),
                 null);
         List<TeachingHumanFeedbackResponse> feedbackList = controller.listHumanFeedback(task.taskId(), null);
 
@@ -421,6 +429,9 @@ class TeachingTaskControllerTest {
         assertThat(feedback.rating()).isEqualTo(4);
         assertThat(feedback.decision()).isEqualTo("needs_revision");
         assertThat(feedback.comment()).contains("second step");
+        assertThat(feedback.reviewContext()).containsEntry("handoutVersion", "teacher");
+        assertThat(feedback.reviewContext()).containsEntry("pdfRenderer", "xelatex");
+        assertThat(feedbackList.getFirst().reviewContext()).containsEntry("pdfPageCount", 2);
         assertThat(feedbackList).extracting(TeachingHumanFeedbackResponse::feedbackId)
                 .containsExactly(feedback.feedbackId());
     }

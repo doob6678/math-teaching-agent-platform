@@ -33,6 +33,9 @@ import org.springframework.stereotype.Service;
 @Service
 public class TeachingHandoutPdfExportService {
 
+    public record RenderedHandoutPdf(byte[] bytes, String renderer, int pageCount) {
+    }
+
     private static final Logger LOGGER = LoggerFactory.getLogger(TeachingHandoutPdfExportService.class);
     private static final Pattern SECTION_COMMAND = Pattern.compile("^\\\\(?:section|subsection|subsubsection|paragraph)\\*?\\{(.+)}\\s*$");
     private static final Pattern MARKDOWN_HEADING = Pattern.compile("^#{1,6}\\s+(.+)$");
@@ -73,9 +76,16 @@ public class TeachingHandoutPdfExportService {
      * @return PDF bytes beginning with the PDF header
      */
     public byte[] render(TeachingTaskResponse task, String version) {
+        return renderDetailed(task, version).bytes();
+    }
+
+    /**
+     * Renders one specific handout version and returns bytes plus rendering metadata for audit and frontend preview.
+     */
+    public RenderedHandoutPdf renderDetailed(TeachingTaskResponse task, String version) {
         Optional<byte[]> compiled = compileLatex(task, version);
         if (compiled.isPresent()) {
-            return compiled.get();
+            return new RenderedHandoutPdf(compiled.get(), "xelatex", countPages(compiled.get()));
         }
         try (PDDocument document = new PDDocument()) {
             PDFont font = loadReadableFont(document);
@@ -104,7 +114,8 @@ public class TeachingHandoutPdfExportService {
             addPageFooters(document, font, style, title);
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             document.save(out);
-            return out.toByteArray();
+            byte[] bytes = out.toByteArray();
+            return new RenderedHandoutPdf(bytes, "pdfbox_fallback", document.getNumberOfPages());
         } catch (IOException exception) {
             throw new IllegalStateException("Failed to render teaching handout PDF", exception);
         }
@@ -220,7 +231,7 @@ public class TeachingHandoutPdfExportService {
                 \\fancyhf{}
                 \\lhead{%s}
                 \\rhead{%s}
-                \\lfoot{Math Agent RAG · %s}
+                \\lfoot{%s}
                 \\rfoot{第 \\thepage 页}
                 \\renewcommand{\\headrulewidth}{0.4pt}
                 \\renewcommand{\\footrulewidth}{0.3pt}
@@ -431,6 +442,14 @@ public class TeachingHandoutPdfExportService {
             return value == null ? "" : value;
         }
         return value.substring(value.length() - maxLength);
+    }
+
+    private static int countPages(byte[] pdfBytes) {
+        try (PDDocument document = org.apache.pdfbox.Loader.loadPDF(pdfBytes)) {
+            return document.getNumberOfPages();
+        } catch (IOException exception) {
+            return 0;
+        }
     }
 
     private static void deleteRecursively(Path root) {
@@ -915,7 +934,7 @@ public class TeachingHandoutPdfExportService {
                 footer.setFont(font, 8.8f);
                 footer.setNonStrokingColor(style.mutedText());
                 footer.newLineAtOffset(MARGIN, 24);
-                footer.showText(supportedText(font, title + " · Math Agent RAG"));
+                footer.showText(supportedText(font, title));
                 footer.endText();
 
                 String pageNo = "第 " + (index + 1) + " / " + totalPages + " 页";
@@ -996,13 +1015,13 @@ public class TeachingHandoutPdfExportService {
         private static PdfStyle forVersion(String version) {
             if ("student".equalsIgnoreCase(version)) {
                 return new PdfStyle(
-                        new Color(37, 99, 235),
-                        new Color(30, 64, 175),
-                        new Color(239, 246, 255),
-                        new Color(15, 23, 42),
-                        new Color(30, 41, 59),
-                        new Color(100, 116, 139),
-                        new Color(191, 219, 254),
+                        new Color(31, 41, 55),
+                        new Color(17, 24, 39),
+                        new Color(248, 250, 252),
+                        new Color(0, 0, 0),
+                        new Color(17, 24, 39),
+                        new Color(75, 85, 99),
+                        new Color(17, 24, 39),
                         "学生版");
             }
             return new PdfStyle(
@@ -1116,16 +1135,24 @@ public class TeachingHandoutPdfExportService {
         private void writeHeadingBlock(String text) throws IOException {
             y -= 5;
             ensureSpace(40);
-            stream.setNonStrokingColor(style.accentLight());
-            stream.addRect(MARGIN, y - 8, PAGE_WIDTH - MARGIN * 2, 28);
-            stream.fill();
-            stream.setNonStrokingColor(style.accent());
-            stream.addRect(MARGIN, y - 8, 4, 28);
-            stream.fill();
+            if (!isStudentWorksheetStyle()) {
+                stream.setNonStrokingColor(style.accentLight());
+                stream.addRect(MARGIN, y - 8, PAGE_WIDTH - MARGIN * 2, 28);
+                stream.fill();
+                stream.setNonStrokingColor(style.accent());
+                stream.addRect(MARGIN, y - 8, 4, 28);
+                stream.fill();
+            } else {
+                stream.setStrokingColor(style.border());
+                stream.setLineWidth(0.35f);
+                stream.moveTo(MARGIN, y - 10);
+                stream.lineTo(PAGE_WIDTH - MARGIN, y - 10);
+                stream.stroke();
+            }
             stream.beginText();
             stream.setFont(font, HEADING_FONT_SIZE);
             stream.setNonStrokingColor(style.accentDark());
-            stream.newLineAtOffset(MARGIN + 12, y);
+            stream.newLineAtOffset(isStudentWorksheetStyle() ? MARGIN : MARGIN + 12, y);
             stream.showText(supportedText(font, text));
             stream.endText();
             y -= 38;
@@ -1154,10 +1181,33 @@ public class TeachingHandoutPdfExportService {
             stream = new PDPageContentStream(document, page);
             pageNumber += 1;
             drawHeader();
-            y = PAGE_HEIGHT - 104;
+            y = isStudentWorksheetStyle() ? PAGE_HEIGHT - 132 : PAGE_HEIGHT - 104;
         }
 
         private void drawHeader() throws IOException {
+            if (isStudentWorksheetStyle()) {
+                stream.setStrokingColor(style.border());
+                stream.setLineWidth(0.7f);
+                stream.moveTo(MARGIN, PAGE_HEIGHT - 72);
+                stream.lineTo(PAGE_WIDTH - MARGIN, PAGE_HEIGHT - 72);
+                stream.stroke();
+
+                stream.beginText();
+                stream.setFont(font, 10.2f);
+                stream.setNonStrokingColor(style.mutedText());
+                stream.newLineAtOffset(MARGIN, PAGE_HEIGHT - 54);
+                stream.showText(supportedText(font, "数学讲义"));
+                stream.endText();
+
+                stream.beginText();
+                stream.setFont(font, 18.5f);
+                stream.setNonStrokingColor(style.titleText());
+                float titleWidth = textWidth(font, title, 18.5f);
+                stream.newLineAtOffset((PAGE_WIDTH - titleWidth) / 2f, PAGE_HEIGHT - 102);
+                stream.showText(supportedText(font, title));
+                stream.endText();
+                return;
+            }
             stream.setNonStrokingColor(style.accentLight());
             stream.addRect(0, PAGE_HEIGHT - 74, PAGE_WIDTH, 74);
             stream.fill();
@@ -1196,6 +1246,10 @@ public class TeachingHandoutPdfExportService {
             stream.newLineAtOffset(chipX + 11, PAGE_HEIGHT - 41);
             stream.showText(supportedText(font, chip));
             stream.endText();
+        }
+
+        private boolean isStudentWorksheetStyle() {
+            return "学生版".equals(style.versionLabel());
         }
 
         private void close() throws IOException {

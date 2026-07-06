@@ -88,6 +88,27 @@ class MultiAgentWritingArtifactExportServiceTest {
     }
 
     @Test
+    void exportsOwnedArtifactAsPdfForReview() throws Exception {
+        MultiAgentWritingService writingService = writingService();
+        RequestSubject subject = subject();
+        String workflowId = completedWorkflow(writingService, subject);
+        MultiAgentWritingArtifactExportService exportService = new MultiAgentWritingArtifactExportService(
+                writingService,
+                Clock.fixed(Instant.parse("2026-07-01T00:00:00Z"), ZoneOffset.UTC),
+                Duration.ofMinutes(5));
+
+        MultiAgentWritingArtifactExportResponse response = exportService.export(workflowId, "pdf", subject);
+
+        byte[] bytes = Base64.getDecoder().decode(response.base64Content());
+        assertThat(response.format()).isEqualTo("pdf");
+        assertThat(response.fileName()).endsWith(".pdf");
+        assertThat(response.mimeType()).isEqualTo("application/pdf");
+        assertThat(response.byteSize()).isEqualTo(bytes.length);
+        assertThat(response.sha256()).isEqualTo(sha256(bytes));
+        assertThat(new String(bytes, 0, 5, StandardCharsets.US_ASCII)).isEqualTo("%PDF-");
+    }
+
+    @Test
     void exportsOwnedArtifactAsZipWithManifestAndStageFiles() throws Exception {
         MultiAgentWritingService writingService = writingService();
         RequestSubject subject = subject();

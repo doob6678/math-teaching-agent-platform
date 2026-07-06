@@ -81,6 +81,13 @@ class AuthServiceTest {
         }
 
         @Override
+        public Optional<LocalAccount> findByUserId(String userId) {
+            return accounts.values().stream()
+                    .filter(account -> account.userId().equals(userId))
+                    .findFirst();
+        }
+
+        @Override
         public LocalAccount createStudent(String username, String encodedPassword, String tenantId) {
             LocalAccount account = new LocalAccount("student-002", username, encodedPassword, "student", tenantId);
             LocalAccount previous = accounts.putIfAbsent(username, account);

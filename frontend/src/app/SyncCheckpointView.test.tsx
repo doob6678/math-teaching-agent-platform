@@ -34,11 +34,11 @@ describe("SyncCheckpointView", () => {
 
     const html = renderToStaticMarkup(<SyncCheckpointView checkpoint={checkpoint} />);
 
-    expect(html).toContain("1 downloaded");
-    expect(html).toContain("1 failed");
-    expect(html).toContain("DULWdiJKgoL6hLxwiMCcTRBrnOc");
-    expect(html).toContain("期望和方差的性质");
-    expect(html).toContain("ProxyError");
-    expect(html).toContain("retryable");
+    expect(html).toContain("1 已下载");
+    expect(html).toContain("1 失败");
+    expect(html).toContain("高中数学/概率统计");
+    expect(html).toContain("有游标");
+    expect(html).not.toContain("folder-token");
+    expect(html).not.toContain("DULWdiJKgoL6hLxwiMCcTRBrnOc");
   });
 });

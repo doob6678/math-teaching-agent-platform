@@ -38,7 +38,8 @@ final class TeachingHandoutLocalReferenceScanner {
                     root,
                     MAX_DEPTH,
                     (path, attributes) -> attributes.isRegularFile() && isCandidatePdf(path))) {
-                stream.sorted(Comparator
+                stream.limit(MAX_FILES * 4L)
+                        .sorted(Comparator
                         .comparingInt(TeachingHandoutLocalReferenceScanner::candidatePriority)
                         .thenComparing(path -> path.getFileName().toString()))
                         .limit(MAX_FILES)
@@ -169,6 +170,9 @@ final class TeachingHandoutLocalReferenceScanner {
         if (title.isBlank() || title.equalsIgnoreCase("input") || title.equalsIgnoreCase("output")) {
             return false;
         }
+        if (looksGarbled(title)) {
+            return false;
+        }
         if ("参考讲义数学空间向量".equals(title)) {
             return false;
         }
@@ -206,7 +210,8 @@ final class TeachingHandoutLocalReferenceScanner {
             PDFTextStripper stripper = new PDFTextStripper();
             stripper.setStartPage(1);
             stripper.setEndPage(Math.min(2, document.getNumberOfPages()));
-            return compact(stripper.getText(document), PREVIEW_LIMIT);
+            String preview = compact(stripper.getText(document), PREVIEW_LIMIT);
+            return looksGarbled(preview) ? "" : preview;
         } catch (IOException | RuntimeException exception) {
             return "";
         }
@@ -320,5 +325,22 @@ final class TeachingHandoutLocalReferenceScanner {
             return text;
         }
         return text.substring(0, limit) + "...";
+    }
+
+    private static boolean looksGarbled(String value) {
+        if (value == null || value.isBlank()) {
+            return false;
+        }
+        String text = value.strip();
+        String lower = text.toLowerCase(Locale.ROOT);
+        if (lower.contains("ã") || lower.contains("â") || lower.contains("ä¸") || lower.contains("å")
+                || lower.contains("æ") || lower.contains("ç")) {
+            return true;
+        }
+        String suspicious = "璁蹭箟鎵撳瀵煎嚭妯℃澘鐢熸垚涓嶅彲鐢ㄨ缂哄皯";
+        long suspiciousCount = text.chars()
+                .filter(ch -> suspicious.indexOf(ch) >= 0)
+                .count();
+        return suspiciousCount >= 4 && suspiciousCount * 3 >= text.length();
     }
 }

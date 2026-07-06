@@ -38,6 +38,20 @@ public class MyBatisLocalAccountStore implements LocalAccountStore {
     }
 
     @Override
+    public Optional<LocalAccount> findByUserId(String userId) {
+        String normalizedUserId = textOrEmpty(userId);
+        if (normalizedUserId.isBlank()) {
+            return Optional.empty();
+        }
+        return mapper.selectList(new LambdaQueryWrapper<AuthAccountEntity>()
+                .eq(AuthAccountEntity::getUserId, normalizedUserId)
+                .eq(AuthAccountEntity::getStatus, ACTIVE))
+                .stream()
+                .findFirst()
+                .map(MyBatisLocalAccountStore::toAccount);
+    }
+
+    @Override
     public LocalAccount createStudent(String username, String encodedPassword, String tenantId) {
         String normalizedUsername = normalizeUsername(username);
         if (normalizedUsername.isBlank()) {
@@ -75,5 +89,9 @@ public class MyBatisLocalAccountStore implements LocalAccountStore {
 
     private static String textOrDefault(String value, String fallback) {
         return value == null || value.isBlank() ? fallback : value.strip();
+    }
+
+    private static String textOrEmpty(String value) {
+        return value == null ? "" : value.strip();
     }
 }

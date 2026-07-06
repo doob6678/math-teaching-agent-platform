@@ -90,6 +90,12 @@ class KnowledgeQuestionBankStoreTest {
         assertThat(store.searchQuestions("school-a", "teacher", "teacher-1", "函数", 10))
                 .extracting(QuestionBankItemRecord::questionId)
                 .containsExactly("q-private");
+        assertThat(store.searchQuestions("school-a", "teacher", "teacher-1", "", 10))
+                .extracting(QuestionBankItemRecord::questionId)
+                .containsExactly("q-private", "q-vip");
+        assertThat(store.searchQuestions("school-a", "teacher", "teacher-1", "向量 夹角", 10))
+                .extracting(QuestionBankItemRecord::questionId)
+                .containsExactly("q-vip");
         assertThat(store.searchQuestions("school-a", "admin", "admin-1", "空间", 10))
                 .extracting(QuestionBankItemRecord::questionId)
                 .containsExactly("q-vip");

@@ -7,6 +7,8 @@ import java.util.List;
  *
  * @param tenantId tenant id that owns the dashboard data
  * @param studentId student id whose learning data is shown
+ * @param subjectRole backend-resolved role of the object represented by this dashboard, such as student, teacher,
+ *                    admin, global, or unknown
  * @param viewerRole role of the current viewer
  * @param viewerSubjectId current viewer subject id
  * @param isAdminView whether this response was opened by an admin or teacher for another student
@@ -20,6 +22,7 @@ import java.util.List;
 public record StudentDashboardResponse(
         String tenantId,
         String studentId,
+        String subjectRole,
         String viewerRole,
         String viewerSubjectId,
         boolean isAdminView,

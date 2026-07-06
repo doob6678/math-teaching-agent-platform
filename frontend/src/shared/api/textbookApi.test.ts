@@ -472,6 +472,13 @@ describe("textbookApi", () => {
         ok: true,
         arrayBuffer: async () => pdfBytes,
         text: async () => "",
+        headers: {
+          get: (name: string) => {
+            if (name === "X-Handout-Renderer") return "xelatex";
+            if (name === "X-Handout-Page-Count") return "3";
+            return null;
+          },
+        },
       });
     const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
 
@@ -496,7 +503,9 @@ describe("textbookApi", () => {
         }),
       }),
     );
-    expect(Array.from(pdf.slice(0, 4))).toEqual([37, 80, 68, 70]);
+    expect(Array.from(pdf.bytes.slice(0, 4))).toEqual([37, 80, 68, 70]);
+    expect(pdf.renderer).toBe("xelatex");
+    expect(pdf.pageCount).toBe(3);
   });
 
   it("previews teaching task latex with one-time capability token", async () => {
@@ -687,6 +696,12 @@ describe("textbookApi", () => {
       rating: 4,
       decision: "needs_revision",
       comment: "Step two explanation needs more detail.",
+      reviewContext: {
+        handoutVersion: "teacher",
+        pdfRenderer: "xelatex",
+        pdfPageCount: 2,
+        checks: { matchedCoreColumns: 5, coreColumnTotal: 6 },
+      },
     };
     const fetchMock = vi
       .fn()
@@ -711,6 +726,7 @@ describe("textbookApi", () => {
           rating: 4,
           decision: "needs_revision",
           comment: "Step two explanation needs more detail.",
+          reviewContext: request.reviewContext,
           createdAt: "2026-06-28T12:00:00Z",
         }),
       });
@@ -741,6 +757,43 @@ describe("textbookApi", () => {
     );
     expect(feedback.feedbackId).toBe("feedback-1");
     expect(feedback.rating).toBe(4);
+    expect(feedback.reviewContext?.pdfRenderer).toBe("xelatex");
+  });
+
+  it("lists teaching human feedback records for the current task", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: async () => ([
+        {
+          feedbackId: "feedback-1",
+          taskId: "task-1",
+          tenantId: "default",
+          subjectType: "teacher",
+          subjectId: "teacher-1",
+          rating: 5,
+          decision: "helpful",
+          comment: "PDF layout is usable.",
+          reviewContext: {
+            handoutVersion: "teacher",
+            pdfRenderer: "xelatex",
+            checks: { matchedCoreColumns: 6, coreColumnTotal: 6 },
+          },
+          createdAt: "2026-06-28T12:00:00Z",
+        },
+      ]),
+    });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const feedback = await client.listTeachingHumanFeedback("task-1");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8080/api/teaching/tasks/task-1/feedback",
+      expect.objectContaining({
+        headers: expect.objectContaining({ "X-Device-Id": "local-browser-console" }),
+      }),
+    );
+    expect(feedback).toHaveLength(1);
+    expect(feedback[0].reviewContext?.pdfRenderer).toBe("xelatex");
   });
 
   it("binds batch zip capability idempotency to selected folder paths", async () => {
@@ -1753,6 +1806,7 @@ describe("textbookApi", () => {
       json: async () => ({
         tenantId: "default",
         studentId: "local-student",
+        subjectRole: "student",
         viewerRole: "student",
         viewerSubjectId: "local-student",
         isAdminView: false,
@@ -1987,6 +2041,7 @@ describe("textbookApi", () => {
         json: async () => ({
           tenantId: "school-a",
           studentId: "student-1",
+          subjectRole: "student",
           viewerRole: "student",
           viewerSubjectId: "student-1",
           isAdminView: false,

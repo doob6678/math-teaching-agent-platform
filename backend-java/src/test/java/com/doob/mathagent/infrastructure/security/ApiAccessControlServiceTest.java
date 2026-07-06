@@ -258,6 +258,40 @@ class ApiAccessControlServiceTest {
     }
 
     @Test
+    void teachingHandoutTemplateListRequiresLoggedInSubject() {
+        ApiAccessControlService service = new ApiAccessControlService(
+                FixedWindowRateLimiter.empty(),
+                Clock.fixed(Instant.parse("2026-06-28T10:00:00Z"), ZoneOffset.UTC),
+                ApiAccessPolicy.defaultRules());
+        ApiRequestIdentity anonymous = new ApiRequestIdentity(
+                "GET",
+                "/api/teaching/handout-templates",
+                "default",
+                "anonymous",
+                null,
+                "127.0.0.1",
+                "device-1",
+                "JUnit");
+        ApiRequestIdentity teacher = new ApiRequestIdentity(
+                "GET",
+                "/api/teaching/handout-templates",
+                "default",
+                "teacher",
+                "teacher-1",
+                "127.0.0.1",
+                "device-1",
+                "JUnit");
+
+        ApiAccessDecision denied = service.evaluate(anonymous);
+        ApiAccessDecision allowed = service.evaluate(teacher);
+
+        assertThat(denied.allowed()).isFalse();
+        assertThat(denied.httpStatus()).isEqualTo(403);
+        assertThat(allowed.allowed()).isTrue();
+        assertThat(allowed.limit()).isEqualTo(60);
+    }
+
+    @Test
     void teachingBatchZipRequiresLoggedInSubjectAndHasOwnRateLimitBucket() {
         ApiAccessControlService service = new ApiAccessControlService(
                 FixedWindowRateLimiter.empty(),

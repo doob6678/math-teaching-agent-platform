@@ -24,6 +24,7 @@ public class HttpCorsConfiguration implements WebMvcConfigurer {
                 .allowedOrigins(corsProperties.allowedOrigins().toArray(String[]::new))
                 .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
                 .allowedHeaders("*")
+                .exposedHeaders("MCP-Protocol-Version", "X-Api-Access-Level", "X-RateLimit-Limit", "X-RateLimit-Used", "X-Handout-Renderer", "X-Handout-Page-Count")
                 .maxAge(3600);
     }
 }

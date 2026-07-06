@@ -2,9 +2,12 @@ package com.doob.mathagent.student;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.doob.mathagent.auth.service.LocalAccount;
+import com.doob.mathagent.auth.service.LocalAccountStore;
 import com.doob.mathagent.memory.service.StudentMemoryEntry;
 import com.doob.mathagent.memory.service.StudentMemoryStore;
 import com.doob.mathagent.student.dto.StudentDashboardQuery;
+import com.doob.mathagent.student.service.StudentDashboardSubjectResolver;
 import com.doob.mathagent.student.service.StudentLearningSnapshotRecord;
 import com.doob.mathagent.student.service.StudentLearningSnapshotRefreshService;
 import com.doob.mathagent.student.service.StudentLearningSnapshotStore;
@@ -55,6 +58,7 @@ class StudentLearningSnapshotRefreshServiceTest {
         StudentLearningSnapshotRefreshService service = new StudentLearningSnapshotRefreshService(
                 memoryStore,
                 snapshotStore,
+                subjectResolver(),
                 new ObjectMapper());
 
         StudentDashboardResponse response = service.refresh(new StudentDashboardQuery(
@@ -64,6 +68,7 @@ class StudentLearningSnapshotRefreshServiceTest {
                 null));
 
         assertThat(response.studentId()).isEqualTo("student-1");
+        assertThat(response.subjectRole()).isEqualTo("student");
         assertThat(response.knowledgeProgress())
                 .extracting(StudentDashboardResponse.KnowledgeProgress::knowledgePointName)
                 .containsExactly("立体几何线面关系", "空间向量数量积");
@@ -106,6 +111,7 @@ class StudentLearningSnapshotRefreshServiceTest {
         StudentLearningSnapshotRefreshService service = new StudentLearningSnapshotRefreshService(
                 memoryStore,
                 snapshotStore,
+                subjectResolver(),
                 new ObjectMapper());
 
         StudentDashboardResponse response = service.refresh(new StudentDashboardQuery(
@@ -115,6 +121,7 @@ class StudentLearningSnapshotRefreshServiceTest {
                 "student-victim"));
 
         assertThat(response.studentId()).isEqualTo("student-real");
+        assertThat(response.subjectRole()).isEqualTo("student");
         assertThat(response.knowledgeProgress())
                 .extracting(StudentDashboardResponse.KnowledgeProgress::knowledgePointName)
                 .containsExactly("函数定义域");
@@ -155,5 +162,30 @@ class StudentLearningSnapshotRefreshServiceTest {
             saved.add(record);
             return record;
         }
+    }
+
+    private static StudentDashboardSubjectResolver subjectResolver() {
+        return new StudentDashboardSubjectResolver(new LocalAccountStore() {
+            @Override
+            public java.util.Optional<LocalAccount> findByUsername(String username) {
+                return java.util.Optional.empty();
+            }
+
+            @Override
+            public java.util.Optional<LocalAccount> findByUserId(String userId) {
+                if ("student-1".equals(userId) || "student-real".equals(userId)) {
+                    return java.util.Optional.of(new LocalAccount(userId, userId, "", "student", "school-a"));
+                }
+                if ("teacher-1".equals(userId)) {
+                    return java.util.Optional.of(new LocalAccount(userId, userId, "", "teacher", "school-a"));
+                }
+                return java.util.Optional.empty();
+            }
+
+            @Override
+            public LocalAccount createStudent(String username, String encodedPassword, String tenantId) {
+                throw new UnsupportedOperationException();
+            }
+        });
     }
 }

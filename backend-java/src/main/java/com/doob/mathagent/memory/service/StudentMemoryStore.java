@@ -23,4 +23,16 @@ public interface StudentMemoryStore {
      * @return private owner memory plus public tenant memory
      */
     List<StudentMemoryEntry> candidates(String tenantId, String studentId);
+
+    /**
+     * Lists active memory entries across one tenant for teacher/admin global dashboards.
+     *
+     * @param tenantId tenant id
+     * @return active tenant memory entries
+     */
+    default List<StudentMemoryEntry> tenantCandidates(String tenantId, int limit) {
+        return candidates(tenantId, "").stream()
+                .limit(Math.max(1, limit))
+                .toList();
+    }
 }

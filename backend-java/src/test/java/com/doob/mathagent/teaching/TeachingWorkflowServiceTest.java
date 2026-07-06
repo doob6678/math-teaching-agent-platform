@@ -77,13 +77,13 @@ class TeachingWorkflowServiceTest {
         assertThat(response.teacherHandoutLatex()).contains(
                 "\\section{讲义信息}",
                 "模板：",
-                "\\section{板书与讲评主线}",
-                "\\section{例题讲评}",
-                "\\section{课堂追问预设}",
+                "\\section{板书流程}",
+                "\\section{例题与答案}",
+                "\\section{课堂追问}",
                 "\\section{知识点归属}");
         assertThat(response.teacherHandoutLatex()).doesNotContain("PDF 版式要求", "页眉展示主题和版本", "页脚展示页码", "颜色", "系统说明");
         assertThat(response.teacherHandoutLatex()).doesNotContain("![p", "## 正文", "书名：");
-        assertThat(response.studentHandoutLatex()).contains("\\section{学习主题}", "\\section{知识点速记}", "\\section{课堂练习}", "\\vspace");
+        assertThat(response.studentHandoutLatex()).contains("\\section{第 1 讲", "\\section{知识点 1：核心方法}", "\\section{课堂练习}", "\\vspace");
         assertThat(response.studentHandoutLatex()).doesNotContain("版本：学生版", "页眉", "页脚", "颜色");
         assertThat(response.studentHandoutLatex()).doesNotContain("知识点归属");
         assertThat(response.interactiveSuggestions()).contains("继续追问定义 D(x_0)");
@@ -213,11 +213,11 @@ class TeachingWorkflowServiceTest {
         assertThat(trace.message()).contains("Teaching AI draft structured");
         assertThat(trace.diagnosticEvents()).extracting(AgentTraceRecord.DiagnosticEvent::eventType)
                 .containsExactly("MODEL_CALL_SUCCEEDED", "JSON_PARSE_SUCCEEDED");
-        assertThat(response.teacherHandoutLatex()).contains("教师讲解稿与练习设计", "知识点与方法卡", "课堂追问与变式训练", "讲评备注");
+        assertThat(response.teacherHandoutLatex()).contains("教师讲评页", "方法卡片", "追问与变式训练", "板书与反馈记录");
         assertThat(response.teacherHandoutLatex()).contains("$D(x_0)$", "$$c^2=a^2+b^2$$", "$c^2=a^2+b^2$");
         assertThat(response.teacherHandoutLatex()).doesNotContain("\\$D", "c\\textasciicircum{}2");
-        assertThat(response.studentHandoutLatex()).contains("课堂练习与作答区", "\\vspace{10em}");
-        assertThat(response.studentHandoutLatex()).contains("【知识速记】", "【练习任务】", "$D(x_0)$", "$c^2=a^2+b^2$");
+        assertThat(response.studentHandoutLatex()).contains("学生练习页", "\\vspace{12em}");
+        assertThat(response.studentHandoutLatex()).contains("\\subsection*{知识速记}", "\\subsection*{练习任务}", "$D(x_0)$", "$c^2=a^2+b^2$");
         assertThat(response.studentHandoutLatex()).doesNotContain("【答案与评分点】", "答案：", "得分");
         assertThat(response.teacherHandoutLatex()).doesNotContain("tokens=", "\\paragraph{模型}");
         assertThat(response.nodes())

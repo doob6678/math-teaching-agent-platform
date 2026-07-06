@@ -14,6 +14,8 @@ public record StudentDashboardQuery(
         String viewerSubjectId,
         String requestedStudentId) {
 
+    public static final String GLOBAL_STUDENT_ID = "__all_students__";
+
     /**
      * Returns a normalized query after requiring backend-resolved identity fields.
      *
@@ -43,7 +45,18 @@ public record StudentDashboardQuery(
         if (normalized.canInspectOtherStudent() && normalized.requestedStudentId != null) {
             return normalized.requestedStudentId;
         }
+        if (normalized.canInspectOtherStudent()) {
+            return GLOBAL_STUDENT_ID;
+        }
         return normalized.viewerSubjectId;
+    }
+
+    /**
+     * Returns whether this is a tenant-level dashboard view for teacher/admin users.
+     */
+    public boolean globalView() {
+        StudentDashboardQuery normalized = normalize();
+        return normalized.canInspectOtherStudent() && normalized.requestedStudentId == null;
     }
 
     /**
@@ -54,8 +67,8 @@ public record StudentDashboardQuery(
     public boolean adminView() {
         StudentDashboardQuery normalized = normalize();
         return normalized.canInspectOtherStudent()
-                && normalized.requestedStudentId != null
-                && !normalized.requestedStudentId.equals(normalized.viewerSubjectId);
+                && (normalized.requestedStudentId == null
+                || !normalized.requestedStudentId.equals(normalized.viewerSubjectId));
     }
 
     /**
@@ -65,17 +78,6 @@ public record StudentDashboardQuery(
      */
     private boolean canInspectOtherStudent() {
         return "admin".equals(viewerRole) || "teacher".equals(viewerRole);
-    }
-
-    /**
-     * Returns a stripped value or a default when blank.
-     *
-     * @param value input value
-     * @param defaultValue default value
-     * @return normalized text
-     */
-    private static String textOrDefault(String value, String defaultValue) {
-        return value == null || value.isBlank() ? defaultValue : value.strip();
     }
 
     /**

@@ -179,19 +179,45 @@ public class MyBatisKnowledgeQuestionBankStore implements KnowledgeQuestionBankS
             int limit) {
         LambdaQueryWrapper<QuestionBankItemEntity> wrapper = new LambdaQueryWrapper<QuestionBankItemEntity>()
                 .eq(QuestionBankItemEntity::getTenantId, tenantId)
-                .eq(QuestionBankItemEntity::getStatus, "active")
-                .orderByAsc(QuestionBankItemEntity::getQuestionTitle);
+                .eq(QuestionBankItemEntity::getStatus, "active");
         applyQuestionVisibility(wrapper, viewerRole, viewerSubjectId);
         if (query != null && !query.isBlank()) {
-            String keyword = query.strip();
+            List<String> keywords = searchKeywords(query);
             wrapper.and(nested -> nested
-                    .like(QuestionBankItemEntity::getQuestionTitle, keyword)
+                    .like(QuestionBankItemEntity::getQuestionTitle, query.strip())
                     .or()
-                    .like(QuestionBankItemEntity::getQuestionText, keyword));
+                    .like(QuestionBankItemEntity::getQuestionText, query.strip())
+                    .or(keywordGroup -> {
+                        for (String keyword : keywords) {
+                            keywordGroup
+                                    .or()
+                                    .like(QuestionBankItemEntity::getQuestionTitle, keyword)
+                                    .or()
+                                    .like(QuestionBankItemEntity::getQuestionText, keyword)
+                                    .or()
+                                    .like(QuestionBankItemEntity::getSourceBlockId, keyword);
+                        }
+                    }));
         }
+        wrapper.orderByAsc(QuestionBankItemEntity::getQuestionTitle);
         return questionMapper.selectList(wrapper).stream()
                 .limit(Math.max(1, Math.min(50, limit)))
                 .map(entity -> toRecord(entity, links(tenantId, entity.getQuestionId())))
+                .toList();
+    }
+
+    /**
+     * Splits user search text into bounded non-blank terms so "双曲线 大题" does not become one exact LIKE.
+     */
+    private static List<String> searchKeywords(String query) {
+        if (query == null || query.isBlank()) {
+            return List.of();
+        }
+        return java.util.Arrays.stream(query.strip().split("[\\s,，、]+"))
+                .map(String::strip)
+                .filter(value -> !value.isBlank())
+                .distinct()
+                .limit(6)
                 .toList();
     }
 

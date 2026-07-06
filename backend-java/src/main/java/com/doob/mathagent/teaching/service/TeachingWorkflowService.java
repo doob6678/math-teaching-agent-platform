@@ -24,6 +24,7 @@ import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -306,26 +307,26 @@ public class TeachingWorkflowService {
         if (aiDraft.content() == null || aiDraft.content().isBlank()) {
             return latex;
         }
-        String title = teacherVersion ? "教师讲解稿与练习设计" : "课堂练习与作答区";
+        String title = teacherVersion ? "教师讲评页" : "学生练习页";
         if (!aiDraft.structured()) {
             return latex;
         }
         if (teacherVersion) {
             return latex + "\n\\section{" + title + "}\n"
-                    + "\\paragraph{讲评主线}\n"
-                    + escapeLatex(aiDraft.teacherExplanation())
-                    + "\n\\paragraph{知识点与方法卡}"
+                    + labeledDraftSections(aiDraft.teacherExplanation(), teacherDraftLabels(), "讲义内容")
+                    + "\n\\subsection*{方法卡片}"
                     + latexItemize(aiDraft.knowledgePoints())
-                    + "\n\\paragraph{课堂追问与变式训练}"
+                    + "\n\\subsection*{追问与变式训练}"
                     + latexEnumerate(aiDraft.followUpQuestions())
-                    + "\n\\paragraph{讲评备注}\n"
-                    + "用于记录课堂生成问题、学生典型错误和二次讲评安排。\\vspace{5em}\n";
+                    + "\n\\subsection*{板书与反馈记录}\n"
+                    + "记录课堂卡点、典型错误、二次讲评安排和需要补充的同类题。\\vspace{5em}\n";
         }
         return latex + "\n\\section{" + title + "}\n"
-                + escapeLatex(aiDraft.studentHint())
-                + "\n\\paragraph{练习任务}"
+                + labeledDraftSections(aiDraft.studentHint(), studentDraftLabels(), "学习提示")
+                + "\n\\subsection*{分层练习}"
                 + latexEnumerate(aiDraft.followUpQuestions())
-                + "\n\\paragraph{作答区}\n\\vspace{10em}\n";
+                + "\n\\subsection*{课堂作答区}\n\\vspace{12em}\n"
+                + "\n\\subsection*{订正记录}\n\\vspace{5em}\n";
     }
 
     /**
@@ -583,7 +584,7 @@ public class TeachingWorkflowService {
                 \\section{学习目标}
                 %s
 
-                \\section{本讲任务}
+                \\section{题目与本讲任务}
                 %s
 
                 \\section{来源索引}
@@ -592,7 +593,7 @@ public class TeachingWorkflowService {
                 \\section{知识点归属}
                 %s
 
-                \\section{板书与讲评主线}
+                \\section{板书流程}
                 \\begin{enumerate}
                 \\item 定位：先写本讲核心定义、公式或图像特征，让学生知道从哪里入手。
                 \\item 识别：圈出题目条件中的题型信号，判断使用定义法、代数计算、数形结合还是分类讨论。
@@ -600,8 +601,8 @@ public class TeachingWorkflowService {
                 \\item 收束：给出答案、评分点、易错提醒和可继续追问的变式。
                 \\end{enumerate}
                 
-                \\section{例题讲评}
-                \\paragraph{例题}
+                \\section{例题与答案}
+                \\paragraph{例题 1}
                 %s
                 
                 \\paragraph{讲解路径}
@@ -610,7 +611,7 @@ public class TeachingWorkflowService {
                 \\paragraph{答案与评分点}
                 教师版保留完整答案、关键等式、评分点和学生常见失分位置。
                 
-                \\section{课堂追问预设}
+                \\section{课堂追问}
                 \\begin{itemize}
                 \\item 这道题第一步为什么不能直接套公式？
                 \\item 如果条件少一个，应该先补哪个量？
@@ -689,22 +690,21 @@ public class TeachingWorkflowService {
                     ? "根据本节主题完成下面的知识梳理与分层练习。"
                     : safeQuestionText(request);
             return """
-                    \\section{学习主题}
+                    \\section{第 1 讲  %s}
                     \\begin{itemize}
-                    \\item 学习主题：%s
                     \\item 课堂任务：先完成例题任务，再做分层练习，最后记录错因。
                     \\end{itemize}
 
-                    \\subsection*{知识点速记}
+                    \\subsection*{知识点 1：核心定义与公式}
                     %s
 
                     \\subsection*{注意}
                     %s
 
-                    \\subsection*{例题任务}
+                    \\subsection*{题型 1：基础识别}
                     %s
 
-                    \\subsection*{分层练习}
+                    \\subsection*{练习}
                     \\begin{enumerate}
                     \\item A 基础：写出本讲涉及的定义、公式或图像特征。
                     \\item B 提高：根据题目条件列出关键等式，并说明每一步依据。
@@ -726,24 +726,23 @@ public class TeachingWorkflowService {
                 ? "根据本讲主题完成例题、变式和订正。"
                 : safeQuestionText(request);
         return """
-                \\section{学习主题}
+                \\section{第 1 讲  %s}
                 \\begin{itemize}
-                \\item 主题：%s
                 \\item 课堂任务：先独立完成空白区，再订正关键步骤。
                 \\end{itemize}
 
-                \\section{例题任务}
-                %s
-
-                \\section{思路提示}
-                %s
-                
-                \\section{知识点速记}
+                \\section{知识点 1：核心方法}
                 \\begin{itemize}
                 \\item 先写定义、公式或图像特征，再代入题目条件。
                 \\item 遇到参数、范围、符号时先标记边界，不急着计算。
                 \\item 本页只保留提示和作答区，详细讲评在教师版审查。
                 \\end{itemize}
+
+                \\section{题型 1：例题任务}
+                %s
+
+                \\section{思路提示}
+                %s
                 
                 \\section{课堂练习}
                 \\begin{enumerate}
@@ -846,6 +845,65 @@ public class TeachingWorkflowService {
         return request.questionText() == null ? "" : request.questionText().strip();
     }
 
+    private static List<String> teacherDraftLabels() {
+        return List.of("知识定位", "题型识别", "方法步骤", "例题详解", "答案与评分点", "易错提醒", "课堂追问");
+    }
+
+    private static List<String> studentDraftLabels() {
+        return List.of("知识速记", "题型识别", "例题任务", "练习任务", "作答提醒");
+    }
+
+    private static String labeledDraftSections(String text, List<String> labels, String fallbackTitle) {
+        List<LabeledDraftBlock> blocks = parseLabeledDraftBlocks(text, labels, fallbackTitle);
+        StringBuilder builder = new StringBuilder();
+        for (LabeledDraftBlock block : blocks) {
+            builder.append("\\subsection*{")
+                    .append(escapeLatex(block.label()))
+                    .append("}\n")
+                    .append(escapeLatex(block.content()))
+                    .append("\n\n");
+        }
+        return builder.toString();
+    }
+
+    private static List<LabeledDraftBlock> parseLabeledDraftBlocks(String text, List<String> labels, String fallbackTitle) {
+        String source = text == null ? "" : text.strip();
+        if (source.isBlank()) {
+            return List.of();
+        }
+        List<LabelPosition> positions = new ArrayList<>();
+        for (String label : labels) {
+            String marker = "【" + label + "】";
+            int from = 0;
+            while (from < source.length()) {
+                int start = source.indexOf(marker, from);
+                if (start < 0) {
+                    break;
+                }
+                positions.add(new LabelPosition(label, start, start + marker.length()));
+                from = start + marker.length();
+            }
+        }
+        positions.sort(Comparator.comparingInt(LabelPosition::start));
+        if (positions.isEmpty()) {
+            return List.of(new LabeledDraftBlock(fallbackTitle, source));
+        }
+        List<LabeledDraftBlock> blocks = new ArrayList<>();
+        String prefix = source.substring(0, positions.getFirst().start()).strip();
+        if (!prefix.isBlank()) {
+            blocks.add(new LabeledDraftBlock(fallbackTitle, prefix));
+        }
+        for (int index = 0; index < positions.size(); index += 1) {
+            LabelPosition current = positions.get(index);
+            int nextStart = index + 1 < positions.size() ? positions.get(index + 1).start() : source.length();
+            String content = source.substring(current.end(), nextStart).strip();
+            if (!content.isBlank()) {
+                blocks.add(new LabeledDraftBlock(current.label(), content));
+            }
+        }
+        return List.copyOf(blocks);
+    }
+
     private static String latexItemize(List<String> items) {
         if (items == null || items.isEmpty()) {
             return "\n";
@@ -899,5 +957,11 @@ public class TeachingWorkflowService {
         List<TeachingTaskResponse.StageTiming> timings() {
             return List.copyOf(timings);
         }
+    }
+
+    private record LabelPosition(String label, int start, int end) {
+    }
+
+    private record LabeledDraftBlock(String label, String content) {
     }
 }

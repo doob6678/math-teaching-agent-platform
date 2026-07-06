@@ -24,7 +24,9 @@ import {
   QuestionBankItemResponse,
   RetrievalAuditDetail,
   StudentDashboardResponse,
+  TeachingHandoutPdfResponse,
   TeachingHandoutTemplateResponse,
+  TeachingHumanFeedbackResponse,
   TeachingTaskResponse,
   TeacherFeishuDiscoveryCandidate,
   TeacherFeishuDiscoveryResponse,
@@ -180,6 +182,7 @@ export function App() {
   const [handoutPreviewPdfUrl, setHandoutPreviewPdfUrl] = useState("");
   const [handoutPreviewPdfBytes, setHandoutPreviewPdfBytes] = useState<Uint8Array | null>(null);
   const [handoutPreviewPdfTaskId, setHandoutPreviewPdfTaskId] = useState("");
+  const [handoutPreviewPdfMeta, setHandoutPreviewPdfMeta] = useState<TeachingHandoutPdfResponse | null>(null);
   const [teachingHistory, setTeachingHistory] = useState<TeachingTaskResponse[]>([]);
   const [loadingTeachingHistory, setLoadingTeachingHistory] = useState(false);
   const [handoutVersion, setHandoutVersion] = useState<"teacher" | "student">("teacher");
@@ -190,6 +193,8 @@ export function App() {
   const [feedbackComment, setFeedbackComment] = useState("");
   const [submittingFeedback, setSubmittingFeedback] = useState(false);
   const [feedbackMessage, setFeedbackMessage] = useState("");
+  const [feedbackHistory, setFeedbackHistory] = useState<TeachingHumanFeedbackResponse[]>([]);
+  const [loadingFeedbackHistory, setLoadingFeedbackHistory] = useState(false);
   const [agentPlan, setAgentPlan] = useState<AgentRunPlanResponse | null>(null);
   const [agentExecution, setAgentExecution] = useState<AgentRunExecuteResponse | null>(null);
   const [agentTraces, setAgentTraces] = useState<AgentTraceResponse[]>([]);
@@ -430,7 +435,9 @@ export function App() {
     api
       .getTeachingTask(taskId)
       .then((task) => {
+        syncSelectedTeachingTemplate(task);
         setTeachingTask(task);
+        loadTeachingFeedbackHistory(task.taskId);
         if (task.status === "COMPLETED") {
           previewTeachingTaskPdf(task.taskId, handoutVersion);
         } else if (task.status === "CREATED" || task.status === "RUNNING") {
@@ -543,6 +550,19 @@ export function App() {
       .finally(() => setLoadingQuestionBank(false));
   }
 
+  function loadTeachingFeedbackHistory(taskId: string) {
+    if (!taskId) {
+      setFeedbackHistory([]);
+      return;
+    }
+    setLoadingFeedbackHistory(true);
+    api
+      .listTeachingHumanFeedback(taskId)
+      .then(setFeedbackHistory)
+      .catch(() => setFeedbackHistory([]))
+      .finally(() => setLoadingFeedbackHistory(false));
+  }
+
   function handleSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!query.trim()) { setSearchError("请输入检索词。"); return; }
@@ -585,6 +605,7 @@ export function App() {
         handoutTemplateCode: selectedTeachingTemplateCode || undefined,
       })
       .then((task) => {
+        syncSelectedTeachingTemplate(task);
         window.localStorage.setItem(TEACHING_TASK_STORAGE_KEY, task.taskId);
         setTeachingTask(task);
         setHandoutPreviewLatex("");
@@ -595,9 +616,12 @@ export function App() {
         });
         setHandoutPreviewPdfBytes(null);
         setHandoutPreviewPdfTaskId("");
+        setHandoutPreviewPdfMeta(null);
         setHandoutExportMessage("");
         setFeedbackMessage("");
+        setFeedbackHistory([]);
         refreshTeachingHistory();
+        loadTeachingFeedbackHistory(task.taskId);
         if (task.status === "COMPLETED") {
           previewTeachingTaskPdf(task.taskId, handoutVersion);
         } else {
@@ -639,6 +663,7 @@ export function App() {
   function pollTeachingTask(taskId: string) {
     const poll = () => {
       api.getTeachingTask(taskId).then((task) => {
+        syncSelectedTeachingTemplate(task);
         setTeachingTask(task);
         if (task.status === "CREATED" || task.status === "RUNNING") {
           globalThis.setTimeout(poll, 2000);
@@ -849,6 +874,7 @@ export function App() {
     });
     setHandoutPreviewPdfBytes(null);
     setHandoutPreviewPdfTaskId("");
+    setHandoutPreviewPdfMeta(null);
     api
       .previewTeachingTaskLatex(teachingTask.taskId, handoutVersion)
       .then((latex) => { setHandoutPreviewLatex(latex); setHandoutPreviewTaskId(`${teachingTask.taskId}:${handoutVersion}`); })
@@ -870,9 +896,10 @@ export function App() {
       .then((pdf) => {
         setHandoutPreviewLatex("");
         setHandoutPreviewTaskId("");
-        const bytes = new Uint8Array(pdf.byteLength);
-        bytes.set(pdf);
+        const bytes = new Uint8Array(pdf.bytes.byteLength);
+        bytes.set(pdf.bytes);
         setHandoutPreviewPdfBytes(bytes);
+        setHandoutPreviewPdfMeta(pdf);
         setHandoutPreviewPdfUrl((current) => {
           if (current) URL.revokeObjectURL(current);
           return URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
@@ -902,7 +929,10 @@ export function App() {
     setHandoutExportMessage("");
     api
       .exportTeachingTaskPdf(teachingTask.taskId, handoutVersion)
-      .then((pdf) => { downloadBytes(`${teachingTask.taskId}-${handoutVersion}.pdf`, pdf, "application/pdf"); setHandoutExportMessage("PDF 讲义已下载。"); })
+      .then((pdf) => {
+        downloadBytes(`${teachingTask.taskId}-${handoutVersion}.pdf`, pdf.bytes, "application/pdf");
+        setHandoutExportMessage(`PDF 讲义已下载。${pdf.renderer === "xelatex" ? "已使用 XeLaTeX 编译。" : "当前使用后备排版。"}`);
+      })
       .catch((error: Error) => setTeachingError(error.message))
       .finally(() => setHandoutAction(""));
   }
@@ -921,6 +951,7 @@ export function App() {
 
   function handleSelectTeachingHistory(task: TeachingTaskResponse) {
     window.localStorage.setItem(TEACHING_TASK_STORAGE_KEY, task.taskId);
+    syncSelectedTeachingTemplate(task);
     setTeachingTask(task);
     setHandoutPreviewLatex("");
     setHandoutPreviewTaskId("");
@@ -930,7 +961,10 @@ export function App() {
     });
     setHandoutPreviewPdfBytes(null);
     setHandoutPreviewPdfTaskId("");
+    setHandoutPreviewPdfMeta(null);
     setHandoutExportMessage("");
+    setFeedbackMessage("");
+    loadTeachingFeedbackHistory(task.taskId);
     setTeachingError("");
     if (task.status === "COMPLETED") {
       previewTeachingTaskPdf(task.taskId, handoutVersion);
@@ -939,15 +973,41 @@ export function App() {
     }
   }
 
+  function syncSelectedTeachingTemplate(task: TeachingTaskResponse) {
+    const templateCode = task.selectedTemplate?.templateCode;
+    if (templateCode) {
+      setSelectedTeachingTemplateCode(templateCode);
+    }
+  }
+
   function handleSubmitFeedback(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!teachingTask) return;
+    const selectedDraft = handoutVersion === "student"
+      ? teachingTask.studentHandoutLatex ?? teachingTask.handoutLatex ?? ""
+      : teachingTask.teacherHandoutLatex ?? teachingTask.handoutLatex ?? "";
+    const reviewContext = buildTeachingFeedbackReviewContext(
+      teachingTask,
+      handoutVersion,
+      selectedDraft,
+      handoutPreviewPdfMeta,
+      handoutPreviewPdfTaskId,
+    );
     setSubmittingFeedback(true);
     setTeachingError("");
     setFeedbackMessage("");
     api
-      .submitTeachingHumanFeedback(teachingTask.taskId, { rating: feedbackRating, decision: feedbackDecision, comment: feedbackComment.trim() })
-      .then((feedback) => { setFeedbackMessage(`反馈已记录：${decisionLabel(feedback.decision)} / ${feedback.rating} 星`); setFeedbackComment(""); })
+      .submitTeachingHumanFeedback(teachingTask.taskId, {
+        rating: feedbackRating,
+        decision: feedbackDecision,
+        comment: feedbackComment.trim(),
+        reviewContext,
+      })
+      .then((feedback) => {
+        setFeedbackMessage(`反馈已记录：${decisionLabel(feedback.decision)} / ${feedback.rating} 星`);
+        setFeedbackHistory((current) => [feedback, ...current.filter((item) => item.feedbackId !== feedback.feedbackId)]);
+        setFeedbackComment("");
+      })
       .catch((error: Error) => setTeachingError(error.message))
       .finally(() => setSubmittingFeedback(false));
   }
@@ -1454,6 +1514,7 @@ export function App() {
                 previewLatex={handoutPreviewTaskId === `${teachingTask?.taskId}:${handoutVersion}` ? handoutPreviewLatex : ""}
                 previewPdfUrl={handoutPreviewPdfTaskId === `${teachingTask?.taskId}:${handoutVersion}` ? handoutPreviewPdfUrl : ""}
                 previewPdfBytes={handoutPreviewPdfTaskId === `${teachingTask?.taskId}:${handoutVersion}` ? handoutPreviewPdfBytes : null}
+                previewPdfMeta={handoutPreviewPdfTaskId === `${teachingTask?.taskId}:${handoutVersion}` ? handoutPreviewPdfMeta : null}
                 history={teachingHistory}
                 loadingHistory={loadingTeachingHistory}
                 action={handoutAction}
@@ -1463,6 +1524,8 @@ export function App() {
                 feedbackComment={feedbackComment}
                 submittingFeedback={submittingFeedback}
                 feedbackMessage={feedbackMessage}
+                feedbackHistory={feedbackHistory}
+                loadingFeedbackHistory={loadingFeedbackHistory}
                 batchFolderPath={batchFolderPath}
                 onVersionChange={(v) => {
                   setHandoutVersion(v);
@@ -1474,6 +1537,7 @@ export function App() {
                   });
                   setHandoutPreviewPdfBytes(null);
                   setHandoutPreviewPdfTaskId("");
+                  setHandoutPreviewPdfMeta(null);
                   setHandoutExportMessage("");
                 }}
                 onBatchFolderPathChange={setBatchFolderPath}
@@ -2098,6 +2162,60 @@ function decisionLabel(decision: string) {
     needs_revision: "需要修改",
   };
   return labels[decision] ?? decision;
+}
+
+function buildTeachingFeedbackReviewContext(
+  task: TeachingTaskResponse,
+  version: "teacher" | "student",
+  latex: string,
+  pdfMeta: TeachingHandoutPdfResponse | null,
+  pdfPreviewKey: string,
+) {
+  const plainText = latex
+    .replace(/\\[a-zA-Z]+\*?\{([^{}]*)\}/g, "$1")
+    .replace(/[%#*_`>$]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const sectionCount = (latex.match(/\\section\*?\{/g) ?? []).length;
+  const hasMath = /(\${1,2}[^$]+\${1,2}|\\\(.+?\\\)|\\\[.+?\\\]|[A-Za-z][_^][{]?\d)/.test(latex);
+  const hasWorkspace = /作答区|我的解答|订正|留白|\\vspace|___/.test(latex);
+  const answerLeak = /答案与评分点|参考答案|评分标准|答案[:：]|答案为|故答案|因此答案|得分/.test(plainText);
+  const teacherHasAnswer = /答案与评分点|答案|解析|讲评|评分/.test(plainText);
+  const groups = version === "teacher" ? [
+    ["讲义信息", "学习目标", "本讲任务", "课前定位"],
+    ["来源索引", "知识点归属", "知识定位", "教材", "题库", "证据"],
+    ["板书流程", "板书", "方法步骤", "讲解路径", "方法卡片", "讲解"],
+    ["例题与答案", "例题详解", "答案与评分点", "评分点", "解析"],
+    ["课堂追问", "追问与变式训练", "变式", "问题预设", "互动练习"],
+    ["课后订正", "反馈记录", "易错提醒", "订正记录", "反馈"],
+  ] : [
+    ["第 1 讲", "学习主题", "学习目标", "专题标题"],
+    ["知识点", "知识速记", "核心定义", "核心方法"],
+    ["题型", "例题任务", "题目", "连续编号"],
+    ["思路提示", "作答提醒", "注意", "方法提示"],
+    ["课堂练习", "练习任务", "课后巩固"],
+    ["我的解答", "课堂作答区", "订正记录", "错因"],
+  ];
+  const matchedCoreColumns = groups.filter((group) => group.some((keyword) => plainText.includes(keyword))).length;
+  return {
+    schemaVersion: "teaching-feedback-review-v1",
+    handoutVersion: version,
+    taskStatus: task.status,
+    templateCode: task.selectedTemplate?.templateCode ?? "default_standard",
+    templateName: task.selectedTemplate?.displayName ?? "标准讲义",
+    pdfRenderer: pdfMeta?.renderer ?? "",
+    pdfPageCount: pdfMeta?.pageCount ?? 0,
+    pdfPreviewReady: pdfPreviewKey === `${task.taskId}:${version}`,
+    checks: {
+      sectionCount,
+      matchedCoreColumns,
+      coreColumnTotal: groups.length,
+      hasMath,
+      hasWorkspace,
+      teacherHasAnswer,
+      answerLeak,
+    },
+  };
 }
 
 function downloadBlob(fileName: string, blob: Blob) {

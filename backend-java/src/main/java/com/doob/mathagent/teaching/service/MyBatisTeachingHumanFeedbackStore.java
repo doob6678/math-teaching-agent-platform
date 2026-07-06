@@ -4,7 +4,10 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.doob.mathagent.teaching.entity.TeachingHumanFeedbackEntity;
 import com.doob.mathagent.teaching.mapper.TeachingHumanFeedbackMapper;
 import com.doob.mathagent.teaching.vo.TeachingHumanFeedbackResponse;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.List;
+import java.util.Map;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Repository;
 
@@ -14,6 +17,10 @@ import org.springframework.stereotype.Repository;
 @Repository
 @ConditionalOnProperty(prefix = "math-agent.database", name = "enabled", havingValue = "true")
 public class MyBatisTeachingHumanFeedbackStore implements TeachingHumanFeedbackStore {
+
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final TypeReference<Map<String, Object>> REVIEW_CONTEXT_TYPE = new TypeReference<>() {
+    };
 
     private final TeachingHumanFeedbackMapper mapper;
 
@@ -49,6 +56,7 @@ public class MyBatisTeachingHumanFeedbackStore implements TeachingHumanFeedbackS
         entity.setRating(feedback.rating());
         entity.setDecision(feedback.decision());
         entity.setComment(feedback.comment());
+        entity.setReviewContextJson(toJson(feedback.reviewContext()));
         entity.setCreatedAt(feedback.createdAt());
         return entity;
     }
@@ -63,6 +71,29 @@ public class MyBatisTeachingHumanFeedbackStore implements TeachingHumanFeedbackS
                 entity.getRating(),
                 entity.getDecision(),
                 entity.getComment(),
+                fromJson(entity.getReviewContextJson()),
                 entity.getCreatedAt());
+    }
+
+    private static String toJson(Map<String, Object> value) {
+        if (value == null || value.isEmpty()) {
+            return "{}";
+        }
+        try {
+            return OBJECT_MAPPER.writeValueAsString(value);
+        } catch (RuntimeException | java.io.IOException exception) {
+            return "{}";
+        }
+    }
+
+    private static Map<String, Object> fromJson(String value) {
+        if (value == null || value.isBlank()) {
+            return Map.of();
+        }
+        try {
+            return OBJECT_MAPPER.readValue(value, REVIEW_CONTEXT_TYPE);
+        } catch (RuntimeException | java.io.IOException exception) {
+            return Map.of();
+        }
     }
 }

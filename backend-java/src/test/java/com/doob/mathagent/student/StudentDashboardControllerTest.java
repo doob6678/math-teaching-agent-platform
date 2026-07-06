@@ -2,6 +2,8 @@ package com.doob.mathagent.student;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.doob.mathagent.auth.service.LocalAccount;
+import com.doob.mathagent.auth.service.LocalAccountStore;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.infrastructure.security.RequestSubjectResolver;
 import com.doob.mathagent.memory.service.StudentMemoryEntry;
@@ -9,6 +11,7 @@ import com.doob.mathagent.memory.service.StudentMemoryStore;
 import com.doob.mathagent.student.controller.StudentDashboardController;
 import com.doob.mathagent.student.dto.StudentDashboardQuery;
 import com.doob.mathagent.student.service.StudentDashboardService;
+import com.doob.mathagent.student.service.StudentDashboardSubjectResolver;
 import com.doob.mathagent.student.service.StudentLearningSnapshotRecord;
 import com.doob.mathagent.student.service.StudentLearningSnapshotRefreshService;
 import com.doob.mathagent.student.service.StudentLearningSnapshotStore;
@@ -34,6 +37,7 @@ class StudentDashboardControllerTest {
 
         assertThat(response.viewerRole()).isEqualTo("student");
         assertThat(response.studentId()).isEqualTo("local-student");
+        assertThat(response.subjectRole()).isEqualTo("student");
         assertThat(response.knowledgeProgress()).isEmpty();
         assertThat(response.recentQuestions()).isEmpty();
     }
@@ -49,6 +53,7 @@ class StudentDashboardControllerTest {
         StudentDashboardResponse response = controller.getDashboard("student-100", new MockHttpServletRequest());
 
         assertThat(response.studentId()).isEqualTo("student-100");
+        assertThat(response.subjectRole()).isEqualTo("student");
         assertThat(response.isAdminView()).isTrue();
     }
 
@@ -66,6 +71,7 @@ class StudentDashboardControllerTest {
         StudentDashboardResponse response = controller.getDashboard("student-victim", request);
 
         assertThat(response.studentId()).isEqualTo("student-real");
+        assertThat(response.subjectRole()).isEqualTo("student");
         assertThat(response.viewerRole()).isEqualTo("student");
         assertThat(response.viewerSubjectId()).isEqualTo("student-real");
         assertThat(response.isAdminView()).isFalse();
@@ -92,12 +98,14 @@ class StudentDashboardControllerTest {
                 new StudentLearningSnapshotRefreshService(
                         emptyMemoryStore(),
                         emptySnapshotStore(),
+                        subjectResolver(),
                         new ObjectMapper()) {
                     @Override
                     public StudentDashboardResponse refresh(StudentDashboardQuery query) {
                         return new StudentDashboardResponse(
                                 query.tenantId(),
                                 query.targetStudentId(),
+                                subjectResolver().resolveSubjectRole(query),
                                 query.viewerRole(),
                                 query.viewerSubjectId(),
                                 query.adminView(),
@@ -122,15 +130,18 @@ class StudentDashboardControllerTest {
         StudentDashboardResponse response = controller.refreshDashboard("student-victim", request);
 
         assertThat(response.studentId()).isEqualTo("student-real");
+        assertThat(response.subjectRole()).isEqualTo("student");
         assertThat(response.isAdminView()).isFalse();
     }
 
     private static StudentDashboardService dashboardService() {
         StudentLearningSnapshotStore snapshotStore = emptySnapshotStore();
         ObjectMapper objectMapper = new ObjectMapper();
+        StudentDashboardSubjectResolver subjectResolver = subjectResolver();
         return new StudentDashboardService(
                 snapshotStore,
-                new StudentLearningSnapshotRefreshService(emptyMemoryStore(), snapshotStore, objectMapper),
+                new StudentLearningSnapshotRefreshService(emptyMemoryStore(), snapshotStore, subjectResolver, objectMapper),
+                subjectResolver,
                 objectMapper);
     }
 
@@ -138,6 +149,7 @@ class StudentDashboardControllerTest {
         return new StudentLearningSnapshotRefreshService(
                 emptyMemoryStore(),
                 emptySnapshotStore(),
+                subjectResolver(),
                 new ObjectMapper());
     }
 
@@ -167,5 +179,31 @@ class StudentDashboardControllerTest {
                 return List.of();
             }
         };
+    }
+
+    private static StudentDashboardSubjectResolver subjectResolver() {
+        return new StudentDashboardSubjectResolver(new LocalAccountStore() {
+            @Override
+            public Optional<LocalAccount> findByUsername(String username) {
+                return Optional.empty();
+            }
+
+            @Override
+            public Optional<LocalAccount> findByUserId(String userId) {
+                String role = switch (userId) {
+                    case "local-student", "student-100", "student-real" -> "student";
+                    case "admin-local" -> "admin";
+                    default -> null;
+                };
+                return role == null
+                        ? Optional.empty()
+                        : Optional.of(new LocalAccount(userId, userId, "", role, "school-a"));
+            }
+
+            @Override
+            public LocalAccount createStudent(String username, String encodedPassword, String tenantId) {
+                throw new UnsupportedOperationException();
+            }
+        });
     }
 }

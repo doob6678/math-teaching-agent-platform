@@ -26,9 +26,14 @@ public record MultiAgentWritingRequest(
      * @return normalized request
      */
     public MultiAgentWritingRequest normalize() {
+        String normalizedGoal = safeText(writingGoal);
+        String normalizedQuestion = safeText(questionText);
+        if (normalizedQuestion.isBlank()) {
+            normalizedQuestion = normalizedGoal;
+        }
         return new MultiAgentWritingRequest(
-                safeText(writingGoal),
-                safeText(questionText),
+                normalizedGoal,
+                normalizedQuestion,
                 evidenceRefs == null ? List.of() : evidenceRefs.stream().map(MultiAgentWritingRequest::safeText).toList(),
                 dryRun,
                 safeText(preferredProviderName).toLowerCase(java.util.Locale.ROOT),

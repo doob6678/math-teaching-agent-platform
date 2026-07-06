@@ -219,11 +219,34 @@ export interface TeachingTaskRequest {
   /** 前端幂等请求号，刷新或重试时保持不变。 */
   clientRequestId: string;
   /** 用户输入的题目或学习问题。 */
-  questionText: string;
+  questionText?: string;
   /** 用户想学什么。 */
   learningGoal: string;
   /** 教材证据召回数量上限。 */
   evidenceLimit: number;
+  /** Optional backend-owned handout template code selected by the user. */
+  handoutTemplateCode?: string;
+}
+
+export interface TeachingHandoutTemplateResponse {
+  templateCode: string;
+  displayName: string;
+  sourceType: string;
+  audience: string;
+  description: string;
+  category?: string;
+  visualStyle?: string;
+  difficultyBands?: string[];
+  tags?: string[];
+  referenceTitle?: string | null;
+  referencePath?: string | null;
+  referencePreview?: string | null;
+}
+
+export interface TeachingHandoutPdfResponse {
+  bytes: Uint8Array;
+  renderer: string;
+  pageCount: number;
 }
 
 /**
@@ -439,6 +462,8 @@ export interface TeachingTaskResponse {
   subjectType?: string;
   /** 主体 ID。 */
   subjectId?: string;
+  /** Selected backend-owned handout template. */
+  selectedTemplate?: TeachingHandoutTemplateResponse;
   /** 任务状态。 */
   status: "CREATED" | "RUNNING" | "COMPLETED" | "FAILED";
   /** 用户题目。 */
@@ -514,6 +539,8 @@ export interface TeachingHumanFeedbackRequest {
   decision: string;
   /** Human-readable feedback content for later review. */
   comment: string;
+  /** Structured handout review context captured by the frontend review panel. */
+  reviewContext?: Record<string, unknown>;
 }
 
 /**
@@ -536,6 +563,8 @@ export interface TeachingHumanFeedbackResponse {
   decision: string;
   /** Free-text feedback content. */
   comment: string;
+  /** Structured handout review context captured at submission time. */
+  reviewContext?: Record<string, unknown>;
   /** Backend creation timestamp. */
   createdAt: string;
 }
@@ -847,6 +876,63 @@ export interface MultiAgentWritingResponse {
 }
 
 /**
+ * Owner-visible generated content for one multi-agent writing workflow.
+ */
+export interface MultiAgentWritingArtifact {
+  /** Backend workflow id. */
+  workflowId: string;
+  /** Backend tenant id. */
+  tenantId: string;
+  /** Backend subject role. */
+  subjectType: string;
+  /** Backend subject id. */
+  subjectId: string;
+  /** Workflow status. */
+  status: string;
+  /** Summed provider-reported token usage. */
+  totalUsage: AgentTokenUsage;
+  /** Per-stage generated content. */
+  stages: MultiAgentWritingStageArtifact[];
+  /** Merged Markdown content for preview and export. */
+  mergedMarkdown: string;
+}
+
+/**
+ * Generated content from one writing stage.
+ */
+export interface MultiAgentWritingStageArtifact {
+  /** Stable stage code. */
+  stageCode: string;
+  /** Backend agent code. */
+  agentCode: string;
+  /** Trace id used for diagnostics. */
+  traceId: string;
+  /** Actual provider used by this stage. */
+  providerName: string;
+  /** Actual model used by this stage. */
+  modelCode: string;
+  /** Stage status. */
+  status: string;
+  /** Owner-visible generated content. */
+  generatedContent: string;
+}
+
+/**
+ * Temporary exported artifact payload.
+ */
+export interface MultiAgentWritingArtifactExportResponse {
+  exportId: string;
+  workflowId: string;
+  format: "markdown" | "latex" | "pdf" | "zip" | string;
+  fileName: string;
+  mimeType: string;
+  byteSize: number;
+  sha256: string;
+  base64Content: string;
+  expiresAt: string;
+}
+
+/**
  * Optional filters for listing visible agent traces.
  */
 export interface AgentTraceQuery {
@@ -1123,6 +1209,8 @@ export interface StudentDashboardResponse {
   tenantId: string;
   /** 当前面板展示的学生 ID。 */
   studentId: string;
+  /** 当前面板代表对象的后端角色，例如 student、teacher、admin、global 或 unknown。 */
+  subjectRole: string;
   /** 当前查看者角色，通常为 student、teacher 或 admin。 */
   viewerRole: string;
   /** 当前查看者主体 ID。 */
@@ -1917,6 +2005,18 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
   /**
    * 请求后端 JSON。身份只通过后端登录 token 传递，不能使用前端自报角色或学生 ID。
    */
+    /** 生成 UUID v4，优先使用 Crypto API，回退到手动实现。用于幂等 clientRequestId。 */
+  function generateUUID(): string {
+    try {
+      return globalThis.crypto.randomUUID();
+    } catch {
+      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+        const r = (Math.random() * 16) | 0;
+        return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
+      });
+    }
+  }
+
   async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> {
     const auth = readAuthSession();
     const authHeader = auth ? { [auth.tokenName]: auth.tokenValue } : {};
@@ -1938,6 +2038,16 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
   /**
    * Requests a backend text response while preserving the same session and device headers.
    */
+  /** 合并两个 AbortSignal，任一触发中止则整体中止。用于同时支持外部 signal 和内部超时。 */
+  function combineSignals(s1: AbortSignal, s2: AbortSignal): AbortSignal {
+    const controller = new AbortController();
+    const onAbort = () => controller.abort();
+    s1.addEventListener('abort', onAbort);
+    s2.addEventListener('abort', onAbort);
+    if (s1.aborted || s2.aborted) controller.abort();
+    return controller.signal;
+  }
+
   async function requestText(path: string, init: RequestInit = {}): Promise<string> {
     const auth = readAuthSession();
     const authHeader = auth ? { [auth.tokenName]: auth.tokenValue } : {};
@@ -1975,6 +2085,30 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
       throw new Error(`Backend request failed: ${response.status} ${body}`.trim());
     }
     return new Uint8Array(await response.arrayBuffer());
+  }
+
+  async function requestBytesWithHeaders(path: string, init: RequestInit = {}): Promise<{
+    bytes: Uint8Array;
+    headers: Headers;
+  }> {
+    const auth = readAuthSession();
+    const authHeader = auth ? { [auth.tokenName]: auth.tokenValue } : {};
+    const response = await fetchImpl(`${normalizedBaseUrl}${path}`, {
+      ...init,
+      headers: {
+        ...DEVICE_ID_HEADER,
+        ...authHeader,
+        ...init.headers,
+      },
+    });
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`Backend request failed: ${response.status} ${body}`.trim());
+    }
+    return {
+      bytes: new Uint8Array(await response.arrayBuffer()),
+      headers: response.headers as Headers,
+    };
   }
 
   /**
@@ -2190,6 +2324,13 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
       return requestJson<TeachingTaskResponse>(`/api/teaching/tasks/${encodeURIComponent(taskId)}`);
     },
 
+    listTeachingTasks(limit = 20): Promise<TeachingTaskResponse[]> {
+      return requestJson<TeachingTaskResponse[]>(`/api/teaching/tasks?limit=${encodeURIComponent(String(limit))}`);
+    },
+    listTeachingHandoutTemplates(): Promise<TeachingHandoutTemplateResponse[]> {
+      return requestJson<TeachingHandoutTemplateResponse[]>("/api/teaching/handout-templates");
+    },
+
     /**
      * 读取学生学习画像。默认使用本地学生身份，避免学生面板误带教师权限。
      */
@@ -2238,7 +2379,7 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     /**
      * Downloads the PDF handout for a teaching task after applying a one-time capability token.
      */
-    async exportTeachingTaskPdf(taskId: string, version: "teacher" | "student" = "teacher"): Promise<Uint8Array> {
+    async exportTeachingTaskPdf(taskId: string, version: "teacher" | "student" = "teacher"): Promise<TeachingHandoutPdfResponse> {
       const encodedTaskId = encodeURIComponent(taskId);
       const path = `/api/teaching/tasks/${encodedTaskId}/handout/${version}/pdf`;
       const capability = await applyCapability(
@@ -2248,13 +2389,18 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
         `teaching-handout-export-pdf:${taskId}:${version}`,
         2,
       );
-      return requestBytes(path, {
+      const response = await requestBytesWithHeaders(path, {
         method: "GET",
         headers: {
           "X-Capability-Token": capability.token,
           "X-Request-Hash": capability.requestHash,
         },
       });
+      return {
+        bytes: response.bytes,
+        renderer: response.headers.get("X-Handout-Renderer") ?? "",
+        pageCount: Number(response.headers.get("X-Handout-Page-Count") ?? "0") || 0,
+      };
     },
 
     /**
@@ -2331,6 +2477,15 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
         },
         body,
       });
+    },
+
+    /**
+     * Lists human review records for the current backend-owned teaching task.
+     */
+    listTeachingHumanFeedback(taskId: string): Promise<TeachingHumanFeedbackResponse[]> {
+      return requestJson<TeachingHumanFeedbackResponse[]>(
+        `/api/teaching/tasks/${encodeURIComponent(taskId)}/feedback`,
+      );
     },
 
     /**
@@ -2474,6 +2629,28 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     getMultiAgentWritingTraces(workflowId: string): Promise<MultiAgentWritingTraceResponse> {
       return requestJson<MultiAgentWritingTraceResponse>(
         `/api/agents/writing/${encodeURIComponent(workflowId)}/traces`,
+      );
+    },
+
+    /**
+     * Reads owner-visible generated content for review and frontend preview.
+     */
+    getMultiAgentWritingArtifact(workflowId: string): Promise<MultiAgentWritingArtifact> {
+      return requestJson<MultiAgentWritingArtifact>(
+        `/api/agents/writing/${encodeURIComponent(workflowId)}/artifact`,
+      );
+    },
+
+    /**
+     * Exports generated writing content as Markdown, LaTeX, or ZIP.
+     */
+    exportMultiAgentWritingArtifact(
+      workflowId: string,
+      format: "markdown" | "latex" | "pdf" | "zip",
+    ): Promise<MultiAgentWritingArtifactExportResponse> {
+      const params = new URLSearchParams({ format });
+      return requestJson<MultiAgentWritingArtifactExportResponse>(
+        `/api/agents/writing/${encodeURIComponent(workflowId)}/artifact/export?${params}`,
       );
     },
 

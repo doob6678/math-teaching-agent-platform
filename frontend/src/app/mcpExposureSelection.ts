@@ -26,75 +26,75 @@ export const MCP_PROTECTED_TOOL_OPTIONS = [] as const;
 
 export interface McpToolOptionMeta {
   label: string;
-  badge: "read-only" | "protected";
+  badge: "只读" | "需授权";
   note: string;
 }
 
 export const MCP_TOOL_OPTION_META: Record<string, McpToolOptionMeta> = {
   search_textbook_evidence: {
-    label: "Textbook evidence",
-    badge: "read-only",
-    note: "Public textbook snippets.",
+    label: "教材证据检索",
+    badge: "只读",
+    note: "检索公开教材片段。",
   },
   search_teacher_resource_evidence: {
-    label: "Teacher resource evidence",
-    badge: "read-only",
-    note: "Visible Feishu/resource blocks.",
+    label: "教师资源检索",
+    badge: "只读",
+    note: "检索当前账号可见的飞书或本地资源片段。",
   },
   get_teaching_ai_trace: {
-    label: "Teaching AI trace",
-    badge: "read-only",
-    note: "Owned task diagnostics.",
+    label: "教学任务追踪",
+    badge: "只读",
+    note: "查看本人可见教学任务的模型调用与解析记录。",
   },
   get_ai_diagnostic_summary: {
-    label: "AI diagnostics",
-    badge: "read-only",
-    note: "Retry and fallback summary.",
+    label: "AI 诊断汇总",
+    badge: "只读",
+    note: "查看重试、降级和故障恢复汇总。",
   },
   get_multi_agent_writing_trace: {
-    label: "Writing trace",
-    badge: "read-only",
-    note: "Visible writing workflow trace.",
+    label: "讲义协作追踪",
+    badge: "只读",
+    note: "查看可见写作流程的阶段调用记录。",
   },
   plan_agent_run: {
-    label: "Agent planning",
-    badge: "read-only",
-    note: "Returns routing and ReAct plan only.",
+    label: "智能体预案",
+    badge: "只读",
+    note: "只返回路由和执行预案，不启动真实任务。",
   },
   start_multi_agent_writing: {
-    label: "Start writing",
-    badge: "protected",
-    note: "Runs backend multi-agent writing.",
+    label: "启动讲义协作",
+    badge: "需授权",
+    note: "启动后端多智能体写作流程。",
   },
   get_multi_agent_writing_status: {
-    label: "Writing status",
-    badge: "read-only",
-    note: "Recover workflow progress.",
+    label: "讲义流程状态",
+    badge: "只读",
+    note: "恢复并查看写作流程进度。",
   },
   get_multi_agent_writing_artifact: {
-    label: "Writing artifact",
-    badge: "read-only",
-    note: "Read generated handout content.",
+    label: "读取讲义成果",
+    badge: "只读",
+    note: "读取已生成讲义内容用于审查。",
   },
   export_multi_agent_writing_artifact: {
-    label: "Export artifact",
-    badge: "protected",
-    note: "Exports markdown, LaTeX, or ZIP.",
+    label: "导出讲义成果",
+    badge: "需授权",
+    note: "导出 Markdown、TeX 或 ZIP。",
   },
   resume_multi_agent_writing: {
-    label: "Resume writing",
-    badge: "protected",
-    note: "Resumes failed writing workflow.",
+    label: "恢复讲义流程",
+    badge: "需授权",
+    note: "恢复失败或中断的写作流程。",
   },
   discover_feishu_resources: {
-    label: "Find Feishu",
-    badge: "read-only",
-    note: "Lists or searches Feishu candidates.",
+    label: "查找飞书资源",
+    badge: "只读",
+    note: "列出或搜索可入库的飞书候选资源。",
   },
   download_feishu_resource: {
-    label: "Download Feishu",
-    badge: "protected",
-    note: "Downloads, parses, and indexes resource.",
+    label: "下载飞书资源",
+    badge: "需授权",
+    note: "下载、解析并写入索引。",
   },
 };
 

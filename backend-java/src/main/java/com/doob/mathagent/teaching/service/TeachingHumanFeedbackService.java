@@ -63,6 +63,7 @@ public class TeachingHumanFeedbackService {
                 normalizedRequest.rating(),
                 normalizedRequest.decision(),
                 normalizedRequest.comment(),
+                normalizedRequest.reviewContext(),
                 Instant.now(clock));
         return store.save(normalized.ownerKey(), feedback);
     }

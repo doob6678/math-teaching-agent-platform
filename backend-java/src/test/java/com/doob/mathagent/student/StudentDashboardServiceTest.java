@@ -2,10 +2,13 @@ package com.doob.mathagent.student;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.doob.mathagent.auth.service.LocalAccount;
+import com.doob.mathagent.auth.service.LocalAccountStore;
 import com.doob.mathagent.memory.service.StudentMemoryEntry;
 import com.doob.mathagent.memory.service.StudentMemoryStore;
 import com.doob.mathagent.student.dto.StudentDashboardQuery;
 import com.doob.mathagent.student.service.StudentDashboardService;
+import com.doob.mathagent.student.service.StudentDashboardSubjectResolver;
 import com.doob.mathagent.student.service.StudentLearningSnapshotRecord;
 import com.doob.mathagent.student.service.StudentLearningSnapshotRefreshService;
 import com.doob.mathagent.student.service.StudentLearningSnapshotStore;
@@ -27,6 +30,7 @@ class StudentDashboardServiceTest {
 
         assertThat(response.tenantId()).isEqualTo("tenant-a");
         assertThat(response.studentId()).isEqualTo("student-001");
+        assertThat(response.subjectRole()).isEqualTo("student");
         assertThat(response.viewerRole()).isEqualTo("student");
         assertThat(response.knowledgeProgress()).isEmpty();
         assertThat(response.weakPoints()).isEmpty();
@@ -50,6 +54,7 @@ class StudentDashboardServiceTest {
         assertThat(response.knowledgeProgress())
                 .extracting(StudentDashboardResponse.KnowledgeProgress::knowledgePointName)
                 .containsExactly("函数零点");
+        assertThat(response.subjectRole()).isEqualTo("student");
         assertThat(response.knowledgeProgress().getFirst().progressPercent()).isEqualTo(70);
         assertThat(response.recentQuestions())
                 .extracting(StudentDashboardResponse.RecentQuestion::sourceType)
@@ -67,6 +72,7 @@ class StudentDashboardServiceTest {
 
         assertThat(response.knowledgeProgress()).extracting(StudentDashboardResponse.KnowledgeProgress::knowledgePointId)
                 .containsExactly("persisted-vector");
+        assertThat(response.subjectRole()).isEqualTo("student");
         assertThat(response.knowledgeGraph().generatedFrom()).isEqualTo("mysql_snapshot");
         assertThat(response.weakPoints()).extracting(StudentDashboardResponse.WeakPoint::evidenceSummary)
                 .containsExactly("latest snapshot");
@@ -84,6 +90,7 @@ class StudentDashboardServiceTest {
         assertThat(response.viewerRole()).isEqualTo("admin");
         assertThat(response.viewerSubjectId()).isEqualTo("admin-001");
         assertThat(response.studentId()).isEqualTo("student-009");
+        assertThat(response.subjectRole()).isEqualTo("student");
         assertThat(response.isAdminView()).isTrue();
     }
 
@@ -95,9 +102,10 @@ class StudentDashboardServiceTest {
             StudentLearningSnapshotStore snapshotStore,
             StudentMemoryStore memoryStore) {
         ObjectMapper objectMapper = new ObjectMapper();
+        StudentDashboardSubjectResolver subjectResolver = subjectResolver();
         StudentLearningSnapshotRefreshService refreshService =
-                new StudentLearningSnapshotRefreshService(memoryStore, snapshotStore, objectMapper);
-        return new StudentDashboardService(snapshotStore, refreshService, objectMapper);
+                new StudentLearningSnapshotRefreshService(memoryStore, snapshotStore, subjectResolver, objectMapper);
+        return new StudentDashboardService(snapshotStore, refreshService, subjectResolver, objectMapper);
     }
 
     private static StudentLearningSnapshotStore persistedSnapshotStore() {
@@ -170,6 +178,32 @@ class StudentDashboardServiceTest {
                         .toList();
             }
         };
+    }
+
+    private static StudentDashboardSubjectResolver subjectResolver() {
+        return new StudentDashboardSubjectResolver(new LocalAccountStore() {
+            @Override
+            public Optional<LocalAccount> findByUsername(String username) {
+                return Optional.empty();
+            }
+
+            @Override
+            public Optional<LocalAccount> findByUserId(String userId) {
+                String role = switch (userId) {
+                    case "student-001", "student-009" -> "student";
+                    case "admin-001" -> "admin";
+                    default -> null;
+                };
+                return role == null
+                        ? Optional.empty()
+                        : Optional.of(new LocalAccount(userId, userId, "", role, "tenant-a"));
+            }
+
+            @Override
+            public LocalAccount createStudent(String username, String encodedPassword, String tenantId) {
+                throw new UnsupportedOperationException();
+            }
+        });
     }
 
     private static StudentMemoryEntry memory(

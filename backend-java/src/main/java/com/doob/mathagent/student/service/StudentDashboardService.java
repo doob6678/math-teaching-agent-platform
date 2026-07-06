@@ -16,6 +16,7 @@ public class StudentDashboardService {
 
     private final StudentLearningSnapshotStore snapshotStore;
     private final StudentLearningSnapshotRefreshService refreshService;
+    private final StudentDashboardSubjectResolver subjectResolver;
     private final ObjectMapper objectMapper;
 
     /**
@@ -23,15 +24,18 @@ public class StudentDashboardService {
      *
      * @param snapshotStore store for persisted student learning snapshots
      * @param refreshService real aggregation service used when no valid snapshot exists
+     * @param subjectResolver resolves the represented subject role from backend account records
      * @param objectMapper JSON mapper used to decode persisted snapshot payloads
      */
     @Autowired
     public StudentDashboardService(
             StudentLearningSnapshotStore snapshotStore,
             StudentLearningSnapshotRefreshService refreshService,
+            StudentDashboardSubjectResolver subjectResolver,
             ObjectMapper objectMapper) {
         this.snapshotStore = snapshotStore;
         this.refreshService = refreshService;
+        this.subjectResolver = subjectResolver;
         this.objectMapper = objectMapper;
     }
 
@@ -87,6 +91,7 @@ public class StudentDashboardService {
             return new StudentDashboardResponse(
                     normalized.tenantId(),
                     normalized.targetStudentId(),
+                    subjectResolver.resolveSubjectRole(normalized),
                     normalized.viewerRole(),
                     normalized.viewerSubjectId(),
                     normalized.adminView(),

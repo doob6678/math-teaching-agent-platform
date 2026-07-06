@@ -121,11 +121,12 @@ public class InMemoryKnowledgeQuestionBankStore implements KnowledgeQuestionBank
             String query,
             int limit) {
         String normalizedQuery = query == null ? "" : query.strip().toLowerCase();
+        List<String> keywords = searchKeywords(normalizedQuery);
         return questions.values().stream()
                 .filter(record -> tenantId.equals(record.tenantId()))
                 .filter(record -> "active".equals(record.status()))
                 .filter(record -> visible(record.permissionScope(), record.ownerSubjectId(), viewerRole, viewerSubjectId))
-                .filter(record -> matches(record, normalizedQuery))
+                .filter(record -> matches(record, normalizedQuery, keywords))
                 .sorted(Comparator.comparing(QuestionBankItemRecord::questionTitle))
                 .limit(Math.max(1, Math.min(50, limit)))
                 .toList();
@@ -147,13 +148,35 @@ public class InMemoryKnowledgeQuestionBankStore implements KnowledgeQuestionBank
     /**
      * Matches a question against the normalized query text.
      */
-    private static boolean matches(QuestionBankItemRecord record, String query) {
+    private static boolean matches(QuestionBankItemRecord record, String query, List<String> keywords) {
         if (query.isBlank()) {
             return true;
         }
-        return contains(record.questionTitle(), query)
+        if (contains(record.questionTitle(), query)
                 || contains(record.questionText(), query)
-                || record.knowledgePointIds().stream().anyMatch(id -> contains(id, query));
+                || contains(record.sourceBlockId(), query)
+                || record.knowledgePointIds().stream().anyMatch(id -> contains(id, query))) {
+            return true;
+        }
+        return keywords.stream().anyMatch(keyword -> contains(record.questionTitle(), keyword)
+                || contains(record.questionText(), keyword)
+                || contains(record.sourceBlockId(), keyword)
+                || record.knowledgePointIds().stream().anyMatch(id -> contains(id, keyword)));
+    }
+
+    /**
+     * Splits user search text into non-blank terms.
+     */
+    private static List<String> searchKeywords(String query) {
+        if (query == null || query.isBlank()) {
+            return List.of();
+        }
+        return java.util.Arrays.stream(query.strip().split("[\\s,，、]+"))
+                .map(String::strip)
+                .filter(value -> !value.isBlank())
+                .distinct()
+                .limit(6)
+                .toList();
     }
 
     /**

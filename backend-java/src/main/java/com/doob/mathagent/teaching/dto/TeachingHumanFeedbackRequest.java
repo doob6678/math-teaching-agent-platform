@@ -3,6 +3,9 @@ package com.doob.mathagent.teaching.dto;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Size;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * Request body for human feedback on a recoverable teaching task.
@@ -10,11 +13,17 @@ import jakarta.validation.constraints.Size;
  * @param rating numeric feedback score from 1 to 5
  * @param decision compact decision code, such as helpful, confusing, or needs_revision
  * @param comment teacher/student free-text feedback used for later human review and revision
+ * @param reviewContext structured handout review context such as version, PDF renderer, page count, and UI checks
  */
 public record TeachingHumanFeedbackRequest(
         @Min(1) @Max(5) int rating,
         @Size(max = 40) String decision,
-        @Size(max = 1000) String comment) {
+        @Size(max = 1000) String comment,
+        Map<String, Object> reviewContext) {
+
+    public TeachingHumanFeedbackRequest(int rating, String decision, String comment) {
+        this(rating, decision, comment, Map.of());
+    }
 
     /**
      * Returns a null-safe request with bounded text fields for storage and audit display.
@@ -25,7 +34,8 @@ public record TeachingHumanFeedbackRequest(
         return new TeachingHumanFeedbackRequest(
                 Math.max(1, Math.min(5, rating)),
                 normalizeText(decision, "needs_review", 40),
-                normalizeText(comment, "", 1000));
+                normalizeText(comment, "", 1000),
+                normalizeReviewContext(reviewContext));
     }
 
     /**
@@ -34,5 +44,46 @@ public record TeachingHumanFeedbackRequest(
     private static String normalizeText(String value, String defaultValue, int maxLength) {
         String normalized = value == null || value.isBlank() ? defaultValue : value.strip();
         return normalized.length() <= maxLength ? normalized : normalized.substring(0, maxLength);
+    }
+
+    private static Map<String, Object> normalizeReviewContext(Map<String, Object> value) {
+        if (value == null || value.isEmpty()) {
+            return Map.of();
+        }
+        LinkedHashMap<String, Object> normalized = new LinkedHashMap<>();
+        value.entrySet().stream()
+                .filter(entry -> entry.getKey() != null && !entry.getKey().isBlank())
+                .limit(24)
+                .forEach(entry -> normalized.put(normalizeText(entry.getKey(), "field", 80), normalizeValue(entry.getValue())));
+        return Collections.unmodifiableMap(normalized);
+    }
+
+    private static Object normalizeValue(Object value) {
+        if (value == null || value instanceof Number || value instanceof Boolean) {
+            return value;
+        }
+        if (value instanceof Iterable<?> iterable) {
+            java.util.ArrayList<Object> items = new java.util.ArrayList<>();
+            for (Object item : iterable) {
+                if (items.size() >= 20) {
+                    break;
+                }
+                items.add(normalizeValue(item));
+            }
+            return items;
+        }
+        if (value instanceof Map<?, ?> map) {
+            LinkedHashMap<String, Object> nested = new LinkedHashMap<>();
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                if (nested.size() >= 20) {
+                    break;
+                }
+                if (entry.getKey() != null) {
+                    nested.put(normalizeText(String.valueOf(entry.getKey()), "field", 80), normalizeValue(entry.getValue()));
+                }
+            }
+            return nested;
+        }
+        return normalizeText(String.valueOf(value), "", 300);
     }
 }

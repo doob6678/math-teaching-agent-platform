@@ -6,6 +6,8 @@ import {
   AlertCircle,
   BookOpen,
   Check,
+  ArrowLeft,
+  ArrowRight,
   Clock,
   Database,
   Download,
@@ -14,7 +16,7 @@ import {
   Loader2,
   ShieldCheck,
 } from "lucide-react";
-import { TeachingTaskResponse } from "../../shared/api/textbookApi";
+import { TeachingHandoutPdfResponse, TeachingHumanFeedbackResponse, TeachingTaskResponse } from "../../shared/api/textbookApi";
 import { formatSimilarity, stageLabel, StatusLine } from "./panelShared";
 
 type HandoutVersion = "teacher" | "student";
@@ -39,6 +41,12 @@ type WorkflowConversationGroup = {
   nodes: TeachingTaskResponse["nodes"];
 };
 
+type DraftOutlineItem = {
+  title: string;
+  summary: string;
+  audience: "teacher" | "student";
+};
+
 export function TeachingTaskPanel({
   task,
   loading,
@@ -49,6 +57,7 @@ export function TeachingTaskPanel({
   previewLatex,
   previewPdfUrl,
   previewPdfBytes,
+  previewPdfMeta,
   action,
   exportMessage,
   feedbackRating,
@@ -56,6 +65,8 @@ export function TeachingTaskPanel({
   feedbackComment,
   submittingFeedback,
   feedbackMessage,
+  feedbackHistory,
+  loadingFeedbackHistory,
   batchFolderPath,
   onVersionChange,
   onBatchFolderPathChange,
@@ -79,6 +90,7 @@ export function TeachingTaskPanel({
   previewLatex: string;
   previewPdfUrl: string;
   previewPdfBytes: Uint8Array | null;
+  previewPdfMeta: TeachingHandoutPdfResponse | null;
   action: string;
   exportMessage: string;
   feedbackRating: number;
@@ -86,6 +98,8 @@ export function TeachingTaskPanel({
   feedbackComment: string;
   submittingFeedback: boolean;
   feedbackMessage: string;
+  feedbackHistory: TeachingHumanFeedbackResponse[];
+  loadingFeedbackHistory: boolean;
   batchFolderPath: string;
   onVersionChange: (value: HandoutVersion) => void;
   onBatchFolderPathChange: (value: string) => void;
@@ -191,7 +205,7 @@ export function TeachingTaskPanel({
             {selectedDraft ? <HandoutReviewChecks latex={selectedDraft} version={version} /> : null}
 
             {previewPdfUrl ? (
-              <PdfCanvasPreview pdfBytes={previewPdfBytes} pdfUrl={previewPdfUrl} />
+              <PdfCanvasPreview pdfBytes={previewPdfBytes} pdfUrl={previewPdfUrl} meta={previewPdfMeta} />
             ) : selectedDraft ? (
               <HandoutStructuredPreview latex={selectedDraft} version={version} />
             ) : (
@@ -275,6 +289,8 @@ export function TeachingTaskPanel({
             </button>
           </form>
 
+          <FeedbackHistoryPanel feedback={feedbackHistory} loading={loadingFeedbackHistory} />
+
           {task.memoryReuse ? (
             <details className="review-details">
               <summary>记忆复用说明</summary>
@@ -287,12 +303,91 @@ export function TeachingTaskPanel({
   );
 }
 
+function FeedbackHistoryPanel({
+  feedback,
+  loading,
+}: {
+  feedback: TeachingHumanFeedbackResponse[];
+  loading: boolean;
+}) {
+  return (
+    <section className="feedback-history-panel" aria-label="人工审校历史">
+      <div className="feedback-history-head">
+        <div>
+          <strong>审校记录</strong>
+          <span>保留人工判断、PDF 渲染和结构检查，后续可用于重新生成。</span>
+        </div>
+        {loading ? <Loader2 className="spin" size={14} /> : <Clock size={14} />}
+      </div>
+      {!feedback.length ? (
+        <div className="empty-state compact">暂无人工审校记录。</div>
+      ) : (
+        <div className="feedback-history-list">
+          {feedback.slice(0, 5).map((item) => (
+            <article className="feedback-history-item" key={item.feedbackId}>
+              <div className="feedback-history-title">
+                <strong>{decisionLabel(item.decision)}</strong>
+                <span>{item.rating} 星 · {formatDateTime(item.createdAt)}</span>
+              </div>
+              {item.comment ? <p>{shortText(item.comment, 150)}</p> : <p className="muted-line">未填写修改意见。</p>}
+              <FeedbackContextSummary context={item.reviewContext} />
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function FeedbackContextSummary({ context }: { context?: Record<string, unknown> }) {
+  const checks = isRecord(context?.checks) ? context.checks : {};
+  const handoutVersion = stringValue(context?.handoutVersion);
+  const renderer = stringValue(context?.pdfRenderer);
+  const pageCount = numberValue(context?.pdfPageCount);
+  const matchedCoreColumns = numberValue(checks.matchedCoreColumns);
+  const coreColumnTotal = numberValue(checks.coreColumnTotal);
+  const hasMath = booleanValue(checks.hasMath);
+  const hasWorkspace = booleanValue(checks.hasWorkspace);
+  const answerLeak = booleanValue(checks.answerLeak);
+  const items = [
+    handoutVersion ? `版本：${handoutVersion === "student" ? "学生版" : "教师版"}` : "",
+    renderer ? `PDF：${pdfRendererLabel(renderer)}${pageCount ? ` · ${pageCount} 页` : ""}` : "",
+    coreColumnTotal ? `结构：${matchedCoreColumns}/${coreColumnTotal} 栏` : "",
+    hasMath ? "含公式" : "",
+    hasWorkspace ? "有作答区" : "",
+    answerLeak && handoutVersion === "student" ? "学生版疑似露出答案" : "",
+  ].filter(Boolean);
+  if (!items.length) {
+    return null;
+  }
+  return (
+    <div className="feedback-context-tags">
+      {items.map((item) => <span className={item.includes("露出答案") ? "warning" : ""} key={item}>{item}</span>)}
+    </div>
+  );
+}
+
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
-function PdfCanvasPreview({ pdfBytes, pdfUrl }: { pdfBytes: Uint8Array | null; pdfUrl: string }) {
+function PdfCanvasPreview({
+  pdfBytes,
+  pdfUrl,
+  meta,
+}: {
+  pdfBytes: Uint8Array | null;
+  pdfUrl: string;
+  meta: TeachingHandoutPdfResponse | null;
+}) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "failed">("loading");
   const [pageInfo, setPageInfo] = useState("");
+  const [pageCount, setPageCount] = useState(0);
+  const [currentPage, setCurrentPage] = useState(1);
+
+  useEffect(() => {
+    setCurrentPage(1);
+    setPageCount(0);
+  }, [pdfBytes]);
 
   useEffect(() => {
     let cancelled = false;
@@ -306,7 +401,14 @@ function PdfCanvasPreview({ pdfBytes, pdfUrl }: { pdfBytes: Uint8Array | null; p
       try {
         const loadingTask = pdfjsLib.getDocument({ data: pdfBytes.slice() });
         const pdf = await loadingTask.promise;
-        const page = await pdf.getPage(1);
+        const totalPages = pdf.numPages;
+        const safePage = Math.min(Math.max(1, currentPage), totalPages);
+        if (safePage !== currentPage) {
+          setCurrentPage(safePage);
+          await pdf.cleanup();
+          return;
+        }
+        const page = await pdf.getPage(safePage);
         const baseViewport = page.getViewport({ scale: 1 });
         const containerWidth = Math.min(880, canvas.parentElement?.clientWidth ?? 880);
         const scale = Math.max(1, Math.min(1.6, containerWidth / baseViewport.width));
@@ -322,10 +424,10 @@ function PdfCanvasPreview({ pdfBytes, pdfUrl }: { pdfBytes: Uint8Array | null; p
         }
         context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
         await page.render({ canvas, canvasContext: context, viewport }).promise;
-        const totalPages = pdf.numPages;
         await pdf.cleanup();
         if (!cancelled) {
-          setPageInfo(`第 1 页 / 共 ${totalPages} 页`);
+          setPageCount(totalPages);
+          setPageInfo(`第 ${safePage} 页 / 共 ${totalPages} 页`);
           setState("ready");
         }
       } catch {
@@ -338,7 +440,7 @@ function PdfCanvasPreview({ pdfBytes, pdfUrl }: { pdfBytes: Uint8Array | null; p
     return () => {
       cancelled = true;
     };
-  }, [pdfBytes]);
+  }, [pdfBytes, currentPage]);
 
   return (
     <div className="pdf-canvas-preview">
@@ -346,8 +448,34 @@ function PdfCanvasPreview({ pdfBytes, pdfUrl }: { pdfBytes: Uint8Array | null; p
         <div>
           <strong>PDF 真实渲染预览</strong>
           <span>{state === "ready" ? pageInfo : state === "loading" ? "正在渲染首页" : "Canvas 预览不可用"}</span>
+          {meta ? (
+            <span>
+              {pdfRendererLabel(meta.renderer)}
+              {meta.pageCount > 0 ? ` · ${meta.pageCount} 页` : ""}
+            </span>
+          ) : null}
         </div>
-        <a href={pdfUrl} target="_blank" rel="noreferrer">打开原始 PDF</a>
+        <div className="pdf-canvas-actions">
+          <button
+            type="button"
+            className="icon-button compact"
+            onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+            disabled={state !== "ready" || currentPage <= 1}
+            aria-label="上一页"
+          >
+            <ArrowLeft size={16} />
+          </button>
+          <button
+            type="button"
+            className="icon-button compact"
+            onClick={() => setCurrentPage((page) => Math.min(pageCount || page, page + 1))}
+            disabled={state !== "ready" || pageCount <= 1 || currentPage >= pageCount}
+            aria-label="下一页"
+          >
+            <ArrowRight size={16} />
+          </button>
+          <a href={pdfUrl} target="_blank" rel="noreferrer">打开原始 PDF</a>
+        </div>
       </div>
       <div className={state === "ready" ? "pdf-canvas-page" : "pdf-canvas-page loading"}>
         {state === "loading" ? <Loader2 className="spin" size={18} /> : null}
@@ -425,24 +553,23 @@ function HandoutReviewChecks({ latex, version }: { latex: string; version: Hando
 
 function buildHandoutReviewChecks(blocks: ReviewBlock[], latex: string, version: HandoutVersion): ReviewCheck[] {
   const sectionCount = blocks.filter((block) => block.type === "section").length;
-  const hasMath = /\${1,2}[^$]+\${1,2}/.test(latex);
+  const hasMath = splitMathText(normalizePreviewMath(decodeLatexText(latex))).some((segment) => segment.math);
   const hasWorkspace = blocks.some((block) => block.type === "space") || /作答区|订正|留白|___/.test(latex);
   const plainText = cleanPreviewText(latex);
   const answerLeak = /【答案与评分点】|参考答案|评分标准|答案[:：]|答案为|故答案|因此答案|得分/.test(plainText);
   const teacherHasAnswer = /【答案与评分点】|答案|解析|讲评|评分/.test(plainText);
   const labels = blocks
-    .filter((block): block is Extract<ReviewBlock, { type: "paragraph" }> => block.type === "paragraph")
+    .filter((block): block is Extract<ReviewBlock, { type: "section" | "subsection" | "paragraph" }> =>
+      block.type === "section" || block.type === "subsection" || block.type === "paragraph")
     .map((block) => block.title);
-  const requiredLabels = version === "teacher"
-    ? ["知识定位", "题型识别", "方法步骤", "例题详解", "答案与评分点", "易错提醒", "课堂追问"]
-    : ["知识速记", "题型识别", "例题任务", "练习任务", "作答提醒"];
-  const matchedLabels = requiredLabels.filter((label) => labels.some((item) => item.includes(label))).length;
+  const reviewGroups = version === "teacher" ? teacherReviewGroups : studentReviewGroups;
+  const matchedLabels = reviewGroups.filter((group) => matchesReviewGroup(group, labels, plainText)).length;
 
   return [
     {
       label: "结构",
-      value: `${sectionCount} 个章节，${matchedLabels}/${requiredLabels.length} 个核心栏目`,
-      state: sectionCount >= 3 && matchedLabels >= Math.min(3, requiredLabels.length) ? "good" : "warning",
+      value: `${sectionCount} 个章节，${matchedLabels}/${reviewGroups.length} 个核心栏目`,
+      state: sectionCount >= 3 && matchedLabels >= Math.min(4, reviewGroups.length) ? "good" : "warning",
     },
     {
       label: "公式",
@@ -464,6 +591,29 @@ function buildHandoutReviewChecks(blocks: ReviewBlock[], latex: string, version:
       state: version === "teacher" ? "good" : (answerLeak ? "warning" : "good"),
     },
   ];
+}
+
+const teacherReviewGroups = [
+  ["讲义信息", "学习目标", "本讲任务", "课前定位"],
+  ["来源索引", "知识点归属", "知识定位", "教材", "题库", "证据"],
+  ["板书流程", "板书", "方法步骤", "讲解路径", "方法卡片", "讲解"],
+  ["例题与答案", "例题详解", "答案与评分点", "评分点", "解析"],
+  ["课堂追问", "追问与变式训练", "变式", "问题预设", "互动练习"],
+  ["课后订正", "反馈记录", "易错提醒", "订正记录", "反馈"],
+];
+
+const studentReviewGroups = [
+  ["第 1 讲", "学习主题", "学习目标", "专题标题"],
+  ["知识点", "知识速记", "核心定义", "核心方法"],
+  ["题型", "例题任务", "题目", "连续编号"],
+  ["思路提示", "作答提醒", "注意", "方法提示"],
+  ["课堂练习", "练习任务", "课后巩固"],
+  ["我的解答", "课堂作答区", "订正记录", "错因"],
+];
+
+function matchesReviewGroup(group: string[], labels: string[], plainText: string) {
+  return group.some((keyword) =>
+    labels.some((label) => label.includes(keyword)) || plainText.includes(keyword));
 }
 
 function HistoryPanel({
@@ -526,6 +676,7 @@ function GenerationReviewPanel({ task }: { task: TeachingTaskResponse }) {
   const evidenceCount = task.evidence.length;
   const knowledgePoints = aiDraft?.knowledgePoints ?? [];
   const workflowGroups = buildWorkflowConversationGroups(task.nodes);
+  const draftOutline = aiDraft ? buildDraftOutline(aiDraft.teacherExplanation, aiDraft.studentHint) : [];
 
   return (
     <section className="generation-review-panel">
@@ -578,8 +729,20 @@ function GenerationReviewPanel({ task }: { task: TeachingTaskResponse }) {
               <strong>{structured ? "生成讲义草稿" : "需要复核的问题"}</strong>
               {structured ? (
                 <>
-                  <p><MathRichText text={shortText(aiDraft.teacherExplanation, 180)} /></p>
-                  <p className="muted-line"><MathRichText text={shortText(aiDraft.studentHint, 140)} /></p>
+                  <p className="muted-line">
+                    已拆成教师版、学生版两套讲义结构。正文请以 PDF 预览和结构化讲义为准，这里只保留审校摘要。
+                  </p>
+                  {draftOutline.length ? (
+                    <div className="draft-outline-list" aria-label="讲义结构摘要">
+                      {draftOutline.slice(0, 8).map((item) => (
+                        <div className={`draft-outline-item ${item.audience}`} key={`${item.audience}-${item.title}`}>
+                          <span>{item.audience === "teacher" ? "教师版" : "学生版"}</span>
+                          <strong>{item.title}</strong>
+                          <p><MathRichText text={item.summary} /></p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
                   {knowledgePoints.length ? (
                     <div className="tag-list compact">{knowledgePoints.slice(0, 8).map((item) => <span key={item}><MathRichText text={item} /></span>)}</div>
                   ) : null}
@@ -634,6 +797,45 @@ function GenerationReviewPanel({ task }: { task: TeachingTaskResponse }) {
       </details>
     </section>
   );
+}
+
+function buildDraftOutline(teacherExplanation: string, studentHint: string): DraftOutlineItem[] {
+  return [
+    ...parseDraftOutlineItems(teacherExplanation, "teacher"),
+    ...parseDraftOutlineItems(studentHint, "student"),
+  ];
+}
+
+function parseDraftOutlineItems(text: string, audience: "teacher" | "student"): DraftOutlineItem[] {
+  const cleaned = cleanPreviewText(text);
+  if (!cleaned) {
+    return [];
+  }
+  const labels = [...cleaned.matchAll(/【([^】]{2,18})】/g)];
+  if (!labels.length) {
+    return [{ title: audience === "teacher" ? "讲解摘要" : "练习摘要", summary: shortText(stripDraftNoise(cleaned), 90), audience }];
+  }
+  const items: DraftOutlineItem[] = [];
+  for (let index = 0; index < labels.length; index += 1) {
+    const match = labels[index];
+    const labelStart = match.index ?? 0;
+    const labelEnd = labelStart + match[0].length;
+    const nextStart = labels[index + 1]?.index ?? cleaned.length;
+    const title = match[1].trim();
+    const summary = shortText(stripDraftNoise(cleaned.slice(labelEnd, nextStart)), 88);
+    if (title && summary) {
+      items.push({ title, summary, audience });
+    }
+  }
+  return items;
+}
+
+function stripDraftNoise(value: string) {
+  return value
+    .replace(/【[^】]{2,18}】/g, " ")
+    .replace(/\b(AI|MODEL|JSON|token|tokens|retry)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function buildWorkflowConversationGroups(nodes: TeachingTaskResponse["nodes"]): WorkflowConversationGroup[] {
@@ -792,32 +994,29 @@ function pushRichTextBlocks(blocks: ReviewBlock[], text: string) {
 
 function splitMathText(text: string) {
   const segments: Array<{ key: string; text: string; math: boolean; display: boolean }> = [];
-  let index = 0;
   let key = 0;
-  while (index < text.length) {
-    const displayStart = text.indexOf("$$", index);
-    const inlineStart = text.indexOf("$", index);
-    const nextStart = displayStart >= 0 && (inlineStart < 0 || displayStart <= inlineStart) ? displayStart : inlineStart;
-    if (nextStart < 0) {
-      segments.push({ key: `text-${key++}`, text: text.slice(index), math: false, display: false });
-      break;
+  const pattern = /(\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\$[^$]+?\$|\\\([^)]+?\\\))/g;
+  let cursor = 0;
+  for (const match of text.matchAll(pattern)) {
+    const start = match.index ?? 0;
+    if (start > cursor) {
+      segments.push({ key: `text-${key++}`, text: text.slice(cursor, start), math: false, display: false });
     }
-    if (nextStart > index) {
-      segments.push({ key: `text-${key++}`, text: text.slice(index, nextStart), math: false, display: false });
-    }
-    const display = text.startsWith("$$", nextStart);
-    const delimiter = display ? "$$" : "$";
-    const start = nextStart + delimiter.length;
-    const end = text.indexOf(delimiter, start);
-    if (end < 0) {
-      segments.push({ key: `text-${key++}`, text: text.slice(nextStart), math: false, display: false });
-      break;
-    }
-    const expression = text.slice(start, end).trim();
+    const raw = match[0];
+    const display = raw.startsWith("$$") || raw.startsWith("\\[");
+    const expression = raw
+      .replace(/^\$\$|\$\$$/g, "")
+      .replace(/^\\\[|\\\]$/g, "")
+      .replace(/^\$|\$$/g, "")
+      .replace(/^\\\(|\\\)$/g, "")
+      .trim();
     if (expression) {
       segments.push({ key: `math-${key++}`, text: expression, math: true, display });
     }
-    index = end + delimiter.length;
+    cursor = start + raw.length;
+  }
+  if (cursor < text.length) {
+    segments.push({ key: `text-${key++}`, text: text.slice(cursor), math: false, display: false });
   }
   return segments.length ? segments : [{ key: "text-0", text, math: false, display: false }];
 }
@@ -836,6 +1035,8 @@ function decodeLatexText(value: string) {
 
 function normalizePreviewMath(value: string) {
   return wrapBarePreviewMath(value
+    .replace(/\\\(([\s\S]+?)\\\)/g, "$$$1$")
+    .replace(/\\\[([\s\S]+?)\\\]/g, "$$$$ $1 $$$$")
     .replace(/⁰/g, "^0")
     .replace(/¹/g, "^1")
     .replace(/²/g, "^2")
@@ -860,8 +1061,12 @@ function normalizePreviewMath(value: string) {
 }
 
 function wrapBarePreviewMath(value: string) {
-  const withFractions = wrapRegexOutsideMath(
+  const withCommonLatex = wrapRegexOutsideMath(
     value,
+    /(?<![$\\])((?:\\frac\{[^{}]+\}\{[^{}]+\}|\\sqrt\{[^{}]+\}|[A-Za-z][_^]\{?[-+]?\d+\}?)(?:\s*[+\-*/=]\s*(?:\\frac\{[^{}]+\}\{[^{}]+\}|\\sqrt\{[^{}]+\}|[A-Za-z0-9][_^]?\{?[-+]?\d+\}?))+)(?![$\w])/g,
+  );
+  const withFractions = wrapRegexOutsideMath(
+    withCommonLatex,
     /(?<![$\w])([A-Za-z0-9]+(?:\^[-+]?\d+)?\/[A-Za-z0-9]+(?:\^[-+]?\d+)?(?:\s*[+\-=]\s*[A-Za-z0-9]+(?:\^[-+]?\d+)?\/[A-Za-z0-9]+(?:\^[-+]?\d+)?)+(?:\s*=\s*-?\d+)?)(?![$\w])/g,
   );
   return wrapRegexOutsideMath(
@@ -926,6 +1131,55 @@ function providerLabel(provider: string) {
     ark: "火山方舟",
   };
   return labels[provider] ?? provider;
+}
+
+function pdfRendererLabel(renderer: string) {
+  const labels: Record<string, string> = {
+    xelatex: "XeLaTeX 编译",
+    pdfbox_fallback: "后备排版",
+  };
+  return labels[renderer] ?? (renderer || "渲染方式未知");
+}
+
+function decisionLabel(decision: string) {
+  const labels: Record<string, string> = {
+    helpful: "可用",
+    confusing: "不清楚",
+    needs_revision: "需要修改",
+  };
+  return labels[decision] ?? decision;
+}
+
+function formatDateTime(value: string | undefined) {
+  if (!value) {
+    return "时间未记录";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" ? value : "";
+}
+
+function numberValue(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function booleanValue(value: unknown) {
+  return value === true;
 }
 
 function shortText(value: string | undefined, maxLength: number) {

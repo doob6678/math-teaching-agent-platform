@@ -1,6 +1,7 @@
 package com.doob.mathagent.memory.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.doob.mathagent.memory.entity.StudentMemoryEntryEntity;
 import com.doob.mathagent.memory.mapper.StudentMemoryEntryMapper;
 import java.time.Instant;
@@ -46,6 +47,22 @@ public class MyBatisStudentMemoryStore implements StudentMemoryStore {
                                 .eq(StudentMemoryEntryEntity::getStudentId, studentId))
                         .orderByDesc(StudentMemoryEntryEntity::getCreatedAt)
                         .orderByDesc(StudentMemoryEntryEntity::getMemoryId))
+                .stream()
+                .map(MyBatisStudentMemoryStore::toRecord)
+                .toList();
+    }
+
+    @Override
+    public List<StudentMemoryEntry> tenantCandidates(String tenantId, int limit) {
+        int normalizedLimit = Math.max(1, Math.min(500, limit));
+        return mapper.selectPage(
+                        Page.of(1, normalizedLimit),
+                        new LambdaQueryWrapper<StudentMemoryEntryEntity>()
+                                .eq(StudentMemoryEntryEntity::getTenantId, tenantId)
+                                .eq(StudentMemoryEntryEntity::getStatus, "active")
+                                .orderByDesc(StudentMemoryEntryEntity::getCreatedAt)
+                                .orderByDesc(StudentMemoryEntryEntity::getMemoryId))
+                .getRecords()
                 .stream()
                 .map(MyBatisStudentMemoryStore::toRecord)
                 .toList();

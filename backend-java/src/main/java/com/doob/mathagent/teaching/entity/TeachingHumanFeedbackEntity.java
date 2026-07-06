@@ -1,6 +1,7 @@
 package com.doob.mathagent.teaching.entity;
 
 import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableName;
 import java.time.Instant;
 
@@ -20,6 +21,8 @@ public class TeachingHumanFeedbackEntity {
     private Integer rating;
     private String decision;
     private String comment;
+    @TableField("review_context_json")
+    private String reviewContextJson;
     private Instant createdAt;
 
     public String getFeedbackId() {
@@ -92,6 +95,14 @@ public class TeachingHumanFeedbackEntity {
 
     public void setComment(String comment) {
         this.comment = comment;
+    }
+
+    public String getReviewContextJson() {
+        return reviewContextJson;
+    }
+
+    public void setReviewContextJson(String reviewContextJson) {
+        this.reviewContextJson = reviewContextJson;
     }
 
     public Instant getCreatedAt() {

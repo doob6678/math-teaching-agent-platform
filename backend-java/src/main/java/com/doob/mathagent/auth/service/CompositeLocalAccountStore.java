@@ -23,6 +23,11 @@ public class CompositeLocalAccountStore implements LocalAccountStore {
     }
 
     @Override
+    public Optional<LocalAccount> findByUserId(String userId) {
+        return persistentStore.findByUserId(userId);
+    }
+
+    @Override
     public LocalAccount createStudent(String username, String encodedPassword, String tenantId) {
         return persistentStore.createStudent(username, encodedPassword, tenantId);
     }

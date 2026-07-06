@@ -50,6 +50,8 @@ public class TeachingTaskController {
     private static final String TEACHING_FEEDBACK_SUBMIT_ACTION = "teaching-feedback:submit";
     private static final String TEACHING_TASKS_PATH = "/api/teaching/tasks";
     private static final String TEACHING_BATCH_ZIP_PATH = "/api/teaching/handouts/batch/zip";
+    private static final String HANDOUT_RENDERER_HEADER = "X-Handout-Renderer";
+    private static final String HANDOUT_PAGE_COUNT_HEADER = "X-Handout-Page-Count";
 
     private final TeachingWorkflowService workflowService;
     private final RequestSubjectResolver subjectResolver;
@@ -291,13 +293,16 @@ public class TeachingTaskController {
         TeachingTaskResponse task = workflowService.get(taskId, requestContext(subject))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Teaching task not found"));
         String effectiveVersion = defaultHandoutVersion(subject);
+        TeachingHandoutPdfExportService.RenderedHandoutPdf rendered = pdfExportService.renderDetailed(task, effectiveVersion);
         return ResponseEntity.ok()
                 .contentType(MediaType.APPLICATION_PDF)
                 .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
                         .filename(task.taskId() + ".pdf", StandardCharsets.UTF_8)
                         .build()
                         .toString())
-                .body(pdfExportService.render(task, effectiveVersion));
+                .header(HANDOUT_RENDERER_HEADER, rendered.renderer())
+                .header(HANDOUT_PAGE_COUNT_HEADER, Integer.toString(rendered.pageCount()))
+                .body(rendered.bytes());
     }
 
     /**
@@ -322,13 +327,16 @@ public class TeachingTaskController {
         }
         TeachingTaskResponse task = workflowService.get(taskId, requestContext(subject))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Teaching task not found"));
+        TeachingHandoutPdfExportService.RenderedHandoutPdf rendered = pdfExportService.renderDetailed(task, normalizedVersion);
         return ResponseEntity.ok()
                 .contentType(MediaType.APPLICATION_PDF)
                 .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
                         .filename(task.taskId() + "-" + normalizedVersion + ".pdf", StandardCharsets.UTF_8)
                         .build()
                         .toString())
-                .body(pdfExportService.render(task, normalizedVersion));
+                .header(HANDOUT_RENDERER_HEADER, rendered.renderer())
+                .header(HANDOUT_PAGE_COUNT_HEADER, Integer.toString(rendered.pageCount()))
+                .body(rendered.bytes());
     }
 
     /**

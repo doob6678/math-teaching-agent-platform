@@ -93,6 +93,41 @@ class MyBatisKnowledgeQuestionBankStoreTest {
         assertThat(records.getFirst().knowledgePointIds()).containsExactly("kp-1");
     }
 
+    @Test
+    void searchQuestionsAllowsBlankBrowseAndWhitespaceKeywords() {
+        CapturingQuestionMapper questionMapper = new CapturingQuestionMapper();
+        QuestionBankItemEntity first = question("q-1", "函数定义域求解", "求函数定义域。");
+        QuestionBankItemEntity second = question("q-2", "空间向量夹角", "已知空间向量，求夹角。");
+        questionMapper.rows.add(first);
+        questionMapper.rows.add(second);
+        MyBatisKnowledgeQuestionBankStore store = new MyBatisKnowledgeQuestionBankStore(
+                new CapturingKnowledgeMapper().proxy(),
+                new CapturingRelationMapper().proxy(),
+                questionMapper.proxy(),
+                new CapturingLinkMapper().proxy());
+
+        assertThat(store.searchQuestions("school-a", "teacher", "teacher-1", "", 10))
+                .extracting(QuestionBankItemRecord::questionId)
+                .containsExactly("q-1", "q-2");
+        assertThat(store.searchQuestions("school-a", "teacher", "teacher-1", "向量 夹角", 10))
+                .extracting(QuestionBankItemRecord::questionId)
+                .containsExactly("q-1", "q-2");
+    }
+
+    private static QuestionBankItemEntity question(String questionId, String title, String text) {
+        QuestionBankItemEntity entity = new QuestionBankItemEntity();
+        entity.setQuestionId(questionId);
+        entity.setTenantId("school-a");
+        entity.setOwnerSubjectId("teacher-1");
+        entity.setPermissionScope("TEACHER_PRIVATE");
+        entity.setQuestionTitle(title);
+        entity.setQuestionText(text);
+        entity.setAnswerJson("{}");
+        entity.setDifficulty("medium");
+        entity.setStatus("active");
+        return entity;
+    }
+
     private static final class CapturingRelationMapper {
         private final List<KnowledgeRelationEntity> inserted = new ArrayList<>();
         private final List<KnowledgeRelationEntity> rows = new ArrayList<>();

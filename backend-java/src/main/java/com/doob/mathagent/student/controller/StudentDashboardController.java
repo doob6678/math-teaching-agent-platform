@@ -59,7 +59,11 @@ public class StudentDashboardController {
     public StudentDashboardResponse getDashboard(
             @RequestParam(required = false) String studentId,
             HttpServletRequest httpRequest) {
-        return dashboardService.dashboard(query(studentId, subjectResolver.resolve(httpRequest)));
+        try {
+            return dashboardService.dashboard(query(studentId, subjectResolver.resolve(httpRequest)));
+        } catch (IllegalArgumentException exception) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, exception.getMessage(), exception);
+        }
     }
 
     /**
@@ -82,7 +86,11 @@ public class StudentDashboardController {
                 subject)) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for dashboard refresh");
         }
-        return refreshService.refresh(query(studentId, subject));
+        try {
+            return refreshService.refresh(query(studentId, subject));
+        } catch (IllegalArgumentException exception) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, exception.getMessage(), exception);
+        }
     }
 
     /**

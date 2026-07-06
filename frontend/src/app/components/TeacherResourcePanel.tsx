@@ -11,7 +11,7 @@ import {
   TeacherSourceSyncJobResponse,
   VectorIndexRebuildResponse,
 } from "../../shared/api/textbookApi";
-import { countJsonArray, PanelTitle, StatusLine } from "./panelShared";
+import { compactText, countJsonArray, PanelTitle, StatusLine } from "./panelShared";
 
 export function TeacherResourcePanel({
   resources,
@@ -96,33 +96,37 @@ export function TeacherResourcePanel({
 }) {
   return (
     <section className="teacher-resource-panel">
-      <PanelTitle icon={<Database size={18} />} title="Teacher resources" />
+      <PanelTitle icon={<Database size={18} />} title="教师资源" />
+
       <details className="resource-hint">
-        <summary>Feishu setup</summary>
+        <summary>飞书接入说明</summary>
         <div className="resource-hint-body">
-          <p>Enter a real Feishu folder or document URL. Use List/Search before registering when the folder is large.</p>
-          <p>APPKEY stays on the backend. Download checkpoints are stored in MySQL and paused jobs can Resume.</p>
+          <p>粘贴真实飞书文件夹或文档链接即可。大目录先用“列出”或“搜索”，再选择具体节点入库。</p>
+          <p>密钥保存在后端，下载断点和同步进度落库到 MySQL，网络波动后可恢复。</p>
         </div>
       </details>
+
       <form className="search-form" onSubmit={onRegister}>
         <label>
-          <span>Title</span>
+          <span>资源名称</span>
           <input
+            className="form-input"
             value={title}
             onChange={(event) => onTitleChange(event.target.value)}
-            placeholder="High school function handout / Feishu folder"
+            placeholder="例如：函数专题讲义 / 飞书资料夹"
           />
         </label>
         <label>
-          <span>Source</span>
-          <select value={sourceType} onChange={(event) => onSourceTypeChange(event.target.value)}>
-            <option value="local_path">Local path</option>
-            <option value="feishu">Feishu URL</option>
+          <span>来源类型</span>
+          <select className="form-select" value={sourceType} onChange={(event) => onSourceTypeChange(event.target.value)}>
+            <option value="local_path">本地路径</option>
+            <option value="feishu">飞书链接</option>
           </select>
         </label>
         <label>
-          <span>{sourceType === "feishu" ? "Feishu URL" : "Local path"}</span>
+          <span>{sourceType === "feishu" ? "飞书链接" : "本地路径"}</span>
           <input
+            className="form-input"
             value={location}
             onChange={(event) => onLocationChange(event.target.value)}
             placeholder={sourceType === "feishu" ? "https://..." : "C:\\path\\to\\file.pdf"}
@@ -130,130 +134,130 @@ export function TeacherResourcePanel({
         </label>
         {sourceType === "feishu" ? (
           <label>
-            <span>Export</span>
+            <span>导出格式</span>
             <select
+              className="form-select"
               value={feishuExportFormat}
               onChange={(event) => onFeishuExportFormatChange(event.target.value as "md" | "docx" | "pdf")}
             >
-              <option value="md">MD</option>
+              <option value="md">Markdown</option>
               <option value="docx">DOCX</option>
               <option value="pdf">PDF</option>
             </select>
           </label>
         ) : null}
         <label>
-          <span>Scope</span>
-          <select value={scope} onChange={(event) => onScopeChange(event.target.value)}>
-            <option value="TEACHER_PRIVATE">Teacher private</option>
-            <option value="MATH_VIP">Math VIP</option>
-            <option value="PUBLIC_TEXTBOOK">Public textbook</option>
+          <span>资源范围</span>
+          <select className="form-select" value={scope} onChange={(event) => onScopeChange(event.target.value)}>
+            <option value="TEACHER_PRIVATE">教师私有</option>
+            <option value="MATH_VIP">教研共享</option>
+            <option value="PUBLIC_TEXTBOOK">公开教材</option>
           </select>
         </label>
-        <button type="submit" disabled={registering}>
+        <button className="btn btn-primary" type="submit" disabled={registering}>
           {registering ? <Loader2 className="spin" size={17} /> : <Database size={17} />}
-          <span>Register</span>
+          <span>登记资源</span>
         </button>
       </form>
-      {loading ? <StatusLine icon={<Loader2 className="spin" size={16} />} text="Loading teacher resources" /> : null}
+
+      {loading ? <StatusLine icon={<Loader2 className="spin" size={16} />} text="正在读取教师资源" /> : null}
       {error ? <StatusLine icon={<AlertCircle size={16} />} text={error} tone="danger" /> : null}
       {importResult ? (
         <StatusLine
           icon={<Database size={16} />}
-          text={`Imported ${importResult.importedQuestionCount}, skipped ${importResult.skippedBlockCount}, duplicate ${importResult.duplicateBlockCount}`}
+          text={`题目入库完成：新增 ${importResult.importedQuestionCount}，跳过 ${importResult.skippedBlockCount}，重复 ${importResult.duplicateBlockCount}`}
         />
       ) : null}
       {indexRebuildResult ? (
         <StatusLine
           icon={<Database size={16} />}
-          text={`${indexRebuildResult.status}: ${indexRebuildResult.message}; embedded ${indexRebuildResult.embeddedCount}/${indexRebuildResult.blockCount}, upserted ${indexRebuildResult.upsertedCount}`}
+          text={`向量重建${statusLabel(indexRebuildResult.status)}：嵌入 ${indexRebuildResult.embeddedCount}/${indexRebuildResult.blockCount}，写入 ${indexRebuildResult.upsertedCount}`}
         />
       ) : null}
+
       <div className="feishu-discovery-panel">
         <label>
-          <span>Feishu search</span>
+          <span>飞书查找</span>
           <input
+            className="form-input"
             value={feishuDiscoveryQuery}
             onChange={(event) => onFeishuDiscoveryQueryChange(event.target.value)}
-            placeholder="Keyword, such as space vector"
+            placeholder="输入关键词，例如：空间向量"
           />
         </label>
         <div className="feishu-discovery-actions">
-          <button type="button" onClick={() => onDiscoverFeishu("list")} disabled={discoveringFeishu}>
+          <button className="btn btn-secondary" type="button" onClick={() => onDiscoverFeishu("list")} disabled={discoveringFeishu}>
             {discoveringFeishu ? <Loader2 className="spin" size={16} /> : <Database size={16} />}
-            <span>List</span>
+            <span>列出</span>
           </button>
-          <button type="button" onClick={() => onDiscoverFeishu("search")} disabled={discoveringFeishu}>
+          <button className="btn btn-secondary" type="button" onClick={() => onDiscoverFeishu("search")} disabled={discoveringFeishu}>
             {discoveringFeishu ? <Loader2 className="spin" size={16} /> : <Search size={16} />}
-            <span>Search</span>
+            <span>搜索</span>
           </button>
         </div>
         {feishuDiscoveryResult ? (
           <div className="feishu-candidate-list">
             <div className="resource-search-summary">
-              <span>{feishuDiscoveryResult.mode}</span>
-              <span>{feishuDiscoveryResult.candidateCount} candidates</span>
-              <span>{feishuDiscoveryResult.rootUrl}</span>
+              <span>{feishuDiscoveryResult.mode === "list" ? "目录浏览" : "关键词搜索"}</span>
+              <span>{feishuDiscoveryResult.candidateCount} 项</span>
             </div>
             {feishuDiscoveryResult.candidates.map((candidate) => (
               <article className="feishu-candidate" key={`${candidate.resourceType}:${candidate.token}:${candidate.url}`}>
                 <div>
                   <strong>{candidate.name}</strong>
-                  <span>
-                    {candidate.resourceType} / {candidate.path} / depth {candidate.depth}
-                  </span>
+                  <span>{resourceTypeLabel(candidate.resourceType)} / {compactText(candidate.path, 44)}</span>
                 </div>
                 <button type="button" onClick={() => onUseFeishuCandidate(candidate)} disabled={!candidate.downloadable}>
-                  Use
+                  选用
                 </button>
               </article>
             ))}
           </div>
         ) : null}
       </div>
+
       <form className="resource-block-search" onSubmit={onBlockSearch}>
         <label>
-          <span>Block search</span>
+          <span>资源检索</span>
           <input
+            className="form-input"
             value={blockSearchQuery}
             onChange={(event) => onBlockSearchQueryChange(event.target.value)}
-            placeholder="Knowledge point, method, formula, or question keyword"
+            placeholder="知识点、题型方法、公式或关键词"
           />
         </label>
-        <button type="submit" disabled={searchingBlocks}>
+        <button className="btn btn-primary" type="submit" disabled={searchingBlocks}>
           {searchingBlocks ? <Loader2 className="spin" size={16} /> : <Search size={16} />}
-          <span>Search</span>
+          <span>检索</span>
         </button>
       </form>
+
       {blockSearchResult ? (
         <div className="resource-search-results">
           <div className="resource-search-summary">
-            <span>{blockSearchResult.retrievalMode}</span>
-            <span>{blockSearchResult.hitCount} hits</span>
-            <span>{blockSearchResult.queryId}</span>
+            <span>{retrievalModeLabel(blockSearchResult.retrievalMode)}</span>
+            <span>{blockSearchResult.hitCount} 条命中</span>
+            {blockSearchAudit ? <span>{blockSearchAudit.elapsedMs} ms</span> : null}
           </div>
-          {blockSearchAudit ? (
-            <div className="resource-audit-summary">
-              <span>{blockSearchAudit.endpoint}</span>
-              <span>{blockSearchAudit.elapsedMs} ms</span>
-              <span>
-                {blockSearchAudit.subjectType}:{blockSearchAudit.subjectId}
-              </span>
-            </div>
-          ) : null}
           {blockSearchResult.hits.map((hit) => (
             <article className="resource-search-hit" key={`${hit.documentId}:${hit.blockId}`}>
               <strong>{hit.documentTitle}</strong>
               <span>
-                {hit.permissionScope} / {hit.blockType}
-                {hit.pageNo ? ` / p.${hit.pageNo}` : ""}
+                {scopeLabel(hit.permissionScope)} / {blockTypeLabel(hit.blockType)}
+                {hit.pageNo ? ` / 第 ${hit.pageNo} 页` : ""}
               </span>
-              <p>{hit.snippet}</p>
+              <p>{compactText(hit.snippet, 120)}</p>
+              <details className="review-details">
+                <summary>查看片段</summary>
+                <p>{hit.snippet}</p>
+              </details>
             </article>
           ))}
         </div>
       ) : null}
+
       <div className="resource-list">
-        {!resources.length ? <div className="empty-state compact">No registered teacher resources.</div> : null}
+        {!resources.length ? <div className="empty-state compact">当前没有已登记的教师资源。</div> : null}
         {resources.map((resource) => {
           const latestJob = syncJobsByDocument[resource.documentId]?.[0];
           const latestCheckpoint = latestJob ? syncCheckpointsByJob[latestJob.jobId] : undefined;
@@ -262,65 +266,65 @@ export function TeacherResourcePanel({
               <div>
                 <strong>{resource.title}</strong>
                 <span>
-                  {resource.sourceType} / {resource.permissionScope}
-                  {resource.sourceType === "feishu" ? ` / ${resource.feishuExportFormat ?? "md"}` : ""}
+                  {sourceTypeLabel(resource.sourceType)} / {scopeLabel(resource.permissionScope)}
+                  {resource.sourceType === "feishu" ? ` / ${exportFormatLabel(resource.feishuExportFormat)}` : ""}
                 </span>
               </div>
               <div className="resource-status">
-                <span>sync: {latestJob?.status ?? resource.syncStatus}</span>
-                <span>parse: {resource.parseStatus ?? "unknown"}</span>
-                <span>embed: {resource.embeddingStatus ?? "unknown"}</span>
-                <span>index: {latestJob?.phase ?? resource.indexStatus ?? "waiting_rebuild"}</span>
+                <span>同步 {statusLabel(latestJob?.status ?? resource.syncStatus)}</span>
+                <span>解析 {statusLabel(resource.parseStatus)}</span>
+                <span>向量 {statusLabel(resource.embeddingStatus)}</span>
+                <span>索引 {phaseLabel(latestJob?.phase ?? resource.indexStatus ?? "waiting_rebuild")}</span>
               </div>
               {latestJob ? (
-                <p>
-                  {latestJob.operation}: {latestJob.message ?? latestJob.createdAt ?? latestJob.jobId}
-                </p>
+                <p>{compactText(syncJobMessage(latestJob.message) || latestJob.createdAt || latestJob.jobId, 120)}</p>
               ) : resource.previewFiles?.length ? (
-                <p>{resource.previewFiles.map((file) => file.fileName).join(", ")}</p>
+                <p>{compactText(resource.previewFiles.map((file) => file.fileName).join("，"), 120)}</p>
               ) : null}
               {latestCheckpoint ? <SyncCheckpointView checkpoint={latestCheckpoint} /> : null}
-              <button
-                type="button"
-                onClick={() => onSync(resource.documentId)}
-                disabled={syncingResourceId === resource.documentId}
-              >
-                {syncingResourceId === resource.documentId ? <Loader2 className="spin" size={15} /> : <Database size={15} />}
-                <span>Sync</span>
-              </button>
-              {latestJob?.status === "paused" ? (
+              <div className="resource-action-row">
                 <button
+                  className="btn btn-secondary btn-sm"
                   type="button"
-                  onClick={() => onResume(resource.documentId, latestJob.jobId)}
+                  onClick={() => onSync(resource.documentId)}
                   disabled={syncingResourceId === resource.documentId}
                 >
                   {syncingResourceId === resource.documentId ? <Loader2 className="spin" size={15} /> : <Database size={15} />}
-                  <span>Resume</span>
+                  <span>同步</span>
                 </button>
-              ) : null}
-              <button
-                type="button"
-                onClick={() => onImportQuestions(resource.documentId)}
-                disabled={importingResourceId === resource.documentId}
-              >
-                {importingResourceId === resource.documentId ? <Loader2 className="spin" size={15} /> : <Database size={15} />}
-                <span>Import questions</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => onRebuildIndex(resource.documentId)}
-                disabled={rebuildingResourceId === resource.documentId}
-              >
-                {rebuildingResourceId === resource.documentId ? (
-                  <Loader2 className="spin" size={15} />
-                ) : (
-                  <Database size={15} />
-                )}
-                <span>Rebuild index</span>
-              </button>
-              <button type="button" onClick={() => onArchive(resource.documentId)}>
-                Archive
-              </button>
+                {latestJob?.status === "paused" ? (
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    type="button"
+                    onClick={() => onResume(resource.documentId, latestJob.jobId)}
+                    disabled={syncingResourceId === resource.documentId}
+                  >
+                    {syncingResourceId === resource.documentId ? <Loader2 className="spin" size={15} /> : <Database size={15} />}
+                    <span>恢复</span>
+                  </button>
+                ) : null}
+                <button
+                  className="btn btn-secondary btn-sm"
+                  type="button"
+                  onClick={() => onImportQuestions(resource.documentId)}
+                  disabled={importingResourceId === resource.documentId}
+                >
+                  {importingResourceId === resource.documentId ? <Loader2 className="spin" size={15} /> : <Database size={15} />}
+                  <span>入题库</span>
+                </button>
+                <button
+                  className="btn btn-secondary btn-sm"
+                  type="button"
+                  onClick={() => onRebuildIndex(resource.documentId)}
+                  disabled={rebuildingResourceId === resource.documentId}
+                >
+                  {rebuildingResourceId === resource.documentId ? <Loader2 className="spin" size={15} /> : <Database size={15} />}
+                  <span>重建向量</span>
+                </button>
+                <button className="btn btn-ghost btn-sm" type="button" onClick={() => onArchive(resource.documentId)}>
+                  归档
+                </button>
+              </div>
             </article>
           );
         })}
@@ -329,19 +333,169 @@ export function TeacherResourcePanel({
   );
 }
 
+function statusLabel(value?: string | null) {
+  const normalized = (value ?? "").trim().toLowerCase();
+  const labels: Record<string, string> = {
+    completed: "已完成",
+    complete: "已完成",
+    success: "成功",
+    succeeded: "成功",
+    ready: "就绪",
+    parsed: "已解析",
+    indexed: "已索引",
+    synced: "已同步",
+    running: "运行中",
+    processing: "处理中",
+    pending: "等待中",
+    created: "已创建",
+    queued: "排队中",
+    paused: "已暂停",
+    failed: "失败",
+    error: "异常",
+    archived: "已归档",
+    none: "未开始",
+    unknown: "未识别",
+    waiting_rebuild: "待重建",
+    ready_to_index: "待索引",
+    download_completed: "下载完成",
+    parse_completed: "解析完成",
+    embedding_completed: "向量完成",
+    index_completed: "索引完成",
+  };
+  return labels[normalized] ?? (value ? value : "未开始");
+}
+
+function phaseLabel(value?: string | null) {
+  const normalized = (value ?? "").trim().toLowerCase();
+  const labels: Record<string, string> = {
+    download: "下载",
+    parse: "解析",
+    embedding: "向量化",
+    index: "写入索引",
+    completed: "已完成",
+    failed: "失败",
+    paused: "已暂停",
+    waiting_rebuild: "待重建",
+    ready_to_index: "待索引",
+  };
+  return labels[normalized] ?? statusLabel(value);
+}
+
+function sourceTypeLabel(value?: string | null) {
+  const labels: Record<string, string> = {
+    feishu: "飞书",
+    local_path: "本地文件",
+    local: "本地文件",
+  };
+  return labels[(value ?? "").trim().toLowerCase()] ?? (value || "未知来源");
+}
+
+function resourceTypeLabel(value?: string | null) {
+  const labels: Record<string, string> = {
+    doc: "文档",
+    docx: "文档",
+    sheet: "表格",
+    bitable: "多维表格",
+    file: "文件",
+    folder: "文件夹",
+    wiki: "知识库",
+  };
+  return labels[(value ?? "").trim().toLowerCase()] ?? (value || "资源");
+}
+
+function scopeLabel(value?: string | null) {
+  const labels: Record<string, string> = {
+    TEACHER_PRIVATE: "教师私有",
+    MATH_VIP: "教研共享",
+    PUBLIC_TEXTBOOK: "公开教材",
+  };
+  return labels[value ?? ""] ?? (value || "未设置范围");
+}
+
+function retrievalModeLabel(value?: string | null) {
+  const normalized = (value ?? "").trim().toLowerCase();
+  if (!normalized) {
+    return "混合检索";
+  }
+  if (normalized.includes("hybrid")) {
+    return "关键词与向量混合检索";
+  }
+  if (normalized.includes("vector")) {
+    return "向量检索";
+  }
+  if (normalized.includes("keyword") || normalized.includes("bm25")) {
+    return "关键词检索";
+  }
+  return value ?? "混合检索";
+}
+
+function blockTypeLabel(value?: string | null) {
+  const labels: Record<string, string> = {
+    text: "正文",
+    markdown: "正文",
+    question: "题目",
+    formula: "公式",
+    table: "表格",
+    image: "图片说明",
+    heading: "标题",
+  };
+  return labels[(value ?? "").trim().toLowerCase()] ?? (value || "片段");
+}
+
+function exportFormatLabel(value?: string | null) {
+  const labels: Record<string, string> = {
+    md: "Markdown",
+    markdown: "Markdown",
+    docx: "Word",
+    pdf: "PDF",
+  };
+  return labels[(value ?? "md").trim().toLowerCase()] ?? (value || "Markdown");
+}
+
+function syncJobMessage(value?: string | null) {
+  const text = (value ?? "").trim();
+  if (!text) {
+    return "";
+  }
+  const parsedMatch = text.match(/Parsed\s+(\d+)\s+blocks\s+from\s+local\s+source/i);
+  const parts: string[] = [];
+  if (parsedMatch) {
+    parts.push(`已解析 ${parsedMatch[1]} 个文本块`);
+  }
+  if (/Vector index indexed:\s*Milvus upsert completed/i.test(text)) {
+    parts.push("向量索引已写入 Milvus");
+  }
+  if (/download_completed/i.test(text)) {
+    parts.push("下载完成");
+  }
+  if (/parse_completed/i.test(text)) {
+    parts.push("解析完成");
+  }
+  if (/Downloading Feishu source files/i.test(text)) {
+    parts.push("正在下载飞书资源");
+  }
+  if (/Parsing source files/i.test(text)) {
+    parts.push("正在解析资源");
+  }
+  if (/ProxyError|tunnel connection reset|connection reset|timeout/i.test(text)) {
+    parts.push("网络连接中断，可恢复后继续");
+  }
+  if (/completed/i.test(text) && !parts.length) {
+    parts.push("任务已完成");
+  }
+  return parts.length ? parts.join("，") : "同步状态已更新";
+}
+
 export function SyncCheckpointView({ checkpoint }: { checkpoint: TeacherSourceSyncCheckpointResponse }) {
   return (
-    <div className="sync-checkpoint">
-      <div>
-        <span>Checkpoint</span>
-        <strong>{checkpoint.currentPath || checkpoint.currentFolderToken}</strong>
-      </div>
+    <details className="sync-checkpoint">
+      <summary>同步断点</summary>
       <div className="sync-checkpoint-grid">
-        <span>{checkpoint.pageToken ? `cursor ${checkpoint.pageToken}` : "cursor none"}</span>
-        <span>{countJsonArray(checkpoint.downloadedItemsJson)} downloaded</span>
-        <span>{countJsonArray(checkpoint.failedItemsJson)} failed</span>
-        <span>v{checkpoint.cursorVersion}</span>
+        <span>{compactText(checkpoint.currentPath || "已保存断点位置", 48)}</span>
+        <span>{countJsonArray(checkpoint.downloadedItemsJson)} 已下载</span>
+        <span>{countJsonArray(checkpoint.failedItemsJson)} 失败</span>
+        <span>{checkpoint.pageToken ? "有游标" : "无游标"}</span>
       </div>
-    </div>
+    </details>
   );
 }

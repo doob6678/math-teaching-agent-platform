@@ -197,8 +197,8 @@ public class KnowledgeQuestionBankService {
                         requireText(tenantId, "tenantId"),
                         role,
                         requireText(viewerSubjectId, "viewerSubjectId"),
-                        textOrDefault(query, ""),
-                        limit)
+                        normalizedQuestionQuery(query),
+                        normalizedLimit(limit))
                 .stream()
                 .map(KnowledgeQuestionBankService::toResponse)
                 .toList();
@@ -281,6 +281,20 @@ public class KnowledgeQuestionBankService {
      */
     private static String normalizeRole(String viewerRole) {
         return requireText(viewerRole, "viewerRole").toLowerCase();
+    }
+
+    /**
+     * Normalizes question-bank search text while preserving an empty query as "browse latest".
+     */
+    private static String normalizedQuestionQuery(String query) {
+        return textOrDefault(query, "").replaceAll("\\s+", " ").strip();
+    }
+
+    /**
+     * Keeps question-bank browse/search bounded for frontend pagination.
+     */
+    private static int normalizedLimit(int limit) {
+        return Math.max(1, Math.min(50, limit));
     }
 
     /**

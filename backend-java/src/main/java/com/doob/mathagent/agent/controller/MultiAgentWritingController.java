@@ -4,9 +4,12 @@ import com.doob.mathagent.agent.dto.AgentTraceQueryRequest;
 import com.doob.mathagent.agent.dto.MultiAgentWritingRequest;
 import com.doob.mathagent.agent.service.AgentRunCapabilityVerifier;
 import com.doob.mathagent.agent.service.AgentTraceQueryService;
+import com.doob.mathagent.agent.service.MultiAgentWritingArtifact;
+import com.doob.mathagent.agent.service.MultiAgentWritingArtifactExportService;
 import com.doob.mathagent.agent.vo.AgentRunExecuteResponse;
 import com.doob.mathagent.agent.vo.AgentTraceResponse;
 import com.doob.mathagent.agent.service.MultiAgentWritingService;
+import com.doob.mathagent.agent.vo.MultiAgentWritingArtifactExportResponse;
 import com.doob.mathagent.agent.vo.MultiAgentWritingResponse;
 import com.doob.mathagent.agent.vo.MultiAgentWritingTraceResponse;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
@@ -15,10 +18,12 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import java.util.Comparator;
 import java.util.List;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
@@ -34,6 +39,7 @@ public class MultiAgentWritingController {
     private static final String RESUME_PATH = "/api/agents/writing/{workflowId}/resume";
 
     private final MultiAgentWritingService writingService;
+    private final MultiAgentWritingArtifactExportService artifactExportService;
     private final AgentTraceQueryService traceQueryService;
     private final RequestSubjectResolver subjectResolver;
     private final AgentRunCapabilityVerifier capabilityVerifier;
@@ -46,15 +52,34 @@ public class MultiAgentWritingController {
      * @param subjectResolver backend subject resolver
      * @param capabilityVerifier capability verifier for high-value writing
      */
+    @Autowired
+    public MultiAgentWritingController(
+            MultiAgentWritingService writingService,
+            MultiAgentWritingArtifactExportService artifactExportService,
+            AgentTraceQueryService traceQueryService,
+            RequestSubjectResolver subjectResolver,
+            AgentRunCapabilityVerifier capabilityVerifier) {
+        this.writingService = writingService;
+        this.artifactExportService = artifactExportService;
+        this.traceQueryService = traceQueryService;
+        this.subjectResolver = subjectResolver;
+        this.capabilityVerifier = capabilityVerifier;
+    }
+
+    /**
+     * Backward-compatible constructor for direct controller tests.
+     */
     public MultiAgentWritingController(
             MultiAgentWritingService writingService,
             AgentTraceQueryService traceQueryService,
             RequestSubjectResolver subjectResolver,
             AgentRunCapabilityVerifier capabilityVerifier) {
-        this.writingService = writingService;
-        this.traceQueryService = traceQueryService;
-        this.subjectResolver = subjectResolver;
-        this.capabilityVerifier = capabilityVerifier;
+        this(
+                writingService,
+                new MultiAgentWritingArtifactExportService(writingService, 30),
+                traceQueryService,
+                subjectResolver,
+                capabilityVerifier);
     }
 
     /**
@@ -132,6 +157,46 @@ public class MultiAgentWritingController {
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Multi-agent writing workflow not found"));
         } catch (IllegalArgumentException exception) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, exception.getMessage(), exception);
+        }
+    }
+
+    /**
+     * Reads owner-visible generated content for review and frontend preview.
+     *
+     * @param workflowId workflow id returned by the write endpoint
+     * @param httpRequest HTTP request used only for trusted backend subject
+     * @return merged and per-stage generated content
+     */
+    @GetMapping("/api/agents/writing/{workflowId}/artifact")
+    public MultiAgentWritingArtifact artifact(
+            @PathVariable String workflowId,
+            HttpServletRequest httpRequest) {
+        RequestSubject subject = subjectResolver.resolve(httpRequest);
+        try {
+            return writingService.artifact(normalizedWorkflowId(workflowId), subject);
+        } catch (IllegalArgumentException exception) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, exception.getMessage(), exception);
+        }
+    }
+
+    /**
+     * Exports owner-visible generated content as a temporary payload for download.
+     *
+     * @param workflowId workflow id returned by the write endpoint
+     * @param format markdown, latex, or zip
+     * @param httpRequest HTTP request used only for trusted backend subject
+     * @return base64 encoded export payload with checksum and expiration
+     */
+    @GetMapping("/api/agents/writing/{workflowId}/artifact/export")
+    public MultiAgentWritingArtifactExportResponse exportArtifact(
+            @PathVariable String workflowId,
+            @RequestParam(defaultValue = "markdown") String format,
+            HttpServletRequest httpRequest) {
+        RequestSubject subject = subjectResolver.resolve(httpRequest);
+        try {
+            return artifactExportService.export(normalizedWorkflowId(workflowId), format, subject);
+        } catch (IllegalArgumentException exception) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, exception.getMessage(), exception);
         }
     }
 

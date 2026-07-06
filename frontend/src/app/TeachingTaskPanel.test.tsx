@@ -92,6 +92,7 @@ describe("TeachingTaskPanel", () => {
         previewLatex=""
         previewPdfUrl=""
         previewPdfBytes={null}
+        previewPdfMeta={null}
         action=""
         exportMessage=""
         feedbackRating={4}
@@ -99,6 +100,8 @@ describe("TeachingTaskPanel", () => {
         feedbackComment=""
         submittingFeedback={false}
         feedbackMessage=""
+        feedbackHistory={[]}
+        loadingFeedbackHistory={false}
         batchFolderPath="handouts/task-teaching-1"
         onVersionChange={vi.fn()}
         onBatchFolderPathChange={vi.fn()}
@@ -125,6 +128,12 @@ describe("TeachingTaskPanel", () => {
     expect(html).toContain("讲义排版");
     expect(html).toContain("审查与交付");
     expect(html).toContain("人类反馈");
+    expect(html).toContain("讲义结构摘要");
+    expect(html).toContain("教师版");
+    expect(html).toContain("学生版");
+    expect(html).toContain("知识定位");
+    expect(html).not.toContain("【知识定位】");
+    expect(html).not.toContain("【练习任务】");
     expect(html).not.toContain("ParseError");
     expect(html).not.toContain("MODEL_CALL_SUCCEEDED");
     expect(html).not.toContain("tokens");
