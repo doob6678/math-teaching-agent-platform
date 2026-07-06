@@ -3244,7 +3244,7 @@ h1, h2, h3, h4, h5, h6 {
   background: #f0fdfa;
 }
 
-.draft-outline-item span {
+.draft-outline-item > span {
   width: fit-content;
   padding: 2px 6px;
   border-radius: 999px;
@@ -3254,13 +3254,13 @@ h1, h2, h3, h4, h5, h6 {
   font-weight: 700;
 }
 
-.draft-outline-item strong {
+.draft-outline-item > strong {
   display: block;
   color: var(--navy);
   font-size: 13px;
 }
 
-.draft-outline-item p {
+.draft-outline-item > p {
   margin: 0;
   color: var(--navy-mid);
   font-size: 12px;
@@ -4186,7 +4186,7 @@ h1, h2, h3, h4, h5, h6 {
   gap: 6px;
 }
 
-.tag-list span {
+.tag-list > span {
   padding: 4px 8px;
   border-radius: 999px;
   background: var(--gray-subtle);

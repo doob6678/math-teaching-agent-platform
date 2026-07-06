@@ -50,4 +50,14 @@ class FormulaMarkupSanitizerTest {
 
         assertThat(sanitized).contains("$a_1=a^2$", "$Sn=an+bn$");
     }
+
+    @Test
+    void wrapsBareLatexFractionEquationsUsedInHandouts() {
+        String sanitized = FormulaMarkupSanitizer.sanitizeFeishuMath(
+                "设解析式 y=\\frac{k}{x}，代入后得到 y=-\\frac{6}{x}，标准方程 x²/a²-y²/b²=1。");
+
+        assertThat(sanitized)
+                .contains("$y=\\frac{k}{x}$", "$y=-\\frac{6}{x}$", "$x^2/a^2-y^2/b^2=1$")
+                .doesNotContain("x²", "a²", "y²");
+    }
 }

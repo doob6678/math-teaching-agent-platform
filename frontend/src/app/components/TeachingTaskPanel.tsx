@@ -738,13 +738,13 @@ function GenerationReviewPanel({ task }: { task: TeachingTaskResponse }) {
                         <div className={`draft-outline-item ${item.audience}`} key={`${item.audience}-${item.title}`}>
                           <span>{item.audience === "teacher" ? "教师版" : "学生版"}</span>
                           <strong>{item.title}</strong>
-                          <p><MathRichText text={item.summary} /></p>
+                          <p><MathRichText compact text={item.summary} /></p>
                         </div>
                       ))}
                     </div>
                   ) : null}
                   {knowledgePoints.length ? (
-                    <div className="tag-list compact">{knowledgePoints.slice(0, 8).map((item) => <span key={item}><MathRichText text={item} /></span>)}</div>
+                    <div className="tag-list compact">{knowledgePoints.slice(0, 8).map((item) => <span key={item}><MathRichText compact text={item} /></span>)}</div>
                   ) : null}
                 </>
               ) : (
@@ -862,7 +862,7 @@ function buildWorkflowConversationGroups(nodes: TeachingTaskResponse["nodes"]): 
   return groups.filter((group) => group.nodes.length);
 }
 
-function MathRichText({ text }: { text: string }) {
+function MathRichText({ text, compact = false }: { text: string; compact?: boolean }) {
   const normalizedText = normalizePreviewMath(decodeLatexText(text));
   return (
     <>
@@ -870,13 +870,14 @@ function MathRichText({ text }: { text: string }) {
         if (!segment.math) {
           return <span key={segment.key}>{segment.text}</span>;
         }
+        const display = compact ? false : segment.display;
         const html = katex.renderToString(normalizeLatexExpression(segment.text), {
-          displayMode: segment.display,
+          displayMode: display,
           throwOnError: false,
           strict: false,
           trust: false,
         });
-        return <span className={segment.display ? "math-render display" : "math-render inline"} dangerouslySetInnerHTML={{ __html: html }} key={segment.key} />;
+        return <span className={display ? "math-render display" : "math-render inline"} dangerouslySetInnerHTML={{ __html: html }} key={segment.key} />;
       })}
     </>
   );
@@ -1057,21 +1058,16 @@ function normalizePreviewMath(value: string) {
     .replace(/₇/g, "_7")
     .replace(/₈/g, "_8")
     .replace(/₉/g, "_9")
-    .replace(/±/g, "\\pm "));
+    .replace(/±/g, "\\pm ")
+    .replace(/×/g, "\\times ")
+    .replace(/÷/g, "/"));
 }
 
 function wrapBarePreviewMath(value: string) {
-  const withCommonLatex = wrapRegexOutsideMath(
-    value,
-    /(?<![$\\])((?:\\frac\{[^{}]+\}\{[^{}]+\}|\\sqrt\{[^{}]+\}|[A-Za-z][_^]\{?[-+]?\d+\}?)(?:\s*[+\-*/=]\s*(?:\\frac\{[^{}]+\}\{[^{}]+\}|\\sqrt\{[^{}]+\}|[A-Za-z0-9][_^]?\{?[-+]?\d+\}?))+)(?![$\w])/g,
-  );
-  const withFractions = wrapRegexOutsideMath(
-    withCommonLatex,
-    /(?<![$\w])([A-Za-z0-9]+(?:\^[-+]?\d+)?\/[A-Za-z0-9]+(?:\^[-+]?\d+)?(?:\s*[+\-=]\s*[A-Za-z0-9]+(?:\^[-+]?\d+)?\/[A-Za-z0-9]+(?:\^[-+]?\d+)?)+(?:\s*=\s*-?\d+)?)(?![$\w])/g,
-  );
+  const mathAtom = String.raw`(?:[+\-]?\s*(?:\\frac\{[^{}]+\}\{[^{}]+\}|\\sqrt\{[^{}]+\}|(?:\\pm\s*)?[A-Za-z0-9]+(?:[_^]\{?[-+]?\d+\}?)?|\d+(?:\.\d+)?))`;
   return wrapRegexOutsideMath(
-    withFractions,
-    /(?<![$\w])((?:\\pm\s*)?[A-Za-z0-9]+(?:[_^][-+]?\d+)?(?:\s*[+\-*/=]\s*(?:\\pm\s*)?[A-Za-z0-9]+(?:[_^][-+]?\d+)?)+)(?![$\w])/g,
+    value,
+    new RegExp(String.raw`(?<![$\\A-Za-z0-9_])(${mathAtom}(?:\s*[+\-*/=]\s*${mathAtom})+)(?![$A-Za-z0-9_])`, "g"),
   );
 }
 
@@ -1187,7 +1183,31 @@ function shortText(value: string | undefined, maxLength: number) {
   if (text.length <= maxLength) {
     return text || "暂无内容";
   }
-  return `${text.slice(0, Math.max(0, maxLength - 1))}…`;
+  const rawCut = text.slice(0, Math.max(0, maxLength - 1));
+  const safeCut = trimDanglingMathPreview(rawCut).replace(/\s+/g, " ").trim();
+  return `${safeCut || rawCut.replace(/[$\\{}_^]+/g, "").trim() || "暂无内容"}…`;
+}
+
+function trimDanglingMathPreview(value: string) {
+  let text = value.trim();
+  const dollarCount = (text.match(/\$/g) ?? []).length;
+  if (dollarCount % 2 === 1) {
+    text = text.slice(0, text.lastIndexOf("$")).trim();
+  }
+  const openInline = text.lastIndexOf("\\(");
+  const closeInline = text.lastIndexOf("\\)");
+  if (openInline > closeInline) {
+    text = text.slice(0, openInline).trim();
+  }
+  const openDisplay = text.lastIndexOf("\\[");
+  const closeDisplay = text.lastIndexOf("\\]");
+  if (openDisplay > closeDisplay) {
+    text = text.slice(0, openDisplay).trim();
+  }
+  return text
+    .replace(/\s+\\(?:frac|sqrt|left|right)?[A-Za-z]*\{?[^，。；、,.!?！？]*$/g, "")
+    .replace(/\s+\$?\\?[A-Za-z0-9+\-=*/_^{}()[\],. ]{1,24}$/g, "")
+    .trim();
 }
 
 function humanMemoryReason(value: string | undefined) {

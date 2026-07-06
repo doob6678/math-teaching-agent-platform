@@ -69,7 +69,7 @@ describe("TeachingTaskPanel", () => {
         content: "{}",
         message: "ok",
         structured: true,
-        teacherExplanation: "【知识定位】双曲线标准方程 x²/a²-y²/b²=1。 【答案与评分点】答案为 $b^2=16$。",
+        teacherExplanation: "【知识定位】双曲线标准方程 x²/a²-y²/b²=1。 【方法步骤】设解析式 y=\\frac{k}{x}，代入后得到 y=-\\frac{6}{x}，继续联立一次函数并写出 $y=-\\frac{1}{2}x+3$ 后比较交点。 【答案与评分点】答案为 $b^2=16$。",
         studentHint: "【知识速记】先写 $c^2=a^2+b^2$。 【练习任务】完成参数计算。",
         knowledgePoints: ["参数关系 $c^2=a^2+b^2$"],
         followUpQuestions: ["已知焦距为 10，求 c。"],
@@ -129,9 +129,12 @@ describe("TeachingTaskPanel", () => {
     expect(html).toContain("审查与交付");
     expect(html).toContain("人类反馈");
     expect(html).toContain("讲义结构摘要");
+    expect(html).toContain("mfrac");
+    expect(html).toContain("msup");
     expect(html).toContain("教师版");
     expect(html).toContain("学生版");
     expect(html).toContain("知识定位");
+    expect(html).not.toContain("$y=-");
     expect(html).not.toContain("【知识定位】");
     expect(html).not.toContain("【练习任务】");
     expect(html).not.toContain("ParseError");

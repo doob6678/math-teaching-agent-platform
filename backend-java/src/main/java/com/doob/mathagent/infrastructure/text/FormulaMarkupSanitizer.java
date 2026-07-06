@@ -15,13 +15,12 @@ public final class FormulaMarkupSanitizer {
             Pattern.DOTALL);
     private static final Pattern BARE_COORDINATE = Pattern.compile(
             "(?<![$A-Za-z0-9])\\((?:\\\\pm\\s*)?[A-Za-z](?:\\^[-+]?\\d+)?,\\s*-?\\d+\\)");
+    private static final String MATH_ATOM = "(?:[+\\-]?\\s*(?:\\\\frac\\{[^{}]+}\\{[^{}]+}"
+            + "|\\\\sqrt\\{[^{}]+}"
+            + "|(?:\\\\pm\\s*)?[A-Za-z0-9]+(?:[_^]\\{?[-+]?\\d+}?)?"
+            + "|\\d+(?:\\.\\d+)?))";
     private static final Pattern BARE_FORMULA = Pattern.compile(
-            "(?<![$A-Za-z0-9])((?:\\\\pm\\s*)?[A-Za-z0-9]+(?:[_^][-+]?\\d+)?"
-                    + "(?:\\s*[+\\-*/=]\\s*(?:\\\\pm\\s*)?[A-Za-z0-9]+(?:[_^][-+]?\\d+)?)+)(?![$A-Za-z0-9])");
-    private static final Pattern BARE_FRACTION_FORMULA = Pattern.compile(
-            "(?<![$A-Za-z0-9])([A-Za-z0-9]+(?:\\^[-+]?\\d+)?/[A-Za-z0-9]+(?:\\^[-+]?\\d+)?"
-                    + "(?:\\s*[+\\-=]\\s*[A-Za-z0-9]+(?:\\^[-+]?\\d+)?/[A-Za-z0-9]+(?:\\^[-+]?\\d+)?)+"
-                    + "(?:\\s*=\\s*-?\\d+)?)");
+            "(?<![$\\\\A-Za-z0-9_])(" + MATH_ATOM + "(?:\\s*[+\\-*/=]\\s*" + MATH_ATOM + ")+)(?![$A-Za-z0-9_])");
 
     private FormulaMarkupSanitizer() {
     }
@@ -88,7 +87,9 @@ public final class FormulaMarkupSanitizer {
                 .replace("₇", "_7")
                 .replace("₈", "_8")
                 .replace("₉", "_9")
-                .replace("±", "\\pm ");
+                .replace("±", "\\pm ")
+                .replace("×", "\\times ")
+                .replace("÷", "/");
     }
 
     private static String wrapBareMathOutsideDelimiters(String value) {
@@ -113,8 +114,7 @@ public final class FormulaMarkupSanitizer {
 
     private static String wrapBareMathText(String value) {
         String withCoordinates = wrapMatches(value, BARE_COORDINATE);
-        String withFractions = wrapMatches(withCoordinates, BARE_FRACTION_FORMULA);
-        return wrapMatches(withFractions, BARE_FORMULA);
+        return wrapMatches(withCoordinates, BARE_FORMULA);
     }
 
     private static String wrapMatches(String value, Pattern pattern) {
