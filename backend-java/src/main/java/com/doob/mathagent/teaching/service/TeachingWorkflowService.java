@@ -580,7 +580,6 @@ public class TeachingWorkflowService {
                 \\item 模板：%s
                 \\item 难度：%s
                 \\item 使用场景：教师备课、课堂讲评、学生订正。
-                \\item 版式：PDF 导出使用页眉、页脚页码和教师版讲评色；课堂发放以 PDF 为准。
                 \\end{itemize}
 
                 \\section{课前定位}
