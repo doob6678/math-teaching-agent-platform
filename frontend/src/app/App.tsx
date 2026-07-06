@@ -2235,7 +2235,7 @@ function decisionLabel(decision: string) {
   return labels[decision] ?? decision;
 }
 
-function buildTeachingFeedbackReviewContext(
+export function buildTeachingFeedbackReviewContext(
   task: TeachingTaskResponse,
   version: "teacher" | "student",
   latex: string,
@@ -2254,8 +2254,13 @@ function buildTeachingFeedbackReviewContext(
   const teacherHasAnswer = /答案与评分点|答案|解析|讲评|评分/.test(plainText);
   const evidenceCount = task.evidence.length;
   const evidenceScopes = Array.from(new Set(task.evidence.map((item) => item.sourceScope).filter(Boolean)));
-  const pdfPreviewReady = Boolean(pdfMeta) && pdfPreviewKey === `${task.taskId}:${version}`;
+  const pdfPreviewKeyMatches = pdfPreviewKey === `${task.taskId}:${version}`;
+  const pdfPreviewReady = Boolean(pdfMeta) && pdfPreviewKeyMatches;
   const sourceTraceable = evidenceCount > 0;
+  const internalDebugLeak = /MODEL_CALL|JSON_PARSE|tokens?=|模型健康|model health|debug|调试|作为\s*AI|as an AI/i.test(plainText);
+  const layoutRuleLeak = /页眉|页脚|颜色|PDF\s*版式要求|PDF\s*规则|渲染引擎/.test(plainText);
+  const studentAnswerIsolated = version !== "student" || !answerLeak;
+  const teacherAnswerPresent = version !== "teacher" || teacherHasAnswer;
   const groups = version === "teacher" ? [
     ["讲义信息", "学习目标", "本讲任务", "课前定位"],
     ["来源索引", "知识点归属", "知识定位", "教材", "题库", "证据"],
@@ -2272,27 +2277,66 @@ function buildTeachingFeedbackReviewContext(
     ["我的解答", "课堂作答区", "订正记录", "错因"],
   ];
   const matchedCoreColumns = groups.filter((group) => group.some((keyword) => plainText.includes(keyword))).length;
+  const pdfRenderer = pdfMeta?.renderer ?? "";
+  const pdfPageCount = pdfMeta?.pageCount ?? 0;
+  const coreColumnCoverage = `${matchedCoreColumns}/${groups.length}`;
   return {
-    schemaVersion: "teaching-feedback-review-v1",
+    schemaVersion: "teaching-feedback-review-v2",
     handoutVersion: version,
     taskStatus: task.status,
     templateCode: task.selectedTemplate?.templateCode ?? "default_standard",
     templateName: task.selectedTemplate?.displayName ?? "标准讲义",
-    pdfRenderer: pdfMeta?.renderer ?? "",
-    pdfPageCount: pdfMeta?.pageCount ?? 0,
+    pdfRenderer,
+    pdfPageCount,
     pdfPreviewReady,
-    pdfRendererIsXeLaTeX: pdfMeta?.renderer === "xelatex",
+    pdfRendererIsXeLaTeX: pdfRenderer === "xelatex",
     evidenceCount,
     evidenceScopes,
     sourceTraceable,
+    aiReviewBrief: [
+      `版本：${version === "teacher" ? "教师版" : "学生版"}`,
+      `模板：${task.selectedTemplate?.displayName ?? "标准讲义"}`,
+      `结构：${coreColumnCoverage} 核心栏目`,
+      `PDF：${pdfPreviewReady ? `${pdfRenderer || "unknown"} / ${pdfPageCount}页` : "未预览"}`,
+      `安全：${internalDebugLeak || layoutRuleLeak ? "需复核内部词泄漏" : "未发现内部词泄漏"}`,
+    ],
+    reviewEvidence: {
+      pdfPreview: {
+        artifactType: "pdf_preview",
+        version,
+        previewReady: pdfPreviewReady,
+        versionBound: pdfPreviewKeyMatches,
+        renderer: pdfRenderer,
+        pageCount: pdfPageCount,
+      },
+      handoutText: {
+        latexLength: latex.length,
+        plainTextLength: plainText.length,
+        sectionCount,
+        hasMath,
+        hasWorkspace,
+      },
+      safety: {
+        internalDebugLeak,
+        layoutRuleLeak,
+        answerLeak,
+        studentAnswerIsolated,
+        teacherAnswerPresent,
+      },
+    },
     checks: {
       sectionCount,
       matchedCoreColumns,
       coreColumnTotal: groups.length,
+      coreColumnCoverage,
       hasMath,
       hasWorkspace,
       teacherHasAnswer,
       answerLeak,
+      internalDebugLeak,
+      layoutRuleLeak,
+      studentAnswerIsolated,
+      teacherAnswerPresent,
       pdfPreviewReady,
       sourceTraceable,
     },
