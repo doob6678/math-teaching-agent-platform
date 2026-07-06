@@ -35,6 +35,12 @@ type ReviewCheck = {
   state: "good" | "warning";
 };
 
+type FeedbackQualityItem = {
+  label: string;
+  value: string;
+  state: "good" | "warning";
+};
+
 type WorkflowConversationGroup = {
   title: string;
   summary: string;
@@ -121,6 +127,15 @@ export function TeachingTaskPanel({
     : task?.teacherHandoutLatex ?? task?.handoutLatex ?? "";
   const completed = normalizedStatus === "COMPLETED";
   const pending = normalizedStatus === "CREATED" || normalizedStatus === "RUNNING";
+  const feedbackQualityItems = task
+    ? buildFeedbackQualityItems({
+      latex: selectedDraft,
+      version,
+      pdfMeta: previewPdfMeta,
+      pdfBytes: previewPdfBytes,
+      evidenceCount: task.evidence.length,
+    })
+    : [];
 
   return (
     <section className="teaching-task">
@@ -243,14 +258,12 @@ export function TeachingTaskPanel({
               {feedbackMessage ? <span>{feedbackMessage}</span> : null}
             </div>
             <div className="feedback-quality-list" aria-label="讲义质量审查要点">
-              {[
-                "打印版式完整",
-                "教师/学生版区分清楚",
-                "公式渲染正确",
-                "版式无重叠",
-                "来源可追溯",
-              ].map((item) => (
-                <span key={item}><Check size={13} />{item}</span>
+              {feedbackQualityItems.map((item) => (
+                <span className={`feedback-quality-item ${item.state}`} key={item.label}>
+                  {item.state === "good" ? <Check size={13} /> : <AlertCircle size={13} />}
+                  <strong>{item.label}</strong>
+                  <em>{item.value}</em>
+                </span>
               ))}
             </div>
             <div className="feedback-grid">
@@ -549,6 +562,72 @@ function HandoutReviewChecks({ latex, version }: { latex: string; version: Hando
       ))}
     </div>
   );
+}
+
+function buildFeedbackQualityItems({
+  latex,
+  version,
+  pdfMeta,
+  pdfBytes,
+  evidenceCount,
+}: {
+  latex: string;
+  version: HandoutVersion;
+  pdfMeta: TeachingHandoutPdfResponse | null;
+  pdfBytes: Uint8Array | null;
+  evidenceCount: number;
+}): FeedbackQualityItem[] {
+  if (!latex.trim()) {
+    return [
+      { label: "讲义内容", value: "暂无可审查内容", state: "warning" },
+      { label: "PDF 预览", value: "等待生成后再检查", state: "warning" },
+    ];
+  }
+
+  const checks = buildHandoutReviewChecks(parseHandoutLatex(latex), latex, version);
+  const structureCheck = checks.find((check) => check.label === "结构");
+  const formulaCheck = checks.find((check) => check.label === "公式");
+  const versionCheck = checks.find((check) => check.label === "教师解析" || check.label === "学生作答");
+  const answerCheck = checks.find((check) => check.label === "答案区分" || check.label === "答案隔离");
+  const hasPdfBytes = Boolean(pdfBytes?.byteLength);
+  const renderer = pdfMeta?.renderer ?? "";
+  const pdfPreviewReady = hasPdfBytes && Boolean(pdfMeta);
+  const pdfIsXeLaTeX = renderer === "xelatex";
+
+  return [
+    {
+      label: "PDF 预览",
+      value: pdfPreviewReady
+        ? `${pdfRendererLabel(renderer)}${pdfMeta?.pageCount ? ` · ${pdfMeta.pageCount} 页` : ""}`
+        : "待打开真实 PDF",
+      state: pdfPreviewReady && pdfIsXeLaTeX ? "good" : "warning",
+    },
+    {
+      label: "结构栏目",
+      value: structureCheck?.value ?? "未识别结构",
+      state: structureCheck?.state ?? "warning",
+    },
+    {
+      label: "公式渲染",
+      value: formulaCheck?.value ?? "未检测到公式",
+      state: formulaCheck?.state ?? "warning",
+    },
+    {
+      label: version === "teacher" ? "教师版内容" : "学生版留白",
+      value: versionCheck?.value ?? "未识别版本要求",
+      state: versionCheck?.state ?? "warning",
+    },
+    {
+      label: version === "teacher" ? "答案审查" : "答案隔离",
+      value: answerCheck?.value ?? "未完成答案检查",
+      state: answerCheck?.state ?? "warning",
+    },
+    {
+      label: "来源追溯",
+      value: evidenceCount > 0 ? `${evidenceCount} 条来源` : "缺少教材/题库来源",
+      state: evidenceCount > 0 ? "good" : "warning",
+    },
+  ];
 }
 
 function buildHandoutReviewChecks(blocks: ReviewBlock[], latex: string, version: HandoutVersion): ReviewCheck[] {

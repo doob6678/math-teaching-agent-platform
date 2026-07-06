@@ -134,6 +134,15 @@ describe("TeachingTaskPanel", () => {
     expect(html).toContain("教师版");
     expect(html).toContain("学生版");
     expect(html).toContain("知识定位");
+    expect(html).toContain("PDF 预览");
+    expect(html).toContain("待打开真实 PDF");
+    expect(html).toContain("结构栏目");
+    expect(html).toContain("公式渲染");
+    expect(html).toContain("教师版内容");
+    expect(html).toContain("来源追溯");
+    expect(html).toContain("缺少教材/题库来源");
+    expect(html).not.toContain("打印版式完整");
+    expect(html).not.toContain("版式无重叠");
     expect(html).not.toContain("$y=-");
     expect(html).not.toContain("【知识定位】");
     expect(html).not.toContain("【练习任务】");
