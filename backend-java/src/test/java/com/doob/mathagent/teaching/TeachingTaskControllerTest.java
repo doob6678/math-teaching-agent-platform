@@ -133,6 +133,71 @@ class TeachingTaskControllerTest {
     }
 
     @Test
+    void latexPreviewAndDownloadReturnSanitizedHandoutSource() throws Exception {
+        Path root = createTextbookCorpus();
+        TextbookRetrievalService retrievalService = com.doob.mathagent.retrieval.TextbookRetrievalServiceFixture.service(
+                new TextbookCatalogReader(),
+                new TextbookChunkReader(),
+                new LocalTextbookBm25SearchEngine(),
+                new NoopRetrievalAuditSink());
+        InMemoryTeachingTaskStore taskStore = new InMemoryTeachingTaskStore();
+        TeachingWorkflowService service = testWorkflowService(
+                root,
+                retrievalService,
+                taskStore,
+                new StudentMemoryReuseService(new InMemoryStudentMemoryStore()));
+        TeachingTaskController controller = testController(
+                service,
+                teacherResolver(),
+                (token, action, path, requestHash, subject) -> true,
+                new TeachingHandoutPdfExportService(),
+                batchExportService(new TeachingHandoutPdfExportService()));
+        TeachingTaskResponse task = new TeachingTaskResponse(
+                "task-controller-sanitize",
+                "client-controller-sanitize",
+                "school-a",
+                "teacher",
+                "teacher-001",
+                TeachingTaskStatus.COMPLETED,
+                "双曲线讲义",
+                "清理旧任务导出",
+                List.of(),
+                List.of(),
+                List.of(),
+                "",
+                """
+                \\section{讲义模板与版式}
+                PDF 版式要求：页眉展示主题和版本，页脚展示页码；教师版使用讲评色。
+                \\section{教材与资料证据}
+                # p159 - 书名：人教B版选择性必修一 - 页图：![p159](../../pages/p159.png)
+                ## 正文
+                旧 OCR 正文不应该出现在 TeX 下载里。
+                \\section{教师讲评页}
+                \\paragraph{方法步骤}
+                由 $2a=6$ 得 $a=3$。
+                """,
+                "\\section{学生版}\n\\vspace{6em}",
+                List.of(),
+                null,
+                List.of(),
+                null,
+                null);
+        taskStore.save(
+                new TeachingRequestContext("school-a", "teacher", "teacher-001", "dev-device").ownerKey(),
+                "controller-sanitize",
+                task);
+
+        String preview = controller.previewLatex(task.taskId(), null).getBody();
+        String exported = controller.exportLatexVersion(task.taskId(), "teacher", null).getBody();
+
+        assertThat(preview)
+                .contains("\\section{来源索引}", "\\section{教师讲评页}", "$2a=6$", "$a=3$")
+                .doesNotContain("讲义模板与版式", "PDF 版式要求", "页眉", "页脚", "讲评色", "![p159]",
+                        "../../pages", "## 正文", "旧 OCR 正文");
+        assertThat(exported).isEqualTo(preview);
+    }
+
+    @Test
     void rejectsTeachingSubmitWithoutAcceptedCapabilityToken() throws Exception {
         TeachingWorkflowService service = testWorkflowService(
                 createTextbookCorpus(),

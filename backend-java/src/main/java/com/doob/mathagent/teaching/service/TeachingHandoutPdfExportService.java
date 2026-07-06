@@ -92,7 +92,7 @@ public class TeachingHandoutPdfExportService {
             PdfStyle style = PdfStyle.forVersion(version);
             String title = versionTitle(version);
             String templateName = task.selectedTemplate() == null ? "标准讲义" : task.selectedTemplate().displayName();
-            String handoutSource = task.handoutLatexFor(version);
+            String handoutSource = sanitizeLatexForExport(task.handoutLatexFor(version));
             boolean hasStructuredBody = containsStructuredSections(handoutSource);
             PdfWriter writer = new PdfWriter(document, font, style, title, templateName);
             writer.writeMuted("任务编号：" + safeText(task.taskId()));
@@ -226,7 +226,7 @@ public class TeachingHandoutPdfExportService {
         PdfStyle style = PdfStyle.forVersion(version);
         String title = versionTitle(version);
         String templateName = task.selectedTemplate() == null ? "标准讲义" : task.selectedTemplate().displayName();
-        String body = normalizeHandoutSource(task.handoutLatexFor(version));
+        String body = sanitizeLatexForExport(task.handoutLatexFor(version));
         return """
                 \\documentclass[11pt,a4paper]{article}
                 \\usepackage[a4paper,top=24mm,bottom=23mm,left=22mm,right=22mm]{geometry}
@@ -288,7 +288,12 @@ public class TeachingHandoutPdfExportService {
                 body);
     }
 
-    private static String normalizeHandoutSource(String source) {
+    /**
+     * Produces the canonical LaTeX body used by preview, download, ZIP export, and PDF rendering.
+     * This is a last-resort guard for old tasks or model output that still contains internal layout
+     * instructions, OCR page fragments, markdown image paths, or provider diagnostics.
+     */
+    public static String sanitizeLatexForExport(String source) {
         String normalized = safeText(source)
                 .replace("\\textbackslash{}frac", "\\frac")
                 .replace("\\textbackslash{}sqrt", "\\sqrt")

@@ -16,6 +16,27 @@ import org.junit.jupiter.api.Test;
 class TeachingHandoutPdfExportServiceTest {
 
     @Test
+    void sanitizesLatexExportBeforeTexDownloadAndPdfCompilation() {
+        String sanitized = TeachingHandoutPdfExportService.sanitizeLatexForExport("""
+                \\section{讲义模板与版式}
+                PDF 版式要求：页眉展示主题和版本，页脚展示页码；教师版使用讲评色，学生版使用练习色。
+                \\section{教材与资料证据}
+                # p159 - 书名：人教B版选择性必修一 - 章节：第二章 / PDF页码：159 - 页图：![p159](../../pages/p159.png)
+                ## 正文
+                这是会污染讲义的大段 OCR 原文。
+                \\section{教师讲评页}
+                \\paragraph{方法步骤}
+                由 $2a=6$ 得 $a=3$，再用 $c^2=a^2+b^2$。
+                模型openai/gpt-5.5 tokens=1759
+                """);
+
+        assertThat(sanitized)
+                .contains("\\section{来源索引}", "\\section{教师讲评页}", "$2a=6$", "$a=3$", "$c^2=a^2+b^2$")
+                .doesNotContain("讲义模板与版式", "PDF 版式要求", "页眉", "页脚", "讲评色", "练习色",
+                        "![p159]", "../../pages", "## 正文", "OCR 原文", "tokens", "gpt-5.5");
+    }
+
+    @Test
     void rendersReadableChineseHandoutInsteadOfRawLatexSource() throws Exception {
         TeachingTaskResponse task = new TeachingTaskResponse(
                 "task-chinese-pdf",

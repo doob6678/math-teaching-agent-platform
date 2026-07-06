@@ -8,10 +8,13 @@ import com.doob.mathagent.teaching.service.TeachingHandoutPdfExportService;
 import com.doob.mathagent.teaching.vo.TeachingHandoutBatchExportResponse;
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
 import java.io.ByteArrayInputStream;
+import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.zip.ZipInputStream;
 import org.junit.jupiter.api.Test;
 
@@ -92,6 +95,63 @@ class TeachingHandoutBatchExportServiceTest {
     }
 
     @Test
+    void batchZipTexEntriesUseSanitizedHandoutLatex() throws Exception {
+        TeachingHandoutBatchExportService service = service();
+        TeachingTaskResponse task = new TeachingTaskResponse(
+                "task-sanitized-zip",
+                "client-task-sanitized-zip",
+                "default",
+                "teacher",
+                "local-teacher-console",
+                TeachingTaskStatus.COMPLETED,
+                "question",
+                "goal",
+                List.of(),
+                List.of(),
+                List.of(),
+                "",
+                """
+                \\section{讲义模板与版式}
+                PDF 版式要求：页眉展示主题和版本，页脚展示页码；教师版使用讲评色。
+                \\section{教材与资料证据}
+                # p159 - 书名：人教B版选择性必修一 - 页图：![p159](../../pages/p159.png)
+                ## 正文
+                旧 OCR 正文不应该进导出文件。
+                \\section{教师讲评页}
+                \\paragraph{答案与评分点}
+                由 $2a=6$ 得 $a=3$。
+                """,
+                "\\section{学生版}\n\\vspace{6em}",
+                List.of(),
+                null,
+                List.of(),
+                null,
+                null);
+
+        TeachingHandoutBatchExportResponse response = service.create(
+                new TeachingHandoutBatchExportRequest(
+                        List.of("task-sanitized-zip"),
+                        List.of("folder-sanitized-zip"),
+                        List.of("grade-10/sanitized")),
+                new TeachingRequestContext("school-a", "teacher", "teacher-001", "browser-console"),
+                List.of(task));
+
+        Map<String, String> entries = zipTextEntries(service.findDownload(
+                        response.batchId(),
+                        new TeachingRequestContext("school-a", "teacher", "teacher-001", "browser-console"))
+                .orElseThrow()
+                .zipBytes());
+
+        assertThat(entries.get("grade-10/sanitized/task-sanitized-zip.tex"))
+                .contains("\\section{来源索引}", "\\section{教师讲评页}", "$2a=6$", "$a=3$")
+                .doesNotContain("讲义模板与版式", "PDF 版式要求", "页眉", "页脚", "讲评色", "![p159]",
+                        "../../pages", "## 正文", "旧 OCR 正文");
+        assertThat(entries.get("grade-10/sanitized/teacher/task-sanitized-zip.tex"))
+                .contains("\\section{来源索引}", "\\section{教师讲评页}")
+                .doesNotContain("PDF 版式要求", "../../pages", "旧 OCR 正文");
+    }
+
+    @Test
     void studentBatchZipContainsOnlyStudentHandoutVersion() throws Exception {
         TeachingHandoutBatchExportService service = service();
 
@@ -149,6 +209,20 @@ class TeachingHandoutBatchExportServiceTest {
                 names.add(entry.getName());
             }
             return names;
+        }
+    }
+
+    private static Map<String, String> zipTextEntries(byte[] zipBytes) throws Exception {
+        try (ZipInputStream input = new ZipInputStream(new ByteArrayInputStream(zipBytes))) {
+            Map<String, String> entries = new LinkedHashMap<>();
+            java.util.zip.ZipEntry entry;
+            while ((entry = input.getNextEntry()) != null) {
+                byte[] bytes = input.readAllBytes();
+                if (entry.getName().endsWith(".tex") || entry.getName().endsWith(".txt")) {
+                    entries.put(entry.getName(), new String(bytes, StandardCharsets.UTF_8));
+                }
+            }
+            return entries;
         }
     }
 }

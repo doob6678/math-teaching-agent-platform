@@ -141,7 +141,7 @@ public class TeachingHandoutBatchExportService {
                     TeachingTaskResponse task = tasks.get(index);
                     String folderPrefix = folderPrefix(response.folderPaths(), index, tasks.size());
                     if (canUseTeacherHandout(response.subjectType())) {
-                        put(zip, folderPrefix + task.taskId() + ".tex", task.handoutLatexFor("teacher").getBytes(StandardCharsets.UTF_8));
+                        put(zip, folderPrefix + task.taskId() + ".tex", sanitizedLatex(task, "teacher").getBytes(StandardCharsets.UTF_8));
                         put(zip, folderPrefix + task.taskId() + ".pdf", pdfExportService.render(task, "teacher"));
                         putVersion(zip, folderPrefix, task, "teacher");
                     }
@@ -173,8 +173,12 @@ public class TeachingHandoutBatchExportService {
             TeachingTaskResponse task,
             String version) throws java.io.IOException {
         String versionPrefix = folderPrefix + version + "/" + task.taskId();
-        put(zip, versionPrefix + ".tex", task.handoutLatexFor(version).getBytes(StandardCharsets.UTF_8));
+        put(zip, versionPrefix + ".tex", sanitizedLatex(task, version).getBytes(StandardCharsets.UTF_8));
         put(zip, versionPrefix + ".pdf", pdfExportService.render(task, version));
+    }
+
+    private static String sanitizedLatex(TeachingTaskResponse task, String version) {
+        return TeachingHandoutPdfExportService.sanitizeLatexForExport(task.handoutLatexFor(version));
     }
 
     /**

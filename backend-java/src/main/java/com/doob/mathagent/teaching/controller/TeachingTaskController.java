@@ -180,7 +180,7 @@ public class TeachingTaskController {
                         .filename(task.taskId() + ".tex", StandardCharsets.UTF_8)
                         .build()
                         .toString())
-                .body(task.handoutLatexFor(effectiveVersion));
+                .body(TeachingHandoutPdfExportService.sanitizeLatexForExport(task.handoutLatexFor(effectiveVersion)));
     }
 
     /**
@@ -211,7 +211,7 @@ public class TeachingTaskController {
                         .filename(task.taskId() + "-" + normalizedVersion + ".tex", StandardCharsets.UTF_8)
                         .build()
                         .toString())
-                .body(task.handoutLatexFor(normalizedVersion));
+                .body(TeachingHandoutPdfExportService.sanitizeLatexForExport(task.handoutLatexFor(normalizedVersion)));
     }
 
     /**
@@ -240,7 +240,7 @@ public class TeachingTaskController {
                         .filename(task.taskId() + ".tex", StandardCharsets.UTF_8)
                         .build()
                         .toString())
-                .body(task.handoutLatexFor(effectiveVersion));
+                .body(TeachingHandoutPdfExportService.sanitizeLatexForExport(task.handoutLatexFor(effectiveVersion)));
     }
 
     /**
@@ -271,7 +271,7 @@ public class TeachingTaskController {
                         .filename(task.taskId() + "-" + normalizedVersion + ".tex", StandardCharsets.UTF_8)
                         .build()
                         .toString())
-                .body(task.handoutLatexFor(normalizedVersion));
+                .body(TeachingHandoutPdfExportService.sanitizeLatexForExport(task.handoutLatexFor(normalizedVersion)));
     }
 
     /**
