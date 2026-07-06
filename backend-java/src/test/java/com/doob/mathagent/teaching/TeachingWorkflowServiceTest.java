@@ -8,6 +8,9 @@ import com.doob.mathagent.agent.service.AiChatResult;
 import com.doob.mathagent.agent.service.InMemoryAgentTraceStore;
 import com.doob.mathagent.infrastructure.ai.AiProviderCatalog;
 import com.doob.mathagent.infrastructure.ai.AiProviderProperties;
+import com.doob.mathagent.knowledge.dto.QuestionBankItemCreateRequest;
+import com.doob.mathagent.knowledge.service.InMemoryKnowledgeQuestionBankStore;
+import com.doob.mathagent.knowledge.service.KnowledgeQuestionBankService;
 import com.doob.mathagent.memory.service.InMemoryStudentMemoryStore;
 import com.doob.mathagent.memory.service.StudentMemoryCommand;
 import com.doob.mathagent.memory.service.StudentMemoryReuseService;
@@ -25,6 +28,7 @@ import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -171,6 +175,50 @@ class TeachingWorkflowServiceTest {
                 owner);
 
         assertThat(service.get(created.taskId(), other)).isEmpty();
+    }
+
+    @Test
+    void teacherQuestionBankEvidenceCreatesStudentSafePracticeAndTeacherAnswers() throws Exception {
+        Path root = createTextbookCorpus();
+        KnowledgeQuestionBankService questionBankService = new KnowledgeQuestionBankService(new InMemoryKnowledgeQuestionBankStore());
+        questionBankService.createQuestion(
+                "tenant-a",
+                "teacher",
+                "teacher-1",
+                new QuestionBankItemCreateRequest(
+                        "双曲线定义与参数关系基础题",
+                        "已知双曲线焦距为 $10$，且 $2a=6$，求 $a,c,b^2$。",
+                        "{\"answer\":\"a=3,c=5,b^2=16\",\"scoring\":\"写出参数关系得分\"}",
+                        "A 基础",
+                        "tenant",
+                        List.of()));
+        InMemoryTeachingTaskStore taskStore = new InMemoryTeachingTaskStore();
+        TeachingWorkflowService service = new TeachingWorkflowService(
+                root,
+                retrievalService(),
+                taskStore,
+                memoryReuseService(),
+                TeachingAiDraftServiceFixture.disabled(),
+                new InMemoryAgentTraceStore(),
+                new com.doob.mathagent.teaching.service.TeachingHandoutTemplateService(),
+                Optional.of(questionBankService),
+                Runnable::run);
+
+        TeachingRequestContext context = new TeachingRequestContext("tenant-a", "teacher", "teacher-1", "device-1");
+        TeachingTaskResponse created = service.submit(
+                new TeachingTaskRequest("req-question-bank-handout", "双曲线参数怎么求", "双曲线定义与参数关系", 3),
+                context);
+        TeachingTaskResponse response = service.get(created.taskId(), context).orElseThrow();
+
+        assertThat(response.evidence())
+                .anySatisfy(item -> assertThat(item.sourceScope()).isEqualTo("QUESTION_BANK"));
+        assertThat(response.teacherHandoutLatex())
+                .contains("A ", "c=5", "b^2=16")
+                .doesNotContain("\"answer\"", "\"scoring\"");
+        assertThat(response.studentHandoutLatex())
+                .contains("\\section{", "A ", "\\vspace{5em}");
+        assertThat(response.studentHandoutLatex())
+                .doesNotContain("答案要点", "answer", "c=5", "scoring", "评分", "得分");
     }
 
     @Test

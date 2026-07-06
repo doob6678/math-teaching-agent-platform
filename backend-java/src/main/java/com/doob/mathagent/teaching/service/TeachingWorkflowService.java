@@ -573,6 +573,7 @@ public class TeachingWorkflowService {
         String questionSection = safeQuestionText(request).isBlank()
                 ? "围绕学习目标设计例题、变式题和课堂追问。"
                 : safeQuestionText(request);
+        String questionBankTeacherSection = teacherQuestionBankSection(evidence);
         return """
                 \\section{讲义信息}
                 \\begin{itemize}
@@ -617,6 +618,8 @@ public class TeachingWorkflowService {
                 \\item 如果条件少一个，应该先补哪个量？
                 \\item 学生最容易在定义域、符号、参数范围还是计算细节上出错？
                 \\end{itemize}
+
+                %s
                 
                 \\section{课后订正记录}
                 \\vspace{5em}
@@ -627,7 +630,8 @@ public class TeachingWorkflowService {
                 escapeLatex(questionSection),
                 evidenceSnippet,
                 teacherKnowledgePoint(request, evidence),
-                escapeLatex(questionSection));
+                escapeLatex(questionSection),
+                questionBankTeacherSection);
     }
 
     private static boolean canUseQuestionBank(TeachingRequestContext context) {
@@ -644,8 +648,17 @@ public class TeachingWorkflowService {
         }
         return evidence.stream()
                 .limit(3)
-                .map(item -> escapeLatex(evidenceLabel(item) + "：" + TeachingEvidenceSnippetSanitizer.sanitizeCompact(item.snippet())))
+                .map(item -> escapeLatex(evidenceLabel(item) + "：" + evidenceDisplaySnippet(item)))
                 .collect(java.util.stream.Collectors.joining("\n\n"));
+    }
+
+    private static String evidenceDisplaySnippet(TeachingEvidence item) {
+        if ("QUESTION_BANK".equals(item.sourceScope())) {
+            String question = questionTextOnly(item.snippet());
+            String answer = questionAnswerOnly(item.snippet());
+            return answer.isBlank() ? question : question + " " + answer;
+        }
+        return TeachingEvidenceSnippetSanitizer.sanitizeCompact(item.snippet());
     }
 
     private static String evidenceLabel(TeachingEvidence item) {
@@ -685,6 +698,7 @@ public class TeachingWorkflowService {
                 : evidence.isEmpty()
                 ? "先圈出题目中的关键词，再尝试写出相关定义。"
                 : "先阅读教材证据中的定义或公式，再补全自己的推理。";
+        String questionBankPractice = studentQuestionBankSection(evidence);
         if (template.studentLectureStyle()) {
             String questionText = safeQuestionText(request).isBlank()
                     ? "根据本节主题完成下面的知识梳理与分层练习。"
@@ -713,6 +727,8 @@ public class TeachingWorkflowService {
 
                     \\subsection*{课堂作答区}
                     \\vspace{10em}
+
+                    %s
                     
                     \\subsection*{订正与错因}
                     \\vspace{6em}
@@ -720,7 +736,8 @@ public class TeachingWorkflowService {
                     escapeLatex(request.learningGoal()),
                     escapeLatex(hint),
                     escapeLatex("先核对定义域、符号条件和参数不为 0 等边界。"),
-                    escapeLatex(questionText));
+                    escapeLatex(questionText),
+                    questionBankPractice);
         }
         String questionText = safeQuestionText(request).isBlank()
                 ? "根据本讲主题完成例题、变式和订正。"
@@ -754,12 +771,121 @@ public class TeachingWorkflowService {
                 \\section{我的解答}
                 \\vspace{10em}
 
+                %s
+
                 \\section{订正记录}
                 \\vspace{6em}
                 """.formatted(
                 escapeLatex(request.learningGoal()),
                 escapeLatex(questionText),
-                escapeLatex(hint));
+                escapeLatex(hint),
+                questionBankPractice);
+    }
+
+    /**
+     * Builds teacher-only question bank practice with answer snippets preserved.
+     */
+    private static String teacherQuestionBankSection(List<TeachingEvidence> evidence) {
+        List<TeachingEvidence> questions = questionBankEvidence(evidence);
+        if (questions.isEmpty()) {
+            return "";
+        }
+        StringBuilder builder = new StringBuilder("\\section{题库分层练习与答案}\n\\begin{enumerate}\n");
+        for (TeachingEvidence item : questions) {
+            String difficulty = questionDifficulty(item);
+            String question = questionTextOnly(item.snippet());
+            String answer = questionAnswerOnly(item.snippet());
+            builder.append("\\item ")
+                    .append(escapeLatex(difficulty + "：" + item.sourceTitle()))
+                    .append("\\\\\n")
+                    .append(escapeLatex(question))
+                    .append("\\\\\n")
+                    .append(escapeLatex(answer.isBlank() ? "答案要点：请教师结合课堂讲评补充。" : answer))
+                    .append('\n');
+        }
+        builder.append("\\end{enumerate}\n");
+        return builder.toString();
+    }
+
+    /**
+     * Builds student-safe question bank practice without answer or scoring leakage.
+     */
+    private static String studentQuestionBankSection(List<TeachingEvidence> evidence) {
+        List<TeachingEvidence> questions = questionBankEvidence(evidence);
+        if (questions.isEmpty()) {
+            return "";
+        }
+        StringBuilder builder = new StringBuilder("\\section{题库分层练习}\n\\begin{enumerate}\n");
+        for (TeachingEvidence item : questions) {
+            String difficulty = questionDifficulty(item);
+            builder.append("\\item ")
+                    .append(escapeLatex(difficulty + "：" + questionTextOnly(item.snippet())))
+                    .append("\n\\vspace{5em}\n");
+        }
+        builder.append("\\end{enumerate}\n");
+        return builder.toString();
+    }
+
+    private static List<TeachingEvidence> questionBankEvidence(List<TeachingEvidence> evidence) {
+        return evidence.stream()
+                .filter(item -> "QUESTION_BANK".equals(item.sourceScope()))
+                .sorted(Comparator.comparingInt(TeachingWorkflowService::questionDifficultyRank))
+                .limit(3)
+                .toList();
+    }
+
+    private static int questionDifficultyRank(TeachingEvidence item) {
+        String difficulty = questionDifficulty(item);
+        if (difficulty.contains("基础") || difficulty.equalsIgnoreCase("easy")) {
+            return 0;
+        }
+        if (difficulty.contains("提高") || difficulty.contains("中等") || difficulty.equalsIgnoreCase("medium")) {
+            return 1;
+        }
+        if (difficulty.contains("压轴") || difficulty.contains("困难") || difficulty.equalsIgnoreCase("hard")) {
+            return 2;
+        }
+        return 3;
+    }
+
+    private static String questionDifficulty(TeachingEvidence item) {
+        String title = item.sourceTitle() == null ? "" : item.sourceTitle();
+        int index = title.indexOf("难度：");
+        if (index < 0) {
+            return "未标难度";
+        }
+        return title.substring(index + "难度：".length()).strip();
+    }
+
+    private static String questionTextOnly(String snippet) {
+        if (snippet == null || snippet.isBlank()) {
+            return "题目内容待补充。";
+        }
+        String[] parts = snippet.split("答案要点：", 2);
+        return parts[0].replaceAll("\\s+", " ").strip();
+    }
+
+    private static String questionAnswerOnly(String snippet) {
+        if (snippet == null || snippet.isBlank()) {
+            return "";
+        }
+        String[] parts = snippet.split("答案要点：", 2);
+        if (parts.length < 2) {
+            return "";
+        }
+        String answer = parts[1].replaceAll("\\s+", " ").strip();
+        if (answer.startsWith("{") && answer.endsWith("}")) {
+            answer = answer
+                    .replace("\"answer\"", "答案")
+                    .replace("\"scoring\"", "评分点")
+                    .replace("\"", "")
+                    .replace("{", "")
+                    .replace("}", "")
+                    .replace(":", "：")
+                    .replace(",", "；")
+                    .strip();
+        }
+        return "答案要点：" + answer;
     }
 
     /**
