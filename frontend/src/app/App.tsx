@@ -2057,10 +2057,12 @@ export function TemplateShelf({
       <div className="template-shelf-head">
         <div>
           <span>讲义模板书架</span>
-          <small>当前：{selectedTemplate.displayName} · 显示 {shelfTemplates.length}/{templates.length}</small>
+          <small>
+            当前：{selectedTemplate.displayName} · {expanded ? `展开 ${shelfTemplates.length}` : `精选 ${visibleTemplates.length}`} / {templates.length}
+          </small>
         </div>
         <button type="button" className="template-shelf-toggle" onClick={() => setExpanded((value) => !value)}>
-          {expanded ? "收起书架" : `展开全部 ${templates.length} 个模板`}
+          {expanded ? "收起书架" : `展开更多模板`}
         </button>
       </div>
       <div className="template-filter-row" aria-label="模板筛选">
@@ -2071,7 +2073,7 @@ export function TemplateShelf({
             key={option.value}
             onClick={() => {
               setFilter(option.value);
-              setExpanded(option.value !== "all");
+              setExpanded(false);
             }}
           >
             <span>{option.label}</span>
