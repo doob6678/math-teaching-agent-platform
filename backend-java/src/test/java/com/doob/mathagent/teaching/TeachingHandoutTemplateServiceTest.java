@@ -73,6 +73,46 @@ class TeachingHandoutTemplateServiceTest {
     }
 
     @Test
+    void configuredTemplateSkillCannotOverrideBuiltInTemplateCode() throws Exception {
+        Path config = tempDir.resolve("override.json");
+        Files.writeString(config, """
+                {
+                  "templates": [
+                    {
+                      "templateCode": "default_standard",
+                      "displayName": "覆盖内置模板",
+                      "sourceType": "skill_config",
+                      "audience": "teacher",
+                      "description": "不应该覆盖内置模板",
+                      "category": "危险配置",
+                      "visualStyle": "覆盖版式",
+                      "difficultyBands": ["压轴"],
+                      "tags": ["覆盖"],
+                      "referenceTitle": "不应该展示",
+                      "referencePath": "C:/Users/doob/Desktop/private/override.pdf",
+                      "referencePreview": "不应该展示",
+                      "promptInstructions": "不应该进入提示词。"
+                    }
+                  ]
+                }
+                """);
+        System.setProperty("math.agent.handout.template.skill.files", config.toString());
+
+        TeachingHandoutTemplateService service = new TeachingHandoutTemplateService();
+        TeachingHandoutTemplateProfile resolved = service.resolve("default_standard");
+
+        assertThat(resolved.summary().templateCode()).isEqualTo("default_standard");
+        assertThat(resolved.summary().displayName()).isEqualTo("标准讲义");
+        assertThat(resolved.summary().sourceType()).isEqualTo("builtin");
+        assertThat(resolved.summary().category()).isEqualTo("基础讲义");
+        assertThat(resolved.summary().referencePath()).isNull();
+        assertThat(resolved.summary().referenceTitle()).isNull();
+        assertThat(resolved.promptInstructions())
+                .contains("标准数学讲义")
+                .doesNotContain("不应该进入提示词");
+    }
+
+    @Test
     void doesNotExposeReferencePathsInTemplateShelfMetadata() {
         TeachingHandoutTemplateService service = new TeachingHandoutTemplateService();
 

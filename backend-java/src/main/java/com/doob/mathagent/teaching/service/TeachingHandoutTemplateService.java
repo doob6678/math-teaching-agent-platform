@@ -143,7 +143,7 @@ public class TeachingHandoutTemplateService {
                 """,
                 false));
         for (TeachingHandoutTemplateProfile profile : configuredTemplateSkills()) {
-            map.put(profile.summary().templateCode(), profile);
+            map.putIfAbsent(profile.summary().templateCode(), profile);
         }
         for (TeachingHandoutTemplateProfile profile : new TeachingHandoutLocalReferenceScanner().scan()) {
             map.putIfAbsent(profile.summary().templateCode(), profile);
