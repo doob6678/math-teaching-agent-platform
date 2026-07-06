@@ -529,14 +529,10 @@ public class TeachingWorkflowService {
         if (aiDraft == null || !aiDraft.enabled()) {
             return "未生成模型内容，讲义仅使用教材、题库和模板内容。";
         }
-        String parseState = aiDraft.structured() ? "结构化解析成功" : "结构化解析失败";
-        return "%s，当前模型 %s/%s，重试 %d/%d，诊断事件 %d 条。".formatted(
-                parseState,
-                aiDraft.providerName(),
-                aiDraft.modelCode(),
-                aiDraft.retryCount(),
-                aiDraft.maxRetries(),
-                aiDraft.recoveryEvents() == null ? 0 : aiDraft.recoveryEvents().size());
+        if (aiDraft.structured()) {
+            return "讲义草稿已整理为教师讲解、学生提示、知识点和追问任务，可进入人工审校。";
+        }
+        return "讲义草稿未能稳定结构化，请先人工复核内容后再导出使用。";
     }
 
     /**

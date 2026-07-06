@@ -216,6 +216,12 @@ class TeachingWorkflowServiceTest {
         assertThat(response.teacherHandoutLatex()).contains("教师讲解稿与练习设计", "知识点与方法卡", "课堂追问与变式训练", "讲评备注");
         assertThat(response.studentHandoutLatex()).contains("课堂练习与作答区", "\\vspace{10em}");
         assertThat(response.teacherHandoutLatex()).doesNotContain("tokens=", "\\paragraph{模型}");
+        assertThat(response.nodes())
+                .filteredOn(node -> "AI_DRAFT".equals(node.code()))
+                .singleElement()
+                .satisfies(node -> assertThat(node.summary())
+                        .contains("人工审校")
+                        .doesNotContain("当前模型", "重试", "诊断事件", "gpt", "qwen", "tokens"));
     }
 
     private TeachingWorkflowService service(Path root) {
