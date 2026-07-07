@@ -228,6 +228,7 @@ public class TeachingHandoutPdfExportService {
         String title = versionTitle(version);
         String templateName = task.selectedTemplate() == null ? "标准讲义" : task.selectedTemplate().displayName();
         String body = sanitizeLatexForExport(task.handoutLatexFor(version));
+        String headerTopic = safeHeaderTopic(task.learningGoal());
         return """
                 \\documentclass[11pt,a4paper]{article}
                 \\usepackage[a4paper,top=24mm,bottom=23mm,left=22mm,right=22mm]{geometry}
@@ -281,7 +282,7 @@ public class TeachingHandoutPdfExportService {
                 hex(style.accent()),
                 hex(style.accentLight()),
                 latexText(title),
-                latexText(task.learningGoal()),
+                latexText(headerTopic),
                 latexText(templateName),
                 latexText(title),
                 latexText(templateName),
@@ -359,6 +360,9 @@ public class TeachingHandoutPdfExportService {
                 continue;
             }
             if (line.startsWith("%") || isDiagnosticLine(line) || isMarkdownImageOnlyLine(line)) {
+                continue;
+            }
+            if (isUnreadablePlaceholderLine(line)) {
                 continue;
             }
             if (isLatexDocumentScaffoldLine(line)) {
@@ -708,14 +712,24 @@ public class TeachingHandoutPdfExportService {
     private static boolean isInternalLayoutInstruction(String line) {
         String text = safeText(line).replaceAll("\\s+", "");
         return text.contains("PDF版式要求")
+                || text.contains("PDF排版说明")
+                || text.contains("PDF排版")
                 || text.contains("页眉展示主题和版本")
                 || text.contains("页脚展示页码")
                 || text.contains("教师版使用讲评色")
                 || text.contains("学生版使用练习色")
+                || text.contains("页边距")
+                || text.contains("虚线折叠")
                 || text.contains("版式由系统渲染负责")
                 || text.contains("正文不要写页眉")
                 || text.contains("不要写页眉页脚")
                 || text.contains("渲染规则");
+    }
+
+    private static boolean isUnreadablePlaceholderLine(String line) {
+        String text = safeText(line).replaceAll("\\s+", "");
+        long questionMarks = text.chars().filter(ch -> ch == '?').count();
+        return questionMarks >= 6 && questionMarks >= Math.max(6, text.length() / 2);
     }
 
     private static boolean isLatexDocumentScaffoldLine(String line) {
@@ -983,6 +997,11 @@ public class TeachingHandoutPdfExportService {
     private static String nonBlank(String value, String fallback) {
         String text = safeText(value);
         return text.isBlank() ? fallback : text;
+    }
+
+    private static String safeHeaderTopic(String value) {
+        String text = safeText(value);
+        return isUnreadablePlaceholderLine(text) ? "历史讲义" : nonBlank(text, "历史讲义");
     }
 
     /**

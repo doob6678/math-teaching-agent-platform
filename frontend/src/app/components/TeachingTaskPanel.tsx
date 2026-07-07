@@ -983,7 +983,7 @@ function parseDraftOutlineItems(text: string, audience: "teacher" | "student"): 
     const nextStart = labels[index + 1]?.index ?? cleaned.length;
     const title = match[1].trim();
     const summary = shortText(stripDraftNoise(cleaned.slice(labelEnd, nextStart)), 88);
-    if (title && summary) {
+    if (title && summary && !isReviewNoiseText(title) && summary !== "暂无内容") {
       items.push({ title, summary, audience });
     }
   }
@@ -993,6 +993,7 @@ function parseDraftOutlineItems(text: string, audience: "teacher" | "student"): 
 function stripDraftNoise(value: string) {
   return value
     .replace(/【[^】]{2,18}】/g, " ")
+    .replace(/.*(?:PDF\s*排版说明|PDF\s*版式要求|页眉|页脚|页面颜色|讲评色|练习色|渲染规则|模板规则|页边距|虚线折叠).*/g, " ")
     .replace(/\b(AI|MODEL|JSON|token|tokens|retry)\b/gi, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -1522,7 +1523,8 @@ function isReviewNoiseSection(title: string) {
 }
 
 function isReviewNoiseText(value: string) {
-  return /页眉|页脚|讲评色|练习色|PDF\s*版式要求|版式要求|系统渲染|渲染引擎|模板规则|不要写|颜色/.test(value)
+  return /页眉|页脚|讲评色|练习色|PDF\s*排版说明|PDF\s*排版|PDF\s*版式要求|版式要求|系统渲染|渲染引擎|模板规则|不要写|颜色|页边距|虚线折叠/.test(value)
+    || /\?{6,}/.test(value)
     || /^p\d+\b/i.test(value)
     || /pages\/p\d+\.png/i.test(value);
 }
@@ -1553,6 +1555,8 @@ function humanMemoryReason(value: string | undefined) {
 function cleanReviewSummary(value: string | undefined) {
   const cleaned = (value ?? "")
     .replace(/No reusable memory matched\.?/gi, "未找到适合复用的历史学习记录")
+    .replace(/识别用户想学：\?{4,}[^。]*/g, "识别到历史任务标题不可读，建议以 PDF 预览和重新生成结果为准")
+    .replace(/\?{8,}/g, "历史内容不可读")
     .replace(/MODEL_CALL_SUCCEEDED[^。]*。?/gi, "")
     .replace(/JSON_PARSE_SUCCEEDED[^。]*。?/gi, "")
     .replace(/当前模型\s*[^，。]*[，。]?/g, "")

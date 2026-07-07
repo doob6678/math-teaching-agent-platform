@@ -4416,7 +4416,7 @@ h1, h2, h3, h4, h5, h6 {
   color: var(--navy);
   font-size: 14px;
   line-height: 2.05;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 
 .handout-review-list {
@@ -4464,6 +4464,14 @@ h1, h2, h3, h4, h5, h6 {
   max-width: 100%;
   padding: 0 2px;
   vertical-align: baseline;
+  white-space: nowrap;
+  word-break: normal;
+  overflow-wrap: normal;
+}
+
+.math-render.inline .katex,
+.math-render.display .katex {
+  white-space: nowrap;
 }
 
 .artifact-pdf-preview {
