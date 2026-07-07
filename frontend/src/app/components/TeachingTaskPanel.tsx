@@ -511,7 +511,7 @@ function PdfCanvasPreview({
   }, [pdfBytes, currentPage]);
 
   return (
-    <div className="pdf-canvas-preview">
+    <div className="pdf-canvas-preview" data-preview-state={state} data-page-count={pageCount || meta?.pageCount || 0}>
       <div className="pdf-canvas-toolbar">
         <div>
           <strong>PDF 真实渲染预览</strong>
@@ -545,7 +545,7 @@ function PdfCanvasPreview({
           <a href={pdfUrl} target="_blank" rel="noreferrer">打开原始 PDF</a>
         </div>
       </div>
-      <div className={state === "ready" ? "pdf-canvas-page" : "pdf-canvas-page loading"}>
+      <div className={state === "ready" ? "pdf-canvas-page" : "pdf-canvas-page loading"} data-current-page={currentPage}>
         {state === "loading" ? <Loader2 className="spin" size={18} /> : null}
         {state === "failed" ? (
           <div className="handout-preview-placeholder compact">
@@ -554,7 +554,12 @@ function PdfCanvasPreview({
             <span>当前浏览器无法渲染 Canvas 预览，可以打开原始 PDF 或直接下载。</span>
           </div>
         ) : null}
-        <canvas ref={canvasRef} aria-label="讲义 PDF 首页预览" />
+        <canvas
+          ref={canvasRef}
+          className="pdf-page-canvas"
+          data-page={currentPage}
+          aria-label="讲义 PDF 页面预览"
+        />
       </div>
     </div>
   );

@@ -96,9 +96,9 @@ describe("TeachingTaskPanel", () => {
         loadingHistoryTaskId=""
         version="teacher"
         previewLatex=""
-        previewPdfUrl=""
-        previewPdfBytes={null}
-        previewPdfMeta={null}
+        previewPdfUrl="blob:test-pdf"
+        previewPdfBytes={new Uint8Array([37, 80, 68, 70])}
+        previewPdfMeta={{ bytes: new Uint8Array([37, 80, 68, 70]), renderer: "xelatex", pageCount: 4 }}
         action=""
         exportMessage=""
         feedbackRating={4}
@@ -188,13 +188,17 @@ describe("TeachingTaskPanel", () => {
     expect(html).toContain("讲义结构摘要");
     expect(html).toContain("mfrac");
     expect(html).toContain("msup");
-    expect(html).toContain("纸面审查视图：未打开 PDF 时先检查结构、公式和留白");
+    expect(html).toContain("正在渲染首页");
     expect(html).not.toContain("textasciicircum");
     expect(html).toContain("教师版");
     expect(html).toContain("学生版");
     expect(html).toContain("知识定位");
     expect(html).toContain("PDF 预览");
-    expect(html).toContain("待打开真实 PDF");
+    expect(html).toContain("PDF 真实渲染预览");
+    expect(html).toContain("class=\"pdf-page-canvas\"");
+    expect(html).toContain("data-preview-state=\"loading\"");
+    expect(html).toContain("data-page-count=\"4\"");
+    expect(html).toContain("讲义 PDF 页面预览");
     expect(html).toContain("结构栏目");
     expect(html).toContain("公式渲染");
     expect(html).toContain("教师版内容");

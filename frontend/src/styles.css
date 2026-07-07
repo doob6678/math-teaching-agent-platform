@@ -4144,7 +4144,7 @@ h1, h2, h3, h4, h5, h6 {
   place-items: center;
 }
 
-.pdf-canvas-page canvas {
+.pdf-page-canvas {
   max-width: 100%;
   border-radius: 4px;
   background: var(--white);
