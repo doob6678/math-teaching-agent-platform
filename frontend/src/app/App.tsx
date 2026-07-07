@@ -2491,18 +2491,38 @@ export function buildTeachingFeedbackReviewContext(
   const pdfPageCount = pdfMeta?.pageCount ?? 0;
   const coreColumnCoverage = `${matchedCoreColumns}/${groups.length}`;
   const pdfVisualEvidenceCaptured = Boolean(visualEvidence?.captured && pdfPreviewReady);
+  const evidenceSummary = buildTeachingFeedbackEvidenceSummary(task);
+  const pdfImageRef = visualEvidence?.imageRef ?? `teaching-task:${task.taskId}:${version}:pdf-page:1`;
   return {
     schemaVersion: "teaching-feedback-review-v2",
     handoutVersion: version,
     taskStatus: task.status,
+    taskSnapshot: {
+      taskId: task.taskId,
+      learningGoal: safeReviewText(task.learningGoal, 120),
+      questionPreview: safeReviewText(task.questionText, 120),
+      hasQuestionText: Boolean(task.questionText?.trim()),
+      subjectType: task.subjectType,
+      subjectId: task.subjectId,
+    },
     templateCode: task.selectedTemplate?.templateCode ?? "default_standard",
     templateName: task.selectedTemplate?.displayName ?? "标准讲义",
+    templateSnapshot: {
+      templateCode: task.selectedTemplate?.templateCode ?? "default_standard",
+      templateName: task.selectedTemplate?.displayName ?? "标准讲义",
+      sourceType: task.selectedTemplate?.sourceType ?? "builtin",
+      audience: task.selectedTemplate?.audience ?? "mixed",
+      category: task.selectedTemplate?.category ?? "",
+      visualStyle: task.selectedTemplate?.visualStyle ?? "",
+      referenceTitle: task.selectedTemplate?.referenceTitle ?? "",
+    },
     pdfRenderer,
     pdfPageCount,
     pdfPreviewReady,
     pdfRendererIsXeLaTeX: pdfRenderer === "xelatex",
     evidenceCount,
     evidenceScopes,
+    evidenceSummary,
     sourceTraceable,
     aiReviewBrief: [
       `版本：${version === "teacher" ? "教师版" : "学生版"}`,
@@ -2512,6 +2532,20 @@ export function buildTeachingFeedbackReviewContext(
       `预览图：${pdfVisualEvidenceCaptured ? "已记录首屏渲染证据" : "未记录"}`,
       `安全：${internalDebugLeak || layoutRuleLeak ? "需复核内部词泄漏" : "未发现内部词泄漏"}`,
     ],
+    aiReviewInputPlan: {
+      purpose: "后续AI复核应同时读取结构化审校上下文、短来源摘要和PDF页面图像。",
+      imageRequired: true,
+      imageRefs: [pdfImageRef],
+      attachPdfPreviewImage: pdfVisualEvidenceCaptured,
+      textPayloadFields: [
+        "taskSnapshot",
+        "templateSnapshot",
+        "reviewEvidence.handoutText",
+        "reviewEvidence.safety",
+        "evidenceSummary",
+      ],
+      doNotSendFields: ["rawLatex", "base64Image", "fullOcrText", "localFilePath"],
+    },
     reviewEvidence: {
       pdfPreview: {
         artifactType: "pdf_preview",
@@ -2528,6 +2562,13 @@ export function buildTeachingFeedbackReviewContext(
         sectionCount,
         hasMath,
         hasWorkspace,
+        coreColumnCoverage,
+      },
+      sources: {
+        sourceTraceable,
+        evidenceCount,
+        evidenceScopes,
+        evidenceSummary,
       },
       safety: {
         internalDebugLeak,
@@ -2555,6 +2596,34 @@ export function buildTeachingFeedbackReviewContext(
       sourceTraceable,
     },
   };
+}
+
+function buildTeachingFeedbackEvidenceSummary(task: TeachingTaskResponse) {
+  return (task.evidence ?? []).slice(0, 8).map((item, index) => ({
+    index: index + 1,
+    scope: item.sourceScope,
+    title: safeReviewText(item.sourceTitle, 120),
+    pageNo: item.pageNo,
+    sourceRef: safeReviewText(item.chunkId, 120),
+    snippetPreview: safeReviewText(cleanEvidenceSnippetForReview(item.snippet), 140),
+  }));
+}
+
+function cleanEvidenceSnippetForReview(value: string) {
+  return (value ?? "")
+    .replace(/!\[[^\]]*]\([^)]*\)/g, " ")
+    .replace(/\.\.\/\.\.\/pages\/[^\s，。；;)]*/g, " ")
+    .replace(/formula_text|source_page_image/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function safeReviewText(value: string | undefined, maxLength: number) {
+  const text = (value ?? "")
+    .replace(/\s+/g, " ")
+    .replace(/\?{4,}|�/g, "")
+    .trim();
+  return text.length <= maxLength ? text : `${text.slice(0, Math.max(0, maxLength - 1)).trim()}…`;
 }
 
 function captureTeachingPdfPreviewVisualEvidence(

@@ -37,7 +37,7 @@ describe("buildTeachingFeedbackReviewContext", () => {
           sourceTitle: "人教B版选择性必修一 / 2.6 双曲线及其方程",
           chunkId: "chunk-1",
           pageNo: 154,
-          snippet: "双曲线定义与参数关系。",
+          snippet: "双曲线定义与参数关系。![p154](../../pages/p154.png) formula_text source_page_image",
         },
         {
           sourceScope: "QUESTION_BANK",
@@ -88,7 +88,33 @@ describe("buildTeachingFeedbackReviewContext", () => {
     expect(context.schemaVersion).toBe("teaching-feedback-review-v2");
     expect(context.pdfPreviewReady).toBe(true);
     expect(context.pdfRendererIsXeLaTeX).toBe(true);
+    expect(context.taskSnapshot).toMatchObject({
+      taskId: "task-review-1",
+      learningGoal: "双曲线定义与参数关系",
+      hasQuestionText: true,
+      subjectType: "teacher",
+    });
+    expect(context.templateSnapshot).toMatchObject({
+      templateCode: "teacher_blackboard_solution_v1",
+      templateName: "教师详解版",
+      sourceType: "builtin",
+      audience: "teacher",
+    });
     expect(context.evidenceScopes).toEqual(["PUBLIC_TEXTBOOK", "QUESTION_BANK"]);
+    expect(context.evidenceSummary).toHaveLength(2);
+    expect(context.evidenceSummary[0]).toMatchObject({
+      scope: "PUBLIC_TEXTBOOK",
+      pageNo: 154,
+      sourceRef: "chunk-1",
+    });
+    expect(context.evidenceSummary[0].snippetPreview).not.toContain("../../pages");
+    expect(context.evidenceSummary[0].snippetPreview).not.toContain("formula_text");
+    expect(context.aiReviewInputPlan).toMatchObject({
+      imageRequired: true,
+      imageRefs: ["teaching-task:task-review-1:teacher:pdf-page:1"],
+      attachPdfPreviewImage: true,
+    });
+    expect(context.aiReviewInputPlan.doNotSendFields).toContain("base64Image");
     expect(context.checks.coreColumnCoverage).toBe("6/6");
     expect(context.checks.internalDebugLeak).toBe(false);
     expect(context.checks.layoutRuleLeak).toBe(false);
@@ -114,6 +140,11 @@ describe("buildTeachingFeedbackReviewContext", () => {
       answerLeak: true,
       studentAnswerIsolated: true,
       teacherAnswerPresent: true,
+    });
+    expect(context.reviewEvidence.sources).toMatchObject({
+      sourceTraceable: true,
+      evidenceCount: 2,
+      evidenceScopes: ["PUBLIC_TEXTBOOK", "QUESTION_BANK"],
     });
     expect(context.aiReviewBrief).toContain("PDF：xelatex / 4页");
     expect(context.aiReviewBrief).toContain("预览图：已记录首屏渲染证据");
