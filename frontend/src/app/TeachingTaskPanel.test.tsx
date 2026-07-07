@@ -88,6 +88,7 @@ describe("TeachingTaskPanel", () => {
         error=""
         history={[]}
         loadingHistory={false}
+        loadingHistoryTaskId=""
         version="teacher"
         previewLatex=""
         previewPdfUrl=""

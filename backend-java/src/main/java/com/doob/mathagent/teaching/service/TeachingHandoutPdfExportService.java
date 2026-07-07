@@ -360,6 +360,9 @@ public class TeachingHandoutPdfExportService {
             if (line.startsWith("%") || isDiagnosticLine(line) || isMarkdownImageOnlyLine(line)) {
                 continue;
             }
+            if (isLatexDocumentScaffoldLine(line)) {
+                continue;
+            }
             if (isInternalLayoutInstruction(line)) {
                 continue;
             }
@@ -574,6 +577,9 @@ public class TeachingHandoutPdfExportService {
                     || line.startsWith("\\end{enumerate}")) {
                 continue;
             }
+            if (isLatexDocumentScaffoldLine(line)) {
+                continue;
+            }
             if (isInternalLayoutInstruction(line)) {
                 continue;
             }
@@ -704,7 +710,40 @@ public class TeachingHandoutPdfExportService {
                 || text.contains("页眉展示主题和版本")
                 || text.contains("页脚展示页码")
                 || text.contains("教师版使用讲评色")
-                || text.contains("学生版使用练习色");
+                || text.contains("学生版使用练习色")
+                || text.contains("版式由系统渲染负责")
+                || text.contains("正文不要写页眉")
+                || text.contains("不要写页眉页脚")
+                || text.contains("渲染规则");
+    }
+
+    private static boolean isLatexDocumentScaffoldLine(String line) {
+        String text = safeText(line).replaceAll("\\s+", "");
+        String lower = text.toLowerCase(Locale.ROOT);
+        return lower.startsWith("\\documentclass")
+                || lower.startsWith("\\usepackage")
+                || lower.startsWith("\\iffontexiststf")
+                || lower.startsWith("\\setcjkmainfont")
+                || lower.startsWith("\\setmainfont")
+                || lower.startsWith("\\setlength")
+                || lower.startsWith("\\setlist")
+                || lower.startsWith("\\definecolor")
+                || lower.startsWith("\\pagestyle")
+                || lower.startsWith("\\fancyhf")
+                || lower.startsWith("\\lhead")
+                || lower.startsWith("\\rhead")
+                || lower.startsWith("\\lfoot")
+                || lower.startsWith("\\rfoot")
+                || lower.startsWith("\\renewcommand")
+                || lower.startsWith("\\titleformat")
+                || lower.startsWith("\\titlespacing")
+                || lower.startsWith("\\begin{document}")
+                || lower.startsWith("\\end{document}")
+                || lower.startsWith("\\begin{center}")
+                || lower.startsWith("\\end{center}")
+                || lower.startsWith("\\begin{titlepage}")
+                || lower.startsWith("\\end{titlepage}")
+                || lower.startsWith("\\color{");
     }
 
     private static boolean isMarkdownImageOnlyLine(String line) {

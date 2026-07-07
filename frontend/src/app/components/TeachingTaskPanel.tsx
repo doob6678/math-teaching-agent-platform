@@ -59,6 +59,7 @@ export function TeachingTaskPanel({
   error,
   history,
   loadingHistory,
+  loadingHistoryTaskId,
   version,
   previewLatex,
   previewPdfUrl,
@@ -92,6 +93,7 @@ export function TeachingTaskPanel({
   error: string;
   history: TeachingTaskResponse[];
   loadingHistory: boolean;
+  loadingHistoryTaskId: string;
   version: HandoutVersion;
   previewLatex: string;
   previewPdfUrl: string;
@@ -156,6 +158,7 @@ export function TeachingTaskPanel({
         history={history}
         currentTaskId={task?.taskId}
         loading={loadingHistory}
+        loadingTaskId={loadingHistoryTaskId}
         onSelectHistory={onSelectHistory}
       />
 
@@ -749,11 +752,13 @@ function HistoryPanel({
   history,
   currentTaskId,
   loading,
+  loadingTaskId,
   onSelectHistory,
 }: {
   history: TeachingTaskResponse[];
   currentTaskId?: string;
   loading: boolean;
+  loadingTaskId: string;
   onSelectHistory: (task: TeachingTaskResponse) => void;
 }) {
   return (
@@ -768,17 +773,23 @@ function HistoryPanel({
         <div className="teaching-history-list">
           {history.map((item) => {
             const hasHandout = Boolean(item.teacherHandoutLatex || item.studentHandoutLatex || item.handoutLatex);
+            const opening = loadingTaskId === item.taskId;
             return (
               <button
                 type="button"
-                className={currentTaskId === item.taskId ? "teaching-history-item active" : "teaching-history-item"}
+                className={[
+                  "teaching-history-item",
+                  currentTaskId === item.taskId ? "active" : "",
+                  opening ? "loading" : "",
+                ].filter(Boolean).join(" ")}
                 key={item.taskId}
+                disabled={opening}
                 onClick={() => onSelectHistory(item)}
               >
                 <strong>{displayTaskTitle(item)}</strong>
                 <span>{statusLabel(item.status)} · {shortText(item.taskId, 22)}</span>
                 <span className={hasHandout ? "teaching-history-action" : "teaching-history-action muted"}>
-                  {hasHandout ? "打开并预览内容，可下载或复核" : "任务尚未产出可预览讲义"}
+                  {opening ? "正在打开真实讲义内容" : (hasHandout ? "打开并预览内容，可下载或复核" : "任务尚未产出可预览讲义")}
                 </span>
               </button>
             );

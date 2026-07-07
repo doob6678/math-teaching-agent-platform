@@ -84,7 +84,11 @@ describe("TemplateShelf", () => {
     expect(html).toContain("高考压轴");
     expect(html).toContain("本机 PDF");
     expect(html).toContain("zhao_lixian_daoshu.pdf");
-    expect(html).toContain("查看结构摘要");
+    expect(html).toContain("参考来源");
+    expect(html).toContain("template-selected-preview");
+    expect(html).toContain("template-preview-paper");
+    expect(html).toContain("template-card-paper");
+    expect(html).toContain("katex");
     expect(html).toContain("动态配置提示词模板");
     expect(html).not.toContain("C:/Users/doob/Desktop/private");
   });

@@ -185,6 +185,7 @@ export function App() {
   const [handoutPreviewPdfMeta, setHandoutPreviewPdfMeta] = useState<TeachingHandoutPdfResponse | null>(null);
   const [teachingHistory, setTeachingHistory] = useState<TeachingTaskResponse[]>([]);
   const [loadingTeachingHistory, setLoadingTeachingHistory] = useState(false);
+  const [openingTeachingHistoryTaskId, setOpeningTeachingHistoryTaskId] = useState("");
   const [handoutVersion, setHandoutVersion] = useState<"teacher" | "student">("teacher");
   const [handoutAction, setHandoutAction] = useState("");
   const [handoutExportMessage, setHandoutExportMessage] = useState("");
@@ -444,7 +445,15 @@ export function App() {
           pollTeachingTask(task.taskId);
         }
       })
-      .catch((error: Error) => setTeachingError(toUserFacingError(error)))
+      .catch((error: Error) => {
+        if (isBackendNotFound(error)) {
+          window.localStorage.removeItem(TEACHING_TASK_STORAGE_KEY);
+          setTeachingTask(null);
+          setTeachingError("");
+          return;
+        }
+        setTeachingError(toUserFacingError(error));
+      })
       .finally(() => setLoadingTeachingTask(false));
   }, [api, hasVerifiedSession]);
 
@@ -949,10 +958,7 @@ export function App() {
       .finally(() => setHandoutAction(""));
   }
 
-  function handleSelectTeachingHistory(task: TeachingTaskResponse) {
-    window.localStorage.setItem(TEACHING_TASK_STORAGE_KEY, task.taskId);
-    syncSelectedTeachingTemplate(task);
-    setTeachingTask(task);
+  function clearHandoutPreview() {
     setHandoutPreviewLatex("");
     setHandoutPreviewTaskId("");
     setHandoutPreviewPdfUrl((current) => {
@@ -962,15 +968,48 @@ export function App() {
     setHandoutPreviewPdfBytes(null);
     setHandoutPreviewPdfTaskId("");
     setHandoutPreviewPdfMeta(null);
+  }
+
+  function handleSelectTeachingHistory(task: TeachingTaskResponse) {
+    window.localStorage.setItem(TEACHING_TASK_STORAGE_KEY, task.taskId);
+    setOpeningTeachingHistoryTaskId(task.taskId);
+    setLoadingTeachingTask(true);
+    clearHandoutPreview();
     setHandoutExportMessage("");
     setFeedbackMessage("");
-    loadTeachingFeedbackHistory(task.taskId);
     setTeachingError("");
-    if (task.status === "COMPLETED") {
-      previewTeachingTaskPdf(task.taskId, handoutVersion);
-    } else if (task.status === "CREATED" || task.status === "RUNNING") {
-      pollTeachingTask(task.taskId);
-    }
+    api
+      .getTeachingTask(task.taskId)
+      .then((latestTask) => {
+        window.localStorage.setItem(TEACHING_TASK_STORAGE_KEY, latestTask.taskId);
+        syncSelectedTeachingTemplate(latestTask);
+        setTeachingTask(latestTask);
+        setTeachingHistory((current) => [latestTask, ...current.filter((item) => item.taskId !== latestTask.taskId)]);
+        loadTeachingFeedbackHistory(latestTask.taskId);
+        if (latestTask.status === "COMPLETED") {
+          previewTeachingTaskPdf(latestTask.taskId, handoutVersion);
+        } else if (latestTask.status === "CREATED" || latestTask.status === "RUNNING") {
+          pollTeachingTask(latestTask.taskId);
+        }
+      })
+      .catch((error: Error) => {
+        if (isBackendNotFound(error)) {
+          setTeachingHistory((current) => current.filter((item) => item.taskId !== task.taskId));
+          if (window.localStorage.getItem(TEACHING_TASK_STORAGE_KEY) === task.taskId) {
+            window.localStorage.removeItem(TEACHING_TASK_STORAGE_KEY);
+          }
+          if (teachingTask?.taskId === task.taskId) {
+            setTeachingTask(null);
+          }
+          setTeachingError("这条历史讲义记录已经失效，已从列表移除。");
+          return;
+        }
+        setTeachingError(toUserFacingError(error));
+      })
+      .finally(() => {
+        setOpeningTeachingHistoryTaskId("");
+        setLoadingTeachingTask(false);
+      });
   }
 
   function syncSelectedTeachingTemplate(task: TeachingTaskResponse) {
@@ -1473,8 +1512,8 @@ export function App() {
           <h1 className="page-title">教学任务</h1>
           <p className="page-subtitle">AI 教学任务编排与讲义导出</p>
         </div>
-        <div className="card-grid">
-          <div className="card">
+        <div className="card-grid teaching-page-grid">
+          <div className="card card-full teaching-create-card">
             <div className="card-header">
               <h2 className="card-title"><BookOpen size={16} /> 创建教学任务</h2>
             </div>
@@ -1517,6 +1556,7 @@ export function App() {
                 previewPdfMeta={handoutPreviewPdfTaskId === `${teachingTask?.taskId}:${handoutVersion}` ? handoutPreviewPdfMeta : null}
                 history={teachingHistory}
                 loadingHistory={loadingTeachingHistory}
+                loadingHistoryTaskId={openingTeachingHistoryTaskId}
                 action={handoutAction}
                 exportMessage={handoutExportMessage}
                 feedbackRating={feedbackRating}
@@ -1969,6 +2009,10 @@ function isWorkflowNotFound(error: Error) {
     && error.message.includes("/api/agents/writing/");
 }
 
+function isBackendNotFound(error: Error) {
+  return (error.message || "").includes("Backend request failed: 404");
+}
+
 function toUserFacingError(error: Error) {
   const message = error.message || "";
   if (message.includes("Backend request failed: 403")) {
@@ -2058,7 +2102,7 @@ export function TemplateShelf({
         <div>
           <span>讲义模板书架</span>
           <small>
-            当前：{selectedTemplate.displayName} · {expanded ? `展开 ${shelfTemplates.length}` : `精选 ${visibleTemplates.length}`} / {templates.length}
+            当前：{safeTemplateText(selectedTemplate.displayName, "未命名模板")} · {expanded ? `展开 ${shelfTemplates.length}` : `精选 ${visibleTemplates.length}`} / {templates.length}
           </small>
         </div>
         <button type="button" className="template-shelf-toggle" onClick={() => setExpanded((value) => !value)}>
@@ -2081,11 +2125,15 @@ export function TemplateShelf({
           </button>
         ))}
       </div>
+      <TemplateHandoutPreview template={selectedTemplate} />
       <div className={expanded ? "template-shelf-grid expanded" : "template-shelf-grid compact"}>
         {visibleTemplates.map((template) => {
           const selected = template.templateCode === selectedCode;
           const dynamicSkill = template.sourceType === "skill_config";
           const localReference = !dynamicSkill && (template.sourceType === "local_reference" || Boolean(template.referenceTitle));
+          const displayName = safeTemplateText(template.displayName, "未命名模板");
+          const description = safeTemplateText(template.description, "按讲义结构生成内容");
+          const referenceTitle = safeTemplateText(template.referenceTitle, displayName);
           return (
             <article
               key={template.templateCode}
@@ -2098,37 +2146,38 @@ export function TemplateShelf({
             >
               <button type="button" className="template-card-select" onClick={() => onSelect(template.templateCode)}>
                 <div className="template-card-top">
-                  <span>{template.category || audienceLabel(template.audience)}</span>
-                  <strong>{template.visualStyle || sourceTypeLabel(template.sourceType)}</strong>
+                  <span>{safeTemplateText(template.category, audienceLabel(template.audience))}</span>
+                  <strong>{safeTemplateText(template.visualStyle, sourceTypeLabel(template.sourceType))}</strong>
                 </div>
-                <h3>{template.displayName}</h3>
-                <p>{template.description}</p>
+                <h3>{displayName}</h3>
+                <p>{compactText(description, 88)}</p>
+                <TemplateMiniPaper template={template} />
                 {localReference ? (
                   <div className="template-reference-strip">
                     <span>本机 PDF</span>
-                    <strong>{template.referenceTitle || template.displayName}</strong>
+                    <strong>{referenceTitle}</strong>
                   </div>
                 ) : null}
                 {dynamicSkill ? (
                   <div className="template-reference-strip template-skill-strip">
                     <span>动态 Skill</span>
-                    <strong>{template.referenceTitle || "可配置提示词模板"}</strong>
+                    <strong>{safeTemplateText(template.referenceTitle, "可配置提示词模板")}</strong>
                   </div>
                 ) : null}
                 <div className="template-chip-row">
                   <span>{audienceLabel(template.audience)}</span>
-                  {(template.difficultyBands ?? []).slice(0, 3).map((item) => <span key={item}>{item}</span>)}
+                  {(template.difficultyBands ?? []).slice(0, 3).map((item) => <span key={item}>{safeTemplateText(item, "难度")}</span>)}
                 </div>
                 {template.tags?.length ? (
                   <div className="template-tag-row">
-                    {template.tags.slice(0, 3).map((tag) => <small key={tag}>{tag}</small>)}
+                    {template.tags.slice(0, 3).map((tag) => <small key={tag}>{safeTemplateText(tag, "标签")}</small>)}
                   </div>
                 ) : null}
               </button>
               {template.referencePreview?.trim() ? (
                 <details className="template-reference-preview">
-                  <summary>查看结构摘要</summary>
-                  <p>{compactText(template.referencePreview, 160)}</p>
+                  <summary>参考来源</summary>
+                  <p>{compactText(safeTemplateText(template.referencePreview, "本机参考讲义"), 120)}</p>
                 </details>
               ) : null}
             </article>
@@ -2137,6 +2186,148 @@ export function TemplateShelf({
       </div>
     </div>
   );
+}
+
+function TemplateMiniPaper({ template }: { template: TeachingHandoutTemplateResponse }) {
+  const sections = templatePreviewSections(template).slice(0, 4);
+  return (
+    <div className="template-card-paper" aria-hidden="true">
+      <div className="template-card-paper-head">
+        <span />
+        <span />
+      </div>
+      {sections.map((section) => (
+        <div className="template-card-paper-row" key={section.title}>
+          <strong>{section.index}</strong>
+          <span>{section.title}</span>
+        </div>
+      ))}
+      <div className="template-card-paper-lines">
+        <i />
+        <i />
+        <i />
+      </div>
+    </div>
+  );
+}
+
+function TemplateHandoutPreview({ template }: { template: TeachingHandoutTemplateResponse }) {
+  const sections = templatePreviewSections(template);
+  const displayName = safeTemplateText(template.displayName, "讲义模板");
+  const referenceTitle = safeTemplateText(template.referenceTitle, "模板结构");
+  const tags = (template.tags ?? []).map((tag) => safeTemplateText(tag, "")).filter(Boolean).slice(0, 5);
+  const difficultyBands = (template.difficultyBands ?? []).map((item) => safeTemplateText(item, "")).filter(Boolean).slice(0, 4);
+  const isStudentOnly = (template.audience ?? "").toLowerCase() === "student";
+  const mathPreview = templatePreviewFormula(template);
+  return (
+    <section className="template-selected-preview" aria-label="当前模板预览">
+      <div className="template-preview-meta">
+        <span>{audienceLabel(template.audience)}</span>
+        <span>{sourceTypeLabel(template.sourceType)}</span>
+        {safeTemplateText(template.category, "") ? <span>{safeTemplateText(template.category, "")}</span> : null}
+      </div>
+      <div className="template-preview-paper">
+        <div className="template-preview-title">
+          <div>
+            <small>{isStudentOnly ? "学生练习讲义预览" : "教师备课讲义预览"}</small>
+            <h3>{displayName}</h3>
+            <p>{compactText(safeTemplateText(template.description, "按模板组织知识点、例题、讲解流程和反馈审查。"), 120)}</p>
+          </div>
+          <div className="template-preview-stamp">
+            <strong>{isStudentOnly ? "无答案" : "含答案"}</strong>
+            <span>{difficultyBands[0] ?? "动态难度"}</span>
+          </div>
+        </div>
+
+        <div className="template-preview-grid">
+          {sections.map((section) => (
+            <article className={section.kind === "answer" && isStudentOnly ? "template-preview-section muted" : "template-preview-section"} key={section.title}>
+              <span>{section.index}</span>
+              <div>
+                <strong>{section.title}</strong>
+                <p>{section.description}</p>
+              </div>
+            </article>
+          ))}
+        </div>
+
+        <div className="template-preview-workspace">
+          <div>
+            <strong>{isStudentOnly ? "课堂作答区" : "板书与讲评区"}</strong>
+            <div className="template-preview-lines">
+              <span />
+              <span />
+              <span />
+            </div>
+          </div>
+          <div className="template-preview-example">
+            <small>公式预览</small>
+            <InlineMathPreview latex={mathPreview} />
+          </div>
+        </div>
+
+        <div className="template-preview-footer">
+          <span>来源：{referenceTitle}</span>
+          <span>{tags.length ? tags.join(" / ") : "知识点、题型、难度可动态拼装"}</span>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function InlineMathPreview({ latex }: { latex: string }) {
+  const html = useMemo(() => {
+    try {
+      return katex.renderToString(latex, { throwOnError: false, displayMode: false });
+    } catch {
+      return latex;
+    }
+  }, [latex]);
+  return <span className="template-preview-formula" dangerouslySetInnerHTML={{ __html: html }} />;
+}
+
+function templatePreviewSections(template: TeachingHandoutTemplateResponse) {
+  const audience = (template.audience ?? "").toLowerCase();
+  const searchable = `${template.displayName} ${template.description} ${template.category ?? ""} ${(template.tags ?? []).join(" ")}`.toLowerCase();
+  const examMode = searchable.includes("高考") || searchable.includes("压轴") || searchable.includes("题型");
+  if (audience === "student") {
+    return [
+      { index: "01", kind: "topic", title: "知识速记", description: "只保留定义、公式和易错提醒。" },
+      { index: "02", kind: "question", title: "例题任务", description: "题目连续编号，保留完整作答空间。" },
+      { index: "03", kind: "hint", title: "思路提示", description: "给方向，不直接暴露答案。" },
+      { index: "04", kind: "workspace", title: "订正记录", description: "学生课后补充错因和二次解法。" },
+    ];
+  }
+  if (examMode) {
+    return [
+      { index: "01", kind: "source", title: "题源定位", description: "绑定高考题、变式题和知识点来源。" },
+      { index: "02", kind: "method", title: "方法拆解", description: "按审题、建模、计算、检验拆步骤。" },
+      { index: "03", kind: "answer", title: "答案与评分点", description: "教师版保留关键得分点和扣分提醒。" },
+      { index: "04", kind: "question", title: "变式梯度", description: "基础、提高、压轴动态组卷。" },
+    ];
+  }
+  return [
+    { index: "01", kind: "source", title: "知识定位", description: "列出教材、题库和教师资料来源。" },
+    { index: "02", kind: "method", title: "讲解流程", description: "形成可直接上课使用的板书顺序。" },
+    { index: "03", kind: "answer", title: "例题详解", description: "教师版展示答案、思路和评分口径。" },
+    { index: "04", kind: "question", title: "课堂追问", description: "预设追问、变式和学生反馈节点。" },
+  ];
+}
+
+function templatePreviewFormula(template: TeachingHandoutTemplateResponse) {
+  const text = `${template.displayName} ${template.description} ${(template.tags ?? []).join(" ")}`;
+  if (/双曲线|圆锥|椭圆/.test(text)) return "c^2=a^2+b^2";
+  if (/反比例|函数/.test(text)) return "y=\\frac{k}{x}";
+  if (/导数/.test(text)) return "f'(x)=\\lim_{\\Delta x\\to0}\\frac{f(x+\\Delta x)-f(x)}{\\Delta x}";
+  return "a_n=a_1+(n-1)d";
+}
+
+function safeTemplateText(value: string | null | undefined, fallback: string) {
+  const normalized = (value ?? "").replace(/\s+/g, " ").trim();
+  if (!normalized || /\?{2,}|�/.test(normalized)) {
+    return fallback;
+  }
+  return normalized;
 }
 
 function uniqueTemplates(templates: TeachingHandoutTemplateResponse[]) {

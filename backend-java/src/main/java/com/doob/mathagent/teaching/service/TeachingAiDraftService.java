@@ -30,7 +30,7 @@ public class TeachingAiDraftService {
     private static final Pattern STUDENT_FORBIDDEN_LINE = Pattern.compile(
             "(?m)^.*(?:答案[：:]|参考答案|评分点|评分标准|完整解析|解答如下|解：|因此答案为|故答案为).*$");
     private static final Pattern INTERNAL_HANDOUT_LINE = Pattern.compile(
-            "(?mi)^.*(?:MODEL_CALL|JSON_PARSE|\\btokens?\\b|模型健康|model health|debug|调试|JSON|页眉|页脚|颜色|PDF\\s*规则|渲染引擎|作为\\s*AI|as an AI).*$");
+            "(?mi)^.*(?:MODEL_CALL|JSON_PARSE|\\btokens?\\b|模型健康|model health|debug|调试|JSON|页眉|页脚|颜色|PDF\\s*规则|渲染引擎|documentclass|usepackage|fancyhdr|pagestyle|begin\\{document}|end\\{document}|作为\\s*AI|as an AI).*$");
 
     private final AiChatGateway aiChatGateway;
     private final AiProviderCatalog providerCatalog;
@@ -285,6 +285,7 @@ public class TeachingAiDraftService {
                 All user-facing text values must be written in concise Chinese.
                 Math must use Feishu-supported delimiters only: inline $...$ or display $$...$$.
                 Do not use \\[...\\], \\(...\\), \\begin{align}, \\begin{aligned}, \\begin{equation}, or Markdown code fences.
+                Do not output a complete LaTeX document. Never write \\documentclass, \\usepackage, \\begin{document}, \\end{document}, fancyhdr, titleformat, page style commands, or any preamble command in JSON values.
                 Separate capabilities strictly: AI live explanation belongs to chat/dialogue features; this task generates printable handouts for teachers and students only.
                 Treat template layout instructions as rendering constraints only. Do not write header/footer/color/PDF layout rules in any JSON value.
                 JSON schema:
@@ -330,6 +331,7 @@ public class TeachingAiDraftService {
                 Fix format only. Do not add sources. Do not output Markdown.
                 All user-facing text values must be written in concise Chinese.
                 Math must use only $...$ or $$...$$; never use \\[...\\], \\(...\\), or align/equation environments.
+                Do not output a complete LaTeX document. Never write \\documentclass, \\usepackage, \\begin{document}, \\end{document}, fancyhdr, titleformat, page style commands, or any preamble command in user-facing values.
                 Do not write header/footer/color/PDF layout rules, AI, token, debug, JSON, or model-health wording inside user-facing values.
                 AI live explanation belongs to chat/dialogue features; this retry still generates printable handouts only.
                 Parse error: %s

@@ -64,7 +64,9 @@ class TeachingAiDraftServiceTest {
         assertThat(gateway.requests().getFirst().userInputSummary())
                 .contains("【知识定位】", "【答案与评分点】", "【知识速记】", "never reveal final answers",
                         "AI live explanation belongs to chat/dialogue features",
-                        "never expose raw JSON keys");
+                        "never expose raw JSON keys",
+                        "Do not output a complete LaTeX document",
+                        "\\documentclass");
         assertThat(gateway.requests().get(1).userInputSummary()).contains("JSON schema");
         assertThat(gateway.requests().get(1).userInputSummary())
                 .contains("【知识定位】", "【知识速记】", "no answer/scoring/solution leakage",
@@ -110,8 +112,8 @@ class TeachingAiDraftServiceTest {
     void stripsInternalDebugAndLayoutLinesFromParsedHandoutText() {
         TeachingAiDraftService.ParsedDraft parsed = TeachingAiDraftService.parseStructuredDraft("""
                 {
-                  "teacherExplanation": "【知识定位】双曲线参数关系。\\n页眉展示主题，颜色使用蓝色。\\nMODEL_CALL_SUCCEEDED openai tokens=100\\n【答案与评分点】由 $c^2=a^2+b^2$ 得 $b^2=16$。",
-                  "studentHint": "【知识速记】先写 $c^2=a^2+b^2$。\\nJSON_PARSE_SUCCEEDED tokens=20\\n【练习任务】完成参数计算。\\n解：$b^2=16$。",
+                  "teacherExplanation": "【知识定位】双曲线参数关系。\\n页眉展示主题，颜色使用蓝色。\\n\\\\documentclass{article}\\n\\\\usepackage{fancyhdr}\\nMODEL_CALL_SUCCEEDED openai tokens=100\\n【答案与评分点】由 $c^2=a^2+b^2$ 得 $b^2=16$。",
+                  "studentHint": "【知识速记】先写 $c^2=a^2+b^2$。\\n\\\\begin{document}\\nJSON_PARSE_SUCCEEDED tokens=20\\n【练习任务】完成参数计算。\\n解：$b^2=16$。",
                   "knowledgePoints": ["参数关系 $c^2=a^2+b^2$", "debug tokens=10"],
                   "followUpQuestions": ["已知焦距为 10，求 c。解：c=5。", "判断焦点在哪个轴。"]
                 }
@@ -120,10 +122,10 @@ class TeachingAiDraftServiceTest {
         assertThat(parsed.structured()).isTrue();
         assertThat(parsed.teacherExplanation())
                 .contains("【知识定位】", "【答案与评分点】", "$b^2=16$")
-                .doesNotContain("页眉", "颜色", "MODEL_CALL", "tokens");
+                .doesNotContain("页眉", "颜色", "MODEL_CALL", "tokens", "\\documentclass", "\\usepackage", "fancyhdr");
         assertThat(parsed.studentHint())
                 .contains("【知识速记】", "【练习任务】")
-                .doesNotContain("JSON_PARSE", "tokens", "解：", "$b^2=16$");
+                .doesNotContain("JSON_PARSE", "tokens", "解：", "$b^2=16$", "\\begin{document}");
         assertThat(parsed.knowledgePoints())
                 .containsExactly("参数关系 $c^2=a^2+b^2$");
         assertThat(parsed.followUpQuestions())

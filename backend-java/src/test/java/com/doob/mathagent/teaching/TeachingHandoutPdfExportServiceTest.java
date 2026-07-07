@@ -18,6 +18,21 @@ class TeachingHandoutPdfExportServiceTest {
     @Test
     void sanitizesLatexExportBeforeTexDownloadAndPdfCompilation() {
         String sanitized = TeachingHandoutPdfExportService.sanitizeLatexForExport("""
+                \\documentclass[11pt,a4paper]{article}
+                \\usepackage{fancyhdr}
+                \\usepackage{xcolor}
+                \\pagestyle{fancy}
+                \\fancyhf{}
+                \\lhead{教师版讲义}
+                \\rhead{双曲线}
+                \\lfoot{模板信息}
+                \\rfoot{第 \\thepage 页}
+                \\definecolor{HandoutAccent}{HTML}{0F766E}
+                \\titleformat{\\section}{\\Large\\bfseries}{}{0pt}{}
+                \\begin{document}
+                \\begin{center}
+                {\\LARGE\\bfseries 双曲线讲义}
+                \\end{center}
                 \\section{讲义模板与版式}
                 PDF 版式要求：页眉展示主题和版本，页脚展示页码；教师版使用讲评色，学生版使用练习色。
                 \\section{教材与资料证据}
@@ -28,12 +43,15 @@ class TeachingHandoutPdfExportServiceTest {
                 \\paragraph{方法步骤}
                 由 $2a=6$ 得 $a=3$，再用 $c^2=a^2+b^2$。
                 模型openai/gpt-5.5 tokens=1759
+                \\end{document}
                 """);
 
         assertThat(sanitized)
                 .contains("\\section{来源索引}", "\\section{教师讲评页}", "$2a=6$", "$a=3$", "$c^2=a^2+b^2$")
                 .doesNotContain("讲义模板与版式", "PDF 版式要求", "页眉", "页脚", "讲评色", "练习色",
-                        "![p159]", "../../pages", "## 正文", "OCR 原文", "tokens", "gpt-5.5");
+                        "![p159]", "../../pages", "## 正文", "OCR 原文", "tokens", "gpt-5.5",
+                        "\\documentclass", "\\usepackage", "\\pagestyle", "\\fancyhf", "\\lhead", "\\rhead",
+                        "\\lfoot", "\\rfoot", "\\definecolor", "\\titleformat", "\\begin{document}", "\\end{document}");
     }
 
     @Test
