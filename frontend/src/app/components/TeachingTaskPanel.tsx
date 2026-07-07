@@ -1036,6 +1036,7 @@ function MathRichText({ text, compact = false }: { text: string; compact?: boole
           throwOnError: false,
           strict: false,
           trust: false,
+          output: "html",
         });
         return <span className={display ? "math-render display" : "math-render inline"} dangerouslySetInnerHTML={{ __html: html }} key={segment.key} />;
       })}

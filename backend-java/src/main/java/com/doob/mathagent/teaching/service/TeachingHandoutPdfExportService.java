@@ -47,6 +47,7 @@ public class TeachingHandoutPdfExportService {
     private static final Pattern SUBSCRIPT_BRACED = Pattern.compile("_\\{([^{}]+)}");
     private static final Pattern SUBSCRIPT_SIMPLE = Pattern.compile("_([0-9a-zA-Z+-])");
     private static final Pattern VSPACE_COMMAND = Pattern.compile("\\\\vspace\\{([0-9.]+)em}");
+    private static final Pattern UNDERLINE_HSPACE_COMMAND = Pattern.compile("\\\\underline\\{\\\\hspace\\{[0-9.]+em}}");
     private static final Pattern MARKDOWN_IMAGE = Pattern.compile("!\\[[^\\]]*]\\([^)]*\\)");
     private static final Duration LATEX_TIMEOUT = Duration.ofSeconds(45);
     private static final float PAGE_WIDTH = PDRectangle.A4.getWidth();
@@ -820,6 +821,7 @@ public class TeachingHandoutPdfExportService {
                 .replace("\\textbackslash", "\\")
                 .replace("\\_", "_");
         cleaned = MARKDOWN_IMAGE.matcher(cleaned).replaceAll("");
+        cleaned = UNDERLINE_HSPACE_COMMAND.matcher(cleaned).replaceAll("________");
         cleaned = replaceRepeated(FRAC_COMMAND, cleaned, "($1)/($2)");
         cleaned = replaceRepeated(SQRT_COMMAND, cleaned, "√($1)");
         cleaned = replaceRepeated(WRAPPED_TEXT_COMMAND, cleaned, "$1");

@@ -2296,7 +2296,7 @@ function TemplateHandoutPreview({ template }: { template: TeachingHandoutTemplat
 function InlineMathPreview({ latex }: { latex: string }) {
   const html = useMemo(() => {
     try {
-      return katex.renderToString(latex, { throwOnError: false, displayMode: false });
+      return katex.renderToString(latex, { throwOnError: false, displayMode: false, output: "html" });
     } catch {
       return latex;
     }

@@ -205,6 +205,62 @@ class TeachingHandoutPdfExportServiceTest {
     }
 
     @Test
+    void pdfboxFallbackKeepsStudentBlanksReadableWithoutLeakingLatexCommands() throws Exception {
+        Path fakeEngine = Files.createTempFile("fake-xelatex", ".exe");
+        String previous = System.getProperty("math.agent.xelatex.path");
+        System.setProperty("math.agent.xelatex.path", fakeEngine.toString());
+        try {
+            TeachingTaskResponse task = new TeachingTaskResponse(
+                    "task-fallback-student-blanks",
+                    "client-fallback-student-blanks",
+                    "school-a",
+                    "student",
+                    "student-001",
+                    TeachingTaskStatus.COMPLETED,
+                    "反比例函数留白练习",
+                    "学生版检查公式和作答区",
+                    List.of(),
+                    List.of(),
+                    List.of(),
+                    "",
+                    "\\section{教师版}\n教师答案：$y=\\frac{k}{x}$。",
+                    """
+                    \\section{学生版}
+                    \\subsection*{知识速记}
+                    反比例函数可写为 $y=\\frac{k}{x}$，其中 $k\\ne 0$。
+                    \\subsection*{练习任务}
+                    \\begin{itemize}
+                    \\item 写出定义：\\underline{\\hspace{4em}}
+                    \\item 判断点是否在图像上：\\underline{\\hspace{5em}}
+                    \\end{itemize}
+                    \\subsection*{课堂作答区}
+                    \\vspace{8em}
+                    """,
+                    List.of(),
+                    null,
+                    List.of(),
+                    null,
+                    null);
+
+            byte[] pdf = new TeachingHandoutPdfExportService().render(task, "student");
+
+            try (PDDocument document = Loader.loadPDF(pdf)) {
+                String text = new PDFTextStripper().getText(document);
+                assertThat(text).contains("学生版讲义", "知识速记", "练习任务", "________");
+                assertThat(text).contains("y=(k)/(x)", "k", "0");
+                assertThat(text).doesNotContain("\\underline", "\\hspace", "\\begin", "\\item", "\\frac", "4em", "5em");
+            }
+        } finally {
+            Files.deleteIfExists(fakeEngine);
+            if (previous == null) {
+                System.clearProperty("math.agent.xelatex.path");
+            } else {
+                System.setProperty("math.agent.xelatex.path", previous);
+            }
+        }
+    }
+
+    @Test
     void usesRealXeLaTeXWhenConfiguredAndAvailable() throws Exception {
         Path engine = firstExistingPath(
                 "C:/Users/doob/AppData/Local/Programs/MiKTeX/miktex/bin/x64/xelatex.exe",

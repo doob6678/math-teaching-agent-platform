@@ -89,6 +89,7 @@ describe("TemplateShelf", () => {
     expect(html).toContain("template-preview-paper");
     expect(html).toContain("template-card-paper");
     expect(html).toContain("katex");
+    expect(html).not.toContain("katex-mathml");
     expect(html).toContain("动态配置提示词模板");
     expect(html).not.toContain("C:/Users/doob/Desktop/private");
   });
