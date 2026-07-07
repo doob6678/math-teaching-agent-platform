@@ -58,7 +58,12 @@ describe("TeachingTaskPanel", () => {
         similarity: 0,
         reason: "No reusable memory matched",
       },
-      stageTimings: [],
+      stageTimings: [
+        { stage: "textbook_retrieval", elapsedMs: 1320 },
+        { stage: "question_bank_retrieval", elapsedMs: 240 },
+        { stage: "ai_draft", elapsedMs: 19295 },
+        { stage: "handout_generation", elapsedMs: 280 },
+      ],
       aiDraft: {
         enabled: true,
         providerName: "openai",
@@ -165,15 +170,21 @@ describe("TeachingTaskPanel", () => {
     );
 
     expect(html).toContain("过程对话");
-    expect(html).toContain("把检索、生成、排版和人工审校折叠成可追踪步骤");
+    expect(html).toContain("像对话一样展示检索、生成、排版和审校");
+    expect(html).toContain("已确定讲义框架");
+    expect(html).toContain("工具调用");
     expect(html).toContain("工具调用与检索");
     expect(html).toContain("公开教材检索");
     expect(html).toContain("题库检索");
+    expect(html).toContain("1.3 秒");
+    expect(html).toContain("240 ms");
     expect(html).toContain("内容生成与排版");
     expect(html).toContain("讲义内容生成");
     expect(html).toContain("讲义排版");
+    expect(html).toContain("19 秒");
     expect(html).toContain("审查与交付");
     expect(html).toContain("人类反馈");
+    expect(html).toContain("讲义草稿已准备好");
     expect(html).toContain("讲义结构摘要");
     expect(html).toContain("mfrac");
     expect(html).toContain("msup");

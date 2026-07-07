@@ -47,6 +47,8 @@ type WorkflowConversationGroup = {
   nodes: TeachingTaskResponse["nodes"];
 };
 
+type TimingByStage = Record<string, number>;
+
 type DraftOutlineItem = {
   title: string;
   summary: string;
@@ -816,6 +818,7 @@ function GenerationReviewPanel({ task }: { task: TeachingTaskResponse }) {
   const evidenceCount = task.evidence.length;
   const knowledgePoints = aiDraft?.knowledgePoints ?? [];
   const workflowGroups = buildWorkflowConversationGroups(task.nodes);
+  const timingByStage = buildTimingByStage(task.stageTimings);
   const draftOutline = aiDraft ? buildDraftOutline(aiDraft.teacherExplanation, aiDraft.studentHint) : [];
 
   return (
@@ -824,53 +827,61 @@ function GenerationReviewPanel({ task }: { task: TeachingTaskResponse }) {
         <div>
           <p className="eyebrow">过程对话</p>
           <h3>{structured ? "讲义内容已整理成可审查结构" : "讲义需要人工复核后再使用"}</h3>
-          <small>把检索、生成、排版和人工审校折叠成可追踪步骤。</small>
+          <small>像对话一样展示检索、生成、排版和审校；技术明细默认收起。</small>
         </div>
         <span className={structured ? "review-state good" : "review-state warning"}>{structured ? "可进入审校" : "待修订"}</span>
       </div>
 
       <div className="review-chat-list">
-        <article className="review-message system">
+        <article className="review-message system review-dialogue-message">
           <span className="review-avatar">1</span>
           <div>
-            <strong>确定讲义框架</strong>
-            <p>使用「{templateName}」组织教师版和学生版；本次引用 {evidenceCount} 条教材、题库或教师资料作为来源。</p>
+            <strong>已确定讲义框架</strong>
+            <p>我会按「{templateName}」生成教师版和学生版，先引用 {evidenceCount} 条真实来源，再交给人工审校确认。</p>
           </div>
         </article>
 
         {workflowGroups.map((group, groupIndex) => (
-          <details className="review-process-group" open={groupIndex < 2} key={group.title}>
+          <details className="review-process-group review-tool-call-group" open={groupIndex < 2} key={group.title}>
             <summary>
               <span className="review-avatar">{groupIndex + 2}</span>
               <div>
+                <span className="review-tool-kicker">工具调用</span>
                 <strong>{group.title}</strong>
                 <p>{group.summary}</p>
               </div>
-              <em>{group.nodes.length} 个步骤</em>
+              <em>{group.nodes.length} 步</em>
             </summary>
             <div className="review-process-steps">
-              {group.nodes.map((node) => (
-                <article className="review-message tool compact" key={node.code}>
-                  <span className="review-step-dot" />
-                  <div>
-                    <strong>{node.name}<em>{nodeStatusLabel(node.status)}</em></strong>
-                    <p>{cleanReviewSummary(node.summary)}</p>
-                  </div>
-                </article>
-              ))}
+              {group.nodes.map((node) => {
+                const elapsedMs = nodeElapsedMs(node.code, timingByStage);
+                return (
+                  <article className={`review-tool-result ${nodeStatusTone(node.status)}`} key={node.code}>
+                    <span className="review-step-dot" />
+                    <div>
+                      <div className="review-tool-title">
+                        <strong>{node.name}</strong>
+                        <span>{nodeStatusLabel(node.status)}</span>
+                        {elapsedMs ? <em>{formatElapsed(elapsedMs)}</em> : null}
+                      </div>
+                      <p><MathRichText compact text={cleanReviewSummary(node.summary)} /></p>
+                    </div>
+                  </article>
+                );
+              })}
             </div>
           </details>
         ))}
 
         {aiDraft ? (
-          <article className={structured ? "review-message assistant" : "review-message warning"}>
+          <article className={structured ? "review-message assistant review-dialogue-message" : "review-message warning review-dialogue-message"}>
             <span className="review-avatar">{workflowGroups.length + 2}</span>
             <div>
-              <strong>{structured ? "生成讲义草稿" : "需要复核的问题"}</strong>
+              <strong>{structured ? "讲义草稿已准备好" : "需要复核的问题"}</strong>
               {structured ? (
                 <>
                   <p className="muted-line">
-                    已拆成教师版、学生版两套讲义结构。正文请以 PDF 预览和结构化讲义为准，这里只保留审校摘要。
+                    已拆成教师版和学生版。正文以 PDF 预览为准，这里只展示审校摘要，避免把大段 TeX 或调试信息直接暴露给用户。
                   </p>
                   {draftOutline.length ? (
                     <div className="draft-outline-list" aria-label="讲义结构摘要">
@@ -896,7 +907,7 @@ function GenerationReviewPanel({ task }: { task: TeachingTaskResponse }) {
       </div>
 
       <details className="review-source-drawer">
-        <summary>查看来源与运行明细</summary>
+        <summary>运行与来源明细</summary>
         {aiDraft ? (
           <div className="diagnostic-meta">
             <span>模型：{aiDraft.enabled ? `${providerLabel(aiDraft.providerName)} / ${aiDraft.modelCode}` : "未启用"}</span>
@@ -1291,6 +1302,67 @@ function nodeStatusLabel(status?: string) {
     FAILED: "失败",
   };
   return labels[normalized] ?? (status || "完成");
+}
+
+function nodeStatusTone(status?: string) {
+  const normalized = (status ?? "").toUpperCase();
+  if (normalized === "FAILED") {
+    return "failed";
+  }
+  if (normalized === "RUNNING") {
+    return "running";
+  }
+  if (normalized === "PENDING" || normalized === "CREATED") {
+    return "pending";
+  }
+  return "completed";
+}
+
+function buildTimingByStage(stageTimings: TeachingTaskResponse["stageTimings"]): TimingByStage {
+  const timings: TimingByStage = {};
+  for (const timing of stageTimings ?? []) {
+    timings[normalizeStageKey(timing.stage)] = timing.elapsedMs;
+  }
+  return timings;
+}
+
+function normalizeStageKey(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function nodeElapsedMs(nodeCode: string, timings: TimingByStage) {
+  const key = normalizeStageKey(nodeCode);
+  const direct = timings[key];
+  if (direct !== undefined) {
+    return direct;
+  }
+  const aliases: Record<string, string[]> = {
+    learninggoal: ["learninggoal", "goal", "plan"],
+    publictextbookretrieval: ["textbookretrieval", "retrieval", "resource"],
+    questionbankretrieval: ["questionbankretrieval", "questionretrieval"],
+    aidraft: ["aidraft", "modelcall", "draft"],
+    latexhandout: ["handoutgeneration", "latexhandout", "latex", "pdf"],
+    humanfeedback: ["humanfeedback", "feedback"],
+  };
+  const candidates = aliases[key] ?? [];
+  for (const candidate of candidates) {
+    const match = Object.entries(timings).find(([stage]) => stage === candidate || stage.includes(candidate) || candidate.includes(stage));
+    if (match) {
+      return match[1];
+    }
+  }
+  const fuzzy = Object.entries(timings).find(([stage]) => stage.includes(key) || key.includes(stage));
+  return fuzzy?.[1];
+}
+
+function formatElapsed(value: number | undefined) {
+  if (value === undefined) {
+    return "";
+  }
+  if (value >= 1000) {
+    return `${(value / 1000).toFixed(value >= 10000 ? 0 : 1)} 秒`;
+  }
+  return `${value} ms`;
 }
 
 function providerLabel(provider: string) {
