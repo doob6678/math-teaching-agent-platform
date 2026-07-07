@@ -28,6 +28,8 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.task.TaskExecutor;
@@ -38,6 +40,10 @@ import org.springframework.stereotype.Service;
  */
 @Service
 public class TeachingWorkflowService {
+
+    private static final Pattern DRAFT_ORDERED_LINE = Pattern.compile("^\\s*(?:\\d+|[一二三四五六七八九十]+)[.、)]\\s+(.+)$");
+    private static final Pattern DRAFT_BULLET_LINE = Pattern.compile("^\\s*[-•·]\\s+(.+)$");
+    private static final Pattern BLANK_PLACEHOLDER = Pattern.compile("_{3,}|＿{3,}");
 
     private final Path processedBooksRoot;
     private final TextbookRetrievalService retrievalService;
@@ -921,7 +927,7 @@ public class TeachingWorkflowService {
         boolean math = false;
         for (int index = 0; index < normalized.length(); index += 1) {
             if (normalized.startsWith("$$", index)) {
-                builder.append(math ? sanitizeMathSegment(segment.toString()) : escapeLatexText(segment.toString()));
+                builder.append(math ? sanitizeMathSegment(segment.toString()) : escapeLatexTextWithBlanks(segment.toString()));
                 segment.setLength(0);
                 builder.append("$$");
                 math = !math;
@@ -930,7 +936,7 @@ public class TeachingWorkflowService {
             }
             char character = normalized.charAt(index);
             if (character == '$') {
-                builder.append(math ? sanitizeMathSegment(segment.toString()) : escapeLatexText(segment.toString()));
+                builder.append(math ? sanitizeMathSegment(segment.toString()) : escapeLatexTextWithBlanks(segment.toString()));
                 segment.setLength(0);
                 builder.append('$');
                 math = !math;
@@ -938,7 +944,24 @@ public class TeachingWorkflowService {
                 segment.append(character);
             }
         }
-        builder.append(math ? sanitizeMathSegment(segment.toString()) : escapeLatexText(segment.toString()));
+        builder.append(math ? sanitizeMathSegment(segment.toString()) : escapeLatexTextWithBlanks(segment.toString()));
+        return builder.toString();
+    }
+
+    private static String escapeLatexTextWithBlanks(String value) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        Matcher matcher = BLANK_PLACEHOLDER.matcher(value);
+        StringBuilder builder = new StringBuilder();
+        int cursor = 0;
+        while (matcher.find()) {
+            builder.append(escapeLatexText(value.substring(cursor, matcher.start())));
+            int width = Math.max(4, Math.min(10, matcher.group().length() + 1));
+            builder.append("\\underline{\\hspace{").append(width).append("em}}");
+            cursor = matcher.end();
+        }
+        builder.append(escapeLatexText(value.substring(cursor)));
         return builder.toString();
     }
 
@@ -998,10 +1021,62 @@ public class TeachingWorkflowService {
             builder.append("\\subsection*{")
                     .append(escapeLatex(block.label()))
                     .append("}\n")
-                    .append(escapeLatex(block.content()))
+                    .append(formatDraftContentAsLatex(block.content()))
                     .append("\n\n");
         }
         return builder.toString();
+    }
+
+    private static String formatDraftContentAsLatex(String content) {
+        String source = content == null ? "" : content
+                .replace("\r\n", "\n")
+                .replace('\r', '\n')
+                .strip();
+        if (source.isBlank()) {
+            return "";
+        }
+        StringBuilder builder = new StringBuilder();
+        List<String> ordered = new ArrayList<>();
+        List<String> unordered = new ArrayList<>();
+        for (String rawLine : source.split("\n")) {
+            String line = rawLine.strip();
+            if (line.isBlank()) {
+                flushDraftList(builder, ordered, true);
+                flushDraftList(builder, unordered, false);
+                builder.append("\\par\n");
+                continue;
+            }
+            Matcher orderedMatcher = DRAFT_ORDERED_LINE.matcher(line);
+            Matcher bulletMatcher = DRAFT_BULLET_LINE.matcher(line);
+            if (orderedMatcher.matches()) {
+                flushDraftList(builder, unordered, false);
+                ordered.add(orderedMatcher.group(1).strip());
+                continue;
+            }
+            if (bulletMatcher.matches()) {
+                flushDraftList(builder, ordered, true);
+                unordered.add(bulletMatcher.group(1).strip());
+                continue;
+            }
+            flushDraftList(builder, ordered, true);
+            flushDraftList(builder, unordered, false);
+            builder.append(escapeLatex(line)).append("\\par\n");
+        }
+        flushDraftList(builder, ordered, true);
+        flushDraftList(builder, unordered, false);
+        return builder.toString();
+    }
+
+    private static void flushDraftList(StringBuilder builder, List<String> items, boolean ordered) {
+        if (items.isEmpty()) {
+            return;
+        }
+        builder.append(ordered ? "\\begin{enumerate}\n" : "\\begin{itemize}\n");
+        for (String item : items) {
+            builder.append("\\item ").append(escapeLatex(item)).append('\n');
+        }
+        builder.append(ordered ? "\\end{enumerate}\n" : "\\end{itemize}\n");
+        items.clear();
     }
 
     private static List<LabeledDraftBlock> parseLabeledDraftBlocks(String text, List<String> labels, String fallbackTitle) {

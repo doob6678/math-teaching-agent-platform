@@ -242,8 +242,8 @@ class TeachingWorkflowServiceTest {
         TeachingAiDraftService aiDraftService = new TeachingAiDraftService(
                 request -> new AiChatResult("openai", "gpt-5.4", 21, 13, 34, "ok", """
                         {
-                          "teacherExplanation": "【知识定位】先读清 $D(x_0)$ 的定义。\\n【方法步骤】用 $$c^2=a^2+b^2$$ 这类参数关系示范公式排版，再把 -1 代入。\\n【答案与评分点】关键是代入位置与定义域检查。",
-                          "studentHint": "【知识速记】先找到 $D(x_0)$ 里的自变量位置，记住 c²=a²+b² 这类公式要先写清。\\n【答案与评分点】答案：把 -1 代入即可得分。\\n【练习任务】独立完成 D(0)。",
+                          "teacherExplanation": "【知识定位】先读清 $D(x_0)$ 的定义。\\n【方法步骤】1. 写出定义中的自变量位置。\\n2. 用 $$c^2=a^2+b^2$$ 这类参数关系示范公式排版，再把 -1 代入。\\n【答案与评分点】关键是代入位置与定义域检查。",
+                          "studentHint": "【知识速记】先找到 $D(x_0)$ 里的自变量位置，记住 c²=a²+b² 这类公式要先写清。\\n【答案与评分点】答案：把 -1 代入即可得分。\\n【练习任务】- 先写出定义：___\\n- 独立完成 D(0)：___",
                           "knowledgePoints": ["函数新定义", "定义域", "参数关系 c²=a²+b²"],
                           "followUpQuestions": ["D(0) 如何处理？", "条件变化时如何分类？"]
                         }
@@ -275,10 +275,12 @@ class TeachingWorkflowServiceTest {
                 .containsExactly("MODEL_CALL_SUCCEEDED", "JSON_PARSE_SUCCEEDED");
         assertThat(response.teacherHandoutLatex()).contains("教师讲评页", "方法卡片", "追问与变式训练", "板书与反馈记录");
         assertThat(response.teacherHandoutLatex()).contains("$D(x_0)$", "$$c^2=a^2+b^2$$", "$c^2=a^2+b^2$");
+        assertThat(response.teacherHandoutLatex()).contains("\\begin{enumerate}", "\\item 写出定义中的自变量位置");
         assertThat(response.teacherHandoutLatex()).doesNotContain("\\$D", "c\\textasciicircum{}2");
         assertThat(response.studentHandoutLatex()).contains("学生练习页", "\\vspace{12em}");
         assertThat(response.studentHandoutLatex()).contains("\\subsection*{知识速记}", "\\subsection*{练习任务}", "$D(x_0)$", "$c^2=a^2+b^2$");
-        assertThat(response.studentHandoutLatex()).doesNotContain("【答案与评分点】", "答案：", "得分");
+        assertThat(response.studentHandoutLatex()).contains("\\begin{itemize}", "\\underline{\\hspace{4em}}");
+        assertThat(response.studentHandoutLatex()).doesNotContain("【答案与评分点】", "答案：", "得分", "___");
         assertThat(response.teacherHandoutLatex()).doesNotContain("tokens=", "\\paragraph{模型}");
         assertThat(response.nodes())
                 .filteredOn(node -> "AI_DRAFT".equals(node.code()))

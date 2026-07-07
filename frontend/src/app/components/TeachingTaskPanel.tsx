@@ -1104,7 +1104,7 @@ function parseHandoutLatex(latex: string): ReviewBlock[] {
     }
     flushList();
 
-    const subsection = line.match(/^\\subsection\*?\{(.+)\}$/);
+    const subsection = line.match(/^\\(?:subsection|subsubsection)\*?\{(.+)\}$/);
     if (subsection) {
       const title = cleanPreviewText(subsection[1]);
       if (title && !isReviewNoiseText(title)) {
@@ -1123,6 +1123,9 @@ function parseHandoutLatex(latex: string): ReviewBlock[] {
       if (inlineText) {
         pushRichTextBlocks(blocks, compactReviewText(inlineText));
       }
+      continue;
+    }
+    if (line === "\\par") {
       continue;
     }
     if (line.startsWith("\\vspace")) {
@@ -1278,9 +1281,12 @@ function cleanPreviewText(value: string) {
     .replace(/印刷页码[:：]?\s*[^\s，。；;]*/g, " ")
     .replace(/页图[:：]?\s*/g, " ")
     .replace(/\\subsection\*?\{.+?\}/g, " ")
+    .replace(/\\subsubsection\*?\{.+?\}/g, " ")
     .replace(/\\section\{.+?\}/g, " ")
     .replace(/\\paragraph\{.+?\}/g, " ")
     .replace(/\\vspace\{.+?\}/g, " ")
+    .replace(/\\par\b/g, " ")
+    .replace(/\\underline\{\\hspace\{[0-9.]+em\}\}/g, "________")
     .replace(/\\\\/g, " ")
     .replace(/\s+/g, " ")
     .trim();
