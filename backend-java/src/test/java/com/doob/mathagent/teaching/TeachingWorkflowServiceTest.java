@@ -85,9 +85,14 @@ class TeachingWorkflowServiceTest {
                 "\\section{例题与答案}",
                 "\\section{课堂追问}",
                 "\\section{知识点归属}");
+        assertThat(response.teacherHandoutLatex()).contains(
+                "来源 1",
+                "公开教材",
+                "用途：知识点定位与公式依据");
         assertThat(response.teacherHandoutLatex()).doesNotContain(
                 "PDF 版式要求", "页眉展示主题和版本", "页脚展示页码", "页眉", "页脚", "版式", "颜色", "系统说明");
-        assertThat(response.teacherHandoutLatex()).doesNotContain("![p", "## 正文", "书名：");
+        assertThat(response.teacherHandoutLatex()).doesNotContain(
+                "![p", "## 正文", "书名：", "formula_text", "source_page_image", "D(x_0)=\\{d");
         assertThat(response.studentHandoutLatex()).contains("\\section{第 1 讲", "\\section{知识点 1：核心方法}", "\\section{课堂练习}", "\\vspace");
         assertThat(response.studentHandoutLatex()).doesNotContain("版本：学生版", "页眉", "页脚", "颜色");
         assertThat(response.studentHandoutLatex()).doesNotContain("知识点归属");

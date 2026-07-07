@@ -660,19 +660,30 @@ public class TeachingWorkflowService {
         if (evidence.isEmpty()) {
             return "暂无教材证据。";
         }
-        return evidence.stream()
-                .limit(3)
-                .map(item -> escapeLatex(evidenceLabel(item) + "：" + evidenceDisplaySnippet(item)))
-                .collect(java.util.stream.Collectors.joining("\n\n"));
+        StringBuilder builder = new StringBuilder("\\begin{enumerate}\n");
+        int index = 1;
+        for (TeachingEvidence item : evidence.stream().limit(5).toList()) {
+            builder.append("\\item ")
+                    .append(escapeLatex(evidenceSourceLine(index, item)))
+                    .append('\n');
+            index += 1;
+        }
+        builder.append("\\end{enumerate}\n");
+        return builder.toString();
     }
 
-    private static String evidenceDisplaySnippet(TeachingEvidence item) {
+    private static String evidenceSourceLine(int index, TeachingEvidence item) {
         if ("QUESTION_BANK".equals(item.sourceScope())) {
-            String question = questionTextOnly(item.snippet());
-            String answer = questionAnswerOnly(item.snippet());
-            return answer.isBlank() ? question : question + " " + answer;
+            return "来源 " + index
+                    + "：题库，" + questionTitleWithoutDifficulty(item)
+                    + "，难度 " + questionDifficulty(item)
+                    + "；用途：分层练习与教师答案区。";
         }
-        return TeachingEvidenceSnippetSanitizer.sanitizeCompact(item.snippet());
+        String page = item.pageNo() > 0 ? "PDF " + item.pageNo() : "页码未记录";
+        return "来源 " + index
+                + "：公开教材，" + item.sourceTitle()
+                + "，" + page
+                + "；用途：知识点定位与公式依据。";
     }
 
     private static String evidenceLabel(TeachingEvidence item) {
@@ -680,23 +691,6 @@ public class TeachingWorkflowService {
             return "题库：" + questionTitleWithoutDifficulty(item);
         }
         return item.sourceTitle() + " / PDF " + item.pageNo();
-    }
-
-    private static String compactEvidenceSnippet(String snippet) {
-        if (snippet == null || snippet.isBlank()) {
-            return "已命中资料片段。";
-        }
-        String cleaned = snippet
-                .replace("\r", "\n")
-                .replaceAll("!\\[[^\\]]*]\\([^)]*\\)", " ")
-                .replaceAll("(?m)^#.*$", " ")
-                .replaceAll("(?m)^##\\s*正文.*$", " ")
-                .replaceAll("(?m)^-\\s*(书名|章节|PDF页码|印刷页码|页图).*?$", " ")
-                .replace("$$", " ")
-                .replace("###", " ")
-                .replaceAll("\\s+", " ")
-                .strip();
-        return cleaned.length() <= 120 ? cleaned : cleaned.substring(0, 120) + "...";
     }
 
     /**
