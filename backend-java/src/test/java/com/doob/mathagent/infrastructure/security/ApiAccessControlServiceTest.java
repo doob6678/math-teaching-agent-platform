@@ -78,6 +78,41 @@ class ApiAccessControlServiceTest {
     }
 
     @Test
+    void teacherResourceSearchUsesDedicatedReadLimitInsteadOfMutationBudget() {
+        ApiAccessControlService service = new ApiAccessControlService(
+                FixedWindowRateLimiter.empty(),
+                Clock.fixed(Instant.parse("2026-06-28T10:00:00Z"), ZoneOffset.UTC),
+                ApiAccessPolicy.defaultRules());
+        ApiRequestIdentity search = new ApiRequestIdentity(
+                "GET",
+                "/api/teacher/resources/search",
+                "school-a",
+                "teacher",
+                "teacher-1",
+                "127.0.0.1",
+                "device-1",
+                "JUnit");
+        ApiRequestIdentity mutationPrefix = new ApiRequestIdentity(
+                "POST",
+                "/api/teacher/resources",
+                "school-a",
+                "teacher",
+                "teacher-1",
+                "127.0.0.1",
+                "device-1",
+                "JUnit");
+
+        ApiAccessDecision searchDecision = service.evaluate(search);
+        ApiAccessDecision mutationDecision = service.evaluate(mutationPrefix);
+
+        assertThat(searchDecision.allowed()).isTrue();
+        assertThat(searchDecision.level()).isEqualTo(ApiAccessLevel.ADMIN);
+        assertThat(searchDecision.limit()).isEqualTo(120);
+        assertThat(mutationDecision.allowed()).isTrue();
+        assertThat(mutationDecision.limit()).isEqualTo(30);
+    }
+
+    @Test
     void protocolDiscoveryRequiresLoggedInStudentTeacherOrAdmin() {
         ApiAccessControlService service = new ApiAccessControlService(
                 FixedWindowRateLimiter.empty(),

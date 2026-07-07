@@ -58,6 +58,14 @@ public class ApiAccessPolicy {
                 new ApiAccessRule("/api/students/explanations", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 20, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/students/dashboard", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 40, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/students/memory", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 40, Duration.ofMinutes(1)),
+                /*
+                 * Teacher resource retrieval is the hot read path for the two-stage RAG chain and for benchmark
+                 * sampling. Keep a dedicated higher limit here so read-heavy evaluation or classroom lookup traffic
+                 * does not consume the much smaller mutation budget shared by register/archive/sync endpoints below.
+                 * Do not remove this more specific prefix unless the policy layer learns method-aware rules.
+                 */
+                new ApiAccessRule("/api/teacher/resources/search/audit", ApiAccessLevel.ADMIN, Set.of("teacher", "admin"), 120, Duration.ofMinutes(1)),
+                new ApiAccessRule("/api/teacher/resources/search", ApiAccessLevel.ADMIN, Set.of("teacher", "admin"), 120, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/teacher/resources", ApiAccessLevel.ADMIN, Set.of("teacher", "admin"), 30, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/teaching/handout-templates", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 60, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/teaching/handouts/batch/zip", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 10, Duration.ofMinutes(1)),
