@@ -6,6 +6,8 @@ import com.doob.mathagent.teacher.vo.TeacherSourceSyncCheckpointResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncJobResponse;
 import com.doob.mathagent.vector.service.VectorIndexRebuildResponse;
 import com.doob.mathagent.vector.service.VectorIndexService;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -35,6 +37,7 @@ import org.springframework.stereotype.Service;
 @Service
 public class TeacherSourceSyncExecutionService {
 
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final int MAX_SCAN_DEPTH = 8;
 
     private final TeacherResourceStore resourceStore;
@@ -44,6 +47,7 @@ public class TeacherSourceSyncExecutionService {
     private final TeacherSourceSyncProperties syncProperties;
     private final TeacherSourceSyncCheckpointStore checkpointStore;
     private final VectorIndexService vectorIndexService;
+    private final TeacherResourceGraphAlignmentService graphAlignmentService;
 
     /**
      * Creates a sync execution service.
@@ -51,6 +55,28 @@ public class TeacherSourceSyncExecutionService {
      * @param resourceStore source document store
      * @param jobStore sync job store
      * @param blockStore parsed block store
+     */
+    public TeacherSourceSyncExecutionService(
+            TeacherResourceStore resourceStore,
+            TeacherSourceSyncJobStore jobStore,
+            TeacherDocumentBlockStore blockStore,
+            TeacherFeishuDownloadClient feishuDownloadClient,
+            TeacherSourceSyncProperties syncProperties,
+            TeacherSourceSyncCheckpointStore checkpointStore,
+            VectorIndexService vectorIndexService) {
+        this(
+                resourceStore,
+                jobStore,
+                blockStore,
+                feishuDownloadClient,
+                syncProperties,
+                checkpointStore,
+                vectorIndexService,
+                TeacherResourceGraphAlignmentService.disabled());
+    }
+
+    /**
+     * Production constructor with graph normalization.
      */
     @Autowired
     public TeacherSourceSyncExecutionService(
@@ -60,7 +86,8 @@ public class TeacherSourceSyncExecutionService {
             TeacherFeishuDownloadClient feishuDownloadClient,
             TeacherSourceSyncProperties syncProperties,
             TeacherSourceSyncCheckpointStore checkpointStore,
-            VectorIndexService vectorIndexService) {
+            VectorIndexService vectorIndexService,
+            TeacherResourceGraphAlignmentService graphAlignmentService) {
         this.resourceStore = resourceStore;
         this.jobStore = jobStore;
         this.blockStore = blockStore;
@@ -68,6 +95,7 @@ public class TeacherSourceSyncExecutionService {
         this.syncProperties = syncProperties;
         this.checkpointStore = checkpointStore;
         this.vectorIndexService = Objects.requireNonNull(vectorIndexService, "vectorIndexService is required");
+        this.graphAlignmentService = Objects.requireNonNull(graphAlignmentService, "graphAlignmentService is required");
     }
 
     /**
@@ -144,7 +172,11 @@ public class TeacherSourceSyncExecutionService {
                         document.feishuExportFormat(),
                         document.previewFiles());
                 resourceStore.save(downloaded);
-                List<TeacherDocumentBlockResponse> blocks = parseResourceFiles(downloaded);
+                List<TeacherDocumentBlockResponse> blocks = parseResourceFiles(
+                        normalizedTenantId,
+                        normalizedRole,
+                        normalizedSubjectId,
+                        downloaded);
                 String vectorMessage = "";
                 if (!blocks.isEmpty()) {
                     blockStore.replaceActiveBlocks(document.tenantId(), document.documentId(), blocks);
@@ -171,7 +203,11 @@ public class TeacherSourceSyncExecutionService {
                         2);
                 return jobStore.save(completed);
             }
-            List<TeacherDocumentBlockResponse> blocks = parseResourceFiles(document);
+            List<TeacherDocumentBlockResponse> blocks = parseResourceFiles(
+                    normalizedTenantId,
+                    normalizedRole,
+                    normalizedSubjectId,
+                    document);
             blockStore.replaceActiveBlocks(document.tenantId(), document.documentId(), blocks);
             TeacherResourceDocumentResponse synced = markLocalResourceSynced(document);
             String vectorMessage = autoRebuildVectorIndex(synced, normalizedRole, normalizedSubjectId);
@@ -473,7 +509,11 @@ public class TeacherSourceSyncExecutionService {
     /**
      * Parses a local teacher resource into document blocks.
      */
-    private static List<TeacherDocumentBlockResponse> parseResourceFiles(TeacherResourceDocumentResponse document) {
+    private List<TeacherDocumentBlockResponse> parseResourceFiles(
+            String tenantId,
+            String viewerRole,
+            String viewerSubjectId,
+            TeacherResourceDocumentResponse document) {
         Path root = Path.of(textOrDefault(document.localPath(), ""));
         if (!Files.exists(root)) {
             throw new IllegalArgumentException("Local resource path does not exist: " + root);
@@ -487,7 +527,14 @@ public class TeacherSourceSyncExecutionService {
         for (Path file : files) {
             String relativePath = root.equals(file) ? file.getFileName().toString() : root.relativize(file).toString();
             for (ParsedBlock parsed : parseFileBlocks(file)) {
-                blocks.add(toBlock(document.documentId(), relativePath.replace('\\', '/'), parsed, order++));
+                blocks.add(toBlock(
+                        tenantId,
+                        viewerRole,
+                        viewerSubjectId,
+                        document,
+                        relativePath.replace('\\', '/'),
+                        parsed,
+                        order++));
             }
         }
         return blocks;
@@ -634,17 +681,37 @@ public class TeacherSourceSyncExecutionService {
     /**
      * Converts a parsed text segment to a document block response.
      */
-    private static TeacherDocumentBlockResponse toBlock(
-            String documentId,
+    private TeacherDocumentBlockResponse toBlock(
+            String tenantId,
+            String viewerRole,
+            String viewerSubjectId,
+            TeacherResourceDocumentResponse document,
             String relativePath,
             ParsedBlock parsed,
             int order) {
         String normalized = normalizeText(parsed.text());
         String sourcePath = relativePath.replace('\\', '/');
         String externalBlockId = stableExternalBlockId(sourcePath, parsed, order);
+        String blockRole = classifyBlockRole(sourcePath, parsed, normalized);
+        /*
+         * Graph alignment is written at sync time, not lazily at query time only. This keeps document-level coarse
+         * recall stable after incremental updates because Milvus/MySQL rows already carry the same normalized concept
+         * view used later by query-side rerank.
+         */
+        TeacherResourceGraphAlignmentService.GraphAlignment graphAlignment = graphAlignmentService.alignBlock(
+                tenantId,
+                viewerRole,
+                viewerSubjectId,
+                document,
+                sourcePath,
+                blockRole,
+                parsed.chapter(),
+                parsed.section(),
+                parsed.text(),
+                normalized);
         return new TeacherDocumentBlockResponse(
                 UUID.randomUUID().toString(),
-                documentId,
+                document.documentId(),
                 externalBlockId,
                 relativePath.endsWith(".md") ? "markdown" : relativePath.endsWith(".pdf") ? "pdf_text" : "text",
                 order,
@@ -653,13 +720,13 @@ public class TeacherSourceSyncExecutionService {
                 parsed.pageNo(),
                 null,
                 sourcePath,
-                classifyBlockRole(sourcePath, parsed, normalized),
+                blockRole,
                 parsed.text(),
                 normalized,
                 "[]",
                 "[]",
-                "[]",
-                "[]",
+                jsonArray(graphAlignment.nodeIds()),
+                jsonArray(graphAlignment.tagNames()),
                 sha256(normalized),
                 1.0,
                 "active");
@@ -722,6 +789,14 @@ public class TeacherSourceSyncExecutionService {
         return normalizeText(textOrDefault(value, ""))
                 .replace('|', '/')
                 .replace('#', '/');
+    }
+
+    private static String jsonArray(List<String> values) {
+        try {
+            return OBJECT_MAPPER.writeValueAsString(values == null ? List.of() : values);
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("Failed to serialize graph alignment metadata", exception);
+        }
     }
 
     /**

@@ -3,6 +3,9 @@ package com.doob.mathagent.teacher;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.doob.mathagent.knowledge.service.InMemoryKnowledgeQuestionBankStore;
+import com.doob.mathagent.knowledge.service.KnowledgePointRecord;
+import com.doob.mathagent.knowledge.service.KnowledgeRelationRecord;
 import com.doob.mathagent.teacher.service.InMemoryTeacherDocumentBlockStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherResourceStore;
 import com.doob.mathagent.teacher.service.RecentTeacherResourceBlockSearchAuditStore;
@@ -208,6 +211,96 @@ class TeacherResourceBlockSearchServiceTest {
                 .contains("included angle")
                 .contains("dot product")
                 .contains("method");
+    }
+
+    @Test
+    void graphNormalizedQueryCanPromoteCorrectDocumentEvenWhenSurfaceWordsDrift() {
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        InMemoryKnowledgeQuestionBankStore knowledgeStore = new InMemoryKnowledgeQuestionBankStore();
+        knowledgeStore.saveKnowledgePoint(new KnowledgePointRecord(
+                "kp-module-sequence",
+                "school-a",
+                null,
+                "MATH_VIP",
+                "数列",
+                "数列",
+                "active",
+                "display_spine_v0.1; nodeType=MODULE"));
+        knowledgeStore.saveKnowledgePoint(new KnowledgePointRecord(
+                "kp-topic-sequence-sum",
+                "school-a",
+                null,
+                "MATH_VIP",
+                "数列求通项与求和",
+                "数列/数列求通项与求和",
+                "active",
+                "display_spine_v0.1; nodeType=TOPIC"));
+        knowledgeStore.saveKnowledgeRelation(new KnowledgeRelationRecord(
+                "rel-sequence-topic",
+                "school-a",
+                "kp-module-sequence",
+                "kp-topic-sequence-sum",
+                "CONTAINS_TOPIC",
+                "display_spine_v0.1; 数列包含数列求通项与求和",
+                "active"));
+        resourceStore.save(document("doc-sequence", "teacher-1", "MATH_VIP", "General method handout"));
+        resourceStore.save(document("doc-probability", "teacher-1", "MATH_VIP", "General method handout B"));
+        blockStore.replaceActiveBlocks("school-a", "doc-sequence", List.of(new TeacherDocumentBlockResponse(
+                "b-sequence",
+                "doc-sequence",
+                "doc-sequence:1",
+                "text",
+                1,
+                "General notes",
+                "Method drift",
+                null,
+                null,
+                "handout/method.md",
+                "method",
+                "先比较前 n 项和与通项，再决定是否做错位相减。",
+                "先比较前 n 项和与通项，再决定是否做错位相减。",
+                "[]",
+                "[]",
+                "[\"kp-topic-sequence-sum\"]",
+                "[\"数列求通项与求和\",\"数列\"]",
+                "b-sequence-checksum",
+                1.0,
+                "active")));
+        blockStore.replaceActiveBlocks("school-a", "doc-probability", List.of(new TeacherDocumentBlockResponse(
+                "b-probability",
+                "doc-probability",
+                "doc-probability:1",
+                "text",
+                1,
+                "General notes",
+                "Method drift",
+                null,
+                null,
+                "handout/method.md",
+                "method",
+                "先看抽样是否放回，再决定概率模型。",
+                "先看抽样是否放回，再决定概率模型。",
+                "[]",
+                "[]",
+                "[]",
+                "[]",
+                "b-probability-checksum",
+                1.0,
+                "active")));
+        TeacherResourceBlockSearchService service =
+                TeacherResourceBlockSearchServiceFixture.service(resourceStore, blockStore, knowledgeStore);
+
+        TeacherResourceBlockSearchResponse response = service.search(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                "数列方法怎么讲",
+                5);
+
+        assertThat(response.hits()).isNotEmpty();
+        assertThat(response.hits().getFirst().documentId()).isEqualTo("doc-sequence");
+        assertThat(response.hits().getFirst().graphTags()).contains("数列");
     }
 
     @Test

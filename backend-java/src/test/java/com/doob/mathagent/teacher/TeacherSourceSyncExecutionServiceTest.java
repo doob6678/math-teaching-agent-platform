@@ -3,6 +3,8 @@ package com.doob.mathagent.teacher;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.doob.mathagent.knowledge.service.InMemoryKnowledgeQuestionBankStore;
+import com.doob.mathagent.knowledge.service.KnowledgePointRecord;
+import com.doob.mathagent.knowledge.service.KnowledgeRelationRecord;
 import com.doob.mathagent.knowledge.service.KnowledgeQuestionBankService;
 import com.doob.mathagent.knowledge.service.TeacherBlockQuestionImportService;
 import com.doob.mathagent.knowledge.vo.QuestionBankItemResponse;
@@ -16,6 +18,7 @@ import com.doob.mathagent.teacher.service.TeacherFeishuDownloadClient;
 import com.doob.mathagent.teacher.service.TeacherFeishuDownloadException;
 import com.doob.mathagent.teacher.service.TeacherResourceRegistrationCommand;
 import com.doob.mathagent.teacher.service.TeacherResourceService;
+import com.doob.mathagent.teacher.service.TeacherResourceGraphAlignmentService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncExecutionService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncJobService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncProperties;
@@ -115,6 +118,92 @@ class TeacherSourceSyncExecutionServiceTest {
         assertThat(blocks).extracting(TeacherDocumentBlockResponse::chapter).contains("Space Vector");
         assertThat(blocks).extracting(TeacherDocumentBlockResponse::normalizedText)
                 .anySatisfy(text -> assertThat(text).contains("Dot product supports angle"));
+    }
+
+    @Test
+    void localPathSyncWritesGraphAlignmentIntoBlocks() throws Exception {
+        Path bank = tempDir.resolve("teacher-bank-graph-alignment");
+        Files.createDirectories(bank);
+        Files.writeString(bank.resolve("space-vector.md"), """
+                # Space Vector
+
+                ## Dot Product
+                Dot product supports angle and projection problems.
+                """);
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherSourceSyncJobStore jobStore = new InMemoryTeacherSourceSyncJobStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        InMemoryKnowledgeQuestionBankStore knowledgeStore = new InMemoryKnowledgeQuestionBankStore();
+        knowledgeStore.saveKnowledgePoint(new KnowledgePointRecord(
+                "kp-space-vector",
+                "school-a",
+                "teacher-1",
+                "TEACHER_PRIVATE",
+                "Space Vector",
+                "Space Vector",
+                "active",
+                "display_spine_v0.1; nodeType=MODULE"));
+        knowledgeStore.saveKnowledgePoint(new KnowledgePointRecord(
+                "kp-dot-product",
+                "school-a",
+                "teacher-1",
+                "TEACHER_PRIVATE",
+                "Dot Product",
+                "Space Vector/Dot Product",
+                "active",
+                "display_spine_v0.1; nodeType=TOPIC"));
+        knowledgeStore.saveKnowledgeRelation(new KnowledgeRelationRecord(
+                "rel-space-vector-dot-product",
+                "school-a",
+                "kp-space-vector",
+                "kp-dot-product",
+                "CONTAINS_TOPIC",
+                "display_spine_v0.1; Space Vector contains Dot Product",
+                "active"));
+        TeacherResourceService resourceService = TeacherResourceServiceFixture.service(resourceStore);
+        TeacherResourceDocumentResponse resource = resourceService.register(new TeacherResourceRegistrationCommand(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                "local_path",
+                "Local vector graph bank",
+                null,
+                bank.toString(),
+                "TEACHER_PRIVATE",
+                null));
+        TeacherSourceSyncJobService jobService = new TeacherSourceSyncJobService(resourceStore, jobStore);
+        TeacherSourceSyncJobResponse queued = jobService.createSyncJob(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                resource.documentId());
+        TeacherSourceSyncExecutionService executionService =
+                new TeacherSourceSyncExecutionService(
+                        resourceStore,
+                        jobStore,
+                        blockStore,
+                        emptyDownloadClient(),
+                        testSyncProperties(),
+                        new InMemoryTeacherSourceSyncCheckpointStore(),
+                        TestVectorIndexService.successful(resourceStore, blockStore),
+                        new TeacherResourceGraphAlignmentService(knowledgeStore));
+
+        TeacherSourceSyncJobResponse completed = executionService.execute(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                resource.documentId(),
+                queued.jobId());
+
+        assertThat(completed.status()).isEqualTo("completed");
+        assertThat(blockStore.listByDocument("school-a", resource.documentId()))
+                .hasSize(1)
+                .first()
+                .satisfies(block -> {
+                    assertThat(block.graphNodeIdsJson()).contains("kp-dot-product");
+                    assertThat(block.graphTagNamesJson()).contains("Dot Product");
+                    assertThat(block.graphTagNamesJson()).contains("Space Vector");
+                });
     }
 
     @Test

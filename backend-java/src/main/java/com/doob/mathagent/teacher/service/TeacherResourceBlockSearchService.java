@@ -58,6 +58,7 @@ public class TeacherResourceBlockSearchService {
     private final TeacherDocumentBlockStore blockStore;
     private final TeacherResourceBlockSearchAuditSink auditSink;
     private final VectorIndexService vectorIndexService;
+    private final TeacherResourceGraphAlignmentService graphAlignmentService;
 
     /**
      * Creates a parsed block search service.
@@ -66,16 +67,34 @@ public class TeacherResourceBlockSearchService {
      * @param blockStore parsed document block store
      * @param auditSink recent audit sink for UI and MCP queryId lookup
      */
-    @Autowired
     public TeacherResourceBlockSearchService(
             TeacherResourceStore resourceStore,
             TeacherDocumentBlockStore blockStore,
             TeacherResourceBlockSearchAuditSink auditSink,
             VectorIndexService vectorIndexService) {
+        this(
+                resourceStore,
+                blockStore,
+                auditSink,
+                vectorIndexService,
+                TeacherResourceGraphAlignmentService.disabled());
+    }
+
+    /**
+     * Production constructor with graph-aware query normalization.
+     */
+    @Autowired
+    public TeacherResourceBlockSearchService(
+            TeacherResourceStore resourceStore,
+            TeacherDocumentBlockStore blockStore,
+            TeacherResourceBlockSearchAuditSink auditSink,
+            VectorIndexService vectorIndexService,
+            TeacherResourceGraphAlignmentService graphAlignmentService) {
         this.resourceStore = Objects.requireNonNull(resourceStore, "resourceStore is required");
         this.blockStore = Objects.requireNonNull(blockStore, "blockStore is required");
         this.auditSink = Objects.requireNonNull(auditSink, "auditSink is required");
         this.vectorIndexService = Objects.requireNonNull(vectorIndexService, "vectorIndexService is required");
+        this.graphAlignmentService = Objects.requireNonNull(graphAlignmentService, "graphAlignmentService is required");
     }
 
     /**
@@ -183,6 +202,11 @@ public class TeacherResourceBlockSearchService {
             return emptyResponse;
         }
         String[] terms = searchTerms(normalizedQuery);
+        TeacherResourceGraphAlignmentService.QueryGraphContext queryGraph = graphAlignmentService.alignQuery(
+                normalizedTenantId,
+                normalizedRole,
+                normalizedSubjectId,
+                normalizedQuery);
         List<TeacherResourceDocumentResponse> documents =
                 filteredDocuments(
                         resourceStore.listSearchable(normalizedTenantId, normalizedRole, normalizedSubjectId),
@@ -195,14 +219,16 @@ public class TeacherResourceBlockSearchService {
                                 normalizedQuery,
                                 terms,
                                 safeLimit,
-                                normalizedFilter)
+                                normalizedFilter,
+                                queryGraph)
                         : twoStageResponse(
                                 normalizedTenantId,
                                 documents,
                                 normalizedQuery,
                                 terms,
                                 safeLimit,
-                                normalizedFilter);
+                                normalizedFilter,
+                                queryGraph);
         recordAudit(normalizedTenantId, normalizedRole, normalizedSubjectId, endpoint, searchResponse, startedNanos);
         return searchResponse;
     }
@@ -213,7 +239,8 @@ public class TeacherResourceBlockSearchService {
             String normalizedQuery,
             String[] terms,
             int safeLimit,
-            TeacherResourceSearchFilter filter) {
+            TeacherResourceSearchFilter filter,
+            TeacherResourceGraphAlignmentService.QueryGraphContext queryGraph) {
         if (documents.isEmpty()) {
             return response(normalizedQuery, safeLimit, retrievalMode(STRATEGY_TWO_STAGE_DOC_BLOCK, filter, "no_visible_documents"), List.of());
         }
@@ -238,7 +265,8 @@ public class TeacherResourceBlockSearchService {
                 vectorScoreByKey,
                 normalizedQuery,
                 terms,
-                safeLimit);
+                safeLimit,
+                queryGraph);
         List<DocumentCandidate> rankedDocuments = documentCandidates.stream()
                 .sorted(Comparator.comparingDouble(DocumentCandidate::score).reversed()
                         .thenComparing(candidate -> candidate.document().title())
@@ -251,7 +279,8 @@ public class TeacherResourceBlockSearchService {
                 vectorScoreByKey,
                 normalizedQuery,
                 terms,
-                safeLimit);
+                safeLimit,
+                queryGraph);
         return response(normalizedQuery, safeLimit, retrievalMode(STRATEGY_TWO_STAGE_DOC_BLOCK, filter, null), hits);
     }
 
@@ -264,7 +293,8 @@ public class TeacherResourceBlockSearchService {
             String normalizedQuery,
             String[] terms,
             int safeLimit,
-            TeacherResourceSearchFilter filter) {
+            TeacherResourceSearchFilter filter,
+            TeacherResourceGraphAlignmentService.QueryGraphContext queryGraph) {
         if (documents.isEmpty()) {
             return response(normalizedQuery, safeLimit, retrievalMode(STRATEGY_LEGACY_BLOCK_HYBRID, filter, "no_visible_documents"), List.of());
         }
@@ -295,7 +325,8 @@ public class TeacherResourceBlockSearchService {
                         blocksById.get(hit.blockId()),
                         hit,
                         normalizedQuery,
-                        terms))
+                        terms,
+                        queryGraph))
                 .filter(Objects::nonNull)
                 .toList();
         List<TeacherResourceBlockSearchResponse.Hit> lexicalHits = lexicalHits(
@@ -304,7 +335,8 @@ public class TeacherResourceBlockSearchService {
                 normalizedQuery,
                 terms,
                 Math.max(safeLimit * 4, safeLimit),
-                filter.tags());
+                filter.tags(),
+                queryGraph);
         List<TeacherResourceBlockSearchResponse.Hit> hits = mergeHybridHits(vectorHits, lexicalHits, safeLimit);
         return response(normalizedQuery, safeLimit, retrievalMode(STRATEGY_LEGACY_BLOCK_HYBRID, filter, null), hits);
     }
@@ -372,7 +404,8 @@ public class TeacherResourceBlockSearchService {
             Map<String, Double> vectorScoreByKey,
             String normalizedQuery,
             String[] terms,
-            int safeLimit) {
+            int safeLimit,
+            TeacherResourceGraphAlignmentService.QueryGraphContext queryGraph) {
         List<DocumentCandidate> candidates = new ArrayList<>();
         for (Map.Entry<String, List<BlockContext>> entry : blocksByDocumentId.entrySet()) {
             TeacherResourceDocumentResponse document = documentsById.get(entry.getKey());
@@ -392,7 +425,7 @@ public class TeacherResourceBlockSearchService {
                         + fieldScore(block.block().chapter(), normalizedQuery, terms)
                         + fieldScore(block.block().section(), normalizedQuery, terms)
                         + fieldScore(block.blockRole(), normalizedQuery, terms)
-                        + graphTagScore(block.graphTags(), normalizedQuery, terms)
+                        + graphTagScore(block.graphTags(), block.graphNodeIds(), queryGraph, normalizedQuery, terms)
                         + roleCueScore(block.blockRole(), block.sourcePath(), normalizedQuery);
                 double vector = vectorScoreByKey.getOrDefault(blockKey(document.documentId(), block.block().blockId()), 0.0d);
                 if (lexical > 0) {
@@ -432,7 +465,8 @@ public class TeacherResourceBlockSearchService {
             Map<String, Double> vectorScoreByKey,
             String normalizedQuery,
             String[] terms,
-            int safeLimit) {
+            int safeLimit,
+            TeacherResourceGraphAlignmentService.QueryGraphContext queryGraph) {
         List<BlockCandidate> blockCandidates = new ArrayList<>();
         for (DocumentCandidate candidate : rankedDocuments) {
             for (BlockContext block : candidate.blocks()) {
@@ -441,7 +475,7 @@ public class TeacherResourceBlockSearchService {
                 double structure = fieldScore(block.sourcePath(), normalizedQuery, terms)
                         + fieldScore(block.block().chapter(), normalizedQuery, terms)
                         + fieldScore(block.block().section(), normalizedQuery, terms);
-                double graph = graphTagScore(block.graphTags(), normalizedQuery, terms);
+                double graph = graphTagScore(block.graphTags(), block.graphNodeIds(), queryGraph, normalizedQuery, terms);
                 double role = roleCueScore(block.blockRole(), block.sourcePath(), normalizedQuery)
                         + fieldScore(block.blockRole(), normalizedQuery, terms);
                 double vector = vectorScoreByKey.getOrDefault(blockKey(candidate.document().documentId(), block.block().blockId()), 0.0d);
@@ -560,7 +594,8 @@ public class TeacherResourceBlockSearchService {
             TeacherDocumentBlockResponse block,
             VectorSearchHit vectorHit,
             String normalizedQuery,
-            String[] terms) {
+            String[] terms,
+            TeacherResourceGraphAlignmentService.QueryGraphContext queryGraph) {
         if (document == null || block == null) {
             return null;
         }
@@ -585,7 +620,8 @@ public class TeacherResourceBlockSearchService {
                 snippet(rawText, normalizedQuery, terms),
                 vectorHit.score()
                         + score(normalizeText(rawText), normalizedQuery, terms)
-                        + metadataScore(document, block, normalizedQuery, terms));
+                        + metadataScore(document, block, normalizedQuery, terms)
+                        + graphTagScore(graphTags, parseStringArray(block.graphNodeIdsJson()), queryGraph, normalizedQuery, terms));
     }
 
     private List<TeacherResourceBlockSearchResponse.Hit> lexicalHits(
@@ -594,11 +630,12 @@ public class TeacherResourceBlockSearchService {
             String normalizedQuery,
             String[] terms,
             int safeLimit,
-            List<String> tags) {
+            List<String> tags,
+            TeacherResourceGraphAlignmentService.QueryGraphContext queryGraph) {
         return documents.stream()
                 .flatMap(document -> blockStore.listByDocument(tenantId, document.documentId()).stream()
                         .filter(block -> matchesTags(document, block, tags))
-                        .map(block -> lexicalHit(document, block, normalizedQuery, terms)))
+                        .map(block -> lexicalHit(document, block, normalizedQuery, terms, queryGraph)))
                 .filter(candidate -> candidate.score() > 0)
                 .sorted(Comparator.comparingDouble(TeacherResourceBlockSearchResponse.Hit::score).reversed()
                         .thenComparing(TeacherResourceBlockSearchResponse.Hit::documentTitle)
@@ -695,13 +732,19 @@ public class TeacherResourceBlockSearchService {
             TeacherResourceDocumentResponse document,
             TeacherDocumentBlockResponse block,
             String normalizedQuery,
-            String[] terms) {
+            String[] terms,
+            TeacherResourceGraphAlignmentService.QueryGraphContext queryGraph) {
         String searchableText = normalizeText(textOrDefault(block.normalizedText(), block.rawText()));
         double score = score(searchableText, normalizedQuery, terms)
                 + metadataScore(document, block, normalizedQuery, terms)
                 + fieldScore(block.sourcePath(), normalizedQuery, terms)
                 + fieldScore(block.blockRole(), normalizedQuery, terms)
-                + graphTagScore(parseStringArray(block.graphTagNamesJson()), normalizedQuery, terms);
+                + graphTagScore(
+                        parseStringArray(block.graphTagNamesJson()),
+                        parseStringArray(block.graphNodeIdsJson()),
+                        queryGraph,
+                        normalizedQuery,
+                        terms);
         String rawText = textOrDefault(block.rawText(), block.normalizedText());
         return new TeacherResourceBlockSearchResponse.Hit(
                 document.documentId(),
@@ -732,7 +775,8 @@ public class TeacherResourceBlockSearchService {
                 normalizeText(textOrDefault(block.normalizedText(), block.rawText())),
                 textOrDefault(block.sourcePath(), ""),
                 textOrDefault(block.blockRole(), "reference"),
-                parseStringArray(block.graphTagNamesJson()));
+                parseStringArray(block.graphTagNamesJson()),
+                parseStringArray(block.graphNodeIdsJson()));
     }
 
     /**
@@ -853,6 +897,43 @@ public class TeacherResourceBlockSearchService {
         double score = 0;
         for (String graphTag : graphTags) {
             score += fieldScore(graphTag, normalizedQuery, terms);
+        }
+        return score;
+    }
+
+    /**
+     * The graph layer is a normalization aid for both retrieval stages. Raw lexical matches still matter, but once the
+     * query and the block have been projected into the same graph ids we should reward that alignment even when the
+     * surface wording differs between document title, section heading, and classroom phrasing.
+     */
+    private static double graphTagScore(
+            List<String> graphTags,
+            List<String> graphNodeIds,
+            TeacherResourceGraphAlignmentService.QueryGraphContext queryGraph,
+            String normalizedQuery,
+            String[] terms) {
+        double score = graphTagScore(graphTags, normalizedQuery, terms);
+        if (queryGraph == null || queryGraph.empty()) {
+            return score;
+        }
+        Set<String> blockNodeIdSet = new java.util.LinkedHashSet<>(graphNodeIds == null ? List.of() : graphNodeIds);
+        if (!blockNodeIdSet.isEmpty()) {
+            if (queryGraph.primaryNodeIds().stream().anyMatch(blockNodeIdSet::contains)) {
+                score += 6.0d;
+            } else if (queryGraph.expandedNodeIds().stream().anyMatch(blockNodeIdSet::contains)) {
+                score += 2.5d;
+            }
+        }
+        String tagHaystack = normalizeText(String.join(" ", graphTags == null ? List.of() : graphTags));
+        for (String tag : queryGraph.primaryTagNames()) {
+            if (!tag.isBlank() && tagHaystack.contains(normalizeText(tag))) {
+                score += 2.0d;
+            }
+        }
+        for (String tag : queryGraph.expandedTagNames()) {
+            if (!tag.isBlank() && tagHaystack.contains(normalizeText(tag))) {
+                score += 0.75d;
+            }
         }
         return score;
     }
@@ -1130,7 +1211,8 @@ public class TeacherResourceBlockSearchService {
             String searchableText,
             String sourcePath,
             String blockRole,
-            List<String> graphTags) {
+            List<String> graphTags,
+            List<String> graphNodeIds) {
     }
 
     private record DocumentCandidate(
