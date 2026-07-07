@@ -4,6 +4,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -63,6 +64,41 @@ public class InMemoryKnowledgeQuestionBankStore implements KnowledgeQuestionBank
                 .filter(record -> equalsText(sourceBlockId, record.sourceBlockId()))
                 .filter(record -> equalsText(sourceChecksum, record.sourceChecksum()))
                 .findFirst();
+    }
+
+    @Override
+    public int archiveQuestionsBySourceDocumentExcept(
+            String tenantId,
+            String sourceResourceDocumentId,
+            Set<String> activeSourceKeys) {
+        int archived = 0;
+        for (QuestionBankItemRecord record : questions.values()) {
+            if (!tenantId.equals(record.tenantId())
+                    || !"active".equals(record.status())
+                    || !equalsText(sourceResourceDocumentId, record.sourceResourceDocumentId())) {
+                continue;
+            }
+            String sourceKey = sourceKey(record.sourceBlockId(), record.sourceChecksum());
+            if (activeSourceKeys.contains(sourceKey)) {
+                continue;
+            }
+            questions.put(record.questionId(), new QuestionBankItemRecord(
+                    record.questionId(),
+                    record.tenantId(),
+                    record.ownerSubjectId(),
+                    record.permissionScope(),
+                    record.questionTitle(),
+                    record.questionText(),
+                    record.answerJson(),
+                    record.difficulty(),
+                    "archived",
+                    record.sourceResourceDocumentId(),
+                    record.sourceBlockId(),
+                    record.sourceChecksum(),
+                    record.knowledgePointIds()));
+            archived += 1;
+        }
+        return archived;
     }
 
     @Override
@@ -142,5 +178,9 @@ public class InMemoryKnowledgeQuestionBankStore implements KnowledgeQuestionBank
         String left = expected == null ? "" : expected;
         String right = actual == null ? "" : actual;
         return left.equals(right);
+    }
+
+    private static String sourceKey(String sourceBlockId, String sourceChecksum) {
+        return (sourceBlockId == null ? "" : sourceBlockId) + "\n" + (sourceChecksum == null ? "" : sourceChecksum);
     }
 }

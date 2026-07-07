@@ -28,6 +28,10 @@ public class TeacherDocumentBlockEntity {
     private Integer pageNo;
     /** Printed page label when available. */
     private String printedPageNo;
+    /** Stable relative source path used for incremental sync and rerank. */
+    private String sourcePath;
+    /** Coarse semantic role used by stage-two block rerank. */
+    private String blockRole;
     /** Raw extracted text. */
     private String rawText;
     /** Normalized retrieval text. */
@@ -36,6 +40,10 @@ public class TeacherDocumentBlockEntity {
     private String imageRefs;
     /** JSON formula reference array. */
     private String formulaRefs;
+    /** JSON array of aligned knowledge graph node ids. */
+    private String graphNodeIdsJson;
+    /** JSON array of aligned graph tag names. */
+    private String graphTagNamesJson;
     /** Content checksum. */
     private String checksum;
     /** Extraction confidence. */
@@ -115,6 +123,22 @@ public class TeacherDocumentBlockEntity {
         this.printedPageNo = printedPageNo;
     }
 
+    public String getSourcePath() {
+        return sourcePath;
+    }
+
+    public void setSourcePath(String sourcePath) {
+        this.sourcePath = sourcePath;
+    }
+
+    public String getBlockRole() {
+        return blockRole;
+    }
+
+    public void setBlockRole(String blockRole) {
+        this.blockRole = blockRole;
+    }
+
     public String getRawText() {
         return rawText;
     }
@@ -145,6 +169,22 @@ public class TeacherDocumentBlockEntity {
 
     public void setFormulaRefs(String formulaRefs) {
         this.formulaRefs = formulaRefs;
+    }
+
+    public String getGraphNodeIdsJson() {
+        return graphNodeIdsJson;
+    }
+
+    public void setGraphNodeIdsJson(String graphNodeIdsJson) {
+        this.graphNodeIdsJson = graphNodeIdsJson;
+    }
+
+    public String getGraphTagNamesJson() {
+        return graphTagNamesJson;
+    }
+
+    public void setGraphTagNamesJson(String graphTagNamesJson) {
+        this.graphTagNamesJson = graphTagNamesJson;
     }
 
     public String getChecksum() {

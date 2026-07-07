@@ -98,7 +98,7 @@ public class VectorIndexService {
             EmbeddingBatch embeddings = embed(blocks.stream().map(TeacherDocumentBlockResponse::normalizedText).toList());
             ensureCollection();
             ensureVectorIndex();
-            deleteExistingDocumentVectors(document, blocks);
+            deleteExistingDocumentVectors(document);
             int upserted = upsert(document, blocks, embeddings.vectors());
             flushCollection();
             loadCollection();
@@ -129,6 +129,10 @@ public class VectorIndexService {
     }
 
     public List<VectorSearchHit> searchTeacherResourceBlocks(String query, int limit) {
+        return searchTeacherResourceBlocks(query, limit, VectorSearchFilter.EMPTY);
+    }
+
+    public List<VectorSearchHit> searchTeacherResourceBlocks(String query, int limit, VectorSearchFilter filter) {
         properties.requireFullyConfigured();
         String normalizedQuery = text(query).strip();
         if (normalizedQuery.isBlank()) {
@@ -138,13 +142,25 @@ public class VectorIndexService {
         ensureCollection();
         ensureVectorIndex();
         loadCollection();
-        Map<String, Object> body = Map.of(
-                "collectionName", properties.normalizedCollectionName(),
-                "data", List.of(embedding.vectors().getFirst()),
-                "limit", Math.max(1, limit),
-                "outputFields", List.of("id", "text", "metadata"));
+        Map<String, Object> body = searchBody(embedding.vectors().getFirst(), limit, filter);
         VectorHttpResponse response = milvusPost("/v2/vectordb/entities/search", body);
-        JsonNode root = readJson("Milvus search", response);
+        JsonNode root;
+        try {
+            root = readJson("Milvus search", response);
+        } catch (RuntimeException exception) {
+            if (filter == null || filter.empty()) {
+                throw exception;
+            }
+            // Filter parsing errors may be returned as non-JSON by older Milvus gateways.
+            response = milvusPost("/v2/vectordb/entities/search", searchBody(embedding.vectors().getFirst(), limit, VectorSearchFilter.EMPTY));
+            root = readJson("Milvus search", response);
+        }
+        if (milvusSearchFailed(response, root) && filter != null && !filter.empty()) {
+            // Some Milvus deployments differ in JSON filter support. Fall back to unfiltered vector
+            // search and let the caller's visibility/post-filters enforce boundaries.
+            response = milvusPost("/v2/vectordb/entities/search", searchBody(embedding.vectors().getFirst(), limit, VectorSearchFilter.EMPTY));
+            root = readJson("Milvus search", response);
+        }
         if (!response.success2xx() || root.path("code").asInt(-1) != 0) {
             throw new IllegalStateException("Milvus search failed: HTTP " + response.statusCode()
                     + " body=" + abbreviate(response.body(), 300));
@@ -165,6 +181,19 @@ public class VectorIndexService {
         return List.copyOf(hits);
     }
 
+    private Map<String, Object> searchBody(List<Double> vector, int limit, VectorSearchFilter filter) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("collectionName", properties.normalizedCollectionName());
+        body.put("data", List.of(vector));
+        body.put("limit", Math.max(1, limit));
+        body.put("outputFields", List.of("id", "text", "metadata"));
+        String expression = milvusMetadataFilter(filter);
+        if (!expression.isBlank()) {
+            body.put("filter", expression);
+        }
+        return body;
+    }
+
     public int deleteTeacherResourceVectors(String tenantId, String documentId) {
         if (!properties.enabled()) {
             return 0;
@@ -177,7 +206,7 @@ public class VectorIndexService {
         List<TeacherDocumentBlockResponse> blocks = blockStore.listByDocument(tenantId, documentId).stream()
                 .filter(block -> text(block.blockId()).isBlank() == false)
                 .toList();
-        deleteExistingDocumentVectors(document, blocks);
+        deleteExistingDocumentVectors(document);
         flushCollection();
         return blocks.size();
     }
@@ -396,26 +425,23 @@ public class VectorIndexService {
         return upserted;
     }
 
-    private void deleteExistingDocumentVectors(
-            TeacherResourceDocumentResponse document,
-            List<TeacherDocumentBlockResponse> blocks) {
-        for (int start = 0; start < blocks.size(); start += MILVUS_UPSERT_BATCH_SIZE) {
-            int end = Math.min(start + MILVUS_UPSERT_BATCH_SIZE, blocks.size());
-            List<String> ids = new ArrayList<>();
-            for (int index = start; index < end; index++) {
-                ids.add(document.documentId() + ":" + blocks.get(index).blockId());
-            }
-            String filter = "id in [" + ids.stream()
-                    .map(VectorIndexService::milvusStringLiteral)
-                    .collect(java.util.stream.Collectors.joining(",")) + "]";
-            VectorHttpResponse response = milvusPost("/v2/vectordb/entities/delete", Map.of(
-                    "collectionName", properties.normalizedCollectionName(),
-                    "filter", filter));
-            JsonNode root = readJson("Milvus delete", response);
-            if (!response.success2xx() || root.path("code").asInt(-1) != 0) {
-                throw new IllegalStateException("Milvus delete failed: HTTP " + response.statusCode()
-                        + " body=" + abbreviate(response.body(), 300));
-            }
+    /**
+     * Deletes all vectors for one logical document before upserting the newest active block set.
+     *
+     * <p>Do not delete only the current active block ids here. Incremental sync may mark old rows inactive because a
+     * source file was renamed, split, or deleted; those stale vectors must leave Milvus as well or stage-one document
+     * recall will keep seeing ghosts from old syncs.</p>
+     */
+    private void deleteExistingDocumentVectors(TeacherResourceDocumentResponse document) {
+        String filter = "metadata[\"tenantId\"] == " + milvusStringLiteral(text(document.tenantId()))
+                + " and metadata[\"documentId\"] == " + milvusStringLiteral(text(document.documentId()));
+        VectorHttpResponse response = milvusPost("/v2/vectordb/entities/delete", Map.of(
+                "collectionName", properties.normalizedCollectionName(),
+                "filter", filter));
+        JsonNode root = readJson("Milvus delete", response);
+        if (!response.success2xx() || root.path("code").asInt(-1) != 0) {
+            throw new IllegalStateException("Milvus delete failed: HTTP " + response.statusCode()
+                    + " body=" + abbreviate(response.body(), 300));
         }
     }
 
@@ -423,19 +449,24 @@ public class VectorIndexService {
             TeacherResourceDocumentResponse document,
             TeacherDocumentBlockResponse block,
             List<Double> vector) {
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("tenantId", document.tenantId());
+        metadata.put("documentId", document.documentId());
+        metadata.put("blockId", block.blockId());
+        metadata.put("title", text(document.title()));
+        metadata.put("sourceType", text(document.sourceType()));
+        metadata.put("permissionScope", text(document.permissionScope()));
+        metadata.put("chapter", text(block.chapter()));
+        metadata.put("section", text(block.section()));
+        metadata.put("sourcePath", text(block.sourcePath()));
+        metadata.put("blockRole", text(block.blockRole()));
+        metadata.put("graphTagsJson", text(block.graphTagNamesJson()));
+        metadata.put("checksum", text(block.checksum()));
         return Map.of(
                 "id", document.documentId() + ":" + block.blockId(),
                 "vector", vector,
                 "text", text(block.normalizedText()),
-                "metadata", Map.of(
-                        "tenantId", document.tenantId(),
-                        "documentId", document.documentId(),
-                        "blockId", block.blockId(),
-                        "title", text(document.title()),
-                        "permissionScope", text(document.permissionScope()),
-                        "chapter", text(block.chapter()),
-                        "section", text(block.section()),
-                        "checksum", text(block.checksum())));
+                "metadata", metadata);
     }
 
     private VectorHttpResponse milvusPost(String path, Object body) {
@@ -472,6 +503,10 @@ public class VectorIndexService {
         }
         String body = safe(response.body()).toLowerCase();
         return body.contains("rate limit") || body.contains("ratelimiter") || body.contains("\"code\":1807");
+    }
+
+    private static boolean milvusSearchFailed(VectorHttpResponse response, JsonNode root) {
+        return response == null || !response.success2xx() || root.path("code").asInt(-1) != 0;
     }
 
     private static void sleepBeforeMilvusRetry(int attempt) {
@@ -570,6 +605,28 @@ public class VectorIndexService {
     private static String milvusStringLiteral(String value) {
         String safeValue = value == null ? "" : value;
         return "\"" + safeValue.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
+    }
+
+    private static String milvusMetadataFilter(VectorSearchFilter filter) {
+        if (filter == null || filter.empty()) {
+            return "";
+        }
+        List<String> parts = new ArrayList<>();
+        if (!filter.documentIds().isEmpty()) {
+            parts.add("metadata[\"documentId\"] in ["
+                    + filter.documentIds().stream()
+                            .map(VectorIndexService::milvusStringLiteral)
+                            .collect(java.util.stream.Collectors.joining(","))
+                    + "]");
+        }
+        if (!filter.permissionScopes().isEmpty()) {
+            parts.add("metadata[\"permissionScope\"] in ["
+                    + filter.permissionScopes().stream()
+                            .map(VectorIndexService::milvusStringLiteral)
+                            .collect(java.util.stream.Collectors.joining(","))
+                    + "]");
+        }
+        return String.join(" and ", parts);
     }
 
     private record EmbeddingBatch(List<List<Double>> vectors, int promptTokens) {

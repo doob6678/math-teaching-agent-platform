@@ -64,6 +64,15 @@ public class TeacherBlockQuestionImportService {
             throw new IllegalArgumentException("Teacher resource document is not visible for import");
         }
         List<TeacherDocumentBlockResponse> blocks = blockStore.listByDocument(normalizedTenantId, normalizedDocumentId);
+        /*
+         * The parser and the question bank form one incremental pipeline. Archive imported question rows whose
+         * source block/checksum disappeared from the latest active parse set before inserting new rows; otherwise
+         * checksum changes create stale duplicates that survive forever and poison downstream retrieval.
+         */
+        questionBankStore.archiveQuestionsBySourceDocumentExcept(
+                normalizedTenantId,
+                document.documentId(),
+                activeQuestionSourceKeys(blocks));
         List<QuestionBankItemResponse> imported = new ArrayList<>();
         Set<String> linkedKnowledgePointIds = new LinkedHashSet<>();
         int skipped = 0;
@@ -157,13 +166,13 @@ public class TeacherBlockQuestionImportService {
      */
     private static boolean looksLikeQuestion(String text) {
         String normalized = textOrDefault(text, "");
-        return normalized.contains("求")
-                || normalized.contains("证明")
-                || normalized.contains("已知")
-                || normalized.contains("例")
-                || normalized.contains("题")
+        return normalized.contains("\u6c42")
+                || normalized.contains("\u8bc1\u660e")
+                || normalized.contains("\u5df2\u77e5")
+                || normalized.contains("\u4f8b")
+                || normalized.contains("\u9898")
                 || normalized.contains("?")
-                || normalized.contains("？");
+                || normalized.contains("\uff1f");
     }
 
     /**
@@ -174,7 +183,7 @@ public class TeacherBlockQuestionImportService {
         if (!section.isBlank()) {
             return section;
         }
-        return textOrDefault(block.chapter(), "未归类知识点");
+        return textOrDefault(block.chapter(), "\u672a\u5f52\u7c7b\u77e5\u8bc6\u70b9");
     }
 
     /**
@@ -227,5 +236,20 @@ public class TeacherBlockQuestionImportService {
      */
     private static String textOrDefault(String value, String defaultValue) {
         return value == null || value.isBlank() ? defaultValue : value.strip();
+    }
+
+    private static Set<String> activeQuestionSourceKeys(List<TeacherDocumentBlockResponse> blocks) {
+        Set<String> keys = new LinkedHashSet<>();
+        for (TeacherDocumentBlockResponse block : blocks) {
+            String questionText = textOrDefault(block.rawText(), block.normalizedText());
+            if (looksLikeQuestion(questionText)) {
+                keys.add(sourceKey(block.blockId(), block.checksum()));
+            }
+        }
+        return keys;
+    }
+
+    private static String sourceKey(String sourceBlockId, String sourceChecksum) {
+        return textOrDefault(sourceBlockId, "") + "\n" + textOrDefault(sourceChecksum, "");
     }
 }

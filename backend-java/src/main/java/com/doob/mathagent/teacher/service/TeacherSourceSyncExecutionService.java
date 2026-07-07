@@ -640,18 +640,24 @@ public class TeacherSourceSyncExecutionService {
             ParsedBlock parsed,
             int order) {
         String normalized = normalizeText(parsed.text());
+        String sourcePath = relativePath.replace('\\', '/');
+        String externalBlockId = stableExternalBlockId(sourcePath, parsed, order);
         return new TeacherDocumentBlockResponse(
                 UUID.randomUUID().toString(),
                 documentId,
-                relativePath + "#" + order,
-                relativePath.endsWith(".md") ? "markdown" : "text",
+                externalBlockId,
+                relativePath.endsWith(".md") ? "markdown" : relativePath.endsWith(".pdf") ? "pdf_text" : "text",
                 order,
                 parsed.chapter(),
                 parsed.section(),
                 parsed.pageNo(),
                 null,
+                sourcePath,
+                classifyBlockRole(sourcePath, parsed, normalized),
                 parsed.text(),
                 normalized,
+                "[]",
+                "[]",
                 "[]",
                 "[]",
                 sha256(normalized),
@@ -660,10 +666,62 @@ public class TeacherSourceSyncExecutionService {
     }
 
     /**
+     * Keeps a stable source-side block key for incremental sync. The MySQL auto id may change when rows are inserted,
+     * but this external id must stay derivable from the real source structure so updates can reconcile in place.
+     */
+    private static String stableExternalBlockId(String sourcePath, ParsedBlock parsed, int order) {
+        String chapter = normalizeHeading(parsed.chapter());
+        String section = normalizeHeading(parsed.section());
+        String page = parsed.pageNo() == null ? "0" : String.valueOf(parsed.pageNo());
+        return sourcePath + "|" + page + "|" + chapter + "|" + section + "|" + order;
+    }
+
+    /**
+     * Classifies one parsed block into a small set of generic roles used by stage-two in-document rerank. Keep this
+     * broad and source-driven; do not inject benchmark keywords or per-dataset rules here.
+     */
+    private static String classifyBlockRole(String sourcePath, ParsedBlock parsed, String normalizedText) {
+        String haystack = normalizeText(String.join(
+                " ",
+                textOrDefault(sourcePath, ""),
+                textOrDefault(parsed.chapter(), ""),
+                textOrDefault(parsed.section(), ""),
+                textOrDefault(normalizedText, ""))).toLowerCase(Locale.ROOT);
+        if (containsAny(haystack, "答案", "解析", "讲评", "点评", "评注", "解答", "solution", "analysis")) {
+            return "analysis";
+        }
+        if (containsAny(haystack, "方法", "讲法", "思路", "策略", "套路", "model", "method")) {
+            return "method";
+        }
+        if (containsAny(haystack, "板书", "板演", "blackboard")) {
+            return "boardwork";
+        }
+        if (containsAny(haystack, "模板", "讲义模板", "template")) {
+            return "template";
+        }
+        if (containsAny(haystack, "提示", "提醒", "易错", "注意", "tip")) {
+            return "tip";
+        }
+        if (containsAny(haystack, "真题", "模拟", "试题", "题目", "例题", "question", "exam")) {
+            return "question";
+        }
+        if (containsAny(haystack, "专题", "讲义", "课堂", "notes", "lesson")) {
+            return "lesson";
+        }
+        return "reference";
+    }
+
+    /**
      * Normalizes text for retrieval and checksum stability.
      */
     private static String normalizeText(String text) {
         return text == null ? "" : text.replaceAll("\\s+", " ").strip();
+    }
+
+    private static String normalizeHeading(String value) {
+        return normalizeText(textOrDefault(value, ""))
+                .replace('|', '/')
+                .replace('#', '/');
     }
 
     /**
@@ -760,6 +818,15 @@ public class TeacherSourceSyncExecutionService {
             throw new IllegalArgumentException(message);
         }
         return value.strip();
+    }
+
+    private static boolean containsAny(String haystack, String... needles) {
+        for (String needle : needles) {
+            if (!needle.isBlank() && haystack.contains(needle.toLowerCase(Locale.ROOT))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

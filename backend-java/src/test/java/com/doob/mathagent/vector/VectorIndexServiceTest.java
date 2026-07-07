@@ -107,7 +107,10 @@ class VectorIndexServiceTest {
                         URI.create("http://milvus.local:19530/v2/vectordb/entities/upsert"),
                         URI.create("http://milvus.local:19530/v2/vectordb/collections/flush"),
                         URI.create("http://milvus.local:19530/v2/vectordb/collections/load"));
-        assertThat(transport.requests.get(4).body()).contains("space vector angle", "doc-1:block-1");
+        assertThat(transport.requests.get(3).body()).contains("metadata[\\\"tenantId\\\"] == \\\"school-a\\\"")
+                .contains("metadata[\\\"documentId\\\"] == \\\"doc-1\\\"");
+        assertThat(transport.requests.get(4).body()).contains("space vector angle", "doc-1:block-1")
+                .contains("sourceType", "sourcePath", "blockRole", "graphTagsJson");
         TeacherResourceDocumentResponse updated = resources.find("school-a", "doc-1");
         assertThat(updated.embeddingStatus()).isEqualTo("ready");
         assertThat(updated.indexStatus()).isEqualTo("ready");
@@ -145,8 +148,12 @@ class VectorIndexServiceTest {
                 "angle",
                 12,
                 "12",
+                "lesson/vector-angle.md",
+                "lesson",
                 normalizedText,
                 normalizedText,
+                "[]",
+                "[]",
                 "[]",
                 "[]",
                 "checksum-1",

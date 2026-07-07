@@ -70,6 +70,43 @@ class TeacherBlockQuestionImportServiceTest {
     }
 
     @Test
+    void archivesStaleImportedQuestionWhenSameBlockGetsNewChecksum() {
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        InMemoryKnowledgeQuestionBankStore questionStore = new InMemoryKnowledgeQuestionBankStore();
+        resourceStore.save(document("doc-refresh", "teacher-1", "TEACHER_PRIVATE", "Refreshable proof handout"));
+        TeacherBlockQuestionImportService service = service(resourceStore, blockStore, questionStore);
+        blockStore.replaceActiveBlocks("school-a", "doc-refresh", List.of(blockWithChecksum(
+                "b-refresh",
+                "doc-refresh",
+                1,
+                "立体几何",
+                "平行证明",
+                "证明：若直线 l 平行平面 alpha，则 l 与平面内某直线平行。",
+                "checksum-v1")));
+
+        TeacherBlockQuestionImportResponse first =
+                service.importFromTeacherResource("school-a", "teacher", "teacher-1", "doc-refresh");
+        blockStore.replaceActiveBlocks("school-a", "doc-refresh", List.of(blockWithChecksum(
+                "b-refresh",
+                "doc-refresh",
+                1,
+                "立体几何",
+                "平行证明",
+                "证明：若直线 l 平行平面 alpha，则可通过反证法补充说明存在平行线。",
+                "checksum-v2")));
+        TeacherBlockQuestionImportResponse second =
+                service.importFromTeacherResource("school-a", "teacher", "teacher-1", "doc-refresh");
+
+        assertThat(first.importedQuestionCount()).isEqualTo(1);
+        assertThat(second.importedQuestionCount()).isEqualTo(1);
+        assertThat(second.duplicateBlockCount()).isZero();
+        assertThat(service.searchQuestions("school-a", "teacher", "teacher-1", "反证法", 10))
+                .extracting(QuestionBankItemResponse::sourceChecksum)
+                .containsExactly("checksum-v2");
+    }
+
+    @Test
     void doesNotImportAnotherTeacherPrivateDocument() {
         InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
         InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
@@ -136,6 +173,17 @@ class TeacherBlockQuestionImportServiceTest {
             String chapter,
             String section,
             String text) {
+        return blockWithChecksum(blockId, documentId, blockOrder, chapter, section, text, blockId + "-checksum");
+    }
+
+    private static TeacherDocumentBlockResponse blockWithChecksum(
+            String blockId,
+            String documentId,
+            int blockOrder,
+            String chapter,
+            String section,
+            String text,
+            String checksum) {
         return new TeacherDocumentBlockResponse(
                 blockId,
                 documentId,
@@ -150,7 +198,7 @@ class TeacherBlockQuestionImportServiceTest {
                 text.toLowerCase(),
                 "[]",
                 "[]",
-                blockId + "-checksum",
+                checksum,
                 1.0,
                 "active");
     }

@@ -224,6 +224,20 @@ class DatabaseMigrationSqlContractTest {
     }
 
     @Test
+    void teacherDocumentBlockTwoStageMigrationAddsStableRerankAndGraphFields() throws Exception {
+        String migration = Files.readString(Path.of("src/main/resources/db/migration/V16__teacher_document_block_two_stage_rag_fields.sql"));
+
+        assertThat(migration)
+                .contains("ALTER TABLE document_block")
+                .contains("ADD COLUMN source_path")
+                .contains("ADD COLUMN block_role")
+                .contains("ADD COLUMN graph_node_ids_json JSON")
+                .contains("ADD COLUMN graph_tag_names_json JSON")
+                .contains("idx_document_block_doc_role_order")
+                .contains("idx_document_block_doc_source_path");
+    }
+
+    @Test
     void studentExplanationHistoryMigrationStoresDurableConversationAndMessagePayloads() throws Exception {
         String migration = Files.readString(Path.of("src/main/resources/db/migration/V12__student_explanation_history.sql"));
 

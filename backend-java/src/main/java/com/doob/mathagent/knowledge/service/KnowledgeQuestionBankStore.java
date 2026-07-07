@@ -2,6 +2,7 @@ package com.doob.mathagent.knowledge.service;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Store abstraction for standard knowledge points and linked question bank items.
@@ -63,6 +64,20 @@ public interface KnowledgeQuestionBankStore {
             String sourceResourceDocumentId,
             String sourceBlockId,
             String sourceChecksum);
+
+    /**
+     * Archives imported questions for one teacher resource document when their source block/checksum is no longer part
+     * of the latest active parse result.
+     *
+     * @param tenantId backend tenant id
+     * @param sourceResourceDocumentId teacher resource document id
+     * @param activeSourceKeys current active source block/checksum identities
+     * @return archived row count
+     */
+    int archiveQuestionsBySourceDocumentExcept(
+            String tenantId,
+            String sourceResourceDocumentId,
+            Set<String> activeSourceKeys);
 
     /**
      * Lists visible knowledge points after backend role and owner filtering.

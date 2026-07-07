@@ -5,7 +5,9 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.doob.mathagent.teacher.entity.TeacherDocumentBlockEntity;
 import com.doob.mathagent.teacher.mapper.TeacherDocumentBlockMapper;
 import com.doob.mathagent.teacher.vo.TeacherDocumentBlockResponse;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Repository;
 
@@ -39,14 +41,44 @@ public class MyBatisTeacherDocumentBlockStore implements TeacherDocumentBlockSto
         if (sourceDocumentId == null) {
             return List.of();
         }
-        LambdaUpdateWrapper<TeacherDocumentBlockEntity> inactive = new LambdaUpdateWrapper<TeacherDocumentBlockEntity>()
+        List<TeacherDocumentBlockEntity> existingActive = mapper.selectList(new LambdaQueryWrapper<TeacherDocumentBlockEntity>()
                 .eq(TeacherDocumentBlockEntity::getSourceDocumentId, sourceDocumentId)
                 .eq(TeacherDocumentBlockEntity::getStatus, "active")
-                .set(TeacherDocumentBlockEntity::getStatus, "inactive");
-        mapper.update(null, inactive);
+                .orderByAsc(TeacherDocumentBlockEntity::getBlockOrder)
+                .orderByAsc(TeacherDocumentBlockEntity::getId));
+        Map<String, TeacherDocumentBlockEntity> existingBySourceKey = new LinkedHashMap<>();
+        for (TeacherDocumentBlockEntity entity : existingActive) {
+            existingBySourceKey.put(sourceKey(entity.getExternalBlockId(), entity.getId()), entity);
+        }
+        Map<String, Boolean> seenIncomingKeys = new LinkedHashMap<>();
         for (TeacherDocumentBlockResponse block : blocks) {
+            String sourceKey = sourceKey(block.externalBlockId(), parseId(block.blockId()));
+            seenIncomingKeys.put(sourceKey, Boolean.TRUE);
+            TeacherDocumentBlockEntity existing = existingBySourceKey.get(sourceKey);
             TeacherDocumentBlockEntity entity = toEntity(block);
+            entity.setSourceDocumentId(sourceDocumentId);
+            entity.setStatus("active");
+            if (existing != null) {
+                /*
+                 * Do not mark everything inactive and reinsert from scratch here. Stable block ids are part of the
+                 * incremental-sync contract: question-bank source links, vector cleanup, and document-internal rerank
+                 * depend on a block keeping the same primary key while its checksum/text updates in place.
+                 */
+                entity.setId(existing.getId());
+                mapper.updateById(entity);
+                continue;
+            }
             mapper.insert(entity);
+        }
+        for (TeacherDocumentBlockEntity entity : existingActive) {
+            if (seenIncomingKeys.containsKey(sourceKey(entity.getExternalBlockId(), entity.getId()))) {
+                continue;
+            }
+            mapper.update(
+                    null,
+                    new LambdaUpdateWrapper<TeacherDocumentBlockEntity>()
+                            .eq(TeacherDocumentBlockEntity::getId, entity.getId())
+                            .set(TeacherDocumentBlockEntity::getStatus, "inactive"));
         }
         return listByDocument(tenantId, documentId);
     }
@@ -84,10 +116,14 @@ public class MyBatisTeacherDocumentBlockStore implements TeacherDocumentBlockSto
         entity.setSection(block.section());
         entity.setPageNo(block.pageNo());
         entity.setPrintedPageNo(block.printedPageNo());
+        entity.setSourcePath(block.sourcePath());
+        entity.setBlockRole(block.blockRole());
         entity.setRawText(block.rawText());
         entity.setNormalizedText(block.normalizedText());
         entity.setImageRefs(block.imageRefs());
         entity.setFormulaRefs(block.formulaRefs());
+        entity.setGraphNodeIdsJson(block.graphNodeIdsJson());
+        entity.setGraphTagNamesJson(block.graphTagNamesJson());
         entity.setChecksum(block.checksum());
         entity.setConfidence(block.confidence());
         entity.setStatus(block.status());
@@ -108,13 +144,24 @@ public class MyBatisTeacherDocumentBlockStore implements TeacherDocumentBlockSto
                 entity.getSection(),
                 entity.getPageNo(),
                 entity.getPrintedPageNo(),
+                entity.getSourcePath(),
+                blankToDefault(entity.getBlockRole(), "reference"),
                 entity.getRawText(),
                 entity.getNormalizedText(),
                 entity.getImageRefs(),
                 entity.getFormulaRefs(),
+                blankToDefault(entity.getGraphNodeIdsJson(), "[]"),
+                blankToDefault(entity.getGraphTagNamesJson(), "[]"),
                 entity.getChecksum(),
                 entity.getConfidence() == null ? 0.0 : entity.getConfidence(),
                 entity.getStatus());
+    }
+
+    private static String sourceKey(String externalBlockId, Long fallbackId) {
+        if (externalBlockId != null && !externalBlockId.isBlank()) {
+            return externalBlockId.strip();
+        }
+        return fallbackId == null ? "" : String.valueOf(fallbackId);
     }
 
     /**
@@ -129,5 +176,9 @@ public class MyBatisTeacherDocumentBlockStore implements TeacherDocumentBlockSto
         } catch (NumberFormatException exception) {
             return null;
         }
+    }
+
+    private static String blankToDefault(String value, String defaultValue) {
+        return value == null || value.isBlank() ? defaultValue : value;
     }
 }

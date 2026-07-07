@@ -1,6 +1,7 @@
 package com.doob.mathagent.knowledge.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.doob.mathagent.knowledge.entity.KnowledgePointEntity;
 import com.doob.mathagent.knowledge.entity.KnowledgeRelationEntity;
 import com.doob.mathagent.knowledge.entity.QuestionBankItemEntity;
@@ -132,6 +133,35 @@ public class MyBatisKnowledgeQuestionBankStore implements KnowledgeQuestionBankS
                 .map(entity -> toRecord(entity, links(tenantId, entity.getQuestionId())));
     }
 
+    @Override
+    public int archiveQuestionsBySourceDocumentExcept(
+            String tenantId,
+            String sourceResourceDocumentId,
+            Set<String> activeSourceKeys) {
+        List<QuestionBankItemEntity> existing = questionMapper.selectList(new LambdaQueryWrapper<QuestionBankItemEntity>()
+                .eq(QuestionBankItemEntity::getTenantId, tenantId)
+                .eq(QuestionBankItemEntity::getSourceResourceDocumentId, sourceResourceDocumentId)
+                .eq(QuestionBankItemEntity::getStatus, "active"));
+        int archived = 0;
+        for (QuestionBankItemEntity entity : existing) {
+            String sourceKey = sourceKey(entity.getSourceBlockId(), entity.getSourceChecksum());
+            if (activeSourceKeys.contains(sourceKey)) {
+                continue;
+            }
+            /*
+             * Archive stale imported questions instead of deleting them. This keeps downstream auditability while
+             * preventing old block/checksum variants from surviving a source sync and polluting retrieval or review.
+             */
+            questionMapper.update(
+                    null,
+                    new LambdaUpdateWrapper<QuestionBankItemEntity>()
+                            .eq(QuestionBankItemEntity::getQuestionId, entity.getQuestionId())
+                            .set(QuestionBankItemEntity::getStatus, "archived"));
+            archived += 1;
+        }
+        return archived;
+    }
+
     /**
      * Lists visible active knowledge points.
      */
@@ -183,11 +213,12 @@ public class MyBatisKnowledgeQuestionBankStore implements KnowledgeQuestionBankS
         applyQuestionVisibility(wrapper, viewerRole, viewerSubjectId);
         if (query != null && !query.isBlank()) {
             List<String> keywords = QuestionBankSearchText.keywords(query);
-            wrapper.and(nested -> nested
-                    .like(QuestionBankItemEntity::getQuestionTitle, query.strip())
-                    .or()
-                    .like(QuestionBankItemEntity::getQuestionText, query.strip())
-                    .or(keywordGroup -> {
+            wrapper.and(nested -> {
+                nested.like(QuestionBankItemEntity::getQuestionTitle, query.strip())
+                        .or()
+                        .like(QuestionBankItemEntity::getQuestionText, query.strip());
+                if (!keywords.isEmpty()) {
+                    nested.or(keywordGroup -> {
                         for (String keyword : keywords) {
                             keywordGroup
                                     .or()
@@ -197,7 +228,9 @@ public class MyBatisKnowledgeQuestionBankStore implements KnowledgeQuestionBankS
                                     .or()
                                     .like(QuestionBankItemEntity::getSourceBlockId, keyword);
                         }
-                    }));
+                    });
+                }
+            });
         }
         wrapper.orderByAsc(QuestionBankItemEntity::getQuestionTitle);
         return questionMapper.selectList(wrapper).stream()
@@ -366,5 +399,9 @@ public class MyBatisKnowledgeQuestionBankStore implements KnowledgeQuestionBankS
                 entity.getSourceBlockId(),
                 entity.getSourceChecksum(),
                 knowledgePointIds);
+    }
+
+    private static String sourceKey(String sourceBlockId, String sourceChecksum) {
+        return (sourceBlockId == null ? "" : sourceBlockId) + "\n" + (sourceChecksum == null ? "" : sourceChecksum);
     }
 }

@@ -8,10 +8,13 @@ import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchAuditEvent;
 import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchAuditLookup;
 import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService;
 import com.doob.mathagent.teacher.service.TeacherResourceRegistrationCommand;
+import com.doob.mathagent.teacher.service.TeacherResourceSearchFilter;
 import com.doob.mathagent.teacher.service.TeacherResourceService;
+import com.doob.mathagent.teacher.service.TeacherDocumentBlockStore;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncCheckpointQueryService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncExecutionService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncJobService;
+import com.doob.mathagent.teacher.vo.TeacherDocumentBlockResponse;
 import com.doob.mathagent.teacher.vo.TeacherResourceBlockSearchResponse;
 import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncCheckpointResponse;
@@ -50,6 +53,7 @@ public class TeacherResourceController {
     private final TeacherResourceBlockSearchService blockSearchService;
     private final TeacherResourceBlockSearchAuditLookup blockSearchAuditLookup;
     private final TeacherSourceSyncCheckpointQueryService checkpointQueryService;
+    private final TeacherDocumentBlockStore blockStore;
     private final RequestSubjectResolver subjectResolver;
     private final TeacherResourceCapabilityVerifier capabilityVerifier;
 
@@ -67,6 +71,7 @@ public class TeacherResourceController {
             TeacherResourceBlockSearchService blockSearchService,
             TeacherResourceBlockSearchAuditLookup blockSearchAuditLookup,
             TeacherSourceSyncCheckpointQueryService checkpointQueryService,
+            TeacherDocumentBlockStore blockStore,
             RequestSubjectResolver subjectResolver,
             TeacherResourceCapabilityVerifier capabilityVerifier) {
         this.teacherResourceService = Objects.requireNonNull(teacherResourceService, "teacherResourceService");
@@ -75,6 +80,7 @@ public class TeacherResourceController {
         this.blockSearchService = Objects.requireNonNull(blockSearchService, "blockSearchService");
         this.blockSearchAuditLookup = Objects.requireNonNull(blockSearchAuditLookup, "blockSearchAuditLookup");
         this.checkpointQueryService = Objects.requireNonNull(checkpointQueryService, "checkpointQueryService");
+        this.blockStore = Objects.requireNonNull(blockStore, "blockStore");
         this.subjectResolver = Objects.requireNonNull(subjectResolver, "subjectResolver");
         this.capabilityVerifier = Objects.requireNonNull(capabilityVerifier, "capabilityVerifier");
     }
@@ -130,6 +136,10 @@ public class TeacherResourceController {
     public TeacherResourceBlockSearchResponse searchBlocks(
             @RequestParam String query,
             @RequestParam(defaultValue = "10") int limit,
+            @RequestParam(value = "permissionScope", required = false) List<String> permissionScopes,
+            @RequestParam(value = "documentId", required = false) List<String> documentIds,
+            @RequestParam(value = "tag", required = false) List<String> tags,
+            @RequestParam(value = "strategy", required = false) String strategy,
             HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest).normalize();
         try {
@@ -138,10 +148,49 @@ public class TeacherResourceController {
                     subject.subjectType(),
                     subject.subjectId(),
                     query,
-                    limit);
+                    limit,
+                    "/api/teacher/resources/search",
+                    TeacherResourceSearchFilter.of(permissionScopes, documentIds, tags),
+                    strategy);
         } catch (IllegalArgumentException exception) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, exception.getMessage(), exception);
         }
+    }
+
+    /**
+     * Backward-compatible test helper for callers that do not pass metadata filters.
+     */
+    public TeacherResourceBlockSearchResponse searchBlocks(
+            String query,
+            int limit,
+            HttpServletRequest httpRequest) {
+        return searchBlocks(query, limit, null, null, null, null, httpRequest);
+    }
+
+    /**
+     * Lists parsed blocks for one visible teacher resource.
+     *
+     * This read-only endpoint exists so evaluation tooling can build strict RAG recall sets from real parsed blocks
+     * instead of inventing ground-truth ids. It must keep the same teacher/admin visibility boundary as resource list
+     * and search; do not replace it with a direct file or database shortcut in benchmark code.
+     *
+     * @param documentId resource document id
+     * @param httpRequest HTTP request containing backend session
+     * @return active parsed document blocks for the visible resource
+     */
+    @GetMapping("/api/teacher/resources/{documentId}/blocks")
+    public List<TeacherDocumentBlockResponse> listBlocks(
+            @PathVariable String documentId,
+            HttpServletRequest httpRequest) {
+        RequestSubject subject = subjectResolver.resolve(httpRequest).normalize();
+        boolean visible = teacherResourceService
+                .list(subject.tenantId(), subject.subjectType(), subject.subjectId())
+                .stream()
+                .anyMatch(resource -> resource.documentId().equals(documentId));
+        if (!visible) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Teacher resource not found");
+        }
+        return blockStore.listByDocument(subject.tenantId(), documentId);
     }
 
     /**

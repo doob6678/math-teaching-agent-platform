@@ -22,6 +22,7 @@ import com.doob.mathagent.teacher.service.TeacherSourceSyncCheckpointQueryServic
 import com.doob.mathagent.teacher.service.TeacherSourceSyncExecutionService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncJobService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncProperties;
+import com.doob.mathagent.teacher.service.TeacherDocumentBlockStore;
 import com.doob.mathagent.teacher.vo.TeacherDocumentBlockResponse;
 import com.doob.mathagent.teacher.vo.TeacherResourceBlockSearchResponse;
 import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
@@ -30,6 +31,7 @@ import com.doob.mathagent.teacher.vo.TeacherSourceSyncJobResponse;
 import com.doob.mathagent.vector.service.TestVectorIndexService;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.mock.web.MockHttpServletRequest;
@@ -110,7 +112,7 @@ class TeacherResourceControllerTest {
             TeacherSourceSyncJobService jobService,
             TeacherSourceSyncExecutionService executionService,
             TeacherResourceBlockSearchService searchService,
-            TeacherSourceSyncCheckpointQueryService checkpointQueryService,
+            TeacherDocumentBlockStore blockStore,
             RequestSubjectResolver subjectResolver,
             TeacherResourceCapabilityVerifier capabilityVerifier) {
         return controller(
@@ -119,7 +121,8 @@ class TeacherResourceControllerTest {
                 executionService,
                 searchService,
                 null,
-                checkpointQueryService,
+                null,
+                blockStore,
                 subjectResolver,
                 capabilityVerifier);
     }
@@ -131,6 +134,48 @@ class TeacherResourceControllerTest {
             TeacherResourceBlockSearchService searchService,
             TeacherResourceBlockSearchAuditLookup auditLookup,
             TeacherSourceSyncCheckpointQueryService checkpointQueryService,
+            RequestSubjectResolver subjectResolver,
+            TeacherResourceCapabilityVerifier capabilityVerifier) {
+        return controller(
+                resourceService,
+                jobService,
+                executionService,
+                searchService,
+                auditLookup,
+                checkpointQueryService,
+                null,
+                subjectResolver,
+                capabilityVerifier);
+    }
+
+    private static TeacherResourceController controller(
+            TeacherResourceService resourceService,
+            TeacherSourceSyncJobService jobService,
+            TeacherSourceSyncExecutionService executionService,
+            TeacherResourceBlockSearchService searchService,
+            TeacherSourceSyncCheckpointQueryService checkpointQueryService,
+            RequestSubjectResolver subjectResolver,
+            TeacherResourceCapabilityVerifier capabilityVerifier) {
+        return controller(
+                resourceService,
+                jobService,
+                executionService,
+                searchService,
+                null,
+                checkpointQueryService,
+                null,
+                subjectResolver,
+                capabilityVerifier);
+    }
+
+    private static TeacherResourceController controller(
+            TeacherResourceService resourceService,
+            TeacherSourceSyncJobService jobService,
+            TeacherSourceSyncExecutionService executionService,
+            TeacherResourceBlockSearchService searchService,
+            TeacherResourceBlockSearchAuditLookup auditLookup,
+            TeacherSourceSyncCheckpointQueryService checkpointQueryService,
+            TeacherDocumentBlockStore explicitBlockStore,
             RequestSubjectResolver subjectResolver,
             TeacherResourceCapabilityVerifier capabilityVerifier) {
         InMemoryTeacherResourceStore fallbackResourceStore = new InMemoryTeacherResourceStore();
@@ -151,6 +196,7 @@ class TeacherResourceControllerTest {
                         ? new TeacherSourceSyncCheckpointQueryService(
                                 fallbackResourceStore, fallbackJobStore, fallbackCheckpointStore)
                         : checkpointQueryService,
+                explicitBlockStore == null ? fallbackBlockStore : explicitBlockStore,
                 subjectResolver,
                 capabilityVerifier);
     }
@@ -537,6 +583,65 @@ class TeacherResourceControllerTest {
     }
 
     @Test
+    void listsParsedBlocksOnlyForVisibleTeacherResource() {
+        InMemoryTeacherResourceStore store = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        store.save(new TeacherResourceDocumentResponse(
+                "doc-own",
+                "school-a",
+                "teacher-88",
+                "local_path",
+                "Own parsed blocks",
+                null,
+                "C:/math/own",
+                "TEACHER_PRIVATE",
+                "synced",
+                "parsed",
+                "ready",
+                "ready",
+                java.util.List.of()));
+        store.save(new TeacherResourceDocumentResponse(
+                "doc-other",
+                "school-a",
+                "teacher-other",
+                "local_path",
+                "Other private blocks",
+                null,
+                "C:/math/other",
+                "TEACHER_PRIVATE",
+                "synced",
+                "parsed",
+                "ready",
+                "ready",
+                java.util.List.of()));
+        blockStore.replaceActiveBlocks("school-a", "doc-own", java.util.List.of(searchBlock(
+                "block-own",
+                "doc-own",
+                "strict recall source block")));
+        blockStore.replaceActiveBlocks("school-a", "doc-other", java.util.List.of(searchBlock(
+                "block-other",
+                "doc-other",
+                "hidden private block")));
+        TeacherResourceController controller = controller(
+                TeacherResourceServiceFixture.service(store, blockStore),
+                new TeacherSourceSyncJobService(store, new InMemoryTeacherSourceSyncJobStore()),
+                syncExecutionService(store, new InMemoryTeacherSourceSyncJobStore(), blockStore),
+                com.doob.mathagent.teacher.TeacherResourceBlockSearchServiceFixture.service(store, blockStore),
+                blockStore,
+                request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"),
+                (token, action, path, requestHash, subject) -> true);
+
+        List<TeacherDocumentBlockResponse> blocks =
+                controller.listBlocks("doc-own", new MockHttpServletRequest());
+
+        assertThat(blocks).extracting(TeacherDocumentBlockResponse::blockId).containsExactly("block-own");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                        controller.listBlocks("doc-other", new MockHttpServletRequest()))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("Teacher resource not found");
+    }
+
+    @Test
     void rejectsStudentTeacherBlockSearch() {
         InMemoryTeacherResourceStore store = new InMemoryTeacherResourceStore();
         InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
@@ -552,6 +657,186 @@ class TeacherResourceControllerTest {
                         controller.searchBlocks("vector theorem", 10, new MockHttpServletRequest()))
                 .isInstanceOf(ResponseStatusException.class)
                 .hasMessageContaining("teacher or admin");
+    }
+
+    @Test
+    void searchesParsedBlocksWithScopeAndTagFilters() {
+        InMemoryTeacherResourceStore store = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        store.save(new TeacherResourceDocumentResponse(
+                "doc-vip",
+                "school-a",
+                "teacher-88",
+                "local_path",
+                "VIP derivative notes",
+                null,
+                "C:/math/vip",
+                "MATH_VIP",
+                "synced",
+                "parsed",
+                "ready",
+                "ready",
+                java.util.List.of()));
+        store.save(new TeacherResourceDocumentResponse(
+                "doc-private",
+                "school-a",
+                "teacher-88",
+                "local_path",
+                "Private vector notes",
+                null,
+                "C:/math/private",
+                "TEACHER_PRIVATE",
+                "synced",
+                "parsed",
+                "ready",
+                "ready",
+                java.util.List.of()));
+        blockStore.replaceActiveBlocks("school-a", "doc-vip", java.util.List.of(searchBlock(
+                "block-vip",
+                "doc-vip",
+                "derivative monotonicity endpoint method")));
+        blockStore.replaceActiveBlocks("school-a", "doc-private", java.util.List.of(searchBlock(
+                "block-private",
+                "doc-private",
+                "vector normal line angle method")));
+        TeacherResourceController controller = controller(
+                TeacherResourceServiceFixture.service(store, blockStore),
+                new TeacherSourceSyncJobService(store, new InMemoryTeacherSourceSyncJobStore()),
+                syncExecutionService(store, new InMemoryTeacherSourceSyncJobStore(), blockStore),
+                com.doob.mathagent.teacher.TeacherResourceBlockSearchServiceFixture.service(store, blockStore),
+                request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"),
+                (token, action, path, requestHash, subject) -> true);
+
+        TeacherResourceBlockSearchResponse response = controller.searchBlocks(
+                "method",
+                10,
+                java.util.List.of("MATH_VIP"),
+                null,
+                java.util.List.of("derivative"),
+                null,
+                new MockHttpServletRequest());
+
+        assertThat(response.retrievalMode()).isEqualTo("two_stage_doc_block_filtered");
+        assertThat(response.hits()).extracting(TeacherResourceBlockSearchResponse.Hit::blockId)
+                .containsExactly("block-vip");
+    }
+
+    @Test
+    void ranksMatchingSectionBlockAheadOfSiblingBlock() {
+        InMemoryTeacherResourceStore store = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        store.save(new TeacherResourceDocumentResponse(
+                "doc-derivative",
+                "school-a",
+                "teacher-88",
+                "local_path",
+                "导数参数讨论讲义",
+                null,
+                "C:/math/derivative",
+                "MATH_VIP",
+                "synced",
+                "parsed",
+                "ready",
+                "ready",
+                java.util.List.of()));
+        blockStore.replaceActiveBlocks("school-a", "doc-derivative", java.util.List.of(
+                searchBlockWithSection(
+                        "block-sign",
+                        "doc-derivative",
+                        "导数参数讨论",
+                        "符号表",
+                        "讲符号表时要结合区间端点讨论单调性变化"),
+                searchBlockWithSection(
+                        "block-method",
+                        "doc-derivative",
+                        "导数参数讨论",
+                        "方法总览",
+                        "先说明为什么不能只看导数零点，再回到原函数增减变化")));
+        TeacherResourceController controller = controller(
+                TeacherResourceServiceFixture.service(store, blockStore),
+                new TeacherSourceSyncJobService(store, new InMemoryTeacherSourceSyncJobStore()),
+                syncExecutionService(store, new InMemoryTeacherSourceSyncJobStore(), blockStore),
+                com.doob.mathagent.teacher.TeacherResourceBlockSearchServiceFixture.service(store, blockStore),
+                request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"),
+                (token, action, path, requestHash, subject) -> true);
+
+        TeacherResourceBlockSearchResponse response = controller.searchBlocks(
+                "导数参数讨论 符号表 区间端点 单调性",
+                10,
+                new MockHttpServletRequest());
+
+        assertThat(response.hits()).isNotEmpty();
+        assertThat(response.hits().getFirst().blockId()).isEqualTo("block-sign");
+    }
+
+    @Test
+    void diversifiesSiblingBlocksSoAnotherRelevantDocumentCanReachTopResults() {
+        InMemoryTeacherResourceStore store = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        store.save(new TeacherResourceDocumentResponse(
+                "doc-noisy",
+                "school-a",
+                "teacher-88",
+                "local_path",
+                "Derivative noise bundle",
+                null,
+                "C:/math/noisy",
+                "MATH_VIP",
+                "synced",
+                "parsed",
+                "ready",
+                "ready",
+                java.util.List.of()));
+        store.save(new TeacherResourceDocumentResponse(
+                "doc-target",
+                "school-a",
+                "teacher-88",
+                "local_path",
+                "Vector angle guide",
+                null,
+                "C:/math/target",
+                "MATH_VIP",
+                "synced",
+                "parsed",
+                "ready",
+                "ready",
+                java.util.List.of()));
+        blockStore.replaceActiveBlocks("school-a", "doc-noisy", java.util.List.of(
+                searchBlock("block-noisy-1", "doc-noisy", "vector angle method with repeated generic theorem words"),
+                searchBlock("block-noisy-2", "doc-noisy", "vector angle method with repeated generic endpoint words"),
+                searchBlock("block-noisy-3", "doc-noisy", "vector angle method with repeated generic summary words")));
+        blockStore.replaceActiveBlocks("school-a", "doc-target", java.util.List.of(
+                searchBlockWithSection(
+                        "block-target",
+                        "doc-target",
+                        "Space vector",
+                        "Line-plane angle",
+                        "vector angle method explains direction vector then normal vector to convert the angle")));
+        TeacherResourceController controller = controller(
+                TeacherResourceServiceFixture.service(store, blockStore),
+                new TeacherSourceSyncJobService(store, new InMemoryTeacherSourceSyncJobStore()),
+                syncExecutionService(store, new InMemoryTeacherSourceSyncJobStore(), blockStore),
+                com.doob.mathagent.teacher.TeacherResourceBlockSearchServiceFixture.service(store, blockStore),
+                request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"),
+                (token, action, path, requestHash, subject) -> true);
+
+        TeacherResourceBlockSearchResponse response = controller.searchBlocks(
+                "vector angle method normal vector",
+                3,
+                new MockHttpServletRequest());
+
+        assertThat(response.hits()).hasSize(3);
+        assertThat(response.hits().stream()
+                .limit(2)
+                .map(TeacherResourceBlockSearchResponse.Hit::documentId)
+                .distinct()
+                .count()).isEqualTo(2);
+        assertThat(response.hits().subList(0, 2))
+                .extracting(TeacherResourceBlockSearchResponse.Hit::documentId)
+                .contains("doc-target");
+        assertThat(response.hits().subList(0, 2))
+                .extracting(TeacherResourceBlockSearchResponse.Hit::blockId)
+                .contains("block-target");
     }
 
     @Test
@@ -756,6 +1041,31 @@ class TeacherResourceControllerTest {
                 1,
                 "Vectors",
                 "Theorem",
+                null,
+                null,
+                text,
+                text,
+                "[]",
+                "[]",
+                blockId + "-checksum",
+                1.0,
+                "active");
+    }
+
+    private static TeacherDocumentBlockResponse searchBlockWithSection(
+            String blockId,
+            String documentId,
+            String chapter,
+            String section,
+            String text) {
+        return new TeacherDocumentBlockResponse(
+                blockId,
+                documentId,
+                documentId + ":" + blockId,
+                "text",
+                1,
+                chapter,
+                section,
                 null,
                 null,
                 text,

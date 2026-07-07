@@ -8,6 +8,7 @@ import com.doob.mathagent.teacher.service.InMemoryTeacherResourceStore;
 import com.doob.mathagent.teacher.service.RecentTeacherResourceBlockSearchAuditStore;
 import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchAuditEvent;
 import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService;
+import com.doob.mathagent.teacher.service.TeacherResourceSearchFilter;
 import com.doob.mathagent.teacher.vo.TeacherDocumentBlockResponse;
 import com.doob.mathagent.teacher.vo.TeacherResourceBlockSearchResponse;
 import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
@@ -144,6 +145,103 @@ class TeacherResourceBlockSearchServiceTest {
     }
 
     @Test
+    void defaultsToTwoStageRetrievalAndReranksAnalysisBlockInsideCorrectDocument() {
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        resourceStore.save(document("doc-qa", "teacher-1", "MATH_VIP", "Vector angle bundle"));
+        resourceStore.save(document("doc-lesson", "teacher-1", "MATH_VIP", "Vector angle lesson"));
+        blockStore.replaceActiveBlocks("school-a", "doc-qa", List.of(
+                detailedBlock(
+                        "b-question",
+                        "doc-qa",
+                        1,
+                        "qq_bundle/question.md",
+                        "question",
+                        "Space vector",
+                        "Angle",
+                        "Question: vector angle prompt asks for the included angle."),
+                detailedBlock(
+                        "b-analysis",
+                        "doc-qa",
+                        2,
+                        "qq_bundle/analysis.md",
+                        "analysis",
+                        "Space vector",
+                        "Angle analysis",
+                        "Analysis: use the dot product and norm formula to solve the vector angle."),
+                detailedBlock(
+                        "b-lesson",
+                        "doc-qa",
+                        3,
+                        "qq_bundle/lesson.md",
+                        "lesson",
+                        "Space vector",
+                        "Method summary",
+                        "Lesson note: summarize the vector angle method.")));
+        blockStore.replaceActiveBlocks("school-a", "doc-lesson", List.of(detailedBlock(
+                "b-generic",
+                "doc-lesson",
+                1,
+                "handout/lesson.md",
+                "lesson",
+                "Space vector",
+                "Angle",
+                "Lesson note: vector angle method overview with no worked analysis.")));
+        TeacherResourceBlockSearchService service = TeacherResourceBlockSearchServiceFixture.service(resourceStore, blockStore);
+
+        TeacherResourceBlockSearchResponse response = service.search(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                "vector angle analysis",
+                5);
+
+        assertThat(response.retrievalMode()).isEqualTo("two_stage_doc_block");
+        assertThat(response.hits()).isNotEmpty();
+        assertThat(response.hits().getFirst().documentId()).isEqualTo("doc-qa");
+        assertThat(response.hits().getFirst().blockId()).isEqualTo("b-analysis");
+        assertThat(response.hits().getFirst().blockRole()).isEqualTo("analysis");
+        assertThat(response.hits().getFirst().sourcePath()).contains("analysis.md");
+        assertThat(response.hits().getFirst().evidenceBlockIds())
+                .contains("b-question", "b-analysis", "b-lesson");
+        assertThat(response.hits().getFirst().evidenceText())
+                .contains("included angle")
+                .contains("dot product")
+                .contains("method");
+    }
+
+    @Test
+    void canStillRunLegacyBlockHybridForBaselineComparison() {
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        resourceStore.save(document("doc-own", "teacher-1", "TEACHER_PRIVATE", "Own vector notes"));
+        blockStore.replaceActiveBlocks("school-a", "doc-own", List.of(detailedBlock(
+                "b-own",
+                "doc-own",
+                1,
+                "handout/reference.md",
+                "reference",
+                "Vectors",
+                "Dot product",
+                "Space vector dot product method belongs to the teacher private handout.")));
+        TeacherResourceBlockSearchService service = TeacherResourceBlockSearchServiceFixture.service(resourceStore, blockStore);
+
+        TeacherResourceBlockSearchResponse response = service.search(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                "dot product",
+                10,
+                "/api/teacher/resources/search",
+                TeacherResourceSearchFilter.EMPTY,
+                "legacy_block_hybrid");
+
+        assertThat(response.retrievalMode()).isEqualTo("legacy_block_hybrid");
+        assertThat(response.hits()).extracting(TeacherResourceBlockSearchResponse.Hit::blockId)
+                .containsExactly("b-own");
+    }
+
+    @Test
     void studentCannotSearchTeacherResourceBlocks() {
         TeacherResourceBlockSearchService service = TeacherResourceBlockSearchServiceFixture.service(
                 new InMemoryTeacherResourceStore(),
@@ -180,18 +278,42 @@ class TeacherResourceBlockSearchServiceTest {
             String documentId,
             int blockOrder,
             String text) {
+        return detailedBlock(
+                blockId,
+                documentId,
+                blockOrder,
+                "notes/" + blockId + ".md",
+                "reference",
+                "Vectors",
+                "Dot product",
+                text);
+    }
+
+    private static TeacherDocumentBlockResponse detailedBlock(
+            String blockId,
+            String documentId,
+            int blockOrder,
+            String sourcePath,
+            String blockRole,
+            String chapter,
+            String section,
+            String text) {
         return new TeacherDocumentBlockResponse(
                 blockId,
                 documentId,
                 documentId + ":" + blockOrder,
                 "text",
                 blockOrder,
-                "Vectors",
-                "Dot product",
+                chapter,
+                section,
                 null,
                 null,
+                sourcePath,
+                blockRole,
                 text,
                 text.toLowerCase(),
+                "[]",
+                "[]",
                 "[]",
                 "[]",
                 blockId + "-checksum",

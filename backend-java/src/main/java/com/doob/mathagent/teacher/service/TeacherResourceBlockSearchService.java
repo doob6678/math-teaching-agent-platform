@@ -4,7 +4,11 @@ import com.doob.mathagent.teacher.vo.TeacherDocumentBlockResponse;
 import com.doob.mathagent.teacher.vo.TeacherResourceBlockSearchResponse;
 import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
 import com.doob.mathagent.vector.service.VectorIndexService;
+import com.doob.mathagent.vector.service.VectorSearchFilter;
 import com.doob.mathagent.vector.service.VectorSearchHit;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -13,21 +17,42 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
-import java.util.UUID;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 /**
  * Searches parsed teacher resource blocks with backend-controlled tenant and scope visibility.
+ *
+ * <p>The default path is an explicit two-stage retriever:</p>
+ *
+ * <ol>
+ *     <li>Aggregate vector + lexical evidence at document level so the right document is more likely to enter the
+ *     candidate set even when several sibling blocks look similar.</li>
+ *     <li>Rerank blocks only inside those candidate documents using block role, headings, source path, graph tags,
+ *     and neighboring evidence windows.</li>
+ * </ol>
+ *
+ * <p>The legacy block-level hybrid path is kept for baseline comparison. Do not remove it until benchmark outputs
+ * have been updated, otherwise we lose a stable before/after reference for unknown runtime-authored eval data.</p>
  */
 @Service
 public class TeacherResourceBlockSearchService {
 
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final TypeReference<List<String>> STRING_LIST_TYPE = new TypeReference<>() {
+    };
+
     private static final int DEFAULT_LIMIT = 10;
     private static final int MAX_LIMIT = 20;
     private static final int SNIPPET_RADIUS = 80;
+    private static final int EVIDENCE_WINDOW_RADIUS = 1;
+    private static final double METADATA_EXACT_MATCH_BOOST = 4.0d;
+    private static final double METADATA_TERM_MATCH_BOOST = 0.75d;
+    private static final String STRATEGY_LEGACY_BLOCK_HYBRID = "legacy_block_hybrid";
+    private static final String STRATEGY_TWO_STAGE_DOC_BLOCK = "two_stage_doc_block";
 
     private final TeacherResourceStore resourceStore;
     private final TeacherDocumentBlockStore blockStore;
@@ -90,6 +115,55 @@ public class TeacherResourceBlockSearchService {
             String query,
             int limit,
             String endpoint) {
+        return search(
+                tenantId,
+                viewerRole,
+                viewerSubjectId,
+                query,
+                limit,
+                endpoint,
+                TeacherResourceSearchFilter.EMPTY,
+                STRATEGY_TWO_STAGE_DOC_BLOCK);
+    }
+
+    /**
+     * Searches visible blocks and applies optional metadata filters.
+     */
+    public TeacherResourceBlockSearchResponse search(
+            String tenantId,
+            String viewerRole,
+            String viewerSubjectId,
+            String query,
+            int limit,
+            String endpoint,
+            TeacherResourceSearchFilter filter) {
+        return search(
+                tenantId,
+                viewerRole,
+                viewerSubjectId,
+                query,
+                limit,
+                endpoint,
+                filter,
+                STRATEGY_TWO_STAGE_DOC_BLOCK);
+    }
+
+    /**
+     * Searches visible blocks using either the legacy block-level hybrid baseline or the new two-stage pipeline.
+     *
+     * <p>Keep this strategy switch in the Java backend instead of Python benchmark code. That way baseline and upgraded
+     * retrieval both exercise the same real HTTP/permission/vector stack and cannot drift into a fake benchmark-only
+     * code path.</p>
+     */
+    public TeacherResourceBlockSearchResponse search(
+            String tenantId,
+            String viewerRole,
+            String viewerSubjectId,
+            String query,
+            int limit,
+            String endpoint,
+            TeacherResourceSearchFilter filter,
+            String strategy) {
         long startedNanos = System.nanoTime();
         String normalizedTenantId = requireText(tenantId, "tenantId is required");
         String normalizedRole = requireText(viewerRole, "viewerRole is required").toLowerCase(Locale.ROOT);
@@ -97,36 +171,102 @@ public class TeacherResourceBlockSearchService {
         requireTeacherOrAdmin(normalizedRole);
         String normalizedQuery = normalizeQuery(query);
         int safeLimit = clampLimit(limit);
+        String normalizedStrategy = normalizeStrategy(strategy);
+        TeacherResourceSearchFilter normalizedFilter = filter == null ? TeacherResourceSearchFilter.EMPTY : filter;
         if (normalizedQuery.isBlank()) {
             TeacherResourceBlockSearchResponse emptyResponse = response(
                     normalizedQuery,
                     safeLimit,
-                    "teacher_block_empty",
+                    normalizedStrategy + "_empty",
                     List.of());
             recordAudit(normalizedTenantId, normalizedRole, normalizedSubjectId, endpoint, emptyResponse, startedNanos);
             return emptyResponse;
         }
         String[] terms = searchTerms(normalizedQuery);
         List<TeacherResourceDocumentResponse> documents =
-                resourceStore.listSearchable(normalizedTenantId, normalizedRole, normalizedSubjectId);
-        TeacherResourceBlockSearchResponse searchResponse = hybridResponse(
-                normalizedTenantId,
-                documents,
-                normalizedQuery,
-                terms,
-                safeLimit);
+                filteredDocuments(
+                        resourceStore.listSearchable(normalizedTenantId, normalizedRole, normalizedSubjectId),
+                        normalizedFilter);
+        TeacherResourceBlockSearchResponse searchResponse =
+                STRATEGY_LEGACY_BLOCK_HYBRID.equals(normalizedStrategy)
+                        ? hybridResponse(
+                                normalizedTenantId,
+                                documents,
+                                normalizedQuery,
+                                terms,
+                                safeLimit,
+                                normalizedFilter)
+                        : twoStageResponse(
+                                normalizedTenantId,
+                                documents,
+                                normalizedQuery,
+                                terms,
+                                safeLimit,
+                                normalizedFilter);
         recordAudit(normalizedTenantId, normalizedRole, normalizedSubjectId, endpoint, searchResponse, startedNanos);
         return searchResponse;
     }
 
+    private TeacherResourceBlockSearchResponse twoStageResponse(
+            String tenantId,
+            List<TeacherResourceDocumentResponse> documents,
+            String normalizedQuery,
+            String[] terms,
+            int safeLimit,
+            TeacherResourceSearchFilter filter) {
+        if (documents.isEmpty()) {
+            return response(normalizedQuery, safeLimit, retrievalMode(STRATEGY_TWO_STAGE_DOC_BLOCK, filter, "no_visible_documents"), List.of());
+        }
+        Map<String, TeacherResourceDocumentResponse> documentsById = documents.stream()
+                .collect(Collectors.toMap(
+                        TeacherResourceDocumentResponse::documentId,
+                        Function.identity(),
+                        (left, ignored) -> left,
+                        LinkedHashMap::new));
+        Map<String, List<BlockContext>> blocksByDocumentId = loadVisibleBlockContexts(tenantId, documents, filter.tags());
+        if (blocksByDocumentId.isEmpty()) {
+            return response(normalizedQuery, safeLimit, retrievalMode(STRATEGY_TWO_STAGE_DOC_BLOCK, filter, "no_visible_blocks"), List.of());
+        }
+        Map<String, Double> vectorScoreByKey = vectorScoreByKey(
+                normalizedQuery,
+                safeLimit,
+                blocksByDocumentId,
+                filter);
+        List<DocumentCandidate> documentCandidates = coarseDocumentCandidates(
+                documentsById,
+                blocksByDocumentId,
+                vectorScoreByKey,
+                normalizedQuery,
+                terms,
+                safeLimit);
+        List<DocumentCandidate> rankedDocuments = documentCandidates.stream()
+                .sorted(Comparator.comparingDouble(DocumentCandidate::score).reversed()
+                        .thenComparing(candidate -> candidate.document().title())
+                        .thenComparing(candidate -> candidate.document().documentId()))
+                .limit(candidateDocumentLimit(safeLimit, blocksByDocumentId.size()))
+                .toList();
+        List<TeacherResourceBlockSearchResponse.Hit> hits = rerankedBlockHits(
+                rankedDocuments,
+                blocksByDocumentId,
+                vectorScoreByKey,
+                normalizedQuery,
+                terms,
+                safeLimit);
+        return response(normalizedQuery, safeLimit, retrievalMode(STRATEGY_TWO_STAGE_DOC_BLOCK, filter, null), hits);
+    }
+
+    /**
+     * Legacy baseline kept for before/after runtime benchmark comparison.
+     */
     private TeacherResourceBlockSearchResponse hybridResponse(
             String tenantId,
             List<TeacherResourceDocumentResponse> documents,
             String normalizedQuery,
             String[] terms,
-            int safeLimit) {
+            int safeLimit,
+            TeacherResourceSearchFilter filter) {
         if (documents.isEmpty()) {
-            return response(normalizedQuery, safeLimit, "teacher_block_no_visible_documents", List.of());
+            return response(normalizedQuery, safeLimit, retrievalMode(STRATEGY_LEGACY_BLOCK_HYBRID, filter, "no_visible_documents"), List.of());
         }
         Map<String, TeacherResourceDocumentResponse> documentsById = documents.stream()
                 .collect(Collectors.toMap(
@@ -137,15 +277,25 @@ public class TeacherResourceBlockSearchService {
         Set<String> visibleDocumentIds = documentsById.keySet();
         Map<String, TeacherDocumentBlockResponse> blocksById = new LinkedHashMap<>();
         for (TeacherResourceDocumentResponse document : documents) {
-            for (TeacherDocumentBlockResponse block : blockStore.listByDocument(document.tenantId(), document.documentId())) {
-                blocksById.put(block.blockId(), block);
+            for (TeacherDocumentBlockResponse block : blockStore.listByDocument(tenantId, document.documentId())) {
+                if (matchesTags(document, block, filter.tags())) {
+                    blocksById.put(block.blockId(), block);
+                }
             }
         }
         List<TeacherResourceBlockSearchResponse.Hit> vectorHits = vectorIndexService
-                .searchTeacherResourceBlocks(normalizedQuery, Math.max(safeLimit * 10, 50))
+                .searchTeacherResourceBlocks(
+                        normalizedQuery,
+                        Math.max(safeLimit * 10, 50),
+                        new VectorSearchFilter(List.copyOf(visibleDocumentIds), filter.permissionScopes()))
                 .stream()
                 .filter(hit -> visibleDocumentIds.contains(hit.documentId()))
-                .map(hit -> toVectorHit(documentsById.get(hit.documentId()), blocksById.get(hit.blockId()), hit, normalizedQuery, terms))
+                .map(hit -> toLegacyVectorHit(
+                        documentsById.get(hit.documentId()),
+                        blocksById.get(hit.blockId()),
+                        hit,
+                        normalizedQuery,
+                        terms))
                 .filter(Objects::nonNull)
                 .toList();
         List<TeacherResourceBlockSearchResponse.Hit> lexicalHits = lexicalHits(
@@ -153,9 +303,308 @@ public class TeacherResourceBlockSearchService {
                 documents,
                 normalizedQuery,
                 terms,
-                Math.max(safeLimit * 4, safeLimit));
+                Math.max(safeLimit * 4, safeLimit),
+                filter.tags());
         List<TeacherResourceBlockSearchResponse.Hit> hits = mergeHybridHits(vectorHits, lexicalHits, safeLimit);
-        return response(normalizedQuery, safeLimit, "teacher_block_hybrid", hits);
+        return response(normalizedQuery, safeLimit, retrievalMode(STRATEGY_LEGACY_BLOCK_HYBRID, filter, null), hits);
+    }
+
+    /**
+     * Loads active blocks once and keeps normalized metadata alongside them so stage one and stage two share the same
+     * real parsed source state.
+     */
+    private Map<String, List<BlockContext>> loadVisibleBlockContexts(
+            String tenantId,
+            List<TeacherResourceDocumentResponse> documents,
+            List<String> tags) {
+        Map<String, List<BlockContext>> contexts = new LinkedHashMap<>();
+        for (TeacherResourceDocumentResponse document : documents) {
+            List<BlockContext> blocks = blockStore.listByDocument(tenantId, document.documentId()).stream()
+                    .filter(block -> matchesTags(document, block, tags))
+                    .map(block -> toContext(document, block))
+                    .toList();
+            if (!blocks.isEmpty()) {
+                contexts.put(document.documentId(), blocks);
+            }
+        }
+        return contexts;
+    }
+
+    /**
+     * Stage one groups vector hits by document instead of consuming them directly as final block hits. This is the
+     * main behavioral change: vector search helps decide which document is plausible, then stage two resolves the
+     * correct block inside that document.
+     */
+    private Map<String, Double> vectorScoreByKey(
+            String normalizedQuery,
+            int safeLimit,
+            Map<String, List<BlockContext>> blocksByDocumentId,
+            TeacherResourceSearchFilter filter) {
+        Set<String> visibleDocumentIds = blocksByDocumentId.keySet();
+        if (visibleDocumentIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, Set<String>> blockIdsByDocument = new LinkedHashMap<>();
+        for (Map.Entry<String, List<BlockContext>> entry : blocksByDocumentId.entrySet()) {
+            blockIdsByDocument.put(
+                    entry.getKey(),
+                    entry.getValue().stream().map(context -> context.block().blockId()).collect(Collectors.toSet()));
+        }
+        Map<String, Double> scores = new LinkedHashMap<>();
+        List<VectorSearchHit> hits = vectorIndexService.searchTeacherResourceBlocks(
+                normalizedQuery,
+                Math.max(safeLimit * 12, 60),
+                new VectorSearchFilter(List.copyOf(visibleDocumentIds), filter.permissionScopes()));
+        for (VectorSearchHit hit : hits) {
+            Set<String> visibleBlockIds = blockIdsByDocument.get(hit.documentId());
+            if (visibleBlockIds == null || !visibleBlockIds.contains(hit.blockId())) {
+                continue;
+            }
+            String key = blockKey(hit.documentId(), hit.blockId());
+            scores.merge(key, hit.score(), Math::max);
+        }
+        return scores;
+    }
+
+    private List<DocumentCandidate> coarseDocumentCandidates(
+            Map<String, TeacherResourceDocumentResponse> documentsById,
+            Map<String, List<BlockContext>> blocksByDocumentId,
+            Map<String, Double> vectorScoreByKey,
+            String normalizedQuery,
+            String[] terms,
+            int safeLimit) {
+        List<DocumentCandidate> candidates = new ArrayList<>();
+        for (Map.Entry<String, List<BlockContext>> entry : blocksByDocumentId.entrySet()) {
+            TeacherResourceDocumentResponse document = documentsById.get(entry.getKey());
+            if (document == null) {
+                continue;
+            }
+            List<BlockContext> blocks = entry.getValue();
+            double bestBlockLexical = 0;
+            double bestStructure = 0;
+            double bestVector = 0;
+            int lexicalHitCount = 0;
+            int vectorHitCount = 0;
+            for (BlockContext block : blocks) {
+                double lexical = score(block.searchableText(), normalizedQuery, terms)
+                        + metadataScore(document, block.block(), normalizedQuery, terms);
+                double structure = fieldScore(block.sourcePath(), normalizedQuery, terms)
+                        + fieldScore(block.block().chapter(), normalizedQuery, terms)
+                        + fieldScore(block.block().section(), normalizedQuery, terms)
+                        + fieldScore(block.blockRole(), normalizedQuery, terms)
+                        + graphTagScore(block.graphTags(), normalizedQuery, terms)
+                        + roleCueScore(block.blockRole(), block.sourcePath(), normalizedQuery);
+                double vector = vectorScoreByKey.getOrDefault(blockKey(document.documentId(), block.block().blockId()), 0.0d);
+                if (lexical > 0) {
+                    lexicalHitCount += 1;
+                }
+                if (vector > 0) {
+                    vectorHitCount += 1;
+                }
+                bestBlockLexical = Math.max(bestBlockLexical, lexical);
+                bestStructure = Math.max(bestStructure, structure);
+                bestVector = Math.max(bestVector, vector);
+            }
+            double documentScore = documentMetadataScore(document, normalizedQuery, terms)
+                    + documentSourceCueScore(document, blocks, normalizedQuery)
+                    + bestBlockLexical * 1.35d
+                    + bestStructure
+                    + Math.min(lexicalHitCount, 2) * 0.8d
+                    + bestVector * 8.0d
+                    + Math.min(vectorHitCount, 2) * 0.75d;
+            candidates.add(new DocumentCandidate(document, blocks, documentScore));
+        }
+        return candidates.stream()
+                .sorted(Comparator.comparingDouble(DocumentCandidate::score).reversed()
+                        .thenComparing(candidate -> candidate.document().title())
+                        .thenComparing(candidate -> candidate.document().documentId()))
+                .limit(candidateDocumentLimit(safeLimit, blocksByDocumentId.size()))
+                .toList();
+    }
+
+    /**
+     * Stage two reranks only inside candidate documents. This avoids the old failure mode where one near-duplicate
+     * sibling block from an unrelated document beats the correct local neighbor block from the right document.
+     */
+    private List<TeacherResourceBlockSearchResponse.Hit> rerankedBlockHits(
+            List<DocumentCandidate> rankedDocuments,
+            Map<String, List<BlockContext>> blocksByDocumentId,
+            Map<String, Double> vectorScoreByKey,
+            String normalizedQuery,
+            String[] terms,
+            int safeLimit) {
+        List<BlockCandidate> blockCandidates = new ArrayList<>();
+        for (DocumentCandidate candidate : rankedDocuments) {
+            for (BlockContext block : candidate.blocks()) {
+                double lexical = score(block.searchableText(), normalizedQuery, terms);
+                double metadata = metadataScore(candidate.document(), block.block(), normalizedQuery, terms);
+                double structure = fieldScore(block.sourcePath(), normalizedQuery, terms)
+                        + fieldScore(block.block().chapter(), normalizedQuery, terms)
+                        + fieldScore(block.block().section(), normalizedQuery, terms);
+                double graph = graphTagScore(block.graphTags(), normalizedQuery, terms);
+                double role = roleCueScore(block.blockRole(), block.sourcePath(), normalizedQuery)
+                        + fieldScore(block.blockRole(), normalizedQuery, terms);
+                double vector = vectorScoreByKey.getOrDefault(blockKey(candidate.document().documentId(), block.block().blockId()), 0.0d);
+                double score = candidate.score() * 0.18d
+                        + lexical * 1.7d
+                        + metadata
+                        + structure
+                        + graph
+                        + role
+                        + vector * 8.0d
+                        + exactQueryBonus(block.searchableText(), normalizedQuery);
+                blockCandidates.add(new BlockCandidate(candidate.document(), block, score));
+            }
+        }
+        return blockCandidates.stream()
+                .sorted(Comparator.comparingDouble(BlockCandidate::score).reversed()
+                        .thenComparing(candidate -> candidate.document().title())
+                        .thenComparing(candidate -> candidate.block().block().blockOrder()))
+                .limit(safeLimit)
+                .map(candidate -> toTwoStageHit(candidate, blocksByDocumentId.get(candidate.document().documentId()), normalizedQuery, terms))
+                .toList();
+    }
+
+    private static int candidateDocumentLimit(int safeLimit, int visibleDocumentCount) {
+        if (visibleDocumentCount <= 0) {
+            return 0;
+        }
+        return Math.min(visibleDocumentCount, Math.max(safeLimit * 3, 6));
+    }
+
+    private static TeacherResourceBlockSearchResponse.Hit toTwoStageHit(
+            BlockCandidate candidate,
+            List<BlockContext> documentBlocks,
+            String normalizedQuery,
+            String[] terms) {
+        BlockContext context = candidate.block();
+        EvidenceWindow evidence = evidenceWindow(context, documentBlocks);
+        return new TeacherResourceBlockSearchResponse.Hit(
+                candidate.document().documentId(),
+                candidate.document().title(),
+                candidate.document().sourceType(),
+                candidate.document().permissionScope(),
+                context.block().blockId(),
+                context.block().blockType(),
+                context.block().blockOrder(),
+                context.block().chapter(),
+                context.block().section(),
+                context.block().pageNo(),
+                context.sourcePath(),
+                context.blockRole(),
+                context.graphTags(),
+                evidence.blockIds(),
+                evidence.text(),
+                snippet(textOrDefault(context.block().rawText(), context.block().normalizedText()), normalizedQuery, terms),
+                candidate.score());
+    }
+
+    /**
+     * Returns the central hit block plus adjacent parsed neighbors. We do not expand arbitrarily: the goal is to keep
+     * citations stable while still handling real evidence that spans a prompt block and the following answer/analysis.
+     */
+    private static EvidenceWindow evidenceWindow(BlockContext target, List<BlockContext> documentBlocks) {
+        if (documentBlocks == null || documentBlocks.isEmpty()) {
+            return new EvidenceWindow(List.of(target.block().blockId()), textOrDefault(target.block().rawText(), target.block().normalizedText()));
+        }
+        int targetIndex = -1;
+        for (int index = 0; index < documentBlocks.size(); index += 1) {
+            if (documentBlocks.get(index).block().blockId().equals(target.block().blockId())) {
+                targetIndex = index;
+                break;
+            }
+        }
+        if (targetIndex < 0) {
+            return new EvidenceWindow(List.of(target.block().blockId()), textOrDefault(target.block().rawText(), target.block().normalizedText()));
+        }
+        List<String> blockIds = new ArrayList<>();
+        List<String> texts = new ArrayList<>();
+        int start = Math.max(0, targetIndex - EVIDENCE_WINDOW_RADIUS);
+        int end = Math.min(documentBlocks.size() - 1, targetIndex + EVIDENCE_WINDOW_RADIUS);
+        for (int index = start; index <= end; index += 1) {
+            BlockContext neighbor = documentBlocks.get(index);
+            blockIds.add(neighbor.block().blockId());
+            String text = textOrDefault(neighbor.block().rawText(), neighbor.block().normalizedText());
+            if (!text.isBlank()) {
+                texts.add(text);
+            }
+        }
+        return new EvidenceWindow(List.copyOf(blockIds), String.join("\n", texts));
+    }
+
+    private static TeacherResourceBlockSearchResponse.Hit boostLexicalHit(
+            TeacherResourceBlockSearchResponse.Hit lexicalHit,
+            double vectorScore) {
+        return new TeacherResourceBlockSearchResponse.Hit(
+                lexicalHit.documentId(),
+                lexicalHit.documentTitle(),
+                lexicalHit.sourceType(),
+                lexicalHit.permissionScope(),
+                lexicalHit.blockId(),
+                lexicalHit.blockType(),
+                lexicalHit.blockOrder(),
+                lexicalHit.chapter(),
+                lexicalHit.section(),
+                lexicalHit.pageNo(),
+                lexicalHit.sourcePath(),
+                lexicalHit.blockRole(),
+                lexicalHit.graphTags(),
+                lexicalHit.evidenceBlockIds(),
+                lexicalHit.evidenceText(),
+                lexicalHit.snippet(),
+                lexicalHit.score() + Math.max(vectorScore, 0));
+    }
+
+    private static TeacherResourceBlockSearchResponse.Hit toLegacyVectorHit(
+            TeacherResourceDocumentResponse document,
+            TeacherDocumentBlockResponse block,
+            VectorSearchHit vectorHit,
+            String normalizedQuery,
+            String[] terms) {
+        if (document == null || block == null) {
+            return null;
+        }
+        List<String> graphTags = parseStringArray(block.graphTagNamesJson());
+        String rawText = textOrDefault(block.rawText(), vectorHit.text());
+        return new TeacherResourceBlockSearchResponse.Hit(
+                document.documentId(),
+                document.title(),
+                document.sourceType(),
+                document.permissionScope(),
+                block.blockId(),
+                block.blockType(),
+                block.blockOrder(),
+                block.chapter(),
+                block.section(),
+                block.pageNo(),
+                textOrDefault(block.sourcePath(), ""),
+                textOrDefault(block.blockRole(), "reference"),
+                graphTags,
+                List.of(block.blockId()),
+                rawText,
+                snippet(rawText, normalizedQuery, terms),
+                vectorHit.score()
+                        + score(normalizeText(rawText), normalizedQuery, terms)
+                        + metadataScore(document, block, normalizedQuery, terms));
+    }
+
+    private List<TeacherResourceBlockSearchResponse.Hit> lexicalHits(
+            String tenantId,
+            List<TeacherResourceDocumentResponse> documents,
+            String normalizedQuery,
+            String[] terms,
+            int safeLimit,
+            List<String> tags) {
+        return documents.stream()
+                .flatMap(document -> blockStore.listByDocument(tenantId, document.documentId()).stream()
+                        .filter(block -> matchesTags(document, block, tags))
+                        .map(block -> lexicalHit(document, block, normalizedQuery, terms)))
+                .filter(candidate -> candidate.score() > 0)
+                .sorted(Comparator.comparingDouble(TeacherResourceBlockSearchResponse.Hit::score).reversed()
+                        .thenComparing(TeacherResourceBlockSearchResponse.Hit::documentTitle)
+                        .thenComparingInt(TeacherResourceBlockSearchResponse.Hit::blockOrder))
+                .limit(safeLimit)
+                .toList();
     }
 
     private static List<TeacherResourceBlockSearchResponse.Hit> mergeHybridHits(
@@ -171,67 +620,50 @@ public class TeacherResourceBlockSearchService {
             TeacherResourceBlockSearchResponse.Hit vectorHit = merged.get(key);
             merged.put(key, vectorHit == null ? lexicalHit : boostLexicalHit(lexicalHit, vectorHit.score()));
         }
-        return merged.values().stream()
+        List<TeacherResourceBlockSearchResponse.Hit> ranked = merged.values().stream()
                 .sorted(Comparator.comparingDouble(TeacherResourceBlockSearchResponse.Hit::score).reversed()
                         .thenComparing(TeacherResourceBlockSearchResponse.Hit::documentTitle)
                         .thenComparingInt(TeacherResourceBlockSearchResponse.Hit::blockOrder))
-                .limit(safeLimit)
                 .toList();
+        return diversifyByDocument(ranked, safeLimit);
     }
 
-    private static TeacherResourceBlockSearchResponse.Hit boostLexicalHit(
-            TeacherResourceBlockSearchResponse.Hit lexicalHit,
-            double vectorScore) {
-        return new TeacherResourceBlockSearchResponse.Hit(
-                lexicalHit.documentId(),
-                lexicalHit.documentTitle(),
-                lexicalHit.permissionScope(),
-                lexicalHit.blockId(),
-                lexicalHit.blockType(),
-                lexicalHit.blockOrder(),
-                lexicalHit.chapter(),
-                lexicalHit.section(),
-                lexicalHit.pageNo(),
-                lexicalHit.snippet(),
-                lexicalHit.score() + Math.max(vectorScore, 0));
-    }
-
-    private static TeacherResourceBlockSearchResponse.Hit toVectorHit(
-            TeacherResourceDocumentResponse document,
-            TeacherDocumentBlockResponse block,
-            VectorSearchHit vectorHit,
-            String normalizedQuery,
-            String[] terms) {
-        if (document == null || block == null) {
-            return null;
-        }
-        return new TeacherResourceBlockSearchResponse.Hit(
-                document.documentId(),
-                document.title(),
-                document.permissionScope(),
-                block.blockId(),
-                block.blockType(),
-                block.blockOrder(),
-                block.chapter(),
-                block.section(),
-                block.pageNo(),
-                snippet(textOrDefault(block.rawText(), vectorHit.text()), normalizedQuery, terms),
-                vectorHit.score());
-    }
-
-    private List<TeacherResourceBlockSearchResponse.Hit> lexicalHits(
-            String tenantId,
-            List<TeacherResourceDocumentResponse> documents,
-            String normalizedQuery,
-            String[] terms,
+    /**
+     * Prevents one noisy document from occupying the whole first page before other plausible documents
+     * get a chance. This is generic diversification rather than a benchmark-specific shortcut.
+     */
+    private static List<TeacherResourceBlockSearchResponse.Hit> diversifyByDocument(
+            List<TeacherResourceBlockSearchResponse.Hit> rankedHits,
             int safeLimit) {
-        return documents.stream()
-                .flatMap(document -> blockStore.listByDocument(tenantId, document.documentId()).stream()
-                        .map(block -> hit(document, block, normalizedQuery, terms)))
-                .filter(candidate -> candidate.score() > 0)
-                .sorted(Comparator.comparingDouble(TeacherResourceBlockSearchResponse.Hit::score).reversed()
-                        .thenComparing(TeacherResourceBlockSearchResponse.Hit::documentTitle)
-                        .thenComparingInt(TeacherResourceBlockSearchResponse.Hit::blockOrder))
+        Map<String, List<TeacherResourceBlockSearchResponse.Hit>> hitsByDocument = new LinkedHashMap<>();
+        for (TeacherResourceBlockSearchResponse.Hit hit : rankedHits) {
+            hitsByDocument.computeIfAbsent(hit.documentId(), ignored -> new ArrayList<>()).add(hit);
+        }
+        List<Map.Entry<String, List<TeacherResourceBlockSearchResponse.Hit>>> documentBuckets = hitsByDocument.entrySet().stream()
+                .sorted(Comparator
+                        .comparingDouble((Map.Entry<String, List<TeacherResourceBlockSearchResponse.Hit>> entry) ->
+                                entry.getValue().getFirst().score())
+                        .reversed()
+                        .thenComparing(Map.Entry::getKey))
+                .toList();
+        List<TeacherResourceBlockSearchResponse.Hit> diversified = new ArrayList<>();
+        for (int depth = 0; diversified.size() < safeLimit; depth += 1) {
+            boolean appendedAtDepth = false;
+            for (Map.Entry<String, List<TeacherResourceBlockSearchResponse.Hit>> entry : documentBuckets) {
+                List<TeacherResourceBlockSearchResponse.Hit> bucket = entry.getValue();
+                if (depth < bucket.size()) {
+                    diversified.add(bucket.get(depth));
+                    appendedAtDepth = true;
+                    if (diversified.size() >= safeLimit) {
+                        break;
+                    }
+                }
+            }
+            if (!appendedAtDepth) {
+                break;
+            }
+        }
+        return diversified.stream()
                 .limit(safeLimit)
                 .toList();
     }
@@ -259,16 +691,22 @@ public class TeacherResourceBlockSearchService {
     /**
      * Builds a hit with a deterministic lexical score.
      */
-    private static TeacherResourceBlockSearchResponse.Hit hit(
+    private static TeacherResourceBlockSearchResponse.Hit lexicalHit(
             TeacherResourceDocumentResponse document,
             TeacherDocumentBlockResponse block,
             String normalizedQuery,
             String[] terms) {
         String searchableText = normalizeText(textOrDefault(block.normalizedText(), block.rawText()));
-        double score = score(searchableText, normalizedQuery, terms);
+        double score = score(searchableText, normalizedQuery, terms)
+                + metadataScore(document, block, normalizedQuery, terms)
+                + fieldScore(block.sourcePath(), normalizedQuery, terms)
+                + fieldScore(block.blockRole(), normalizedQuery, terms)
+                + graphTagScore(parseStringArray(block.graphTagNamesJson()), normalizedQuery, terms);
+        String rawText = textOrDefault(block.rawText(), block.normalizedText());
         return new TeacherResourceBlockSearchResponse.Hit(
                 document.documentId(),
                 document.title(),
+                document.sourceType(),
                 document.permissionScope(),
                 block.blockId(),
                 block.blockType(),
@@ -276,8 +714,25 @@ public class TeacherResourceBlockSearchService {
                 block.chapter(),
                 block.section(),
                 block.pageNo(),
-                snippet(textOrDefault(block.rawText(), block.normalizedText()), normalizedQuery, terms),
+                textOrDefault(block.sourcePath(), ""),
+                textOrDefault(block.blockRole(), "reference"),
+                parseStringArray(block.graphTagNamesJson()),
+                List.of(block.blockId()),
+                rawText,
+                snippet(rawText, normalizedQuery, terms),
                 score);
+    }
+
+    private static BlockContext toContext(
+            TeacherResourceDocumentResponse document,
+            TeacherDocumentBlockResponse block) {
+        return new BlockContext(
+                document,
+                block,
+                normalizeText(textOrDefault(block.normalizedText(), block.rawText())),
+                textOrDefault(block.sourcePath(), ""),
+                textOrDefault(block.blockRole(), "reference"),
+                parseStringArray(block.graphTagNamesJson()));
     }
 
     /**
@@ -294,6 +749,203 @@ public class TeacherResourceBlockSearchService {
             }
         }
         return score;
+    }
+
+    /**
+     * Adds a small metadata-aware boost so chapter/section/title matches can disambiguate blocks inside one document.
+     */
+    private static double metadataScore(
+            TeacherResourceDocumentResponse document,
+            TeacherDocumentBlockResponse block,
+            String normalizedQuery,
+            String[] terms) {
+        String metadata = normalizeText(String.join(
+                " ",
+                textOrDefault(document.title(), ""),
+                textOrDefault(document.sourceType(), ""),
+                textOrDefault(block.chapter(), ""),
+                textOrDefault(block.section(), "")));
+        if (metadata.isBlank()) {
+            return 0;
+        }
+        double score = metadata.contains(normalizedQuery) ? METADATA_EXACT_MATCH_BOOST : 0;
+        for (String term : terms) {
+            if (!term.isBlank() && metadata.contains(term)) {
+                score += METADATA_TERM_MATCH_BOOST;
+            }
+        }
+        return score;
+    }
+
+    private static double documentMetadataScore(
+            TeacherResourceDocumentResponse document,
+            String normalizedQuery,
+            String[] terms) {
+        String metadata = normalizeText(String.join(
+                " ",
+                textOrDefault(document.title(), ""),
+                textOrDefault(document.sourceType(), ""),
+                textOrDefault(document.permissionScope(), "")));
+        return score(metadata, normalizedQuery, terms);
+    }
+
+    private static double documentSourceCueScore(
+            TeacherResourceDocumentResponse document,
+            List<BlockContext> blocks,
+            String normalizedQuery) {
+        StringBuilder haystack = new StringBuilder();
+        haystack.append(textOrDefault(document.title(), "")).append(' ')
+                .append(textOrDefault(document.sourceType(), ""));
+        for (BlockContext block : blocks.stream().limit(4).toList()) {
+            haystack.append(' ')
+                    .append(textOrDefault(block.sourcePath(), ""))
+                    .append(' ')
+                    .append(textOrDefault(block.blockRole(), ""));
+        }
+        String normalizedHaystack = normalizeText(haystack.toString());
+        double score = 0;
+        score += categoricalCueScore(
+                normalizedQuery,
+                normalizedHaystack,
+                new String[]{"\u6559\u6750", "textbook"},
+                new String[]{"\u6559\u6750", "textbook", "chapter"});
+        score += categoricalCueScore(
+                normalizedQuery,
+                normalizedHaystack,
+                new String[]{"qq", "\u4e13\u9898", "\u70b9\u8bc4", "\u89e3\u6790"},
+                new String[]{"qq", "bundle", "\u4e13\u9898", "\u70b9\u8bc4", "\u89e3\u6790"});
+        score += categoricalCueScore(
+                normalizedQuery,
+                normalizedHaystack,
+                new String[]{"\u98de\u4e66", "\u65b9\u6cd5\u6587\u6863", "\u8bb2\u6cd5", "\u677f\u4e66", "\u6a21\u677f"},
+                new String[]{"feishu", "method", "\u8bb2\u6cd5", "\u677f\u4e66", "\u6a21\u677f"});
+        score += categoricalCueScore(
+                normalizedQuery,
+                normalizedHaystack,
+                new String[]{"\u771f\u9898", "\u9ad8\u8003"},
+                new String[]{"\u771f\u9898", "\u9ad8\u8003", "gaokao"});
+        score += categoricalCueScore(
+                normalizedQuery,
+                normalizedHaystack,
+                new String[]{"\u6a21\u62df", "\u8bb2\u8bc4"},
+                new String[]{"\u6a21\u62df", "\u8bb2\u8bc4", "mock"});
+        return score;
+    }
+
+    private static double fieldScore(String fieldValue, String normalizedQuery, String[] terms) {
+        String normalizedField = normalizeText(textOrDefault(fieldValue, ""));
+        if (normalizedField.isBlank()) {
+            return 0;
+        }
+        double score = normalizedField.contains(normalizedQuery) ? 2.0d : 0.0d;
+        for (String term : terms) {
+            if (!term.isBlank() && normalizedField.contains(term)) {
+                score += 0.5d;
+            }
+        }
+        return score;
+    }
+
+    private static double graphTagScore(List<String> graphTags, String normalizedQuery, String[] terms) {
+        if (graphTags == null || graphTags.isEmpty()) {
+            return 0;
+        }
+        double score = 0;
+        for (String graphTag : graphTags) {
+            score += fieldScore(graphTag, normalizedQuery, terms);
+        }
+        return score;
+    }
+
+    /**
+     * Generic block-role cues. This is intentionally broad and source-oriented; do not narrow it to one benchmark's
+     * prompt wording or we will silently overfit runtime-authored eval data.
+     */
+    private static double roleCueScore(String blockRole, String sourcePath, String normalizedQuery) {
+        String role = normalizeText(textOrDefault(blockRole, ""));
+        String path = normalizeText(textOrDefault(sourcePath, ""));
+        boolean wantsAnalysis = containsAny(normalizedQuery, "\u89e3\u6790", "\u7b54\u6848", "\u70b9\u8bc4", "analysis", "answer", "solution");
+        boolean wantsMethod = containsAny(normalizedQuery, "\u65b9\u6cd5", "\u8bb2\u6cd5", "\u601d\u8def", "method", "approach");
+        boolean wantsBoardwork = containsAny(normalizedQuery, "\u677f\u4e66", "\u677f\u6f14", "boardwork", "blackboard");
+        boolean wantsTemplate = containsAny(normalizedQuery, "\u6a21\u677f", "\u8bb2\u4e49\u6a21\u677f", "template");
+        boolean wantsTip = containsAny(normalizedQuery, "\u63d0\u793a", "\u63d0\u9192", "\u6ce8\u610f", "\u6613\u9519", "tip", "pitfall");
+        boolean wantsQuestion = containsAny(normalizedQuery, "\u771f\u9898", "\u6a21\u62df", "\u9898", "\u4f8b\u9898", "question", "exam");
+        boolean wantsLesson = containsAny(normalizedQuery, "\u4e13\u9898", "\u8bb2\u4e49", "\u6559\u6750", "\u8bfe\u5802", "lesson", "notes", "textbook");
+        boolean wantsExplanation = containsAny(
+                normalizedQuery,
+                "\u4e3a\u4ec0\u4e48",
+                "\u600e\u4e48",
+                "\u8bf4\u660e",
+                "\u660e\u786e\u8bf4",
+                "\u6b65\u9aa4",
+                "\u63d0\u9192",
+                "why",
+                "how",
+                "explain",
+                "steps");
+        double score = 0;
+        if (wantsAnalysis && ("analysis".equals(role) || containsAny(path, "answer", "analysis", "solution"))) {
+            score += 6.0d;
+        } else if (wantsAnalysis) {
+            score -= 2.0d;
+        }
+        if (wantsMethod && ("method".equals(role) || containsAny(path, "method", "approach"))) {
+            score += 5.0d;
+        } else if (wantsMethod) {
+            score -= 1.5d;
+        }
+        if (wantsBoardwork && ("boardwork".equals(role) || containsAny(path, "boardwork", "blackboard"))) {
+            score += 5.0d;
+        } else if (wantsBoardwork) {
+            score -= 1.5d;
+        }
+        if (wantsTemplate && ("template".equals(role) || containsAny(path, "template"))) {
+            score += 5.0d;
+        } else if (wantsTemplate) {
+            score -= 1.5d;
+        }
+        if (wantsTip && ("tip".equals(role) || containsAny(path, "tip", "notice"))) {
+            score += 5.0d;
+        } else if (wantsTip) {
+            score -= 1.5d;
+        }
+        if (wantsQuestion && ("question".equals(role) || containsAny(path, "question", "exam", "mock"))) {
+            score += 4.0d;
+        } else if (wantsQuestion) {
+            score -= 1.0d;
+        }
+        if (wantsLesson && ("lesson".equals(role) || containsAny(path, "lesson", "handout", "textbook"))) {
+            score += 3.0d;
+        } else if (wantsLesson) {
+            score -= 0.5d;
+        }
+        if (wantsExplanation) {
+            if ("analysis".equals(role)) {
+                score += 3.0d;
+            } else if ("method".equals(role) || "tip".equals(role)) {
+                score += 2.0d;
+            } else if ("boardwork".equals(role) || "template".equals(role) || "lesson".equals(role)) {
+                score += 1.0d;
+            } else if ("question".equals(role)) {
+                score -= 2.5d;
+            }
+        }
+        return score;
+    }
+
+    private static double categoricalCueScore(
+            String normalizedQuery,
+            String normalizedHaystack,
+            String[] queryCues,
+            String[] documentCues) {
+        if (!containsAny(normalizedQuery, queryCues)) {
+            return 0;
+        }
+        return containsAny(normalizedHaystack, documentCues) ? 8.0d : -3.0d;
+    }
+
+    private static double exactQueryBonus(String searchableText, String normalizedQuery) {
+        return searchableText.contains(normalizedQuery) ? 2.0d : 0.0d;
     }
 
     /**
@@ -347,6 +999,39 @@ public class TeacherResourceBlockSearchService {
         }
     }
 
+    private static List<TeacherResourceDocumentResponse> filteredDocuments(
+            List<TeacherResourceDocumentResponse> documents,
+            TeacherResourceSearchFilter filter) {
+        if (filter.empty()) {
+            return documents;
+        }
+        return documents.stream()
+                .filter(document -> filter.documentIds().isEmpty() || filter.documentIds().contains(document.documentId()))
+                .filter(document -> filter.permissionScopes().isEmpty()
+                        || filter.permissionScopes().contains(textOrDefault(document.permissionScope(), "").toUpperCase(Locale.ROOT)))
+                .toList();
+    }
+
+    private static boolean matchesTags(
+            TeacherResourceDocumentResponse document,
+            TeacherDocumentBlockResponse block,
+            List<String> tags) {
+        if (tags == null || tags.isEmpty()) {
+            return true;
+        }
+        String haystack = normalizeText(String.join(
+                " ",
+                textOrDefault(document.title(), ""),
+                textOrDefault(document.sourceType(), ""),
+                textOrDefault(block.chapter(), ""),
+                textOrDefault(block.section(), ""),
+                textOrDefault(block.sourcePath(), ""),
+                textOrDefault(block.blockRole(), ""),
+                String.join(" ", parseStringArray(block.graphTagNamesJson())),
+                textOrDefault(block.normalizedText(), block.rawText())));
+        return tags.stream().map(TeacherResourceBlockSearchService::normalizeText).anyMatch(haystack::contains);
+    }
+
     /**
      * Clamps query result size to keep the read path bounded.
      */
@@ -362,6 +1047,22 @@ public class TeacherResourceBlockSearchService {
      */
     private static String normalizeQuery(String query) {
         return normalizeText(textOrDefault(query, ""));
+    }
+
+    private static String normalizeStrategy(String strategy) {
+        String normalized = normalizeText(textOrDefault(strategy, STRATEGY_TWO_STAGE_DOC_BLOCK));
+        if (STRATEGY_LEGACY_BLOCK_HYBRID.equals(normalized)) {
+            return STRATEGY_LEGACY_BLOCK_HYBRID;
+        }
+        return STRATEGY_TWO_STAGE_DOC_BLOCK;
+    }
+
+    private static String retrievalMode(String strategy, TeacherResourceSearchFilter filter, String suffix) {
+        String mode = filter.empty() ? strategy : strategy + "_filtered";
+        if (suffix == null || suffix.isBlank()) {
+            return mode;
+        }
+        return mode + "_" + suffix;
     }
 
     /**
@@ -395,5 +1096,57 @@ public class TeacherResourceBlockSearchService {
             throw new IllegalArgumentException(message);
         }
         return value.strip();
+    }
+
+    private static boolean containsAny(String haystack, String... needles) {
+        String normalizedHaystack = normalizeText(textOrDefault(haystack, ""));
+        for (String needle : needles) {
+            if (!needle.isBlank() && normalizedHaystack.contains(normalizeText(needle))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static List<String> parseStringArray(String json) {
+        String value = textOrDefault(json, "[]");
+        try {
+            return OBJECT_MAPPER.readValue(value, STRING_LIST_TYPE).stream()
+                    .filter(item -> item != null && !item.isBlank())
+                    .map(String::strip)
+                    .toList();
+        } catch (Exception ignored) {
+            return List.of();
+        }
+    }
+
+    private static String blockKey(String documentId, String blockId) {
+        return documentId + ":" + blockId;
+    }
+
+    private record BlockContext(
+            TeacherResourceDocumentResponse document,
+            TeacherDocumentBlockResponse block,
+            String searchableText,
+            String sourcePath,
+            String blockRole,
+            List<String> graphTags) {
+    }
+
+    private record DocumentCandidate(
+            TeacherResourceDocumentResponse document,
+            List<BlockContext> blocks,
+            double score) {
+    }
+
+    private record BlockCandidate(
+            TeacherResourceDocumentResponse document,
+            BlockContext block,
+            double score) {
+    }
+
+    private record EvidenceWindow(
+            List<String> blockIds,
+            String text) {
     }
 }
