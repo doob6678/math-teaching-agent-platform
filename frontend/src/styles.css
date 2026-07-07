@@ -2285,9 +2285,19 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .template-preview-formula {
+  display: block;
+  max-width: 100%;
   overflow-x: auto;
   color: var(--navy);
   font-size: 15px;
+  white-space: nowrap;
+  word-break: normal;
+  overflow-wrap: normal;
+}
+
+.template-preview-formula .katex,
+.template-preview-formula .katex-html {
+  white-space: nowrap;
 }
 
 .template-preview-footer {
