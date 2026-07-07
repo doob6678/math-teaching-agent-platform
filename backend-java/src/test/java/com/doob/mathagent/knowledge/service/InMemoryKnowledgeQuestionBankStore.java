@@ -15,27 +15,18 @@ public class InMemoryKnowledgeQuestionBankStore implements KnowledgeQuestionBank
     private final Map<String, KnowledgeRelationRecord> relations = new ConcurrentHashMap<>();
     private final Map<String, QuestionBankItemRecord> questions = new ConcurrentHashMap<>();
 
-    /**
-     * Saves or replaces one knowledge point.
-     */
     @Override
     public KnowledgePointRecord saveKnowledgePoint(KnowledgePointRecord record) {
         knowledgePoints.put(record.knowledgePointId(), record);
         return record;
     }
 
-    /**
-     * Saves or replaces one knowledge relation.
-     */
     @Override
     public KnowledgeRelationRecord saveKnowledgeRelation(KnowledgeRelationRecord record) {
         relations.put(record.relationId(), record);
         return record;
     }
 
-    /**
-     * Finds an active knowledge point by import identity.
-     */
     @Override
     public Optional<KnowledgePointRecord> findKnowledgePoint(
             String tenantId,
@@ -53,18 +44,12 @@ public class InMemoryKnowledgeQuestionBankStore implements KnowledgeQuestionBank
                 .findFirst();
     }
 
-    /**
-     * Saves or replaces one question item.
-     */
     @Override
     public QuestionBankItemRecord saveQuestion(QuestionBankItemRecord record) {
         questions.put(record.questionId(), record);
         return record;
     }
 
-    /**
-     * Finds an active imported question by source block and checksum.
-     */
     @Override
     public Optional<QuestionBankItemRecord> findQuestionBySource(
             String tenantId,
@@ -80,9 +65,6 @@ public class InMemoryKnowledgeQuestionBankStore implements KnowledgeQuestionBank
                 .findFirst();
     }
 
-    /**
-     * Lists active knowledge points visible to the viewer.
-     */
     @Override
     public List<KnowledgePointRecord> listKnowledgePoints(String tenantId, String viewerRole, String viewerSubjectId) {
         return knowledgePoints.values().stream()
@@ -93,9 +75,6 @@ public class InMemoryKnowledgeQuestionBankStore implements KnowledgeQuestionBank
                 .toList();
     }
 
-    /**
-     * Lists active relations only when both endpoint points are visible to the viewer.
-     */
     @Override
     public List<KnowledgeRelationRecord> listKnowledgeRelations(String tenantId, String viewerRole, String viewerSubjectId) {
         Map<String, KnowledgePointRecord> visiblePoints = listKnowledgePoints(tenantId, viewerRole, viewerSubjectId)
@@ -110,9 +89,6 @@ public class InMemoryKnowledgeQuestionBankStore implements KnowledgeQuestionBank
                 .toList();
     }
 
-    /**
-     * Searches active questions visible to the viewer.
-     */
     @Override
     public List<QuestionBankItemRecord> searchQuestions(
             String tenantId,
@@ -120,8 +96,8 @@ public class InMemoryKnowledgeQuestionBankStore implements KnowledgeQuestionBank
             String viewerSubjectId,
             String query,
             int limit) {
-        String normalizedQuery = query == null ? "" : query.strip().toLowerCase();
-        List<String> keywords = searchKeywords(normalizedQuery);
+        String normalizedQuery = QuestionBankSearchText.normalize(query);
+        List<String> keywords = QuestionBankSearchText.keywords(normalizedQuery);
         return questions.values().stream()
                 .filter(record -> tenantId.equals(record.tenantId()))
                 .filter(record -> "active".equals(record.status()))
@@ -132,9 +108,6 @@ public class InMemoryKnowledgeQuestionBankStore implements KnowledgeQuestionBank
                 .toList();
     }
 
-    /**
-     * Returns whether one scoped row is visible to the backend viewer.
-     */
     private static boolean visible(String permissionScope, String ownerSubjectId, String viewerRole, String viewerSubjectId) {
         if ("admin".equals(viewerRole)) {
             return true;
@@ -145,9 +118,6 @@ public class InMemoryKnowledgeQuestionBankStore implements KnowledgeQuestionBank
         return "MATH_VIP".equals(permissionScope) || "PUBLIC_TEXTBOOK".equals(permissionScope);
     }
 
-    /**
-     * Matches a question against the normalized query text.
-     */
     private static boolean matches(QuestionBankItemRecord record, String query, List<String> keywords) {
         if (query.isBlank()) {
             return true;
@@ -164,31 +134,10 @@ public class InMemoryKnowledgeQuestionBankStore implements KnowledgeQuestionBank
                 || record.knowledgePointIds().stream().anyMatch(id -> contains(id, keyword)));
     }
 
-    /**
-     * Splits user search text into non-blank terms.
-     */
-    private static List<String> searchKeywords(String query) {
-        if (query == null || query.isBlank()) {
-            return List.of();
-        }
-        return java.util.Arrays.stream(query.strip().split("[\\s,，、]+"))
-                .map(String::strip)
-                .filter(value -> !value.isBlank())
-                .distinct()
-                .limit(6)
-                .toList();
-    }
-
-    /**
-     * Case-insensitive contains helper.
-     */
     private static boolean contains(String value, String query) {
         return value != null && value.toLowerCase().contains(query);
     }
 
-    /**
-     * Compares nullable text values exactly after null normalization.
-     */
     private static boolean equalsText(String expected, String actual) {
         String left = expected == null ? "" : expected;
         String right = actual == null ? "" : actual;

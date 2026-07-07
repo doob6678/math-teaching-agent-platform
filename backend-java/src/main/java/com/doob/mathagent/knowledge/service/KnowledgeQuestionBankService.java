@@ -242,7 +242,7 @@ public class KnowledgeQuestionBankService {
                 record.tenantId(),
                 record.ownerSubjectId(),
                 record.permissionScope(),
-                record.questionTitle(),
+                displayQuestionTitle(record),
                 record.questionText(),
                 record.answerJson(),
                 record.difficulty(),
@@ -251,6 +251,52 @@ public class KnowledgeQuestionBankService {
                 record.sourceBlockId(),
                 record.sourceChecksum(),
                 record.knowledgePointIds());
+    }
+
+    /**
+     * Keeps imported OCR separators out of user-facing title fields without mutating stored source data.
+     */
+    private static String displayQuestionTitle(QuestionBankItemRecord record) {
+        String title = textOrDefault(record.questionTitle(), "");
+        if (!isNoisyTitle(title)) {
+            return title;
+        }
+        String fallback = displayTitleFromQuestionText(record.questionText());
+        return fallback.isBlank() ? "题库题目（待清理）" : fallback;
+    }
+
+    private static boolean isNoisyTitle(String title) {
+        if (title.isBlank()) {
+            return true;
+        }
+        long separatorCount = title.chars()
+                .filter(ch -> ch == '*' || ch == '-' || ch == '_' || ch == '=')
+                .count();
+        return separatorCount >= 12 || separatorCount * 2 > title.length();
+    }
+
+    private static String displayTitleFromQuestionText(String questionText) {
+        if (questionText == null || questionText.isBlank()) {
+            return "";
+        }
+        for (String line : questionText.split("\\R+")) {
+            String cleaned = line
+                    .replaceAll("[*_=-]{6,}", " ")
+                    .replaceAll("\\s+", " ")
+                    .strip();
+            if (cleaned.equals("赵礼显数学") || cleaned.length() < 8 || isNoisyTitle(cleaned)) {
+                continue;
+            }
+            return cleaned.length() <= 80 ? cleaned : cleaned.substring(0, 80);
+        }
+        String compact = questionText
+                .replaceAll("[*_=-]{6,}", " ")
+                .replaceAll("\\s+", " ")
+                .strip();
+        if (compact.equals("赵礼显数学") || compact.length() < 8 || isNoisyTitle(compact)) {
+            return "";
+        }
+        return compact.length() <= 80 ? compact : compact.substring(0, 80);
     }
 
     /**

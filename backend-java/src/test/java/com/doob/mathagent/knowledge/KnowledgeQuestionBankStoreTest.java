@@ -102,6 +102,26 @@ class KnowledgeQuestionBankStoreTest {
     }
 
     @Test
+    void expandsNaturalMathTopicQueryToVisibleQuestionTypes() {
+        InMemoryKnowledgeQuestionBankStore store = new InMemoryKnowledgeQuestionBankStore();
+        store.saveQuestion(new QuestionBankItemRecord(
+                "q-solid-geometry",
+                "school-a",
+                "admin-1",
+                "MATH_VIP",
+                "赵礼显数学 四棱柱线面角基础题",
+                "如图，在四棱柱中求线面角，并说明垂直关系。",
+                "{}",
+                "medium",
+                "active",
+                List.of()));
+
+        assertThat(store.searchQuestions("school-a", "teacher", "teacher-1", "学会空间向量大题讲义", 10))
+                .extracting(QuestionBankItemRecord::questionId)
+                .containsExactly("q-solid-geometry");
+    }
+
+    @Test
     void listsRelationsOnlyWhenBothEndpointKnowledgePointsAreVisible() {
         InMemoryKnowledgeQuestionBankStore store = new InMemoryKnowledgeQuestionBankStore();
         store.saveKnowledgePoint(new KnowledgePointRecord(

@@ -182,7 +182,7 @@ public class MyBatisKnowledgeQuestionBankStore implements KnowledgeQuestionBankS
                 .eq(QuestionBankItemEntity::getStatus, "active");
         applyQuestionVisibility(wrapper, viewerRole, viewerSubjectId);
         if (query != null && !query.isBlank()) {
-            List<String> keywords = searchKeywords(query);
+            List<String> keywords = QuestionBankSearchText.keywords(query);
             wrapper.and(nested -> nested
                     .like(QuestionBankItemEntity::getQuestionTitle, query.strip())
                     .or()

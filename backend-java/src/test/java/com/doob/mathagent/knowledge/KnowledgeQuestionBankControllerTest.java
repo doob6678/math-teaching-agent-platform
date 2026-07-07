@@ -75,6 +75,24 @@ class KnowledgeQuestionBankControllerTest {
     }
 
     @Test
+    void replacesSeparatorOnlyImportedQuestionTitleForDisplay() {
+        KnowledgeQuestionBankController controller = controller(
+                request -> new RequestSubject("school-a", "admin", "admin-1", "device-1"),
+                (token, action, path, requestHash, subject) -> true);
+        MockHttpServletRequest request = requestWithCapability("token-ok", "hash-noisy-title");
+
+        QuestionBankItemResponse question = controller.createQuestion(new QuestionBankItemCreateRequest(
+                "赵礼显数学 ************************************************",
+                "赵礼显数学\n************************************************\n如图，在四棱柱中求线面角，并说明垂直关系。",
+                "{}",
+                "medium",
+                "MATH_VIP",
+                List.of()), request);
+
+        assertThat(question.questionTitle()).startsWith("如图，在四棱柱中求线面角");
+    }
+
+    @Test
     void rejectsStudentCreateAndMissingCapabilityToken() {
         KnowledgeQuestionBankController studentController = controller(
                 request -> new RequestSubject("school-a", "student", "student-1", "device-1"),

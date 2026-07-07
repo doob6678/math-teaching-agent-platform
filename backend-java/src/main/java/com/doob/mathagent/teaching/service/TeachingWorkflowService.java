@@ -4,6 +4,7 @@ import com.doob.mathagent.agent.service.AgentTraceRecord;
 import com.doob.mathagent.agent.service.AgentTraceStore;
 import com.doob.mathagent.agent.vo.AgentRunExecuteResponse;
 import com.doob.mathagent.knowledge.service.KnowledgeQuestionBankService;
+import com.doob.mathagent.knowledge.service.QuestionBankSearchText;
 import com.doob.mathagent.knowledge.vo.QuestionBankItemResponse;
 import com.doob.mathagent.memory.dto.StudentMemoryRequest;
 import com.doob.mathagent.memory.service.StudentMemoryCommand;
@@ -25,7 +26,9 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.regex.Matcher;
@@ -446,19 +449,46 @@ public class TeachingWorkflowService {
         if (!canUseQuestionBank(context) || questionBankService == null) {
             return List.of();
         }
+        Map<String, QuestionBankItemResponse> matchedQuestions = new LinkedHashMap<>();
         try {
-            return questionBankService.searchQuestions(
-                            context.tenantId(),
-                            context.subjectType(),
-                            context.subjectId(),
-                            retrievalQuery(request),
-                            3)
-                    .stream()
+            for (String query : QuestionBankSearchText.candidateQueries(request.learningGoal(), request.questionText())) {
+                for (QuestionBankItemResponse question : questionBankService.searchQuestions(
+                        context.tenantId(),
+                        context.subjectType(),
+                        context.subjectId(),
+                        query,
+                        6)) {
+                    matchedQuestions.putIfAbsent(question.questionId(), question);
+                    if (matchedQuestions.size() >= 6) {
+                        break;
+                    }
+                }
+                if (matchedQuestions.size() >= 6) {
+                    break;
+                }
+            }
+            return matchedQuestions.values().stream()
+                    .sorted(Comparator.comparingInt(TeachingWorkflowService::questionDifficultyRank))
+                    .limit(3)
                     .map(TeachingWorkflowService::toQuestionEvidence)
                     .toList();
         } catch (IllegalArgumentException exception) {
             return List.of();
         }
+    }
+
+    private static int questionDifficultyRank(QuestionBankItemResponse item) {
+        String difficulty = item.difficulty() == null ? "" : item.difficulty();
+        if (difficulty.contains("基础") || difficulty.equalsIgnoreCase("easy")) {
+            return 0;
+        }
+        if (difficulty.contains("提高") || difficulty.contains("中等") || difficulty.equalsIgnoreCase("medium")) {
+            return 1;
+        }
+        if (difficulty.contains("压轴") || difficulty.contains("困难") || difficulty.equalsIgnoreCase("hard")) {
+            return 2;
+        }
+        return 3;
     }
 
     private static TeachingEvidence toQuestionEvidence(QuestionBankItemResponse question) {

@@ -234,6 +234,48 @@ class TeachingWorkflowServiceTest {
     }
 
     @Test
+    void teachingTaskExpandsNaturalTopicWhenSearchingQuestionBank() throws Exception {
+        Path root = createTextbookCorpus();
+        KnowledgeQuestionBankService questionBankService = new KnowledgeQuestionBankService(new InMemoryKnowledgeQuestionBankStore());
+        questionBankService.createQuestion(
+                "tenant-a",
+                "admin",
+                "admin-1",
+                new QuestionBankItemCreateRequest(
+                        "赵礼显数学 四棱柱线面角基础题",
+                        "如图，在四棱柱中求线面角，并说明垂直关系。",
+                        "{\"answer\":\"建立空间直角坐标系，求法向量后计算夹角\"}",
+                        "medium",
+                        "MATH_VIP",
+                        List.of()));
+        TeachingWorkflowService service = new TeachingWorkflowService(
+                root,
+                retrievalService(),
+                new InMemoryTeachingTaskStore(),
+                memoryReuseService(),
+                TeachingAiDraftServiceFixture.disabled(),
+                new InMemoryAgentTraceStore(),
+                new com.doob.mathagent.teaching.service.TeachingHandoutTemplateService(),
+                Optional.of(questionBankService),
+                Runnable::run);
+
+        TeachingTaskResponse created = service.submit(
+                new TeachingTaskRequest("req-space-vector-qbank", "生成空间向量大题讲义", "学会空间向量线面角大题", 3),
+                new TeachingRequestContext("tenant-a", "teacher", "teacher-1", "device-1"));
+        TeachingTaskResponse response = service.get(
+                created.taskId(),
+                new TeachingRequestContext("tenant-a", "teacher", "teacher-1", "device-1")).orElseThrow();
+
+        assertThat(response.evidence())
+                .anySatisfy(item -> {
+                    assertThat(item.sourceScope()).isEqualTo("QUESTION_BANK");
+                    assertThat(item.sourceTitle()).contains("四棱柱线面角基础题");
+                });
+        assertThat(response.teacherHandoutLatex()).contains("四棱柱线面角基础题");
+        assertThat(response.studentHandoutLatex()).contains("四棱柱");
+    }
+
+    @Test
     void storesCoursewareAgentTraceForRealAiDraftRuns() throws Exception {
         Path root = createTextbookCorpus();
         InMemoryAgentTraceStore traceStore = new InMemoryAgentTraceStore();
