@@ -138,6 +138,23 @@ export function MathText({ text, block = false }: { text: string; block?: boolea
 
 type PageId = "dashboard" | "search" | "teaching" | "agents" | "streaming" | "knowledge" | "settings" | "login";
 
+type TeachingPdfPreviewVisualEvidence = {
+  artifactType: "browser_pdf_canvas";
+  captured: boolean;
+  selector: string;
+  version: "teacher" | "student";
+  imageRef: string;
+  previewState: string;
+  page: number;
+  pixelWidth: number;
+  pixelHeight: number;
+  cssWidth: number;
+  cssHeight: number;
+  attachToAiReview: boolean;
+  aiAttachmentPlan: string;
+  reason?: string;
+};
+
 interface NavItem {
   id: PageId;
   label: string;
@@ -1031,6 +1048,7 @@ export function App() {
       selectedDraft,
       handoutPreviewPdfMeta,
       handoutPreviewPdfTaskId,
+      captureTeachingPdfPreviewVisualEvidence(teachingTask.taskId, handoutVersion),
     );
     setSubmittingFeedback(true);
     setTeachingError("");
@@ -2432,6 +2450,7 @@ export function buildTeachingFeedbackReviewContext(
   latex: string,
   pdfMeta: TeachingHandoutPdfResponse | null,
   pdfPreviewKey: string,
+  visualEvidence?: TeachingPdfPreviewVisualEvidence,
 ) {
   const plainText = latex
     .replace(/\\[a-zA-Z]+\*?\{([^{}]*)\}/g, "$1")
@@ -2471,6 +2490,7 @@ export function buildTeachingFeedbackReviewContext(
   const pdfRenderer = pdfMeta?.renderer ?? "";
   const pdfPageCount = pdfMeta?.pageCount ?? 0;
   const coreColumnCoverage = `${matchedCoreColumns}/${groups.length}`;
+  const pdfVisualEvidenceCaptured = Boolean(visualEvidence?.captured && pdfPreviewReady);
   return {
     schemaVersion: "teaching-feedback-review-v2",
     handoutVersion: version,
@@ -2489,6 +2509,7 @@ export function buildTeachingFeedbackReviewContext(
       `模板：${task.selectedTemplate?.displayName ?? "标准讲义"}`,
       `结构：${coreColumnCoverage} 核心栏目`,
       `PDF：${pdfPreviewReady ? `${pdfRenderer || "unknown"} / ${pdfPageCount}页` : "未预览"}`,
+      `预览图：${pdfVisualEvidenceCaptured ? "已记录首屏渲染证据" : "未记录"}`,
       `安全：${internalDebugLeak || layoutRuleLeak ? "需复核内部词泄漏" : "未发现内部词泄漏"}`,
     ],
     reviewEvidence: {
@@ -2499,6 +2520,7 @@ export function buildTeachingFeedbackReviewContext(
         versionBound: pdfPreviewKeyMatches,
         renderer: pdfRenderer,
         pageCount: pdfPageCount,
+        visualEvidence: visualEvidence ?? null,
       },
       handoutText: {
         latexLength: latex.length,
@@ -2529,8 +2551,51 @@ export function buildTeachingFeedbackReviewContext(
       studentAnswerIsolated,
       teacherAnswerPresent,
       pdfPreviewReady,
+      pdfVisualEvidenceCaptured,
       sourceTraceable,
     },
+  };
+}
+
+function captureTeachingPdfPreviewVisualEvidence(
+  taskId: string,
+  version: "teacher" | "student",
+): TeachingPdfPreviewVisualEvidence {
+  const selector = ".pdf-page-canvas";
+  const canvas = document.querySelector<HTMLCanvasElement>(selector);
+  const preview = document.querySelector<HTMLElement>(".pdf-canvas-preview");
+  const pageFrame = document.querySelector<HTMLElement>(".pdf-canvas-page");
+  const previewState = preview?.dataset.previewState ?? "missing";
+  const page = Number(canvas?.dataset.page || pageFrame?.dataset.currentPage || "1") || 1;
+  const base = {
+    artifactType: "browser_pdf_canvas" as const,
+    captured: false,
+    selector,
+    version,
+    imageRef: `teaching-task:${taskId}:${version}:pdf-page:${page}`,
+    previewState,
+    page,
+    pixelWidth: 0,
+    pixelHeight: 0,
+    cssWidth: 0,
+    cssHeight: 0,
+    attachToAiReview: false,
+    aiAttachmentPlan: "AI复核时按 imageRef 重新加载任务 PDF，并渲染对应页作为图片输入。",
+  };
+  if (!canvas) {
+    return { ...base, reason: "PDF canvas not mounted" };
+  }
+  const rect = canvas.getBoundingClientRect();
+  const captured = previewState === "ready" && canvas.width > 0 && canvas.height > 0;
+  return {
+    ...base,
+    captured,
+    pixelWidth: canvas.width,
+    pixelHeight: canvas.height,
+    cssWidth: Math.round(rect.width),
+    cssHeight: Math.round(rect.height),
+    attachToAiReview: captured,
+    reason: captured ? undefined : "PDF canvas not ready",
   };
 }
 

@@ -68,6 +68,21 @@ describe("buildTeachingFeedbackReviewContext", () => {
       latex,
       { bytes: new Uint8Array([37, 80, 68, 70]), renderer: "xelatex", pageCount: 4 },
       "task-review-1:teacher",
+      {
+        artifactType: "browser_pdf_canvas",
+        captured: true,
+        selector: ".pdf-page-canvas",
+        version: "teacher",
+        imageRef: "teaching-task:task-review-1:teacher:pdf-page:1",
+        previewState: "ready",
+        page: 1,
+        pixelWidth: 1200,
+        pixelHeight: 1680,
+        cssWidth: 600,
+        cssHeight: 840,
+        attachToAiReview: true,
+        aiAttachmentPlan: "AI复核时按 imageRef 重新加载任务 PDF，并渲染对应页作为图片输入。",
+      },
     );
 
     expect(context.schemaVersion).toBe("teaching-feedback-review-v2");
@@ -86,6 +101,13 @@ describe("buildTeachingFeedbackReviewContext", () => {
       renderer: "xelatex",
       pageCount: 4,
     });
+    expect(context.reviewEvidence.pdfPreview.visualEvidence).toMatchObject({
+      artifactType: "browser_pdf_canvas",
+      captured: true,
+      selector: ".pdf-page-canvas",
+      imageRef: "teaching-task:task-review-1:teacher:pdf-page:1",
+      attachToAiReview: true,
+    });
     expect(context.reviewEvidence.safety).toMatchObject({
       internalDebugLeak: false,
       layoutRuleLeak: false,
@@ -94,5 +116,7 @@ describe("buildTeachingFeedbackReviewContext", () => {
       teacherAnswerPresent: true,
     });
     expect(context.aiReviewBrief).toContain("PDF：xelatex / 4页");
+    expect(context.aiReviewBrief).toContain("预览图：已记录首屏渲染证据");
+    expect(context.checks.pdfVisualEvidenceCaptured).toBe(true);
   });
 });

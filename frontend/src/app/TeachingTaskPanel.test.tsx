@@ -138,6 +138,15 @@ describe("TeachingTaskPanel", () => {
                 studentAnswerIsolated: true,
                 teacherAnswerPresent: true,
               },
+              pdfPreview: {
+                visualEvidence: {
+                  artifactType: "browser_pdf_canvas",
+                  captured: true,
+                  selector: ".pdf-page-canvas",
+                  imageRef: "teaching-task:task-teaching-1:teacher:pdf-page:1",
+                  attachToAiReview: true,
+                },
+              },
             },
             checks: {
               matchedCoreColumns: 5,
@@ -148,6 +157,7 @@ describe("TeachingTaskPanel", () => {
               internalDebugLeak: false,
               layoutRuleLeak: false,
               teacherAnswerPresent: true,
+              pdfVisualEvidenceCaptured: true,
             },
           },
           createdAt: "2026-07-06T10:00:00Z",
@@ -209,6 +219,7 @@ describe("TeachingTaskPanel", () => {
     expect(html).toContain("PDF：XeLaTeX 编译 · 4 页");
     expect(html).toContain("PDF：xelatex / 4页");
     expect(html).toContain("PDF已预览");
+    expect(html).toContain("预览图证据已记录");
     expect(html).toContain("来源：2 条");
     expect(html).toContain("结构：5/6 栏");
     expect(html).toContain("结构：5/6 核心栏目");

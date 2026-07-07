@@ -370,12 +370,15 @@ function FeedbackHistoryPanel({
 function FeedbackContextSummary({ context }: { context?: Record<string, unknown> }) {
   const checks = isRecord(context?.checks) ? context.checks : {};
   const reviewEvidence = isRecord(context?.reviewEvidence) ? context.reviewEvidence : {};
+  const pdfPreviewEvidence = isRecord(reviewEvidence.pdfPreview) ? reviewEvidence.pdfPreview : {};
+  const visualEvidence = isRecord(pdfPreviewEvidence.visualEvidence) ? pdfPreviewEvidence.visualEvidence : {};
   const safety = isRecord(reviewEvidence.safety) ? reviewEvidence.safety : {};
-  const aiReviewBrief = stringArrayValue(context?.aiReviewBrief).slice(0, 5);
+  const aiReviewBrief = stringArrayValue(context?.aiReviewBrief).slice(0, 6);
   const handoutVersion = stringValue(context?.handoutVersion);
   const renderer = stringValue(context?.pdfRenderer);
   const pageCount = numberValue(context?.pdfPageCount);
   const pdfPreviewReady = booleanValue(context?.pdfPreviewReady) || booleanValue(checks.pdfPreviewReady);
+  const pdfVisualEvidenceCaptured = booleanValue(checks.pdfVisualEvidenceCaptured) || booleanValue(visualEvidence.captured);
   const evidenceCount = numberValue(context?.evidenceCount);
   const sourceTraceable = booleanValue(context?.sourceTraceable) || booleanValue(checks.sourceTraceable);
   const matchedCoreColumns = numberValue(checks.matchedCoreColumns);
@@ -395,6 +398,7 @@ function FeedbackContextSummary({ context }: { context?: Record<string, unknown>
     handoutVersion ? `版本：${handoutVersion === "student" ? "学生版" : "教师版"}` : "",
     renderer ? `PDF：${pdfRendererLabel(renderer)}${pageCount ? ` · ${pageCount} 页` : ""}` : "",
     pdfPreviewReady ? "PDF已预览" : "",
+    pdfVisualEvidenceCaptured ? "预览图证据已记录" : "",
     evidenceCount ? `来源：${evidenceCount} 条` : (sourceTraceable ? "来源可追溯" : ""),
     coreColumnTotal ? `结构：${matchedCoreColumns}/${coreColumnTotal} 栏` : "",
     hasMath ? "含公式" : "",
