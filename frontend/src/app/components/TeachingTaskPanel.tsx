@@ -698,8 +698,29 @@ function buildHandoutReviewChecks(blocks: ReviewBlock[], latex: string, version:
   const sectionCount = blocks.filter((block) => block.type === "section").length;
   const hasMath = splitMathText(normalizePreviewMath(decodeLatexText(latex))).some((segment) => segment.math);
   const hasWorkspace = blocks.some((block) => block.type === "space") || /作答区|订正|留白|___/.test(latex);
-  const plainText = cleanPreviewText(latex);
+  const plainText = reviewBlocksPlainText(blocks);
+  const compactPlainText = plainText.replace(/\s+/g, "");
   const answerLeak = /【答案与评分点】|参考答案|评分标准|答案[:：]|答案为|故答案|因此答案|得分/.test(plainText);
+  const internalDebugLeak = /MODEL_CALL|JSON_PARSE|\btokens?\b|模型健康|model health|debug|调试|ParseError|Retry\d/i.test(plainText);
+  const layoutRuleLeak = [
+    "页眉",
+    "页脚",
+    "页面颜色",
+    "讲评色",
+    "练习色",
+    "PDF规则",
+    "PDF排版",
+    "PDF版式",
+    "排版说明",
+    "版式要求",
+    "渲染引擎",
+    "页边距",
+    "虚线折叠",
+    "fancyhdr",
+    "pagestyle",
+    "documentclass",
+    "usepackage",
+  ].some((term) => compactPlainText.toLowerCase().includes(term.toLowerCase()));
   const teacherHasAnswer = /【答案与评分点】|答案|解析|讲评|评分/.test(plainText);
   const labels = blocks
     .filter((block): block is Extract<ReviewBlock, { type: "section" | "subsection" | "paragraph" }> =>
@@ -733,7 +754,34 @@ function buildHandoutReviewChecks(blocks: ReviewBlock[], latex: string, version:
         : (answerLeak ? "发现疑似答案词" : "未发现答案泄漏"),
       state: version === "teacher" ? "good" : (answerLeak ? "warning" : "good"),
     },
+    {
+      label: "调试词",
+      value: internalDebugLeak ? "疑似内部状态泄漏" : "未发现内部词泄漏",
+      state: internalDebugLeak ? "warning" : "good",
+    },
+    {
+      label: "版式词",
+      value: layoutRuleLeak ? "疑似版式规则泄漏" : "未发现版式规则泄漏",
+      state: layoutRuleLeak ? "warning" : "good",
+    },
   ];
+}
+
+function reviewBlocksPlainText(blocks: ReviewBlock[]) {
+  return blocks
+    .flatMap((block) => {
+      if (block.type === "section" || block.type === "subsection" || block.type === "paragraph") {
+        return [block.title];
+      }
+      if (block.type === "text") {
+        return [block.text];
+      }
+      if (block.type === "list") {
+        return block.items;
+      }
+      return [];
+    })
+    .join("\n");
 }
 
 const teacherReviewGroups = [

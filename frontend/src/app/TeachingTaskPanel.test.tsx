@@ -47,7 +47,7 @@ describe("TeachingTaskPanel", () => {
       reactTrace: [],
       evidence: [],
       handoutLatex: "\\section{学习目标}\n学会双曲线定义与参数关系",
-      teacherHandoutLatex: "\\section{学习目标}\n学会双曲线定义与参数关系\n\\paragraph{知识定位}双曲线\n\\paragraph{答案与评分点}答案为 $b^2=16$。\n参数关系 c\\textasciicircum{}2=a\\textasciicircum{}2+b\\textasciicircum{}2。",
+      teacherHandoutLatex: "\\section{讲义模板与版式}\nPDF 版式要求：页眉展示主题和版本，页脚展示页码，教师版使用讲评色。\n\\section{学习目标}\n学会双曲线定义与参数关系\n\\paragraph{知识定位}双曲线\n\\paragraph{答案与评分点}答案为 $b^2=16$。\n参数关系 c\\textasciicircum{}2=a\\textasciicircum{}2+b\\textasciicircum{}2。",
       studentHandoutLatex: "\\section{学习主题}\n学会双曲线定义与参数关系\n\\section{我的解答}\n\\vspace{10em}",
       interactiveSuggestions: [],
       memoryReuse: {
@@ -212,6 +212,10 @@ describe("TeachingTaskPanel", () => {
     expect(html).toContain("结构栏目");
     expect(html).toContain("公式渲染");
     expect(html).toContain("教师版内容");
+    expect(html).toContain("调试词");
+    expect(html).toContain("版式词");
+    expect(html).toContain("未发现内部词泄漏");
+    expect(html).toContain("未发现版式规则泄漏");
     expect(html).toContain("来源追溯");
     expect(html).toContain("缺少教材/题库来源");
     expect(html).toContain("审校记录");
@@ -226,6 +230,8 @@ describe("TeachingTaskPanel", () => {
     expect(html).toContain("安全：未发现内部词泄漏");
     expect(html).toContain("无调试词泄漏");
     expect(html).toContain("无版式规则泄漏");
+    expect(html).not.toContain("PDF 版式要求");
+    expect(html).not.toContain("页眉展示主题");
     expect(html).not.toContain("打印版式完整");
     expect(html).not.toContain("版式无重叠");
     expect(html).not.toContain("$y=-");

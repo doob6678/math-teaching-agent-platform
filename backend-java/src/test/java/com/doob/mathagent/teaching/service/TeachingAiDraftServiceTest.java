@@ -78,7 +78,7 @@ class TeachingAiDraftServiceTest {
         TeachingAiDraftService.ParsedDraft parsed = TeachingAiDraftService.parseStructuredDraft("""
                 {
                   "teacherExplanation": "【知识定位】函数新定义\\n【题型识别】代入求值\\n【方法步骤】先读定义\\n【例题详解】把 $x_0=-1$ 代入。\\n【答案与评分点】答案为 $2$。\\n【易错提醒】不要代错。\\n【课堂追问】D(0) 呢？",
-                  "studentHint": "【知识速记】先找到定义里的自变量位置。\\n【例题详解】把 $x_0=-1$ 代入得到 $2$。\\n【答案与评分点】答案：$2$，写出代入过程得 2 分。\\n【练习任务】完成同类题，过程写在作答区。",
+                  "studentHint": "【知识速记】先找到定义里的自变量位置。\\n答案为 $2$，这一行不应进入学生版。\\n【例题详解】把 $x_0=-1$ 代入得到 $2$。\\n【参考解析】先代入再化简。\\n【答案与评分点】答案：$2$，写出代入过程得 2 分。\\n【练习任务】完成同类题，过程写在作答区。",
                   "knowledgePoints": ["函数新定义", "代入求值"],
                   "followUpQuestions": ["D(0) 如何处理？", "条件变化时如何分类？"]
                 }
@@ -87,7 +87,7 @@ class TeachingAiDraftServiceTest {
         assertThat(parsed.structured()).isTrue();
         assertThat(parsed.studentHint())
                 .contains("【知识速记】", "【练习任务】")
-                .doesNotContain("【例题详解】", "【答案与评分点】", "答案：", "评分点", "$2$");
+                .doesNotContain("【例题详解】", "【参考解析】", "【答案与评分点】", "答案：", "答案为", "评分点", "$2$");
         assertThat(parsed.teacherExplanation()).contains("【答案与评分点】", "$2$");
     }
 

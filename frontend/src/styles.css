@@ -2128,14 +2128,14 @@ h1, h2, h3, h4, h5, h6 {
 .template-preview-paper {
   display: grid;
   gap: 13px;
-  border: 1px solid rgba(15, 23, 42, 0.12);
+  border: 1px solid rgba(15, 23, 42, 0.18);
   border-radius: 8px;
-  padding: 16px;
+  padding: 18px;
   background:
-    linear-gradient(90deg, rgba(37, 99, 235, 0.09) 0, rgba(37, 99, 235, 0.09) 1px, transparent 1px),
-    linear-gradient(180deg, #ffffff, #fbfdff);
-  background-size: 20px 100%, auto;
-  box-shadow: 0 16px 36px rgba(15, 23, 42, 0.08);
+    linear-gradient(90deg, rgba(15, 23, 42, 0.055) 0, rgba(15, 23, 42, 0.055) 1px, transparent 1px),
+    #ffffff;
+  background-size: 20px 100%;
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.12);
 }
 
 .template-preview-title {
@@ -2163,7 +2163,7 @@ h1, h2, h3, h4, h5, h6 {
 
 .template-preview-title p {
   margin: 0;
-  color: var(--slate);
+  color: var(--navy-mid);
   font-size: 12px;
   line-height: 1.7;
 }
@@ -2202,10 +2202,10 @@ h1, h2, h3, h4, h5, h6 {
   grid-template-columns: auto minmax(0, 1fr);
   gap: 9px;
   min-height: 72px;
-  border: 1px solid rgba(148, 163, 184, 0.22);
+  border: 1px solid rgba(100, 116, 139, 0.26);
   border-radius: 8px;
   padding: 10px;
-  background: rgba(255, 255, 255, 0.82);
+  background: rgba(255, 255, 255, 0.96);
 }
 
 .template-preview-section > span {
@@ -2230,7 +2230,7 @@ h1, h2, h3, h4, h5, h6 {
 
 .template-preview-section p {
   margin: 0;
-  color: var(--slate);
+  color: var(--navy-mid);
   font-size: 12px;
   line-height: 1.55;
 }
@@ -2247,10 +2247,10 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .template-preview-workspace > div {
-  border: 1px solid rgba(148, 163, 184, 0.22);
+  border: 1px solid rgba(100, 116, 139, 0.26);
   border-radius: 8px;
   padding: 11px;
-  background: rgba(255, 255, 255, 0.76);
+  background: rgba(255, 255, 255, 0.96);
 }
 
 .template-preview-workspace strong {
@@ -2311,7 +2311,7 @@ h1, h2, h3, h4, h5, h6 {
 
 .template-shelf-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
   align-items: start;
   gap: 14px;
   overflow-y: auto;
@@ -2332,11 +2332,11 @@ h1, h2, h3, h4, h5, h6 {
   gap: 8px;
   min-height: 178px;
   padding: 13px 13px 13px 17px;
-  border: 1px solid var(--slate-lightest);
+  border: 1px solid rgba(100, 116, 139, 0.26);
   border-radius: 8px;
   background:
-    linear-gradient(90deg, rgba(15, 23, 42, 0.1) 0, rgba(15, 23, 42, 0.1) 4px, transparent 4px),
-    linear-gradient(180deg, var(--white), var(--gray-subtle));
+    linear-gradient(90deg, rgba(15, 23, 42, 0.24) 0, rgba(15, 23, 42, 0.24) 4px, transparent 4px),
+    #ffffff;
   color: inherit;
   text-align: left;
   transition: var(--transition);
@@ -2363,7 +2363,7 @@ h1, h2, h3, h4, h5, h6 {
 .template-card:hover {
   border-color: var(--blue-border);
   transform: translateY(-1px);
-  box-shadow: 0 12px 26px rgba(15, 23, 42, 0.08);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.12);
 }
 
 .template-card.selected {
@@ -2464,10 +2464,10 @@ h1, h2, h3, h4, h5, h6 {
 .template-card-paper {
   display: grid;
   gap: 5px;
-  border: 1px solid rgba(148, 163, 184, 0.22);
+  border: 1px solid rgba(100, 116, 139, 0.26);
   border-radius: 7px;
   padding: 8px;
-  background: rgba(255, 255, 255, 0.78);
+  background: rgba(255, 255, 255, 0.96);
 }
 
 .template-card-paper-head {

@@ -26,9 +26,9 @@ public class TeachingAiDraftService {
     private static final TeachingHandoutTemplateProfile DEFAULT_TEMPLATE =
             new TeachingHandoutTemplateService().resolve("default_standard");
     private static final Pattern STUDENT_FORBIDDEN_SECTION = Pattern.compile(
-            "【(?:答案与评分点|参考答案|评分标准|例题详解|完整解析|教师讲解|讲评主线|教师备注|板书设计)】[\\s\\S]*?(?=【|$)");
+            "【(?:答案与评分点|参考答案|参考解析|评分标准|例题详解|完整解析|教师讲解|讲评主线|教师备注|板书设计)】[\\s\\S]*?(?=【|$)");
     private static final Pattern STUDENT_FORBIDDEN_LINE = Pattern.compile(
-            "(?m)^.*(?:答案[：:]|参考答案|评分点|评分标准|完整解析|解答如下|解：|因此答案为|故答案为).*$");
+            "(?m)^.*(?:答案[：:]|答案为|参考答案|参考解析|评分点|评分标准|完整解析|解答如下|解：|因此答案为|故答案为).*$");
     private static final Pattern INTERNAL_HANDOUT_LINE = Pattern.compile(
             "(?mi)^.*(?:MODEL_CALL|JSON_PARSE|\\btokens?\\b|模型健康|model health|debug|调试|JSON|页眉|页脚|颜色|PDF\\s*(?:规则|排版|版式)|排版说明|版式要求|渲染引擎|页边距|虚线折叠|documentclass|usepackage|fancyhdr|pagestyle|begin\\{document}|end\\{document}|作为\\s*AI|as an AI).*$");
 
