@@ -291,6 +291,7 @@ def main() -> None:
         },
         "directTeacherSearch": _summarize_direct_rows(direct_rows),
         "sourceGrounded": _summarize_grounded_rows(grounded_rows),
+        "sourceGroundedPrimary": _summarize_grounded_primary_rows(grounded_rows),
         "localJson": {
             "count": len(json_rows),
             "jsonRepairSuccessRate": _rate(json_rows, lambda row: bool(row.get("parsed"))),
@@ -564,6 +565,51 @@ def _summarize_grounded_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "latency": compute_latency_summary(row.get("elapsedMs", 0) for row in successful),
             "retrievalModes": dict(Counter(str(row.get("retrievalMode") or "") for row in successful)),
             "filterModeBreakdown": dict(Counter(str(row.get("filterMode") or "") for row in group)),
+        }
+    if "legacy_block_hybrid" in summary["byStrategy"] and "two_stage_doc_block" in summary["byStrategy"]:
+        legacy = summary["byStrategy"]["legacy_block_hybrid"]
+        upgraded = summary["byStrategy"]["two_stage_doc_block"]
+        summary["deltaVsLegacy"] = {
+            "documentRecallAt1": round(float(upgraded["documentRecallAt1"]) - float(legacy["documentRecallAt1"]), 4),
+            "documentRecallAt3": round(float(upgraded["documentRecallAt3"]) - float(legacy["documentRecallAt3"]), 4),
+            "documentRecallAt5": round(float(upgraded["documentRecallAt5"]) - float(legacy["documentRecallAt5"]), 4),
+            "blockRecallAt1": round(float(upgraded["blockRecallAt1"]) - float(legacy["blockRecallAt1"]), 4),
+            "blockRecallAt3": round(float(upgraded["blockRecallAt3"]) - float(legacy["blockRecallAt3"]), 4),
+            "blockRecallAt5": round(float(upgraded["blockRecallAt5"]) - float(legacy["blockRecallAt5"]), 4),
+            "judgePassRate": round(float(upgraded["judgePassRate"]) - float(legacy["judgePassRate"]), 4),
+            "avgJudgeScore": round(float(upgraded["avgJudgeScore"]) - float(legacy["avgJudgeScore"]), 4),
+            "scopeHitRate": round(float(upgraded["scopeHitRate"]) - float(legacy["scopeHitRate"]), 4),
+            "roleHitRate": round(float(upgraded["roleHitRate"]) - float(legacy["roleHitRate"]), 4),
+        }
+    return summary
+
+
+def _summarize_grounded_primary_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    primary_rows = [row for row in rows if str(row.get("filterMode") or "") == "scope+tag"]
+    grouped = _group_by_strategy(primary_rows)
+    summary = {
+        "primaryFilterMode": "scope+tag",
+        "count": len(primary_rows),
+        "byStrategy": {},
+    }
+    for strategy, group in grouped.items():
+        successful = [row for row in group if row.get("status") == 200]
+        judged_rows = [row for row in successful if row.get("judgePass") is not None]
+        summary["byStrategy"][strategy] = {
+            "count": len(group),
+            "documentRecallAt1": _rate(successful, lambda row: bool(row.get("documentRecallAt1"))),
+            "documentRecallAt3": _rate(successful, lambda row: bool(row.get("documentRecallAt3"))),
+            "documentRecallAt5": _rate(successful, lambda row: bool(row.get("documentRecallAt5"))),
+            "blockRecallAt1": _rate(successful, lambda row: bool(row.get("blockRecallAt1"))),
+            "blockRecallAt3": _rate(successful, lambda row: bool(row.get("blockRecallAt3"))),
+            "blockRecallAt5": _rate(successful, lambda row: bool(row.get("blockRecallAt5"))),
+            "judgeSampleCount": len(judged_rows),
+            "judgePassRate": _rate(judged_rows, lambda row: bool(row.get("judgePass"))),
+            "avgJudgeScore": round(sum(float(row.get("judgeScore") or 0) for row in judged_rows) / len(judged_rows), 3)
+            if judged_rows else 0.0,
+            "scopeHitRate": _rate(successful, lambda row: bool(row.get("scopeHit"))),
+            "roleHitRate": _rate(successful, lambda row: bool(row.get("roleHit"))),
+            "latency": compute_latency_summary(row.get("elapsedMs", 0) for row in successful),
         }
     if "legacy_block_hybrid" in summary["byStrategy"] and "two_stage_doc_block" in summary["byStrategy"]:
         legacy = summary["byStrategy"]["legacy_block_hybrid"]
