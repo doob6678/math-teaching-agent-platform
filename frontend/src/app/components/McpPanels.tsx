@@ -1,6 +1,6 @@
 import { FormEvent } from "react";
-import { AlertCircle, Loader2, ShieldCheck } from "lucide-react";
-import { McpConfigurationResponse } from "../../shared/api/textbookApi";
+import { AlertCircle, Loader2, Network, ShieldCheck } from "lucide-react";
+import { McpConfigurationResponse, McpConnectionTestResult } from "../../shared/api/textbookApi";
 import {
   MCP_PROMPT_OPTIONS,
   MCP_PROTECTED_TOOL_OPTIONS,
@@ -44,11 +44,12 @@ export function McpConfigurationForm({
       <form className="search-form" onSubmit={onSubmit}>
         <label>
           <span>MCP 服务地址</span>
-          <input value={url} onChange={(event) => onUrlChange(event.target.value)} />
+          <input className="form-input" value={url} onChange={(event) => onUrlChange(event.target.value)} />
         </label>
         <label>
           <span>访问密钥</span>
           <input
+            className="form-input"
             type="password"
             value={secretKey}
             onChange={(event) => onSecretKeyChange(event.target.value)}
@@ -57,7 +58,7 @@ export function McpConfigurationForm({
         </label>
         <label>
           <span>环境变量名</span>
-          <input value={secretEnvName} onChange={(event) => onSecretEnvNameChange(event.target.value)} />
+          <input className="form-input" value={secretEnvName} onChange={(event) => onSecretEnvNameChange(event.target.value)} />
         </label>
         <McpOptionGroup title="开放工具" options={MCP_TOOL_OPTIONS} selected={selectedTools} onToggle={onToolToggle} />
         <McpProtectedToolGroup />
@@ -195,6 +196,62 @@ export function McpConfigurationPanel({
           生成配置后，这里会展示后端过滤后的工具、提示词和可复制 JSON。
         </div>
       )}
+    </section>
+  );
+}
+
+export function McpConnectionTestPanel({
+  testing,
+  result,
+  error,
+  onTest,
+}: {
+  testing: boolean;
+  result: McpConnectionTestResult | null;
+  error: string;
+  onTest: () => void;
+}) {
+  return (
+    <section className="mcp-test-panel">
+      <div className="mcp-test-head">
+        <div>
+          <p className="eyebrow">连接测试</p>
+          <h2>标准 MCP 握手</h2>
+        </div>
+        <button className="btn btn-secondary btn-sm" type="button" onClick={onTest} disabled={testing}>
+          {testing ? <Loader2 className="spin" size={16} /> : <Network size={16} />}
+          <span>{testing ? "测试中" : "测试连接"}</span>
+        </button>
+      </div>
+      {error ? <StatusLine icon={<AlertCircle size={16} />} text={error} tone="danger" /> : null}
+      {result ? (
+        <div className="mcp-test-result">
+          <StatusLine icon={<ShieldCheck size={16} />} text={`连接成功，可见工具 ${result.toolCount} 个`} />
+          <div className="mcp-test-meta">
+            <div>
+              <span>服务</span>
+              <strong>{result.serverName}</strong>
+            </div>
+            <div>
+              <span>版本</span>
+              <strong>{result.serverVersion}</strong>
+            </div>
+            <div>
+              <span>协议</span>
+              <strong>{result.protocolVersion}</strong>
+            </div>
+          </div>
+          <div className="mcp-tool-chip-list">
+            {result.tools.map((tool) => (
+              <span key={tool}>{optionLabel(tool)}</span>
+            ))}
+          </div>
+        </div>
+      ) : !error ? (
+        <div className="empty-state compact">
+          填写密钥后可直接测试 MCP initialize 和 tools/list，确认外部客户端能真实调用。
+        </div>
+      ) : null}
     </section>
   );
 }

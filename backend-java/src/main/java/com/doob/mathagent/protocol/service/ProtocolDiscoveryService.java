@@ -15,6 +15,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 /**
@@ -73,7 +74,8 @@ public class ProtocolDiscoveryService {
     private final McpClientRegistryProperties clientRegistryProperties;
 
     /**
-     * Creates the protocol discovery service with an empty MCP client registry.
+     * Creates the protocol discovery service with an empty MCP client registry for isolated metadata tests only.
+     * Production wiring must use the autowired constructor below so MCP configuration uses registered client keys.
      */
     public ProtocolDiscoveryService() {
         this(new McpClientRegistryProperties());
@@ -84,6 +86,7 @@ public class ProtocolDiscoveryService {
      *
      * @param clientRegistryProperties registered MCP client hashes and profiles
      */
+    @Autowired
     public ProtocolDiscoveryService(McpClientRegistryProperties clientRegistryProperties) {
         this.clientRegistryProperties = clientRegistryProperties == null
                 ? new McpClientRegistryProperties()
@@ -602,22 +605,22 @@ public class ProtocolDiscoveryService {
         return List.of(
                 new McpConfigurationResponse.Layer(
                         "discovery",
-                        "Discovery",
-                        "Lists available MCP tools and Agent Card metadata only.",
-                        "Sa-Token session or future registered MCP secret",
-                        List.of("GET /api/mcp/tools", "GET /api/a2a/.well-known/agent-card.json")),
+                        "发现层",
+                        "只列出可用 MCP 工具和智能体卡片元数据，不执行任务。",
+                        "后端会话或已注册 MCP 密钥",
+                        List.of("查看工具清单", "查看 Agent Card")),
                 new McpConfigurationResponse.Layer(
                         "session",
-                        "Session-bound calls",
-                        "Uses backend-resolved tenant, role, and subject identity for low-risk read operations.",
-                        "Sa-Token session",
-                        List.of("textbook evidence search", "teacher resource evidence search")),
+                        "会话层",
+                        "使用后端解析的租户、角色和主体身份执行低风险读取。",
+                        "后端登录会话",
+                        List.of("教材证据检索", "教师资源检索")),
                 new McpConfigurationResponse.Layer(
                         "high_value",
-                        "High-value execution",
-                        "Requires a registered MCP secret whose allowed tool list and scopes explicitly enable the operation.",
-                        "Registered MCP secret plus backend allow-list scopes",
-                        List.of("multi-agent handout writing", "Feishu controlled download", "future protected export tools")));
+                        "高价值执行层",
+                        "必须使用已注册 MCP 密钥，并由后端工具白名单和资源范围共同放行。",
+                        "已注册 MCP 密钥和后端白名单",
+                        List.of("讲义协作写作", "飞书受控下载", "受保护导出工具")));
     }
 
     /**

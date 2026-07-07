@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 教材目录摘要。字段与后端 `TextbookResourceSummary` 对齐，用于资料搜索页顶部资源概览。
  */
 export interface TextbookSummary {
@@ -2017,6 +2017,32 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     }
   }
 
+  /**
+   * Turns structured backend errors into concise UI text; raw JSON makes operational pages hard to read.
+   */
+  function backendErrorMessage(status: number, body: string): string {
+    const trimmed = body.trim();
+    if (trimmed.startsWith("{")) {
+      try {
+        const parsed = JSON.parse(trimmed) as { message?: unknown; code?: unknown; error?: unknown };
+        const message = typeof parsed.message === "string" ? parsed.message : "";
+        const code = typeof parsed.code === "string" ? parsed.code : "";
+        if (message && code) {
+          return `Backend request failed: ${status} ${message} (${code})`;
+        }
+        if (message) {
+          return `Backend request failed: ${status} ${message}`;
+        }
+        if (typeof parsed.error === "string") {
+          return `Backend request failed: ${status} ${parsed.error}`;
+        }
+      } catch {
+        // Fall back to the raw text when the backend returns malformed JSON.
+      }
+    }
+    return `Backend request failed: ${status} ${trimmed}`.trim();
+  }
+
   async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> {
     const auth = readAuthSession();
     const authHeader = auth ? { [auth.tokenName]: auth.tokenValue } : {};
@@ -2030,7 +2056,7 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     });
     if (!response.ok) {
       const body = await response.text();
-      throw new Error(`Backend request failed: ${response.status} ${body}`.trim());
+      throw new Error(backendErrorMessage(response.status, body));
     }
     return response.json() as Promise<T>;
   }
@@ -2061,7 +2087,7 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     });
     if (!response.ok) {
       const body = await response.text();
-      throw new Error(`Backend request failed: ${response.status} ${body}`.trim());
+      throw new Error(backendErrorMessage(response.status, body));
     }
     return response.text();
   }
@@ -2082,7 +2108,7 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     });
     if (!response.ok) {
       const body = await response.text();
-      throw new Error(`Backend request failed: ${response.status} ${body}`.trim());
+      throw new Error(backendErrorMessage(response.status, body));
     }
     return new Uint8Array(await response.arrayBuffer());
   }
@@ -2103,7 +2129,7 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     });
     if (!response.ok) {
       const body = await response.text();
-      throw new Error(`Backend request failed: ${response.status} ${body}`.trim());
+      throw new Error(backendErrorMessage(response.status, body));
     }
     return {
       bytes: new Uint8Array(await response.arrayBuffer()),
@@ -2129,7 +2155,7 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     });
     if (!response.ok) {
       const body = await response.text();
-      throw new Error(`Backend request failed: ${response.status} ${body}`.trim());
+      throw new Error(backendErrorMessage(response.status, body));
     }
     return response.json() as Promise<T>;
   }

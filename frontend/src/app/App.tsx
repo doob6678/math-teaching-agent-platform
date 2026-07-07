@@ -17,6 +17,7 @@ import {
   AgentTraceUsageSummaryResponse,
   KnowledgePointResponse,
   KnowledgeRelationResponse,
+  McpConnectionTestResult,
   McpConfigurationResponse,
   MultiAgentWritingArtifact,
   MultiAgentWritingResponse,
@@ -51,7 +52,7 @@ import {
 import { AgentModelHealthPanel, AgentPlanPanel, AgentTracePanel } from "./components/AgentPanels";
 import { AuditDetailPanel, EvidenceCard } from "./components/EvidencePanels";
 import { KnowledgeQuestionBankPanel } from "./components/KnowledgeQuestionBankPanel";
-import { McpConfigurationForm, McpConfigurationPanel } from "./components/McpPanels";
+import { McpConnectionTestPanel, McpConfigurationForm, McpConfigurationPanel } from "./components/McpPanels";
 import { MultiAgentWritingPanel } from "./components/MultiAgentWritingPanel";
 import {
   compactText,
@@ -136,7 +137,7 @@ export function MathText({ text, block = false }: { text: string; block?: boolea
   );
 }
 
-type PageId = "dashboard" | "search" | "teaching" | "agents" | "streaming" | "knowledge" | "settings" | "login";
+type PageId = "dashboard" | "search" | "teaching" | "agents" | "streaming" | "knowledge" | "mcp" | "settings" | "login";
 
 type TeachingPdfPreviewVisualEvidence = {
   artifactType: "browser_pdf_canvas";
@@ -256,6 +257,9 @@ export function App() {
   const [mcpBuilding, setMcpBuilding] = useState(false);
   const [mcpCopyMessage, setMcpCopyMessage] = useState("");
   const [mcpError, setMcpError] = useState("");
+  const [mcpTesting, setMcpTesting] = useState(false);
+  const [mcpTestError, setMcpTestError] = useState("");
+  const [mcpTestResult, setMcpTestResult] = useState<McpConnectionTestResult | null>(null);
   const [teachingError, setTeachingError] = useState("");
   const [studentDashboardError, setStudentDashboardError] = useState("");
   const [teacherResourceError, setTeacherResourceError] = useState("");
@@ -1233,6 +1237,17 @@ export function App() {
       .finally(() => setMcpBuilding(false));
   }
 
+  function handleTestMcpConnection() {
+    setMcpTesting(true);
+    setMcpTestError("");
+    setMcpTestResult(null);
+    api
+      .testMcpConnection(mcpUrl, mcpSecretKey)
+      .then(setMcpTestResult)
+      .catch((error: Error) => setMcpTestError(error.message))
+      .finally(() => setMcpTesting(false));
+  }
+
   function handleMcpToolToggle(option: string, checked: boolean) {
     setMcpSelection((current) => ({ ...current, tools: toggleMcpExposureOption(current.tools, option, checked, MCP_TOOL_OPTIONS) }));
   }
@@ -1287,6 +1302,7 @@ export function App() {
     { id: "agents", label: "AI 控制台", icon: <Bot size={16} /> },
     { id: "streaming", label: "讲义协作", icon: <GitBranch size={16} /> },
     { id: "knowledge", label: "知识库", icon: <BrainCircuit size={16} /> },
+    { id: "mcp", label: "MCP 接入", icon: <Globe size={16} /> },
     { id: "settings", label: "系统设置", icon: <Settings size={16} /> },
   ];
 
@@ -1334,6 +1350,10 @@ export function App() {
                     <Settings size={14} />
                     系统设置
                   </button>
+                  <button className="dropdown-item" onClick={() => navigate("mcp")}>
+                    <Globe size={14} />
+                    MCP 接入
+                  </button>
                   <button className="dropdown-item logout" onClick={handleLogout}>
                     <LogOut size={14} />
                     退出登录
@@ -1358,6 +1378,7 @@ export function App() {
           {activePage === "agents" && renderAgents()}
           {activePage === "streaming" && renderStreaming()}
           {activePage === "knowledge" && renderKnowledge()}
+          {activePage === "mcp" && renderMcp()}
           {activePage === "settings" && renderSettings()}
           {activePage === "login" && renderLogin()}
         </div>
@@ -1432,9 +1453,9 @@ export function App() {
     );
   }
 
-  function renderRequiresAuth(children: React.ReactNode) {
+  function renderRequiresAuth(children: React.ReactNode, loginReturnPage: PageId = "settings") {
     if (!hasVerifiedSession) {
-      return <LoginPrompt onLogin={() => navigate("settings")} />;
+      return <LoginPrompt onLogin={() => navigate(loginReturnPage)} />;
     }
     return <>{children}</>;
   }
@@ -1819,32 +1840,46 @@ export function App() {
     );
   }
 
-  function renderSettings() {
-    return (
+  function renderMcp() {
+    return renderRequiresAuth(
       <>
         <div className="page-header">
-          <h1 className="page-title">系统设置</h1>
-          <p className="page-subtitle">MCP 配置、后端连接与资源管理</p>
+          <h1 className="page-title">MCP 接入</h1>
+          <p className="page-subtitle">为 WorkBuddy、Claude Desktop 等外部客户端生成当前账号可用的标准 MCP 配置</p>
         </div>
-        <div className="settings-grid">
-          {authSession ? (
-            <div className="card">
-              <div className="card-header">
-                <h2 className="card-title"><ShieldCheck size={16} /> 当前会话</h2>
-              </div>
-              <div className="card-body">
-                <div className="auth-session">
-                  <Check size={14} />
-                  <span>{sessionRoleLabel(authSession.role)}</span>
-                  <strong>{authSession.userId}</strong>
-                  <span style={{ color: "var(--slate)", fontSize: 12, marginLeft: "auto" }}>已登录</span>
+        <div className="mcp-page-grid">
+          <div className="card card-full mcp-identity-card">
+            <div className="card-header">
+              <h2 className="card-title"><ShieldCheck size={16} /> 当前账号边界</h2>
+            </div>
+            <div className="card-body">
+              <div className="mcp-identity-strip">
+                <div>
+                  <span>账号</span>
+                  <strong>{authSession?.username ?? "未登录"}</strong>
+                </div>
+                <div>
+                  <span>用户 ID</span>
+                  <strong>{authSession?.userId ?? "-"}</strong>
+                </div>
+                <div>
+                  <span>角色</span>
+                  <strong>{sessionRoleLabel(authSession?.role)}</strong>
+                </div>
+                <div>
+                  <span>租户</span>
+                  <strong>{authSession?.tenantId ?? "-"}</strong>
                 </div>
               </div>
+              <details className="mcp-policy-note">
+                <summary>权限说明</summary>
+                <p>外部客户端只拿到后端按当前账号过滤后的工具和提示词。角色、租户和资源范围由后端会话与 MCP 密钥解析，前端不能自选身份。</p>
+              </details>
             </div>
-          ) : null}
-          <div className="card">
+          </div>
+          <div className="card mcp-config-card">
             <div className="card-header">
-              <h2 className="card-title"><Globe size={16} /> MCP 配置</h2>
+              <h2 className="card-title"><Globe size={16} /> 客户端配置</h2>
             </div>
             <div className="card-body">
               <McpConfigurationForm
@@ -1862,6 +1897,19 @@ export function App() {
                 onPromptToggle={handleMcpPromptToggle}
                 onSubmit={handleBuildMcpConfiguration}
               />
+            </div>
+          </div>
+          <div className="card mcp-result-card">
+            <div className="card-header">
+              <h2 className="card-title"><Network size={16} /> 连接与导出</h2>
+            </div>
+            <div className="card-body">
+              <McpConnectionTestPanel
+                testing={mcpTesting}
+                result={mcpTestResult}
+                error={mcpTestError}
+                onTest={handleTestMcpConnection}
+              />
               <McpConfigurationPanel
                 configuration={mcpConfiguration}
                 copyMessage={mcpCopyMessage}
@@ -1869,6 +1917,35 @@ export function App() {
               />
             </div>
           </div>
+        </div>
+      </>,
+      "mcp",
+    );
+  }
+
+  function renderSettings() {
+    return (
+      <>
+        <div className="page-header">
+          <h1 className="page-title">系统设置</h1>
+          <p className="page-subtitle">后端连接、当前会话与教师资源管理</p>
+        </div>
+        <div className="settings-grid">
+          {authSession ? (
+            <div className="card">
+              <div className="card-header">
+                <h2 className="card-title"><ShieldCheck size={16} /> 当前会话</h2>
+              </div>
+              <div className="card-body">
+                <div className="auth-session">
+                  <Check size={14} />
+                  <span>{sessionRoleLabel(authSession.role)}</span>
+                  <strong>{authSession.userId}</strong>
+                  <span style={{ color: "var(--slate)", fontSize: 12, marginLeft: "auto" }}>已登录</span>
+                </div>
+              </div>
+            </div>
+          ) : null}
           <div className="card">
             <div className="card-header">
               <h2 className="card-title"><Database size={16} /> 后端连接</h2>

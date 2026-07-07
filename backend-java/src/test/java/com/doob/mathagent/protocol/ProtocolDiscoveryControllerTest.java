@@ -78,17 +78,36 @@ class ProtocolDiscoveryControllerTest {
         ProtocolDiscoveryService service = new ProtocolDiscoveryService(registryWithTextbookSearch());
         McpDiscoveryController controller = new McpDiscoveryController(service);
 
-        var config = controller.configuration(new McpConfigurationRequest(
+        var response = controller.configuration(new McpConfigurationRequest(
                 "https://math.example.com/api/mcp",
                 "teacher_secret_1234567890abcdef",
                 "MATH_AGENT_MCP_SECRET",
                 java.util.List.of(),
                 java.util.List.of()));
+        var config = (com.doob.mathagent.protocol.vo.McpConfigurationResponse) response.getBody();
 
+        assertThat(response.getStatusCode().value()).isEqualTo(200);
+        assertThat(config).isNotNull();
         assertThat(config.valid()).isTrue();
         assertThat(config.configJson()).contains("\"math-agent-rag\"");
         assertThat(config.configJson()).contains("${MATH_AGENT_MCP_SECRET}");
         assertThat(config.configJson()).doesNotContain("teacher_secret_1234567890abcdef");
+    }
+
+    @Test
+    void returnsBadRequestForUnregisteredMcpConfigurationSecret() {
+        ProtocolDiscoveryService service = new ProtocolDiscoveryService(registryWithTextbookSearch());
+        McpDiscoveryController controller = new McpDiscoveryController(service);
+
+        var response = controller.configuration(new McpConfigurationRequest(
+                        "https://math.example.com/api/mcp",
+                        "unregistered_secret_1234567890abcdef",
+                        "MATH_AGENT_MCP_SECRET",
+                        java.util.List.of(),
+                        java.util.List.of()));
+
+        assertThat(response.getStatusCode().value()).isEqualTo(400);
+        assertThat(response.getBody()).asString().contains("MCP_CONFIGURATION_INVALID").contains("not registered");
     }
 
     @Test

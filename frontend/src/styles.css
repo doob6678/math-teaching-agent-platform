@@ -1750,6 +1750,128 @@ h1, h2, h3, h4, h5, h6 {
   gap: 20px;
 }
 
+.mcp-page-grid {
+  display: grid;
+  grid-template-columns: minmax(360px, 0.9fr) minmax(460px, 1.1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.mcp-config-card,
+.mcp-result-card,
+.mcp-identity-card {
+  min-width: 0;
+}
+
+.mcp-identity-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.mcp-identity-strip > div,
+.mcp-test-meta > div {
+  display: grid;
+  gap: 5px;
+  padding: 12px 14px;
+  border: 1px solid var(--slate-lightest);
+  border-radius: var(--radius-md);
+  background: var(--gray-subtle);
+}
+
+.mcp-identity-strip span,
+.mcp-test-meta span {
+  color: var(--slate);
+  font-size: 12px;
+}
+
+.mcp-identity-strip strong,
+.mcp-test-meta strong {
+  color: var(--navy);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.mcp-policy-note {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(15, 118, 110, 0.16);
+  border-radius: var(--radius-md);
+  background: #f0fdfa;
+}
+
+.mcp-policy-note summary {
+  cursor: pointer;
+  color: #0f766e;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.mcp-policy-note p {
+  margin: 8px 0 0;
+  color: var(--navy-mid);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.mcp-test-panel,
+.mcp-config-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.mcp-test-panel {
+  margin-bottom: 18px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--slate-lightest);
+}
+
+.mcp-test-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mcp-test-head h2 {
+  margin: 0;
+  color: var(--navy);
+  font-size: 18px;
+  font-weight: 750;
+}
+
+.mcp-test-result {
+  display: grid;
+  gap: 12px;
+}
+
+.mcp-test-meta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.mcp-tool-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.mcp-tool-chip-list span {
+  display: inline-flex;
+  max-width: 220px;
+  padding: 5px 9px;
+  border: 1px solid rgba(37, 99, 235, 0.16);
+  border-radius: 999px;
+  background: var(--blue-subtle);
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -1774,6 +1896,12 @@ h1, h2, h3, h4, h5, h6 {
   }
 
   .card-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .mcp-page-grid,
+  .mcp-identity-strip,
+  .mcp-test-meta {
     grid-template-columns: 1fr;
   }
 
