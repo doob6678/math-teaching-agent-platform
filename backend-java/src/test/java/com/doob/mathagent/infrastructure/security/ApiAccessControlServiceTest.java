@@ -155,8 +155,8 @@ class ApiAccessControlServiceTest {
                 "device-2",
                 "JUnit");
         ApiRequestIdentity studentConfiguration = new ApiRequestIdentity(
-                "POST",
-                "/api/mcp/configuration",
+                "GET",
+                "/api/mcp/configuration/me",
                 "default",
                 "student",
                 "student-1",
@@ -164,8 +164,8 @@ class ApiAccessControlServiceTest {
                 "device-3",
                 "JUnit");
         ApiRequestIdentity teacherConfiguration = new ApiRequestIdentity(
-                "POST",
-                "/api/mcp/configuration",
+                "GET",
+                "/api/mcp/configuration/me",
                 "default",
                 "teacher",
                 "teacher-1",
@@ -177,7 +177,7 @@ class ApiAccessControlServiceTest {
         ApiAccessDecision standardMcpAllowed = service.evaluate(anonymousStandardMcp);
         ApiAccessDecision studentAllowed = service.evaluate(studentMcp);
         ApiAccessDecision teacherAllowed = service.evaluate(teacherA2a);
-        ApiAccessDecision studentConfigurationDenied = service.evaluate(studentConfiguration);
+        ApiAccessDecision studentConfigurationAllowed = service.evaluate(studentConfiguration);
         ApiAccessDecision teacherConfigurationAllowed = service.evaluate(teacherConfiguration);
 
         assertThat(denied.allowed()).isFalse();
@@ -191,10 +191,11 @@ class ApiAccessControlServiceTest {
         assertThat(teacherAllowed.allowed()).isTrue();
         assertThat(teacherAllowed.level()).isEqualTo(ApiAccessLevel.USER);
         assertThat(teacherAllowed.limit()).isEqualTo(30);
-        assertThat(studentConfigurationDenied.allowed()).isFalse();
-        assertThat(studentConfigurationDenied.httpStatus()).isEqualTo(403);
+        assertThat(studentConfigurationAllowed.allowed()).isTrue();
+        assertThat(studentConfigurationAllowed.level()).isEqualTo(ApiAccessLevel.USER);
+        assertThat(studentConfigurationAllowed.limit()).isEqualTo(30);
         assertThat(teacherConfigurationAllowed.allowed()).isTrue();
-        assertThat(teacherConfigurationAllowed.limit()).isEqualTo(20);
+        assertThat(teacherConfigurationAllowed.limit()).isEqualTo(30);
     }
 
     @Test

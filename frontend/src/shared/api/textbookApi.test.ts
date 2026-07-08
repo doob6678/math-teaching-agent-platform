@@ -1728,7 +1728,84 @@ describe("textbookApi", () => {
     expect(summary.retryRecoveredCount).toBe(1);
   });
 
-  it("builds copyable MCP configuration without client supplied identity headers", async () => {
+  it("lists session-owned MCP keys without client supplied identity headers", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ([{
+        keyId: "key-1",
+        name: "teacher-mcp-20260708-120000",
+        tenantId: "school-a",
+        ownerUserId: "teacher-1",
+        keyProfile: "teacher",
+        status: "active",
+        secretKeyPreview: "mcp_...cdef",
+        createdAt: "2026-07-08T12:00:00",
+      }]),
+    });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const keys = await client.listMcpKeys();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8080/api/mcp/keys",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          "X-Device-Id": "local-browser-console",
+        }),
+      }),
+    );
+    expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Id");
+    expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Type");
+    expect(keys).toHaveLength(1);
+    expect(keys[0].ownerUserId).toBe("teacher-1");
+  });
+
+  it("creates a backend-generated MCP key without sending secret or identity fields", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        keyId: "key-1",
+        name: "teacher-mcp-20260708-120000",
+        tenantId: "school-a",
+        ownerUserId: "teacher-1",
+        keyProfile: "teacher",
+        secretKey: "mcp_secret_1234567890abcdef",
+        secretKeyPreview: "mcp_...cdef",
+        configuration: {
+          serverName: "math-agent-rag",
+          url: "https://math.example.com/api/mcp",
+          valid: true,
+          secretKeyAccepted: true,
+          secretKeyPreview: "mcp_...cdef",
+          secretEnvName: "MATH_AGENT_MCP_SECRET",
+          keyProfile: "teacher",
+          exposedTools: ["search_textbook_evidence"],
+          exposedPrompts: ["teacher_handout_writer"],
+          configJson:
+            '{\n  "mcpServers" : {\n    "math-agent-rag" : {\n      "type" : "http",\n      "url" : "https://math.example.com/api/mcp",\n      "headers" : {\n        "Authorization" : "Bearer ${MATH_AGENT_MCP_SECRET}"\n      }\n    }\n  }\n}',
+          layers: [],
+        },
+      }),
+    });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const created = await client.createMcpKey();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8080/api/mcp/keys",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "X-Device-Id": "local-browser-console",
+        }),
+      }),
+    );
+    expect(fetchMock.mock.calls[0][1]?.body).toBeUndefined();
+    expect(created.secretKey).toBe("mcp_secret_1234567890abcdef");
+    expect(created.configuration.configJson).toContain("${MATH_AGENT_MCP_SECRET}");
+  });
+
+  it("loads my backend-generated MCP configuration without client supplied identity headers", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -1738,37 +1815,55 @@ describe("textbookApi", () => {
         secretKeyAccepted: true,
         secretKeyPreview: "mcp_...cdef",
         secretEnvName: "MATH_AGENT_MCP_SECRET",
+        keyProfile: "teacher",
+        exposedTools: ["search_textbook_evidence", "plan_agent_run"],
+        exposedPrompts: ["teacher_handout_writer", "student_blank_handout_writer"],
         configJson:
           '{\n  "mcpServers" : {\n    "math-agent-rag" : {\n      "type" : "http",\n      "url" : "https://math.example.com/api/mcp",\n      "headers" : {\n        "Authorization" : "Bearer ${MATH_AGENT_MCP_SECRET}"\n      }\n    }\n  }\n}',
+        layers: [],
       }),
     });
     const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
-    const request = {
-      url: "https://math.example.com/api/mcp",
-      secretKey: "mcp_secret_1234567890abcdef",
-      secretEnvName: "MATH_AGENT_MCP_SECRET",
-      enabledToolNames: ["search_textbook_evidence", "plan_agent_run"],
-      enabledPromptNames: ["teacher_handout_writer", "student_blank_handout_writer"],
-    };
 
-    const config = await client.buildMcpConfiguration(request);
+    const config = await client.getMyMcpConfiguration();
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:8080/api/mcp/configuration",
+      "http://127.0.0.1:8080/api/mcp/configuration/me",
       expect.objectContaining({
-        method: "POST",
         headers: expect.objectContaining({
-          "Content-Type": "application/json",
           "X-Device-Id": "local-browser-console",
         }),
-        body: JSON.stringify(request),
       }),
     );
     expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Id");
     expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Type");
     expect(config.configJson).toContain("mcpServers");
     expect(config.configJson).toContain("${MATH_AGENT_MCP_SECRET}");
-    expect(config.configJson).not.toContain("mcp_secret_1234567890abcdef");
+  });
+
+  it("revokes one session-owned MCP key without sending identity fields", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        keyId: "key-1",
+        status: "revoked",
+        revokedAt: "2026-07-08T12:10:00",
+      }),
+    });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const revoked = await client.revokeMcpKey("key-1");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8080/api/mcp/keys/key-1/revoke",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "X-Device-Id": "local-browser-console",
+        }),
+      }),
+    );
+    expect(revoked.status).toBe("revoked");
   });
 
   it("tests standard MCP connection through initialize and tools/list without platform session headers", async () => {

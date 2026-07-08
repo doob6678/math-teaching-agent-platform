@@ -14,7 +14,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * validation, hashed in memory, and immediately discarded.
  */
 @ConfigurationProperties(prefix = "math-agent.protocol.mcp.registry")
-public class McpClientRegistryProperties {
+public class McpClientRegistryProperties implements McpClientResolver {
 
     private List<Client> clients = List.of();
 
@@ -42,6 +42,7 @@ public class McpClientRegistryProperties {
      * @param secret raw MCP Bearer secret from the Authorization header
      * @return matching enabled client, or empty when the secret is not registered
      */
+    @Override
     public Optional<Client> findEnabledClientBySecret(String secret) {
         String hashedSecret = secretHash(secret);
         return clients.stream()

@@ -21,6 +21,7 @@ class ProtocolDiscoveryServiceTest {
 
         assertThat(tools).extracting(McpToolDescriptor::name)
                 .contains(
+                        "search_multi_source_evidence",
                         "search_textbook_evidence",
                         "search_teacher_resource_evidence",
                         "get_teaching_ai_trace",
@@ -39,6 +40,7 @@ class ProtocolDiscoveryServiceTest {
         assertThat(tools).filteredOn(McpToolDescriptor::executionEndpointEnabled)
                 .extracting(McpToolDescriptor::name)
                 .containsExactly(
+                        "search_multi_source_evidence",
                         "search_textbook_evidence",
                         "search_teacher_resource_evidence",
                         "get_teaching_ai_trace",
@@ -61,6 +63,13 @@ class ProtocolDiscoveryServiceTest {
                     assertThat(tool.readOnly()).isTrue();
                     assertThat(tool.inputSchema().required()).contains("query");
                     assertThat(tool.requiredRoles()).contains("student", "teacher", "admin");
+                });
+        assertThat(tools).filteredOn(tool -> tool.name().equals("search_multi_source_evidence"))
+                .singleElement()
+                .satisfies(tool -> {
+                    assertThat(tool.readOnly()).isTrue();
+                    assertThat(tool.requiredRoles()).containsExactly("teacher", "admin");
+                    assertThat(tool.inputSchema().required()).contains("query");
                 });
         assertThat(tools).filteredOn(tool -> tool.name().equals("search_teacher_resource_evidence"))
                 .singleElement()

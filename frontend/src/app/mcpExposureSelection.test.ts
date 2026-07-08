@@ -63,7 +63,7 @@ describe("mcpExposureSelection", () => {
     expect([...MCP_PROTECTED_TOOL_OPTIONS]).toEqual([]);
     expect(MCP_TOOL_OPTION_META.search_teacher_resource_evidence.badge).toBe("只读");
     expect(MCP_TOOL_OPTION_META.get_teaching_ai_trace.note).toBe("查看本人可见教学任务的模型调用与解析记录。");
-    expect(MCP_TOOL_OPTION_META.get_ai_diagnostic_summary.note).toBe("查看重试、降级和故障恢复汇总。");
+    expect(MCP_TOOL_OPTION_META.get_ai_diagnostic_summary.note).toBe("查看重试、降级和恢复情况。");
     expect(MCP_TOOL_OPTION_META.download_feishu_resource.badge).toBe("需授权");
     expect(MCP_TOOL_OPTIONS).not.toContain("create_teaching_task");
     expect(MCP_TOOL_OPTIONS).not.toContain("export_handout_pdf");

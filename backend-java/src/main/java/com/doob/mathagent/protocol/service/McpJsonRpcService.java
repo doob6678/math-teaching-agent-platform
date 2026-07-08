@@ -32,7 +32,7 @@ public class McpJsonRpcService {
 
     private final ProtocolDiscoveryService discoveryService;
     private final McpToolExecutionService toolExecutionService;
-    private final McpClientRegistryProperties registryProperties;
+    private final McpClientResolver clientResolver;
     private final TextbookResourceService textbookResourceService;
     private final TextbookResourceProperties textbookResourceProperties;
     private final KnowledgeGraphSpineService knowledgeGraphSpineService;
@@ -42,7 +42,7 @@ public class McpJsonRpcService {
      *
      * @param discoveryService descriptor source for MCP tools, prompts, and resources
      * @param toolExecutionService existing tool executor with subject and allow-list checks
-     * @param registryProperties registered MCP clients and secret hashes
+     * @param clientResolver registered MCP client secret resolver
      * @param textbookResourceService textbook summary service for resources/read
      * @param textbookResourceProperties configured processed textbook root
      * @param knowledgeGraphSpineService curated graph spine reader
@@ -50,13 +50,13 @@ public class McpJsonRpcService {
     public McpJsonRpcService(
             ProtocolDiscoveryService discoveryService,
             McpToolExecutionService toolExecutionService,
-            McpClientRegistryProperties registryProperties,
+            McpClientResolver clientResolver,
             TextbookResourceService textbookResourceService,
             TextbookResourceProperties textbookResourceProperties,
             KnowledgeGraphSpineService knowledgeGraphSpineService) {
         this.discoveryService = Objects.requireNonNull(discoveryService, "discoveryService is required");
         this.toolExecutionService = Objects.requireNonNull(toolExecutionService, "toolExecutionService is required");
-        this.registryProperties = Objects.requireNonNull(registryProperties, "registryProperties is required");
+        this.clientResolver = Objects.requireNonNull(clientResolver, "clientResolver is required");
         this.textbookResourceService = Objects.requireNonNull(textbookResourceService, "textbookResourceService is required");
         this.textbookResourceProperties = Objects.requireNonNull(textbookResourceProperties, "textbookResourceProperties is required");
         this.knowledgeGraphSpineService = Objects.requireNonNull(
@@ -152,7 +152,8 @@ public class McpJsonRpcService {
         McpClientRegistryProperties.Client client = resolveClient(authorization);
         List<Map<String, Object>> tools = discoveryService.mcpTools().stream()
                 .filter(McpToolDescriptor::executionEndpointEnabled)
-                .filter(tool -> client.allowedTools().contains(tool.name()))
+                .filter(tool -> tool.requiredRoles().contains(stringValue(client.profile()).toLowerCase()))
+                .filter(tool -> McpToolExecutionService.toolEnabledForClient(client, tool.name()))
                 .map(McpJsonRpcService::toolDescriptor)
                 .toList();
         return Map.of("tools", tools);
@@ -499,7 +500,7 @@ public class McpJsonRpcService {
      */
     private McpClientRegistryProperties.Client resolveClient(String authorization) {
         String secret = bearerSecret(authorization);
-        return registryProperties.findEnabledClientBySecret(secret)
+        return clientResolver.findEnabledClientBySecret(secret)
                 .orElseThrow(() -> new IllegalArgumentException("MCP client secret is not registered or disabled"));
     }
 

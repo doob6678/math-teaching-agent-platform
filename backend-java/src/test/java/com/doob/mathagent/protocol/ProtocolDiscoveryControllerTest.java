@@ -5,7 +5,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.doob.mathagent.protocol.controller.A2aAgentCardController;
 import com.doob.mathagent.protocol.controller.McpDiscoveryController;
 import com.doob.mathagent.protocol.controller.McpToolExecutionController;
-import com.doob.mathagent.protocol.dto.McpConfigurationRequest;
 import com.doob.mathagent.protocol.dto.McpToolCallRequest;
 import com.doob.mathagent.protocol.service.McpClientRegistryProperties;
 import com.doob.mathagent.protocol.service.McpToolExecutionService;
@@ -37,6 +36,7 @@ class ProtocolDiscoveryControllerTest {
 
         assertThat(tools).extracting("name")
                 .contains(
+                        "search_multi_source_evidence",
                         "search_textbook_evidence",
                         "search_teacher_resource_evidence",
                         "get_teaching_ai_trace",
@@ -45,6 +45,7 @@ class ProtocolDiscoveryControllerTest {
         assertThat(tools).filteredOn("executionEndpointEnabled", true)
                 .extracting("name")
                 .containsExactly(
+                        "search_multi_source_evidence",
                         "search_textbook_evidence",
                         "search_teacher_resource_evidence",
                         "get_teaching_ai_trace",
@@ -71,43 +72,6 @@ class ProtocolDiscoveryControllerTest {
         assertThat(card.skills()).extracting("id")
                 .contains("teacher_student_handout_generation");
         assertThat(card.url()).isEqualTo("/api/a2a");
-    }
-
-    @Test
-    void exposesCopyableMcpConfigurationThroughService() {
-        ProtocolDiscoveryService service = new ProtocolDiscoveryService(registryWithTextbookSearch());
-        McpDiscoveryController controller = new McpDiscoveryController(service);
-
-        var response = controller.configuration(new McpConfigurationRequest(
-                "https://math.example.com/api/mcp",
-                "teacher_secret_1234567890abcdef",
-                "MATH_AGENT_MCP_SECRET",
-                java.util.List.of(),
-                java.util.List.of()));
-        var config = (com.doob.mathagent.protocol.vo.McpConfigurationResponse) response.getBody();
-
-        assertThat(response.getStatusCode().value()).isEqualTo(200);
-        assertThat(config).isNotNull();
-        assertThat(config.valid()).isTrue();
-        assertThat(config.configJson()).contains("\"math-agent-rag\"");
-        assertThat(config.configJson()).contains("${MATH_AGENT_MCP_SECRET}");
-        assertThat(config.configJson()).doesNotContain("teacher_secret_1234567890abcdef");
-    }
-
-    @Test
-    void returnsBadRequestForUnregisteredMcpConfigurationSecret() {
-        ProtocolDiscoveryService service = new ProtocolDiscoveryService(registryWithTextbookSearch());
-        McpDiscoveryController controller = new McpDiscoveryController(service);
-
-        var response = controller.configuration(new McpConfigurationRequest(
-                        "https://math.example.com/api/mcp",
-                        "unregistered_secret_1234567890abcdef",
-                        "MATH_AGENT_MCP_SECRET",
-                        java.util.List.of(),
-                        java.util.List.of()));
-
-        assertThat(response.getStatusCode().value()).isEqualTo(400);
-        assertThat(response.getBody()).asString().contains("MCP_CONFIGURATION_INVALID").contains("not registered");
     }
 
     @Test

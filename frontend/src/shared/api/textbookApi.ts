@@ -1127,22 +1127,6 @@ export interface AgentTraceModelUsage {
 }
 
 /**
- * Request for building a copyable MCP client configuration.
- */
-export interface McpConfigurationRequest {
-  /** Public MCP base URL that the external client should call. */
-  url: string;
-  /** Secret key entered for validation only; backend must not echo it. */
-  secretKey: string;
-  /** Environment variable name referenced by the copied JSON. */
-  secretEnvName: string;
-  /** Tool names manually selected by the user; empty means default all allowed by key profile. */
-  enabledToolNames: string[];
-  /** Prompt names manually selected by the user; empty means default all allowed by key profile. */
-  enabledPromptNames: string[];
-}
-
-/**
  * Backend-generated MCP configuration template and layered usage notes.
  */
 export interface McpConfigurationResponse {
@@ -1150,11 +1134,11 @@ export interface McpConfigurationResponse {
   serverName: string;
   /** Validated public MCP URL. */
   url: string;
-  /** Whether validation passed. */
+  /** Whether backend generation succeeded. */
   valid: boolean;
-  /** Whether the secret key satisfied backend policy. */
+  /** Whether the referenced backend-owned key is active and usable. */
   secretKeyAccepted: boolean;
-  /** Redacted secret preview; raw secret is never returned. */
+  /** Redacted secret preview for the backend-owned key. */
   secretKeyPreview: string;
   /** Environment variable name used in copied JSON. */
   secretEnvName: string;
@@ -1168,6 +1152,45 @@ export interface McpConfigurationResponse {
   configJson: string;
   /** Layered MCP usage explanation. */
   layers: McpConfigurationLayer[];
+}
+
+/**
+ * One MCP key owned by the current authenticated backend account.
+ */
+export interface McpClientKeyResponse {
+  keyId: string;
+  name: string;
+  tenantId: string;
+  ownerUserId: string;
+  keyProfile: string;
+  status: string;
+  secretKeyPreview: string;
+  createdAt?: string;
+  lastUsedAt?: string | null;
+  revokedAt?: string | null;
+}
+
+/**
+ * Backend-generated MCP key returned once with its raw secret.
+ */
+export interface McpClientKeyCreatedResponse {
+  keyId: string;
+  name: string;
+  tenantId: string;
+  ownerUserId: string;
+  keyProfile: string;
+  secretKey: string;
+  secretKeyPreview: string;
+  configuration: McpConfigurationResponse;
+}
+
+/**
+ * Revocation result for one owned MCP key.
+ */
+export interface McpClientKeyRevocationResponse {
+  keyId: string;
+  status: string;
+  revokedAt?: string | null;
 }
 
 /**
@@ -2048,6 +2071,7 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     const authHeader = auth ? { [auth.tokenName]: auth.tokenValue } : {};
     const response = await fetchImpl(`${normalizedBaseUrl}${path}`, {
       ...init,
+      credentials: init.credentials ?? "include",
       headers: {
         ...DEVICE_ID_HEADER,
         ...authHeader,
@@ -2079,6 +2103,7 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     const authHeader = auth ? { [auth.tokenName]: auth.tokenValue } : {};
     const response = await fetchImpl(`${normalizedBaseUrl}${path}`, {
       ...init,
+      credentials: init.credentials ?? "include",
       headers: {
         ...DEVICE_ID_HEADER,
         ...authHeader,
@@ -2100,6 +2125,7 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     const authHeader = auth ? { [auth.tokenName]: auth.tokenValue } : {};
     const response = await fetchImpl(`${normalizedBaseUrl}${path}`, {
       ...init,
+      credentials: init.credentials ?? "include",
       headers: {
         ...DEVICE_ID_HEADER,
         ...authHeader,
@@ -2119,8 +2145,9 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
   }> {
     const auth = readAuthSession();
     const authHeader = auth ? { [auth.tokenName]: auth.tokenValue } : {};
-    const response = await fetchImpl(`${normalizedBaseUrl}${path}`, {
+  const response = await fetchImpl(`${normalizedBaseUrl}${path}`, {
       ...init,
+      credentials: init.credentials ?? "include",
       headers: {
         ...DEVICE_ID_HEADER,
         ...authHeader,
@@ -2146,6 +2173,7 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     const response = await fetchImpl(`${normalizedBaseUrl}${path}`, {
       ...init,
       method: init.method ?? "POST",
+      credentials: init.credentials ?? "include",
       headers: {
         ...DEVICE_ID_HEADER,
         ...authHeader,
@@ -2355,6 +2383,14 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     },
     listTeachingHandoutTemplates(): Promise<TeachingHandoutTemplateResponse[]> {
       return requestJson<TeachingHandoutTemplateResponse[]>("/api/teaching/handout-templates");
+    },
+
+    getTeachingHandoutTemplatePreviewImage(templateCode: string): Promise<Uint8Array> {
+      return requestBytes(`/api/teaching/handout-templates/${encodeURIComponent(templateCode)}/preview.png`);
+    },
+
+    getTeachingHandoutTemplateReferencePdf(templateCode: string): Promise<Uint8Array> {
+      return requestBytes(`/api/teaching/handout-templates/${encodeURIComponent(templateCode)}/reference.pdf`);
     },
 
     /**
@@ -2779,15 +2815,24 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
       return requestJson<AgentTraceDiagnosticSummaryResponse>(`/api/agents/traces/diagnostic-summary${suffix}`);
     },
 
-    /**
-     * Builds a copyable MCP configuration template after backend URL, secret, and profile filtering.
-     */
-    buildMcpConfiguration(request: McpConfigurationRequest): Promise<McpConfigurationResponse> {
-      return requestJson<McpConfigurationResponse>("/api/mcp/configuration", {
+    listMcpKeys(): Promise<McpClientKeyResponse[]> {
+      return requestJson<McpClientKeyResponse[]>("/api/mcp/keys");
+    },
+
+    createMcpKey(): Promise<McpClientKeyCreatedResponse> {
+      return requestJson<McpClientKeyCreatedResponse>("/api/mcp/keys", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(request),
       });
+    },
+
+    revokeMcpKey(keyId: string): Promise<McpClientKeyRevocationResponse> {
+      return requestJson<McpClientKeyRevocationResponse>(`/api/mcp/keys/${encodeURIComponent(keyId)}/revoke`, {
+        method: "POST",
+      });
+    },
+
+    getMyMcpConfiguration(): Promise<McpConfigurationResponse> {
+      return requestJson<McpConfigurationResponse>("/api/mcp/configuration/me");
     },
 
     /**

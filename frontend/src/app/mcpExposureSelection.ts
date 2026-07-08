@@ -1,6 +1,6 @@
 /**
- * MCP tools that the frontend lets a teacher request for exposure.
- * Backend policy still performs the final allowlist filtering by key profile and session role.
+ * Historical MCP exposure metadata retained for tests and UI labels.
+ * The backend now owns the final allowlist and configuration generation.
  */
 export const MCP_TOOL_OPTIONS = [
   "search_textbook_evidence",
@@ -18,10 +18,6 @@ export const MCP_TOOL_OPTIONS = [
   "download_feishu_resource",
 ] as const;
 
-/**
- * MCP tool descriptors are only shown when the backend has a real execution endpoint.
- * Keep this list empty instead of advertising future tools that would fail at runtime.
- */
 export const MCP_PROTECTED_TOOL_OPTIONS = [] as const;
 
 export interface McpToolOptionMeta {
@@ -39,7 +35,7 @@ export const MCP_TOOL_OPTION_META: Record<string, McpToolOptionMeta> = {
   search_teacher_resource_evidence: {
     label: "教师资源检索",
     badge: "只读",
-    note: "检索当前账号可见的飞书或本地资源片段。",
+    note: "检索当前账号可见的教师资源片段。",
   },
   get_teaching_ai_trace: {
     label: "教学任务追踪",
@@ -49,22 +45,22 @@ export const MCP_TOOL_OPTION_META: Record<string, McpToolOptionMeta> = {
   get_ai_diagnostic_summary: {
     label: "AI 诊断汇总",
     badge: "只读",
-    note: "查看重试、降级和故障恢复汇总。",
+    note: "查看重试、降级和恢复情况。",
   },
   get_multi_agent_writing_trace: {
     label: "讲义协作追踪",
     badge: "只读",
-    note: "查看可见写作流程的阶段调用记录。",
+    note: "查看可见写作流程的阶段追踪。",
   },
   plan_agent_run: {
     label: "智能体预案",
     badge: "只读",
-    note: "只返回路由和执行预案，不启动真实任务。",
+    note: "只返回规划结果，不直接启动任务。",
   },
   start_multi_agent_writing: {
     label: "启动讲义协作",
     badge: "需授权",
-    note: "启动后端多智能体写作流程。",
+    note: "启动后端真实多智能体写作流程。",
   },
   get_multi_agent_writing_status: {
     label: "讲义流程状态",
@@ -74,12 +70,12 @@ export const MCP_TOOL_OPTION_META: Record<string, McpToolOptionMeta> = {
   get_multi_agent_writing_artifact: {
     label: "读取讲义成果",
     badge: "只读",
-    note: "读取已生成讲义内容用于审查。",
+    note: "读取已生成讲义正文。",
   },
   export_multi_agent_writing_artifact: {
     label: "导出讲义成果",
     badge: "需授权",
-    note: "导出 Markdown、TeX 或 ZIP。",
+    note: "导出 Markdown、LaTeX、PDF 或 ZIP。",
   },
   resume_multi_agent_writing: {
     label: "恢复讲义流程",
@@ -89,7 +85,7 @@ export const MCP_TOOL_OPTION_META: Record<string, McpToolOptionMeta> = {
   discover_feishu_resources: {
     label: "查找飞书资源",
     badge: "只读",
-    note: "列出或搜索可入库的飞书候选资源。",
+    note: "列出或搜索可入库的飞书资源。",
   },
   download_feishu_resource: {
     label: "下载飞书资源",
@@ -98,19 +94,12 @@ export const MCP_TOOL_OPTION_META: Record<string, McpToolOptionMeta> = {
   },
 };
 
-/**
- * MCP prompts that the frontend lets a teacher request for exposure.
- * Backend filtering prevents a student-profile key from receiving teacher-only prompts.
- */
 export const MCP_PROMPT_OPTIONS = [
   "teacher_handout_writer",
   "student_blank_handout_writer",
   "solution_reviewer",
 ] as const;
 
-/**
- * Creates the default exposure selection used when opening the MCP configuration panel.
- */
 export function defaultMcpExposureSelection() {
   return {
     tools: [...MCP_TOOL_OPTIONS] as string[],
@@ -118,9 +107,6 @@ export function defaultMcpExposureSelection() {
   };
 }
 
-/**
- * Toggles one MCP option while preserving stable option ordering for deterministic requests.
- */
 export function toggleMcpExposureOption(
   current: string[],
   option: string,

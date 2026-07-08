@@ -2,6 +2,7 @@ package com.doob.mathagent.protocol.config;
 
 import com.doob.mathagent.knowledge.service.KnowledgeGraphSpineService;
 import com.doob.mathagent.protocol.service.McpClientRegistryProperties;
+import com.doob.mathagent.protocol.service.McpClientResolver;
 import com.doob.mathagent.protocol.service.McpJsonRpcService;
 import com.doob.mathagent.protocol.service.McpToolExecutionService;
 import com.doob.mathagent.protocol.service.ProtocolDiscoveryService;
@@ -25,14 +26,14 @@ public class McpProtocolConfiguration {
     McpJsonRpcService mcpJsonRpcService(
             ProtocolDiscoveryService discoveryService,
             McpToolExecutionService toolExecutionService,
-            McpClientRegistryProperties registryProperties,
+            McpClientResolver clientResolver,
             TextbookResourceService textbookResourceService,
             TextbookResourceProperties textbookResourceProperties,
             KnowledgeGraphSpineService knowledgeGraphSpineService) {
         return new McpJsonRpcService(
                 discoveryService,
                 toolExecutionService,
-                registryProperties,
+                clientResolver,
                 textbookResourceService,
                 textbookResourceProperties,
                 knowledgeGraphSpineService);

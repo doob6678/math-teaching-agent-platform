@@ -3,13 +3,13 @@ package com.doob.mathagent.protocol.vo;
 import java.util.List;
 
 /**
- * Validated MCP configuration template response for frontend copy actions.
+ * Backend-generated MCP configuration template response for frontend copy actions.
  *
  * @param serverName stable MCP server name used in client JSON
  * @param url externally reachable MCP base URL
- * @param valid whether the supplied URL and secret key passed configuration validation
- * @param secretKeyAccepted whether the submitted secret key met minimum policy
- * @param secretKeyPreview redacted preview of the submitted secret key
+ * @param valid whether backend configuration generation succeeded
+ * @param secretKeyAccepted whether the referenced backend-owned key is active and usable
+ * @param secretKeyPreview redacted preview of the backend-owned key
  * @param secretEnvName environment variable name referenced by the JSON template
  * @param keyProfile backend-derived key profile used to filter tools and prompts
  * @param exposedTools final MCP tool names exposed after backend profile filtering

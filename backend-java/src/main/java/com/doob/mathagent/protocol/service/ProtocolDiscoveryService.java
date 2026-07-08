@@ -1,6 +1,5 @@
 package com.doob.mathagent.protocol.service;
 
-import com.doob.mathagent.protocol.dto.McpConfigurationRequest;
 import com.doob.mathagent.protocol.vo.A2aAgentCardResponse;
 import com.doob.mathagent.protocol.vo.McpConfigurationResponse;
 import com.doob.mathagent.protocol.vo.McpPromptDescriptor;
@@ -14,90 +13,63 @@ import java.net.URISyntaxException;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 /**
- * Provides read-only MCP and A2A discovery metadata.
+ * Provides read-only MCP and A2A discovery metadata plus backend-owned configuration rendering.
  */
 @Service
 public class ProtocolDiscoveryService {
 
     private static final List<String> TEACHING_ROLES = List.of("student", "teacher", "admin");
     private static final List<String> TEACHER_ROLES = List.of("teacher", "admin");
-    private static final List<String> ALL_PROMPTS = List.of(
-            "teacher_handout_writer",
-            "student_blank_handout_writer",
-            "solution_reviewer");
-    private static final List<String> STUDENT_TOOLS = List.of(
-            "search_textbook_evidence",
-            "get_teaching_ai_trace",
-            "get_ai_diagnostic_summary",
-            "plan_agent_run");
-    private static final List<String> STUDENT_CONFIGURABLE_TOOLS = List.of(
-            "search_textbook_evidence",
-            "get_teaching_ai_trace",
-            "get_ai_diagnostic_summary");
-    private static final List<String> STUDENT_PROMPTS = List.of("student_blank_handout_writer", "solution_reviewer");
-    private static final List<String> TEACHER_TOOLS = List.of(
-            "search_textbook_evidence",
-            "search_teacher_resource_evidence",
-            "get_teaching_ai_trace",
-            "get_ai_diagnostic_summary",
-            "get_multi_agent_writing_trace",
-            "plan_agent_run",
-            "start_multi_agent_writing",
-            "get_multi_agent_writing_status",
-            "get_multi_agent_writing_artifact",
-            "export_multi_agent_writing_artifact",
-            "resume_multi_agent_writing",
-            "discover_feishu_resources",
-            "download_feishu_resource");
-    private static final List<String> TEACHER_CONFIGURABLE_TOOLS = List.of(
-            "search_textbook_evidence",
-            "search_teacher_resource_evidence",
-            "get_teaching_ai_trace",
-            "get_ai_diagnostic_summary",
-            "get_multi_agent_writing_trace",
-            "plan_agent_run",
-            "start_multi_agent_writing",
-            "get_multi_agent_writing_status",
-            "get_multi_agent_writing_artifact",
-            "export_multi_agent_writing_artifact",
-            "resume_multi_agent_writing",
-            "discover_feishu_resources",
-            "download_feishu_resource");
-    private static final List<String> TEACHER_PROMPTS = ALL_PROMPTS;
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
-    private final McpClientRegistryProperties clientRegistryProperties;
-
     /**
-     * Creates the protocol discovery service with an empty MCP client registry for isolated metadata tests only.
-     * Production wiring must use the autowired constructor below so MCP configuration uses registered client keys.
+     * Creates the protocol discovery service without forcing the MCP resolver graph to initialize.
+     *
+     * <p>Discovery metadata itself is static. It should stay bootable even while key-management beans are being
+     * created, otherwise session subject resolution and MCP key rendering can deadlock the application context during
+     * startup.</p>
      */
     public ProtocolDiscoveryService() {
-        this(new McpClientRegistryProperties());
     }
 
     /**
-     * Creates the protocol discovery service with configured MCP client profiles.
+     * Compatibility constructor kept for existing tests and direct instantiation sites.
      *
-     * @param clientRegistryProperties registered MCP client hashes and profiles
+     * <p>The resolver argument is intentionally ignored. Runtime discovery does not need it, and reading it here would
+     * reintroduce a circular startup dependency through session subject resolution and MCP key services.</p>
      */
-    @Autowired
-    public ProtocolDiscoveryService(McpClientRegistryProperties clientRegistryProperties) {
-        this.clientRegistryProperties = clientRegistryProperties == null
-                ? new McpClientRegistryProperties()
-                : clientRegistryProperties;
+    public ProtocolDiscoveryService(McpClientResolver clientResolver) {
     }
 
     /**
-     * Returns MCP tool descriptors without exposing execution endpoints.
+     * Returns MCP tool descriptors.
      */
     public List<McpToolDescriptor> mcpTools() {
         return List.of(
+                new McpToolDescriptor(
+                        "search_multi_source_evidence",
+                        "Search multi-source evidence",
+                        "Preferred teacher search entrypoint that queries public textbooks and visible teacher resources together.",
+                        true,
+                        true,
+                        TEACHER_ROLES,
+                        "PUBLIC_TEXTBOOK + teacher-resource:read",
+                        "low",
+                        false,
+                        true,
+                        schema(
+                                fields(
+                                        field("query", "string", "Search text submitted by the agent."),
+                                        field("limit", "integer", "Maximum merged evidence snippets to return."),
+                                        fieldArray("libraries", "Optional library selectors such as textbook, teacher_resource, feishu, qq_bundle, gaokao, or mock_exam."),
+                                        fieldArray("permissionScopes", "Optional teacher-resource permission scopes such as TEACHER_PRIVATE or MATH_VIP."),
+                                        fieldArray("documentIds", "Optional teacher-resource document ids to search."),
+                                        fieldArray("sourceTypes", "Optional teacher-resource source types such as feishu, qq_bundle, gaokao, or mock_exam."),
+                                        fieldArray("tags", "Optional teacher-resource tags used as retrieval hints.")),
+                                "query")),
                 new McpToolDescriptor(
                         "search_textbook_evidence",
                         "Search textbook evidence",
@@ -105,7 +77,7 @@ public class ProtocolDiscoveryService {
                         true,
                         true,
                         TEACHING_ROLES,
-                        "query:basic",
+                        "PUBLIC_TEXTBOOK",
                         "low",
                         false,
                         true,
@@ -117,7 +89,7 @@ public class ProtocolDiscoveryService {
                 new McpToolDescriptor(
                         "search_teacher_resource_evidence",
                         "Search teacher resource evidence",
-                        "Search parsed Feishu and teacher resource blocks visible to the registered teacher/admin key.",
+                        "Search parsed teacher-resource blocks visible to the registered teacher or admin key.",
                         true,
                         true,
                         TEACHER_ROLES,
@@ -128,12 +100,16 @@ public class ProtocolDiscoveryService {
                         schema(
                                 fields(
                                         field("query", "string", "Search text submitted by the agent."),
-                                        field("limit", "integer", "Maximum evidence snippets to return.")),
+                                        field("limit", "integer", "Maximum evidence snippets to return."),
+                                        fieldArray("permissionScopes", "Optional teacher-resource permission scopes such as TEACHER_PRIVATE or MATH_VIP."),
+                                        fieldArray("documentIds", "Optional teacher-resource document ids to search."),
+                                        fieldArray("sourceTypes", "Optional teacher-resource source types such as feishu, qq_bundle, gaokao, or mock_exam."),
+                                        fieldArray("tags", "Optional teacher-resource tags used as retrieval hints.")),
                                 "query")),
                 new McpToolDescriptor(
                         "get_teaching_ai_trace",
                         "Get teaching AI trace",
-                        "Read the safe CoursewareAgent trace linked to an owned teaching task id.",
+                        "Read the safe teaching-agent trace linked to an owned teaching task id.",
                         true,
                         true,
                         TEACHING_ROLES,
@@ -141,9 +117,7 @@ public class ProtocolDiscoveryService {
                         "low",
                         false,
                         true,
-                        schema(
-                                fields(field("taskId", "string", "Owned teaching task id linked as trace planId.")),
-                                "taskId")),
+                        schema(fields(field("taskId", "string", "Owned teaching task id linked as trace planId.")), "taskId")),
                 new McpToolDescriptor(
                         "get_ai_diagnostic_summary",
                         "Get AI diagnostic summary",
@@ -171,13 +145,11 @@ public class ProtocolDiscoveryService {
                         "low",
                         false,
                         true,
-                        schema(
-                                fields(field("workflowId", "string", "Workflow id returned by multi-agent writing.")),
-                                "workflowId")),
+                        schema(fields(field("workflowId", "string", "Workflow id returned by multi-agent writing.")), "workflowId")),
                 new McpToolDescriptor(
                         "plan_agent_run",
                         "Plan agent run",
-                        "Plan a teaching agent run, route provider/model, and return ReAct/parallel tool guidance without executing high-value actions.",
+                        "Plan a teaching agent run and return route, model, and tool guidance without executing the task.",
                         true,
                         true,
                         TEACHING_ROLES,
@@ -189,22 +161,22 @@ public class ProtocolDiscoveryService {
                                 fields(
                                         field("agentCode", "string", "Backend agent code to plan."),
                                         field("agent", "string", "Alias for agentCode when generated by an external AI client."),
-                                        field("task", "string", "Natural-language task. Courseware or handout text is inferred as courseware_generation."),
+                                        field("task", "string", "Natural-language task."),
                                         field("taskType", "string", "Backend task type, for example courseware_generation or question_solving."),
                                         field("preferredProviderName", "string", "Optional provider preference such as dashscope, openai, deepseek, or ark."),
-                                        field("preferredModelCode", "string", "Optional model code configured on the backend."),
-                                        field("estimatedInputTokens", "integer", "Estimated prompt/input tokens for budget and route planning."),
-                                        field("estimatedOutputTokens", "integer", "Estimated completion/output tokens for budget and route planning."),
+                                        field("preferredModelCode", "string", "Optional backend model code."),
+                                        field("estimatedInputTokens", "integer", "Estimated prompt or input tokens."),
+                                        field("estimatedOutputTokens", "integer", "Estimated completion or output tokens."),
                                         field("costBudget", "number", "Budget hint. Numeric values are preferred; low, medium, and high aliases are accepted."),
                                         field("hasFormula", "boolean", "Whether the request contains formula-heavy reasoning."),
                                         field("requiredJsonSchema", "boolean", "Whether the downstream model output must be strict JSON."),
-                                        fieldArray("requestedToolScopes", "Tool scopes requested by the client, for example tool:search:textbook or textbook_search."),
-                                        fieldArray("disabledToolScopes", "Tool scopes disabled by the user."),
-                                        fieldArray("requestedDataScopes", "Data scopes requested by the client, for example PUBLIC_TEXTBOOK or TEACHER_PRIVATE.")))),
+                                        fieldArray("requestedToolScopes", "Tool scopes requested by the client."),
+                                        fieldArray("disabledToolScopes", "Tool scopes disabled by the caller."),
+                                        fieldArray("requestedDataScopes", "Data scopes requested by the client.")))),
                 new McpToolDescriptor(
                         "start_multi_agent_writing",
                         "Start multi-agent writing",
-                        "Start a resumable teacher handout writing workflow through backend DAG/ReAct planning and real model execution.",
+                        "Start a resumable teacher handout writing workflow through real backend execution.",
                         false,
                         true,
                         TEACHER_ROLES,
@@ -219,12 +191,12 @@ public class ProtocolDiscoveryService {
                                         field("question", "string", "Alias for questionText when used by external agents."),
                                         fieldArray("evidenceRefs", "Evidence references returned by textbook or teacher-resource search."),
                                         field("preferredProviderName", "string", "Optional provider preference such as dashscope, openai, deepseek, or ark."),
-                                        field("preferredModelCode", "string", "Optional backend-configured model code.")),
+                                        field("preferredModelCode", "string", "Optional backend model code.")),
                                 "questionText")),
                 new McpToolDescriptor(
                         "get_multi_agent_writing_status",
                         "Get multi-agent writing status",
-                        "Read the latest visible workflow status so WorkBuddy can recover after page refreshes or network interruption.",
+                        "Read the latest visible workflow status so clients can recover after refresh or interruption.",
                         true,
                         true,
                         TEACHER_ROLES,
@@ -232,9 +204,7 @@ public class ProtocolDiscoveryService {
                         "low",
                         false,
                         true,
-                        schema(
-                                fields(field("workflowId", "string", "Workflow id returned by start_multi_agent_writing.")),
-                                "workflowId")),
+                        schema(fields(field("workflowId", "string", "Workflow id returned by start_multi_agent_writing.")), "workflowId")),
                 new McpToolDescriptor(
                         "get_multi_agent_writing_artifact",
                         "Get multi-agent writing artifact",
@@ -246,13 +216,11 @@ public class ProtocolDiscoveryService {
                         "low",
                         false,
                         true,
-                        schema(
-                                fields(field("workflowId", "string", "Workflow id returned by start_multi_agent_writing.")),
-                                "workflowId")),
+                        schema(fields(field("workflowId", "string", "Workflow id returned by start_multi_agent_writing.")), "workflowId")),
                 new McpToolDescriptor(
                         "export_multi_agent_writing_artifact",
                         "Export multi-agent writing artifact",
-                        "Export owner-visible generated handout content as UTF-8 Markdown, LaTeX, or ZIP bytes for MCP clients.",
+                        "Export owner-visible generated handout content as Markdown, LaTeX, PDF, or ZIP.",
                         false,
                         true,
                         TEACHER_ROLES,
@@ -263,12 +231,12 @@ public class ProtocolDiscoveryService {
                         schema(
                                 fields(
                                         field("workflowId", "string", "Workflow id returned by start_multi_agent_writing."),
-                                        field("format", "string", "Export format: markdown, md, latex, tex, or zip.")),
+                                        field("format", "string", "Export format: markdown, md, latex, tex, pdf, or zip.")),
                                 "workflowId")),
                 new McpToolDescriptor(
                         "resume_multi_agent_writing",
                         "Resume multi-agent writing",
-                        "Resume a failed teacher writing workflow from the first incomplete DAG stage.",
+                        "Resume a failed teacher writing workflow from the first incomplete stage.",
                         false,
                         true,
                         TEACHER_ROLES,
@@ -283,7 +251,7 @@ public class ProtocolDiscoveryService {
                                         field("questionText", "string", "Math topic, question, or teaching objective."),
                                         fieldArray("evidenceRefs", "Evidence references returned by prior searches."),
                                         field("preferredProviderName", "string", "Optional provider preference."),
-                                        field("preferredModelCode", "string", "Optional backend-configured model code.")),
+                                        field("preferredModelCode", "string", "Optional backend model code.")),
                                 "workflowId",
                                 "questionText")),
                 new McpToolDescriptor(
@@ -307,7 +275,7 @@ public class ProtocolDiscoveryService {
                 new McpToolDescriptor(
                         "download_feishu_resource",
                         "Download Feishu resource",
-                        "Register, download, parse, and store one Feishu resource into the backend configured staging root.",
+                        "Register, download, parse, and store one Feishu resource into the backend staging root.",
                         false,
                         true,
                         TEACHER_ROLES,
@@ -324,19 +292,18 @@ public class ProtocolDiscoveryService {
     }
 
     /**
-     * Returns standard MCP prompt descriptors. Prompt bodies are intentionally concise templates,
-     * not hidden model chains; callers still need backend tools for evidence.
+     * Returns standard MCP prompt descriptors.
      */
     public List<McpPromptDescriptor> mcpPrompts() {
         return List.of(
                 new McpPromptDescriptor(
                         "teacher_handout_writer",
                         "Teacher handout writer",
-                        "Write a teacher-version math handout with evidence, method attribution, and worked solution structure.",
+                        "Write a teacher-version math handout with evidence, method attribution, and worked solutions.",
                         TEACHER_ROLES,
                         List.of(
                                 promptArgument("topic", "Topic", "Teaching topic or knowledge point.", true),
-                                promptArgument("evidence", "Evidence", "Textbook or Feishu evidence snippets to ground the handout.", false),
+                                promptArgument("evidence", "Evidence", "Textbook or teacher-resource evidence snippets.", false),
                                 promptArgument("difficulty", "Difficulty", "Target difficulty or student level.", false))),
                 new McpPromptDescriptor(
                         "student_blank_handout_writer",
@@ -358,7 +325,7 @@ public class ProtocolDiscoveryService {
     }
 
     /**
-     * Returns safe MCP resources. Resource URIs are application-owned and never map directly to local file paths.
+     * Returns safe application-owned MCP resources.
      */
     public List<McpResourceDescriptor> mcpResources() {
         return List.of(
@@ -386,7 +353,7 @@ public class ProtocolDiscoveryService {
     }
 
     /**
-     * Returns the A2A Agent Card metadata for this platform.
+     * Returns the A2A agent card metadata.
      */
     public A2aAgentCardResponse a2aAgentCard() {
         return new A2aAgentCardResponse(
@@ -434,28 +401,26 @@ public class ProtocolDiscoveryService {
     }
 
     /**
-     * Validates MCP URL and secret shape, then builds a copyable JSON template without echoing the secret.
+     * Builds a copyable MCP configuration for one backend-owned key without trusting frontend identity input.
      */
-    public McpConfigurationResponse mcpConfiguration(McpConfigurationRequest request) {
-        String url = normalizeUrl(request.url());
-        String secretKey = normalizeSecretKey(request.secretKey());
-        String secretEnvName = normalizeSecretEnvName(request.secretEnvName());
-        String keyProfile = registeredKeyProfile(secretKey, clientRegistryProperties)
-                .orElseThrow(() -> new IllegalArgumentException("secretKey is not registered or enabled"));
-        List<String> exposedTools = exposedItems(
-                safeList(request.enabledToolNames()),
-                "student".equals(keyProfile) ? STUDENT_CONFIGURABLE_TOOLS : TEACHER_CONFIGURABLE_TOOLS);
-        List<String> exposedPrompts = exposedItems(
-                safeList(request.enabledPromptNames()),
-                "student".equals(keyProfile) ? STUDENT_PROMPTS : TEACHER_PROMPTS);
-        String configJson = mcpConfigJson(url, secretEnvName, exposedTools, exposedPrompts);
+    public McpConfigurationResponse mcpConfiguration(
+            McpClientRegistryProperties.Client client,
+            String url,
+            String secretEnvName,
+            String secretPreview) {
+        String normalizedUrl = normalizeUrl(url);
+        String normalizedSecretEnvName = normalizeSecretEnvName(secretEnvName);
+        String keyProfile = McpAccessPolicy.normalizeProfile(client.profile());
+        List<String> exposedTools = visibleToolNames(client);
+        List<String> exposedPrompts = visiblePromptNames(keyProfile);
+        String configJson = mcpConfigJson(normalizedUrl, normalizedSecretEnvName);
         return new McpConfigurationResponse(
                 "math-agent-rag",
-                url,
+                normalizedUrl,
                 true,
                 true,
-                previewSecret(secretKey),
-                secretEnvName,
+                secretPreview,
+                normalizedSecretEnvName,
                 keyProfile,
                 exposedTools,
                 exposedPrompts,
@@ -463,9 +428,6 @@ public class ProtocolDiscoveryService {
                 mcpLayers());
     }
 
-    /**
-     * Normalizes and validates the externally reachable MCP base URL.
-     */
     private static String normalizeUrl(String value) {
         if (value == null || value.isBlank()) {
             throw new IllegalArgumentException("MCP URL is required");
@@ -485,26 +447,6 @@ public class ProtocolDiscoveryService {
         }
     }
 
-    /**
-     * Validates the submitted secret key without storing or returning it.
-     */
-    private static String normalizeSecretKey(String value) {
-        if (value == null || value.isBlank()) {
-            throw new IllegalArgumentException("secretKey is required");
-        }
-        String normalized = value.strip();
-        if (normalized.length() < 16 || normalized.length() > 160) {
-            throw new IllegalArgumentException("secretKey length must be between 16 and 160");
-        }
-        if (!normalized.matches("[A-Za-z0-9._:-]+")) {
-            throw new IllegalArgumentException("secretKey contains unsupported characters");
-        }
-        return normalized;
-    }
-
-    /**
-     * Normalizes the environment variable name used by generated MCP JSON.
-     */
     private static String normalizeSecretEnvName(String value) {
         String normalized = value == null || value.isBlank() ? "MATH_AGENT_MCP_SECRET" : value.strip();
         if (!normalized.matches("[A-Z][A-Z0-9_]{2,63}")) {
@@ -513,14 +455,7 @@ public class ProtocolDiscoveryService {
         return normalized;
     }
 
-    /**
-     * Builds pretty JSON for client MCP configuration.
-     */
-    private static String mcpConfigJson(
-            String url,
-            String secretEnvName,
-            List<String> exposedTools,
-            List<String> exposedPrompts) {
+    private static String mcpConfigJson(String url, String secretEnvName) {
         Map<String, Object> server = new LinkedHashMap<>();
         server.put("type", "http");
         server.put("url", url);
@@ -534,118 +469,58 @@ public class ProtocolDiscoveryService {
     }
 
     /**
-     * Returns a redacted preview that proves validation happened without leaking raw secret.
-     */
-    private static String previewSecret(String secretKey) {
-        return secretKey.substring(0, Math.min(4, secretKey.length()))
-                + "..."
-                + secretKey.substring(secretKey.length() - 4);
-    }
-
-    /**
-     * Resolves the profile from the configured secret hash registry.
-     */
-    private static Optional<String> registeredKeyProfile(
-            String secretKey,
-            McpClientRegistryProperties registryProperties) {
-        String secretHash = McpClientRegistryProperties.secretHash(secretKey);
-        return registryProperties.getClients().stream()
-                .filter(McpClientRegistryProperties.Client::enabled)
-                .filter(client -> secretHash.equalsIgnoreCase(blankToEmpty(client.secretHash())))
-                .map(McpClientRegistryProperties.Client::profile)
-                .map(ProtocolDiscoveryService::normalizeProfile)
-                .filter(profile -> profile.equals("student") || profile.equals("teacher") || profile.equals("admin"))
-                .findFirst();
-    }
-
-    /**
-     * Returns a SHA-256 secret hash for focused tests and local key bootstrap scripts.
+     * Returns a SHA-256 secret hash for focused tests and bootstrap scripts.
      */
     public static String secretHashForTest(String secretKey) {
         return McpClientRegistryProperties.secretHash(secretKey);
     }
 
-    /**
-     * Normalizes a configured profile value.
-     */
-    private static String normalizeProfile(String profile) {
-        return profile == null ? "" : profile.strip().toLowerCase();
-    }
-
-    /**
-     * Converts null strings to empty strings for safe comparisons.
-     */
-    private static String blankToEmpty(String value) {
-        return value == null ? "" : value.strip();
-    }
-
-    /**
-     * Applies backend profile allow-list after user selection; empty selection means all allowed items.
-     */
-    private static List<String> exposedItems(List<String> requestedItems, List<String> allowedItems) {
-        if (requestedItems.isEmpty()) {
-            return allowedItems;
-        }
-        return allowedItems.stream()
-                .filter(requestedItems::contains)
+    private List<String> visibleToolNames(McpClientRegistryProperties.Client client) {
+        return mcpTools().stream()
+                .filter(McpToolDescriptor::executionEndpointEnabled)
+                .filter(tool -> tool.requiredRoles().contains(McpAccessPolicy.normalizeProfile(client.profile())))
+                .filter(tool -> McpToolExecutionService.toolEnabledForClient(client, tool.name()))
+                .map(McpToolDescriptor::name)
                 .toList();
     }
 
-    /**
-     * Returns a null-safe immutable list.
-     */
-    private static List<String> safeList(List<String> values) {
-        return values == null ? List.of() : List.copyOf(values);
+    private List<String> visiblePromptNames(String keyProfile) {
+        return mcpPrompts().stream()
+                .filter(prompt -> prompt.allowedProfiles().contains(keyProfile))
+                .map(McpPromptDescriptor::name)
+                .toList();
     }
 
-    /**
-     * Describes layered MCP access so the frontend can show safe usage guidance.
-     */
     private static List<McpConfigurationResponse.Layer> mcpLayers() {
         return List.of(
                 new McpConfigurationResponse.Layer(
                         "discovery",
                         "发现层",
-                        "只列出可用 MCP 工具和智能体卡片元数据，不执行任务。",
-                        "后端会话或已注册 MCP 密钥",
+                        "只列出当前账号可见的工具、提示词和 Agent 元数据，不执行高价值动作。",
+                        "后端会话或已绑定的 MCP key",
                         List.of("查看工具清单", "查看 Agent Card")),
                 new McpConfigurationResponse.Layer(
                         "session",
                         "会话层",
-                        "使用后端解析的租户、角色和主体身份执行低风险读取。",
+                        "后端使用 Sa-Token 登录态解析租户、角色和主体身份，前端不传身份参数。",
                         "后端登录会话",
-                        List.of("教材证据检索", "教师资源检索")),
+                        List.of("生成个人 MCP key", "生成当前账号配置")),
                 new McpConfigurationResponse.Layer(
-                        "high_value",
-                        "高价值执行层",
-                        "必须使用已注册 MCP 密钥，并由后端工具白名单和资源范围共同放行。",
-                        "已注册 MCP 密钥和后端白名单",
-                        List.of("讲义协作写作", "飞书受控下载", "受保护导出工具")));
+                        "execution",
+                        "执行层",
+                        "外部客户端通过 Bearer MCP secret 调用真实 MCP 能力，仍受后端角色和资源范围约束。",
+                        "后端生成的 MCP key",
+                        List.of("教材检索", "教师资源检索", "讲义协作", "飞书资源同步")));
     }
 
-    /**
-     * Creates one A2A skill record.
-     */
-    private static A2aAgentCardResponse.Skill skill(
-            String id,
-            String name,
-            String description,
-            String... tags) {
+    private static A2aAgentCardResponse.Skill skill(String id, String name, String description, String... tags) {
         return new A2aAgentCardResponse.Skill(id, name, description, List.of(tags));
     }
 
-    /**
-     * Creates a JSON schema object for MCP tool arguments.
-     */
-    private static McpToolInputSchema schema(
-            Map<String, Map<String, Object>> properties,
-            String... required) {
+    private static McpToolInputSchema schema(Map<String, Map<String, Object>> properties, String... required) {
         return new McpToolInputSchema("object", properties, List.of(required));
     }
 
-    /**
-     * Creates a stable ordered field map.
-     */
     @SafeVarargs
     private static Map<String, Map<String, Object>> fields(Map.Entry<String, Map<String, Object>>... entries) {
         Map<String, Map<String, Object>> fields = new LinkedHashMap<>();
@@ -655,16 +530,10 @@ public class ProtocolDiscoveryService {
         return fields;
     }
 
-    /**
-     * Creates one JSON schema field definition.
-     */
     private static Map.Entry<String, Map<String, Object>> field(String name, String type, String description) {
         return Map.entry(name, Map.of("type", type, "description", description));
     }
 
-    /**
-     * Creates one JSON schema array field with string items.
-     */
     private static Map.Entry<String, Map<String, Object>> fieldArray(String name, String description) {
         return Map.entry(name, Map.of(
                 "type", "array",
@@ -672,14 +541,7 @@ public class ProtocolDiscoveryService {
                 "items", Map.of("type", "string")));
     }
 
-    /**
-     * Creates one MCP prompt argument descriptor.
-     */
-    private static McpPromptDescriptor.Argument promptArgument(
-            String name,
-            String title,
-            String description,
-            boolean required) {
+    private static McpPromptDescriptor.Argument promptArgument(String name, String title, String description, boolean required) {
         return new McpPromptDescriptor.Argument(name, title, description, required);
     }
 }

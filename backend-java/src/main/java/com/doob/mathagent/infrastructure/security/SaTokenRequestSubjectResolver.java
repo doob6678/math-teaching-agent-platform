@@ -2,6 +2,7 @@ package com.doob.mathagent.infrastructure.security;
 
 import cn.dev33.satoken.session.SaSession;
 import cn.dev33.satoken.stp.StpUtil;
+import com.doob.mathagent.protocol.service.McpClientResolver;
 import com.doob.mathagent.protocol.service.McpClientRegistryProperties;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.List;
@@ -16,7 +17,7 @@ public class SaTokenRequestSubjectResolver implements RequestSubjectResolver {
 
     private static final String TENANT_SESSION_KEY = "tenantId";
     private static final String ROLE_SESSION_KEY = "role";
-    private final McpClientRegistryProperties mcpClientRegistryProperties;
+    private final McpClientResolver mcpClientResolver;
 
     /**
      * Creates a resolver with an empty MCP registry for isolated unit tests.
@@ -28,13 +29,11 @@ public class SaTokenRequestSubjectResolver implements RequestSubjectResolver {
     /**
      * Creates a resolver with the configured MCP client registry.
      *
-     * @param mcpClientRegistryProperties registered MCP client keys
+     * @param mcpClientResolver registered MCP client keys
      */
     @Autowired
-    public SaTokenRequestSubjectResolver(McpClientRegistryProperties mcpClientRegistryProperties) {
-        this.mcpClientRegistryProperties = mcpClientRegistryProperties == null
-                ? new McpClientRegistryProperties()
-                : mcpClientRegistryProperties;
+    public SaTokenRequestSubjectResolver(McpClientResolver mcpClientResolver) {
+        this.mcpClientResolver = mcpClientResolver == null ? new McpClientRegistryProperties() : mcpClientResolver;
     }
 
     /**
@@ -66,17 +65,25 @@ public class SaTokenRequestSubjectResolver implements RequestSubjectResolver {
      * Resolves a trusted backend subject from a registered MCP Bearer secret before Sa-Token fallback.
      */
     private RequestSubject resolveMcpBearerSubject(HttpServletRequest request) {
+        if (!supportsMcpBearerIdentity(request)) {
+            return null;
+        }
         String secret = bearerSecretOrNull(request.getHeader("Authorization"));
         if (secret == null) {
             return null;
         }
-        return mcpClientRegistryProperties.findEnabledClientBySecret(secret)
+        return mcpClientResolver.findEnabledClientBySecret(secret)
                 .map(client -> new RequestSubject(
                         client.tenantId(),
                         client.profile(),
                         client.subjectId(),
                         "mcp:" + client.clientId()))
                 .orElse(null);
+    }
+
+    private static boolean supportsMcpBearerIdentity(HttpServletRequest request) {
+        String path = request.getRequestURI();
+        return "/api/mcp".equals(path) || path.startsWith("/api/mcp/tools/");
     }
 
     /**

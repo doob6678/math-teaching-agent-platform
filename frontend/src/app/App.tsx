@@ -1,4 +1,4 @@
-import {
+﻿import {
   AlertCircle, BookOpen, Bot, BrainCircuit, Check, ChevronDown, Database,
   FileText, FolderKanban, GitBranch, Globe, GraduationCap, Home,
   LayoutDashboard, Library, Loader2, LogOut, Network, RefreshCw,
@@ -17,6 +17,8 @@ import {
   AgentTraceUsageSummaryResponse,
   KnowledgePointResponse,
   KnowledgeRelationResponse,
+  McpClientKeyCreatedResponse,
+  McpClientKeyResponse,
   McpConnectionTestResult,
   McpConfigurationResponse,
   MultiAgentWritingArtifact,
@@ -25,6 +27,9 @@ import {
   QuestionBankItemResponse,
   RetrievalAuditDetail,
   StudentDashboardResponse,
+  StudentExplanationHistoryItem,
+  StudentExplanationImageUploadResponse,
+  StudentExplanationResponse,
   TeachingHandoutPdfResponse,
   TeachingHandoutTemplateResponse,
   TeachingHumanFeedbackResponse,
@@ -43,17 +48,18 @@ import {
   LoginResponse,
   createTextbookApiClient,
 } from "../shared/api/textbookApi";
-import {
-  MCP_PROMPT_OPTIONS,
-  MCP_TOOL_OPTIONS,
-  defaultMcpExposureSelection,
-  toggleMcpExposureOption,
-} from "./mcpExposureSelection";
 import { AgentModelHealthPanel, AgentPlanPanel, AgentTracePanel } from "./components/AgentPanels";
 import { AuditDetailPanel, EvidenceCard } from "./components/EvidencePanels";
 import { KnowledgeQuestionBankPanel } from "./components/KnowledgeQuestionBankPanel";
-import { McpConnectionTestPanel, McpConfigurationForm, McpConfigurationPanel } from "./components/McpPanels";
+import {
+  McpConnectionTestPanel,
+  McpConfigurationForm,
+  McpConfigurationPanel,
+  McpIdentityBoundaryCard,
+  McpKeyVaultPanel,
+} from "./components/McpPanels";
 import { MultiAgentWritingPanel } from "./components/MultiAgentWritingPanel";
+import { HandoutCollaborationPanel, HandoutCollaborationThreadItem } from "./components/HandoutCollaborationPanel";
 import {
   compactText,
   formatDateTime,
@@ -64,8 +70,9 @@ import {
   statusTone,
 } from "./components/panelShared";
 import { StudentDashboardPanel } from "./components/StudentDashboardPanel";
+import { TeachingConversationPanel, TeachingConversationThreadItem } from "./components/TeachingConversationPanel";
 import { SyncCheckpointView, TeacherResourcePanel } from "./components/TeacherResourcePanel";
-import { TeachingTaskPanel } from "./components/TeachingTaskPanel";
+import { PdfCanvasPreview } from "./components/PdfCanvasPreview";
 import { KnowledgeWorkspace } from "./knowledge/KnowledgeWorkspace";
 
 export { MultiAgentWritingPanel } from "./components/MultiAgentWritingPanel";
@@ -77,6 +84,8 @@ export { statusClass, statusTone } from "./components/panelShared";
 const DEFAULT_BACKEND_URL = import.meta.env.VITE_BACKEND_URL ?? "http://127.0.0.1:8080";
 const TEACHING_TASK_STORAGE_KEY = "math-agent:last-teaching-task-id";
 const MULTI_AGENT_WORKFLOW_STORAGE_KEY = "math-agent:last-multi-agent-workflow-id";
+const TEACHING_CONVERSATION_STORAGE_KEY = "math-agent:teaching-conversation-thread";
+const HANDOUT_COLLABORATION_STORAGE_KEY = "math-agent:handout-collaboration-thread";
 
 type MathSegment = {
   key: string;
@@ -145,6 +154,7 @@ type TeachingPdfPreviewVisualEvidence = {
   selector: string;
   version: "teacher" | "student";
   imageRef: string;
+  previewImageDataUrl?: string;
   previewState: string;
   page: number;
   pixelWidth: number;
@@ -161,6 +171,10 @@ interface NavItem {
   label: string;
   icon: React.ReactNode;
 }
+
+type TeachingConversationImageDraft = StudentExplanationImageUploadResponse & {
+  previewUrl: string;
+};
 
 export function App() {
   const api = useMemo(() => createTextbookApiClient(DEFAULT_BACKEND_URL), []);
@@ -179,6 +193,16 @@ export function App() {
   const [teachingQuestion, setTeachingQuestion] = useState("");
   const [learningGoal, setLearningGoal] = useState("");
   const [teachingTask, setTeachingTask] = useState<TeachingTaskResponse | null>(null);
+  const [teachingConversationInput, setTeachingConversationInput] = useState("");
+  const [teachingConversationId, setTeachingConversationId] = useState(() => readStoredTeachingConversation().conversationId);
+  const [teachingConversationHistory, setTeachingConversationHistory] = useState<StudentExplanationHistoryItem[]>([]);
+  const [teachingConversationEntries, setTeachingConversationEntries] =
+    useState<TeachingConversationThreadItem[]>(() => readStoredTeachingConversation().entries);
+  const [teachingConversationImageDraft, setTeachingConversationImageDraft] = useState<TeachingConversationImageDraft | null>(null);
+  const [uploadingTeachingConversationImage, setUploadingTeachingConversationImage] = useState(false);
+  const [teachingConversationImageError, setTeachingConversationImageError] = useState("");
+  const [handoutCollaborationEntries, setHandoutCollaborationEntries] =
+    useState<HandoutCollaborationThreadItem[]>(() => readStoredHandoutCollaboration());
   const [teachingTemplates, setTeachingTemplates] = useState<TeachingHandoutTemplateResponse[]>([]);
   const [selectedTeachingTemplateCode, setSelectedTeachingTemplateCode] = useState("default_standard");
   const [studentDashboard, setStudentDashboard] = useState<StudentDashboardResponse | null>(null);
@@ -249,12 +273,12 @@ export function App() {
   const [multiAgentWritingGoal, setMultiAgentWritingGoal] = useState("");
   const [multiAgentWritingQuestion, setMultiAgentWritingQuestion] = useState("");
   const [multiAgentWritingError, setMultiAgentWritingError] = useState("");
-  const [mcpUrl, setMcpUrl] = useState(`${DEFAULT_BACKEND_URL}/api/mcp`);
-  const [mcpSecretKey, setMcpSecretKey] = useState("");
-  const [mcpSecretEnvName, setMcpSecretEnvName] = useState("MATH_AGENT_MCP_SECRET");
-  const [mcpSelection, setMcpSelection] = useState(() => defaultMcpExposureSelection());
+  const [mcpKeys, setMcpKeys] = useState<McpClientKeyResponse[]>([]);
+  const [mcpLatestCreatedKey, setMcpLatestCreatedKey] = useState<McpClientKeyCreatedResponse | null>(null);
   const [mcpConfiguration, setMcpConfiguration] = useState<McpConfigurationResponse | null>(null);
-  const [mcpBuilding, setMcpBuilding] = useState(false);
+  const [mcpCreating, setMcpCreating] = useState(false);
+  const [mcpLoadingKeys, setMcpLoadingKeys] = useState(false);
+  const [mcpRevokingKeyId, setMcpRevokingKeyId] = useState("");
   const [mcpCopyMessage, setMcpCopyMessage] = useState("");
   const [mcpError, setMcpError] = useState("");
   const [mcpTesting, setMcpTesting] = useState(false);
@@ -288,6 +312,8 @@ export function App() {
   const [searching, setSearching] = useState(false);
   const [loadingAudit, setLoadingAudit] = useState(false);
   const [submittingTeachingTask, setSubmittingTeachingTask] = useState(false);
+  const [submittingTeachingConversation, setSubmittingTeachingConversation] = useState(false);
+  const [loadingTeachingConversationHistory, setLoadingTeachingConversationHistory] = useState(false);
   const [loadingTeachingTask, setLoadingTeachingTask] = useState(false);
   const [loadingTeachingTemplates, setLoadingTeachingTemplates] = useState(false);
   const [loadingStudentDashboard, setLoadingStudentDashboard] = useState(false);
@@ -344,6 +370,19 @@ export function App() {
     if (!hasVerifiedSession) return;
     loadStudentDashboard();
   }, [api, hasVerifiedSession, authSession?.role]);
+
+  useEffect(() => {
+    if (!authSession) {
+      setMcpKeys([]);
+      setMcpConfiguration(null);
+      setMcpLatestCreatedKey(null);
+      return;
+    }
+    if (activePage !== "mcp") {
+      return;
+    }
+    refreshMcpState();
+  }, [api, activePage, authSession?.tokenValue]);
 
   function loadStudentDashboard(studentId = "") {
     setLoadingStudentDashboard(true);
@@ -451,6 +490,28 @@ export function App() {
 
   useEffect(() => {
     if (!hasVerifiedSession) return;
+    refreshTeachingConversationHistory();
+  }, [api, hasVerifiedSession]);
+
+  useEffect(() => {
+    globalThis.localStorage?.setItem(
+      TEACHING_CONVERSATION_STORAGE_KEY,
+      JSON.stringify({
+        conversationId: teachingConversationId,
+        entries: sanitizeTeachingConversationEntries(teachingConversationEntries),
+      }),
+    );
+  }, [teachingConversationEntries, teachingConversationId]);
+
+  useEffect(() => {
+    globalThis.localStorage?.setItem(
+      HANDOUT_COLLABORATION_STORAGE_KEY,
+      JSON.stringify(handoutCollaborationEntries),
+    );
+  }, [handoutCollaborationEntries]);
+
+  useEffect(() => {
+    if (!hasVerifiedSession) return;
     const taskId = window.localStorage.getItem(TEACHING_TASK_STORAGE_KEY);
     if (!taskId) return;
     setLoadingTeachingTask(true);
@@ -460,9 +521,7 @@ export function App() {
         syncSelectedTeachingTemplate(task);
         setTeachingTask(task);
         loadTeachingFeedbackHistory(task.taskId);
-        if (task.status === "COMPLETED") {
-          previewTeachingTaskPdf(task.taskId, handoutVersion);
-        } else if (task.status === "CREATED" || task.status === "RUNNING") {
+        if (task.status === "CREATED" || task.status === "RUNNING") {
           pollTeachingTask(task.taskId);
         }
       })
@@ -620,17 +679,72 @@ export function App() {
       .finally(() => setSearching(false));
   }
 
+  function upsertHandoutCollaborationTask(task: TeachingTaskResponse, requestId?: string) {
+    setHandoutCollaborationEntries((current) => {
+      const updated = current.map((entry) => {
+        if (entry.role !== "assistant") {
+          return entry;
+        }
+        if (entry.taskId === task.taskId || (requestId && entry.id === `assistant-pending:${requestId}`)) {
+          return {
+            id: `assistant:${task.taskId}`,
+            role: "assistant" as const,
+            taskId: task.taskId,
+            task,
+            createdAt: entry.createdAt,
+          };
+        }
+        return entry;
+      });
+      const exists = updated.some((entry) => entry.role === "assistant" && entry.taskId === task.taskId);
+      if (exists) {
+        return updated;
+      }
+      return [
+        ...updated,
+        {
+          id: `assistant:${task.taskId}`,
+          role: "assistant" as const,
+          taskId: task.taskId,
+          task,
+          createdAt: new Date().toISOString(),
+        },
+      ];
+    });
+  }
+
   function handleTeachingTask(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!learningGoal.trim()) { setTeachingError("请输入讲义主题或学习目标。"); return; }
     const clientRequestId = globalThis.crypto.randomUUID();
+    const submittedGoal = learningGoal.trim();
+    const submittedQuestion = teachingQuestion.trim();
+    const selectedTemplate = teachingTemplates.find((item) => item.templateCode === selectedTeachingTemplateCode);
     setSubmittingTeachingTask(true);
     setTeachingError("");
+    setHandoutCollaborationEntries((current) => [
+      ...current,
+      {
+        id: `user:${clientRequestId}`,
+        role: "user" as const,
+        learningGoal: submittedGoal,
+        questionText: submittedQuestion || undefined,
+        templateName: selectedTemplate?.displayName ?? "标准讲义模板",
+        evidenceLimit: limit,
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: `assistant-pending:${clientRequestId}`,
+        role: "assistant" as const,
+        createdAt: new Date().toISOString(),
+        loading: true,
+      },
+    ]);
     api
       .submitTeachingTask({
         clientRequestId,
-        questionText: teachingQuestion.trim() || undefined,
-        learningGoal: learningGoal.trim(),
+        questionText: submittedQuestion || undefined,
+        learningGoal: submittedGoal,
         evidenceLimit: limit,
         handoutTemplateCode: selectedTeachingTemplateCode || undefined,
       })
@@ -650,16 +764,156 @@ export function App() {
         setHandoutExportMessage("");
         setFeedbackMessage("");
         setFeedbackHistory([]);
+        upsertHandoutCollaborationTask(task, clientRequestId);
         refreshTeachingHistory();
         loadTeachingFeedbackHistory(task.taskId);
-        if (task.status === "COMPLETED") {
-          previewTeachingTaskPdf(task.taskId, handoutVersion);
-        } else {
+        if (task.status !== "COMPLETED") {
           pollTeachingTask(task.taskId);
         }
       })
-      .catch((error: Error) => setTeachingError(toUserFacingError(error)))
+      .catch((error: Error) => {
+        const message = toUserFacingError(error);
+        setTeachingError(message);
+        setHandoutCollaborationEntries((current) =>
+          current.map((entry) =>
+            entry.id === `assistant-pending:${clientRequestId}`
+              ? {
+                  id: `assistant-error:${clientRequestId}`,
+                  role: "assistant" as const,
+                  createdAt: entry.createdAt,
+                  error: message,
+                }
+              : entry,
+          ),
+        );
+      })
       .finally(() => setSubmittingTeachingTask(false));
+  }
+
+  function refreshTeachingConversationHistory(conversationId?: string) {
+    setLoadingTeachingConversationHistory(true);
+    return api
+      .getStudentExplanationHistory(conversationId || teachingConversationId || undefined, 12)
+      .then((history) => setTeachingConversationHistory(history.items))
+      .catch((error: Error) => setTeachingError(toUserFacingError(error)))
+      .finally(() => setLoadingTeachingConversationHistory(false));
+  }
+
+  function handleTeachingConversation(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const submittedQuestion = teachingConversationInput.trim();
+    const submittedImage = teachingConversationImageDraft;
+    if (!submittedQuestion && !submittedImage) {
+      setTeachingError("请输入题目，或先上传题图。");
+      return;
+    }
+    const requestId = globalThis.crypto.randomUUID();
+    const pendingAssistantId = `assistant-pending:${requestId}`;
+    setSubmittingTeachingConversation(true);
+    setTeachingError("");
+    setTeachingConversationImageError("");
+    setTeachingConversationEntries((current) => [
+      ...current,
+      {
+        id: `user:${requestId}`,
+        role: "user",
+        questionText: submittedQuestion || "图片讲题",
+        imagePreviewUrl: submittedImage?.previewUrl,
+        imageFileName: submittedImage?.originalFileName,
+        imageStatus: submittedImage?.imageStatus,
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: pendingAssistantId,
+        role: "assistant",
+        questionText: submittedQuestion,
+        imagePreviewUrl: submittedImage?.previewUrl,
+        imageFileName: submittedImage?.originalFileName,
+        imageStatus: submittedImage?.imageStatus,
+        loading: true,
+        createdAt: new Date().toISOString(),
+      },
+    ]);
+    setTeachingConversationInput("");
+    api
+      .explainStudentQuestion({
+        conversationId: teachingConversationId || undefined,
+        questionText: submittedQuestion || undefined,
+        imageUploadId: submittedImage?.uploadId,
+        imageFileName: submittedImage?.originalFileName,
+        imageContentType: submittedImage?.contentType,
+        imageSizeBytes: submittedImage?.sizeBytes,
+        searchTextbook: true,
+        searchKnowledgeGraph: true,
+        searchTeacherResources: authSession?.role === "teacher" || authSession?.role === "admin",
+        maxTextbookHits: 5,
+        maxTeacherResourceHits: 3,
+      })
+      .then((response: StudentExplanationResponse) => {
+        setTeachingConversationId(response.conversationId);
+        setTeachingConversationEntries((current) =>
+          current.map((entry) =>
+            entry.id === pendingAssistantId
+              ? {
+                  id: `assistant:${response.explanationId}`,
+                  role: "assistant",
+                  questionText: submittedQuestion || "图片讲题",
+                  imagePreviewUrl: submittedImage?.previewUrl,
+                  imageFileName: submittedImage?.originalFileName,
+                  imageStatus: response.imageStatus || submittedImage?.imageStatus,
+                  response,
+                  createdAt: new Date().toISOString(),
+                }
+              : entry,
+          ),
+        );
+        setTeachingConversationImageDraft(null);
+        return refreshTeachingConversationHistory(response.conversationId);
+      })
+      .catch((error: Error) => {
+        const message = toUserFacingError(error);
+        setTeachingError(message);
+        setTeachingConversationEntries((current) =>
+          current.map((entry) =>
+            entry.id === pendingAssistantId
+              ? {
+                  id: `assistant-error:${requestId}`,
+                  role: "assistant",
+                  questionText: submittedQuestion || "图片讲题",
+                  imagePreviewUrl: submittedImage?.previewUrl,
+                  imageFileName: submittedImage?.originalFileName,
+                  imageStatus: submittedImage?.imageStatus,
+                  error: message,
+                  createdAt: new Date().toISOString(),
+                }
+              : entry,
+          ),
+        );
+      })
+      .finally(() => setSubmittingTeachingConversation(false));
+  }
+
+  function clearTeachingConversationImage() {
+    setTeachingConversationImageDraft(null);
+    setTeachingConversationImageError("");
+  }
+
+  function handleTeachingConversationImageUpload(file: File | null) {
+    if (!file) {
+      return;
+    }
+    setUploadingTeachingConversationImage(true);
+    setTeachingConversationImageError("");
+    api
+      .uploadStudentExplanationImage(file)
+      .then(async (uploaded) => {
+        setTeachingConversationImageDraft({
+          ...uploaded,
+          previewUrl: await fileToDataUrl(file),
+        });
+      })
+      .catch((error: Error) => setTeachingConversationImageError(toUserFacingError(error)))
+      .finally(() => setUploadingTeachingConversationImage(false));
   }
 
   function handleLogin(event: FormEvent<HTMLFormElement>) {
@@ -695,14 +949,12 @@ export function App() {
       api.getTeachingTask(taskId).then((task) => {
         syncSelectedTeachingTemplate(task);
         setTeachingTask(task);
+        upsertHandoutCollaborationTask(task);
         if (task.status === "CREATED" || task.status === "RUNNING") {
           globalThis.setTimeout(poll, 2000);
           return;
         }
         refreshTeachingHistory();
-        if (task.status === "COMPLETED") {
-          previewTeachingTaskPdf(task.taskId, handoutVersion);
-        }
       }).catch(() => {
         globalThis.setTimeout(poll, 3000);
       });
@@ -940,6 +1192,88 @@ export function App() {
       .finally(() => setHandoutAction(""));
   }
 
+  function resolvePreviewHandoutVersion(
+    task: TeachingTaskResponse,
+    preferred: "teacher" | "student",
+  ) {
+    const hasTeacher = Boolean(task.teacherHandoutLatex?.trim());
+    const hasStudent = Boolean(task.studentHandoutLatex?.trim());
+    if (preferred === "teacher" && hasTeacher) return "teacher";
+    if (preferred === "student" && hasStudent) return "student";
+    if (hasTeacher) return "teacher";
+    if (hasStudent) return "student";
+    return preferred;
+  }
+
+  function focusTeachingTask(task: TeachingTaskResponse) {
+    window.localStorage.setItem(TEACHING_TASK_STORAGE_KEY, task.taskId);
+    syncSelectedTeachingTemplate(task);
+    setTeachingTask(task);
+    loadTeachingFeedbackHistory(task.taskId);
+    upsertHandoutCollaborationTask(task);
+  }
+
+  function previewHandoutTaskPdf(task: TeachingTaskResponse) {
+    const resolvedVersion = resolvePreviewHandoutVersion(task, handoutVersion);
+    if (resolvedVersion !== handoutVersion) {
+      setHandoutVersion(resolvedVersion);
+    }
+    focusTeachingTask(task);
+    previewTeachingTaskPdf(task.taskId, resolvedVersion);
+  }
+
+  function previewHandoutTaskLatex(task: TeachingTaskResponse) {
+    const resolvedVersion = resolvePreviewHandoutVersion(task, handoutVersion);
+    if (resolvedVersion !== handoutVersion) {
+      setHandoutVersion(resolvedVersion);
+    }
+    focusTeachingTask(task);
+    setHandoutAction("preview");
+    setTeachingError("");
+    setHandoutExportMessage("");
+    setHandoutPreviewPdfUrl((current) => {
+      if (current) URL.revokeObjectURL(current);
+      return "";
+    });
+    setHandoutPreviewPdfBytes(null);
+    setHandoutPreviewPdfTaskId("");
+    setHandoutPreviewPdfMeta(null);
+    api
+      .previewTeachingTaskLatex(task.taskId, resolvedVersion)
+      .then((latex) => {
+        setHandoutPreviewLatex(latex);
+        setHandoutPreviewTaskId(`${task.taskId}:${resolvedVersion}`);
+        globalThis.setTimeout(() => {
+          document.getElementById("handout-review-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+        }, 80);
+      })
+      .catch((error: Error) => setTeachingError(error.message))
+      .finally(() => setHandoutAction(""));
+  }
+
+  function exportHandoutTaskPdf(task: TeachingTaskResponse) {
+    const resolvedVersion = resolvePreviewHandoutVersion(task, handoutVersion);
+    if (resolvedVersion !== handoutVersion) {
+      setHandoutVersion(resolvedVersion);
+    }
+    focusTeachingTask(task);
+    setHandoutAction("pdf");
+    setTeachingError("");
+    setHandoutExportMessage("");
+    api
+      .exportTeachingTaskPdf(task.taskId, resolvedVersion)
+      .then((pdf) => {
+        downloadBytes(`${task.taskId}-${resolvedVersion}.pdf`, pdf.bytes, "application/pdf");
+        setHandoutExportMessage(
+          pdf.renderer === "xelatex"
+            ? "PDF 已下载，当前使用 XeLaTeX 渲染。"
+            : "PDF 已下载，当前使用后备排版。",
+        );
+      })
+      .catch((error: Error) => setTeachingError(error.message))
+      .finally(() => setHandoutAction(""));
+  }
+
   function handleExportLatex() {
     if (!teachingTask) return;
     setHandoutAction("latex");
@@ -1005,11 +1339,10 @@ export function App() {
         window.localStorage.setItem(TEACHING_TASK_STORAGE_KEY, latestTask.taskId);
         syncSelectedTeachingTemplate(latestTask);
         setTeachingTask(latestTask);
+        upsertHandoutCollaborationTask(latestTask);
         setTeachingHistory((current) => [latestTask, ...current.filter((item) => item.taskId !== latestTask.taskId)]);
         loadTeachingFeedbackHistory(latestTask.taskId);
-        if (latestTask.status === "COMPLETED") {
-          previewTeachingTaskPdf(latestTask.taskId, handoutVersion);
-        } else if (latestTask.status === "CREATED" || latestTask.status === "RUNNING") {
+        if (latestTask.status === "CREATED" || latestTask.status === "RUNNING") {
           pollTeachingTask(latestTask.taskId);
         }
       })
@@ -1225,31 +1558,60 @@ export function App() {
       .finally(() => setPollingMultiAgentWriting(false));
   }
 
-  function handleBuildMcpConfiguration(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setMcpBuilding(true);
+  function refreshMcpState() {
+    if (!authSession) {
+      setMcpKeys([]);
+      setMcpConfiguration(null);
+      return;
+    }
+    setMcpLoadingKeys(true);
+    setMcpError("");
+    Promise.all([
+      api.listMcpKeys().then(setMcpKeys),
+      api
+        .getMyMcpConfiguration()
+        .then(setMcpConfiguration)
+        .catch((error: Error) => {
+          if (error.message.includes("no active MCP key")) {
+            setMcpConfiguration(null);
+            return;
+          }
+          throw error;
+        }),
+    ])
+      .catch((error: Error) => setMcpError(error.message))
+      .finally(() => setMcpLoadingKeys(false));
+  }
+
+  function handleCreateMcpKey() {
+    setMcpCreating(true);
     setMcpError("");
     setMcpCopyMessage("");
     api
-      .buildMcpConfiguration({ url: mcpUrl.trim(), secretKey: mcpSecretKey.trim(), secretEnvName: mcpSecretEnvName.trim(), enabledToolNames: mcpSelection.tools, enabledPromptNames: mcpSelection.prompts })
-      .then(setMcpConfiguration)
+      .createMcpKey()
+      .then((created) => {
+        setMcpLatestCreatedKey(created);
+        setMcpConfiguration(created.configuration);
+        return api.listMcpKeys().then(setMcpKeys);
+      })
       .catch((error: Error) => setMcpError(error.message))
-      .finally(() => setMcpBuilding(false));
+      .finally(() => setMcpCreating(false));
   }
 
   function handleTestMcpConnection() {
+    if (!mcpLatestCreatedKey?.secretKey) {
+      setMcpTestError("请先创建一个新的 MCP key，再用这次返回的真实 secret 做握手测试。");
+      setMcpTestResult(null);
+      return;
+    }
     setMcpTesting(true);
     setMcpTestError("");
     setMcpTestResult(null);
     api
-      .testMcpConnection(mcpUrl, mcpSecretKey)
+      .testMcpConnection(mcpConfiguration?.url ?? `${DEFAULT_BACKEND_URL}/api/mcp`, mcpLatestCreatedKey.secretKey)
       .then(setMcpTestResult)
       .catch((error: Error) => setMcpTestError(error.message))
       .finally(() => setMcpTesting(false));
-  }
-
-  function handleMcpToolToggle(option: string, checked: boolean) {
-    setMcpSelection((current) => ({ ...current, tools: toggleMcpExposureOption(current.tools, option, checked, MCP_TOOL_OPTIONS) }));
   }
 
   function handleAgentProviderChange(provider: string) {
@@ -1264,8 +1626,20 @@ export function App() {
     api.getAgentModelHealth().then(setAgentModelHealth).catch((error: Error) => setAgentModelHealthError(toUserFacingError(error))).finally(() => setCheckingAgentModelHealth(false));
   }
 
-  function handleMcpPromptToggle(option: string, checked: boolean) {
-    setMcpSelection((current) => ({ ...current, prompts: toggleMcpExposureOption(current.prompts, option, checked, MCP_PROMPT_OPTIONS) }));
+  function handleRevokeMcpKey(keyId: string) {
+    setMcpRevokingKeyId(keyId);
+    setMcpError("");
+    api
+      .revokeMcpKey(keyId)
+      .then(() => {
+        if (mcpLatestCreatedKey?.keyId === keyId) {
+          setMcpLatestCreatedKey(null);
+          setMcpTestResult(null);
+        }
+        refreshMcpState();
+      })
+      .catch((error: Error) => setMcpError(error.message))
+      .finally(() => setMcpRevokingKeyId(""));
   }
 
   function handleCopyMcpConfiguration() {
@@ -1274,9 +1648,18 @@ export function App() {
     navigator.clipboard.writeText(mcpConfiguration.configJson).then(() => setMcpCopyMessage("MCP JSON 已复制。")).catch((error: Error) => setMcpCopyMessage(error.message));
   }
 
+  function handleCopyLatestMcpSecret() {
+    if (!mcpLatestCreatedKey?.secretKey) return;
+    if (!navigator.clipboard?.writeText) { setMcpCopyMessage("当前浏览器不支持剪贴板写入。"); return; }
+    navigator.clipboard.writeText(mcpLatestCreatedKey.secretKey).then(() => setMcpCopyMessage("MCP secret 已复制。")).catch((error: Error) => setMcpCopyMessage(error.message));
+  }
+
   function handleLogout() {
     globalThis.localStorage?.removeItem("math-agent:auth-session");
     setAuthSession(null);
+    setMcpKeys([]);
+    setMcpConfiguration(null);
+    setMcpLatestCreatedKey(null);
     setDropdownOpen(false);
   }
 
@@ -1546,95 +1929,22 @@ export function App() {
 
   function renderTeaching() {
     return renderRequiresAuth(
-      <>
-        <div className="page-header">
-          <h1 className="page-title">教学任务</h1>
-          <p className="page-subtitle">AI 教学任务编排与讲义导出</p>
-        </div>
-        <div className="card-grid teaching-page-grid">
-          <div className="card card-full teaching-create-card">
-            <div className="card-header">
-              <h2 className="card-title"><BookOpen size={16} /> 创建教学任务</h2>
-            </div>
-            <div className="card-body">
-              <form className="search-form" onSubmit={handleTeachingTask}>
-                <label>
-                  <span>讲义主题 / 学习目标</span>
-                  <input className="form-input" value={learningGoal} onChange={(e) => setLearningGoal(e.target.value)} placeholder="例如：双曲线从定义到大题小题方法" />
-                </label>
-                <label>
-                  <span>题目 / 补充要求（可选）</span>
-                  <input className="form-input" value={teachingQuestion} onChange={(e) => setTeachingQuestion(e.target.value)} placeholder="没有具体题目可以留空，后端会按主题生成讲义" />
-                </label>
-                <TemplateShelf
-                  templates={teachingTemplates}
-                  selectedCode={selectedTeachingTemplateCode}
-                  loading={loadingTeachingTemplates}
-                  onSelect={setSelectedTeachingTemplateCode}
-                />
-                <button className="btn btn-primary" type="submit" disabled={submittingTeachingTask}>
-                  {submittingTeachingTask ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />}
-                  <span>生成讲义任务</span>
-                </button>
-              </form>
-            </div>
-          </div>
-          <div className="card card-full">
-            <div className="card-header">
-              <h2 className="card-title"><FileText size={16} /> 讲义与反馈</h2>
-            </div>
-            <div className="card-body">
-              <TeachingTaskPanel
-                task={teachingTask}
-                loading={loadingTeachingTask}
-                error={teachingError}
-                version={handoutVersion}
-                previewLatex={handoutPreviewTaskId === `${teachingTask?.taskId}:${handoutVersion}` ? handoutPreviewLatex : ""}
-                previewPdfUrl={handoutPreviewPdfTaskId === `${teachingTask?.taskId}:${handoutVersion}` ? handoutPreviewPdfUrl : ""}
-                previewPdfBytes={handoutPreviewPdfTaskId === `${teachingTask?.taskId}:${handoutVersion}` ? handoutPreviewPdfBytes : null}
-                previewPdfMeta={handoutPreviewPdfTaskId === `${teachingTask?.taskId}:${handoutVersion}` ? handoutPreviewPdfMeta : null}
-                history={teachingHistory}
-                loadingHistory={loadingTeachingHistory}
-                loadingHistoryTaskId={openingTeachingHistoryTaskId}
-                action={handoutAction}
-                exportMessage={handoutExportMessage}
-                feedbackRating={feedbackRating}
-                feedbackDecision={feedbackDecision}
-                feedbackComment={feedbackComment}
-                submittingFeedback={submittingFeedback}
-                feedbackMessage={feedbackMessage}
-                feedbackHistory={feedbackHistory}
-                loadingFeedbackHistory={loadingFeedbackHistory}
-                batchFolderPath={batchFolderPath}
-                onVersionChange={(v) => {
-                  setHandoutVersion(v);
-                  setHandoutPreviewLatex("");
-                  setHandoutPreviewTaskId("");
-                  setHandoutPreviewPdfUrl((current) => {
-                    if (current) URL.revokeObjectURL(current);
-                    return "";
-                  });
-                  setHandoutPreviewPdfBytes(null);
-                  setHandoutPreviewPdfTaskId("");
-                  setHandoutPreviewPdfMeta(null);
-                  setHandoutExportMessage("");
-                }}
-                onBatchFolderPathChange={setBatchFolderPath}
-                onPreviewLatex={handlePreviewLatex}
-                onPreviewPdf={handlePreviewPdf}
-                onExportLatex={handleExportLatex}
-                onExportPdf={handleExportPdf}
-                onExportBatchZip={handleExportBatchZip}
-                onSelectHistory={handleSelectTeachingHistory}
-                onFeedbackRatingChange={setFeedbackRating}
-                onFeedbackDecisionChange={setFeedbackDecision}
-                onFeedbackCommentChange={setFeedbackComment}
-                onSubmitFeedback={handleSubmitFeedback}
-              />
-            </div>
-          </div>
-        </div>
-      </>
+      <TeachingConversationPanel
+        value={teachingConversationInput}
+        entries={teachingConversationEntries}
+        history={teachingConversationHistory}
+        loading={submittingTeachingConversation}
+        loadingHistory={loadingTeachingConversationHistory}
+        error={teachingError}
+        imageDraft={teachingConversationImageDraft}
+        uploadingImage={uploadingTeachingConversationImage}
+        imageError={teachingConversationImageError}
+        onValueChange={setTeachingConversationInput}
+        onSubmit={handleTeachingConversation}
+        onImageSelect={handleTeachingConversationImageUpload}
+        onClearImage={clearTeachingConversationImage}
+        onOpenHandout={() => navigate("streaming")}
+      />,
     );
   }
 
@@ -1735,13 +2045,59 @@ export function App() {
     return renderRequiresAuth(
       <>
         <div className="page-header">
-          <h1 className="page-title">讲义协作流程</h1>
-          <p className="page-subtitle">从生成、审校到导出的讲义协作流程</p>
+          <h1 className="page-title">讲义协作</h1>
+          <p className="page-subtitle">模板书架与协作流同页完成讲义生成、预览与导出</p>
         </div>
-        <div className="card-grid">
+        <div className="card-grid handout-studio-grid">
           <div className="card card-full">
             <div className="card-header">
-              <h2 className="card-title"><GitBranch size={16} /> 创建写作任务</h2>
+              <h2 className="card-title"><FileText size={16} /> 协作会话流</h2>
+            </div>
+            <div className="card-body">
+              <HandoutCollaborationPanel
+                learningGoal={learningGoal}
+                questionText={teachingQuestion}
+                evidenceLimit={limit}
+                selectedTemplateName={
+                  teachingTemplates.find((item) => item.templateCode === selectedTeachingTemplateCode)?.displayName
+                  ?? "标准讲义模板"
+                }
+                currentTaskId={teachingTask?.taskId ?? ""}
+                version={handoutVersion}
+                entries={handoutCollaborationEntries}
+                history={teachingHistory}
+                loading={submittingTeachingTask}
+                loadingHistory={loadingTeachingHistory}
+                error={teachingError}
+                onLearningGoalChange={setLearningGoal}
+                onQuestionTextChange={setTeachingQuestion}
+                onEvidenceLimitChange={setLimit}
+                onSubmit={handleTeachingTask}
+                onSelectHistory={handleSelectTeachingHistory}
+                onPreviewPdf={previewHandoutTaskPdf}
+                onPreviewLatex={previewHandoutTaskLatex}
+                onExportPdf={exportHandoutTaskPdf}
+              />
+            </div>
+          </div>
+          <div className="card card-full">
+            <div className="card-header">
+              <h2 className="card-title"><BookOpen size={16} /> 模板书架</h2>
+            </div>
+            <div className="card-body">
+              <TemplateShelf
+                templates={teachingTemplates}
+                selectedCode={selectedTeachingTemplateCode}
+                loading={loadingTeachingTemplates}
+                onSelect={setSelectedTeachingTemplateCode}
+                loadPreviewImage={api.getTeachingHandoutTemplatePreviewImage}
+                loadReferencePdf={api.getTeachingHandoutTemplateReferencePdf}
+              />
+            </div>
+          </div>
+          <div className="card card-full">
+            <div className="card-header">
+              <h2 className="card-title"><GitBranch size={16} /> AI 协作增强</h2>
             </div>
             <div className="card-body">
               <MultiAgentWritingPanel
@@ -1845,7 +2201,7 @@ export function App() {
       <>
         <div className="page-header">
           <h1 className="page-title">MCP 接入</h1>
-          <p className="page-subtitle">为 WorkBuddy、Claude Desktop 等外部客户端生成当前账号可用的标准 MCP 配置</p>
+          <p className="page-subtitle">后端按当前登录态生成个人 MCP key 和标准配置，前端不再传递身份或 secret 参数</p>
         </div>
         <div className="mcp-page-grid">
           <div className="card card-full mcp-identity-card">
@@ -1853,55 +2209,41 @@ export function App() {
               <h2 className="card-title"><ShieldCheck size={16} /> 当前账号边界</h2>
             </div>
             <div className="card-body">
-              <div className="mcp-identity-strip">
-                <div>
-                  <span>账号</span>
-                  <strong>{authSession?.username ?? "未登录"}</strong>
-                </div>
-                <div>
-                  <span>用户 ID</span>
-                  <strong>{authSession?.userId ?? "-"}</strong>
-                </div>
-                <div>
-                  <span>角色</span>
-                  <strong>{sessionRoleLabel(authSession?.role)}</strong>
-                </div>
-                <div>
-                  <span>租户</span>
-                  <strong>{authSession?.tenantId ?? "-"}</strong>
-                </div>
-              </div>
-              <details className="mcp-policy-note">
-                <summary>权限说明</summary>
-                <p>外部客户端只拿到后端按当前账号过滤后的工具和提示词。角色、租户和资源范围由后端会话与 MCP 密钥解析，前端不能自选身份。</p>
-              </details>
+              <McpIdentityBoundaryCard
+                username={authSession?.username}
+                userId={authSession?.userId}
+                roleLabel={sessionRoleLabel(authSession?.role)}
+                tenantId={authSession?.tenantId}
+              />
             </div>
           </div>
           <div className="card mcp-config-card">
             <div className="card-header">
-              <h2 className="card-title"><Globe size={16} /> 客户端配置</h2>
+              <h2 className="card-title"><Globe size={16} /> Key 管理</h2>
             </div>
             <div className="card-body">
               <McpConfigurationForm
-                url={mcpUrl}
-                secretKey={mcpSecretKey}
-                secretEnvName={mcpSecretEnvName}
-                selectedTools={mcpSelection.tools}
-                selectedPrompts={mcpSelection.prompts}
-                building={mcpBuilding}
+                creating={mcpCreating}
+                loadingKeys={mcpLoadingKeys}
                 error={mcpError}
-                onUrlChange={setMcpUrl}
-                onSecretKeyChange={setMcpSecretKey}
-                onSecretEnvNameChange={setMcpSecretEnvName}
-                onToolToggle={handleMcpToolToggle}
-                onPromptToggle={handleMcpPromptToggle}
-                onSubmit={handleBuildMcpConfiguration}
+                latestCreatedKey={mcpLatestCreatedKey}
+                onCreate={handleCreateMcpKey}
+                onRefresh={refreshMcpState}
+              />
+              <McpKeyVaultPanel
+                keys={mcpKeys}
+                latestCreatedKey={mcpLatestCreatedKey}
+                revokingKeyId={mcpRevokingKeyId}
+                loading={mcpLoadingKeys}
+                copyMessage={mcpCopyMessage}
+                onCopyLatestSecret={handleCopyLatestMcpSecret}
+                onRevokeKey={handleRevokeMcpKey}
               />
             </div>
           </div>
           <div className="card mcp-result-card">
             <div className="card-header">
-              <h2 className="card-title"><Network size={16} /> 连接与导出</h2>
+              <h2 className="card-title"><Network size={16} /> 配置与连接</h2>
             </div>
             <div className="card-body">
               <McpConnectionTestPanel
@@ -1909,6 +2251,7 @@ export function App() {
                 result={mcpTestResult}
                 error={mcpTestError}
                 onTest={handleTestMcpConnection}
+                ready={Boolean(mcpLatestCreatedKey?.secretKey)}
               />
               <McpConfigurationPanel
                 configuration={mcpConfiguration}
@@ -2094,6 +2437,48 @@ function readStoredAuthSession() {
   }
 }
 
+function readStoredTeachingConversation(): {
+  conversationId: string;
+  entries: TeachingConversationThreadItem[];
+} {
+  try {
+    const value = globalThis.localStorage?.getItem(TEACHING_CONVERSATION_STORAGE_KEY);
+    if (!value) {
+      return { conversationId: "", entries: [] };
+    }
+    const parsed = JSON.parse(value) as {
+      conversationId?: string;
+      entries?: TeachingConversationThreadItem[];
+    };
+    return {
+      conversationId: parsed.conversationId ?? "",
+      entries: Array.isArray(parsed.entries) ? parsed.entries : [],
+    };
+  } catch {
+    return { conversationId: "", entries: [] };
+  }
+}
+
+function sanitizeTeachingConversationEntries(entries: TeachingConversationThreadItem[]) {
+  return entries.map((entry) => ({
+    ...entry,
+    imagePreviewUrl: undefined,
+  }));
+}
+
+function readStoredHandoutCollaboration(): HandoutCollaborationThreadItem[] {
+  try {
+    const value = globalThis.localStorage?.getItem(HANDOUT_COLLABORATION_STORAGE_KEY);
+    if (!value) {
+      return [];
+    }
+    const parsed = JSON.parse(value) as HandoutCollaborationThreadItem[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 function multiAgentEvidenceRefs(searchResult: TextbookSearchResponse | null) {
   if (!searchResult) return [];
   return searchResult.hits.slice(0, 3).map((hit) => `PUBLIC_TEXTBOOK:${hit.docId}:${hit.chunkId}`);
@@ -2111,7 +2496,7 @@ function isBackendNotFound(error: Error) {
 function toUserFacingError(error: Error) {
   const message = error.message || "";
   if (message.includes("Backend request failed: 403")) {
-    return "当前账号没有执行这个操作的权限，请切换教师或管理员账号。";
+    return "当前会话没有执行这个操作的权限，请重新登录后重试。";
   }
   if (message.includes("Backend request failed: 404")) {
     return "后端没有找到对应记录，请刷新页面后重试。";
@@ -2127,6 +2512,15 @@ function toUserFacingError(error: Error) {
 
 function downloadText(fileName: string, content: string, mimeType: string) {
   downloadBlob(fileName, new Blob([content], { type: mimeType }));
+}
+
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : "");
+    reader.onerror = () => reject(reader.error ?? new Error("文件预览失败"));
+    reader.readAsDataURL(file);
+  });
 }
 
 function downloadBytes(fileName: string, bytes: Uint8Array, mimeType: string) {
@@ -2151,14 +2545,115 @@ export function TemplateShelf({
   selectedCode,
   loading,
   onSelect,
+  loadPreviewImage,
+  loadReferencePdf,
 }: {
   templates: TeachingHandoutTemplateResponse[];
   selectedCode: string;
   loading: boolean;
   onSelect: (templateCode: string) => void;
+  loadPreviewImage?: (templateCode: string) => Promise<Uint8Array>;
+  loadReferencePdf?: (templateCode: string) => Promise<Uint8Array>;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [filter, setFilter] = useState<TemplateShelfFilter>("all");
+  const selectedTemplate = templates.find((template) => template.templateCode === selectedCode) ?? templates[0];
+  const shouldLoadReferenceMedia = canLoadTemplateReferenceMedia(selectedTemplate);
+  const [previewImageState, setPreviewImageState] = useState<"idle" | "loading" | "ready" | "failed">(
+    () => (shouldLoadReferenceMedia && loadPreviewImage ? "loading" : "idle"),
+  );
+  const [previewImageUrl, setPreviewImageUrl] = useState("");
+  const [referencePdfState, setReferencePdfState] = useState<"idle" | "loading" | "ready" | "failed">(
+    () => (shouldLoadReferenceMedia && loadReferencePdf ? "loading" : "idle"),
+  );
+  const [referencePdfBytes, setReferencePdfBytes] = useState<Uint8Array | null>(null);
+  const [referencePdfUrl, setReferencePdfUrl] = useState("");
+
+  useEffect(() => {
+    if (!selectedTemplate || !shouldLoadReferenceMedia) {
+      setPreviewImageState("idle");
+      setReferencePdfState("idle");
+      setPreviewImageUrl((current) => {
+        if (current) URL.revokeObjectURL(current);
+        return "";
+      });
+      setReferencePdfUrl((current) => {
+        if (current) URL.revokeObjectURL(current);
+        return "";
+      });
+      setReferencePdfBytes(null);
+      return undefined;
+    }
+    let cancelled = false;
+    setPreviewImageUrl((current) => {
+      if (current) URL.revokeObjectURL(current);
+      return "";
+    });
+    setReferencePdfUrl((current) => {
+      if (current) URL.revokeObjectURL(current);
+      return "";
+    });
+    setReferencePdfBytes(null);
+
+    if (loadPreviewImage) {
+      setPreviewImageState("loading");
+      loadPreviewImage(selectedTemplate.templateCode)
+        .then((bytes) => {
+          if (cancelled || !bytes?.byteLength) {
+            return;
+          }
+          const safeBytes = new Uint8Array(bytes.byteLength);
+          safeBytes.set(bytes);
+          const url = URL.createObjectURL(new Blob([safeBytes], { type: "image/png" }));
+          setPreviewImageUrl(url);
+          setPreviewImageState("ready");
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setPreviewImageState("failed");
+          }
+        });
+    } else {
+      setPreviewImageState("idle");
+    }
+
+    if (loadReferencePdf) {
+      setReferencePdfState("loading");
+      loadReferencePdf(selectedTemplate.templateCode)
+        .then((bytes) => {
+          if (cancelled || !bytes?.byteLength) {
+            return;
+          }
+          const safeBytes = new Uint8Array(bytes.byteLength);
+          safeBytes.set(bytes);
+          const url = URL.createObjectURL(new Blob([safeBytes], { type: "application/pdf" }));
+          setReferencePdfBytes(safeBytes);
+          setReferencePdfUrl(url);
+          setReferencePdfState("ready");
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setReferencePdfState("failed");
+          }
+        });
+    } else {
+      setReferencePdfState("idle");
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedTemplate, shouldLoadReferenceMedia, loadPreviewImage, loadReferencePdf]);
+
+  useEffect(() => () => {
+    if (previewImageUrl) {
+      URL.revokeObjectURL(previewImageUrl);
+    }
+    if (referencePdfUrl) {
+      URL.revokeObjectURL(referencePdfUrl);
+    }
+  }, [previewImageUrl, referencePdfUrl]);
+
   if (loading) {
     return (
       <div className="template-shelf">
@@ -2173,7 +2668,7 @@ export function TemplateShelf({
       </div>
     );
   }
-  if (!templates.length) {
+  if (!templates.length || !selectedTemplate) {
     return (
       <div className="template-shelf">
         <div className="template-shelf-head">
@@ -2183,7 +2678,7 @@ export function TemplateShelf({
       </div>
     );
   }
-  const selectedTemplate = templates.find((template) => template.templateCode === selectedCode) ?? templates[0];
+
   const filterOptions = templateShelfFilters(templates);
   const filteredTemplates = templates.filter((template) => templateMatchesShelfFilter(template, filter));
   const shelfTemplates = filteredTemplates.length ? filteredTemplates : templates;
@@ -2220,7 +2715,14 @@ export function TemplateShelf({
           </button>
         ))}
       </div>
-      <TemplateHandoutPreview template={selectedTemplate} />
+      <TemplateHandoutPreview
+        template={selectedTemplate}
+        previewImageState={previewImageState}
+        previewImageUrl={previewImageUrl}
+        referencePdfState={referencePdfState}
+        referencePdfBytes={referencePdfBytes}
+        referencePdfUrl={referencePdfUrl}
+      />
       <div className={expanded ? "template-shelf-grid expanded" : "template-shelf-grid compact"}>
         {visibleTemplates.map((template) => {
           const selected = template.templateCode === selectedCode;
@@ -2306,7 +2808,21 @@ function TemplateMiniPaper({ template }: { template: TeachingHandoutTemplateResp
   );
 }
 
-function TemplateHandoutPreview({ template }: { template: TeachingHandoutTemplateResponse }) {
+function TemplateHandoutPreview({
+  template,
+  previewImageState,
+  previewImageUrl,
+  referencePdfState,
+  referencePdfBytes,
+  referencePdfUrl,
+}: {
+  template: TeachingHandoutTemplateResponse;
+  previewImageState: "idle" | "loading" | "ready" | "failed";
+  previewImageUrl: string;
+  referencePdfState: "idle" | "loading" | "ready" | "failed";
+  referencePdfBytes: Uint8Array | null;
+  referencePdfUrl: string;
+}) {
   const sections = templatePreviewSections(template);
   const displayName = safeTemplateText(template.displayName, "讲义模板");
   const referenceTitle = safeTemplateText(template.referenceTitle, "模板结构");
@@ -2314,6 +2830,7 @@ function TemplateHandoutPreview({ template }: { template: TeachingHandoutTemplat
   const difficultyBands = (template.difficultyBands ?? []).map((item) => safeTemplateText(item, "")).filter(Boolean).slice(0, 4);
   const isStudentOnly = (template.audience ?? "").toLowerCase() === "student";
   const mathPreview = templatePreviewFormula(template);
+  const showReferenceMedia = canLoadTemplateReferenceMedia(template);
   return (
     <section className="template-selected-preview" aria-label="当前模板预览">
       <div className="template-preview-meta">
@@ -2366,6 +2883,77 @@ function TemplateHandoutPreview({ template }: { template: TeachingHandoutTemplat
           <span>{tags.length ? tags.join(" / ") : "知识点、题型、难度可动态拼装"}</span>
         </div>
       </div>
+
+      {showReferenceMedia ? (
+        <section className="template-reference-callout" aria-label="模板参考内容">
+          <strong>模板参考来源</strong>
+          <p>这里显示模板对应的真实首屏和原始 PDF。模板选择只负责风格与结构，真正的讲义内容仍由讲义生成链路按教材、题库和教师资料重组。</p>
+        </section>
+      ) : null}
+
+      {showReferenceMedia ? (
+        <section className="template-reference-hero" aria-label="模板首屏参考图">
+          <div className="template-reference-hero-head">
+            <div>
+              <small>真实模板首屏</small>
+              <strong>{referenceTitle}</strong>
+            </div>
+            <span>{previewImageState === "ready" ? "已加载" : previewImageState === "failed" ? "不可用" : "加载中"}</span>
+          </div>
+          {previewImageState === "ready" && previewImageUrl ? (
+            <img className="template-reference-hero-image" src={previewImageUrl} alt={`${displayName} 模板首屏`} />
+          ) : previewImageState === "failed" ? (
+            <div className="template-reference-hero-placeholder">
+              <FileText size={18} />
+              <strong>未获取到首屏缩略图</strong>
+              <span>这个模板仍可继续使用，讲义结构和提示词不会受影响。</span>
+            </div>
+          ) : (
+            <div className="template-reference-hero-placeholder">
+              <Loader2 className="spin" size={18} />
+              <strong>正在加载缩略图</strong>
+              <span>优先读取真实模板首屏，方便先看版式和题目密度。</span>
+            </div>
+          )}
+        </section>
+      ) : null}
+
+      {showReferenceMedia ? (
+        <section className="template-reference-pdf" aria-label="模板参考讲义 PDF 预览">
+          <div className="template-reference-pdf-head">
+            <div>
+              <small>模板参考讲义 PDF 预览</small>
+              <strong>{referenceTitle}</strong>
+              <span>支持多页翻看，核对真实模板的题号密度、留白和版式节奏。</span>
+            </div>
+            <div className="template-reference-pdf-nav">
+              {referencePdfUrl ? (
+                <a href={referencePdfUrl} target="_blank" rel="noreferrer">打开原始 PDF</a>
+              ) : null}
+            </div>
+          </div>
+          {referencePdfState === "ready" && referencePdfUrl && referencePdfBytes ? (
+            <PdfCanvasPreview
+              pdfBytes={referencePdfBytes}
+              pdfUrl={referencePdfUrl}
+              title="模板原稿 PDF"
+              canvasLabel={`${displayName} 模板 PDF 预览`}
+            />
+          ) : referencePdfState === "failed" ? (
+            <div className="template-reference-pdf-status failed">
+              <FileText size={18} />
+              <strong>未获取到参考 PDF</strong>
+              <span>当前模板仍可选用，但暂时无法展示原始多页 PDF。</span>
+            </div>
+          ) : (
+            <div className="template-reference-pdf-status">
+              <Loader2 className="spin" size={18} />
+              <strong>正在加载参考 PDF</strong>
+              <span>只通过受控模板接口读取，不直接暴露本机路径。</span>
+            </div>
+          )}
+        </section>
+      ) : null}
     </section>
   );
 }
@@ -2415,6 +3003,15 @@ function templatePreviewFormula(template: TeachingHandoutTemplateResponse) {
   if (/反比例|函数/.test(text)) return "y=\\frac{k}{x}";
   if (/导数/.test(text)) return "f'(x)=\\lim_{\\Delta x\\to0}\\frac{f(x+\\Delta x)-f(x)}{\\Delta x}";
   return "a_n=a_1+(n-1)d";
+}
+
+function canLoadTemplateReferenceMedia(template: TeachingHandoutTemplateResponse | undefined) {
+  if (!template) {
+    return false;
+  }
+  return template.sourceType === "local_reference"
+    || Boolean(template.referenceTitle?.trim())
+    || Boolean(template.referencePath?.trim());
 }
 
 function safeTemplateText(value: string | null | undefined, fallback: string) {
