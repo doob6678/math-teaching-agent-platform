@@ -143,7 +143,8 @@ describe("TeachingTaskPanel", () => {
     expect(html).toContain("下载 PDF");
     expect(html).toContain("结构审查");
     expect(html).toContain("教师版协作卡片流");
-    expect(html).toContain("横版讲解卡");
+    expect(html).toContain("16:10 讲解卡");
+    expect(html).toContain("16:10 讲解版");
     expect(html).toContain("课堂投屏");
     expect(html).toContain("过程对话");
     expect(html).toContain("学习目标识别");

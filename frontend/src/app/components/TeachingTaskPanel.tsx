@@ -128,7 +128,7 @@ export function TeachingTaskPanel({
                 <select className="form-select" value={version} onChange={(event) => onVersionChange(event.target.value as HandoutVersion)}>
                   <option value="teacher">教师版</option>
                   <option value="student">学生版</option>
-                  <option value="lecture">横版讲解</option>
+                  <option value="lecture">16:10 讲解版</option>
                 </select>
               </label>
             </div>
@@ -336,7 +336,7 @@ export function LectureHandoutPreview({ task, version }: { task: TeachingTaskRes
         </PreviewCard>
 
         {lectureCardItems.length ? (
-          <PreviewCard index="03" title="横版讲解卡">
+          <PreviewCard index="03" title="16:10 讲解卡">
             <div className="handout-live-outline-list">
               {lectureCardItems.slice(0, 3).map((item, index) => (
                 <div className="handout-live-outline-item" key={`lecture-card-${index}`}>
@@ -869,12 +869,12 @@ function handoutDraftForVersion(task: TeachingTaskResponse, version: HandoutVers
 }
 
 function handoutVersionLabel(version: HandoutVersion) {
-  if (version === "lecture") return "横版讲解稿";
+  if (version === "lecture") return "16:10 讲解版";
   return version === "teacher" ? "教师版讲义" : "学生版讲义";
 }
 
 function handoutVersionShortLabel(version: HandoutVersion) {
-  if (version === "lecture") return "横版讲解";
+  if (version === "lecture") return "16:10 讲解版";
   return version === "teacher" ? "教师版" : "学生版";
 }
 
