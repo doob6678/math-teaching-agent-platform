@@ -11,6 +11,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -49,6 +50,7 @@ public class TeacherResourceBlockSearchService {
     private static final int MAX_LIMIT = 20;
     private static final int SNIPPET_RADIUS = 80;
     private static final int EVIDENCE_WINDOW_RADIUS = 1;
+    private static final int MAX_SEARCH_TERMS = 32;
     private static final double METADATA_EXACT_MATCH_BOOST = 4.0d;
     private static final double METADATA_TERM_MATCH_BOOST = 0.75d;
     private static final String STRATEGY_LEGACY_BLOCK_HYBRID = "legacy_block_hybrid";
@@ -438,12 +440,27 @@ public class TeacherResourceBlockSearchService {
                 bestStructure = Math.max(bestStructure, structure);
                 bestVector = Math.max(bestVector, vector);
             }
+            double documentMetadata = documentMetadataScore(document, normalizedQuery, terms);
+            double sourceCue = documentSourceCueScore(document, blocks, normalizedQuery);
+            double vectorSupport = vectorSupportMultiplier(
+                    documentMetadata,
+                    sourceCue,
+                    bestBlockLexical,
+                    bestStructure,
+                    lexicalHitCount);
             double documentScore = documentMetadataScore(document, normalizedQuery, terms)
-                    + documentSourceCueScore(document, blocks, normalizedQuery)
+                    + sourceCue
                     + bestBlockLexical * 1.35d
                     + bestStructure
                     + Math.min(lexicalHitCount, 2) * 0.8d
-                    + bestVector * 8.0d
+                    /*
+                     * Stage one still needs vector recall so the right document can enter the candidate pool, but the
+                     * live misses showed that a semantically broad "generic method" block can otherwise outrank the
+                     * correct textbook or exam document when lexical/structural evidence is weak. Only let vector
+                     * similarity contribute at full strength after the same document also shows some textual or
+                     * structural support for the current query.
+                     */
+                    + bestVector * 6.0d * vectorSupport
                     + Math.min(vectorHitCount, 2) * 0.75d;
             candidates.add(new DocumentCandidate(document, blocks, documentScore));
         }
@@ -469,6 +486,7 @@ public class TeacherResourceBlockSearchService {
             TeacherResourceGraphAlignmentService.QueryGraphContext queryGraph) {
         List<BlockCandidate> blockCandidates = new ArrayList<>();
         for (DocumentCandidate candidate : rankedDocuments) {
+            List<BlockContext> documentBlocks = blocksByDocumentId.getOrDefault(candidate.document().documentId(), List.of());
             for (BlockContext block : candidate.blocks()) {
                 double lexical = score(block.searchableText(), normalizedQuery, terms);
                 double metadata = metadataScore(candidate.document(), block.block(), normalizedQuery, terms);
@@ -478,14 +496,28 @@ public class TeacherResourceBlockSearchService {
                 double graph = graphTagScore(block.graphTags(), block.graphNodeIds(), queryGraph, normalizedQuery, terms);
                 double role = roleCueScore(block.blockRole(), block.sourcePath(), normalizedQuery)
                         + fieldScore(block.blockRole(), normalizedQuery, terms);
+                double neighbor = neighborSupportScore(block, documentBlocks, normalizedQuery, terms);
                 double vector = vectorScoreByKey.getOrDefault(blockKey(candidate.document().documentId(), block.block().blockId()), 0.0d);
+                double vectorSupport = vectorSupportMultiplier(
+                        metadata,
+                        structure,
+                        lexical,
+                        role + graph + neighbor,
+                        lexical > 0 ? 1 : 0);
                 double score = candidate.score() * 0.18d
                         + lexical * 1.7d
                         + metadata
                         + structure
                         + graph
                         + role
-                        + vector * 8.0d
+                        + neighbor
+                        /*
+                         * Stage two is intentionally document-internal. Vector similarity is still useful inside one
+                         * candidate document, but a question block should not keep beating its adjacent analysis block
+                         * purely because the embedding is broad. Neighbor-aware role evidence therefore shares the same
+                         * score budget and gates part of the vector contribution.
+                         */
+                        + vector * 6.0d * vectorSupport
                         + exactQueryBonus(block.searchableText(), normalizedQuery);
                 blockCandidates.add(new BlockCandidate(candidate.document(), block, score));
             }
@@ -876,6 +908,21 @@ public class TeacherResourceBlockSearchService {
         return score;
     }
 
+    private static double vectorSupportMultiplier(
+            double metadataScore,
+            double structuralScore,
+            double lexicalScore,
+            double companionScore,
+            int lexicalHitCount) {
+        double support = 0.2d;
+        support += Math.min(0.18d, metadataScore / 14.0d);
+        support += Math.min(0.18d, structuralScore / 12.0d);
+        support += Math.min(0.24d, lexicalScore / 16.0d);
+        support += Math.min(0.12d, companionScore / 18.0d);
+        support += Math.min(0.18d, lexicalHitCount * 0.09d);
+        return Math.min(1.0d, support);
+    }
+
     private static double fieldScore(String fieldValue, String normalizedQuery, String[] terms) {
         String normalizedField = normalizeText(textOrDefault(fieldValue, ""));
         if (normalizedField.isBlank()) {
@@ -945,12 +992,12 @@ public class TeacherResourceBlockSearchService {
     private static double roleCueScore(String blockRole, String sourcePath, String normalizedQuery) {
         String role = normalizeText(textOrDefault(blockRole, ""));
         String path = normalizeText(textOrDefault(sourcePath, ""));
-        boolean wantsAnalysis = containsAny(normalizedQuery, "\u89e3\u6790", "\u7b54\u6848", "\u70b9\u8bc4", "analysis", "answer", "solution");
+        boolean wantsAnalysis = queryWantsAnalysis(normalizedQuery);
         boolean wantsMethod = containsAny(normalizedQuery, "\u65b9\u6cd5", "\u8bb2\u6cd5", "\u601d\u8def", "method", "approach");
         boolean wantsBoardwork = containsAny(normalizedQuery, "\u677f\u4e66", "\u677f\u6f14", "boardwork", "blackboard");
         boolean wantsTemplate = containsAny(normalizedQuery, "\u6a21\u677f", "\u8bb2\u4e49\u6a21\u677f", "template");
         boolean wantsTip = containsAny(normalizedQuery, "\u63d0\u793a", "\u63d0\u9192", "\u6ce8\u610f", "\u6613\u9519", "tip", "pitfall");
-        boolean wantsQuestion = containsAny(normalizedQuery, "\u771f\u9898", "\u6a21\u62df", "\u9898", "\u4f8b\u9898", "question", "exam");
+        boolean wantsQuestion = queryWantsQuestion(normalizedQuery, wantsAnalysis);
         boolean wantsLesson = containsAny(normalizedQuery, "\u4e13\u9898", "\u8bb2\u4e49", "\u6559\u6750", "\u8bfe\u5802", "lesson", "notes", "textbook");
         boolean wantsExplanation = containsAny(
                 normalizedQuery,
@@ -1009,6 +1056,101 @@ public class TeacherResourceBlockSearchService {
                 score += 1.0d;
             } else if ("question".equals(role)) {
                 score -= 2.5d;
+            }
+        }
+        return score;
+    }
+
+    private static boolean queryWantsAnalysis(String normalizedQuery) {
+        return containsAny(
+                normalizedQuery,
+                "\u89e3\u6790",
+                "\u7b54\u6848",
+                "\u70b9\u8bc4",
+                "\u8bb2\u8bc4",
+                "analysis",
+                "answer",
+                "solution");
+    }
+
+    private static boolean queryWantsQuestion(String normalizedQuery, boolean wantsAnalysis) {
+        if (containsAny(
+                normalizedQuery,
+                "\u9898\u9762",
+                "\u9898\u76ee",
+                "\u539f\u9898",
+                "\u54ea\u9053\u9898",
+                "question",
+                "prompt")) {
+            return true;
+        }
+        /*
+         * "真题/模拟" often selects the library, not the block role. When the same query asks for an answer,
+         * explanation, or commentary, stage-two rerank should prefer the analysis sibling over the question sibling.
+         */
+        return !wantsAnalysis && containsAny(
+                normalizedQuery,
+                "\u771f\u9898",
+                "\u6a21\u62df",
+                "\u4f8b\u9898",
+                "exam");
+    }
+
+    /**
+     * Reads one-step neighbors as a scoring signal, not just as returned evidence. This specifically addresses the
+     * recurring real-world failure where the correct document is found but a sibling question block beats the adjacent
+     * answer/analysis block. Neighbor text is only trusted inside the same parsed document, so this does not expand the
+     * candidate corpus or leak cross-document noise back into stage two.
+     */
+    private static double neighborSupportScore(
+            BlockContext target,
+            List<BlockContext> documentBlocks,
+            String normalizedQuery,
+            String[] terms) {
+        if (documentBlocks == null || documentBlocks.size() <= 1) {
+            return 0;
+        }
+        int targetIndex = -1;
+        for (int index = 0; index < documentBlocks.size(); index += 1) {
+            if (documentBlocks.get(index).block().blockId().equals(target.block().blockId())) {
+                targetIndex = index;
+                break;
+            }
+        }
+        if (targetIndex < 0) {
+            return 0;
+        }
+        boolean wantsAnalysis = queryWantsAnalysis(normalizedQuery);
+        boolean wantsQuestion = queryWantsQuestion(normalizedQuery, wantsAnalysis);
+        double score = 0;
+        int start = Math.max(0, targetIndex - EVIDENCE_WINDOW_RADIUS);
+        int end = Math.min(documentBlocks.size() - 1, targetIndex + EVIDENCE_WINDOW_RADIUS);
+        for (int index = start; index <= end; index += 1) {
+            if (index == targetIndex) {
+                continue;
+            }
+            BlockContext neighbor = documentBlocks.get(index);
+            double lexical = score(neighbor.searchableText(), normalizedQuery, terms)
+                    + fieldScore(neighbor.block().section(), normalizedQuery, terms)
+                    + fieldScore(neighbor.sourcePath(), normalizedQuery, terms);
+            if (lexical <= 0) {
+                continue;
+            }
+            String targetRole = normalizeText(target.blockRole());
+            String neighborRole = normalizeText(neighbor.blockRole());
+            if ("analysis".equals(targetRole) && "question".equals(neighborRole)) {
+                score += Math.min(2.8d, lexical * 0.35d);
+                if (wantsAnalysis) {
+                    score += 1.4d;
+                }
+            } else if ("question".equals(targetRole) && "analysis".equals(neighborRole) && wantsAnalysis) {
+                score -= Math.min(3.2d, lexical * 0.4d + 1.2d);
+            } else if ("method".equals(targetRole) && "boardwork".equals(neighborRole)) {
+                score += Math.min(1.5d, lexical * 0.2d);
+            } else if ("tip".equals(targetRole) && ("method".equals(neighborRole) || "boardwork".equals(neighborRole))) {
+                score += Math.min(1.0d, lexical * 0.15d);
+            } else if ("question".equals(targetRole) && wantsQuestion) {
+                score += Math.min(0.8d, lexical * 0.12d);
             }
         }
         return score;
@@ -1151,9 +1293,94 @@ public class TeacherResourceBlockSearchService {
      * Splits a normalized query into non-empty terms.
      */
     private static String[] searchTerms(String normalizedQuery) {
-        return Arrays.stream(normalizedQuery.split("\\s+"))
-                .filter(term -> !term.isBlank())
+        if (normalizedQuery.isBlank()) {
+            return new String[0];
+        }
+        LinkedHashSet<String> terms = new LinkedHashSet<>();
+        for (String fragment : normalizedQuery.split("\\s+")) {
+            appendSearchTerms(terms, fragment);
+            if (terms.size() >= MAX_SEARCH_TERMS) {
+                break;
+            }
+        }
+        return terms.stream()
+                .limit(MAX_SEARCH_TERMS)
                 .toArray(String[]::new);
+    }
+
+    /**
+     * Extracts a compact set of lexical terms from Chinese and Latin fragments. Runtime eval queries are often written
+     * as one continuous Chinese sentence with no spaces, so whitespace tokenization alone collapses the entire query
+     * into one unusable term and erases the lexical signals that should help stage one find the right document.
+     */
+    private static void appendSearchTerms(LinkedHashSet<String> terms, String fragment) {
+        String normalizedFragment = normalizeText(textOrDefault(fragment, ""));
+        if (normalizedFragment.isBlank()) {
+            return;
+        }
+        addSearchTerm(terms, normalizedFragment);
+        StringBuilder latin = new StringBuilder();
+        StringBuilder cjk = new StringBuilder();
+        for (int index = 0; index < normalizedFragment.length(); index += 1) {
+            char current = normalizedFragment.charAt(index);
+            if (isAsciiWordChar(current)) {
+                if (cjk.length() > 0) {
+                    appendCjkTerms(terms, cjk.toString());
+                    cjk.setLength(0);
+                }
+                latin.append(current);
+            } else if (isCjkChar(current)) {
+                if (latin.length() > 0) {
+                    addSearchTerm(terms, latin.toString());
+                    latin.setLength(0);
+                }
+                cjk.append(current);
+            } else {
+                if (latin.length() > 0) {
+                    addSearchTerm(terms, latin.toString());
+                    latin.setLength(0);
+                }
+                if (cjk.length() > 0) {
+                    appendCjkTerms(terms, cjk.toString());
+                    cjk.setLength(0);
+                }
+            }
+            if (terms.size() >= MAX_SEARCH_TERMS) {
+                return;
+            }
+        }
+        if (latin.length() > 0) {
+            addSearchTerm(terms, latin.toString());
+        }
+        if (cjk.length() > 0) {
+            appendCjkTerms(terms, cjk.toString());
+        }
+    }
+
+    private static void appendCjkTerms(LinkedHashSet<String> terms, String fragment) {
+        if (fragment.isBlank()) {
+            return;
+        }
+        if (fragment.length() <= 6) {
+            addSearchTerm(terms, fragment);
+        }
+        if (fragment.length() == 1) {
+            return;
+        }
+        for (int index = 0; index < fragment.length() - 1 && terms.size() < MAX_SEARCH_TERMS; index += 1) {
+            addSearchTerm(terms, fragment.substring(index, index + 2));
+        }
+    }
+
+    private static void addSearchTerm(LinkedHashSet<String> terms, String candidate) {
+        String normalizedCandidate = normalizeText(textOrDefault(candidate, ""));
+        if (normalizedCandidate.isBlank()) {
+            return;
+        }
+        if (normalizedCandidate.length() == 1 && isAsciiWordChar(normalizedCandidate.charAt(0)) == false) {
+            return;
+        }
+        terms.add(normalizedCandidate);
     }
 
     /**
@@ -1188,6 +1415,21 @@ public class TeacherResourceBlockSearchService {
             }
         }
         return false;
+    }
+
+    private static boolean isAsciiWordChar(char value) {
+        return (value >= 'a' && value <= 'z')
+                || (value >= '0' && value <= '9')
+                || value == '_'
+                || value == '-';
+    }
+
+    private static boolean isCjkChar(char value) {
+        Character.UnicodeBlock block = Character.UnicodeBlock.of(value);
+        return Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS.equals(block)
+                || Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_A.equals(block)
+                || Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_B.equals(block)
+                || Character.UnicodeBlock.CJK_COMPATIBILITY_IDEOGRAPHS.equals(block);
     }
 
     private static List<String> parseStringArray(String json) {

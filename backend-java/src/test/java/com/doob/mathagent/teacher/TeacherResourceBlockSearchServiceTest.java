@@ -214,6 +214,125 @@ class TeacherResourceBlockSearchServiceTest {
     }
 
     @Test
+    void chineseQueryWithoutWhitespaceStillProducesUsefulLexicalTermsForDocumentRecall() {
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        resourceStore.save(new TeacherResourceDocumentResponse(
+                "doc-textbook",
+                "school-a",
+                "admin-1",
+                "local_path",
+                "runtime-public-textbook-derivative",
+                null,
+                "C:/workspace/runtime-authored/01-public-textbook-derivative",
+                "PUBLIC_TEXTBOOK",
+                "synced",
+                "parsed",
+                "ready",
+                "ready",
+                List.of()));
+        resourceStore.save(new TeacherResourceDocumentResponse(
+                "doc-feishu",
+                "school-a",
+                "teacher-1",
+                "local_path",
+                "runtime-feishu-method-probability",
+                null,
+                "C:/workspace/runtime-authored/03-feishu-method-probability",
+                "TEACHER_PRIVATE",
+                "synced",
+                "parsed",
+                "ready",
+                "ready",
+                List.of()));
+        blockStore.replaceActiveBlocks("school-a", "doc-textbook", List.of(detailedBlock(
+                "b-textbook",
+                "doc-textbook",
+                1,
+                "教材-导数参数讨论.md",
+                "reference",
+                "导数参数讨论",
+                "参数分类入口",
+                "参数出现时先判断讨论区间会不会穿过端点，再决定符号表怎么列，这样学生不会把分段讨论写散。")));
+        blockStore.replaceActiveBlocks("school-a", "doc-feishu", List.of(detailedBlock(
+                "b-feishu",
+                "doc-feishu",
+                1,
+                "讲法模板.md",
+                "method",
+                "二项分布与超几何分布讲法模板",
+                "先分模型",
+                "先追问抽取过程是否独立且可重复，再决定是二项分布还是超几何分布，不要先背公式名字。")));
+        TeacherResourceBlockSearchService service = TeacherResourceBlockSearchServiceFixture.service(resourceStore, blockStore);
+
+        TeacherResourceBlockSearchResponse response = service.search(
+                "school-a",
+                "admin",
+                "admin-1",
+                "参数题里讨论区间可能穿过端点符号表应该怎么引导学生列",
+                5);
+
+        assertThat(response.hits()).isNotEmpty();
+        assertThat(response.hits().getFirst().documentId()).isEqualTo("doc-textbook");
+        assertThat(response.hits().getFirst().blockId()).isEqualTo("b-textbook");
+        assertThat(response.hits().getFirst().sourceType()).isEqualTo("public_textbook");
+    }
+
+    @Test
+    void analysisCueWinsOverGenericExamCueInsideSameDocument() {
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        resourceStore.save(new TeacherResourceDocumentResponse(
+                "doc-gaokao",
+                "school-a",
+                "teacher-1",
+                "local_path",
+                "runtime-gaokao-conic",
+                null,
+                "C:/workspace/runtime-authored/04-gaokao-conic",
+                "MATH_VIP",
+                "synced",
+                "parsed",
+                "ready",
+                "ready",
+                List.of()));
+        blockStore.replaceActiveBlocks("school-a", "doc-gaokao", List.of(
+                detailedBlock(
+                        "b-question",
+                        "doc-gaokao",
+                        1,
+                        "2024高考真题.md",
+                        "question",
+                        "2024 高考真题",
+                        "椭圆切线题",
+                        "已知椭圆上一点的切线与坐标轴围成三角形，求面积最小值。"),
+                detailedBlock(
+                        "b-analysis",
+                        "doc-gaokao",
+                        2,
+                        "解析.md",
+                        "analysis",
+                        "真题解析",
+                        "变量怎么设",
+                        "先把切点参数化，让变量有几何意义，再去写面积式，别一上来盯着斜率硬算。")));
+        TeacherResourceBlockSearchService service = TeacherResourceBlockSearchServiceFixture.service(resourceStore, blockStore);
+
+        TeacherResourceBlockSearchResponse response = service.search(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                "椭圆切线面积最值这类真题，解析里变量应该先怎么设才顺",
+                5,
+                "/api/teacher/resources/search",
+                TeacherResourceSearchFilter.of(null, null, List.of("gaokao"), null),
+                "two_stage_doc_block");
+
+        assertThat(response.hits()).isNotEmpty();
+        assertThat(response.hits().getFirst().blockId()).isEqualTo("b-analysis");
+        assertThat(response.hits().getFirst().blockRole()).isEqualTo("analysis");
+    }
+
+    @Test
     void graphNormalizedQueryCanPromoteCorrectDocumentEvenWhenSurfaceWordsDrift() {
         InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
         InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();

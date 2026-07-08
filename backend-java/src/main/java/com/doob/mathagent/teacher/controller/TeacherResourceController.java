@@ -20,6 +20,7 @@ import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncCheckpointResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncJobResponse;
 import jakarta.servlet.http.HttpServletRequest;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -139,6 +140,7 @@ public class TeacherResourceController {
             @RequestParam(value = "permissionScope", required = false) List<String> permissionScopes,
             @RequestParam(value = "documentId", required = false) List<String> documentIds,
             @RequestParam(value = "sourceType", required = false) List<String> sourceTypes,
+            @RequestParam(value = "library", required = false) List<String> libraries,
             @RequestParam(value = "tag", required = false) List<String> tags,
             @RequestParam(value = "strategy", required = false) String strategy,
             HttpServletRequest httpRequest) {
@@ -151,7 +153,11 @@ public class TeacherResourceController {
                     query,
                     limit,
                     "/api/teacher/resources/search",
-                    TeacherResourceSearchFilter.of(permissionScopes, documentIds, sourceTypes, tags),
+                    TeacherResourceSearchFilter.of(
+                            permissionScopes,
+                            documentIds,
+                            mergeLibrarySelectors(sourceTypes, libraries),
+                            tags),
                     strategy);
         } catch (IllegalArgumentException exception) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, exception.getMessage(), exception);
@@ -165,7 +171,31 @@ public class TeacherResourceController {
             String query,
             int limit,
             HttpServletRequest httpRequest) {
-        return searchBlocks(query, limit, null, null, null, null, null, httpRequest);
+        return searchBlocks(query, limit, null, null, null, null, null, null, httpRequest);
+    }
+
+    /**
+     * Accepts both legacy sourceType selectors and the clearer library alias. Both ultimately route into the same
+     * logical-library resolver so existing clients keep working while AI callers can express intent with a less
+     * implementation-specific parameter name.
+     */
+    private static List<String> mergeLibrarySelectors(List<String> sourceTypes, List<String> libraries) {
+        LinkedHashSet<String> selectors = new LinkedHashSet<>();
+        if (sourceTypes != null) {
+            for (String sourceType : sourceTypes) {
+                if (sourceType != null && !sourceType.isBlank()) {
+                    selectors.add(sourceType.strip());
+                }
+            }
+        }
+        if (libraries != null) {
+            for (String library : libraries) {
+                if (library != null && !library.isBlank()) {
+                    selectors.add(library.strip());
+                }
+            }
+        }
+        return List.copyOf(selectors);
     }
 
     /**

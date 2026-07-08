@@ -324,6 +324,9 @@ public class McpToolExecutionService {
         if (query.isBlank()) {
             throw new IllegalArgumentException("query is required for search_teacher_resource_evidence");
         }
+        List<String> librarySelectors = mergeDistinct(
+                flexibleStringListArgument(arguments, "libraries", "library"),
+                flexibleStringListArgument(arguments, "sourceTypes", "sourceType"));
         TeacherResourceBlockSearchResponse response = teacherResourceBlockSearchService.search(
                 client.tenantId(),
                 normalizedProfile(client.profile()),
@@ -334,7 +337,7 @@ public class McpToolExecutionService {
                 TeacherResourceSearchFilter.of(
                         flexibleStringListArgument(arguments, "permissionScopes", "permissionScope"),
                         flexibleStringListArgument(arguments, "documentIds", "documentId"),
-                        flexibleStringListArgument(arguments, "sourceTypes", "sourceType"),
+                        librarySelectors,
                         flexibleStringListArgument(arguments, "tags", "tag")));
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("queryId", response.queryId());

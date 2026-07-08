@@ -152,6 +152,71 @@ class McpToolExecutionServiceTest {
     }
 
     @Test
+    void teacherMcpSecretCanConstrainTeacherResourceEvidenceByLibraryAlias() throws Exception {
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        resourceStore.save(new TeacherResourceDocumentResponse(
+                "doc-qq",
+                "default",
+                "workbuddy-teacher-subject",
+                "local_path",
+                "Runtime QQ bundle package",
+                null,
+                "C:/workspace/runtime-authored/02-qq-bundle-vector",
+                "MATH_VIP",
+                "synced",
+                "parsed",
+                "ready",
+                "ready",
+                List.of()));
+        resourceStore.save(new TeacherResourceDocumentResponse(
+                "doc-feishu",
+                "default",
+                "workbuddy-teacher-subject",
+                "local_path",
+                "Runtime Feishu method package",
+                null,
+                "C:/workspace/runtime-authored/03-feishu-method-probability",
+                "TEACHER_PRIVATE",
+                "synced",
+                "parsed",
+                "ready",
+                "ready",
+                List.of()));
+        blockStore.replaceActiveBlocks("default", "doc-qq", List.of(block(
+                "b-qq",
+                "doc-qq",
+                "QQ bundle analysis explains the vector angle route.")));
+        blockStore.replaceActiveBlocks("default", "doc-feishu", List.of(block(
+                "b-feishu",
+                "doc-feishu",
+                "Feishu method reminds students to separate model choices.")));
+        McpToolExecutionService service = McpToolExecutionServiceFixture.service(
+                registryWithTeacherResourceTool(),
+                com.doob.mathagent.retrieval.TextbookRetrievalServiceFixture.service(
+                        new TextbookCatalogReader(),
+                        new TextbookChunkReader(),
+                        new LocalTextbookBm25SearchEngine(),
+                        new NoopRetrievalAuditSink()),
+                new TextbookResourceProperties(textbookCorpus()),
+                com.doob.mathagent.teacher.TeacherResourceBlockSearchServiceFixture.service(resourceStore, blockStore));
+
+        var response = service.callTool(
+                "Bearer teacher_secret_1234567890abcdef",
+                "search_teacher_resource_evidence",
+                new McpToolCallRequest(Map.of(
+                        "query", "vector angle route",
+                        "limit", 5,
+                        "library", "qq_bundle")));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> result = (Map<String, Object>) response.result();
+        assertThat(result.get("hitCount")).isEqualTo(1);
+        assertThat(result.toString()).contains("b-qq");
+        assertThat(result.toString()).doesNotContain("b-feishu");
+    }
+
+    @Test
     void studentMcpSecretCannotCallTeacherResourceEvidenceEvenIfMisconfigured() throws Exception {
         McpClientRegistryProperties properties = new McpClientRegistryProperties();
         properties.setClients(List.of(new McpClientRegistryProperties.Client(
