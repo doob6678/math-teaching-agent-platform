@@ -52,7 +52,7 @@ public class ProtocolDiscoveryService {
                 new McpToolDescriptor(
                         "search_multi_source_evidence",
                         "Search multi-source evidence",
-                        "Preferred teacher search entrypoint that queries public textbooks and visible teacher resources together.",
+                        "Preferred teacher search entrypoint that queries public textbooks and visible teacher resources together. When the request clearly targets one corpus, pass library or libraries first so the backend can avoid cross-library noise before stage-two rerank.",
                         true,
                         true,
                         TEACHER_ROLES,
@@ -64,7 +64,8 @@ public class ProtocolDiscoveryService {
                                 fields(
                                         field("query", "string", "Search text submitted by the agent."),
                                         field("limit", "integer", "Maximum merged evidence snippets to return."),
-                                        fieldArray("libraries", "Optional library selectors such as textbook, teacher_resource, feishu, qq_bundle, gaokao, or mock_exam."),
+                                        field("library", "string", "Optional single logical library selector. Prefer this when the request clearly targets one corpus such as textbook, feishu, qq_bundle, gaokao, or mock_exam."),
+                                        fieldArray("libraries", "Optional logical library selectors such as textbook, teacher_resource, feishu, qq_bundle, gaokao, or mock_exam."),
                                         fieldArray("permissionScopes", "Optional teacher-resource permission scopes such as TEACHER_PRIVATE or MATH_VIP."),
                                         fieldArray("documentIds", "Optional teacher-resource document ids to search."),
                                         fieldArray("sourceTypes", "Optional teacher-resource source types such as feishu, qq_bundle, gaokao, or mock_exam."),
@@ -89,7 +90,7 @@ public class ProtocolDiscoveryService {
                 new McpToolDescriptor(
                         "search_teacher_resource_evidence",
                         "Search teacher resource evidence",
-                        "Search parsed teacher-resource blocks visible to the registered teacher or admin key.",
+                        "Search parsed teacher-resource blocks visible to the registered teacher or admin key. Prefer library or libraries when the question is obviously about one corpus such as a QQ bundle, Feishu method doc, gaokao paper, or mock exam.",
                         true,
                         true,
                         TEACHER_ROLES,
@@ -101,6 +102,8 @@ public class ProtocolDiscoveryService {
                                 fields(
                                         field("query", "string", "Search text submitted by the agent."),
                                         field("limit", "integer", "Maximum evidence snippets to return."),
+                                        field("library", "string", "Optional single logical library selector. Prefer this over implementation-specific sourceType names when targeting one corpus."),
+                                        fieldArray("libraries", "Optional logical library selectors such as feishu, qq_bundle, gaokao, mock_exam, or public_textbook_derivative."),
                                         fieldArray("permissionScopes", "Optional teacher-resource permission scopes such as TEACHER_PRIVATE or MATH_VIP."),
                                         fieldArray("documentIds", "Optional teacher-resource document ids to search."),
                                         fieldArray("sourceTypes", "Optional teacher-resource source types such as feishu, qq_bundle, gaokao, or mock_exam."),

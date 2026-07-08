@@ -70,6 +70,7 @@ class ProtocolDiscoveryServiceTest {
                     assertThat(tool.readOnly()).isTrue();
                     assertThat(tool.requiredRoles()).containsExactly("teacher", "admin");
                     assertThat(tool.inputSchema().required()).contains("query");
+                    assertThat(tool.inputSchema().properties()).containsKeys("library", "libraries");
                 });
         assertThat(tools).filteredOn(tool -> tool.name().equals("search_teacher_resource_evidence"))
                 .singleElement()
@@ -77,6 +78,7 @@ class ProtocolDiscoveryServiceTest {
                     assertThat(tool.readOnly()).isTrue();
                     assertThat(tool.requiredRoles()).containsExactly("teacher", "admin");
                     assertThat(tool.requiredScope()).isEqualTo("teacher-resource:read");
+                    assertThat(tool.inputSchema().properties()).containsKeys("library", "libraries", "sourceTypes");
                 });
         assertThat(tools).filteredOn(tool -> tool.name().equals("get_teaching_ai_trace"))
                 .singleElement()
