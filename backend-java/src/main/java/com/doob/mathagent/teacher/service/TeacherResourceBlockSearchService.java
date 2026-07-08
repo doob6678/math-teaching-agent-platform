@@ -516,7 +516,7 @@ public class TeacherResourceBlockSearchService {
         return new TeacherResourceBlockSearchResponse.Hit(
                 candidate.document().documentId(),
                 candidate.document().title(),
-                candidate.document().sourceType(),
+                TeacherResourceLibraryResolver.effectiveLibrary(candidate.document()),
                 candidate.document().permissionScope(),
                 context.block().blockId(),
                 context.block().blockType(),
@@ -604,7 +604,7 @@ public class TeacherResourceBlockSearchService {
         return new TeacherResourceBlockSearchResponse.Hit(
                 document.documentId(),
                 document.title(),
-                document.sourceType(),
+                TeacherResourceLibraryResolver.effectiveLibrary(document),
                 document.permissionScope(),
                 block.blockId(),
                 block.blockType(),
@@ -749,7 +749,7 @@ public class TeacherResourceBlockSearchService {
         return new TeacherResourceBlockSearchResponse.Hit(
                 document.documentId(),
                 document.title(),
-                document.sourceType(),
+                TeacherResourceLibraryResolver.effectiveLibrary(document),
                 document.permissionScope(),
                 block.blockId(),
                 block.blockType(),
@@ -806,7 +806,7 @@ public class TeacherResourceBlockSearchService {
         String metadata = normalizeText(String.join(
                 " ",
                 textOrDefault(document.title(), ""),
-                textOrDefault(document.sourceType(), ""),
+                TeacherResourceLibraryResolver.effectiveLibrary(document),
                 textOrDefault(block.chapter(), ""),
                 textOrDefault(block.section(), "")));
         if (metadata.isBlank()) {
@@ -828,7 +828,7 @@ public class TeacherResourceBlockSearchService {
         String metadata = normalizeText(String.join(
                 " ",
                 textOrDefault(document.title(), ""),
-                textOrDefault(document.sourceType(), ""),
+                TeacherResourceLibraryResolver.effectiveLibrary(document),
                 textOrDefault(document.permissionScope(), "")));
         return score(metadata, normalizedQuery, terms);
     }
@@ -839,7 +839,7 @@ public class TeacherResourceBlockSearchService {
             String normalizedQuery) {
         StringBuilder haystack = new StringBuilder();
         haystack.append(textOrDefault(document.title(), "")).append(' ')
-                .append(textOrDefault(document.sourceType(), ""));
+                .append(TeacherResourceLibraryResolver.effectiveLibrary(document));
         for (BlockContext block : blocks.stream().limit(4).toList()) {
             haystack.append(' ')
                     .append(textOrDefault(block.sourcePath(), ""))
@@ -1090,6 +1090,7 @@ public class TeacherResourceBlockSearchService {
                 .filter(document -> filter.documentIds().isEmpty() || filter.documentIds().contains(document.documentId()))
                 .filter(document -> filter.permissionScopes().isEmpty()
                         || filter.permissionScopes().contains(textOrDefault(document.permissionScope(), "").toUpperCase(Locale.ROOT)))
+                .filter(document -> TeacherResourceLibraryResolver.matchesAny(document, filter.sourceTypes()))
                 .toList();
     }
 
@@ -1103,7 +1104,7 @@ public class TeacherResourceBlockSearchService {
         String haystack = normalizeText(String.join(
                 " ",
                 textOrDefault(document.title(), ""),
-                textOrDefault(document.sourceType(), ""),
+                TeacherResourceLibraryResolver.effectiveLibrary(document),
                 textOrDefault(block.chapter(), ""),
                 textOrDefault(block.section(), ""),
                 textOrDefault(block.sourcePath(), ""),

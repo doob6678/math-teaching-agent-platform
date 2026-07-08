@@ -138,6 +138,7 @@ public class TeacherResourceController {
             @RequestParam(defaultValue = "10") int limit,
             @RequestParam(value = "permissionScope", required = false) List<String> permissionScopes,
             @RequestParam(value = "documentId", required = false) List<String> documentIds,
+            @RequestParam(value = "sourceType", required = false) List<String> sourceTypes,
             @RequestParam(value = "tag", required = false) List<String> tags,
             @RequestParam(value = "strategy", required = false) String strategy,
             HttpServletRequest httpRequest) {
@@ -150,7 +151,7 @@ public class TeacherResourceController {
                     query,
                     limit,
                     "/api/teacher/resources/search",
-                    TeacherResourceSearchFilter.of(permissionScopes, documentIds, tags),
+                    TeacherResourceSearchFilter.of(permissionScopes, documentIds, sourceTypes, tags),
                     strategy);
         } catch (IllegalArgumentException exception) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, exception.getMessage(), exception);
@@ -164,7 +165,7 @@ public class TeacherResourceController {
             String query,
             int limit,
             HttpServletRequest httpRequest) {
-        return searchBlocks(query, limit, null, null, null, null, httpRequest);
+        return searchBlocks(query, limit, null, null, null, null, null, httpRequest);
     }
 
     /**

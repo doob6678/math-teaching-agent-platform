@@ -4,6 +4,7 @@ import com.doob.mathagent.resources.TextbookCatalogItem;
 import com.doob.mathagent.resources.TextbookCatalogReader;
 import com.doob.mathagent.resources.TextbookChunk;
 import com.doob.mathagent.resources.TextbookChunkReader;
+import com.doob.mathagent.teacher.service.TeacherResourceGraphAlignmentService;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -24,6 +25,7 @@ import org.springframework.stereotype.Service;
 public class TextbookRetrievalService {
 
     private static final long LOAD_FAILURE_COOLDOWN_NANOS = TimeUnit.SECONDS.toNanos(30);
+    private static final String SEARCH_PIPELINE_VERSION = "two_stage_doc_page_v1";
 
     private final TextbookCatalogReader catalogReader;
     private final TextbookChunkReader chunkReader;
@@ -31,6 +33,7 @@ public class TextbookRetrievalService {
     private final RetrievalAuditSink auditSink;
     private final TextbookSearchCache searchCache;
     private final RedisTextbookSearchCacheProperties searchCacheProperties;
+    private final TeacherResourceGraphAlignmentService graphAlignmentService;
     /**
      * 语料加载互斥锁：防止缓存未命中时多个请求同时读取大批量教材文件，降低缓存击穿风险。
      */
@@ -51,13 +54,15 @@ public class TextbookRetrievalService {
             LocalTextbookBm25SearchEngine searchEngine,
             RetrievalAuditSink auditSink,
             TextbookSearchCache searchCache,
-            RedisTextbookSearchCacheProperties searchCacheProperties) {
+            RedisTextbookSearchCacheProperties searchCacheProperties,
+            TeacherResourceGraphAlignmentService graphAlignmentService) {
         this.catalogReader = Objects.requireNonNull(catalogReader, "catalogReader is required");
         this.chunkReader = Objects.requireNonNull(chunkReader, "chunkReader is required");
         this.searchEngine = Objects.requireNonNull(searchEngine, "searchEngine is required");
         this.auditSink = Objects.requireNonNull(auditSink, "auditSink is required");
         this.searchCache = Objects.requireNonNull(searchCache, "searchCache is required");
         this.searchCacheProperties = Objects.requireNonNull(searchCacheProperties, "searchCacheProperties is required");
+        this.graphAlignmentService = Objects.requireNonNull(graphAlignmentService, "graphAlignmentService is required");
     }
 
     /**
@@ -74,14 +79,22 @@ public class TextbookRetrievalService {
             Path processedBooksRoot,
             TextbookSearchRequest request,
             RetrievalRequestContext requestContext) {
+        RetrievalRequestContext normalizedContext = requestContext == null
+                ? RetrievalRequestContext.defaultTextbookSearch().normalize()
+                : requestContext.normalize();
         String queryId = UUID.randomUUID().toString();
         long startedAtNanos = System.nanoTime();
         Path normalizedRoot = processedBooksRoot.toAbsolutePath().normalize();
         CachedTextbookCorpus corpus = loadCorpus(normalizedRoot);
         String cacheKey = searchCacheKey(corpus, request);
         TextbookSearchCache.CachedTextbookSearch cached = searchCache.find(cacheKey).orElse(null);
+        TeacherResourceGraphAlignmentService.QueryGraphContext queryGraph = graphAlignmentService.alignQuery(
+                normalizedContext.tenantId(),
+                normalizedContext.subjectType(),
+                normalizedContext.subjectId(),
+                request.query());
         List<TextbookSearchHit> hits = cached == null
-                ? searchEngine.search(request.query(), corpus.chunks(), request.limit())
+                ? searchEngine.search(request.query(), corpus.chunks(), request.limit(), queryGraph)
                 : cached.hits();
         if (cached == null && !hits.isEmpty()) {
             searchCache.put(
@@ -89,7 +102,7 @@ public class TextbookRetrievalService {
                     new TextbookSearchCache.CachedTextbookSearch(
                             request.query(),
                             request.limit(),
-                            "local_bm25_first",
+                            SEARCH_PIPELINE_VERSION,
                             hits.size(),
                             hits),
                     searchCacheProperties.normalizedTtl());
@@ -99,10 +112,10 @@ public class TextbookRetrievalService {
                 queryId,
                 request.query(),
                 request.limit(),
-                cached == null ? "local_bm25_first" : "redis_cache_local_bm25_first",
+                cached == null ? SEARCH_PIPELINE_VERSION : "redis_cache_" + SEARCH_PIPELINE_VERSION,
                 hits.size(),
                 hits);
-        auditSink.record(RetrievalAuditEvent.from(queryId, request, response, elapsedMs, requestContext));
+        auditSink.record(RetrievalAuditEvent.from(queryId, request, response, elapsedMs, normalizedContext));
         return response;
     }
 
@@ -256,6 +269,7 @@ public class TextbookRetrievalService {
 
     private static String searchCacheKey(CachedTextbookCorpus corpus, TextbookSearchRequest request) {
         return sha256(String.join("|",
+                SEARCH_PIPELINE_VERSION,
                 corpus.processedBooksRoot().toString(),
                 corpus.signatureHash(),
                 String.valueOf(request.limit()),

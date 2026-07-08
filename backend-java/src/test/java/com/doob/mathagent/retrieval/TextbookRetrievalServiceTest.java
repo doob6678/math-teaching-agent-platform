@@ -27,7 +27,7 @@ class TextbookRetrievalServiceTest {
     Path tempDir;
 
     @Test
-    void searchesChunksDeclaredByCatalogWithBm25First() throws Exception {
+    void searchesChunksDeclaredByCatalogWithTwoStageRetrieval() throws Exception {
         Path root = tempDir.resolve("processed_books");
         Path bookRoot = root.resolve("book_a");
         Files.createDirectories(bookRoot.resolve("jsonl"));
@@ -47,7 +47,7 @@ class TextbookRetrievalServiceTest {
 
         TextbookSearchResponse response = service.search(root, new TextbookSearchRequest("分段函数的定义", 5));
 
-        assertThat(response.retrievalStrategy()).isEqualTo("local_bm25_first");
+        assertThat(response.retrievalStrategy()).isEqualTo("two_stage_doc_page_v1");
         assertThat(response.total()).isEqualTo(2);
         assertThat(response.hits())
                 .isNotEmpty()
@@ -82,7 +82,7 @@ class TextbookRetrievalServiceTest {
         assertThat(auditSink.event().queryId()).isEqualTo(response.queryId());
         assertThat(auditSink.event().tenantId()).isEqualTo("default");
         assertThat(auditSink.event().queryText()).isEqualTo("function mapping");
-        assertThat(auditSink.event().retrievalStrategy()).isEqualTo("local_bm25_first");
+        assertThat(auditSink.event().retrievalStrategy()).isEqualTo("two_stage_doc_page_v1");
         assertThat(auditSink.event().requestedLimit()).isEqualTo(5);
         assertThat(auditSink.event().hitCount()).isEqualTo(response.hits().size());
         assertThat(auditSink.event().elapsedMs()).isGreaterThanOrEqualTo(0);
@@ -146,12 +146,53 @@ class TextbookRetrievalServiceTest {
         TextbookSearchResponse first = service.search(root, new TextbookSearchRequest("piecewise function", 5));
         TextbookSearchResponse second = service.search(root, new TextbookSearchRequest("piecewise function", 5));
 
-        assertThat(first.retrievalStrategy()).isEqualTo("local_bm25_first");
-        assertThat(second.retrievalStrategy()).isEqualTo("redis_cache_local_bm25_first");
+        assertThat(first.retrievalStrategy()).isEqualTo("two_stage_doc_page_v1");
+        assertThat(second.retrievalStrategy()).isEqualTo("redis_cache_two_stage_doc_page_v1");
         assertThat(second.queryId()).isNotEqualTo(first.queryId());
         assertThat(second.hits()).extracting(TextbookSearchHit::chunkId).containsExactly("book_a_p101_text_001");
         assertThat(searchEngine.searchCount()).isEqualTo(1);
         assertThat(cache.putCount()).isEqualTo(1);
+    }
+
+    @Test
+    void favorsTheRightBookBeforeRerankingPagesInsideIt() throws Exception {
+        Path root = tempDir.resolve("processed_books");
+        Path geometryRoot = root.resolve("geometry_book");
+        Path statsRoot = root.resolve("stats_book");
+        Files.createDirectories(geometryRoot.resolve("jsonl"));
+        Files.createDirectories(statsRoot.resolve("jsonl"));
+        Files.writeString(root.resolve("catalog.jsonl"), """
+                {"doc_id":"geometry_book","book_name":"Geometry Textbook","volume":"selective","book_root":"%s","manifest":"%s","chunk_count":1,"page_count":1,"ai_ok":false}
+                {"doc_id":"stats_book","book_name":"Statistics Textbook","volume":"required","book_root":"%s","manifest":"%s","chunk_count":2,"page_count":2,"ai_ok":false}
+                """.formatted(
+                escape(geometryRoot),
+                escape(geometryRoot.resolve("manifest.json")),
+                escape(statsRoot),
+                escape(statsRoot.resolve("manifest.json"))));
+        Files.writeString(geometryRoot.resolve("jsonl/chunks.jsonl"), """
+                {"chunk_id":"geometry_p134","doc_id":"geometry_book","book_name":"Geometry Textbook","volume":"selective","chapter_path":["Solid Geometry"],"page_no":134,"printed_page_no":"134","chunk_type":"page_summary","section_title":"Proof check","text":"method check proof angle line plane check relation","formula_text":"","image_rel_paths":[],"source_page_image":"pages/p134.png"}
+                """);
+        Files.writeString(statsRoot.resolve("jsonl/chunks.jsonl"), """
+                {"chunk_id":"stats_p134","doc_id":"stats_book","book_name":"Statistics Textbook","volume":"required","chapter_path":["Statistics And Probability"],"page_no":134,"printed_page_no":"134","chunk_type":"page_summary","section_title":"Is the sample reliable","text":"sample frequency estimate reliability judgement probability background","formula_text":"","image_rel_paths":[],"source_page_image":"pages/p134.png"}
+                {"chunk_id":"stats_p135","doc_id":"stats_book","book_name":"Statistics Textbook","volume":"required","chapter_path":["Statistics And Probability"],"page_no":135,"printed_page_no":"135","chunk_type":"page_summary","section_title":"Probability application","text":"probability application data estimate reliability judgement and conclusion","formula_text":"","image_rel_paths":[],"source_page_image":"pages/p135.png"}
+                """);
+
+        TextbookRetrievalService service = com.doob.mathagent.retrieval.TextbookRetrievalServiceFixture.service(
+                new TextbookCatalogReader(),
+                new TextbookChunkReader(),
+                new LocalTextbookBm25SearchEngine(),
+                new NoopRetrievalAuditSink());
+
+        TextbookSearchResponse response = service.search(root, new TextbookSearchRequest("probability reliability judgement", 3));
+
+        assertThat(response.hits())
+                .isNotEmpty()
+                .first()
+                .extracting(TextbookSearchHit::docId)
+                .isEqualTo("stats_book");
+        assertThat(response.hits())
+                .extracting(TextbookSearchHit::chunkId)
+                .contains("stats_p134", "stats_p135");
     }
 
     @Test
@@ -304,6 +345,16 @@ class TextbookRetrievalServiceTest {
         public List<TextbookSearchHit> search(String query, List<TextbookChunk> chunks, int limit) {
             searchCount++;
             return super.search(query, chunks, limit);
+        }
+
+        @Override
+        public List<TextbookSearchHit> search(
+                String query,
+                List<TextbookChunk> chunks,
+                int limit,
+                com.doob.mathagent.teacher.service.TeacherResourceGraphAlignmentService.QueryGraphContext queryGraph) {
+            searchCount++;
+            return super.search(query, chunks, limit, queryGraph);
         }
 
         int searchCount() {

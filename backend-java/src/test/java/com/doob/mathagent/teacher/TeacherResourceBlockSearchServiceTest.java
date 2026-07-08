@@ -335,6 +335,73 @@ class TeacherResourceBlockSearchServiceTest {
     }
 
     @Test
+    void sourceTypeFilterMatchesInferredLibraryForLegacyLocalPathRows() {
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        resourceStore.save(new TeacherResourceDocumentResponse(
+                "doc-qq",
+                "school-a",
+                "teacher-1",
+                "local_path",
+                "Runtime QQ bundle package",
+                null,
+                "C:/workspace/runtime-authored/02-qq-bundle-vector",
+                "MATH_VIP",
+                "synced",
+                "parsed",
+                "ready",
+                "ready",
+                List.of()));
+        resourceStore.save(new TeacherResourceDocumentResponse(
+                "doc-mock",
+                "school-a",
+                "teacher-1",
+                "local_path",
+                "Runtime mock package",
+                null,
+                "C:/workspace/runtime-authored/05-mock-sequence",
+                "TEACHER_PRIVATE",
+                "synced",
+                "parsed",
+                "ready",
+                "ready",
+                List.of()));
+        blockStore.replaceActiveBlocks("school-a", "doc-qq", List.of(detailedBlock(
+                "b-qq",
+                "doc-qq",
+                1,
+                "专题讲解.md",
+                "lesson",
+                "Vectors",
+                "Angle",
+                "Vector angle bundle analysis and lesson summary.")));
+        blockStore.replaceActiveBlocks("school-a", "doc-mock", List.of(detailedBlock(
+                "b-mock",
+                "doc-mock",
+                1,
+                "模拟题.md",
+                "question",
+                "Sequence",
+                "Sum",
+                "Sequence mock question and answer.")));
+        TeacherResourceBlockSearchService service = TeacherResourceBlockSearchServiceFixture.service(resourceStore, blockStore);
+
+        TeacherResourceBlockSearchResponse response = service.search(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                "vector angle analysis",
+                10,
+                "/api/teacher/resources/search",
+                TeacherResourceSearchFilter.of(null, null, List.of("QQ_BUNDLE"), null),
+                "two_stage_doc_block");
+
+        assertThat(response.hits()).extracting(TeacherResourceBlockSearchResponse.Hit::documentId)
+                .containsExactly("doc-qq");
+        assertThat(response.hits().getFirst().sourceType()).isEqualTo("qq_bundle");
+    }
+
+    @Test
     void studentCannotSearchTeacherResourceBlocks() {
         TeacherResourceBlockSearchService service = TeacherResourceBlockSearchServiceFixture.service(
                 new InMemoryTeacherResourceStore(),
