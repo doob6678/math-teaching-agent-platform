@@ -5,6 +5,7 @@ import com.doob.mathagent.agent.service.AiChatRequest;
 import com.doob.mathagent.agent.service.AiChatResult;
 import com.doob.mathagent.infrastructure.ai.AiProviderCatalog;
 import com.doob.mathagent.infrastructure.text.FormulaMarkupSanitizer;
+import com.doob.mathagent.knowledge.service.QuestionBankSearchText;
 import com.doob.mathagent.memory.vo.StudentMemoryResponse;
 import com.doob.mathagent.teaching.TeachingEvidence;
 import com.doob.mathagent.teaching.dto.TeachingTaskRequest;
@@ -13,6 +14,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.regex.Pattern;
 import org.springframework.stereotype.Service;
 
@@ -29,8 +31,15 @@ public class TeachingAiDraftService {
             "【(?:答案与评分点|参考答案|参考解析|评分标准|例题详解|完整解析|教师讲解|讲评主线|教师备注|板书设计)】[\\s\\S]*?(?=【|$)");
     private static final Pattern STUDENT_FORBIDDEN_LINE = Pattern.compile(
             "(?m)^.*(?:答案[：:]|答案为|参考答案|参考解析|评分点|评分标准|完整解析|解答如下|解：|因此答案为|故答案为).*$");
+    private static final Pattern VISIBLE_WORKSPACE_LABEL = Pattern.compile(
+            "(?:课堂作答区|作答区|我的解答|推导区|手写区|教师手写区|留白区|空白区|板书区|教师板书区)\\s*[：:]?");
+    private static final Pattern VISIBLE_WORKSPACE_REFERENCE = Pattern.compile(
+            "(?:写在|填写在|完成在|放在|留在)(?:课堂作答区|作答区|我的解答|推导区|手写区|教师手写区|留白区|空白区|板书区|教师板书区)");
     private static final Pattern INTERNAL_HANDOUT_LINE = Pattern.compile(
-            "(?mi)^.*(?:MODEL_CALL|JSON_PARSE|\\btokens?\\b|模型健康|model health|debug|调试|JSON|页眉|页脚|颜色|PDF\\s*(?:规则|排版|版式)|排版说明|版式要求|渲染引擎|页边距|虚线折叠|documentclass|usepackage|fancyhdr|pagestyle|begin\\{document}|end\\{document}|作为\\s*AI|as an AI).*$");
+            "(?mi)^.*(?:MODEL_CALL|JSON_PARSE|\\btokens?\\b|模型健康|model health|debug|调试|JSON|页眉|页脚|颜色|PDF\\s*(?:规则|排版|版式)|排版说明|版式要求|渲染引擎|页边距|虚线折叠|documentclass|usepackage|fancyhdr|pagestyle|begin\\{document}|end\\{document}|作为\\s*AI|as an AI|本页只保留|课堂任务|本讲任务|讲后自查|教师审校清单|横版讲解提纲|模板偏向|本讲更偏向).*$");
+    private static final List<String> PREFERRED_TOPIC_ANCHORS = List.of(
+            "双曲线", "椭圆", "抛物线", "圆锥曲线", "导数", "函数", "数列", "概率",
+            "统计", "三角函数", "平面向量", "空间向量", "立体几何", "直线", "圆", "排列组合");
 
     private final AiChatGateway aiChatGateway;
     private final AiProviderCatalog providerCatalog;
@@ -102,6 +111,39 @@ public class TeachingAiDraftService {
                             result.safeMessage()));
                     ParsedDraft parsed = parseStructuredDraft(result.generatedContent());
                     if (parsed.structured()) {
+                        if (!appearsTopicAligned(request, parsed)) {
+                            recoveryEvents.add(event(
+                                    "TOPIC_ALIGNMENT_REJECTED",
+                                    result.providerName(),
+                                    result.modelCode(),
+                                    attempt,
+                                    false,
+                                    canRetryProvider || canRotateProvider,
+                                    "Structured draft drifted away from the requested topic."));
+                            if (attempt == maxRetries) {
+                                lastUnstructuredDraft = toAiDraft(
+                                        result,
+                                        parsed,
+                                        totalPromptTokens,
+                                        totalCompletionTokens,
+                                        totalTokens,
+                                        attempt,
+                                        maxRetries,
+                                        recoveryEvents);
+                                break;
+                            }
+                            recoveryEvents.add(event(
+                                    "RETRY_SCHEDULED",
+                                    provider.name(),
+                                    provider.chatModel(),
+                                    attempt + 1,
+                                    false,
+                                    true,
+                                    "Retrying after topic-alignment validation failure."));
+                            nextPrompt = retryPrompt(request, evidence, memoryResponse, template, result.generatedContent(),
+                                    "Structured output drifted away from the requested topic.");
+                            continue;
+                        }
                         recoveryEvents.add(event(
                                 "JSON_PARSE_SUCCEEDED",
                                 result.providerName(),
@@ -290,9 +332,9 @@ public class TeachingAiDraftService {
                 Treat template layout instructions as rendering constraints only. Do not write header/footer/color/PDF layout rules in any JSON value.
                 JSON schema:
                 {
-                  "teacherExplanation": "Chinese teacher handout body. Required labels in this order: 【知识定位】【题型识别】【方法步骤】【例题详解】【答案与评分点】【易错提醒】【课堂追问】. Include source-grounded reasoning, answer path, scoring points, board-writing sequence, and preset questions. It must be printable and complete, not chatty.",
-                  "studentHint": "Chinese student worksheet body. Required labels in this order: 【知识速记】【题型识别】【例题任务】【练习任务】【作答提醒】. Leave blanks with ___ or 作答区; hint only; never reveal final answers, full worked solutions, scoring points, or teacher-only notes.",
-                  "knowledgePoints": ["3-8 Chinese knowledge points or method cards, formula-first when useful"],
+                  "teacherExplanation": "Chinese teacher handout body. Required labels in this order: 【知识定位】【题型识别】【方法步骤】【例题详解】【答案与评分点】【易错提醒】【课堂追问】. Include source-grounded reasoning, answer path, scoring points, board-writing sequence, preset questions, and compact classroom-ready steps. Write like a real teacher's lecture note, not like a template or system checklist. When the topic supports it, you may open with one short高考题入口、课堂情境或小故事引子, but keep it printable.",
+                  "studentHint": "Chinese student worksheet body. Required labels in this order: 【知识速记】【题型识别】【例题任务】【练习任务】【作答提醒】. Every line must be concrete to the current topic/problem. Prefer short worksheet sentences and continuous numbering. Leave blank writing space with blank lines or ___ only where students really need to write; do not label the blank area as 作答区, 手写区, 留白区, 推导区, or 板书区; never reveal final answers, full worked solutions, scoring points, or teacher-only notes.",
+                  "knowledgePoints": ["3-6 Chinese knowledge points or method cards that are specific to the current topic/problem, with formulas, conditions, or method signals first; no generic study advice or placeholder text"],
                   "followUpQuestions": ["3-8 Chinese exercises/questions only, include easy/medium/hard progression when possible; no answers, no scoring points, no worked solutions"]
                 }
                 Do not write "as an AI". Do not invent sources not provided below.
@@ -301,18 +343,31 @@ public class TeachingAiDraftService {
                 Teacher content must include answers when enough information is available from the problem/evidence; student content must leave blanks instead of answers.
                 Teacher content is for human teacher review and printing. Student content is for classroom use and must not contain 【答案与评分点】, 【例题详解】, 参考答案, 评分标准, or complete solution paragraphs.
                 Use question-bank difficulty and answer evidence only to organize teacher answers and student exercises; never expose raw JSON keys from question-bank metadata.
+                When question-bank evidence exists, prefer 2-4 real题型/题目 rewritten into printable Chinese worksheet style, grouped by 基础 / 提高 / 压轴 when the evidence supports it.
+                When the user only gives a topic, still generate enough real handout material: at least one worked example for the teacher version and at least four continuously numbered student exercises.
+                Teacher content should mention compact source titles or page hints only when useful, for example [教材 p.152] or [题库-双曲线基础], but never paste long OCR paragraphs.
+                Prefer standard LaTeX fractions such as $\\frac{k}{x}$, $\\frac{a+b}{c}$, and $\\frac{1}{2}$ instead of plain slash text like k/x, (a+b)/c, or 1/2 whenever the expression is mathematical.
+                Student exercise wording should feel like a real printed worksheet: short prompts, continuous numbering, obvious writing space, and no long essay paragraphs.
+                Leave visible writing space in student content with clean blank lines or ___ only; do not write visible labels such as 作答区、手写区、留白区、推导区、板书区 before blank space; avoid scattering oversized blank areas after every small point.
                 Keep each labeled block compact: prefer formulas, numbered steps, short bullets, and explicit blanks over long prose.
+                The learning goal and problem are the highest-priority topic constraint. Before writing, extract the core topic from them and keep every section on that exact topic.
+                If any retrieved evidence is off-topic, noisy, OCR-broken, or belongs to another chapter, ignore it instead of switching topics. Never let unrelated evidence override the learning goal.
+                When reliable evidence is missing, stay with the requested topic and write a correct topic-focused handout from general math knowledge rather than drifting to another topic.
+                Do not output placeholder structure text such as “知识点1/2/3”, “题型1/2/3”, “先把主题拆成定义、公式”, “本讲更偏向”, or any sentence that only explains how to write the handout instead of teaching math.
+                Output only actual teaching content or intentional blank workspace. Do not write meta-operational sentences such as “本页只保留…”, “课堂任务…”, “本讲任务…”, “讲后自查…”, “教师审校清单…”, or “横版讲解提纲…”.
                 Respect printable handout layout, but do not describe layout rules such as header/footer or color requirements as user-facing content.
                 If the user only gives a topic rather than a problem, create a complete mini-handout around that topic.
                 Selected handout template: %s
-                Template instructions: %s
+                Template context: %s
+                Template content instructions: %s
                 Learning goal: %s
                 Problem: %s
                 Reused memory: %s
                 Retrieved evidence: %s
                 """.formatted(
                 template.summary().displayName(),
-                template.promptInstructions(),
+                templateContext(template),
+                safeTemplatePromptText(template.promptInstructions()),
                 request.learningGoal(),
                 request.questionText(),
                 memoryResponse.reused() ? memoryResponse.answer() : memoryResponse.reason(),
@@ -340,13 +395,19 @@ public class TeachingAiDraftService {
                 Return exactly one valid JSON object with all fields present and non-empty:
                 {
                   "teacherExplanation": "printable Chinese teacher handout body with labels 【知识定位】【题型识别】【方法步骤】【例题详解】【答案与评分点】【易错提醒】【课堂追问】",
-                  "studentHint": "printable Chinese student worksheet body with labels 【知识速记】【题型识别】【例题任务】【练习任务】【作答提醒】 and no answer/scoring/solution leakage",
+                  "studentHint": "printable Chinese student worksheet body with labels 【知识速记】【题型识别】【例题任务】【练习任务】【作答提醒】, concrete topic-specific wording, continuous numbering, visible blanks, standard \\frac fractions where needed, and no answer/scoring/solution leakage",
                   "knowledgePoints": ["..."],
                   "followUpQuestions": ["student-safe questions only; no answer/scoring/solution leakage"]
                 }
                 Student content must not contain 【答案与评分点】, 【例题详解】, 参考答案, 评分标准, or complete solution paragraphs.
+                Keep student exercises continuously numbered with visible blank space, but do not label blank space as 作答区、手写区、留白区、推导区、板书区; keep mathematical fractions in standard LaTeX \\frac form instead of slash text.
+                The learning goal and problem remain the highest-priority topic constraint. If retrieved evidence looks off-topic or broken, ignore it and stay on the requested topic.
+                Do not output placeholder structure text such as “知识点1/2/3”, “题型1/2/3”, or generic process advice that is detached from the current math topic.
+                Output only actual teaching content or intentional blank workspace; remove any meta-operational sentence such as “本页只保留…”, “课堂任务…”, “本讲任务…”, or “教师审校清单…”.
+                If question-bank evidence exists, prefer real题型/题目组织，并按基础 / 提高 / 压轴递进； if the user only gives a topic, still provide enough printable exercises.
                 Selected handout template: %s
-                Template instructions: %s
+                Template context: %s
+                Template content instructions: %s
                 Learning goal: %s
                 Problem: %s
                 Reused memory: %s
@@ -355,11 +416,79 @@ public class TeachingAiDraftService {
                 parseError,
                 previousContent == null ? "" : previousContent,
                 template.summary().displayName(),
-                template.promptInstructions(),
+                templateContext(template),
+                safeTemplatePromptText(template.promptInstructions()),
                 request.learningGoal(),
                 request.questionText(),
                 memoryResponse.reused() ? memoryResponse.answer() : memoryResponse.reason(),
                 evidence.stream().map(TeachingAiDraftService::evidenceLine).toList());
+    }
+
+    /**
+     * Injects style and source metadata that helps dynamic template skills affect generation without exposing local paths.
+     */
+    private static String templateContext(TeachingHandoutTemplateProfile template) {
+        var summary = template.summary();
+        List<String> parts = new ArrayList<>();
+        addTemplatePart(parts, "code", summary.templateCode());
+        addTemplatePart(parts, "source", summary.sourceType());
+        addTemplatePart(parts, "audience", summary.audience());
+        addTemplatePart(parts, "category", summary.category());
+        addTemplatePart(parts, "visualStyle", summary.visualStyle());
+        if (summary.difficultyBands() != null && !summary.difficultyBands().isEmpty()) {
+            addTemplatePart(parts, "difficulty", String.join("/", summary.difficultyBands()));
+        }
+        if (summary.tags() != null && !summary.tags().isEmpty()) {
+            addTemplatePart(parts, "tags", String.join("/", summary.tags()));
+        }
+        addTemplatePart(parts, "referenceTitle", summary.referenceTitle());
+        addTemplatePart(parts, "referenceSummary", safeTemplatePromptText(summary.referencePreview()));
+        return String.join("; ", parts);
+    }
+
+    private static void addTemplatePart(List<String> parts, String key, String value) {
+        String safe = safeTemplatePromptText(value);
+        if (!safe.isBlank()) {
+            parts.add(key + "=" + safe);
+        }
+    }
+
+    /**
+     * Template skills may mention rendering/layout constraints for humans configuring the skill.
+     * The model only needs content-side constraints; stripping these words reduces header/footer/color leakage.
+     */
+    private static String safeTemplatePromptText(String value) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        String normalized = value
+                .replaceAll("(?i)[A-Z]:\\\\[^\\s，。；;]+", " ")
+                .replaceAll("(?i)/(?:Users|home|var|tmp|mnt)/[^\\s，。；;]+", " ")
+                .replaceAll("(?i)file://\\S+", " ");
+        normalized = normalized
+                .replaceAll("(?i)MODEL_CALL|JSON_PARSE|\\btokens?\\b|模型健康|model health|debug|调试|JSON", " ")
+                .replaceAll("(?i)documentclass|usepackage|fancyhdr|pagestyle|begin\\{document}|end\\{document}", " ")
+                .replace("页眉", "")
+                .replace("页脚", "")
+                .replace("颜色", "")
+                .replace("渲染引擎", "")
+                .replace("渲染规则", "")
+                .replace("模板规则", "")
+                .replace("页面颜色", "")
+                .replace("讲评色", "")
+                .replace("练习色", "")
+                .replace("PDF 规则", "")
+                .replace("PDF规则", "")
+                .replace("PDF 版式", "")
+                .replace("PDF版式", "")
+                .replace("PDF 排版", "")
+                .replace("PDF排版", "")
+                .replaceAll("\\s+", " ")
+                .strip();
+        if (normalized.length() > 900) {
+            return normalized.substring(0, 900).strip();
+        }
+        return normalized;
     }
 
     private static String transientFailureRetryPrompt(
@@ -371,6 +500,62 @@ public class TeachingAiDraftService {
         return prompt(request, evidence, memoryResponse, template)
                 + "\nPrevious provider call failed with: " + exception.getClass().getSimpleName()
                 + ". This is an automatic backend retry. Still return only valid JSON.";
+    }
+
+    private static boolean appearsTopicAligned(TeachingTaskRequest request, ParsedDraft parsed) {
+        List<String> anchors = topicAnchors(request);
+        if (anchors.isEmpty()) {
+            return true;
+        }
+        if (anchors.stream().noneMatch(anchor -> anchor.length() >= 3)) {
+            return true;
+        }
+        String haystack = ((parsed.teacherExplanation() == null ? "" : parsed.teacherExplanation()) + " "
+                + (parsed.studentHint() == null ? "" : parsed.studentHint()) + " "
+                + String.join(" ", parsed.knowledgePoints()) + " "
+                + String.join(" ", parsed.followUpQuestions()))
+                .replaceAll("\\s+", "")
+                .toLowerCase(Locale.ROOT);
+        int matched = 0;
+        int weighted = 0;
+        for (String anchor : anchors) {
+            String normalized = anchor.toLowerCase(Locale.ROOT);
+            if (haystack.contains(normalized)) {
+                matched += 1;
+                weighted += anchor.length();
+            }
+        }
+        return matched >= 1 || weighted >= 2;
+    }
+
+    private static List<String> topicAnchors(TeachingTaskRequest request) {
+        String raw = ((request.learningGoal() == null ? "" : request.learningGoal()) + " "
+                + (request.questionText() == null ? "" : request.questionText()))
+                .replaceAll("[^\\p{IsHan}A-Za-z0-9]+", " ")
+                .replaceAll("(?:请|生成|一份|关于|围绕|针对|包含|以及|并|和|与|从|到|开始|讲解|讲义|学习|学会|理解|掌握|做题|大题|小题|题型|例题|专题|训练|教师版|学生版|教师|学生|课堂|作答|补充要求|要求|目标|主题|知识点|基础|提高|综合|题目|问题|复习|巩固|提升|中的|中|的)", " ");
+        List<String> anchors = new ArrayList<>();
+        for (String preferred : PREFERRED_TOPIC_ANCHORS) {
+            if (raw.contains(preferred)) {
+                anchors.add(preferred);
+            }
+        }
+        for (String candidate : QuestionBankSearchText.candidateQueries(request.learningGoal(), request.questionText())) {
+            if (candidate.length() >= 2 && candidate.length() <= 12 && !anchors.contains(candidate)) {
+                anchors.add(candidate);
+            }
+        }
+        for (String part : raw.split("\\s+")) {
+            String candidate = part.strip();
+            if (candidate.length() >= 2
+                    && candidate.length() <= 12
+                    && !"数学".equals(candidate)
+                    && !"高中数学".equals(candidate)
+                    && !anchors.contains(candidate)) {
+                anchors.add(candidate);
+            }
+        }
+        anchors.sort((left, right) -> Integer.compare(right.length(), left.length()));
+        return anchors.size() > 6 ? anchors.subList(0, 6) : anchors;
     }
 
     /**
@@ -530,15 +715,21 @@ public class TeachingAiDraftService {
         }
         String sanitized = STUDENT_FORBIDDEN_SECTION.matcher(value).replaceAll("");
         sanitized = STUDENT_FORBIDDEN_LINE.matcher(sanitized).replaceAll("");
+        sanitized = removeVisibleWorkspaceLabels(sanitized);
         sanitized = sanitized.replaceAll("\\n{3,}", "\n\n").strip();
         if (sanitized.isBlank()) {
             return """
                     【知识速记】先写出本题对应的定义、公式或图像特征。
-                    【例题任务】独立完成关键步骤，计算过程写在作答区。
-                    【作答提醒】本页只保留提示和空白，完整解析由教师版审查。
+                    【例题任务】独立完成关键步骤，写清计算过程。
+                    【作答提醒】先写关键依据，再整理计算或证明步骤。
                     """.strip();
         }
         return sanitized;
+    }
+
+    private static String removeVisibleWorkspaceLabels(String value) {
+        String withoutReferences = VISIBLE_WORKSPACE_REFERENCE.matcher(value).replaceAll("独立完成");
+        return VISIBLE_WORKSPACE_LABEL.matcher(withoutReferences).replaceAll("");
     }
 
     private static List<String> normalizeList(List<String> values) {
@@ -579,6 +770,7 @@ public class TeachingAiDraftService {
                 .replaceAll("(?i)(参考答案|答案|评分点|评分标准|完整解析|解答如下|解：|因此答案为|故答案为).*$", "")
                 .replaceAll("\\s+", " ")
                 .strip();
+        sanitized = removeVisibleWorkspaceLabels(sanitized);
         return sanitized;
     }
 

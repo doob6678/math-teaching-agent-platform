@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Locale;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -53,11 +55,11 @@ class TeachingHandoutTemplateServiceTest {
                     assertThat(template.sourceType()).isEqualTo("skill_config");
                     assertThat(template.displayName()).isEqualTo("单元测试 Skill");
                     assertThat(template.tags()).contains("测试", "配置");
-                    assertThat(template.referencePath()).isNull();
+                    assertThat(template.referencePath()).isEqualTo("C:/Users/doob/Desktop/private/teacher-template.pdf");
                 });
         TeachingHandoutTemplateProfile resolved = service.resolve("unit_test_skill_v1");
         assertThat(resolved.summary().displayName()).isEqualTo("单元测试 Skill");
-        assertThat(resolved.summary().referencePath()).isNull();
+        assertThat(resolved.summary().referencePath()).isEqualTo("C:/Users/doob/Desktop/private/teacher-template.pdf");
         assertThat(resolved.promptInstructions()).contains("教师版给答案", "学生版留白");
     }
 
@@ -113,12 +115,42 @@ class TeachingHandoutTemplateServiceTest {
     }
 
     @Test
-    void doesNotExposeReferencePathsInTemplateShelfMetadata() {
+    void exposesReferencePathsOnlyForPdfBackedTemplates() {
         TeachingHandoutTemplateService service = new TeachingHandoutTemplateService();
 
         assertThat(service.list())
                 .isNotEmpty()
-                .allSatisfy(template -> assertThat(template.referencePath()).isNull());
+                .anySatisfy(template -> {
+                    if ("local_inverse_student_sample_v1".equals(template.templateCode())) {
+                        assertThat(template.referencePath()).isNotBlank();
+                    }
+                })
+                .anySatisfy(template -> {
+                    if ("space_vector_reference_v1".equals(template.templateCode())) {
+                        assertThat(template.referencePath()).contains("参考讲义数学空间向量.pdf");
+                    }
+                })
+                .anySatisfy(template -> {
+                    if ("default_standard".equals(template.templateCode())) {
+                        assertThat(template.referencePath()).isNull();
+                    }
+                });
+    }
+
+    @Test
+    void suppressesDuplicateTemplatesBackedBySameReferencePdf() {
+        TeachingHandoutTemplateService service = new TeachingHandoutTemplateService();
+
+        assertThat(service.list())
+                .anySatisfy(template -> assertThat(template.templateCode()).isEqualTo("inverse_real_student_reference_v1"))
+                .noneSatisfy(template -> assertThat(template.templateCode()).isEqualTo("local_inverse_student_sample_v1"));
+        assertThat(service.list().stream()
+                .map(template -> referenceIdentity(template.referenceTitle(), template.referencePath()))
+                .filter(identity -> !identity.isBlank())
+                .collect(Collectors.groupingBy(identity -> identity, Collectors.counting())))
+                .allSatisfy((identity, count) -> assertThat(count)
+                        .as("duplicate handout reference %s", identity)
+                        .isEqualTo(1L));
     }
 
     @Test
@@ -154,5 +186,25 @@ class TeachingHandoutTemplateServiceTest {
                             .contains("系统渲染负责", "A 基础", "B 提高", "C 压轴", "真实题库题目", "token")
                             .doesNotContain("页眉", "页脚", "颜色");
                 });
+    }
+
+    private static String referenceIdentity(String referenceTitle, String referencePath) {
+        String value = referencePath == null || referencePath.isBlank() ? referenceTitle : referencePath;
+        if (value == null) {
+            return "";
+        }
+        if (value.isBlank()) {
+            return "";
+        }
+        String normalized = value.replace('\\', '/');
+        int index = normalized.lastIndexOf('/');
+        if (index >= 0) {
+            normalized = normalized.substring(index + 1);
+        }
+        return normalized
+                .replaceFirst("(?i)\\.pdf$", "")
+                .replaceAll("\\d{6,}$", "")
+                .replaceAll("[\\s_\\-]+", "")
+                .toLowerCase(Locale.ROOT);
     }
 }

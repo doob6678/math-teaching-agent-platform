@@ -111,25 +111,34 @@ class TeachingTaskControllerTest {
         ResponseEntity<String> preview = controller.previewLatex(submitted.taskId(), null);
         ResponseEntity<byte[]> exportedPdf = controller.exportPdf(submitted.taskId(), null);
         ResponseEntity<String> studentPreview = controller.previewLatexVersion(submitted.taskId(), "student", null);
+        ResponseEntity<String> lecturePreview = controller.previewLatexVersion(submitted.taskId(), "lecture", null);
         ResponseEntity<byte[]> teacherPdf = controller.exportPdfVersion(submitted.taskId(), "teacher", null);
         ResponseEntity<byte[]> teacherPdfPreview = controller.previewPdfVersion(submitted.taskId(), "teacher", null);
+        ResponseEntity<byte[]> lecturePdfPreview = controller.previewPdfVersion(submitted.taskId(), "lecture", null);
 
         assertThat(loaded.taskId()).isEqualTo(submitted.taskId());
         assertThat(loaded.status()).isEqualTo(TeachingTaskStatus.COMPLETED);
         assertThat(exported.getBody()).contains("\\section");
         assertThat(preview.getBody()).contains("\\section");
         assertThat(studentPreview.getBody()).contains("\\section", "\\vspace");
+        assertThat(lecturePreview.getBody())
+                .contains("16:10 横版讲解卡", "\\vspace")
+                .doesNotContain("教师手写区", "手写区", "板书留白");
         assertThat(preview.getHeaders().getContentDisposition().isInline()).isTrue();
         assertThat(exported.getHeaders().getContentDisposition().getFilename()).isEqualTo(submitted.taskId() + ".tex");
         assertThat(exportedPdf.getBody()).startsWith(new byte[] {'%', 'P', 'D', 'F'});
         assertThat(teacherPdf.getBody()).startsWith(new byte[] {'%', 'P', 'D', 'F'});
         assertThat(teacherPdfPreview.getBody()).startsWith(new byte[] {'%', 'P', 'D', 'F'});
+        assertThat(lecturePdfPreview.getBody()).startsWith(new byte[] {'%', 'P', 'D', 'F'});
         assertThat(teacherPdfPreview.getHeaders().getContentDisposition().isInline()).isTrue();
+        assertThat(lecturePdfPreview.getHeaders().getContentDisposition().getFilename()).isEqualTo(submitted.taskId() + "-lecture.pdf");
         assertThat(exportedPdf.getHeaders().getContentDisposition().getFilename()).isEqualTo(submitted.taskId() + ".pdf");
         assertThat(exportedPdf.getHeaders().getFirst("X-Handout-Renderer")).isNotBlank();
         assertThat(Integer.parseInt(exportedPdf.getHeaders().getFirst("X-Handout-Page-Count"))).isPositive();
         assertThat(teacherPdf.getHeaders().getFirst("X-Handout-Renderer")).isNotBlank();
+        assertThat(lecturePdfPreview.getHeaders().getFirst("X-Handout-Renderer")).isNotBlank();
         assertThat(loaded.handoutLatex()).contains("\\section");
+        assertThat(loaded.lectureHandoutLatex()).contains("16:10 横版讲解卡");
     }
 
     @Test
@@ -384,6 +393,18 @@ class TeachingTaskControllerTest {
                         null))
                 .isInstanceOfSatisfying(ResponseStatusException.class, exception ->
                         assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.previewLatexVersion(
+                        submitted.taskId(),
+                        "lecture",
+                        null))
+                .isInstanceOfSatisfying(ResponseStatusException.class, exception ->
+                        assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.previewPdfVersion(
+                        submitted.taskId(),
+                        "lecture",
+                        null))
+                .isInstanceOfSatisfying(ResponseStatusException.class, exception ->
+                        assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
         assertThat(controller.previewLatexVersion(submitted.taskId(), "student", null).getBody())
                 .contains("\\section", "\\vspace")
                 .doesNotContain("Teacher");
@@ -513,6 +534,49 @@ class TeachingTaskControllerTest {
         assertThat(feedbackList.getFirst().reviewContext()).containsEntry("pdfPageCount", 2);
         assertThat(feedbackList).extracting(TeachingHumanFeedbackResponse::feedbackId)
                 .containsExactly(feedback.feedbackId());
+    }
+
+    @Test
+    void keepsPdfPreviewImageDataUrlInsideFeedbackReviewContext() throws Exception {
+        TeachingWorkflowService service = testWorkflowService(
+                createTextbookCorpus(),
+                com.doob.mathagent.retrieval.TextbookRetrievalServiceFixture.service(
+                        new TextbookCatalogReader(),
+                        new TextbookChunkReader(),
+                        new LocalTextbookBm25SearchEngine(),
+                        new NoopRetrievalAuditSink()),
+                new InMemoryTeachingTaskStore(),
+                new StudentMemoryReuseService(new InMemoryStudentMemoryStore()));
+        TeachingTaskController controller = testController(
+                service,
+                teacherResolver(),
+                (token, action, path, requestHash, subject) -> true,
+                new TeachingHandoutPdfExportService(),
+                batchExportService(new TeachingHandoutPdfExportService()));
+        TeachingTaskResponse task = controller.submit(
+                new TeachingTaskRequest("client-feedback-image", "question", "goal", 3),
+                null);
+
+        String previewImageDataUrl = "data:image/png;base64," + "a".repeat(1600);
+        TeachingHumanFeedbackResponse feedback = controller.submitHumanFeedback(
+                task.taskId(),
+                new TeachingHumanFeedbackRequest(4, "needs_revision", "capture current PDF preview", Map.of(
+                        "handoutVersion", "teacher",
+                        "reviewEvidence", Map.of(
+                                "pdfPreview", Map.of(
+                                        "visualEvidence", Map.of(
+                                                "previewImageDataUrl", previewImageDataUrl))))),
+                null);
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> reviewEvidence = (Map<String, Object>) feedback.reviewContext().get("reviewEvidence");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> pdfPreview = (Map<String, Object>) reviewEvidence.get("pdfPreview");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> visualEvidence = (Map<String, Object>) pdfPreview.get("visualEvidence");
+
+        assertThat(visualEvidence.get("previewImageDataUrl")).isEqualTo(previewImageDataUrl);
+        assertThat(((String) visualEvidence.get("previewImageDataUrl")).length()).isGreaterThan(300);
     }
 
     @Test

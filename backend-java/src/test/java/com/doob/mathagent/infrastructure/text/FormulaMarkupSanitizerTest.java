@@ -60,4 +60,24 @@ class FormulaMarkupSanitizerTest {
                 .contains("$y=\\frac{k}{x}$", "$y=-\\frac{6}{x}$", "$x^2/a^2-y^2/b^2=1$")
                 .doesNotContain("x²", "a²", "y²");
     }
+
+    @Test
+    void normalizesSimpleSlashFractionsWithoutBreakingSquaredRatios() {
+        String sanitized = FormulaMarkupSanitizer.sanitizeFeishuMath(
+                "反比例函数写成 y=k/x，面积公式里常见 (a+b)/c，标准方程仍是 x²/a²-y²/b²=1。");
+
+        assertThat(sanitized)
+                .contains("$y=\\frac{k}{x}$", "$\\frac{a+b}{c}$", "$x^2/a^2-y^2/b^2=1$")
+                .doesNotContain("y=k/x", "(a+b)/c");
+    }
+
+    @Test
+    void restoresLegacyEscapedMathTextBeforeWrappingBareFormula() {
+        String sanitized = FormulaMarkupSanitizer.sanitizeFeishuMath(
+                "参数关系 c\\textasciicircum{}2=a\\textasciicircum{}2+b\\textasciicircum{}2，解析式 y=\\textbackslash{}frac{k}{x}。");
+
+        assertThat(sanitized)
+                .contains("$c^2=a^2+b^2$", "$y=\\frac{k}{x}$")
+                .doesNotContain("textasciicircum", "textbackslash{}frac");
+    }
 }

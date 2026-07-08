@@ -4,11 +4,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.doob.mathagent.teaching.service.TeachingHandoutPdfExportService;
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
+import java.awt.Color;
+import java.awt.image.BufferedImage;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import javax.imageio.ImageIO;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 import org.apache.pdfbox.text.PDFTextStripper;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
@@ -47,11 +51,53 @@ class TeachingHandoutPdfExportServiceTest {
                 """);
 
         assertThat(sanitized)
-                .contains("\\section{来源索引}", "\\section{教师讲评页}", "$2a=6$", "$a=3$", "$c^2=a^2+b^2$")
+                .contains("\\section{教师讲评页}", "$2a=6$", "$a=3$", "$c^2=a^2+b^2$")
                 .doesNotContain("讲义模板与版式", "PDF 版式要求", "页眉", "页脚", "讲评色", "练习色",
                         "![p159]", "../../pages", "## 正文", "OCR 原文", "tokens", "gpt-5.5",
                         "\\documentclass", "\\usepackage", "\\pagestyle", "\\fancyhf", "\\lhead", "\\rhead",
                         "\\lfoot", "\\rfoot", "\\definecolor", "\\titleformat", "\\begin{document}", "\\end{document}");
+    }
+
+    @Test
+    void keepsMarkdownImagesAsRenderableImageMarkers() {
+        String sanitized = TeachingHandoutPdfExportService.sanitizeLatexForExport("""
+                \\section{题目}
+                如图，完成立体几何判断。
+                ![几何图一](C:/tmp/geo-1.png)
+                ![几何图二](C:/tmp/geo-2.png)
+                """);
+
+        assertThat(sanitized)
+                .contains("[[HANDOUTIMAGE:")
+                .contains("如图，完成立体几何判断。")
+                .doesNotContain("![几何图一]", "![几何图二]");
+    }
+
+    @Test
+    void removesTitleBlocksThatContainOnlyBlankWorkspace() {
+        String sanitized = TeachingHandoutPdfExportService.sanitizeLatexForExport("""
+                \\section{题目}
+                已知 $a+b=3$，求 $2a+2b$。
+
+                \\section{课堂作答区}
+                \\vspace{12em}
+                教师手写区
+                手写区
+                板书留白
+
+                \\section{订正记录}
+                作答：\\underline{\\hspace{8em}}
+
+                \\section{练习}
+                \\begin{enumerate}
+                \\item 计算 $2(a+b)$。作答：___
+                \\end{enumerate}
+                """);
+
+        assertThat(sanitized)
+                .contains("\\section{题目}", "\\section{练习}", "计算 $2(a+b)$")
+                .doesNotContain("\\section{课堂作答区}", "\\section{订正记录}", "\\vspace{12em}",
+                        "教师手写区", "手写区", "板书留白");
     }
 
     @Test
@@ -205,6 +251,67 @@ class TeachingHandoutPdfExportServiceTest {
     }
 
     @Test
+    void rendersLectureVersionAsSixteenToTenLandscapeWithoutHandwritingLabels() throws Exception {
+        Path fakeEngine = Files.createTempFile("fake-xelatex", ".exe");
+        String previous = System.getProperty("math.agent.xelatex.path");
+        System.setProperty("math.agent.xelatex.path", fakeEngine.toString());
+        try {
+            TeachingTaskResponse task = new TeachingTaskResponse(
+                    "task-lecture-pdf",
+                    "client-lecture-pdf",
+                    "school-a",
+                    "teacher",
+                    "teacher-001",
+                    null,
+                    TeachingTaskStatus.COMPLETED,
+                    "学会双曲线定义与标准方程",
+                    "横版投屏讲解双曲线",
+                    List.of(),
+                    List.of(),
+                    List.of(),
+                    "",
+                    "\\section{教师版}\n教师讲解：$c^2=a^2+b^2$。",
+                    "\\section{学生版}\n完成练习。\n\\vspace{8em}",
+                    """
+                    \\section{16:10 横版讲解卡}
+                    \\paragraph{课堂投屏}
+                    双曲线核心公式 $c^2=a^2+b^2$。
+                    \\begin{itemize}
+                    \\item 先判断焦点在 x 轴还是 y 轴。
+                    \\item 再根据 $2a$、$2c$ 求参数。
+                    \\end{itemize}
+                    \\vspace{10em}
+                    """,
+                    List.of(),
+                    null,
+                    List.of(),
+                    null,
+                    null);
+
+            TeachingHandoutPdfExportService.RenderedHandoutPdf rendered =
+                    new TeachingHandoutPdfExportService().renderDetailed(task, "lecture");
+
+            assertThat(rendered.renderer()).isEqualTo("pdfbox_fallback");
+            try (PDDocument document = Loader.loadPDF(rendered.bytes())) {
+                var mediaBox = document.getPage(0).getMediaBox();
+                assertThat(mediaBox.getWidth()).isGreaterThan(mediaBox.getHeight());
+                assertThat(mediaBox.getWidth() / mediaBox.getHeight()).isBetween(1.58f, 1.62f);
+                String text = new PDFTextStripper().getText(document);
+                assertThat(text)
+                        .contains("横版讲解稿", "16:10 横版讲解卡", "课堂投屏", "双曲线核心公式")
+                        .doesNotContain("教师手写区", "手写区", "板书留白");
+            }
+        } finally {
+            Files.deleteIfExists(fakeEngine);
+            if (previous == null) {
+                System.clearProperty("math.agent.xelatex.path");
+            } else {
+                System.setProperty("math.agent.xelatex.path", previous);
+            }
+        }
+    }
+
+    @Test
     void pdfboxFallbackKeepsStudentBlanksReadableWithoutLeakingLatexCommands() throws Exception {
         Path fakeEngine = Files.createTempFile("fake-xelatex", ".exe");
         String previous = System.getProperty("math.agent.xelatex.path");
@@ -218,7 +325,7 @@ class TeachingHandoutPdfExportServiceTest {
                     "student-001",
                     TeachingTaskStatus.COMPLETED,
                     "反比例函数留白练习",
-                    "学生版检查公式和作答区",
+                    "学生版检查公式和留白",
                     List.of(),
                     List.of(),
                     List.of(),
@@ -233,7 +340,6 @@ class TeachingHandoutPdfExportServiceTest {
                     \\item 写出定义：\\underline{\\hspace{4em}}
                     \\item 判断点是否在图像上：\\underline{\\hspace{5em}}
                     \\end{itemize}
-                    \\subsection*{课堂作答区}
                     \\vspace{8em}
                     """,
                     List.of(),
@@ -248,9 +354,69 @@ class TeachingHandoutPdfExportServiceTest {
                 String text = new PDFTextStripper().getText(document);
                 assertThat(text).contains("学生版讲义", "知识速记", "练习任务", "________");
                 assertThat(text).contains("y=(k)/(x)", "k", "0");
-                assertThat(text).doesNotContain("\\underline", "\\hspace", "\\begin", "\\item", "\\frac", "4em", "5em");
+                assertThat(text).doesNotContain("作答区", "手写区", "留白区",
+                        "\\underline", "\\hspace", "\\begin", "\\item", "\\frac", "4em", "5em");
             }
         } finally {
+            Files.deleteIfExists(fakeEngine);
+            if (previous == null) {
+                System.clearProperty("math.agent.xelatex.path");
+            } else {
+                System.setProperty("math.agent.xelatex.path", previous);
+            }
+        }
+    }
+
+    @Test
+    void pdfboxFallbackEmbedsQuestionImagesAndCaptions() throws Exception {
+        Path firstImage = createSolidImage("handout-geometry-1");
+        Path secondImage = createSolidImage("handout-geometry-2");
+        Path fakeEngine = Files.createTempFile("fake-xelatex", ".exe");
+        String previous = System.getProperty("math.agent.xelatex.path");
+        System.setProperty("math.agent.xelatex.path", fakeEngine.toString());
+        try {
+            TeachingTaskResponse task = new TeachingTaskResponse(
+                    "task-image-fallback",
+                    "client-image-fallback",
+                    "school-a",
+                    "teacher",
+                    "teacher-001",
+                    TeachingTaskStatus.COMPLETED,
+                    "image handout export",
+                    "verify multi-image export under a question",
+                    List.of(),
+                    List.of(),
+                    List.of(),
+                    "",
+                    """
+                    \\section{Question}
+                    Inspect the solid geometry figure below.
+                    ![FigureOne](%s)
+                    ![FigureTwo](%s)
+                    \\section{Review}
+                    Read the outer edges before the hidden edges.
+                    """.formatted(firstImage.toString().replace("\\", "/"), secondImage.toString().replace("\\", "/")),
+                    "\\section{Student}\nFinish the question from the figures.",
+                    List.of(),
+                    null,
+                    List.of(),
+                    null,
+                    null);
+
+            TeachingHandoutPdfExportService.RenderedHandoutPdf rendered =
+                    new TeachingHandoutPdfExportService().renderDetailed(task, "teacher");
+
+            assertThat(rendered.renderer()).isEqualTo("pdfbox_fallback");
+            try (PDDocument document = Loader.loadPDF(rendered.bytes())) {
+                String text = new PDFTextStripper().getText(document);
+                long imageCount = countPdfImages(document);
+                assertThat(imageCount).isGreaterThanOrEqualTo(2);
+                assertThat(text).contains("Question", "FigureOne", "FigureTwo", "Read the outer edges before the hidden edges.");
+                assertThat(text).doesNotContain("![FigureOne]", "![FigureTwo]");
+            }
+        } finally {
+            Files.deleteIfExists(firstImage);
+            Files.deleteIfExists(secondImage);
             Files.deleteIfExists(fakeEngine);
             if (previous == null) {
                 System.clearProperty("math.agent.xelatex.path");
@@ -294,7 +460,7 @@ class TeachingHandoutPdfExportServiceTest {
                     \\section{讲评}
                     教师版保留答案、步骤和评分点。
                     """,
-                    "\\section{学生版}\n完成公式识别与作答区。\n\\vspace{8em}",
+                    "\\section{学生版}\n完成公式识别。\n\\vspace{8em}",
                     List.of(),
                     null,
                     List.of(),
@@ -327,5 +493,35 @@ class TeachingHandoutPdfExportServiceTest {
             }
         }
         return null;
+    }
+
+    private static Path createSolidImage(String prefix) throws Exception {
+        Path file = Files.createTempFile(prefix, ".png");
+        BufferedImage image = new BufferedImage(160, 120, BufferedImage.TYPE_INT_RGB);
+        java.awt.Graphics2D graphics = image.createGraphics();
+        try {
+            graphics.setColor(Color.WHITE);
+            graphics.fillRect(0, 0, 160, 120);
+            graphics.setColor(new Color(15, 118, 110));
+            graphics.drawRect(12, 12, 136, 96);
+            graphics.drawLine(20, 100, 80, 24);
+            graphics.drawLine(80, 24, 140, 88);
+        } finally {
+            graphics.dispose();
+        }
+        ImageIO.write(image, "png", file.toFile());
+        return file;
+    }
+
+    private static long countPdfImages(PDDocument document) throws Exception {
+        long total = 0;
+        for (int pageIndex = 0; pageIndex < document.getNumberOfPages(); pageIndex += 1) {
+            for (org.apache.pdfbox.cos.COSName name : document.getPage(pageIndex).getResources().getXObjectNames()) {
+                if (document.getPage(pageIndex).getResources().getXObject(name) instanceof PDImageXObject) {
+                    total += 1;
+                }
+            }
+        }
+        return total;
     }
 }

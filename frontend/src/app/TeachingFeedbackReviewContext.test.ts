@@ -74,6 +74,7 @@ describe("buildTeachingFeedbackReviewContext", () => {
         selector: ".pdf-page-canvas",
         version: "teacher",
         imageRef: "teaching-task:task-review-1:teacher:pdf-page:1",
+        previewImageDataUrl: "data:image/png;base64,abc123",
         previewState: "ready",
         page: 1,
         pixelWidth: 1200,
@@ -113,6 +114,7 @@ describe("buildTeachingFeedbackReviewContext", () => {
       imageRequired: true,
       imageRefs: ["teaching-task:task-review-1:teacher:pdf-page:1"],
       attachPdfPreviewImage: true,
+      inlinePreviewIncluded: true,
     });
     expect(context.aiReviewInputPlan.doNotSendFields).toContain("base64Image");
     expect(context.checks.coreColumnCoverage).toBe("6/6");
@@ -132,6 +134,7 @@ describe("buildTeachingFeedbackReviewContext", () => {
       captured: true,
       selector: ".pdf-page-canvas",
       imageRef: "teaching-task:task-review-1:teacher:pdf-page:1",
+      previewImageDataUrl: "data:image/png;base64,abc123",
       attachToAiReview: true,
     });
     expect(context.reviewEvidence.safety).toMatchObject({
@@ -149,5 +152,60 @@ describe("buildTeachingFeedbackReviewContext", () => {
     expect(context.aiReviewBrief).toContain("PDF：xelatex / 4页");
     expect(context.aiReviewBrief).toContain("预览图：已记录首屏渲染证据");
     expect(context.checks.pdfVisualEvidenceCaptured).toBe(true);
+  });
+
+  it("does not mark AI image attachment ready when the PDF canvas image is missing", () => {
+    const task: TeachingTaskResponse = {
+      taskId: "task-review-no-image",
+      clientRequestId: "req-review-no-image",
+      tenantId: "school-a",
+      subjectType: "teacher",
+      subjectId: "teacher-1",
+      selectedTemplate: {
+        templateCode: "teacher_blackboard_solution_v1",
+        displayName: "教师详解版",
+        sourceType: "builtin",
+        audience: "teacher",
+        description: "教师版给答案和讲评。",
+      },
+      status: "COMPLETED",
+      questionText: "讲双曲线参数。",
+      learningGoal: "双曲线参数关系",
+      nodes: [],
+      reactTrace: [],
+      evidence: [],
+      handoutLatex: "",
+      teacherHandoutLatex: "",
+      studentHandoutLatex: "",
+      interactiveSuggestions: [],
+    };
+
+    const context = buildTeachingFeedbackReviewContext(
+      task,
+      "teacher",
+      "\\section{课前定位}\\section{例题详解}\\paragraph{答案与评分点}答案完整。",
+      { bytes: new Uint8Array([37, 80, 68, 70]), renderer: "xelatex", pageCount: 2 },
+      "task-review-no-image:teacher",
+      {
+        artifactType: "browser_pdf_canvas",
+        captured: true,
+        selector: ".pdf-page-canvas",
+        version: "teacher",
+        imageRef: "teaching-task:task-review-no-image:teacher:pdf-page:1",
+        previewState: "ready",
+        page: 1,
+        pixelWidth: 1200,
+        pixelHeight: 1680,
+        cssWidth: 600,
+        cssHeight: 840,
+        attachToAiReview: true,
+        aiAttachmentPlan: "AI复核时按 imageRef 重新加载任务 PDF，并渲染对应页作为图片输入。",
+      },
+    );
+
+    expect(context.pdfPreviewReady).toBe(true);
+    expect(context.checks.pdfVisualEvidenceCaptured).toBe(false);
+    expect(context.aiReviewInputPlan.attachPdfPreviewImage).toBe(false);
+    expect(context.aiReviewBrief).toContain("预览图：未记录");
   });
 });

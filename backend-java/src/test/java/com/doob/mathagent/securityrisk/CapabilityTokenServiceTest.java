@@ -435,11 +435,29 @@ class CapabilityTokenServiceTest {
                 "hash-empty-body",
                 "teaching-handout-export-pdf:task-1:student",
                 2.0), teacher);
+        CapabilityTokenResponse lectureLatexPreview = service.apply(new CapabilityTokenApplyRequest(
+                "teaching-handout:preview-latex",
+                "/api/teaching/tasks/task-1/handout/lecture/latex/preview",
+                "hash-empty-body",
+                "teaching-handout-preview-latex:task-1:lecture",
+                1.0), teacher);
+        CapabilityTokenResponse lecturePdfExport = service.apply(new CapabilityTokenApplyRequest(
+                "teaching-handout:export-pdf",
+                "/api/teaching/tasks/task-1/handout/lecture/pdf",
+                "hash-empty-body",
+                "teaching-handout-export-pdf:task-1:lecture",
+                2.0), teacher);
         CapabilityTokenResponse teacherPdfPreview = service.apply(new CapabilityTokenApplyRequest(
                 "teaching-handout:preview-pdf",
                 "/api/teaching/tasks/task-1/handout/teacher/pdf/preview",
                 "hash-empty-body",
                 "teaching-handout-preview-pdf:task-1:teacher",
+                2.0), teacher);
+        CapabilityTokenResponse lecturePdfPreview = service.apply(new CapabilityTokenApplyRequest(
+                "teaching-handout:preview-pdf",
+                "/api/teaching/tasks/task-1/handout/lecture/pdf/preview",
+                "hash-empty-body",
+                "teaching-handout-preview-pdf:task-1:lecture",
                 2.0), teacher);
 
         assertThat(service.consume(
@@ -461,9 +479,27 @@ class CapabilityTokenServiceTest {
                 "hash-empty-body",
                 teacher).allowed()).isTrue();
         assertThat(service.consume(
+                lectureLatexPreview.token(),
+                "teaching-handout:preview-latex",
+                "/api/teaching/tasks/task-1/handout/lecture/latex/preview",
+                "hash-empty-body",
+                teacher).allowed()).isTrue();
+        assertThat(service.consume(
+                lecturePdfExport.token(),
+                "teaching-handout:export-pdf",
+                "/api/teaching/tasks/task-1/handout/lecture/pdf",
+                "hash-empty-body",
+                teacher).allowed()).isTrue();
+        assertThat(service.consume(
                 teacherPdfPreview.token(),
                 "teaching-handout:preview-pdf",
                 "/api/teaching/tasks/task-1/handout/teacher/pdf/preview",
+                "hash-empty-body",
+                teacher).allowed()).isTrue();
+        assertThat(service.consume(
+                lecturePdfPreview.token(),
+                "teaching-handout:preview-pdf",
+                "/api/teaching/tasks/task-1/handout/lecture/pdf/preview",
                 "hash-empty-body",
                 teacher).allowed()).isTrue();
     }

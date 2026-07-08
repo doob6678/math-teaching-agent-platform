@@ -147,6 +147,11 @@ if ([string]::IsNullOrWhiteSpace($env:MATH_AGENT_EMBEDDING_MODEL)) {
 if ([string]::IsNullOrWhiteSpace($env:MATH_AGENT_EMBEDDING_DIMENSION)) {
     $env:MATH_AGENT_EMBEDDING_DIMENSION = "512"
 }
+if ([string]::IsNullOrWhiteSpace($env:MATH_AGENT_AI_DEFAULT_PROVIDER) -and -not [string]::IsNullOrWhiteSpace($env:DEEPSEEK_API_KEY)) {
+    # Local RAG/Agent evaluation should prefer the configured low-cost DeepSeek route when available.
+    # Users can still override this before startup by setting MATH_AGENT_AI_DEFAULT_PROVIDER explicitly.
+    $env:MATH_AGENT_AI_DEFAULT_PROVIDER = "deepseek"
+}
 
 $mcpSecret = Resolve-McpSecret
 $env:MATH_AGENT_MCP_SECRET = $mcpSecret
@@ -157,6 +162,7 @@ $env:MATH_AGENT_PROTOCOL_MCP_REGISTRY_CLIENTS_0_SUBJECT_ID = "local-admin"
 $env:MATH_AGENT_PROTOCOL_MCP_REGISTRY_CLIENTS_0_SECRET_HASH = Get-Sha256SecretHash $mcpSecret
 $env:MATH_AGENT_PROTOCOL_MCP_REGISTRY_CLIENTS_0_ENABLED = "true"
 $env:MATH_AGENT_PROTOCOL_MCP_REGISTRY_CLIENTS_0_ALLOWED_TOOLS = @(
+    "search_multi_source_evidence",
     "search_textbook_evidence",
     "search_teacher_resource_evidence",
     "get_teaching_ai_trace",

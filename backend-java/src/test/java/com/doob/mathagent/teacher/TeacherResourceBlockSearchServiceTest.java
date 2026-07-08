@@ -639,6 +639,60 @@ class TeacherResourceBlockSearchServiceTest {
     }
 
     @Test
+    void classroomCommentaryCourseCueKeepsLessonAheadOfSingleQuestionAnalysis() {
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        resourceStore.save(new TeacherResourceDocumentResponse(
+                "doc-qq-commentary-course",
+                "school-a",
+                "teacher-1",
+                "qq_bundle",
+                "Runtime QQ commentary lesson pack",
+                null,
+                "C:/workspace/runtime-authored/qq-commentary-course-pack",
+                "MATH_VIP",
+                "synced",
+                "parsed",
+                "ready",
+                "ready",
+                List.of()));
+        blockStore.replaceActiveBlocks("school-a", "doc-qq-commentary-course", List.of(
+                detailedBlock(
+                        "b-course-lesson",
+                        "doc-qq-commentary-course",
+                        1,
+                        "qq_bundle/topic-lesson.md",
+                        "lesson",
+                        "空间向量",
+                        "专题整体讲法",
+                        "专题讲解块说明开篇目标、适用课型和整体课堂推进顺序。"),
+                detailedBlock(
+                        "b-course-analysis",
+                        "doc-qq-commentary-course",
+                        2,
+                        "qq_bundle/answer-analysis.md",
+                        "analysis",
+                        "空间向量",
+                        "单题答案解析",
+                        "答案解析块记录某一道题的步骤、讲评和验算提醒。")));
+        TeacherResourceBlockSearchService service = TeacherResourceBlockSearchServiceFixture.service(resourceStore, blockStore);
+
+        TeacherResourceBlockSearchResponse response = service.search(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                "专题讲评课要先找整体讲法入口，而不是某一道题的解析，指定库是qq_bundle",
+                5,
+                "/api/teacher/resources/search",
+                TeacherResourceSearchFilter.of(null, null, List.of("qq_bundle"), null),
+                "two_stage_doc_block");
+
+        assertThat(response.hits()).isNotEmpty();
+        assertThat(response.hits().getFirst().blockId()).isEqualTo("b-course-lesson");
+        assertThat(response.hits().getFirst().blockRole()).isEqualTo("lesson");
+    }
+
+    @Test
     void negatedQuestionCueDoesNotBeatAnalysisWhenTeacherRejectsPromptBlock() {
         InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
         InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();

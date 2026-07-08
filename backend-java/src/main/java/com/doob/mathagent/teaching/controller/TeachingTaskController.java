@@ -11,6 +11,7 @@ import com.doob.mathagent.teaching.service.TeachingHandoutBatchExportService;
 import com.doob.mathagent.teaching.service.TeachingCapabilityVerifier;
 import com.doob.mathagent.teaching.service.TeachingHumanFeedbackService;
 import com.doob.mathagent.teaching.service.TeachingHandoutPdfExportService;
+import com.doob.mathagent.teaching.service.TeachingHandoutTemplatePreviewService;
 import com.doob.mathagent.teaching.service.TeachingHandoutTemplateService;
 import com.doob.mathagent.teaching.service.TeachingWorkflowService;
 import com.doob.mathagent.teaching.vo.TeachingHandoutBatchExportResponse;
@@ -61,6 +62,7 @@ public class TeachingTaskController {
     private final TeachingHandoutBatchExportService batchExportService;
     private final TeachingHumanFeedbackService feedbackService;
     private final TeachingHandoutTemplateService handoutTemplateService;
+    private final TeachingHandoutTemplatePreviewService handoutTemplatePreviewService;
 
     /**
      * 注入教学编排服务。
@@ -73,7 +75,8 @@ public class TeachingTaskController {
             TeachingHandoutPdfExportService pdfExportService,
             TeachingHandoutBatchExportService batchExportService,
             TeachingHumanFeedbackService feedbackService,
-            TeachingHandoutTemplateService handoutTemplateService) {
+            TeachingHandoutTemplateService handoutTemplateService,
+            TeachingHandoutTemplatePreviewService handoutTemplatePreviewService) {
         this.workflowService = workflowService;
         this.subjectResolver = subjectResolver;
         this.capabilityVerifier = capabilityVerifier;
@@ -81,6 +84,7 @@ public class TeachingTaskController {
         this.batchExportService = batchExportService;
         this.feedbackService = feedbackService;
         this.handoutTemplateService = handoutTemplateService;
+        this.handoutTemplatePreviewService = handoutTemplatePreviewService;
     }
 
     /**
@@ -100,7 +104,8 @@ public class TeachingTaskController {
                 pdfExportService,
                 batchExportService,
                 feedbackService,
-                new TeachingHandoutTemplateService());
+                new TeachingHandoutTemplateService(),
+                new TeachingHandoutTemplatePreviewService(new TeachingHandoutTemplateService()));
     }
 
     /**
@@ -137,12 +142,50 @@ public class TeachingTaskController {
      */
     @GetMapping("/api/teaching/handout-templates")
     public List<TeachingHandoutTemplateResponse> listTemplates() {
-        return handoutTemplateService.list();
+        return handoutTemplateService.list().stream()
+                .map(TeachingTaskController::sanitizeTemplateForFrontend)
+                .toList();
+    }
+
+    /**
+     * Returns a real first-page PNG preview for PDF-backed templates without exposing filesystem paths to the browser.
+     */
+    @GetMapping("/api/teaching/handout-templates/{templateCode}/preview.png")
+    public ResponseEntity<byte[]> previewTemplateImage(
+            @PathVariable String templateCode,
+            HttpServletRequest httpRequest) {
+        RequestSubject subject = subjectResolver.resolve(httpRequest);
+        if ("anonymous".equalsIgnoreCase(subject.subjectType())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Login required for template preview");
+        }
+        byte[] png = handoutTemplatePreviewService.renderPreviewPng(templateCode)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Teaching template preview not found"));
+        return ResponseEntity.ok()
+                .contentType(MediaType.IMAGE_PNG)
+                .body(png);
     }
 
     /**
      * 按 taskId 查询任务结果；只允许任务归属主体读取。
      */
+    /**
+     * Returns the original template reference PDF for real multipage frontend preview.
+     */
+    @GetMapping("/api/teaching/handout-templates/{templateCode}/reference.pdf")
+    public ResponseEntity<byte[]> previewTemplatePdf(
+            @PathVariable String templateCode,
+            HttpServletRequest httpRequest) {
+        RequestSubject subject = subjectResolver.resolve(httpRequest);
+        if ("anonymous".equalsIgnoreCase(subject.subjectType())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Login required for template preview");
+        }
+        byte[] pdf = handoutTemplatePreviewService.loadReferencePdf(templateCode)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Teaching template reference PDF not found"));
+        return ResponseEntity.ok()
+                .contentType(MediaType.APPLICATION_PDF)
+                .body(pdf);
+    }
+
     @GetMapping("/api/teaching/tasks/{taskId}")
     public TeachingTaskResponse get(
             @PathVariable String taskId,
@@ -505,6 +548,9 @@ public class TeachingTaskController {
         if ("student".equalsIgnoreCase(version)) {
             return "student";
         }
+        if ("lecture".equalsIgnoreCase(version)) {
+            return "lecture";
+        }
         throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported handout version");
     }
 
@@ -519,7 +565,7 @@ public class TeachingTaskController {
      * Blocks student sessions from teacher-only handout sources even if the frontend requests that route.
      */
     private static void requireHandoutVersionAllowed(String version, RequestSubject subject) {
-        if ("teacher".equals(version) && !canUseTeacherHandout(subject)) {
+        if (("teacher".equals(version) || "lecture".equals(version)) && !canUseTeacherHandout(subject)) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Teacher handout version requires teacher role");
         }
     }
@@ -541,5 +587,25 @@ public class TeachingTaskController {
         }
         String value = request.getHeader(name);
         return value == null || value.isBlank() ? null : value.strip();
+    }
+
+    /**
+     * Frontend template cards should never receive local filesystem paths. Real previews go through
+     * protected PNG/PDF endpoints that resolve templateCode on the backend.
+     */
+    private static TeachingHandoutTemplateResponse sanitizeTemplateForFrontend(TeachingHandoutTemplateResponse template) {
+        return new TeachingHandoutTemplateResponse(
+                template.templateCode(),
+                template.displayName(),
+                template.sourceType(),
+                template.audience(),
+                template.description(),
+                template.category(),
+                template.visualStyle(),
+                template.difficultyBands(),
+                template.tags(),
+                template.referenceTitle(),
+                null,
+                template.referencePreview());
     }
 }

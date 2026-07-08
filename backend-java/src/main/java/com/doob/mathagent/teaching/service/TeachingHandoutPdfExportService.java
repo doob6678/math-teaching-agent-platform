@@ -1,13 +1,17 @@
 package com.doob.mathagent.teaching.service;
 
+import com.doob.mathagent.infrastructure.text.FormulaMarkupSanitizer;
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
 import java.awt.Color;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -22,6 +26,7 @@ import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.pdmodel.font.PDFont;
 import org.apache.pdfbox.pdmodel.font.PDType0Font;
 import org.apache.pdfbox.pdmodel.font.PDType1Font;
+import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -38,6 +43,7 @@ public class TeachingHandoutPdfExportService {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(TeachingHandoutPdfExportService.class);
     private static final Pattern SECTION_COMMAND = Pattern.compile("^\\\\(?:section|subsection|subsubsection|paragraph)\\*?\\{(.+)}\\s*$");
+    private static final Pattern LATEX_HEADING_LINE = Pattern.compile("^\\\\(section\\*?|subsection\\*?|subsubsection\\*?|paragraph\\*?)\\{(.+)}\\s*$");
     private static final Pattern MARKDOWN_HEADING = Pattern.compile("^#{1,6}\\s+(.+)$");
     private static final Pattern WRAPPED_TEXT_COMMAND = Pattern.compile("\\\\(?:textbf|textit|emph|text|mathrm)\\{([^{}]*)}");
     private static final Pattern FRAC_COMMAND = Pattern.compile("\\\\frac\\{([^{}]+)}\\{([^{}]+)}");
@@ -48,14 +54,23 @@ public class TeachingHandoutPdfExportService {
     private static final Pattern SUBSCRIPT_SIMPLE = Pattern.compile("_([0-9a-zA-Z+-])");
     private static final Pattern VSPACE_COMMAND = Pattern.compile("\\\\vspace\\{([0-9.]+)em}");
     private static final Pattern UNDERLINE_HSPACE_COMMAND = Pattern.compile("\\\\underline\\{\\\\hspace\\{[0-9.]+em}}");
-    private static final Pattern MARKDOWN_IMAGE = Pattern.compile("!\\[[^\\]]*]\\([^)]*\\)");
+    private static final Pattern VISIBLE_WORKSPACE_LABEL = Pattern.compile(
+            "(?:课堂作答区|作答区|我的解答|推导区|手写区|教师手写区|留白区|空白区|板书区|教师板书区)\\s*[：:]?");
+    private static final Pattern VISIBLE_WORKSPACE_REFERENCE = Pattern.compile(
+            "(?:写在|填写在|完成在|放在|留在)(?:课堂作答区|作答区|我的解答|推导区|手写区|教师手写区|留白区|空白区|板书区|教师板书区)");
+    private static final Pattern MARKDOWN_IMAGE = Pattern.compile("!\\[([^\\]]*)]\\(([^)]+)\\)");
+    private static final Pattern IMAGE_MARKER = Pattern.compile("\\[\\[HANDOUTIMAGE:([A-Za-z0-9+/]+):([A-Za-z0-9+/]+)]]");
     private static final Duration LATEX_TIMEOUT = Duration.ofSeconds(45);
     private static final float PAGE_WIDTH = PDRectangle.A4.getWidth();
     private static final float PAGE_HEIGHT = PDRectangle.A4.getHeight();
+    private static final float LECTURE_PAGE_WIDTH = 800f;
+    private static final float LECTURE_PAGE_HEIGHT = 500f;
     private static final float MARGIN = 54;
+    private static final float LECTURE_MARGIN = 34;
     private static final float TITLE_FONT_SIZE = 18;
     private static final float HEADING_FONT_SIZE = 12.8f;
     private static final float BODY_FONT_SIZE = 10.8f;
+    private static final float IMAGE_CAPTION_SIZE = 8.6f;
     private static final float LEADING = 19;
     private static final int WRAP_UNITS = 68;
 
@@ -227,15 +242,22 @@ public class TeachingHandoutPdfExportService {
         PdfStyle style = PdfStyle.forVersion(version);
         String title = versionTitle(version);
         String templateName = task.selectedTemplate() == null ? "标准讲义" : task.selectedTemplate().displayName();
-        String body = sanitizeLatexForExport(task.handoutLatexFor(version));
+        String body = renderLatexBody(sanitizeLatexForExport(task.handoutLatexFor(version)));
         String headerTopic = safeHeaderTopic(task.learningGoal());
+        String documentOptions = style.isLecture() ? "10pt" : "11pt,a4paper";
+        String geometryOptions = style.isLecture()
+                ? "paperwidth=16cm,paperheight=10cm,top=8mm,bottom=8mm,left=10mm,right=10mm"
+                : "a4paper,top=24mm,bottom=23mm,left=22mm,right=22mm";
+        String bodySizeCommand = style.isLecture() ? "\\small" : "";
         return """
-                \\documentclass[11pt,a4paper]{article}
-                \\usepackage[a4paper,top=24mm,bottom=23mm,left=22mm,right=22mm]{geometry}
+                \\documentclass[%s]{article}
+                \\usepackage[%s]{geometry}
                 \\usepackage{fontspec}
                 \\usepackage{xeCJK}
                 \\usepackage{xcolor}
                 \\usepackage{amsmath,amssymb}
+                \\usepackage{graphicx}
+                \\usepackage{caption}
                 \\usepackage{enumitem}
                 \\usepackage{fancyhdr}
                 \\usepackage{lastpage}
@@ -246,6 +268,8 @@ public class TeachingHandoutPdfExportService {
                 \\setlength{\\parskip}{0.72em}
                 \\setlength{\\headheight}{15pt}
                 \\setlength{\\footskip}{14mm}
+                \\setkeys{Gin}{keepaspectratio}
+                \\captionsetup{font=small,labelformat=empty}
                 \\setlist[itemize]{leftmargin=2em,itemsep=0.28em,topsep=0.35em}
                 \\setlist[enumerate]{leftmargin=2em,itemsep=0.28em,topsep=0.35em}
                 \\definecolor{HandoutAccent}{HTML}{%s}
@@ -277,8 +301,11 @@ public class TeachingHandoutPdfExportService {
                 \\end{center}
                 \\vspace{0.6em}
                 %s
+                %s
                 \\end{document}
                 """.formatted(
+                documentOptions,
+                geometryOptions,
                 hex(style.accent()),
                 hex(style.accentLight()),
                 latexText(title),
@@ -287,13 +314,14 @@ public class TeachingHandoutPdfExportService {
                 latexText(title),
                 latexText(templateName),
                 latexText(title),
+                bodySizeCommand,
                 body);
     }
 
     /**
      * Produces the canonical LaTeX body used by preview, download, ZIP export, and PDF rendering.
      * This is a last-resort guard for old tasks or model output that still contains internal layout
-     * instructions, OCR page fragments, markdown image paths, or provider diagnostics.
+     * instructions, OCR page fragments, or provider diagnostics while preserving real handout images.
      */
     public static String sanitizeLatexForExport(String source) {
         String normalized = safeText(source)
@@ -321,6 +349,7 @@ public class TeachingHandoutPdfExportService {
         boolean inEvidenceSection = false;
         boolean skippingTextbookBody = false;
         boolean skippingLegacyMetadataSection = false;
+        boolean skippingBlankWorkspaceSection = false;
         int evidenceLineCount = 0;
         for (String rawLine : normalized.replace("\r\n", "\n").replace('\r', '\n').split("\n")) {
             String line = rawLine.strip();
@@ -333,10 +362,19 @@ public class TeachingHandoutPdfExportService {
                 String heading = cleanText(section.group(1));
                 if (isVersionOnlyHeading(heading)) {
                     skippingLegacyMetadataSection = false;
+                    skippingBlankWorkspaceSection = false;
                     inEvidenceSection = false;
                     skippingTextbookBody = false;
                     continue;
                 }
+                if (isBlankWorkspaceHeading(heading)) {
+                    skippingLegacyMetadataSection = false;
+                    skippingBlankWorkspaceSection = true;
+                    inEvidenceSection = false;
+                    skippingTextbookBody = false;
+                    continue;
+                }
+                skippingBlankWorkspaceSection = false;
                 skippingLegacyMetadataSection = isLegacyMetadataHeading(heading);
                 if (skippingLegacyMetadataSection) {
                     continue;
@@ -351,15 +389,15 @@ public class TeachingHandoutPdfExportService {
                 skippingTextbookBody = false;
             }
             if (line.isBlank()) {
-                if (!skippingTextbookBody && !skippingLegacyMetadataSection) {
+                if (!skippingTextbookBody && !skippingLegacyMetadataSection && !skippingBlankWorkspaceSection) {
                     lines.add("");
                 }
                 continue;
             }
-            if (skippingLegacyMetadataSection) {
+            if (skippingLegacyMetadataSection || skippingBlankWorkspaceSection) {
                 continue;
             }
-            if (line.startsWith("%") || isDiagnosticLine(line) || isMarkdownImageOnlyLine(line)) {
+            if (line.startsWith("%") || isDiagnosticLine(line)) {
                 continue;
             }
             if (isUnreadablePlaceholderLine(line)) {
@@ -389,6 +427,10 @@ public class TeachingHandoutPdfExportService {
             if (skippingTextbookBody) {
                 continue;
             }
+            line = removeVisibleWorkspaceLabels(line).strip();
+            if (line.isBlank()) {
+                continue;
+            }
             if (inEvidenceSection) {
                 line = compactEvidenceReference(line);
                 if (line.isBlank() || evidenceLineCount >= 4) {
@@ -397,18 +439,221 @@ public class TeachingHandoutPdfExportService {
                 evidenceLineCount += 1;
                 line = "- " + line;
             }
-            if (MARKDOWN_IMAGE.matcher(line).find()) {
-                line = MARKDOWN_IMAGE.matcher(line).replaceAll("").strip();
-                if (line.isBlank()) {
-                    continue;
+            List<HandoutImage> images = inEvidenceSection ? List.of() : extractMarkdownImages(line);
+            if (!images.isEmpty()) {
+                String textOnly = MARKDOWN_IMAGE.matcher(line).replaceAll("").strip();
+                if (!textOnly.isBlank()) {
+                    lines.add(textOnly);
                 }
+                for (HandoutImage image : images) {
+                    lines.add(toImageMarker(image));
+                }
+                continue;
             }
             lines.add(line);
         }
-        return escapeLooseTextSpecials(String.join("\n", lines));
+        return removeEmptyTitledBlocks(escapeLooseTextSpecials(String.join("\n", lines)));
+    }
+
+    private static String removeVisibleWorkspaceLabels(String value) {
+        String withoutReferences = VISIBLE_WORKSPACE_REFERENCE.matcher(value).replaceAll("独立完成");
+        return VISIBLE_WORKSPACE_LABEL.matcher(withoutReferences).replaceAll("");
+    }
+
+    private static boolean isBlankWorkspaceHeading(String value) {
+        String compact = safeText(value)
+                .replaceAll("[_＿\\s:：，。,.;；、-]+", "")
+                .strip();
+        return List.of("作答", "作答区", "课堂作答区", "我的解答", "解答", "推导区", "空白区",
+                "留白区", "留白", "手写区", "教师手写区", "板书留白", "板书区", "教师板书区")
+                .contains(compact);
+    }
+
+    private static String removeEmptyTitledBlocks(String latex) {
+        if (latex == null || latex.isBlank()) {
+            return "";
+        }
+        String[] lines = latex.replace("\r\n", "\n").replace('\r', '\n').split("\n", -1);
+        return renderNonEmptyTitleRange(lines, 0, lines.length).strip();
+    }
+
+    private static String renderNonEmptyTitleRange(String[] lines, int start, int end) {
+        StringBuilder builder = new StringBuilder();
+        int index = start;
+        while (index < end) {
+            Matcher heading = LATEX_HEADING_LINE.matcher(lines[index].strip());
+            if (!heading.matches()) {
+                if (!isBlankWorkspaceLabelLine(lines[index])) {
+                    builder.append(lines[index]).append('\n');
+                }
+                index += 1;
+                continue;
+            }
+            int level = latexHeadingLevel(heading.group(1));
+            int next = index + 1;
+            while (next < end) {
+                Matcher nextHeading = LATEX_HEADING_LINE.matcher(lines[next].strip());
+                if (nextHeading.matches() && latexHeadingLevel(nextHeading.group(1)) <= level) {
+                    break;
+                }
+                next += 1;
+            }
+            String body = renderNonEmptyTitleRange(lines, index + 1, next).strip();
+            if (hasRealLatexContent(body)) {
+                builder.append(lines[index].strip()).append('\n').append(body).append("\n\n");
+            }
+            index = next;
+        }
+        return builder.toString();
+    }
+
+    private static int latexHeadingLevel(String command) {
+        String normalized = command == null ? "" : command.replace("*", "");
+        return switch (normalized) {
+            case "section" -> 1;
+            case "subsection" -> 2;
+            case "subsubsection", "paragraph" -> 3;
+            default -> 4;
+        };
+    }
+
+    private static boolean hasRealLatexContent(String body) {
+        if (body == null || body.isBlank()) {
+            return false;
+        }
+        for (String rawLine : body.replace("\r\n", "\n").replace('\r', '\n').split("\n")) {
+            if (!isBlankOnlyLatexLine(rawLine)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isBlankWorkspaceLabelLine(String line) {
+        String text = line == null ? "" : line.strip();
+        if (text.isBlank()) {
+            return false;
+        }
+        String compact = text
+                .replaceAll("[_＿\\s:：，。,.;；、-]+", "")
+                .strip();
+        return List.of("留白区", "留白", "手写区", "教师手写区", "板书留白", "板书区", "教师板书区").contains(compact);
+    }
+
+    private static boolean isBlankOnlyLatexLine(String line) {
+        String text = line == null ? "" : line.strip();
+        if (text.isBlank()) {
+            return true;
+        }
+        if (text.matches("^\\\\vspace\\{[0-9.]+em}\\s*$")
+                || text.matches("^\\\\(?:smallskip|medskip|bigskip|par)\\s*$")
+                || text.matches("^\\\\underline\\{\\\\hspace\\{[0-9.]+em}}\\s*$")
+                || text.matches("^\\\\(?:begin|end)\\{(?:itemize|enumerate|center)}\\s*$")) {
+            return true;
+        }
+        String compact = text
+                .replaceAll("\\\\vspace\\{[^}]+}", "")
+                .replaceAll("\\\\underline\\{\\\\hspace\\{[^}]+}}", "")
+                .replaceAll("\\\\hspace\\{[^}]+}", "")
+                .replaceAll("\\\\par", "")
+                .replaceAll("[_＿\\s:：，。,.;；、-]+", "")
+                .strip();
+        return compact.isBlank()
+                || isBlankWorkspaceLabelLine(text)
+                || List.of("作答", "作答区", "课堂作答区", "我的解答", "解答", "推导区", "订正", "订正记录",
+                        "错因", "错因记录", "订正与错因", "空白区", "留白区", "留白", "手写区",
+                        "教师手写区", "板书留白", "板书区", "教师板书区").contains(compact);
+    }
+
+    private static String renderLatexBody(String sanitizedBody) {
+        StringBuilder builder = new StringBuilder();
+        String[] lines = safeText(sanitizedBody).replace("\r\n", "\n").replace('\r', '\n').split("\n");
+        for (int index = 0; index < lines.length; index += 1) {
+            Optional<HandoutImage> image = parseImageMarker(lines[index].strip());
+            if (image.isPresent()) {
+                List<HandoutImage> block = new ArrayList<>();
+                while (index < lines.length) {
+                    Optional<HandoutImage> candidate = parseImageMarker(lines[index].strip());
+                    if (candidate.isEmpty()) {
+                        break;
+                    }
+                    block.add(candidate.get());
+                    index += 1;
+                }
+                index -= 1;
+                builder.append(renderLatexImageBlock(block));
+                continue;
+            }
+            builder.append(lines[index]).append('\n');
+        }
+        return builder.toString().strip();
+    }
+
+    private static String renderLatexImageBlock(List<HandoutImage> images) {
+        if (images.isEmpty()) {
+            return "";
+        }
+        StringBuilder builder = new StringBuilder();
+        for (int index = 0; index < images.size(); index += 2) {
+            List<HandoutImage> row = images.subList(index, Math.min(index + 2, images.size()));
+            builder.append("\\begin{center}\n");
+            if (row.size() == 1) {
+                builder.append(renderLatexImageCell(row.get(0), "0.78\\linewidth", "0.32\\textheight"));
+            } else {
+                builder.append(renderLatexImageRowCell(row.get(0)));
+                builder.append("\\hfill\n");
+                builder.append(renderLatexImageRowCell(row.get(1)));
+            }
+            builder.append("\\end{center}\n");
+            builder.append("\\vspace{0.35em}\n");
+        }
+        return builder.toString();
+    }
+
+    private static String renderLatexImageRowCell(HandoutImage image) {
+        return """
+                \\begin{minipage}[t]{0.48\\linewidth}
+                \\centering
+                %s
+                \\end{minipage}
+                """.formatted(renderLatexImageCell(image, "\\linewidth", "0.24\\textheight"));
+    }
+
+    private static String renderLatexImageCell(HandoutImage image, String width, String maxHeight) {
+        Optional<Path> localPath = existingLocalImagePath(image.path());
+        String caption = safeText(image.alt());
+        StringBuilder builder = new StringBuilder();
+        if (localPath.isPresent()) {
+            builder.append("\\includegraphics[width=")
+                    .append(width)
+                    .append(",height=")
+                    .append(maxHeight)
+                    .append("]{")
+                    .append(latexImagePath(localPath.get()))
+                    .append("}\n");
+        } else {
+            builder.append("\\fbox{\\parbox[c][")
+                    .append(maxHeight)
+                    .append("][c]{")
+                    .append(width)
+                    .append("}{\\centering 图片未找到");
+            if (!caption.isBlank()) {
+                builder.append("\\\\").append(latexText(caption));
+            }
+            builder.append("}}\n");
+        }
+        if (!caption.isBlank()) {
+            builder.append("{\\small ").append(latexText(caption)).append("\\par}\n");
+        }
+        return builder.toString();
+    }
+
+    private static String latexImagePath(Path path) {
+        return "\\detokenize{" + path.toAbsolutePath().normalize().toString().replace('\\', '/') + "}";
     }
 
     private static String escapeLooseTextSpecials(String value) {
+        value = FormulaMarkupSanitizer.sanitizeFeishuMath(safeText(value));
         StringBuilder builder = new StringBuilder();
         boolean math = false;
         for (int index = 0; index < value.length(); index += 1) {
@@ -457,7 +702,7 @@ public class TeachingHandoutPdfExportService {
     }
 
     private static String latexText(String value) {
-        return safeText(value)
+        return normalizeLegacyLatexText(safeText(value))
                 .replace("\\", "\\textbackslash{}")
                 .replace("&", "\\&")
                 .replace("%", "\\%")
@@ -467,6 +712,14 @@ public class TeachingHandoutPdfExportService {
                 .replace("}", "\\}")
                 .replace("^", "\\textasciicircum{}")
                 .replace("~", "\\textasciitilde{}");
+    }
+
+    private static String normalizeLegacyLatexText(String value) {
+        return safeText(value)
+                .replace("\\textasciicircum{}", "^")
+                .replace("\\textasciitilde{}", "~")
+                .replace("\\textbackslash{}frac", "\\frac")
+                .replace("\\textbackslash{}sqrt", "\\sqrt");
     }
 
     private static String hex(Color color) {
@@ -559,8 +812,9 @@ public class TeachingHandoutPdfExportService {
         boolean skippingTextbookBody = false;
         boolean skippingLegacyMetadataSection = false;
         int evidenceLineCount = 0;
-        for (String rawLine : safeText(latex).replace("\r\n", "\n").replace('\r', '\n').split("\n")) {
-            String line = rawLine.strip();
+        String[] sourceLines = safeText(latex).replace("\r\n", "\n").replace('\r', '\n').split("\n");
+        for (int index = 0; index < sourceLines.length; index += 1) {
+            String line = sourceLines[index].strip();
             if (line.isBlank()) {
                 if (!skippingTextbookBody && !skippingLegacyMetadataSection) {
                     addBlank(lines);
@@ -570,7 +824,19 @@ public class TeachingHandoutPdfExportService {
             if (isDiagnosticLine(line)) {
                 continue;
             }
-            if (isMarkdownImageOnlyLine(line)) {
+            Optional<HandoutImage> markerImage = parseImageMarker(line);
+            if (markerImage.isPresent()) {
+                List<HandoutImage> block = new ArrayList<>();
+                while (index < sourceLines.length) {
+                    Optional<HandoutImage> candidate = parseImageMarker(sourceLines[index].strip());
+                    if (candidate.isEmpty()) {
+                        break;
+                    }
+                    block.add(candidate.get());
+                    index += 1;
+                }
+                index -= 1;
+                lines.add(new ReadableLine(LineType.IMAGE, "", List.copyOf(block)));
                 continue;
             }
             if (line.startsWith("%")
@@ -637,6 +903,15 @@ public class TeachingHandoutPdfExportService {
                 continue;
             }
             if (skippingLegacyMetadataSection) {
+                continue;
+            }
+            List<HandoutImage> inlineImages = extractMarkdownImages(line);
+            if (!inlineImages.isEmpty()) {
+                String textOnly = cleanText(MARKDOWN_IMAGE.matcher(line).replaceAll(""));
+                if (!textOnly.isBlank()) {
+                    lines.add(new ReadableLine(inEvidenceSection ? LineType.BULLET : LineType.PARAGRAPH, textOnly));
+                }
+                lines.add(new ReadableLine(LineType.IMAGE, "", List.copyOf(inlineImages)));
                 continue;
             }
             if (line.startsWith("\\item")) {
@@ -761,6 +1036,73 @@ public class TeachingHandoutPdfExportService {
                 || lower.startsWith("\\color{");
     }
 
+    private static List<HandoutImage> extractMarkdownImages(String line) {
+        List<HandoutImage> images = new ArrayList<>();
+        Matcher matcher = MARKDOWN_IMAGE.matcher(safeText(line));
+        while (matcher.find()) {
+            String alt = cleanText(matcher.group(1));
+            String path = normalizeImageReference(matcher.group(2));
+            if (!path.isBlank()) {
+                images.add(new HandoutImage(alt, path));
+            }
+        }
+        return images;
+    }
+
+    private static String normalizeImageReference(String rawPath) {
+        String candidate = safeText(rawPath);
+        if (candidate.startsWith("<") && candidate.endsWith(">") && candidate.length() > 2) {
+            candidate = candidate.substring(1, candidate.length() - 1).strip();
+        }
+        if (candidate.startsWith("http://") || candidate.startsWith("https://")) {
+            return candidate;
+        }
+        try {
+            Path path = Path.of(candidate);
+            if (!path.isAbsolute()) {
+                path = Path.of("").toAbsolutePath().resolve(path).normalize();
+            }
+            return path.toString();
+        } catch (InvalidPathException exception) {
+            return candidate;
+        }
+    }
+
+    private static String toImageMarker(HandoutImage image) {
+        return "[[HANDOUTIMAGE:"
+                + Base64.getEncoder().withoutPadding().encodeToString(safeText(image.alt()).getBytes(StandardCharsets.UTF_8))
+                + ":"
+                + Base64.getEncoder().withoutPadding().encodeToString(safeText(image.path()).getBytes(StandardCharsets.UTF_8))
+                + "]]";
+    }
+
+    private static Optional<HandoutImage> parseImageMarker(String line) {
+        Matcher matcher = IMAGE_MARKER.matcher(safeText(line));
+        if (!matcher.matches()) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(new HandoutImage(
+                    new String(Base64.getDecoder().decode(matcher.group(1)), StandardCharsets.UTF_8),
+                    new String(Base64.getDecoder().decode(matcher.group(2)), StandardCharsets.UTF_8)));
+        } catch (IllegalArgumentException exception) {
+            return Optional.empty();
+        }
+    }
+
+    private static Optional<Path> existingLocalImagePath(String reference) {
+        String text = safeText(reference);
+        if (text.isBlank() || text.startsWith("http://") || text.startsWith("https://")) {
+            return Optional.empty();
+        }
+        try {
+            Path path = Path.of(text);
+            return Files.isRegularFile(path) ? Optional.of(path) : Optional.empty();
+        } catch (InvalidPathException exception) {
+            return Optional.empty();
+        }
+    }
+
     private static boolean isMarkdownImageOnlyLine(String line) {
         if (!MARKDOWN_IMAGE.matcher(line).find()) {
             return false;
@@ -778,6 +1120,7 @@ public class TeachingHandoutPdfExportService {
         String text = TeachingEvidenceSnippetSanitizer.sanitizeCompact(cleanText(value))
                 .replaceAll("\\s+", " ")
                 .strip();
+        text = compactLegacyPdfEvidenceLine(text);
         if (text.isBlank()
                 || "已命中资料片段。".equals(text)
                 || text.equals("正文")
@@ -785,6 +1128,7 @@ public class TeachingHandoutPdfExportService {
                 || text.matches("(?i)^#?\\s*p\\d+.*")
                 || text.contains("页图")
                 || text.contains("OCR")
+                || text.contains("[[HANDOUTIMAGE:")
                 || text.contains("![")
                 || text.contains("## 正文")) {
             return "";
@@ -795,6 +1139,29 @@ public class TeachingHandoutPdfExportService {
                 .replace("TEACHER_PRIVATE", "教师资料");
         if (text.length() > 88) {
             text = text.substring(0, 88).strip() + "...";
+        }
+        return text;
+    }
+
+    /**
+     * Old saved tasks sometimes stored the whole OCR snippet after a source/page reference.
+     * Exported handouts should cite the source, not replay noisy OCR text or broken glyphs.
+     */
+    private static String compactLegacyPdfEvidenceLine(String value) {
+        String text = safeText(value).strip();
+        if (text.isBlank()) {
+            return "";
+        }
+        Matcher matcher = Pattern.compile("(?i)(.+?PDF\\$?\\s*\\d+)(?:[:：].*)?$").matcher(text);
+        if (matcher.matches()) {
+            return matcher.group(1)
+                    .replace("$", "")
+                    .replaceAll("\\s+", " ")
+                    .strip();
+        }
+        matcher = Pattern.compile("(.+?)(?:PDF页码|PDF\\s*页码)[:：]?\\s*(\\d+).*").matcher(text);
+        if (matcher.matches()) {
+            return (matcher.group(1).strip() + " PDF " + matcher.group(2)).replaceAll("\\s+", " ").strip();
         }
         return text;
     }
@@ -835,6 +1202,7 @@ public class TeachingHandoutPdfExportService {
                 .replace("\\textbackslash", "\\")
                 .replace("\\_", "_");
         cleaned = MARKDOWN_IMAGE.matcher(cleaned).replaceAll("");
+        cleaned = IMAGE_MARKER.matcher(cleaned).replaceAll("");
         cleaned = UNDERLINE_HSPACE_COMMAND.matcher(cleaned).replaceAll("________");
         cleaned = replaceRepeated(FRAC_COMMAND, cleaned, "($1)/($2)");
         cleaned = replaceRepeated(SQRT_COMMAND, cleaned, "√($1)");
@@ -981,6 +1349,9 @@ public class TeachingHandoutPdfExportService {
      * Returns a localized handout version title.
      */
     private static String versionTitle(String version) {
+        if ("lecture".equalsIgnoreCase(version)) {
+            return "横版讲解稿";
+        }
         return "student".equalsIgnoreCase(version) ? "学生版讲义" : "教师版讲义";
     }
 
@@ -1011,17 +1382,20 @@ public class TeachingHandoutPdfExportService {
         int totalPages = document.getNumberOfPages();
         for (int index = 0; index < totalPages; index += 1) {
             PDPage page = document.getPage(index);
+            PDRectangle box = page.getMediaBox();
+            float pageWidth = box.getWidth();
+            float margin = footerMargin(style);
             try (PDPageContentStream footer = new PDPageContentStream(document, page, AppendMode.APPEND, true, true)) {
                 footer.setStrokingColor(style.border());
                 footer.setLineWidth(0.4f);
-                footer.moveTo(MARGIN, 38);
-                footer.lineTo(PAGE_WIDTH - MARGIN, 38);
+                footer.moveTo(margin, 38);
+                footer.lineTo(pageWidth - margin, 38);
                 footer.stroke();
 
                 footer.beginText();
                 footer.setFont(font, 8.8f);
                 footer.setNonStrokingColor(style.mutedText());
-                footer.newLineAtOffset(MARGIN, 24);
+                footer.newLineAtOffset(margin, 24);
                 footer.showText(supportedText(font, title));
                 footer.endText();
 
@@ -1030,11 +1404,15 @@ public class TeachingHandoutPdfExportService {
                 footer.setFont(font, 8.8f);
                 footer.setNonStrokingColor(style.mutedText());
                 float width = textWidth(font, pageNo, 8.8f);
-                footer.newLineAtOffset(PAGE_WIDTH - MARGIN - width, 24);
+                footer.newLineAtOffset(pageWidth - margin - width, 24);
                 footer.showText(supportedText(font, pageNo));
                 footer.endText();
             }
         }
+    }
+
+    private static float footerMargin(PdfStyle style) {
+        return style.isLecture() ? LECTURE_MARGIN : MARGIN;
     }
 
     /**
@@ -1077,6 +1455,7 @@ public class TeachingHandoutPdfExportService {
         PARAGRAPH,
         BULLET,
         MUTED,
+        IMAGE,
         WRITING_SPACE,
         BLANK
     }
@@ -1084,7 +1463,13 @@ public class TeachingHandoutPdfExportService {
     /**
      * A readable line after LaTeX cleanup.
      */
-    private record ReadableLine(LineType type, String text) {
+    private record ReadableLine(LineType type, String text, List<HandoutImage> images) {
+        private ReadableLine(LineType type, String text) {
+            this(type, text, List.of());
+        }
+    }
+
+    private record HandoutImage(String alt, String path) {
     }
 
     /**
@@ -1112,6 +1497,17 @@ public class TeachingHandoutPdfExportService {
                         new Color(17, 24, 39),
                         "学生版");
             }
+            if ("lecture".equalsIgnoreCase(version)) {
+                return new PdfStyle(
+                        new Color(37, 99, 235),
+                        new Color(30, 64, 175),
+                        new Color(239, 246, 255),
+                        new Color(15, 23, 42),
+                        new Color(30, 41, 59),
+                        new Color(100, 116, 139),
+                        new Color(191, 219, 254),
+                        "横版讲解");
+            }
             return new PdfStyle(
                     new Color(15, 118, 110),
                     new Color(17, 94, 89),
@@ -1121,6 +1517,10 @@ public class TeachingHandoutPdfExportService {
                     new Color(100, 116, 139),
                     new Color(153, 246, 228),
                     "教师版");
+        }
+
+        private boolean isLecture() {
+            return "横版讲解".equals(versionLabel);
         }
     }
 
@@ -1179,12 +1579,16 @@ public class TeachingHandoutPdfExportService {
                 ensureSpace(LEADING);
                 return;
             }
+            if (line.type() == LineType.IMAGE) {
+                writeImageBlock(line.images());
+                return;
+            }
             if (line.type() == LineType.WRITING_SPACE) {
                 ensureSpace(LEADING * 1.15f);
                 stream.setStrokingColor(style.border());
                 stream.setLineWidth(0.35f);
-                stream.moveTo(MARGIN, y - 3);
-                stream.lineTo(PAGE_WIDTH - MARGIN, y - 3);
+                stream.moveTo(pageMargin(), y - 3);
+                stream.lineTo(pageWidth() - pageMargin(), y - 3);
                 stream.stroke();
                 y -= LEADING * 1.15f;
                 return;
@@ -1195,7 +1599,7 @@ public class TeachingHandoutPdfExportService {
                 case MUTED -> BODY_FONT_SIZE - 1;
                 default -> BODY_FONT_SIZE;
             };
-            float left = line.type() == LineType.BULLET ? MARGIN + 14 : MARGIN;
+            float left = line.type() == LineType.BULLET ? pageMargin() + 14 : pageMargin();
             String prefix = line.type() == LineType.BULLET ? "- " : "";
             if (line.type() == LineType.HEADING) {
                 writeHeadingBlock(line.text());
@@ -1220,27 +1624,107 @@ public class TeachingHandoutPdfExportService {
             }
         }
 
+        private void writeImageBlock(List<HandoutImage> images) throws IOException {
+            if (images == null || images.isEmpty()) {
+                return;
+            }
+            for (int index = 0; index < images.size(); index += 2) {
+                List<HandoutImage> row = images.subList(index, Math.min(index + 2, images.size()));
+                float rowHeight = row.size() == 1 ? 214f : 176f;
+                float gap = row.size() == 1 ? 0f : 12f;
+                float contentWidth = pageWidth() - pageMargin() * 2;
+                float cellWidth = row.size() == 1 ? contentWidth * 0.78f : (contentWidth - gap) / 2f;
+                float startX = row.size() == 1 ? (pageWidth() - cellWidth) / 2f : pageMargin();
+                ensureSpace(rowHeight);
+                float top = y;
+                for (int column = 0; column < row.size(); column += 1) {
+                    drawImageCell(row.get(column), startX + column * (cellWidth + gap), top, cellWidth, rowHeight - 16f);
+                }
+                y -= rowHeight;
+            }
+            y -= 6;
+        }
+
+        private void drawImageCell(HandoutImage image, float left, float top, float width, float reservedHeight) throws IOException {
+            String caption = safeText(image.alt());
+            float captionHeight = caption.isBlank() ? 0f : 18f;
+            float imageAreaHeight = Math.max(72f, reservedHeight - captionHeight - 8f);
+            Optional<Path> localPath = existingLocalImagePath(image.path());
+            if (localPath.isPresent()) {
+                PDImageXObject pdImage = PDImageXObject.createFromFileByExtension(localPath.get().toFile(), document);
+                float scale = Math.min(width / pdImage.getWidth(), imageAreaHeight / pdImage.getHeight());
+                float drawWidth = pdImage.getWidth() * scale;
+                float drawHeight = pdImage.getHeight() * scale;
+                float drawX = left + (width - drawWidth) / 2f;
+                float drawY = top - drawHeight;
+                stream.drawImage(pdImage, drawX, drawY, drawWidth, drawHeight);
+            } else {
+                float boxHeight = Math.min(imageAreaHeight, 108f);
+                stream.setStrokingColor(style.border());
+                stream.setLineWidth(0.45f);
+                stream.addRect(left, top - boxHeight, width, boxHeight);
+                stream.stroke();
+                writeCenteredSmallText("图片未找到", left, top - boxHeight / 2f + 8f, width);
+                if (!caption.isBlank()) {
+                    writeCenteredSmallText(caption, left + 10f, top - boxHeight / 2f - 8f, width - 20f);
+                }
+            }
+            if (!caption.isBlank()) {
+                stream.beginText();
+                stream.setFont(font, IMAGE_CAPTION_SIZE);
+                stream.setNonStrokingColor(style.mutedText());
+                stream.newLineAtOffset(left, top - imageAreaHeight - 14f);
+                stream.showText(supportedText(font, truncateCaption(caption, width)));
+                stream.endText();
+            }
+        }
+
+        private void writeCenteredSmallText(String text, float left, float baseline, float width) throws IOException {
+            String rendered = truncateCaption(text, width);
+            float size = BODY_FONT_SIZE - 1.2f;
+            float textWidth = textWidth(font, rendered, size);
+            stream.beginText();
+            stream.setFont(font, size);
+            stream.setNonStrokingColor(style.mutedText());
+            stream.newLineAtOffset(left + Math.max(0f, (width - textWidth) / 2f), baseline);
+            stream.showText(supportedText(font, rendered));
+            stream.endText();
+        }
+
+        private String truncateCaption(String text, float width) {
+            if (safeText(text).isBlank()) {
+                return "";
+            }
+            int maxUnits = Math.max(12, Math.round(width / 7.4f));
+            List<String> wrapped = wrap(text, maxUnits);
+            if (wrapped.isEmpty()) {
+                return "";
+            }
+            String firstLine = wrapped.get(0);
+            return wrapped.size() == 1 ? firstLine : firstLine + "...";
+        }
+
         private void writeHeadingBlock(String text) throws IOException {
             y -= 5;
             ensureSpace(40);
             if (!isStudentWorksheetStyle()) {
                 stream.setNonStrokingColor(style.accentLight());
-                stream.addRect(MARGIN, y - 8, PAGE_WIDTH - MARGIN * 2, 28);
+                stream.addRect(pageMargin(), y - 8, pageWidth() - pageMargin() * 2, 28);
                 stream.fill();
                 stream.setNonStrokingColor(style.accent());
-                stream.addRect(MARGIN, y - 8, 4, 28);
+                stream.addRect(pageMargin(), y - 8, 4, 28);
                 stream.fill();
             } else {
                 stream.setStrokingColor(style.border());
                 stream.setLineWidth(0.35f);
-                stream.moveTo(MARGIN, y - 10);
-                stream.lineTo(PAGE_WIDTH - MARGIN, y - 10);
+                stream.moveTo(pageMargin(), y - 10);
+                stream.lineTo(pageWidth() - pageMargin(), y - 10);
                 stream.stroke();
             }
             stream.beginText();
             stream.setFont(font, HEADING_FONT_SIZE);
             stream.setNonStrokingColor(style.accentDark());
-            stream.newLineAtOffset(isStudentWorksheetStyle() ? MARGIN : MARGIN + 12, y);
+            stream.newLineAtOffset(isStudentWorksheetStyle() ? pageMargin() : pageMargin() + 12, y);
             stream.showText(supportedText(font, text));
             stream.endText();
             y -= 38;
@@ -1255,7 +1739,7 @@ public class TeachingHandoutPdfExportService {
         }
 
         private void ensureSpace(float required) throws IOException {
-            if (y - required < MARGIN) {
+            if (y - required < pageMargin()) {
                 newPage();
             }
         }
@@ -1264,26 +1748,26 @@ public class TeachingHandoutPdfExportService {
             if (stream != null) {
                 stream.close();
             }
-            PDPage page = new PDPage(PDRectangle.A4);
+            PDPage page = new PDPage(pageRectangle());
             document.addPage(page);
             stream = new PDPageContentStream(document, page);
             pageNumber += 1;
             drawHeader();
-            y = isStudentWorksheetStyle() ? PAGE_HEIGHT - 132 : PAGE_HEIGHT - 104;
+            y = isStudentWorksheetStyle() ? pageHeight() - 132 : pageHeight() - 104;
         }
 
         private void drawHeader() throws IOException {
             if (isStudentWorksheetStyle()) {
                 stream.setStrokingColor(style.border());
                 stream.setLineWidth(0.7f);
-                stream.moveTo(MARGIN, PAGE_HEIGHT - 72);
-                stream.lineTo(PAGE_WIDTH - MARGIN, PAGE_HEIGHT - 72);
+                stream.moveTo(pageMargin(), pageHeight() - 72);
+                stream.lineTo(pageWidth() - pageMargin(), pageHeight() - 72);
                 stream.stroke();
 
                 stream.beginText();
                 stream.setFont(font, 10.2f);
                 stream.setNonStrokingColor(style.mutedText());
-                stream.newLineAtOffset(MARGIN, PAGE_HEIGHT - 54);
+                stream.newLineAtOffset(pageMargin(), pageHeight() - 54);
                 stream.showText(supportedText(font, "数学讲义"));
                 stream.endText();
 
@@ -1291,49 +1775,65 @@ public class TeachingHandoutPdfExportService {
                 stream.setFont(font, 18.5f);
                 stream.setNonStrokingColor(style.titleText());
                 float titleWidth = textWidth(font, title, 18.5f);
-                stream.newLineAtOffset((PAGE_WIDTH - titleWidth) / 2f, PAGE_HEIGHT - 102);
+                stream.newLineAtOffset((pageWidth() - titleWidth) / 2f, pageHeight() - 102);
                 stream.showText(supportedText(font, title));
                 stream.endText();
                 return;
             }
             stream.setNonStrokingColor(style.accentLight());
-            stream.addRect(0, PAGE_HEIGHT - 74, PAGE_WIDTH, 74);
+            stream.addRect(0, pageHeight() - 74, pageWidth(), 74);
             stream.fill();
             stream.setNonStrokingColor(style.accent());
-            stream.addRect(0, PAGE_HEIGHT - 74, 7, 74);
+            stream.addRect(0, pageHeight() - 74, 7, 74);
             stream.fill();
             stream.setStrokingColor(style.border());
             stream.setLineWidth(0.5f);
-            stream.moveTo(MARGIN, PAGE_HEIGHT - 74);
-            stream.lineTo(PAGE_WIDTH - MARGIN, PAGE_HEIGHT - 74);
+            stream.moveTo(pageMargin(), pageHeight() - 74);
+            stream.lineTo(pageWidth() - pageMargin(), pageHeight() - 74);
             stream.stroke();
 
             stream.beginText();
             stream.setFont(font, 14.5f);
             stream.setNonStrokingColor(style.titleText());
-            stream.newLineAtOffset(MARGIN, PAGE_HEIGHT - 34);
+            stream.newLineAtOffset(pageMargin(), pageHeight() - 34);
             stream.showText(supportedText(font, title));
             stream.endText();
 
             stream.beginText();
             stream.setFont(font, 9.2f);
             stream.setNonStrokingColor(style.mutedText());
-            stream.newLineAtOffset(MARGIN, PAGE_HEIGHT - 54);
+            stream.newLineAtOffset(pageMargin(), pageHeight() - 54);
             stream.showText(supportedText(font, "模板：" + templateName + " · 第 " + pageNumber + " 页"));
             stream.endText();
 
             String chip = style.versionLabel();
             float chipWidth = Math.max(52, textWidth(font, chip, 9.5f) + 22);
-            float chipX = PAGE_WIDTH - MARGIN - chipWidth;
+            float chipX = pageWidth() - pageMargin() - chipWidth;
             stream.setNonStrokingColor(style.accent());
-            stream.addRect(chipX, PAGE_HEIGHT - 48, chipWidth, 24);
+            stream.addRect(chipX, pageHeight() - 48, chipWidth, 24);
             stream.fill();
             stream.beginText();
             stream.setFont(font, 9.5f);
             stream.setNonStrokingColor(Color.WHITE);
-            stream.newLineAtOffset(chipX + 11, PAGE_HEIGHT - 41);
+            stream.newLineAtOffset(chipX + 11, pageHeight() - 41);
             stream.showText(supportedText(font, chip));
             stream.endText();
+        }
+
+        private PDRectangle pageRectangle() {
+            return style.isLecture() ? new PDRectangle(LECTURE_PAGE_WIDTH, LECTURE_PAGE_HEIGHT) : PDRectangle.A4;
+        }
+
+        private float pageWidth() {
+            return style.isLecture() ? LECTURE_PAGE_WIDTH : PAGE_WIDTH;
+        }
+
+        private float pageHeight() {
+            return style.isLecture() ? LECTURE_PAGE_HEIGHT : PAGE_HEIGHT;
+        }
+
+        private float pageMargin() {
+            return style.isLecture() ? LECTURE_MARGIN : MARGIN;
         }
 
         private boolean isStudentWorksheetStyle() {

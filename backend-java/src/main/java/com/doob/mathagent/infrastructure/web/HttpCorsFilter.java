@@ -42,6 +42,7 @@ public class HttpCorsFilter extends OncePerRequestFilter {
         String origin = request.getHeader(HttpHeaders.ORIGIN);
         if (originAllowed(origin, corsProperties.allowedOrigins())) {
             response.setHeader(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, origin.strip());
+            response.setHeader(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS, "true");
             response.setHeader(HttpHeaders.ACCESS_CONTROL_ALLOW_METHODS, "GET,POST,PUT,DELETE,OPTIONS");
             response.setHeader(HttpHeaders.ACCESS_CONTROL_ALLOW_HEADERS, "Authorization,Content-Type,MCP-Protocol-Version,X-Device-Id,X-Capability-Token,X-Request-Hash,satoken");
             response.setHeader(HttpHeaders.ACCESS_CONTROL_EXPOSE_HEADERS, "MCP-Protocol-Version,X-Api-Access-Level,X-RateLimit-Limit,X-RateLimit-Used,X-Handout-Renderer,X-Handout-Page-Count");

@@ -71,6 +71,8 @@ describe("TemplateShelf", () => {
         selectedCode="local_zhao"
         loading={false}
         onSelect={vi.fn()}
+        loadPreviewImage={vi.fn().mockResolvedValue(new Uint8Array([137, 80, 78, 71]))}
+        loadReferencePdf={vi.fn().mockResolvedValue(new Uint8Array([37, 80, 68, 70]))}
       />,
     );
 
@@ -88,9 +90,50 @@ describe("TemplateShelf", () => {
     expect(html).toContain("template-selected-preview");
     expect(html).toContain("template-preview-paper");
     expect(html).toContain("template-card-paper");
+    expect(html).toContain("正在加载缩略图");
+    expect(html).toContain("模板参考讲义 PDF 预览");
+    expect(html).toContain("正在加载参考 PDF");
     expect(html).toContain("katex");
     expect(html).not.toContain("katex-mathml");
     expect(html).toContain("动态配置提示词模板");
     expect(html).not.toContain("C:/Users/doob/Desktop/private");
+  });
+
+  it("does not request reference media for skill templates that only have text titles", () => {
+    const templates: TeachingHandoutTemplateResponse[] = [
+      {
+        templateCode: "skill_teacher",
+        displayName: "教师讲评 Skill",
+        sourceType: "skill_config",
+        audience: "teacher",
+        description: "动态配置提示词模板。",
+        category: "动态模板",
+        visualStyle: "教案式",
+        difficultyBands: ["基础"],
+        tags: ["教师版"],
+        referenceTitle: "教师讲评模板",
+        referencePreview: "教师版要能直接拿去讲。",
+      },
+    ];
+    const loadPreviewImage = vi.fn().mockResolvedValue(new Uint8Array([137, 80, 78, 71]));
+    const loadReferencePdf = vi.fn().mockResolvedValue(new Uint8Array([37, 80, 68, 70]));
+
+    const html = renderToStaticMarkup(
+      <TemplateShelf
+        templates={templates}
+        selectedCode="skill_teacher"
+        loading={false}
+        onSelect={vi.fn()}
+        loadPreviewImage={loadPreviewImage}
+        loadReferencePdf={loadReferencePdf}
+      />,
+    );
+
+    expect(html).toContain("教师讲评 Skill");
+    expect(html).toContain("动态 Skill");
+    expect(html).not.toContain("模板参考讲义 PDF 预览");
+    expect(html).not.toContain("正在加载参考 PDF");
+    expect(loadPreviewImage).not.toHaveBeenCalled();
+    expect(loadReferencePdf).not.toHaveBeenCalled();
   });
 });

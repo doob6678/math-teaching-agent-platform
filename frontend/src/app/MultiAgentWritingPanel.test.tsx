@@ -1,7 +1,16 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { MultiAgentWritingPanel } from "./App";
+import { MultiAgentWritingPanel } from "./components/MultiAgentWritingPanel";
 import { MultiAgentWritingResponse, MultiAgentWritingTraceResponse } from "../shared/api/textbookApi";
+
+vi.mock("pdfjs-dist", () => ({
+  GlobalWorkerOptions: { workerSrc: "" },
+  getDocument: vi.fn(),
+}));
+
+vi.mock("pdfjs-dist/build/pdf.worker.mjs?url", () => ({
+  default: "pdf-worker-test.mjs",
+}));
 
 describe("MultiAgentWritingPanel", () => {
   it("renders requested model, actual fallback model usage, Chinese usage labels, and diagnostics", () => {
@@ -88,6 +97,8 @@ describe("MultiAgentWritingPanel", () => {
         starting={false}
         resuming={false}
         polling={false}
+        pdfPreviewUrl="blob:multi-agent-pdf"
+        pdfPreviewBytes={new Uint8Array([37, 80, 68, 70])}
         error=""
         onWritingGoalChange={vi.fn()}
         onQuestionTextChange={vi.fn()}
@@ -106,6 +117,13 @@ describe("MultiAgentWritingPanel", () => {
     expect(html).toContain("通义千问 / qwen3.6-flash");
     expect(html).not.toContain("tokens");
     expect(html).toContain("建议先预览 PDF");
+    expect(html).toContain("协作讲义 PDF 预览");
+    expect(html).toContain("class=\"pdf-page-canvas\"");
+    expect(html).toContain("aria-label=\"上一页\"");
+    expect(html).toContain("aria-label=\"下一页\"");
+    expect(html).toContain("aria-label=\"跳转到页码\"");
+    expect(html).toContain("aria-label=\"最后一页\"");
+    expect(html).not.toContain("<iframe");
     expect(html).toContain("成果文件");
     expect(html).toContain("打开成果");
     expect(html).toContain("执行追踪 1 条");

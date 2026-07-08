@@ -3,8 +3,8 @@ import { AlertCircle, ArrowLeft, ArrowRight, Database, Loader2, Search } from "l
 import { StudentDashboardResponse } from "../../shared/api/textbookApi";
 import { boundedPercent, StatusLine } from "./panelShared";
 
-const DEFAULT_DASHBOARD_PAGE_SIZE = 10;
-const DASHBOARD_PAGE_SIZE_OPTIONS = [10, 20, 50];
+const DEFAULT_PAGE_SIZE = 10;
+const PAGE_SIZE_OPTIONS = [10, 20, 50];
 
 export function StudentDashboardPanel({
   dashboard,
@@ -26,23 +26,36 @@ export function StudentDashboardPanel({
   onRefresh?: () => void;
 }) {
   const [progressPage, setProgressPage] = useState(1);
-  const [weakPointPage, setWeakPointPage] = useState(1);
+  const [weakPage, setWeakPage] = useState(1);
   const [questionPage, setQuestionPage] = useState(1);
   const [scorePage, setScorePage] = useState(1);
-  const [progressPageSize, setProgressPageSize] = useState(DEFAULT_DASHBOARD_PAGE_SIZE);
-  const [weakPointPageSize, setWeakPointPageSize] = useState(DEFAULT_DASHBOARD_PAGE_SIZE);
-  const [questionPageSize, setQuestionPageSize] = useState(DEFAULT_DASHBOARD_PAGE_SIZE);
-  const [scorePageSize, setScorePageSize] = useState(DEFAULT_DASHBOARD_PAGE_SIZE);
-  const latestScore = dashboard?.scoreTrend.at(-1);
+  const [progressPageSize, setProgressPageSize] = useState(DEFAULT_PAGE_SIZE);
+  const [weakPageSize, setWeakPageSize] = useState(DEFAULT_PAGE_SIZE);
+  const [questionPageSize, setQuestionPageSize] = useState(DEFAULT_PAGE_SIZE);
+  const [scorePageSize, setScorePageSize] = useState(DEFAULT_PAGE_SIZE);
+
   const needsTarget = viewerRole === "teacher" || viewerRole === "admin";
-  const isGlobalView = needsTarget && dashboard?.studentId === "__all_students__";
+  const hasTarget = Boolean(targetStudentId?.trim());
+  const selectedStudentId = dashboard?.studentId?.trim() ?? "";
+  const hasDashboardStudent = Boolean(selectedStudentId);
+  const latestScore = dashboard?.scoreTrend.at(-1);
+
   const progressItems = dashboard?.knowledgeProgress ?? [];
   const weakPointItems = dashboard?.weakPoints ?? [];
   const questionItems = dashboard?.recentQuestions ?? [];
   const scoreItems = dashboard?.scoreTrend ?? [];
+
   const visibleProgress = useMemo(
     () => pageSlice(progressItems, progressPage, progressPageSize),
     [progressItems, progressPage, progressPageSize],
+  );
+  const visibleWeakPoints = useMemo(
+    () => pageSlice(weakPointItems, weakPage, weakPageSize),
+    [weakPointItems, weakPage, weakPageSize],
+  );
+  const visibleQuestions = useMemo(
+    () => pageSlice(questionItems, questionPage, questionPageSize),
+    [questionItems, questionPage, questionPageSize],
   );
   const visibleScores = useMemo(
     () => pageSlice(scoreItems, scorePage, scorePageSize),
@@ -51,13 +64,13 @@ export function StudentDashboardPanel({
 
   useEffect(() => {
     setProgressPage(1);
-    setWeakPointPage(1);
+    setWeakPage(1);
     setQuestionPage(1);
     setScorePage(1);
-    setProgressPageSize(DEFAULT_DASHBOARD_PAGE_SIZE);
-    setWeakPointPageSize(DEFAULT_DASHBOARD_PAGE_SIZE);
-    setQuestionPageSize(DEFAULT_DASHBOARD_PAGE_SIZE);
-    setScorePageSize(DEFAULT_DASHBOARD_PAGE_SIZE);
+    setProgressPageSize(DEFAULT_PAGE_SIZE);
+    setWeakPageSize(DEFAULT_PAGE_SIZE);
+    setQuestionPageSize(DEFAULT_PAGE_SIZE);
+    setScorePageSize(DEFAULT_PAGE_SIZE);
   }, [dashboard?.tenantId, dashboard?.studentId, dashboard?.viewerSubjectId]);
 
   return (
@@ -65,12 +78,17 @@ export function StudentDashboardPanel({
       <div className="result-header">
         <div>
           <p className="eyebrow">学习画像</p>
-          <h2>{needsTarget ? "学生画像概览" : "我的学习画像"}</h2>
+          <h2>{needsTarget ? "查看学生画像" : "我的学习画像"}</h2>
         </div>
         <div className="result-actions">
-          {dashboard ? <div className="strategy-pill">{roleLabel(dashboard.viewerRole)}查看</div> : null}
+          {dashboard ? <div className="strategy-pill">{viewerRoleLabel(dashboard.viewerRole)}查看</div> : null}
           {onRefresh ? (
-            <button type="button" className="inline-action btn btn-ghost btn-sm" onClick={onRefresh} disabled={loading}>
+            <button
+              type="button"
+              className="inline-action btn btn-ghost btn-sm"
+              onClick={onRefresh}
+              disabled={loading || (needsTarget && !hasTarget)}
+            >
               {loading ? <Loader2 className="spin" size={16} /> : <Database size={16} />}
               <span>刷新快照</span>
             </button>
@@ -86,12 +104,12 @@ export function StudentDashboardPanel({
               className="form-input"
               value={targetStudentId ?? ""}
               onChange={(event) => onTargetStudentIdChange?.(event.target.value)}
-              placeholder="留空查看全局概览，或输入 student-001"
+              placeholder="例如 student-001"
             />
           </label>
-          <button type="button" className="btn btn-secondary" onClick={onLoad} disabled={loading}>
+          <button type="button" className="btn btn-secondary" onClick={onLoad} disabled={loading || !hasTarget}>
             {loading ? <Loader2 className="spin" size={15} /> : <Search size={15} />}
-            <span>{targetStudentId?.trim() ? "查看学生" : "查看全局"}</span>
+            <span>查看学生</span>
           </button>
         </div>
       ) : null}
@@ -100,23 +118,27 @@ export function StudentDashboardPanel({
       {error ? <StatusLine icon={<AlertCircle size={16} />} text={error} tone="danger" /> : null}
       {!dashboard && !loading && !error ? (
         <div className="empty-state compact">
-          {needsTarget ? "留空会查看当前租户的全局学习概览；输入学生 ID 可查看单个学生。" : "暂无学习画像。"}
+          {needsTarget ? "请输入要查看的学生 ID，例如 student-001。" : "暂无学习画像。"}
         </div>
       ) : null}
 
-      {dashboard ? (
+      {dashboard && !hasDashboardStudent && !loading && !error ? (
+        <div className="empty-state compact">当前查询对象不是学生，无法展示学习画像。</div>
+      ) : null}
+
+      {dashboard && hasDashboardStudent ? (
         <div className="dashboard-grid">
           <div className="profile-strip">
             <div>
-              <span>{subjectLabel(dashboard.subjectRole, isGlobalView)}</span>
-              <strong>{isGlobalView ? "全局概览" : dashboard.studentId}</strong>
+              <span>学生</span>
+              <strong>{selectedStudentId}</strong>
             </div>
             <div>
               <span>查看者</span>
               <strong>{dashboard.viewerSubjectId}</strong>
             </div>
             <div>
-              <span>{isGlobalView ? "数据范围" : "最近成绩"}</span>
+              <span>最近成绩</span>
               <strong>{latestScore ? `${latestScore.score} / 年级 ${latestScore.rankInGrade}` : "未记录"}</strong>
             </div>
           </div>
@@ -154,29 +176,31 @@ export function StudentDashboardPanel({
           <CompactList
             title="薄弱点"
             empty="暂无薄弱点。"
-            page={weakPointPage}
-            pageSize={weakPointPageSize}
-            onPageChange={setWeakPointPage}
-            onPageSizeChange={setWeakPointPageSize}
-            items={weakPointItems.map((item) => ({
+            items={visibleWeakPoints.map((item) => ({
               key: item.knowledgePointId ?? item.knowledgePointName,
               title: item.knowledgePointName,
               meta: `等级 ${item.weaknessLevel}`,
             }))}
+            total={weakPointItems.length}
+            page={weakPage}
+            pageSize={weakPageSize}
+            onPageChange={setWeakPage}
+            onPageSizeChange={setWeakPageSize}
           />
 
           <CompactList
             title="历史问题"
             empty="暂无历史问题。"
-            page={questionPage}
-            pageSize={questionPageSize}
-            onPageChange={setQuestionPage}
-            onPageSizeChange={setQuestionPageSize}
-            items={questionItems.map((item) => ({
+            items={visibleQuestions.map((item) => ({
               key: item.recordId,
               title: item.questionTitle,
               meta: `${questionSourceLabel(item.sourceType)} / ${questionStatusLabel(item.status)}`,
             }))}
+            total={questionItems.length}
+            page={questionPage}
+            pageSize={questionPageSize}
+            onPageChange={setQuestionPage}
+            onPageSizeChange={setQuestionPageSize}
           />
 
           <div className="dashboard-column score-column">
@@ -215,6 +239,7 @@ function CompactList({
   title,
   empty,
   items,
+  total,
   page,
   pageSize,
   onPageChange,
@@ -223,18 +248,18 @@ function CompactList({
   title: string;
   empty: string;
   items: Array<{ key: string; title: string; meta: string }>;
+  total: number;
   page: number;
   pageSize: number;
   onPageChange: (page: number) => void;
   onPageSizeChange: (pageSize: number) => void;
 }) {
-  const visibleItems = pageSlice(items, page, pageSize);
   return (
     <div className="dashboard-column">
       <h3>{title}</h3>
-      {visibleItems.length ? (
+      {items.length ? (
         <>
-          {visibleItems.map((item) => (
+          {items.map((item) => (
             <div className="question-item" key={item.key}>
               <strong>{item.title}</strong>
               <span>{item.meta}</span>
@@ -244,7 +269,7 @@ function CompactList({
             label={title}
             page={page}
             pageSize={pageSize}
-            total={items.length}
+            total={total}
             onPageChange={onPageChange}
             onPageSizeChange={onPageSizeChange}
           />
@@ -273,6 +298,7 @@ function PaginationControls({
 }) {
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const currentPage = Math.min(Math.max(1, page), pageCount);
+
   return (
     <div className="dashboard-pagination" aria-label={`${label}分页`}>
       <div className="dashboard-pagination-meta">
@@ -288,37 +314,33 @@ function PaginationControls({
                 onPageChange(1);
               }}
             >
-              {DASHBOARD_PAGE_SIZE_OPTIONS.map((option) => (
-                <option key={option} value={option}>
-                  {option}
-                </option>
+              {PAGE_SIZE_OPTIONS.map((option) => (
+                <option key={option} value={option}>{option}</option>
               ))}
             </select>
           </label>
         ) : null}
       </div>
       <div className="dashboard-pagination-nav">
-      <button
-        type="button"
-        className="btn-icon"
-        onClick={() => onPageChange(Math.max(1, currentPage - 1))}
-        disabled={currentPage <= 1}
-        aria-label={`上一页${label}`}
-      >
-        <ArrowLeft size={15} />
-      </button>
-      <span>
-        第 {currentPage} / {pageCount} 页 · 共 {total} 条
-      </span>
-      <button
-        type="button"
-        className="btn-icon"
-        onClick={() => onPageChange(Math.min(pageCount, currentPage + 1))}
-        disabled={currentPage >= pageCount}
-        aria-label={`下一页${label}`}
-      >
-        <ArrowRight size={15} />
-      </button>
+        <button
+          type="button"
+          className="btn-icon"
+          onClick={() => onPageChange(Math.max(1, currentPage - 1))}
+          disabled={currentPage <= 1}
+          aria-label={`${label}上一页`}
+        >
+          <ArrowLeft size={15} />
+        </button>
+        <span>第 {currentPage} / {pageCount} 页</span>
+        <button
+          type="button"
+          className="btn-icon"
+          onClick={() => onPageChange(Math.min(pageCount, currentPage + 1))}
+          disabled={currentPage >= pageCount}
+          aria-label={`${label}下一页`}
+        >
+          <ArrowRight size={15} />
+        </button>
       </div>
     </div>
   );
@@ -331,14 +353,16 @@ function pageSlice<T>(items: T[], page: number, pageSize: number) {
   return items.slice(start, start + pageSize);
 }
 
-function roleLabel(role: string) {
-  return ({
+function viewerRoleLabel(role: string) {
+  const labels: Record<string, string> = {
     student: "学生",
     teacher: "教师",
     admin: "管理员",
     global: "全局",
+    unselected: "未选择学生",
     unknown: "未识别对象",
-  } as Record<string, string>)[role] ?? role;
+  };
+  return labels[role] ?? role;
 }
 
 function questionSourceLabel(sourceType: string) {
@@ -365,11 +389,4 @@ function questionStatusLabel(status: string) {
     archived: "已归档",
   };
   return labels[normalized] ?? status;
-}
-
-function subjectLabel(role: string, isGlobalView: boolean) {
-  if (isGlobalView || role === "global") {
-    return "范围";
-  }
-  return roleLabel(role);
 }

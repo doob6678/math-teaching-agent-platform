@@ -35,6 +35,9 @@ public final class QuestionBankSearchText {
         String combined = normalize(String.join(" ", values == null ? new String[0] : values));
         addIfUseful(candidates, combined);
         for (String term : CORE_TERMS) {
+            if ("圆锥".equals(term) && combined.contains("圆锥曲线")) {
+                continue;
+            }
             if (combined.contains(term.toLowerCase())) {
                 addIfUseful(candidates, term);
                 expandDomainTerm(candidates, term);

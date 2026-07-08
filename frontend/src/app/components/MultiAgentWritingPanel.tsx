@@ -17,7 +17,8 @@ import {
   MultiAgentWritingResponse,
   MultiAgentWritingTraceResponse,
 } from "../../shared/api/textbookApi";
-import { compactText, statusClass, StatusBadge, StatusLine } from "./panelShared";
+import { compactText, formatDateTime, statusClass, StatusBadge, StatusLine } from "./panelShared";
+import { PdfCanvasPreview } from "./PdfCanvasPreview";
 
 export function MultiAgentWritingPanel({
   workflow,
@@ -36,6 +37,7 @@ export function MultiAgentWritingPanel({
   artifactMessage = "",
   exportingArtifactFormat = "",
   pdfPreviewUrl = "",
+  pdfPreviewBytes = null,
   error,
   onWritingGoalChange,
   onQuestionTextChange,
@@ -62,6 +64,7 @@ export function MultiAgentWritingPanel({
   artifactMessage?: string;
   exportingArtifactFormat?: string;
   pdfPreviewUrl?: string;
+  pdfPreviewBytes?: Uint8Array | null;
   error: string;
   onWritingGoalChange: (value: string) => void;
   onQuestionTextChange: (value: string) => void;
@@ -85,6 +88,14 @@ export function MultiAgentWritingPanel({
   const completedStageCount = workflow?.stages.filter((stage) => ["COMPLETED", "SUCCESS"].includes(stage.status.toUpperCase())).length ?? 0;
   const progressPercent = workflow ? Math.round((completedStageCount / stageCodes.length) * 100) : 0;
   const shortWorkflowId = workflow?.workflowId ? compactWorkflowId(workflow.workflowId) : "";
+  const running = normalizedWorkflowStatus === "RUNNING";
+  const currentStageCode = running
+    ? stageCodes[Math.min(completedStageCount, stageCodes.length - 1)]
+    : actualStage?.stageCode ?? stageCodes[Math.max(0, Math.min(stageCodes.length - 1, completedStageCount - 1))] ?? "";
+  const currentStageTrace = traces?.stages.find((trace) => trace.planId?.endsWith(`:${currentStageCode}`));
+  const workflowElapsed = workflow?.createdAt
+    ? formatElapsed(workflow.createdAt, running ? undefined : workflow.updatedAt)
+    : "";
   const deliveryHint = hasArtifact
     ? "正文、PDF、TeX 和打包文件都可以从这里审查或导出。"
     : "后端已保存生成结果，先预览 PDF 或打开正文审查。";
@@ -149,15 +160,32 @@ export function MultiAgentWritingPanel({
         <div className="tool-decision-list compact">
           {stageCodes.map((stageCode, index) => {
             const stage = workflow.stages.find((candidate) => candidate.stageCode === stageCode);
-            const stageClass = stage ? statusClass(stage.status) : workflow.status === "RUNNING" ? "running" : "unknown";
+            const stageTrace = traces?.stages.find((trace) => trace.planId?.endsWith(`:${stageCode}`));
+            const isCurrentStage = running && currentStageCode === stageCode;
+            const stageClass = stage
+              ? statusClass(stage.status)
+              : isCurrentStage
+                ? "running"
+                : workflow.status === "RUNNING"
+                  ? "unknown"
+                  : "unknown";
             return (
               <div className={`tool-decision ${stageClass}`} key={stageCode}>
                 <strong>{index + 1}. {stageLabel(stageCode)}</strong>
                 <span>
                   {stage
                     ? `${statusLabel(stage.status)} / ${providerLabel(stage.providerName)} / ${stage.modelCode} / 用量 ${stage.actualUsage.totalTokens.toLocaleString("zh-CN")}`
-                    : workflow.status === "RUNNING" ? "等待执行" : "未执行"}
+                    : isCurrentStage
+                      ? "正在执行"
+                      : workflow.status === "RUNNING"
+                        ? "等待执行"
+                        : "未执行"}
                 </span>
+                {stageTrace?.createdAt ? (
+                  <p>{`阶段记录时间：${formatDateTime(stageTrace.createdAt)}`}</p>
+                ) : isCurrentStage ? (
+                  <p>后端正在执行这一阶段，结果返回后会显示模型与用量。</p>
+                ) : null}
               </div>
             );
           })}
@@ -272,10 +300,50 @@ export function MultiAgentWritingPanel({
         </div>
       ) : null}
 
+      {workflow && !completed ? (
+        <section className="workflow-progress-board">
+          <div className="workflow-progress-head">
+            <div>
+              <p className="eyebrow">当前在做什么</p>
+              <h3>{stageLabel(currentStageCode || "draft")}</h3>
+              <p>
+                {workflow.message ? workflowMessage(workflow.message) : "流程已启动，正在按阶段推进。"}
+                {running && completedStageCount > 0 ? " 已完成的阶段只代表局部产物可用，不代表最终讲义已经可下载。" : ""}
+              </p>
+            </div>
+            <StatusBadge status={statusLabel(workflow.status)} />
+          </div>
+          <div className="workflow-progress-meta">
+            <div>
+              <span>流程编号</span>
+              <strong>{shortWorkflowId || "待生成"}</strong>
+            </div>
+            <div>
+              <span>已完成阶段</span>
+              <strong>{completedStageCount} / {stageCodes.length}</strong>
+            </div>
+            <div>
+              <span>流程耗时</span>
+              <strong>{workflowElapsed || "进行中"}</strong>
+            </div>
+            <div>
+              <span>最近阶段时间</span>
+              <strong>{currentStageTrace?.createdAt ? formatDateTime(currentStageTrace.createdAt) : "等待回传"}</strong>
+            </div>
+          </div>
+          <div className="workflow-progress-track" aria-label={`流程进度 ${progressPercent}%`}>
+            <div style={{ width: `${progressPercent}%` }} />
+          </div>
+        </section>
+      ) : null}
+
       {!modelReady ? (
         <StatusLine icon={<AlertCircle size={16} />} text="模型目录还没有加载完成，暂时不能启动写作流程。" tone="danger" />
       ) : null}
       {error ? <StatusLine icon={<AlertCircle size={16} />} text={error} tone="danger" /> : null}
+      {running ? (
+        <StatusLine icon={<Loader2 className="spin" size={16} />} text="这里只显示真实阶段推进。只有出现 PDF 预览和下载入口，才表示讲义已经可交付。" />
+      ) : null}
 
       {completed ? (
         <StatusLine icon={<Check size={16} />} text="讲义已生成，建议先预览 PDF，再按需要下载或进入正文审查。" />
@@ -315,8 +383,13 @@ export function MultiAgentWritingPanel({
         ) : hasArtifact || pdfPreviewUrl ? (
           <>
             {pdfPreviewUrl ? (
-              <div className="pdf-preview-frame artifact-pdf-preview">
-                <iframe src={pdfPreviewUrl} title="协作讲义 PDF 预览" />
+              <div className="artifact-pdf-preview">
+                <PdfCanvasPreview
+                  pdfBytes={pdfPreviewBytes}
+                  pdfUrl={pdfPreviewUrl}
+                  title="协作讲义 PDF 预览"
+                  canvasLabel="协作讲义 PDF 页面预览"
+                />
               </div>
             ) : null}
             {hasArtifact ? <ArtifactPreview markdown={artifact?.mergedMarkdown ?? ""} /> : null}
@@ -622,6 +695,24 @@ function compactWorkflowId(workflowId: string) {
   return `${workflowId.slice(0, 8)}…${workflowId.slice(-6)}`;
 }
 
+function formatElapsed(startedAt?: string, endedAt?: string) {
+  if (!startedAt) {
+    return "";
+  }
+  const start = new Date(startedAt).getTime();
+  const end = endedAt ? new Date(endedAt).getTime() : Date.now();
+  if (Number.isNaN(start) || Number.isNaN(end) || end < start) {
+    return "";
+  }
+  const totalSeconds = Math.max(1, Math.round((end - start) / 1000));
+  if (totalSeconds < 60) {
+    return `${totalSeconds} 秒`;
+  }
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return seconds > 0 ? `${minutes} 分 ${seconds} 秒` : `${minutes} 分`;
+}
+
 function markdownToBlocks(markdown: string): PreviewBlock[] {
   const blocks: PreviewBlock[] = [];
   let paragraph: string[] = [];
@@ -906,9 +997,9 @@ function workflowMessage(message: string) {
   const labels: Record<string, string> = {
     "Multi-agent writing workflow queued.": "任务已进入队列，正在等待执行。",
     "Multi-agent writing workflow started.": "任务已开始执行。",
-    "Draft stage completed.": "讲义初稿已完成。",
-    "Review stage completed.": "质量审校已完成。",
-    "Format stage completed.": "排版整理已完成。",
+    "Draft stage completed.": "初稿阶段已返回草案，系统正在继续审校。",
+    "Review stage completed.": "审校阶段已完成，系统正在继续排版。",
+    "Format stage completed.": "排版阶段已完成，正在整理最终交付文件。",
     "Multi-agent writing workflow completed.": "写作流程已完成，可以审查和导出。",
     "Workflow completed": "写作流程已完成，可以审查和导出。",
   };

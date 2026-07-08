@@ -21,6 +21,9 @@ public record TeachingHumanFeedbackRequest(
         @Size(max = 1000) String comment,
         Map<String, Object> reviewContext) {
 
+    private static final int DEFAULT_STRING_LIMIT = 300;
+    private static final int IMAGE_DATA_URL_LIMIT = 200_000;
+
     public TeachingHumanFeedbackRequest(int rating, String decision, String comment) {
         this(rating, decision, comment, Map.of());
     }
@@ -54,7 +57,10 @@ public record TeachingHumanFeedbackRequest(
         value.entrySet().stream()
                 .filter(entry -> entry.getKey() != null && !entry.getKey().isBlank())
                 .limit(24)
-                .forEach(entry -> normalized.put(normalizeText(entry.getKey(), "field", 80), normalizeValue(entry.getValue())));
+                .forEach(entry -> {
+                    String key = normalizeText(entry.getKey(), "field", 80);
+                    normalized.put(key, normalizeValue(key, entry.getValue()));
+                });
         return Collections.unmodifiableMap(normalized);
     }
 
@@ -79,11 +85,19 @@ public record TeachingHumanFeedbackRequest(
                     break;
                 }
                 if (entry.getKey() != null) {
-                    nested.put(normalizeText(String.valueOf(entry.getKey()), "field", 80), normalizeValue(entry.getValue()));
+                    String key = normalizeText(String.valueOf(entry.getKey()), "field", 80);
+                    nested.put(key, normalizeValue(key, entry.getValue()));
                 }
             }
             return nested;
         }
-        return normalizeText(String.valueOf(value), "", 300);
+        return normalizeText(String.valueOf(value), "", DEFAULT_STRING_LIMIT);
+    }
+
+    private static Object normalizeValue(String key, Object value) {
+        if ("previewImageDataUrl".equals(key) || "imageDataUrl".equals(key)) {
+            return normalizeText(String.valueOf(value), "", IMAGE_DATA_URL_LIMIT);
+        }
+        return normalizeValue(value);
     }
 }

@@ -22,8 +22,6 @@ import org.springframework.stereotype.Service;
 @Service
 public class StudentLearningSnapshotRefreshService {
 
-    private static final int GLOBAL_DASHBOARD_MEMORY_LIMIT = 200;
-
     private final StudentMemoryStore memoryStore;
     private final StudentLearningSnapshotStore snapshotStore;
     private final StudentDashboardSubjectResolver subjectResolver;
@@ -57,11 +55,39 @@ public class StudentLearningSnapshotRefreshService {
      */
     public StudentDashboardResponse refresh(StudentDashboardQuery query) {
         StudentDashboardQuery normalized = query.normalize();
+        if (normalized.selectionRequired()) {
+            return new StudentDashboardResponse(
+                    normalized.tenantId(),
+                    "",
+                    subjectResolver.resolveSubjectRole(normalized),
+                    normalized.viewerRole(),
+                    normalized.viewerSubjectId(),
+                    false,
+                    List.of(),
+                    List.of(),
+                    List.of(),
+                    List.of(),
+                    List.of(),
+                    new StudentDashboardResponse.KnowledgeGraph(List.of(), List.of(), "selection_required"));
+        }
+        if (!subjectResolver.isStudentTarget(normalized)) {
+            return new StudentDashboardResponse(
+                    normalized.tenantId(),
+                    "",
+                    subjectResolver.resolveSubjectRole(normalized),
+                    normalized.viewerRole(),
+                    normalized.viewerSubjectId(),
+                    false,
+                    List.of(),
+                    List.of(),
+                    List.of(),
+                    List.of(),
+                    List.of(),
+                    new StudentDashboardResponse.KnowledgeGraph(List.of(), List.of(), "non_student_target"));
+        }
         String tenantId = normalized.tenantId();
         String studentId = normalized.targetStudentId();
-        List<StudentMemoryEntry> entries = normalized.globalView()
-                ? activeTenantMemoryEntries(tenantId)
-                : activeMemoryEntries(tenantId, studentId);
+        List<StudentMemoryEntry> entries = activeMemoryEntries(tenantId, studentId);
         List<StudentDashboardResponse.KnowledgeProgress> progress = progress(entries);
         List<StudentDashboardResponse.WeakPoint> weakPoints = List.of();
         List<StudentDashboardResponse.RecentQuestion> recentQuestions = recentQuestions(entries);
@@ -95,20 +121,6 @@ public class StudentLearningSnapshotRefreshService {
                 .filter(entry -> tenantId.equals(entry.tenantId()))
                 .filter(entry -> "active".equals(entry.status()))
                 .filter(entry -> "public".equals(entry.memoryScope()) || studentId.equals(entry.studentId()))
-                .sorted(Comparator
-                        .comparing(StudentMemoryEntry::createdAt, Comparator.nullsLast(Comparator.naturalOrder()))
-                        .reversed()
-                        .thenComparing(StudentMemoryEntry::memoryId, Comparator.nullsLast(String::compareTo)))
-                .toList();
-    }
-
-    /**
-     * Loads active tenant-wide learning signals for teacher/admin global overview.
-     */
-    private List<StudentMemoryEntry> activeTenantMemoryEntries(String tenantId) {
-        return memoryStore.tenantCandidates(tenantId, GLOBAL_DASHBOARD_MEMORY_LIMIT).stream()
-                .filter(entry -> tenantId.equals(entry.tenantId()))
-                .filter(entry -> "active".equals(entry.status()))
                 .sorted(Comparator
                         .comparing(StudentMemoryEntry::createdAt, Comparator.nullsLast(Comparator.naturalOrder()))
                         .reversed()

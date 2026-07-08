@@ -327,7 +327,7 @@ public class CapabilityTokenService {
     }
 
     /**
-     * Allows legacy handout paths and explicit teacher/student version paths for protected exports.
+     * Allows legacy handout paths and explicit teacher/student/lecture version paths for protected exports.
      */
     private static boolean isTeachingHandoutPath(String path, String suffix) {
         String[] parts = pathPartsAfterPrefix(path, TEACHING_TASKS_PATH);
@@ -450,7 +450,7 @@ public class CapabilityTokenService {
      * Checks whether a path segment is a supported handout version.
      */
     private static boolean isHandoutVersion(String value) {
-        return "teacher".equals(value) || "student".equals(value);
+        return "teacher".equals(value) || "student".equals(value) || "lecture".equals(value);
     }
 
     /**

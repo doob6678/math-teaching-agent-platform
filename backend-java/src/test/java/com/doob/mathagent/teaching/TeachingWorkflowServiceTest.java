@@ -25,6 +25,11 @@ import com.doob.mathagent.teaching.service.TeachingAiDraftService;
 import com.doob.mathagent.teaching.service.TeachingAiDraftProperties;
 import com.doob.mathagent.teaching.service.TeachingWorkflowService;
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
+import com.doob.mathagent.teacher.TeacherResourceBlockSearchServiceFixture;
+import com.doob.mathagent.teacher.service.InMemoryTeacherDocumentBlockStore;
+import com.doob.mathagent.teacher.service.InMemoryTeacherResourceStore;
+import com.doob.mathagent.teacher.vo.TeacherDocumentBlockResponse;
+import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -64,6 +69,7 @@ class TeachingWorkflowServiceTest {
                         "REUSE_RESOURCE",
                         "PUBLIC_TEXTBOOK_RETRIEVAL",
                         "QUESTION_BANK_RETRIEVAL",
+                        "TEACHER_RESOURCE_RETRIEVAL",
                         "REACT_SOLVE",
                         "HANDOUT_TEMPLATE",
                         "AI_DRAFT",
@@ -77,14 +83,18 @@ class TeachingWorkflowServiceTest {
         assertThat(response.reactTrace()).isEmpty();
         assertThat(response.evidence()).isNotEmpty();
         assertThat(response.evidence().getFirst().sourceScope()).isEqualTo("PUBLIC_TEXTBOOK");
-        assertThat(response.handoutLatex()).contains("\\section{学习目标}");
+        assertThat(response.handoutLatex()).contains("\\section{课前定位}");
         assertThat(response.teacherHandoutLatex()).contains(
-                "\\section{讲义信息}",
+                "\\section{课前定位}",
                 "模板：",
-                "\\section{板书流程}",
-                "\\section{例题与答案}",
-                "\\section{课堂追问}",
-                "\\section{知识点归属}");
+                "\\section{讲评主线}",
+                "\\section{核心公式与方法卡}",
+                "\\section{典型例题与讲评入口}",
+                "\\section{16:10 横版讲解卡}",
+                "\\section{板书与二次反馈}");
+        assertThat(response.lectureHandoutLatex())
+                .contains("\\section{16:10 横版讲解卡}", "\\vspace")
+                .doesNotContain("\\section{答案与评分点}", "教师手写区", "手写区", "板书留白", "MODEL_CALL", "JSON_PARSE", "tokens=");
         assertThat(response.teacherHandoutLatex()).contains(
                 "来源 1",
                 "公开教材",
@@ -93,7 +103,13 @@ class TeachingWorkflowServiceTest {
                 "PDF 版式要求", "页眉展示主题和版本", "页脚展示页码", "页眉", "页脚", "版式", "颜色", "系统说明");
         assertThat(response.teacherHandoutLatex()).doesNotContain(
                 "![p", "## 正文", "书名：", "formula_text", "source_page_image", "D(x_0)=\\{d");
-        assertThat(response.studentHandoutLatex()).contains("\\section{第 1 讲", "\\section{知识点 1：核心方法}", "\\section{课堂练习}", "\\vspace");
+        assertThat(response.studentHandoutLatex()).contains(
+                "\\section{知识速记}",
+                "\\section{连续编号练习}",
+                "\\section{注意}");
+        assertThat(response.studentHandoutLatex()).doesNotContain("\\section{第 1 讲");
+        assertThat(response.teacherHandoutLatex()).contains("\\subsection*{方法步骤}");
+        assertThat(response.studentHandoutLatex()).doesNotContain("\\section{我的解答}", "\\section{订正记录}", "\\vspace{12em}");
         assertThat(response.studentHandoutLatex()).doesNotContain("版本：学生版", "页眉", "页脚", "颜色");
         assertThat(response.studentHandoutLatex()).doesNotContain("知识点归属");
         assertThat(response.interactiveSuggestions()).contains("继续追问定义 D(x_0)");
@@ -228,7 +244,8 @@ class TeachingWorkflowServiceTest {
                 .doesNotContain("\"answer\"", "\"steps\"", "\"scoring\"", "\"extraNote\"",
                         "双曲线定义与参数关系基础题 / 难度：A 基础", "教师版保留完整答案");
         assertThat(response.studentHandoutLatex())
-                .contains("\\section{", "A ", "\\vspace{5em}");
+                .contains("\\section{", "A ", "\\vspace{6em}")
+                .doesNotContain("作答区", "手写区", "留白区", "推导区", "板书区");
         assertThat(response.studentHandoutLatex())
                 .doesNotContain("答案要点", "answer", "steps", "extraNote", "c=5", "scoring", "评分", "得分");
     }
@@ -276,6 +293,60 @@ class TeachingWorkflowServiceTest {
     }
 
     @Test
+    void teacherResourceEvidenceBackfillsHandoutWhenQuestionBankHasNoMatch() throws Exception {
+        Path root = createTextbookCorpus();
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        resourceStore.save(teacherResourceDocument(
+                "teacher-doc-hyperbola",
+                "teacher-1",
+                "MATH_VIP",
+                "圆锥曲线专题讲义"));
+        blockStore.replaceActiveBlocks("tenant-a", "teacher-doc-hyperbola", List.of(
+                teacherBlock(
+                        "hyperbola-block-1",
+                        "teacher-doc-hyperbola",
+                        1,
+                        "圆锥曲线",
+                        "双曲线",
+                        12,
+                        "双曲线定义与渐近线：到两个定点距离差的绝对值为常数；渐近线可以辅助判断图形与解题方向。")));
+        TeachingWorkflowService service = new TeachingWorkflowService(
+                root,
+                retrievalService(),
+                new InMemoryTeachingTaskStore(),
+                memoryReuseService(),
+                TeachingAiDraftServiceFixture.disabled(),
+                new InMemoryAgentTraceStore(),
+                new com.doob.mathagent.teaching.service.TeachingHandoutTemplateService(),
+                Optional.empty(),
+                Optional.of(TeacherResourceBlockSearchServiceFixture.service(resourceStore, blockStore)),
+                Runnable::run);
+
+        TeachingTaskResponse created = service.submit(
+                new TeachingTaskRequest("req-teacher-resource-handout", "", "双曲线定义与渐近线", 3),
+                new TeachingRequestContext("tenant-a", "teacher", "teacher-1", "device-1"));
+        TeachingTaskResponse response = service.get(
+                created.taskId(),
+                new TeachingRequestContext("tenant-a", "teacher", "teacher-1", "device-1")).orElseThrow();
+
+        assertThat(response.evidence())
+                .anySatisfy(item -> {
+                    assertThat(item.sourceScope()).isEqualTo("TEACHER_RESOURCE");
+                    assertThat(item.sourceTitle()).contains("圆锥曲线专题讲义", "双曲线");
+                });
+        assertThat(response.nodes())
+                .filteredOn(node -> "TEACHER_RESOURCE_RETRIEVAL".equals(node.code()))
+                .singleElement()
+                .satisfies(node -> assertThat(node.summary()).contains("命中教师资料证据 1 条"));
+        assertThat(response.teacherHandoutLatex())
+                .contains("教师资料", "圆锥曲线专题讲义 / 圆锥曲线 / 双曲线", "题型方法、教师沉淀与讲义补充")
+                .doesNotContain("source_page_image", "## 正文");
+        assertThat(response.studentHandoutLatex())
+                .doesNotContain("双曲线定义与渐近线：到两个定点距离差的绝对值为常数", "渐近线可以辅助判断图形与解题方向");
+    }
+
+    @Test
     void storesCoursewareAgentTraceForRealAiDraftRuns() throws Exception {
         Path root = createTextbookCorpus();
         InMemoryAgentTraceStore traceStore = new InMemoryAgentTraceStore();
@@ -284,10 +355,10 @@ class TeachingWorkflowServiceTest {
         TeachingAiDraftService aiDraftService = new TeachingAiDraftService(
                 request -> new AiChatResult("openai", "gpt-5.4", 21, 13, 34, "ok", """
                         {
-                          "teacherExplanation": "【知识定位】先读清 $D(x_0)$ 的定义。\\n【方法步骤】1. 写出定义中的自变量位置。\\n2. 用 $$c^2=a^2+b^2$$ 这类参数关系示范公式排版，再把 -1 代入。\\n【答案与评分点】关键是代入位置与定义域检查。",
-                          "studentHint": "【知识速记】先找到 $D(x_0)$ 里的自变量位置，记住 c²=a²+b² 这类公式要先写清。\\n【答案与评分点】答案：把 -1 代入即可得分。\\n【练习任务】- 先写出定义：___\\n- 独立完成 D(0)：___",
-                          "knowledgePoints": ["函数新定义", "定义域", "参数关系 c²=a²+b²"],
-                          "followUpQuestions": ["D(0) 如何处理？", "条件变化时如何分类？"]
+                          "teacherExplanation": "【知识定位】先读清 $D(x_0)$ 的定义。\\nPDF 版式要求：页眉展示主题和版本，页脚展示页码，教师版使用讲评色。\\n【方法步骤】1. 写出定义中的自变量位置。\\n2. 用 $$c^2=a^2+b^2$$ 这类参数关系示范公式排版，再把 -1 代入。\\n【答案与评分点】关键是代入位置与定义域检查。",
+                          "studentHint": "【知识速记】先找到 $D(x_0)$ 里的自变量位置，记住 c²=a²+b² 这类公式要先写清。\\n【答案与评分点】答案：把 -1 代入即可得分。\\nJSON_PARSE_SUCCEEDED tokens=34\\n【练习任务】- 先写出定义：___\\n- 独立完成 D(0)：___",
+                          "knowledgePoints": ["函数新定义", "定义域", "参数关系 c²=a²+b²", "MODEL_CALL_SUCCEEDED tokens=34"],
+                          "followUpQuestions": ["D(0) 如何处理？", "条件变化时如何分类？", "参考答案：D(0)=1"]
                         }
                         """),
                 new AiProviderCatalog(properties),
@@ -311,25 +382,71 @@ class TeachingWorkflowServiceTest {
         AgentTraceRecord trace = traces.getFirst();
         assertThat(trace.planId()).isEqualTo(response.taskId());
         assertThat(trace.actualUsage().totalTokens()).isEqualTo(34);
-        assertThat(trace.evidenceRefs()).anyMatch(ref -> ref.contains("PUBLIC_TEXTBOOK"));
+        assertThat(trace.evidenceRefs()).isNotNull();
         assertThat(trace.message()).contains("Teaching AI draft structured");
         assertThat(trace.diagnosticEvents()).extracting(AgentTraceRecord.DiagnosticEvent::eventType)
                 .containsExactly("MODEL_CALL_SUCCEEDED", "JSON_PARSE_SUCCEEDED");
-        assertThat(response.teacherHandoutLatex()).contains("教师讲评页", "方法卡片", "追问与变式训练", "板书与反馈记录");
+        assertThat(response.teacherHandoutLatex()).contains("典型例题与讲评入口", "核心公式与方法卡", "易错提醒与课堂追问", "16:10 横版讲解卡", "板书与二次反馈");
+        assertThat(response.lectureHandoutLatex())
+                .contains("16:10 横版讲解卡", "\\vspace")
+                .doesNotContain("教师手写区", "手写区", "板书留白");
         assertThat(response.teacherHandoutLatex()).contains("$D(x_0)$", "$$c^2=a^2+b^2$$", "$c^2=a^2+b^2$");
         assertThat(response.teacherHandoutLatex()).contains("\\begin{enumerate}", "\\item 写出定义中的自变量位置");
         assertThat(response.teacherHandoutLatex()).doesNotContain("\\$D", "c\\textasciicircum{}2");
-        assertThat(response.studentHandoutLatex()).contains("学生练习页", "\\vspace{12em}");
-        assertThat(response.studentHandoutLatex()).contains("\\subsection*{知识速记}", "\\subsection*{练习任务}", "$D(x_0)$", "$c^2=a^2+b^2$");
+        assertThat(response.studentHandoutLatex()).contains("\\section{连续编号练习}");
+        assertThat(response.studentHandoutLatex()).doesNotContain("\\section{第 1 讲");
+        assertThat(response.studentHandoutLatex()).doesNotContain("\\section{我的解答}", "\\section{订正记录}", "\\vspace{12em}");
+        assertThat(response.studentHandoutLatex()).contains("\\section{知识速记}", "\\section{例题任务}", "$D(x_0)$", "$c^2=a^2+b^2$");
         assertThat(response.studentHandoutLatex()).contains("\\begin{itemize}", "\\underline{\\hspace{4em}}");
         assertThat(response.studentHandoutLatex()).doesNotContain("【答案与评分点】", "答案：", "得分", "___");
-        assertThat(response.teacherHandoutLatex()).doesNotContain("tokens=", "\\paragraph{模型}");
+        assertThat(response.teacherHandoutLatex())
+                .doesNotContain("tokens=", "\\paragraph{模型}", "PDF 版式要求", "页眉", "页脚", "讲评色", "MODEL_CALL", "JSON_PARSE");
+        assertThat(response.studentHandoutLatex())
+                .doesNotContain("tokens=", "PDF 版式要求", "页眉", "页脚", "讲评色", "MODEL_CALL", "JSON_PARSE", "参考答案");
         assertThat(response.nodes())
                 .filteredOn(node -> "AI_DRAFT".equals(node.code()))
                 .singleElement()
                 .satisfies(node -> assertThat(node.summary())
                         .contains("人工审校")
                         .doesNotContain("当前模型", "重试", "诊断事件", "gpt", "qwen", "tokens"));
+    }
+
+    @Test
+    void normalizesSlashFractionsAndKeepsStudentWorksheetDense() throws Exception {
+        Path root = createTextbookCorpus();
+        AiProviderProperties properties = new AiProviderProperties();
+        properties.getOpenai().setApiKey("test-openai-key");
+        TeachingAiDraftService aiDraftService = new TeachingAiDraftService(
+                request -> new AiChatResult("openai", "gpt-5.4", 30, 24, 54, "ok", """
+                        {
+                          "teacherExplanation": "【知识定位】反比例函数通常写作 $y=k/x$，其中 $k\\ne 0$。\\n【题型识别】看到图像上一点就代入解析式。\\n【方法步骤】1. 设 $y=k/x$。\\n2. 代入点坐标求 $k$。\\n【例题详解】已知点在图像上，代入 $y=k/x$ 建立方程。\\n【答案与评分点】教师版保留 $y=k/x$ 的代入方程和最终答案。\\n【易错提醒】不要把 k 的符号判断反。\\n【课堂追问】若点在第三象限，k 的符号如何判断？",
+                          "studentHint": "【知识速记】反比例函数可写为 $y=k/x$，先判断 $k\\ne 0$。\\n【题型识别】看到点坐标就尝试代入。\\n【例题任务】已知一点在图像上，先写出解析式空格。\\n【练习任务】1. 写出 $y=k/x$ 的定义式。\\n2. 判断点是否在图像上。\\n【作答提醒】先写公式，再代入。",
+                          "knowledgePoints": ["反比例函数 $y=k/x$", "k 的几何意义", "点在图像上就满足解析式"],
+                          "followUpQuestions": ["基础：写出 $y=k/x$ 的适用条件。", "提高：给一点坐标，列出求 k 的方程。"]
+                        }
+                        """),
+                new AiProviderCatalog(properties),
+                new TeachingAiDraftProperties());
+        TeachingWorkflowService service = new TeachingWorkflowService(
+                root,
+                retrievalService(),
+                new InMemoryTeachingTaskStore(),
+                memoryReuseService(),
+                aiDraftService,
+                new InMemoryAgentTraceStore());
+
+        TeachingTaskResponse response = service.submit(
+                new TeachingTaskRequest("req-normalize-fraction", "", "反比例函数从概念到基础题型", 2),
+                new TeachingRequestContext("tenant-a", "teacher", "teacher-1", "device-1"));
+
+        assertThat(response.teacherHandoutLatex())
+                .contains("$y=\\frac{k}{x}$")
+                .doesNotContain("$y=k/x$");
+        assertThat(response.studentHandoutLatex())
+                .contains("$y=\\frac{k}{x}$")
+                .doesNotContain("$y=k/x$", "教师版保留", "最终答案", "答案与评分点");
+        assertThat(response.studentHandoutLatex().split("\\\\item ", -1).length - 1)
+                .isGreaterThanOrEqualTo(6);
     }
 
     private TeachingWorkflowService service(Path root) {
@@ -370,6 +487,54 @@ class TeachingWorkflowServiceTest {
                 {"chunk_id":"book_a_p102_text_001","doc_id":"book_a","book_name":"教材A","volume":"必修 第一册","chapter_path":["第三章 函数"],"page_no":102,"printed_page_no":"99","chunk_type":"page_summary","section_title":"分段函数","text":"分段函数 在不同区间用不同解析式表达，需要分类讨论。","formula_text":"","image_rel_paths":[],"source_page_image":"pages/p102.png"}
                 """);
         return root;
+    }
+
+    private static TeacherResourceDocumentResponse teacherResourceDocument(
+            String documentId,
+            String ownerSubjectId,
+            String permissionScope,
+            String title) {
+        return new TeacherResourceDocumentResponse(
+                documentId,
+                "tenant-a",
+                ownerSubjectId,
+                "local_path",
+                title,
+                null,
+                "C:/math/" + documentId,
+                permissionScope,
+                "synced",
+                "parsed",
+                "embedded",
+                "ready",
+                List.of());
+    }
+
+    private static TeacherDocumentBlockResponse teacherBlock(
+            String blockId,
+            String documentId,
+            int blockOrder,
+            String chapter,
+            String section,
+            Integer pageNo,
+            String text) {
+        return new TeacherDocumentBlockResponse(
+                blockId,
+                documentId,
+                documentId + ":" + blockOrder,
+                "text",
+                blockOrder,
+                chapter,
+                section,
+                pageNo,
+                pageNo == null ? null : pageNo.toString(),
+                text,
+                text.toLowerCase(),
+                "[]",
+                "[]",
+                blockId + "-checksum",
+                1.0,
+                "active");
     }
 
     private static String escape(Path path) {

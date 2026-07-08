@@ -101,8 +101,8 @@ public class StudentExplanationService {
         List<StudentExplanationHistorySummary> recentHistory =
                 loadRecentHistory(normalizedRequest, normalizedSubject, stages);
 
-        stages.add(stage("understand_problem", "Understand problem", "completed",
-                "Used question text or real vision output for retrieval planning; image names and metadata are never treated as OCR.",
+        stages.add(stage("understand_problem", "理解题意", "completed",
+                "已使用题目文本或真实视觉识别结果规划检索，不把图片文件名当作题目内容。",
                 startedNanos));
         List<TextbookSearchHit> textbookHits = searchTextbooks(normalizedRequest, normalizedSubject, query, stages);
         textbookHits.stream().map(StudentExplanationService::textbookSource).forEach(sources::add);
@@ -122,13 +122,13 @@ public class StudentExplanationService {
                 sources,
                 recentHistory,
                 stages);
-        stages.add(stage("assemble_cards", "Assemble explanation cards", "completed",
-                "Used real model output and parsed it as JSON explanation cards.", startedNanos));
+        stages.add(stage("assemble_cards", "整理讲解卡片", "completed",
+                "已使用真实模型输出并解析为讲解卡片。", startedNanos));
         String explanationId = UUID.randomUUID().toString();
-        stages.add(stage("persist_history", "Persist explanation history", historyStore.durable() ? "completed" : "skipped",
+        stages.add(stage("persist_history", "保存讲解记录", historyStore.durable() ? "completed" : "skipped",
                 historyStore.durable()
-                        ? "MySQL history persistence is enabled for conversation recovery."
-                        : "Database history store is disabled for this local run.",
+                        ? "已写入 MySQL 历史记录，后续可恢复会话。"
+                        : "当前本地运行未启用数据库历史记录。",
                 startedNanos));
         StudentExplanationResponse response = new StudentExplanationResponse(
                 explanationId,
@@ -174,11 +174,11 @@ public class StudentExplanationService {
                     subject.subjectId(),
                     request.conversationId(),
                     6);
-            stages.add(stageFrom(stageStarted, "load_conversation_context", "Load conversation context", "completed",
-                    "Loaded " + history.size() + " recent messages for this backend subject."));
+            stages.add(stageFrom(stageStarted, "load_conversation_context", "读取上下文", "completed",
+                    "已读取 " + history.size() + " 条最近会话。"));
             return history;
         } catch (RuntimeException e) {
-            stages.add(stageFrom(stageStarted, "load_conversation_context", "Load conversation context", "failed",
+            stages.add(stageFrom(stageStarted, "load_conversation_context", "读取上下文", "failed",
                     e.getClass().getSimpleName()));
             throw e;
         }
@@ -213,11 +213,11 @@ public class StudentExplanationService {
             List<StudentExplanationResponse.WorkflowStage> stages) {
         long stageStarted = System.nanoTime();
         if (imageRecord == null) {
-            stages.add(stageFrom(stageStarted, "analyze_image", "Analyze image", "skipped", "No image upload."));
+            stages.add(stageFrom(stageStarted, "analyze_image", "识别题图", "skipped", "未上传题图。"));
             return StudentExplanationVisionService.VisionAnalysis.skipped("no-image");
         }
         StudentExplanationVisionService.VisionAnalysis analysis = visionService.analyze(imageRecord);
-        stages.add(stageFrom(stageStarted, "analyze_image", "Analyze image",
+        stages.add(stageFrom(stageStarted, "analyze_image", "识别题图",
                 analysis.succeeded() ? "completed" : analysis.enabled() ? "failed" : "skipped",
                 analysis.succeeded()
                         ? analysis.providerName() + "/" + analysis.modelCode() + " tokens=" + analysis.totalTokens()
@@ -235,8 +235,8 @@ public class StudentExplanationService {
             List<StudentExplanationResponse.WorkflowStage> stages) {
         long stageStarted = System.nanoTime();
         if (!Boolean.TRUE.equals(request.searchTextbook())) {
-            stages.add(stageFrom(stageStarted, "search_textbook", "Search textbooks", "skipped",
-                    "Textbook retrieval is disabled for this request."));
+            stages.add(stageFrom(stageStarted, "search_textbook", "检索教材", "skipped",
+                    "本轮未启用教材检索。"));
             return List.of();
         }
         try {
@@ -251,11 +251,11 @@ public class StudentExplanationService {
                             subject.deviceId(),
                             null,
                             ENDPOINT));
-            stages.add(stageFrom(stageStarted, "search_textbook", "Search textbooks", "completed",
-                    "Matched " + response.total() + " textbook evidence items."));
+            stages.add(stageFrom(stageStarted, "search_textbook", "检索教材", "completed",
+                    "命中 " + response.total() + " 条教材证据。"));
             return response.hits();
         } catch (RuntimeException e) {
-            stages.add(stageFrom(stageStarted, "search_textbook", "Search textbooks", "failed", e.getMessage()));
+            stages.add(stageFrom(stageStarted, "search_textbook", "检索教材", "failed", e.getMessage()));
             throw e;
         }
     }
@@ -270,8 +270,8 @@ public class StudentExplanationService {
             List<StudentExplanationResponse.WorkflowStage> stages) {
         long stageStarted = System.nanoTime();
         if (!Boolean.TRUE.equals(request.searchKnowledgeGraph())) {
-            stages.add(stageFrom(stageStarted, "match_knowledge_graph", "Match knowledge graph", "skipped",
-                    "Knowledge graph matching is disabled for this request."));
+            stages.add(stageFrom(stageStarted, "match_knowledge_graph", "匹配知识点", "skipped",
+                    "本轮未启用知识点匹配。"));
             return List.of();
         }
         try {
@@ -287,11 +287,11 @@ public class StudentExplanationService {
                     .limit(5)
                     .map(NodeMatch::node)
                     .toList();
-            stages.add(stageFrom(stageStarted, "match_knowledge_graph", "Match knowledge graph", "completed",
-                    "Matched " + nodes.size() + " curated spine knowledge nodes."));
+            stages.add(stageFrom(stageStarted, "match_knowledge_graph", "匹配知识点", "completed",
+                    "命中 " + nodes.size() + " 个主干知识点。"));
             return nodes;
         } catch (RuntimeException e) {
-            stages.add(stageFrom(stageStarted, "match_knowledge_graph", "Match knowledge graph", "failed", e.getMessage()));
+            stages.add(stageFrom(stageStarted, "match_knowledge_graph", "匹配知识点", "failed", e.getMessage()));
             throw e;
         }
     }
@@ -306,13 +306,13 @@ public class StudentExplanationService {
             List<StudentExplanationResponse.WorkflowStage> stages) {
         long stageStarted = System.nanoTime();
         if (!Boolean.TRUE.equals(request.searchTeacherResources())) {
-            stages.add(stageFrom(stageStarted, "search_teacher_resources", "Search teacher resources", "skipped",
-                    "Teacher resource retrieval is disabled for this request."));
+            stages.add(stageFrom(stageStarted, "search_teacher_resources", "检索教师资料", "skipped",
+                    "本轮未启用教师资料检索。"));
             return List.of();
         }
         if (!isTeacherOrAdmin(subject.subjectType())) {
-            stages.add(stageFrom(stageStarted, "search_teacher_resources", "Search teacher resources", "skipped",
-                    "Current student identity cannot read private teacher resources."));
+            stages.add(stageFrom(stageStarted, "search_teacher_resources", "检索教师资料", "skipped",
+                    "学生身份不能读取教师私有资料。"));
             return List.of();
         }
         try {
@@ -323,12 +323,12 @@ public class StudentExplanationService {
                     query,
                     request.maxTeacherResourceHits(),
                     ENDPOINT);
-            stages.add(stageFrom(stageStarted, "search_teacher_resources", "Search teacher resources", "completed",
-                    "Matched " + response.hitCount() + " teacher resource evidence items."));
+            stages.add(stageFrom(stageStarted, "search_teacher_resources", "检索教师资料", "completed",
+                    "命中 " + response.hitCount() + " 条教师资料。"));
             return response.hits();
         } catch (RuntimeException e) {
-            stages.add(stageFrom(stageStarted, "search_teacher_resources", "Search teacher resources", "failed", e.getMessage()));
-            throw e;
+            stages.add(stageFrom(stageStarted, "search_teacher_resources", "检索教师资料", "failed", e.getMessage()));
+            return List.of();
         }
     }
 

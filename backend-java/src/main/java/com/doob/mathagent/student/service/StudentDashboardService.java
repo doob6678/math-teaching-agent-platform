@@ -47,6 +47,12 @@ public class StudentDashboardService {
      */
     public StudentDashboardResponse dashboard(StudentDashboardQuery query) {
         StudentDashboardQuery normalized = query.normalize();
+        if (normalized.selectionRequired()) {
+            return emptyDashboard(normalized, "selection_required");
+        }
+        if (!subjectResolver.isStudentTarget(normalized)) {
+            return emptyDashboard(normalized, "non_student_target");
+        }
         return snapshotStore
                 .findLatest(normalized.tenantId(), normalized.targetStudentId())
                 .map(snapshot -> dashboardFromSnapshot(normalized, snapshot))
@@ -129,5 +135,21 @@ public class StudentDashboardService {
         }
         String generatedFrom = sourceSummary == null || sourceSummary.isBlank() ? "mysql_snapshot" : sourceSummary;
         return "{\"nodes\":[],\"edges\":[],\"generatedFrom\":\"" + generatedFrom.replace("\"", "\\\"") + "\"}";
+    }
+
+    private StudentDashboardResponse emptyDashboard(StudentDashboardQuery normalized, String generatedFrom) {
+        return new StudentDashboardResponse(
+                normalized.tenantId(),
+                "",
+                subjectResolver.resolveSubjectRole(normalized),
+                normalized.viewerRole(),
+                normalized.viewerSubjectId(),
+                false,
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                new StudentDashboardResponse.KnowledgeGraph(List.of(), List.of(), generatedFrom));
     }
 }

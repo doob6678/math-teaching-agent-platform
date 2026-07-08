@@ -26,8 +26,8 @@ public class StudentDashboardSubjectResolver {
      */
     public String resolveSubjectRole(StudentDashboardQuery query) {
         StudentDashboardQuery normalized = query.normalize();
-        if (normalized.globalView()) {
-            return "global";
+        if (normalized.selectionRequired()) {
+            return "unselected";
         }
         String targetStudentId = normalized.targetStudentId();
         if (targetStudentId.equals(normalized.viewerSubjectId())) {
@@ -38,5 +38,25 @@ public class StudentDashboardSubjectResolver {
                         ? "unknown"
                         : account.role().strip().toLowerCase())
                 .orElse("unknown");
+    }
+
+    /**
+     * Returns whether the selected target is a real student account.
+     *
+     * @param query normalized dashboard query
+     * @return true when the target account exists and its role is student
+     */
+    public boolean isStudentTarget(StudentDashboardQuery query) {
+        StudentDashboardQuery normalized = query.normalize();
+        if (normalized.selectionRequired()) {
+            return false;
+        }
+        String targetStudentId = normalized.targetStudentId();
+        if (targetStudentId.equals(normalized.viewerSubjectId())) {
+            return "student".equals(normalized.viewerRole());
+        }
+        return accountStore.findByUserId(targetStudentId)
+                .map(account -> account.role() != null && "student".equals(account.role().strip().toLowerCase()))
+                .orElse(false);
     }
 }

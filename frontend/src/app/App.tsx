@@ -1,6 +1,6 @@
 ﻿import {
   AlertCircle, BookOpen, Bot, BrainCircuit, Check, ChevronDown, Database,
-  FileText, FolderKanban, GitBranch, Globe, GraduationCap, Home,
+  Eye, FileText, FolderKanban, GitBranch, Globe, GraduationCap, Home,
   LayoutDashboard, Library, Loader2, LogOut, Network, RefreshCw,
   Bell, Search, Settings, ShieldCheck, Sparkles, User, X,
 } from "lucide-react";
@@ -30,6 +30,7 @@ import {
   StudentExplanationHistoryItem,
   StudentExplanationImageUploadResponse,
   StudentExplanationResponse,
+  TeachingHandoutVersion,
   TeachingHandoutPdfResponse,
   TeachingHandoutTemplateResponse,
   TeachingHumanFeedbackResponse,
@@ -60,6 +61,7 @@ import {
 } from "./components/McpPanels";
 import { MultiAgentWritingPanel } from "./components/MultiAgentWritingPanel";
 import { HandoutCollaborationPanel, HandoutCollaborationThreadItem } from "./components/HandoutCollaborationPanel";
+import { HandoutWorkspacePreviewPanel } from "./components/HandoutWorkspacePreviewPanel";
 import {
   compactText,
   formatDateTime,
@@ -152,7 +154,7 @@ type TeachingPdfPreviewVisualEvidence = {
   artifactType: "browser_pdf_canvas";
   captured: boolean;
   selector: string;
-  version: "teacher" | "student";
+  version: TeachingHandoutVersion;
   imageRef: string;
   previewImageDataUrl?: string;
   previewState: string;
@@ -228,7 +230,7 @@ export function App() {
   const [teachingHistory, setTeachingHistory] = useState<TeachingTaskResponse[]>([]);
   const [loadingTeachingHistory, setLoadingTeachingHistory] = useState(false);
   const [openingTeachingHistoryTaskId, setOpeningTeachingHistoryTaskId] = useState("");
-  const [handoutVersion, setHandoutVersion] = useState<"teacher" | "student">("teacher");
+  const [handoutVersion, setHandoutVersion] = useState<TeachingHandoutVersion>("teacher");
   const [handoutAction, setHandoutAction] = useState("");
   const [handoutExportMessage, setHandoutExportMessage] = useState("");
   const [feedbackRating, setFeedbackRating] = useState(4);
@@ -368,7 +370,12 @@ export function App() {
 
   useEffect(() => {
     if (!hasVerifiedSession) return;
-    loadStudentDashboard();
+    if (authSession?.role === "student") {
+      loadStudentDashboard();
+      return;
+    }
+    setStudentDashboard(null);
+    setStudentDashboardError("");
   }, [api, hasVerifiedSession, authSession?.role]);
 
   useEffect(() => {
@@ -397,6 +404,10 @@ export function App() {
 
   function handleRefreshStudentDashboard() {
     const requestedStudentId = authSession?.role === "student" ? "" : dashboardStudentId.trim();
+    if (authSession?.role !== "student" && !requestedStudentId) {
+      setStudentDashboardError("请输入学生 ID 后再刷新画像。");
+      return;
+    }
     setLoadingStudentDashboard(true);
     setStudentDashboardError("");
     setStudentDashboard(null);
@@ -409,6 +420,10 @@ export function App() {
 
   function handleLoadStudentDashboard() {
     const requestedStudentId = authSession?.role === "student" ? "" : dashboardStudentId.trim();
+    if (authSession?.role !== "student" && !requestedStudentId) {
+      setStudentDashboardError("请输入要查看的学生 ID，例如 student-001。");
+      return;
+    }
     loadStudentDashboard(requestedStudentId);
   }
 
@@ -912,7 +927,7 @@ export function App() {
           previewUrl: await fileToDataUrl(file),
         });
       })
-      .catch((error: Error) => setTeachingConversationImageError(toUserFacingError(error)))
+      .catch((error: Error) => setTeachingConversationImageError(toImageUploadError(error)))
       .finally(() => setUploadingTeachingConversationImage(false));
   }
 
@@ -929,7 +944,11 @@ export function App() {
         setKnowledgeBankError(""); setAgentPlanError(""); setAgentExecutionError("");
         setAgentTraceError(""); setAgentModelCatalogError(""); setAgentModelHealthError("");
         setMcpError("");
-        loadStudentDashboard();
+        if (session.role === "student") {
+          loadStudentDashboard();
+        } else {
+          setStudentDashboard(null);
+        }
         refreshTeacherResources();
         refreshKnowledgeQuestionBank();
         refreshAgentTraces();
@@ -945,21 +964,27 @@ export function App() {
   }
 
   function pollTeachingTask(taskId: string) {
-    const poll = () => {
+    const startedAt = Date.now();
+    const poll = (attempt = 0) => {
       api.getTeachingTask(taskId).then((task) => {
         syncSelectedTeachingTemplate(task);
         setTeachingTask(task);
         upsertHandoutCollaborationTask(task);
         if (task.status === "CREATED" || task.status === "RUNNING") {
-          globalThis.setTimeout(poll, 2000);
+          const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1000);
+          const nextDelay = elapsedSeconds < 20 ? 4000 : elapsedSeconds < 60 ? 7000 : 10000;
+          globalThis.setTimeout(() => poll(attempt + 1), nextDelay);
           return;
         }
         refreshTeachingHistory();
-      }).catch(() => {
-        globalThis.setTimeout(poll, 3000);
+      }).catch((error: Error) => {
+        const message = error.message || "";
+        const hitRateLimit = message.includes("Rate limit exceeded") || message.includes("429");
+        const nextDelay = hitRateLimit ? 12000 : Math.min(12000, 5000 + attempt * 1000);
+        globalThis.setTimeout(() => poll(attempt + 1), nextDelay);
       });
     };
-    globalThis.setTimeout(poll, 1000);
+    globalThis.setTimeout(() => poll(0), 2000);
   }
 
   function handleRegisterResource(event: FormEvent<HTMLFormElement>) {
@@ -1160,7 +1185,7 @@ export function App() {
     api
       .previewTeachingTaskLatex(teachingTask.taskId, handoutVersion)
       .then((latex) => { setHandoutPreviewLatex(latex); setHandoutPreviewTaskId(`${teachingTask.taskId}:${handoutVersion}`); })
-      .catch((error: Error) => setTeachingError(error.message))
+      .catch((error: Error) => setTeachingError(toUserFacingError(error)))
       .finally(() => setHandoutAction(""));
   }
 
@@ -1169,7 +1194,7 @@ export function App() {
     previewTeachingTaskPdf(teachingTask.taskId, handoutVersion);
   }
 
-  function previewTeachingTaskPdf(taskId: string, version: "teacher" | "student") {
+  function previewTeachingTaskPdf(taskId: string, version: TeachingHandoutVersion) {
     setHandoutAction("preview-pdf");
     setTeachingError("");
     setHandoutExportMessage("");
@@ -1188,18 +1213,21 @@ export function App() {
         });
         setHandoutPreviewPdfTaskId(`${taskId}:${version}`);
       })
-      .catch((error: Error) => setTeachingError(error.message))
+      .catch((error: Error) => setTeachingError(toUserFacingError(error)))
       .finally(() => setHandoutAction(""));
   }
 
   function resolvePreviewHandoutVersion(
     task: TeachingTaskResponse,
-    preferred: "teacher" | "student",
+    preferred: TeachingHandoutVersion,
   ) {
     const hasTeacher = Boolean(task.teacherHandoutLatex?.trim());
     const hasStudent = Boolean(task.studentHandoutLatex?.trim());
+    const hasLecture = Boolean(task.lectureHandoutLatex?.trim());
+    if (preferred === "lecture" && hasLecture) return "lecture";
     if (preferred === "teacher" && hasTeacher) return "teacher";
     if (preferred === "student" && hasStudent) return "student";
+    if (hasLecture) return "lecture";
     if (hasTeacher) return "teacher";
     if (hasStudent) return "student";
     return preferred;
@@ -1247,7 +1275,7 @@ export function App() {
           document.getElementById("handout-review-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
         }, 80);
       })
-      .catch((error: Error) => setTeachingError(error.message))
+      .catch((error: Error) => setTeachingError(toUserFacingError(error)))
       .finally(() => setHandoutAction(""));
   }
 
@@ -1270,7 +1298,7 @@ export function App() {
             : "PDF 已下载，当前使用后备排版。",
         );
       })
-      .catch((error: Error) => setTeachingError(error.message))
+      .catch((error: Error) => setTeachingError(toUserFacingError(error)))
       .finally(() => setHandoutAction(""));
   }
 
@@ -1282,7 +1310,7 @@ export function App() {
     api
       .exportTeachingTaskLatex(teachingTask.taskId, handoutVersion)
       .then((latex) => { downloadText(`${teachingTask.taskId}-${handoutVersion}.tex`, latex, "application/x-tex;charset=utf-8"); setHandoutExportMessage("TeX 源文件已下载。"); })
-      .catch((error: Error) => setTeachingError(error.message))
+      .catch((error: Error) => setTeachingError(toUserFacingError(error)))
       .finally(() => setHandoutAction(""));
   }
 
@@ -1297,7 +1325,7 @@ export function App() {
         downloadBytes(`${teachingTask.taskId}-${handoutVersion}.pdf`, pdf.bytes, "application/pdf");
         setHandoutExportMessage(`PDF 讲义已下载。${pdf.renderer === "xelatex" ? "已使用 XeLaTeX 编译。" : "当前使用后备排版。"}`);
       })
-      .catch((error: Error) => setTeachingError(error.message))
+      .catch((error: Error) => setTeachingError(toUserFacingError(error)))
       .finally(() => setHandoutAction(""));
   }
 
@@ -1309,7 +1337,7 @@ export function App() {
     api
       .createTeachingHandoutBatchZip({ taskIds: [teachingTask.taskId], folderIds: [`task-${teachingTask.taskId}`], folderPaths: [batchFolderPath.trim() || `handouts/${teachingTask.taskId}`] })
       .then((batch) => api.downloadTeachingHandoutBatchZip(batch.batchId).then((zip) => { downloadBytes(`${batch.batchId}.zip`, zip, "application/zip"); setHandoutExportMessage(`ZIP 已下载，临时文件有效期至 ${formatDateTime(batch.expiresAt)}。`); }))
-      .catch((error: Error) => setTeachingError(error.message))
+      .catch((error: Error) => setTeachingError(toUserFacingError(error)))
       .finally(() => setHandoutAction(""));
   }
 
@@ -1376,9 +1404,7 @@ export function App() {
   function handleSubmitFeedback(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!teachingTask) return;
-    const selectedDraft = handoutVersion === "student"
-      ? teachingTask.studentHandoutLatex ?? teachingTask.handoutLatex ?? ""
-      : teachingTask.teacherHandoutLatex ?? teachingTask.handoutLatex ?? "";
+    const selectedDraft = handoutDraftForVersion(teachingTask, handoutVersion);
     const reviewContext = buildTeachingFeedbackReviewContext(
       teachingTask,
       handoutVersion,
@@ -1402,7 +1428,7 @@ export function App() {
         setFeedbackHistory((current) => [feedback, ...current.filter((item) => item.feedbackId !== feedback.feedbackId)]);
         setFeedbackComment("");
       })
-      .catch((error: Error) => setTeachingError(error.message))
+      .catch((error: Error) => setTeachingError(toUserFacingError(error)))
       .finally(() => setSubmittingFeedback(false));
   }
 
@@ -1681,9 +1707,9 @@ export function App() {
   const navItems: NavItem[] = [
     { id: "dashboard", label: "工作台", icon: <LayoutDashboard size={16} /> },
     { id: "search", label: "教材检索", icon: <Search size={16} /> },
-    { id: "teaching", label: "教学任务", icon: <BookOpen size={16} /> },
+    { id: "teaching", label: "AI 讲题", icon: <BookOpen size={16} /> },
     { id: "agents", label: "AI 控制台", icon: <Bot size={16} /> },
-    { id: "streaming", label: "讲义协作", icon: <GitBranch size={16} /> },
+    { id: "streaming", label: "讲义生成", icon: <GitBranch size={16} /> },
     { id: "knowledge", label: "知识库", icon: <BrainCircuit size={16} /> },
     { id: "mcp", label: "MCP 接入", icon: <Globe size={16} /> },
     { id: "settings", label: "系统设置", icon: <Settings size={16} /> },
@@ -1825,9 +1851,9 @@ export function App() {
             <div className="card-body">
               <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
                 <button className="btn btn-secondary" onClick={() => navigate("search")}><Search size={14} /> 教材检索</button>
-                <button className="btn btn-secondary" onClick={() => navigate("teaching")}><BookOpen size={14} /> 教学任务</button>
+                <button className="btn btn-secondary" onClick={() => navigate("teaching")}><BookOpen size={14} /> AI 讲题</button>
                 <button className="btn btn-secondary" onClick={() => navigate("agents")}><Bot size={14} /> AI 控制台</button>
-                <button className="btn btn-secondary" onClick={() => navigate("streaming")}><GitBranch size={14} /> 讲义协作</button>
+                <button className="btn btn-secondary" onClick={() => navigate("streaming")}><GitBranch size={14} /> 讲义生成</button>
               </div>
             </div>
           </div>
@@ -1943,7 +1969,6 @@ export function App() {
         onSubmit={handleTeachingConversation}
         onImageSelect={handleTeachingConversationImageUpload}
         onClearImage={clearTeachingConversationImage}
-        onOpenHandout={() => navigate("streaming")}
       />,
     );
   }
@@ -2043,17 +2068,17 @@ export function App() {
 
   function renderStreaming() {
     return renderRequiresAuth(
-      <>
-        <div className="page-header">
-          <h1 className="page-title">讲义协作</h1>
-          <p className="page-subtitle">模板书架与协作流同页完成讲义生成、预览与导出</p>
+      <section className="handout-studio-shell">
+        <div className="handout-studio-header">
+          <div>
+            <h1 className="page-title">讲义生成</h1>
+            <p className="page-subtitle">教师讲义、学生讲义、PDF 预览和人工审查在同一工作区完成。</p>
+          </div>
         </div>
-        <div className="card-grid handout-studio-grid">
-          <div className="card card-full">
-            <div className="card-header">
-              <h2 className="card-title"><FileText size={16} /> 协作会话流</h2>
-            </div>
-            <div className="card-body">
+
+        <div className="handout-studio-grid">
+          <div className="handout-studio-main">
+            <section className="handout-studio-pane">
               <HandoutCollaborationPanel
                 learningGoal={learningGoal}
                 questionText={teachingQuestion}
@@ -2078,13 +2103,13 @@ export function App() {
                 onPreviewLatex={previewHandoutTaskLatex}
                 onExportPdf={exportHandoutTaskPdf}
               />
-            </div>
-          </div>
-          <div className="card card-full">
-            <div className="card-header">
-              <h2 className="card-title"><BookOpen size={16} /> 模板书架</h2>
-            </div>
-            <div className="card-body">
+            </section>
+
+            <section className="handout-studio-pane handout-template-pane">
+              <div className="handout-pane-head">
+                <h2 className="card-title"><BookOpen size={16} /> 模板书架</h2>
+                <span>参考真实讲义版式，当前仅影响结构与排版风格。</span>
+              </div>
               <TemplateShelf
                 templates={teachingTemplates}
                 selectedCode={selectedTeachingTemplateCode}
@@ -2093,44 +2118,46 @@ export function App() {
                 loadPreviewImage={api.getTeachingHandoutTemplatePreviewImage}
                 loadReferencePdf={api.getTeachingHandoutTemplateReferencePdf}
               />
-            </div>
+            </section>
           </div>
-          <div className="card card-full">
-            <div className="card-header">
-              <h2 className="card-title"><GitBranch size={16} /> AI 协作增强</h2>
+
+          <aside className="handout-studio-pane handout-preview-pane">
+            <div className="handout-pane-head">
+              <h2 className="card-title"><Eye size={16} /> 讲义预览</h2>
+              <span>支持真实 PDF 翻页、结构审查和教师/学生双版本切换。</span>
             </div>
-            <div className="card-body">
-              <MultiAgentWritingPanel
-                workflow={multiAgentWorkflow}
-                traces={multiAgentWorkflowTraces}
-                artifact={multiAgentArtifact}
-                writingGoal={multiAgentWritingGoal}
-                questionText={multiAgentWritingQuestion}
-                providerName={agentProvider}
-                modelCode={agentModel}
-                modelReady={agentModelsForProvider(agentModelCatalog, agentProvider).some((m) => m.modelCode === agentModel)}
-                starting={startingMultiAgentWriting}
-                polling={pollingMultiAgentWriting}
-                loadingArtifact={loadingMultiAgentArtifact}
-                artifactError={multiAgentArtifactError}
-                artifactMessage={multiAgentArtifactMessage}
-                exportingArtifactFormat={exportingMultiAgentArtifact}
-                pdfPreviewUrl={
-                  multiAgentArtifactPdfWorkflowId === multiAgentWorkflow?.workflowId ? multiAgentArtifactPdfUrl : ""
-                }
-                error={multiAgentWritingError}
-                onWritingGoalChange={setMultiAgentWritingGoal}
-                onQuestionTextChange={setMultiAgentWritingQuestion}
-                onSubmit={handleStartMultiAgentWriting}
-                onRefresh={() => refreshMultiAgentWritingWorkflow()}
-                onLoadArtifact={() => multiAgentWorkflow && loadMultiAgentArtifact(multiAgentWorkflow.workflowId)}
-                onPreviewPdf={handlePreviewMultiAgentArtifactPdf}
-                onExportArtifact={handleExportMultiAgentArtifact}
+            <div className="handout-preview-pane-body">
+              <HandoutWorkspacePreviewPanel
+                task={teachingTask}
+                version={handoutVersion}
+                previewLatex={handoutPreviewLatex}
+                previewTaskKey={handoutPreviewTaskId}
+                previewPdfUrl={handoutPreviewPdfUrl}
+                previewPdfBytes={handoutPreviewPdfBytes}
+                previewPdfMeta={handoutPreviewPdfMeta}
+                previewPdfTaskKey={handoutPreviewPdfTaskId}
+                action={handoutAction}
+                exportMessage={handoutExportMessage}
+                feedbackRating={feedbackRating}
+                feedbackDecision={feedbackDecision}
+                feedbackComment={feedbackComment}
+                submittingFeedback={submittingFeedback}
+                feedbackMessage={feedbackMessage}
+                feedbackHistory={feedbackHistory}
+                loadingFeedbackHistory={loadingFeedbackHistory}
+                onVersionChange={setHandoutVersion}
+                onPreviewPdf={handlePreviewPdf}
+                onPreviewLatex={handlePreviewLatex}
+                onExportPdf={handleExportPdf}
+                onFeedbackRatingChange={setFeedbackRating}
+                onFeedbackDecisionChange={setFeedbackDecision}
+                onFeedbackCommentChange={setFeedbackComment}
+                onSubmitFeedback={handleSubmitFeedback}
               />
             </div>
-          </div>
+          </aside>
         </div>
-      </>
+      </section>
     );
   }
 
@@ -2452,7 +2479,7 @@ function readStoredTeachingConversation(): {
     };
     return {
       conversationId: parsed.conversationId ?? "",
-      entries: Array.isArray(parsed.entries) ? parsed.entries : [],
+      entries: Array.isArray(parsed.entries) ? sanitizeTeachingConversationEntries(parsed.entries) : [],
     };
   } catch {
     return { conversationId: "", entries: [] };
@@ -2460,10 +2487,44 @@ function readStoredTeachingConversation(): {
 }
 
 function sanitizeTeachingConversationEntries(entries: TeachingConversationThreadItem[]) {
-  return entries.map((entry) => ({
-    ...entry,
-    imagePreviewUrl: undefined,
-  }));
+  return entries
+    .filter(isRestorableTeachingConversationEntry)
+    .slice(-24)
+    .map((entry) => ({
+      ...entry,
+      imagePreviewUrl: undefined,
+    }));
+}
+
+function isRestorableTeachingConversationEntry(entry: TeachingConversationThreadItem) {
+  if (entry.role === "user") {
+    return Boolean(entry.questionText?.trim() || entry.imageFileName?.trim());
+  }
+  if (entry.loading) {
+    return false;
+  }
+  if (entry.error) {
+    return false;
+  }
+  if (!entry.response) {
+    return false;
+  }
+  return !isNoisyTeachingConversationText([
+    entry.questionText,
+    entry.response.questionText,
+    ...(entry.response.cards ?? []).flatMap((card) => [
+      card.title,
+      card.summary,
+      ...(card.items ?? []),
+    ]),
+  ]);
+}
+
+function isNoisyTeachingConversationText(values: Array<string | undefined>) {
+  return values.some((value) => {
+    const text = value ?? "";
+    return /API_ACCESS_DENIED|Endpoint requires|没有执行这个操作的权限|权限不足|MODEL_CALL|JSON_PARSE|bearer|MCP|requestHash|idempotencyKey/i.test(text);
+  });
 }
 
 function readStoredHandoutCollaboration(): HandoutCollaborationThreadItem[] {
@@ -2504,10 +2565,27 @@ function toUserFacingError(error: Error) {
   if (message.includes("Backend request failed: 429")) {
     return "当前模型或任务队列繁忙，请稍后重试。";
   }
+  if (message.includes("Backend request failed: 400")) {
+    return "后端拒绝了本次请求，请刷新页面或重启后端后重试；如果是横版讲解 PDF，通常是后端能力白名单尚未加载最新代码。";
+  }
   if (message.includes("Failed to fetch") || message.includes("NetworkError")) {
     return "无法连接后端服务，请确认本机后端已经启动。";
   }
   return message.replace(/^Backend request failed:\s*/i, "").slice(0, 220);
+}
+
+function toImageUploadError(error: Error) {
+  const message = error.message || "";
+  if (message.includes("Backend request failed: 403")) {
+    return "图片上传需要有效登录态。管理员、教师和学生都可以上传；请重新登录后再试。";
+  }
+  if (message.includes("Backend request failed: 413") || message.includes("exceeds max size")) {
+    return "图片太大，请换一张更小的题图。";
+  }
+  if (message.includes("Only image uploads")) {
+    return "只能上传图片文件。";
+  }
+  return toUserFacingError(error);
 }
 
 function downloadText(fileName: string, content: string, mimeType: string) {
@@ -2680,7 +2758,9 @@ export function TemplateShelf({
   }
 
   const filterOptions = templateShelfFilters(templates);
-  const filteredTemplates = templates.filter((template) => templateMatchesShelfFilter(template, filter));
+  const filteredTemplates = templates
+    .filter((template) => templateMatchesShelfFilter(template, filter))
+    .sort(compareTemplateShelfPriority);
   const shelfTemplates = filteredTemplates.length ? filteredTemplates : templates;
   const recommendedTemplates = shelfTemplates
     .filter((template) => template.templateCode !== selectedTemplate.templateCode)
@@ -2865,8 +2945,7 @@ function TemplateHandoutPreview({
 
         <div className="template-preview-workspace">
           <div>
-            <strong>{isStudentOnly ? "课堂作答区" : "板书与讲评区"}</strong>
-            <div className="template-preview-lines">
+            <div className="template-preview-lines" aria-hidden="true">
               <span />
               <span />
               <span />
@@ -3009,8 +3088,9 @@ function canLoadTemplateReferenceMedia(template: TeachingHandoutTemplateResponse
   if (!template) {
     return false;
   }
+  const referenceTitle = template.referenceTitle?.trim() ?? "";
   return template.sourceType === "local_reference"
-    || Boolean(template.referenceTitle?.trim())
+    || /\.pdf$/i.test(referenceTitle)
     || Boolean(template.referencePath?.trim());
 }
 
@@ -3031,6 +3111,23 @@ function uniqueTemplates(templates: TeachingHandoutTemplateResponse[]) {
     seen.add(template.templateCode);
     return true;
   });
+}
+
+function compareTemplateShelfPriority(left: TeachingHandoutTemplateResponse, right: TeachingHandoutTemplateResponse) {
+  return templateShelfPriority(right) - templateShelfPriority(left);
+}
+
+function templateShelfPriority(template: TeachingHandoutTemplateResponse) {
+  const searchable = `${template.templateCode} ${template.displayName} ${template.description} ${template.referenceTitle ?? ""} ${(template.tags ?? []).join(" ")}`.toLowerCase();
+  let score = 0;
+  if ((template.sourceType ?? "").toLowerCase() === "local_reference") score += 30;
+  if ((template.audience ?? "").toLowerCase() === "student") score += 18;
+  if (searchable.includes("真实")) score += 24;
+  if (searchable.includes("反比例函数")) score += 26;
+  if (searchable.includes("赵礼显")) score += 18;
+  if (searchable.includes("学生版")) score += 16;
+  if (searchable.includes("pdf")) score += 4;
+  return score;
 }
 
 function templateShelfFilters(templates: TeachingHandoutTemplateResponse[]): Array<{ value: TemplateShelfFilter; label: string; count: number }> {
@@ -3118,9 +3215,19 @@ function decisionLabel(decision: string) {
   return labels[decision] ?? decision;
 }
 
+function handoutDraftForVersion(task: TeachingTaskResponse, version: TeachingHandoutVersion) {
+  if (version === "lecture") {
+    return task.lectureHandoutLatex ?? task.teacherHandoutLatex ?? task.handoutLatex ?? "";
+  }
+  if (version === "student") {
+    return task.studentHandoutLatex ?? task.handoutLatex ?? "";
+  }
+  return task.teacherHandoutLatex ?? task.handoutLatex ?? "";
+}
+
 export function buildTeachingFeedbackReviewContext(
   task: TeachingTaskResponse,
-  version: "teacher" | "student",
+  version: TeachingHandoutVersion,
   latex: string,
   pdfMeta: TeachingHandoutPdfResponse | null,
   pdfPreviewKey: string,
@@ -3133,7 +3240,7 @@ export function buildTeachingFeedbackReviewContext(
     .trim();
   const sectionCount = (latex.match(/\\section\*?\{/g) ?? []).length;
   const hasMath = /(\${1,2}[^$]+\${1,2}|\\\(.+?\\\)|\\\[.+?\\\]|[A-Za-z][_^][{]?\d)/.test(latex);
-  const hasWorkspace = /作答区|我的解答|订正|留白|\\vspace|___/.test(latex);
+  const hasWorkspace = /\\vspace|\\underline\{\\hspace|___/.test(latex);
   const answerLeak = /答案与评分点|参考答案|评分标准|答案[:：]|答案为|故答案|因此答案|得分/.test(plainText);
   const teacherHasAnswer = /答案与评分点|答案|解析|讲评|评分/.test(plainText);
   const evidenceCount = task.evidence.length;
@@ -3145,7 +3252,11 @@ export function buildTeachingFeedbackReviewContext(
   const layoutRuleLeak = /页眉|页脚|颜色|PDF\s*版式要求|PDF\s*规则|渲染引擎/.test(plainText);
   const studentAnswerIsolated = version !== "student" || !answerLeak;
   const teacherAnswerPresent = version !== "teacher" || teacherHasAnswer;
-  const groups = version === "teacher" ? [
+  const groups = version === "lecture" ? [
+    ["横版讲解卡", "16:10 横版讲解卡", "课堂投屏", "讲解卡"],
+    ["核心公式", "核心公式与方法卡", "公式", "方法"],
+    ["课堂引导", "课堂追问", "追问", "引导"],
+  ] : version === "teacher" ? [
     ["讲义信息", "学习目标", "本讲任务", "课前定位"],
     ["来源索引", "知识点归属", "知识定位", "教材", "题库", "证据"],
     ["板书流程", "板书", "方法步骤", "讲解路径", "方法卡片", "讲解"],
@@ -3158,13 +3269,13 @@ export function buildTeachingFeedbackReviewContext(
     ["题型", "例题任务", "题目", "连续编号"],
     ["思路提示", "作答提醒", "注意", "方法提示"],
     ["课堂练习", "练习任务", "课后巩固"],
-    ["我的解答", "课堂作答区", "订正记录", "错因"],
+    ["连续编号", "练习任务", "订正记录", "错因"],
   ];
   const matchedCoreColumns = groups.filter((group) => group.some((keyword) => plainText.includes(keyword))).length;
   const pdfRenderer = pdfMeta?.renderer ?? "";
   const pdfPageCount = pdfMeta?.pageCount ?? 0;
   const coreColumnCoverage = `${matchedCoreColumns}/${groups.length}`;
-  const pdfVisualEvidenceCaptured = Boolean(visualEvidence?.captured && pdfPreviewReady);
+  const pdfVisualEvidenceCaptured = Boolean(visualEvidence?.captured && visualEvidence.previewImageDataUrl && pdfPreviewReady);
   const evidenceSummary = buildTeachingFeedbackEvidenceSummary(task);
   const pdfImageRef = visualEvidence?.imageRef ?? `teaching-task:${task.taskId}:${version}:pdf-page:1`;
   return {
@@ -3211,6 +3322,7 @@ export function buildTeachingFeedbackReviewContext(
       imageRequired: true,
       imageRefs: [pdfImageRef],
       attachPdfPreviewImage: pdfVisualEvidenceCaptured,
+      inlinePreviewIncluded: pdfVisualEvidenceCaptured,
       textPayloadFields: [
         "taskSnapshot",
         "templateSnapshot",
@@ -3302,7 +3414,7 @@ function safeReviewText(value: string | undefined, maxLength: number) {
 
 function captureTeachingPdfPreviewVisualEvidence(
   taskId: string,
-  version: "teacher" | "student",
+  version: TeachingHandoutVersion,
 ): TeachingPdfPreviewVisualEvidence {
   const selector = ".pdf-page-canvas";
   const canvas = document.querySelector<HTMLCanvasElement>(selector);
@@ -3330,16 +3442,39 @@ function captureTeachingPdfPreviewVisualEvidence(
   }
   const rect = canvas.getBoundingClientRect();
   const captured = previewState === "ready" && canvas.width > 0 && canvas.height > 0;
+  const previewImageDataUrl = captured ? captureCanvasPreviewDataUrl(canvas) : "";
   return {
     ...base,
     captured,
+    previewImageDataUrl,
     pixelWidth: canvas.width,
     pixelHeight: canvas.height,
     cssWidth: Math.round(rect.width),
     cssHeight: Math.round(rect.height),
-    attachToAiReview: captured,
+    attachToAiReview: captured && Boolean(previewImageDataUrl),
     reason: captured ? undefined : "PDF canvas not ready",
   };
+}
+
+function captureCanvasPreviewDataUrl(canvas: HTMLCanvasElement) {
+  try {
+    const maxWidth = 900;
+    const scale = canvas.width > maxWidth ? maxWidth / canvas.width : 1;
+    if (scale >= 1) {
+      return canvas.toDataURL("image/png");
+    }
+    const preview = document.createElement("canvas");
+    preview.width = Math.max(1, Math.round(canvas.width * scale));
+    preview.height = Math.max(1, Math.round(canvas.height * scale));
+    const context = preview.getContext("2d");
+    if (!context) {
+      return "";
+    }
+    context.drawImage(canvas, 0, 0, preview.width, preview.height);
+    return preview.toDataURL("image/png");
+  } catch {
+    return "";
+  }
 }
 
 function downloadBlob(fileName: string, blob: Blob) {

@@ -23,7 +23,9 @@ import com.doob.mathagent.teacher.service.InMemoryTeacherDocumentBlockStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherResourceStore;
 import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService;
 import com.doob.mathagent.teacher.vo.TeacherDocumentBlockResponse;
+import com.doob.mathagent.teacher.vo.TeacherResourceBlockSearchResponse;
 import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
+import com.doob.mathagent.vector.service.TestVectorIndexService;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -76,6 +78,32 @@ class StudentExplanationServiceTest {
         assertThat(response.workflowStages())
                 .anySatisfy(stage -> {
                     assertThat(stage.stageKey()).isEqualTo("search_teacher_resources");
+                    assertThat(stage.status()).isEqualTo("completed");
+                });
+    }
+
+    @Test
+    void teacherResourceSearchFailureDoesNotFailTheWholeExplanation() throws Exception {
+        StudentExplanationService service = serviceWithFailingTeacherResourceSearch(tempDir);
+        StudentExplanationRequest request = request("space vector dot product dihedral angle", true, true, true);
+
+        StudentExplanationResponse response = service.explain(
+                request,
+                new RequestSubject("default", "admin", "admin-1", "device-1"));
+
+        assertThat(response.viewerRole()).isEqualTo("admin");
+        assertThat(response.cards()).isNotEmpty();
+        assertThat(response.sources()).extracting(StudentExplanationResponse.ExplanationSource::sourceUri)
+                .anyMatch(uri -> uri.startsWith("textbook://book-vector/page/12#chunk="))
+                .noneMatch(uri -> uri.startsWith("teacher-resource://"));
+        assertThat(response.workflowStages())
+                .anySatisfy(stage -> {
+                    assertThat(stage.stageKey()).isEqualTo("search_teacher_resources");
+                    assertThat(stage.status()).isEqualTo("failed");
+                    assertThat(stage.detail()).contains("teacher search unavailable");
+                })
+                .anySatisfy(stage -> {
+                    assertThat(stage.stageKey()).isEqualTo("assemble_cards");
                     assertThat(stage.status()).isEqualTo("completed");
                 });
     }
@@ -340,6 +368,49 @@ class StudentExplanationServiceTest {
                 aiProviderCatalog(),
                 null,
                 null);
+    }
+
+    private static StudentExplanationService serviceWithFailingTeacherResourceSearch(Path root) throws Exception {
+        writeTextbookCorpus(root);
+        InMemoryKnowledgeQuestionBankStore knowledgeStore = new InMemoryKnowledgeQuestionBankStore();
+        knowledgeStore.saveKnowledgePoint(new KnowledgePointRecord(
+                "spine-vector-dot",
+                "default",
+                "seed",
+                "PUBLIC_TEXTBOOK",
+                "space vector dot product",
+                "space vector / solid geometry",
+                "active",
+                "display_spine_v0.1;nodeType=TOPIC"));
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        TeacherResourceBlockSearchService throwingSearchService = new TeacherResourceBlockSearchService(
+                resourceStore,
+                blockStore,
+                event -> {
+                },
+                TestVectorIndexService.successful(resourceStore, blockStore)) {
+            @Override
+            public TeacherResourceBlockSearchResponse search(
+                    String tenantId,
+                    String viewerRole,
+                    String viewerSubjectId,
+                    String query,
+                    int limit,
+                    String endpoint) {
+                throw new IllegalStateException("teacher search unavailable");
+            }
+        };
+        return StudentExplanationServiceFixture.deterministic(
+                new TextbookResourceProperties(root),
+                com.doob.mathagent.retrieval.TextbookRetrievalServiceFixture.service(
+                        new TextbookCatalogReader(),
+                        new TextbookChunkReader(),
+                        new LocalTextbookBm25SearchEngine(),
+                        event -> {
+                        }),
+                new KnowledgeGraphSpineService(knowledgeStore),
+                throwingSearchService);
     }
 
     /**

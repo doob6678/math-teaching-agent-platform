@@ -1124,21 +1124,45 @@ public class TeacherResourceBlockSearchService {
     }
 
     private static boolean queryWantsAnalysis(String normalizedQuery) {
-        return containsPositiveCue(
+        if (containsPositiveCue(
                 normalizedQuery,
                 "\u89e3\u6790",
                 "\u7b54\u6848",
                 "\u601d\u8def",
                 "\u8def\u7ebf",
-                "\u8bb2\u8bc4",
                 "\u70b9\u8bc4",
                 "\u9519\u56e0",
+                "\u9519\u8bef",
                 "\u6b65\u9aa4",
-                "\u8bb2\u8bc4",
+                "\u89e3\u6cd5",
+                "\u9a8c\u7b97",
+                "\u8bb2\u8bc4\u5757",
+                "\u8bb2\u8bc4\u70b9\u8bc4",
+                "\u8bb2\u8bc4\u89e3\u6790",
                 "analysis",
                 "answer",
                 "solution",
-                "steps");
+                "steps")) {
+            return true;
+        }
+        /*
+         * "讲评" alone is ambiguous: teachers often say "专题讲评课" while asking for the lesson-level
+         * classroom entry, not a single-question answer block. Only treat it as analysis when it is paired with
+         * answer/solution/error-route wording and no lesson-level classroom cue is present.
+         */
+        return containsPositiveCue(normalizedQuery, "\u8bb2\u8bc4")
+                && !queryWantsLesson(normalizedQuery)
+                && containsPositiveCue(
+                        normalizedQuery,
+                        "\u9519\u56e0",
+                        "\u9519\u8bef",
+                        "\u6b65\u9aa4",
+                        "\u7b54\u6848",
+                        "\u89e3\u6790",
+                        "\u70b9\u8bc4",
+                        "\u8def\u7ebf",
+                        "\u89e3\u6cd5",
+                        "\u9a8c\u7b97");
     }
 
     private static boolean queryWantsQuestion(String normalizedQuery, boolean wantsAnalysis) {
@@ -1176,8 +1200,13 @@ public class TeacherResourceBlockSearchService {
                 "\u8bb2\u4e49",
                 "\u6559\u6750",
                 "\u8bfe\u5802",
+                "\u8bb2\u8bc4\u8bfe",
                 "\u6574\u4f53\u8bb2\u6cd5",
+                "\u8bb2\u6cd5\u5165\u53e3",
                 "\u6574\u4f53\u68b3\u7406",
+                "\u5f00\u7bc7",
+                "\u6536\u675f",
+                "\u8bfe\u5802\u68c0\u67e5",
                 "\u603b\u8bb2",
                 "\u6574\u5305",
                 "lesson",
@@ -1272,6 +1301,8 @@ public class TeacherResourceBlockSearchService {
                         before,
                         "\u4e0d\u8981",
                         "\u522b",
+                        "\u4e0d\u662f",
+                        "\u800c\u4e0d\u662f",
                         "\u4e0d\u60f3",
                         "\u4e0d\u627e",
                         "\u4e0d\u67e5",

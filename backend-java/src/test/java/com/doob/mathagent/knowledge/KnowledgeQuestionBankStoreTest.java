@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.doob.mathagent.knowledge.service.InMemoryKnowledgeQuestionBankStore;
 import com.doob.mathagent.knowledge.service.KnowledgePointRecord;
 import com.doob.mathagent.knowledge.service.KnowledgeRelationRecord;
+import com.doob.mathagent.knowledge.service.QuestionBankSearchText;
 import com.doob.mathagent.knowledge.service.QuestionBankItemRecord;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -119,6 +120,40 @@ class KnowledgeQuestionBankStoreTest {
         assertThat(store.searchQuestions("school-a", "teacher", "teacher-1", "学会空间向量大题讲义", 10))
                 .extracting(QuestionBankItemRecord::questionId)
                 .containsExactly("q-solid-geometry");
+    }
+
+    @Test
+    void coneSectionSearchDoesNotExpandToSolidConeQuestions() {
+        InMemoryKnowledgeQuestionBankStore store = new InMemoryKnowledgeQuestionBankStore();
+        store.saveQuestion(new QuestionBankItemRecord(
+                "q-solid-cone",
+                "school-a",
+                "admin-1",
+                "MATH_VIP",
+                "圆锥立体几何体积题",
+                "如图，在圆锥中求线面角与体积。",
+                "{}",
+                "medium",
+                "active",
+                List.of()));
+        store.saveQuestion(new QuestionBankItemRecord(
+                "q-hyperbola",
+                "school-a",
+                "admin-1",
+                "MATH_VIP",
+                "双曲线标准方程与渐近线",
+                "已知焦点和离心率，求双曲线标准方程。",
+                "{}",
+                "medium",
+                "active",
+                List.of()));
+
+        assertThat(QuestionBankSearchText.candidateQueries("圆锥曲线专题讲义"))
+                .contains("圆锥曲线", "双曲线", "渐近线")
+                .doesNotContain("圆锥");
+        assertThat(store.searchQuestions("school-a", "teacher", "teacher-1", "圆锥曲线专题讲义", 10))
+                .extracting(QuestionBankItemRecord::questionId)
+                .containsExactly("q-hyperbola");
     }
 
     @Test

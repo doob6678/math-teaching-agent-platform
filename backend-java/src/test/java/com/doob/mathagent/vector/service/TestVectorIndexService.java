@@ -99,6 +99,11 @@ public final class TestVectorIndexService extends VectorIndexService {
 
     @Override
     public List<VectorSearchHit> searchTeacherResourceBlocks(String query, int limit) {
+        return searchTeacherResourceBlocks(query, limit, VectorSearchFilter.EMPTY);
+    }
+
+    @Override
+    public List<VectorSearchHit> searchTeacherResourceBlocks(String query, int limit, VectorSearchFilter filter) {
         if (!(resourceStore instanceof InMemoryTeacherResourceStore memoryStore)) {
             return List.of();
         }
@@ -107,7 +112,12 @@ public final class TestVectorIndexService extends VectorIndexService {
             return List.of();
         }
         String[] terms = normalizedQuery.split("\\s+");
+        VectorSearchFilter normalizedFilter = filter == null ? VectorSearchFilter.EMPTY : filter;
         return memoryStore.snapshot().stream()
+                .filter(document -> normalizedFilter.documentIds().isEmpty()
+                        || normalizedFilter.documentIds().contains(document.documentId()))
+                .filter(document -> normalizedFilter.permissionScopes().isEmpty()
+                        || normalizedFilter.permissionScopes().contains(scope(document.permissionScope())))
                 .sorted(Comparator.comparing(TeacherResourceDocumentResponse::title)
                         .thenComparing(TeacherResourceDocumentResponse::documentId))
                 .flatMap(document -> blockStore.listByDocument(document.tenantId(), document.documentId()).stream())
@@ -154,6 +164,10 @@ public final class TestVectorIndexService extends VectorIndexService {
 
     private static String text(String primary, String fallback) {
         return primary == null || primary.isBlank() ? (fallback == null ? "" : fallback) : primary;
+    }
+
+    private static String scope(String value) {
+        return value == null ? "" : value.strip().toUpperCase(Locale.ROOT);
     }
 
     private static final class NoOpTransport implements VectorHttpTransport {

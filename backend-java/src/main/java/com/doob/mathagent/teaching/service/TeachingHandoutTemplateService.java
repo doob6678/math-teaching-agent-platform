@@ -10,9 +10,12 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import org.springframework.stereotype.Service;
 
 /**
@@ -45,8 +48,10 @@ public class TeachingHandoutTemplateService {
                         null),
                 """
                 生成一份可直接打印的标准数学讲义。
-                必须包含：学习目标、知识点梳理、方法步骤、例题拆解、分层练习、易错提醒。
+                必须包含：学习目标、具体知识点梳理、方法步骤、例题拆解、分层练习、易错提醒。
                 教师版要给出完整讲解链路；学生版保留提示和空白，不直接泄露完整答案。
+                所有知识点、方法卡和练习都要紧扣当前题目或主题，不要生成“知识点1/2/3”“题型1/2/3”这类占位标题。
+                正文要么写实际教学内容，要么保留干净空白，不要写“本讲任务”“课堂任务”“审校清单”这类元说明。
                 版式由系统渲染负责，正文不要写页眉、页脚、颜色、模板规则、模型或系统说明。
                 段落要短，公式优先，避免聊天式解释和大段散文。
                 """,
@@ -67,13 +72,35 @@ public class TeachingHandoutTemplateService {
                         null),
                 """
                 输出必须像学生打印讲义，不像问答。
-                结构要求：
-                1. 标题使用“第X讲 <主题>”或“专题 <主题>”；
-                2. 2-4 个“知识点1/2/3”块，每块先公式再解释；
-                3. 必须有“注意”块，写定义域、参数、符号、易错边界；
-                4. 必须按“题型1/题型2/练习1/练习2”组织；
-                5. 学生版只给提示和空白，答案放到教师版。
-                6. 正文只写学生需要看的知识、提示、题目和留白，不写页眉页脚、颜色或系统规则。
+                标题使用“第X讲 <主题>”或“专题 <主题>”。
+                先写具体公式、条件、图像特征，再写对应解释；不要用“知识点1/2/3”“题型1/2/3”当占位块堆页面。
+                保留“注意”或“易错提醒”，重点写定义域、参数、符号和边界。
+                练习必须连续编号，空白区域集中、紧凑，不要在每个小点后面塞大块空白；空白处不要标“作答区”“手写区”“留白区”。
+                学生版只给提示和干净空白，答案放到教师版。
+                正文要么写具体内容，要么留空，不要写“本讲任务”“课堂任务”“本页只保留”这类元话术。
+                正文只写学生需要看的知识、提示、题目和留白，不写页眉页脚、颜色或系统规则。
+                """,
+                true));
+        map.put("inverse_real_student_reference_v1", new TeachingHandoutTemplateProfile(
+                new TeachingHandoutTemplateResponse(
+                        "inverse_real_student_reference_v1",
+                        "反比例函数真实学生讲义",
+                        "local_reference",
+                        "student",
+                        "直接参考本机真实《反比例函数（学生版）》PDF，用于学生讲义排版和留白风格对齐。",
+                        "学生讲义",
+                        "学霸笔记",
+                        List.of("基础", "提高"),
+                        List.of("反比例函数", "学生版", "真实参考", "编号练习"),
+                        "反比例函数（学生版）7658488570078855330.pdf",
+                        "C:/Users/doob/Documents/xwechat_files/wxid_4o23y4ktrzsx22_7541/msg/file/2026-07/反比例函数（学生版）7658488570078855330.pdf",
+                        "本机真实学生版讲义，适合作为学生讲义留白、编号练习和标题层级的参考。"),
+                """
+                参考本机真实《反比例函数（学生版）》讲义风格，生成学生可直接打印的课堂讲义。
+                先写具体定义、表达式、图像性质和题型提示，再写连续编号练习。
+                学生版只保留知识点、题目、提示和干净空白，不出现答案、评分点、完整解析。
+                每道题之间留出明显空白，但不要标注“作答区”“手写区”“留白区”，也不要过度留白；整体保持真实讲义的紧凑层级。
+                正文只写学生要看到的内容，不写页眉页脚、颜色、模板规则、PDF 规则或系统说明。
                 """,
                 true));
         map.put("teacher_solution_v1", new TeachingHandoutTemplateProfile(
@@ -132,7 +159,7 @@ public class TeachingHandoutTemplateService {
                         List.of("提高", "压轴"),
                         List.of("空间向量", "立体几何", "本机参考"),
                         "参考讲义数学空间向量.pdf",
-                        null,
+                        "C:/Users/doob/Desktop/code/dev/math_agent_rag/文档/项目测试数据位置/参考讲义数学空间向量.pdf",
                         "本机项目测试资料中的空间向量专题讲义。"),
                 """
                 参考本机真实空间向量专题讲义风格。
@@ -142,11 +169,15 @@ public class TeachingHandoutTemplateService {
                 正文只保留专题讲解、题目、步骤、答案或留白，不写页眉页脚和渲染规则。
                 """,
                 false));
+        Set<String> knownSourceKeys = new LinkedHashSet<>();
+        for (TeachingHandoutTemplateProfile profile : map.values()) {
+            knownSourceKeys.addAll(templateSourceKeys(profile.summary()));
+        }
         for (TeachingHandoutTemplateProfile profile : configuredTemplateSkills()) {
-            map.putIfAbsent(profile.summary().templateCode(), profile);
+            putTemplateIfNewSource(map, knownSourceKeys, profile);
         }
         for (TeachingHandoutTemplateProfile profile : new TeachingHandoutLocalReferenceScanner().scan()) {
-            map.putIfAbsent(profile.summary().templateCode(), profile);
+            putTemplateIfNewSource(map, knownSourceKeys, profile);
         }
         this.templates = Collections.unmodifiableMap(map);
     }
@@ -169,6 +200,60 @@ public class TeachingHandoutTemplateService {
         }
         return Optional.ofNullable(templates.get(templateCode.strip()))
                 .orElseGet(() -> templates.get("default_standard"));
+    }
+
+    private static void putTemplateIfNewSource(
+            LinkedHashMap<String, TeachingHandoutTemplateProfile> map,
+            Set<String> knownSourceKeys,
+            TeachingHandoutTemplateProfile profile) {
+        if (profile == null || profile.summary() == null || isBlank(profile.summary().templateCode())) {
+            return;
+        }
+        if (map.containsKey(profile.summary().templateCode())) {
+            return;
+        }
+        List<String> keys = templateSourceKeys(profile.summary());
+        if (!Collections.disjoint(knownSourceKeys, keys)) {
+            return;
+        }
+        map.put(profile.summary().templateCode(), profile);
+        knownSourceKeys.addAll(keys);
+    }
+
+    private static List<String> templateSourceKeys(TeachingHandoutTemplateResponse summary) {
+        LinkedHashSet<String> keys = new LinkedHashSet<>();
+        addSourceKey(keys, "reference-title", summary.referenceTitle());
+        addSourceKey(keys, "reference-path", summary.referencePath());
+        addSourceKey(keys, "reference-file", fileNameOf(summary.referencePath()));
+        return keys.stream().toList();
+    }
+
+    private static void addSourceKey(Set<String> keys, String prefix, String value) {
+        String normalized = normalizeSourceIdentity(value);
+        if (!normalized.isBlank()) {
+            keys.add(prefix + ":" + normalized);
+        }
+    }
+
+    private static String fileNameOf(String path) {
+        if (path == null || path.isBlank()) {
+            return "";
+        }
+        String normalized = path.replace('\\', '/');
+        int index = normalized.lastIndexOf('/');
+        return index >= 0 ? normalized.substring(index + 1) : normalized;
+    }
+
+    private static String normalizeSourceIdentity(String value) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        return value.strip()
+                .replace('\\', '/')
+                .replaceFirst("(?i)\\.pdf$", "")
+                .replaceAll("\\d{6,}$", "")
+                .replaceAll("[\\s_\\-]+", "")
+                .toLowerCase(Locale.ROOT);
     }
 
     private static List<TeachingHandoutTemplateProfile> configuredTemplateSkills() {
@@ -233,7 +318,7 @@ public class TeachingHandoutTemplateService {
                         safeList(item.difficultyBands(), List.of("基础", "提高")),
                         safeList(item.tags(), List.of("动态配置")),
                         emptyToNull(item.referenceTitle()),
-                        null,
+                        emptyToNull(item.referencePath()),
                         emptyToNull(item.referencePreview())),
                 item.promptInstructions().strip(),
                 item.studentLectureStyle()));

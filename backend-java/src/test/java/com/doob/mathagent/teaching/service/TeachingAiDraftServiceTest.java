@@ -10,6 +10,7 @@ import com.doob.mathagent.infrastructure.ai.AiProviderProperties;
 import com.doob.mathagent.memory.vo.StudentMemoryResponse;
 import com.doob.mathagent.teaching.TeachingEvidence;
 import com.doob.mathagent.teaching.dto.TeachingTaskRequest;
+import com.doob.mathagent.teaching.vo.TeachingHandoutTemplateResponse;
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
 import java.util.ArrayList;
 import java.util.List;
@@ -86,8 +87,9 @@ class TeachingAiDraftServiceTest {
 
         assertThat(parsed.structured()).isTrue();
         assertThat(parsed.studentHint())
-                .contains("【知识速记】", "【练习任务】")
-                .doesNotContain("【例题详解】", "【参考解析】", "【答案与评分点】", "答案：", "答案为", "评分点", "$2$");
+                .contains("【知识速记】", "【练习任务】", "独立完成")
+                .doesNotContain("作答区", "手写区", "留白区",
+                        "【例题详解】", "【参考解析】", "【答案与评分点】", "答案：", "答案为", "评分点", "$2$");
         assertThat(parsed.teacherExplanation()).contains("【答案与评分点】", "$2$");
     }
 
@@ -106,6 +108,7 @@ class TeachingAiDraftServiceTest {
         assertThat(parsed.followUpQuestions())
                 .containsExactly("已知 $D(x_0)$，求 $D(0)$。", "条件变化时如何分类？")
                 .allSatisfy(item -> assertThat(item).doesNotContain("答案", "评分点", "得分", "$2$"));
+        assertThat(parsed.studentHint()).doesNotContain("作答区", "手写区", "留白区");
     }
 
     @Test
@@ -162,6 +165,49 @@ class TeachingAiDraftServiceTest {
                         "步骤：1. 由 $2a=6$ 得 $a=3$", "评分点：补充1：写出参数关系得分",
                         "补充1：注意 $b^2$ 不是 b")
                 .doesNotContain("\"answer\"", "\"steps\"", "\"scoring\"", "\"extraNote\"");
+    }
+
+    @Test
+    void injectsDynamicTemplateContextWithoutLocalPathOrLayoutLeakage() {
+        CapturingGateway gateway = new CapturingGateway(List.of(new AiChatResult(
+                "openai",
+                "gpt-5.4",
+                18,
+                9,
+                27,
+                "ok",
+                structuredJson("template grounded teacher explanation"))));
+        TeachingAiDraftService service = new TeachingAiDraftService(gateway, catalog(true, false), defaultPolicy());
+        TeachingHandoutTemplateProfile template = new TeachingHandoutTemplateProfile(
+                new TeachingHandoutTemplateResponse(
+                        "local_inverse_student_sample_v1",
+                        "反比例函数学生讲义",
+                        "skill_config",
+                        "student",
+                        "参考本机真实学生讲义。",
+                        "学生讲义",
+                        "黑白打印讲义",
+                        List.of("基础", "提高"),
+                        List.of("本机PDF", "反比例函数", "学生版"),
+                        "反比例函数（学生版）7658488570078855330.pdf",
+                        "C:/Users/doob/Desktop/private/反比例函数（学生版）7658488570078855330.pdf",
+                        "首页结构为：教材册别页眉、居中大标题、知识点、题型和连续编号练习，底部页码。"),
+                "学生版按连续题号组织，公式必须用 $y=\\frac{k}{x}$。正文不要写页眉、页脚、颜色、PDF规则、AI、token、debug、JSON。",
+                true);
+
+        service.draft(request(), evidence(), memory(), template);
+
+        String prompt = gateway.requests().getFirst().userInputSummary();
+        String contextLine = lineStarting(prompt, "Template context:");
+        String instructionLine = lineStarting(prompt, "Template content instructions:");
+        assertThat(contextLine)
+                .contains("local_inverse_student_sample_v1", "skill_config", "student", "基础/提高",
+                        "本机PDF/反比例函数/学生版", "反比例函数（学生版）7658488570078855330.pdf",
+                        "首页结构为：教材册别")
+                .doesNotContain("C:/Users", "private", "页眉", "页脚", "颜色", "PDF规则", "token", "JSON");
+        assertThat(instructionLine)
+                .contains("连续题号", "$y=\\frac{k}{x}$")
+                .doesNotContain("页眉", "页脚", "颜色", "PDF规则", "token", "debug", "JSON");
     }
 
     @Test
@@ -308,6 +354,16 @@ class TeachingAiDraftServiceTest {
 
     private static TeachingAiDraftProperties defaultPolicy() {
         return new TeachingAiDraftProperties();
+    }
+
+    private static String lineStarting(String value, String prefix) {
+        for (String line : value.split("\\R")) {
+            String stripped = line.strip();
+            if (stripped.startsWith(prefix)) {
+                return stripped;
+            }
+        }
+        return "";
     }
 
     private static final class CapturingGateway implements AiChatGateway {

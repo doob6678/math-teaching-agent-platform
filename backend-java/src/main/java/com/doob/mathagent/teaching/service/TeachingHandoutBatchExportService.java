@@ -144,6 +144,7 @@ public class TeachingHandoutBatchExportService {
                         put(zip, folderPrefix + task.taskId() + ".tex", sanitizedLatex(task, "teacher").getBytes(StandardCharsets.UTF_8));
                         put(zip, folderPrefix + task.taskId() + ".pdf", pdfExportService.render(task, "teacher"));
                         putVersion(zip, folderPrefix, task, "teacher");
+                        putVersion(zip, folderPrefix, task, "lecture");
                     }
                     putVersion(zip, folderPrefix, task, "student");
                 }

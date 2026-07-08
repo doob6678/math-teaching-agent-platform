@@ -14,8 +14,6 @@ public record StudentDashboardQuery(
         String viewerSubjectId,
         String requestedStudentId) {
 
-    public static final String GLOBAL_STUDENT_ID = "__all_students__";
-
     /**
      * Returns a normalized query after requiring backend-resolved identity fields.
      *
@@ -45,16 +43,13 @@ public record StudentDashboardQuery(
         if (normalized.canInspectOtherStudent() && normalized.requestedStudentId != null) {
             return normalized.requestedStudentId;
         }
-        if (normalized.canInspectOtherStudent()) {
-            return GLOBAL_STUDENT_ID;
-        }
         return normalized.viewerSubjectId;
     }
 
     /**
-     * Returns whether this is a tenant-level dashboard view for teacher/admin users.
+     * Returns whether the current viewer must first choose a student before reading any dashboard data.
      */
-    public boolean globalView() {
+    public boolean selectionRequired() {
         StudentDashboardQuery normalized = normalize();
         return normalized.canInspectOtherStudent() && normalized.requestedStudentId == null;
     }
@@ -67,8 +62,8 @@ public record StudentDashboardQuery(
     public boolean adminView() {
         StudentDashboardQuery normalized = normalize();
         return normalized.canInspectOtherStudent()
-                && (normalized.requestedStudentId == null
-                || !normalized.requestedStudentId.equals(normalized.viewerSubjectId));
+                && normalized.requestedStudentId != null
+                && !normalized.requestedStudentId.equals(normalized.viewerSubjectId);
     }
 
     /**

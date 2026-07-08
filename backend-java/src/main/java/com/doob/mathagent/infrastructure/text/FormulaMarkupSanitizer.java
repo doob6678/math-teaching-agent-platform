@@ -15,12 +15,20 @@ public final class FormulaMarkupSanitizer {
             Pattern.DOTALL);
     private static final Pattern BARE_COORDINATE = Pattern.compile(
             "(?<![$A-Za-z0-9])\\((?:\\\\pm\\s*)?[A-Za-z](?:\\^[-+]?\\d+)?,\\s*-?\\d+\\)");
+    private static final Pattern BARE_FRACTION_COMMAND = Pattern.compile(
+            "(?<![$\\\\A-Za-z0-9_])(\\\\frac\\{[^{}]+}\\{[^{}]+})(?![$A-Za-z0-9_])");
     private static final String MATH_ATOM = "(?:[+\\-]?\\s*(?:\\\\frac\\{[^{}]+}\\{[^{}]+}"
             + "|\\\\sqrt\\{[^{}]+}"
             + "|(?:\\\\pm\\s*)?[A-Za-z0-9]+(?:[_^]\\{?[-+]?\\d+}?)?"
             + "|\\d+(?:\\.\\d+)?))";
     private static final Pattern BARE_FORMULA = Pattern.compile(
             "(?<![$\\\\A-Za-z0-9_])(" + MATH_ATOM + "(?:\\s*[+\\-*/=]\\s*" + MATH_ATOM + ")+)(?![$A-Za-z0-9_])");
+    private static final Pattern SIMPLE_FRACTION_LEFT_HEAVY = Pattern.compile(
+            "(?<![\\^_])(\\([^)]+\\)|\\{[^}]+}|(?:[A-Za-z][A-Za-z0-9]*|\\d+))\\s*/\\s*(\\([^)]+\\)|\\{[^}]+}|[A-Za-z][A-Za-z0-9]*)");
+    private static final Pattern SIMPLE_FRACTION_RIGHT_HEAVY = Pattern.compile(
+            "(?<![\\^_])(\\([^)]+\\)|\\{[^}]+}|[A-Za-z][A-Za-z0-9]*)\\s*/\\s*(\\([^)]+\\)|\\{[^}]+}|(?:[A-Za-z][A-Za-z0-9]*|\\d+))");
+    private static final Pattern FRACTION_POWER = Pattern.compile("\\\\frac\\{([^{}]+)}\\{([^{}]+)}\\^([A-Za-z0-9]+)");
+    private static final Pattern ALL_UPPERCASE_LATIN = Pattern.compile("[A-Z]{2,}");
 
     private FormulaMarkupSanitizer() {
     }
@@ -32,12 +40,34 @@ public final class FormulaMarkupSanitizer {
         if (value == null || value.isBlank()) {
             return value == null ? "" : value.strip();
         }
-        String normalized = replaceEnvironment(value);
+        String normalized = normalizeLegacyLatexEscapes(value);
+        normalized = replaceEnvironment(normalized);
         normalized = replaceAll(normalized, DISPLAY_BRACKET, "$$\n%s\n$$");
         normalized = replaceAll(normalized, INLINE_PAREN, "$%s$");
         normalized = normalizeUnicodeMathSymbols(normalized);
+        normalized = normalizeSlashFractions(normalized);
         normalized = wrapBareMathOutsideDelimiters(normalized);
+        normalized = cleanupFractionMathDelimiters(normalized);
+        normalized = wrapMatches(normalized, BARE_FRACTION_COMMAND);
         return normalized.strip();
+    }
+
+    /**
+     * Older workflow stages sometimes stored already-escaped LaTeX text such as \textasciicircum{} or
+     * \textbackslash{}frac in plain content fields. Convert those forms back before detecting bare formulas so
+     * teacher/student handouts can still render standard math.
+     */
+    private static String normalizeLegacyLatexEscapes(String value) {
+        return value
+                .replace("\\textasciicircum{}", "^")
+                .replace("\\textasciitilde{}", "~")
+                .replace("\\textbackslash{}frac", "\\frac")
+                .replace("\\textbackslash{}sqrt", "\\sqrt")
+                .replace("\\textbackslash{}sin", "\\sin")
+                .replace("\\textbackslash{}cos", "\\cos")
+                .replace("\\textbackslash{}tan", "\\tan")
+                .replace("\\textbackslash{}ln", "\\ln")
+                .replace("\\textbackslash{}log", "\\log");
     }
 
     private static String replaceEnvironment(String value) {
@@ -114,7 +144,8 @@ public final class FormulaMarkupSanitizer {
 
     private static String wrapBareMathText(String value) {
         String withCoordinates = wrapMatches(value, BARE_COORDINATE);
-        return wrapMatches(withCoordinates, BARE_FORMULA);
+        String withFormulas = wrapMatches(withCoordinates, BARE_FORMULA);
+        return wrapMatches(withFormulas, BARE_FRACTION_COMMAND);
     }
 
     private static String wrapMatches(String value, Pattern pattern) {
@@ -153,5 +184,92 @@ public final class FormulaMarkupSanitizer {
         }
         matcher.appendTail(buffer);
         return buffer.toString();
+    }
+
+    /**
+     * Converts simple slash fractions such as k/x or (a+b)/c to \frac{...}{...} while avoiding exponent ratios like x^2/a^2.
+     */
+    private static String normalizeSlashFractions(String value) {
+        String normalized = replaceSimpleFractions(value, SIMPLE_FRACTION_LEFT_HEAVY);
+        normalized = replaceSimpleFractions(normalized, SIMPLE_FRACTION_RIGHT_HEAVY);
+        Matcher matcher = FRACTION_POWER.matcher(normalized);
+        StringBuffer buffer = new StringBuffer();
+        while (matcher.find()) {
+            matcher.appendReplacement(
+                    buffer,
+                    Matcher.quoteReplacement("\\left(\\frac{" + matcher.group(1) + "}{" + matcher.group(2) + "}\\right)^" + matcher.group(3)));
+        }
+        matcher.appendTail(buffer);
+        return buffer.toString();
+    }
+
+    private static String replaceSimpleFractions(String value, Pattern pattern) {
+        Matcher matcher = pattern.matcher(value);
+        StringBuffer buffer = new StringBuffer();
+        while (matcher.find()) {
+            String left = stripMathWrappers(matcher.group(1));
+            String right = stripMathWrappers(matcher.group(2));
+            if (!looksLikeMathFraction(left, right)) {
+                matcher.appendReplacement(buffer, Matcher.quoteReplacement(matcher.group()));
+                continue;
+            }
+            matcher.appendReplacement(buffer, Matcher.quoteReplacement("\\frac{" + left + "}{" + right + "}"));
+        }
+        matcher.appendTail(buffer);
+        return buffer.toString();
+    }
+
+    private static String cleanupFractionMathDelimiters(String value) {
+        return value
+                .replaceAll("\\\\frac\\{\\$([^$]+)\\$}", "\\\\frac{$1}")
+                .replaceAll("}\\{\\$([^$]+)\\$}", "}{$1}");
+    }
+
+    private static boolean looksLikeMathFraction(String left, String right) {
+        if (left.isBlank() || right.isBlank()) {
+            return false;
+        }
+        if (isReservedPlainToken(left) || isReservedPlainToken(right)) {
+            return false;
+        }
+        return isMathToken(left) && isMathToken(right);
+    }
+
+    private static boolean isMathToken(String value) {
+        String token = value.strip();
+        if (token.isBlank()) {
+            return false;
+        }
+        if (token.matches("[-+]?\\d+(?:\\.\\d+)?")) {
+            return true;
+        }
+        if (token.startsWith("\\") || token.contains("^") || token.contains("_")) {
+            return true;
+        }
+        if (token.matches("[A-Za-z]")) {
+            return true;
+        }
+        if (token.matches("[A-Za-z][A-Za-z0-9]?") && !ALL_UPPERCASE_LATIN.matcher(token).matches()) {
+            return true;
+        }
+        return token.matches("[A-Za-z0-9]+[+\\-][A-Za-z0-9]+");
+    }
+
+    private static boolean isReservedPlainToken(String value) {
+        String token = value.strip();
+        return ALL_UPPERCASE_LATIN.matcher(token).matches()
+                || "PDF".equals(token)
+                || "OCR".equals(token)
+                || "JSON".equals(token);
+    }
+
+    private static String stripMathWrappers(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.strip()
+                .replaceAll("^\\((.+)\\)$", "$1")
+                .replaceAll("^\\{(.+)\\}$", "$1")
+                .strip();
     }
 }

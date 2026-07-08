@@ -1,14 +1,14 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { StudentDashboardPanel } from "./App";
+import { StudentDashboardPanel } from "./components/StudentDashboardPanel";
 import { StudentDashboardResponse } from "../shared/api/textbookApi";
 
 describe("StudentDashboardPanel", () => {
-  it("renders a paginated Chinese dashboard without raw graph internals", () => {
+  it("renders a paginated Chinese student dashboard without raw graph internals", () => {
     const dashboard: StudentDashboardResponse = {
       tenantId: "school-a",
-      studentId: "__all_students__",
-      subjectRole: "global",
+      studentId: "student-001",
+      subjectRole: "student",
       viewerRole: "admin",
       viewerSubjectId: "admin-001",
       isAdminView: true,
@@ -55,21 +55,7 @@ describe("StudentDashboardPanel", () => {
                 url: "/api/textbooks/search?query=math-vector-dot-product",
                 permissionScope: "PUBLIC_TEXTBOOK",
               },
-              {
-                sourceType: "feishu",
-                title: "space vector dot product",
-                url: "https://my.feishu.cn/docx/vector",
-                permissionScope: "MATH_VIP",
-              },
             ],
-          },
-          {
-            knowledgePointId: "math-solid-geometry",
-            knowledgePointName: "solid geometry relation",
-            chapterPath: "Compulsory / solid geometry / page 74",
-            masteryPercent: 54,
-            riskLevel: "high",
-            evidenceLinks: [],
           },
         ],
         edges: [
@@ -90,17 +76,17 @@ describe("StudentDashboardPanel", () => {
         loading={false}
         error=""
         viewerRole="admin"
-        targetStudentId=""
+        targetStudentId="student-001"
         onRefresh={() => undefined}
         onLoad={() => undefined}
       />,
     );
 
-    expect(html).toContain("学生画像概览");
+    expect(html).toContain("查看学生画像");
     expect(html).toContain("管理员查看");
     expect(html).toContain("刷新快照");
-    expect(html).toContain("全局概览");
-    expect(html).toContain("查看全局");
+    expect(html).toContain("student-001");
+    expect(html).toContain("查看学生");
     expect(html).toContain("知识点 1");
     expect(html).toContain("第 1 / 2 页");
     expect(html).toContain("共 12 条知识点");
@@ -111,5 +97,23 @@ describe("StudentDashboardPanel", () => {
     expect(html).not.toContain("Knowledge Graph");
     expect(html).not.toContain("PREREQUISITE_FOR");
     expect(html).not.toContain("dashboard_progress");
+  });
+
+  it("does not render a global dashboard when admin has not selected a student", () => {
+    const html = renderToStaticMarkup(
+      <StudentDashboardPanel
+        dashboard={null}
+        loading={false}
+        error=""
+        viewerRole="admin"
+        targetStudentId=""
+        onRefresh={() => undefined}
+        onLoad={() => undefined}
+      />,
+    );
+
+    expect(html).toContain("请输入要查看的学生 ID");
+    expect(html).not.toContain("全局概览");
+    expect(html).not.toContain("__all_students__");
   });
 });

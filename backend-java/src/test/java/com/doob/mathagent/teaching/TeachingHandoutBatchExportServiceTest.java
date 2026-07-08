@@ -90,6 +90,8 @@ class TeachingHandoutBatchExportServiceTest {
                 .contains(
                         "grade-10/versioned/teacher/task-versioned.tex",
                         "grade-10/versioned/teacher/task-versioned.pdf",
+                        "grade-10/versioned/lecture/task-versioned.tex",
+                        "grade-10/versioned/lecture/task-versioned.pdf",
                         "grade-10/versioned/student/task-versioned.tex",
                         "grade-10/versioned/student/task-versioned.pdf");
     }
@@ -175,7 +177,8 @@ class TeachingHandoutBatchExportServiceTest {
         assertThat(entries).noneMatch(entry ->
                 entry.equals("grade-10/student/task-student.tex")
                         || entry.equals("grade-10/student/task-student.pdf")
-                        || entry.contains("/teacher/"));
+                        || entry.contains("/teacher/")
+                        || entry.contains("/lecture/"));
     }
 
     private static TeachingTaskResponse task(String taskId) {

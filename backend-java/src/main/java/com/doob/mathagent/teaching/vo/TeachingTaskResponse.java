@@ -43,11 +43,61 @@ public record TeachingTaskResponse(
         String handoutLatex,
         String teacherHandoutLatex,
         String studentHandoutLatex,
+        String lectureHandoutLatex,
         List<String> interactiveSuggestions,
         MemoryReuse memoryReuse,
         List<StageTiming> stageTimings,
         AiDraft aiDraft,
         String errorMessage) {
+
+    /**
+     * Backward-compatible constructor for call sites that already set a selected template but do not
+     * yet provide the independent lecture/slides handout version.
+     */
+    public TeachingTaskResponse(
+            String taskId,
+            String clientRequestId,
+            String tenantId,
+            String subjectType,
+            String subjectId,
+            TeachingHandoutTemplateResponse selectedTemplate,
+            TeachingTaskStatus status,
+            String questionText,
+            String learningGoal,
+            List<TeachingWorkflowNode> nodes,
+            List<TeachingReactStep> reactTrace,
+            List<TeachingEvidence> evidence,
+            String handoutLatex,
+            String teacherHandoutLatex,
+            String studentHandoutLatex,
+            List<String> interactiveSuggestions,
+            MemoryReuse memoryReuse,
+            List<StageTiming> stageTimings,
+            AiDraft aiDraft,
+            String errorMessage) {
+        this(
+                taskId,
+                clientRequestId,
+                tenantId,
+                subjectType,
+                subjectId,
+                selectedTemplate,
+                status,
+                questionText,
+                learningGoal,
+                nodes,
+                reactTrace,
+                evidence,
+                handoutLatex,
+                teacherHandoutLatex,
+                studentHandoutLatex,
+                "",
+                interactiveSuggestions,
+                memoryReuse,
+                stageTimings,
+                aiDraft,
+                errorMessage);
+    }
 
     /**
      * Backward-compatible constructor for older call sites that do not set a selected template.
@@ -88,6 +138,7 @@ public record TeachingTaskResponse(
                 handoutLatex,
                 teacherHandoutLatex,
                 studentHandoutLatex,
+                "",
                 interactiveSuggestions,
                 memoryReuse,
                 stageTimings,
@@ -102,6 +153,9 @@ public record TeachingTaskResponse(
      * @return LaTeX source for the requested handout version
      */
     public String handoutLatexFor(String version) {
+        if ("lecture".equalsIgnoreCase(version)) {
+            return lectureHandoutLatex == null || lectureHandoutLatex.isBlank() ? handoutLatexFor("teacher") : lectureHandoutLatex;
+        }
         if ("student".equalsIgnoreCase(version)) {
             return studentHandoutLatex == null || studentHandoutLatex.isBlank() ? handoutLatex : studentHandoutLatex;
         }

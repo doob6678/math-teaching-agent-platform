@@ -22,14 +22,18 @@ import com.doob.mathagent.teaching.TeachingTaskStatus;
 import com.doob.mathagent.teaching.TeachingWorkflowNode;
 import com.doob.mathagent.teaching.dto.TeachingTaskRequest;
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
+import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService;
+import com.doob.mathagent.teacher.vo.TeacherResourceBlockSearchResponse;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -47,6 +51,31 @@ public class TeachingWorkflowService {
     private static final Pattern DRAFT_ORDERED_LINE = Pattern.compile("^\\s*(?:\\d+|[一二三四五六七八九十]+)[.、)]\\s+(.+)$");
     private static final Pattern DRAFT_BULLET_LINE = Pattern.compile("^\\s*[-•·]\\s+(.+)$");
     private static final Pattern BLANK_PLACEHOLDER = Pattern.compile("_{3,}|＿{3,}");
+    private static final Pattern LATEX_HEADING_LINE = Pattern.compile("^\\\\(section\\*?|subsection\\*?|subsubsection\\*?|paragraph\\*?)\\{(.+)}\\s*$");
+    private static final Pattern INTERNAL_HANDOUT_LINE = Pattern.compile(
+            "(?mi)^.*(?:MODEL_CALL|JSON_PARSE|\\btokens?\\b|模型健康|model health|debug|调试|JSON|PDF\\s*(?:规则|排版|版式)|PDF\\s*版式|排版说明|版式要求|页眉|页脚|颜色|讲评色|练习色|渲染引擎|模板规则|页边距|虚线折叠|documentclass|usepackage|fancyhdr|pagestyle|begin\\{document}|end\\{document}|作为\\s*AI|as an AI|本页只保留|课堂任务|本讲任务|讲后自查|教师审校清单|横版讲解提纲|AI 知识定位|模板偏向|本讲更偏向).*$");
+    private static final Pattern STUDENT_FORBIDDEN_SECTION = Pattern.compile(
+            "【(?:答案与评分点|参考答案|参考解析|评分标准|例题详解|完整解析|教师讲解|讲评主线|教师备注|板书设计)】[\\s\\S]*?(?=【|$)");
+    private static final Pattern STUDENT_FORBIDDEN_LINE = Pattern.compile(
+            "(?m)^.*(?:答案[：:]|答案为|参考答案|参考解析|评分点|评分标准|完整解析|解答如下|解：|因此答案为|故答案为|教师讲解|讲评主线|板书设计).*$");
+    private static final Pattern VISIBLE_WORKSPACE_LABEL = Pattern.compile(
+            "(?:课堂作答区|作答区|我的解答|推导区|手写区|教师手写区|留白区|空白区|板书区|教师板书区)\\s*[：:]?");
+    private static final Pattern VISIBLE_WORKSPACE_REFERENCE = Pattern.compile(
+            "(?:写在|填写在|完成在|放在|留在)(?:课堂作答区|作答区|我的解答|推导区|手写区|教师手写区|留白区|空白区|板书区|教师板书区)");
+    private static final Pattern TOPIC_NOISE_WORD = Pattern.compile(
+            "(?:请|生成|一份|关于|围绕|针对|包含|以及|并|和|与|及|从|到|开始|讲解|讲义|学习|学会|理解|掌握|做题|大题|小题|题型|例题|易错点|方法|流程|专题|训练|教师版|学生版|教师|学生|课堂|作答|补充要求|要求|目标|主题|知识点|基础|提高|综合|定义|图像|性质|题目|问题|讲清|讲透|入门|复习|巩固|提升|中的|中|的)");
+    private static final Set<String> TOPIC_GENERIC_TERMS = Set.of(
+            "数学",
+            "高中数学",
+            "函数",
+            "题目",
+            "问题",
+            "讲解",
+            "讲义",
+            "知识点");
+    private static final Set<String> CORE_TOPIC_PREFERENCES = Set.of(
+            "函数", "导数", "双曲线", "椭圆", "抛物线", "圆锥曲线", "数列", "概率", "统计",
+            "三角函数", "向量", "空间向量", "立体几何", "直线", "圆", "排列组合", "二项式");
 
     private final Path processedBooksRoot;
     private final TextbookRetrievalService retrievalService;
@@ -56,6 +85,7 @@ public class TeachingWorkflowService {
     private final AgentTraceStore agentTraceStore;
     private final TeachingHandoutTemplateService handoutTemplateService;
     private final KnowledgeQuestionBankService questionBankService;
+    private final TeacherResourceBlockSearchService teacherResourceBlockSearchService;
     private final TaskExecutor taskExecutor;
     private boolean returnCompletedWhenExecutorIsSynchronous;
 
@@ -77,6 +107,7 @@ public class TeachingWorkflowService {
             AgentTraceStore agentTraceStore,
             TeachingHandoutTemplateService handoutTemplateService,
             Optional<KnowledgeQuestionBankService> questionBankService,
+            Optional<TeacherResourceBlockSearchService> teacherResourceBlockSearchService,
             @Qualifier("multiAgentWritingTaskExecutor") TaskExecutor taskExecutor) {
         this.processedBooksRoot = processedBooksRoot.toAbsolutePath().normalize();
         this.retrievalService = retrievalService;
@@ -86,8 +117,32 @@ public class TeachingWorkflowService {
         this.agentTraceStore = agentTraceStore;
         this.handoutTemplateService = handoutTemplateService;
         this.questionBankService = questionBankService.orElse(null);
+        this.teacherResourceBlockSearchService = teacherResourceBlockSearchService.orElse(null);
         this.taskExecutor = taskExecutor;
         this.returnCompletedWhenExecutorIsSynchronous = false;
+    }
+
+    public TeachingWorkflowService(
+            Path processedBooksRoot,
+            TextbookRetrievalService retrievalService,
+            TeachingTaskStore taskStore,
+            StudentMemoryReuseService memoryReuseService,
+            TeachingAiDraftService aiDraftService,
+            AgentTraceStore agentTraceStore,
+            TeachingHandoutTemplateService handoutTemplateService,
+            Optional<KnowledgeQuestionBankService> questionBankService,
+            @Qualifier("multiAgentWritingTaskExecutor") TaskExecutor taskExecutor) {
+        this(
+                processedBooksRoot,
+                retrievalService,
+                taskStore,
+                memoryReuseService,
+                aiDraftService,
+                agentTraceStore,
+                handoutTemplateService,
+                questionBankService,
+                Optional.empty(),
+                taskExecutor);
     }
 
     /**
@@ -108,6 +163,7 @@ public class TeachingWorkflowService {
                 aiDraftService,
                 agentTraceStore,
                 new TeachingHandoutTemplateService(),
+                Optional.empty(),
                 Optional.empty(),
                 Runnable::run);
         this.returnCompletedWhenExecutorIsSynchronous = true;
@@ -185,7 +241,11 @@ public class TeachingWorkflowService {
      * Lists recent tasks for the current backend session subject.
      */
     public List<TeachingTaskResponse> listRecent(TeachingRequestContext context, int limit) {
-        return taskStore.listRecentByOwnerKey(context.normalize().ownerKey(), limit);
+        // 历史区只展示可继续审查/预览的任务。旧脏数据会把前端历史和讲义预览直接污染掉。
+        return taskStore.listRecentByOwnerKey(context.normalize().ownerKey(), Math.max(limit * 3, limit)).stream()
+                .filter(TeachingWorkflowService::isFrontendDisplayableTask)
+                .limit(limit)
+                .toList();
     }
 
     /**
@@ -230,9 +290,11 @@ public class TeachingWorkflowService {
         List<TeachingEvidence> evidence;
         List<TeachingEvidence> textbookEvidence;
         List<TeachingEvidence> questionEvidence;
+        List<TeachingEvidence> teacherResourceEvidence;
         if (memoryResponse.reused()) {
             textbookEvidence = List.of();
             questionEvidence = List.of();
+            teacherResourceEvidence = List.of();
             evidence = List.of();
             timer.mark("reuse_short_circuit");
         } else {
@@ -250,24 +312,40 @@ public class TeachingWorkflowService {
             textbookEvidence = retrieval.hits().stream()
                     .map(this::toEvidence)
                     .toList();
+            textbookEvidence = alignEvidenceToTopic(request, textbookEvidence);
             timer.mark("textbook_retrieval");
             questionEvidence = retrieveQuestionBankEvidence(request, context);
+            questionEvidence = alignEvidenceToTopic(request, questionEvidence);
             timer.mark("question_bank_retrieval");
-            evidence = concatEvidence(textbookEvidence, questionEvidence);
+            teacherResourceEvidence = retrieveTeacherResourceEvidence(request, context);
+            teacherResourceEvidence = alignEvidenceToTopic(request, teacherResourceEvidence);
+            timer.mark("teacher_resource_retrieval");
+            evidence = concatEvidence(textbookEvidence, questionEvidence, teacherResourceEvidence);
+            if (evidence.isEmpty()) {
+                textbookEvidence = List.of();
+                questionEvidence = List.of();
+                teacherResourceEvidence = List.of();
+            }
         }
         List<TeachingReactStep> reactTrace = List.of();
         timer.mark("react_trace");
         TeachingTaskResponse.AiDraft aiDraft = aiDraftService.draft(request, evidence, memoryResponse, template);
         timer.mark("ai_draft");
-        List<TeachingWorkflowNode> nodes = buildNodes(request, evidence, questionEvidence, memoryResponse, aiDraft, template, canUseQuestionBank(context));
-        String teacherHandoutLatex = appendAiDraft(
-                buildTeacherHandoutLatex(request, evidence, memoryResponse, template),
+        List<TeachingWorkflowNode> nodes = buildNodes(
+                request,
+                evidence,
+                questionEvidence,
+                teacherResourceEvidence,
+                memoryResponse,
                 aiDraft,
-                true);
-        String studentHandoutLatex = appendAiDraft(
-                buildStudentHandoutLatex(request, evidence, memoryResponse, template),
-                aiDraft,
-                false);
+                template,
+                canUseQuestionBank(context),
+                canUseTeacherResources(context));
+        String teacherHandoutLatex = buildTeacherHandoutLatex(request, evidence, memoryResponse, template, aiDraft);
+        String studentHandoutLatex = buildStudentHandoutLatex(request, evidence, memoryResponse, template, aiDraft);
+        teacherHandoutLatex = guardHandoutLatex(teacherHandoutLatex, true);
+        studentHandoutLatex = guardHandoutLatex(studentHandoutLatex, false);
+        String lectureHandoutLatex = buildLectureHandoutLatex(teacherHandoutLatex, request);
         timer.mark("handout_generation");
         if (taskId == null) {
             taskId = UUID.randomUUID().toString();
@@ -288,6 +366,7 @@ public class TeachingWorkflowService {
                 teacherHandoutLatex,
                 teacherHandoutLatex,
                 studentHandoutLatex,
+                lectureHandoutLatex,
                 List.of("继续追问定义 D(x_0)", "生成同类练习题", "把讲义导出为 PDF"),
                 toMemoryReuse(memoryResponse),
                 timer.timings(),
@@ -304,38 +383,197 @@ public class TeachingWorkflowService {
      * 构造学生记忆查询请求；教学任务阶段先使用学习目标作为知识点粗标签，后续会接入知识点识别器。
      */
     /**
-     * Appends model-produced teaching content to printable handouts without exposing backend diagnostics.
+     * Final backend guard before storage/export. It keeps printable handout content only.
      */
-    private static String appendAiDraft(
-            String latex,
-            TeachingTaskResponse.AiDraft aiDraft,
-            boolean teacherVersion) {
-        if (aiDraft == null || !aiDraft.enabled()) {
-            return latex;
+    private static String guardHandoutLatex(String latex, boolean teacherVersion) {
+        if (latex == null || latex.isBlank()) {
+            return "";
         }
-        if (aiDraft.content() == null || aiDraft.content().isBlank()) {
-            return latex;
+        String guarded = INTERNAL_HANDOUT_LINE.matcher(latex).replaceAll("");
+        if (!teacherVersion) {
+            guarded = STUDENT_FORBIDDEN_SECTION.matcher(guarded).replaceAll("");
+            guarded = STUDENT_FORBIDDEN_LINE.matcher(guarded).replaceAll("");
+            guarded = guarded
+                    .replaceAll("(?m)^\\\\(?:section|subsection|subsubsection|paragraph)\\*?\\{(?:答案与评分点|参考答案|参考解析|评分标准|例题详解|完整解析|教师讲解|讲评主线|教师备注|板书设计|课堂作答区|作答区|我的解答|推导区|手写区|教师手写区|留白区|空白区)}\\s*$", "");
+            guarded = removeVisibleWorkspaceLabels(guarded);
         }
-        String title = teacherVersion ? "教师讲评页" : "学生练习页";
-        if (!aiDraft.structured()) {
-            return latex;
+        return removeEmptyTitledBlocks(guarded)
+                .replaceAll("(?m)^\\s*\\n", "\n")
+                .replaceAll("\\n{3,}", "\n\n")
+                .strip();
+    }
+
+    private static String removeVisibleWorkspaceLabels(String value) {
+        String withoutReferences = VISIBLE_WORKSPACE_REFERENCE.matcher(value).replaceAll("独立完成");
+        return VISIBLE_WORKSPACE_LABEL.matcher(withoutReferences).replaceAll("");
+    }
+
+    /**
+     * Extracts the teacher-only 16:10 lecture card into an independent exportable handout version.
+     * This keeps PPT/lecture review separate from the full teacher solution without requiring a schema migration.
+     */
+    private static String buildLectureHandoutLatex(String guardedTeacherLatex, TeachingTaskRequest request) {
+        String section = extractLatexSection(guardedTeacherLatex, "16:10 横版讲解卡");
+        StringBuilder builder = new StringBuilder();
+        builder.append("\\section{16:10 横版讲解卡}\n");
+        if (section.isBlank()) {
+            String topic = request.learningGoal() == null || request.learningGoal().isBlank()
+                    ? request.questionText()
+                    : request.learningGoal();
+            builder.append("\\paragraph{课堂投屏}\n")
+                    .append(escapeLatex(topic == null || topic.isBlank() ? "讲义主题未填写" : topic))
+                    .append("\n\n")
+                    .append("\\vspace{8em}\n");
+        } else {
+            builder.append(section).append('\n');
         }
-        if (teacherVersion) {
-            return latex + "\n\\section{" + title + "}\n"
-                    + labeledDraftSections(aiDraft.teacherExplanation(), teacherDraftLabels(), "讲义内容")
-                    + "\n\\subsection*{方法卡片}"
-                    + latexItemize(aiDraft.knowledgePoints())
-                    + "\n\\subsection*{追问与变式训练}"
-                    + latexEnumerate(aiDraft.followUpQuestions())
-                    + "\n\\subsection*{板书与反馈记录}\n"
-                    + "记录课堂卡点、典型错误、二次讲评安排和需要补充的同类题。\\vspace{5em}\n";
+        builder.append("\\vspace{10em}\n");
+        return guardHandoutLatex(builder.toString(), true);
+    }
+
+    private static String extractLatexSection(String latex, String sectionTitle) {
+        if (latex == null || latex.isBlank() || sectionTitle == null || sectionTitle.isBlank()) {
+            return "";
         }
-        return latex + "\n\\section{" + title + "}\n"
-                + labeledDraftSections(aiDraft.studentHint(), studentDraftLabels(), "学习提示")
-                + "\n\\subsection*{分层练习}"
-                + latexEnumerate(aiDraft.followUpQuestions())
-                + "\n\\subsection*{课堂作答区}\n\\vspace{12em}\n"
-                + "\n\\subsection*{订正记录}\n\\vspace{5em}\n";
+        String[] lines = latex.replace("\r\n", "\n").replace('\r', '\n').split("\n", -1);
+        StringBuilder body = new StringBuilder();
+        boolean capturing = false;
+        for (String line : lines) {
+            String stripped = line.strip();
+            Matcher heading = LATEX_HEADING_LINE.matcher(stripped);
+            if (heading.matches() && "section".equals(heading.group(1).replace("*", ""))) {
+                String title = heading.group(2).strip();
+                if (capturing) {
+                    break;
+                }
+                capturing = title.equals(sectionTitle);
+                continue;
+            }
+            if (capturing) {
+                body.append(line).append('\n');
+            }
+        }
+        return body.toString().strip();
+    }
+
+    private static String removeEmptyTitledBlocks(String latex) {
+        if (latex == null || latex.isBlank()) {
+            return "";
+        }
+        String[] lines = latex.replace("\r\n", "\n").replace('\r', '\n').split("\n", -1);
+        return renderNonEmptyTitleRange(lines, 0, lines.length).strip();
+    }
+
+    private static String renderNonEmptyTitleRange(String[] lines, int start, int end) {
+        StringBuilder builder = new StringBuilder();
+        int index = start;
+        while (index < end) {
+            Matcher heading = LATEX_HEADING_LINE.matcher(lines[index].strip());
+            if (!heading.matches()) {
+                if (!isBlankWorkspaceLabelLine(lines[index])) {
+                    builder.append(lines[index]).append('\n');
+                }
+                index += 1;
+                continue;
+            }
+            int level = latexHeadingLevel(heading.group(1));
+            int next = index + 1;
+            while (next < end) {
+                Matcher nextHeading = LATEX_HEADING_LINE.matcher(lines[next].strip());
+                if (nextHeading.matches() && latexHeadingLevel(nextHeading.group(1)) <= level) {
+                    break;
+                }
+                next += 1;
+            }
+            String body = renderNonEmptyTitleRange(lines, index + 1, next).strip();
+            if (hasRealLatexContent(body)) {
+                builder.append(lines[index].strip()).append('\n').append(body).append("\n\n");
+            }
+            index = next;
+        }
+        return builder.toString();
+    }
+
+    private static int latexHeadingLevel(String command) {
+        String normalized = command == null ? "" : command.replace("*", "");
+        return switch (normalized) {
+            case "section" -> 1;
+            case "subsection" -> 2;
+            case "subsubsection", "paragraph" -> 3;
+            default -> 4;
+        };
+    }
+
+    private static boolean hasRealLatexContent(String body) {
+        if (body == null || body.isBlank()) {
+            return false;
+        }
+        for (String rawLine : body.replace("\r\n", "\n").replace('\r', '\n').split("\n")) {
+            if (!isBlankOnlyLatexLine(rawLine)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isBlankWorkspaceLabelLine(String line) {
+        String text = line == null ? "" : line.strip();
+        if (text.isBlank()) {
+            return false;
+        }
+        String compact = text
+                .replaceAll("[_＿\\s:：，。,.;；、-]+", "")
+                .strip();
+        return Set.of("留白区", "留白", "手写区", "教师手写区", "板书留白", "板书区", "教师板书区").contains(compact);
+    }
+
+    private static boolean isBlankOnlyLatexLine(String line) {
+        String text = line == null ? "" : line.strip();
+        if (text.isBlank()) {
+            return true;
+        }
+        if (text.matches("^\\\\vspace\\{[0-9.]+em}\\s*$")
+                || text.matches("^\\\\(?:smallskip|medskip|bigskip|par)\\s*$")
+                || text.matches("^\\\\underline\\{\\\\hspace\\{[0-9.]+em}}\\s*$")
+                || text.matches("^\\\\(?:begin|end)\\{(?:itemize|enumerate|center)}\\s*$")) {
+            return true;
+        }
+        String compact = text
+                .replaceAll("\\\\vspace\\{[^}]+}", "")
+                .replaceAll("\\\\underline\\{\\\\hspace\\{[^}]+}}", "")
+                .replaceAll("\\\\hspace\\{[^}]+}", "")
+                .replaceAll("\\\\par", "")
+                .replaceAll("[_＿\\s:：，。,.;；、-]+", "")
+                .strip();
+        return compact.isBlank()
+                || isBlankWorkspaceLabelLine(text)
+                || Set.of("作答", "作答区", "课堂作答区", "我的解答", "解答", "推导区", "订正", "订正记录",
+                        "错因", "错因记录", "订正与错因", "空白区", "留白区", "留白", "手写区",
+                        "教师手写区", "板书留白", "板书区", "教师板书区").contains(compact);
+    }
+
+    private static String guardDraftText(String value, boolean teacherVersion) {
+        String guarded = guardHandoutLatex(value, teacherVersion);
+        if (!teacherVersion && guarded.isBlank()) {
+            return "";
+        }
+        return guarded;
+    }
+
+    private static List<String> guardDraftItems(List<String> values, boolean teacherVersion) {
+        if (values == null || values.isEmpty()) {
+            return List.of();
+        }
+        List<String> guarded = new ArrayList<>();
+        for (String value : values) {
+            String item = guardHandoutLatex(value, teacherVersion)
+                    .replaceAll("\\s+", " ")
+                    .strip();
+            if (!item.isBlank()) {
+                guarded.add(item);
+            }
+        }
+        return List.copyOf(guarded);
     }
 
     /**
@@ -430,7 +668,22 @@ public class TeachingWorkflowService {
      * 构造教材检索 query，把用户想学什么和题目文本合并，优先复用公开教材证据。
      */
     private static String retrievalQuery(TeachingTaskRequest request) {
-        return request.learningGoal() + " " + request.questionText();
+        List<String> keywords = topicKeywords(request);
+        String coreTopic = primaryTopicKeyword(request);
+        StringBuilder builder = new StringBuilder();
+        if (!coreTopic.isBlank()) {
+            builder.append(coreTopic).append(' ');
+        }
+        if (request.learningGoal() != null && !request.learningGoal().isBlank()) {
+            builder.append(request.learningGoal().strip()).append(' ');
+        }
+        if (request.questionText() != null && !request.questionText().isBlank()) {
+            builder.append(request.questionText().strip()).append(' ');
+        }
+        if (!keywords.isEmpty()) {
+            builder.append(String.join(" ", keywords));
+        }
+        return builder.toString().replaceAll("\\s+", " ").strip();
     }
 
     /**
@@ -450,8 +703,9 @@ public class TeachingWorkflowService {
             return List.of();
         }
         Map<String, QuestionBankItemResponse> matchedQuestions = new LinkedHashMap<>();
+        List<String> alignedQueries = alignedQueries(request);
         try {
-            for (String query : QuestionBankSearchText.candidateQueries(request.learningGoal(), request.questionText())) {
+            for (String query : alignedQueries) {
                 for (QuestionBankItemResponse question : questionBankService.searchQuestions(
                         context.tenantId(),
                         context.subjectType(),
@@ -471,6 +725,43 @@ public class TeachingWorkflowService {
                     .sorted(Comparator.comparingInt(TeachingWorkflowService::questionDifficultyRank))
                     .limit(3)
                     .map(TeachingWorkflowService::toQuestionEvidence)
+                    .toList();
+        } catch (IllegalArgumentException exception) {
+            return List.of();
+        }
+    }
+
+    private List<TeachingEvidence> retrieveTeacherResourceEvidence(TeachingTaskRequest request, TeachingRequestContext context) {
+        if (!canUseTeacherResources(context) || teacherResourceBlockSearchService == null) {
+            return List.of();
+        }
+        Map<String, TeacherResourceBlockSearchResponse.Hit> matchedBlocks = new LinkedHashMap<>();
+        List<String> alignedQueries = alignedQueries(request);
+        try {
+            for (String query : alignedQueries) {
+                TeacherResourceBlockSearchResponse response = teacherResourceBlockSearchService.search(
+                        context.tenantId(),
+                        context.subjectType(),
+                        context.subjectId(),
+                        query,
+                        6,
+                        "/api/teaching/tasks");
+                for (TeacherResourceBlockSearchResponse.Hit hit : response.hits()) {
+                    matchedBlocks.putIfAbsent(hit.documentId() + ":" + hit.blockId(), hit);
+                    if (matchedBlocks.size() >= 6) {
+                        break;
+                    }
+                }
+                if (matchedBlocks.size() >= 6) {
+                    break;
+                }
+            }
+            return matchedBlocks.values().stream()
+                    .sorted(Comparator.comparingDouble(TeacherResourceBlockSearchResponse.Hit::score).reversed()
+                            .thenComparing(TeacherResourceBlockSearchResponse.Hit::documentTitle)
+                            .thenComparingInt(TeacherResourceBlockSearchResponse.Hit::blockOrder))
+                    .limit(3)
+                    .map(TeachingWorkflowService::toTeacherResourceEvidence)
                     .toList();
         } catch (IllegalArgumentException exception) {
             return List.of();
@@ -511,15 +802,256 @@ public class TeachingWorkflowService {
                 snippet);
     }
 
-    private static List<TeachingEvidence> concatEvidence(List<TeachingEvidence> first, List<TeachingEvidence> second) {
-        List<TeachingEvidence> merged = new ArrayList<>();
-        if (first != null) {
-            merged.addAll(first);
+    private static TeachingEvidence toTeacherResourceEvidence(TeacherResourceBlockSearchResponse.Hit hit) {
+        return new TeachingEvidence(
+                "TEACHER_RESOURCE",
+                teacherResourceSourceTitle(hit),
+                hit.blockId(),
+                hit.pageNo() == null ? 0 : hit.pageNo(),
+                hit.snippet());
+    }
+
+    private static String teacherResourceSourceTitle(TeacherResourceBlockSearchResponse.Hit hit) {
+        StringBuilder builder = new StringBuilder(hit.documentTitle() == null || hit.documentTitle().isBlank()
+                ? "教师资料"
+                : hit.documentTitle().strip());
+        if (hit.chapter() != null && !hit.chapter().isBlank()) {
+            builder.append(" / ").append(hit.chapter().strip());
         }
-        if (second != null) {
-            merged.addAll(second);
+        if (hit.section() != null && !hit.section().isBlank()
+                && !hit.section().strip().equals(hit.chapter() == null ? "" : hit.chapter().strip())) {
+            builder.append(" / ").append(hit.section().strip());
+        }
+        return builder.toString();
+    }
+
+    private static List<TeachingEvidence> concatEvidence(List<TeachingEvidence>... groups) {
+        List<TeachingEvidence> merged = new ArrayList<>();
+        for (List<TeachingEvidence> group : groups) {
+            if (group != null) {
+                merged.addAll(group);
+            }
         }
         return List.copyOf(merged);
+    }
+
+    private static List<TeachingEvidence> alignEvidenceToTopic(TeachingTaskRequest request, List<TeachingEvidence> evidence) {
+        if (evidence == null || evidence.isEmpty()) {
+            return List.of();
+        }
+        List<String> keywords = topicKeywords(request);
+        if (keywords.isEmpty()) {
+            return evidence;
+        }
+        String primary = primaryTopicKeyword(request);
+        int threshold = primary.length() >= 3
+                ? primary.length()
+                : Math.min(4, keywords.stream().mapToInt(String::length).max().orElse(2));
+        List<TeachingEvidence> aligned = evidence.stream()
+                .filter(item -> topicMatchScore(item, keywords) >= threshold)
+                .toList();
+        if (!aligned.isEmpty()) {
+            return aligned;
+        }
+        if (hasLocalTeachingResource(evidence)) {
+            List<String> expandedKeywords = localResourceTopicKeywords(request);
+            if (!expandedKeywords.isEmpty()) {
+                int expandedThreshold = Math.min(4,
+                        expandedKeywords.stream().mapToInt(String::length).max().orElse(2));
+                List<TeachingEvidence> expandedAligned = evidence.stream()
+                        .filter(item -> topicMatchScore(item, expandedKeywords) >= expandedThreshold)
+                        .toList();
+                if (!expandedAligned.isEmpty()) {
+                    return expandedAligned;
+                }
+            }
+        }
+        if (primary.isBlank()) {
+            return List.of();
+        }
+        return evidence.stream()
+                .filter(item -> compactEvidenceText(item).contains(primary.toLowerCase()))
+                .toList();
+    }
+
+    private static boolean hasLocalTeachingResource(List<TeachingEvidence> evidence) {
+        return evidence.stream().anyMatch(item -> !"PUBLIC_TEXTBOOK".equals(item.sourceScope()));
+    }
+
+    private static List<String> localResourceTopicKeywords(TeachingTaskRequest request) {
+        LinkedHashSet<String> keywords = new LinkedHashSet<>(topicKeywords(request));
+        for (String candidate : QuestionBankSearchText.candidateQueries(request.learningGoal(), request.questionText())) {
+            if (candidate.length() >= 2 && candidate.length() <= 12 && !TOPIC_GENERIC_TERMS.contains(candidate)) {
+                keywords.add(candidate);
+            }
+        }
+        return keywords.stream()
+                .sorted(Comparator
+                        .comparingInt((String keyword) -> CORE_TOPIC_PREFERENCES.contains(keyword) ? 0 : 1)
+                        .thenComparing(Comparator.comparingInt(String::length).reversed()))
+                .limit(12)
+                .toList();
+    }
+
+    static boolean isFrontendDisplayableTask(TeachingTaskResponse task) {
+        if (task == null || task.taskId() == null || task.taskId().isBlank()) {
+            return false;
+        }
+        if (task.status() != TeachingTaskStatus.COMPLETED) {
+            return false;
+        }
+        String title = safeFrontendText(task.learningGoal(), task.questionText());
+        if (title.isBlank() || looksCorruptedText(title)) {
+            return false;
+        }
+        String combined = safeFrontendText(
+                title,
+                task.handoutLatex(),
+                task.teacherHandoutLatex(),
+                task.studentHandoutLatex());
+        if (containsProtocolOrDebugLeak(combined)) {
+            return false;
+        }
+        String teacherDraft = task.teacherHandoutLatex();
+        String studentDraft = task.studentHandoutLatex();
+        return hasReadableHandoutContent(teacherDraft)
+                || hasReadableHandoutContent(studentDraft);
+    }
+
+    private static boolean hasReadableHandoutContent(String value) {
+        String normalized = safeFrontendText(value);
+        if (normalized.length() < 18) {
+            return false;
+        }
+        if (looksCorruptedText(normalized)) {
+            return false;
+        }
+        if (containsProtocolOrDebugLeak(normalized)) {
+            return false;
+        }
+        return true;
+    }
+
+    private static boolean containsProtocolOrDebugLeak(String value) {
+        if (value == null || value.isBlank()) {
+            return false;
+        }
+        String lower = value.toLowerCase().replaceAll("[\\s_\\-]+", "");
+        return lower.contains("capability")
+                || lower.contains("requesthash")
+                || lower.contains("idempotencykey")
+                || lower.contains("modelcall")
+                || lower.contains("jsonparse")
+                || lower.contains("apiaccess")
+                || lower.contains("subjecttype")
+                || lower.contains("bearer")
+                || lower.contains("mcp")
+                || lower.contains("安全探针")
+                || lower.contains("不做题目生成")
+                || lower.contains("模型健康")
+                || lower.contains("调试信息");
+    }
+
+    private static boolean looksCorruptedText(String value) {
+        if (value == null || value.isBlank()) {
+            return false;
+        }
+        String normalized = value.replaceAll("\\s+", "");
+        if (normalized.contains("???") || normalized.contains("�")) {
+            return true;
+        }
+        long questionMarks = normalized.chars().filter(ch -> ch == '?').count();
+        if (questionMarks >= 3 && questionMarks * 2 >= normalized.length()) {
+            return true;
+        }
+        String lower = normalized.toLowerCase();
+        return lower.contains("ã")
+                || lower.contains("â")
+                || lower.contains("ä¸")
+                || lower.contains("å")
+                || lower.contains("æ")
+                || lower.contains("ç");
+    }
+
+    private static String safeFrontendText(String... values) {
+        StringBuilder builder = new StringBuilder();
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                if (builder.length() > 0) {
+                    builder.append(' ');
+                }
+                builder.append(value.strip());
+            }
+        }
+        return builder.toString().replaceAll("\\s+", " ").strip();
+    }
+
+    private static int topicMatchScore(TeachingEvidence evidence, List<String> keywords) {
+        String haystack = compactEvidenceText(evidence);
+        int score = 0;
+        for (String keyword : keywords) {
+            if (!keyword.isBlank() && haystack.contains(keyword.toLowerCase())) {
+                score += keyword.length();
+            }
+        }
+        return score;
+    }
+
+    private static String compactEvidenceText(TeachingEvidence evidence) {
+        return ((evidence.sourceTitle() == null ? "" : evidence.sourceTitle()) + " "
+                + (evidence.snippet() == null ? "" : evidence.snippet()))
+                .replaceAll("\\s+", "")
+                .toLowerCase();
+    }
+
+    private static List<String> topicKeywords(TeachingTaskRequest request) {
+        String raw = ((request.learningGoal() == null ? "" : request.learningGoal()) + " "
+                + (request.questionText() == null ? "" : request.questionText()))
+                .replaceAll("[^\\p{IsHan}A-Za-z0-9]+", " ");
+        raw = TOPIC_NOISE_WORD.matcher(raw).replaceAll(" ");
+        LinkedHashSet<String> keywords = new LinkedHashSet<>();
+        for (String part : raw.split("\\s+")) {
+            String candidate = part.strip();
+            if (candidate.length() < 2) {
+                continue;
+            }
+            if (TOPIC_GENERIC_TERMS.contains(candidate)) {
+                continue;
+            }
+            keywords.add(candidate);
+        }
+        return keywords.stream()
+                .sorted(Comparator.comparingInt(String::length).reversed())
+                .limit(8)
+                .toList();
+    }
+
+    private static String primaryTopicKeyword(TeachingTaskRequest request) {
+        List<String> keywords = topicKeywords(request);
+        for (String keyword : keywords) {
+            if (CORE_TOPIC_PREFERENCES.contains(keyword)) {
+                return keyword;
+            }
+        }
+        return keywords.isEmpty() ? "" : keywords.getFirst();
+    }
+
+    private static List<String> alignedQueries(TeachingTaskRequest request) {
+        LinkedHashSet<String> queries = new LinkedHashSet<>();
+        String coreTopic = primaryTopicKeyword(request);
+        if (!coreTopic.isBlank()) {
+            queries.add(coreTopic);
+            String combined = (coreTopic + " " + safeQuestionText(request)).trim();
+            if (!combined.isBlank()) {
+                queries.add(combined);
+            }
+            String goalCombined = (coreTopic + " " + (request.learningGoal() == null ? "" : request.learningGoal().strip())).trim();
+            if (!goalCombined.isBlank()) {
+                queries.add(goalCombined);
+            }
+        }
+        queries.addAll(QuestionBankSearchText.candidateQueries(request.learningGoal(), request.questionText()));
+        return List.copyOf(queries);
     }
 
     /**
@@ -529,10 +1061,12 @@ public class TeachingWorkflowService {
             TeachingTaskRequest request,
             List<TeachingEvidence> evidence,
             List<TeachingEvidence> questionEvidence,
+            List<TeachingEvidence> teacherResourceEvidence,
             StudentMemoryResponse memoryResponse,
             TeachingTaskResponse.AiDraft aiDraft,
             TeachingHandoutTemplateProfile template,
-            boolean questionBankAllowed) {
+            boolean questionBankAllowed,
+            boolean teacherResourceAllowed) {
         String reuseSummary = memoryResponse.reused()
                 ? "命中学生记忆 %s，作用域 %s，相似度 %.4f，跳过重复教材召回。"
                         .formatted(memoryResponse.memoryId(), memoryResponse.reuseScope(), memoryResponse.similarity())
@@ -541,6 +1075,7 @@ public class TeachingWorkflowService {
         long publicTextbookCount = evidence.stream()
                 .filter(item -> "PUBLIC_TEXTBOOK".equals(item.sourceScope()))
                 .count();
+        long teacherResourceCount = teacherResourceEvidence.size();
         return List.of(
                 node("LEARNING_GOAL", "学习目标识别", "识别用户想学：" + request.learningGoal()),
                 node("REUSE_RESOURCE", "历史资源复用", reuseSummary),
@@ -554,10 +1089,15 @@ public class TeachingWorkflowService {
                         textbookRetrievalRan && questionBankAllowed
                                 ? "命中题库题目 " + questionEvidence.size() + " 条，已按难度作为讲义证据。"
                                 : "当前身份或复用路径未触发题库检索。"),
+                node("TEACHER_RESOURCE_RETRIEVAL", "教师资料检索",
+                        textbookRetrievalRan && teacherResourceAllowed ? "completed" : "skipped",
+                        textbookRetrievalRan && teacherResourceAllowed
+                                ? "命中教师资料证据 " + teacherResourceCount + " 条，已补充题型方法与教师沉淀。"
+                                : "当前身份或复用路径未触发教师资料检索。"),
                 node("REACT_SOLVE", "解题编排", "基于教材证据、学生记忆和题型方法整理讲解步骤。"),
                 node("HANDOUT_TEMPLATE", "讲义模板", "使用模板：" + template.summary().displayName() + "。"),
                 node("AI_DRAFT", "讲义内容生成", aiDraftSummary(aiDraft)),
-                node("LATEX_HANDOUT", "讲义排版", "生成教师版和学生版，可预览并导出 PDF。"),
+                node("LATEX_HANDOUT", "讲义排版", "生成教师版、学生版和横版讲解稿，可预览并导出 PDF。"),
                 node("HUMAN_FEEDBACK", "人类反馈", "pending", "等待学生或教师提交人工反馈。"),
                 node("INTERACTIVE_FOLLOW_UP", "交互追问", "给出继续追问、练习和导出建议。"));
     }
@@ -603,90 +1143,115 @@ public class TeachingWorkflowService {
             TeachingTaskRequest request,
             List<TeachingEvidence> evidence,
             StudentMemoryResponse memoryResponse,
-            TeachingHandoutTemplateProfile template) {
-        String evidenceSnippet = memoryResponse.reused()
-                ? "复用学生记忆：" + escapeLatex(memoryResponse.answer())
-                : evidence.isEmpty() ? "暂无教材证据。" : evidenceSummary(evidence);
-        String templateLine = escapeLatex(template.summary().displayName() + " / " + template.summary().description());
-        String difficultyLine = escapeLatex(difficultyBands(template));
+            TeachingHandoutTemplateProfile template,
+            TeachingTaskResponse.AiDraft aiDraft) {
         String questionSection = safeQuestionText(request).isBlank()
                 ? "围绕学习目标设计例题、变式题和课堂追问。"
                 : safeQuestionText(request);
+        String evidenceSnippet = memoryResponse.reused()
+                ? "复用学生记忆：" + escapeLatex(memoryResponse.answer())
+                : evidence.isEmpty() ? "暂无教材、题库或教师资料证据，需教师审校后补足题源。" : evidenceSummary(evidence);
+        String teacherExplanation = aiDraft == null ? "" : guardDraftText(aiDraft.teacherExplanation(), true);
+        String knowledgeLocation = draftBlockContent(teacherExplanation, teacherDraftLabels(), "知识定位");
+        String questionType = draftBlockContent(teacherExplanation, teacherDraftLabels(), "题型识别");
+        String methodSteps = draftBlockContent(teacherExplanation, teacherDraftLabels(), "方法步骤");
+        String workedExample = draftBlockContent(teacherExplanation, teacherDraftLabels(), "例题详解");
+        String answerPoints = draftBlockContent(teacherExplanation, teacherDraftLabels(), "答案与评分点");
+        String draftPitfalls = draftBlockContent(teacherExplanation, teacherDraftLabels(), "易错提醒");
+        String draftFollowUps = draftBlockContent(teacherExplanation, teacherDraftLabels(), "课堂追问");
+        List<String> teacherMethodCardItems = mergeDistinctItems(
+                8,
+                draftBlockLines(knowledgeLocation),
+                guardDraftItems(aiDraft == null ? List.of() : aiDraft.knowledgePoints(), true),
+                draftBlockLines(questionType),
+                teacherMethodCards(request, evidence, template));
         String questionBankTeacherSection = teacherQuestionBankSection(evidence);
-        return """
-                \\section{讲义信息}
-                \\begin{itemize}
-                \\item 模板：%s
-                \\item 难度：%s
-                \\item 使用场景：教师备课、课堂讲评、学生订正。
-                \\end{itemize}
+        String teacherMethodCards = latexItemize(teacherMethodCardItems);
+        String teacherBoardPlan = latexEnumerate(teacherBoardPlan(request, evidence, template));
+        String teacherPitfalls = latexItemize(mergeDistinctItems(
+                6,
+                List.of(
+                        "先核对条件是否读全，尤其是定义域、参数范围、符号方向和图形关系。",
+                        "不要只记结论不写依据；每一步都要能指出来自哪个定义、公式或条件。",
+                        "参数题和分类讨论题要先处理边界，再给最终结论。"),
+                draftBlockLines(draftPitfalls)));
+        String teacherFollowUps = latexEnumerate(mergeDistinctItems(
+                8,
+                draftBlockLines(draftFollowUps),
+                guardDraftItems(aiDraft == null ? List.of() : aiDraft.followUpQuestions(), true),
+                List.of(
+                        "这道题的第一步为什么不能直接套结论？",
+                        "如果把一个条件改掉，原方法还成立吗？",
+                        "学生最容易错在识别题型、边界处理还是计算细节？")));
+        String teacherReviewNotes = latexItemize(List.of(
+                "先让学生口述定义、公式、图像特征或题型信号，再开始完整板书。",
+                "讲到参数、范围、分类讨论时，先处理边界，再推进计算或证明。",
+                "答案讲完后补一题同类型变式，检查学生是否真的会迁移。"));
+        String wideSlides = latexEnumerate(teacherWideSlides(
+                questionSection,
+                questionType,
+                methodSteps,
+                answerPoints,
+                draftPitfalls,
+                draftFollowUps));
+        StringBuilder builder = new StringBuilder();
+        builder.append("\\section{课前定位}\n")
+                .append(escapeLatex("模板：" + template.summary().displayName()))
+                .append("\n\n")
+                .append("\\subsection*{学习目标}\n")
+                .append(escapeLatex(request.learningGoal()))
+                .append("\n\n\\subsection*{题目入口}\n")
+                .append(escapeLatex(questionSection))
+                .append("\n\n\\subsection*{来源依据}\n")
+                .append(evidenceSnippet)
+                .append("\n\n");
 
-                \\section{课前定位}
-                \\begin{itemize}
-                \\item 学习目标：%s
-                \\item 本讲边界：只围绕本次目标组织知识点、例题、追问和分层练习，不混入无关章节。
-                \\item 课堂产物：教师版保留讲解、答案、评分点；学生版只保留题目、提示和作答空间。
-                \\end{itemize}
+        builder.append("\\section{核心公式与方法卡}\n")
+                .append(teacherMethodCards)
+                .append("\n\n\\section{讲评主线}\n")
+                .append("\\subsection*{题型识别}\n")
+                .append(contentOrFallback(questionType, escapeLatex("先判断题目属于定义识别、性质判断、参数范围还是综合应用。")))
+                .append("\n\n\\subsection*{审题提醒}\n")
+                .append(escapeLatex("先圈出已知条件中的定义、数量关系、图像关系或参数范围；若题目只给学习主题，则按该主题补一题典型例题再展开讲评。"))
+                .append("\n\n\\subsection*{方法步骤}\n")
+                .append(contentOrFallback(methodSteps, teacherBoardPlan))
+                .append("\n\n\\section{典型例题与讲评入口}\n")
+                .append("\\subsection*{题目 / 任务}\n")
+                .append(escapeLatex(questionSection))
+                .append("\n\n\\subsection*{例题详解}\n")
+                .append(contentOrFallback(workedExample, escapeLatex("讲解时必须说明每一步依据来自哪个定义、公式、图形关系或题目条件，不能只给最终结论。")))
+                .append("\n\n\\subsection*{答案与评分点}\n")
+                .append(contentOrFallback(answerPoints, escapeLatex("若题目来源于题库或教师资料，答案区要保留关键步骤、得分点和边界说明。")))
+                .append("\n\n");
 
-                \\section{学习目标}
-                %s
+        builder.append("\\section{16:10 横版讲解卡}\n")
+                .append(wideSlides)
+                .append("\n\n");
 
-                \\section{题目与本讲任务}
-                %s
+        builder.append("\\section{易错提醒与课堂追问}\n")
+                .append("\\subsection*{易错提醒}\n")
+                .append(teacherPitfalls)
+                .append("\n\\subsection*{课堂追问}\n")
+                .append(teacherFollowUps)
+                .append('\n');
 
-                \\section{来源索引}
-                %s
+        if (!questionBankTeacherSection.isBlank()) {
+            builder.append(questionBankTeacherSection).append('\n');
+        }
 
-                \\section{知识点归属}
-                %s
-
-                \\section{板书流程}
-                \\begin{enumerate}
-                \\item 定位：先写本讲核心定义、公式或图像特征，让学生知道从哪里入手。
-                \\item 识别：圈出题目条件中的题型信号，判断使用定义法、代数计算、数形结合还是分类讨论。
-                \\item 推进：每一步板书都说明依据，遇到参数、范围或符号先处理边界。
-                \\item 收束：给出答案、评分点、易错提醒和可继续追问的变式。
-                \\end{enumerate}
-                
-                \\section{例题与答案}
-                \\paragraph{例题 1}
-                %s
-                
-                \\paragraph{讲解路径}
-                先提取题目条件，再写对应知识点和公式；若有参数或范围条件，单独处理边界，再进入计算。
-                
-                \\paragraph{答案与评分点}
-                答案要点先写关键等式，再写最终结论；评分时分开记录“条件识别、公式依据、计算结论、易错提醒”。
-                
-                \\paragraph{易错提醒}
-                学生常见问题通常出现在条件漏读、符号方向、参数范围和公式记忆混淆；讲评时先让学生说出依据，再展示完整解法。
-                
-                \\section{课堂追问}
-                \\begin{itemize}
-                \\item 这道题第一步为什么不能直接套公式？
-                \\item 如果条件少一个，应该先补哪个量？
-                \\item 学生最容易在定义域、符号、参数范围还是计算细节上出错？
-                \\end{itemize}
-
-                %s
-                
-                \\section{课后订正记录}
-                \\vspace{5em}
-                """.formatted(
-                templateLine,
-                difficultyLine,
-                escapeLatex(request.learningGoal()),
-                escapeLatex(request.learningGoal()),
-                escapeLatex(questionSection),
-                evidenceSnippet,
-                teacherKnowledgePoint(request, evidence),
-                escapeLatex(questionSection),
-                questionBankTeacherSection);
+        builder.append("\\section{板书与二次反馈}\n")
+                .append(teacherReviewNotes)
+                .append("\n\\section{课后订正与追踪记录}\n\\vspace{5em}\n");
+        return builder.toString();
     }
 
     private static boolean canUseQuestionBank(TeachingRequestContext context) {
         String subjectType = context == null ? "" : context.subjectType();
         return "teacher".equalsIgnoreCase(subjectType) || "admin".equalsIgnoreCase(subjectType);
+    }
+
+    private static boolean canUseTeacherResources(TeachingRequestContext context) {
+        return canUseQuestionBank(context);
     }
 
     /**
@@ -696,16 +1261,14 @@ public class TeachingWorkflowService {
         if (evidence.isEmpty()) {
             return "暂无教材证据。";
         }
-        StringBuilder builder = new StringBuilder("\\begin{enumerate}\n");
+        StringBuilder builder = new StringBuilder();
         int index = 1;
         for (TeachingEvidence item : evidence.stream().limit(5).toList()) {
-            builder.append("\\item ")
-                    .append(escapeLatex(evidenceSourceLine(index, item)))
+            builder.append(escapeLatex(evidenceSourceLine(index, item)))
                     .append('\n');
             index += 1;
         }
-        builder.append("\\end{enumerate}\n");
-        return builder.toString();
+        return builder.toString().strip();
     }
 
     private static String evidenceSourceLine(int index, TeachingEvidence item) {
@@ -715,6 +1278,13 @@ public class TeachingWorkflowService {
                     + "，难度 " + questionDifficulty(item)
                     + "；用途：分层练习与教师答案区。";
         }
+        if ("TEACHER_RESOURCE".equals(item.sourceScope())) {
+            String page = item.pageNo() > 0 ? "第 " + item.pageNo() + " 页" : "页码未记录";
+            return "来源 " + index
+                    + "：教师资料，" + item.sourceTitle()
+                    + "，" + page
+                    + "；用途：题型方法、教师沉淀与讲义补充。";
+        }
         String page = item.pageNo() > 0 ? "PDF " + item.pageNo() : "页码未记录";
         return "来源 " + index
                 + "：公开教材，" + item.sourceTitle()
@@ -723,107 +1293,323 @@ public class TeachingWorkflowService {
     }
 
     private static String evidenceLabel(TeachingEvidence item) {
-        if ("QUESTION_BANK".equals(item.sourceScope()) || item.pageNo() <= 0) {
+        if ("QUESTION_BANK".equals(item.sourceScope())) {
             return "题库：" + questionTitleWithoutDifficulty(item);
+        }
+        if ("TEACHER_RESOURCE".equals(item.sourceScope())) {
+            return item.pageNo() > 0
+                    ? item.sourceTitle() + " / 第 " + item.pageNo() + " 页"
+                    : item.sourceTitle();
         }
         return item.sourceTitle() + " / PDF " + item.pageNo();
     }
 
     /**
-     * 生成学生版 LaTeX 讲义：保留题目、提示和空白作答区，不直接暴露教师解析和知识点归属。
+     * 生成学生版 LaTeX 讲义：保留题目、提示和干净空白，不直接暴露教师解析和知识点归属。
      */
     private static String buildStudentHandoutLatex(
             TeachingTaskRequest request,
             List<TeachingEvidence> evidence,
             StudentMemoryResponse memoryResponse,
-            TeachingHandoutTemplateProfile template) {
+            TeachingHandoutTemplateProfile template,
+            TeachingTaskResponse.AiDraft aiDraft) {
         String hint = memoryResponse.reused()
                 ? "回忆同类问题的方法，先写出已知条件，再判断可用公式。"
                 : evidence.isEmpty()
                 ? "先圈出题目中的关键词，再尝试写出相关定义。"
                 : "先阅读教材证据中的定义或公式，再补全自己的推理。";
-        String questionBankPractice = studentQuestionBankSection(evidence);
+        String lectureTitle = studentLectureTitle(request);
+        String studentHint = aiDraft == null ? "" : guardDraftText(aiDraft.studentHint(), false);
+        String draftKnowledge = draftBlockContent(studentHint, studentDraftLabels(), "知识速记");
+        String draftType = draftBlockContent(studentHint, studentDraftLabels(), "题型识别");
+        String draftExample = draftBlockContent(studentHint, studentDraftLabels(), "例题任务");
+        String draftPractice = draftBlockContent(studentHint, studentDraftLabels(), "练习任务");
+        String draftNotice = draftBlockContent(studentHint, studentDraftLabels(), "作答提醒");
+        String knowledgeSection = studentKnowledgeCardsLatex(mergeDistinctItems(
+                5,
+                draftBlockLines(draftKnowledge),
+                guardDraftItems(aiDraft == null ? List.of() : aiDraft.knowledgePoints(), false),
+                studentKnowledgeCards(request, evidence, hint)));
+        String noteSection = latexItemize(mergeDistinctItems(
+                5,
+                draftBlockLines(draftNotice),
+                studentNoticeCards(request, evidence)));
+        String methodSection = latexEnumerate(mergeDistinctItems(
+                5,
+                draftBlockLines(draftType),
+                studentMethodCards(request, evidence)));
+        String exampleSection = contentOrFallback(draftExample, studentExampleSection(request, evidence, hint));
+        List<String> practiceItems = studentPracticeTasks(request, evidence, aiDraft, draftPractice);
         if (template.studentLectureStyle()) {
             String questionText = safeQuestionText(request).isBlank()
                     ? "根据本节主题完成下面的知识梳理与分层练习。"
                     : safeQuestionText(request);
             return """
-                    \\section{第 1 讲  %s}
-                    \\begin{itemize}
-                    \\item 课堂任务：先完成例题任务，再做分层练习，最后记录错因。
-                    \\end{itemize}
+                    \\section{%s}
 
-                    \\subsection*{知识点 1：核心定义与公式}
+                    \\section{知识速记}
                     %s
 
-                    \\subsection*{注意}
+                    \\section{注意}
                     %s
 
-                    \\subsection*{题型 1：基础识别}
+                    \\section{题型识别}
                     %s
 
-                    \\subsection*{练习}
-                    \\begin{enumerate}
-                    \\item A 基础：写出本讲涉及的定义、公式或图像特征。
-                    \\item B 提高：根据题目条件列出关键等式，并说明每一步依据。
-                    \\item C 挑战：改变一个条件后，判断方法是否还成立。
-                    \\end{enumerate}
-
-                    \\subsection*{课堂作答区}
-                    \\vspace{10em}
-
+                    \\section{例题任务}
                     %s
-                    
-                    \\subsection*{订正与错因}
+                    \\paragraph{本讲题干}
+                    %s
+
+                    \\section{连续编号练习}
+                    %s
+                    %s
+
+                    \\section{订正与错因}
                     \\vspace{6em}
                     """.formatted(
-                    escapeLatex(request.learningGoal()),
-                    escapeLatex(hint),
-                    escapeLatex("先核对定义域、符号条件和参数不为 0 等边界。"),
+                    escapeLatex(lectureTitle),
+                    knowledgeSection,
+                    noteSection,
+                    methodSection,
+                    exampleSection,
                     escapeLatex(questionText),
-                    questionBankPractice);
+                    latexEnumerateWithWorkspace(practiceItems, 6),
+                    studentQuestionBankSection(request, evidence));
         }
         String questionText = safeQuestionText(request).isBlank()
                 ? "根据本讲主题完成例题、变式和订正。"
                 : safeQuestionText(request);
         return """
-                \\section{第 1 讲  %s}
-                \\begin{itemize}
-                \\item 课堂任务：先独立完成空白区，再订正关键步骤。
-                \\end{itemize}
+                \\section{%s}
 
-                \\section{知识点 1：核心方法}
-                \\begin{itemize}
-                \\item 先写定义、公式或图像特征，再代入题目条件。
-                \\item 遇到参数、范围、符号时先标记边界，不急着计算。
-                \\item 本页只保留提示和作答区，详细讲评在教师版审查。
-                \\end{itemize}
-
-                \\section{题型 1：例题任务}
+                \\section{知识速记}
                 %s
 
-                \\section{思路提示}
+                \\section{注意}
+                %s
+
+                \\section{题型识别}
+                %s
+
+                \\section{例题任务}
+                %s
+                \\paragraph{本讲题干}
                 %s
                 
-                \\section{课堂练习}
-                \\begin{enumerate}
-                \\item A 基础：复述本题对应的核心知识点。
-                \\item B 提高：写出第一步等式或图形关系。
-                \\item C 挑战：说明如果条件变化，方法需要怎样调整。
-                \\end{enumerate}
-
-                \\section{我的解答}
-                \\vspace{10em}
-
+                \\section{连续编号练习}
+                %s
                 %s
 
-                \\section{订正记录}
+                \\section{错因整理}
                 \\vspace{6em}
                 """.formatted(
-                escapeLatex(request.learningGoal()),
+                escapeLatex(lectureTitle),
+                knowledgeSection,
+                noteSection,
+                methodSection,
+                exampleSection,
                 escapeLatex(questionText),
-                escapeLatex(hint),
-                questionBankPractice);
+                latexEnumerateWithWorkspace(practiceItems, 6),
+                studentQuestionBankSection(request, evidence));
+    }
+
+    /**
+     * Keeps the built-in scaffold compact so the later AI draft sections remain the primary readable content.
+     */
+    private static List<String> teacherMethodCards(
+            TeachingTaskRequest request,
+            List<TeachingEvidence> evidence,
+            TeachingHandoutTemplateProfile template) {
+        List<String> cards = new ArrayList<>();
+        cards.add("先写出本讲对应的定义、公式、图像特征或空间关系，再进入计算或证明。");
+        if (!safeQuestionText(request).isBlank()) {
+            cards.add("题目入口：" + safeQuestionText(request));
+        }
+        if (!evidence.isEmpty()) {
+            cards.add("优先依据命中的教材/题库/教师资料组织讲评，不直接搬运 OCR 原文。");
+            cards.add("命中主证据：" + evidenceLabel(evidence.getFirst()));
+        }
+        cards.add("题型推进保持“识别条件 → 选择方法 → 写关键等式 → 回收答案与评分点”。");
+        return cards.stream().distinct().limit(5).toList();
+    }
+
+    private static List<String> studentMethodCards(TeachingTaskRequest request, List<TeachingEvidence> evidence) {
+        List<String> cards = new ArrayList<>();
+        cards.add("先圈出关键词，再判断对应的是定义、公式、图像性质还是题型方法。");
+        cards.add("遇到参数、范围、符号或图形关系时，先处理边界条件。");
+        if (!safeQuestionText(request).isBlank()) {
+            cards.add("本讲例题围绕“" + safeQuestionText(request) + "”展开。");
+        }
+        if (!evidence.isEmpty()) {
+            cards.add("先看教材或题源中的核心定义，再自己写第一步。");
+        }
+        return cards.stream().distinct().limit(4).toList();
+    }
+
+    private static List<String> teacherBoardPlan(
+            TeachingTaskRequest request,
+            List<TeachingEvidence> evidence,
+            TeachingHandoutTemplateProfile template) {
+        List<String> plan = new ArrayList<>();
+        plan.add("先用 1 行话说清本讲主题、题型入口和核心依据，再开始板书。");
+        plan.add("板书顺序保持“写定义/公式 → 审条件 → 立关键等式或图形关系 → 回收答案”。");
+        if (!safeQuestionText(request).isBlank()) {
+            plan.add("把题干中的关键词拆成已知条件、求解目标和第一步落点：" + safeQuestionText(request));
+        }
+        if (!evidence.isEmpty()) {
+            plan.add("引用首条真实来源作为板书依据：" + evidenceLabel(evidence.getFirst()));
+        }
+        if (template.summary().referenceTitle() != null && !template.summary().referenceTitle().isBlank()) {
+            plan.add("保持模板风格与课堂节奏：" + template.summary().referenceTitle());
+        }
+        return plan.stream().distinct().limit(5).toList();
+    }
+
+    private static List<String> teacherChecklist(
+            TeachingTaskRequest request,
+            List<TeachingEvidence> evidence,
+            TeachingHandoutTemplateProfile template) {
+        List<String> checklist = new ArrayList<>();
+        checklist.add("核对教师版是否包含知识来源、题型识别、完整答案、追问和错因提醒。");
+        checklist.add("核对学生版是否只保留知识点、题目、提示和足够作答留白。");
+        checklist.add("检查分式、平方、不等号、根式是否按标准 LaTeX 渲染。");
+        if (!evidence.isEmpty()) {
+            checklist.add("抽查命中来源与讲义内容是否一致，避免把 OCR 碎片直接写进正文。");
+        }
+        if (!safeQuestionText(request).isBlank()) {
+            checklist.add("确认题干与模板主线一致，不要把题型和例题讲偏。");
+        }
+        if (template.studentLectureStyle()) {
+            checklist.add("确认学生版题号连续、留白充足，适合横版讲解和课堂打印。");
+        }
+        return checklist.stream().distinct().limit(6).toList();
+    }
+
+    private static String studentKnowledgeSection(
+            TeachingTaskRequest request,
+            List<TeachingEvidence> evidence,
+            String fallbackHint) {
+        List<String> items = new ArrayList<>();
+        items.add(fallbackHint);
+        if (!safeQuestionText(request).isBlank()) {
+            items.add("题目条件先拆成“已知什么、要求什么、先用什么”。");
+        }
+        if (!evidence.isEmpty()) {
+            items.add("优先回忆命中证据里的定义、公式或题型信号，再开始作答。");
+        }
+        items.add("公式、定义、图像性质写清以后再进入计算，避免直接硬算。");
+        return latexItemize(items.stream().distinct().limit(4).toList());
+    }
+
+    private static List<String> studentKnowledgeCards(
+            TeachingTaskRequest request,
+            List<TeachingEvidence> evidence,
+            String fallbackHint) {
+        List<String> cards = new ArrayList<>();
+        cards.add("先写本讲最核心的定义、公式和适用条件，再开始计算或证明。");
+        if (!evidence.isEmpty()) {
+            cards.add("先回到命中来源里的主定义或主公式，再决定第一步。来源：" + evidenceLabel(evidence.getFirst()));
+        }
+        if (!safeQuestionText(request).isBlank()) {
+            cards.add("把题目拆成“已知条件、求解目标、第一步依据”三件事。");
+        }
+        cards.add(fallbackHint);
+        return cards.stream().distinct().limit(4).toList();
+    }
+
+    private static String studentKnowledgeCardsLatex(List<String> cards) {
+        return latexItemize(cards);
+    }
+
+    private static List<String> studentNoticeCards(TeachingTaskRequest request, List<TeachingEvidence> evidence) {
+        List<String> notes = new ArrayList<>();
+        notes.add("先核对定义域、参数是否为 0、符号方向和边界条件。");
+        notes.add("若题目涉及图像、几何关系或位置关系，先画草图或标关键量。");
+        if (!safeQuestionText(request).isBlank()) {
+            notes.add("读题时先划出“已知什么、要求什么、第一步写什么”。");
+        }
+        if (!evidence.isEmpty()) {
+            notes.add("教材或题源中的关键词先记下来，再开始计算。");
+        }
+        return notes.stream().distinct().limit(4).toList();
+    }
+
+    private static List<String> studentPracticeTasks(
+            TeachingTaskRequest request,
+            List<TeachingEvidence> evidence,
+            TeachingTaskResponse.AiDraft aiDraft,
+            String draftPractice) {
+        List<String> tasks = new ArrayList<>();
+        tasks.addAll(draftBlockLines(draftPractice));
+        tasks.addAll(guardDraftItems(aiDraft == null ? List.of() : aiDraft.followUpQuestions(), false));
+        for (TeachingEvidence item : questionBankEvidence(evidence)) {
+            tasks.add(questionDifficulty(item) + "：" + questionTextOnly(item.snippet()));
+        }
+        tasks.addAll(defaultStudentExercises(request));
+        return mergeDistinctItems(6, tasks).stream().limit(6).toList();
+    }
+
+    private static List<String> defaultStudentExercises(TeachingTaskRequest request) {
+        String goal = request.learningGoal() == null || request.learningGoal().isBlank()
+                ? "本讲主题"
+                : request.learningGoal().strip();
+        String prompt = safeQuestionText(request).isBlank()
+                ? goal
+                : safeQuestionText(request);
+        return List.of(
+                "基础 1：先写出“" + goal + "”对应的定义、公式或图像特征。",
+                "基础 2：围绕“" + prompt + "”写出第一步依据，并说明为什么这样设。",
+                "基础 3：补全一组最小条件，判断本题能否直接套用核心公式。",
+                "提高 1：把题目中的一个条件改成相近条件，说明解法哪里要调整。",
+                "提高 2：保留主方法不变，补一题同类变式并完成关键一步。",
+                "综合 1：整理本讲同类题的审题顺序，并写出最容易漏掉的一步。");
+    }
+
+    private static List<String> teacherWideSlides(
+            String questionSection,
+            String questionType,
+            String methodSteps,
+            String answerPoints,
+            String pitfalls,
+            String followUps) {
+        return List.of(
+                "第 1 屏：用一句话交代本讲题目“" + questionSection + "”，并标出知识入口与题型信号。",
+                "第 2 屏：突出题型识别与关键方法。"
+                        + (questionType.isBlank() ? "先解释为什么选这个方法。" : flattenDraftBlock(questionType)),
+                "第 3 屏：逐步板书核心推导与答案回收。"
+                        + (methodSteps.isBlank() ? "每一步都写依据。" : flattenDraftBlock(methodSteps))
+                        + (answerPoints.isBlank() ? "" : " 结尾强调：" + flattenDraftBlock(answerPoints)),
+                "第 4 屏：总结易错点与追问。"
+                        + (pitfalls.isBlank() ? "" : " 易错点：" + flattenDraftBlock(pitfalls))
+                        + (followUps.isBlank() ? "" : " 追问：" + flattenDraftBlock(followUps)));
+    }
+
+    private static String studentExampleSection(
+            TeachingTaskRequest request,
+            List<TeachingEvidence> evidence,
+            String fallbackHint) {
+        List<String> items = new ArrayList<>();
+        if (!safeQuestionText(request).isBlank()) {
+            items.add("先独立拆题：把“" + safeQuestionText(request) + "”分成已知条件、目标和关键方法。");
+        } else {
+            items.add("先围绕本讲主题补出 1 道典型例题，再写第一步关键依据。");
+        }
+        items.add("作答时先写定义、公式或图形关系，再推进运算或证明。");
+        if (!evidence.isEmpty()) {
+            items.add("可参考命中来源中的核心定义或公式，答案由学生独立完成。");
+        } else {
+            items.add(fallbackHint);
+        }
+        return latexEnumerate(items.stream().distinct().limit(4).toList());
+    }
+
+    private static String studentLectureTitle(TeachingTaskRequest request) {
+        String goal = request.learningGoal() == null ? "" : request.learningGoal().strip();
+        if (goal.contains("专题")) {
+            return "专题  " + goal;
+        }
+        return "第 1 讲  " + goal;
     }
 
     /**
@@ -834,37 +1620,43 @@ public class TeachingWorkflowService {
         if (questions.isEmpty()) {
             return "";
         }
-        StringBuilder builder = new StringBuilder("\\section{题库分层练习与答案}\n\\begin{enumerate}\n");
+        StringBuilder builder = new StringBuilder("\\section{题库分层练习与答案}\n");
+        int index = 1;
         for (TeachingEvidence item : questions) {
             String difficulty = questionDifficulty(item);
             String question = questionTextOnly(item.snippet());
             String answer = questionAnswerOnly(item.snippet());
-            builder.append("\\item ")
-                    .append(escapeLatex(difficulty + "：" + questionTitleWithoutDifficulty(item)))
-                    .append("\\\\\n")
+            builder.append("\\subsection*{题 ").append(index).append("  ")
+                    .append(escapeLatex(difficulty + " · " + questionTitleWithoutDifficulty(item)))
+                    .append("}\n")
                     .append(escapeLatex(question))
-                    .append("\\\\\n")
-                    .append(escapeLatex(answer.isBlank() ? "答案要点：题库未提供答案，需教师审校后补充。" : answer))
-                    .append('\n');
+                    .append("\n\n\\paragraph{答案要点}\n")
+                    .append(escapeLatex(answer.isBlank() ? "题库未提供答案，需教师审校后补充。" : answer))
+                    .append("\n\n\\paragraph{讲评提醒}\n")
+                    .append(escapeLatex("先让学生说出第一步依据，再补完整解题链路。"))
+                    .append("\n\n");
+            index += 1;
         }
-        builder.append("\\end{enumerate}\n");
         return builder.toString();
     }
 
     /**
      * Builds student-safe question bank practice without answer or scoring leakage.
      */
-    private static String studentQuestionBankSection(List<TeachingEvidence> evidence) {
+    private static String studentQuestionBankSection(TeachingTaskRequest request, List<TeachingEvidence> evidence) {
         List<TeachingEvidence> questions = questionBankEvidence(evidence);
         if (questions.isEmpty()) {
             return "";
         }
-        StringBuilder builder = new StringBuilder("\\section{题库分层练习}\n\\begin{enumerate}\n");
+        List<String> tasks = new ArrayList<>();
         for (TeachingEvidence item : questions) {
-            String difficulty = questionDifficulty(item);
+            tasks.add(questionDifficulty(item) + "：" + questionTextOnly(item.snippet()));
+        }
+        StringBuilder builder = new StringBuilder("\\section{题库分层练习}\n\\begin{enumerate}\n");
+        for (String item : tasks) {
             builder.append("\\item ")
-                    .append(escapeLatex(difficulty + "：" + questionTextOnly(item.snippet())))
-                    .append("\n\\vspace{5em}\n");
+                    .append(escapeLatex(item))
+                    .append("\n\\vspace{6em}\n");
         }
         builder.append("\\end{enumerate}\n");
         return builder.toString();
@@ -1055,6 +1847,78 @@ public class TeachingWorkflowService {
                     .append("\n\n");
         }
         return builder.toString();
+    }
+
+    private static String draftBlockContent(String text, List<String> labels, String targetLabel) {
+        if (text == null || text.isBlank()) {
+            return "";
+        }
+        return parseLabeledDraftBlocks(text, labels, targetLabel).stream()
+                .filter(block -> targetLabel.equals(block.label()))
+                .map(LabeledDraftBlock::content)
+                .findFirst()
+                .orElse("");
+    }
+
+    private static List<String> draftBlockLines(String content) {
+        if (content == null || content.isBlank()) {
+            return List.of();
+        }
+        List<String> items = new ArrayList<>();
+        for (String rawLine : content.replace("\r\n", "\n").replace('\r', '\n').split("\n")) {
+            String line = rawLine.strip()
+                    .replaceFirst("^[0-9]+[.、)]\\s*", "")
+                    .replaceFirst("^[-•·]\\s*", "")
+                    .strip();
+            if (!line.isBlank()) {
+                items.add(line);
+            }
+        }
+        return items;
+    }
+
+    @SafeVarargs
+    private static List<String> mergeDistinctItems(int limit, List<String>... groups) {
+        LinkedHashSet<String> merged = new LinkedHashSet<>();
+        for (List<String> group : groups) {
+            if (group == null) {
+                continue;
+            }
+            for (String item : group) {
+                String normalized = guardHandoutLatex(item, true).replaceAll("\\s+", " ").strip();
+                if (!normalized.isBlank()) {
+                    merged.add(normalized);
+                }
+                if (merged.size() >= limit) {
+                    return List.copyOf(merged);
+                }
+            }
+        }
+        return List.copyOf(merged);
+    }
+
+    private static String flattenDraftBlock(String content) {
+        return content == null ? "" : content.replaceAll("\\s+", " ").strip();
+    }
+
+    private static String contentOrFallback(String content, String fallbackLatex) {
+        if (content == null || content.isBlank()) {
+            return fallbackLatex == null ? "" : fallbackLatex;
+        }
+        return formatDraftContentAsLatex(content);
+    }
+
+    private static String latexEnumerateWithWorkspace(List<String> items, int workspaceEm) {
+        if (items == null || items.isEmpty()) {
+            return "\n";
+        }
+        int space = Math.max(5, Math.min(10, workspaceEm));
+        StringBuilder builder = new StringBuilder("\n\\begin{enumerate}\n");
+        for (String item : items) {
+            builder.append("\\item ").append(escapeLatex(item)).append("\\par\n")
+                    .append("\\vspace{").append(space).append("em}\n");
+        }
+        return builder.append("\\end{enumerate}\n").toString();
     }
 
     private static String formatDraftContentAsLatex(String content) {
