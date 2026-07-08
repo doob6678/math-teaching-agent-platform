@@ -235,6 +235,11 @@ def _summarize_alignment(cases: list[dict[str, Any]]) -> dict[str, Any]:
         "methods": dict(sorted(methods.items())),
         "usesBlockText": False,
         "storesStaticCaseLocators": False,
+        "notes": [
+            "same_block_id means the historical expected block id still exists in the current real backend state.",
+            "role_order is the strongest available non-text fallback when the historical block id no longer exists but the document id is unchanged.",
+            "role_order matches only within the same source document, the same block role, and the active blockOrder ordering returned by the real backend.",
+        ],
     }
 
 
