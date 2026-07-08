@@ -104,7 +104,7 @@ export function HandoutWorkspacePreviewPanel({
           </button>
           {task ? (
             <button type="button" className={`handout-preview-mode${version === "lecture" ? " active" : ""}`} onClick={() => onVersionChange("lecture")}>
-              横版讲解
+              16:10 讲解版
             </button>
           ) : null}
         </div>
@@ -235,10 +235,10 @@ function HandoutFeedbackReview({
   const teacherVersion = version === "teacher";
   const lectureVersion = version === "lecture";
   const selectedDraft = handoutDraftForVersion(task, version);
-  const hasAnswers = /答案|解析|评分点|teacherExplanation|参考/.test(selectedDraft ?? "");
+  const hasAnswers = /答案|解析|评分点|teacherExplanation|参考答案/.test(selectedDraft ?? "");
   const studentLeakWarning = version === "student" && hasAnswers;
   const reviewHint = lectureVersion
-    ? "核对横版讲解卡是否适合投屏，空白部分保持干净。"
+    ? "核对 16:10 讲解版是否适合投屏，空白部分保持干净。"
     : teacherVersion
       ? "核对教师版答案、来源和讲评主线。"
       : "核对学生版是否只保留题目、提示和作答空间。";
@@ -256,7 +256,7 @@ function HandoutFeedbackReview({
       <div className="feedback-quality-list">
         <ReviewQualityItem tone={pdfPreviewReady ? "good" : "warning"} label="真实 PDF" value={pdfPreviewReady ? "已加载" : "未预览"} />
         <ReviewQualityItem tone={latexPreviewReady ? "good" : "warning"} label="结构审查" value={latexPreviewReady ? "已加载" : "未打开"} />
-        <ReviewQualityItem tone={studentLeakWarning ? "warning" : "good"} label="版本隔离" value={studentLeakWarning ? "学生版疑似含答案" : "当前无明显泄露"} />
+        <ReviewQualityItem tone={studentLeakWarning ? "warning" : "good"} label="版本隔离" value={studentLeakWarning ? "学生版疑似含答案" : "当前无明显泄漏"} />
       </div>
 
       <form className="human-feedback-panel compact" onSubmit={onSubmitFeedback}>
@@ -327,7 +327,7 @@ function handoutDraftForVersion(task: TeachingTaskResponse, version: HandoutVers
 }
 
 function handoutVersionLabel(version: HandoutVersion) {
-  if (version === "lecture") return "横版讲解稿";
+  if (version === "lecture") return "16:10 讲解版";
   return version === "teacher" ? "教师版讲义" : "学生版讲义";
 }
 

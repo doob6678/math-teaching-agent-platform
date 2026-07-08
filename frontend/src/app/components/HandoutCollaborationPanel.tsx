@@ -83,7 +83,7 @@ export function HandoutCollaborationPanel({
           <div className="teaching-live-brand-icon handout-live-brand-icon"><BookOpen size={16} /></div>
           <div className="teaching-live-brand-copy">
             <strong>讲义协作</strong>
-            <span>先确定目标，再生成教师版、学生版和横版讲解稿。</span>
+            <span>先确定主题，再生成教师版、学生版和 16:10 讲解版。</span>
           </div>
         </div>
         <div className="teaching-live-toolbar handout-live-toolbar">
@@ -110,7 +110,12 @@ export function HandoutCollaborationPanel({
         </div>
         <label className="handout-brief-field full">
           <span>补充要求</span>
-          <textarea value={questionText} onChange={(event) => onQuestionTextChange(event.target.value)} placeholder="可选：指定课堂风格、难度、题型范围、是否只做学生留白版。" rows={3} />
+          <textarea
+            value={questionText}
+            onChange={(event) => onQuestionTextChange(event.target.value)}
+            placeholder="可选：指定课堂风格、难度、题型范围，或说明只做学生留白版。"
+            rows={3}
+          />
         </label>
         <div className="handout-brief-actions">
           <button className="teaching-send-btn handout-submit-btn" type="submit" disabled={loading || !learningGoal.trim()}>
@@ -191,7 +196,7 @@ export function HandoutCollaborationPanel({
 }
 
 function LoadingTaskCard({ selectedTemplateName }: { selectedTemplateName: string }) {
-  const steps = ["确认主题", "检索教材与题库", "调用模型生成草稿", "整理教师版、学生版和横版讲解稿", "准备预览与下载"];
+  const steps = ["确认主题", "检索教材与题库", "调用模型生成草稿", "整理教师版、学生版和讲解版", "准备预览与下载"];
   return (
     <section className="teaching-status-card pending handout-status-card">
       <div className="teaching-status-head">
@@ -268,7 +273,7 @@ function TaskConversationCards({
         <div className="teaching-response-head">
           <div>
             <strong>生成过程</strong>
-            <span className="teaching-response-mode">按真实后端阶段展示，不暴露提示词</span>
+            <span className="teaching-response-mode">按真实后端阶段展示，不暴露提示词和调试输出</span>
           </div>
         </div>
         <div className="handout-thread-feed">
@@ -354,7 +359,7 @@ function handoutDraftForVersion(task: TeachingTaskResponse, version: TeachingHan
 }
 
 function handoutVersionLabel(version: TeachingHandoutVersion) {
-  if (version === "lecture") return "横版讲解";
+  if (version === "lecture") return "16:10 讲解版";
   if (version === "student") return "学生版";
   return "教师版";
 }
@@ -526,7 +531,7 @@ function buildVisibleHistory(history: TeachingTaskResponse[], currentTaskId: str
   }).slice(0, 6).sort((a, b) => (a.taskId === currentTaskId ? -1 : b.taskId === currentTaskId ? 1 : 0));
 }
 
-// 这里必须过滤旧脏任务，否则历史区会再次把乱码、离题草稿和空讲义暴露给老师。
+// 历史区不能直接回显旧坏数据，否则会把乱码、空讲义和离题内容重新带回当前工作区。
 function isDisplayableHistoryTask(task: TeachingTaskResponse) {
   if (!task.taskId) return false;
   if ((task.status || "").toUpperCase() !== "COMPLETED") return false;
@@ -563,10 +568,10 @@ function containsProtocolLeak(value: string) {
 function looksCorrupted(value: string) {
   const normalized = value.replace(/\s+/g, "");
   if (!normalized) return false;
-  if (normalized.includes("???") || normalized.includes("�")) return true;
+  if (normalized.includes("???") || normalized.includes("？？？") || normalized.includes("锟")) return true;
   const questionCount = [...normalized].filter((char) => char === "?").length;
   if (questionCount >= 3 && questionCount * 2 >= normalized.length) return true;
-  return /ã|â|ä¸|å|æ|ç/i.test(normalized);
+  return /茫|芒|盲赂|氓|忙|莽|鐢|璁|妯|瀛|绋|锛/i.test(normalized);
 }
 
 function formatThreadTime(value: string) {
