@@ -1003,6 +1003,13 @@ public class TeachingHandoutPdfExportService {
 
     private static boolean isUnreadablePlaceholderLine(String line) {
         String text = safeText(line).replaceAll("\\s+", "");
+        if (text.contains("????") || text.contains("？？？？")) {
+            return true;
+        }
+        long replacementChars = text.codePoints().filter(ch -> ch == 0xFFFD).count();
+        if (replacementChars >= 2) {
+            return true;
+        }
         long questionMarks = text.chars().filter(ch -> ch == '?').count();
         return questionMarks >= 6 && questionMarks >= Math.max(6, text.length() / 2);
     }

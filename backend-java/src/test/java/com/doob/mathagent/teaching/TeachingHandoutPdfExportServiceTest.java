@@ -101,6 +101,22 @@ class TeachingHandoutPdfExportServiceTest {
     }
 
     @Test
+    void dropsUnreadablePlaceholderLinesButKeepsRealQuestions() {
+        String sanitized = TeachingHandoutPdfExportService.sanitizeLatexForExport("""
+                \\section{例题任务}
+                ???????? 这行是旧任务里的坏占位。
+                OCR 片段：�� 公式无法识别。
+                为什么先判断 $a$、$b$、$c$ 的关系？
+                \\section{练习}
+                若 $\\sin A=\\frac{1}{2}$，求角 $A$ 的可能取值。
+                """);
+
+        assertThat(sanitized)
+                .contains("\\section{例题任务}", "为什么先判断 $a$、$b$、$c$ 的关系？", "\\section{练习}", "$\\sin A=\\frac{1}{2}$")
+                .doesNotContain("????????", "��", "坏占位");
+    }
+
+    @Test
     void rendersReadableChineseHandoutInsteadOfRawLatexSource() throws Exception {
         TeachingTaskResponse task = new TeachingTaskResponse(
                 "task-chinese-pdf",
