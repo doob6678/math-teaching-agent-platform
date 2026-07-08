@@ -75,6 +75,16 @@ class ProtocolDiscoveryServiceTest {
                             .containsEntry("type", "string")
                             .containsKey("enum")
                             .containsKey("x-enum-descriptions");
+                    @SuppressWarnings("unchecked")
+                    List<String> descriptions = (List<String>) tool.inputSchema().properties()
+                            .get("library")
+                            .get("x-enum-descriptions");
+                    assertThat(descriptions).anySatisfy(description -> assertThat(description).contains("textbook"));
+                    assertThat(descriptions).anySatisfy(description -> assertThat(description).contains("teacher_resource"));
+                    assertThat(descriptions).anySatisfy(description -> assertThat(description).contains("feishu"));
+                    assertThat(descriptions).anySatisfy(description -> assertThat(description).contains("qq_bundle"));
+                    assertThat(descriptions).anySatisfy(description -> assertThat(description).contains("gaokao"));
+                    assertThat(descriptions).anySatisfy(description -> assertThat(description).contains("mock_exam"));
                 });
         assertThat(tools).filteredOn(tool -> tool.name().equals("search_teacher_resource_evidence"))
                 .singleElement()
@@ -86,6 +96,12 @@ class ProtocolDiscoveryServiceTest {
                     assertThat(tool.inputSchema().properties().get("libraries"))
                             .containsEntry("type", "array")
                             .containsKey("x-enum-descriptions");
+                    @SuppressWarnings("unchecked")
+                    List<String> descriptions = (List<String>) tool.inputSchema().properties()
+                            .get("libraries")
+                            .get("x-enum-descriptions");
+                    assertThat(descriptions).anySatisfy(description -> assertThat(description)
+                            .contains("Use only when the request does not clearly belong to a narrower library"));
                 });
         assertThat(tools).filteredOn(tool -> tool.name().equals("get_teaching_ai_trace"))
                 .singleElement()

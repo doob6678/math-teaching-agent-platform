@@ -585,14 +585,14 @@ public class ProtocolDiscoveryService {
 
     private static List<String> libraryEnumDescriptions() {
         List<String> descriptions = new ArrayList<>();
-        descriptions.add("textbook: public textbook corpus alias; same corpus as public_textbook.");
-        descriptions.add("public_textbook: public textbook pages and parsed textbook evidence.");
-        descriptions.add("teacher_resource: broad teacher-resource alias across visible private/shared corpora.");
-        descriptions.add("feishu: teacher method documents, boardwork logic, classroom tips, and templates from Feishu.");
-        descriptions.add("qq_bundle: QQ topic packages that may contain lesson notes, questions, answers, analyses, and commentary together.");
-        descriptions.add("gaokao: real gaokao papers and their parsed question or analysis blocks.");
-        descriptions.add("mock_exam: mock exam papers plus answer/commentary analysis blocks.");
-        descriptions.add("public_textbook_derivative: teacher-resource documents derived from public textbook material.");
+        descriptions.add("textbook: public textbook alias. Use when the request is clearly asking for standard textbook explanations, chapter content, or parsed textbook evidence.");
+        descriptions.add("public_textbook: same public textbook corpus as textbook. Prefer textbook unless a client needs the explicit backend corpus name.");
+        descriptions.add("teacher_resource: broad visible teacher-resource corpus. Use only when the request does not clearly belong to a narrower library such as feishu, qq_bundle, gaokao, or mock_exam.");
+        descriptions.add("feishu: teacher method docs, boardwork logic, classroom reminders, templates, and other Feishu-authored teaching materials.");
+        descriptions.add("qq_bundle: QQ topic packages that may mix topic notes, original questions, answers, analyses, and commentary in the same package.");
+        descriptions.add("gaokao: real gaokao papers and their parsed question, answer, or analysis blocks.");
+        descriptions.add("mock_exam: mock exam papers and their parsed question, answer, or commentary analysis blocks.");
+        descriptions.add("public_textbook_derivative: teacher-resource documents derived from public textbook material rather than the textbook corpus itself.");
         return descriptions;
     }
 
