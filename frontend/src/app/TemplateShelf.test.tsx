@@ -39,6 +39,8 @@ describe("TemplateShelf", () => {
         referenceTitle: "zhao_lixian_daoshu.pdf",
         referencePath: "C:/Users/doob/Desktop/private/zhao_lixian_daoshu.pdf",
         referencePreview: "题型识别、方法模板、典型例题、变式训练。",
+        blankSpaceEm: 9,
+        questionGapEm: 4,
       },
       {
         templateCode: "skill_teacher",
@@ -86,6 +88,8 @@ describe("TemplateShelf", () => {
     expect(html).toContain("高考压轴");
     expect(html).toContain("本机 PDF");
     expect(html).toContain("zhao_lixian_daoshu.pdf");
+    expect(html).toContain("留白 9em");
+    expect(html).toContain("题距 4em");
     expect(html).toContain("参考来源");
     expect(html).toContain("template-selected-preview");
     expect(html).toContain("template-preview-paper");

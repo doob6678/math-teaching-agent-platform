@@ -606,6 +606,8 @@ public class TeachingTaskController {
                 template.tags(),
                 template.referenceTitle(),
                 null,
-                template.referencePreview());
+                template.referencePreview(),
+                template.blankSpaceEm(),
+                template.questionGapEm());
     }
 }

@@ -435,6 +435,8 @@ public class TeachingAiDraftService {
         addTemplatePart(parts, "audience", summary.audience());
         addTemplatePart(parts, "category", summary.category());
         addTemplatePart(parts, "visualStyle", summary.visualStyle());
+        addTemplatePart(parts, "studentBlankSpaceEm", String.valueOf(template.blankSpaceEm()));
+        addTemplatePart(parts, "questionGapEm", String.valueOf(template.questionGapEm()));
         if (summary.difficultyBands() != null && !summary.difficultyBands().isEmpty()) {
             addTemplatePart(parts, "difficulty", String.join("/", summary.difficultyBands()));
         }

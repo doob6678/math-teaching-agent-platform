@@ -2844,6 +2844,8 @@ export function TemplateShelf({
                 <div className="template-chip-row">
                   <span>{audienceLabel(template.audience)}</span>
                   {(template.difficultyBands ?? []).slice(0, 3).map((item) => <span key={item}>{safeTemplateText(item, "难度")}</span>)}
+                  <span>留白 {template.blankSpaceEm ?? 6}em</span>
+                  <span>题距 {template.questionGapEm ?? 4}em</span>
                 </div>
                 {template.tags?.length ? (
                   <div className="template-tag-row">

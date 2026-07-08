@@ -17,6 +17,8 @@ import java.util.List;
  * @param referenceTitle optional local reference material title
  * @param referencePath optional local reference path kept for teacher/admin review
  * @param referencePreview optional short text extracted from the reference material
+ * @param blankSpaceEm default printable blank space in em units for student exercises
+ * @param questionGapEm default spacing in em units between continuous questions
  */
 public record TeachingHandoutTemplateResponse(
         String templateCode,
@@ -30,5 +32,7 @@ public record TeachingHandoutTemplateResponse(
         List<String> tags,
         String referenceTitle,
         String referencePath,
-        String referencePreview) {
+        String referencePreview,
+        Integer blankSpaceEm,
+        Integer questionGapEm) {
 }

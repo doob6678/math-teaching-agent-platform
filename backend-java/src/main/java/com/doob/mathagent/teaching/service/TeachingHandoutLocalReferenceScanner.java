@@ -286,9 +286,28 @@ final class TeachingHandoutLocalReferenceScanner {
                         tags,
                         fileName,
                         path.toAbsolutePath().normalize().toString(),
-                        preview),
+                        preview,
+                        inferredBlankSpaceEm(audience, title),
+                        inferredQuestionGapEm(audience, title)),
                 prompt,
                 "student".equals(audience) || title.contains("学霸笔记"));
+    }
+
+    private static int inferredBlankSpaceEm(String audience, String title) {
+        if ("student".equals(audience) || title.contains("学霸笔记") || title.contains("学生")) {
+            return 8;
+        }
+        if (title.contains("高考") || title.contains("压轴")) {
+            return 7;
+        }
+        return 6;
+    }
+
+    private static int inferredQuestionGapEm(String audience, String title) {
+        if (title.contains("压轴")) {
+            return 5;
+        }
+        return "student".equals(audience) ? 4 : 3;
     }
 
     private String extractPreview(Path path) {

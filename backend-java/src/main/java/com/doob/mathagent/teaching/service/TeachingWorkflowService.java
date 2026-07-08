@@ -1340,6 +1340,7 @@ public class TeachingWorkflowService {
                 studentMethodCards(request, evidence)));
         String exampleSection = contentOrFallback(draftExample, studentExampleSection(request, evidence, hint));
         List<String> practiceItems = studentPracticeTasks(request, evidence, aiDraft, draftPractice);
+        int blankSpaceEm = template.blankSpaceEm();
         if (template.studentLectureStyle()) {
             String questionText = safeQuestionText(request).isBlank()
                     ? "根据本节主题完成下面的知识梳理与分层练习。"
@@ -1374,8 +1375,8 @@ public class TeachingWorkflowService {
                     methodSection,
                     exampleSection,
                     escapeLatex(questionText),
-                    latexEnumerateWithWorkspace(practiceItems, 6),
-                    studentQuestionBankSection(request, evidence));
+                    latexEnumerateWithWorkspace(practiceItems, blankSpaceEm),
+                    studentQuestionBankSection(request, evidence, blankSpaceEm));
         }
         String questionText = safeQuestionText(request).isBlank()
                 ? "根据本讲主题完成例题、变式和订正。"
@@ -1410,8 +1411,8 @@ public class TeachingWorkflowService {
                 methodSection,
                 exampleSection,
                 escapeLatex(questionText),
-                latexEnumerateWithWorkspace(practiceItems, 6),
-                studentQuestionBankSection(request, evidence));
+                latexEnumerateWithWorkspace(practiceItems, blankSpaceEm),
+                studentQuestionBankSection(request, evidence, blankSpaceEm));
     }
 
     /**
@@ -1643,11 +1644,12 @@ public class TeachingWorkflowService {
     /**
      * Builds student-safe question bank practice without answer or scoring leakage.
      */
-    private static String studentQuestionBankSection(TeachingTaskRequest request, List<TeachingEvidence> evidence) {
+    private static String studentQuestionBankSection(TeachingTaskRequest request, List<TeachingEvidence> evidence, int blankSpaceEm) {
         List<TeachingEvidence> questions = questionBankEvidence(evidence);
         if (questions.isEmpty()) {
             return "";
         }
+        int space = boundedEm(blankSpaceEm, 5, 12, 6);
         List<String> tasks = new ArrayList<>();
         for (TeachingEvidence item : questions) {
             tasks.add(questionDifficulty(item) + "：" + questionTextOnly(item.snippet()));
@@ -1656,7 +1658,7 @@ public class TeachingWorkflowService {
         for (String item : tasks) {
             builder.append("\\item ")
                     .append(escapeLatex(item))
-                    .append("\n\\vspace{6em}\n");
+                    .append("\n\\vspace{").append(space).append("em}\n");
         }
         builder.append("\\end{enumerate}\n");
         return builder.toString();
@@ -1912,13 +1914,20 @@ public class TeachingWorkflowService {
         if (items == null || items.isEmpty()) {
             return "\n";
         }
-        int space = Math.max(5, Math.min(10, workspaceEm));
+        int space = boundedEm(workspaceEm, 5, 12, 6);
         StringBuilder builder = new StringBuilder("\n\\begin{enumerate}\n");
         for (String item : items) {
             builder.append("\\item ").append(escapeLatex(item)).append("\\par\n")
                     .append("\\vspace{").append(space).append("em}\n");
         }
         return builder.append("\\end{enumerate}\n").toString();
+    }
+
+    private static int boundedEm(int value, int min, int max, int fallback) {
+        if (value <= 0) {
+            return fallback;
+        }
+        return Math.max(min, Math.min(max, value));
     }
 
     private static String formatDraftContentAsLatex(String content) {

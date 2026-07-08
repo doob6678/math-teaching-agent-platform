@@ -241,6 +241,8 @@ export interface TeachingHandoutTemplateResponse {
   referenceTitle?: string | null;
   referencePath?: string | null;
   referencePreview?: string | null;
+  blankSpaceEm?: number | null;
+  questionGapEm?: number | null;
 }
 
 export interface TeachingHandoutPdfResponse {

@@ -45,7 +45,9 @@ public class TeachingHandoutTemplateService {
                         List.of("知识梳理", "课堂讲解", "双版本"),
                         null,
                         null,
-                        null),
+                        null,
+                        6,
+                        4),
                 """
                 生成一份可直接打印的标准数学讲义。
                 必须包含：学习目标、具体知识点梳理、方法步骤、例题拆解、分层练习、易错提醒。
@@ -69,7 +71,9 @@ public class TeachingHandoutTemplateService {
                         List.of("学生版", "知识点", "编号练习"),
                         null,
                         null,
-                        null),
+                        null,
+                        8,
+                        4),
                 """
                 输出必须像学生打印讲义，不像问答。
                 标题使用“第X讲 <主题>”或“专题 <主题>”。
@@ -94,7 +98,9 @@ public class TeachingHandoutTemplateService {
                         List.of("反比例函数", "学生版", "真实参考", "编号练习"),
                         "反比例函数（学生版）7658488570078855330.pdf",
                         "C:/Users/doob/Documents/xwechat_files/wxid_4o23y4ktrzsx22_7541/msg/file/2026-07/反比例函数（学生版）7658488570078855330.pdf",
-                        "本机真实学生版讲义，适合作为学生讲义留白、编号练习和标题层级的参考。"),
+                        "本机真实学生版讲义，适合作为学生讲义留白、编号练习和标题层级的参考。",
+                        9,
+                        4),
                 """
                 参考本机真实《反比例函数（学生版）》讲义风格，生成学生可直接打印的课堂讲义。
                 先写具体定义、表达式、图像性质和题型提示，再写连续编号练习。
@@ -116,7 +122,9 @@ public class TeachingHandoutTemplateService {
                         List.of("教师版", "答案", "板书"),
                         null,
                         null,
-                        null),
+                        null,
+                        6,
+                        4),
                 """
                 生成教师讲评用讲义。
                 必须包含：知识定位、板书流程、例题完整解析、关键追问、学生易错点、变式训练答案。
@@ -138,7 +146,9 @@ public class TeachingHandoutTemplateService {
                         List.of("高考", "题型", "分层训练"),
                         null,
                         null,
-                        null),
+                        null,
+                        7,
+                        3),
                 """
                 生成高考专题训练讲义。
                 必须按“题型识别 -> 方法模板 -> 典型例题 -> 变式训练 -> 难度升级”组织。
@@ -160,7 +170,9 @@ public class TeachingHandoutTemplateService {
                         List.of("空间向量", "立体几何", "本机参考"),
                         "参考讲义数学空间向量.pdf",
                         "C:/Users/doob/Desktop/code/dev/math_agent_rag/文档/项目测试数据位置/参考讲义数学空间向量.pdf",
-                        "本机项目测试资料中的空间向量专题讲义。"),
+                        "本机项目测试资料中的空间向量专题讲义。",
+                        7,
+                        4),
                 """
                 参考本机真实空间向量专题讲义风格。
                 讲义要突出：建系、设点、法向量、线面角、二面角、距离计算。
@@ -319,7 +331,9 @@ public class TeachingHandoutTemplateService {
                         safeList(item.tags(), List.of("动态配置")),
                         emptyToNull(item.referenceTitle()),
                         emptyToNull(item.referencePath()),
-                        emptyToNull(item.referencePreview())),
+                        emptyToNull(item.referencePreview()),
+                        item.blankSpaceEm(),
+                        item.questionGapEm()),
                 item.promptInstructions().strip(),
                 item.studentLectureStyle()));
     }
@@ -375,6 +389,8 @@ public class TeachingHandoutTemplateService {
             String referencePath,
             String referencePreview,
             String promptInstructions,
+            Integer blankSpaceEm,
+            Integer questionGapEm,
             boolean studentLectureStyle) {
     }
 }

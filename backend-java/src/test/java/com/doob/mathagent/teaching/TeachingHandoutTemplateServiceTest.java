@@ -40,6 +40,8 @@ class TeachingHandoutTemplateServiceTest {
                       "referenceTitle": "测试引用",
                       "referencePath": "C:/Users/doob/Desktop/private/teacher-template.pdf",
                       "referencePreview": "测试摘要",
+                      "blankSpaceEm": 11,
+                      "questionGapEm": 5,
                       "promptInstructions": "生成正式讲义，教师版给答案，学生版留白。"
                     }
                   ]
@@ -56,10 +58,14 @@ class TeachingHandoutTemplateServiceTest {
                     assertThat(template.displayName()).isEqualTo("单元测试 Skill");
                     assertThat(template.tags()).contains("测试", "配置");
                     assertThat(template.referencePath()).isEqualTo("C:/Users/doob/Desktop/private/teacher-template.pdf");
+                    assertThat(template.blankSpaceEm()).isEqualTo(11);
+                    assertThat(template.questionGapEm()).isEqualTo(5);
                 });
         TeachingHandoutTemplateProfile resolved = service.resolve("unit_test_skill_v1");
         assertThat(resolved.summary().displayName()).isEqualTo("单元测试 Skill");
         assertThat(resolved.summary().referencePath()).isEqualTo("C:/Users/doob/Desktop/private/teacher-template.pdf");
+        assertThat(resolved.blankSpaceEm()).isEqualTo(11);
+        assertThat(resolved.questionGapEm()).isEqualTo(5);
         assertThat(resolved.promptInstructions()).contains("教师版给答案", "学生版留白");
     }
 

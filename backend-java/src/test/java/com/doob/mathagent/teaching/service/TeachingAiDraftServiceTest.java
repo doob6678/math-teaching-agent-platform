@@ -191,7 +191,9 @@ class TeachingAiDraftServiceTest {
                         List.of("本机PDF", "反比例函数", "学生版"),
                         "反比例函数（学生版）7658488570078855330.pdf",
                         "C:/Users/doob/Desktop/private/反比例函数（学生版）7658488570078855330.pdf",
-                        "首页结构为：教材册别页眉、居中大标题、知识点、题型和连续编号练习，底部页码。"),
+                        "首页结构为：教材册别页眉、居中大标题、知识点、题型和连续编号练习，底部页码。",
+                        9,
+                        4),
                 "学生版按连续题号组织，公式必须用 $y=\\frac{k}{x}$。正文不要写页眉、页脚、颜色、PDF规则、AI、token、debug、JSON。",
                 true);
 
@@ -203,6 +205,7 @@ class TeachingAiDraftServiceTest {
         assertThat(contextLine)
                 .contains("local_inverse_student_sample_v1", "skill_config", "student", "基础/提高",
                         "本机PDF/反比例函数/学生版", "反比例函数（学生版）7658488570078855330.pdf",
+                        "studentBlankSpaceEm=9", "questionGapEm=4",
                         "首页结构为：教材册别")
                 .doesNotContain("C:/Users", "private", "页眉", "页脚", "颜色", "PDF规则", "token", "JSON");
         assertThat(instructionLine)
