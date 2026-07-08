@@ -72,6 +72,16 @@ class FormulaMarkupSanitizerTest {
     }
 
     @Test
+    void normalizesShortNumericSlashFractionsUsedInHandouts() {
+        String sanitized = FormulaMarkupSanitizer.sanitizeFeishuMath(
+                "若 sinA=1/2，则可继续判断；有理式 (x+1)/(x-1) 需要先看定义域，标准方程仍是 x²/a²-y²/b²=1。");
+
+        assertThat(sanitized)
+                .contains("$sinA=\\frac{1}{2}$", "$\\frac{x+1}{x-1}$", "$x^2/a^2-y^2/b^2=1$")
+                .doesNotContain("sinA=1/2", "(x+1)/(x-1)");
+    }
+
+    @Test
     void restoresLegacyEscapedMathTextBeforeWrappingBareFormula() {
         String sanitized = FormulaMarkupSanitizer.sanitizeFeishuMath(
                 "参数关系 c\\textasciicircum{}2=a\\textasciicircum{}2+b\\textasciicircum{}2，解析式 y=\\textbackslash{}frac{k}{x}。");

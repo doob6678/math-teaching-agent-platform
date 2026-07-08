@@ -27,6 +27,8 @@ public final class FormulaMarkupSanitizer {
             "(?<![\\^_])(\\([^)]+\\)|\\{[^}]+}|(?:[A-Za-z][A-Za-z0-9]*|\\d+))\\s*/\\s*(\\([^)]+\\)|\\{[^}]+}|[A-Za-z][A-Za-z0-9]*)");
     private static final Pattern SIMPLE_FRACTION_RIGHT_HEAVY = Pattern.compile(
             "(?<![\\^_])(\\([^)]+\\)|\\{[^}]+}|[A-Za-z][A-Za-z0-9]*)\\s*/\\s*(\\([^)]+\\)|\\{[^}]+}|(?:[A-Za-z][A-Za-z0-9]*|\\d+))");
+    private static final Pattern SHORT_NUMERIC_FRACTION = Pattern.compile(
+            "(?<![A-Za-z0-9/])([1-9]\\d?)\\s*/\\s*([1-9]\\d?)(?![A-Za-z0-9/])");
     private static final Pattern FRACTION_POWER = Pattern.compile("\\\\frac\\{([^{}]+)}\\{([^{}]+)}\\^([A-Za-z0-9]+)");
     private static final Pattern ALL_UPPERCASE_LATIN = Pattern.compile("[A-Z]{2,}");
 
@@ -192,12 +194,25 @@ public final class FormulaMarkupSanitizer {
     private static String normalizeSlashFractions(String value) {
         String normalized = replaceSimpleFractions(value, SIMPLE_FRACTION_LEFT_HEAVY);
         normalized = replaceSimpleFractions(normalized, SIMPLE_FRACTION_RIGHT_HEAVY);
+        normalized = replaceShortNumericFractions(normalized);
         Matcher matcher = FRACTION_POWER.matcher(normalized);
         StringBuffer buffer = new StringBuffer();
         while (matcher.find()) {
             matcher.appendReplacement(
                     buffer,
                     Matcher.quoteReplacement("\\left(\\frac{" + matcher.group(1) + "}{" + matcher.group(2) + "}\\right)^" + matcher.group(3)));
+        }
+        matcher.appendTail(buffer);
+        return buffer.toString();
+    }
+
+    private static String replaceShortNumericFractions(String value) {
+        Matcher matcher = SHORT_NUMERIC_FRACTION.matcher(value);
+        StringBuffer buffer = new StringBuffer();
+        while (matcher.find()) {
+            String left = matcher.group(1);
+            String right = matcher.group(2);
+            matcher.appendReplacement(buffer, Matcher.quoteReplacement("\\frac{" + left + "}{" + right + "}"));
         }
         matcher.appendTail(buffer);
         return buffer.toString();
