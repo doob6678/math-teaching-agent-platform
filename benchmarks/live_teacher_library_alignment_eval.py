@@ -20,101 +20,13 @@ DEFAULT_OUTPUT_ROOT = Path("output") / "benchmarks"
 STRATEGY_LEGACY = "legacy_block_hybrid"
 STRATEGY_TWO_STAGE = "two_stage_doc_block"
 
-CASE_LOCATORS: dict[str, dict[str, str]] = {
-    "textbook-interval-endpoint": {
-        "title": "runtime-public-textbook-derivative",
-        "library": "textbook",
-        "scope": "PUBLIC_TEXTBOOK",
-        "role": "reference",
-        "sourcePathContains": "教材-导数参数讨论",
-        "sectionContains": "闭区间单调性",
-    },
-    "textbook-sign-table": {
-        "title": "runtime-public-textbook-derivative",
-        "library": "textbook",
-        "scope": "PUBLIC_TEXTBOOK",
-        "role": "reference",
-        "sourcePathContains": "教材-导数参数讨论",
-        "sectionContains": "参数分类入口",
-    },
-    "qq-analysis-angle": {
-        "title": "runtime-qq-bundle-vector",
-        "library": "qq_bundle",
-        "scope": "MATH_VIP",
-        "role": "analysis",
-        "sourcePathContains": "点评",
-        "sectionContains": "",
-    },
-    "qq-solution-route": {
-        "title": "runtime-qq-bundle-vector",
-        "library": "qq_bundle",
-        "scope": "MATH_VIP",
-        "role": "analysis",
-        "sourcePathContains": "答案解析",
-        "sectionContains": "点积转角",
-    },
-    "feishu-boardwork-columns": {
-        "title": "runtime-feishu-method-probability",
-        "library": "feishu",
-        "scope": "TEACHER_PRIVATE",
-        "role": "boardwork",
-        "sourcePathContains": "板书逻辑",
-        "sectionContains": "三列板书",
-    },
-    "feishu-method-before-formula": {
-        "title": "runtime-feishu-method-probability",
-        "library": "feishu",
-        "scope": "TEACHER_PRIVATE",
-        "role": "method",
-        "sourcePathContains": "讲法模板",
-        "sectionContains": "先分模型",
-    },
-    "feishu-tip-without-replacement": {
-        "title": "runtime-feishu-method-probability",
-        "library": "feishu",
-        "scope": "TEACHER_PRIVATE",
-        "role": "tip",
-        "sourcePathContains": "课堂提示",
-        "sectionContains": "易错提醒",
-    },
-    "gaokao-conic-setup": {
-        "title": "runtime-gaokao-conic",
-        "library": "gaokao",
-        "scope": "MATH_VIP",
-        "role": "analysis",
-        "sourcePathContains": "解析",
-        "sectionContains": "变量怎么设",
-    },
-    "gaokao-question": {
-        "title": "runtime-gaokao-conic",
-        "library": "gaokao",
-        "scope": "MATH_VIP",
-        "role": "question",
-        "sourcePathContains": "高考真题",
-        "sectionContains": "椭圆切线题",
-    },
-    "mock-sequence-answer": {
-        "title": "runtime-mock-sequence",
-        "library": "mock_exam",
-        "scope": "TEACHER_PRIVATE",
-        "role": "analysis",
-        "sourcePathContains": "答案",
-        "sectionContains": "先转化再回代",
-    },
-    "mock-sequence-commentary": {
-        "title": "runtime-mock-sequence",
-        "library": "mock_exam",
-        "scope": "TEACHER_PRIVATE",
-        "role": "analysis",
-        "sourcePathContains": "讲评",
-        "sectionContains": "易错点",
-    },
-}
-
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Re-score the live teacher-resource retrieval cases with library-targeted calls and refreshed block ids."
+        description=(
+            "Re-score existing live teacher-resource retrieval rows with library-targeted calls "
+            "and current backend block ids."
+        )
     )
     parser.add_argument("--config", default=".tmp/grounded-compare-6.json")
     parser.add_argument("--reference-run", default=str(DEFAULT_REFERENCE_RUN))
@@ -131,13 +43,7 @@ def main() -> None:
     client.login(config.get("adminUsername", "admin"), config.get("adminPassword", "admin-123456"))
 
     reference_cases = _load_reference_queries(reference_run / "query_rows.jsonl")
-    active_documents = client.get("/api/teacher/resources").body
-    documents_by_title = {
-        str(document.get("title") or ""): document
-        for document in (active_documents if isinstance(active_documents, list) else [])
-        if isinstance(document, dict)
-    }
-    cases = _resolve_cases(client, reference_cases, documents_by_title)
+    cases = _resolve_cases(client, reference_cases)
 
     rows: list[dict[str, Any]] = []
     for mode in (
@@ -174,6 +80,7 @@ def main() -> None:
                 "expected_scope": case["expected_scope"],
                 "expected_library": case["expected_library"],
                 "library_param": case["expected_library"] if mode["library"] else "",
+                "alignment_method": case["alignment_method"],
                 "document_hit_ranks": _rank_flags(document_rank),
                 "block_hit_ranks": _rank_flags(block_rank),
                 "top_hit": {
@@ -206,6 +113,7 @@ def main() -> None:
             "modeCount": 3,
             "runDir": str(output_dir.resolve()),
         },
+        "alignment": _summarize_alignment(cases),
         "teacherDirectSearch": _summarize_rows(rows),
     }
 
@@ -229,57 +137,105 @@ def _load_reference_queries(path: Path) -> list[dict[str, Any]]:
         case_id = str(row.get("case_id") or "").strip()
         if not case_id or case_id in cases_by_id:
             continue
-        locator = CASE_LOCATORS.get(case_id)
-        if locator is None:
+        expected_document_id = str(row.get("expected_document_id") or "").strip()
+        expected_role = str(row.get("expected_role") or "").strip()
+        expected_scope = str(row.get("expected_scope") or "").strip()
+        expected_library = str(row.get("expected_library") or "").strip()
+        query = str(row.get("query") or "").strip()
+        if not all((expected_document_id, expected_role, expected_scope, expected_library, query)):
             continue
         cases_by_id[case_id] = {
             "case_id": case_id,
-            "query": str(row.get("query") or ""),
-            "expected_scope": locator["scope"],
-            "expected_role": locator["role"],
-            "expected_library": locator["library"],
-            "document_title": locator["title"],
-            "sourcePathContains": locator["sourcePathContains"],
-            "sectionContains": locator["sectionContains"],
+            "query": query,
+            "reference_expected_document_id": expected_document_id,
+            "reference_expected_block_id": str(row.get("expected_block_id") or "").strip(),
+            "expected_scope": expected_scope,
+            "expected_role": expected_role,
+            "expected_library": expected_library,
         }
+    if not cases_by_id:
+        raise RuntimeError(f"No reusable query rows found in {path}")
     return list(cases_by_id.values())
 
 
-def _resolve_cases(
-    client: MathAgentClient,
-    reference_cases: list[dict[str, Any]],
-    documents_by_title: dict[str, dict[str, Any]],
-) -> list[dict[str, Any]]:
-    resolved = []
+def _resolve_cases(client: MathAgentClient, reference_cases: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    active_documents = client.get("/api/teacher/resources").body
+    active_document_ids = {
+        str(document.get("documentId") or document.get("id") or "")
+        for document in (active_documents if isinstance(active_documents, list) else [])
+        if isinstance(document, dict)
+    }
+    cases_by_document_role: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for case in reference_cases:
-        document = documents_by_title.get(case["document_title"])
-        if document is None:
-            raise RuntimeError(f"Active document not found for case {case['case_id']}: {case['document_title']}")
-        document_id = str(document.get("documentId") or document.get("id") or "")
-        if not document_id:
-            raise RuntimeError(f"Missing document id for case {case['case_id']}")
-        blocks_response = client.get(f"/api/teacher/resources/{document_id}/blocks")
-        blocks = blocks_response.body if isinstance(blocks_response.body, list) else []
-        matched_block = None
-        for block in blocks:
-            if not isinstance(block, dict):
-                continue
-            if str(block.get("blockRole") or "") != case["expected_role"]:
-                continue
-            if case["sourcePathContains"] and case["sourcePathContains"] not in str(block.get("sourcePath") or ""):
-                continue
-            if case["sectionContains"] and case["sectionContains"] not in str(block.get("section") or ""):
-                continue
-            matched_block = block
-            break
-        if matched_block is None:
-            raise RuntimeError(f"Could not align current block id for case {case['case_id']}")
-        resolved.append({
-            **case,
-            "expected_document_id": document_id,
-            "expected_block_id": str(matched_block.get("blockId") or matched_block.get("id") or ""),
-        })
-    return resolved
+        document_id = case["reference_expected_document_id"]
+        if document_id not in active_document_ids:
+            raise RuntimeError(
+                f"Reference document is no longer active for case {case['case_id']}: {document_id}. "
+                "Re-run ingestion first or use a newer reference run."
+            )
+        cases_by_document_role[(document_id, case["expected_role"])].append(case)
+
+    reference_order = {case["case_id"]: index for index, case in enumerate(reference_cases)}
+    resolved: list[dict[str, Any]] = []
+    document_block_cache: dict[str, list[dict[str, Any]]] = {}
+    for (document_id, expected_role), group in cases_by_document_role.items():
+        document_blocks = document_block_cache.setdefault(document_id, _load_document_blocks(client, document_id))
+        role_blocks = sorted(
+            [block for block in document_blocks if str(block.get("blockRole") or "") == expected_role],
+            key=_block_order,
+        )
+        if len(role_blocks) < len(group):
+            raise RuntimeError(
+                f"Not enough active {expected_role} blocks in document {document_id}: "
+                f"need {len(group)}, found {len(role_blocks)}"
+            )
+        for ordinal, case in enumerate(group):
+            matched_block = _match_reference_block(case, role_blocks, ordinal)
+            expected_block_id = str(matched_block.get("blockId") or matched_block.get("id") or "")
+            resolved.append({
+                **case,
+                "expected_document_id": document_id,
+                "expected_block_id": expected_block_id,
+                "alignment_method": "same_block_id"
+                if expected_block_id == case["reference_expected_block_id"]
+                else "role_order",
+            })
+    return sorted(resolved, key=lambda case: reference_order[case["case_id"]])
+
+
+def _load_document_blocks(client: MathAgentClient, document_id: str) -> list[dict[str, Any]]:
+    blocks_response = client.get(f"/api/teacher/resources/{document_id}/blocks")
+    blocks = blocks_response.body if isinstance(blocks_response.body, list) else []
+    return [block for block in blocks if isinstance(block, dict)]
+
+
+def _match_reference_block(case: dict[str, Any], role_blocks: list[dict[str, Any]], ordinal: int) -> dict[str, Any]:
+    reference_block_id = case["reference_expected_block_id"]
+    for block in role_blocks:
+        block_id = str(block.get("blockId") or block.get("id") or "")
+        if block_id == reference_block_id:
+            return block
+    return role_blocks[ordinal]
+
+
+def _block_order(block: dict[str, Any]) -> tuple[int, str]:
+    try:
+        order = int(block.get("blockOrder"))
+    except (TypeError, ValueError):
+        order = 1_000_000
+    return order, str(block.get("blockId") or block.get("id") or "")
+
+
+def _summarize_alignment(cases: list[dict[str, Any]]) -> dict[str, Any]:
+    methods: dict[str, int] = defaultdict(int)
+    for case in cases:
+        methods[str(case["alignment_method"])] += 1
+    return {
+        "caseCount": len(cases),
+        "methods": dict(sorted(methods.items())),
+        "usesBlockText": False,
+        "storesStaticCaseLocators": False,
+    }
 
 
 def _summarize_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:

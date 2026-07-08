@@ -71,6 +71,10 @@ class ProtocolDiscoveryServiceTest {
                     assertThat(tool.requiredRoles()).containsExactly("teacher", "admin");
                     assertThat(tool.inputSchema().required()).contains("query");
                     assertThat(tool.inputSchema().properties()).containsKeys("library", "libraries");
+                    assertThat(tool.inputSchema().properties().get("library"))
+                            .containsEntry("type", "string")
+                            .containsKey("enum")
+                            .containsKey("x-enum-descriptions");
                 });
         assertThat(tools).filteredOn(tool -> tool.name().equals("search_teacher_resource_evidence"))
                 .singleElement()
@@ -79,6 +83,9 @@ class ProtocolDiscoveryServiceTest {
                     assertThat(tool.requiredRoles()).containsExactly("teacher", "admin");
                     assertThat(tool.requiredScope()).isEqualTo("teacher-resource:read");
                     assertThat(tool.inputSchema().properties()).containsKeys("library", "libraries", "sourceTypes");
+                    assertThat(tool.inputSchema().properties().get("libraries"))
+                            .containsEntry("type", "array")
+                            .containsKey("x-enum-descriptions");
                 });
         assertThat(tools).filteredOn(tool -> tool.name().equals("get_teaching_ai_trace"))
                 .singleElement()

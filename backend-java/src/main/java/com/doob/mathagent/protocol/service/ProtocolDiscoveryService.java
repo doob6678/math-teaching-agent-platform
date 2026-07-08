@@ -10,6 +10,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -24,6 +25,15 @@ public class ProtocolDiscoveryService {
     private static final List<String> TEACHING_ROLES = List.of("student", "teacher", "admin");
     private static final List<String> TEACHER_ROLES = List.of("teacher", "admin");
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final List<String> LIBRARY_ENUMS = List.of(
+            "textbook",
+            "public_textbook",
+            "teacher_resource",
+            "feishu",
+            "qq_bundle",
+            "gaokao",
+            "mock_exam",
+            "public_textbook_derivative");
 
     /**
      * Creates the protocol discovery service without forcing the MCP resolver graph to initialize.
@@ -64,8 +74,12 @@ public class ProtocolDiscoveryService {
                                 fields(
                                         field("query", "string", "Search text submitted by the agent."),
                                         field("limit", "integer", "Maximum merged evidence snippets to return."),
-                                        field("library", "string", "Optional single logical library selector. Prefer this when the request clearly targets one corpus such as textbook, feishu, qq_bundle, gaokao, or mock_exam."),
-                                        fieldArray("libraries", "Optional logical library selectors such as textbook, teacher_resource, feishu, qq_bundle, gaokao, or mock_exam."),
+                                        libraryField(
+                                                "library",
+                                                "Optional single logical library selector. Prefer this when the request clearly targets one corpus."),
+                                        libraryArrayField(
+                                                "libraries",
+                                                "Optional logical library selectors. Use one selector per corpus you want the backend to search."),
                                         fieldArray("permissionScopes", "Optional teacher-resource permission scopes such as TEACHER_PRIVATE or MATH_VIP."),
                                         fieldArray("documentIds", "Optional teacher-resource document ids to search."),
                                         fieldArray("sourceTypes", "Optional teacher-resource source types such as feishu, qq_bundle, gaokao, or mock_exam."),
@@ -102,8 +116,12 @@ public class ProtocolDiscoveryService {
                                 fields(
                                         field("query", "string", "Search text submitted by the agent."),
                                         field("limit", "integer", "Maximum evidence snippets to return."),
-                                        field("library", "string", "Optional single logical library selector. Prefer this over implementation-specific sourceType names when targeting one corpus."),
-                                        fieldArray("libraries", "Optional logical library selectors such as feishu, qq_bundle, gaokao, mock_exam, or public_textbook_derivative."),
+                                        libraryField(
+                                                "library",
+                                                "Optional single logical library selector. Prefer this over implementation-specific sourceType names when targeting one corpus."),
+                                        libraryArrayField(
+                                                "libraries",
+                                                "Optional logical library selectors. Use these when one request should search multiple named corpora."),
                                         fieldArray("permissionScopes", "Optional teacher-resource permission scopes such as TEACHER_PRIVATE or MATH_VIP."),
                                         fieldArray("documentIds", "Optional teacher-resource document ids to search."),
                                         fieldArray("sourceTypes", "Optional teacher-resource source types such as feishu, qq_bundle, gaokao, or mock_exam."),
@@ -537,11 +555,45 @@ public class ProtocolDiscoveryService {
         return Map.entry(name, Map.of("type", type, "description", description));
     }
 
+    private static Map.Entry<String, Map<String, Object>> libraryField(String name, String description) {
+        Map<String, Object> definition = new LinkedHashMap<>();
+        definition.put("type", "string");
+        definition.put("description", description);
+        definition.put("enum", LIBRARY_ENUMS);
+        definition.put("x-enum-descriptions", libraryEnumDescriptions());
+        return Map.entry(name, definition);
+    }
+
+    private static Map.Entry<String, Map<String, Object>> libraryArrayField(String name, String description) {
+        Map<String, Object> item = new LinkedHashMap<>();
+        item.put("type", "string");
+        item.put("enum", LIBRARY_ENUMS);
+        Map<String, Object> definition = new LinkedHashMap<>();
+        definition.put("type", "array");
+        definition.put("description", description);
+        definition.put("items", item);
+        definition.put("x-enum-descriptions", libraryEnumDescriptions());
+        return Map.entry(name, definition);
+    }
+
     private static Map.Entry<String, Map<String, Object>> fieldArray(String name, String description) {
         return Map.entry(name, Map.of(
                 "type", "array",
                 "description", description,
                 "items", Map.of("type", "string")));
+    }
+
+    private static List<String> libraryEnumDescriptions() {
+        List<String> descriptions = new ArrayList<>();
+        descriptions.add("textbook: public textbook corpus alias; same corpus as public_textbook.");
+        descriptions.add("public_textbook: public textbook pages and parsed textbook evidence.");
+        descriptions.add("teacher_resource: broad teacher-resource alias across visible private/shared corpora.");
+        descriptions.add("feishu: teacher method documents, boardwork logic, classroom tips, and templates from Feishu.");
+        descriptions.add("qq_bundle: QQ topic packages that may contain lesson notes, questions, answers, analyses, and commentary together.");
+        descriptions.add("gaokao: real gaokao papers and their parsed question or analysis blocks.");
+        descriptions.add("mock_exam: mock exam papers plus answer/commentary analysis blocks.");
+        descriptions.add("public_textbook_derivative: teacher-resource documents derived from public textbook material.");
+        return descriptions;
     }
 
     private static McpPromptDescriptor.Argument promptArgument(String name, String title, String description, boolean required) {
