@@ -591,7 +591,8 @@ public class VectorIndexService {
                 embeddingStatus,
                 indexStatus,
                 document.feishuExportFormat(),
-                document.previewFiles());
+                document.previewFiles(),
+                document.parseMode());
     }
 
     private static String text(String value) {

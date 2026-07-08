@@ -296,6 +296,7 @@ export function App() {
   const [resourceSourceType, setResourceSourceType] = useState("feishu");
   const [resourceScope, setResourceScope] = useState("TEACHER_PRIVATE");
   const [feishuExportFormat, setFeishuExportFormat] = useState<"md" | "docx" | "pdf">("md");
+  const [resourceParseMode, setResourceParseMode] = useState<"TEXT" | "AI">("TEXT");
   const [knowledgePointName, setKnowledgePointName] = useState("");
   const [knowledgeChapterPath, setKnowledgeChapterPath] = useState("");
   const [questionTitle, setQuestionTitle] = useState("");
@@ -1000,6 +1001,7 @@ export function App() {
         localPath: resourceSourceType === "local_path" ? resourceLocation.trim() : undefined,
         permissionScope: resourceScope,
         feishuExportFormat: resourceSourceType === "feishu" ? feishuExportFormat : undefined,
+        parseMode: resourceParseMode,
       })
       .then((resource) => {
         setTeacherResources((current) => [resource, ...current]);
@@ -2342,6 +2344,7 @@ export function App() {
                 sourceType={resourceSourceType}
                 scope={resourceScope}
                 feishuExportFormat={feishuExportFormat}
+                parseMode={resourceParseMode}
                 loading={loadingTeacherResources}
                 registering={registeringResource}
                 searchingBlocks={searchingTeacherBlocks}
@@ -2364,6 +2367,7 @@ export function App() {
                 onSourceTypeChange={setResourceSourceType}
                 onScopeChange={setResourceScope}
                 onFeishuExportFormatChange={setFeishuExportFormat}
+                onParseModeChange={setResourceParseMode}
                 onBlockSearchQueryChange={setTeacherResourceSearchQuery}
                 onBlockSearch={handleTeacherBlockSearch}
                 onFeishuDiscoveryQueryChange={setFeishuDiscoveryQuery}

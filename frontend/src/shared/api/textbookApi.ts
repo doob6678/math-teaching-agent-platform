@@ -1634,6 +1634,8 @@ export interface TeacherResourceRegistrationRequest {
   permissionScope: string;
   /** Native Feishu export format for Feishu resources; defaults to md. */
   feishuExportFormat?: "md" | "docx" | "pdf";
+  /** TEXT uses deterministic extraction; AI requests higher-cost semantic labeling when backend is configured. */
+  parseMode?: "TEXT" | "AI";
 }
 
 /**
@@ -1785,6 +1787,8 @@ export interface TeacherResourceDocumentResponse {
   feishuExportFormat?: "md" | "docx" | "pdf";
   /** 本地预览文件列表。 */
   previewFiles?: TeacherResourcePreviewFile[];
+  /** TEXT deterministic extraction or AI semantic labeling mode. */
+  parseMode?: "TEXT" | "AI";
 }
 
 /**
@@ -3054,8 +3058,8 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
       request: TeacherResourceRegistrationRequest,
     ): Promise<TeacherResourceDocumentResponse> {
       const normalizedRequest = request.sourceType === "feishu"
-        ? { ...request, feishuExportFormat: request.feishuExportFormat ?? "md" }
-        : request;
+        ? { ...request, feishuExportFormat: request.feishuExportFormat ?? "md", parseMode: request.parseMode ?? "TEXT" }
+        : { ...request, parseMode: request.parseMode ?? "TEXT" };
       const body = JSON.stringify(normalizedRequest);
       return applyCapability(
         "teacher-resource:register",

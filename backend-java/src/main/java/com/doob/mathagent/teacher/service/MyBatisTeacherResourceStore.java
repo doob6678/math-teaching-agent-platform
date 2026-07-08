@@ -144,8 +144,9 @@ public class MyBatisTeacherResourceStore implements TeacherResourceStore {
         entity.setCreatedBy(document.ownerSubjectId());
         entity.setSyncStatus(document.syncStatus());
         entity.setParseStatus(document.parseStatus());
+        entity.setParseMode(normalizeParseMode(document.parseMode()));
         entity.setEmbeddingStatus(document.embeddingStatus());
-        entity.setMetadataJson(indexMetadata(document.indexStatus(), document.feishuExportFormat()));
+        entity.setMetadataJson(indexMetadata(document.indexStatus(), document.feishuExportFormat(), document.parseMode()));
         return entity;
     }
 
@@ -170,7 +171,8 @@ public class MyBatisTeacherResourceStore implements TeacherResourceStore {
                 entity.getEmbeddingStatus(),
                 indexStatus(entity.getMetadataJson()),
                 feishuExportFormat(entity.getSourceType(), entity.getMetadataJson()),
-                List.of());
+                List.of(),
+                normalizeParseMode(firstNonBlank(entity.getParseMode(), textMetadataField(entity.getMetadataJson(), "parseMode"))));
     }
 
     /**
@@ -180,13 +182,15 @@ public class MyBatisTeacherResourceStore implements TeacherResourceStore {
      * @param feishuExportFormat native Feishu export format
      * @return metadata JSON
      */
-    private static String indexMetadata(String indexStatus, String feishuExportFormat) {
+    private static String indexMetadata(String indexStatus, String feishuExportFormat, String parseMode) {
         String value = indexStatus == null || indexStatus.isBlank() ? "waiting_rebuild" : indexStatus.strip();
         String exportFormat = feishuExportFormat == null || feishuExportFormat.isBlank()
                 ? ""
                 : feishuExportFormat.strip().toLowerCase();
+        String normalizedParseMode = normalizeParseMode(parseMode);
         return "{\"indexStatus\":\"" + escapeJson(value) + "\","
-                + "\"feishuExportFormat\":\"" + escapeJson(exportFormat) + "\"}";
+                + "\"feishuExportFormat\":\"" + escapeJson(exportFormat) + "\","
+                + "\"parseMode\":\"" + escapeJson(normalizedParseMode) + "\"}";
     }
 
     /**
@@ -252,6 +256,15 @@ public class MyBatisTeacherResourceStore implements TeacherResourceStore {
             return "";
         }
         return metadataJson.substring(firstQuote + 1, secondQuote);
+    }
+
+    private static String normalizeParseMode(String value) {
+        String normalized = value == null || value.isBlank() ? "TEXT" : value.strip().toUpperCase();
+        return "AI".equals(normalized) ? "AI" : "TEXT";
+    }
+
+    private static String firstNonBlank(String first, String second) {
+        return first == null || first.isBlank() ? second : first;
     }
 
     /**

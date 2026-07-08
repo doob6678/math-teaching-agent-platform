@@ -8,6 +8,7 @@ import com.doob.mathagent.vector.service.VectorIndexRebuildResponse;
 import com.doob.mathagent.vector.service.VectorIndexService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -18,16 +19,24 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Stream;
+import javax.imageio.ImageIO;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.rendering.PDFRenderer;
 import org.apache.pdfbox.text.PDFTextStripper;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.apache.poi.xwpf.usermodel.XWPFParagraph;
+import org.apache.poi.xwpf.usermodel.XWPFPicture;
+import org.apache.poi.xwpf.usermodel.XWPFPictureData;
+import org.apache.poi.xwpf.usermodel.XWPFRun;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -48,6 +57,7 @@ public class TeacherSourceSyncExecutionService {
     private final TeacherSourceSyncCheckpointStore checkpointStore;
     private final VectorIndexService vectorIndexService;
     private final TeacherResourceGraphAlignmentService graphAlignmentService;
+    private final TeacherResourceAssetService assetService;
 
     /**
      * Creates a sync execution service.
@@ -72,11 +82,36 @@ public class TeacherSourceSyncExecutionService {
                 syncProperties,
                 checkpointStore,
                 vectorIndexService,
-                TeacherResourceGraphAlignmentService.disabled());
+                TeacherResourceGraphAlignmentService.disabled(),
+                TeacherResourceAssetService.disabled());
     }
 
     /**
      * Production constructor with graph normalization.
+     */
+    public TeacherSourceSyncExecutionService(
+            TeacherResourceStore resourceStore,
+            TeacherSourceSyncJobStore jobStore,
+            TeacherDocumentBlockStore blockStore,
+            TeacherFeishuDownloadClient feishuDownloadClient,
+            TeacherSourceSyncProperties syncProperties,
+            TeacherSourceSyncCheckpointStore checkpointStore,
+            VectorIndexService vectorIndexService,
+            TeacherResourceGraphAlignmentService graphAlignmentService) {
+        this(
+                resourceStore,
+                jobStore,
+                blockStore,
+                feishuDownloadClient,
+                syncProperties,
+                checkpointStore,
+                vectorIndexService,
+                graphAlignmentService,
+                TeacherResourceAssetService.disabled());
+    }
+
+    /**
+     * Production constructor with graph normalization and persisted image assets.
      */
     @Autowired
     public TeacherSourceSyncExecutionService(
@@ -87,7 +122,8 @@ public class TeacherSourceSyncExecutionService {
             TeacherSourceSyncProperties syncProperties,
             TeacherSourceSyncCheckpointStore checkpointStore,
             VectorIndexService vectorIndexService,
-            TeacherResourceGraphAlignmentService graphAlignmentService) {
+            TeacherResourceGraphAlignmentService graphAlignmentService,
+            TeacherResourceAssetService assetService) {
         this.resourceStore = resourceStore;
         this.jobStore = jobStore;
         this.blockStore = blockStore;
@@ -96,6 +132,7 @@ public class TeacherSourceSyncExecutionService {
         this.checkpointStore = checkpointStore;
         this.vectorIndexService = Objects.requireNonNull(vectorIndexService, "vectorIndexService is required");
         this.graphAlignmentService = Objects.requireNonNull(graphAlignmentService, "graphAlignmentService is required");
+        this.assetService = Objects.requireNonNull(assetService, "assetService is required");
     }
 
     /**
@@ -170,8 +207,10 @@ public class TeacherSourceSyncExecutionService {
                         "pending",
                         "waiting_rebuild",
                         document.feishuExportFormat(),
-                        document.previewFiles());
+                        document.previewFiles(),
+                        document.parseMode());
                 resourceStore.save(downloaded);
+                assetService.markDocumentAssetsInactive(document.tenantId(), document.documentId());
                 List<TeacherDocumentBlockResponse> blocks = parseResourceFiles(
                         normalizedTenantId,
                         normalizedRole,
@@ -190,7 +229,9 @@ public class TeacherSourceSyncExecutionService {
                         result.savedPath().toString(),
                         blocks.isEmpty()
                                 ? result.message() + "; no supported files parsed"
-                                : result.message() + "; Parsed " + blocks.size() + " blocks" + vectorMessage);
+                                : result.message() + "; Parsed " + blocks.size() + " blocks"
+                                        + aiModeSuffix(document)
+                                        + vectorMessage);
                 TeacherSourceSyncCheckpointResponse successCheckpoint = result.checkpoint().hasCursor()
                         ? toStoredCheckpoint(document, completed, result.checkpoint(), result.failedItemsJson())
                         : null;
@@ -203,6 +244,7 @@ public class TeacherSourceSyncExecutionService {
                         2);
                 return jobStore.save(completed);
             }
+            assetService.markDocumentAssetsInactive(document.tenantId(), document.documentId());
             List<TeacherDocumentBlockResponse> blocks = parseResourceFiles(
                     normalizedTenantId,
                     normalizedRole,
@@ -216,7 +258,9 @@ public class TeacherSourceSyncExecutionService {
                     "completed",
                     "parse_completed",
                     null,
-                    "Parsed " + blocks.size() + " blocks from local source" + vectorMessage);
+                    "Parsed " + blocks.size() + " blocks from local source"
+                            + aiModeSuffix(document)
+                            + vectorMessage);
             return jobStore.save(completed);
         } catch (RuntimeException exception) {
             if (exception instanceof VectorIndexSyncException) {
@@ -451,6 +495,16 @@ public class TeacherSourceSyncExecutionService {
     }
 
     /**
+     * AI mode is a paid semantic-labeling request. Until a real model client is configured, sync keeps the TEXT parse
+     * result and says so explicitly instead of pretending AI role/tag labeling succeeded.
+     */
+    private static String aiModeSuffix(TeacherResourceDocumentResponse document) {
+        return "AI".equalsIgnoreCase(textOrDefault(document.parseMode(), "TEXT"))
+                ? "; AI labeling unavailable, kept TEXT extraction"
+                : "";
+    }
+
+    /**
      * Marks a local resource as parsed while keeping embedding/index rebuild pending.
      */
     private TeacherResourceDocumentResponse markLocalResourceSynced(TeacherResourceDocumentResponse document) {
@@ -468,7 +522,8 @@ public class TeacherSourceSyncExecutionService {
                 "pending",
                 "waiting_rebuild",
                 document.feishuExportFormat(),
-                document.previewFiles());
+                document.previewFiles(),
+                document.parseMode());
         resourceStore.save(synced);
         return synced;
     }
@@ -632,22 +687,44 @@ public class TeacherSourceSyncExecutionService {
     private static void flushBlock(List<ParsedBlock> blocks, String chapter, String section, StringBuilder current) {
         String value = current.toString().strip();
         if (!value.isBlank()) {
-            blocks.add(new ParsedBlock(chapter, section, null, value));
+            blocks.add(new ParsedBlock(chapter, section, null, value, List.of()));
         }
         current.setLength(0);
     }
 
     /**
-     * Parses DOCX paragraphs into ordered blocks while preserving the source file name as chapter.
+     * Parses DOCX paragraphs and extracts embedded images without relying on filenames or keywords for classification.
      */
     private static List<ParsedBlock> parseDocxBlocks(Path file) {
         List<ParsedBlock> blocks = new ArrayList<>();
         String chapter = stripExtension(file.getFileName().toString());
         try (XWPFDocument document = new XWPFDocument(Files.newInputStream(file))) {
             for (XWPFParagraph paragraph : document.getParagraphs()) {
-                String text = textOrDefault(paragraph.getText(), "");
-                if (!text.isBlank()) {
-                    blocks.add(new ParsedBlock(chapter, null, null, text));
+                List<PendingAsset> assets = new ArrayList<>();
+                StringBuilder text = new StringBuilder();
+                for (XWPFRun run : paragraph.getRuns()) {
+                    String runText = textOrDefault(run.text(), "");
+                    if (!runText.isBlank()) {
+                        text.append(runText).append(' ');
+                    }
+                    for (XWPFPicture picture : run.getEmbeddedPictures()) {
+                        XWPFPictureData pictureData = picture.getPictureData();
+                        if (pictureData == null) {
+                            continue;
+                        }
+                        String providerId = pictureData.getPackagePart().getPartName().getName();
+                        String mimeType = textOrDefault(pictureData.getPackagePart().getContentType(), "application/octet-stream");
+                        assets.add(new PendingAsset(providerId, pictureData.getData(), mimeType));
+                    }
+                }
+                String paragraphText = textOrDefault(text.toString(), paragraph.getText());
+                if (!paragraphText.isBlank() || !assets.isEmpty()) {
+                    blocks.add(new ParsedBlock(
+                            chapter,
+                            null,
+                            null,
+                            paragraphText.isBlank() ? "[DOCX image block; no extractable text]" : paragraphText,
+                            List.copyOf(assets)));
                 }
             }
         } catch (IOException exception) {
@@ -664,12 +741,22 @@ public class TeacherSourceSyncExecutionService {
         String chapter = stripExtension(file.getFileName().toString());
         try (PDDocument document = Loader.loadPDF(file.toFile())) {
             PDFTextStripper stripper = new PDFTextStripper();
+            PDFRenderer renderer = new PDFRenderer(document);
             for (int page = 1; page <= document.getNumberOfPages(); page += 1) {
                 stripper.setStartPage(page);
                 stripper.setEndPage(page);
                 String text = textOrDefault(stripper.getText(document), "");
-                if (!text.isBlank()) {
-                    blocks.add(new ParsedBlock(chapter, null, page, text));
+                List<PendingAsset> assets = new ArrayList<>();
+                ByteArrayOutputStream imageBytes = new ByteArrayOutputStream();
+                ImageIO.write(renderer.renderImageWithDPI(page - 1, 144), "png", imageBytes);
+                assets.add(new PendingAsset("pdf-page:" + page, imageBytes.toByteArray(), "image/png"));
+                if (!text.isBlank() || !assets.isEmpty()) {
+                    blocks.add(new ParsedBlock(
+                            chapter,
+                            null,
+                            page,
+                            text.isBlank() ? "[PDF page image; no extractable text]" : text,
+                            List.copyOf(assets)));
                 }
             }
         } catch (IOException exception) {
@@ -709,6 +796,7 @@ public class TeacherSourceSyncExecutionService {
                 parsed.section(),
                 parsed.text(),
                 normalized);
+        String imageRefs = imageRefs(document, sourcePath, parsed);
         return new TeacherDocumentBlockResponse(
                 UUID.randomUUID().toString(),
                 document.documentId(),
@@ -723,7 +811,7 @@ public class TeacherSourceSyncExecutionService {
                 blockRole,
                 parsed.text(),
                 normalized,
-                "[]",
+                imageRefs,
                 "[]",
                 jsonArray(graphAlignment.nodeIds()),
                 jsonArray(graphAlignment.tagNames()),
@@ -796,6 +884,42 @@ public class TeacherSourceSyncExecutionService {
             return OBJECT_MAPPER.writeValueAsString(values == null ? List.of() : values);
         } catch (JsonProcessingException exception) {
             throw new IllegalStateException("Failed to serialize graph alignment metadata", exception);
+        }
+    }
+
+    /**
+     * Persists extracted images and converts them to safe asset references carried by block imageRefs.
+     */
+    private String imageRefs(
+            TeacherResourceDocumentResponse document,
+            String sourcePath,
+            ParsedBlock parsed) {
+        if (parsed.assets().isEmpty()) {
+            return "[]";
+        }
+        List<Map<String, Object>> refs = new ArrayList<>();
+        for (PendingAsset pending : parsed.assets()) {
+            Optional<com.doob.mathagent.teacher.vo.TeacherResourceAssetResponse> saved =
+                    assetService.saveExtractedAsset(
+                            document,
+                            sourcePath,
+                            parsed.pageNo(),
+                            pending.providerAssetId(),
+                            pending.content(),
+                            pending.mimeType());
+            saved.ifPresent(asset -> {
+                Map<String, Object> ref = new LinkedHashMap<>();
+                ref.put("assetId", asset.assetId());
+                ref.put("pageNo", asset.pageNo());
+                ref.put("sourcePath", textOrDefault(asset.sourcePath(), ""));
+                ref.put("mimeType", asset.mimeType());
+                refs.add(ref);
+            });
+        }
+        try {
+            return OBJECT_MAPPER.writeValueAsString(refs);
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("Failed to serialize teacher resource imageRefs", exception);
         }
     }
 
@@ -907,6 +1031,9 @@ public class TeacherSourceSyncExecutionService {
     /**
      * Internal parsed block model.
      */
-    private record ParsedBlock(String chapter, String section, Integer pageNo, String text) {
+    private record ParsedBlock(String chapter, String section, Integer pageNo, String text, List<PendingAsset> assets) {
+    }
+
+    private record PendingAsset(String providerAssetId, byte[] content, String mimeType) {
     }
 }

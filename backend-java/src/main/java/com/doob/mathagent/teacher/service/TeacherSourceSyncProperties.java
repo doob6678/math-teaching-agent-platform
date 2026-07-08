@@ -10,6 +10,7 @@ import org.springframework.core.env.Environment;
  * @param feishuDownloaderScript Python downloader script path
  * @param feishuAppkeyPath APPKEY file path used by the downloader; raw content is never returned by APIs
  * @param feishuStagingRoot local staging root for downloaded Feishu resources
+ * @param assetStorageRoot backend-owned root for extracted images/assets; controllers never expose this path
  * @param feishuSmokeMaxFiles bounded file count for smoke tests and UI-triggered checks
  * @param feishuProcessTimeoutSeconds hard timeout for one Python Feishu process attempt
  */
@@ -18,6 +19,7 @@ public record TeacherSourceSyncProperties(
         Path feishuDownloaderScript,
         Path feishuAppkeyPath,
         Path feishuStagingRoot,
+        Path assetStorageRoot,
         int feishuSmokeMaxFiles,
         int feishuProcessTimeoutSeconds) {
 
@@ -35,8 +37,26 @@ public record TeacherSourceSyncProperties(
                 feishuDownloaderScript,
                 feishuAppkeyPath,
                 feishuStagingRoot,
+                feishuStagingRoot.resolve("_assets"),
                 feishuSmokeMaxFiles,
                 30);
+    }
+
+    public TeacherSourceSyncProperties(
+            String feishuDefaultUrl,
+            Path feishuDownloaderScript,
+            Path feishuAppkeyPath,
+            Path feishuStagingRoot,
+            int feishuSmokeMaxFiles,
+            int feishuProcessTimeoutSeconds) {
+        this(
+                feishuDefaultUrl,
+                feishuDownloaderScript,
+                feishuAppkeyPath,
+                feishuStagingRoot,
+                feishuStagingRoot.resolve("_assets"),
+                feishuSmokeMaxFiles,
+                feishuProcessTimeoutSeconds);
     }
 
     /**
@@ -59,6 +79,11 @@ public record TeacherSourceSyncProperties(
                 Path.of(textOrDefault(
                         environment.getProperty("math-agent.teacher.sync.feishu.staging-root"),
                         "D:/project2026/feishutest/codex-app-staging")),
+                Path.of(textOrDefault(
+                        environment.getProperty("math-agent.teacher.sync.asset-storage-root"),
+                        environment.getProperty(
+                                "math-agent.teacher.sync.feishu.staging-root",
+                                "D:/project2026/feishutest/codex-app-staging") + "/_assets")),
                 integerOrDefault(environment.getProperty("math-agent.teacher.sync.feishu.smoke-max-files"), 1),
                 integerOrDefault(environment.getProperty("math-agent.teacher.sync.feishu.process-timeout-seconds"), 30));
     }
@@ -70,6 +95,7 @@ public record TeacherSourceSyncProperties(
         feishuDownloaderScript = feishuDownloaderScript.toAbsolutePath().normalize();
         feishuAppkeyPath = feishuAppkeyPath.toAbsolutePath().normalize();
         feishuStagingRoot = feishuStagingRoot.toAbsolutePath().normalize();
+        assetStorageRoot = assetStorageRoot.toAbsolutePath().normalize();
         feishuSmokeMaxFiles = Math.max(0, feishuSmokeMaxFiles);
         feishuProcessTimeoutSeconds = Math.max(1, feishuProcessTimeoutSeconds);
     }

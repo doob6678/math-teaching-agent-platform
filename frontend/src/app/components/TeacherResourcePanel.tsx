@@ -20,6 +20,7 @@ export function TeacherResourcePanel({
   sourceType,
   scope,
   feishuExportFormat,
+  parseMode,
   loading,
   registering,
   searchingBlocks,
@@ -42,6 +43,7 @@ export function TeacherResourcePanel({
   onSourceTypeChange,
   onScopeChange,
   onFeishuExportFormatChange,
+  onParseModeChange,
   onBlockSearchQueryChange,
   onBlockSearch,
   onFeishuDiscoveryQueryChange,
@@ -60,6 +62,7 @@ export function TeacherResourcePanel({
   sourceType: string;
   scope: string;
   feishuExportFormat: "md" | "docx" | "pdf";
+  parseMode: "TEXT" | "AI";
   loading: boolean;
   registering: boolean;
   searchingBlocks: boolean;
@@ -82,6 +85,7 @@ export function TeacherResourcePanel({
   onSourceTypeChange: (value: string) => void;
   onScopeChange: (value: string) => void;
   onFeishuExportFormatChange: (value: "md" | "docx" | "pdf") => void;
+  onParseModeChange: (value: "TEXT" | "AI") => void;
   onBlockSearchQueryChange: (value: string) => void;
   onBlockSearch: (event: FormEvent<HTMLFormElement>) => void;
   onFeishuDiscoveryQueryChange: (value: string) => void;
@@ -152,6 +156,13 @@ export function TeacherResourcePanel({
             <option value="TEACHER_PRIVATE">教师私有</option>
             <option value="MATH_VIP">教研共享</option>
             <option value="PUBLIC_TEXTBOOK">公开教材</option>
+          </select>
+        </label>
+        <label>
+          <span>解析模式</span>
+          <select className="form-select" value={parseMode} onChange={(event) => onParseModeChange(event.target.value as "TEXT" | "AI")}>
+            <option value="TEXT">TEXT：文字与结构提取</option>
+            <option value="AI">AI：图文语义标注</option>
           </select>
         </label>
         <button className="btn btn-primary" type="submit" disabled={registering}>
@@ -268,6 +279,7 @@ export function TeacherResourcePanel({
                 <span>
                   {sourceTypeLabel(resource.sourceType)} / {scopeLabel(resource.permissionScope)}
                   {resource.sourceType === "feishu" ? ` / ${exportFormatLabel(resource.feishuExportFormat)}` : ""}
+                  {` / ${parseModeLabel(resource.parseMode)}`}
                 </span>
               </div>
               <div className="resource-status">
@@ -452,6 +464,10 @@ function exportFormatLabel(value?: string | null) {
   return labels[(value ?? "md").trim().toLowerCase()] ?? (value || "Markdown");
 }
 
+function parseModeLabel(value?: string | null) {
+  return (value ?? "TEXT").toUpperCase() === "AI" ? "AI 解析" : "TEXT 解析";
+}
+
 function syncJobMessage(value?: string | null) {
   const text = (value ?? "").trim();
   if (!text) {
@@ -476,6 +492,9 @@ function syncJobMessage(value?: string | null) {
   }
   if (/Parsing source files/i.test(text)) {
     parts.push("正在解析资源");
+  }
+  if (/AI labeling unavailable, kept TEXT extraction/i.test(text)) {
+    parts.push("AI 标注未配置，已保留 TEXT 解析结果");
   }
   if (/ProxyError|tunnel connection reset|connection reset|timeout/i.test(text)) {
     parts.push("网络连接中断，可恢复后继续");

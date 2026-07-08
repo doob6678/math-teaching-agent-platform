@@ -40,6 +40,9 @@ public class TeacherSourceDocumentEntity {
     /** Parse status for document parsing tasks. */
     private String parseStatus;
 
+    /** User-selected parse mode: TEXT or AI. */
+    private String parseMode;
+
     /** Embedding status for vector indexing tasks. */
     private String embeddingStatus;
 
@@ -230,6 +233,14 @@ public class TeacherSourceDocumentEntity {
      */
     public void setParseStatus(String parseStatus) {
         this.parseStatus = parseStatus;
+    }
+
+    public String getParseMode() {
+        return parseMode;
+    }
+
+    public void setParseMode(String parseMode) {
+        this.parseMode = parseMode;
     }
 
     /**

@@ -56,7 +56,8 @@ public class TeacherResourceService {
                 "pending",
                 "waiting_rebuild",
                 normalized.feishuExportFormat(),
-                previewFiles(normalized.localPath()));
+                previewFiles(normalized.localPath()),
+                normalized.parseMode());
         return store.save(document);
     }
 
@@ -116,7 +117,8 @@ public class TeacherResourceService {
                 document.embeddingStatus(),
                 "archived",
                 document.feishuExportFormat(),
-                document.previewFiles());
+                document.previewFiles(),
+                document.parseMode());
         return store.save(archived);
     }
 

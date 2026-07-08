@@ -10,6 +10,7 @@ import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService;
 import com.doob.mathagent.teacher.service.TeacherResourceRegistrationCommand;
 import com.doob.mathagent.teacher.service.TeacherResourceSearchFilter;
 import com.doob.mathagent.teacher.service.TeacherResourceService;
+import com.doob.mathagent.teacher.service.TeacherResourceAssetService;
 import com.doob.mathagent.teacher.service.TeacherDocumentBlockStore;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncCheckpointQueryService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncExecutionService;
@@ -25,7 +26,12 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.io.Resource;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -55,6 +61,7 @@ public class TeacherResourceController {
     private final TeacherResourceBlockSearchAuditLookup blockSearchAuditLookup;
     private final TeacherSourceSyncCheckpointQueryService checkpointQueryService;
     private final TeacherDocumentBlockStore blockStore;
+    private final TeacherResourceAssetService assetService;
     private final RequestSubjectResolver subjectResolver;
     private final TeacherResourceCapabilityVerifier capabilityVerifier;
 
@@ -64,7 +71,6 @@ public class TeacherResourceController {
      * @param teacherResourceService teacher resource service
      * @param subjectResolver backend subject resolver
      */
-    @Autowired
     public TeacherResourceController(
             TeacherResourceService teacherResourceService,
             TeacherSourceSyncJobService syncJobService,
@@ -75,6 +81,31 @@ public class TeacherResourceController {
             TeacherDocumentBlockStore blockStore,
             RequestSubjectResolver subjectResolver,
             TeacherResourceCapabilityVerifier capabilityVerifier) {
+        this(
+                teacherResourceService,
+                syncJobService,
+                syncExecutionService,
+                blockSearchService,
+                blockSearchAuditLookup,
+                checkpointQueryService,
+                blockStore,
+                TeacherResourceAssetService.disabled(),
+                subjectResolver,
+                capabilityVerifier);
+    }
+
+    @Autowired
+    public TeacherResourceController(
+            TeacherResourceService teacherResourceService,
+            TeacherSourceSyncJobService syncJobService,
+            TeacherSourceSyncExecutionService syncExecutionService,
+            TeacherResourceBlockSearchService blockSearchService,
+            TeacherResourceBlockSearchAuditLookup blockSearchAuditLookup,
+            TeacherSourceSyncCheckpointQueryService checkpointQueryService,
+            TeacherDocumentBlockStore blockStore,
+            TeacherResourceAssetService assetService,
+            RequestSubjectResolver subjectResolver,
+            TeacherResourceCapabilityVerifier capabilityVerifier) {
         this.teacherResourceService = Objects.requireNonNull(teacherResourceService, "teacherResourceService");
         this.syncJobService = Objects.requireNonNull(syncJobService, "syncJobService");
         this.syncExecutionService = Objects.requireNonNull(syncExecutionService, "syncExecutionService");
@@ -82,6 +113,7 @@ public class TeacherResourceController {
         this.blockSearchAuditLookup = Objects.requireNonNull(blockSearchAuditLookup, "blockSearchAuditLookup");
         this.checkpointQueryService = Objects.requireNonNull(checkpointQueryService, "checkpointQueryService");
         this.blockStore = Objects.requireNonNull(blockStore, "blockStore");
+        this.assetService = Objects.requireNonNull(assetService, "assetService");
         this.subjectResolver = Objects.requireNonNull(subjectResolver, "subjectResolver");
         this.capabilityVerifier = Objects.requireNonNull(capabilityVerifier, "capabilityVerifier");
     }
@@ -222,6 +254,31 @@ public class TeacherResourceController {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Teacher resource not found");
         }
         return blockStore.listByDocument(subject.tenantId(), documentId);
+    }
+
+    /**
+     * Streams an extracted PDF/DOCX/Feishu image through backend authorization.
+     *
+     * The response deliberately exposes only an opaque asset id and a file stream. Do not replace this with static
+     * file serving: storage paths, Feishu image tokens, and object-store keys are not client-facing identifiers.
+     */
+    @GetMapping("/api/teacher/resources/assets/{assetId}")
+    public ResponseEntity<Resource> readAsset(
+            @PathVariable String assetId,
+            HttpServletRequest httpRequest) {
+        RequestSubject subject = subjectResolver.resolve(httpRequest).normalize();
+        try {
+            TeacherResourceAssetService.VisibleAsset asset = assetService.openVisibleAsset(assetId, subject);
+            return ResponseEntity.ok()
+                    .contentType(MediaType.parseMediaType(asset.mimeType()))
+                    .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.inline()
+                            .filename(asset.fileName())
+                            .build()
+                            .toString())
+                    .body(asset.resource());
+        } catch (IllegalArgumentException exception) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Teacher resource asset not found", exception);
+        }
     }
 
     /**

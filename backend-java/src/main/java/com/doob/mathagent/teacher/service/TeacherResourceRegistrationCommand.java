@@ -14,6 +14,7 @@ import com.doob.mathagent.teacher.dto.TeacherResourceRegistrationRequest;
  * @param localPath local folder or file path configured by teacher/admin
  * @param permissionScope resource access scope, such as TEACHER_PRIVATE, MATH_VIP, or PUBLIC_TEXTBOOK
  * @param feishuExportFormat native Feishu export format for Feishu sources; supported values are md, docx, and pdf
+ * @param parseMode TEXT for deterministic extraction or AI for higher-cost semantic labeling
  */
 public record TeacherResourceRegistrationCommand(
         String tenantId,
@@ -24,7 +25,31 @@ public record TeacherResourceRegistrationCommand(
         String originalUrl,
         String localPath,
         String permissionScope,
-        String feishuExportFormat) {
+        String feishuExportFormat,
+        String parseMode) {
+
+    public TeacherResourceRegistrationCommand(
+            String tenantId,
+            String viewerRole,
+            String viewerSubjectId,
+            String sourceType,
+            String title,
+            String originalUrl,
+            String localPath,
+            String permissionScope,
+            String feishuExportFormat) {
+        this(
+                tenantId,
+                viewerRole,
+                viewerSubjectId,
+                sourceType,
+                title,
+                originalUrl,
+                localPath,
+                permissionScope,
+                feishuExportFormat,
+                "TEXT");
+    }
 
     /**
      * Builds a command from backend identity and request body fields.
@@ -50,7 +75,8 @@ public record TeacherResourceRegistrationCommand(
                 normalized.originalUrl(),
                 normalized.localPath(),
                 normalized.permissionScope(),
-                normalized.feishuExportFormat());
+                normalized.feishuExportFormat(),
+                normalized.parseMode());
     }
 
     /**
@@ -69,7 +95,8 @@ public record TeacherResourceRegistrationCommand(
                 blankToNull(originalUrl),
                 blankToNull(localPath),
                 textOrDefault(permissionScope, "TEACHER_PRIVATE"),
-                normalizeFeishuExportFormat(normalizedSourceType, feishuExportFormat));
+                normalizeFeishuExportFormat(normalizedSourceType, feishuExportFormat),
+                normalizeParseMode(parseMode));
     }
 
     /**
@@ -141,5 +168,13 @@ public record TeacherResourceRegistrationCommand(
             return normalized;
         }
         throw new IllegalArgumentException("Unsupported Feishu export format: " + value);
+    }
+
+    private static String normalizeParseMode(String value) {
+        String normalized = textOrDefault(value, "TEXT").toUpperCase();
+        if ("TEXT".equals(normalized) || "AI".equals(normalized)) {
+            return normalized;
+        }
+        throw new IllegalArgumentException("Unsupported teacher resource parse mode: " + value);
     }
 }

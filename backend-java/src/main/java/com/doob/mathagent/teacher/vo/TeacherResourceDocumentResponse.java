@@ -19,6 +19,7 @@ import java.util.List;
  * @param indexStatus BM25/Milvus index rebuild status
  * @param feishuExportFormat native Feishu export format for Feishu sources; supported values are md, docx, and pdf
  * @param previewFiles small local file preview list shown in teacher UI
+ * @param parseMode TEXT deterministic extraction or AI semantic labeling mode
  */
 public record TeacherResourceDocumentResponse(
         String documentId,
@@ -34,7 +35,41 @@ public record TeacherResourceDocumentResponse(
         String embeddingStatus,
         String indexStatus,
         String feishuExportFormat,
-        List<PreviewFile> previewFiles) {
+        List<PreviewFile> previewFiles,
+        String parseMode) {
+
+    public TeacherResourceDocumentResponse(
+            String documentId,
+            String tenantId,
+            String ownerSubjectId,
+            String sourceType,
+            String title,
+            String originalUrl,
+            String localPath,
+            String permissionScope,
+            String syncStatus,
+            String parseStatus,
+            String embeddingStatus,
+            String indexStatus,
+            String feishuExportFormat,
+            List<PreviewFile> previewFiles) {
+        this(
+                documentId,
+                tenantId,
+                ownerSubjectId,
+                sourceType,
+                title,
+                originalUrl,
+                localPath,
+                permissionScope,
+                syncStatus,
+                parseStatus,
+                embeddingStatus,
+                indexStatus,
+                feishuExportFormat,
+                previewFiles,
+                "TEXT");
+    }
 
     /**
      * Backward-compatible constructor for non-Feishu resources and older focused tests.
@@ -67,7 +102,8 @@ public record TeacherResourceDocumentResponse(
                 embeddingStatus,
                 indexStatus,
                 "feishu".equalsIgnoreCase(sourceType == null ? "" : sourceType) ? "md" : null,
-                previewFiles);
+                previewFiles,
+                "TEXT");
     }
 
     /**
