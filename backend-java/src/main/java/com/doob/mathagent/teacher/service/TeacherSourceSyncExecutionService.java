@@ -7,6 +7,7 @@ import com.doob.mathagent.teacher.vo.TeacherSourceSyncJobResponse;
 import com.doob.mathagent.vector.service.VectorIndexRebuildResponse;
 import com.doob.mathagent.vector.service.VectorIndexService;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -27,6 +28,8 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Stream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 import javax.imageio.ImageIO;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
@@ -38,12 +41,14 @@ import org.apache.poi.xwpf.usermodel.XWPFPicture;
 import org.apache.poi.xwpf.usermodel.XWPFPictureData;
 import org.apache.poi.xwpf.usermodel.XWPFRun;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Service;
 
 /**
  * Executes queued teacher source synchronization jobs.
+ *
+ * Do not put @Service back on this class while the legacy test constructors exist. Spring picked a compatibility
+ * constructor in real runs and disabled asset persistence. Production wiring is pinned in
+ * TeacherSourceSyncExecutionConfiguration so DOCX/PDF/Feishu assets always use the real asset service.
  */
-@Service
 public class TeacherSourceSyncExecutionService {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
@@ -211,11 +216,13 @@ public class TeacherSourceSyncExecutionService {
                         document.parseMode());
                 resourceStore.save(downloaded);
                 assetService.markDocumentAssetsInactive(document.tenantId(), document.documentId());
+                int feishuManifestAssets = ingestFeishuDownloadedAssetManifest(downloaded, result);
                 List<TeacherDocumentBlockResponse> blocks = parseResourceFiles(
                         normalizedTenantId,
                         normalizedRole,
                         normalizedSubjectId,
-                        downloaded);
+                        downloaded,
+                        true);
                 String vectorMessage = "";
                 if (!blocks.isEmpty()) {
                     blockStore.replaceActiveBlocks(document.tenantId(), document.documentId(), blocks);
@@ -229,7 +236,9 @@ public class TeacherSourceSyncExecutionService {
                         result.savedPath().toString(),
                         blocks.isEmpty()
                                 ? result.message() + "; no supported files parsed"
+                                        + assetCountSuffix(feishuManifestAssets)
                                 : result.message() + "; Parsed " + blocks.size() + " blocks"
+                                        + assetCountSuffix(feishuManifestAssets)
                                         + aiModeSuffix(document)
                                         + vectorMessage);
                 TeacherSourceSyncCheckpointResponse successCheckpoint = result.checkpoint().hasCursor()
@@ -504,6 +513,84 @@ public class TeacherSourceSyncExecutionService {
                 : "";
     }
 
+    private static String assetCountSuffix(int assetCount) {
+        return assetCount > 0 ? "; Feishu manifest assets " + assetCount : "";
+    }
+
+    /**
+     * Persists Feishu-native image/file attachments carried by the downloader checkpoint. Exported DOCX/PDF/Markdown
+     * rows remain documents and are parsed by parseResourceFiles; only rows marked as image/attachment become assets
+     * here so we do not double-count document exports.
+     */
+    private int ingestFeishuDownloadedAssetManifest(
+            TeacherResourceDocumentResponse document,
+            TeacherFeishuDownloadClient.FeishuDownloadResult result) {
+        JsonNode items;
+        try {
+            items = OBJECT_MAPPER.readTree(jsonOrEmptyArray(result.downloadedItemsJson()));
+        } catch (JsonProcessingException exception) {
+            return 0;
+        }
+        if (!items.isArray()) {
+            return 0;
+        }
+        int count = 0;
+        for (JsonNode item : items) {
+            String assetKind = textOrDefault(item.path("assetKind").asText(""), "");
+            if (!"image".equalsIgnoreCase(assetKind) && !"attachment".equalsIgnoreCase(assetKind)) {
+                continue;
+            }
+            String relativePath = textOrDefault(item.path("relativePath").asText(""), "");
+            if (relativePath.isBlank()) {
+                continue;
+            }
+            Path file = resolveDownloadedItemPath(result.savedPath(), relativePath);
+            if (!Files.isRegularFile(file)) {
+                continue;
+            }
+            try {
+                String providerAssetId = "feishu:" + textOrDefault(item.path("token").asText(""), relativePath);
+                Optional<com.doob.mathagent.teacher.vo.TeacherResourceAssetResponse> saved =
+                        assetService.saveExtractedAsset(
+                                document,
+                                relativePath.replace('\\', '/'),
+                                null,
+                                providerAssetId,
+                                Files.readAllBytes(file),
+                                textOrDefault(item.path("mimeType").asText(""), "application/octet-stream"));
+                if (saved.isPresent()) {
+                    count += 1;
+                }
+            } catch (IOException exception) {
+                throw new IllegalStateException("Failed to ingest Feishu asset manifest file: " + file, exception);
+            }
+        }
+        return count;
+    }
+
+    /**
+     * Resolves downloader relative paths without letting manifest data escape the saved folder/file root.
+     */
+    private static Path resolveDownloadedItemPath(Path savedPath, String relativePath) {
+        Path base = savedPath.toAbsolutePath().normalize();
+        if (Files.isRegularFile(base)) {
+            if (base.getFileName().toString().equals(relativePath)) {
+                return base;
+            }
+            Path parent = base.getParent() == null ? base : base.getParent();
+            Path resolved = parent.resolve(relativePath).normalize();
+            if (!resolved.startsWith(parent)) {
+                throw new IllegalArgumentException("Feishu downloaded item path escapes saved file parent");
+            }
+            return resolved;
+        }
+        Path resolved = base.resolve(relativePath).normalize();
+        if (!resolved.startsWith(base)) {
+            throw new IllegalArgumentException("Feishu downloaded item path escapes saved folder");
+        }
+        return resolved;
+    }
+
     /**
      * Marks a local resource as parsed while keeping embedding/index rebuild pending.
      */
@@ -569,12 +656,24 @@ public class TeacherSourceSyncExecutionService {
             String viewerRole,
             String viewerSubjectId,
             TeacherResourceDocumentResponse document) {
+        return parseResourceFiles(tenantId, viewerRole, viewerSubjectId, document, false);
+    }
+
+    private List<TeacherDocumentBlockResponse> parseResourceFiles(
+            String tenantId,
+            String viewerRole,
+            String viewerSubjectId,
+            TeacherResourceDocumentResponse document,
+            boolean allowNoSupportedFiles) {
         Path root = Path.of(textOrDefault(document.localPath(), ""));
         if (!Files.exists(root)) {
             throw new IllegalArgumentException("Local resource path does not exist: " + root);
         }
         List<Path> files = listSupportedFiles(root);
         if (files.isEmpty()) {
+            if (allowNoSupportedFiles) {
+                return List.of();
+            }
             throw new IllegalArgumentException("Local resource path contains no supported .md, .txt, .docx, or .pdf files: " + root);
         }
         List<TeacherDocumentBlockResponse> blocks = new ArrayList<>();
@@ -714,7 +813,19 @@ public class TeacherSourceSyncExecutionService {
                         }
                         String providerId = pictureData.getPackagePart().getPartName().getName();
                         String mimeType = textOrDefault(pictureData.getPackagePart().getContentType(), "application/octet-stream");
-                        assets.add(new PendingAsset(providerId, pictureData.getData(), mimeType));
+                        byte[] data = pictureData.getData();
+                        if (data == null || data.length == 0) {
+                            data = pictureData.getPackagePart().getInputStream().readAllBytes();
+                        }
+                        if (data == null || data.length == 0) {
+                            /*
+                             * Some real DOCX files produced by python-docx expose the drawing relationship through
+                             * POI but return an empty PackagePart stream. The binary still exists in word/media/*, so
+                             * fall back to the package entry instead of dropping imageRefs and losing the asset.
+                             */
+                            data = readDocxPackagePart(file, providerId);
+                        }
+                        assets.add(new PendingAsset(providerId, data, mimeType));
                     }
                 }
                 String paragraphText = textOrDefault(text.toString(), paragraph.getText());
@@ -731,6 +842,23 @@ public class TeacherSourceSyncExecutionService {
             throw new IllegalArgumentException("Failed to parse DOCX resource file: " + file, exception);
         }
         return blocks;
+    }
+
+    private static byte[] readDocxPackagePart(Path file, String providerId) throws IOException {
+        String entryName = textOrDefault(providerId, "").replace('\\', '/');
+        if (entryName.startsWith("/")) {
+            entryName = entryName.substring(1);
+        }
+        if (entryName.isBlank()) {
+            return new byte[0];
+        }
+        try (ZipFile zipFile = new ZipFile(file.toFile())) {
+            ZipEntry entry = zipFile.getEntry(entryName);
+            if (entry == null) {
+                return new byte[0];
+            }
+            return zipFile.getInputStream(entry).readAllBytes();
+        }
     }
 
     /**

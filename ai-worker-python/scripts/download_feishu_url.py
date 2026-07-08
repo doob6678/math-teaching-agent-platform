@@ -1,5 +1,7 @@
 import argparse
+import hashlib
 import json
+import mimetypes
 import os
 import re
 import sys
@@ -401,6 +403,35 @@ def save_bytes(content: bytes, output_dir: Path, filename: str) -> Path:
     return target
 
 
+def file_manifest(
+    target: Path,
+    base_dir: Path,
+    *,
+    item_type: str,
+    token: str,
+    name: str,
+    item_path: str,
+    asset_kind: str,
+) -> Dict[str, Any]:
+    try:
+        relative_path = target.relative_to(base_dir).as_posix()
+    except ValueError:
+        relative_path = target.name
+    content = target.read_bytes()
+    mime_type, _ = mimetypes.guess_type(target.name)
+    return {
+        "type": item_type,
+        "token": token,
+        "name": name,
+        "path": item_path,
+        "relativePath": relative_path,
+        "checksum": hashlib.sha256(content).hexdigest(),
+        "mimeType": mime_type or "application/octet-stream",
+        "sizeBytes": len(content),
+        "assetKind": asset_kind,
+    }
+
+
 def load_resume_checkpoint(checkpoint_path: str = "") -> Dict[str, Any]:
     if not checkpoint_path:
         return {}
@@ -530,17 +561,35 @@ def download_folder(
                         else:
                             content, suggested_name, _ = client.export_docx(item_token, file_extension)
                         target_name = f"{item_name}.{file_extension}" if not suggested_name.lower().endswith(f".{file_extension}") else suggested_name
-                        save_bytes(content, current_dir, target_name)
+                        target = save_bytes(content, current_dir, target_name)
                         counters["files"] += 1
+                        manifest = file_manifest(
+                            target,
+                            root_dir,
+                            item_type=item_type,
+                            token=item_token,
+                            name=item_name,
+                            item_path=item_path,
+                            asset_kind="document")
                     elif item_type in DIRECT_DOWNLOAD_TYPES:
                         content, suggested_name, _ = client.download_file(item_token)
-                        save_bytes(content, current_dir, suggested_name or item_name)
+                        target = save_bytes(content, current_dir, suggested_name or item_name)
                         counters["files"] += 1
+                        mime_type, _ = mimetypes.guess_type(target.name)
+                        asset_kind = "image" if str(mime_type or "").startswith("image/") else "attachment"
+                        manifest = file_manifest(
+                            target,
+                            root_dir,
+                            item_type=item_type,
+                            token=item_token,
+                            name=item_name,
+                            item_path=item_path,
+                            asset_kind=asset_kind)
                     else:
                         counters["skipped"] += 1
                         continue
                     downloaded_tokens.add(item_token)
-                    downloaded_items.append({"type": item_type, "token": item_token, "name": item_name, "path": item_path})
+                    downloaded_items.append(manifest)
                     remember_checkpoint(current_token, path_text, page_token)
                 except Exception as exc:
                     counters["failed"] += 1
@@ -603,12 +652,14 @@ def download_from_url(
         else:
             content, suggested_name, size = client.export_docx(token, file_extension)
         target = save_bytes(content, output_dir, suggested_name or f"{token}.{file_extension}")
-        downloaded_item = {
-            "type": "docx",
-            "token": token,
-            "name": target.name,
-            "path": target.name,
-        }
+        downloaded_item = file_manifest(
+            target,
+            output_dir,
+            item_type="docx",
+            token=token,
+            name=target.name,
+            item_path=target.name,
+            asset_kind="document")
         return {
             **parsed,
             "saved_path": str(target),
@@ -627,12 +678,15 @@ def download_from_url(
     if resource_type == "file":
         content, suggested_name, size = client.download_file(token)
         target = save_bytes(content, output_dir, suggested_name or token)
-        downloaded_item = {
-            "type": "file",
-            "token": token,
-            "name": target.name,
-            "path": target.name,
-        }
+        mime_type, _ = mimetypes.guess_type(target.name)
+        downloaded_item = file_manifest(
+            target,
+            output_dir,
+            item_type="file",
+            token=token,
+            name=target.name,
+            item_path=target.name,
+            asset_kind="image" if str(mime_type or "").startswith("image/") else "attachment")
         return {
             **parsed,
             "saved_path": str(target),

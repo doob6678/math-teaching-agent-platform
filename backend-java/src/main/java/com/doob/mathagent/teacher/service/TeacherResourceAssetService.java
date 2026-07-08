@@ -16,9 +16,12 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import javax.imageio.ImageIO;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Persists extracted images/assets and serves them only through backend permission checks.
@@ -26,6 +29,7 @@ import org.springframework.stereotype.Service;
 @Service
 public class TeacherResourceAssetService {
 
+    private static final Logger LOGGER = LoggerFactory.getLogger(TeacherResourceAssetService.class);
     private static final String TEACHER_PRIVATE = "TEACHER_PRIVATE";
     private static final java.util.Set<String> SHARED_SCOPES = java.util.Set.of(
             "MATH_VIP",
@@ -37,6 +41,7 @@ public class TeacherResourceAssetService {
     private final TeacherSourceSyncProperties syncProperties;
     private final boolean enabled;
 
+    @Autowired
     public TeacherResourceAssetService(
             TeacherResourceAssetStore assetStore,
             TeacherResourceStore resourceStore,
@@ -81,6 +86,17 @@ public class TeacherResourceAssetService {
             byte[] content,
             String mimeType) {
         if (!enabled || document == null || content == null || content.length == 0) {
+            /*
+             * Do not silently drop assets. If this fires in production, the parser found an image/attachment reference
+             * but either Spring wired the disabled test service or the extractor produced an empty byte array.
+             */
+            LOGGER.warn(
+                    "Skip teacher resource asset: enabled={}, documentId={}, sourcePath={}, providerAssetId={}, bytes={}",
+                    enabled,
+                    document == null ? "" : document.documentId(),
+                    sourcePath,
+                    providerAssetId,
+                    content == null ? null : content.length);
             return Optional.empty();
         }
         String checksum = sha256(content);

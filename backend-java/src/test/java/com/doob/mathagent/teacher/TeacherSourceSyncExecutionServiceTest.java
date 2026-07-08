@@ -10,6 +10,7 @@ import com.doob.mathagent.knowledge.service.TeacherBlockQuestionImportService;
 import com.doob.mathagent.knowledge.vo.QuestionBankItemResponse;
 import com.doob.mathagent.knowledge.vo.TeacherBlockQuestionImportResponse;
 import com.doob.mathagent.teacher.service.InMemoryTeacherDocumentBlockStore;
+import com.doob.mathagent.teacher.service.InMemoryTeacherResourceAssetStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherResourceStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherSourceSyncCheckpointStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherSourceSyncJobStore;
@@ -17,6 +18,7 @@ import com.doob.mathagent.teacher.service.ProcessTeacherFeishuDownloadClient;
 import com.doob.mathagent.teacher.service.TeacherFeishuDownloadClient;
 import com.doob.mathagent.teacher.service.TeacherFeishuDownloadException;
 import com.doob.mathagent.teacher.service.TeacherResourceRegistrationCommand;
+import com.doob.mathagent.teacher.service.TeacherResourceAssetService;
 import com.doob.mathagent.teacher.service.TeacherResourceService;
 import com.doob.mathagent.teacher.service.TeacherResourceGraphAlignmentService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncExecutionService;
@@ -24,6 +26,7 @@ import com.doob.mathagent.teacher.service.TeacherSourceSyncJobService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncProperties;
 import com.doob.mathagent.teacher.service.UnconfiguredTeacherFeishuDownloadClient;
 import com.doob.mathagent.teacher.vo.TeacherDocumentBlockResponse;
+import com.doob.mathagent.teacher.vo.TeacherResourceAssetResponse;
 import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncCheckpointResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncJobResponse;
@@ -33,6 +36,10 @@ import com.doob.mathagent.vector.service.VectorIndexProperties;
 import com.doob.mathagent.vector.service.VectorIndexService;
 import com.doob.mathagent.vector.service.TestVectorIndexService;
 import java.io.OutputStream;
+import java.awt.Color;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -46,9 +53,11 @@ import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.apache.pdfbox.pdmodel.font.PDType1Font;
 import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
+import org.apache.poi.xwpf.usermodel.Document;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import javax.imageio.ImageIO;
 
 class TeacherSourceSyncExecutionServiceTest {
 
@@ -814,6 +823,124 @@ class TeacherSourceSyncExecutionServiceTest {
     }
 
     @Test
+    void feishuSyncJobPersistsDownloadedImageManifestWhenNoTextBlocksExist() throws Exception {
+        Path savedPath = tempDir.resolve("downloaded-feishu-assets");
+        Files.createDirectories(savedPath.resolve("figures"));
+        Files.write(savedPath.resolve("figures").resolve("curve.png"), new byte[] {1, 2, 3, 4, 5});
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherSourceSyncJobStore jobStore = new InMemoryTeacherSourceSyncJobStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        InMemoryTeacherResourceAssetStore assetStore = new InMemoryTeacherResourceAssetStore();
+        TeacherResourceService resourceService = TeacherResourceServiceFixture.service(resourceStore);
+        TeacherResourceDocumentResponse resource = resourceService.register(new TeacherResourceRegistrationCommand(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                "feishu",
+                "Feishu figure asset bank",
+                "https://my.feishu.cn/drive/folder/assetRootToken",
+                null,
+                "TEACHER_PRIVATE",
+                "md"));
+        TeacherSourceSyncJobService jobService = new TeacherSourceSyncJobService(resourceStore, jobStore);
+        TeacherSourceSyncJobResponse queued = jobService.createSyncJob(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                resource.documentId());
+        TeacherSourceSyncExecutionService executionService = new TeacherSourceSyncExecutionService(
+                resourceStore,
+                jobStore,
+                blockStore,
+                new ManifestOnlyFeishuDownloadClient(savedPath),
+                testSyncProperties(),
+                new InMemoryTeacherSourceSyncCheckpointStore(),
+                TestVectorIndexService.successful(resourceStore, blockStore),
+                TeacherResourceGraphAlignmentService.disabled(),
+                new TeacherResourceAssetService(assetStore, resourceStore, testSyncProperties()));
+
+        TeacherSourceSyncJobResponse completed = executionService.execute(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                resource.documentId(),
+                queued.jobId());
+
+        assertThat(completed.status()).isEqualTo("completed");
+        assertThat(completed.message()).contains("no supported files parsed");
+        assertThat(completed.message()).contains("Feishu manifest assets 1");
+        assertThat(blockStore.listByDocument("school-a", resource.documentId())).isEmpty();
+        assertThat(assetStore.snapshot())
+                .hasSize(1)
+                .first()
+                .satisfies(asset -> {
+                    assertThat(asset.providerAssetId()).isEqualTo("feishu:image-token-1");
+                    assertThat(asset.sourcePath()).isEqualTo("figures/curve.png");
+                    assertThat(asset.mimeType()).isEqualTo("image/png");
+                    assertThat(asset.permissionScope()).isEqualTo("TEACHER_PRIVATE");
+                });
+        TeacherResourceAssetResponse asset = assetStore.snapshot().getFirst();
+        assertThat(Files.exists(testSyncProperties().assetStorageRoot().resolve(asset.storageKey()))).isTrue();
+    }
+
+    @Test
+    void localDocxImageSyncPersistsAssetAndBlockImageRef() throws Exception {
+        Path bank = tempDir.resolve("teacher-docx-image-bank");
+        Files.createDirectories(bank);
+        writeDocxWithImage(bank.resolve("diagram-note.docx"));
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherSourceSyncJobStore jobStore = new InMemoryTeacherSourceSyncJobStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        InMemoryTeacherResourceAssetStore assetStore = new InMemoryTeacherResourceAssetStore();
+        TeacherResourceService resourceService = TeacherResourceServiceFixture.service(resourceStore);
+        TeacherResourceDocumentResponse resource = resourceService.register(new TeacherResourceRegistrationCommand(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                "local_path",
+                "Local DOCX image bank",
+                null,
+                bank.toString(),
+                "TEACHER_PRIVATE",
+                null));
+        TeacherSourceSyncJobService jobService = new TeacherSourceSyncJobService(resourceStore, jobStore);
+        TeacherSourceSyncJobResponse queued = jobService.createSyncJob(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                resource.documentId());
+        TeacherResourceAssetService assetService =
+                new TeacherResourceAssetService(assetStore, resourceStore, testSyncProperties());
+        TeacherSourceSyncExecutionService executionService = new TeacherSourceSyncExecutionService(
+                resourceStore,
+                jobStore,
+                blockStore,
+                emptyDownloadClient(),
+                testSyncProperties(),
+                new InMemoryTeacherSourceSyncCheckpointStore(),
+                TestVectorIndexService.successful(resourceStore, blockStore),
+                TeacherResourceGraphAlignmentService.disabled(),
+                assetService);
+
+        TeacherSourceSyncJobResponse completed = executionService.execute(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                resource.documentId(),
+                queued.jobId());
+
+        assertThat(completed.status()).isEqualTo("completed");
+        assertThat(assetStore.snapshot()).hasSize(1);
+        TeacherResourceAssetResponse asset = assetStore.snapshot().getFirst();
+        assertThat(asset.sourcePath()).isEqualTo("diagram-note.docx");
+        assertThat(asset.providerAssetId()).contains("/word/media/");
+        assertThat(asset.mimeType()).isEqualTo("image/png");
+        assertThat(Files.exists(testSyncProperties().assetStorageRoot().resolve(asset.storageKey()))).isTrue();
+        assertThat(blockStore.listByDocument("school-a", resource.documentId()))
+                .anySatisfy(block -> assertThat(block.imageRefs()).contains(asset.assetId()));
+    }
+
+    @Test
     void realFeishuSyncJobDownloadsOneFileThroughVerifiedScript() {
         Path script = Path.of("..", "ai-worker-python", "scripts", "download_feishu_url.py")
                 .toAbsolutePath()
@@ -897,6 +1024,30 @@ class TeacherSourceSyncExecutionServiceTest {
             for (String paragraph : paragraphs) {
                 document.createParagraph().createRun().setText(paragraph);
             }
+            document.write(output);
+        }
+    }
+
+    /**
+     * Writes a real Office package with an embedded PNG; this catches regressions where POI sees an image paragraph
+     * but the sync pipeline silently drops the binary asset before writing block imageRefs.
+     */
+    private static void writeDocxWithImage(Path path) throws Exception {
+        BufferedImage image = new BufferedImage(16, 12, BufferedImage.TYPE_INT_RGB);
+        for (int x = 0; x < image.getWidth(); x += 1) {
+            for (int y = 0; y < image.getHeight(); y += 1) {
+                image.setRGB(x, y, x < 8 ? Color.BLUE.getRGB() : Color.ORANGE.getRGB());
+            }
+        }
+        ByteArrayOutputStream imageBytes = new ByteArrayOutputStream();
+        ImageIO.write(image, "png", imageBytes);
+        try (XWPFDocument document = new XWPFDocument();
+                OutputStream output = Files.newOutputStream(path);
+                ByteArrayInputStream input = new ByteArrayInputStream(imageBytes.toByteArray())) {
+            document.createParagraph().createRun().setText("Diagram note before image");
+            document.createParagraph()
+                    .createRun()
+                    .addPicture(input, Document.PICTURE_TYPE_PNG, "inline-diagram.png", 16, 12);
             document.write(output);
         }
     }
@@ -1045,6 +1196,44 @@ class TeacherSourceSyncExecutionServiceTest {
                     "Downloaded 1 Feishu files; skipped 0",
                     FeishuDownloadCheckpoint.empty(),
                     "[]",
+                    "[]");
+        }
+    }
+
+    private static final class ManifestOnlyFeishuDownloadClient implements TeacherFeishuDownloadClient {
+
+        private final Path savedPath;
+
+        private ManifestOnlyFeishuDownloadClient(Path savedPath) {
+            this.savedPath = savedPath;
+        }
+
+        @Override
+        public FeishuDownloadResult download(
+                String url,
+                Path stagingRoot,
+                int maxFiles,
+                String fileExtension,
+                FeishuDownloadCheckpoint checkpoint) {
+            return new FeishuDownloadResult(
+                    savedPath,
+                    1,
+                    0,
+                    0,
+                    "Downloaded 1 Feishu files; skipped 0",
+                    FeishuDownloadCheckpoint.empty(),
+                    """
+                    [{
+                      "type":"file",
+                      "token":"image-token-1",
+                      "name":"curve.png",
+                      "path":"figures/curve.png",
+                      "relativePath":"figures/curve.png",
+                      "checksum":"ignored-by-java-test",
+                      "mimeType":"image/png",
+                      "assetKind":"image"
+                    }]
+                    """,
                     "[]");
         }
     }
