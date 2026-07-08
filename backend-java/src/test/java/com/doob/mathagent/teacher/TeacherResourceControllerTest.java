@@ -789,6 +789,90 @@ class TeacherResourceControllerTest {
     }
 
     @Test
+    void teacherResourceLibraryAliasExcludesSpecializedLocalPathLibraries() {
+        InMemoryTeacherResourceStore store = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        store.save(new TeacherResourceDocumentResponse(
+                "doc-generic",
+                "school-a",
+                "teacher-88",
+                "local_path",
+                "Teacher owned vector notes",
+                null,
+                "C:/workspace/runtime-authored/space-vector-handout",
+                "MATH_VIP",
+                "synced",
+                "parsed",
+                "ready",
+                "ready",
+                java.util.List.of()));
+        store.save(new TeacherResourceDocumentResponse(
+                "doc-qq",
+                "school-a",
+                "teacher-88",
+                "local_path",
+                "Runtime QQ bundle package",
+                null,
+                "C:/workspace/runtime-authored/02-qq-bundle-vector",
+                "MATH_VIP",
+                "synced",
+                "parsed",
+                "ready",
+                "ready",
+                java.util.List.of()));
+        store.save(new TeacherResourceDocumentResponse(
+                "doc-feishu",
+                "school-a",
+                "teacher-88",
+                "local_path",
+                "Runtime Feishu method package",
+                null,
+                "C:/workspace/runtime-authored/03-feishu-method-probability",
+                "TEACHER_PRIVATE",
+                "synced",
+                "parsed",
+                "ready",
+                "ready",
+                java.util.List.of()));
+        blockStore.replaceActiveBlocks("school-a", "doc-generic", java.util.List.of(searchBlock(
+                "block-generic",
+                "doc-generic",
+                "space vector teacher notes and generic classroom handout")));
+        blockStore.replaceActiveBlocks("school-a", "doc-qq", java.util.List.of(searchBlock(
+                "block-qq",
+                "doc-qq",
+                "vector angle bundle analysis and lesson summary")));
+        blockStore.replaceActiveBlocks("school-a", "doc-feishu", java.util.List.of(searchBlock(
+                "block-feishu",
+                "doc-feishu",
+                "probability method template and classroom reminder")));
+        TeacherResourceController controller = controller(
+                TeacherResourceServiceFixture.service(store, blockStore),
+                new TeacherSourceSyncJobService(store, new InMemoryTeacherSourceSyncJobStore()),
+                syncExecutionService(store, new InMemoryTeacherSourceSyncJobStore(), blockStore),
+                com.doob.mathagent.teacher.TeacherResourceBlockSearchServiceFixture.service(store, blockStore),
+                request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"),
+                (token, action, path, requestHash, subject) -> true);
+
+        TeacherResourceBlockSearchResponse response = controller.searchBlocks(
+                "space vector handout notes",
+                10,
+                null,
+                null,
+                null,
+                java.util.List.of("teacher_resource"),
+                null,
+                null,
+                new MockHttpServletRequest());
+
+        assertThat(response.retrievalMode()).isEqualTo("two_stage_doc_block_filtered");
+        assertThat(response.hits()).extracting(TeacherResourceBlockSearchResponse.Hit::documentId)
+                .containsExactly("doc-generic");
+        assertThat(response.hits()).extracting(TeacherResourceBlockSearchResponse.Hit::sourceType)
+                .containsExactly("teacher_resource");
+    }
+
+    @Test
     void ranksMatchingSectionBlockAheadOfSiblingBlock() {
         InMemoryTeacherResourceStore store = new InMemoryTeacherResourceStore();
         InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();

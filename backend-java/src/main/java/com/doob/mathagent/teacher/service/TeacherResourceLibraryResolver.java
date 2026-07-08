@@ -9,11 +9,10 @@ import java.util.Set;
 /**
  * Resolves the logical teacher-resource library for one source document.
  *
- * <p>The same ingestion pipeline serves real Feishu downloads, local QQ bundles, gaokao folders, and runtime-authored
- * evaluation packages. Older rows were often stored as {@code local_path}, which is a transport detail rather than the
- * library that teachers or AI tools care about. Library-aware retrieval must therefore infer a stable logical library
- * from persisted metadata instead of trusting {@code source_type} literally, or "specify library" silently stops
- * working for perfectly valid existing data.</p>
+ * <p>Many existing rows were ingested as {@code local_path}, even when the folder is clearly a QQ bundle, Feishu
+ * method export, gaokao paper, or mock exam. Retrieval filters must therefore infer a stable logical library from
+ * persisted document metadata. Keep this resolver source-oriented: it must classify libraries from title/path/type
+ * metadata, not from benchmark query wording or one-off test phrases.</p>
  */
 public final class TeacherResourceLibraryResolver {
 
@@ -23,7 +22,9 @@ public final class TeacherResourceLibraryResolver {
             "gaokao",
             "mock_exam",
             "public_textbook",
-            "textbook");
+            "textbook",
+            "teacher_resource",
+            "system_reference");
 
     private TeacherResourceLibraryResolver() {
     }
@@ -43,6 +44,17 @@ public final class TeacherResourceLibraryResolver {
             return "public_textbook";
         }
         String haystack = metadataHaystack(document);
+        if (containsAny(
+                haystack,
+                "design-system",
+                "development-knowledge",
+                "knowledge-graph-spine",
+                "synthetic-natural-math-benchmark",
+                "benchmark-high-school-math",
+                "/output/benchmarks/",
+                "/benchmark-math-resources")) {
+            return "system_reference";
+        }
         if (containsAny(haystack, "qq_bundle", "qq-bundle", "qq bundle", "专题", "答案解析", "点评")) {
             return "qq_bundle";
         }
@@ -58,14 +70,19 @@ public final class TeacherResourceLibraryResolver {
         if (containsAny(haystack, "textbook", "教材", "chapter")) {
             return "public_textbook";
         }
+        if ("local_path".equals(normalizedSourceType) || normalizedSourceType.isBlank()) {
+            return "teacher_resource";
+        }
         return normalizedSourceType;
     }
 
     /**
      * Returns all selectors that should match this document.
      *
-     * <p>We keep both the raw {@code source_type} and the inferred logical library so old {@code local_path} rows stay
-     * reachable during migration while newer explicitly typed rows continue to work.</p>
+     * <p>The raw {@code source_type} remains selectable for legacy callers, so {@code sourceType=local_path} can still
+     * inspect old local-folder rows. The broad {@code teacher_resource} selector is narrower by design: it only matches
+     * generic teacher-owned material after specialized libraries have been inferred. Otherwise an AI request for one
+     * library would still pull in QQ, Feishu, gaokao, and mock-exam local folders and stage-one recall would be noisy.</p>
      */
     public static Set<String> selectors(TeacherResourceDocumentResponse document) {
         LinkedHashSet<String> selectors = new LinkedHashSet<>();
@@ -80,7 +97,7 @@ public final class TeacherResourceLibraryResolver {
         if ("PUBLIC_TEXTBOOK".equalsIgnoreCase(text(document == null ? null : document.permissionScope()))) {
             selectors.add("textbook");
             selectors.add("public_textbook");
-        } else if (!effectiveLibrary.isBlank()) {
+        } else if ("teacher_resource".equals(effectiveLibrary)) {
             selectors.add("teacher_resource");
         }
         return selectors;
@@ -112,7 +129,8 @@ public final class TeacherResourceLibraryResolver {
 
     private static boolean containsAny(String haystack, String... needles) {
         for (String needle : needles) {
-            if (!normalize(needle).isBlank() && haystack.contains(normalize(needle))) {
+            String normalizedNeedle = normalize(needle);
+            if (!normalizedNeedle.isBlank() && haystack.contains(normalizedNeedle)) {
                 return true;
             }
         }
