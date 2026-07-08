@@ -53,8 +53,39 @@ public class TeacherResourceBlockSearchService {
     private static final int MAX_SEARCH_TERMS = 32;
     private static final double METADATA_EXACT_MATCH_BOOST = 4.0d;
     private static final double METADATA_TERM_MATCH_BOOST = 0.75d;
+    private static final double FILTERED_REJECT_SCORE_THRESHOLD = 13.0d;
+    private static final double FILTERED_REJECT_MAX_SCORE_WITHOUT_ANCHOR = 26.0d;
+    private static final double FILTERED_ANCHOR_SCORE_THRESHOLD = 3.0d;
     private static final String STRATEGY_LEGACY_BLOCK_HYBRID = "legacy_block_hybrid";
     private static final String STRATEGY_TWO_STAGE_DOC_BLOCK = "two_stage_doc_block";
+    private static final Set<String> GENERIC_SEARCH_TERMS = Set.of(
+            "\u68c0\u7d22",
+            "\u8bc4\u6d4b",
+            "\u53ea\u505a",
+            "\u8bf7\u627e",
+            "\u8d44\u6599",
+            "\u7ebf\u7d22",
+            "\u8d44\u6599\u7ebf\u7d22",
+            "\u8bc1\u636e",
+            "\u8bc1\u636e\u5757",
+            "\u8bc1\u636e\u5757\u5373\u53ef",
+            "\u8fd4\u56de",
+            "\u5373\u53ef",
+            "\u5b9a\u4f4d",
+            "\u4f18\u5148",
+            "\u4f18\u5148\u627e",
+            "\u6307\u5b9a",
+            "\u6307\u5b9a\u5e93",
+            "\u76ee\u6807",
+            "\u89d2\u8272",
+            "\u76ee\u6807\u89d2\u8272",
+            "\u5e93\u8303\u56f4",
+            "\u6765\u6e90",
+            "\u76f4\u63a5",
+            "\u8df3\u5230",
+            "\u524d\u9762",
+            "\u6700\u8d34",
+            "\u8d34\u8fd1");
 
     private final TeacherResourceStore resourceStore;
     private final TeacherDocumentBlockStore blockStore;
@@ -282,6 +313,7 @@ public class TeacherResourceBlockSearchService {
                 normalizedQuery,
                 terms,
                 safeLimit,
+                filter,
                 queryGraph);
         return response(normalizedQuery, safeLimit, retrievalMode(STRATEGY_TWO_STAGE_DOC_BLOCK, filter, null), hits);
     }
@@ -483,6 +515,7 @@ public class TeacherResourceBlockSearchService {
             String normalizedQuery,
             String[] terms,
             int safeLimit,
+            TeacherResourceSearchFilter filter,
             TeacherResourceGraphAlignmentService.QueryGraphContext queryGraph) {
         List<BlockCandidate> blockCandidates = new ArrayList<>();
         for (DocumentCandidate candidate : rankedDocuments) {
@@ -519,13 +552,30 @@ public class TeacherResourceBlockSearchService {
                          */
                         + vector * 6.0d * vectorSupport
                         + exactQueryBonus(block.searchableText(), normalizedQuery);
-                blockCandidates.add(new BlockCandidate(candidate.document(), block, score));
+                blockCandidates.add(new BlockCandidate(
+                        candidate.document(),
+                        block,
+                        score,
+                        lexical,
+                        metadata,
+                        structure,
+                        graph,
+                        role,
+                        neighbor,
+                        vector));
             }
         }
-        return blockCandidates.stream()
+        List<BlockCandidate> rankedCandidates = blockCandidates.stream()
                 .sorted(Comparator.comparingDouble(BlockCandidate::score).reversed()
                         .thenComparing(candidate -> candidate.document().title())
                         .thenComparing(candidate -> candidate.block().block().blockOrder()))
+                .toList();
+        List<BlockCandidate> acceptedCandidates = maybeRejectLowConfidenceFilteredHits(
+                rankedCandidates,
+                filter,
+                normalizedQuery,
+                terms);
+        return acceptedCandidates.stream()
                 .limit(safeLimit)
                 .map(candidate -> toTwoStageHit(candidate, blocksByDocumentId.get(candidate.document().documentId()), normalizedQuery, terms))
                 .toList();
@@ -993,13 +1043,16 @@ public class TeacherResourceBlockSearchService {
         String role = normalizeText(textOrDefault(blockRole, ""));
         String path = normalizeText(textOrDefault(sourcePath, ""));
         boolean wantsAnalysis = queryWantsAnalysis(normalizedQuery);
-        boolean wantsMethod = containsAny(normalizedQuery, "\u65b9\u6cd5", "\u8bb2\u6cd5", "\u601d\u8def", "method", "approach");
-        boolean wantsBoardwork = containsAny(normalizedQuery, "\u677f\u4e66", "\u677f\u6f14", "boardwork", "blackboard");
-        boolean wantsTemplate = containsAny(normalizedQuery, "\u6a21\u677f", "\u8bb2\u4e49\u6a21\u677f", "template");
-        boolean wantsTip = containsAny(normalizedQuery, "\u63d0\u793a", "\u63d0\u9192", "\u6ce8\u610f", "\u6613\u9519", "tip", "pitfall");
+        boolean wantsMethod = containsPositiveCue(normalizedQuery, "\u65b9\u6cd5", "\u8bb2\u6cd5", "\u601d\u8def", "method", "approach");
+        boolean wantsBoardwork = containsPositiveCue(normalizedQuery, "\u677f\u4e66", "\u677f\u6f14", "boardwork", "blackboard");
+        boolean wantsTemplate = containsPositiveCue(normalizedQuery, "\u6a21\u677f", "\u8bb2\u4e49\u6a21\u677f", "template");
+        boolean wantsTip = containsPositiveCue(normalizedQuery, "\u63d0\u793a", "\u63d0\u9192", "\u6ce8\u610f", "\u6613\u9519", "tip", "pitfall");
         boolean wantsQuestion = queryWantsQuestion(normalizedQuery, wantsAnalysis);
-        boolean wantsLesson = containsAny(normalizedQuery, "\u4e13\u9898", "\u8bb2\u4e49", "\u6559\u6750", "\u8bfe\u5802", "lesson", "notes", "textbook");
-        boolean wantsExplanation = containsAny(
+        boolean wantsLesson = queryWantsLesson(normalizedQuery);
+        boolean rejectsAnalysis = queryRejectsRole(normalizedQuery, "\u89e3\u6790", "\u7b54\u6848", "\u8bb2\u8bc4", "analysis", "answer", "solution");
+        boolean rejectsQuestion = queryRejectsRole(normalizedQuery, "\u9898\u9762", "\u9898\u76ee", "\u9898\u5e72", "\u539f\u9898", "question", "prompt", "stem");
+        boolean rejectsLesson = queryRejectsRole(normalizedQuery, "\u4e13\u9898", "\u8bb2\u4e49", "\u603b\u8bb2", "lesson", "notes");
+        boolean wantsExplanation = containsPositiveCue(
                 normalizedQuery,
                 "\u4e3a\u4ec0\u4e48",
                 "\u600e\u4e48",
@@ -1013,14 +1066,17 @@ public class TeacherResourceBlockSearchService {
                 "steps");
         double score = 0;
         if (wantsAnalysis && ("analysis".equals(role) || containsAny(path, "answer", "analysis", "solution"))) {
-            score += 6.0d;
+            score += 7.0d;
         } else if (wantsAnalysis) {
-            score -= 2.0d;
+            score -= "question".equals(role) ? 4.2d : "lesson".equals(role) ? 2.6d : 2.0d;
+        }
+        if (rejectsAnalysis && ("analysis".equals(role) || containsAny(path, "answer", "analysis", "solution"))) {
+            score -= 6.0d;
         }
         if (wantsMethod && ("method".equals(role) || containsAny(path, "method", "approach"))) {
             score += 5.0d;
         } else if (wantsMethod) {
-            score -= 1.5d;
+            score -= "tip".equals(role) ? 0.8d : 1.5d;
         }
         if (wantsBoardwork && ("boardwork".equals(role) || containsAny(path, "boardwork", "blackboard"))) {
             score += 5.0d;
@@ -1038,14 +1094,20 @@ public class TeacherResourceBlockSearchService {
             score -= 1.5d;
         }
         if (wantsQuestion && ("question".equals(role) || containsAny(path, "question", "exam", "mock"))) {
-            score += 4.0d;
+            score += 6.2d;
         } else if (wantsQuestion) {
-            score -= 1.0d;
+            score -= "lesson".equals(role) ? 3.2d : "analysis".equals(role) ? 2.4d : 1.4d;
         }
-        if (wantsLesson && ("lesson".equals(role) || containsAny(path, "lesson", "handout", "textbook"))) {
-            score += 3.0d;
+        if (rejectsQuestion && ("question".equals(role) || containsAny(path, "question", "exam", "mock"))) {
+            score -= 6.0d;
+        }
+        if (wantsLesson && ("lesson".equals(role) || containsAny(path, "lesson", "handout", "textbook", "topic"))) {
+            score += 4.0d;
         } else if (wantsLesson) {
-            score -= 0.5d;
+            score -= "question".equals(role) ? 2.8d : 0.8d;
+        }
+        if (rejectsLesson && ("lesson".equals(role) || containsAny(path, "lesson", "handout", "textbook", "topic"))) {
+            score -= 4.5d;
         }
         if (wantsExplanation) {
             if ("analysis".equals(role)) {
@@ -1062,26 +1124,37 @@ public class TeacherResourceBlockSearchService {
     }
 
     private static boolean queryWantsAnalysis(String normalizedQuery) {
-        return containsAny(
+        return containsPositiveCue(
                 normalizedQuery,
                 "\u89e3\u6790",
                 "\u7b54\u6848",
+                "\u601d\u8def",
+                "\u8def\u7ebf",
+                "\u8bb2\u8bc4",
                 "\u70b9\u8bc4",
+                "\u9519\u56e0",
+                "\u6b65\u9aa4",
                 "\u8bb2\u8bc4",
                 "analysis",
                 "answer",
-                "solution");
+                "solution",
+                "steps");
     }
 
     private static boolean queryWantsQuestion(String normalizedQuery, boolean wantsAnalysis) {
-        if (containsAny(
+        if (containsPositiveCue(
                 normalizedQuery,
                 "\u9898\u9762",
                 "\u9898\u76ee",
+                "\u9898\u5e72",
                 "\u539f\u9898",
+                "\u539f\u6587",
+                "\u5148\u770b\u9898",
+                "\u5b9a\u4f4d\u9898\u9762",
                 "\u54ea\u9053\u9898",
                 "question",
-                "prompt")) {
+                "prompt",
+                "stem")) {
             return true;
         }
         /*
@@ -1094,6 +1167,212 @@ public class TeacherResourceBlockSearchService {
                 "\u6a21\u62df",
                 "\u4f8b\u9898",
                 "exam");
+    }
+
+    private static boolean queryWantsLesson(String normalizedQuery) {
+        return containsPositiveCue(
+                normalizedQuery,
+                "\u4e13\u9898",
+                "\u8bb2\u4e49",
+                "\u6559\u6750",
+                "\u8bfe\u5802",
+                "\u6574\u4f53\u8bb2\u6cd5",
+                "\u6574\u4f53\u68b3\u7406",
+                "\u603b\u8bb2",
+                "\u6574\u5305",
+                "lesson",
+                "notes",
+                "textbook",
+                "topic");
+    }
+
+    private static boolean queryHasExplicitRoleIntent(String normalizedQuery) {
+        return queryWantsAnalysis(normalizedQuery)
+                || queryWantsQuestion(normalizedQuery, false)
+                || queryWantsLesson(normalizedQuery)
+                || containsPositiveCue(
+                        normalizedQuery,
+                        "\u65b9\u6cd5",
+                        "\u8bb2\u6cd5",
+                        "\u601d\u8def",
+                        "\u677f\u4e66",
+                        "\u677f\u6f14",
+                        "\u6a21\u677f",
+                        "\u63d0\u793a",
+                        "\u6613\u9519",
+                        "method",
+                        "boardwork",
+                        "template",
+                        "tip");
+    }
+
+    private static boolean roleSatisfiesQueryIntent(String blockRole, String sourcePath, String normalizedQuery) {
+        String role = normalizeText(textOrDefault(blockRole, ""));
+        String path = normalizeText(textOrDefault(sourcePath, ""));
+        boolean wantsAnalysis = queryWantsAnalysis(normalizedQuery);
+        if (queryWantsQuestion(normalizedQuery, wantsAnalysis)) {
+            return "question".equals(role) || containsAny(path, "question", "exam", "mock");
+        }
+        if (wantsAnalysis) {
+            return "analysis".equals(role) || containsAny(path, "answer", "analysis", "solution");
+        }
+        if (containsPositiveCue(normalizedQuery, "\u677f\u4e66", "\u677f\u6f14", "boardwork", "blackboard")) {
+            return "boardwork".equals(role) || containsAny(path, "boardwork", "blackboard");
+        }
+        if (containsPositiveCue(normalizedQuery, "\u6a21\u677f", "\u8bb2\u4e49\u6a21\u677f", "template")) {
+            return "template".equals(role) || containsAny(path, "template");
+        }
+        if (containsPositiveCue(normalizedQuery, "\u63d0\u793a", "\u6613\u9519", "tip", "notice")) {
+            return "tip".equals(role) || containsAny(path, "tip", "notice");
+        }
+        if (containsPositiveCue(normalizedQuery, "\u65b9\u6cd5", "\u8bb2\u6cd5", "\u601d\u8def", "method", "approach")) {
+            return "method".equals(role) || containsAny(path, "method", "approach");
+        }
+        if (queryWantsLesson(normalizedQuery)) {
+            return "lesson".equals(role) || containsAny(path, "lesson", "handout", "textbook", "topic");
+        }
+        return true;
+    }
+
+    /**
+     * Classroom queries often mention a role only to rule it out, for example "不要答案解析" or "题面不能排在前面".
+     * Treat those as negative constraints instead of positive role intent, otherwise filtered library search keeps
+     * promoting the exact sibling block the teacher explicitly said not to surface first.
+     */
+    private static boolean containsPositiveCue(String normalizedQuery, String... cues) {
+        String haystack = normalizeText(textOrDefault(normalizedQuery, ""));
+        for (String cue : cues) {
+            String normalizedCue = normalizeText(textOrDefault(cue, ""));
+            if (normalizedCue.isBlank()) {
+                continue;
+            }
+            int startIndex = 0;
+            while (startIndex >= 0 && startIndex < haystack.length()) {
+                int matchIndex = haystack.indexOf(normalizedCue, startIndex);
+                if (matchIndex < 0) {
+                    break;
+                }
+                if (!negatedCueOccurrence(haystack, matchIndex, normalizedCue.length())) {
+                    return true;
+                }
+                startIndex = matchIndex + normalizedCue.length();
+            }
+        }
+        return false;
+    }
+
+    private static boolean negatedCueOccurrence(String normalizedQuery, int matchIndex, int cueLength) {
+        int clauseStart = clauseStart(normalizedQuery, matchIndex);
+        int clauseEnd = clauseEnd(normalizedQuery, matchIndex + cueLength);
+        int beforeStart = Math.max(clauseStart, matchIndex - 8);
+        int afterEnd = Math.min(clauseEnd, matchIndex + cueLength + 10);
+        String before = normalizedQuery.substring(beforeStart, matchIndex);
+        String after = normalizedQuery.substring(matchIndex + cueLength, afterEnd);
+        return containsAnyLiteral(
+                        before,
+                        "\u4e0d\u8981",
+                        "\u522b",
+                        "\u4e0d\u60f3",
+                        "\u4e0d\u627e",
+                        "\u4e0d\u67e5",
+                        "\u4e0d\u9700\u8981",
+                        "\u65e0\u9700",
+                        "\u4e0d\u7528",
+                        "\u4e0d\u5fc5",
+                        "\u4e0d\u53ea",
+                        "\u4e0d\u8981\u53ea",
+                        "\u4e0d\u8981\u5148",
+                        "\u522b\u5148",
+                        "\u522b\u628a")
+                || containsAnyLiteral(
+                        after,
+                        "\u4e0d\u80fd",
+                        "\u4e0d\u8981",
+                        "\u4e0d\u5e94",
+                        "\u522b",
+                        "\u4e0d\u5fc5",
+                        "\u65e0\u9700",
+                        "\u4e0d\u4f18\u5148",
+                        "\u4e0d\u80fd\u6392\u5728\u524d\u9762",
+                        "\u4e0d\u6392\u5728\u524d\u9762",
+                        "\u4e0d\u5728\u524d\u9762",
+                        "\u522b\u6392\u5728\u524d\u9762",
+                        "\u522b\u653e\u5728\u524d\u9762",
+                        "\u522b\u5148\u8fd4",
+                        "\u522b\u5148\u7ed9");
+    }
+
+    private static int clauseStart(String text, int index) {
+        int boundary = 0;
+        for (int cursor = Math.max(0, index - 12); cursor < index; cursor += 1) {
+            if (isClauseBoundary(text.charAt(cursor))) {
+                boundary = cursor + 1;
+            }
+        }
+        return boundary;
+    }
+
+    private static int clauseEnd(String text, int index) {
+        int boundary = text.length();
+        for (int cursor = index; cursor < Math.min(text.length(), index + 12); cursor += 1) {
+            if (isClauseBoundary(text.charAt(cursor))) {
+                boundary = cursor;
+                break;
+            }
+        }
+        return boundary;
+    }
+
+    private static boolean isClauseBoundary(char value) {
+        return value == ','
+                || value == '.'
+                || value == ';'
+                || value == ':'
+                || value == '!'
+                || value == '?'
+                || value == '\n'
+                || value == '\r'
+                || value == '\u3002'
+                || value == '\uff0c'
+                || value == '\u3001'
+                || value == '\uff1b'
+                || value == '\uff1a'
+                || value == '\uff01'
+                || value == '\uff1f';
+    }
+
+    private static boolean queryRejectsRole(String normalizedQuery, String... cues) {
+        String haystack = normalizeText(textOrDefault(normalizedQuery, ""));
+        for (String cue : cues) {
+            String normalizedCue = normalizeText(textOrDefault(cue, ""));
+            if (normalizedCue.isBlank()) {
+                continue;
+            }
+            int startIndex = 0;
+            while (startIndex >= 0 && startIndex < haystack.length()) {
+                int matchIndex = haystack.indexOf(normalizedCue, startIndex);
+                if (matchIndex < 0) {
+                    break;
+                }
+                if (negatedCueOccurrence(haystack, matchIndex, normalizedCue.length())) {
+                    return true;
+                }
+                startIndex = matchIndex + normalizedCue.length();
+            }
+        }
+        return false;
+    }
+
+    private static boolean containsAnyLiteral(String haystack, String... needles) {
+        if (haystack == null || haystack.isBlank()) {
+            return false;
+        }
+        for (String needle : needles) {
+            if (needle != null && !needle.isBlank() && haystack.contains(needle)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -1122,6 +1401,7 @@ public class TeacherResourceBlockSearchService {
         }
         boolean wantsAnalysis = queryWantsAnalysis(normalizedQuery);
         boolean wantsQuestion = queryWantsQuestion(normalizedQuery, wantsAnalysis);
+        boolean wantsLesson = queryWantsLesson(normalizedQuery);
         double score = 0;
         int start = Math.max(0, targetIndex - EVIDENCE_WINDOW_RADIUS);
         int end = Math.min(documentBlocks.size() - 1, targetIndex + EVIDENCE_WINDOW_RADIUS);
@@ -1139,21 +1419,149 @@ public class TeacherResourceBlockSearchService {
             String targetRole = normalizeText(target.blockRole());
             String neighborRole = normalizeText(neighbor.blockRole());
             if ("analysis".equals(targetRole) && "question".equals(neighborRole)) {
-                score += Math.min(2.8d, lexical * 0.35d);
+                score += Math.min(3.4d, lexical * 0.42d);
                 if (wantsAnalysis) {
-                    score += 1.4d;
+                    score += 2.1d;
                 }
             } else if ("question".equals(targetRole) && "analysis".equals(neighborRole) && wantsAnalysis) {
-                score -= Math.min(3.2d, lexical * 0.4d + 1.2d);
+                score -= Math.min(5.4d, lexical * 0.55d + 1.8d);
+            } else if ("question".equals(targetRole) && "lesson".equals(neighborRole) && wantsQuestion) {
+                score += Math.min(1.8d, lexical * 0.2d + 0.6d);
+            } else if ("lesson".equals(targetRole) && "question".equals(neighborRole) && wantsQuestion) {
+                score -= Math.min(3.2d, lexical * 0.35d + 0.8d);
+            } else if ("lesson".equals(targetRole) && "analysis".equals(neighborRole) && wantsAnalysis) {
+                score -= Math.min(2.2d, lexical * 0.22d + 0.6d);
             } else if ("method".equals(targetRole) && "boardwork".equals(neighborRole)) {
                 score += Math.min(1.5d, lexical * 0.2d);
             } else if ("tip".equals(targetRole) && ("method".equals(neighborRole) || "boardwork".equals(neighborRole))) {
                 score += Math.min(1.0d, lexical * 0.15d);
             } else if ("question".equals(targetRole) && wantsQuestion) {
                 score += Math.min(0.8d, lexical * 0.12d);
+            } else if ("lesson".equals(targetRole) && wantsLesson) {
+                score += Math.min(1.1d, lexical * 0.12d);
             }
         }
         return score;
+    }
+
+    /**
+     * When the caller already narrows the library, preserve the same candidate set but reorder wrong-role siblings
+     * behind candidates that satisfy explicit query intent such as "题面/解析/讲法/板书". This keeps the filtered
+     * retrieval path compatible with real AI callers that can pass `library`, while avoiding benchmark-only rules.
+     */
+    private static List<BlockCandidate> maybeRejectLowConfidenceFilteredHits(
+            List<BlockCandidate> rankedCandidates,
+            TeacherResourceSearchFilter filter,
+            String normalizedQuery,
+            String[] terms) {
+        if (filter == null || filter.empty() || rankedCandidates.isEmpty()) {
+            return rankedCandidates;
+        }
+        boolean explicitRoleIntent = queryHasExplicitRoleIntent(normalizedQuery);
+        List<BlockCandidate> roleMatchedCandidates = explicitRoleIntent
+                ? rankedCandidates.stream()
+                        .filter(candidate -> roleSatisfiesQueryIntent(
+                                candidate.block().blockRole(),
+                                candidate.block().sourcePath(),
+                                normalizedQuery))
+                        .toList()
+                : List.of();
+        if (explicitRoleIntent && !roleMatchedCandidates.isEmpty()) {
+            if (!roleSatisfiesQueryIntent(
+                    rankedCandidates.getFirst().block().blockRole(),
+                    rankedCandidates.getFirst().block().sourcePath(),
+                    normalizedQuery)) {
+                /*
+                 * When the caller already narrowed the library and also clearly asks for "题面/解析/讲法" etc., keeping
+                 * a wrong-role sibling at rank 1 is worse than preferring the best same-library block that satisfies
+                 * the requested role. This reorders only the filtered list; it does not invent a new corpus or hardcode
+                 * benchmark phrases.
+                 */
+                List<BlockCandidate> reordered = new ArrayList<>(roleMatchedCandidates);
+                for (BlockCandidate candidate : rankedCandidates) {
+                    if (!roleSatisfiesQueryIntent(
+                            candidate.block().blockRole(),
+                            candidate.block().sourcePath(),
+                            normalizedQuery)) {
+                        reordered.add(candidate);
+                    }
+                }
+                rankedCandidates = List.copyOf(reordered);
+            }
+        }
+        if (shouldRejectWeakFilteredTopCandidate(rankedCandidates, filter, normalizedQuery)) {
+            return List.of();
+        }
+        return rankedCandidates;
+    }
+
+    /**
+     * Explicit library selection should reduce cross-library noise, but it also makes broad within-library boilerplate
+     * more visible. Reject only the weakest filtered hits: low score plus weak document/block anchors such as role,
+     * headings, graph tags, or neighbor evidence. Keep this conservative and generic. If someone removes it, specified
+     * library search will regress back to returning arbitrary same-library blocks for obviously out-of-scope queries.
+     */
+    private static boolean shouldRejectWeakFilteredTopCandidate(
+            List<BlockCandidate> rankedCandidates,
+            TeacherResourceSearchFilter filter,
+            String normalizedQuery) {
+        if (rankedCandidates.isEmpty() || filter == null || filter.sourceTypes().isEmpty()) {
+            return false;
+        }
+        BlockCandidate topCandidate = rankedCandidates.getFirst();
+        boolean explicitRoleIntent = queryHasExplicitRoleIntent(normalizedQuery);
+        if (explicitRoleIntent
+                && roleSatisfiesQueryIntent(
+                        topCandidate.block().blockRole(),
+                        topCandidate.block().sourcePath(),
+                        normalizedQuery)) {
+            return false;
+        }
+        double semanticAnchorScore = topCandidate.metadataScore() + Math.max(0.0d, topCandidate.graphScore());
+        int matchedSubstantiveTerms = matchedSubstantiveTermCount(topCandidate, searchTerms(normalizedQuery));
+        if (!explicitRoleIntent) {
+            if (topCandidate.score() < FILTERED_REJECT_SCORE_THRESHOLD
+                    && semanticAnchorScore <= 0.0d
+                    && matchedSubstantiveTerms <= 2) {
+                return true;
+            }
+            if (topCandidate.score() < FILTERED_REJECT_MAX_SCORE_WITHOUT_ANCHOR
+                    && semanticAnchorScore <= 0.0d
+                    && matchedSubstantiveTerms == 0
+                    && Math.max(0.0d, topCandidate.neighborScore()) <= 0.0d) {
+                return true;
+            }
+        }
+        double anchoredScore = topCandidate.metadataScore()
+                + topCandidate.structureScore()
+                + Math.max(0.0d, topCandidate.graphScore())
+                + Math.max(0.0d, topCandidate.roleScore())
+                + Math.max(0.0d, topCandidate.neighborScore());
+        return topCandidate.score() < FILTERED_REJECT_SCORE_THRESHOLD
+                && anchoredScore < FILTERED_ANCHOR_SCORE_THRESHOLD
+                && matchedSubstantiveTerms <= 1;
+    }
+
+    private static int matchedSubstantiveTermCount(BlockCandidate candidate, String[] terms) {
+        if (terms == null || terms.length == 0) {
+            return 0;
+        }
+        String haystack = normalizeText(String.join(
+                " ",
+                candidate.document().title(),
+                candidate.block().searchableText(),
+                candidate.block().sourcePath(),
+                candidate.block().block().chapter(),
+                candidate.block().block().section(),
+                candidate.block().blockRole(),
+                String.join(" ", candidate.block().graphTags())));
+        int count = 0;
+        for (String term : terms) {
+            if (!term.isBlank() && haystack.contains(term)) {
+                count += 1;
+            }
+        }
+        return count;
     }
 
     private static double categoricalCueScore(
@@ -1377,7 +1785,15 @@ public class TeacherResourceBlockSearchService {
         if (normalizedCandidate.isBlank()) {
             return;
         }
-        if (normalizedCandidate.length() == 1 && isAsciiWordChar(normalizedCandidate.charAt(0)) == false) {
+        if (normalizedCandidate.length() == 1 && isAsciiWordChar(normalizedCandidate.charAt(0))) {
+            /*
+             * Single ASCII letters are almost always retrieval noise in real teacher queries: articles like "a",
+             * variable fragments, and OCR leftovers would otherwise match nearly every Latin block and make filtered
+             * library rejection impossible. Keep one-character CJK terms available, but drop one-character ASCII terms.
+             */
+            return;
+        }
+        if (GENERIC_SEARCH_TERMS.contains(normalizedCandidate)) {
             return;
         }
         terms.add(normalizedCandidate);
@@ -1467,11 +1883,19 @@ public class TeacherResourceBlockSearchService {
     private record BlockCandidate(
             TeacherResourceDocumentResponse document,
             BlockContext block,
-            double score) {
+            double score,
+            double lexicalScore,
+            double metadataScore,
+            double structureScore,
+            double graphScore,
+            double roleScore,
+            double neighborScore,
+            double vectorScore) {
     }
 
     private record EvidenceWindow(
             List<String> blockIds,
             String text) {
     }
+
 }

@@ -521,6 +521,284 @@ class TeacherResourceBlockSearchServiceTest {
     }
 
     @Test
+    void explicitQuestionIntentBeatsLessonSiblingInsideFilteredQqBundleDocument() {
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        resourceStore.save(new TeacherResourceDocumentResponse(
+                "doc-qq-question",
+                "school-a",
+                "teacher-1",
+                "qq_bundle",
+                "Runtime QQ bundle original question pack",
+                null,
+                "C:/workspace/runtime-authored/qq-question-pack",
+                "MATH_VIP",
+                "synced",
+                "parsed",
+                "ready",
+                "ready",
+                List.of()));
+        blockStore.replaceActiveBlocks("school-a", "doc-qq-question", List.of(
+                detailedBlock(
+                        "b-qq-lesson",
+                        "doc-qq-question",
+                        1,
+                        "qq_bundle/专题讲解.md",
+                        "lesson",
+                        "空间向量",
+                        "专题总述",
+                        "专题讲解先梳理空间向量整包讲法，强调线面角与向量角的联系，属于讲义总述。"),
+                detailedBlock(
+                        "b-qq-question",
+                        "doc-qq-question",
+                        2,
+                        "qq_bundle/原题题面.md",
+                        "question",
+                        "空间向量",
+                        "原题题面",
+                        "原题题面要求先定位专题包里的题目原文，只呈现题干与条件，不展开答案解析。"),
+                detailedBlock(
+                        "b-qq-analysis",
+                        "doc-qq-question",
+                        3,
+                        "qq_bundle/答案解析.md",
+                        "analysis",
+                        "空间向量",
+                        "答案解析",
+                        "答案解析说明解题路线与点评，应该排在原题题面之后。")));
+        TeacherResourceBlockSearchService service = TeacherResourceBlockSearchServiceFixture.service(resourceStore, blockStore);
+
+        TeacherResourceBlockSearchResponse response = service.search(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                "帮我先定位这套专题包里的原题题面，不要讲义总述，也不要答案解析",
+                5,
+                "/api/teacher/resources/search",
+                TeacherResourceSearchFilter.of(null, null, List.of("qq_bundle"), null),
+                "two_stage_doc_block");
+
+        assertThat(response.hits()).isNotEmpty();
+        assertThat(response.hits().getFirst().documentId()).isEqualTo("doc-qq-question");
+        assertThat(response.hits().getFirst().blockId()).isEqualTo("b-qq-question");
+        assertThat(response.hits().getFirst().blockRole()).isEqualTo("question");
+    }
+
+    @Test
+    void negatedAnalysisCueDoesNotBeatLessonWhenTeacherExplicitlyRejectsAnswerBlock() {
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        resourceStore.save(new TeacherResourceDocumentResponse(
+                "doc-qq-lesson",
+                "school-a",
+                "teacher-1",
+                "qq_bundle",
+                "Runtime QQ bundle lesson pack",
+                null,
+                "C:/workspace/runtime-authored/qq-lesson-pack",
+                "MATH_VIP",
+                "synced",
+                "parsed",
+                "ready",
+                "ready",
+                List.of()));
+        blockStore.replaceActiveBlocks("school-a", "doc-qq-lesson", List.of(
+                detailedBlock(
+                        "b-qq-lesson",
+                        "doc-qq-lesson",
+                        1,
+                        "qq_bundle/专题讲解.md",
+                        "lesson",
+                        "空间向量",
+                        "整体讲法",
+                        "专题讲解先梳理线面角整体讲法和课堂推进顺序。"),
+                detailedBlock(
+                        "b-qq-analysis",
+                        "doc-qq-lesson",
+                        2,
+                        "qq_bundle/答案解析.md",
+                        "analysis",
+                        "空间向量",
+                        "答案解析",
+                        "答案解析强调单题步骤与讲评，不适合放在专题总述前面.")));
+        TeacherResourceBlockSearchService service = TeacherResourceBlockSearchServiceFixture.service(resourceStore, blockStore);
+
+        TeacherResourceBlockSearchResponse response = service.search(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                "优先找专题讲解块，不要直接跳到答案解析，题面也不要排前面",
+                5,
+                "/api/teacher/resources/search",
+                TeacherResourceSearchFilter.of(null, null, List.of("qq_bundle"), null),
+                "two_stage_doc_block");
+
+        assertThat(response.hits()).isNotEmpty();
+        assertThat(response.hits().getFirst().blockId()).isEqualTo("b-qq-lesson");
+        assertThat(response.hits().getFirst().blockRole()).isEqualTo("lesson");
+    }
+
+    @Test
+    void negatedQuestionCueDoesNotBeatAnalysisWhenTeacherRejectsPromptBlock() {
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        resourceStore.save(new TeacherResourceDocumentResponse(
+                "doc-gaokao-analysis",
+                "school-a",
+                "teacher-1",
+                "gaokao",
+                "Runtime gaokao analysis pack",
+                null,
+                "C:/workspace/runtime-authored/gaokao-analysis-pack",
+                "MATH_VIP",
+                "synced",
+                "parsed",
+                "ready",
+                "ready",
+                List.of()));
+        blockStore.replaceActiveBlocks("school-a", "doc-gaokao-analysis", List.of(
+                detailedBlock(
+                        "b-gaokao-question",
+                        "doc-gaokao-analysis",
+                        1,
+                        "2024高考真题.md",
+                        "question",
+                        "圆锥曲线",
+                        "原题题面",
+                        "原题题面只给出切线与面积最值问题的条件。"),
+                detailedBlock(
+                        "b-gaokao-analysis",
+                        "doc-gaokao-analysis",
+                        2,
+                        "解析.md",
+                        "analysis",
+                        "圆锥曲线",
+                        "变量设置",
+                        "解析里先讲变量如何设置，再展开面积最值的推导路线。")));
+        TeacherResourceBlockSearchService service = TeacherResourceBlockSearchServiceFixture.service(resourceStore, blockStore);
+
+        TeacherResourceBlockSearchResponse response = service.search(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                "优先找解析或讲评块，题面不能排在前面，返回最贴近的证据块即可",
+                5,
+                "/api/teacher/resources/search",
+                TeacherResourceSearchFilter.of(null, null, List.of("gaokao"), null),
+                "two_stage_doc_block");
+
+        assertThat(response.hits()).isNotEmpty();
+        assertThat(response.hits().getFirst().blockId()).isEqualTo("b-gaokao-analysis");
+        assertThat(response.hits().getFirst().blockRole()).isEqualTo("analysis");
+    }
+
+    @Test
+    void specifiedLibraryReturnsEmptyWhenOnlyWeakGenericWithinLibraryNoiseMatches() {
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        resourceStore.save(new TeacherResourceDocumentResponse(
+                "doc-feishu-generic",
+                "school-a",
+                "teacher-1",
+                "feishu",
+                "Teacher method notes",
+                null,
+                "C:/workspace/runtime-authored/feishu-generic-pack",
+                "TEACHER_PRIVATE",
+                "synced",
+                "parsed",
+                "ready",
+                "ready",
+                List.of()));
+        blockStore.replaceActiveBlocks("school-a", "doc-feishu-generic", List.of(
+                detailedBlock(
+                        "b-feishu-method",
+                        "doc-feishu-generic",
+                        1,
+                        "feishu/method.md",
+                        "method",
+                        "General method",
+                        "Classroom prompt",
+                        "This teacher method note explains how to open class, organize review rhythm, and prepare examples."),
+                detailedBlock(
+                        "b-feishu-tip",
+                        "doc-feishu-generic",
+                        2,
+                        "feishu/tip.md",
+                        "tip",
+                        "General reminder",
+                        "Classroom notice",
+                        "This tip reminds the teacher to keep the explanation structured and the board clean.")));
+        TeacherResourceBlockSearchService service = TeacherResourceBlockSearchServiceFixture.service(resourceStore, blockStore);
+
+        TeacherResourceBlockSearchResponse response = service.search(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                "Need a teacher reference about campus safety drill checklist for student evacuation",
+                5,
+                "/api/teacher/resources/search",
+                TeacherResourceSearchFilter.of(null, null, List.of("feishu"), null),
+                "two_stage_doc_block");
+
+        assertThat(response.hits()).isEmpty();
+    }
+
+    @Test
+    void specifiedLibraryKeepsLowScorePositiveWhenRoleAndStructureAnchorsAreClear() {
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        resourceStore.save(new TeacherResourceDocumentResponse(
+                "doc-feishu-boardwork",
+                "school-a",
+                "teacher-1",
+                "feishu",
+                "Probability boardwork flow",
+                null,
+                "C:/workspace/runtime-authored/feishu-boardwork-pack",
+                "TEACHER_PRIVATE",
+                "synced",
+                "parsed",
+                "ready",
+                "ready",
+                List.of()));
+        blockStore.replaceActiveBlocks("school-a", "doc-feishu-boardwork", List.of(
+                detailedBlock(
+                        "b-feishu-method",
+                        "doc-feishu-boardwork",
+                        1,
+                        "feishu/method.md",
+                        "method",
+                        "Probability method",
+                        "Overall teaching route",
+                        "Start by deciding whether replacement is allowed, then classify the counting model."),
+                detailedBlock(
+                        "b-feishu-boardwork",
+                        "doc-feishu-boardwork",
+                        2,
+                        "feishu/boardwork.md",
+                        "boardwork",
+                        "Probability boardwork",
+                        "Blackboard sequence",
+                        "Boardwork should first compare the sampling process, then write the branching structure on the blackboard.")));
+        TeacherResourceBlockSearchService service = TeacherResourceBlockSearchServiceFixture.service(resourceStore, blockStore);
+
+        TeacherResourceBlockSearchResponse response = service.search(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                "Need the boardwork order for probability sampling comparison, not the generic method overview",
+                5,
+                "/api/teacher/resources/search",
+                TeacherResourceSearchFilter.of(null, null, List.of("feishu"), null),
+                "two_stage_doc_block");
+
+        assertThat(response.hits()).isNotEmpty();
+        assertThat(response.hits().getFirst().blockId()).isEqualTo("b-feishu-boardwork");
+        assertThat(response.hits().getFirst().blockRole()).isEqualTo("boardwork");
+    }
+
+    @Test
     void studentCannotSearchTeacherResourceBlocks() {
         TeacherResourceBlockSearchService service = TeacherResourceBlockSearchServiceFixture.service(
                 new InMemoryTeacherResourceStore(),

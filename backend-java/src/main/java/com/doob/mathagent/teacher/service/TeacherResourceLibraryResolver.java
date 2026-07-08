@@ -44,6 +44,36 @@ public final class TeacherResourceLibraryResolver {
             return "public_textbook";
         }
         String haystack = metadataHaystack(document);
+        /*
+         * Live runtime-authored eval documents may be created under output/benchmarks/... during real ingestion. Those
+         * files are still genuine teacher-owned resources if the title/path says runtime teacher pack rather than a
+         * seeded benchmark corpus. Do not collapse them into system_reference or library-scoped retrieval will never
+         * see the teacher's own pack in stage one.
+         */
+        if (containsAny(
+                haystack,
+                "runtime-teacher-resource-pack",
+                "/runtime-authored/teacher-resource-pack",
+                "\\runtime-authored\\teacher-resource-pack")) {
+            return "teacher_resource";
+        }
+        /*
+         * Runtime-authored live-eval corpora are stored under output/benchmarks/... but they still represent the real
+         * logical source library chosen during ingestion. Keep specialized corpus inference ahead of the generic
+         * benchmark/system fallback so QQ/Feishu/gaokao/mock packages remain searchable when AI passes `library`.
+         */
+        if (containsAny(haystack, "runtime-qq-bundle", "/runtime-authored/02-qq-bundle", "\\runtime-authored\\02-qq-bundle")) {
+            return "qq_bundle";
+        }
+        if (containsAny(haystack, "runtime-feishu-method", "/runtime-authored/03-feishu", "\\runtime-authored\\03-feishu")) {
+            return "feishu";
+        }
+        if (containsAny(haystack, "runtime-gaokao", "/runtime-authored/04-gaokao", "\\runtime-authored\\04-gaokao")) {
+            return "gaokao";
+        }
+        if (containsAny(haystack, "runtime-mock", "/runtime-authored/05-mock", "\\runtime-authored\\05-mock")) {
+            return "mock_exam";
+        }
         if (containsAny(
                 haystack,
                 "design-system",

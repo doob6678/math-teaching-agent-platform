@@ -121,4 +121,95 @@ class TeacherResourceLibraryResolverTest {
         assertThat(TeacherResourceLibraryResolver.matchesAny(benchmarkDocument, List.of("teacher_resource"))).isFalse();
         assertThat(TeacherResourceLibraryResolver.matchesAny(syntheticDocument, List.of("teacher_resource"))).isFalse();
     }
+
+    @Test
+    void keepsRuntimeAuthoredTeacherPackAsTeacherResourceEvenInsideBenchmarkOutputTree() {
+        TeacherResourceDocumentResponse runtimeTeacherPack = new TeacherResourceDocumentResponse(
+                "doc-runtime-pack",
+                "school-a",
+                "teacher-1",
+                "local_path",
+                "runtime-teacher-resource-pack-v6",
+                null,
+                "C:/workspace/output/benchmarks/live-two-stage-teacher-generated-100/runtime-authored/teacher-resource-pack",
+                "TEACHER_PRIVATE",
+                "synced",
+                "parsed",
+                "ready",
+                "ready",
+                List.of());
+
+        assertThat(TeacherResourceLibraryResolver.effectiveLibrary(runtimeTeacherPack)).isEqualTo("teacher_resource");
+        assertThat(TeacherResourceLibraryResolver.matchesAny(runtimeTeacherPack, List.of("teacher_resource"))).isTrue();
+        assertThat(TeacherResourceLibraryResolver.matchesAny(runtimeTeacherPack, List.of("system_reference"))).isFalse();
+    }
+
+    @Test
+    void keepsRuntimeAuthoredSpecializedLibrariesSearchableInsideBenchmarkOutputTree() {
+        TeacherResourceDocumentResponse runtimeQq = new TeacherResourceDocumentResponse(
+                "doc-runtime-qq",
+                "school-a",
+                "admin-1",
+                "local_path",
+                "runtime-qq-bundle-vector",
+                null,
+                "C:/workspace/output/benchmarks/live/runtime-authored/02-qq-bundle-vector",
+                "MATH_VIP",
+                "synced",
+                "parsed",
+                "ready",
+                "ready",
+                List.of());
+        TeacherResourceDocumentResponse runtimeFeishu = new TeacherResourceDocumentResponse(
+                "doc-runtime-feishu",
+                "school-a",
+                "admin-1",
+                "local_path",
+                "runtime-feishu-method-probability",
+                null,
+                "C:/workspace/output/benchmarks/live/runtime-authored/03-feishu-method-probability",
+                "TEACHER_PRIVATE",
+                "synced",
+                "parsed",
+                "ready",
+                "ready",
+                List.of());
+        TeacherResourceDocumentResponse runtimeGaokao = new TeacherResourceDocumentResponse(
+                "doc-runtime-gaokao",
+                "school-a",
+                "admin-1",
+                "local_path",
+                "runtime-gaokao-conic",
+                null,
+                "C:/workspace/output/benchmarks/live/runtime-authored/04-gaokao-conic",
+                "MATH_VIP",
+                "synced",
+                "parsed",
+                "ready",
+                "ready",
+                List.of());
+        TeacherResourceDocumentResponse runtimeMock = new TeacherResourceDocumentResponse(
+                "doc-runtime-mock",
+                "school-a",
+                "admin-1",
+                "local_path",
+                "runtime-mock-sequence",
+                null,
+                "C:/workspace/output/benchmarks/live/runtime-authored/05-mock-sequence",
+                "TEACHER_PRIVATE",
+                "synced",
+                "parsed",
+                "ready",
+                "ready",
+                List.of());
+
+        assertThat(TeacherResourceLibraryResolver.effectiveLibrary(runtimeQq)).isEqualTo("qq_bundle");
+        assertThat(TeacherResourceLibraryResolver.effectiveLibrary(runtimeFeishu)).isEqualTo("feishu");
+        assertThat(TeacherResourceLibraryResolver.effectiveLibrary(runtimeGaokao)).isEqualTo("gaokao");
+        assertThat(TeacherResourceLibraryResolver.effectiveLibrary(runtimeMock)).isEqualTo("mock_exam");
+        assertThat(TeacherResourceLibraryResolver.matchesAny(runtimeQq, List.of("qq_bundle"))).isTrue();
+        assertThat(TeacherResourceLibraryResolver.matchesAny(runtimeFeishu, List.of("feishu"))).isTrue();
+        assertThat(TeacherResourceLibraryResolver.matchesAny(runtimeGaokao, List.of("gaokao"))).isTrue();
+        assertThat(TeacherResourceLibraryResolver.matchesAny(runtimeMock, List.of("mock_exam"))).isTrue();
+    }
 }
