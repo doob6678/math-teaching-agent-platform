@@ -12,6 +12,7 @@ except Exception as exc:  # pragma: no cover - import failure is explicit at ser
 from app.embeddings import (
     EmbeddingProviderError,
     EmbeddingService,
+    clip_page_search_response,
     clip_similarity_response,
     openai_embedding_response,
 )
@@ -33,6 +34,13 @@ class ClipImageEmbeddingRequest(BaseModel):
 class ClipSimilarityRequest(BaseModel):
     texts: str | list[str]
     images: str | list[str]
+
+
+class ClipPageSearchRequest(BaseModel):
+    texts: str | list[str] | None = None
+    images: str | list[str] | None = None
+    limit: int = 10
+    docIds: list[str] | None = None
 
 
 app = FastAPI(title="math-agent-rag-worker")
@@ -104,3 +112,17 @@ def clip_similarity(payload: ClipSimilarityRequest) -> dict:
     except (ValueError, EmbeddingProviderError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return clip_similarity_response(result)
+
+
+@app.post("/v1/clip/page-search", dependencies=[Depends(require_worker_key)])
+def clip_page_search(payload: ClipPageSearchRequest) -> dict:
+    try:
+        result = embedding_service().search_page_images(
+            texts=payload.texts,
+            images=payload.images,
+            limit=payload.limit,
+            doc_ids=payload.docIds,
+        )
+    except (ValueError, EmbeddingProviderError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return clip_page_search_response(result)

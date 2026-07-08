@@ -4,9 +4,12 @@ import tempfile
 import unittest
 
 from app.embeddings import (
+    ClipPageSearchResult,
+    ClipPageSearchHit,
     EmbeddingProviderError,
     EmbeddingService,
     LocalBertVocabTokenizer,
+    clip_page_search_response,
     clip_similarity_response,
     decode_allowed_image_source,
     fit_vectors_to_dimension,
@@ -27,6 +30,36 @@ class FakeResponse:
 
     def read(self):
         return self.body
+
+
+class StubLocalClipBackend:
+    def status(self):
+        return {
+            "status": "ready",
+            "textEmbedding": {"status": "ready"},
+            "imageEmbedding": {"status": "ready"},
+        }
+
+    def embed_text(self, texts, dimensions=None):
+        if texts == ["monotonicity"]:
+            vectors = [[1.0, 0.0, 0.0]]
+        else:
+            vectors = [[0.0, 1.0, 0.0] for _ in texts]
+        return type("EmbeddingResult", (), {
+            "model": "local-clip-test",
+            "provider": "local_clip",
+            "vectors": vectors,
+            "prompt_tokens": 1,
+        })()
+
+    def embed_images(self, images, dimensions=None):
+        vectors = [[0.0, 1.0, 0.0] for _ in images]
+        return type("EmbeddingResult", (), {
+            "model": "local-clip-test",
+            "provider": "local_clip",
+            "vectors": vectors,
+            "prompt_tokens": 0,
+        })()
 
 
 class EmbeddingServiceTest(unittest.TestCase):
@@ -163,6 +196,149 @@ class EmbeddingServiceTest(unittest.TestCase):
             decode_allowed_image_source("C:\\Users\\doob\\secret.png")
         with self.assertRaisesRegex(ValueError, "local image paths are not accepted"):
             decode_allowed_image_source("/mnt/d/secret.png")
+
+    def test_clip_page_search_reuses_existing_page_index(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "processed_books"
+            index_dir = root / "_page_image_index"
+            index_dir.mkdir(parents=True)
+            (index_dir / "manifest.json").write_text(json.dumps({
+                "kind": "page_image_clip_index",
+                "row_count": 2,
+                "fingerprint": "fp-1",
+            }), encoding="utf-8")
+            (index_dir / "metadata.jsonl").write_text("\n".join([
+                json.dumps({
+                    "doc_id": "book-a",
+                    "book_name": "Book A",
+                    "chapter_path": "Functions",
+                    "page_no": 12,
+                    "printed_page_no": "10",
+                    "section_title": "Monotonicity",
+                    "source_page_image": "pages/p012.png",
+                    "text": "function monotonicity page",
+                }, ensure_ascii=False),
+                json.dumps({
+                    "doc_id": "book-b",
+                    "book_name": "Book B",
+                    "chapter_path": "Vectors",
+                    "page_no": 33,
+                    "printed_page_no": "31",
+                    "section_title": "Vector product",
+                    "source_page_image": "pages/p033.png",
+                    "text": "space vector page",
+                }, ensure_ascii=False),
+            ]), encoding="utf-8")
+            import numpy as np
+
+            np.save(index_dir / "page_embeddings.npy", np.array([
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+            ], dtype=np.float32))
+            settings = WorkerSettings.from_environment(env={
+                "MATH_AGENT_PROCESSED_BOOKS_ROOT": str(root),
+                "MATH_AGENT_LOCAL_CLIP_MODEL_PATH": temp_dir,
+            })
+            service = EmbeddingService(settings, local_clip_backend=StubLocalClipBackend())
+
+            result = service.search_page_images(texts="monotonicity", limit=2)
+
+            self.assertEqual(result.provider, "local_clip")
+            self.assertEqual([hit.doc_id for hit in result.hits], ["book-a", "book-b"])
+            self.assertGreater(result.hits[0].score, result.hits[1].score)
+            self.assertEqual(result.hits[0].source_page_image, "pages/p012.png")
+
+    def test_clip_page_search_can_filter_doc_ids(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "processed_books"
+            index_dir = root / "_page_image_index"
+            index_dir.mkdir(parents=True)
+            (index_dir / "manifest.json").write_text(json.dumps({
+                "kind": "page_image_clip_index",
+                "row_count": 2,
+                "fingerprint": "fp-2",
+            }), encoding="utf-8")
+            (index_dir / "metadata.jsonl").write_text("\n".join([
+                json.dumps({"doc_id": "book-a", "book_name": "Book A", "chapter_path": "Functions", "page_no": 12,
+                            "printed_page_no": "10", "section_title": "Monotonicity", "source_page_image": "pages/p012.png",
+                            "text": "function monotonicity page"}, ensure_ascii=False),
+                json.dumps({"doc_id": "book-b", "book_name": "Book B", "chapter_path": "Vectors", "page_no": 33,
+                            "printed_page_no": "31", "section_title": "Vector product", "source_page_image": "pages/p033.png",
+                            "text": "space vector page"}, ensure_ascii=False),
+            ]), encoding="utf-8")
+            import numpy as np
+
+            np.save(index_dir / "page_embeddings.npy", np.array([
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+            ], dtype=np.float32))
+            settings = WorkerSettings.from_environment(env={
+                "MATH_AGENT_PROCESSED_BOOKS_ROOT": str(root),
+                "MATH_AGENT_LOCAL_CLIP_MODEL_PATH": temp_dir,
+            })
+            service = EmbeddingService(settings, local_clip_backend=StubLocalClipBackend())
+
+            result = service.search_page_images(texts="monotonicity", limit=3, doc_ids=["book-b"])
+
+            self.assertEqual(len(result.hits), 1)
+            self.assertEqual(result.hits[0].doc_id, "book-b")
+
+    def test_clip_page_search_handles_legacy_index_dimension_mismatch(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "processed_books"
+            index_dir = root / "_page_image_index"
+            index_dir.mkdir(parents=True)
+            (index_dir / "manifest.json").write_text(json.dumps({
+                "kind": "page_image_clip_index",
+                "row_count": 2,
+                "fingerprint": "fp-3",
+            }), encoding="utf-8")
+            (index_dir / "metadata.jsonl").write_text("\n".join([
+                json.dumps({"doc_id": "book-a", "book_name": "Book A", "chapter_path": "Functions", "page_no": 12,
+                            "printed_page_no": "10", "section_title": "Monotonicity", "source_page_image": "pages/p012.png",
+                            "text": "function monotonicity page"}, ensure_ascii=False),
+                json.dumps({"doc_id": "book-b", "book_name": "Book B", "chapter_path": "Vectors", "page_no": 33,
+                            "printed_page_no": "31", "section_title": "Vector product", "source_page_image": "pages/p033.png",
+                            "text": "space vector page"}, ensure_ascii=False),
+            ]), encoding="utf-8")
+            import numpy as np
+
+            np.save(index_dir / "page_embeddings.npy", np.array([
+                [1.0, 0.0, 0.0, 5.0],
+                [0.0, 1.0, 0.0, 5.0],
+            ], dtype=np.float32))
+            settings = WorkerSettings.from_environment(env={
+                "MATH_AGENT_PROCESSED_BOOKS_ROOT": str(root),
+                "MATH_AGENT_LOCAL_CLIP_MODEL_PATH": temp_dir,
+            })
+            service = EmbeddingService(settings, local_clip_backend=StubLocalClipBackend())
+
+            result = service.search_page_images(texts="monotonicity", limit=2)
+
+            self.assertEqual(result.hits[0].doc_id, "book-a")
+
+    def test_clip_page_search_response_keeps_public_page_metadata(self):
+        response = clip_page_search_response(ClipPageSearchResult(
+            model="local-clip",
+            provider="local_clip",
+            hits=[
+                ClipPageSearchHit(
+                    score=0.98,
+                    doc_id="book-a",
+                    book_name="Book A",
+                    chapter_path="Functions",
+                    page_no=12,
+                    printed_page_no="10",
+                    section_title="Monotonicity",
+                    source_page_image="pages/p012.png",
+                    text="function monotonicity page",
+                )
+            ],
+        ))
+
+        self.assertEqual(response["object"], "clip.page_search")
+        self.assertEqual(response["hits"][0]["docId"], "book-a")
+        self.assertEqual(response["hits"][0]["sourcePageImage"], "pages/p012.png")
 
 
 if __name__ == "__main__":

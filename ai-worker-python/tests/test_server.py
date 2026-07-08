@@ -43,6 +43,33 @@ class WorkerServerAuthTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
 
+    def test_clip_page_search_requires_worker_key(self):
+        os.environ["MATH_AGENT_WORKER_API_KEY"] = "local-key"
+        client = TestClient(app)
+
+        response = client.post("/v1/clip/page-search", json={"texts": "函数单调性"})
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_clip_page_search_accepts_bearer_worker_key(self):
+        os.environ["MATH_AGENT_WORKER_API_KEY"] = "local-key"
+        client = TestClient(app)
+
+        fake_result = type("Result", (), {
+            "model": "local-clip",
+            "provider": "local_clip",
+            "hits": [],
+        })()
+        with patch("app.embeddings.EmbeddingService.search_page_images", return_value=fake_result):
+            response = client.post(
+                "/v1/clip/page-search",
+                headers={"Authorization": "Bearer local-key"},
+                json={"texts": "函数单调性", "limit": 3},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["object"], "clip.page_search")
+
 
 if __name__ == "__main__":
     unittest.main()

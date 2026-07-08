@@ -43,6 +43,35 @@ class ClipSimilarityResult:
     similarities: list[list[float]]
 
 
+@dataclass(frozen=True)
+class ClipPageSearchHit:
+    score: float
+    doc_id: str
+    book_name: str
+    chapter_path: str
+    page_no: int
+    printed_page_no: str
+    section_title: str
+    source_page_image: str
+    text: str
+
+
+@dataclass(frozen=True)
+class ClipPageSearchResult:
+    model: str
+    provider: str
+    hits: list[ClipPageSearchHit]
+
+
+@dataclass(frozen=True)
+class LoadedPageImageIndex:
+    processed_books_root: str
+    index_dir: str
+    fingerprint: str
+    metadata: list[dict[str, object]]
+    embeddings: object
+
+
 class LocalBertVocabTokenizer:
     def __init__(self, vocab_file: str):
         self.vocab = {
@@ -576,6 +605,7 @@ class EmbeddingService:
         self.settings = settings
         self.opener = opener or request.urlopen
         self.local_clip_backend = local_clip_backend or LocalClipBackend(settings)
+        self._page_image_index: LoadedPageImageIndex | None = None
 
     def status(self) -> dict[str, object]:
         dashscope_status = "ready" if self.settings.dashscope_api_key else "configuration_error"
@@ -605,6 +635,11 @@ class EmbeddingService:
                     "providers": list(self.settings.local_clip_provider_order),
                     "dimension": self.settings.local_clip_dimension,
                     "status": "ready" if local_text_status == "ready" and local_image_status == "ready" else "configuration_error",
+                },
+                "clipPageSearch": {
+                    "providers": list(self.settings.local_clip_provider_order),
+                    "dimension": self.settings.local_clip_dimension,
+                    "status": self._page_search_status(local_text_status, local_image_status),
                 },
             },
             "providers": {
@@ -644,6 +679,130 @@ class EmbeddingService:
 
     def clip_similarity(self, texts: str | list[str], images: str | list[str]) -> ClipSimilarityResult:
         return self.local_clip_backend.similarity(normalize_inputs(texts), normalize_image_inputs(images))
+
+    def search_page_images(
+        self,
+        texts: str | list[str] | None = None,
+        images: str | list[str] | None = None,
+        limit: int = 10,
+        doc_ids: list[str] | None = None,
+    ) -> ClipPageSearchResult:
+        normalized_texts = normalize_inputs([] if texts is None else texts)
+        normalized_images = normalize_image_inputs([] if images is None else images)
+        if not normalized_texts and not normalized_images:
+            raise ValueError("texts or images must contain at least one non-empty query item")
+        query_vectors: list[list[float]] = []
+        model = self.settings.local_clip_model_path or "local_clip"
+        if normalized_texts:
+            text_result = self.local_clip_backend.embed_text(normalized_texts)
+            query_vectors.extend(text_result.vectors)
+            model = text_result.model
+        if normalized_images:
+            image_result = self.local_clip_backend.embed_images(normalized_images)
+            query_vectors.extend(image_result.vectors)
+            model = image_result.model
+        index = self._load_page_image_index()
+        metadata = index.metadata
+        embeddings = index.embeddings
+        import numpy as np
+
+        candidate_indexes = [
+            idx for idx, item in enumerate(metadata)
+            if not doc_ids or str(item.get("doc_id", "")).strip() in doc_ids
+        ]
+        if not candidate_indexes:
+            return ClipPageSearchResult(model=model, provider="local_clip", hits=[])
+        embedding_rows = embeddings[np.array(candidate_indexes)]
+        query_matrix = np.array(query_vectors, dtype=np.float32)
+        if embedding_rows.shape[1] != query_matrix.shape[1]:
+            # Historical page-image indexes may have been built with an older local CLIP export dimension. Trim both
+            # sides to the common prefix and renormalize so the worker can reuse the existing index instead of forcing
+            # a full rebuild every time the query-side model dimension changes.
+            target_dim = min(int(embedding_rows.shape[1]), int(query_matrix.shape[1]))
+            if target_dim <= 0:
+                raise EmbeddingProviderError("page image index and query embeddings do not share a usable dimension")
+            embedding_rows = normalize_numpy_rows(embedding_rows[:, :target_dim])
+            query_matrix = normalize_numpy_rows(query_matrix[:, :target_dim])
+        score_matrix = embedding_rows @ query_matrix.T
+        best_scores = score_matrix.max(axis=1)
+        top_limit = max(1, min(50, int(limit)))
+        ranked_indexes = np.argsort(-best_scores)[:top_limit]
+        hits = []
+        for rank_idx in ranked_indexes.tolist():
+            metadata_index = candidate_indexes[int(rank_idx)]
+            item = metadata[metadata_index]
+            hits.append(ClipPageSearchHit(
+                score=float(best_scores[rank_idx]),
+                doc_id=text_or_default(item.get("doc_id"), ""),
+                book_name=text_or_default(item.get("book_name"), ""),
+                chapter_path=text_or_default(item.get("chapter_path"), ""),
+                page_no=int(item.get("page_no", 0) or 0),
+                printed_page_no=text_or_default(item.get("printed_page_no"), ""),
+                section_title=text_or_default(item.get("section_title"), ""),
+                source_page_image=text_or_default(item.get("source_page_image"), ""),
+                text=text_or_default(item.get("text"), ""),
+            ))
+        return ClipPageSearchResult(model=model, provider="local_clip", hits=hits)
+
+    def _page_search_status(self, text_status: object, image_status: object) -> str:
+        if text_status != "ready" and image_status != "ready":
+            return "configuration_error"
+        try:
+            self._page_image_index_root()
+            return "ready"
+        except EmbeddingConfigurationError:
+            return "configuration_error"
+
+    def _load_page_image_index(self) -> LoadedPageImageIndex:
+        import numpy as np
+
+        index_dir = self._page_image_index_root()
+        manifest_path = index_dir / "manifest.json"
+        metadata_path = index_dir / "metadata.jsonl"
+        embeddings_path = index_dir / "page_embeddings.npy"
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise EmbeddingConfigurationError(f"page image index manifest is unreadable: {manifest_path}") from exc
+        fingerprint = text_or_default(manifest.get("fingerprint"), "")
+        cache = self._page_image_index
+        if cache is not None and cache.index_dir == str(index_dir) and cache.fingerprint == fingerprint:
+            return cache
+        try:
+            metadata = [
+                json.loads(line)
+                for line in metadata_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+        except Exception as exc:
+            raise EmbeddingConfigurationError(f"page image index metadata is unreadable: {metadata_path}") from exc
+        try:
+            embeddings = np.load(embeddings_path)
+        except Exception as exc:
+            raise EmbeddingConfigurationError(f"page image embeddings are unreadable: {embeddings_path}") from exc
+        if len(metadata) != int(manifest.get("row_count", len(metadata))):
+            raise EmbeddingConfigurationError("page image index row_count does not match metadata rows")
+        if getattr(embeddings, "shape", (0, 0))[0] != len(metadata):
+            raise EmbeddingConfigurationError("page image index embedding rows do not match metadata rows")
+        embeddings = normalize_numpy_rows(embeddings)
+        loaded = LoadedPageImageIndex(
+            processed_books_root=text_or_default(self.settings.processed_books_root, ""),
+            index_dir=str(index_dir),
+            fingerprint=fingerprint,
+            metadata=metadata,
+            embeddings=embeddings,
+        )
+        self._page_image_index = loaded
+        return loaded
+
+    def _page_image_index_root(self) -> Path:
+        if not self.settings.processed_books_root:
+            raise EmbeddingConfigurationError("MATH_AGENT_PROCESSED_BOOKS_ROOT is required for clip page search")
+        root = Path(self.settings.processed_books_root).expanduser().resolve()
+        index_dir = root / "_page_image_index"
+        if not index_dir.is_dir():
+            raise EmbeddingConfigurationError(f"page image index directory does not exist: {index_dir}")
+        return index_dir
 
     def _overall_status(self) -> str:
         statuses = []
@@ -770,6 +929,15 @@ def normalize_tensor(features):
     return features / features.norm(dim=-1, keepdim=True).clamp(min=1e-12)
 
 
+def normalize_numpy_rows(matrix):
+    import numpy as np
+
+    rows = np.asarray(matrix, dtype=np.float32)
+    norms = np.linalg.norm(rows, axis=1, keepdims=True)
+    norms = np.clip(norms, 1e-12, None)
+    return rows / norms
+
+
 def validate_dimensions(vectors: list[list[float]], expected: int, label: str) -> None:
     if vectors and len(vectors[0]) != expected:
         raise EmbeddingProviderError(f"{label} dimension mismatch: expected {expected}, got {len(vectors[0])}")
@@ -805,6 +973,13 @@ def cosine_similarity(left: list[float], right: list[float]) -> float:
     return numerator / (left_norm * right_norm)
 
 
+def text_or_default(value: object, default: str) -> str:
+    if value is None:
+        return default
+    text = str(value).strip()
+    return text if text else default
+
+
 def openai_embedding_response(result: EmbeddingResult) -> dict:
     return {
         "object": "list",
@@ -835,4 +1010,27 @@ def clip_similarity_response(result: ClipSimilarityResult) -> dict:
         "similarities": result.similarities,
         "textEmbeddings": result.text_vectors,
         "imageEmbeddings": result.image_vectors,
+    }
+
+
+def clip_page_search_response(result: ClipPageSearchResult) -> dict:
+    return {
+        "object": "clip.page_search",
+        "model": result.model,
+        "provider": result.provider,
+        "created": int(time.time()),
+        "hits": [
+            {
+                "score": hit.score,
+                "docId": hit.doc_id,
+                "bookName": hit.book_name,
+                "chapterPath": hit.chapter_path,
+                "pageNo": hit.page_no,
+                "printedPageNo": hit.printed_page_no,
+                "sectionTitle": hit.section_title,
+                "sourcePageImage": hit.source_page_image,
+                "text": hit.text,
+            }
+            for hit in result.hits
+        ],
     }
