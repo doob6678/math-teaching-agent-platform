@@ -3249,6 +3249,7 @@ export function buildTeachingFeedbackReviewContext(
   const evidenceScopes = Array.from(new Set(task.evidence.map((item) => item.sourceScope).filter(Boolean)));
   const pdfPreviewKeyMatches = pdfPreviewKey === `${task.taskId}:${version}`;
   const pdfPreviewReady = Boolean(pdfMeta) && pdfPreviewKeyMatches;
+  const visualEvidenceVersionMatches = !visualEvidence || visualEvidence.version === version;
   const sourceTraceable = evidenceCount > 0;
   const internalDebugLeak = /MODEL_CALL|JSON_PARSE|tokens?=|模型健康|model health|debug|调试|作为\s*AI|as an AI/i.test(plainText);
   const layoutRuleLeak = /页眉|页脚|颜色|PDF\s*版式要求|PDF\s*规则|渲染引擎/.test(plainText);
@@ -3277,7 +3278,12 @@ export function buildTeachingFeedbackReviewContext(
   const pdfRenderer = pdfMeta?.renderer ?? "";
   const pdfPageCount = pdfMeta?.pageCount ?? 0;
   const coreColumnCoverage = `${matchedCoreColumns}/${groups.length}`;
-  const pdfVisualEvidenceCaptured = Boolean(visualEvidence?.captured && visualEvidence.previewImageDataUrl && pdfPreviewReady);
+  const pdfVisualEvidenceCaptured = Boolean(
+    visualEvidence?.captured
+    && visualEvidence.previewImageDataUrl
+    && pdfPreviewReady
+    && visualEvidenceVersionMatches,
+  );
   const evidenceSummary = buildTeachingFeedbackEvidenceSummary(task);
   const pdfImageRef = visualEvidence?.imageRef ?? `teaching-task:${task.taskId}:${version}:pdf-page:1`;
   return {
@@ -3312,7 +3318,7 @@ export function buildTeachingFeedbackReviewContext(
     evidenceSummary,
     sourceTraceable,
     aiReviewBrief: [
-      `版本：${version === "teacher" ? "教师版" : "学生版"}`,
+      `版本：${version === "teacher" ? "教师版" : version === "lecture" ? "讲解版" : "学生版"}`,
       `模板：${task.selectedTemplate?.displayName ?? "标准讲义"}`,
       `结构：${coreColumnCoverage} 核心栏目`,
       `PDF：${pdfPreviewReady ? `${pdfRenderer || "unknown"} / ${pdfPageCount}页` : "未预览"}`,
@@ -3340,6 +3346,7 @@ export function buildTeachingFeedbackReviewContext(
         version,
         previewReady: pdfPreviewReady,
         versionBound: pdfPreviewKeyMatches,
+        visualEvidenceVersionBound: visualEvidenceVersionMatches,
         renderer: pdfRenderer,
         pageCount: pdfPageCount,
         visualEvidence: visualEvidence ?? null,
