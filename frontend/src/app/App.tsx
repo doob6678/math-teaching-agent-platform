@@ -30,6 +30,7 @@ import {
   StudentExplanationHistoryItem,
   StudentExplanationImageUploadResponse,
   StudentExplanationResponse,
+  StudentExplanationStreamEvent,
   TeachingHandoutVersion,
   TeachingHandoutPdfResponse,
   TeachingHandoutTemplateResponse,
@@ -45,9 +46,11 @@ import {
   TeacherSourceSyncJobResponse,
   TextbookSearchResponse,
   TextbookSummary,
+  UNTITLED_TEACHER_RESOURCE_TITLE,
   VectorIndexRebuildResponse,
   LoginResponse,
   createTextbookApiClient,
+  deriveTeacherResourceTitle,
 } from "../shared/api/textbookApi";
 import { AgentModelHealthPanel, AgentPlanPanel, AgentTracePanel } from "./components/AgentPanels";
 import { AuditDetailPanel, EvidenceCard } from "./components/EvidencePanels";
@@ -583,7 +586,7 @@ export function App() {
         setTeacherResources(resources);
         return loadTeacherSyncJobs(resources);
       })
-      .catch((error: Error) => setTeacherResourceError(error.message))
+      .catch((error: Error) => setTeacherResourceError(toUserFacingError(error)))
       .finally(() => setLoadingTeacherResources(false));
   }
 
@@ -829,6 +832,8 @@ export function App() {
     setSubmittingTeachingConversation(true);
     setTeachingError("");
     setTeachingConversationImageError("");
+    // 发送后立刻清空输入区的题图草稿，避免底部上传条在请求期间继续占位。
+    setTeachingConversationImageDraft(null);
     setTeachingConversationEntries((current) => [
       ...current,
       {
@@ -848,12 +853,13 @@ export function App() {
         imageFileName: submittedImage?.originalFileName,
         imageStatus: submittedImage?.imageStatus,
         loading: true,
+        progress: undefined,
         createdAt: new Date().toISOString(),
       },
     ]);
     setTeachingConversationInput("");
     api
-      .explainStudentQuestion({
+      .streamStudentQuestion({
         conversationId: teachingConversationId || undefined,
         questionText: submittedQuestion || undefined,
         imageUploadId: submittedImage?.uploadId,
@@ -865,6 +871,24 @@ export function App() {
         searchTeacherResources: authSession?.role === "teacher" || authSession?.role === "admin",
         maxTextbookHits: 5,
         maxTeacherResourceHits: 3,
+      }, (_eventName: string, payload: StudentExplanationStreamEvent) => {
+        if (!payload.progress) {
+          return;
+        }
+        if (payload.progress.conversationId) {
+          setTeachingConversationId(payload.progress.conversationId);
+        }
+        setTeachingConversationEntries((current) =>
+          current.map((entry) =>
+            entry.id === pendingAssistantId
+              ? {
+                  ...entry,
+                  progress: payload.progress ?? undefined,
+                  imageStatus: payload.progress?.imageStatus || entry.imageStatus,
+                }
+              : entry,
+          ),
+        );
       })
       .then((response: StudentExplanationResponse) => {
         setTeachingConversationId(response.conversationId);
@@ -884,7 +908,6 @@ export function App() {
               : entry,
           ),
         );
-        setTeachingConversationImageDraft(null);
         return refreshTeachingConversationHistory(response.conversationId);
       })
       .catch((error: Error) => {
@@ -991,10 +1014,6 @@ export function App() {
 
   function handleRegisterResource(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!resourceTitle.trim()) {
-      setTeacherResourceError("请输入资料标题。");
-      return;
-    }
     const feishuMode = resourceSourceType === "feishu";
     if (feishuMode && !resourceLocation.trim()) {
       setTeacherResourceError("请输入飞书 URL。");
@@ -1004,12 +1023,22 @@ export function App() {
       setTeacherResourceError("请上传文件、选择文件夹，或填写服务器本地路径。");
       return;
     }
+    const effectiveTitle = deriveTeacherResourceTitle({
+      title: resourceTitle,
+      files: resourceFiles,
+      originalUrl: feishuMode ? resourceLocation : undefined,
+      localPath: feishuMode ? undefined : resourceLocation,
+    });
+    if (effectiveTitle === UNTITLED_TEACHER_RESOURCE_TITLE) {
+      setTeacherResourceError("无法识别资源名称，请重新选择文件、文件夹或链接。");
+      return;
+    }
     setRegisteringResource(true);
     setTeacherResourceError("");
     const registerPromise = feishuMode
       ? api.registerTeacherResource({
         sourceType: resourceSourceType,
-        title: resourceTitle.trim(),
+        title: effectiveTitle,
         originalUrl: resourceLocation.trim(),
         permissionScope: resourceScope,
         feishuExportFormat: feishuExportFormat,
@@ -1018,14 +1047,14 @@ export function App() {
       : resourceFiles.length > 0
         ? api.uploadTeacherResource({
           sourceType: resourceSourceType,
-          title: resourceTitle.trim(),
+          title: effectiveTitle,
           permissionScope: resourceScope,
           parseMode: resourceParseMode,
           files: resourceFiles,
         })
         : api.registerTeacherResource({
           sourceType: resourceSourceType,
-          title: resourceTitle.trim(),
+          title: effectiveTitle,
           localPath: resourceLocation.trim(),
           permissionScope: resourceScope,
           parseMode: resourceParseMode,
@@ -1039,7 +1068,7 @@ export function App() {
         setResourceFiles([]);
         setFeishuDiscoveryResult(null);
       })
-      .catch((error: Error) => setTeacherResourceError(error.message))
+      .catch((error: Error) => setTeacherResourceError(toUserFacingError(error)))
       .finally(() => setRegisteringResource(false));
   }
 
@@ -1048,7 +1077,47 @@ export function App() {
    * share the same resource form without one mode accidentally leaking stale values into the other.
    */
   function handleResourceFilesChange(files: FileList | null) {
-    setResourceFiles(files ? Array.from(files) : []);
+    const nextFiles = files ? Array.from(files) : [];
+    const previousDerivedTitle = deriveTeacherResourceTitle({
+      files: resourceFiles,
+      originalUrl: resourceSourceType === "feishu" ? resourceLocation : undefined,
+      localPath: resourceSourceType === "feishu" ? undefined : resourceLocation,
+    });
+    const nextDerivedTitle = deriveTeacherResourceTitle({ files: nextFiles });
+    setResourceFiles(nextFiles);
+    setResourceTitle((current) => {
+      const normalizedCurrent = current.trim();
+      if (
+        normalizedCurrent.length > 0
+        && normalizedCurrent !== previousDerivedTitle
+      ) {
+        return current;
+      }
+      return nextDerivedTitle === UNTITLED_TEACHER_RESOURCE_TITLE ? current : nextDerivedTitle;
+    });
+    setTeacherResourceError("");
+  }
+
+  function handleResourceLocationChange(value: string) {
+    const previousDerivedTitle = deriveTeacherResourceTitle({
+      originalUrl: resourceSourceType === "feishu" ? resourceLocation : undefined,
+      localPath: resourceSourceType === "feishu" ? undefined : resourceLocation,
+    });
+    const nextDerivedTitle = deriveTeacherResourceTitle({
+      originalUrl: resourceSourceType === "feishu" ? value : undefined,
+      localPath: resourceSourceType === "feishu" ? undefined : value,
+    });
+    setResourceLocation(value);
+    setResourceTitle((current) => {
+      const normalizedCurrent = current.trim();
+      if (
+        normalizedCurrent.length > 0
+        && normalizedCurrent !== previousDerivedTitle
+      ) {
+        return current;
+      }
+      return nextDerivedTitle === UNTITLED_TEACHER_RESOURCE_TITLE ? current : nextDerivedTitle;
+    });
     setTeacherResourceError("");
   }
 
@@ -1067,7 +1136,7 @@ export function App() {
     api
       .archiveTeacherResource(documentId)
       .then(() => setTeacherResources((current) => current.filter((r) => r.documentId !== documentId)))
-      .catch((error: Error) => setTeacherResourceError(error.message));
+      .catch((error: Error) => setTeacherResourceError(toUserFacingError(error)));
   }
 
   function handleCreateKnowledgePoint(event: FormEvent<HTMLFormElement>) {
@@ -1083,7 +1152,7 @@ export function App() {
         sourceSummary: "前端管理台创建",
       })
       .then((point) => setKnowledgePoints((current) => [point, ...current]))
-      .catch((error: Error) => setKnowledgeBankError(error.message))
+      .catch((error: Error) => setKnowledgeBankError(toUserFacingError(error)))
       .finally(() => setSavingKnowledgeBank(false));
   }
 
@@ -1143,7 +1212,7 @@ export function App() {
           .then((cp) => { if (cp) setTeacherSyncCheckpoints((cur) => ({ ...cur, [executedJob.jobId]: cp })); })
           .catch(() => undefined);
       })
-      .catch((error: Error) => setTeacherResourceError(error.message))
+      .catch((error: Error) => setTeacherResourceError(toUserFacingError(error)))
       .finally(() => setSyncingResourceId(""));
   }
 
@@ -1161,7 +1230,7 @@ export function App() {
           .then((cp) => { if (cp) setTeacherSyncCheckpoints((cur) => ({ ...cur, [resumedJob.jobId]: cp })); })
           .catch(() => undefined);
       })
-      .catch((error: Error) => setTeacherResourceError(error.message))
+      .catch((error: Error) => setTeacherResourceError(toUserFacingError(error)))
       .finally(() => setSyncingResourceId(""));
   }
 
@@ -1172,7 +1241,7 @@ export function App() {
     api
       .importTeacherResourceQuestions(documentId)
       .then((result) => { setTeacherResourceImportResult(result); setQuestionBankItems((c) => [...result.importedQuestions, ...c]); })
-      .catch((error: Error) => setTeacherResourceError(error.message))
+      .catch((error: Error) => setTeacherResourceError(toUserFacingError(error)))
       .finally(() => setImportingResourceId(""));
   }
 
@@ -1183,7 +1252,7 @@ export function App() {
     api
       .rebuildTeacherResourceVectorIndex(documentId)
       .then((result) => { setTeacherResourceIndexRebuildResult(result); return refreshTeacherResources(); })
-      .catch((error: Error) => setTeacherResourceError(error.message))
+      .catch((error: Error) => setTeacherResourceError(toUserFacingError(error)))
       .finally(() => setRebuildingResourceId(""));
   }
 
@@ -1197,9 +1266,9 @@ export function App() {
       .searchTeacherResourceBlocks(teacherResourceSearchQuery.trim(), 8)
       .then((result) => {
         setTeacherBlockSearchResult(result);
-        return api.getTeacherResourceBlockSearchAudit(result.queryId).then(setTeacherBlockSearchAudit).catch((e) => setTeacherResourceError(e.message));
+        return api.getTeacherResourceBlockSearchAudit(result.queryId).then(setTeacherBlockSearchAudit).catch((e) => setTeacherResourceError(toUserFacingError(e)));
       })
-      .catch((error: Error) => setTeacherResourceError(error.message))
+      .catch((error: Error) => setTeacherResourceError(toUserFacingError(error)))
       .finally(() => setSearchingTeacherBlocks(false));
   }
 
@@ -1212,7 +1281,7 @@ export function App() {
     api
       .discoverFeishuResources({ mode, query: mode === "search" ? feishuDiscoveryQuery.trim() : "", rootUrl, listDepth: 1, maxDepth: 5 })
       .then(setFeishuDiscoveryResult)
-      .catch((error: Error) => setTeacherResourceError(error.message))
+      .catch((error: Error) => setTeacherResourceError(toUserFacingError(error)))
       .finally(() => setDiscoveringFeishu(false));
   }
 
@@ -2414,7 +2483,7 @@ export function App() {
                 discoveringFeishu={discoveringFeishu}
                 error={teacherResourceError}
                 onTitleChange={setResourceTitle}
-                onLocationChange={setResourceLocation}
+                onLocationChange={handleResourceLocationChange}
                 onFilesChange={handleResourceFilesChange}
                 onSourceTypeChange={handleResourceSourceTypeChange}
                 onScopeChange={setResourceScope}
@@ -2619,7 +2688,7 @@ function toUserFacingError(error: Error) {
     return "后端没有找到对应记录，请刷新页面后重试。";
   }
   if (message.includes("Backend request failed: 429")) {
-    return "当前模型或任务队列繁忙，请稍后重试。";
+    return "当前请求过于频繁，请稍后再试。";
   }
   if (message.includes("Backend request failed: 400")) {
     return "后端拒绝了本次请求，请刷新页面或重启后端后重试；如果是 16:10 讲解版 PDF，通常是后端能力白名单尚未加载最新代码。";

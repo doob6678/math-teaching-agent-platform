@@ -95,6 +95,12 @@ public class TeacherResourceUploadService {
         if (declaredBytes > maxTotalBytes) {
             throw new IllegalArgumentException("Teacher resource upload exceeds max size of " + maxTotalBytes + " bytes");
         }
+        /*
+         * Capture the human-readable source name before files are copied into a UUID staging directory. Once the upload
+         * lands on disk, the managed folder path is intentionally opaque and no longer suitable as the display title.
+         */
+        String suggestedTitle = TeacherResourceTitleResolver.deriveFromUploadPaths(
+                normalizedFiles.stream().map(MultipartFile::getOriginalFilename).toList());
         Path root = storageRoot(owner).resolve(UUID.randomUUID().toString()).toAbsolutePath().normalize();
         try {
             Files.createDirectories(root);
@@ -105,7 +111,7 @@ public class TeacherResourceUploadService {
             if (counter.storedFiles == 0) {
                 throw new IllegalArgumentException("Teacher resource upload produced no usable files");
             }
-            return new StoredUpload(root, counter.storedFiles, counter.storedBytes);
+            return new StoredUpload(root, counter.storedFiles, counter.storedBytes, suggestedTitle);
         } catch (IOException exception) {
             throw new IllegalStateException("Failed to store teacher resource upload", exception);
         }
@@ -231,7 +237,7 @@ public class TeacherResourceUploadService {
     /**
      * Stored upload metadata returned to the controller so registration can reuse the managed local path.
      */
-    public record StoredUpload(Path rootPath, int storedFileCount, long storedBytes) {
+    public record StoredUpload(Path rootPath, int storedFileCount, long storedBytes, String suggestedTitle) {
     }
 
     private final class Counter {

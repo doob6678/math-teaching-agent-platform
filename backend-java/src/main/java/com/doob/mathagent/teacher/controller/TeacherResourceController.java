@@ -11,6 +11,7 @@ import com.doob.mathagent.teacher.service.TeacherResourceRegistrationCommand;
 import com.doob.mathagent.teacher.service.TeacherResourceSearchFilter;
 import com.doob.mathagent.teacher.service.TeacherResourceService;
 import com.doob.mathagent.teacher.service.TeacherResourceAssetService;
+import com.doob.mathagent.teacher.service.TeacherResourceTitleResolver;
 import com.doob.mathagent.teacher.service.TeacherDocumentBlockStore;
 import com.doob.mathagent.teacher.service.TeacherResourceUploadService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncCheckpointQueryService;
@@ -180,9 +181,19 @@ public class TeacherResourceController {
                 throw new IllegalArgumentException("Upload endpoint does not accept feishu sourceType; use register with originalUrl instead");
             }
             TeacherResourceUploadService.StoredUpload upload = uploadService.store(files, normalized);
+            /*
+             * Browser uploads are stored under a backend-generated UUID directory. When callers leave title blank, use
+             * the original upload name captured by the upload service rather than leaking that opaque staging path into
+             * the teacher-facing document title.
+             */
+            String resolvedTitle = TeacherResourceTitleResolver.resolveOrDefault(
+                    title,
+                    normalizedSourceType,
+                    null,
+                    upload.suggestedTitle());
             TeacherResourceRegistrationRequest registrationRequest = new TeacherResourceRegistrationRequest(
                     normalizedSourceType,
-                    title,
+                    resolvedTitle,
                     null,
                     upload.rootPath().toString(),
                     permissionScope,

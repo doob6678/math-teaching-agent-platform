@@ -34,6 +34,7 @@ class TeacherResourceUploadServiceTest {
 
         assertThat(upload.rootPath()).exists();
         assertThat(upload.storedFileCount()).isEqualTo(1);
+        assertThat(upload.suggestedTitle()).isEqualTo("qq_bundle");
         assertThat(Files.readString(upload.rootPath().resolve("qq_bundle/lesson01/notes.md"), StandardCharsets.UTF_8))
                 .contains("数量积方法");
     }
@@ -51,10 +52,28 @@ class TeacherResourceUploadServiceTest {
                 new RequestSubject("school-a", "teacher", "teacher-01", "device-1"));
 
         assertThat(upload.storedFileCount()).isEqualTo(1);
+        assertThat(upload.suggestedTitle()).isEqualTo("method-pack");
         assertThat(upload.rootPath().resolve("method-pack/docs/lesson.md")).exists();
         assertThat(Files.readString(
                 upload.rootPath().resolve("method-pack/docs/lesson.md"),
                 StandardCharsets.UTF_8)).contains("增减性证明");
+    }
+
+    @Test
+    void derivesBatchTitleForLooseMultiFileUpload() throws Exception {
+        TeacherResourceUploadService service = service();
+
+        TeacherResourceUploadService.StoredUpload upload = service.store(
+                java.util.List.of(
+                        new MockMultipartFile("files", "导数讲义.pdf", "application/pdf", "pdf".getBytes(StandardCharsets.UTF_8)),
+                        new MockMultipartFile(
+                                "files",
+                                "课堂例题.docx",
+                                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                "docx".getBytes(StandardCharsets.UTF_8))),
+                new RequestSubject("school-a", "teacher", "teacher-01", "device-1"));
+
+        assertThat(upload.suggestedTitle()).isEqualTo("导数讲义 等2个文件");
     }
 
     @Test

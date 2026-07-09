@@ -117,12 +117,12 @@ export function TeacherResourcePanel({
 
       <form className="search-form" onSubmit={onRegister}>
         <label>
-          <span>资源名称</span>
+          <span>自定义标题（可选）</span>
           <input
             className="form-input"
             value={title}
             onChange={(event) => onTitleChange(event.target.value)}
-            placeholder="例如：函数专题讲义 / 飞书资料夹"
+            placeholder="留空时自动使用文件名、文件夹名或飞书节点名"
           />
         </label>
         <label>

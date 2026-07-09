@@ -1,5 +1,7 @@
 package com.doob.mathagent.teacher.dto;
 
+import com.doob.mathagent.teacher.service.TeacherResourceTitleResolver;
+
 /**
  * Request body used by teachers or admins to register a managed resource source.
  *
@@ -37,11 +39,17 @@ public record TeacherResourceRegistrationRequest(
      */
     public TeacherResourceRegistrationRequest normalize() {
         String normalizedSourceType = textOrDefault(sourceType, "local_path").toLowerCase();
+        String normalizedOriginalUrl = blankToNull(originalUrl);
+        String normalizedLocalPath = blankToNull(localPath);
         return new TeacherResourceRegistrationRequest(
                 normalizedSourceType,
-                textOrDefault(title, "untitled-teacher-resource"),
-                blankToNull(originalUrl),
-                blankToNull(localPath),
+                TeacherResourceTitleResolver.resolveOrDefault(
+                        title,
+                        normalizedSourceType,
+                        normalizedOriginalUrl,
+                        normalizedLocalPath),
+                normalizedOriginalUrl,
+                normalizedLocalPath,
                 textOrDefault(permissionScope, "TEACHER_PRIVATE"),
                 normalizeFeishuExportFormat(normalizedSourceType, feishuExportFormat),
                 normalizeParseMode(parseMode));

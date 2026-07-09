@@ -332,12 +332,13 @@ class TeacherResourceControllerTest {
         TeacherResourceDocumentResponse created = controller.uploadAndRegister(
                 List.of(markdown),
                 "qq_bundle",
-                "单调性专题上传包",
+                null,
                 "PUBLIC_TEXTBOOK",
                 "AI",
                 request);
 
         assertThat(created.sourceType()).isEqualTo("qq_bundle");
+        assertThat(created.title()).isEqualTo("lesson");
         assertThat(created.permissionScope()).isEqualTo("TEACHER_PRIVATE");
         assertThat(created.parseMode()).isEqualTo("AI");
         assertThat(Path.of(created.localPath())).exists();

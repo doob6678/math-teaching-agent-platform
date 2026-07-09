@@ -78,7 +78,7 @@ class ApiAccessControlServiceTest {
     }
 
     @Test
-    void teacherResourceSearchUsesDedicatedReadLimitInsteadOfMutationBudget() {
+    void teacherResourceEndpointsStayUnlimitedByDefault() {
         ApiAccessControlService service = new ApiAccessControlService(
                 FixedWindowRateLimiter.empty(),
                 Clock.fixed(Instant.parse("2026-06-28T10:00:00Z"), ZoneOffset.UTC),
@@ -107,9 +107,9 @@ class ApiAccessControlServiceTest {
 
         assertThat(searchDecision.allowed()).isTrue();
         assertThat(searchDecision.level()).isEqualTo(ApiAccessLevel.ADMIN);
-        assertThat(searchDecision.limit()).isEqualTo(120);
+        assertThat(searchDecision.limit()).isEqualTo(0);
         assertThat(mutationDecision.allowed()).isTrue();
-        assertThat(mutationDecision.limit()).isEqualTo(30);
+        assertThat(mutationDecision.limit()).isEqualTo(0);
     }
 
     @Test
@@ -184,18 +184,18 @@ class ApiAccessControlServiceTest {
         assertThat(denied.httpStatus()).isEqualTo(403);
         assertThat(standardMcpAllowed.allowed()).isTrue();
         assertThat(standardMcpAllowed.level()).isEqualTo(ApiAccessLevel.GUEST);
-        assertThat(standardMcpAllowed.limit()).isEqualTo(60);
+        assertThat(standardMcpAllowed.limit()).isEqualTo(0);
         assertThat(studentAllowed.allowed()).isTrue();
         assertThat(studentAllowed.level()).isEqualTo(ApiAccessLevel.USER);
-        assertThat(studentAllowed.limit()).isEqualTo(30);
+        assertThat(studentAllowed.limit()).isEqualTo(0);
         assertThat(teacherAllowed.allowed()).isTrue();
         assertThat(teacherAllowed.level()).isEqualTo(ApiAccessLevel.USER);
-        assertThat(teacherAllowed.limit()).isEqualTo(30);
+        assertThat(teacherAllowed.limit()).isEqualTo(0);
         assertThat(studentConfigurationAllowed.allowed()).isTrue();
         assertThat(studentConfigurationAllowed.level()).isEqualTo(ApiAccessLevel.USER);
-        assertThat(studentConfigurationAllowed.limit()).isEqualTo(30);
+        assertThat(studentConfigurationAllowed.limit()).isEqualTo(0);
         assertThat(teacherConfigurationAllowed.allowed()).isTrue();
-        assertThat(teacherConfigurationAllowed.limit()).isEqualTo(30);
+        assertThat(teacherConfigurationAllowed.limit()).isEqualTo(0);
     }
 
     @Test
@@ -230,7 +230,7 @@ class ApiAccessControlServiceTest {
         assertThat(denied.httpStatus()).isEqualTo(403);
         assertThat(allowed.allowed()).isTrue();
         assertThat(allowed.level()).isEqualTo(ApiAccessLevel.USER);
-        assertThat(allowed.limit()).isEqualTo(30);
+        assertThat(allowed.limit()).isEqualTo(0);
     }
 
     @Test
@@ -324,11 +324,11 @@ class ApiAccessControlServiceTest {
         assertThat(denied.allowed()).isFalse();
         assertThat(denied.httpStatus()).isEqualTo(403);
         assertThat(allowed.allowed()).isTrue();
-        assertThat(allowed.limit()).isEqualTo(60);
+        assertThat(allowed.limit()).isEqualTo(0);
     }
 
     @Test
-    void teachingBatchZipRequiresLoggedInSubjectAndHasOwnRateLimitBucket() {
+    void teachingBatchZipRequiresLoggedInSubject() {
         ApiAccessControlService service = new ApiAccessControlService(
                 FixedWindowRateLimiter.empty(),
                 Clock.fixed(Instant.parse("2026-06-28T10:00:00Z"), ZoneOffset.UTC),
@@ -369,10 +369,10 @@ class ApiAccessControlServiceTest {
         assertThat(denied.httpStatus()).isEqualTo(403);
         assertThat(studentAllowed.allowed()).isTrue();
         assertThat(studentAllowed.level()).isEqualTo(ApiAccessLevel.USER);
-        assertThat(studentAllowed.limit()).isEqualTo(10);
+        assertThat(studentAllowed.limit()).isEqualTo(0);
         assertThat(teacherAllowed.allowed()).isTrue();
         assertThat(teacherAllowed.level()).isEqualTo(ApiAccessLevel.USER);
-        assertThat(teacherAllowed.limit()).isEqualTo(10);
+        assertThat(teacherAllowed.limit()).isEqualTo(0);
     }
 
     @Test
@@ -410,7 +410,7 @@ class ApiAccessControlServiceTest {
     }
 
     @Test
-    void questionBankImportRequiresTeacherOrAdminSubjectAndTightRateLimit() {
+    void questionBankImportRequiresTeacherOrAdminSubject() {
         ApiAccessControlService service = new ApiAccessControlService(
                 FixedWindowRateLimiter.empty(),
                 Clock.fixed(Instant.parse("2026-06-28T10:00:00Z"), ZoneOffset.UTC),
@@ -441,7 +441,7 @@ class ApiAccessControlServiceTest {
         assertThat(denied.httpStatus()).isEqualTo(403);
         assertThat(allowed.allowed()).isTrue();
         assertThat(allowed.level()).isEqualTo(ApiAccessLevel.ADMIN);
-        assertThat(allowed.limit()).isEqualTo(10);
+        assertThat(allowed.limit()).isEqualTo(0);
     }
 
     @Test
@@ -510,7 +510,7 @@ class ApiAccessControlServiceTest {
         assertThat(denied.httpStatus()).isEqualTo(403);
         assertThat(allowed.allowed()).isTrue();
         assertThat(allowed.level()).isEqualTo(ApiAccessLevel.USER);
-        assertThat(allowed.limit()).isEqualTo(40);
+        assertThat(allowed.limit()).isEqualTo(0);
     }
 
     @Test
@@ -648,7 +648,7 @@ class ApiAccessControlServiceTest {
         assertThat(denied.httpStatus()).isEqualTo(403);
         assertThat(allowed.allowed()).isTrue();
         assertThat(allowed.level()).isEqualTo(ApiAccessLevel.ADMIN);
-        assertThat(allowed.limit()).isEqualTo(10);
+        assertThat(allowed.limit()).isEqualTo(0);
     }
 
     @Test

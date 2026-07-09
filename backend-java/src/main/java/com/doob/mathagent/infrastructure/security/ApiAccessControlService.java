@@ -58,6 +58,13 @@ public class ApiAccessControlService {
                     0,
                     "Endpoint requires subject type in " + rule.allowedSubjectTypes());
         }
+        /*
+         * Normal CRUD/search/configuration endpoints should not share the fixed-window limiter. A non-positive limit is
+         * treated as "unlimited" so the policy table can reserve throttling only for real AI/model execution paths.
+         */
+        if (rule.limit() <= 0) {
+            return ApiAccessDecision.allow(rule.level(), 0, 0);
+        }
         RateLimitUsage usage = rateLimiter.check(
                 rule.rateLimitKey(identity),
                 rule.limit(),

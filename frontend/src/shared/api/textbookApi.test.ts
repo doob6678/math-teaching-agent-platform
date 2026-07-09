@@ -2745,7 +2745,6 @@ describe("textbookApi", () => {
 
     const created = await client.uploadTeacherResource({
       sourceType: "qq_bundle",
-      title: "QQ 专题上传包",
       permissionScope: "TEACHER_PRIVATE",
       parseMode: "AI",
       files: [file],
@@ -2756,7 +2755,7 @@ describe("textbookApi", () => {
       action: "teacher-resource:register",
       path: "/api/teacher/resources/upload",
       requestHash: expect.any(String),
-      idempotencyKey: "teacher-resource-upload:qq_bundle:QQ 专题上传包",
+      idempotencyKey: "teacher-resource-upload:qq_bundle:lesson",
       maxCost: 1,
     });
     expect(fetchMock).toHaveBeenNthCalledWith(

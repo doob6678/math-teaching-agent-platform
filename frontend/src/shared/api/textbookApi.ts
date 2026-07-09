@@ -1521,6 +1521,33 @@ export interface StudentExplanationResponse {
 }
 
 /**
+ * Real-time progress snapshot for student explanation streaming.
+ */
+export interface StudentExplanationStreamProgress {
+  conversationId: string;
+  questionText?: string;
+  imageStatus: string;
+  imageUnderstanding: StudentExplanationImageUnderstanding;
+  aiDraft: StudentExplanationAiDraft;
+  workflowStages: StudentExplanationStage[];
+  cards: StudentExplanationCard[];
+  sources: StudentExplanationSource[];
+  totalElapsedMs: number;
+}
+
+/**
+ * One SSE event returned by the streaming student explanation endpoint.
+ */
+export interface StudentExplanationStreamEvent {
+  eventType: string;
+  message?: string;
+  progress?: StudentExplanationStreamProgress | null;
+  response?: StudentExplanationResponse | null;
+  errorCode?: string | null;
+  errorTraceId?: string | null;
+}
+
+/**
  * Safe metadata from the backend image understanding stage.
  */
 export interface StudentExplanationImageUnderstanding {
@@ -1720,8 +1747,8 @@ export interface StudentResourceScope {
 export interface TeacherResourceRegistrationRequest {
   /** 来源类型，例如 feishu、local_path、local_docx 或 textbook_md。 */
   sourceType: string;
-  /** 教师端展示标题。 */
-  title: string;
+  /** 教师端展示标题；留空时前后端都会回退到文件名、文件夹名或链接节点名。 */
+  title?: string;
   /** 飞书或外部来源 URL。 */
   originalUrl?: string;
   /** 本地文件或文件夹路径。 */
@@ -1740,14 +1767,111 @@ export interface TeacherResourceRegistrationRequest {
 export interface TeacherResourceUploadRequest {
   /** 非飞书资料的逻辑库类型；最终仍复用后端既有 local sync 链路。 */
   sourceType?: string;
-  /** 教师端展示标题。 */
-  title: string;
+  /** 教师端展示标题；留空时前后端都会回退到上传文件名或文件夹名。 */
+  title?: string;
   /** RAG 权限域，例如 TEACHER_PRIVATE、MATH_VIP 或 PUBLIC_TEXTBOOK。 */
   permissionScope: string;
   /** TEXT uses deterministic extraction; AI requests higher-cost semantic labeling when backend is configured. */
   parseMode?: "TEXT" | "AI";
   /** 上传的真实文件，可来自多文件选择、文件夹选择或 ZIP。 */
   files: File[];
+}
+
+export const UNTITLED_TEACHER_RESOURCE_TITLE = "untitled-teacher-resource";
+
+/**
+ * Derives a teacher-resource title from the same source metadata the backend sees so the browser no longer forces
+ * operators to duplicate file names by hand.
+ */
+export function deriveTeacherResourceTitle(input: {
+  title?: string;
+  originalUrl?: string;
+  localPath?: string;
+  files?: File[];
+}): string {
+  const explicit = normalizeTeacherResourceTitleCandidate(input.title);
+  if (explicit) {
+    return explicit;
+  }
+  const fromFiles = deriveTeacherResourceTitleFromFiles(input.files ?? []);
+  if (fromFiles) {
+    return fromFiles;
+  }
+  const fromPath = deriveTeacherResourceTitleFromPath(input.localPath);
+  if (fromPath) {
+    return fromPath;
+  }
+  const fromUrl = deriveTeacherResourceTitleFromPath(input.originalUrl);
+  return fromUrl ?? UNTITLED_TEACHER_RESOURCE_TITLE;
+}
+
+function deriveTeacherResourceTitleFromFiles(files: File[]): string | null {
+  if (files.length === 0) {
+    return null;
+  }
+  const normalizedPaths = files
+    .map((file) => normalizeTeacherResourcePath(file.webkitRelativePath || file.name))
+    .filter((value): value is string => Boolean(value));
+  if (normalizedPaths.length === 0) {
+    return null;
+  }
+  const topLevelSegments = new Set<string>();
+  let hasNestedPath = false;
+  for (const path of normalizedPaths) {
+    const segments = path.split("/");
+    if (segments.length > 1) {
+      hasNestedPath = true;
+    }
+    topLevelSegments.add(segments[0]);
+  }
+  if (hasNestedPath && topLevelSegments.size === 1) {
+    const folderTitle = normalizeTeacherResourceTitleCandidate([...topLevelSegments][0]);
+    if (folderTitle) {
+      return folderTitle;
+    }
+  }
+  const firstLeaf = teacherResourceLeafName(normalizedPaths[0]);
+  if (!firstLeaf) {
+    return null;
+  }
+  return normalizedPaths.length === 1 ? firstLeaf : `${firstLeaf} 等${normalizedPaths.length}个文件`;
+}
+
+function deriveTeacherResourceTitleFromPath(value?: string): string | null {
+  return teacherResourceLeafName(value);
+}
+
+function teacherResourceLeafName(value?: string): string | null {
+  const normalizedPath = normalizeTeacherResourcePath(value);
+  if (!normalizedPath) {
+    return null;
+  }
+  const slashIndex = normalizedPath.lastIndexOf("/");
+  const leaf = slashIndex >= 0 ? normalizedPath.slice(slashIndex + 1) : normalizedPath;
+  return normalizeTeacherResourceTitleCandidate(leaf);
+}
+
+function normalizeTeacherResourcePath(value?: string): string | null {
+  if (!value?.trim()) {
+    return null;
+  }
+  const normalized = value.trim()
+    .replaceAll("\\", "/")
+    .replace(/[?#].*$/, "")
+    .replace(/^\/+/, "")
+    .replace(/\/+$/, "");
+  return normalized.length > 0 ? normalized : null;
+}
+
+function normalizeTeacherResourceTitleCandidate(value?: string): string | null {
+  const normalizedPath = normalizeTeacherResourcePath(value);
+  if (!normalizedPath) {
+    return null;
+  }
+  const slashIndex = normalizedPath.lastIndexOf("/");
+  const candidate = slashIndex >= 0 ? normalizedPath.slice(slashIndex + 1) : normalizedPath;
+  const stripped = candidate.replace(/\.[A-Za-z0-9]{1,8}$/, "").trim();
+  return stripped.length > 0 ? stripped : null;
 }
 
 /**
@@ -2156,7 +2280,7 @@ export interface SystemRuntimeStatusResponse {
 type FetchLike = (
   input: string,
   init?: RequestInit,
-) => Promise<Pick<Response, "ok" | "status" | "json" | "text" | "arrayBuffer" | "headers">>;
+) => Promise<Pick<Response, "ok" | "status" | "json" | "text" | "arrayBuffer" | "headers" | "body">>;
 
 const AUTH_STORAGE_KEY = "math-agent:auth-session";
 const DEVICE_ID_HEADER = { "X-Device-Id": "local-browser-console" };
@@ -2186,14 +2310,15 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     const trimmed = body.trim();
     if (trimmed.startsWith("{")) {
       try {
-        const parsed = JSON.parse(trimmed) as { message?: unknown; code?: unknown; error?: unknown };
+        const parsed = JSON.parse(trimmed) as { message?: unknown; code?: unknown; error?: unknown; traceId?: unknown };
         const message = typeof parsed.message === "string" ? parsed.message : "";
         const code = typeof parsed.code === "string" ? parsed.code : "";
+        const traceId = typeof parsed.traceId === "string" ? parsed.traceId : "";
         if (message && code) {
-          return `Backend request failed: ${status} ${message} (${code})`;
+          return `Backend request failed: ${status} ${message}${traceId ? ` [traceId: ${traceId}]` : ""} (${code})`;
         }
         if (message) {
-          return `Backend request failed: ${status} ${message}`;
+          return `Backend request failed: ${status} ${message}${traceId ? ` [traceId: ${traceId}]` : ""}`;
         }
         if (typeof parsed.error === "string") {
           return `Backend request failed: ${status} ${parsed.error}`;
@@ -2325,6 +2450,85 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
       throw new Error(backendErrorMessage(response.status, body));
     }
     return response.json() as Promise<T>;
+  }
+
+  /**
+   * Opens a POST-based SSE stream and yields parsed event payloads to the caller.
+   */
+  async function requestEventStream<T>(
+    path: string,
+    init: RequestInit,
+    onEvent: (eventName: string, payload: T) => void,
+  ): Promise<void> {
+    const auth = readAuthSession();
+    const authHeader = auth ? { [auth.tokenName]: auth.tokenValue } : {};
+    const response = await fetchImpl(`${normalizedBaseUrl}${path}`, {
+      ...init,
+      credentials: init.credentials ?? "include",
+      headers: {
+        Accept: "text/event-stream",
+        ...DEVICE_ID_HEADER,
+        ...authHeader,
+        ...init.headers,
+      },
+    });
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(backendErrorMessage(response.status, body));
+    }
+    if (!response.body) {
+      throw new Error("浏览器未返回可读取的流式响应。");
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done }).replace(/\r\n/g, "\n");
+      let separatorIndex = buffer.indexOf("\n\n");
+      while (separatorIndex >= 0) {
+        const rawEvent = buffer.slice(0, separatorIndex);
+        buffer = buffer.slice(separatorIndex + 2);
+        const parsed = parseServerSentEvent<T>(rawEvent);
+        if (parsed) {
+          onEvent(parsed.eventName, parsed.payload);
+        }
+        separatorIndex = buffer.indexOf("\n\n");
+      }
+      if (done) {
+        const trailing = buffer.trim();
+        if (trailing) {
+          const parsed = parseServerSentEvent<T>(trailing);
+          if (parsed) {
+            onEvent(parsed.eventName, parsed.payload);
+          }
+        }
+        return;
+      }
+    }
+  }
+
+  /**
+   * Parses one SSE block into an event name and JSON payload.
+   */
+  function parseServerSentEvent<T>(rawEvent: string): { eventName: string; payload: T } | null {
+    const lines = rawEvent.split(/\r?\n/);
+    let eventName = "message";
+    const dataLines: string[] = [];
+    for (const line of lines) {
+      if (line.startsWith("event:")) {
+        eventName = line.slice(6).trim() || "message";
+      } else if (line.startsWith("data:")) {
+        dataLines.push(line.slice(5).trimStart());
+      }
+    }
+    if (!dataLines.length) {
+      return null;
+    }
+    return {
+      eventName,
+      payload: JSON.parse(dataLines.join("\n")) as T,
+    };
   }
 
   /**
@@ -3037,6 +3241,35 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
       });
     },
 
+    async streamStudentQuestion(
+      request: StudentExplanationRequest,
+      onEvent: (eventName: string, payload: StudentExplanationStreamEvent) => void,
+    ): Promise<StudentExplanationResponse> {
+      let finalResponse: StudentExplanationResponse | null = null;
+      await requestEventStream<StudentExplanationStreamEvent>(
+        "/api/students/explanations/stream",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(request),
+        },
+        (eventName, payload) => {
+          onEvent(eventName, payload);
+          if (payload.response) {
+            finalResponse = payload.response;
+          }
+          if (payload.eventType === "error") {
+            const suffix = payload.errorTraceId ? `（traceId: ${payload.errorTraceId}）` : "";
+            throw new Error((payload.message || "流式讲解失败。") + suffix);
+          }
+        },
+      );
+      if (!finalResponse) {
+        throw new Error("流式讲解已结束，但没有收到最终结果。");
+      }
+      return finalResponse;
+    },
+
     uploadStudentExplanationImage(file: File): Promise<StudentExplanationImageUploadResponse> {
       const formData = new FormData();
       formData.append("file", file);
@@ -3186,9 +3419,10 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     registerTeacherResource(
       request: TeacherResourceRegistrationRequest,
     ): Promise<TeacherResourceDocumentResponse> {
+      const normalizedTitle = deriveTeacherResourceTitle(request);
       const normalizedRequest = request.sourceType === "feishu"
-        ? { ...request, feishuExportFormat: request.feishuExportFormat ?? "md", parseMode: request.parseMode ?? "TEXT" }
-        : { ...request, parseMode: request.parseMode ?? "TEXT" };
+        ? { ...request, title: normalizedTitle, feishuExportFormat: request.feishuExportFormat ?? "md", parseMode: request.parseMode ?? "TEXT" }
+        : { ...request, title: normalizedTitle, parseMode: request.parseMode ?? "TEXT" };
       const body = JSON.stringify(normalizedRequest);
       return applyCapability(
         "teacher-resource:register",
@@ -3219,9 +3453,10 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
         ? request.sourceType
         : "local_path";
       const normalizedParseMode = request.parseMode ?? "TEXT";
+      const normalizedTitle = deriveTeacherResourceTitle(request);
       const capabilityPayload = JSON.stringify({
         sourceType: normalizedSourceType,
-        title: request.title,
+        title: normalizedTitle,
         permissionScope: request.permissionScope,
         parseMode: normalizedParseMode,
         files: request.files.map((file) => ({
@@ -3234,7 +3469,7 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
       });
       const formData = new FormData();
       formData.append("sourceType", normalizedSourceType);
-      formData.append("title", request.title);
+      formData.append("title", normalizedTitle);
       formData.append("permissionScope", request.permissionScope);
       formData.append("parseMode", normalizedParseMode);
       for (const file of request.files) {
@@ -3247,7 +3482,7 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
         "teacher-resource:register",
         "/api/teacher/resources/upload",
         capabilityPayload,
-        `teacher-resource-upload:${normalizedSourceType}:${request.title}`,
+        `teacher-resource-upload:${normalizedSourceType}:${normalizedTitle}`,
       );
       return requestFormJson<TeacherResourceDocumentResponse>("/api/teacher/resources/upload", formData, {
         method: "POST",

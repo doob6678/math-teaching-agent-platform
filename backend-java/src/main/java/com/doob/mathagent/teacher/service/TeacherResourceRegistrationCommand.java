@@ -86,14 +86,20 @@ public record TeacherResourceRegistrationCommand(
      */
     public TeacherResourceRegistrationCommand normalize() {
         String normalizedSourceType = textOrDefault(sourceType, "local_path").toLowerCase();
+        String normalizedOriginalUrl = blankToNull(originalUrl);
+        String normalizedLocalPath = blankToNull(localPath);
         return new TeacherResourceRegistrationCommand(
                 requireText(tenantId, "tenantId is required"),
                 requireText(viewerRole, "viewerRole is required").toLowerCase(),
                 requireText(viewerSubjectId, "viewerSubjectId is required"),
                 normalizedSourceType,
-                textOrDefault(title, "untitled-teacher-resource"),
-                blankToNull(originalUrl),
-                blankToNull(localPath),
+                TeacherResourceTitleResolver.resolveOrDefault(
+                        title,
+                        normalizedSourceType,
+                        normalizedOriginalUrl,
+                        normalizedLocalPath),
+                normalizedOriginalUrl,
+                normalizedLocalPath,
                 textOrDefault(permissionScope, "TEACHER_PRIVATE"),
                 normalizeFeishuExportFormat(normalizedSourceType, feishuExportFormat),
                 normalizeParseMode(parseMode));
