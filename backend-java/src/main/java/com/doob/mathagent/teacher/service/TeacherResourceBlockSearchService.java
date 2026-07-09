@@ -74,6 +74,18 @@ public class TeacherResourceBlockSearchService {
     private static final int SNIPPET_RADIUS = 80;
     private static final int EVIDENCE_WINDOW_RADIUS = 1;
     private static final int MAX_SEARCH_TERMS = 32;
+    private static final int MAX_DOCUMENT_RERANK_BLOCKS_PER_DOCUMENT = 3;
+    private static final int MAX_BLOCK_RERANK_BLOCKS_PER_DOCUMENT = 2;
+    private static final int MAX_RERANK_TITLE_CHARS = 120;
+    private static final int MAX_RERANK_ROLE_CHARS = 48;
+    private static final int MAX_RERANK_HEADING_CHARS = 120;
+    private static final int MAX_RERANK_SOURCE_PATH_CHARS = 220;
+    private static final int MAX_RERANK_GRAPH_TAGS_CHARS = 180;
+    private static final int MAX_RERANK_IMAGE_REFS_CHARS = 180;
+    private static final int MAX_RERANK_EVIDENCE_BLOCK_IDS_CHARS = 120;
+    private static final int MAX_DOCUMENT_RERANK_EVIDENCE_CHARS = 520;
+    private static final int MAX_BLOCK_RERANK_EVIDENCE_CHARS = 900;
+    private static final int MAX_MERGE_RERANK_EVIDENCE_CHARS = 760;
     private static final String STRATEGY_TWO_STAGE_DOC_BLOCK = "two_stage_doc_block";
 
     private final TeacherResourceStore resourceStore;
@@ -257,33 +269,47 @@ public class TeacherResourceBlockSearchService {
                 normalizedSubjectId,
                 normalizedQuery);
         boolean includeRealTextbook = shouldUseRealTextbook(normalizedFilter);
-        List<TeacherResourceDocumentResponse> documents =
-                filteredDocuments(
-                        resourceStore.listSearchable(normalizedTenantId, normalizedRole, normalizedSubjectId),
-                        normalizedFilter);
-        if (includeRealTextbook) {
+        TeacherResourceBlockSearchResponse searchResponse;
+        if (includeRealTextbook && isTextbookOnlyFilter(normalizedFilter)) {
             /*
-             * Once processed_books is available, teacher search must not keep a second stale textbook branch in
-             * source_document/document_block. Those imported PUBLIC_TEXTBOOK rows were only a historical bridge before
-             * the dedicated textbook retriever and page-image index existed. Keeping both sources in mixed mode lets
-             * old derivative rows compete against the real textbook page hit and makes "no library specified" behave
-             * differently from "library=textbook".
-             *
-             * We therefore delete teacher-store textbook derivatives whenever the real textbook retriever is allowed
-             * for this request, even when the caller is doing a mixed multi-library search.
+             * When the caller explicitly pins the library to textbook, searching teacher-resource rows first only
+             * adds generic local_path noise and wastes rerank budget on a corpus that can never satisfy the filter.
+             * Go straight to the dedicated textbook retriever, then keep the normal merge/output path below.
              */
-            documents = documents.stream()
-                    .filter(document -> !"public_textbook".equals(TeacherResourceLibraryResolver.effectiveLibrary(document)))
-                    .toList();
+            searchResponse = response(
+                    normalizedQuery,
+                    safeLimit,
+                    retrievalMode(STRATEGY_TWO_STAGE_DOC_BLOCK, normalizedFilter, "textbook_only"),
+                    List.of());
+        } else {
+            List<TeacherResourceDocumentResponse> documents =
+                    filteredDocuments(
+                            resourceStore.listSearchable(normalizedTenantId, normalizedRole, normalizedSubjectId),
+                            normalizedFilter);
+            if (includeRealTextbook) {
+                /*
+                 * Once processed_books is available, teacher search must not keep a second stale textbook branch in
+                 * source_document/document_block. Those imported PUBLIC_TEXTBOOK rows were only a historical bridge before
+                 * the dedicated textbook retriever and page-image index existed. Keeping both sources in mixed mode lets
+                 * old derivative rows compete against the real textbook page hit and makes "no library specified" behave
+                 * differently from "library=textbook".
+                 *
+                 * We therefore delete teacher-store textbook derivatives whenever the real textbook retriever is allowed
+                 * for this request, even when the caller is doing a mixed multi-library search.
+                 */
+                documents = documents.stream()
+                        .filter(document -> !"public_textbook".equals(TeacherResourceLibraryResolver.effectiveLibrary(document)))
+                        .toList();
+            }
+            searchResponse = twoStageResponse(
+                    normalizedTenantId,
+                    documents,
+                    normalizedQuery,
+                    terms,
+                    safeLimit,
+                    normalizedFilter,
+                    queryGraph);
         }
-        TeacherResourceBlockSearchResponse searchResponse = twoStageResponse(
-                normalizedTenantId,
-                documents,
-                normalizedQuery,
-                terms,
-                safeLimit,
-                normalizedFilter,
-                queryGraph);
         if (includeRealTextbook) {
             searchResponse = mergeRealTextbookHits(
                     searchResponse,
@@ -388,10 +414,25 @@ public class TeacherResourceBlockSearchService {
                 .filter(docId -> docId != null && !docId.isBlank())
                 .distinct()
                 .toList();
-        List<TeacherResourceBlockSearchResponse.Hit> textbookImageHits = textbookImageHits(
-                normalizedQuery,
-                safeLimit,
-                candidateDocIds);
+        /*
+         * CLIP page search is a multimodal fallback, not the default path for every text query. When textbook text
+         * hits already exist, forcing page-image retrieval and a second cross-source rerank adds large latency while
+         * rarely changing the winner. Keep the image path for the real failure mode: text recall missed but the page
+         * image itself may still be distinctive.
+         */
+        List<TeacherResourceBlockSearchResponse.Hit> textbookImageHits = textbookTextHits.isEmpty()
+                ? textbookImageHits(normalizedQuery, safeLimit, candidateDocIds)
+                : List.of();
+        boolean teacherHitsEmpty = teacherResponse == null || teacherResponse.hits() == null || teacherResponse.hits().isEmpty();
+        if (teacherHitsEmpty && textbookImageHits.isEmpty() && !textbookTextHits.isEmpty()) {
+            return new TeacherResourceBlockSearchResponse(
+                    teacherResponse == null ? UUID.randomUUID().toString() : teacherResponse.queryId(),
+                    normalizedQuery,
+                    safeLimit,
+                    safeRetrievalMode(buildTextbookMergeMode(teacherResponse, textbookResponse, false) + "_text_only"),
+                    textbookTextHits.size(),
+                    textbookTextHits.stream().limit(safeLimit).toList());
+        }
         List<TeacherResourceBlockSearchResponse.Hit> combinedHits = new ArrayList<>();
         combinedHits.addAll(textbookTextHits);
         combinedHits.addAll(textbookImageHits);
@@ -496,19 +537,26 @@ public class TeacherResourceBlockSearchService {
         if (visibleDocumentIds.isEmpty()) {
             return Map.of();
         }
-        int visibleBlockCount = blocksByDocumentId.values().stream().mapToInt(List::size).sum();
         Map<String, Set<String>> blockIdsByDocument = new LinkedHashMap<>();
         for (Map.Entry<String, List<BlockContext>> entry : blocksByDocumentId.entrySet()) {
             blockIdsByDocument.put(
                     entry.getKey(),
                     entry.getValue().stream().map(context -> context.block().blockId()).collect(Collectors.toSet()));
         }
+        /*
+         * Stage one only needs enough vector candidates to let the final top-N documents surface. Asking Milvus for
+         * every visible block reintroduces whole-library noise and makes long teacher folders slower for no gain.
+         * Keep this bound derived from caller intent: top-N docs with top-N support blocks each.
+         */
+        int vectorCandidateLimit = Math.max(
+                safeLimit,
+                safeLimit * Math.max(1, candidateDocumentLimit(safeLimit, visibleDocumentIds.size())));
         Map<String, Double> scores = new LinkedHashMap<>();
         List<VectorSearchHit> hits;
         try {
             hits = vectorIndexService.searchTeacherResourceBlocks(
                     normalizedQuery,
-                    Math.max(safeLimit, visibleBlockCount),
+                    vectorCandidateLimit,
                     new VectorSearchFilter(List.copyOf(visibleDocumentIds), filter.permissionScopes()));
         } catch (RuntimeException exception) {
             log.warn("teacher_resource_search_vector_fallback strategy=two_stage query={} message={}",
@@ -547,7 +595,10 @@ public class TeacherResourceBlockSearchService {
         if (coarseCandidates.isEmpty()) {
             return coarseCandidates;
         }
-        Map<String, Double> rerankScoreByDocumentId = documentRerankScoreById(coarseCandidates, normalizedQuery);
+        Map<String, Double> rerankScoreByDocumentId = documentRerankScoreById(
+                coarseCandidates,
+                blocksByDocumentId,
+                normalizedQuery);
         return coarseCandidates.stream()
                 .map(candidate -> candidate.withSemanticScore(
                         rerankScoreByDocumentId.getOrDefault(candidate.document().documentId(), candidate.semanticScore())))
@@ -663,13 +714,19 @@ public class TeacherResourceBlockSearchService {
      */
     private Map<String, Double> documentRerankScoreById(
             List<DocumentCandidate> candidates,
+            Map<String, List<BlockContext>> blocksByDocumentId,
             String normalizedQuery) {
         List<String> candidateKeys = new ArrayList<>();
         List<String> candidateTexts = new ArrayList<>();
         for (DocumentCandidate candidate : candidates) {
-            for (BlockContext block : candidate.blocks()) {
+            List<BlockContext> documentBlocks = blocksByDocumentId.getOrDefault(candidate.document().documentId(), candidate.blocks());
+            for (BlockContext block : candidate.blocks().stream().limit(MAX_DOCUMENT_RERANK_BLOCKS_PER_DOCUMENT).toList()) {
                 candidateKeys.add(candidate.document().documentId());
-                candidateTexts.add(semanticCandidateText(candidate.document(), block));
+                candidateTexts.add(semanticCandidateText(
+                        candidate.document(),
+                        block,
+                        evidenceWindow(block, documentBlocks),
+                        MAX_DOCUMENT_RERANK_EVIDENCE_CHARS));
             }
         }
         if (candidateTexts.isEmpty()) {
@@ -704,7 +761,10 @@ public class TeacherResourceBlockSearchService {
             int safeLimit,
             TeacherResourceSearchFilter filter,
             TeacherResourceGraphAlignmentService.QueryGraphContext queryGraph) {
-        Map<String, Double> semanticScoreByKey = semanticScoreByKey(rankedDocuments, normalizedQuery);
+        Map<String, Double> semanticScoreByKey = semanticScoreByKey(
+                rankedDocuments,
+                blocksByDocumentId,
+                normalizedQuery);
         List<BlockCandidate> blockCandidates = new ArrayList<>();
         for (DocumentCandidate candidate : rankedDocuments) {
             List<BlockContext> documentBlocks = blocksByDocumentId.getOrDefault(candidate.document().documentId(), List.of());
@@ -715,7 +775,6 @@ public class TeacherResourceBlockSearchService {
                         vectorScoreByKey.getOrDefault(key, 0.0d));
                 int lexicalMatches = blockLexicalMatchCount(candidate.document(), block, normalizedQuery, terms);
                 int graphMatches = graphAlignmentMatchCount(block.graphTags(), block.graphNodeIds(), queryGraph, normalizedQuery, terms);
-                double neighborSemantic = neighborSemanticSupportScore(block, documentBlocks, semanticScoreByKey);
                 blockCandidates.add(new BlockCandidate(
                         candidate.document(),
                         block,
@@ -723,7 +782,6 @@ public class TeacherResourceBlockSearchService {
                         lexicalMatches,
                         candidate.semanticScore(),
                         graphMatches,
-                        neighborSemantic,
                         vectorScoreByKey.getOrDefault(key, 0.0d)));
             }
         }
@@ -760,13 +818,19 @@ public class TeacherResourceBlockSearchService {
      */
     private Map<String, Double> semanticScoreByKey(
             List<DocumentCandidate> rankedDocuments,
+            Map<String, List<BlockContext>> blocksByDocumentId,
             String normalizedQuery) {
         LinkedHashMap<String, String> candidateTexts = new LinkedHashMap<>();
         for (DocumentCandidate candidate : rankedDocuments) {
-            for (BlockContext block : candidate.blocks()) {
+            List<BlockContext> documentBlocks = blocksByDocumentId.getOrDefault(candidate.document().documentId(), candidate.blocks());
+            for (BlockContext block : candidate.blocks().stream().limit(MAX_BLOCK_RERANK_BLOCKS_PER_DOCUMENT).toList()) {
                 candidateTexts.put(
                         blockKey(candidate.document().documentId(), block.block().blockId()),
-                        semanticCandidateText(candidate.document(), block));
+                        semanticCandidateText(
+                                candidate.document(),
+                                block,
+                                evidenceWindow(block, documentBlocks),
+                                MAX_BLOCK_RERANK_EVIDENCE_CHARS));
             }
         }
         if (candidateTexts.isEmpty()) {
@@ -794,33 +858,42 @@ public class TeacherResourceBlockSearchService {
      * Legacy role-bucket heuristics were intentionally removed here. The previous implementation tried to infer
      * "analysis/question/lesson" intent from hand-written cue lists and then override the semantic ranking. That made
      * retrieval behavior brittle and benchmark-sensitive. The rewritten pipeline keeps blockRole/sourcePath/chapter/
-     * section inside the rerank text itself, so the real rerank model stays primary while lexical and graph signals
-     * only break ties.
+     * section and the adjacent evidence window inside the rerank text itself, so the real rerank model stays primary
+     * while lexical and graph signals only break ties.
      */
     private static Comparator<BlockCandidate> blockCandidateComparator() {
         Comparator<BlockCandidate> comparator = Comparator.comparingDouble(BlockCandidate::rerankScore).reversed();
         comparator = comparator.thenComparing(Comparator.comparingDouble(BlockCandidate::documentRerankScore).reversed());
         comparator = comparator.thenComparing(Comparator.comparingDouble(BlockCandidate::vectorSemanticScore).reversed());
-        comparator = comparator.thenComparing(Comparator.comparingDouble(BlockCandidate::neighborSemanticScore).reversed());
         comparator = comparator.thenComparing(Comparator.comparingInt(BlockCandidate::lexicalMatches).reversed());
         return comparator.thenComparing(Comparator.comparingInt(BlockCandidate::graphMatches).reversed());
     }
 
     private static String semanticCandidateText(
             TeacherResourceDocumentResponse document,
-            BlockContext block) {
-        String imageRefs = String.join(" ", parseStringArray(block.block().imageRefs()));
+            BlockContext block,
+            EvidenceWindow evidence,
+            int evidenceCharBudget) {
+        String imageRefs = truncateForRerank(
+                String.join(" ", parseStringArray(block.block().imageRefs())),
+                MAX_RERANK_IMAGE_REFS_CHARS);
+        String evidenceText = textOrDefault(
+                evidence == null ? "" : evidence.text(),
+                textOrDefault(block.block().normalizedText(), block.block().rawText()));
         return String.join(
                 "\n",
-                textOrDefault(document.title(), ""),
-                TeacherResourceLibraryResolver.effectiveLibrary(document),
-                textOrDefault(block.blockRole(), ""),
-                textOrDefault(block.block().chapter(), ""),
-                textOrDefault(block.block().section(), ""),
-                textOrDefault(block.sourcePath(), ""),
-                String.join(" ", block.graphTags()),
-                imageRefs,
-                textOrDefault(block.block().normalizedText(), block.block().rawText()));
+                "documentTitle: " + truncateForRerank(textOrDefault(document.title(), ""), MAX_RERANK_TITLE_CHARS),
+                "library: " + TeacherResourceLibraryResolver.effectiveLibrary(document),
+                "role: " + truncateForRerank(textOrDefault(block.blockRole(), ""), MAX_RERANK_ROLE_CHARS),
+                "chapter: " + truncateForRerank(textOrDefault(block.block().chapter(), ""), MAX_RERANK_HEADING_CHARS),
+                "section: " + truncateForRerank(textOrDefault(block.block().section(), ""), MAX_RERANK_HEADING_CHARS),
+                "sourcePath: " + truncateForRerank(textOrDefault(block.sourcePath(), ""), MAX_RERANK_SOURCE_PATH_CHARS),
+                "graphTags: " + truncateForRerank(String.join(" ", block.graphTags()), MAX_RERANK_GRAPH_TAGS_CHARS),
+                "imageRefs: " + imageRefs,
+                "evidenceBlockIds: " + truncateForRerank(
+                        String.join(" ", evidence == null ? List.of() : evidence.blockIds()),
+                        MAX_RERANK_EVIDENCE_BLOCK_IDS_CHARS),
+                "evidenceText:\n" + truncateForRerank(evidenceText, evidenceCharBudget));
     }
 
     private static int blockLexicalMatchCount(
@@ -875,40 +948,6 @@ public class TeacherResourceBlockSearchService {
             }
         }
         return matches;
-    }
-
-    private static double neighborSemanticSupportScore(
-            BlockContext target,
-            List<BlockContext> documentBlocks,
-            Map<String, Double> semanticScoreByKey) {
-        if (documentBlocks == null || documentBlocks.size() <= 1 || semanticScoreByKey.isEmpty()) {
-            return 0.0d;
-        }
-        int targetIndex = -1;
-        for (int index = 0; index < documentBlocks.size(); index += 1) {
-            if (documentBlocks.get(index).block().blockId().equals(target.block().blockId())) {
-                targetIndex = index;
-                break;
-            }
-        }
-        if (targetIndex < 0) {
-            return 0.0d;
-        }
-        double bestNeighborSemantic = 0.0d;
-        int start = Math.max(0, targetIndex - EVIDENCE_WINDOW_RADIUS);
-        int end = Math.min(documentBlocks.size() - 1, targetIndex + EVIDENCE_WINDOW_RADIUS);
-        for (int index = start; index <= end; index += 1) {
-            if (index == targetIndex) {
-                continue;
-            }
-            BlockContext neighbor = documentBlocks.get(index);
-            bestNeighborSemantic = Math.max(
-                    bestNeighborSemantic,
-                    semanticScoreByKey.getOrDefault(blockKey(
-                            neighbor.document().documentId(),
-                            neighbor.block().blockId()), 0.0d));
-        }
-        return bestNeighborSemantic;
     }
 
     private static TeacherResourceBlockSearchResponse.Hit toTwoStageHit(
@@ -1176,14 +1215,18 @@ public class TeacherResourceBlockSearchService {
     private static String semanticMergeCandidateText(TeacherResourceBlockSearchResponse.Hit hit) {
         return String.join(
                 "\n",
-                textOrDefault(hit.documentTitle(), ""),
-                textOrDefault(hit.sourceType(), ""),
-                textOrDefault(hit.blockRole(), ""),
-                textOrDefault(hit.chapter(), ""),
-                textOrDefault(hit.section(), ""),
-                textOrDefault(hit.sourcePath(), ""),
-                String.join(" ", hit.graphTags() == null ? List.of() : hit.graphTags()),
-                textOrDefault(hit.evidenceText(), hit.snippet()));
+                "documentTitle: " + truncateForRerank(textOrDefault(hit.documentTitle(), ""), MAX_RERANK_TITLE_CHARS),
+                "sourceType: " + textOrDefault(hit.sourceType(), ""),
+                "blockRole: " + truncateForRerank(textOrDefault(hit.blockRole(), ""), MAX_RERANK_ROLE_CHARS),
+                "chapter: " + truncateForRerank(textOrDefault(hit.chapter(), ""), MAX_RERANK_HEADING_CHARS),
+                "section: " + truncateForRerank(textOrDefault(hit.section(), ""), MAX_RERANK_HEADING_CHARS),
+                "sourcePath: " + truncateForRerank(textOrDefault(hit.sourcePath(), ""), MAX_RERANK_SOURCE_PATH_CHARS),
+                "graphTags: " + truncateForRerank(
+                        String.join(" ", hit.graphTags() == null ? List.of() : hit.graphTags()),
+                        MAX_RERANK_GRAPH_TAGS_CHARS),
+                "evidenceText:\n" + truncateForRerank(
+                        textOrDefault(hit.evidenceText(), hit.snippet()),
+                        MAX_MERGE_RERANK_EVIDENCE_CHARS));
     }
 
     private static TeacherResourceBlockSearchResponse.Hit withScore(
@@ -1290,6 +1333,28 @@ public class TeacherResourceBlockSearchService {
         return filter.sourceTypes().stream()
                 .map(TeacherResourceBlockSearchService::normalizeText)
                 .anyMatch(selector -> "textbook".equals(selector) || "public_textbook".equals(selector));
+    }
+
+    /**
+     * If the caller narrowed the search space to textbook only, there is no value in running teacher-resource stage
+     * one first. The real textbook retriever is already the canonical source for that library and produces a cleaner
+     * candidate pool for the final merge.
+     */
+    private static boolean isTextbookOnlyFilter(TeacherResourceSearchFilter filter) {
+        if (filter == null) {
+            return false;
+        }
+        if ((filter.documentIds() != null && !filter.documentIds().isEmpty())
+                || (filter.permissionScopes() != null && !filter.permissionScopes().isEmpty())
+                || (filter.tags() != null && !filter.tags().isEmpty())) {
+            return false;
+        }
+        if (filter.sourceTypes() == null || filter.sourceTypes().isEmpty()) {
+            return false;
+        }
+        return filter.sourceTypes().stream()
+                .map(TeacherResourceBlockSearchService::normalizeText)
+                .allMatch(selector -> "textbook".equals(selector) || "public_textbook".equals(selector));
     }
 
     private boolean realTextbookAvailable() {
@@ -1460,6 +1525,19 @@ public class TeacherResourceBlockSearchService {
     }
 
     /**
+     * Real teacher folders can carry very long paths, neighboring block windows, and image references. Truncate only
+     * the rerank view so the worker gets the strongest semantic clues without timing out; the response still returns
+     * the original evidence text and snippets elsewhere.
+     */
+    private static String truncateForRerank(String value, int maxChars) {
+        String normalized = textOrDefault(value, "");
+        if (normalized.isBlank() || maxChars <= 0 || normalized.length() <= maxChars) {
+            return normalized;
+        }
+        return normalized.substring(0, maxChars).strip() + "…";
+    }
+
+    /**
      * Returns stripped text or a fallback when blank.
      */
     private static String textOrDefault(String value, String defaultValue) {
@@ -1546,7 +1624,6 @@ public class TeacherResourceBlockSearchService {
             int lexicalMatches,
             double documentRerankScore,
             int graphMatches,
-            double neighborSemanticScore,
             double vectorSemanticScore) {
     }
 

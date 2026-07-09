@@ -31,6 +31,11 @@ public class TextbookRetrievalService {
 
     private static final long LOAD_FAILURE_COOLDOWN_NANOS = TimeUnit.SECONDS.toNanos(30);
     private static final String SEARCH_PIPELINE_VERSION = "two_stage_doc_page_v2_rerank";
+    private static final int MAX_DOCUMENT_RERANK_DOCS = 5;
+    private static final int MAX_PAGE_RERANK_PAGES_PER_DOCUMENT = 2;
+    private static final int MAX_RERANK_PAGE_TEXT_CHARS = 720;
+    private static final int MAX_RERANK_FORMULA_TEXT_CHARS = 240;
+    private static final int MAX_RERANK_DOCUMENT_TEXT_CHARS = 2200;
 
     private final TextbookCatalogReader catalogReader;
     private final TextbookChunkReader chunkReader;
@@ -159,7 +164,8 @@ public class TextbookRetrievalService {
         for (TextbookSearchHit hit : coarseHits) {
             hitsByDocId.computeIfAbsent(hit.docId(), ignored -> new ArrayList<>()).add(hit);
         }
-        Map<String, List<TextbookSearchHit>> supportHitsByDocId = cappedSupportHitsByDocId(hitsByDocId, safeLimit);
+        Map<String, List<TextbookSearchHit>> coarseDocumentCandidates = topLexicalDocumentCandidates(hitsByDocId, safeLimit);
+        Map<String, List<TextbookSearchHit>> supportHitsByDocId = cappedSupportHitsByDocId(coarseDocumentCandidates);
         Map<String, Double> documentSemanticScores = semanticScoreByKey(query, documentCandidateTexts(supportHitsByDocId));
         List<String> rankedDocIds = rankedDocumentIds(supportHitsByDocId, documentSemanticScores, safeLimit);
         List<TextbookSearchHit> pageCandidates = pageCandidates(rankedDocIds, supportHitsByDocId);
@@ -179,12 +185,35 @@ public class TextbookRetrievalService {
                 .toList();
     }
 
-    private static Map<String, List<TextbookSearchHit>> cappedSupportHitsByDocId(
+    /**
+     * Document-level coarse retrieval already produced a global lexical ordering. Keep only the strongest few book
+     * buckets before invoking the cross-encoder; otherwise a top-5 page query ends up reranking dozens of books that
+     * can never all survive into the final answer.
+     */
+    private static Map<String, List<TextbookSearchHit>> topLexicalDocumentCandidates(
             Map<String, List<TextbookSearchHit>> hitsByDocId,
             int safeLimit) {
+        int docLimit = Math.max(1, Math.min(MAX_DOCUMENT_RERANK_DOCS, safeLimit));
+        Map<String, List<TextbookSearchHit>> candidates = new LinkedHashMap<>();
+        hitsByDocId.entrySet().stream()
+                .sorted(Comparator.<Map.Entry<String, List<TextbookSearchHit>>>comparingDouble(
+                                entry -> entry.getValue().isEmpty() ? 0.0d : entry.getValue().getFirst().score())
+                        .reversed()
+                        .thenComparing(Map.Entry::getKey))
+                .limit(docLimit)
+                .forEach(entry -> candidates.put(entry.getKey(), entry.getValue()));
+        return candidates;
+    }
+
+    /**
+     * Page rerank only needs the strongest sibling pages inside each candidate book. Limiting this window prevents a
+     * single large chapter from exhausting the rerank budget before other candidate books can compete.
+     */
+    private static Map<String, List<TextbookSearchHit>> cappedSupportHitsByDocId(
+            Map<String, List<TextbookSearchHit>> hitsByDocId) {
         Map<String, List<TextbookSearchHit>> capped = new LinkedHashMap<>();
         for (Map.Entry<String, List<TextbookSearchHit>> entry : hitsByDocId.entrySet()) {
-            capped.put(entry.getKey(), entry.getValue().stream().limit(safeLimit).toList());
+            capped.put(entry.getKey(), entry.getValue().stream().limit(MAX_PAGE_RERANK_PAGES_PER_DOCUMENT).toList());
         }
         return capped;
     }
@@ -260,6 +289,11 @@ public class TextbookRetrievalService {
      * Document-level rerank asks a simple question: "does this textbook contain the right evidence somewhere in these
      * candidate pages?" We therefore concatenate only the already-recalled pages from that book instead of inventing a
      * new document summary or relying on fragile filename features.
+     *
+     * <p>Do not send whole OCR pages into the reranker. Real textbook pages can contain large OCR noise and long
+     * formula dumps; once several candidate pages are concatenated, the worker times out before producing a score.
+     * Keep a bounded semantic digest here so rerank latency stays predictable while still exposing chapter/section and
+     * the most relevant snippet text.</p>
      */
     private static String semanticDocumentText(List<TextbookSearchHit> hits) {
         if (hits == null || hits.isEmpty()) {
@@ -271,8 +305,11 @@ public class TextbookRetrievalService {
         appendLine(builder, first.volume());
         for (TextbookSearchHit hit : hits) {
             appendLine(builder, semanticPageText(hit));
+            if (builder.length() >= MAX_RERANK_DOCUMENT_TEXT_CHARS) {
+                break;
+            }
         }
-        return builder.toString();
+        return truncateForRerank(builder.toString(), MAX_RERANK_DOCUMENT_TEXT_CHARS);
     }
 
     private static String semanticPageText(TextbookSearchHit hit) {
@@ -282,9 +319,21 @@ public class TextbookRetrievalService {
         appendLine(builder, String.join(" / ", hit.chapterPath() == null ? List.of() : hit.chapterPath()));
         appendLine(builder, hit.sectionTitle());
         appendLine(builder, hit.printedPageNo());
-        appendLine(builder, hit.textSnippet());
-        appendLine(builder, hit.formulaText());
+        appendLine(builder, truncateForRerank(hit.textSnippet(), MAX_RERANK_PAGE_TEXT_CHARS));
+        appendLine(builder, truncateForRerank(hit.formulaText(), MAX_RERANK_FORMULA_TEXT_CHARS));
         return builder.toString();
+    }
+
+    /**
+     * Rerank quality depends on sending the strongest semantic clue, not the entire raw OCR payload. Truncate only for
+     * model I/O control; caller-visible evidence and snippets remain untouched in the final response.
+     */
+    private static String truncateForRerank(String value, int maxChars) {
+        String normalized = value == null ? "" : value.strip();
+        if (normalized.isBlank() || maxChars <= 0 || normalized.length() <= maxChars) {
+            return normalized;
+        }
+        return normalized.substring(0, maxChars).strip() + "…";
     }
 
     private static void appendLine(StringBuilder builder, String value) {
