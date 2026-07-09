@@ -20,6 +20,10 @@
   - Uploads are stored under the existing local file storage root in a tenant/subject-owned directory, then immediately registered as a normal `local_path` teacher resource.
   - This reuses the current sync-job, parser, question-bank import, and vector rebuild pipeline instead of creating a second ingestion path just for uploads.
 - Added `TeacherResourceAssetService` and MyBatis store. Asset binaries are written under a backend-owned storage root and returned only through `GET /api/teacher/resources/assets/{assetId}` after subject permission checks.
+- Teacher resource search hits now surface extracted asset metadata:
+  - `TeacherResourceBlockSearchResponse.Hit` carries `imageAssetIds` and resolved `assetRefs`.
+  - `assetRefs` expose only backend-controlled URLs like `/api/teacher/resources/assets/{assetId}` plus MIME/source metadata; no local path, Feishu token, or storage key is leaked.
+  - `search_teacher_resource_evidence` and mixed MCP merged rows forward the same asset references so AI/tool callers can cite or display the matching image without bypassing backend authorization.
 - DOCX parsing now extracts embedded images from runs and stores them as assets. If POI exposes a drawing relationship but returns an empty image stream, the parser falls back to the real `word/media/*` package entry; this is required for python-docx and similar producer output. PDF parsing now stores page-level PNG screenshots as assets. `imageRefs` stores opaque `assetId` references, not local paths or provider tokens.
 - Feishu manifest ingestion now persists downloaded rows marked `assetKind=image` or `assetKind=attachment` into `teacher_resource_asset`. Exported documents remain parse inputs and are not double-counted as assets.
 - Sync invalidates active assets for the same document before re-parsing, matching the existing block/vector incremental update contract.
@@ -59,6 +63,10 @@
 - Upload staging verification:
   - `TeacherResourceUploadServiceTest` verifies owner-scoped folder-style multipart path preservation and ZIP expansion.
   - `TeacherResourceControllerTest.uploadEndpointStoresFilesRegistersLocalResourceAndSyncsThroughExistingPipeline` verifies uploaded Markdown files can be registered, queued, parsed, and listed through the existing teacher resource controller flow.
+- Search asset reference verification:
+  - `TeacherResourceControllerTest.searchReturnsVisibleAssetRefsForTeacherOwnedBlocks` verifies visible teacher search hits include `imageAssetIds` and backend asset URLs.
+  - `McpToolExecutionServiceTest.teacherMcpSecretCallsTeacherResourceEvidenceWithoutLeakingOtherTeacherPrivateBlocks` now also verifies MCP teacher-resource evidence returns the same controlled asset reference.
+  - Direct JShell smoke confirmed a parsed block search result returned `ASSET_IDS=[...]`, `ASSET_REFS=1`, and `ASSET_URI=/api/teacher/resources/assets/{assetId}`.
 
 ## Remaining Work
 

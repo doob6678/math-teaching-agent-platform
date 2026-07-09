@@ -31,17 +31,21 @@ import com.doob.mathagent.retrieval.TextbookRetrievalService;
 import com.doob.mathagent.retrieval.TextbookSearchHit;
 import com.doob.mathagent.teacher.TeacherResourceServiceFixture;
 import com.doob.mathagent.teacher.service.InMemoryTeacherDocumentBlockStore;
+import com.doob.mathagent.teacher.service.InMemoryTeacherResourceAssetStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherResourceStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherSourceSyncCheckpointStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherSourceSyncJobStore;
 import com.doob.mathagent.teacher.service.TeacherFeishuDiscoveryService;
 import com.doob.mathagent.teacher.service.TeacherFeishuDownloadClient;
+import com.doob.mathagent.teacher.service.TeacherResourceAssetService;
+import com.doob.mathagent.teacher.service.TeacherResourceGraphAlignmentService;
 import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService;
 import com.doob.mathagent.teacher.service.TeacherResourceService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncExecutionService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncJobService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncProperties;
 import com.doob.mathagent.teacher.vo.TeacherDocumentBlockResponse;
+import com.doob.mathagent.teacher.vo.TeacherResourceAssetResponse;
 import com.doob.mathagent.teacher.vo.TeacherFeishuDiscoveryResponse;
 import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
 import com.doob.mathagent.vector.service.TestVectorIndexService;
@@ -127,16 +131,36 @@ class McpToolExecutionServiceTest {
     void teacherMcpSecretCallsTeacherResourceEvidenceWithoutLeakingOtherTeacherPrivateBlocks() throws Exception {
         InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
         InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        InMemoryTeacherResourceAssetStore assetStore = new InMemoryTeacherResourceAssetStore();
         resourceStore.save(document("doc-own", "workbuddy-teacher-subject", "TEACHER_PRIVATE", "Own Feishu vector notes"));
         resourceStore.save(document("doc-other", "teacher-2", "TEACHER_PRIVATE", "Other private vector notes"));
-        blockStore.replaceActiveBlocks("default", "doc-own", List.of(block(
+        TeacherResourceAssetService assetService = new TeacherResourceAssetService(
+                assetStore,
+                resourceStore,
+                new TeacherSourceSyncProperties("", tempDir.resolve("download.py"), tempDir.resolve("APPKEY.md"), tempDir.resolve("staging"), 1));
+        TeacherResourceAssetResponse asset = assetService.saveExtractedAsset(
+                resourceStore.find("default", "doc-own"),
+                "diagram-note.docx",
+                null,
+                "/word/media/image1.png",
+                new byte[] {1, 2, 3},
+                "image/png").orElseThrow();
+        blockStore.replaceActiveBlocks("default", "doc-own", List.of(blockWithImageRef(
                 "b-own",
                 "doc-own",
-                "Feishu teacher method explains space vector angle with normal vectors.")));
+                "Feishu teacher method explains space vector angle with normal vectors.",
+                asset.assetId())));
         blockStore.replaceActiveBlocks("default", "doc-other", List.of(block(
                 "b-other",
                 "doc-other",
                 "Another teacher private Feishu method must not leak.")));
+        TeacherResourceBlockSearchService searchService = new TeacherResourceBlockSearchService(
+                resourceStore,
+                blockStore,
+                event -> { },
+                TestVectorIndexService.successful(resourceStore, blockStore),
+                TeacherResourceGraphAlignmentService.disabled(),
+                assetService);
         McpToolExecutionService service = McpToolExecutionServiceFixture.service(
                 registryWithTeacherResourceTool(),
                 com.doob.mathagent.retrieval.TextbookRetrievalServiceFixture.service(
@@ -145,7 +169,7 @@ class McpToolExecutionServiceTest {
                         new LocalTextbookBm25SearchEngine(),
                         new NoopRetrievalAuditSink()),
                 new TextbookResourceProperties(textbookCorpus()),
-                com.doob.mathagent.teacher.TeacherResourceBlockSearchServiceFixture.service(resourceStore, blockStore));
+                searchService);
 
         var response = service.callTool(
                 "Bearer teacher_secret_1234567890abcdef",
@@ -158,6 +182,16 @@ class McpToolExecutionServiceTest {
         assertThat(result.get("hitCount")).isEqualTo(1);
         assertThat(result.toString()).contains("b-own");
         assertThat(result.toString()).doesNotContain("b-other");
+        @SuppressWarnings("unchecked")
+        List<com.doob.mathagent.teacher.vo.TeacherResourceBlockSearchResponse.Hit> hits =
+                (List<com.doob.mathagent.teacher.vo.TeacherResourceBlockSearchResponse.Hit>) result.get("hits");
+        assertThat(hits)
+                .singleElement()
+                .satisfies(hit -> {
+                    assertThat(hit.imageAssetIds()).containsExactly(asset.assetId());
+                    assertThat(hit.assetRefs()).singleElement().satisfies(assetRef ->
+                            assertThat(assetRef.assetUri()).isEqualTo("/api/teacher/resources/assets/" + asset.assetId()));
+                });
     }
 
     @Test
@@ -1015,6 +1049,30 @@ class McpToolExecutionServiceTest {
                 text,
                 text.toLowerCase(),
                 "[]",
+                "[]",
+                blockId + "-checksum",
+                1.0,
+                "active");
+    }
+
+    private static TeacherDocumentBlockResponse blockWithImageRef(
+            String blockId,
+            String documentId,
+            String text,
+            String assetId) {
+        return new TeacherDocumentBlockResponse(
+                blockId,
+                documentId,
+                documentId + ":" + blockId,
+                "text",
+                1,
+                "Space vector",
+                "Normal vector",
+                null,
+                null,
+                text,
+                text.toLowerCase(),
+                "[\"" + assetId + "\"]",
                 "[]",
                 blockId + "-checksum",
                 1.0,

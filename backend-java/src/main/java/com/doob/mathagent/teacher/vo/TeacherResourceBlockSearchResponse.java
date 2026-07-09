@@ -40,6 +40,8 @@ public record TeacherResourceBlockSearchResponse(
      * @param evidenceText merged evidence text after neighbor expansion
      * @param snippet compact text snippet around the match
      * @param score lexical relevance score
+     * @param imageAssetIds opaque asset ids parsed from block imageRefs
+     * @param assetRefs visible backend-controlled asset references
      */
     public record Hit(
             String documentId,
@@ -58,7 +60,9 @@ public record TeacherResourceBlockSearchResponse(
             List<String> evidenceBlockIds,
             String evidenceText,
             String snippet,
-            double score) {
+            double score,
+            List<String> imageAssetIds,
+            List<AssetRef> assetRefs) {
 
         /**
          * Backward-compatible constructor for older callers that only return the original hit fields.
@@ -92,7 +96,41 @@ public record TeacherResourceBlockSearchResponse(
                     List.of(blockId),
                     snippet,
                     snippet,
-                    score);
+                    score,
+                    List.of(),
+                    List.of());
         }
+
+        public Hit withAssetRefs(List<AssetRef> visibleAssetRefs) {
+            return new Hit(
+                    documentId,
+                    documentTitle,
+                    sourceType,
+                    permissionScope,
+                    blockId,
+                    blockType,
+                    blockOrder,
+                    chapter,
+                    section,
+                    pageNo,
+                    sourcePath,
+                    blockRole,
+                    graphTags,
+                    evidenceBlockIds,
+                    evidenceText,
+                    snippet,
+                    score,
+                    imageAssetIds,
+                    visibleAssetRefs == null ? List.of() : List.copyOf(visibleAssetRefs));
+        }
+    }
+
+    public record AssetRef(
+            String assetId,
+            String assetUri,
+            String mimeType,
+            String fileName,
+            String sourcePath,
+            Integer pageNo) {
     }
 }

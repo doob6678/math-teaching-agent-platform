@@ -2,6 +2,7 @@ package com.doob.mathagent.teacher.service;
 
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.teacher.vo.TeacherResourceAssetResponse;
+import com.doob.mathagent.teacher.vo.TeacherResourceBlockSearchResponse;
 import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
@@ -164,6 +165,30 @@ public class TeacherResourceAssetService {
                 new FileSystemResource(path));
     }
 
+    /**
+     * Resolves one visible asset reference without opening the binary stream.
+     */
+    public Optional<VisibleAssetReference> findVisibleAssetReference(String assetId, RequestSubject subject) {
+        if (!enabled || assetId == null || assetId.isBlank()) {
+            return Optional.empty();
+        }
+        RequestSubject normalized = subject.normalize();
+        return assetStore.find(normalized.tenantId(), assetId.strip())
+                .filter(candidate -> "active".equalsIgnoreCase(textOrDefault(candidate.status(), "")))
+                .filter(candidate -> canRead(candidate, normalized))
+                .map(asset -> new VisibleAssetReference(
+                        asset.assetId(),
+                        assetUri(asset.assetId()),
+                        asset.mimeType(),
+                        safeDownloadName(asset),
+                        asset.sourcePath(),
+                        asset.pageNo()));
+    }
+
+    public String assetUri(String assetId) {
+        return "/api/teacher/resources/assets/" + textOrDefault(assetId, "");
+    }
+
     private boolean canRead(TeacherResourceAssetResponse asset, RequestSubject subject) {
         if (!asset.tenantId().equals(subject.tenantId())) {
             return false;
@@ -248,6 +273,25 @@ public class TeacherResourceAssetService {
     }
 
     public record VisibleAsset(String assetId, String mimeType, String fileName, Resource resource) {
+    }
+
+    public record VisibleAssetReference(
+            String assetId,
+            String assetUri,
+            String mimeType,
+            String fileName,
+            String sourcePath,
+            Integer pageNo) {
+
+        public TeacherResourceBlockSearchResponse.AssetRef toSearchAssetRef() {
+            return new TeacherResourceBlockSearchResponse.AssetRef(
+                    assetId,
+                    assetUri,
+                    mimeType,
+                    fileName,
+                    sourcePath,
+                    pageNo);
+        }
     }
 
     private record ImageSize(Integer width, Integer height) {

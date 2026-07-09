@@ -1,5 +1,6 @@
 package com.doob.mathagent.teacher.service;
 
+import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.teacher.vo.TeacherDocumentBlockResponse;
 import com.doob.mathagent.teacher.vo.TeacherResourceBlockSearchResponse;
 import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
@@ -17,6 +18,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
@@ -92,6 +94,7 @@ public class TeacherResourceBlockSearchService {
     private final TeacherResourceBlockSearchAuditSink auditSink;
     private final VectorIndexService vectorIndexService;
     private final TeacherResourceGraphAlignmentService graphAlignmentService;
+    private final TeacherResourceAssetService assetService;
 
     /**
      * Creates a parsed block search service.
@@ -110,7 +113,8 @@ public class TeacherResourceBlockSearchService {
                 blockStore,
                 auditSink,
                 vectorIndexService,
-                TeacherResourceGraphAlignmentService.disabled());
+                TeacherResourceGraphAlignmentService.disabled(),
+                TeacherResourceAssetService.disabled());
     }
 
     /**
@@ -123,11 +127,28 @@ public class TeacherResourceBlockSearchService {
             TeacherResourceBlockSearchAuditSink auditSink,
             VectorIndexService vectorIndexService,
             TeacherResourceGraphAlignmentService graphAlignmentService) {
+        this(
+                resourceStore,
+                blockStore,
+                auditSink,
+                vectorIndexService,
+                graphAlignmentService,
+                TeacherResourceAssetService.disabled());
+    }
+
+    public TeacherResourceBlockSearchService(
+            TeacherResourceStore resourceStore,
+            TeacherDocumentBlockStore blockStore,
+            TeacherResourceBlockSearchAuditSink auditSink,
+            VectorIndexService vectorIndexService,
+            TeacherResourceGraphAlignmentService graphAlignmentService,
+            TeacherResourceAssetService assetService) {
         this.resourceStore = Objects.requireNonNull(resourceStore, "resourceStore is required");
         this.blockStore = Objects.requireNonNull(blockStore, "blockStore is required");
         this.auditSink = Objects.requireNonNull(auditSink, "auditSink is required");
         this.vectorIndexService = Objects.requireNonNull(vectorIndexService, "vectorIndexService is required");
         this.graphAlignmentService = Objects.requireNonNull(graphAlignmentService, "graphAlignmentService is required");
+        this.assetService = Objects.requireNonNull(assetService, "assetService is required");
     }
 
     /**
@@ -259,9 +280,12 @@ public class TeacherResourceBlockSearchService {
                                 documents,
                                 normalizedQuery,
                                 terms,
-                                safeLimit,
-                                normalizedFilter,
-                                queryGraph);
+                                 safeLimit,
+                                 normalizedFilter,
+                                 queryGraph);
+        searchResponse = attachVisibleAssetRefs(
+                searchResponse,
+                new RequestSubject(normalizedTenantId, normalizedRole, normalizedSubjectId, null));
         recordAudit(normalizedTenantId, normalizedRole, normalizedSubjectId, endpoint, searchResponse, startedNanos);
         return searchResponse;
     }
@@ -612,7 +636,9 @@ public class TeacherResourceBlockSearchService {
                 evidence.blockIds(),
                 evidence.text(),
                 snippet(textOrDefault(context.block().rawText(), context.block().normalizedText()), normalizedQuery, terms),
-                candidate.score());
+                candidate.score(),
+                parseStringArray(context.block().imageRefs()),
+                List.of());
     }
 
     /**
@@ -668,7 +694,9 @@ public class TeacherResourceBlockSearchService {
                 lexicalHit.evidenceBlockIds(),
                 lexicalHit.evidenceText(),
                 lexicalHit.snippet(),
-                lexicalHit.score() + Math.max(vectorScore, 0));
+                lexicalHit.score() + Math.max(vectorScore, 0),
+                lexicalHit.imageAssetIds(),
+                lexicalHit.assetRefs());
     }
 
     private static TeacherResourceBlockSearchResponse.Hit toLegacyVectorHit(
@@ -703,7 +731,9 @@ public class TeacherResourceBlockSearchService {
                 vectorHit.score()
                         + score(normalizeText(rawText), normalizedQuery, terms)
                         + metadataScore(document, block, normalizedQuery, terms)
-                        + graphTagScore(graphTags, parseStringArray(block.graphNodeIdsJson()), queryGraph, normalizedQuery, terms));
+                        + graphTagScore(graphTags, parseStringArray(block.graphNodeIdsJson()), queryGraph, normalizedQuery, terms),
+                parseStringArray(block.imageRefs()),
+                List.of());
     }
 
     private List<TeacherResourceBlockSearchResponse.Hit> lexicalHits(
@@ -845,7 +875,9 @@ public class TeacherResourceBlockSearchService {
                 List.of(block.blockId()),
                 rawText,
                 snippet(rawText, normalizedQuery, terms),
-                score);
+                score,
+                parseStringArray(block.imageRefs()),
+                List.of());
     }
 
     private static BlockContext toContext(
@@ -1650,6 +1682,42 @@ public class TeacherResourceBlockSearchService {
                 retrievalMode,
                 hits.size(),
                 hits);
+    }
+
+    /**
+     * Asset URLs are attached only after ranking so retrieval math stays content-driven while final hits still carry
+     * safe image references for UI/AI rendering.
+     */
+    private TeacherResourceBlockSearchResponse attachVisibleAssetRefs(
+            TeacherResourceBlockSearchResponse response,
+            RequestSubject subject) {
+        if (response == null || response.hits() == null || response.hits().isEmpty()) {
+            return response;
+        }
+        List<TeacherResourceBlockSearchResponse.Hit> hits = response.hits().stream()
+                .map(hit -> attachVisibleAssetRefs(hit, subject))
+                .toList();
+        return new TeacherResourceBlockSearchResponse(
+                response.queryId(),
+                response.query(),
+                response.limit(),
+                response.retrievalMode(),
+                hits.size(),
+                hits);
+    }
+
+    private TeacherResourceBlockSearchResponse.Hit attachVisibleAssetRefs(
+            TeacherResourceBlockSearchResponse.Hit hit,
+            RequestSubject subject) {
+        if (hit == null || hit.imageAssetIds() == null || hit.imageAssetIds().isEmpty()) {
+            return hit == null ? null : hit.withAssetRefs(List.of());
+        }
+        List<TeacherResourceBlockSearchResponse.AssetRef> assetRefs = hit.imageAssetIds().stream()
+                .map(assetId -> assetService.findVisibleAssetReference(assetId, subject))
+                .flatMap(Optional::stream)
+                .map(TeacherResourceAssetService.VisibleAssetReference::toSearchAssetRef)
+                .toList();
+        return hit.withAssetRefs(assetRefs);
     }
 
     /**

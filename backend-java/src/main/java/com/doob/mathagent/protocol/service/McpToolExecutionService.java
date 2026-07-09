@@ -847,6 +847,8 @@ public class McpToolExecutionService {
             row.put("blockRole", hit.blockRole());
             row.put("snippet", hit.snippet());
             row.put("evidenceText", hit.evidenceText());
+            row.put("imageAssetIds", hit.imageAssetIds());
+            row.put("assetRefs", hit.assetRefs());
             row.put("evidenceRef", hit.permissionScope() + ":" + hit.documentId() + ":" + hit.blockId());
             row.put("rawScore", hit.score());
             merged.add(row);

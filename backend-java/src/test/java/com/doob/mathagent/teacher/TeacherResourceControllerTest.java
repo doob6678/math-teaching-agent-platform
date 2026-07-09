@@ -7,6 +7,7 @@ import com.doob.mathagent.infrastructure.security.RequestSubjectResolver;
 import com.doob.mathagent.teacher.controller.TeacherResourceController;
 import com.doob.mathagent.teacher.dto.TeacherResourceRegistrationRequest;
 import com.doob.mathagent.teacher.service.InMemoryTeacherDocumentBlockStore;
+import com.doob.mathagent.teacher.service.InMemoryTeacherResourceAssetStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherResourceStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherSourceSyncCheckpointStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherSourceSyncJobStore;
@@ -18,6 +19,7 @@ import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService;
 import com.doob.mathagent.teacher.service.TeacherResourceAssetService;
 import com.doob.mathagent.teacher.service.TeacherFeishuDownloadClient;
 import com.doob.mathagent.teacher.service.TeacherFeishuDownloadException;
+import com.doob.mathagent.teacher.service.TeacherResourceGraphAlignmentService;
 import com.doob.mathagent.teacher.service.TeacherResourceUploadService;
 import com.doob.mathagent.teacher.service.TeacherResourceService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncCheckpointQueryService;
@@ -26,11 +28,16 @@ import com.doob.mathagent.teacher.service.TeacherSourceSyncJobService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncProperties;
 import com.doob.mathagent.teacher.service.TeacherDocumentBlockStore;
 import com.doob.mathagent.teacher.vo.TeacherDocumentBlockResponse;
+import com.doob.mathagent.teacher.vo.TeacherResourceAssetResponse;
 import com.doob.mathagent.teacher.vo.TeacherResourceBlockSearchResponse;
 import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncCheckpointResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncJobResponse;
 import com.doob.mathagent.vector.service.TestVectorIndexService;
+import java.awt.Color;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
+import javax.imageio.ImageIO;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -1291,6 +1298,74 @@ class TeacherResourceControllerTest {
                 30);
     }
 
+    @Test
+    void searchReturnsVisibleAssetRefsForTeacherOwnedBlocks() throws Exception {
+        InMemoryTeacherResourceStore store = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        InMemoryTeacherResourceAssetStore assetStore = new InMemoryTeacherResourceAssetStore();
+        RecentTeacherResourceBlockSearchAuditStore auditStore = new RecentTeacherResourceBlockSearchAuditStore(20);
+        TeacherResourceDocumentResponse ownResource = new TeacherResourceDocumentResponse(
+                "doc-own-assets",
+                "school-a",
+                "teacher-88",
+                "local_path",
+                "Own diagram bank",
+                null,
+                "C:/math/own",
+                "TEACHER_PRIVATE",
+                "synced",
+                "parsed",
+                "pending",
+                "waiting_rebuild",
+                List.of());
+        store.save(ownResource);
+        TeacherResourceAssetService assetService = new TeacherResourceAssetService(assetStore, store, testSyncProperties());
+        TeacherResourceAssetResponse asset = assetService.saveExtractedAsset(
+                ownResource,
+                "diagram-note.docx",
+                null,
+                "/word/media/image1.png",
+                pngBytes(),
+                "image/png").orElseThrow();
+        blockStore.replaceActiveBlocks("school-a", ownResource.documentId(), List.of(searchBlockWithImageRef(
+                "block-own-assets",
+                ownResource.documentId(),
+                "Diagram note before image",
+                asset.assetId())));
+        TeacherResourceBlockSearchService searchService = new TeacherResourceBlockSearchService(
+                store,
+                blockStore,
+                auditStore,
+                TestVectorIndexService.successful(store, blockStore),
+                TeacherResourceGraphAlignmentService.disabled(),
+                assetService);
+        TeacherResourceController controller = controller(
+                TeacherResourceServiceFixture.service(store),
+                new TeacherSourceSyncJobService(store, new InMemoryTeacherSourceSyncJobStore()),
+                syncExecutionService(store, new InMemoryTeacherSourceSyncJobStore(), blockStore),
+                searchService,
+                auditStore,
+                null,
+                request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"),
+                (token, action, path, requestHash, subject) -> true);
+
+        TeacherResourceBlockSearchResponse response =
+                controller.searchBlocks("diagram note", 10, new MockHttpServletRequest());
+
+        assertThat(response.hits())
+                .singleElement()
+                .satisfies(hit -> {
+                    assertThat(hit.imageAssetIds()).containsExactly(asset.assetId());
+                    assertThat(hit.assetRefs())
+                            .singleElement()
+                            .satisfies(assetRef -> {
+                                assertThat(assetRef.assetId()).isEqualTo(asset.assetId());
+                                assertThat(assetRef.assetUri()).isEqualTo("/api/teacher/resources/assets/" + asset.assetId());
+                                assertThat(assetRef.mimeType()).isEqualTo("image/png");
+                            });
+                });
+    }
+
     /**
      * Builds an HTTP request carrying capability headers for controller tests.
      */
@@ -1347,6 +1422,38 @@ class TeacherResourceControllerTest {
                 blockId + "-checksum",
                 1.0,
                 "active");
+    }
+
+    private static TeacherDocumentBlockResponse searchBlockWithImageRef(
+            String blockId,
+            String documentId,
+            String text,
+            String assetId) {
+        return new TeacherDocumentBlockResponse(
+                blockId,
+                documentId,
+                documentId + ":" + blockId,
+                "text",
+                1,
+                "Vectors",
+                "Diagram",
+                null,
+                null,
+                text,
+                text,
+                "[\"" + assetId + "\"]",
+                "[]",
+                blockId + "-checksum",
+                1.0,
+                "active");
+    }
+
+    private static byte[] pngBytes() throws Exception {
+        BufferedImage image = new BufferedImage(8, 6, BufferedImage.TYPE_INT_RGB);
+        image.setRGB(0, 0, Color.BLUE.getRGB());
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        ImageIO.write(image, "png", output);
+        return output.toByteArray();
     }
 }
 
