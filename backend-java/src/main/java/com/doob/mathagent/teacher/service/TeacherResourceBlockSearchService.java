@@ -3,6 +3,10 @@ package com.doob.mathagent.teacher.service;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.resources.TextbookResourceProperties;
 import com.doob.mathagent.retrieval.RetrievalRequestContext;
+import com.doob.mathagent.retrieval.TextbookPageImageSearchHit;
+import com.doob.mathagent.retrieval.TextbookPageImageSearchRequest;
+import com.doob.mathagent.retrieval.TextbookPageImageSearchResponse;
+import com.doob.mathagent.retrieval.TextbookPageImageSearchService;
 import com.doob.mathagent.retrieval.TextbookRetrievalService;
 import com.doob.mathagent.retrieval.TextbookSearchHit;
 import com.doob.mathagent.retrieval.TextbookSearchRequest;
@@ -66,48 +70,11 @@ public class TeacherResourceBlockSearchService {
 
     private static final int DEFAULT_LIMIT = 10;
     private static final int MAX_LIMIT = 20;
+    private static final int MAX_RETRIEVAL_MODE_LENGTH = 64;
     private static final int SNIPPET_RADIUS = 80;
     private static final int EVIDENCE_WINDOW_RADIUS = 1;
     private static final int MAX_SEARCH_TERMS = 32;
-    private static final int STAGE_ONE_VECTOR_LIMIT_MULTIPLIER = 12;
-    private static final int STAGE_ONE_VECTOR_LIMIT_FLOOR = 60;
     private static final String STRATEGY_TWO_STAGE_DOC_BLOCK = "two_stage_doc_block";
-    private static final Set<String> GENERIC_SEARCH_TERMS = Set.of(
-            "\u68c0\u7d22",
-            "\u8bc4\u6d4b",
-            "\u53ea\u505a",
-            "\u8bf7\u627e",
-            "\u8d44\u6599",
-            "\u7ebf\u7d22",
-            "\u8d44\u6599\u7ebf\u7d22",
-            "\u8bc1\u636e",
-            "\u8bc1\u636e\u5757",
-            "\u8bc1\u636e\u5757\u5373\u53ef",
-            "\u8fd4\u56de",
-            "\u5373\u53ef",
-            "\u5b9a\u4f4d",
-            "\u4f18\u5148",
-            "\u4f18\u5148\u627e",
-            "\u6307\u5b9a",
-            "\u6307\u5b9a\u5e93",
-            "\u76ee\u6807",
-            "\u89d2\u8272",
-            "\u76ee\u6807\u89d2\u8272",
-            "\u5e93\u8303\u56f4",
-            "\u6765\u6e90",
-            "\u76f4\u63a5",
-            "\u8df3\u5230",
-            "\u524d\u9762",
-            "\u6700\u8d34",
-            "\u8d34\u8fd1",
-            "teacher",
-            "student",
-            "reference",
-            "resource",
-            "search",
-            "find",
-            "need",
-            "about");
 
     private final TeacherResourceStore resourceStore;
     private final TeacherDocumentBlockStore blockStore;
@@ -116,6 +83,7 @@ public class TeacherResourceBlockSearchService {
     private final TeacherResourceGraphAlignmentService graphAlignmentService;
     private final TeacherResourceAssetService assetService;
     private final TextbookRetrievalService textbookRetrievalService;
+    private final TextbookPageImageSearchService textbookPageImageSearchService;
     private final TextbookResourceProperties textbookResourceProperties;
 
     /**
@@ -138,6 +106,7 @@ public class TeacherResourceBlockSearchService {
                 TeacherResourceGraphAlignmentService.disabled(),
                 TeacherResourceAssetService.disabled(),
                 null,
+                null,
                 null);
     }
 
@@ -153,6 +122,7 @@ public class TeacherResourceBlockSearchService {
             TeacherResourceGraphAlignmentService graphAlignmentService,
             TeacherResourceAssetService assetService,
             TextbookRetrievalService textbookRetrievalService,
+            TextbookPageImageSearchService textbookPageImageSearchService,
             TextbookResourceProperties textbookResourceProperties) {
         this.resourceStore = Objects.requireNonNull(resourceStore, "resourceStore is required");
         this.blockStore = Objects.requireNonNull(blockStore, "blockStore is required");
@@ -161,6 +131,7 @@ public class TeacherResourceBlockSearchService {
         this.graphAlignmentService = Objects.requireNonNull(graphAlignmentService, "graphAlignmentService is required");
         this.assetService = Objects.requireNonNull(assetService, "assetService is required");
         this.textbookRetrievalService = textbookRetrievalService;
+        this.textbookPageImageSearchService = textbookPageImageSearchService;
         this.textbookResourceProperties = textbookResourceProperties;
     }
 
@@ -178,6 +149,7 @@ public class TeacherResourceBlockSearchService {
                 vectorIndexService,
                 graphAlignmentService,
                 assetService,
+                null,
                 null,
                 null);
     }
@@ -198,6 +170,7 @@ public class TeacherResourceBlockSearchService {
                 vectorIndexService,
                 graphAlignmentService,
                 TeacherResourceAssetService.disabled(),
+                null,
                 null,
                 null);
     }
@@ -402,30 +375,76 @@ public class TeacherResourceBlockSearchService {
                         null,
                         "teacher-resource-search",
                         endpoint));
-        List<TeacherResourceBlockSearchResponse.Hit> textbookHits = textbookResponse.hits().stream()
+        List<TeacherResourceBlockSearchResponse.Hit> textbookTextHits = textbookResponse.hits().stream()
                 .map(TeacherResourceBlockSearchService::textbookHit)
                 .toList();
-        if (textbookHits.isEmpty()) {
+        List<TeacherResourceBlockSearchResponse.Hit> textbookImageHits = textbookImageHits(normalizedQuery, safeLimit);
+        List<TeacherResourceBlockSearchResponse.Hit> combinedHits = new ArrayList<>();
+        combinedHits.addAll(textbookTextHits);
+        combinedHits.addAll(textbookImageHits);
+        if (teacherResponse != null && teacherResponse.hits() != null) {
+            combinedHits.addAll(teacherResponse.hits());
+        }
+        List<TeacherResourceBlockSearchResponse.Hit> mergedHits = semanticMergeHits(normalizedQuery, combinedHits, safeLimit);
+        if (mergedHits.isEmpty()) {
             return teacherResponse;
         }
-        if (teacherResponse == null || teacherResponse.hits() == null || teacherResponse.hits().isEmpty()) {
-            return new TeacherResourceBlockSearchResponse(
-                    teacherResponse == null ? UUID.randomUUID().toString() : teacherResponse.queryId(),
-                    normalizedQuery,
-                    safeLimit,
-                    "real_textbook_" + textbookResponse.retrievalStrategy(),
-                    textbookHits.size(),
-                    textbookHits.stream().limit(safeLimit).toList());
-        }
-        List<TeacherResourceBlockSearchResponse.Hit> mergedHits =
-                reciprocalRankMerge(textbookHits, teacherResponse.hits(), safeLimit);
         return new TeacherResourceBlockSearchResponse(
-                teacherResponse.queryId(),
-                teacherResponse.query(),
-                teacherResponse.limit(),
-                teacherResponse.retrievalMode() + "_real_textbook",
+                teacherResponse == null ? UUID.randomUUID().toString() : teacherResponse.queryId(),
+                normalizedQuery,
+                safeLimit,
+                safeRetrievalMode(buildTextbookMergeMode(teacherResponse, textbookResponse, !textbookImageHits.isEmpty())),
                 mergedHits.size(),
                 mergedHits);
+    }
+
+    /**
+     * Textbook search now has two real evidence routes: processed_books text chunks and the worker-maintained CLIP page
+     * index. We merge both before the final teacher-search ranking so text-heavy pages and image-distinct pages can
+     * compete in the same semantic space instead of relying on hand-written cross-source score scaling.
+     */
+    private List<TeacherResourceBlockSearchResponse.Hit> textbookImageHits(
+            String normalizedQuery,
+            int safeLimit) {
+        if (textbookPageImageSearchService == null) {
+            return List.of();
+        }
+        try {
+            TextbookPageImageSearchResponse response = textbookPageImageSearchService.search(
+                    new TextbookPageImageSearchRequest(normalizedQuery, null, safeLimit, List.of()));
+            return response.hits().stream()
+                    .map(TeacherResourceBlockSearchService::textbookImageHit)
+                    .toList();
+        } catch (RuntimeException exception) {
+            log.warn("teacher_resource_search_textbook_image_fallback query={} message={}",
+                    normalizedQuery,
+                    textOrDefault(exception.getMessage(), ""),
+                    exception);
+            return List.of();
+        }
+    }
+
+    private static String buildTextbookMergeMode(
+            TeacherResourceBlockSearchResponse teacherResponse,
+            TextbookSearchResponse textbookResponse,
+            boolean usedImageRoute) {
+        /*
+         * This value is persisted into teacher_resource_search_audit.retrieval_mode (VARCHAR(64)).
+         * Keep it stable and short: the mode is only a diagnostic label, not a place to serialize
+         * every internal stage name. If we concatenate upstream mode names here, live textbook
+         * queries can start failing with audit insert errors even though retrieval itself succeeded.
+         */
+        StringBuilder mode = new StringBuilder("two_stage_doc_block_textbook");
+        if (usedImageRoute) {
+            mode.append("_clip");
+        }
+        if (textbookResponse != null
+                && textbookResponse.retrievalStrategy() != null
+                && textbookResponse.retrievalStrategy().contains("page")) {
+            mode.append("_page");
+        }
+        mode.append("_semantic");
+        return mode.toString();
     }
 
     /**
@@ -463,6 +482,7 @@ public class TeacherResourceBlockSearchService {
         if (visibleDocumentIds.isEmpty()) {
             return Map.of();
         }
+        int visibleBlockCount = blocksByDocumentId.values().stream().mapToInt(List::size).sum();
         Map<String, Set<String>> blockIdsByDocument = new LinkedHashMap<>();
         for (Map.Entry<String, List<BlockContext>> entry : blocksByDocumentId.entrySet()) {
             blockIdsByDocument.put(
@@ -474,7 +494,7 @@ public class TeacherResourceBlockSearchService {
         try {
             hits = vectorIndexService.searchTeacherResourceBlocks(
                     normalizedQuery,
-                    Math.max(safeLimit * STAGE_ONE_VECTOR_LIMIT_MULTIPLIER, STAGE_ONE_VECTOR_LIMIT_FLOOR),
+                    Math.max(safeLimit, visibleBlockCount),
                     new VectorSearchFilter(List.copyOf(visibleDocumentIds), filter.permissionScopes()));
         } catch (RuntimeException exception) {
             log.warn("teacher_resource_search_vector_fallback strategy=two_stage query={} message={}",
@@ -532,7 +552,6 @@ public class TeacherResourceBlockSearchService {
             String[] terms,
             int safeLimit,
             TeacherResourceGraphAlignmentService.QueryGraphContext queryGraph) {
-        boolean explicitRoleIntent = queryHasExplicitRoleIntent(normalizedQuery);
         List<DocumentCandidate> candidates = new ArrayList<>();
         for (Map.Entry<String, List<BlockContext>> entry : blocksByDocumentId.entrySet()) {
             TeacherResourceDocumentResponse document = documentsById.get(entry.getKey());
@@ -541,24 +560,22 @@ public class TeacherResourceBlockSearchService {
             }
             List<BlockContext> blocks = entry.getValue();
             double bestSemantic = 0.0d;
+            double bestVector = 0.0d;
             int bestLexicalMatches = 0;
             int bestGraphMatches = 0;
-            boolean anyRoleMatched = false;
             boolean hasSupport = false;
             for (BlockContext block : blocks) {
                 String key = blockKey(document.documentId(), block.block().blockId());
                 double semantic = vectorScoreByKey.getOrDefault(key, 0.0d);
+                bestVector = Math.max(bestVector, semantic);
                 int lexicalMatches = blockLexicalMatchCount(document, block, normalizedQuery, terms);
                 int graphMatches = graphAlignmentMatchCount(block.graphTags(), block.graphNodeIds(), queryGraph, normalizedQuery, terms);
-                boolean roleMatched = explicitRoleIntent
-                        && roleSatisfiesQueryIntent(block.blockRole(), block.sourcePath(), normalizedQuery);
-                if (semantic > 0.0d || lexicalMatches > 0 || graphMatches > 0 || roleMatched) {
+                if (semantic > 0.0d || lexicalMatches > 0 || graphMatches > 0) {
                     hasSupport = true;
                 }
                 bestSemantic = Math.max(bestSemantic, semantic);
                 bestLexicalMatches = Math.max(bestLexicalMatches, lexicalMatches);
                 bestGraphMatches = Math.max(bestGraphMatches, graphMatches);
-                anyRoleMatched = anyRoleMatched || roleMatched;
             }
             if (!hasSupport) {
                 continue;
@@ -567,9 +584,9 @@ public class TeacherResourceBlockSearchService {
                     document,
                     blocks,
                     bestSemantic,
+                    bestVector,
                     bestLexicalMatches,
-                    bestGraphMatches,
-                    anyRoleMatched));
+                    bestGraphMatches));
         }
         return candidates.stream()
                 .sorted(documentCandidateComparator()
@@ -581,25 +598,34 @@ public class TeacherResourceBlockSearchService {
 
     /**
      * Stage one still uses vector coarse recall to decide which documents are plausible, then reranks only those
-     * candidate documents with a real rerank model. This avoids scoring every block in the corpus with the slower
-     * reranker while still letting document selection depend on richer query/document semantics than nearest-block
-     * distance alone.
+     * candidate documents with a real rerank model.
+     *
+     * <p>Do not collapse the whole document into one long concatenated prompt here. When several runtime-authored
+     * teacher documents share a similar markdown skeleton, document-wide concatenation dilutes the exact block that
+     * actually answers the query and lets unrelated but stylistically similar documents steal rank. Instead, we reuse
+     * the same block semantic view used by stage two, score every candidate block inside the candidate documents once,
+     * and aggregate the strongest block score back to its document. That keeps stage one document-focused while making
+     * "does this document contain the right evidence somewhere inside it" the decisive semantic question.</p>
      */
     private Map<String, Double> documentRerankScoreById(
             List<DocumentCandidate> candidates,
             String normalizedQuery) {
-        LinkedHashMap<String, String> candidateTexts = new LinkedHashMap<>();
+        List<String> candidateKeys = new ArrayList<>();
+        List<String> candidateTexts = new ArrayList<>();
         for (DocumentCandidate candidate : candidates) {
-            candidateTexts.put(candidate.document().documentId(), documentSemanticView(candidate.document(), candidate.blocks()));
+            for (BlockContext block : candidate.blocks()) {
+                candidateKeys.add(candidate.document().documentId());
+                candidateTexts.add(semanticCandidateText(candidate.document(), block));
+            }
+        }
+        if (candidateTexts.isEmpty()) {
+            return Map.of();
         }
         try {
-            List<String> documentIds = new ArrayList<>(candidateTexts.keySet());
-            List<Double> scores = vectorIndexService.rerankTexts(
-                    normalizedQuery,
-                    documentIds.stream().map(candidateTexts::get).toList());
+            List<Double> scores = vectorIndexService.rerankTexts(normalizedQuery, candidateTexts);
             Map<String, Double> scoreById = new LinkedHashMap<>();
-            for (int index = 0; index < documentIds.size() && index < scores.size(); index += 1) {
-                scoreById.put(documentIds.get(index), scores.get(index));
+            for (int index = 0; index < candidateKeys.size() && index < scores.size(); index += 1) {
+                scoreById.merge(candidateKeys.get(index), scores.get(index), Math::max);
             }
             return Map.copyOf(scoreById);
         } catch (RuntimeException exception) {
@@ -625,7 +651,6 @@ public class TeacherResourceBlockSearchService {
             TeacherResourceSearchFilter filter,
             TeacherResourceGraphAlignmentService.QueryGraphContext queryGraph) {
         Map<String, Double> semanticScoreByKey = semanticScoreByKey(rankedDocuments, normalizedQuery);
-        boolean explicitRoleIntent = queryHasExplicitRoleIntent(normalizedQuery);
         List<BlockCandidate> blockCandidates = new ArrayList<>();
         for (DocumentCandidate candidate : rankedDocuments) {
             List<BlockContext> documentBlocks = blocksByDocumentId.getOrDefault(candidate.document().documentId(), List.of());
@@ -637,8 +662,6 @@ public class TeacherResourceBlockSearchService {
                 int lexicalMatches = blockLexicalMatchCount(candidate.document(), block, normalizedQuery, terms);
                 int graphMatches = graphAlignmentMatchCount(block.graphTags(), block.graphNodeIds(), queryGraph, normalizedQuery, terms);
                 double neighborSemantic = neighborSemanticSupportScore(block, documentBlocks, semanticScoreByKey);
-                boolean roleMatched = explicitRoleIntent
-                        && roleSatisfiesQueryIntent(block.blockRole(), block.sourcePath(), normalizedQuery);
                 blockCandidates.add(new BlockCandidate(
                         candidate.document(),
                         block,
@@ -646,21 +669,16 @@ public class TeacherResourceBlockSearchService {
                         lexicalMatches,
                         candidate.semanticScore(),
                         graphMatches,
-                        roleMatched,
                         neighborSemantic,
                         vectorScoreByKey.getOrDefault(key, 0.0d)));
             }
         }
         List<BlockCandidate> rankedCandidates = blockCandidates.stream()
-                .sorted(blockCandidateComparator(explicitRoleIntent)
+                .sorted(blockCandidateComparator()
                         .thenComparing(candidate -> candidate.document().title())
                         .thenComparing(candidate -> candidate.block().block().blockOrder()))
                 .toList();
-        List<BlockCandidate> acceptedCandidates = reorderFilteredCandidatesByIntent(
-                rankedCandidates,
-                filter,
-                normalizedQuery);
-        return acceptedCandidates.stream()
+        return rankedCandidates.stream()
                 .limit(safeLimit)
                 .map(candidate -> toTwoStageHit(candidate, blocksByDocumentId.get(candidate.document().documentId()), normalizedQuery, terms))
                 .toList();
@@ -676,9 +694,9 @@ public class TeacherResourceBlockSearchService {
      */
     private static Comparator<DocumentCandidate> documentCandidateComparator() {
         Comparator<DocumentCandidate> comparator = Comparator.comparingDouble(DocumentCandidate::semanticScore).reversed();
+        comparator = comparator.thenComparing(Comparator.comparingDouble(DocumentCandidate::vectorScore).reversed());
         comparator = comparator.thenComparing(Comparator.comparingInt(DocumentCandidate::lexicalMatches).reversed());
-        comparator = comparator.thenComparing(Comparator.comparingInt(DocumentCandidate::graphMatches).reversed());
-        return comparator.thenComparing(Comparator.comparing(DocumentCandidate::roleMatched).reversed());
+        return comparator.thenComparing(Comparator.comparingInt(DocumentCandidate::graphMatches).reversed());
     }
 
     /**
@@ -718,20 +736,26 @@ public class TeacherResourceBlockSearchService {
         }
     }
 
-    private static Comparator<BlockCandidate> blockCandidateComparator(boolean explicitRoleIntent) {
+    /**
+     * Legacy role-bucket heuristics were intentionally removed here. The previous implementation tried to infer
+     * "analysis/question/lesson" intent from hand-written cue lists and then override the semantic ranking. That made
+     * retrieval behavior brittle and benchmark-sensitive. The rewritten pipeline keeps blockRole/sourcePath/chapter/
+     * section inside the rerank text itself, so the real rerank model stays primary while lexical and graph signals
+     * only break ties.
+     */
+    private static Comparator<BlockCandidate> blockCandidateComparator() {
         Comparator<BlockCandidate> comparator = Comparator.comparingDouble(BlockCandidate::rerankScore).reversed();
-        if (explicitRoleIntent) {
-            comparator = Comparator.comparing(BlockCandidate::roleMatched).reversed().thenComparing(comparator);
-        }
+        comparator = comparator.thenComparing(Comparator.comparingDouble(BlockCandidate::documentRerankScore).reversed());
+        comparator = comparator.thenComparing(Comparator.comparingDouble(BlockCandidate::vectorSemanticScore).reversed());
         comparator = comparator.thenComparing(Comparator.comparingDouble(BlockCandidate::neighborSemanticScore).reversed());
         comparator = comparator.thenComparing(Comparator.comparingInt(BlockCandidate::lexicalMatches).reversed());
-        comparator = comparator.thenComparing(Comparator.comparingInt(BlockCandidate::graphMatches).reversed());
-        return comparator.thenComparing(Comparator.comparingDouble(BlockCandidate::documentRerankScore).reversed());
+        return comparator.thenComparing(Comparator.comparingInt(BlockCandidate::graphMatches).reversed());
     }
 
     private static String semanticCandidateText(
             TeacherResourceDocumentResponse document,
             BlockContext block) {
+        String imageRefs = String.join(" ", parseStringArray(block.block().imageRefs()));
         return String.join(
                 "\n",
                 textOrDefault(document.title(), ""),
@@ -739,24 +763,10 @@ public class TeacherResourceBlockSearchService {
                 textOrDefault(block.blockRole(), ""),
                 textOrDefault(block.block().chapter(), ""),
                 textOrDefault(block.block().section(), ""),
+                textOrDefault(block.sourcePath(), ""),
                 String.join(" ", block.graphTags()),
+                imageRefs,
                 textOrDefault(block.block().normalizedText(), block.block().rawText()));
-    }
-
-    private static String documentSemanticView(
-            TeacherResourceDocumentResponse document,
-            List<BlockContext> blocks) {
-        List<String> fragments = new ArrayList<>();
-        fragments.add(textOrDefault(document.title(), ""));
-        fragments.add(TeacherResourceLibraryResolver.effectiveLibrary(document));
-        for (BlockContext block : blocks.stream().limit(8).toList()) {
-            fragments.add(textOrDefault(block.blockRole(), ""));
-            fragments.add(textOrDefault(block.block().chapter(), ""));
-            fragments.add(textOrDefault(block.block().section(), ""));
-            fragments.add(String.join(" ", block.graphTags()));
-            fragments.add(textOrDefault(block.block().normalizedText(), block.block().rawText()));
-        }
-        return String.join("\n", fragments);
     }
 
     private static int blockLexicalMatchCount(
@@ -845,28 +855,6 @@ public class TeacherResourceBlockSearchService {
                             neighbor.block().blockId()), 0.0d));
         }
         return bestNeighborSemantic;
-    }
-
-    /**
-     * When callers already pass `library`, keep the semantic ranking intact but move role-satisfying siblings ahead of
-     * wrong-role siblings. This is still generic backend behavior: the caller supplied the scope, and the backend only
-     * uses that explicit intent to avoid returning the question block before the adjacent analysis block.
-     */
-    private static List<BlockCandidate> reorderFilteredCandidatesByIntent(
-            List<BlockCandidate> rankedCandidates,
-            TeacherResourceSearchFilter filter,
-            String normalizedQuery) {
-        if (filter == null || filter.empty() || rankedCandidates.isEmpty()) {
-            return rankedCandidates;
-        }
-        if (!queryHasExplicitRoleIntent(normalizedQuery)) {
-            return rankedCandidates;
-        }
-        return rankedCandidates.stream()
-                .sorted(Comparator
-                        .comparingInt((BlockCandidate candidate) -> roleIntentBucket(candidate, normalizedQuery))
-                        .thenComparing(blockCandidateComparator(true)))
-                .toList();
     }
 
     private static TeacherResourceBlockSearchResponse.Hit toTwoStageHit(
@@ -964,330 +952,6 @@ public class TeacherResourceBlockSearchService {
                 parseStringArray(block.graphNodeIdsJson()));
     }
 
-    private static boolean queryWantsAnalysis(String normalizedQuery) {
-        if (queryRejectsRole(normalizedQuery, "\u89e3\u6790", "\u7b54\u6848", "analysis", "answer", "solution")) {
-            return false;
-        }
-        if (queryWantsLesson(normalizedQuery)
-                && containsAnyLiteral(normalizedQuery, "\u800c\u4e0d\u662f", "\u4e0d\u662f", "\u4e0d\u8981", "\u522b")
-                && containsAnyLiteral(normalizedQuery, "\u89e3\u6790", "\u7b54\u6848", "analysis", "answer", "solution")) {
-            return false;
-        }
-        if (containsPositiveCue(
-                normalizedQuery,
-                "\u89e3\u6790",
-                "\u7b54\u6848",
-                "\u601d\u8def",
-                "\u8def\u7ebf",
-                "\u70b9\u8bc4",
-                "\u9519\u56e0",
-                "\u9519\u8bef",
-                "\u6b65\u9aa4",
-                "\u89e3\u6cd5",
-                "\u9a8c\u7b97",
-                "\u8bb2\u8bc4\u5757",
-                "\u8bb2\u8bc4\u70b9\u8bc4",
-                "\u8bb2\u8bc4\u89e3\u6790",
-                "analysis",
-                "answer",
-                "solution",
-                "steps")) {
-            return true;
-        }
-        /*
-         * "讲评" alone is ambiguous: teachers often say "专题讲评课" while asking for the lesson-level
-         * classroom entry, not a single-question answer block. Only treat it as analysis when it is paired with
-         * answer/solution/error-route wording and no lesson-level classroom cue is present.
-         */
-        return containsPositiveCue(normalizedQuery, "\u8bb2\u8bc4")
-                && !queryWantsLesson(normalizedQuery)
-                && containsPositiveCue(
-                        normalizedQuery,
-                        "\u9519\u56e0",
-                        "\u9519\u8bef",
-                        "\u6b65\u9aa4",
-                        "\u7b54\u6848",
-                        "\u89e3\u6790",
-                        "\u70b9\u8bc4",
-                        "\u8def\u7ebf",
-                        "\u89e3\u6cd5",
-                        "\u9a8c\u7b97");
-    }
-
-    private static boolean queryWantsQuestion(String normalizedQuery, boolean wantsAnalysis) {
-        if (containsPositiveCue(
-                normalizedQuery,
-                "\u9898\u9762",
-                "\u9898\u76ee",
-                "\u9898\u5e72",
-                "\u539f\u9898",
-                "\u539f\u6587",
-                "\u5148\u770b\u9898",
-                "\u5b9a\u4f4d\u9898\u9762",
-                "\u54ea\u9053\u9898",
-                "question",
-                "prompt",
-                "stem")) {
-            return true;
-        }
-        /*
-         * "真题/模拟" often selects the library, not the block role. When the same query asks for an answer,
-         * explanation, or commentary, stage-two rerank should prefer the analysis sibling over the question sibling.
-         */
-        return !wantsAnalysis && containsAny(
-                normalizedQuery,
-                "\u771f\u9898",
-                "\u6a21\u62df",
-                "\u4f8b\u9898",
-                "exam");
-    }
-
-    private static boolean queryWantsLesson(String normalizedQuery) {
-        return containsPositiveCue(
-                normalizedQuery,
-                "\u4e13\u9898",
-                "\u8bb2\u4e49",
-                "\u6559\u6750",
-                "\u8bfe\u5802",
-                "\u8bb2\u8bc4\u8bfe",
-                "\u6574\u4f53\u8bb2\u6cd5",
-                "\u8bb2\u6cd5\u5165\u53e3",
-                "\u6574\u4f53\u68b3\u7406",
-                "\u5f00\u7bc7",
-                "\u6536\u675f",
-                "\u8bfe\u5802\u68c0\u67e5",
-                "\u603b\u8bb2",
-                "\u6574\u5305",
-                "lesson",
-                "notes",
-                "textbook",
-                "topic");
-    }
-
-    private static boolean queryHasExplicitRoleIntent(String normalizedQuery) {
-        return queryWantsAnalysis(normalizedQuery)
-                || queryWantsQuestion(normalizedQuery, false)
-                || queryWantsLesson(normalizedQuery)
-                || containsPositiveCue(
-                        normalizedQuery,
-                        "\u65b9\u6cd5",
-                        "\u8bb2\u6cd5",
-                        "\u601d\u8def",
-                        "\u677f\u4e66",
-                        "\u677f\u6f14",
-                        "\u6a21\u677f",
-                        "\u63d0\u793a",
-                        "\u6613\u9519",
-                        "method",
-                        "boardwork",
-                        "template",
-                        "tip");
-    }
-
-    private static boolean roleSatisfiesQueryIntent(String blockRole, String sourcePath, String normalizedQuery) {
-        String role = normalizeText(textOrDefault(blockRole, ""));
-        String path = normalizeText(textOrDefault(sourcePath, ""));
-        boolean wantsAnalysis = queryWantsAnalysis(normalizedQuery);
-        if (queryWantsQuestion(normalizedQuery, wantsAnalysis)) {
-            return "question".equals(role) || containsAny(path, "question", "exam", "mock");
-        }
-        if (wantsAnalysis) {
-            return "analysis".equals(role) || containsAny(path, "answer", "analysis", "solution");
-        }
-        if (containsPositiveCue(normalizedQuery, "\u677f\u4e66", "\u677f\u6f14", "boardwork", "blackboard")) {
-            return "boardwork".equals(role) || containsAny(path, "boardwork", "blackboard");
-        }
-        if (containsPositiveCue(normalizedQuery, "\u6a21\u677f", "\u8bb2\u4e49\u6a21\u677f", "template")) {
-            return "template".equals(role) || containsAny(path, "template");
-        }
-        if (containsPositiveCue(normalizedQuery, "\u63d0\u793a", "\u6613\u9519", "tip", "notice")) {
-            return "tip".equals(role) || containsAny(path, "tip", "notice");
-        }
-        if (containsPositiveCue(normalizedQuery, "\u65b9\u6cd5", "\u8bb2\u6cd5", "\u601d\u8def", "method", "approach")) {
-            return "method".equals(role) || containsAny(path, "method", "approach");
-        }
-        if (queryWantsLesson(normalizedQuery)) {
-            return "lesson".equals(role) || containsAny(path, "lesson", "handout", "textbook", "topic");
-        }
-        return true;
-    }
-
-    private static int roleIntentBucket(BlockCandidate candidate, String normalizedQuery) {
-        String role = candidate.block().blockRole();
-        String sourcePath = candidate.block().sourcePath();
-        if (roleConflictsWithQueryIntent(role, sourcePath, normalizedQuery)) {
-            return 2;
-        }
-        if (roleSatisfiesQueryIntent(role, sourcePath, normalizedQuery)) {
-            return 0;
-        }
-        return 1;
-    }
-
-    private static boolean roleConflictsWithQueryIntent(String blockRole, String sourcePath, String normalizedQuery) {
-        String role = normalizeText(textOrDefault(blockRole, ""));
-        String path = normalizeText(textOrDefault(sourcePath, ""));
-        if (queryRejectsRole(normalizedQuery, "\u89e3\u6790", "\u7b54\u6848", "\u8bb2\u8bc4", "analysis", "answer", "solution")) {
-            if ("analysis".equals(role) || containsAny(path, "answer", "analysis", "solution")) {
-                return true;
-            }
-        }
-        if (queryRejectsRole(normalizedQuery, "\u9898\u9762", "\u9898\u76ee", "\u9898\u5e72", "\u539f\u9898", "question", "prompt", "stem")) {
-            if ("question".equals(role) || containsAny(path, "question", "exam", "mock")) {
-                return true;
-            }
-        }
-        if (queryRejectsRole(normalizedQuery, "\u4e13\u9898", "\u8bb2\u4e49", "\u603b\u8bb2", "lesson", "notes")) {
-            if ("lesson".equals(role) || containsAny(path, "lesson", "handout", "textbook", "topic")) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /**
-     * Classroom queries often mention a role only to rule it out, for example "不要答案解析" or "题面不能排在前面".
-     * Treat those as negative constraints instead of positive role intent, otherwise filtered library search keeps
-     * promoting the exact sibling block the teacher explicitly said not to surface first.
-     */
-    private static boolean containsPositiveCue(String normalizedQuery, String... cues) {
-        String haystack = normalizeText(textOrDefault(normalizedQuery, ""));
-        for (String cue : cues) {
-            String normalizedCue = normalizeText(textOrDefault(cue, ""));
-            if (normalizedCue.isBlank()) {
-                continue;
-            }
-            int startIndex = 0;
-            while (startIndex >= 0 && startIndex < haystack.length()) {
-                int matchIndex = haystack.indexOf(normalizedCue, startIndex);
-                if (matchIndex < 0) {
-                    break;
-                }
-                if (!negatedCueOccurrence(haystack, matchIndex, normalizedCue.length())) {
-                    return true;
-                }
-                startIndex = matchIndex + normalizedCue.length();
-            }
-        }
-        return false;
-    }
-
-    private static boolean negatedCueOccurrence(String normalizedQuery, int matchIndex, int cueLength) {
-        int clauseStart = clauseStart(normalizedQuery, matchIndex);
-        int clauseEnd = clauseEnd(normalizedQuery, matchIndex + cueLength);
-        int beforeStart = Math.max(clauseStart, matchIndex - 8);
-        int afterEnd = Math.min(clauseEnd, matchIndex + cueLength + 10);
-        String before = normalizedQuery.substring(beforeStart, matchIndex);
-        String after = normalizedQuery.substring(matchIndex + cueLength, afterEnd);
-        return containsAnyLiteral(
-                        before,
-                        "\u4e0d\u8981",
-                        "\u522b",
-                        "\u4e0d\u662f",
-                        "\u800c\u4e0d\u662f",
-                        "\u4e0d\u60f3",
-                        "\u4e0d\u627e",
-                        "\u4e0d\u67e5",
-                        "\u4e0d\u9700\u8981",
-                        "\u65e0\u9700",
-                        "\u4e0d\u7528",
-                        "\u4e0d\u5fc5",
-                        "\u4e0d\u53ea",
-                        "\u4e0d\u8981\u53ea",
-                        "\u4e0d\u8981\u5148",
-                        "\u522b\u5148",
-                        "\u522b\u628a")
-                || containsAnyLiteral(
-                        after,
-                        "\u4e0d\u80fd",
-                        "\u4e0d\u8981",
-                        "\u4e0d\u5e94",
-                        "\u522b",
-                        "\u4e0d\u5fc5",
-                        "\u65e0\u9700",
-                        "\u4e0d\u4f18\u5148",
-                        "\u4e0d\u80fd\u6392\u5728\u524d\u9762",
-                        "\u4e0d\u6392\u5728\u524d\u9762",
-                        "\u4e0d\u5728\u524d\u9762",
-                        "\u522b\u6392\u5728\u524d\u9762",
-                        "\u522b\u653e\u5728\u524d\u9762",
-                        "\u522b\u5148\u8fd4",
-                        "\u522b\u5148\u7ed9");
-    }
-
-    private static int clauseStart(String text, int index) {
-        int boundary = 0;
-        for (int cursor = Math.max(0, index - 12); cursor < index; cursor += 1) {
-            if (isClauseBoundary(text.charAt(cursor))) {
-                boundary = cursor + 1;
-            }
-        }
-        return boundary;
-    }
-
-    private static int clauseEnd(String text, int index) {
-        int boundary = text.length();
-        for (int cursor = index; cursor < Math.min(text.length(), index + 12); cursor += 1) {
-            if (isClauseBoundary(text.charAt(cursor))) {
-                boundary = cursor;
-                break;
-            }
-        }
-        return boundary;
-    }
-
-    private static boolean isClauseBoundary(char value) {
-        return value == ','
-                || value == '.'
-                || value == ';'
-                || value == ':'
-                || value == '!'
-                || value == '?'
-                || value == '\n'
-                || value == '\r'
-                || value == '\u3002'
-                || value == '\uff0c'
-                || value == '\u3001'
-                || value == '\uff1b'
-                || value == '\uff1a'
-                || value == '\uff01'
-                || value == '\uff1f';
-    }
-
-    private static boolean queryRejectsRole(String normalizedQuery, String... cues) {
-        String haystack = normalizeText(textOrDefault(normalizedQuery, ""));
-        for (String cue : cues) {
-            String normalizedCue = normalizeText(textOrDefault(cue, ""));
-            if (normalizedCue.isBlank()) {
-                continue;
-            }
-            int startIndex = 0;
-            while (startIndex >= 0 && startIndex < haystack.length()) {
-                int matchIndex = haystack.indexOf(normalizedCue, startIndex);
-                if (matchIndex < 0) {
-                    break;
-                }
-                if (negatedCueOccurrence(haystack, matchIndex, normalizedCue.length())) {
-                    return true;
-                }
-                startIndex = matchIndex + normalizedCue.length();
-            }
-        }
-        return false;
-    }
-
-    private static boolean containsAnyLiteral(String haystack, String... needles) {
-        if (haystack == null || haystack.isBlank()) {
-            return false;
-        }
-        for (String needle : needles) {
-            if (needle != null && !needle.isBlank() && haystack.contains(needle)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     /**
      * Builds a compact match snippet around the first exact or term match.
      */
@@ -1325,7 +989,7 @@ public class TeacherResourceBlockSearchService {
                 UUID.randomUUID().toString(),
                 normalizedQuery,
                 safeLimit,
-                retrievalMode,
+                safeRetrievalMode(retrievalMode),
                 hits.size(),
                 hits);
     }
@@ -1368,68 +1032,129 @@ public class TeacherResourceBlockSearchService {
     }
 
     /**
-     * Textbook and teacher-resource scores come from different ranking spaces, so direct numeric comparison is
-     * unreliable. Use reciprocal-rank fusion to combine already-ranked source lists without inventing benchmark-specific
-     * score scaling rules.
+     * Textbook page-image retrieval returns page-level evidence from the same processed_books corpus, but through the
+     * CLIP index maintained by the Python worker. We map it into the same teacher-search hit contract so it can join
+     * the final semantic merge with text chunks.
      */
-    private static List<TeacherResourceBlockSearchResponse.Hit> reciprocalRankMerge(
-            List<TeacherResourceBlockSearchResponse.Hit> textbookHits,
-            List<TeacherResourceBlockSearchResponse.Hit> teacherHits,
+    private static TeacherResourceBlockSearchResponse.Hit textbookImageHit(TextbookPageImageSearchHit hit) {
+        String blockId = hit.docId() + "_p" + hit.pageNo() + "_clip";
+        String sourcePath = "textbook://" + hit.docId() + "/page/" + hit.pageNo() + "#clip=page";
+        String evidenceText = textOrDefault(hit.text(), "");
+        return new TeacherResourceBlockSearchResponse.Hit(
+                hit.docId(),
+                hit.bookName(),
+                "public_textbook",
+                "PUBLIC_TEXTBOOK",
+                blockId,
+                "page_image",
+                Math.max(hit.pageNo(), 0),
+                textOrDefault(hit.chapterPath(), ""),
+                textOrDefault(hit.sectionTitle(), ""),
+                hit.pageNo(),
+                sourcePath,
+                "reference",
+                List.of(),
+                List.of(blockId),
+                evidenceText,
+                evidenceText,
+                hit.score(),
+                List.of(),
+                List.of());
+    }
+
+    /**
+     * Cross-source merging now uses the same real rerank primitive as the main two-stage pipeline instead of reciprocal
+     * rank math. That keeps teacher blocks, textbook chunks, and textbook page-image hits in one semantic ranking
+     * space, while lexical overlap stays only as a tie-breaker.
+     */
+    private List<TeacherResourceBlockSearchResponse.Hit> semanticMergeHits(
+            String normalizedQuery,
+            List<TeacherResourceBlockSearchResponse.Hit> hits,
             int safeLimit) {
-        Map<String, MergedRankedHit> rankedByKey = new LinkedHashMap<>();
-        mergeRankedHits(rankedByKey, textbookHits);
-        mergeRankedHits(rankedByKey, teacherHits);
-        return rankedByKey.values().stream()
-                .sorted(Comparator.comparingDouble(MergedRankedHit::fusedScore).reversed()
-                        .thenComparingDouble(MergedRankedHit::sourceScore).reversed()
-                        .thenComparing(value -> value.hit().documentTitle())
-                        .thenComparing(value -> value.hit().documentId())
-                        .thenComparing(value -> value.hit().blockId()))
+        if (hits == null || hits.isEmpty()) {
+            return List.of();
+        }
+        Map<String, TeacherResourceBlockSearchResponse.Hit> deduplicated = new LinkedHashMap<>();
+        for (TeacherResourceBlockSearchResponse.Hit hit : hits) {
+            if (hit == null) {
+                continue;
+            }
+            String key = blockKey(hit.documentId(), hit.blockId());
+            deduplicated.merge(key, hit, TeacherResourceBlockSearchService::preferMergeHit);
+        }
+        List<TeacherResourceBlockSearchResponse.Hit> candidates = List.copyOf(deduplicated.values());
+        List<String> candidateTexts = candidates.stream()
+                .map(TeacherResourceBlockSearchService::semanticMergeCandidateText)
+                .toList();
+        List<Double> rerankScores = vectorIndexService.rerankTexts(normalizedQuery, candidateTexts);
+        String[] terms = searchTerms(normalizedQuery);
+        List<MergeCandidate> mergeCandidates = new ArrayList<>(candidates.size());
+        for (int index = 0; index < candidates.size(); index += 1) {
+            TeacherResourceBlockSearchResponse.Hit hit = candidates.get(index);
+            mergeCandidates.add(new MergeCandidate(
+                    hit,
+                    rerankScores.size() > index ? rerankScores.get(index) : hit.score(),
+                    lexicalMatchCount(candidateTexts.get(index), normalizedQuery, terms)));
+        }
+        return mergeCandidates.stream()
+                .sorted(Comparator.comparingDouble(MergeCandidate::rerankScore).reversed()
+                        .thenComparing(Comparator.comparingInt(MergeCandidate::lexicalMatches).reversed())
+                        .thenComparing(Comparator.comparingDouble(MergeCandidate::sourceScore).reversed())
+                        .thenComparing(candidate -> candidate.hit().documentTitle())
+                        .thenComparing(candidate -> candidate.hit().documentId())
+                        .thenComparing(candidate -> candidate.hit().blockId()))
                 .limit(safeLimit)
-                .map(value -> new TeacherResourceBlockSearchResponse.Hit(
-                        value.hit().documentId(),
-                        value.hit().documentTitle(),
-                        value.hit().sourceType(),
-                        value.hit().permissionScope(),
-                        value.hit().blockId(),
-                        value.hit().blockType(),
-                        value.hit().blockOrder(),
-                        value.hit().chapter(),
-                        value.hit().section(),
-                        value.hit().pageNo(),
-                        value.hit().sourcePath(),
-                        value.hit().blockRole(),
-                        value.hit().graphTags(),
-                        value.hit().evidenceBlockIds(),
-                        value.hit().evidenceText(),
-                        value.hit().snippet(),
-                        value.fusedScore(),
-                        value.hit().imageAssetIds(),
-                        value.hit().assetRefs()))
+                .map(candidate -> withScore(candidate.hit(), candidate.rerankScore()))
                 .toList();
     }
 
-    private static void mergeRankedHits(
-            Map<String, MergedRankedHit> rankedByKey,
-            List<TeacherResourceBlockSearchResponse.Hit> hits) {
-        for (int index = 0; index < hits.size(); index += 1) {
-            TeacherResourceBlockSearchResponse.Hit hit = hits.get(index);
-            String key = blockKey(hit.documentId(), hit.blockId());
-            double fused = reciprocalRank(index);
-            MergedRankedHit existing = rankedByKey.get(key);
-            if (existing == null) {
-                rankedByKey.put(key, new MergedRankedHit(hit, fused, hit.score()));
-            } else {
-                rankedByKey.put(key, new MergedRankedHit(
-                        existing.hit(),
-                        existing.fusedScore() + fused,
-                        Math.max(existing.sourceScore(), hit.score())));
-            }
+    private static TeacherResourceBlockSearchResponse.Hit preferMergeHit(
+            TeacherResourceBlockSearchResponse.Hit left,
+            TeacherResourceBlockSearchResponse.Hit right) {
+        int leftEvidenceLength = textOrDefault(left.evidenceText(), left.snippet()).length();
+        int rightEvidenceLength = textOrDefault(right.evidenceText(), right.snippet()).length();
+        if (rightEvidenceLength > leftEvidenceLength) {
+            return right.score() >= left.score() ? right : withScore(right, left.score());
         }
+        return left.score() >= right.score() ? left : withScore(left, right.score());
     }
 
-    private static double reciprocalRank(int zeroBasedRank) {
-        return 1.0d / (60.0d + zeroBasedRank + 1.0d);
+    private static String semanticMergeCandidateText(TeacherResourceBlockSearchResponse.Hit hit) {
+        return String.join(
+                "\n",
+                textOrDefault(hit.documentTitle(), ""),
+                textOrDefault(hit.sourceType(), ""),
+                textOrDefault(hit.blockRole(), ""),
+                textOrDefault(hit.chapter(), ""),
+                textOrDefault(hit.section(), ""),
+                textOrDefault(hit.sourcePath(), ""),
+                String.join(" ", hit.graphTags() == null ? List.of() : hit.graphTags()),
+                textOrDefault(hit.evidenceText(), hit.snippet()));
+    }
+
+    private static TeacherResourceBlockSearchResponse.Hit withScore(
+            TeacherResourceBlockSearchResponse.Hit hit,
+            double score) {
+        return new TeacherResourceBlockSearchResponse.Hit(
+                hit.documentId(),
+                hit.documentTitle(),
+                hit.sourceType(),
+                hit.permissionScope(),
+                hit.blockId(),
+                hit.blockType(),
+                hit.blockOrder(),
+                hit.chapter(),
+                hit.section(),
+                hit.pageNo(),
+                hit.sourcePath(),
+                hit.blockRole(),
+                hit.graphTags(),
+                hit.evidenceBlockIds(),
+                hit.evidenceText(),
+                hit.snippet(),
+                score,
+                hit.imageAssetIds(),
+                hit.assetRefs());
     }
 
     /**
@@ -1449,7 +1174,7 @@ public class TeacherResourceBlockSearchService {
                 response.queryId(),
                 response.query(),
                 response.limit(),
-                response.retrievalMode(),
+                safeRetrievalMode(response.retrievalMode()),
                 hits.size(),
                 hits);
     }
@@ -1540,9 +1265,21 @@ public class TeacherResourceBlockSearchService {
     private static String retrievalMode(String strategy, TeacherResourceSearchFilter filter, String suffix) {
         String mode = filter.empty() ? strategy : strategy + "_filtered";
         if (suffix == null || suffix.isBlank()) {
-            return mode;
+            return safeRetrievalMode(mode);
         }
-        return mode + "_" + suffix;
+        return safeRetrievalMode(mode + "_" + suffix);
+    }
+
+    /**
+     * Audit rows persist retrieval mode in a compact varchar column. Truncation here is intentional: the response
+     * label remains human-readable while search continues to work even if internal stage names evolve.
+     */
+    private static String safeRetrievalMode(String retrievalMode) {
+        String normalized = textOrDefault(retrievalMode, "").strip();
+        if (normalized.length() <= MAX_RETRIEVAL_MODE_LENGTH) {
+            return normalized;
+        }
+        return normalized.substring(0, MAX_RETRIEVAL_MODE_LENGTH);
     }
 
     /**
@@ -1641,9 +1378,6 @@ public class TeacherResourceBlockSearchService {
              */
             return;
         }
-        if (GENERIC_SEARCH_TERMS.contains(normalizedCandidate)) {
-            return;
-        }
         terms.add(normalizedCandidate);
     }
 
@@ -1726,11 +1460,11 @@ public class TeacherResourceBlockSearchService {
             TeacherResourceDocumentResponse document,
             List<BlockContext> blocks,
             double semanticScore,
+            double vectorScore,
             int lexicalMatches,
-            int graphMatches,
-            boolean roleMatched) {
+            int graphMatches) {
         private DocumentCandidate withSemanticScore(double rerankedSemanticScore) {
-            return new DocumentCandidate(document, blocks, rerankedSemanticScore, lexicalMatches, graphMatches, roleMatched);
+            return new DocumentCandidate(document, blocks, rerankedSemanticScore, vectorScore, lexicalMatches, graphMatches);
         }
     }
 
@@ -1741,7 +1475,6 @@ public class TeacherResourceBlockSearchService {
             int lexicalMatches,
             double documentRerankScore,
             int graphMatches,
-            boolean roleMatched,
             double neighborSemanticScore,
             double vectorSemanticScore) {
     }
@@ -1751,10 +1484,13 @@ public class TeacherResourceBlockSearchService {
             String text) {
     }
 
-    private record MergedRankedHit(
+    private record MergeCandidate(
             TeacherResourceBlockSearchResponse.Hit hit,
-            double fusedScore,
-            double sourceScore) {
+            double rerankScore,
+            int lexicalMatches) {
+        private double sourceScore() {
+            return hit.score();
+        }
     }
 
 }
