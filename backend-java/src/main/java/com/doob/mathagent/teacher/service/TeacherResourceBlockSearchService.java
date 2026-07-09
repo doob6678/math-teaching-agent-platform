@@ -256,16 +256,21 @@ public class TeacherResourceBlockSearchService {
                 normalizedRole,
                 normalizedSubjectId,
                 normalizedQuery);
-        boolean includeRealTextbook = filterRequestsRealTextbook(normalizedFilter);
+        boolean includeRealTextbook = shouldUseRealTextbook(normalizedFilter);
         List<TeacherResourceDocumentResponse> documents =
                 filteredDocuments(
                         resourceStore.listSearchable(normalizedTenantId, normalizedRole, normalizedSubjectId),
                         normalizedFilter);
         if (includeRealTextbook) {
             /*
-             * `library=textbook` must hit the processed_books corpus rather than whichever public-textbook derivative
-             * rows happened to be imported into source_document earlier. We therefore remove teacher-store textbook rows
-             * from this branch and merge the real textbook retriever below.
+             * Once processed_books is available, teacher search must not keep a second stale textbook branch in
+             * source_document/document_block. Those imported PUBLIC_TEXTBOOK rows were only a historical bridge before
+             * the dedicated textbook retriever and page-image index existed. Keeping both sources in mixed mode lets
+             * old derivative rows compete against the real textbook page hit and makes "no library specified" behave
+             * differently from "library=textbook".
+             *
+             * We therefore delete teacher-store textbook derivatives whenever the real textbook retriever is allowed
+             * for this request, even when the caller is doing a mixed multi-library search.
              */
             documents = documents.stream()
                     .filter(document -> !"public_textbook".equals(TeacherResourceLibraryResolver.effectiveLibrary(document)))
@@ -349,9 +354,9 @@ public class TeacherResourceBlockSearchService {
     }
 
     /**
-     * When the caller explicitly asks for the textbook library, merge hits from the real processed_books retriever into
-     * the teacher-facing response shape. This keeps the existing teacher search HTTP contract while finally making the
-     * textbook branch use the actual textbook corpus instead of only pre-imported teacher-block rows.
+     * Merges real textbook hits into the teacher-facing response shape. Mixed queries also need this path because the
+     * teacher store no longer carries textbook derivative rows once processed_books is available; otherwise a search
+     * without `library=textbook` would silently lose textbook recall.
      */
     private TeacherResourceBlockSearchResponse mergeRealTextbookHits(
             TeacherResourceBlockSearchResponse teacherResponse,
@@ -378,7 +383,15 @@ public class TeacherResourceBlockSearchService {
         List<TeacherResourceBlockSearchResponse.Hit> textbookTextHits = textbookResponse.hits().stream()
                 .map(TeacherResourceBlockSearchService::textbookHit)
                 .toList();
-        List<TeacherResourceBlockSearchResponse.Hit> textbookImageHits = textbookImageHits(normalizedQuery, safeLimit);
+        List<String> candidateDocIds = textbookResponse.hits().stream()
+                .map(TextbookSearchHit::docId)
+                .filter(docId -> docId != null && !docId.isBlank())
+                .distinct()
+                .toList();
+        List<TeacherResourceBlockSearchResponse.Hit> textbookImageHits = textbookImageHits(
+                normalizedQuery,
+                safeLimit,
+                candidateDocIds);
         List<TeacherResourceBlockSearchResponse.Hit> combinedHits = new ArrayList<>();
         combinedHits.addAll(textbookTextHits);
         combinedHits.addAll(textbookImageHits);
@@ -405,13 +418,14 @@ public class TeacherResourceBlockSearchService {
      */
     private List<TeacherResourceBlockSearchResponse.Hit> textbookImageHits(
             String normalizedQuery,
-            int safeLimit) {
+            int safeLimit,
+            List<String> candidateDocIds) {
         if (textbookPageImageSearchService == null) {
             return List.of();
         }
         try {
             TextbookPageImageSearchResponse response = textbookPageImageSearchService.search(
-                    new TextbookPageImageSearchRequest(normalizedQuery, null, safeLimit, List.of()));
+                    new TextbookPageImageSearchRequest(normalizedQuery, null, safeLimit, candidateDocIds == null ? List.of() : candidateDocIds));
             return response.hits().stream()
                     .map(TeacherResourceBlockSearchService::textbookImageHit)
                     .toList();
@@ -559,30 +573,34 @@ public class TeacherResourceBlockSearchService {
                 continue;
             }
             List<BlockContext> blocks = entry.getValue();
+            List<BlockContext> supportedBlocks = supportedBlocks(
+                    document,
+                    blocks,
+                    vectorScoreByKey,
+                    normalizedQuery,
+                    terms,
+                    safeLimit,
+                    queryGraph);
             double bestSemantic = 0.0d;
             double bestVector = 0.0d;
             int bestLexicalMatches = 0;
             int bestGraphMatches = 0;
-            boolean hasSupport = false;
-            for (BlockContext block : blocks) {
+            for (BlockContext block : supportedBlocks) {
                 String key = blockKey(document.documentId(), block.block().blockId());
                 double semantic = vectorScoreByKey.getOrDefault(key, 0.0d);
                 bestVector = Math.max(bestVector, semantic);
                 int lexicalMatches = blockLexicalMatchCount(document, block, normalizedQuery, terms);
                 int graphMatches = graphAlignmentMatchCount(block.graphTags(), block.graphNodeIds(), queryGraph, normalizedQuery, terms);
-                if (semantic > 0.0d || lexicalMatches > 0 || graphMatches > 0) {
-                    hasSupport = true;
-                }
                 bestSemantic = Math.max(bestSemantic, semantic);
                 bestLexicalMatches = Math.max(bestLexicalMatches, lexicalMatches);
                 bestGraphMatches = Math.max(bestGraphMatches, graphMatches);
             }
-            if (!hasSupport) {
+            if (supportedBlocks.isEmpty()) {
                 continue;
             }
             candidates.add(new DocumentCandidate(
                     document,
-                    blocks,
+                    supportedBlocks,
                     bestSemantic,
                     bestVector,
                     bestLexicalMatches,
@@ -593,6 +611,42 @@ public class TeacherResourceBlockSearchService {
                         .thenComparing(candidate -> candidate.document().title())
                         .thenComparing(candidate -> candidate.document().documentId()))
                 .limit(candidateDocumentLimit(safeLimit, candidates.size()))
+                .toList();
+    }
+
+    /**
+     * Two-stage rerank does not need every block from a long document. We keep only the strongest block-level support
+     * signals per document, bounded by the caller's requested limit, so the real rerank model spends capacity on the
+     * most plausible evidence instead of timing out on hundreds of weak siblings from the same file.
+     */
+    private static List<BlockContext> supportedBlocks(
+            TeacherResourceDocumentResponse document,
+            List<BlockContext> blocks,
+            Map<String, Double> vectorScoreByKey,
+            String normalizedQuery,
+            String[] terms,
+            int safeLimit,
+            TeacherResourceGraphAlignmentService.QueryGraphContext queryGraph) {
+        if (blocks == null || blocks.isEmpty()) {
+            return List.of();
+        }
+        return blocks.stream()
+                .filter(block -> {
+                    String key = blockKey(document.documentId(), block.block().blockId());
+                    double semantic = vectorScoreByKey.getOrDefault(key, 0.0d);
+                    int lexicalMatches = blockLexicalMatchCount(document, block, normalizedQuery, terms);
+                    int graphMatches = graphAlignmentMatchCount(block.graphTags(), block.graphNodeIds(), queryGraph, normalizedQuery, terms);
+                    return semantic > 0.0d || lexicalMatches > 0 || graphMatches > 0;
+                })
+                .sorted(Comparator.<BlockContext>comparingDouble(
+                                block -> vectorScoreByKey.getOrDefault(blockKey(document.documentId(), block.block().blockId()), 0.0d))
+                        .reversed()
+                        .thenComparing(Comparator.comparingInt(
+                                (BlockContext block) -> blockLexicalMatchCount(document, block, normalizedQuery, terms)).reversed())
+                        .thenComparing(Comparator.comparingInt(
+                                (BlockContext block) -> graphAlignmentMatchCount(block.graphTags(), block.graphNodeIds(), queryGraph, normalizedQuery, terms)).reversed())
+                        .thenComparing((BlockContext block) -> block.block().blockOrder()))
+                .limit(Math.max(1, safeLimit))
                 .toList();
     }
 
@@ -685,7 +739,7 @@ public class TeacherResourceBlockSearchService {
     }
 
     private static int candidateDocumentLimit(int safeLimit, int visibleDocumentCount) {
-        return Math.max(0, visibleDocumentCount);
+        return Math.max(0, Math.min(safeLimit, visibleDocumentCount));
     }
 
     /**
@@ -1216,13 +1270,30 @@ public class TeacherResourceBlockSearchService {
                 .toList();
     }
 
-    private static boolean filterRequestsRealTextbook(TeacherResourceSearchFilter filter) {
-        if (filter == null || filter.sourceTypes() == null || filter.sourceTypes().isEmpty()) {
+    private boolean shouldUseRealTextbook(TeacherResourceSearchFilter filter) {
+        if (!realTextbookAvailable()) {
             return false;
+        }
+        if (filter == null) {
+            return true;
+        }
+        if (filter.documentIds() != null && !filter.documentIds().isEmpty()) {
+            /*
+             * Teacher-document ids refer to source_document rows, not processed_books textbook doc ids. Do not inject
+             * textbook corpus hits into a doc-id scoped query because that would violate the caller's explicit scope.
+             */
+            return false;
+        }
+        if (filter.sourceTypes() == null || filter.sourceTypes().isEmpty()) {
+            return true;
         }
         return filter.sourceTypes().stream()
                 .map(TeacherResourceBlockSearchService::normalizeText)
                 .anyMatch(selector -> "textbook".equals(selector) || "public_textbook".equals(selector));
+    }
+
+    private boolean realTextbookAvailable() {
+        return textbookRetrievalService != null && textbookResourceProperties != null;
     }
 
     private static boolean matchesTags(

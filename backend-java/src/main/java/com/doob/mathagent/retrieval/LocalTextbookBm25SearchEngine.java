@@ -1,7 +1,7 @@
 package com.doob.mathagent.retrieval;
 
 import com.doob.mathagent.resources.TextbookChunk;
-import com.doob.mathagent.teacher.service.TeacherResourceGraphAlignmentService;
+import com.doob.mathagent.teacher.search.TeacherResourceGraphAlignmentService;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;

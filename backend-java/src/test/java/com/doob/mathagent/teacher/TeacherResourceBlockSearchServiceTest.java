@@ -6,20 +6,35 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.doob.mathagent.knowledge.service.InMemoryKnowledgeQuestionBankStore;
 import com.doob.mathagent.knowledge.service.KnowledgePointRecord;
 import com.doob.mathagent.knowledge.service.KnowledgeRelationRecord;
+import com.doob.mathagent.resources.TextbookCatalogReader;
+import com.doob.mathagent.resources.TextbookChunkReader;
+import com.doob.mathagent.resources.TextbookResourceProperties;
+import com.doob.mathagent.retrieval.LocalTextbookBm25SearchEngine;
+import com.doob.mathagent.retrieval.TextbookRetrievalService;
+import com.doob.mathagent.retrieval.TextbookRetrievalServiceFixture;
 import com.doob.mathagent.teacher.service.InMemoryTeacherDocumentBlockStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherResourceStore;
-import com.doob.mathagent.teacher.service.RecentTeacherResourceBlockSearchAuditStore;
-import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchAuditEvent;
+import com.doob.mathagent.teacher.search.audit.RecentTeacherResourceBlockSearchAuditStore;
+import com.doob.mathagent.teacher.service.TeacherResourceAssetService;
+import com.doob.mathagent.teacher.search.audit.TeacherResourceBlockSearchAuditEvent;
 import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService;
-import com.doob.mathagent.teacher.service.TeacherResourceSearchFilter;
-import com.doob.mathagent.teacher.vo.TeacherDocumentBlockResponse;
-import com.doob.mathagent.teacher.vo.TeacherResourceBlockSearchResponse;
-import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
+import com.doob.mathagent.teacher.search.TeacherResourceGraphAlignmentService;
+import com.doob.mathagent.teacher.search.TeacherResourceSearchFilter;
+import com.doob.mathagent.teacher.block.TeacherDocumentBlockResponse;
+import com.doob.mathagent.teacher.search.TeacherResourceBlockSearchResponse;
+import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
 import com.doob.mathagent.vector.service.TestVectorIndexService;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 class TeacherResourceBlockSearchServiceTest {
+
+    @TempDir
+    Path tempDir;
 
     @Test
     void teacherSearchesOwnPrivateBlocksAndDoesNotSeeAnotherTeacherPrivateBlocks() {
@@ -80,6 +95,164 @@ class TeacherResourceBlockSearchServiceTest {
         assertThat(response.hits()).extracting(TeacherResourceBlockSearchResponse.Hit::blockId)
                 .containsExactly("b-shared");
         assertThat(response.hits().getFirst().permissionScope()).isEqualTo("MATH_VIP");
+    }
+
+    @Test
+    void specifiedTextbookLibraryUsesRealProcessedBooksCorpusInsteadOfTeacherStoreDerivativeRows() throws Exception {
+        Path processedBooksRoot = createProcessedBooksCorpus(
+                tempDir.resolve("processed-books"),
+                "real-textbook-doc",
+                "教材导数单调性",
+                List.of("导数", "单调性"),
+                12,
+                "闭区间单调性要先看定义域和端点，再列符号表，不能只盯导数零点。");
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        resourceStore.save(new TeacherResourceDocumentResponse(
+                "doc-imported-public-textbook",
+                "school-a",
+                "admin-1",
+                "public_textbook",
+                "Old imported textbook derivative",
+                null,
+                "C:/workspace/runtime-authored/public-textbook-derivative",
+                "PUBLIC_TEXTBOOK",
+                "synced",
+                "parsed",
+                "ready",
+                "ready",
+                List.of()));
+        blockStore.replaceActiveBlocks("school-a", "doc-imported-public-textbook", List.of(detailedBlock(
+                "b-imported-public-textbook",
+                "doc-imported-public-textbook",
+                1,
+                "old/textbook-derivative.md",
+                "reference",
+                "导数",
+                "旧导入块",
+                "这是旧 teacher block store 里的教材导入块，本次 real textbook 检索不应优先依赖它。")));
+        TextbookRetrievalService textbookService = TextbookRetrievalServiceFixture.service(
+                new TextbookCatalogReader(),
+                new TextbookChunkReader(),
+                new LocalTextbookBm25SearchEngine(),
+                event -> {
+                });
+        TeacherResourceBlockSearchService service = new TeacherResourceBlockSearchService(
+                resourceStore,
+                blockStore,
+                new RecentTeacherResourceBlockSearchAuditStore(10),
+                TestVectorIndexService.successful(resourceStore, blockStore),
+                TeacherResourceGraphAlignmentService.disabled(),
+                TeacherResourceAssetService.disabled(),
+                textbookService,
+                null,
+                new TextbookResourceProperties(processedBooksRoot));
+
+        TeacherResourceBlockSearchResponse response = service.search(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                "指定库是textbook，想找闭区间单调性为什么必须先看端点和定义域",
+                5,
+                "/api/teacher/resources/search",
+                TeacherResourceSearchFilter.of(null, null, List.of("textbook"), null));
+
+        assertThat(response.hits()).isNotEmpty();
+        assertThat(response.hits().getFirst().documentId()).isEqualTo("real-textbook-doc");
+        assertThat(response.hits().getFirst().blockId()).isEqualTo("real-textbook-doc-p12-1");
+        assertThat(response.hits().getFirst().sourceType()).isEqualTo("public_textbook");
+        assertThat(response.hits().getFirst().permissionScope()).isEqualTo("PUBLIC_TEXTBOOK");
+        assertThat(response.hits().getFirst().sourcePath()).contains("textbook://real-textbook-doc/page/12");
+        assertThat(response.hits()).extracting(TeacherResourceBlockSearchResponse.Hit::blockId)
+                .doesNotContain("b-imported-public-textbook");
+    }
+
+    @Test
+    void mixedSearchAlsoUsesRealProcessedBooksCorpusInsteadOfTeacherStoreDerivativeRows() throws Exception {
+        Path processedBooksRoot = createProcessedBooksCorpus(
+                tempDir.resolve("processed-books-mixed"),
+                "real-textbook-doc",
+                "教材导数单调性",
+                List.of("导数", "单调性"),
+                12,
+                "闭区间单调性要先看定义域和端点，再列符号表，不能只盯导数零点。");
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        resourceStore.save(new TeacherResourceDocumentResponse(
+                "doc-imported-public-textbook",
+                "school-a",
+                "admin-1",
+                "public_textbook",
+                "Old imported textbook derivative",
+                null,
+                "C:/workspace/runtime-authored/public-textbook-derivative",
+                "PUBLIC_TEXTBOOK",
+                "synced",
+                "parsed",
+                "ready",
+                "ready",
+                List.of()));
+        resourceStore.save(new TeacherResourceDocumentResponse(
+                "doc-feishu",
+                "school-a",
+                "teacher-1",
+                "feishu",
+                "概率讲法模板",
+                null,
+                "C:/workspace/runtime-authored/03-feishu-method-probability",
+                "TEACHER_PRIVATE",
+                "synced",
+                "parsed",
+                "ready",
+                "ready",
+                List.of()));
+        blockStore.replaceActiveBlocks("school-a", "doc-imported-public-textbook", List.of(detailedBlock(
+                "b-imported-public-textbook",
+                "doc-imported-public-textbook",
+                1,
+                "old/textbook-derivative.md",
+                "reference",
+                "导数",
+                "旧导入块",
+                "这是旧 teacher block store 里的教材导入块，本次 mixed real textbook 检索不应优先依赖它。")));
+        blockStore.replaceActiveBlocks("school-a", "doc-feishu", List.of(detailedBlock(
+                "b-feishu",
+                "doc-feishu",
+                1,
+                "讲法模板.md",
+                "method",
+                "概率",
+                "先分模型",
+                "先追问抽取过程是否独立且可重复，再决定是二项分布还是超几何分布。")));
+        TextbookRetrievalService textbookService = TextbookRetrievalServiceFixture.service(
+                new TextbookCatalogReader(),
+                new TextbookChunkReader(),
+                new LocalTextbookBm25SearchEngine(),
+                event -> {
+                });
+        TeacherResourceBlockSearchService service = new TeacherResourceBlockSearchService(
+                resourceStore,
+                blockStore,
+                new RecentTeacherResourceBlockSearchAuditStore(10),
+                TestVectorIndexService.successful(resourceStore, blockStore),
+                TeacherResourceGraphAlignmentService.disabled(),
+                TeacherResourceAssetService.disabled(),
+                textbookService,
+                null,
+                new TextbookResourceProperties(processedBooksRoot));
+
+        TeacherResourceBlockSearchResponse response = service.search(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                "闭区间单调性为什么必须先看端点和定义域",
+                5);
+
+        assertThat(response.hits()).isNotEmpty();
+        assertThat(response.hits().getFirst().documentId()).isEqualTo("real-textbook-doc");
+        assertThat(response.hits().getFirst().blockId()).isEqualTo("real-textbook-doc-p12-1");
+        assertThat(response.hits()).extracting(TeacherResourceBlockSearchResponse.Hit::blockId)
+                .doesNotContain("b-imported-public-textbook");
     }
 
     @Test
@@ -324,8 +497,7 @@ class TeacherResourceBlockSearchServiceTest {
                 "椭圆切线面积最值这类真题，解析里变量应该先怎么设才顺",
                 5,
                 "/api/teacher/resources/search",
-                TeacherResourceSearchFilter.of(null, null, List.of("gaokao"), null),
-                "two_stage_doc_block");
+                TeacherResourceSearchFilter.of(null, null, List.of("gaokao"), null));
 
         assertThat(response.hits()).isNotEmpty();
         assertThat(response.hits().getFirst().blockId()).isEqualTo("b-analysis");
@@ -423,7 +595,7 @@ class TeacherResourceBlockSearchServiceTest {
     }
 
     @Test
-    void canStillRunLegacyBlockHybridForBaselineComparison() {
+    void legacyStrategyAliasNowResolvesToTwoStageMainline() {
         InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
         InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
         resourceStore.save(document("doc-own", "teacher-1", "TEACHER_PRIVATE", "Own vector notes"));
@@ -445,10 +617,9 @@ class TeacherResourceBlockSearchServiceTest {
                 "dot product",
                 10,
                 "/api/teacher/resources/search",
-                TeacherResourceSearchFilter.EMPTY,
-                "legacy_block_hybrid");
+                TeacherResourceSearchFilter.EMPTY);
 
-        assertThat(response.retrievalMode()).isEqualTo("legacy_block_hybrid");
+        assertThat(response.retrievalMode()).isEqualTo("two_stage_doc_block");
         assertThat(response.hits()).extracting(TeacherResourceBlockSearchResponse.Hit::blockId)
                 .containsExactly("b-own");
     }
@@ -512,8 +683,7 @@ class TeacherResourceBlockSearchServiceTest {
                 "vector angle analysis",
                 10,
                 "/api/teacher/resources/search",
-                TeacherResourceSearchFilter.of(null, null, List.of("QQ_BUNDLE"), null),
-                "two_stage_doc_block");
+                TeacherResourceSearchFilter.of(null, null, List.of("QQ_BUNDLE"), null));
 
         assertThat(response.hits()).extracting(TeacherResourceBlockSearchResponse.Hit::documentId)
                 .containsExactly("doc-qq");
@@ -575,8 +745,7 @@ class TeacherResourceBlockSearchServiceTest {
                 "帮我先定位这套专题包里的原题题面，不要讲义总述，也不要答案解析",
                 5,
                 "/api/teacher/resources/search",
-                TeacherResourceSearchFilter.of(null, null, List.of("qq_bundle"), null),
-                "two_stage_doc_block");
+                TeacherResourceSearchFilter.of(null, null, List.of("qq_bundle"), null));
 
         assertThat(response.hits()).isNotEmpty();
         assertThat(response.hits().getFirst().documentId()).isEqualTo("doc-qq-question");
@@ -630,8 +799,7 @@ class TeacherResourceBlockSearchServiceTest {
                 "优先找专题讲解块，不要直接跳到答案解析，题面也不要排前面",
                 5,
                 "/api/teacher/resources/search",
-                TeacherResourceSearchFilter.of(null, null, List.of("qq_bundle"), null),
-                "two_stage_doc_block");
+                TeacherResourceSearchFilter.of(null, null, List.of("qq_bundle"), null));
 
         assertThat(response.hits()).isNotEmpty();
         assertThat(response.hits().getFirst().blockId()).isEqualTo("b-qq-lesson");
@@ -684,8 +852,7 @@ class TeacherResourceBlockSearchServiceTest {
                 "专题讲评课要先找整体讲法入口，而不是某一道题的解析，指定库是qq_bundle",
                 5,
                 "/api/teacher/resources/search",
-                TeacherResourceSearchFilter.of(null, null, List.of("qq_bundle"), null),
-                "two_stage_doc_block");
+                TeacherResourceSearchFilter.of(null, null, List.of("qq_bundle"), null));
 
         assertThat(response.hits()).isNotEmpty();
         assertThat(response.hits().getFirst().blockId()).isEqualTo("b-course-lesson");
@@ -738,8 +905,7 @@ class TeacherResourceBlockSearchServiceTest {
                 "优先找解析或讲评块，题面不能排在前面，返回最贴近的证据块即可",
                 5,
                 "/api/teacher/resources/search",
-                TeacherResourceSearchFilter.of(null, null, List.of("gaokao"), null),
-                "two_stage_doc_block");
+                TeacherResourceSearchFilter.of(null, null, List.of("gaokao"), null));
 
         assertThat(response.hits()).isNotEmpty();
         assertThat(response.hits().getFirst().blockId()).isEqualTo("b-gaokao-analysis");
@@ -792,8 +958,7 @@ class TeacherResourceBlockSearchServiceTest {
                 "Need a teacher reference about campus safety drill checklist for student evacuation",
                 5,
                 "/api/teacher/resources/search",
-                TeacherResourceSearchFilter.of(null, null, List.of("feishu"), null),
-                "two_stage_doc_block");
+                TeacherResourceSearchFilter.of(null, null, List.of("feishu"), null));
 
         assertThat(response.hits()).isEmpty();
     }
@@ -844,8 +1009,7 @@ class TeacherResourceBlockSearchServiceTest {
                 "Need the boardwork order for probability sampling comparison, not the generic method overview",
                 5,
                 "/api/teacher/resources/search",
-                TeacherResourceSearchFilter.of(null, null, List.of("feishu"), null),
-                "two_stage_doc_block");
+                TeacherResourceSearchFilter.of(null, null, List.of("feishu"), null));
 
         assertThat(response.hits()).isNotEmpty();
         assertThat(response.hits().getFirst().blockId()).isEqualTo("b-feishu-boardwork");
@@ -882,6 +1046,46 @@ class TeacherResourceBlockSearchServiceTest {
                 "pending",
                 "waiting_rebuild",
                 List.of());
+    }
+
+    private static Path createProcessedBooksCorpus(
+            Path processedBooksRoot,
+            String docId,
+            String bookName,
+            List<String> chapterPath,
+            int pageNo,
+            String text) throws Exception {
+        Files.createDirectories(processedBooksRoot);
+        Path bookRoot = processedBooksRoot.resolve(docId);
+        Path aiChunkDir = bookRoot.resolve("jsonl_ai");
+        Files.createDirectories(aiChunkDir);
+        String catalogLine = """
+                {"doc_id":"%s","book_name":"%s","volume":"必修一","book_root":"%s","manifest":"%s","chunk_count":1,"page_count":1,"ai_ok":true}
+                """.formatted(docId, bookName, docId, docId + "/manifest.json").strip();
+        Files.writeString(
+                processedBooksRoot.resolve("catalog.jsonl"),
+                catalogLine + System.lineSeparator(),
+                StandardCharsets.UTF_8);
+        String chapterJson = chapterPath.stream()
+                .map(value -> "\"" + value + "\"")
+                .collect(java.util.stream.Collectors.joining(","));
+        String chunkLine = """
+                {"chunk_id":"%s-p%d-1","doc_id":"%s","book_name":"%s","volume":"必修一","chapter_path":[%s],"page_no":%d,"printed_page_no":"%d","chunk_type":"text","section_title":"闭区间单调性","text":"%s","formula_text":"","image_rel_paths":[],"source_page_image":"pages/p%03d.png"}
+                """.formatted(
+                docId,
+                pageNo,
+                docId,
+                bookName,
+                chapterJson,
+                pageNo,
+                pageNo,
+                text,
+                pageNo).strip();
+        Files.writeString(
+                aiChunkDir.resolve("chunks.jsonl"),
+                chunkLine + System.lineSeparator(),
+                StandardCharsets.UTF_8);
+        return processedBooksRoot;
     }
 
     private static TeacherDocumentBlockResponse block(
@@ -932,3 +1136,4 @@ class TeacherResourceBlockSearchServiceTest {
                 "active");
     }
 }
+

@@ -5,7 +5,8 @@ import com.doob.mathagent.resources.TextbookCatalogReader;
 import com.doob.mathagent.resources.TextbookChunk;
 import com.doob.mathagent.resources.TextbookChunkReader;
 import com.doob.mathagent.resources.TextbookPageImageService;
-import com.doob.mathagent.teacher.service.TeacherResourceGraphAlignmentService;
+import com.doob.mathagent.teacher.search.TeacherResourceGraphAlignmentService;
+import com.doob.mathagent.vector.service.VectorIndexService;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -15,10 +16,13 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.Comparator;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -26,7 +30,7 @@ import org.springframework.stereotype.Service;
 public class TextbookRetrievalService {
 
     private static final long LOAD_FAILURE_COOLDOWN_NANOS = TimeUnit.SECONDS.toNanos(30);
-    private static final String SEARCH_PIPELINE_VERSION = "two_stage_doc_page_v1";
+    private static final String SEARCH_PIPELINE_VERSION = "two_stage_doc_page_v2_rerank";
 
     private final TextbookCatalogReader catalogReader;
     private final TextbookChunkReader chunkReader;
@@ -36,6 +40,7 @@ public class TextbookRetrievalService {
     private final RedisTextbookSearchCacheProperties searchCacheProperties;
     private final TeacherResourceGraphAlignmentService graphAlignmentService;
     private final TextbookPageImageService pageImageService;
+    private final VectorIndexService vectorIndexService;
     /**
      * 语料加载互斥锁：防止缓存未命中时多个请求同时读取大批量教材文件，降低缓存击穿风险。
      */
@@ -58,7 +63,8 @@ public class TextbookRetrievalService {
             TextbookSearchCache searchCache,
             RedisTextbookSearchCacheProperties searchCacheProperties,
             TeacherResourceGraphAlignmentService graphAlignmentService,
-            TextbookPageImageService pageImageService) {
+            TextbookPageImageService pageImageService,
+            VectorIndexService vectorIndexService) {
         this.catalogReader = Objects.requireNonNull(catalogReader, "catalogReader is required");
         this.chunkReader = Objects.requireNonNull(chunkReader, "chunkReader is required");
         this.searchEngine = Objects.requireNonNull(searchEngine, "searchEngine is required");
@@ -67,6 +73,7 @@ public class TextbookRetrievalService {
         this.searchCacheProperties = Objects.requireNonNull(searchCacheProperties, "searchCacheProperties is required");
         this.graphAlignmentService = Objects.requireNonNull(graphAlignmentService, "graphAlignmentService is required");
         this.pageImageService = Objects.requireNonNull(pageImageService, "pageImageService is required");
+        this.vectorIndexService = Objects.requireNonNull(vectorIndexService, "vectorIndexService is required");
     }
 
     /**
@@ -98,7 +105,7 @@ public class TextbookRetrievalService {
                 normalizedContext.subjectId(),
                 request.query());
         List<TextbookSearchHit> hits = cached == null
-                ? searchEngine.search(request.query(), corpus.chunks(), request.limit(), queryGraph)
+                ? rerankedHits(request.query(), request.limit(), corpus.chunks(), queryGraph)
                 : cached.hits();
         hits = attachControlledPageImageUris(hits);
         if (cached == null && !hits.isEmpty()) {
@@ -122,6 +129,192 @@ public class TextbookRetrievalService {
                 hits);
         auditSink.record(RetrievalAuditEvent.from(queryId, request, response, elapsedMs, normalizedContext));
         return response;
+    }
+
+    /**
+     * The lexical engine is now only the coarse-recall stage for textbooks. It may still use BM25/metadata signals to
+     * avoid scanning unrelated pages, but it no longer decides the final rank returned to callers. Final ordering is
+     * always rebuilt here with the configured rerank model so textbook retrieval follows the same semantic-first
+     * discipline as teacher-resource retrieval.
+     */
+    private List<TextbookSearchHit> rerankedHits(
+            String query,
+            int limit,
+            List<TextbookChunk> chunks,
+            TeacherResourceGraphAlignmentService.QueryGraphContext queryGraph) {
+        int safeLimit = Math.max(1, limit);
+        if (chunks == null || chunks.isEmpty()) {
+            return List.of();
+        }
+        /*
+         * Request the full positive lexical candidate set instead of locking quality to a multiplier/floor constant.
+         * The lexical engine now only decides which pages are plausible enough to enter semantic rerank, not their
+         * final order.
+         */
+        List<TextbookSearchHit> coarseHits = searchEngine.search(query, chunks, chunks.size(), queryGraph);
+        if (coarseHits.isEmpty()) {
+            return List.of();
+        }
+        Map<String, List<TextbookSearchHit>> hitsByDocId = new LinkedHashMap<>();
+        for (TextbookSearchHit hit : coarseHits) {
+            hitsByDocId.computeIfAbsent(hit.docId(), ignored -> new ArrayList<>()).add(hit);
+        }
+        Map<String, List<TextbookSearchHit>> supportHitsByDocId = cappedSupportHitsByDocId(hitsByDocId, safeLimit);
+        Map<String, Double> documentSemanticScores = semanticScoreByKey(query, documentCandidateTexts(supportHitsByDocId));
+        List<String> rankedDocIds = rankedDocumentIds(supportHitsByDocId, documentSemanticScores, safeLimit);
+        List<TextbookSearchHit> pageCandidates = pageCandidates(rankedDocIds, supportHitsByDocId);
+        Map<String, Double> pageSemanticScores = semanticScoreByKey(query, pageCandidateTexts(pageCandidates));
+        return pageCandidates.stream()
+                .map(hit -> new TextbookPageCandidate(
+                        hit,
+                        pageSemanticScores.getOrDefault(hit.chunkId(), hit.score()),
+                        documentSemanticScores.getOrDefault(hit.docId(), hit.score())))
+                .sorted(Comparator.<TextbookPageCandidate>comparingDouble(TextbookPageCandidate::pageSemanticScore).reversed()
+                        .thenComparing(Comparator.comparingDouble(TextbookPageCandidate::documentSemanticScore).reversed())
+                        .thenComparing(Comparator.comparingDouble((TextbookPageCandidate candidate) -> candidate.hit().score()).reversed())
+                        .thenComparing(candidate -> candidate.hit().docId())
+                        .thenComparingInt(candidate -> candidate.hit().pageNo()))
+                .limit(safeLimit)
+                .map(candidate -> withScore(candidate.hit(), candidate.pageSemanticScore()))
+                .toList();
+    }
+
+    private static Map<String, List<TextbookSearchHit>> cappedSupportHitsByDocId(
+            Map<String, List<TextbookSearchHit>> hitsByDocId,
+            int safeLimit) {
+        Map<String, List<TextbookSearchHit>> capped = new LinkedHashMap<>();
+        for (Map.Entry<String, List<TextbookSearchHit>> entry : hitsByDocId.entrySet()) {
+            capped.put(entry.getKey(), entry.getValue().stream().limit(safeLimit).toList());
+        }
+        return capped;
+    }
+
+    /**
+     * The request limit itself defines the document candidate boundary. For a top-N page response, more than N books
+     * cannot contribute unique final winners, so we keep the coarse stage bounded by caller intent instead of opaque
+     * multipliers.
+     */
+    private static List<String> rankedDocumentIds(
+            Map<String, List<TextbookSearchHit>> supportHitsByDocId,
+            Map<String, Double> documentSemanticScores,
+            int safeLimit) {
+        return supportHitsByDocId.entrySet().stream()
+                .sorted(Comparator.<Map.Entry<String, List<TextbookSearchHit>>>comparingDouble(
+                                entry -> documentSemanticScores.getOrDefault(entry.getKey(), 0.0d))
+                        .reversed()
+                        .thenComparing(Comparator.comparingDouble(
+                                (Map.Entry<String, List<TextbookSearchHit>> entry) -> entry.getValue().isEmpty()
+                                        ? 0.0d
+                                        : entry.getValue().getFirst().score()).reversed())
+                        .thenComparing(Map.Entry::getKey))
+                .limit(safeLimit)
+                .map(Map.Entry::getKey)
+                .toList();
+    }
+
+    private static List<TextbookSearchHit> pageCandidates(
+            List<String> rankedDocIds,
+            Map<String, List<TextbookSearchHit>> supportHitsByDocId) {
+        List<TextbookSearchHit> candidates = new ArrayList<>();
+        for (String docId : rankedDocIds) {
+            candidates.addAll(supportHitsByDocId.getOrDefault(docId, List.of()));
+        }
+        return candidates;
+    }
+
+    /**
+     * Uses the configured rerank endpoint when available and falls back inside VectorIndexService to embedding cosine
+     * similarity. Keep the fallback centralized there so textbook retrieval does not grow its own heuristic score path.
+     */
+    private Map<String, Double> semanticScoreByKey(String query, Map<String, String> candidateTexts) {
+        if (candidateTexts.isEmpty()) {
+            return Map.of();
+        }
+        List<String> keys = new ArrayList<>(candidateTexts.keySet());
+        List<String> texts = keys.stream().map(candidateTexts::get).toList();
+        List<Double> scores = vectorIndexService.rerankTexts(query, texts);
+        Map<String, Double> scoreByKey = new LinkedHashMap<>();
+        for (int index = 0; index < keys.size() && index < scores.size(); index += 1) {
+            scoreByKey.put(keys.get(index), scores.get(index));
+        }
+        return Map.copyOf(scoreByKey);
+    }
+
+    private static Map<String, String> documentCandidateTexts(Map<String, List<TextbookSearchHit>> hitsByDocId) {
+        Map<String, String> texts = new LinkedHashMap<>();
+        for (Map.Entry<String, List<TextbookSearchHit>> entry : hitsByDocId.entrySet()) {
+            texts.put(entry.getKey(), semanticDocumentText(entry.getValue()));
+        }
+        return texts;
+    }
+
+    private static Map<String, String> pageCandidateTexts(List<TextbookSearchHit> hits) {
+        Map<String, String> texts = new LinkedHashMap<>();
+        for (TextbookSearchHit hit : hits) {
+            texts.put(hit.chunkId(), semanticPageText(hit));
+        }
+        return texts;
+    }
+
+    /**
+     * Document-level rerank asks a simple question: "does this textbook contain the right evidence somewhere in these
+     * candidate pages?" We therefore concatenate only the already-recalled pages from that book instead of inventing a
+     * new document summary or relying on fragile filename features.
+     */
+    private static String semanticDocumentText(List<TextbookSearchHit> hits) {
+        if (hits == null || hits.isEmpty()) {
+            return "";
+        }
+        StringBuilder builder = new StringBuilder();
+        TextbookSearchHit first = hits.getFirst();
+        appendLine(builder, first.bookName());
+        appendLine(builder, first.volume());
+        for (TextbookSearchHit hit : hits) {
+            appendLine(builder, semanticPageText(hit));
+        }
+        return builder.toString();
+    }
+
+    private static String semanticPageText(TextbookSearchHit hit) {
+        StringBuilder builder = new StringBuilder();
+        appendLine(builder, hit.bookName());
+        appendLine(builder, hit.volume());
+        appendLine(builder, String.join(" / ", hit.chapterPath() == null ? List.of() : hit.chapterPath()));
+        appendLine(builder, hit.sectionTitle());
+        appendLine(builder, hit.printedPageNo());
+        appendLine(builder, hit.textSnippet());
+        appendLine(builder, hit.formulaText());
+        return builder.toString();
+    }
+
+    private static void appendLine(StringBuilder builder, String value) {
+        String normalized = value == null ? "" : value.strip();
+        if (normalized.isBlank()) {
+            return;
+        }
+        if (!builder.isEmpty()) {
+            builder.append('\n');
+        }
+        builder.append(normalized);
+    }
+
+    private static TextbookSearchHit withScore(TextbookSearchHit hit, double score) {
+        return new TextbookSearchHit(
+                hit.chunkId(),
+                score,
+                hit.retrievalStrategy(),
+                hit.docId(),
+                hit.bookName(),
+                hit.volume(),
+                hit.chapterPath(),
+                hit.pageNo(),
+                hit.printedPageNo(),
+                hit.sectionTitle(),
+                hit.textSnippet(),
+                hit.formulaText(),
+                hit.sourcePageImage(),
+                hit.pageQualityLabel(),
+                hit.pageImageUri());
     }
 
     /**
@@ -351,5 +544,11 @@ public class TextbookRetrievalService {
             List<SourceFileSignature> signatures,
             String signatureHash,
             List<TextbookChunk> chunks) {
+    }
+
+    private record TextbookPageCandidate(
+            TextbookSearchHit hit,
+            double pageSemanticScore,
+            double documentSemanticScore) {
     }
 }

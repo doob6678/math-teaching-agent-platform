@@ -47,7 +47,7 @@ class TextbookRetrievalServiceTest {
 
         TextbookSearchResponse response = service.search(root, new TextbookSearchRequest("分段函数的定义", 5));
 
-        assertThat(response.retrievalStrategy()).isEqualTo("two_stage_doc_page_v1");
+        assertThat(response.retrievalStrategy()).isEqualTo("two_stage_doc_page_v2_rerank");
         assertThat(response.total()).isEqualTo(2);
         assertThat(response.hits())
                 .isNotEmpty()
@@ -88,7 +88,7 @@ class TextbookRetrievalServiceTest {
         assertThat(auditSink.event().queryId()).isEqualTo(response.queryId());
         assertThat(auditSink.event().tenantId()).isEqualTo("default");
         assertThat(auditSink.event().queryText()).isEqualTo("function mapping");
-        assertThat(auditSink.event().retrievalStrategy()).isEqualTo("two_stage_doc_page_v1");
+        assertThat(auditSink.event().retrievalStrategy()).isEqualTo("two_stage_doc_page_v2_rerank");
         assertThat(auditSink.event().requestedLimit()).isEqualTo(5);
         assertThat(auditSink.event().hitCount()).isEqualTo(response.hits().size());
         assertThat(auditSink.event().elapsedMs()).isGreaterThanOrEqualTo(0);
@@ -152,8 +152,8 @@ class TextbookRetrievalServiceTest {
         TextbookSearchResponse first = service.search(root, new TextbookSearchRequest("piecewise function", 5));
         TextbookSearchResponse second = service.search(root, new TextbookSearchRequest("piecewise function", 5));
 
-        assertThat(first.retrievalStrategy()).isEqualTo("two_stage_doc_page_v1");
-        assertThat(second.retrievalStrategy()).isEqualTo("redis_cache_two_stage_doc_page_v1");
+        assertThat(first.retrievalStrategy()).isEqualTo("two_stage_doc_page_v2_rerank");
+        assertThat(second.retrievalStrategy()).isEqualTo("redis_cache_two_stage_doc_page_v2_rerank");
         assertThat(second.queryId()).isNotEqualTo(first.queryId());
         assertThat(second.hits()).extracting(TextbookSearchHit::chunkId).containsExactly("book_a_p101_text_001");
         assertThat(searchEngine.searchCount()).isEqualTo(1);
@@ -358,7 +358,7 @@ class TextbookRetrievalServiceTest {
                 String query,
                 List<TextbookChunk> chunks,
                 int limit,
-                com.doob.mathagent.teacher.service.TeacherResourceGraphAlignmentService.QueryGraphContext queryGraph) {
+                com.doob.mathagent.teacher.search.TeacherResourceGraphAlignmentService.QueryGraphContext queryGraph) {
             searchCount++;
             return super.search(query, chunks, limit, queryGraph);
         }
