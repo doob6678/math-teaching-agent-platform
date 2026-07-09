@@ -4,6 +4,7 @@ import com.doob.mathagent.resources.TextbookCatalogItem;
 import com.doob.mathagent.resources.TextbookCatalogReader;
 import com.doob.mathagent.resources.TextbookChunk;
 import com.doob.mathagent.resources.TextbookChunkReader;
+import com.doob.mathagent.resources.TextbookPageImageService;
 import com.doob.mathagent.teacher.service.TeacherResourceGraphAlignmentService;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -34,6 +35,7 @@ public class TextbookRetrievalService {
     private final TextbookSearchCache searchCache;
     private final RedisTextbookSearchCacheProperties searchCacheProperties;
     private final TeacherResourceGraphAlignmentService graphAlignmentService;
+    private final TextbookPageImageService pageImageService;
     /**
      * 语料加载互斥锁：防止缓存未命中时多个请求同时读取大批量教材文件，降低缓存击穿风险。
      */
@@ -55,7 +57,8 @@ public class TextbookRetrievalService {
             RetrievalAuditSink auditSink,
             TextbookSearchCache searchCache,
             RedisTextbookSearchCacheProperties searchCacheProperties,
-            TeacherResourceGraphAlignmentService graphAlignmentService) {
+            TeacherResourceGraphAlignmentService graphAlignmentService,
+            TextbookPageImageService pageImageService) {
         this.catalogReader = Objects.requireNonNull(catalogReader, "catalogReader is required");
         this.chunkReader = Objects.requireNonNull(chunkReader, "chunkReader is required");
         this.searchEngine = Objects.requireNonNull(searchEngine, "searchEngine is required");
@@ -63,6 +66,7 @@ public class TextbookRetrievalService {
         this.searchCache = Objects.requireNonNull(searchCache, "searchCache is required");
         this.searchCacheProperties = Objects.requireNonNull(searchCacheProperties, "searchCacheProperties is required");
         this.graphAlignmentService = Objects.requireNonNull(graphAlignmentService, "graphAlignmentService is required");
+        this.pageImageService = Objects.requireNonNull(pageImageService, "pageImageService is required");
     }
 
     /**
@@ -96,6 +100,7 @@ public class TextbookRetrievalService {
         List<TextbookSearchHit> hits = cached == null
                 ? searchEngine.search(request.query(), corpus.chunks(), request.limit(), queryGraph)
                 : cached.hits();
+        hits = attachControlledPageImageUris(hits);
         if (cached == null && !hits.isEmpty()) {
             searchCache.put(
                     cacheKey,
@@ -117,6 +122,34 @@ public class TextbookRetrievalService {
                 hits);
         auditSink.record(RetrievalAuditEvent.from(queryId, request, response, elapsedMs, normalizedContext));
         return response;
+    }
+
+    /**
+     * 教材原始 chunk 只保存相对图片路径；真正返回给前端和 AI 的必须是后端受控 URI，避免调用方拼接本地路径。
+     */
+    private List<TextbookSearchHit> attachControlledPageImageUris(List<TextbookSearchHit> hits) {
+        if (hits == null || hits.isEmpty()) {
+            return List.of();
+        }
+        return hits.stream()
+                .map(this::attachControlledPageImageUri)
+                .toList();
+    }
+
+    /**
+     * 只在页码有效且当前命中还没携带 URI 时补地址，这样既兼容旧缓存，也避免覆盖上游已经显式指定的值。
+     */
+    private TextbookSearchHit attachControlledPageImageUri(TextbookSearchHit hit) {
+        if (hit == null) {
+            return null;
+        }
+        if (hit.pageImageUri() != null && !hit.pageImageUri().isBlank()) {
+            return hit;
+        }
+        if (hit.pageNo() <= 0 || hit.docId() == null || hit.docId().isBlank()) {
+            return hit;
+        }
+        return hit.withPageImageUri(pageImageService.pageImageUri(hit.docId(), hit.pageNo()));
     }
 
     /**

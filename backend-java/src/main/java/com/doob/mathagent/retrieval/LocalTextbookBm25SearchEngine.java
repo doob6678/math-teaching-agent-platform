@@ -390,7 +390,8 @@ public class LocalTextbookBm25SearchEngine {
                 snippet(chunk.text()),
                 chunk.formulaText(),
                 chunk.sourcePageImage(),
-                pageQualityLabel);
+                pageQualityLabel,
+                null);
     }
 
     private static String snippet(String text) {

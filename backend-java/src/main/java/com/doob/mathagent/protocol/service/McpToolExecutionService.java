@@ -825,6 +825,7 @@ public class McpToolExecutionService {
             row.put("permissionScope", "PUBLIC_TEXTBOOK");
             row.put("snippet", hit.textSnippet());
             row.put("sourcePageImage", hit.sourcePageImage());
+            row.put("pageImageUri", hit.pageImageUri());
             row.put("evidenceRef", "PUBLIC_TEXTBOOK:" + hit.docId() + ":" + hit.chunkId());
             row.put("rawScore", hit.score());
             merged.add(row);

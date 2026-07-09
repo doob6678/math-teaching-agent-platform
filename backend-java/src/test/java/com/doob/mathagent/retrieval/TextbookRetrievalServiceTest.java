@@ -52,8 +52,10 @@ class TextbookRetrievalServiceTest {
         assertThat(response.hits())
                 .isNotEmpty()
                 .first()
-                .extracting(TextbookSearchHit::chunkId)
-                .isEqualTo("book_a_p101_text_001");
+                .satisfies(hit -> {
+                    assertThat(hit.chunkId()).isEqualTo("book_a_p101_text_001");
+                    assertThat(hit.pageImageUri()).isEqualTo("/api/resources/textbooks/book_a/pages/101/image");
+                });
     }
 
     @Test
@@ -78,6 +80,10 @@ class TextbookRetrievalServiceTest {
         TextbookSearchResponse response = service.search(root, new TextbookSearchRequest("function mapping", 5));
 
         assertThat(response.queryId()).isNotBlank();
+        assertThat(response.hits())
+                .first()
+                .extracting(TextbookSearchHit::pageImageUri)
+                .isEqualTo("/api/resources/textbooks/book_a/pages/10/image");
         assertThat(auditSink.event()).isNotNull();
         assertThat(auditSink.event().queryId()).isEqualTo(response.queryId());
         assertThat(auditSink.event().tenantId()).isEqualTo("default");

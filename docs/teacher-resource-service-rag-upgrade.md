@@ -24,6 +24,7 @@
   - Worker endpoint `POST /v1/clip/page-search` reuses the local `_page_image_index` under `processed_books` and supports text or image CLIP queries.
   - Backend endpoint `POST /api/retrieval/textbooks/page-search` proxies to the worker with the existing worker API key, repairs common mojibake in worker metadata, and rewrites page hits to backend-owned image URLs.
   - Backend endpoint `GET /api/resources/textbooks/{docId}/pages/{pageNo}/image` streams a processed textbook page image without exposing `processed_books` absolute paths.
+  - Standard `TextbookRetrievalService` hits now also carry `pageImageUri`, and MCP merged textbook rows forward the same controlled URI. This keeps the normal two-stage textbook/tool search path aligned with the new page-image capability instead of forcing callers onto a separate endpoint first.
 - CLIP page-image search intentionally stays out of the JVM model path. Java only validates requests, calls the worker, and maps doc/page hits back to controlled URLs. This avoids reloading numpy indexes or CLIP weights in the backend process.
 
 ## Permission Model

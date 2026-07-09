@@ -28,6 +28,7 @@ import com.doob.mathagent.resources.TextbookResourceProperties;
 import com.doob.mathagent.retrieval.LocalTextbookBm25SearchEngine;
 import com.doob.mathagent.retrieval.NoopRetrievalAuditSink;
 import com.doob.mathagent.retrieval.TextbookRetrievalService;
+import com.doob.mathagent.retrieval.TextbookSearchHit;
 import com.doob.mathagent.teacher.TeacherResourceServiceFixture;
 import com.doob.mathagent.teacher.service.InMemoryTeacherDocumentBlockStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherResourceStore;
@@ -86,6 +87,14 @@ class McpToolExecutionServiceTest {
         Map<String, Object> result = (Map<String, Object>) response.result();
         assertThat(result.get("query")).isEqualTo("space vector angle");
         assertThat(result.get("total")).isEqualTo(1);
+        @SuppressWarnings("unchecked")
+        List<TextbookSearchHit> hits = (List<TextbookSearchHit>) result.get("hits");
+        assertThat(hits)
+                .singleElement()
+                .satisfies(hit -> {
+                    assertThat(hit.docId()).isEqualTo("book_vector");
+                    assertThat(hit.pageImageUri()).isEqualTo("/api/resources/textbooks/book_vector/pages/1/image");
+                });
     }
 
     @Test

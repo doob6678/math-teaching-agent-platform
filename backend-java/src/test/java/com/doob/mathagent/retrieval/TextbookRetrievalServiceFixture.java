@@ -2,6 +2,7 @@ package com.doob.mathagent.retrieval;
 
 import com.doob.mathagent.resources.TextbookCatalogReader;
 import com.doob.mathagent.resources.TextbookChunkReader;
+import com.doob.mathagent.resources.TextbookPageImageService;
 import com.doob.mathagent.teacher.service.TeacherResourceGraphAlignmentService;
 import java.time.Duration;
 import java.util.Optional;
@@ -39,7 +40,8 @@ public final class TextbookRetrievalServiceFixture {
                 auditSink,
                 searchCache,
                 searchCacheProperties,
-                TeacherResourceGraphAlignmentService.disabled());
+                TeacherResourceGraphAlignmentService.disabled(),
+                new TextbookPageImageService(catalogReader));
     }
 
     private static final class DisabledTextbookSearchCache implements TextbookSearchCache {
