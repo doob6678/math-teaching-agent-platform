@@ -1,9 +1,9 @@
 package com.doob.mathagent.vector.service;
 
-import com.doob.mathagent.teacher.service.TeacherDocumentBlockStore;
-import com.doob.mathagent.teacher.service.TeacherResourceStore;
-import com.doob.mathagent.teacher.vo.TeacherDocumentBlockResponse;
-import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
+import com.doob.mathagent.teacher.block.TeacherDocumentBlockStore;
+import com.doob.mathagent.teacher.document.TeacherResourceStore;
+import com.doob.mathagent.teacher.block.TeacherDocumentBlockResponse;
+import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
@@ -12,6 +12,10 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Locale;
+import java.util.function.Supplier;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 /**
@@ -21,10 +25,12 @@ import org.springframework.stereotype.Service;
 public class VectorIndexService {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final Logger log = LoggerFactory.getLogger(VectorIndexService.class);
     private static final int EMBEDDING_BATCH_SIZE = 32;
     private static final int MILVUS_UPSERT_BATCH_SIZE = 128;
     private static final int MILVUS_RATE_LIMIT_RETRY_ATTEMPTS = 4;
     private static final Duration MILVUS_RATE_LIMIT_RETRY_DELAY = Duration.ofSeconds(12);
+    private static final int VECTOR_SEARCH_RETRY_ATTEMPTS = 3;
 
     private final VectorIndexProperties properties;
     private final VectorHttpTransport transport;
@@ -133,6 +139,97 @@ public class VectorIndexService {
     }
 
     public List<VectorSearchHit> searchTeacherResourceBlocks(String query, int limit, VectorSearchFilter filter) {
+        return retryVectorSearch("teacher_resource_vector_search", () -> searchTeacherResourceBlocksOnce(query, limit, filter));
+    }
+
+    /**
+     * Scores one query against candidate texts with the same real embedding endpoint used by Milvus indexing.
+     *
+     * <p>This is the backend semantic-rerank primitive for stage-two retrieval. Keep it here so teacher search,
+     * textbook search, and future image/text hybrid retrieval all reuse one configured embedding runtime instead of
+     * each feature introducing its own ad-hoc client and scoring behavior.</p>
+     *
+     * @param query normalized user query
+     * @param candidateTexts ordered candidate texts to compare
+     * @return cosine similarities aligned to {@code candidateTexts}
+     */
+    public List<Double> semanticSimilarity(String query, List<String> candidateTexts) {
+        properties.requireFullyConfigured();
+        String normalizedQuery = text(query).strip();
+        if (normalizedQuery.isBlank() || candidateTexts == null || candidateTexts.isEmpty()) {
+            return List.of();
+        }
+        List<String> normalizedCandidates = candidateTexts.stream()
+                .map(VectorIndexService::text)
+                .map(String::strip)
+                .toList();
+        EmbeddingBatch embeddings = embed(buildSemanticInputs(normalizedQuery, normalizedCandidates));
+        List<List<Double>> vectors = embeddings.vectors();
+        if (vectors.size() != normalizedCandidates.size() + 1) {
+            throw new IllegalStateException("Semantic rerank embedding count mismatch: expected "
+                    + (normalizedCandidates.size() + 1) + " but got " + vectors.size());
+        }
+        List<Double> queryVector = vectors.getFirst();
+        List<Double> scores = new ArrayList<>(normalizedCandidates.size());
+        for (int index = 0; index < normalizedCandidates.size(); index += 1) {
+            scores.add(cosineSimilarity(queryVector, vectors.get(index + 1)));
+        }
+        return List.copyOf(scores);
+    }
+
+    /**
+     * Scores one query against candidate texts with a dedicated rerank endpoint when the local worker exposes one.
+     *
+     * <p>Stage-one document rerank and stage-two block rerank should prefer an actual cross-encoder style score when
+     * available, then fall back to embedding cosine similarity if the worker has not been upgraded yet. Keeping the
+     * fallback here prevents callers from silently reintroducing bespoke score heuristics.</p>
+     */
+    public List<Double> rerankTexts(String query, List<String> candidateTexts) {
+        properties.requireFullyConfigured();
+        String normalizedQuery = text(query).strip();
+        if (normalizedQuery.isBlank() || candidateTexts == null || candidateTexts.isEmpty()) {
+            return List.of();
+        }
+        List<String> normalizedCandidates = candidateTexts.stream()
+                .map(VectorIndexService::text)
+                .map(String::strip)
+                .toList();
+        try {
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("query", normalizedQuery);
+            body.put("documents", normalizedCandidates);
+            VectorHttpResponse response = transport.postJson(
+                    endpoint(properties.embeddingBaseUrl(), "/rerank"),
+                    Map.of("Authorization", "Bearer " + properties.embeddingApiKey()),
+                    writeJson(body),
+                    Duration.ofMillis(properties.normalizedTimeoutMs()));
+            JsonNode root = readJson("rerank API", response);
+            if (!response.success2xx()) {
+                throw new IllegalStateException("Rerank API failed: HTTP " + response.statusCode()
+                        + " body=" + abbreviate(response.body(), 300));
+            }
+            List<Double> scores = new ArrayList<>();
+            for (JsonNode item : root.path("data")) {
+                scores.add(item.path("score").asDouble(0.0d));
+            }
+            if (scores.size() != normalizedCandidates.size()) {
+                throw new IllegalStateException("Rerank API returned " + scores.size()
+                        + " scores for " + normalizedCandidates.size() + " candidates");
+            }
+            return List.copyOf(scores);
+        } catch (RuntimeException exception) {
+            log.warn("vector_rerank_fallback query={} message={}",
+                    normalizedQuery,
+                    text(exception.getMessage()),
+                    exception);
+            return semanticSimilarity(normalizedQuery, normalizedCandidates);
+        }
+    }
+
+    /**
+     * Executes one real vector search attempt. The outer retry wrapper decides whether to retry transient failures.
+     */
+    private List<VectorSearchHit> searchTeacherResourceBlocksOnce(String query, int limit, VectorSearchFilter filter) {
         properties.requireFullyConfigured();
         String normalizedQuery = text(query).strip();
         if (normalizedQuery.isBlank()) {
@@ -179,6 +276,96 @@ public class VectorIndexService {
             }
         }
         return List.copyOf(hits);
+    }
+
+    private static List<String> buildSemanticInputs(String normalizedQuery, List<String> candidateTexts) {
+        List<String> inputs = new ArrayList<>(candidateTexts.size() + 1);
+        inputs.add(normalizedQuery);
+        inputs.addAll(candidateTexts);
+        return List.copyOf(inputs);
+    }
+
+    private static double cosineSimilarity(List<Double> left, List<Double> right) {
+        if (left == null || right == null || left.isEmpty() || right.isEmpty() || left.size() != right.size()) {
+            return 0.0d;
+        }
+        double dot = 0.0d;
+        double leftNorm = 0.0d;
+        double rightNorm = 0.0d;
+        for (int index = 0; index < left.size(); index += 1) {
+            double leftValue = left.get(index);
+            double rightValue = right.get(index);
+            dot += leftValue * rightValue;
+            leftNorm += leftValue * leftValue;
+            rightNorm += rightValue * rightValue;
+        }
+        if (leftNorm <= 0.0d || rightNorm <= 0.0d) {
+            return 0.0d;
+        }
+        return dot / (Math.sqrt(leftNorm) * Math.sqrt(rightNorm));
+    }
+
+    /**
+     * Retries only transient vector-search failures with exponential backoff.
+     */
+    private <T> T retryVectorSearch(String operation, Supplier<T> supplier) {
+        RuntimeException lastFailure = null;
+        for (int attempt = 0; attempt < VECTOR_SEARCH_RETRY_ATTEMPTS; attempt++) {
+            try {
+                return supplier.get();
+            } catch (RuntimeException exception) {
+                lastFailure = exception;
+                if (!isRetryableVectorFailure(exception) || attempt >= VECTOR_SEARCH_RETRY_ATTEMPTS - 1) {
+                    throw exception;
+                }
+                long delayMs = (long) Math.min(4000L, 500L * Math.pow(2, attempt));
+                log.warn("vector_search_retry operation={} attempt={} delayMs={} message={}",
+                        operation,
+                        attempt + 1,
+                        delayMs,
+                        safe(exception.getMessage()),
+                        exception);
+                sleepBeforeRetry(delayMs);
+            }
+        }
+        throw lastFailure == null
+                ? new IllegalStateException("Vector search failed without a captured exception")
+                : lastFailure;
+    }
+
+    /**
+     * Keeps retries for network, timeout, rate-limit, and temporary upstream failures only.
+     */
+    private static boolean isRetryableVectorFailure(RuntimeException exception) {
+        String message = safe(exception.getMessage()).toLowerCase(Locale.ROOT);
+        if (message.contains("must be configured")
+                || message.contains("dimension mismatch")
+                || message.contains("returned 0 vectors")
+                || message.contains("returned non-json")) {
+            return false;
+        }
+        return message.contains("timeout")
+                || message.contains("timed out")
+                || message.contains("connection")
+                || message.contains("refused")
+                || message.contains("reset")
+                || message.contains("temporarily")
+                || message.contains("eof")
+                || message.contains("http 408")
+                || message.contains("http 429")
+                || message.contains("http 500")
+                || message.contains("http 502")
+                || message.contains("http 503")
+                || message.contains("http 504");
+    }
+
+    private static void sleepBeforeRetry(long delayMs) {
+        try {
+            Thread.sleep(Math.max(0, delayMs));
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while waiting for vector-search retry", exception);
+        }
     }
 
     private Map<String, Object> searchBody(List<Double> vector, int limit, VectorSearchFilter filter) {
@@ -644,3 +831,4 @@ public class VectorIndexService {
         }
     }
 }
+

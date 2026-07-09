@@ -28,11 +28,13 @@ These scripts start only real services. They do not switch the backend into no-d
    - Skips duplicate startup when `127.0.0.1:8091` is already listening.
    - Supports `-Background` to start the worker as a hidden process and write logs to `output/local-services/`.
    - Uses local CLIP by default with 512-dimensional vectors.
+   - Auto-detects a local BGE reranker when `D:\ModelScope\models\BAAI\bge-reranker-v2-m3`, `D:\ModelScope\models\BAAI\bge-reranker-base`, or the corresponding HuggingFace cache snapshots already exist.
    - Reads `MATH_AGENT_WORKER_API_KEY` when set; otherwise creates `.local-secrets/worker-api-key.txt` and reuses it.
    - Does not install Python packages automatically. Missing dependencies fail fast.
    - Auto-detects `D:\ModelScope\models\damo\multi-modal_clip-vit-large-patch14_zh` when present.
    - Text embeddings can run directly from local ModelScope weights with real `torch` and `transformers`.
    - Image embeddings and CLIP similarity now load the local ModelScope `module.visual.*` weights directly, so they do not require `addict`.
+   - Exposes `/v1/rerank` when a local BGE reranker is available, so backend two-stage retrieval can use a real cross-encoder style rerank instead of only cosine similarity.
 
 5. `start-backend.ps1`
    - Starts Spring Boot with MySQL, Redis, Milvus, and real embedding configuration.

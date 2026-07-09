@@ -64,6 +64,13 @@ class ClipPageSearchResult:
 
 
 @dataclass(frozen=True)
+class RerankResult:
+    model: str
+    provider: str
+    scores: list[float]
+
+
+@dataclass(frozen=True)
 class LoadedPageImageIndex:
     processed_books_root: str
     index_dir: str
@@ -527,6 +534,107 @@ class LocalClipBackend:
         return image_module.open(BytesIO(image_bytes)).convert("RGB")
 
 
+class LocalRerankBackend:
+    def __init__(self, settings: WorkerSettings):
+        self.settings = settings
+        self._model = None
+        self._tokenizer = None
+        self._torch = None
+
+    def status(self) -> dict[str, object]:
+        if not self.settings.local_rerank_model_path:
+            return {
+                "provider": "local_bge_reranker",
+                "status": "configuration_error",
+                "reason": "No local rerank model path was configured or auto-detected",
+                "modelPathConfigured": False,
+                "device": self.settings.local_rerank_device,
+            }
+        try:
+            self._import_dependencies()
+        except EmbeddingConfigurationError as exc:
+            return {
+                "provider": "local_bge_reranker",
+                "status": "configuration_error",
+                "reason": str(exc),
+                "modelPathConfigured": True,
+                "modelPath": self.settings.local_rerank_model_path,
+                "device": self.settings.local_rerank_device,
+            }
+        return {
+            "provider": "local_bge_reranker",
+            "status": "ready",
+            "modelPathConfigured": True,
+            "modelPath": self.settings.local_rerank_model_path,
+            "device": self.settings.local_rerank_device,
+        }
+
+    def rerank(self, query: str, documents: list[str]) -> RerankResult:
+        normalized_query = text_or_default(query, "")
+        normalized_documents = normalize_inputs(documents)
+        if not normalized_query:
+            raise ValueError("query must contain non-empty text")
+        if not normalized_documents:
+            raise ValueError("documents must contain at least one non-empty text")
+        self._load()
+        torch = self._torch
+        assert torch is not None
+        try:
+            encoded = self._tokenizer(
+                [normalized_query] * len(normalized_documents),
+                normalized_documents,
+                padding=True,
+                truncation=True,
+                max_length=512,
+                return_tensors="pt",
+            )
+            encoded = {key: value.to(self.settings.local_rerank_device) for key, value in encoded.items()}
+            with torch.no_grad():
+                logits = self._model(**encoded).logits
+            if getattr(logits, "ndim", 0) == 2 and int(logits.shape[1]) > 1:
+                values = logits[:, -1]
+            else:
+                values = logits.reshape(-1)
+            scores = [float(score) for score in values.detach().cpu().tolist()]
+        except Exception as exc:
+            raise EmbeddingProviderError(f"local rerank failed: {exc}") from exc
+        if len(scores) != len(normalized_documents):
+            raise EmbeddingProviderError(
+                f"local rerank returned {len(scores)} scores for {len(normalized_documents)} documents"
+            )
+        return RerankResult(
+            model=self.settings.local_rerank_model_path or "local_bge_reranker",
+            provider="local_bge_reranker",
+            scores=scores,
+        )
+
+    def _load(self) -> None:
+        if self._model is not None and self._tokenizer is not None:
+            return
+        self._import_dependencies()
+        model_path = self.settings.local_rerank_model_path
+        if not model_path:
+            raise EmbeddingConfigurationError("MATH_AGENT_LOCAL_RERANK_MODEL_PATH is required for local rerank")
+        from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+        tokenizer = AutoTokenizer.from_pretrained(model_path)
+        model = AutoModelForSequenceClassification.from_pretrained(model_path)
+        model.eval()
+        model.to(self.settings.local_rerank_device)
+        self._tokenizer = tokenizer
+        self._model = model
+
+    def _import_dependencies(self) -> None:
+        if self._torch is not None:
+            return
+        try:
+            import torch
+            import transformers  # noqa: F401
+        except Exception as exc:
+            raise EmbeddingConfigurationError("torch and transformers are required for local rerank") from exc
+        self._torch = torch
+
+
 def build_direct_vision_transformer(torch, config: dict):
     nn = torch.nn
 
@@ -601,15 +709,18 @@ class EmbeddingService:
         settings: WorkerSettings,
         opener: Callable[[request.Request, int], object] | None = None,
         local_clip_backend: LocalClipBackend | None = None,
+        local_rerank_backend: LocalRerankBackend | None = None,
     ):
         self.settings = settings
         self.opener = opener or request.urlopen
         self.local_clip_backend = local_clip_backend or LocalClipBackend(settings)
+        self.local_rerank_backend = local_rerank_backend or LocalRerankBackend(settings)
         self._page_image_index: LoadedPageImageIndex | None = None
 
     def status(self) -> dict[str, object]:
         dashscope_status = "ready" if self.settings.dashscope_api_key else "configuration_error"
         local_clip_status = self.local_clip_backend.status()
+        local_rerank_status = self.local_rerank_backend.status()
         local_text_status = local_clip_status.get("textEmbedding", {}).get("status", local_clip_status.get("status"))
         local_image_status = local_clip_status.get("imageEmbedding", {}).get("status", local_clip_status.get("status"))
         return {
@@ -641,6 +752,10 @@ class EmbeddingService:
                     "dimension": self.settings.local_clip_dimension,
                     "status": self._page_search_status(local_text_status, local_image_status),
                 },
+                "textRerank": {
+                    "providers": list(self.settings.rerank_provider_order),
+                    "status": local_rerank_status.get("status", "configuration_error"),
+                },
             },
             "providers": {
                 "dashscope": {
@@ -650,6 +765,7 @@ class EmbeddingService:
                     "apiKeyConfigured": bool(self.settings.dashscope_api_key),
                 },
                 "local_clip": local_clip_status,
+                "local_bge_reranker": local_rerank_status,
             },
         }
 
@@ -679,6 +795,20 @@ class EmbeddingService:
 
     def clip_similarity(self, texts: str | list[str], images: str | list[str]) -> ClipSimilarityResult:
         return self.local_clip_backend.similarity(normalize_inputs(texts), normalize_image_inputs(images))
+
+    def rerank(self, query: str, documents: str | list[str]) -> RerankResult:
+        normalized_documents = normalize_inputs(documents)
+        if not normalized_documents:
+            raise ValueError("documents must contain at least one non-empty text")
+        errors: list[str] = []
+        for provider in self.settings.rerank_provider_order:
+            try:
+                if provider == "local_bge_reranker":
+                    return self.local_rerank_backend.rerank(query, normalized_documents)
+                errors.append(f"{provider}: unsupported provider")
+            except (EmbeddingConfigurationError, EmbeddingProviderError, ValueError) as exc:
+                errors.append(f"{provider}: {exc}")
+        raise EmbeddingProviderError("No real rerank provider succeeded: " + "; ".join(errors))
 
     def search_page_images(
         self,
@@ -1032,5 +1162,21 @@ def clip_page_search_response(result: ClipPageSearchResult) -> dict:
                 "text": hit.text,
             }
             for hit in result.hits
+        ],
+    }
+
+
+def rerank_response(result: RerankResult) -> dict:
+    return {
+        "object": "rerank.result",
+        "model": result.model,
+        "provider": result.provider,
+        "created": int(time.time()),
+        "data": [
+            {
+                "index": index,
+                "score": score,
+            }
+            for index, score in enumerate(result.scores)
         ],
     }

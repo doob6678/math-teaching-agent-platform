@@ -70,6 +70,26 @@ class WorkerServerAuthTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["object"], "clip.page_search")
 
+    def test_rerank_accepts_bearer_worker_key(self):
+        os.environ["MATH_AGENT_WORKER_API_KEY"] = "local-key"
+        client = TestClient(app)
+
+        fake_result = type("Result", (), {
+            "model": "local-bge-reranker",
+            "provider": "local_bge_reranker",
+            "scores": [0.9, 0.2],
+        })()
+        with patch("app.embeddings.EmbeddingService.rerank", return_value=fake_result):
+            response = client.post(
+                "/v1/rerank",
+                headers={"Authorization": "Bearer local-key"},
+                json={"query": "函数单调性", "documents": ["先看端点", "随便文本"]},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["object"], "rerank.result")
+        self.assertEqual(response.json()["data"][0]["score"], 0.9)
+
 
 if __name__ == "__main__":
     unittest.main()

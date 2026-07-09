@@ -3,23 +3,23 @@ package com.doob.mathagent.teacher.controller;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.infrastructure.security.RequestSubjectResolver;
 import com.doob.mathagent.teacher.dto.TeacherResourceRegistrationRequest;
-import com.doob.mathagent.teacher.service.TeacherResourceCapabilityVerifier;
-import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchAuditEvent;
-import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchAuditLookup;
+import com.doob.mathagent.teacher.support.TeacherResourceCapabilityVerifier;
+import com.doob.mathagent.teacher.search.audit.TeacherResourceBlockSearchAuditEvent;
+import com.doob.mathagent.teacher.search.audit.TeacherResourceBlockSearchAuditLookup;
 import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService;
-import com.doob.mathagent.teacher.service.TeacherResourceRegistrationCommand;
-import com.doob.mathagent.teacher.service.TeacherResourceSearchFilter;
+import com.doob.mathagent.teacher.support.TeacherResourceRegistrationCommand;
+import com.doob.mathagent.teacher.search.TeacherResourceSearchFilter;
 import com.doob.mathagent.teacher.service.TeacherResourceService;
 import com.doob.mathagent.teacher.service.TeacherResourceAssetService;
-import com.doob.mathagent.teacher.service.TeacherResourceTitleResolver;
-import com.doob.mathagent.teacher.service.TeacherDocumentBlockStore;
+import com.doob.mathagent.teacher.support.TeacherResourceTitleResolver;
+import com.doob.mathagent.teacher.block.TeacherDocumentBlockStore;
 import com.doob.mathagent.teacher.service.TeacherResourceUploadService;
-import com.doob.mathagent.teacher.service.TeacherSourceSyncCheckpointQueryService;
+import com.doob.mathagent.teacher.sync.TeacherSourceSyncCheckpointQueryService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncExecutionService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncJobService;
-import com.doob.mathagent.teacher.vo.TeacherDocumentBlockResponse;
-import com.doob.mathagent.teacher.vo.TeacherResourceBlockSearchResponse;
-import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
+import com.doob.mathagent.teacher.block.TeacherDocumentBlockResponse;
+import com.doob.mathagent.teacher.search.TeacherResourceBlockSearchResponse;
+import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncCheckpointResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncJobResponse;
 import jakarta.servlet.http.HttpServletRequest;
@@ -234,7 +234,6 @@ public class TeacherResourceController {
             @RequestParam(value = "sourceType", required = false) List<String> sourceTypes,
             @RequestParam(value = "library", required = false) List<String> libraries,
             @RequestParam(value = "tag", required = false) List<String> tags,
-            @RequestParam(value = "strategy", required = false) String strategy,
             HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest).normalize();
         try {
@@ -249,8 +248,7 @@ public class TeacherResourceController {
                             permissionScopes,
                             documentIds,
                             mergeLibrarySelectors(sourceTypes, libraries),
-                            tags),
-                    strategy);
+                            tags));
         } catch (IllegalArgumentException exception) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, exception.getMessage(), exception);
         }
@@ -263,7 +261,7 @@ public class TeacherResourceController {
             String query,
             int limit,
             HttpServletRequest httpRequest) {
-        return searchBlocks(query, limit, null, null, null, null, null, null, httpRequest);
+        return searchBlocks(query, limit, null, null, null, null, null, httpRequest);
     }
 
     /**
@@ -571,3 +569,4 @@ public class TeacherResourceController {
         }
     }
 }
+

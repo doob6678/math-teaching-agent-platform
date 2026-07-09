@@ -98,6 +98,18 @@ if ([string]::IsNullOrWhiteSpace($env:KMP_DUPLICATE_LIB_OK)) {
 if ([string]::IsNullOrWhiteSpace($env:MATH_AGENT_EMBEDDING_PROVIDER_ORDER)) {
     $env:MATH_AGENT_EMBEDDING_PROVIDER_ORDER = "local_clip"
 }
+if ([string]::IsNullOrWhiteSpace($env:MATH_AGENT_PROCESSED_BOOKS_ROOT)) {
+    $processedBookRoots = @(
+        "C:\Users\doob\Desktop\个人资料\高中数学\下载课本代码\tchMaterial-parser-main\tchMaterial-parser-main\processed_books",
+        (Join-Path $Root "processed_books")
+    )
+    foreach ($candidate in $processedBookRoots) {
+        if ((Test-Path $candidate) -and (Test-Path (Join-Path $candidate "_page_image_index"))) {
+            $env:MATH_AGENT_PROCESSED_BOOKS_ROOT = $candidate
+            break
+        }
+    }
+}
 if ([string]::IsNullOrWhiteSpace($env:MATH_AGENT_EMBEDDING_DIMENSION)) {
     $env:MATH_AGENT_EMBEDDING_DIMENSION = "512"
 }
@@ -115,6 +127,37 @@ if ([string]::IsNullOrWhiteSpace($env:MATH_AGENT_LOCAL_CLIP_MODEL_PATH)) {
             (Test-Path (Join-Path $candidate "model.safetensors"))) {
             $env:MATH_AGENT_LOCAL_CLIP_MODEL_PATH = $candidate
             break
+        }
+    }
+}
+
+if ([string]::IsNullOrWhiteSpace($env:MATH_AGENT_LOCAL_RERANK_MODEL_PATH)) {
+    $rerankCandidates = @(
+        "D:\ModelScope\models\BAAI\bge-reranker-v2-m3",
+        "D:\ModelScope\models\BAAI\bge-reranker-base"
+    )
+    foreach ($candidate in $rerankCandidates) {
+        if ((Test-Path (Join-Path $candidate "config.json")) -and
+            ((Test-Path (Join-Path $candidate "model.safetensors")) -or (Test-Path (Join-Path $candidate "pytorch_model.bin")))) {
+            $env:MATH_AGENT_LOCAL_RERANK_MODEL_PATH = $candidate
+            break
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($env:MATH_AGENT_LOCAL_RERANK_MODEL_PATH)) {
+        $snapshotRoots = @(
+            "D:\project2026\hf_cache\hub\models--BAAI--bge-reranker-v2-m3\snapshots",
+            "D:\project2026\hf_cache\hub\models--BAAI--bge-reranker-base\snapshots"
+        )
+        foreach ($root in $snapshotRoots) {
+            if (-not (Test-Path $root)) {
+                continue
+            }
+            $snapshot = Get-ChildItem -LiteralPath $root -Directory | Sort-Object Name -Descending | Select-Object -First 1
+            if ($snapshot -and (Test-Path (Join-Path $snapshot.FullName "config.json")) -and
+                ((Test-Path (Join-Path $snapshot.FullName "model.safetensors")) -or (Test-Path (Join-Path $snapshot.FullName "pytorch_model.bin")))) {
+                $env:MATH_AGENT_LOCAL_RERANK_MODEL_PATH = $snapshot.FullName
+                break
+            }
         }
     }
 }
@@ -144,6 +187,9 @@ Push-Location $Worker
 try {
     Write-Host "Using worker Python: $Python"
     Write-Host "Using local CLIP model: $env:MATH_AGENT_LOCAL_CLIP_MODEL_PATH"
+    if (-not [string]::IsNullOrWhiteSpace($env:MATH_AGENT_LOCAL_RERANK_MODEL_PATH)) {
+        Write-Host "Using local rerank model: $env:MATH_AGENT_LOCAL_RERANK_MODEL_PATH"
+    }
     if ($Background) {
         $logDir = Join-Path $Root "output\local-services"
         New-Item -ItemType Directory -Force -Path $logDir | Out-Null

@@ -1,10 +1,10 @@
 package com.doob.mathagent.vector.service;
 
 import com.doob.mathagent.teacher.service.InMemoryTeacherResourceStore;
-import com.doob.mathagent.teacher.service.TeacherDocumentBlockStore;
-import com.doob.mathagent.teacher.service.TeacherResourceStore;
-import com.doob.mathagent.teacher.vo.TeacherDocumentBlockResponse;
-import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
+import com.doob.mathagent.teacher.block.TeacherDocumentBlockStore;
+import com.doob.mathagent.teacher.document.TeacherResourceStore;
+import com.doob.mathagent.teacher.block.TeacherDocumentBlockResponse;
+import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
 import java.net.URI;
 import java.time.Duration;
 import java.util.Comparator;
@@ -132,6 +132,23 @@ public final class TestVectorIndexService extends VectorIndexService {
     }
 
     @Override
+    public List<Double> semanticSimilarity(String query, List<String> candidateTexts) {
+        String normalizedQuery = query == null ? "" : query.strip().toLowerCase(Locale.ROOT);
+        if (normalizedQuery.isBlank() || candidateTexts == null || candidateTexts.isEmpty()) {
+            return List.of();
+        }
+        String[] queryTerms = normalizedQuery.split("\\s+");
+        return candidateTexts.stream()
+                .map(candidate -> lexicalSimilarity(normalizedQuery, queryTerms, candidate))
+                .toList();
+    }
+
+    @Override
+    public List<Double> rerankTexts(String query, List<String> candidateTexts) {
+        return semanticSimilarity(query, candidateTexts);
+    }
+
+    @Override
     public int deleteTeacherResourceVectors(String tenantId, String documentId) {
         return blockStore.listByDocument(tenantId, documentId).size();
     }
@@ -170,6 +187,31 @@ public final class TestVectorIndexService extends VectorIndexService {
         return value == null ? "" : value.strip().toUpperCase(Locale.ROOT);
     }
 
+    private static double lexicalSimilarity(String normalizedQuery, String[] queryTerms, String candidate) {
+        String normalizedCandidate = text(candidate, "").toLowerCase(Locale.ROOT);
+        if (normalizedCandidate.isBlank()) {
+            return 0.0d;
+        }
+        if (normalizedCandidate.contains(normalizedQuery)) {
+            return 1.0d;
+        }
+        int matched = 0;
+        int total = 0;
+        for (String term : queryTerms) {
+            if (term == null || term.isBlank()) {
+                continue;
+            }
+            total += 1;
+            if (normalizedCandidate.contains(term)) {
+                matched += 1;
+            }
+        }
+        if (total == 0) {
+            return 0.0d;
+        }
+        return (double) matched / total;
+    }
+
     private static final class NoOpTransport implements VectorHttpTransport {
 
         @Override
@@ -178,3 +220,4 @@ public final class TestVectorIndexService extends VectorIndexService {
         }
     }
 }
+

@@ -15,6 +15,7 @@ from app.embeddings import (
     clip_page_search_response,
     clip_similarity_response,
     openai_embedding_response,
+    rerank_response,
 )
 from app.health import health_response
 from app.settings import WorkerSettings
@@ -41,6 +42,11 @@ class ClipPageSearchRequest(BaseModel):
     images: str | list[str] | None = None
     limit: int = 10
     docIds: list[str] | None = None
+
+
+class RerankRequest(BaseModel):
+    query: str
+    documents: list[str]
 
 
 app = FastAPI(title="math-agent-rag-worker")
@@ -126,3 +132,12 @@ def clip_page_search(payload: ClipPageSearchRequest) -> dict:
     except (ValueError, EmbeddingProviderError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return clip_page_search_response(result)
+
+
+@app.post("/v1/rerank", dependencies=[Depends(require_worker_key)])
+def rerank(payload: RerankRequest) -> dict:
+    try:
+        result = embedding_service().rerank(payload.query, payload.documents)
+    except (ValueError, EmbeddingProviderError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return rerank_response(result)
