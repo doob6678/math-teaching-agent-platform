@@ -2570,7 +2570,7 @@ function toUserFacingError(error: Error) {
     return "当前模型或任务队列繁忙，请稍后重试。";
   }
   if (message.includes("Backend request failed: 400")) {
-    return "后端拒绝了本次请求，请刷新页面或重启后端后重试；如果是横版讲解 PDF，通常是后端能力白名单尚未加载最新代码。";
+    return "后端拒绝了本次请求，请刷新页面或重启后端后重试；如果是 16:10 讲解版 PDF，通常是后端能力白名单尚未加载最新代码。";
   }
   if (message.includes("Failed to fetch") || message.includes("NetworkError")) {
     return "无法连接后端服务，请确认本机后端已经启动。";

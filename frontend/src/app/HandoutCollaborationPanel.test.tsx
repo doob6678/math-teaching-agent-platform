@@ -30,7 +30,7 @@ function buildTask(overrides: Partial<TeachingTaskResponse> = {}): TeachingTaskR
     reactTrace: [],
     evidence: [{
       sourceScope: "PUBLIC_TEXTBOOK",
-      sourceTitle: "人教B版选择性必修一 / 双曲线",
+      sourceTitle: "人教 B 版选择性必修一 / 双曲线",
       chunkId: "chunk-1",
       pageNo: 152,
       snippet: "双曲线标准方程。",
@@ -109,7 +109,7 @@ describe("HandoutCollaborationPanel", () => {
     const goodTask = buildTask();
     const badTask = buildTask({
       taskId: "bad-task",
-      learningGoal: "鐢熸垚涓????",
+      learningGoal: "？？？？",
       teacherHandoutLatex: "MODEL_CALL_SUCCEEDED JSON_PARSE tokens=100",
     });
     const html = renderPanel(goodTask, []);
@@ -141,7 +141,7 @@ describe("HandoutCollaborationPanel", () => {
     expect(html).toContain("输入主题后开始生成讲义");
     expect(htmlWithHistory).toContain("最近讲义");
     expect(htmlWithHistory).toContain("双曲线专题");
-    expect(htmlWithHistory).not.toContain("鐢熸垚");
+    expect(htmlWithHistory).not.toContain("？？？？");
     expect(htmlWithHistory).not.toContain("MODEL_CALL");
   });
 });

@@ -169,7 +169,11 @@ export function HandoutWorkspacePreviewPanel({
               latexPreviewReady ? (
                 <HandoutStructuredPreview latex={previewLatex} version={version} />
               ) : (
-                <PreviewPlaceholder title="点击上方按钮加载结构审查" detail="用于核对章节、题目、公式和答案隔离。" loading={action === "preview"} />
+                <PreviewPlaceholder
+                  title="点击上方按钮加载结构审查"
+                  detail="用于核对章节、题目、公式和答案隔离。"
+                  loading={action === "preview"}
+                />
               )
             ) : null}
           </div>
@@ -238,7 +242,7 @@ function HandoutFeedbackReview({
   const hasAnswers = /答案|解析|评分点|teacherExplanation|参考答案/.test(selectedDraft ?? "");
   const studentLeakWarning = version === "student" && hasAnswers;
   const reviewHint = lectureVersion
-    ? "核对 16:10 讲解版是否适合投屏，空白部分保持干净。"
+    ? "核对 16:10 讲解版是否适合投屏，空白区域保持干净。"
     : teacherVersion
       ? "核对教师版答案、来源和讲评主线。"
       : "核对学生版是否只保留题目、提示和作答空间。";

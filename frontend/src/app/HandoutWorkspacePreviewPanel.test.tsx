@@ -131,7 +131,7 @@ describe("HandoutWorkspacePreviewPanel", () => {
     expect(html).toContain("学生版补留白。");
     expect(html).not.toContain("MODEL_CALL");
     expect(html).not.toContain("JSON_PARSE");
-    expect(html).not.toContain("鐢");
+    expect(html).not.toContain("？？？");
   });
 
   it("keeps lecture preview available for legacy tasks without stored lecture latex", () => {

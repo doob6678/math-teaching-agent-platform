@@ -80,7 +80,9 @@ export function HandoutCollaborationPanel({
     <section className="teaching-live-shell handout-live-shell" aria-label="讲义协作">
       <header className="teaching-live-header handout-live-header">
         <div className="teaching-live-brand">
-          <div className="teaching-live-brand-icon handout-live-brand-icon"><BookOpen size={16} /></div>
+          <div className="teaching-live-brand-icon handout-live-brand-icon">
+            <BookOpen size={16} />
+          </div>
           <div className="teaching-live-brand-copy">
             <strong>讲义协作</strong>
             <span>先确定主题，再生成教师版、学生版和 16:10 讲解版。</span>
@@ -100,12 +102,18 @@ export function HandoutCollaborationPanel({
               className="handout-composer-input"
               value={learningGoal}
               onChange={(event) => onLearningGoalChange(event.target.value)}
-              placeholder="例如：双曲线专题讲解 / 反比例函数学生讲义"
+              placeholder="例如：双曲线专题讲解 / 反比例函数基础练习"
             />
           </label>
           <label className="handout-brief-field">
             <span>证据条数</span>
-            <input type="number" min={3} max={12} value={evidenceLimit} onChange={(event) => onEvidenceLimitChange(Number(event.target.value))} />
+            <input
+              type="number"
+              min={3}
+              max={12}
+              value={evidenceLimit}
+              onChange={(event) => onEvidenceLimitChange(Number(event.target.value))}
+            />
           </label>
         </div>
         <label className="handout-brief-field full">
@@ -133,7 +141,12 @@ export function HandoutCollaborationPanel({
           </div>
           <div className="teaching-history-strip handout-history-strip-row">
             {latestHistory.map((item) => (
-              <button className={`handout-history-chip${item.taskId === currentTaskId ? " active" : ""}`} key={item.taskId} type="button" onClick={() => onSelectHistory(item)}>
+              <button
+                className={`handout-history-chip${item.taskId === currentTaskId ? " active" : ""}`}
+                key={item.taskId}
+                type="button"
+                onClick={() => onSelectHistory(item)}
+              >
                 <span>{displayTaskTitle(item)}</span>
                 <em>{statusLabel(item.status)}</em>
               </button>
@@ -145,7 +158,10 @@ export function HandoutCollaborationPanel({
       <div className="teaching-live-scroll handout-live-scroll" ref={scrollRef}>
         {!entries.length ? (
           <section className="teaching-empty-state handout-empty-state">
-            <div className="teaching-empty-badge"><Sparkles size={16} /><span>新建讲义</span></div>
+            <div className="teaching-empty-badge">
+              <Sparkles size={16} />
+              <span>新建讲义</span>
+            </div>
             <h2>输入主题后开始生成讲义</h2>
             <p>支持教师讲义、学生留白讲义、真实 PDF 预览和后续人工审查。</p>
           </section>
@@ -171,7 +187,10 @@ export function HandoutCollaborationPanel({
                 <LoadingTaskCard selectedTemplateName={selectedTemplateName} />
               ) : entry.error ? (
                 <section className="teaching-status-card error">
-                  <div className="teaching-status-head"><strong>本次讲义任务未完成</strong><span>已停止</span></div>
+                  <div className="teaching-status-head">
+                    <strong>本次讲义任务未完成</strong>
+                    <span>已停止</span>
+                  </div>
                   <p>{entry.error}</p>
                 </section>
               ) : entry.task ? (
@@ -196,15 +215,26 @@ export function HandoutCollaborationPanel({
 }
 
 function LoadingTaskCard({ selectedTemplateName }: { selectedTemplateName: string }) {
-  const steps = ["确认主题", "检索教材与题库", "调用模型生成草稿", "整理教师版、学生版和讲解版", "准备预览与下载"];
+  const steps = [
+    "确认主题",
+    "检索教材与题库",
+    "调用模型生成草稿",
+    "整理教师版、学生版和讲解版",
+    "准备预览与下载",
+  ];
   return (
     <section className="teaching-status-card pending handout-status-card">
       <div className="teaching-status-head">
         <strong>正在编排讲义</strong>
         <span><Loader2 className="spin" size={12} />处理中</span>
       </div>
-      <div className="handout-status-summary"><span>当前模板</span><strong>{selectedTemplateName}</strong></div>
-      <div className="teaching-loading-steps">{steps.map((step) => <div key={step}>{step}</div>)}</div>
+      <div className="handout-status-summary">
+        <span>当前模板</span>
+        <strong>{selectedTemplateName}</strong>
+      </div>
+      <div className="teaching-loading-steps">
+        {steps.map((step) => <div key={step}>{step}</div>)}
+      </div>
     </section>
   );
 }
@@ -258,13 +288,16 @@ function TaskConversationCards({
         ) : null}
         <div className="handout-task-actions">
           <button className="btn btn-primary btn-sm" type="button" onClick={() => onPreviewPdf(task)} disabled={!selectedDraft}>
-            <Eye size={15} /><span>{taskCompleted ? "查看 PDF" : "预览草稿"}</span>
+            <Eye size={15} />
+            <span>{taskCompleted ? "查看 PDF" : "预览草稿"}</span>
           </button>
           <button className="btn btn-secondary btn-sm" type="button" onClick={() => onPreviewLatex(task)} disabled={!selectedDraft}>
-            <FileText size={15} /><span>审查结构</span>
+            <FileText size={15} />
+            <span>审查结构</span>
           </button>
           <button className="btn btn-secondary btn-sm" type="button" onClick={() => onExportPdf(task)} disabled={!taskCompleted || !selectedDraft}>
-            <Download size={15} /><span>下载 PDF</span>
+            <Download size={15} />
+            <span>下载 PDF</span>
           </button>
         </div>
       </section>
@@ -299,7 +332,9 @@ function TaskConversationCards({
               <div className="handout-thread-message-body">
                 <div className="handout-thread-message-head">
                   <strong>命中来源</strong>
-                  <div className="handout-thread-message-meta"><span>{task.evidence.length} 条可追溯证据</span></div>
+                  <div className="handout-thread-message-meta">
+                    <span>{task.evidence.length} 条可追溯证据</span>
+                  </div>
                 </div>
                 <div className="handout-thread-source-list">
                   {evidencePreview.map((item) => (
@@ -318,7 +353,9 @@ function TaskConversationCards({
             <article className="handout-thread-message subtle">
               <div className="handout-thread-message-index">问</div>
               <div className="handout-thread-message-body">
-                <div className="handout-thread-message-head"><strong>下一轮可补充</strong></div>
+                <div className="handout-thread-message-head">
+                  <strong>下一轮可补充</strong>
+                </div>
                 <div className="handout-chip-row">
                   {suggestions.map((item, index) => (
                     <span className="handout-suggestion-chip" key={`${task.taskId}:suggestion:${index}`}>
@@ -336,8 +373,12 @@ function TaskConversationCards({
 }
 
 function buildAiOutline(task: TeachingTaskResponse, version: TeachingHandoutVersion) {
-  const source = version === "student" ? task.aiDraft?.studentHint ?? "" : task.aiDraft?.teacherExplanation ?? "";
-  const matches = [...source.matchAll(/【([^】]{2,18})】([^【]*)/g)];
+  const source = version === "student"
+    ? task.aiDraft?.studentHint ?? ""
+    : version === "lecture"
+      ? task.lectureHandoutLatex ?? task.teacherHandoutLatex ?? ""
+      : task.aiDraft?.teacherExplanation ?? "";
+  const matches = [...source.matchAll(/【([^】]{2,18})】([^【]+)/g)];
   if (!matches.length) {
     const fallback = cleanText(source || task.learningGoal || task.questionText);
     return fallback ? [{ title: version === "student" ? "学习提示" : "讲解主线", summary: compactText(fallback, 140) }] : [];
@@ -514,7 +555,11 @@ function stageSummaryText(value: string | undefined) {
 function evidenceDisplaySummary(item: TeachingTaskResponse["evidence"][number]) {
   const source = scopeLabel(item.sourceScope);
   const page = item.pageNo > 0 ? `第 ${item.pageNo} 页` : "页码未记录";
-  const role = item.sourceScope === "QUESTION_BANK" ? "用于补充练习题型" : item.sourceScope === "PUBLIC_TEXTBOOK" ? "用于校准知识点表述" : "用于补充教师资料";
+  const role = item.sourceScope === "QUESTION_BANK"
+    ? "用于补充练习题型"
+    : item.sourceScope === "PUBLIC_TEXTBOOK"
+      ? "用于校准知识点表述"
+      : "用于补充教师资料";
   return `${source} · ${page} · ${role}`;
 }
 
@@ -524,11 +569,14 @@ function isInternalDisplayText(value: string) {
 
 function buildVisibleHistory(history: TeachingTaskResponse[], currentTaskId: string) {
   const seen = new Set<string>();
-  return history.filter((item) => {
-    if (!isDisplayableHistoryTask(item) || seen.has(item.taskId)) return false;
-    seen.add(item.taskId);
-    return true;
-  }).slice(0, 6).sort((a, b) => (a.taskId === currentTaskId ? -1 : b.taskId === currentTaskId ? 1 : 0));
+  return history
+    .filter((item) => {
+      if (!isDisplayableHistoryTask(item) || seen.has(item.taskId)) return false;
+      seen.add(item.taskId);
+      return true;
+    })
+    .slice(0, 6)
+    .sort((a, b) => (a.taskId === currentTaskId ? -1 : b.taskId === currentTaskId ? 1 : 0));
 }
 
 // 历史区不能直接回显旧坏数据，否则会把乱码、空讲义和离题内容重新带回当前工作区。
@@ -537,11 +585,7 @@ function isDisplayableHistoryTask(task: TeachingTaskResponse) {
   if ((task.status || "").toUpperCase() !== "COMPLETED") return false;
   const title = cleanText(task.learningGoal || task.questionText || "");
   if (!title || looksCorrupted(title)) return false;
-  const body = cleanText(
-    task.teacherHandoutLatex
-    || task.studentHandoutLatex
-    || "",
-  );
+  const body = cleanText(task.teacherHandoutLatex || task.studentHandoutLatex || "");
   if (body.length < 18 || looksCorrupted(body)) return false;
   return !containsProtocolLeak(`${title} ${body}`);
 }
@@ -568,10 +612,10 @@ function containsProtocolLeak(value: string) {
 function looksCorrupted(value: string) {
   const normalized = value.replace(/\s+/g, "");
   if (!normalized) return false;
-  if (normalized.includes("???") || normalized.includes("？？？") || normalized.includes("锟")) return true;
+  if (normalized.includes("???") || normalized.includes("？？？") || normalized.includes("�")) return true;
   const questionCount = [...normalized].filter((char) => char === "?").length;
   if (questionCount >= 3 && questionCount * 2 >= normalized.length) return true;
-  return /茫|芒|盲赂|氓|忙|莽|鐢|璁|妯|瀛|绋|锛/i.test(normalized);
+  return false;
 }
 
 function formatThreadTime(value: string) {
