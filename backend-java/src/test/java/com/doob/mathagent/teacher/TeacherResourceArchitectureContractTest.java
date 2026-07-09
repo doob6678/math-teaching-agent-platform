@@ -4,12 +4,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
-import com.doob.mathagent.teacher.entity.TeacherResourceSearchAuditHitEntity;
-import com.doob.mathagent.teacher.entity.TeacherResourceSearchAuditLogEntity;
-import com.doob.mathagent.teacher.entity.TeacherSourceDocumentEntity;
-import com.doob.mathagent.teacher.mapper.TeacherResourceSearchAuditHitMapper;
-import com.doob.mathagent.teacher.mapper.TeacherResourceSearchAuditLogMapper;
-import com.doob.mathagent.teacher.mapper.TeacherSourceDocumentMapper;
+import com.doob.mathagent.teacher.search.entity.TeacherResourceSearchAuditHitEntity;
+import com.doob.mathagent.teacher.search.entity.TeacherResourceSearchAuditLogEntity;
+import com.doob.mathagent.teacher.document.entity.TeacherSourceDocumentEntity;
+import com.doob.mathagent.teacher.search.mapper.TeacherResourceSearchAuditHitMapper;
+import com.doob.mathagent.teacher.search.mapper.TeacherResourceSearchAuditLogMapper;
+import com.doob.mathagent.teacher.document.mapper.TeacherSourceDocumentMapper;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 
@@ -21,8 +21,18 @@ class TeacherResourceArchitectureContractTest {
         assertThat(Path.of("src/main/java/com/doob/mathagent/teacher/service")).isDirectory();
         assertThat(Path.of("src/main/java/com/doob/mathagent/teacher/dto")).isDirectory();
         assertThat(Path.of("src/main/java/com/doob/mathagent/teacher/vo")).isDirectory();
-        assertThat(Path.of("src/main/java/com/doob/mathagent/teacher/mapper")).isDirectory();
-        assertThat(Path.of("src/main/java/com/doob/mathagent/teacher/entity")).isDirectory();
+        /*
+         * The teacher module was split by responsibility so newly added persistence/search code does not drift back
+         * into the former flat entity/mapper/service layout. Keep this contract aligned to the real package topology
+         * rather than the historical one, otherwise follow-up changes will keep resurrecting deleted legacy classes.
+         */
+        assertThat(Path.of("src/main/java/com/doob/mathagent/teacher/asset")).isDirectory();
+        assertThat(Path.of("src/main/java/com/doob/mathagent/teacher/block")).isDirectory();
+        assertThat(Path.of("src/main/java/com/doob/mathagent/teacher/document")).isDirectory();
+        assertThat(Path.of("src/main/java/com/doob/mathagent/teacher/feishu")).isDirectory();
+        assertThat(Path.of("src/main/java/com/doob/mathagent/teacher/search")).isDirectory();
+        assertThat(Path.of("src/main/java/com/doob/mathagent/teacher/support")).isDirectory();
+        assertThat(Path.of("src/main/java/com/doob/mathagent/teacher/sync")).isDirectory();
     }
 
     @Test
@@ -42,3 +52,4 @@ class TeacherResourceArchitectureContractTest {
                 .isEqualTo("teacher_resource_search_audit_hit");
     }
 }
+

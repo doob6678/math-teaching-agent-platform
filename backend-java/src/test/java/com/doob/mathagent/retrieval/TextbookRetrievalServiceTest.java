@@ -3,9 +3,14 @@ package com.doob.mathagent.retrieval;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.doob.mathagent.knowledge.service.KnowledgePointRecord;
+import com.doob.mathagent.knowledge.service.KnowledgeQuestionBankStore;
+import com.doob.mathagent.knowledge.service.KnowledgeRelationRecord;
+import com.doob.mathagent.knowledge.service.QuestionBankItemRecord;
 import com.doob.mathagent.resources.TextbookCatalogReader;
 import com.doob.mathagent.resources.TextbookChunk;
 import com.doob.mathagent.resources.TextbookChunkReader;
+import com.doob.mathagent.teacher.search.TeacherResourceGraphAlignmentService;
 import java.nio.file.Path;
 import java.nio.file.Files;
 import java.time.Duration;
@@ -14,6 +19,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -202,6 +208,50 @@ class TextbookRetrievalServiceTest {
     }
 
     @Test
+    void focusesInstructionHeavyQueryBeforeTextbookTwoStageRetrieval() throws Exception {
+        Path root = tempDir.resolve("processed_books");
+        Path bookRoot = root.resolve("book_a");
+        Files.createDirectories(bookRoot.resolve("jsonl"));
+        Files.writeString(root.resolve("catalog.jsonl"), """
+                {"doc_id":"book_a","book_name":"教材A","volume":"必修 第二册","book_root":"%s","manifest":"%s","chunk_count":2,"page_count":2,"ai_ok":false}
+                """.formatted(escape(bookRoot), escape(bookRoot.resolve("manifest.json"))));
+        Files.writeString(bookRoot.resolve("jsonl/chunks.jsonl"), """
+                {"chunk_id":"book_a_p120","doc_id":"book_a","book_name":"教材A","volume":"必修 第二册","chapter_path":["导数及其应用"],"page_no":120,"printed_page_no":"116","chunk_type":"page_summary","section_title":"导数参数题","text":"在含参数的不等式与函数题中，需要结合闭区间端点取值和单调性判断确定最值范围。","formula_text":"","image_rel_paths":[],"source_page_image":"pages/p120.png"}
+                {"chunk_id":"book_a_p012","doc_id":"book_a","book_name":"教材A","volume":"必修 第二册","chapter_path":["阅读提示"],"page_no":12,"printed_page_no":"12","chunk_type":"page_summary","section_title":"教材原文引用说明","text":"教材原文依据 引用说明 参考写法 证据格式 资料要求。","formula_text":"","image_rel_paths":[],"source_page_image":"pages/p012.png"}
+                """);
+        CapturingSearchEngine searchEngine = new CapturingSearchEngine();
+        TextbookRetrievalService service = new TextbookRetrievalService(
+                new TextbookCatalogReader(),
+                new TextbookChunkReader(),
+                searchEngine,
+                new NoopRetrievalAuditSink(),
+                new DisabledTextbookSearchCache(),
+                new RedisTextbookSearchCacheProperties(false, "math-agent:test:disabled", Duration.ofMinutes(10)),
+                new FixedQueryGraphAlignmentService(new TeacherResourceGraphAlignmentService.QueryGraphContext(
+                        List.of("topic-derivative", "topic-monotonicity"),
+                        List.of("topic-derivative", "topic-monotonicity", "topic-interval"),
+                        List.of("导数", "单调性"),
+                        List.of("导数", "单调性", "闭区间"))),
+                new com.doob.mathagent.resources.TextbookPageImageService(new TextbookCatalogReader()),
+                com.doob.mathagent.vector.service.TestVectorIndexService.successful(
+                        new com.doob.mathagent.teacher.service.InMemoryTeacherResourceStore(),
+                        new com.doob.mathagent.teacher.service.InMemoryTeacherDocumentBlockStore()));
+
+        TextbookSearchResponse response = service.search(
+                root,
+                new TextbookSearchRequest("指定库是textbook，目标角色是reference，围绕导数参数题闭区间端点与单调性判断，只要教材原文依据", 3));
+
+        assertThat(searchEngine.lastQuery()).contains("导数参数题闭区间端点与单调性判断");
+        assertThat(searchEngine.lastQuery()).contains("导数");
+        assertThat(searchEngine.lastQuery()).doesNotContain("指定库是textbook");
+        assertThat(response.hits())
+                .isNotEmpty()
+                .first()
+                .extracting(TextbookSearchHit::chunkId)
+                .isEqualTo("book_a_p120");
+    }
+
+    @Test
     void loadsCorpusOnceWhenConcurrentRequestsMissCacheTogether() throws Exception {
         Path root = tempDir.resolve("processed_books");
         Path bookRoot = root.resolve("book_a");
@@ -368,6 +418,24 @@ class TextbookRetrievalServiceTest {
         }
     }
 
+    private static final class CapturingSearchEngine extends LocalTextbookBm25SearchEngine {
+        private String lastQuery = "";
+
+        @Override
+        public List<TextbookSearchHit> search(
+                String query,
+                List<TextbookChunk> chunks,
+                int limit,
+                TeacherResourceGraphAlignmentService.QueryGraphContext queryGraph) {
+            lastQuery = query;
+            return super.search(query, chunks, limit, queryGraph);
+        }
+
+        private String lastQuery() {
+            return lastQuery;
+        }
+    }
+
     private static class InMemoryTextbookSearchCache implements TextbookSearchCache {
         private final Map<String, CachedTextbookSearch> entries = new HashMap<>();
         private int putCount;
@@ -403,6 +471,100 @@ class TextbookRetrievalServiceTest {
 
         RetrievalAuditEvent event() {
             return event;
+        }
+    }
+
+    private static final class DisabledTextbookSearchCache implements TextbookSearchCache {
+        @Override
+        public Optional<CachedTextbookSearch> find(String cacheKey) {
+            return Optional.empty();
+        }
+
+        @Override
+        public void put(String cacheKey, CachedTextbookSearch value, Duration ttl) {
+            // Explicitly disabled for focused-query tests.
+        }
+    }
+
+    private static final class FixedQueryGraphAlignmentService extends TeacherResourceGraphAlignmentService {
+        private final TeacherResourceGraphAlignmentService.QueryGraphContext context;
+
+        private FixedQueryGraphAlignmentService(TeacherResourceGraphAlignmentService.QueryGraphContext context) {
+            super(new StubKnowledgeQuestionBankStore());
+            this.context = context;
+        }
+
+        @Override
+        public TeacherResourceGraphAlignmentService.QueryGraphContext alignQuery(
+                String tenantId,
+                String viewerRole,
+                String viewerSubjectId,
+                String query) {
+            return context;
+        }
+    }
+
+    private static final class StubKnowledgeQuestionBankStore implements KnowledgeQuestionBankStore {
+        @Override
+        public com.doob.mathagent.knowledge.service.KnowledgePointRecord saveKnowledgePoint(KnowledgePointRecord record) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public com.doob.mathagent.knowledge.service.KnowledgeRelationRecord saveKnowledgeRelation(KnowledgeRelationRecord record) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public Optional<KnowledgePointRecord> findKnowledgePoint(
+                String tenantId,
+                String ownerSubjectId,
+                String permissionScope,
+                String knowledgePointName,
+                String chapterPath) {
+            return Optional.empty();
+        }
+
+        @Override
+        public QuestionBankItemRecord saveQuestion(QuestionBankItemRecord record) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public Optional<QuestionBankItemRecord> findQuestionBySource(
+                String tenantId,
+                String sourceResourceDocumentId,
+                String sourceBlockId,
+                String sourceChecksum) {
+            return Optional.empty();
+        }
+
+        @Override
+        public int archiveQuestionsBySourceDocumentExcept(
+                String tenantId,
+                String sourceResourceDocumentId,
+                Set<String> activeSourceKeys) {
+            return 0;
+        }
+
+        @Override
+        public List<KnowledgePointRecord> listKnowledgePoints(String tenantId, String viewerRole, String viewerSubjectId) {
+            return List.of();
+        }
+
+        @Override
+        public List<KnowledgeRelationRecord> listKnowledgeRelations(String tenantId, String viewerRole, String viewerSubjectId) {
+            return List.of();
+        }
+
+        @Override
+        public List<QuestionBankItemRecord> searchQuestions(
+                String tenantId,
+                String viewerRole,
+                String viewerSubjectId,
+                String query,
+                int limit) {
+            return List.of();
         }
     }
 }

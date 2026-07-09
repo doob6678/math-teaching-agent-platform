@@ -70,23 +70,14 @@ public class TeacherResourceBlockSearchService {
 
     private static final int DEFAULT_LIMIT = 10;
     private static final int MAX_LIMIT = 20;
-    private static final int MAX_RETRIEVAL_MODE_LENGTH = 64;
-    private static final int SNIPPET_RADIUS = 80;
-    private static final int EVIDENCE_WINDOW_RADIUS = 1;
-    private static final int MAX_SEARCH_TERMS = 32;
-    private static final int MAX_DOCUMENT_RERANK_BLOCKS_PER_DOCUMENT = 3;
-    private static final int MAX_BLOCK_RERANK_BLOCKS_PER_DOCUMENT = 2;
-    private static final int MAX_RERANK_TITLE_CHARS = 120;
-    private static final int MAX_RERANK_ROLE_CHARS = 48;
-    private static final int MAX_RERANK_HEADING_CHARS = 120;
-    private static final int MAX_RERANK_SOURCE_PATH_CHARS = 220;
-    private static final int MAX_RERANK_GRAPH_TAGS_CHARS = 180;
-    private static final int MAX_RERANK_IMAGE_REFS_CHARS = 180;
-    private static final int MAX_RERANK_EVIDENCE_BLOCK_IDS_CHARS = 120;
-    private static final int MAX_DOCUMENT_RERANK_EVIDENCE_CHARS = 520;
-    private static final int MAX_BLOCK_RERANK_EVIDENCE_CHARS = 900;
-    private static final int MAX_MERGE_RERANK_EVIDENCE_CHARS = 760;
     private static final String STRATEGY_TWO_STAGE_DOC_BLOCK = "two_stage_doc_block";
+    /**
+     * These numbers are transport budgets for the worker and audit tables, not ranking weights.
+     *
+     * <p>The semantic order itself comes from vector search plus real rerank. The budget only prevents long teacher
+     * folders, deep evidence windows, and image-rich chunks from blowing up worker latency or varchar limits.</p>
+     */
+    private static final SearchRuntimeBudget SEARCH_BUDGET = SearchRuntimeBudget.defaults();
 
     private final TeacherResourceStore resourceStore;
     private final TeacherDocumentBlockStore blockStore;
@@ -543,14 +534,11 @@ public class TeacherResourceBlockSearchService {
                     entry.getKey(),
                     entry.getValue().stream().map(context -> context.block().blockId()).collect(Collectors.toSet()));
         }
-        /*
-         * Stage one only needs enough vector candidates to let the final top-N documents surface. Asking Milvus for
-         * every visible block reintroduces whole-library noise and makes long teacher folders slower for no gain.
-         * Keep this bound derived from caller intent: top-N docs with top-N support blocks each.
-         */
-        int vectorCandidateLimit = Math.max(
+        int totalVisibleBlocks = blocksByDocumentId.values().stream().mapToInt(List::size).sum();
+        int vectorCandidateLimit = SEARCH_BUDGET.vectorCandidateLimit(
                 safeLimit,
-                safeLimit * Math.max(1, candidateDocumentLimit(safeLimit, visibleDocumentIds.size())));
+                candidateDocumentLimit(safeLimit, visibleDocumentIds.size()),
+                totalVisibleBlocks);
         Map<String, Double> scores = new LinkedHashMap<>();
         List<VectorSearchHit> hits;
         try {
@@ -630,7 +618,6 @@ public class TeacherResourceBlockSearchService {
                     vectorScoreByKey,
                     normalizedQuery,
                     terms,
-                    safeLimit,
                     queryGraph);
             double bestSemantic = 0.0d;
             double bestVector = 0.0d;
@@ -638,11 +625,11 @@ public class TeacherResourceBlockSearchService {
             int bestGraphMatches = 0;
             for (BlockContext block : supportedBlocks) {
                 String key = blockKey(document.documentId(), block.block().blockId());
-                double semantic = vectorScoreByKey.getOrDefault(key, 0.0d);
-                bestVector = Math.max(bestVector, semantic);
+                double vectorScore = vectorScoreByKey.getOrDefault(key, 0.0d);
+                bestVector = Math.max(bestVector, vectorScore);
                 int lexicalMatches = blockLexicalMatchCount(document, block, normalizedQuery, terms);
                 int graphMatches = graphAlignmentMatchCount(block.graphTags(), block.graphNodeIds(), queryGraph, normalizedQuery, terms);
-                bestSemantic = Math.max(bestSemantic, semantic);
+                bestSemantic = Math.max(bestSemantic, vectorScore);
                 bestLexicalMatches = Math.max(bestLexicalMatches, lexicalMatches);
                 bestGraphMatches = Math.max(bestGraphMatches, graphMatches);
             }
@@ -676,7 +663,6 @@ public class TeacherResourceBlockSearchService {
             Map<String, Double> vectorScoreByKey,
             String normalizedQuery,
             String[] terms,
-            int safeLimit,
             TeacherResourceGraphAlignmentService.QueryGraphContext queryGraph) {
         if (blocks == null || blocks.isEmpty()) {
             return List.of();
@@ -689,15 +675,7 @@ public class TeacherResourceBlockSearchService {
                     int graphMatches = graphAlignmentMatchCount(block.graphTags(), block.graphNodeIds(), queryGraph, normalizedQuery, terms);
                     return semantic > 0.0d || lexicalMatches > 0 || graphMatches > 0;
                 })
-                .sorted(Comparator.<BlockContext>comparingDouble(
-                                block -> vectorScoreByKey.getOrDefault(blockKey(document.documentId(), block.block().blockId()), 0.0d))
-                        .reversed()
-                        .thenComparing(Comparator.comparingInt(
-                                (BlockContext block) -> blockLexicalMatchCount(document, block, normalizedQuery, terms)).reversed())
-                        .thenComparing(Comparator.comparingInt(
-                                (BlockContext block) -> graphAlignmentMatchCount(block.graphTags(), block.graphNodeIds(), queryGraph, normalizedQuery, terms)).reversed())
-                        .thenComparing((BlockContext block) -> block.block().blockOrder()))
-                .limit(Math.max(1, safeLimit))
+                .sorted(blockSupportComparator(document, vectorScoreByKey, normalizedQuery, terms, queryGraph))
                 .toList();
     }
 
@@ -716,27 +694,25 @@ public class TeacherResourceBlockSearchService {
             List<DocumentCandidate> candidates,
             Map<String, List<BlockContext>> blocksByDocumentId,
             String normalizedQuery) {
-        List<String> candidateKeys = new ArrayList<>();
-        List<String> candidateTexts = new ArrayList<>();
+        LinkedHashMap<String, String> candidateTexts = new LinkedHashMap<>();
         for (DocumentCandidate candidate : candidates) {
-            List<BlockContext> documentBlocks = blocksByDocumentId.getOrDefault(candidate.document().documentId(), candidate.blocks());
-            for (BlockContext block : candidate.blocks().stream().limit(MAX_DOCUMENT_RERANK_BLOCKS_PER_DOCUMENT).toList()) {
-                candidateKeys.add(candidate.document().documentId());
-                candidateTexts.add(semanticCandidateText(
-                        candidate.document(),
-                        block,
-                        evidenceWindow(block, documentBlocks),
-                        MAX_DOCUMENT_RERANK_EVIDENCE_CHARS));
-            }
+            List<BlockContext> documentBlocks =
+                    blocksByDocumentId.getOrDefault(candidate.document().documentId(), candidate.blocks());
+            candidateTexts.put(
+                    candidate.document().documentId(),
+                    documentSemanticText(candidate.document(), candidate.blocks(), documentBlocks));
         }
         if (candidateTexts.isEmpty()) {
             return Map.of();
         }
         try {
-            List<Double> scores = vectorIndexService.rerankTexts(normalizedQuery, candidateTexts);
+            List<String> keys = new ArrayList<>(candidateTexts.keySet());
+            List<Double> scores = vectorIndexService.rerankTexts(
+                    normalizedQuery,
+                    keys.stream().map(candidateTexts::get).toList());
             Map<String, Double> scoreById = new LinkedHashMap<>();
-            for (int index = 0; index < candidateKeys.size() && index < scores.size(); index += 1) {
-                scoreById.merge(candidateKeys.get(index), scores.get(index), Math::max);
+            for (int index = 0; index < keys.size() && index < scores.size(); index += 1) {
+                scoreById.put(keys.get(index), scores.get(index));
             }
             return Map.copyOf(scoreById);
         } catch (RuntimeException exception) {
@@ -811,6 +787,27 @@ public class TeacherResourceBlockSearchService {
         return comparator.thenComparing(Comparator.comparingInt(DocumentCandidate::graphMatches).reversed());
     }
 
+    private static Comparator<BlockContext> blockSupportComparator(
+            TeacherResourceDocumentResponse document,
+            Map<String, Double> vectorScoreByKey,
+            String normalizedQuery,
+            String[] terms,
+            TeacherResourceGraphAlignmentService.QueryGraphContext queryGraph) {
+        return Comparator.<BlockContext>comparingDouble(
+                        block -> vectorScoreByKey.getOrDefault(blockKey(document.documentId(), block.block().blockId()), 0.0d))
+                .reversed()
+                .thenComparing(Comparator.comparingInt(
+                        (BlockContext block) -> blockLexicalMatchCount(document, block, normalizedQuery, terms)).reversed())
+                .thenComparing(Comparator.comparingInt(
+                        (BlockContext block) -> graphAlignmentMatchCount(
+                                block.graphTags(),
+                                block.graphNodeIds(),
+                                queryGraph,
+                                normalizedQuery,
+                                terms)).reversed())
+                .thenComparing(block -> block.block().blockOrder());
+    }
+
     /**
      * Stage two reranks candidate blocks with a dedicated rerank model when the worker provides one, then falls back
      * to embedding cosine similarity inside {@link VectorIndexService}. The candidate text carries title/chapter/
@@ -821,17 +818,14 @@ public class TeacherResourceBlockSearchService {
             Map<String, List<BlockContext>> blocksByDocumentId,
             String normalizedQuery) {
         LinkedHashMap<String, String> candidateTexts = new LinkedHashMap<>();
-        for (DocumentCandidate candidate : rankedDocuments) {
-            List<BlockContext> documentBlocks = blocksByDocumentId.getOrDefault(candidate.document().documentId(), candidate.blocks());
-            for (BlockContext block : candidate.blocks().stream().limit(MAX_BLOCK_RERANK_BLOCKS_PER_DOCUMENT).toList()) {
-                candidateTexts.put(
-                        blockKey(candidate.document().documentId(), block.block().blockId()),
-                        semanticCandidateText(
-                                candidate.document(),
-                                block,
-                                evidenceWindow(block, documentBlocks),
-                                MAX_BLOCK_RERANK_EVIDENCE_CHARS));
-            }
+        for (StageTwoBlockCandidate candidate : stageTwoCandidateBlocks(rankedDocuments, blocksByDocumentId)) {
+            candidateTexts.put(
+                    blockKey(candidate.document().documentId(), candidate.block().block().blockId()),
+                    semanticCandidateText(
+                            candidate.document(),
+                            candidate.block(),
+                            evidenceWindow(candidate.block(), candidate.documentBlocks()),
+                            SEARCH_BUDGET.blockEvidenceChars()));
         }
         if (candidateTexts.isEmpty()) {
             return Map.of();
@@ -852,6 +846,94 @@ public class TeacherResourceBlockSearchService {
                     exception);
             return Map.of();
         }
+    }
+
+    /**
+     * Document-stage rerank should compare one semantic digest per document, not a max over several duplicated block
+     * prompts. We therefore pack the strongest supported block windows from that document into one bounded text view
+     * and let the reranker answer the real stage-one question: "does this document contain the right evidence?".
+     */
+    private static String documentSemanticText(
+            TeacherResourceDocumentResponse document,
+            List<BlockContext> supportedBlocks,
+            List<BlockContext> documentBlocks) {
+        StringBuilder builder = new StringBuilder();
+        appendRerankLine(builder, "documentTitle", truncateForRerank(textOrDefault(document.title(), ""), SEARCH_BUDGET.titleChars()));
+        appendRerankLine(builder, "library", TeacherResourceLibraryResolver.effectiveLibrary(document));
+        appendRerankLine(builder, "permissionScope", textOrDefault(document.permissionScope(), ""));
+        for (BlockContext block : supportedBlocks) {
+            EvidenceWindow evidence = evidenceWindow(block, documentBlocks);
+            appendRerankLine(builder, "blockRole", truncateForRerank(textOrDefault(block.blockRole(), ""), SEARCH_BUDGET.roleChars()));
+            appendRerankLine(builder, "chapter", truncateForRerank(textOrDefault(block.block().chapter(), ""), SEARCH_BUDGET.headingChars()));
+            appendRerankLine(builder, "section", truncateForRerank(textOrDefault(block.block().section(), ""), SEARCH_BUDGET.headingChars()));
+            appendRerankLine(builder, "sourcePath", truncateForRerank(textOrDefault(block.sourcePath(), ""), SEARCH_BUDGET.sourcePathChars()));
+            appendRerankLine(
+                    builder,
+                    "graphTags",
+                    truncateForRerank(String.join(" ", block.graphTags()), SEARCH_BUDGET.graphTagsChars()));
+            appendRerankLine(
+                    builder,
+                    "evidenceBlockIds",
+                    truncateForRerank(String.join(" ", evidence.blockIds()), SEARCH_BUDGET.evidenceBlockIdsChars()));
+            appendRerankLine(
+                    builder,
+                    "evidenceText",
+                    truncateForRerank(textOrDefault(evidence.text(), ""), SEARCH_BUDGET.documentEvidenceChars()));
+            if (builder.length() >= SEARCH_BUDGET.documentDigestChars()) {
+                break;
+            }
+        }
+        return truncateForRerank(builder.toString(), SEARCH_BUDGET.documentDigestChars());
+    }
+
+    /**
+     * Stage two keeps candidate selection fair across documents. Instead of "take exactly N blocks from every
+     * document", we draw supported blocks round-robin from the ranked documents until the worker budget is full.
+     * This preserves multi-document competition while still giving rich documents more than one chance.
+     */
+    private static List<StageTwoBlockCandidate> stageTwoCandidateBlocks(
+            List<DocumentCandidate> rankedDocuments,
+            Map<String, List<BlockContext>> blocksByDocumentId) {
+        List<StageTwoBlockCandidate> selected = new ArrayList<>();
+        int candidateBudget = SEARCH_BUDGET.blockRerankCandidateLimit(rankedDocuments.size());
+        Map<String, List<BlockContext>> orderedBlocksByDoc = new LinkedHashMap<>();
+        Map<String, Integer> cursorByDoc = new LinkedHashMap<>();
+        for (DocumentCandidate candidate : rankedDocuments) {
+            String documentId = candidate.document().documentId();
+            List<BlockContext> documentBlocks = blocksByDocumentId.getOrDefault(documentId, candidate.blocks());
+            List<BlockContext> ordered = candidate.blocks().stream()
+                    .filter(block -> documentBlocks.stream().anyMatch(existing -> existing.block().blockId().equals(block.block().blockId())))
+                    .toList();
+            if (!ordered.isEmpty()) {
+                orderedBlocksByDoc.put(documentId, ordered);
+                cursorByDoc.put(documentId, 0);
+            }
+        }
+        while (selected.size() < candidateBudget) {
+            boolean advanced = false;
+            for (DocumentCandidate candidate : rankedDocuments) {
+                String documentId = candidate.document().documentId();
+                List<BlockContext> ordered = orderedBlocksByDoc.get(documentId);
+                if (ordered == null || ordered.isEmpty()) {
+                    continue;
+                }
+                int cursor = cursorByDoc.getOrDefault(documentId, 0);
+                if (cursor >= ordered.size()) {
+                    continue;
+                }
+                List<BlockContext> documentBlocks = blocksByDocumentId.getOrDefault(documentId, ordered);
+                selected.add(new StageTwoBlockCandidate(candidate.document(), ordered.get(cursor), documentBlocks));
+                cursorByDoc.put(documentId, cursor + 1);
+                advanced = true;
+                if (selected.size() >= candidateBudget) {
+                    break;
+                }
+            }
+            if (!advanced) {
+                break;
+            }
+        }
+        return List.copyOf(selected);
     }
 
     /**
@@ -876,23 +958,23 @@ public class TeacherResourceBlockSearchService {
             int evidenceCharBudget) {
         String imageRefs = truncateForRerank(
                 String.join(" ", parseStringArray(block.block().imageRefs())),
-                MAX_RERANK_IMAGE_REFS_CHARS);
+                SEARCH_BUDGET.imageRefsChars());
         String evidenceText = textOrDefault(
                 evidence == null ? "" : evidence.text(),
                 textOrDefault(block.block().normalizedText(), block.block().rawText()));
         return String.join(
                 "\n",
-                "documentTitle: " + truncateForRerank(textOrDefault(document.title(), ""), MAX_RERANK_TITLE_CHARS),
+                "documentTitle: " + truncateForRerank(textOrDefault(document.title(), ""), SEARCH_BUDGET.titleChars()),
                 "library: " + TeacherResourceLibraryResolver.effectiveLibrary(document),
-                "role: " + truncateForRerank(textOrDefault(block.blockRole(), ""), MAX_RERANK_ROLE_CHARS),
-                "chapter: " + truncateForRerank(textOrDefault(block.block().chapter(), ""), MAX_RERANK_HEADING_CHARS),
-                "section: " + truncateForRerank(textOrDefault(block.block().section(), ""), MAX_RERANK_HEADING_CHARS),
-                "sourcePath: " + truncateForRerank(textOrDefault(block.sourcePath(), ""), MAX_RERANK_SOURCE_PATH_CHARS),
-                "graphTags: " + truncateForRerank(String.join(" ", block.graphTags()), MAX_RERANK_GRAPH_TAGS_CHARS),
+                "role: " + truncateForRerank(textOrDefault(block.blockRole(), ""), SEARCH_BUDGET.roleChars()),
+                "chapter: " + truncateForRerank(textOrDefault(block.block().chapter(), ""), SEARCH_BUDGET.headingChars()),
+                "section: " + truncateForRerank(textOrDefault(block.block().section(), ""), SEARCH_BUDGET.headingChars()),
+                "sourcePath: " + truncateForRerank(textOrDefault(block.sourcePath(), ""), SEARCH_BUDGET.sourcePathChars()),
+                "graphTags: " + truncateForRerank(String.join(" ", block.graphTags()), SEARCH_BUDGET.graphTagsChars()),
                 "imageRefs: " + imageRefs,
                 "evidenceBlockIds: " + truncateForRerank(
                         String.join(" ", evidence == null ? List.of() : evidence.blockIds()),
-                        MAX_RERANK_EVIDENCE_BLOCK_IDS_CHARS),
+                        SEARCH_BUDGET.evidenceBlockIdsChars()),
                 "evidenceText:\n" + truncateForRerank(evidenceText, evidenceCharBudget));
     }
 
@@ -999,8 +1081,8 @@ public class TeacherResourceBlockSearchService {
         }
         List<String> blockIds = new ArrayList<>();
         List<String> texts = new ArrayList<>();
-        int start = Math.max(0, targetIndex - EVIDENCE_WINDOW_RADIUS);
-        int end = Math.min(documentBlocks.size() - 1, targetIndex + EVIDENCE_WINDOW_RADIUS);
+        int start = Math.max(0, targetIndex - SEARCH_BUDGET.evidenceWindowRadius());
+        int end = Math.min(documentBlocks.size() - 1, targetIndex + SEARCH_BUDGET.evidenceWindowRadius());
         for (int index = start; index <= end; index += 1) {
             BlockContext neighbor = documentBlocks.get(index);
             blockIds.add(neighbor.block().blockId());
@@ -1063,8 +1145,8 @@ public class TeacherResourceBlockSearchService {
                     .findFirst()
                     .orElse(0);
         }
-        int start = Math.max(0, matchIndex - SNIPPET_RADIUS);
-        int end = Math.min(text.length(), matchIndex + normalizedQuery.length() + SNIPPET_RADIUS);
+        int start = Math.max(0, matchIndex - SEARCH_BUDGET.snippetRadius());
+        int end = Math.min(text.length(), matchIndex + normalizedQuery.length() + SEARCH_BUDGET.snippetRadius());
         String prefix = start > 0 ? "..." : "";
         String suffix = end < text.length() ? "..." : "";
         return prefix + text.substring(start, end).strip() + suffix;
@@ -1215,18 +1297,18 @@ public class TeacherResourceBlockSearchService {
     private static String semanticMergeCandidateText(TeacherResourceBlockSearchResponse.Hit hit) {
         return String.join(
                 "\n",
-                "documentTitle: " + truncateForRerank(textOrDefault(hit.documentTitle(), ""), MAX_RERANK_TITLE_CHARS),
+                "documentTitle: " + truncateForRerank(textOrDefault(hit.documentTitle(), ""), SEARCH_BUDGET.titleChars()),
                 "sourceType: " + textOrDefault(hit.sourceType(), ""),
-                "blockRole: " + truncateForRerank(textOrDefault(hit.blockRole(), ""), MAX_RERANK_ROLE_CHARS),
-                "chapter: " + truncateForRerank(textOrDefault(hit.chapter(), ""), MAX_RERANK_HEADING_CHARS),
-                "section: " + truncateForRerank(textOrDefault(hit.section(), ""), MAX_RERANK_HEADING_CHARS),
-                "sourcePath: " + truncateForRerank(textOrDefault(hit.sourcePath(), ""), MAX_RERANK_SOURCE_PATH_CHARS),
+                "blockRole: " + truncateForRerank(textOrDefault(hit.blockRole(), ""), SEARCH_BUDGET.roleChars()),
+                "chapter: " + truncateForRerank(textOrDefault(hit.chapter(), ""), SEARCH_BUDGET.headingChars()),
+                "section: " + truncateForRerank(textOrDefault(hit.section(), ""), SEARCH_BUDGET.headingChars()),
+                "sourcePath: " + truncateForRerank(textOrDefault(hit.sourcePath(), ""), SEARCH_BUDGET.sourcePathChars()),
                 "graphTags: " + truncateForRerank(
                         String.join(" ", hit.graphTags() == null ? List.of() : hit.graphTags()),
-                        MAX_RERANK_GRAPH_TAGS_CHARS),
+                        SEARCH_BUDGET.graphTagsChars()),
                 "evidenceText:\n" + truncateForRerank(
                         textOrDefault(hit.evidenceText(), hit.snippet()),
-                        MAX_MERGE_RERANK_EVIDENCE_CHARS));
+                        SEARCH_BUDGET.mergeEvidenceChars()));
     }
 
     private static TeacherResourceBlockSearchResponse.Hit withScore(
@@ -1412,10 +1494,10 @@ public class TeacherResourceBlockSearchService {
      */
     private static String safeRetrievalMode(String retrievalMode) {
         String normalized = textOrDefault(retrievalMode, "").strip();
-        if (normalized.length() <= MAX_RETRIEVAL_MODE_LENGTH) {
+        if (normalized.length() <= SEARCH_BUDGET.maxRetrievalModeLength()) {
             return normalized;
         }
-        return normalized.substring(0, MAX_RETRIEVAL_MODE_LENGTH);
+        return normalized.substring(0, SEARCH_BUDGET.maxRetrievalModeLength());
     }
 
     /**
@@ -1428,12 +1510,12 @@ public class TeacherResourceBlockSearchService {
         LinkedHashSet<String> terms = new LinkedHashSet<>();
         for (String fragment : normalizedQuery.split("\\s+")) {
             appendSearchTerms(terms, fragment);
-            if (terms.size() >= MAX_SEARCH_TERMS) {
+            if (terms.size() >= SEARCH_BUDGET.maxSearchTerms()) {
                 break;
             }
         }
         return terms.stream()
-                .limit(MAX_SEARCH_TERMS)
+                .limit(SEARCH_BUDGET.maxSearchTerms())
                 .toArray(String[]::new);
     }
 
@@ -1474,7 +1556,7 @@ public class TeacherResourceBlockSearchService {
                     cjk.setLength(0);
                 }
             }
-            if (terms.size() >= MAX_SEARCH_TERMS) {
+            if (terms.size() >= SEARCH_BUDGET.maxSearchTerms()) {
                 return;
             }
         }
@@ -1496,7 +1578,7 @@ public class TeacherResourceBlockSearchService {
         if (fragment.length() == 1) {
             return;
         }
-        for (int index = 0; index < fragment.length() - 1 && terms.size() < MAX_SEARCH_TERMS; index += 1) {
+        for (int index = 0; index < fragment.length() - 1 && terms.size() < SEARCH_BUDGET.maxSearchTerms(); index += 1) {
             addSearchTerm(terms, fragment.substring(index, index + 2));
         }
     }
@@ -1535,6 +1617,17 @@ public class TeacherResourceBlockSearchService {
             return normalized;
         }
         return normalized.substring(0, maxChars).strip() + "…";
+    }
+
+    private static void appendRerankLine(StringBuilder builder, String label, String value) {
+        String normalizedValue = textOrDefault(value, "");
+        if (normalizedValue.isBlank()) {
+            return;
+        }
+        if (!builder.isEmpty()) {
+            builder.append('\n');
+        }
+        builder.append(label).append(": ").append(normalizedValue);
     }
 
     /**
@@ -1632,12 +1725,68 @@ public class TeacherResourceBlockSearchService {
             String text) {
     }
 
+    private record StageTwoBlockCandidate(
+            TeacherResourceDocumentResponse document,
+            BlockContext block,
+            List<BlockContext> documentBlocks) {
+    }
+
     private record MergeCandidate(
             TeacherResourceBlockSearchResponse.Hit hit,
             double rerankScore,
             int lexicalMatches) {
         private double sourceScore() {
             return hit.score();
+        }
+    }
+
+    private record SearchRuntimeBudget(
+            int maxRetrievalModeLength,
+            int snippetRadius,
+            int evidenceWindowRadius,
+            int maxSearchTerms,
+            int titleChars,
+            int roleChars,
+            int headingChars,
+            int sourcePathChars,
+            int graphTagsChars,
+            int imageRefsChars,
+            int evidenceBlockIdsChars,
+            int documentEvidenceChars,
+            int blockEvidenceChars,
+            int mergeEvidenceChars,
+            int documentDigestChars,
+            int maxVectorCandidates,
+            int maxBlockRerankCandidates) {
+
+        private static SearchRuntimeBudget defaults() {
+            return new SearchRuntimeBudget(
+                    64,
+                    80,
+                    1,
+                    32,
+                    120,
+                    48,
+                    120,
+                    220,
+                    180,
+                    180,
+                    120,
+                    520,
+                    900,
+                    760,
+                    2600,
+                    96,
+                    36);
+        }
+
+        private int vectorCandidateLimit(int requestedLimit, int candidateDocumentCount, int visibleBlockCount) {
+            int requestedWindow = Math.max(1, requestedLimit) * Math.max(1, candidateDocumentCount);
+            return Math.max(1, Math.min(Math.min(maxVectorCandidates, requestedWindow), Math.max(1, visibleBlockCount)));
+        }
+
+        private int blockRerankCandidateLimit(int rankedDocumentCount) {
+            return Math.max(1, Math.min(maxBlockRerankCandidates, Math.max(1, rankedDocumentCount) * 3));
         }
     }
 

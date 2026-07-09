@@ -16,13 +16,16 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.HexFormat;
+import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.Comparator;
+import java.util.regex.Pattern;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -30,12 +33,18 @@ import org.springframework.stereotype.Service;
 public class TextbookRetrievalService {
 
     private static final long LOAD_FAILURE_COOLDOWN_NANOS = TimeUnit.SECONDS.toNanos(30);
-    private static final String SEARCH_PIPELINE_VERSION = "two_stage_doc_page_v2_rerank";
-    private static final int MAX_DOCUMENT_RERANK_DOCS = 5;
-    private static final int MAX_PAGE_RERANK_PAGES_PER_DOCUMENT = 2;
-    private static final int MAX_RERANK_PAGE_TEXT_CHARS = 720;
-    private static final int MAX_RERANK_FORMULA_TEXT_CHARS = 240;
-    private static final int MAX_RERANK_DOCUMENT_TEXT_CHARS = 2200;
+    private static final String SEARCH_PIPELINE_VERSION = "two_stage_doc_page_v3_focus_rerank";
+    private static final Pattern QUERY_CLAUSE_SPLITTER = Pattern.compile("[\\r\\n,，。；;：:！？!?()（）\\[\\]【】]+");
+    private static final int MAX_FOCUSED_QUERY_CHARS = 120;
+    private static final int MAX_FOCUSED_CLAUSES = 2;
+    private static final int MAX_FOCUSED_TAGS = 4;
+    /**
+     * Worker I/O budgets for textbook rerank.
+     *
+     * <p>These bounds only keep the cross-encoder payload within a predictable latency budget on the real local
+     * worker. They are not ranking weights; final ordering still comes from semantic rerank.</p>
+     */
+    private static final TextbookRerankBudget RERANK_BUDGET = TextbookRerankBudget.defaults();
 
     private final TextbookCatalogReader catalogReader;
     private final TextbookChunkReader chunkReader;
@@ -109,8 +118,9 @@ public class TextbookRetrievalService {
                 normalizedContext.subjectType(),
                 normalizedContext.subjectId(),
                 request.query());
+        String focusedQuery = focusedTextbookQuery(request.query(), queryGraph);
         List<TextbookSearchHit> hits = cached == null
-                ? rerankedHits(request.query(), request.limit(), corpus.chunks(), queryGraph)
+                ? rerankedHits(focusedQuery, request.limit(), corpus.chunks(), queryGraph)
                 : cached.hits();
         hits = attachControlledPageImageUris(hits);
         if (cached == null && !hits.isEmpty()) {
@@ -134,6 +144,108 @@ public class TextbookRetrievalService {
                 hits);
         auditSink.record(RetrievalAuditEvent.from(queryId, request, response, elapsedMs, normalizedContext));
         return response;
+    }
+
+    /**
+     * Agent-assembled textbook queries often mix real topic intent with routing/control clauses such as library hints,
+     * evidence requirements, or other workflow instructions. Feeding that entire sentence into textbook BM25 explodes
+     * generic n-gram matches across many pages and then wastes semantic rerank on a noisy candidate pool.
+     *
+     * <p>Keep this focus builder corpus-agnostic: it never strips benchmark-specific phrases or hardcodes textbook
+     * topics. Instead it prefers the clauses that align with normalized graph tags and falls back to the longest
+     * content-bearing clauses when graph alignment is unavailable.</p>
+     */
+    private static String focusedTextbookQuery(
+            String rawQuery,
+            TeacherResourceGraphAlignmentService.QueryGraphContext queryGraph) {
+        String normalized = normalizeQueryText(rawQuery);
+        if (normalized.isBlank()) {
+            return normalized;
+        }
+        List<String> clauses = splitQueryClauses(normalized);
+        List<String> primaryTags = normalizeQueryParts(queryGraph == null ? List.of() : queryGraph.primaryTagNames());
+        List<String> expandedTags = normalizeQueryParts(queryGraph == null ? List.of() : queryGraph.expandedTagNames());
+
+        LinkedHashSet<String> focusedParts = new LinkedHashSet<>();
+        clauses.stream()
+                .map(clause -> new QueryClauseCandidate(clause, clauseScore(clause, primaryTags, expandedTags)))
+                .filter(candidate -> candidate.score() > 0.0d)
+                .sorted(Comparator.comparingDouble(QueryClauseCandidate::score)
+                        .reversed()
+                        .thenComparing(Comparator.comparingInt((QueryClauseCandidate candidate) -> candidate.text().length()).reversed())
+                        .thenComparing(QueryClauseCandidate::text))
+                .limit(MAX_FOCUSED_CLAUSES)
+                .map(QueryClauseCandidate::text)
+                .forEach(focusedParts::add);
+        if (focusedParts.isEmpty()) {
+            clauses.stream()
+                    .sorted(Comparator.comparingInt(String::length).reversed().thenComparing(String::compareTo))
+                    .limit(MAX_FOCUSED_CLAUSES)
+                    .forEach(focusedParts::add);
+        }
+        primaryTags.stream().limit(MAX_FOCUSED_TAGS).forEach(focusedParts::add);
+        if (focusedParts.size() < MAX_FOCUSED_CLAUSES + 1) {
+            expandedTags.stream()
+                    .filter(tag -> focusedParts.stream().noneMatch(existing -> compact(existing).contains(compact(tag))))
+                    .limit(MAX_FOCUSED_TAGS)
+                    .forEach(focusedParts::add);
+        }
+        String focused = truncateForRerank(String.join(" ", focusedParts), MAX_FOCUSED_QUERY_CHARS);
+        return focused.isBlank() ? normalized : focused;
+    }
+
+    private static List<String> splitQueryClauses(String query) {
+        LinkedHashSet<String> clauses = new LinkedHashSet<>();
+        for (String part : QUERY_CLAUSE_SPLITTER.split(query)) {
+            String normalized = normalizeQueryText(part);
+            if (!normalized.isBlank()) {
+                clauses.add(normalized);
+            }
+        }
+        if (clauses.isEmpty()) {
+            clauses.add(query);
+        }
+        return List.copyOf(clauses);
+    }
+
+    private static List<String> normalizeQueryParts(List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return List.of();
+        }
+        LinkedHashSet<String> normalized = new LinkedHashSet<>();
+        for (String value : values) {
+            String cleaned = normalizeQueryText(value);
+            if (!cleaned.isBlank()) {
+                normalized.add(cleaned);
+            }
+        }
+        return List.copyOf(normalized);
+    }
+
+    private static double clauseScore(String clause, List<String> primaryTags, List<String> expandedTags) {
+        String compactClause = compact(clause);
+        double score = Math.min(clause.length(), 60) / 60.0d;
+        for (String tag : primaryTags) {
+            if (!tag.isBlank() && compactClause.contains(compact(tag))) {
+                score += 8.0d;
+            }
+        }
+        for (String tag : expandedTags) {
+            if (!tag.isBlank() && compactClause.contains(compact(tag))) {
+                score += 3.0d;
+            }
+        }
+        return score;
+    }
+
+    private static String normalizeQueryText(String value) {
+        return String.valueOf(value == null ? "" : value)
+                .replaceAll("\\s+", " ")
+                .strip();
+    }
+
+    private static String compact(String value) {
+        return normalizeQueryText(value).replace(" ", "").toLowerCase(Locale.ROOT);
     }
 
     /**
@@ -193,7 +305,7 @@ public class TextbookRetrievalService {
     private static Map<String, List<TextbookSearchHit>> topLexicalDocumentCandidates(
             Map<String, List<TextbookSearchHit>> hitsByDocId,
             int safeLimit) {
-        int docLimit = Math.max(1, Math.min(MAX_DOCUMENT_RERANK_DOCS, safeLimit));
+        int docLimit = Math.max(1, Math.min(RERANK_BUDGET.maxDocumentCandidates(), safeLimit));
         Map<String, List<TextbookSearchHit>> candidates = new LinkedHashMap<>();
         hitsByDocId.entrySet().stream()
                 .sorted(Comparator.<Map.Entry<String, List<TextbookSearchHit>>>comparingDouble(
@@ -213,7 +325,7 @@ public class TextbookRetrievalService {
             Map<String, List<TextbookSearchHit>> hitsByDocId) {
         Map<String, List<TextbookSearchHit>> capped = new LinkedHashMap<>();
         for (Map.Entry<String, List<TextbookSearchHit>> entry : hitsByDocId.entrySet()) {
-            capped.put(entry.getKey(), entry.getValue().stream().limit(MAX_PAGE_RERANK_PAGES_PER_DOCUMENT).toList());
+            capped.put(entry.getKey(), entry.getValue().stream().limit(RERANK_BUDGET.maxPagesPerDocument()).toList());
         }
         return capped;
     }
@@ -305,11 +417,11 @@ public class TextbookRetrievalService {
         appendLine(builder, first.volume());
         for (TextbookSearchHit hit : hits) {
             appendLine(builder, semanticPageText(hit));
-            if (builder.length() >= MAX_RERANK_DOCUMENT_TEXT_CHARS) {
+            if (builder.length() >= RERANK_BUDGET.documentTextChars()) {
                 break;
             }
         }
-        return truncateForRerank(builder.toString(), MAX_RERANK_DOCUMENT_TEXT_CHARS);
+        return truncateForRerank(builder.toString(), RERANK_BUDGET.documentTextChars());
     }
 
     private static String semanticPageText(TextbookSearchHit hit) {
@@ -319,8 +431,8 @@ public class TextbookRetrievalService {
         appendLine(builder, String.join(" / ", hit.chapterPath() == null ? List.of() : hit.chapterPath()));
         appendLine(builder, hit.sectionTitle());
         appendLine(builder, hit.printedPageNo());
-        appendLine(builder, truncateForRerank(hit.textSnippet(), MAX_RERANK_PAGE_TEXT_CHARS));
-        appendLine(builder, truncateForRerank(hit.formulaText(), MAX_RERANK_FORMULA_TEXT_CHARS));
+        appendLine(builder, truncateForRerank(hit.textSnippet(), RERANK_BUDGET.pageTextChars()));
+        appendLine(builder, truncateForRerank(hit.formulaText(), RERANK_BUDGET.formulaTextChars()));
         return builder.toString();
     }
 
@@ -599,5 +711,20 @@ public class TextbookRetrievalService {
             TextbookSearchHit hit,
             double pageSemanticScore,
             double documentSemanticScore) {
+    }
+
+    private record QueryClauseCandidate(String text, double score) {
+    }
+
+    private record TextbookRerankBudget(
+            int maxDocumentCandidates,
+            int maxPagesPerDocument,
+            int pageTextChars,
+            int formulaTextChars,
+            int documentTextChars) {
+
+        private static TextbookRerankBudget defaults() {
+            return new TextbookRerankBudget(5, 2, 720, 240, 2200);
+        }
     }
 }
