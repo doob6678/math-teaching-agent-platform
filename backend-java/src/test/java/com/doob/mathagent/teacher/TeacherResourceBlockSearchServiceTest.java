@@ -256,6 +256,72 @@ class TeacherResourceBlockSearchServiceTest {
     }
 
     @Test
+    void queryDeclaredTextbookLibraryNarrowsMixedSearchEvenWithoutExplicitLibraryParam() throws Exception {
+        Path processedBooksRoot = createProcessedBooksCorpus(
+                tempDir.resolve("processed-books-query-library"),
+                "real-textbook-doc",
+                "教材导数单调性",
+                List.of("导数", "单调性"),
+                12,
+                "闭区间单调性要先看定义域和端点，再列符号表，不能只盯导数零点。");
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        resourceStore.save(new TeacherResourceDocumentResponse(
+                "doc-feishu",
+                "school-a",
+                "teacher-1",
+                "feishu",
+                "导数讲法模板",
+                null,
+                "C:/workspace/runtime-authored/03-feishu-derivative",
+                "TEACHER_PRIVATE",
+                "synced",
+                "parsed",
+                "ready",
+                "ready",
+                List.of()));
+        blockStore.replaceActiveBlocks("school-a", "doc-feishu", List.of(detailedBlock(
+                "b-feishu",
+                "doc-feishu",
+                1,
+                "讲法模板.md",
+                "method",
+                "导数",
+                "先列步骤",
+                "这是老师自己的导数讲法模板，不应在只查教材库时先进入排序。")));
+        TextbookRetrievalService textbookService = TextbookRetrievalServiceFixture.service(
+                new TextbookCatalogReader(),
+                new TextbookChunkReader(),
+                new LocalTextbookBm25SearchEngine(),
+                event -> {
+                });
+        TeacherResourceBlockSearchService service = new TeacherResourceBlockSearchService(
+                resourceStore,
+                blockStore,
+                new RecentTeacherResourceBlockSearchAuditStore(10),
+                TestVectorIndexService.successful(resourceStore, blockStore),
+                TeacherResourceGraphAlignmentService.disabled(),
+                TeacherResourceAssetService.disabled(),
+                textbookService,
+                null,
+                new TextbookResourceProperties(processedBooksRoot));
+
+        TeacherResourceBlockSearchResponse response = service.search(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                "只查公共教材库，帮我找闭区间单调性为什么必须先看端点和定义域",
+                5);
+
+        assertThat(response.hits()).isNotEmpty();
+        assertThat(response.hits().getFirst().documentId()).isEqualTo("real-textbook-doc");
+        assertThat(response.hits().getFirst().sourceType()).isEqualTo("public_textbook");
+        assertThat(response.hits()).extracting(TeacherResourceBlockSearchResponse.Hit::blockId)
+                .doesNotContain("b-feishu");
+        assertThat(response.retrievalMode()).contains("textbook");
+    }
+
+    @Test
     void adminSearchesTenantBlocksAcrossOwners() {
         InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
         InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();

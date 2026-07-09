@@ -167,16 +167,8 @@ public class TextbookRetrievalService {
         List<String> expandedTags = normalizeQueryParts(queryGraph == null ? List.of() : queryGraph.expandedTagNames());
 
         LinkedHashSet<String> focusedParts = new LinkedHashSet<>();
-        clauses.stream()
-                .map(clause -> new QueryClauseCandidate(clause, clauseScore(clause, primaryTags, expandedTags)))
-                .filter(candidate -> candidate.score() > 0.0d)
-                .sorted(Comparator.comparingDouble(QueryClauseCandidate::score)
-                        .reversed()
-                        .thenComparing(Comparator.comparingInt((QueryClauseCandidate candidate) -> candidate.text().length()).reversed())
-                        .thenComparing(QueryClauseCandidate::text))
-                .limit(MAX_FOCUSED_CLAUSES)
-                .map(QueryClauseCandidate::text)
-                .forEach(focusedParts::add);
+        appendMatchingClauses(focusedParts, clauses, primaryTags);
+        appendMatchingClauses(focusedParts, clauses, expandedTags);
         if (focusedParts.isEmpty()) {
             clauses.stream()
                     .sorted(Comparator.comparingInt(String::length).reversed().thenComparing(String::compareTo))
@@ -222,20 +214,28 @@ public class TextbookRetrievalService {
         return List.copyOf(normalized);
     }
 
-    private static double clauseScore(String clause, List<String> primaryTags, List<String> expandedTags) {
-        String compactClause = compact(clause);
-        double score = Math.min(clause.length(), 60) / 60.0d;
-        for (String tag : primaryTags) {
-            if (!tag.isBlank() && compactClause.contains(compact(tag))) {
-                score += 8.0d;
+    private static void appendMatchingClauses(
+            LinkedHashSet<String> focusedParts,
+            List<String> clauses,
+            List<String> normalizedTags) {
+        if (focusedParts.size() >= MAX_FOCUSED_CLAUSES || normalizedTags.isEmpty()) {
+            return;
+        }
+        for (String clause : clauses) {
+            if (focusedParts.size() >= MAX_FOCUSED_CLAUSES) {
+                return;
+            }
+            boolean matched = normalizedTags.stream().anyMatch(tag -> containsNormalized(clause, tag));
+            if (matched) {
+                focusedParts.add(clause);
             }
         }
-        for (String tag : expandedTags) {
-            if (!tag.isBlank() && compactClause.contains(compact(tag))) {
-                score += 3.0d;
-            }
-        }
-        return score;
+    }
+
+    private static boolean containsNormalized(String haystack, String needle) {
+        String compactHaystack = compact(haystack);
+        String compactNeedle = compact(needle);
+        return !compactNeedle.isBlank() && compactHaystack.contains(compactNeedle);
     }
 
     private static String normalizeQueryText(String value) {
@@ -715,9 +715,6 @@ public class TextbookRetrievalService {
             TextbookSearchHit hit,
             double pageSemanticScore,
             double documentSemanticScore) {
-    }
-
-    private record QueryClauseCandidate(String text, double score) {
     }
 
     private record TextbookRerankBudget(
