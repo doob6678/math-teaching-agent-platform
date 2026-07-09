@@ -18,6 +18,7 @@ import org.springframework.stereotype.Service;
 public class TeacherResourceService {
 
     private static final int MAX_PREVIEW_FILES = 8;
+    private static final int MAX_PREVIEW_DEPTH = 6;
 
     private final TeacherResourceStore store;
     private final VectorIndexService vectorIndexService;
@@ -184,7 +185,7 @@ public class TeacherResourceService {
         if (Files.isRegularFile(root)) {
             return List.of(previewFile(root.getParent(), root));
         }
-        try (Stream<Path> stream = Files.walk(root, 2)) {
+        try (Stream<Path> stream = Files.walk(root, MAX_PREVIEW_DEPTH)) {
             return stream
                     .filter(Files::isRegularFile)
                     .limit(MAX_PREVIEW_FILES)

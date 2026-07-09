@@ -15,6 +15,10 @@
 
 - Added `teacher_resource_asset` for extracted PDF/DOCX/Feishu images and attachments, with tenant, owner, document, optional block, permission scope, source path, page, provider asset id, checksum, mime type, size, storage key, and active/inactive status.
 - Added `source_document.parse_mode` and metadata fallback. `TEXT` is deterministic text/structure extraction. `AI` is recorded as the requested paid semantic mode, but current backend explicitly falls back to TEXT when no real AI labeling client is configured.
+- Added backend-managed teacher upload staging:
+  - `POST /api/teacher/resources/upload` accepts multipart files from teacher/admin sessions, including browser folder uploads and ZIP packages.
+  - Uploads are stored under the existing local file storage root in a tenant/subject-owned directory, then immediately registered as a normal `local_path` teacher resource.
+  - This reuses the current sync-job, parser, question-bank import, and vector rebuild pipeline instead of creating a second ingestion path just for uploads.
 - Added `TeacherResourceAssetService` and MyBatis store. Asset binaries are written under a backend-owned storage root and returned only through `GET /api/teacher/resources/assets/{assetId}` after subject permission checks.
 - DOCX parsing now extracts embedded images from runs and stores them as assets. If POI exposes a drawing relationship but returns an empty image stream, the parser falls back to the real `word/media/*` package entry; this is required for python-docx and similar producer output. PDF parsing now stores page-level PNG screenshots as assets. `imageRefs` stores opaque `assetId` references, not local paths or provider tokens.
 - Feishu manifest ingestion now persists downloaded rows marked `assetKind=image` or `assetKind=attachment` into `teacher_resource_asset`. Exported documents remain parse inputs and are not double-counted as assets.
@@ -52,6 +56,9 @@
   - Real smoke invoked `TextbookPageImageService.openPageImage(...)` on `renjiao_bbixiu1math` page 149 and confirmed the backend-resolved `image/png` resource exists.
   - Real smoke invoked `TextbookPageImageSearchService.search(...)` against a temporary worker on `http://127.0.0.1:18091/v1`, got 3 real hits for query `函数单调性`, and rewrote the top hit to `/api/resources/textbooks/renjiao_bbixiu1math/pages/3/image`.
 - Verification commands run: `python -m py_compile ai-worker-python/scripts/download_feishu_url.py`, `mvn -q -DskipTests compile`, `mvn -q "-Dtest=TeacherSourceSyncExecutionServiceTest" test`, and `mvn -q "-Dtest=TeacherResourceServiceTest,TeacherResourceControllerTest,TeacherSourceSyncExecutionServiceTest,VectorIndexServiceTest" test`.
+- Upload staging verification:
+  - `TeacherResourceUploadServiceTest` verifies owner-scoped folder-style multipart path preservation and ZIP expansion.
+  - `TeacherResourceControllerTest.uploadEndpointStoresFilesRegistersLocalResourceAndSyncsThroughExistingPipeline` verifies uploaded Markdown files can be registered, queued, parsed, and listed through the existing teacher resource controller flow.
 
 ## Remaining Work
 

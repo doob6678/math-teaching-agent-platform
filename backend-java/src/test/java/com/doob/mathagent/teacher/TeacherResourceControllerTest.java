@@ -15,8 +15,10 @@ import com.doob.mathagent.teacher.service.TeacherResourceCapabilityVerifier;
 import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchAuditEvent;
 import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchAuditLookup;
 import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService;
+import com.doob.mathagent.teacher.service.TeacherResourceAssetService;
 import com.doob.mathagent.teacher.service.TeacherFeishuDownloadClient;
 import com.doob.mathagent.teacher.service.TeacherFeishuDownloadException;
+import com.doob.mathagent.teacher.service.TeacherResourceUploadService;
 import com.doob.mathagent.teacher.service.TeacherResourceService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncCheckpointQueryService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncExecutionService;
@@ -35,6 +37,7 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
 class TeacherResourceControllerTest {
@@ -178,6 +181,30 @@ class TeacherResourceControllerTest {
             TeacherDocumentBlockStore explicitBlockStore,
             RequestSubjectResolver subjectResolver,
             TeacherResourceCapabilityVerifier capabilityVerifier) {
+        return controller(
+                resourceService,
+                jobService,
+                executionService,
+                searchService,
+                auditLookup,
+                checkpointQueryService,
+                explicitBlockStore,
+                TeacherResourceUploadService.disabled(),
+                subjectResolver,
+                capabilityVerifier);
+    }
+
+    private static TeacherResourceController controller(
+            TeacherResourceService resourceService,
+            TeacherSourceSyncJobService jobService,
+            TeacherSourceSyncExecutionService executionService,
+            TeacherResourceBlockSearchService searchService,
+            TeacherResourceBlockSearchAuditLookup auditLookup,
+            TeacherSourceSyncCheckpointQueryService checkpointQueryService,
+            TeacherDocumentBlockStore explicitBlockStore,
+            TeacherResourceUploadService uploadService,
+            RequestSubjectResolver subjectResolver,
+            TeacherResourceCapabilityVerifier capabilityVerifier) {
         InMemoryTeacherResourceStore fallbackResourceStore = new InMemoryTeacherResourceStore();
         InMemoryTeacherDocumentBlockStore fallbackBlockStore = new InMemoryTeacherDocumentBlockStore();
         InMemoryTeacherSourceSyncJobStore fallbackJobStore = new InMemoryTeacherSourceSyncJobStore();
@@ -197,6 +224,8 @@ class TeacherResourceControllerTest {
                                 fallbackResourceStore, fallbackJobStore, fallbackCheckpointStore)
                         : checkpointQueryService,
                 explicitBlockStore == null ? fallbackBlockStore : explicitBlockStore,
+                TeacherResourceAssetService.disabled(),
+                uploadService == null ? TeacherResourceUploadService.disabled() : uploadService,
                 subjectResolver,
                 capabilityVerifier);
     }
@@ -253,6 +282,98 @@ class TeacherResourceControllerTest {
                 null), new MockHttpServletRequest());
 
         assertThat(response.permissionScope()).isEqualTo("TEACHER_PRIVATE");
+    }
+
+    @Test
+    void uploadEndpointStoresFilesRegistersLocalResourceAndSyncsThroughExistingPipeline() throws Exception {
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        InMemoryTeacherSourceSyncJobStore jobStore = new InMemoryTeacherSourceSyncJobStore();
+        InMemoryTeacherSourceSyncCheckpointStore checkpointStore = new InMemoryTeacherSourceSyncCheckpointStore();
+        TeacherResourceService resourceService = TeacherResourceServiceFixture.service(resourceStore);
+        TeacherSourceSyncJobService jobService = new TeacherSourceSyncJobService(resourceStore, jobStore);
+        TeacherSourceSyncExecutionService executionService = syncExecutionService(
+                resourceStore,
+                jobStore,
+                blockStore,
+                new EmptyFeishuDownloadClient(),
+                testSyncProperties(),
+                checkpointStore);
+        TeacherResourceUploadService uploadService = new TeacherResourceUploadService(
+                new com.doob.mathagent.resources.ProjectResourceProperties(tempDir, tempDir, tempDir, tempDir, tempDir, tempDir),
+                java.time.Clock.systemUTC(),
+                1024 * 1024,
+                64);
+        TeacherResourceController controller = controller(
+                resourceService,
+                jobService,
+                executionService,
+                null,
+                null,
+                new TeacherSourceSyncCheckpointQueryService(resourceStore, jobStore, checkpointStore),
+                blockStore,
+                uploadService,
+                request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"),
+                (token, action, path, requestHash, subject) -> true);
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        MockMultipartFile markdown = new MockMultipartFile(
+                "files",
+                "lesson/functions/monotonicity.md",
+                "text/markdown",
+                "# 函数单调性\n增函数与减函数判定。".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        TeacherResourceDocumentResponse created = controller.uploadAndRegister(
+                List.of(markdown),
+                "qq_bundle",
+                "单调性专题上传包",
+                "PUBLIC_TEXTBOOK",
+                "AI",
+                request);
+
+        assertThat(created.sourceType()).isEqualTo("qq_bundle");
+        assertThat(created.permissionScope()).isEqualTo("TEACHER_PRIVATE");
+        assertThat(created.parseMode()).isEqualTo("AI");
+        assertThat(Path.of(created.localPath())).exists();
+        assertThat(created.previewFiles()).extracting(TeacherResourceDocumentResponse.PreviewFile::relativePath)
+                .contains("lesson/functions/monotonicity.md");
+
+        TeacherSourceSyncJobResponse job = controller.createSyncJob(created.documentId(), request);
+        TeacherSourceSyncJobResponse completed = controller.executeSyncJob(created.documentId(), job.jobId(), request);
+
+        assertThat(completed.status()).isEqualTo("completed");
+        assertThat(controller.listBlocks(created.documentId(), request))
+                .extracting(TeacherDocumentBlockResponse::rawText)
+                .anySatisfy(text -> assertThat(text).contains("增函数与减函数判定"));
+    }
+
+    @Test
+    void uploadEndpointRejectsFeishuSourceType() {
+        TeacherResourceController controller = controller(
+                TeacherResourceServiceFixture.service(new InMemoryTeacherResourceStore()),
+                new TeacherSourceSyncJobService(new InMemoryTeacherResourceStore(), new InMemoryTeacherSourceSyncJobStore()),
+                syncExecutionService(new InMemoryTeacherResourceStore(), new InMemoryTeacherSourceSyncJobStore(), new InMemoryTeacherDocumentBlockStore()),
+                null,
+                null,
+                null,
+                null,
+                new TeacherResourceUploadService(
+                        new com.doob.mathagent.resources.ProjectResourceProperties(tempDir, tempDir, tempDir, tempDir, tempDir, tempDir),
+                        java.time.Clock.systemUTC(),
+                        1024 * 1024,
+                        64),
+                request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"),
+                (token, action, path, requestHash, subject) -> true);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.uploadAndRegister(
+                        List.of(new MockMultipartFile("files", "function.md", "text/markdown", "# f".getBytes(java.nio.charset.StandardCharsets.UTF_8))),
+                        "feishu",
+                        "错误来源",
+                        "TEACHER_PRIVATE",
+                        "TEXT",
+                        new MockHttpServletRequest()))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting("statusCode.value")
+                .isEqualTo(400);
     }
 
     @Test

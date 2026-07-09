@@ -12,6 +12,7 @@ import com.doob.mathagent.teacher.service.TeacherResourceSearchFilter;
 import com.doob.mathagent.teacher.service.TeacherResourceService;
 import com.doob.mathagent.teacher.service.TeacherResourceAssetService;
 import com.doob.mathagent.teacher.service.TeacherDocumentBlockStore;
+import com.doob.mathagent.teacher.service.TeacherResourceUploadService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncCheckpointQueryService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncExecutionService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncJobService;
@@ -39,6 +40,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
 /**
@@ -53,6 +55,7 @@ public class TeacherResourceController {
     private static final String SYNC_EXECUTE_ACTION = "teacher-resource:sync-execute";
     private static final String SYNC_RESUME_ACTION = "teacher-resource:sync-resume";
     private static final String RESOURCES_PATH = "/api/teacher/resources";
+    private static final String RESOURCES_UPLOAD_PATH = "/api/teacher/resources/upload";
 
     private final TeacherResourceService teacherResourceService;
     private final TeacherSourceSyncJobService syncJobService;
@@ -62,6 +65,7 @@ public class TeacherResourceController {
     private final TeacherSourceSyncCheckpointQueryService checkpointQueryService;
     private final TeacherDocumentBlockStore blockStore;
     private final TeacherResourceAssetService assetService;
+    private final TeacherResourceUploadService uploadService;
     private final RequestSubjectResolver subjectResolver;
     private final TeacherResourceCapabilityVerifier capabilityVerifier;
 
@@ -90,6 +94,7 @@ public class TeacherResourceController {
                 checkpointQueryService,
                 blockStore,
                 TeacherResourceAssetService.disabled(),
+                TeacherResourceUploadService.disabled(),
                 subjectResolver,
                 capabilityVerifier);
     }
@@ -104,6 +109,7 @@ public class TeacherResourceController {
             TeacherSourceSyncCheckpointQueryService checkpointQueryService,
             TeacherDocumentBlockStore blockStore,
             TeacherResourceAssetService assetService,
+            TeacherResourceUploadService uploadService,
             RequestSubjectResolver subjectResolver,
             TeacherResourceCapabilityVerifier capabilityVerifier) {
         this.teacherResourceService = Objects.requireNonNull(teacherResourceService, "teacherResourceService");
@@ -114,6 +120,7 @@ public class TeacherResourceController {
         this.checkpointQueryService = Objects.requireNonNull(checkpointQueryService, "checkpointQueryService");
         this.blockStore = Objects.requireNonNull(blockStore, "blockStore");
         this.assetService = Objects.requireNonNull(assetService, "assetService");
+        this.uploadService = Objects.requireNonNull(uploadService, "uploadService");
         this.subjectResolver = Objects.requireNonNull(subjectResolver, "subjectResolver");
         this.capabilityVerifier = Objects.requireNonNull(capabilityVerifier, "capabilityVerifier");
     }
@@ -140,6 +147,48 @@ public class TeacherResourceController {
         }
         try {
             return teacherResourceService.register(enrich(request, subject));
+        } catch (IllegalArgumentException exception) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, exception.getMessage(), exception);
+        }
+    }
+
+    /**
+     * Saves browser-uploaded files into a backend-managed local directory, then registers that directory as a normal
+     * teacher resource so the existing sync-job/parser/vector pipeline can ingest it unchanged.
+     */
+    @PostMapping(value = RESOURCES_UPLOAD_PATH, consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public TeacherResourceDocumentResponse uploadAndRegister(
+            @RequestParam("files") List<MultipartFile> files,
+            @RequestParam(value = "sourceType", required = false) String sourceType,
+            @RequestParam(value = "title", required = false) String title,
+            @RequestParam(value = "permissionScope", required = false) String permissionScope,
+            @RequestParam(value = "parseMode", required = false) String parseMode,
+            HttpServletRequest httpRequest) {
+        RequestSubject subject = subjectResolver.resolve(httpRequest);
+        if (!capabilityVerifier.verify(
+                headerOrNull(httpRequest, "X-Capability-Token"),
+                REGISTER_ACTION,
+                RESOURCES_UPLOAD_PATH,
+                headerOrNull(httpRequest, "X-Request-Hash"),
+                subject)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for teacher resource upload");
+        }
+        try {
+            RequestSubject normalized = subject.normalize();
+            String normalizedSourceType = sourceType == null || sourceType.isBlank() ? "local_path" : sourceType.strip();
+            if ("feishu".equalsIgnoreCase(normalizedSourceType)) {
+                throw new IllegalArgumentException("Upload endpoint does not accept feishu sourceType; use register with originalUrl instead");
+            }
+            TeacherResourceUploadService.StoredUpload upload = uploadService.store(files, normalized);
+            TeacherResourceRegistrationRequest registrationRequest = new TeacherResourceRegistrationRequest(
+                    normalizedSourceType,
+                    title,
+                    null,
+                    upload.rootPath().toString(),
+                    permissionScope,
+                    null,
+                    parseMode);
+            return teacherResourceService.register(enrich(registrationRequest, normalized));
         } catch (IllegalArgumentException exception) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, exception.getMessage(), exception);
         }
