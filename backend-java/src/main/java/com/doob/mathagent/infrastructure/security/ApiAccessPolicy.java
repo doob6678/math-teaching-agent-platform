@@ -56,7 +56,12 @@ public class ApiAccessPolicy {
                 new ApiAccessRule("/api/agents/writing/courseware/async", ApiAccessLevel.USER, Set.of("teacher", "admin"), 10, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/agents/writing/courseware", ApiAccessLevel.USER, Set.of("teacher", "admin"), 10, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/agents/writing", ApiAccessLevel.USER, Set.of("teacher", "admin"), 120, Duration.ofMinutes(1)),
-                new ApiAccessRule("/api/resources/textbooks/summary", ApiAccessLevel.PUBLIC, Set.of("*"), 120, Duration.ofMinutes(1)),
+                /*
+                 * Public textbook metadata and page-image reads share the same processed_books backing store and never
+                 * expose tenant-private material. Keep the whole /api/resources/textbooks/ prefix public so CLIP page
+                 * search hits can resolve controlled image URLs without requiring a login or leaking local paths.
+                 */
+                new ApiAccessRule("/api/resources/textbooks/", ApiAccessLevel.PUBLIC, Set.of("*"), 120, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/students/explanations", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 20, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/students/dashboard", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 40, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/students/memory", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 40, Duration.ofMinutes(1)),
@@ -73,7 +78,8 @@ public class ApiAccessPolicy {
                 new ApiAccessRule("/api/teaching/handouts/batch/zip", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 10, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/teaching/tasks", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 20, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/retrieval/audit", ApiAccessLevel.ADMIN, Set.of("teacher", "admin"), 60, Duration.ofMinutes(1)),
-                new ApiAccessRule("/api/retrieval/textbooks/search", ApiAccessLevel.GUEST, Set.of("anonymous", "guest", "student", "teacher", "admin"), 30, Duration.ofMinutes(1))));
+                new ApiAccessRule("/api/retrieval/textbooks/search", ApiAccessLevel.GUEST, Set.of("anonymous", "guest", "student", "teacher", "admin"), 30, Duration.ofMinutes(1)),
+                new ApiAccessRule("/api/retrieval/textbooks/page-search", ApiAccessLevel.GUEST, Set.of("anonymous", "guest", "student", "teacher", "admin"), 20, Duration.ofMinutes(1))));
     }
 
     /**
