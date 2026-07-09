@@ -330,6 +330,30 @@ export interface TeachingWorkflowNode {
 }
 
 /**
+ * Recoverable teaching workflow event for process-stream style UI and future event-table persistence.
+ */
+export interface TeachingWorkflowEvent {
+  /** Stable event id within one teaching task response. */
+  eventId: string;
+  /** Parent event id; empty when this is a root-level event. */
+  parentEventId?: string;
+  /** Producer type, such as system, tool, agent, or reviewer. */
+  sourceType: string;
+  /** Producer display name. */
+  sourceName: string;
+  /** Stable event kind, such as plan, evidence, generation, render, or review. */
+  eventType: string;
+  /** Event status for the persisted snapshot. */
+  status: string;
+  /** Short user-facing title. */
+  title: string;
+  /** Safe summary without raw prompt, token, or debug leakage. */
+  summary: string;
+  /** Evidence scopes or artifact versions produced by this event. */
+  artifactRefs: string[];
+}
+
+/**
  * ReAct 解题轨迹步骤。
  */
 export interface TeachingReactStep {
@@ -442,6 +466,50 @@ export interface TeachingAiDraft {
   recoveryEvents: TeachingAiRecoveryEvent[];
 }
 
+/**
+ * Structured teaching draft sections collected before review and merge.
+ */
+export interface TeachingDraftSections {
+  /** Teacher-facing explanation draft. */
+  teacherExplanation: string;
+  /** Student-safe worksheet draft. */
+  studentWorksheet: string;
+  /** Lecture-card outline derived from the teacher draft. */
+  lectureCards: string[];
+  /** Structured student exercises. */
+  exercises: string[];
+  /** Trace-safe evidence references used by the draft. */
+  sourceRefs: string[];
+  /** Known review risks that later reviewer agents should resolve. */
+  risks: string[];
+}
+
+/**
+ * Structured review result collected before merge/render decisions.
+ */
+export interface TeachingDraftReview {
+  /** READY or NEEDS_ATTENTION. */
+  status: string;
+  /** Structured findings grouped by reviewer role and section. */
+  findings: TeachingDraftReviewFinding[];
+  /** Merge-ready patch suggestions. */
+  patches: TeachingDraftReviewPatch[];
+}
+
+export interface TeachingDraftReviewFinding {
+  reviewerCode: string;
+  severity: string;
+  sectionCode: string;
+  summary: string;
+  artifactRefs: string[];
+}
+
+export interface TeachingDraftReviewPatch {
+  reviewerCode: string;
+  targetSectionCode: string;
+  instruction: string;
+}
+
 export interface TeachingAiRecoveryEvent {
   eventType: string;
   providerName: string;
@@ -476,6 +544,8 @@ export interface TeachingTaskResponse {
   learningGoal?: string;
   /** DAG 节点。 */
   nodes: TeachingWorkflowNode[];
+  /** Recoverable process events, richer than nodes and safe for progress timelines. */
+  workflowEvents?: TeachingWorkflowEvent[];
   /** ReAct 轨迹。 */
   reactTrace: TeachingReactStep[];
   /** 证据列表。 */
@@ -495,6 +565,10 @@ export interface TeachingTaskResponse {
   /** 后端 DAG 阶段耗时统计。 */
   stageTimings?: TeachingStageTiming[];
   aiDraft?: TeachingAiDraft;
+  /** Structured draft sections collected before review/merge/render. */
+  draftSections?: TeachingDraftSections;
+  /** Structured review findings and patch suggestions. */
+  draftReview?: TeachingDraftReview;
   /** 失败原因。 */
   errorMessage?: string;
 }
@@ -899,6 +973,8 @@ export interface MultiAgentWritingArtifact {
   totalUsage: AgentTokenUsage;
   /** Per-stage generated content. */
   stages: MultiAgentWritingStageArtifact[];
+  /** Merge-ready sections with review metadata for collaborative editing. */
+  sections?: MultiAgentWritingStructuredSection[];
   /** Merged Markdown content for preview and export. */
   mergedMarkdown: string;
 }
@@ -921,6 +997,26 @@ export interface MultiAgentWritingStageArtifact {
   status: string;
   /** Owner-visible generated content. */
   generatedContent: string;
+}
+
+/**
+ * Structured document section created from multi-agent writing output.
+ */
+export interface MultiAgentWritingStructuredSection {
+  /** Stable merge section code. */
+  sectionCode: string;
+  /** Readable section title. */
+  title: string;
+  /** Stage that produced this section. */
+  sourceStageCode: string;
+  /** Owner-visible Markdown body. */
+  content: string;
+  /** Reviewer comments or patch notes for this section. */
+  reviewNotes: string[];
+  /** Known content, layout, or evidence risks. */
+  risks: string[];
+  /** Evidence or upstream artifact references used by this section. */
+  artifactRefs: string[];
 }
 
 /**
