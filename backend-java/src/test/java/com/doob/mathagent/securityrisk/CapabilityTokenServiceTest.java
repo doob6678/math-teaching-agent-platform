@@ -109,7 +109,7 @@ class CapabilityTokenServiceTest {
     }
 
     @Test
-    void issuesTeacherResourceCapabilityTokensForRegisterArchiveAndSync() {
+    void issuesTeacherResourceCapabilityTokensForRegisterUploadArchiveAndSync() {
         CapabilityTokenService service = CapabilityTokenServiceFixture.service(clock);
         RequestSubject teacher = new RequestSubject("school-a", "teacher", "teacher-001", "device-1");
 
@@ -124,6 +124,12 @@ class CapabilityTokenServiceTest {
                 "/api/teacher/resources/doc-1",
                 "hash-archive",
                 "resource-archive-doc-1",
+                1.0), teacher);
+        CapabilityTokenResponse upload = service.apply(new CapabilityTokenApplyRequest(
+                "teacher-resource:register",
+                "/api/teacher/resources/upload",
+                "hash-upload",
+                "resource-upload-001",
                 1.0), teacher);
         CapabilityTokenResponse sync = service.apply(new CapabilityTokenApplyRequest(
                 "teacher-resource:sync",
@@ -143,6 +149,12 @@ class CapabilityTokenServiceTest {
                 "teacher-resource:archive",
                 "/api/teacher/resources/doc-1",
                 "hash-archive",
+                teacher).allowed()).isTrue();
+        assertThat(service.consume(
+                upload.token(),
+                "teacher-resource:register",
+                "/api/teacher/resources/upload",
+                "hash-upload",
                 teacher).allowed()).isTrue();
         assertThat(service.consume(
                 sync.token(),

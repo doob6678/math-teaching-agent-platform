@@ -1,6 +1,13 @@
 spring:
   application:
     name: math-agent-rag-backend
+  servlet:
+    multipart:
+      # Teacher resource uploads legitimately include full exam PDFs and bundled lesson packages. Keep the servlet
+      # envelope aligned with TeacherResourceUploadService's own 256 MB guard so requests fail for real business
+      # limits instead of Spring Boot's accidental 1 MB default before controller code runs.
+      max-file-size: ${MATH_AGENT_HTTP_MULTIPART_MAX_FILE_SIZE:256MB}
+      max-request-size: ${MATH_AGENT_HTTP_MULTIPART_MAX_REQUEST_SIZE:256MB}
   ai:
     model:
       chat: ${MATH_AGENT_AI_CHAT_MODEL:openai}

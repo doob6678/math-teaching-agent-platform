@@ -35,6 +35,7 @@ public class CapabilityTokenService {
     private static final String TEACHER_RESOURCE_SYNC_EXECUTE_ACTION = "teacher-resource:sync-execute";
     private static final String TEACHER_RESOURCE_SYNC_RESUME_ACTION = "teacher-resource:sync-resume";
     private static final String TEACHER_RESOURCES_PATH = "/api/teacher/resources";
+    private static final String TEACHER_RESOURCES_UPLOAD_PATH = "/api/teacher/resources/upload";
     private static final String STUDENT_MEMORY_REMEMBER_ACTION = "student-memory:remember";
     private static final String STUDENT_MEMORY_REMEMBER_PATH = "/api/students/memory/remember";
     private static final String STUDENT_DASHBOARD_REFRESH_ACTION = "student-dashboard:refresh";
@@ -248,7 +249,13 @@ public class CapabilityTokenService {
             validateTeachingSubject(subject);
             return;
         }
-        if (TEACHER_RESOURCE_REGISTER_ACTION.equals(action) && TEACHER_RESOURCES_PATH.equals(path)) {
+        /*
+         * Teacher resource registration has two real entrypoints: JSON registration for server paths/Feishu links and
+         * multipart upload for browser files. Both consume the same capability action, so do not whitelist only the
+         * base resource path here or upload will be rejected before the controller ever sees the file.
+         */
+        if (TEACHER_RESOURCE_REGISTER_ACTION.equals(action)
+                && (TEACHER_RESOURCES_PATH.equals(path) || TEACHER_RESOURCES_UPLOAD_PATH.equals(path))) {
             validateTeacherResourceSubject(subject);
             return;
         }
