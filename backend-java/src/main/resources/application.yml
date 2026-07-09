@@ -104,7 +104,6 @@ math-agent:
   resources:
     processed-books-root: ${MATH_AGENT_PROCESSED_BOOKS_ROOT:C:/Users/doob/Desktop/个人资料/高中数学/下载课本代码/tchMaterial-parser-main/tchMaterial-parser-main/processed_books}
     project-test-data-root: ${MATH_AGENT_PROJECT_TEST_DATA_ROOT:C:/Users/doob/Desktop/code/dev/math_agent_rag/文档/项目测试数据位置}
-    legacy-textbook-parser-root: ${MATH_AGENT_LEGACY_TEXTBOOK_PARSER_ROOT:C:/Users/doob/Desktop/个人资料/高中数学/下载课本代码/tchMaterial-parser-main/tchMaterial-parser-main}
     design-spec-root: ${MATH_AGENT_DESIGN_SPEC_ROOT:C:/Users/doob/Desktop/code/dev/math_agent_rag/文档/设计方案体系}
     reference-handout-pdf: ${MATH_AGENT_REFERENCE_HANDOUT_PDF:C:/Users/doob/Desktop/code/dev/math_agent_rag/文档/项目测试数据位置/参考讲义数学空间向量.pdf}
     prompt-design-pdf: ${MATH_AGENT_PROMPT_DESIGN_PDF:C:/Users/doob/Desktop/code/dev/math_agent_rag/文档/豆包爱学的提示词设计.pdf}

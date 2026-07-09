@@ -13,14 +13,12 @@ class ProjectResourcePropertiesTest {
     void readsAllLocalResourcePathsFromEnvironmentMap() {
         ProjectResourceProperties properties = ProjectResourceProperties.fromEnvironment(Map.of(
                 "MATH_AGENT_PROJECT_TEST_DATA_ROOT", "C:/project/data",
-                "MATH_AGENT_LEGACY_TEXTBOOK_PARSER_ROOT", "C:/legacy/parser",
                 "MATH_AGENT_DESIGN_SPEC_ROOT", "C:/project/design",
                 "MATH_AGENT_REFERENCE_HANDOUT_PDF", "C:/project/data/reference.pdf",
                 "MATH_AGENT_PROMPT_DESIGN_PDF", "C:/project/prompt.pdf",
                 "MATH_AGENT_LOCAL_FILE_STORAGE_ROOT", "C:/project/storage"));
 
         assertThat(properties.projectTestDataRoot()).isEqualTo(normalized("C:/project/data"));
-        assertThat(properties.legacyTextbookParserRoot()).isEqualTo(normalized("C:/legacy/parser"));
         assertThat(properties.designSpecRoot()).isEqualTo(normalized("C:/project/design"));
         assertThat(properties.referenceHandoutPdf()).isEqualTo(normalized("C:/project/data/reference.pdf"));
         assertThat(properties.promptDesignPdf()).isEqualTo(normalized("C:/project/prompt.pdf"));

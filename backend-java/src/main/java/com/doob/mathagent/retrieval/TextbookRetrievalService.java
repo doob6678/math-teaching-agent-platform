@@ -111,14 +111,14 @@ public class TextbookRetrievalService {
         long startedAtNanos = System.nanoTime();
         Path normalizedRoot = processedBooksRoot.toAbsolutePath().normalize();
         CachedTextbookCorpus corpus = loadCorpus(normalizedRoot);
-        String cacheKey = searchCacheKey(corpus, request);
-        TextbookSearchCache.CachedTextbookSearch cached = searchCache.find(cacheKey).orElse(null);
         TeacherResourceGraphAlignmentService.QueryGraphContext queryGraph = graphAlignmentService.alignQuery(
                 normalizedContext.tenantId(),
                 normalizedContext.subjectType(),
                 normalizedContext.subjectId(),
                 request.query());
         String focusedQuery = focusedTextbookQuery(request.query(), queryGraph);
+        String cacheKey = searchCacheKey(corpus, request.limit(), focusedQuery);
+        TextbookSearchCache.CachedTextbookSearch cached = searchCache.find(cacheKey).orElse(null);
         List<TextbookSearchHit> hits = cached == null
                 ? rerankedHits(focusedQuery, request.limit(), corpus.chunks(), queryGraph)
                 : cached.hits();
@@ -127,7 +127,7 @@ public class TextbookRetrievalService {
             searchCache.put(
                     cacheKey,
                     new TextbookSearchCache.CachedTextbookSearch(
-                            request.query(),
+                            focusedQuery,
                             request.limit(),
                             SEARCH_PIPELINE_VERSION,
                             hits.size(),
@@ -654,13 +654,17 @@ public class TextbookRetrievalService {
         return elapsed > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) elapsed;
     }
 
-    private static String searchCacheKey(CachedTextbookCorpus corpus, TextbookSearchRequest request) {
+    private static String searchCacheKey(CachedTextbookCorpus corpus, int limit, String focusedQuery) {
         return sha256(String.join("|",
                 SEARCH_PIPELINE_VERSION,
                 corpus.processedBooksRoot().toString(),
                 corpus.signatureHash(),
-                String.valueOf(request.limit()),
-                request.query()));
+                String.valueOf(limit),
+                textOrBlank(focusedQuery)));
+    }
+
+    private static String textOrBlank(String value) {
+        return value == null ? "" : value;
     }
 
     private static String corpusSignatureHash(

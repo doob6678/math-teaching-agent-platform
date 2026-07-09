@@ -134,7 +134,7 @@ class StudentExplanationImageStoreServiceTest {
      */
     private StudentExplanationImageStoreService store(MutableClock clock, Duration ttl, long maxBytes) {
         return new StudentExplanationImageStoreService(
-                new ProjectResourceProperties(tempDir, tempDir, tempDir, tempDir, tempDir, tempDir),
+                new ProjectResourceProperties(tempDir, tempDir, tempDir, tempDir, tempDir),
                 clock,
                 ttl,
                 maxBytes);

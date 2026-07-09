@@ -39,6 +39,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -71,6 +72,7 @@ public class TeacherResourceBlockSearchService {
     private static final int DEFAULT_LIMIT = 10;
     private static final int MAX_LIMIT = 20;
     private static final String STRATEGY_TWO_STAGE_DOC_BLOCK = "two_stage_doc_block";
+    private static final Pattern QUERY_CLAUSE_SPLITTER = Pattern.compile("[\\r\\n,，。；;：:！？!?()（）\\[\\]【】]+");
     /**
      * These numbers are transport budgets for the worker and audit tables, not ranking weights.
      *
@@ -78,6 +80,11 @@ public class TeacherResourceBlockSearchService {
      * folders, deep evidence windows, and image-rich chunks from blowing up worker latency or varchar limits.</p>
      */
     private static final SearchRuntimeBudget SEARCH_BUDGET = SearchRuntimeBudget.defaults();
+    /**
+     * Query focus is not a ranking formula. It only strips orchestration noise so semantic retrieval sees the real
+     * math intent instead of the surrounding workflow instructions.
+     */
+    private static final QueryFocusBudget QUERY_FOCUS_BUDGET = QueryFocusBudget.defaults();
 
     private final TeacherResourceStore resourceStore;
     private final TeacherDocumentBlockStore blockStore;
@@ -253,12 +260,12 @@ public class TeacherResourceBlockSearchService {
             recordAudit(normalizedTenantId, normalizedRole, normalizedSubjectId, endpoint, emptyResponse, startedNanos);
             return emptyResponse;
         }
-        String[] terms = searchTerms(normalizedQuery);
         TeacherResourceGraphAlignmentService.QueryGraphContext queryGraph = graphAlignmentService.alignQuery(
                 normalizedTenantId,
                 normalizedRole,
                 normalizedSubjectId,
                 normalizedQuery);
+        FocusedSearchQuery focusedQuery = focusedQuery(normalizedQuery, queryGraph);
         boolean includeRealTextbook = shouldUseRealTextbook(normalizedFilter);
         TeacherResourceBlockSearchResponse searchResponse;
         if (includeRealTextbook && isTextbookOnlyFilter(normalizedFilter)) {
@@ -296,7 +303,7 @@ public class TeacherResourceBlockSearchService {
                     normalizedTenantId,
                     documents,
                     normalizedQuery,
-                    terms,
+                    focusedQuery,
                     safeLimit,
                     normalizedFilter,
                     queryGraph);
@@ -308,6 +315,7 @@ public class TeacherResourceBlockSearchService {
                     normalizedRole,
                     normalizedSubjectId,
                     normalizedQuery,
+                    focusedQuery,
                     safeLimit,
                     endpoint);
         }
@@ -322,7 +330,7 @@ public class TeacherResourceBlockSearchService {
             String tenantId,
             List<TeacherResourceDocumentResponse> documents,
             String normalizedQuery,
-            String[] terms,
+            FocusedSearchQuery focusedQuery,
             int safeLimit,
             TeacherResourceSearchFilter filter,
             TeacherResourceGraphAlignmentService.QueryGraphContext queryGraph) {
@@ -340,7 +348,7 @@ public class TeacherResourceBlockSearchService {
             return response(normalizedQuery, safeLimit, retrievalMode(STRATEGY_TWO_STAGE_DOC_BLOCK, filter, "no_visible_blocks"), List.of());
         }
         Map<String, Double> vectorScoreByKey = vectorScoreByKey(
-                normalizedQuery,
+                focusedQuery.semanticQuery(),
                 safeLimit,
                 blocksByDocumentId,
                 filter);
@@ -348,8 +356,8 @@ public class TeacherResourceBlockSearchService {
                 documentsById,
                 blocksByDocumentId,
                 vectorScoreByKey,
-                normalizedQuery,
-                terms,
+                focusedQuery.semanticQuery(),
+                focusedQuery.terms(),
                 safeLimit,
                 queryGraph);
         List<DocumentCandidate> rankedDocuments = documentCandidates.stream()
@@ -362,8 +370,8 @@ public class TeacherResourceBlockSearchService {
                 rankedDocuments,
                 blocksByDocumentId,
                 vectorScoreByKey,
-                normalizedQuery,
-                terms,
+                focusedQuery.semanticQuery(),
+                focusedQuery.terms(),
                 safeLimit,
                 filter,
                 queryGraph);
@@ -381,6 +389,7 @@ public class TeacherResourceBlockSearchService {
             String viewerRole,
             String viewerSubjectId,
             String normalizedQuery,
+            FocusedSearchQuery focusedQuery,
             int safeLimit,
             String endpoint) {
         if (textbookRetrievalService == null || textbookResourceProperties == null) {
@@ -388,7 +397,7 @@ public class TeacherResourceBlockSearchService {
         }
         TextbookSearchResponse textbookResponse = textbookRetrievalService.search(
                 textbookResourceProperties.processedBooksRoot(),
-                new TextbookSearchRequest(normalizedQuery, safeLimit),
+                new TextbookSearchRequest(focusedQuery.semanticQuery(), safeLimit),
                 new RetrievalRequestContext(
                         tenantId,
                         viewerRole,
@@ -412,7 +421,7 @@ public class TeacherResourceBlockSearchService {
          * image itself may still be distinctive.
          */
         List<TeacherResourceBlockSearchResponse.Hit> textbookImageHits = textbookTextHits.isEmpty()
-                ? textbookImageHits(normalizedQuery, safeLimit, candidateDocIds)
+                ? textbookImageHits(focusedQuery.semanticQuery(), safeLimit, candidateDocIds)
                 : List.of();
         boolean teacherHitsEmpty = teacherResponse == null || teacherResponse.hits() == null || teacherResponse.hits().isEmpty();
         if (teacherHitsEmpty && textbookImageHits.isEmpty() && !textbookTextHits.isEmpty()) {
@@ -430,7 +439,8 @@ public class TeacherResourceBlockSearchService {
         if (teacherResponse != null && teacherResponse.hits() != null) {
             combinedHits.addAll(teacherResponse.hits());
         }
-        List<TeacherResourceBlockSearchResponse.Hit> mergedHits = semanticMergeHits(normalizedQuery, combinedHits, safeLimit);
+        List<TeacherResourceBlockSearchResponse.Hit> mergedHits =
+                semanticMergeHits(focusedQuery.semanticQuery(), focusedQuery.terms(), combinedHits, safeLimit);
         if (mergedHits.isEmpty()) {
             return teacherResponse;
         }
@@ -1243,7 +1253,8 @@ public class TeacherResourceBlockSearchService {
      * space, while lexical overlap stays only as a tie-breaker.
      */
     private List<TeacherResourceBlockSearchResponse.Hit> semanticMergeHits(
-            String normalizedQuery,
+            String semanticQuery,
+            String[] terms,
             List<TeacherResourceBlockSearchResponse.Hit> hits,
             int safeLimit) {
         if (hits == null || hits.isEmpty()) {
@@ -1261,15 +1272,23 @@ public class TeacherResourceBlockSearchService {
         List<String> candidateTexts = candidates.stream()
                 .map(TeacherResourceBlockSearchService::semanticMergeCandidateText)
                 .toList();
-        List<Double> rerankScores = vectorIndexService.rerankTexts(normalizedQuery, candidateTexts);
-        String[] terms = searchTerms(normalizedQuery);
+        List<Double> rerankScores;
+        try {
+            rerankScores = vectorIndexService.rerankTexts(semanticQuery, candidateTexts);
+        } catch (RuntimeException exception) {
+            log.warn("teacher_resource_search_merge_rerank_fallback query={} message={}",
+                    semanticQuery,
+                    textOrDefault(exception.getMessage(), ""),
+                    exception);
+            rerankScores = List.of();
+        }
         List<MergeCandidate> mergeCandidates = new ArrayList<>(candidates.size());
         for (int index = 0; index < candidates.size(); index += 1) {
             TeacherResourceBlockSearchResponse.Hit hit = candidates.get(index);
             mergeCandidates.add(new MergeCandidate(
                     hit,
                     rerankScores.size() > index ? rerankScores.get(index) : hit.score(),
-                    lexicalMatchCount(candidateTexts.get(index), normalizedQuery, terms)));
+                    lexicalMatchCount(candidateTexts.get(index), semanticQuery, terms)));
         }
         return mergeCandidates.stream()
                 .sorted(Comparator.comparingDouble(MergeCandidate::rerankScore).reversed()
@@ -1474,10 +1493,116 @@ public class TeacherResourceBlockSearchService {
     }
 
     /**
-     * Normalizes a query for lexical matching.
+     * Normalizes a query before graph alignment and semantic retrieval.
      */
     private static String normalizeQuery(String query) {
         return normalizeText(textOrDefault(query, ""));
+    }
+
+    /**
+     * Teacher-facing queries often contain routing instructions such as library narrowing, answer-format constraints,
+     * or "do not mix sources" reminders. Those clauses are useful for orchestration, but if we embed the entire
+     * sentence directly they dilute the math intent and make stage-one document recall noisy.
+     *
+     * <p>This focus builder is intentionally generic rather than benchmark-coupled: it keeps the clauses that overlap
+     * with normalized graph tags and falls back to the longest content clauses when graph alignment is sparse.</p>
+     */
+    private static FocusedSearchQuery focusedQuery(
+            String normalizedQuery,
+            TeacherResourceGraphAlignmentService.QueryGraphContext queryGraph) {
+        if (normalizedQuery.isBlank()) {
+            return new FocusedSearchQuery(normalizedQuery, new String[0]);
+        }
+        List<String> clauses = queryClauses(normalizedQuery);
+        List<String> primaryTags = normalizedQueryParts(queryGraph == null ? List.of() : queryGraph.primaryTagNames());
+        List<String> expandedTags = normalizedQueryParts(queryGraph == null ? List.of() : queryGraph.expandedTagNames());
+        LinkedHashSet<String> focusedParts = new LinkedHashSet<>();
+        appendMatchingClauses(focusedParts, clauses, primaryTags);
+        appendMatchingClauses(focusedParts, clauses, expandedTags);
+        if (focusedParts.isEmpty()) {
+            clauses.stream()
+                    .sorted(Comparator.comparingInt(String::length).reversed().thenComparing(String::compareTo))
+                    .limit(QUERY_FOCUS_BUDGET.maxClauses())
+                    .forEach(clause -> addFocusedPart(focusedParts, clause));
+        }
+        primaryTags.stream()
+                .limit(QUERY_FOCUS_BUDGET.maxGraphTags())
+                .forEach(tag -> addFocusedPart(focusedParts, tag));
+        expandedTags.stream()
+                .limit(QUERY_FOCUS_BUDGET.maxGraphTags())
+                .forEach(tag -> addFocusedPart(focusedParts, tag));
+        String semanticQuery = truncateForRerank(
+                String.join(" ", focusedParts),
+                QUERY_FOCUS_BUDGET.maxSemanticQueryChars());
+        if (semanticQuery.isBlank()) {
+            semanticQuery = normalizedQuery;
+        }
+        return new FocusedSearchQuery(semanticQuery, searchTerms(semanticQuery));
+    }
+
+    private static List<String> queryClauses(String normalizedQuery) {
+        LinkedHashSet<String> clauses = new LinkedHashSet<>();
+        for (String value : QUERY_CLAUSE_SPLITTER.split(normalizedQuery)) {
+            String clause = normalizeText(textOrDefault(value, ""));
+            if (!clause.isBlank()) {
+                clauses.add(clause);
+            }
+        }
+        if (clauses.isEmpty()) {
+            clauses.add(normalizedQuery);
+        }
+        return List.copyOf(clauses);
+    }
+
+    private static List<String> normalizedQueryParts(List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return List.of();
+        }
+        LinkedHashSet<String> normalized = new LinkedHashSet<>();
+        for (String value : values) {
+            String tag = normalizeText(textOrDefault(value, ""));
+            if (!tag.isBlank()) {
+                normalized.add(tag);
+            }
+        }
+        return List.copyOf(normalized);
+    }
+
+    private static void appendMatchingClauses(
+            LinkedHashSet<String> focusedParts,
+            List<String> clauses,
+            List<String> normalizedTags) {
+        if (focusedParts.size() >= QUERY_FOCUS_BUDGET.maxClauses() || normalizedTags.isEmpty()) {
+            return;
+        }
+        for (String clause : clauses) {
+            if (focusedParts.size() >= QUERY_FOCUS_BUDGET.maxClauses()) {
+                return;
+            }
+            boolean matched = normalizedTags.stream().anyMatch(tag -> containsNormalized(clause, tag));
+            if (matched) {
+                addFocusedPart(focusedParts, clause);
+            }
+        }
+    }
+
+    private static void addFocusedPart(LinkedHashSet<String> focusedParts, String candidate) {
+        String normalized = normalizeText(textOrDefault(candidate, ""));
+        if (normalized.isBlank()) {
+            return;
+        }
+        for (String existing : focusedParts) {
+            if (containsNormalized(existing, normalized) || containsNormalized(normalized, existing)) {
+                return;
+            }
+        }
+        focusedParts.add(normalized);
+    }
+
+    private static boolean containsNormalized(String haystack, String needle) {
+        String normalizedHaystack = normalizeText(textOrDefault(haystack, ""));
+        String normalizedNeedle = normalizeText(textOrDefault(needle, ""));
+        return !normalizedNeedle.isBlank() && normalizedHaystack.contains(normalizedNeedle);
     }
 
     private static String retrievalMode(String strategy, TeacherResourceSearchFilter filter, String suffix) {
@@ -1520,9 +1645,9 @@ public class TeacherResourceBlockSearchService {
     }
 
     /**
-     * Extracts a compact set of lexical terms from Chinese and Latin fragments. Runtime eval queries are often written
-     * as one continuous Chinese sentence with no spaces, so whitespace tokenization alone collapses the entire query
-     * into one unusable term and erases the lexical signals that should help stage one find the right document.
+     * Extracts a compact set of lexical support terms from Chinese and Latin fragments. Real teacher queries are often
+     * one continuous Chinese sentence with little punctuation, so whitespace tokenization alone collapses the entire
+     * request into one unusable term and erases the lightweight lexical signal that should only assist semantic recall.
      */
     private static void appendSearchTerms(LinkedHashSet<String> terms, String fragment) {
         String normalizedFragment = normalizeText(textOrDefault(fragment, ""));
@@ -1737,6 +1862,21 @@ public class TeacherResourceBlockSearchService {
             int lexicalMatches) {
         private double sourceScore() {
             return hit.score();
+        }
+    }
+
+    private record FocusedSearchQuery(
+            String semanticQuery,
+            String[] terms) {
+    }
+
+    private record QueryFocusBudget(
+            int maxSemanticQueryChars,
+            int maxClauses,
+            int maxGraphTags) {
+
+        private static QueryFocusBudget defaults() {
+            return new QueryFocusBudget(160, 3, 4);
         }
     }
 

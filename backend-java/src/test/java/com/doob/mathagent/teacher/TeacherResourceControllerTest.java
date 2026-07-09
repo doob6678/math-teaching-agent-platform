@@ -11,26 +11,26 @@ import com.doob.mathagent.teacher.service.InMemoryTeacherResourceAssetStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherResourceStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherSourceSyncCheckpointStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherSourceSyncJobStore;
-import com.doob.mathagent.teacher.service.RecentTeacherResourceBlockSearchAuditStore;
-import com.doob.mathagent.teacher.service.TeacherResourceCapabilityVerifier;
-import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchAuditEvent;
-import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchAuditLookup;
+import com.doob.mathagent.teacher.search.audit.RecentTeacherResourceBlockSearchAuditStore;
+import com.doob.mathagent.teacher.support.TeacherResourceCapabilityVerifier;
+import com.doob.mathagent.teacher.search.audit.TeacherResourceBlockSearchAuditEvent;
+import com.doob.mathagent.teacher.search.audit.TeacherResourceBlockSearchAuditLookup;
 import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService;
 import com.doob.mathagent.teacher.service.TeacherResourceAssetService;
-import com.doob.mathagent.teacher.service.TeacherFeishuDownloadClient;
-import com.doob.mathagent.teacher.service.TeacherFeishuDownloadException;
-import com.doob.mathagent.teacher.service.TeacherResourceGraphAlignmentService;
+import com.doob.mathagent.teacher.feishu.TeacherFeishuDownloadClient;
+import com.doob.mathagent.teacher.feishu.TeacherFeishuDownloadException;
+import com.doob.mathagent.teacher.search.TeacherResourceGraphAlignmentService;
 import com.doob.mathagent.teacher.service.TeacherResourceUploadService;
 import com.doob.mathagent.teacher.service.TeacherResourceService;
-import com.doob.mathagent.teacher.service.TeacherSourceSyncCheckpointQueryService;
+import com.doob.mathagent.teacher.sync.TeacherSourceSyncCheckpointQueryService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncExecutionService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncJobService;
-import com.doob.mathagent.teacher.service.TeacherSourceSyncProperties;
-import com.doob.mathagent.teacher.service.TeacherDocumentBlockStore;
-import com.doob.mathagent.teacher.vo.TeacherDocumentBlockResponse;
+import com.doob.mathagent.teacher.sync.TeacherSourceSyncProperties;
+import com.doob.mathagent.teacher.block.TeacherDocumentBlockStore;
+import com.doob.mathagent.teacher.block.TeacherDocumentBlockResponse;
 import com.doob.mathagent.teacher.vo.TeacherResourceAssetResponse;
-import com.doob.mathagent.teacher.vo.TeacherResourceBlockSearchResponse;
-import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
+import com.doob.mathagent.teacher.search.TeacherResourceBlockSearchResponse;
+import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncCheckpointResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncJobResponse;
 import com.doob.mathagent.vector.service.TestVectorIndexService;
@@ -307,7 +307,7 @@ class TeacherResourceControllerTest {
                 testSyncProperties(),
                 checkpointStore);
         TeacherResourceUploadService uploadService = new TeacherResourceUploadService(
-                new com.doob.mathagent.resources.ProjectResourceProperties(tempDir, tempDir, tempDir, tempDir, tempDir, tempDir),
+                new com.doob.mathagent.resources.ProjectResourceProperties(tempDir, tempDir, tempDir, tempDir, tempDir),
                 java.time.Clock.systemUTC(),
                 1024 * 1024,
                 64);
@@ -365,7 +365,7 @@ class TeacherResourceControllerTest {
                 null,
                 null,
                 new TeacherResourceUploadService(
-                        new com.doob.mathagent.resources.ProjectResourceProperties(tempDir, tempDir, tempDir, tempDir, tempDir, tempDir),
+                        new com.doob.mathagent.resources.ProjectResourceProperties(tempDir, tempDir, tempDir, tempDir, tempDir),
                         java.time.Clock.systemUTC(),
                         1024 * 1024,
                         64),
@@ -842,9 +842,7 @@ class TeacherResourceControllerTest {
                 java.util.List.of("MATH_VIP"),
                 null,
                 null,
-                null,
                 java.util.List.of("derivative"),
-                null,
                 new MockHttpServletRequest());
 
         assertThat(response.retrievalMode()).isEqualTo("two_stage_doc_block_filtered");
@@ -905,9 +903,7 @@ class TeacherResourceControllerTest {
                 10,
                 null,
                 null,
-                null,
                 java.util.List.of("qq_bundle"),
-                null,
                 null,
                 new MockHttpServletRequest());
 
@@ -988,9 +984,7 @@ class TeacherResourceControllerTest {
                 10,
                 null,
                 null,
-                null,
                 java.util.List.of("teacher_resource"),
-                null,
                 null,
                 new MockHttpServletRequest());
 
@@ -1457,4 +1451,5 @@ class TeacherResourceControllerTest {
         return output.toByteArray();
     }
 }
+
 

@@ -93,7 +93,7 @@ class TeacherResourceUploadServiceTest {
 
     private TeacherResourceUploadService service() {
         return new TeacherResourceUploadService(
-                new ProjectResourceProperties(tempDir, tempDir, tempDir, tempDir, tempDir, tempDir),
+                new ProjectResourceProperties(tempDir, tempDir, tempDir, tempDir, tempDir),
                 Clock.systemUTC(),
                 1024 * 1024,
                 64);

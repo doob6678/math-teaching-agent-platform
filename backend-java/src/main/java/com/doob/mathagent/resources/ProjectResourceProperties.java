@@ -7,12 +7,11 @@ import org.springframework.core.env.Environment;
 /**
  * Local project resource path configuration.
  *
- * <p>These paths point to test data, legacy textbook parsing output, design documents, reference PDFs, and local file
- * storage. They must be configured through Spring properties or environment variables so future deployments can change
- * paths without code edits.</p>
+ * <p>These paths point to test data, design documents, reference PDFs, and local file storage. They must be
+ * configured through Spring properties or environment variables so future deployments can change paths without code
+ * edits.</p>
  *
  * @param projectTestDataRoot project test data directory
- * @param legacyTextbookParserRoot legacy textbook parser repository directory
  * @param designSpecRoot design scheme document directory
  * @param referenceHandoutPdf reference handout PDF used for visual/layout comparison
  * @param promptDesignPdf prompt design PDF used for AI workflow design reference
@@ -20,7 +19,6 @@ import org.springframework.core.env.Environment;
  */
 public record ProjectResourceProperties(
         Path projectTestDataRoot,
-        Path legacyTextbookParserRoot,
         Path designSpecRoot,
         Path referenceHandoutPdf,
         Path promptDesignPdf,
@@ -28,9 +26,6 @@ public record ProjectResourceProperties(
 
     /** Environment variable for the project test data directory. */
     static final String PROJECT_TEST_DATA_ROOT_KEY = "MATH_AGENT_PROJECT_TEST_DATA_ROOT";
-
-    /** Environment variable for the legacy textbook parser directory. */
-    static final String LEGACY_TEXTBOOK_PARSER_ROOT_KEY = "MATH_AGENT_LEGACY_TEXTBOOK_PARSER_ROOT";
 
     /** Environment variable for the design scheme directory. */
     static final String DESIGN_SPEC_ROOT_KEY = "MATH_AGENT_DESIGN_SPEC_ROOT";
@@ -49,7 +44,6 @@ public record ProjectResourceProperties(
      */
     public ProjectResourceProperties {
         projectTestDataRoot = normalize(projectTestDataRoot);
-        legacyTextbookParserRoot = normalize(legacyTextbookParserRoot);
         designSpecRoot = normalize(designSpecRoot);
         referenceHandoutPdf = normalize(referenceHandoutPdf);
         promptDesignPdf = normalize(promptDesignPdf);
@@ -74,7 +68,6 @@ public record ProjectResourceProperties(
     public static ProjectResourceProperties fromEnvironment(Map<String, String> environment) {
         return fromValues(
                 environment.get(PROJECT_TEST_DATA_ROOT_KEY),
-                environment.get(LEGACY_TEXTBOOK_PARSER_ROOT_KEY),
                 environment.get(DESIGN_SPEC_ROOT_KEY),
                 environment.get(REFERENCE_HANDOUT_PDF_KEY),
                 environment.get(PROMPT_DESIGN_PDF_KEY),
@@ -90,7 +83,6 @@ public record ProjectResourceProperties(
     public static ProjectResourceProperties fromSpringEnvironment(Environment environment) {
         return fromValues(
                 property(environment, "math-agent.resources.project-test-data-root", PROJECT_TEST_DATA_ROOT_KEY),
-                property(environment, "math-agent.resources.legacy-textbook-parser-root", LEGACY_TEXTBOOK_PARSER_ROOT_KEY),
                 property(environment, "math-agent.resources.design-spec-root", DESIGN_SPEC_ROOT_KEY),
                 property(environment, "math-agent.resources.reference-handout-pdf", REFERENCE_HANDOUT_PDF_KEY),
                 property(environment, "math-agent.resources.prompt-design-pdf", PROMPT_DESIGN_PDF_KEY),
@@ -101,7 +93,6 @@ public record ProjectResourceProperties(
      * Creates properties from raw string values and validates every required path is present.
      *
      * @param projectTestDataRoot project test data directory
-     * @param legacyTextbookParserRoot legacy textbook parser directory
      * @param designSpecRoot design scheme directory
      * @param referenceHandoutPdf reference handout PDF
      * @param promptDesignPdf prompt design PDF
@@ -110,14 +101,12 @@ public record ProjectResourceProperties(
      */
     private static ProjectResourceProperties fromValues(
             String projectTestDataRoot,
-            String legacyTextbookParserRoot,
             String designSpecRoot,
             String referenceHandoutPdf,
             String promptDesignPdf,
             String localFileStorageRoot) {
         return new ProjectResourceProperties(
                 path(projectTestDataRoot, PROJECT_TEST_DATA_ROOT_KEY),
-                path(legacyTextbookParserRoot, LEGACY_TEXTBOOK_PARSER_ROOT_KEY),
                 path(designSpecRoot, DESIGN_SPEC_ROOT_KEY),
                 path(referenceHandoutPdf, REFERENCE_HANDOUT_PDF_KEY),
                 path(promptDesignPdf, PROMPT_DESIGN_PDF_KEY),

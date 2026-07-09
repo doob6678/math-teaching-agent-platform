@@ -19,6 +19,8 @@ import com.doob.mathagent.student.service.StudentExplanationService;
 import com.doob.mathagent.student.service.StudentExplanationVisionService;
 import com.doob.mathagent.student.vo.StudentExplanationResponse;
 import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService;
+import com.doob.mathagent.teacher.document.TeacherResourceStore;
+import com.doob.mathagent.teacher.service.InMemoryTeacherResourceStore;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
@@ -74,6 +76,7 @@ public final class StudentExplanationServiceFixture {
                 textbookRetrievalService,
                 knowledgeGraphSpineService,
                 teacherResourceBlockSearchService,
+                new InMemoryTeacherResourceStore(),
                 new StudentExplanationAiCardService(aiChatGateway, aiProviderCatalog),
                 imageStoreService == null ? testImageStore() : imageStoreService,
                 visionService == null ? testVisionService() : visionService,
@@ -84,7 +87,6 @@ public final class StudentExplanationServiceFixture {
         Path root = Path.of(System.getProperty("java.io.tmpdir"), "math-agent-student-explanation-fixture");
         ProjectResourceProperties properties = new ProjectResourceProperties(
                 root.resolve("test-data"),
-                root.resolve("legacy-parser"),
                 root.resolve("design"),
                 root.resolve("reference.pdf"),
                 root.resolve("prompt.pdf"),
@@ -130,6 +132,26 @@ public final class StudentExplanationServiceFixture {
                     int limit) {
                 return List.of();
             }
+
+            @Override
+            public List<com.doob.mathagent.student.service.StudentExplanationConversationSummary> listConversations(
+                    String tenantId,
+                    String subjectType,
+                    String subjectId,
+                    int limit) {
+                return List.of();
+            }
+
+            @Override
+            public com.doob.mathagent.student.service.StudentExplanationConversationDetail loadConversation(
+                    String tenantId,
+                    String subjectType,
+                    String subjectId,
+                    String conversationId,
+                    int limit) {
+                return null;
+            }
         };
     }
 }
+
