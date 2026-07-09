@@ -293,10 +293,11 @@ export function App() {
   const [authError, setAuthError] = useState("");
   const [resourceTitle, setResourceTitle] = useState("");
   const [resourceLocation, setResourceLocation] = useState("");
-  const [resourceSourceType, setResourceSourceType] = useState("feishu");
+  const [resourceSourceType, setResourceSourceType] = useState("teacher_resource");
   const [resourceScope, setResourceScope] = useState("TEACHER_PRIVATE");
   const [feishuExportFormat, setFeishuExportFormat] = useState<"md" | "docx" | "pdf">("md");
   const [resourceParseMode, setResourceParseMode] = useState<"TEXT" | "AI">("TEXT");
+  const [resourceFiles, setResourceFiles] = useState<File[]>([]);
   const [knowledgePointName, setKnowledgePointName] = useState("");
   const [knowledgeChapterPath, setKnowledgeChapterPath] = useState("");
   const [questionTitle, setQuestionTitle] = useState("");
@@ -990,26 +991,75 @@ export function App() {
 
   function handleRegisterResource(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!resourceTitle.trim() || !resourceLocation.trim()) { setTeacherResourceError("请输入资料标题和本地路径或飞书 URL。"); return; }
+    if (!resourceTitle.trim()) {
+      setTeacherResourceError("请输入资料标题。");
+      return;
+    }
+    const feishuMode = resourceSourceType === "feishu";
+    if (feishuMode && !resourceLocation.trim()) {
+      setTeacherResourceError("请输入飞书 URL。");
+      return;
+    }
+    if (!feishuMode && resourceFiles.length === 0 && !resourceLocation.trim()) {
+      setTeacherResourceError("请上传文件、选择文件夹，或填写服务器本地路径。");
+      return;
+    }
     setRegisteringResource(true);
     setTeacherResourceError("");
-    api
-      .registerTeacherResource({
+    const registerPromise = feishuMode
+      ? api.registerTeacherResource({
         sourceType: resourceSourceType,
         title: resourceTitle.trim(),
-        originalUrl: resourceSourceType === "feishu" ? resourceLocation.trim() : undefined,
-        localPath: resourceSourceType === "local_path" ? resourceLocation.trim() : undefined,
+        originalUrl: resourceLocation.trim(),
         permissionScope: resourceScope,
-        feishuExportFormat: resourceSourceType === "feishu" ? feishuExportFormat : undefined,
+        feishuExportFormat: feishuExportFormat,
         parseMode: resourceParseMode,
       })
+      : resourceFiles.length > 0
+        ? api.uploadTeacherResource({
+          sourceType: resourceSourceType,
+          title: resourceTitle.trim(),
+          permissionScope: resourceScope,
+          parseMode: resourceParseMode,
+          files: resourceFiles,
+        })
+        : api.registerTeacherResource({
+          sourceType: resourceSourceType,
+          title: resourceTitle.trim(),
+          localPath: resourceLocation.trim(),
+          permissionScope: resourceScope,
+          parseMode: resourceParseMode,
+        });
+    registerPromise
       .then((resource) => {
         setTeacherResources((current) => [resource, ...current]);
         setTeacherSyncJobs((current) => ({ ...current, [resource.documentId]: [] }));
-        setResourceTitle(""); setResourceLocation(""); setFeishuDiscoveryResult(null);
+        setResourceTitle("");
+        setResourceLocation("");
+        setResourceFiles([]);
+        setFeishuDiscoveryResult(null);
       })
       .catch((error: Error) => setTeacherResourceError(error.message))
       .finally(() => setRegisteringResource(false));
+  }
+
+  /**
+   * Keeps the upload list separate from the server-path field so browser uploads and operator-entered server paths can
+   * share the same resource form without one mode accidentally leaking stale values into the other.
+   */
+  function handleResourceFilesChange(files: FileList | null) {
+    setResourceFiles(files ? Array.from(files) : []);
+    setTeacherResourceError("");
+  }
+
+  function handleResourceSourceTypeChange(value: string) {
+    setResourceSourceType(value);
+    setTeacherResourceError("");
+    if (value === "feishu") {
+      setResourceFiles([]);
+      return;
+    }
+    setFeishuDiscoveryResult(null);
   }
 
   function handleArchiveResource(documentId: string) {
@@ -2341,6 +2391,7 @@ export function App() {
                 resources={teacherResources}
                 title={resourceTitle}
                 location={resourceLocation}
+                files={resourceFiles}
                 sourceType={resourceSourceType}
                 scope={resourceScope}
                 feishuExportFormat={feishuExportFormat}
@@ -2364,7 +2415,8 @@ export function App() {
                 error={teacherResourceError}
                 onTitleChange={setResourceTitle}
                 onLocationChange={setResourceLocation}
-                onSourceTypeChange={setResourceSourceType}
+                onFilesChange={handleResourceFilesChange}
+                onSourceTypeChange={handleResourceSourceTypeChange}
                 onScopeChange={setResourceScope}
                 onFeishuExportFormatChange={setFeishuExportFormat}
                 onParseModeChange={setResourceParseMode}

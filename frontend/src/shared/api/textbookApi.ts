@@ -1735,6 +1735,22 @@ export interface TeacherResourceRegistrationRequest {
 }
 
 /**
+ * 浏览器上传教师资料时的 multipart 请求体。
+ */
+export interface TeacherResourceUploadRequest {
+  /** 非飞书资料的逻辑库类型；最终仍复用后端既有 local sync 链路。 */
+  sourceType?: string;
+  /** 教师端展示标题。 */
+  title: string;
+  /** RAG 权限域，例如 TEACHER_PRIVATE、MATH_VIP 或 PUBLIC_TEXTBOOK。 */
+  permissionScope: string;
+  /** TEXT uses deterministic extraction; AI requests higher-cost semantic labeling when backend is configured. */
+  parseMode?: "TEXT" | "AI";
+  /** 上传的真实文件，可来自多文件选择、文件夹选择或 ZIP。 */
+  files: File[];
+}
+
+/**
  * 教师资料源响应，用于后台预览、删除和重建索引状态展示。
  */
 export interface KnowledgePointCreateRequest {
@@ -1911,6 +1927,7 @@ export interface TeacherResourceBlockSearchResponse {
 export interface TeacherResourceBlockSearchHit {
   documentId: string;
   documentTitle: string;
+  sourceType?: string;
   permissionScope: string;
   blockId: string;
   blockType: string;
@@ -1918,8 +1935,24 @@ export interface TeacherResourceBlockSearchHit {
   chapter?: string;
   section?: string;
   pageNo?: number | null;
+  sourcePath?: string;
+  blockRole?: string;
+  graphTags?: string[];
+  evidenceBlockIds?: string[];
+  evidenceText?: string;
   snippet: string;
   score: number;
+  imageAssetIds?: string[];
+  assetRefs?: TeacherResourceAssetReference[];
+}
+
+export interface TeacherResourceAssetReference {
+  assetId: string;
+  assetUri: string;
+  mimeType?: string;
+  fileName?: string;
+  sourcePath?: string;
+  pageNo?: number | null;
 }
 
 export interface TeacherResourceBlockSearchAuditEvent {
@@ -3173,6 +3206,56 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
           body,
         }),
       );
+    },
+
+    /**
+     * Uploads teacher-owned files into the backend-managed staging root, then registers that stored directory through
+     * the same teacher resource pipeline that handles local_path sync, parsing, vector rebuild, and permission scope.
+     */
+    async uploadTeacherResource(
+      request: TeacherResourceUploadRequest,
+    ): Promise<TeacherResourceDocumentResponse> {
+      const normalizedSourceType = request.sourceType && request.sourceType !== "feishu"
+        ? request.sourceType
+        : "local_path";
+      const normalizedParseMode = request.parseMode ?? "TEXT";
+      const capabilityPayload = JSON.stringify({
+        sourceType: normalizedSourceType,
+        title: request.title,
+        permissionScope: request.permissionScope,
+        parseMode: normalizedParseMode,
+        files: request.files.map((file) => ({
+          name: file.name,
+          relativeName: file.webkitRelativePath || file.name,
+          size: file.size,
+          type: file.type,
+          lastModified: file.lastModified,
+        })),
+      });
+      const formData = new FormData();
+      formData.append("sourceType", normalizedSourceType);
+      formData.append("title", request.title);
+      formData.append("permissionScope", request.permissionScope);
+      formData.append("parseMode", normalizedParseMode);
+      for (const file of request.files) {
+        const relativeName = file.webkitRelativePath && file.webkitRelativePath.trim().length > 0
+          ? file.webkitRelativePath
+          : file.name;
+        formData.append("files", file, relativeName);
+      }
+      const capability = await applyCapability(
+        "teacher-resource:register",
+        "/api/teacher/resources/upload",
+        capabilityPayload,
+        `teacher-resource-upload:${normalizedSourceType}:${request.title}`,
+      );
+      return requestFormJson<TeacherResourceDocumentResponse>("/api/teacher/resources/upload", formData, {
+        method: "POST",
+        headers: {
+          "X-Capability-Token": capability.token,
+          "X-Request-Hash": capability.requestHash,
+        },
+      });
     },
 
     /**

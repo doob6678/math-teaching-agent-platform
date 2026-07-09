@@ -28,6 +28,11 @@
 - Feishu manifest ingestion now persists downloaded rows marked `assetKind=image` or `assetKind=attachment` into `teacher_resource_asset`. Exported documents remain parse inputs and are not double-counted as assets.
 - Sync invalidates active assets for the same document before re-parsing, matching the existing block/vector incremental update contract.
 - Frontend resource registration now exposes only two parse modes: `TEXT` and `AI`. OCR is not a separate user mode.
+- Frontend teacher resource workbench now uses the real upload path instead of asking operators to manually pre-stage files:
+  - non-Feishu resources can be uploaded as files, browser folders, or ZIPs through `uploadTeacherResource(...)`
+  - uploaded files preserve browser folder-relative paths through multipart filenames so backend staging can rebuild the same tree before sync
+  - operators can choose logical source types such as `teacher_resource`, `qq_bundle`, `gaokao`, and `mock_exam` instead of collapsing everything into `local_path`
+  - teacher search hits now render backend-controlled `assetRefs` so the operator can open matched page screenshots or embedded images without exposing storage paths
 - Added public textbook page-image support on both sides:
   - Worker endpoint `POST /v1/clip/page-search` reuses the local `_page_image_index` under `processed_books` and supports text or image CLIP queries.
   - Backend endpoint `POST /api/retrieval/textbooks/page-search` proxies to the worker with the existing worker API key, repairs common mojibake in worker metadata, and rewrites page hits to backend-owned image URLs.
@@ -67,10 +72,14 @@
   - `TeacherResourceControllerTest.searchReturnsVisibleAssetRefsForTeacherOwnedBlocks` verifies visible teacher search hits include `imageAssetIds` and backend asset URLs.
   - `McpToolExecutionServiceTest.teacherMcpSecretCallsTeacherResourceEvidenceWithoutLeakingOtherTeacherPrivateBlocks` now also verifies MCP teacher-resource evidence returns the same controlled asset reference.
   - Direct JShell smoke confirmed a parsed block search result returned `ASSET_IDS=[...]`, `ASSET_REFS=1`, and `ASSET_URI=/api/teacher/resources/assets/{assetId}`.
+- Frontend verification:
+  - `frontend`: `npm test -- src/shared/api/textbookApi.test.ts`
+  - `frontend`: `npm run build`
+  - The API test now covers multipart teacher upload capability flow, verifies there are no client-supplied identity headers, and confirms the browser folder-relative filename is preserved in the request contract.
 
 ## Remaining Work
 
 - AI compact labeling is not implemented yet. Current behavior records `AI` parse mode and honestly reports fallback to TEXT extraction instead of faking AI success.
 - `blockRole` is still a low-confidence parser-side signal. It should be further separated into explicit `roleConfidence`, `shortTitle`, and `brief` fields before relying on it in production ranking diagnostics.
 - The new textbook page-image search is currently a backend/worker slice only. It still needs frontend affordances and, if desired later, MCP tool exposure through the same backend-controlled page image URL contract.
-- The full frontend resource workbench still needs upload/folder UX, sync phase detail, and asset preview polish. Current frontend has parse mode selection but not the complete operator dashboard.
+- The frontend still lacks richer sync phase timelines and inline image preview components; it now has the real upload/folder UX and protected asset links, but not a full operator dashboard for progress drill-down.

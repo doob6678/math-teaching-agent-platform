@@ -2617,6 +2617,7 @@ describe("textbookApi", () => {
           originalUrl: "https://example.feishu.cn/docs/doc1",
           permissionScope: "TEACHER_PRIVATE",
           feishuExportFormat: "md",
+          parseMode: "TEXT",
         }),
       }),
     );
@@ -2695,10 +2696,88 @@ describe("textbookApi", () => {
           originalUrl: "https://example.feishu.cn/docx/doc1",
           permissionScope: "TEACHER_PRIVATE",
           feishuExportFormat: "pdf",
+          parseMode: "TEXT",
         }),
       }),
     );
     expect(created.feishuExportFormat).toBe("pdf");
+  });
+
+  it("uploads teacher resources as multipart with capability token and relative file names", async () => {
+    globalThis.localStorage.setItem(
+      "math-agent:auth-session",
+      JSON.stringify({
+        userId: "teacher-1",
+        username: "teacher",
+        role: "teacher",
+        tenantId: "school-a",
+        tokenName: "satoken",
+        tokenValue: "token-teacher",
+      }),
+    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          token: "upload-capability",
+          action: "teacher-resource:register",
+          path: "/api/teacher/resources/upload",
+          requestHash: "hash-upload",
+          expiresAt: "2026-06-28T12:02:00Z",
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          documentId: "doc-upload",
+          title: "QQ 专题上传包",
+          sourceType: "qq_bundle",
+          syncStatus: "registered",
+        }),
+      });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+    const file = new File(["# 单调性"], "monotonicity.md", { type: "text/markdown" });
+    Object.defineProperty(file, "webkitRelativePath", {
+      configurable: true,
+      value: "lesson/functions/monotonicity.md",
+    });
+
+    const created = await client.uploadTeacherResource({
+      sourceType: "qq_bundle",
+      title: "QQ 专题上传包",
+      permissionScope: "TEACHER_PRIVATE",
+      parseMode: "AI",
+      files: [file],
+    });
+
+    const uploadCapabilityBody = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
+    expect(uploadCapabilityBody).toEqual({
+      action: "teacher-resource:register",
+      path: "/api/teacher/resources/upload",
+      requestHash: expect.any(String),
+      idempotencyKey: "teacher-resource-upload:qq_bundle:QQ 专题上传包",
+      maxCost: 1,
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://127.0.0.1:8080/api/teacher/resources/upload",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          satoken: "token-teacher",
+          "X-Device-Id": "local-browser-console",
+          "X-Capability-Token": "upload-capability",
+          "X-Request-Hash": uploadCapabilityBody.requestHash,
+        }),
+        body: expect.any(FormData),
+      }),
+    );
+    expect(fetchMock.mock.calls[1][1]?.headers).not.toHaveProperty("Content-Type");
+    expect(fetchMock.mock.calls[1][1]?.headers).not.toHaveProperty("X-Subject-Id");
+    expect(fetchMock.mock.calls[1][1]?.headers).not.toHaveProperty("X-Subject-Type");
+    expect(created.documentId).toBe("doc-upload");
+    expect(created.sourceType).toBe("qq_bundle");
   });
 
   it("creates, executes, and lists teacher resource sync jobs with capability tokens", async () => {

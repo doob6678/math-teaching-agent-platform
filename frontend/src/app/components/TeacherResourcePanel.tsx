@@ -17,6 +17,7 @@ export function TeacherResourcePanel({
   resources,
   title,
   location,
+  files,
   sourceType,
   scope,
   feishuExportFormat,
@@ -40,6 +41,7 @@ export function TeacherResourcePanel({
   error,
   onTitleChange,
   onLocationChange,
+  onFilesChange,
   onSourceTypeChange,
   onScopeChange,
   onFeishuExportFormatChange,
@@ -59,6 +61,7 @@ export function TeacherResourcePanel({
   resources: TeacherResourceDocumentResponse[];
   title: string;
   location: string;
+  files: File[];
   sourceType: string;
   scope: string;
   feishuExportFormat: "md" | "docx" | "pdf";
@@ -82,6 +85,7 @@ export function TeacherResourcePanel({
   error: string;
   onTitleChange: (value: string) => void;
   onLocationChange: (value: string) => void;
+  onFilesChange: (files: FileList | null) => void;
   onSourceTypeChange: (value: string) => void;
   onScopeChange: (value: string) => void;
   onFeishuExportFormatChange: (value: "md" | "docx" | "pdf") => void;
@@ -107,6 +111,7 @@ export function TeacherResourcePanel({
         <div className="resource-hint-body">
           <p>粘贴真实飞书文件夹或文档链接即可。大目录先用“列出”或“搜索”，再选择具体节点入库。</p>
           <p>密钥保存在后端，下载断点和同步进度落库到 MySQL，网络波动后可恢复。</p>
+          <p>本地上传会先落到后端 staging 目录，再复用原有同步、切块、向量和权限链路，不会分叉出第二套入库系统。</p>
         </div>
       </details>
 
@@ -123,19 +128,77 @@ export function TeacherResourcePanel({
         <label>
           <span>来源类型</span>
           <select className="form-select" value={sourceType} onChange={(event) => onSourceTypeChange(event.target.value)}>
-            <option value="local_path">本地路径</option>
             <option value="feishu">飞书链接</option>
+            <option value="teacher_resource">教师资料上传</option>
+            <option value="qq_bundle">QQ 专题包上传</option>
+            <option value="gaokao">高考真题上传</option>
+            <option value="mock_exam">模拟题上传</option>
+            <option value="local_path">服务器本地路径</option>
           </select>
         </label>
-        <label>
-          <span>{sourceType === "feishu" ? "飞书链接" : "本地路径"}</span>
-          <input
-            className="form-input"
-            value={location}
-            onChange={(event) => onLocationChange(event.target.value)}
-            placeholder={sourceType === "feishu" ? "https://..." : "C:\\path\\to\\file.pdf"}
-          />
-        </label>
+        {sourceType === "feishu" ? (
+          <label>
+            <span>飞书链接</span>
+            <input
+              className="form-input"
+              value={location}
+              onChange={(event) => onLocationChange(event.target.value)}
+              placeholder="https://..."
+            />
+          </label>
+        ) : (
+          <>
+            <label>
+              <span>上传文件</span>
+              <input
+                className="form-input"
+                type="file"
+                multiple
+                onChange={(event) => onFilesChange(event.target.files)}
+              />
+            </label>
+            <label>
+              <span>上传文件夹</span>
+              <input
+                className="form-input"
+                type="file"
+                multiple
+                ref={(node) => {
+                  if (!node) return;
+                  node.setAttribute("webkitdirectory", "");
+                  node.setAttribute("directory", "");
+                }}
+                onChange={(event) => onFilesChange(event.target.files)}
+              />
+            </label>
+            <label>
+              <span>服务器本地路径（可选）</span>
+              <input
+                className="form-input"
+                value={location}
+                onChange={(event) => onLocationChange(event.target.value)}
+                placeholder="C:\\path\\to\\resource-root"
+              />
+            </label>
+            <div className="resource-search-summary">
+              <span>{sourceTypeLabel(sourceType)}</span>
+              <span>{files.length > 0 ? `已选择 ${files.length} 个文件` : "未选择浏览器上传文件"}</span>
+            </div>
+            {files.length > 0 ? (
+              <div className="feishu-candidate-list">
+                {files.slice(0, 6).map((file) => (
+                  <article className="feishu-candidate" key={`${file.name}:${file.size}:${file.lastModified}`}>
+                    <div>
+                      <strong>{compactText(file.webkitRelativePath || file.name, 60)}</strong>
+                      <span>{file.type || "application/octet-stream"} / {file.size} B</span>
+                    </div>
+                  </article>
+                ))}
+                {files.length > 6 ? <div className="empty-state compact">其余 {files.length - 6} 个文件已省略显示。</div> : null}
+              </div>
+            ) : null}
+          </>
+        )}
         {sourceType === "feishu" ? (
           <label>
             <span>导出格式</span>
@@ -254,13 +317,40 @@ export function TeacherResourcePanel({
             <article className="resource-search-hit" key={`${hit.documentId}:${hit.blockId}`}>
               <strong>{hit.documentTitle}</strong>
               <span>
-                {scopeLabel(hit.permissionScope)} / {blockTypeLabel(hit.blockType)}
+                {scopeLabel(hit.permissionScope)} / {sourceTypeLabel(hit.sourceType || "teacher_resource")} / {blockTypeLabel(hit.blockType)}
                 {hit.pageNo ? ` / 第 ${hit.pageNo} 页` : ""}
+                {hit.blockRole ? ` / ${blockRoleLabel(hit.blockRole)}` : ""}
               </span>
               <p>{compactText(hit.snippet, 120)}</p>
+              {hit.sourcePath ? <p>{compactText(hit.sourcePath, 120)}</p> : null}
+              {hit.assetRefs?.length ? (
+                <div className="resource-search-summary">
+                  <span>{hit.assetRefs.length} 个受控图片/附件</span>
+                  <span>{hit.imageAssetIds?.length ?? hit.assetRefs.length} 个 assetId</span>
+                </div>
+              ) : null}
+              {hit.assetRefs?.length ? (
+                <div className="feishu-candidate-list">
+                  {hit.assetRefs.slice(0, 4).map((asset) => (
+                    <article className="feishu-candidate" key={asset.assetId}>
+                      <div>
+                        <strong>{compactText(asset.fileName || asset.sourcePath || asset.assetId, 56)}</strong>
+                        <span>
+                          {asset.mimeType || "application/octet-stream"}
+                          {asset.pageNo ? ` / 第 ${asset.pageNo} 页` : ""}
+                        </span>
+                      </div>
+                      <a href={asset.assetUri} target="_blank" rel="noreferrer">
+                        查看
+                      </a>
+                    </article>
+                  ))}
+                </div>
+              ) : null}
               <details className="review-details">
                 <summary>查看片段</summary>
                 <p>{hit.snippet}</p>
+                {hit.evidenceText && hit.evidenceText !== hit.snippet ? <p>{hit.evidenceText}</p> : null}
               </details>
             </article>
           ))}
@@ -396,10 +486,27 @@ function phaseLabel(value?: string | null) {
 function sourceTypeLabel(value?: string | null) {
   const labels: Record<string, string> = {
     feishu: "飞书",
+    teacher_resource: "教师资料",
+    qq_bundle: "QQ 专题包",
+    gaokao: "高考真题",
+    mock_exam: "模拟题",
     local_path: "本地文件",
     local: "本地文件",
   };
   return labels[(value ?? "").trim().toLowerCase()] ?? (value || "未知来源");
+}
+
+function blockRoleLabel(value?: string | null) {
+  const labels: Record<string, string> = {
+    analysis: "解析",
+    question: "题面",
+    lesson: "讲解",
+    method: "方法",
+    boardwork: "板书",
+    tip: "提示",
+    reference: "参考",
+  };
+  return labels[(value ?? "").trim().toLowerCase()] ?? (value || "未标注角色");
 }
 
 function resourceTypeLabel(value?: string | null) {
