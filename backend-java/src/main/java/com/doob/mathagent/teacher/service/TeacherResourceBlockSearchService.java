@@ -16,6 +16,7 @@ import com.doob.mathagent.teacher.block.TeacherDocumentBlockStore;
 import com.doob.mathagent.teacher.document.TeacherResourceStore;
 import com.doob.mathagent.teacher.search.TeacherResourceGraphAlignmentService;
 import com.doob.mathagent.teacher.search.TeacherResourceBlockSearchResponse;
+import com.doob.mathagent.teacher.search.TeacherResourceSearchProperties;
 import com.doob.mathagent.teacher.search.TeacherResourceSearchFilter;
 import com.doob.mathagent.teacher.search.audit.TeacherResourceBlockSearchAuditEvent;
 import com.doob.mathagent.teacher.search.audit.TeacherResourceBlockSearchAuditSink;
@@ -25,6 +26,7 @@ import com.doob.mathagent.vector.service.VectorIndexService;
 import com.doob.mathagent.vector.service.VectorSearchFilter;
 import com.doob.mathagent.vector.service.VectorSearchHit;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -69,22 +71,8 @@ public class TeacherResourceBlockSearchService {
     private static final TypeReference<List<String>> STRING_LIST_TYPE = new TypeReference<>() {
     };
 
-    private static final int DEFAULT_LIMIT = 10;
-    private static final int MAX_LIMIT = 20;
     private static final String STRATEGY_TWO_STAGE_DOC_BLOCK = "two_stage_doc_block";
     private static final Pattern QUERY_CLAUSE_SPLITTER = Pattern.compile("[\\r\\n,，。；;：:！？!?()（）\\[\\]【】]+");
-    /**
-     * These numbers are transport budgets for the worker and audit tables, not ranking weights.
-     *
-     * <p>The semantic order itself comes from vector search plus real rerank. The budget only prevents long teacher
-     * folders, deep evidence windows, and image-rich chunks from blowing up worker latency or varchar limits.</p>
-     */
-    private static final SearchRuntimeBudget SEARCH_BUDGET = SearchRuntimeBudget.defaults();
-    /**
-     * Query focus is not a ranking formula. It only strips orchestration noise so semantic retrieval sees the real
-     * math intent instead of the surrounding workflow instructions.
-     */
-    private static final QueryFocusBudget QUERY_FOCUS_BUDGET = QueryFocusBudget.defaults();
 
     private final TeacherResourceStore resourceStore;
     private final TeacherDocumentBlockStore blockStore;
@@ -95,6 +83,9 @@ public class TeacherResourceBlockSearchService {
     private final TextbookRetrievalService textbookRetrievalService;
     private final TextbookPageImageSearchService textbookPageImageSearchService;
     private final TextbookResourceProperties textbookResourceProperties;
+    private final TeacherResourceSearchProperties searchProperties;
+    private final TeacherResourceSearchProperties.QueryFocusBudget queryFocusBudget;
+    private final TeacherResourceSearchProperties.SearchRuntimeBudget searchBudget;
 
     /**
      * Creates a parsed block search service.
@@ -113,6 +104,7 @@ public class TeacherResourceBlockSearchService {
                 blockStore,
                 auditSink,
                 vectorIndexService,
+                TeacherResourceSearchProperties.defaults(),
                 TeacherResourceGraphAlignmentService.disabled(),
                 TeacherResourceAssetService.disabled(),
                 null,
@@ -123,7 +115,6 @@ public class TeacherResourceBlockSearchService {
     /**
      * Production constructor with graph-aware query normalization.
      */
-    @Autowired
     public TeacherResourceBlockSearchService(
             TeacherResourceStore resourceStore,
             TeacherDocumentBlockStore blockStore,
@@ -134,10 +125,38 @@ public class TeacherResourceBlockSearchService {
             TextbookRetrievalService textbookRetrievalService,
             TextbookPageImageSearchService textbookPageImageSearchService,
             TextbookResourceProperties textbookResourceProperties) {
+        this(
+                resourceStore,
+                blockStore,
+                auditSink,
+                vectorIndexService,
+                TeacherResourceSearchProperties.defaults(),
+                graphAlignmentService,
+                assetService,
+                textbookRetrievalService,
+                textbookPageImageSearchService,
+                textbookResourceProperties);
+    }
+
+    @Autowired
+    public TeacherResourceBlockSearchService(
+            TeacherResourceStore resourceStore,
+            TeacherDocumentBlockStore blockStore,
+            TeacherResourceBlockSearchAuditSink auditSink,
+            VectorIndexService vectorIndexService,
+            TeacherResourceSearchProperties searchProperties,
+            TeacherResourceGraphAlignmentService graphAlignmentService,
+            TeacherResourceAssetService assetService,
+            TextbookRetrievalService textbookRetrievalService,
+            TextbookPageImageSearchService textbookPageImageSearchService,
+            TextbookResourceProperties textbookResourceProperties) {
         this.resourceStore = Objects.requireNonNull(resourceStore, "resourceStore is required");
         this.blockStore = Objects.requireNonNull(blockStore, "blockStore is required");
         this.auditSink = Objects.requireNonNull(auditSink, "auditSink is required");
         this.vectorIndexService = Objects.requireNonNull(vectorIndexService, "vectorIndexService is required");
+        this.searchProperties = Objects.requireNonNull(searchProperties, "searchProperties is required");
+        this.queryFocusBudget = this.searchProperties.queryFocus();
+        this.searchBudget = this.searchProperties.runtime();
         this.graphAlignmentService = Objects.requireNonNull(graphAlignmentService, "graphAlignmentService is required");
         this.assetService = Objects.requireNonNull(assetService, "assetService is required");
         this.textbookRetrievalService = textbookRetrievalService;
@@ -157,6 +176,7 @@ public class TeacherResourceBlockSearchService {
                 blockStore,
                 auditSink,
                 vectorIndexService,
+                TeacherResourceSearchProperties.defaults(),
                 graphAlignmentService,
                 assetService,
                 null,
@@ -178,6 +198,7 @@ public class TeacherResourceBlockSearchService {
                 blockStore,
                 auditSink,
                 vectorIndexService,
+                TeacherResourceSearchProperties.defaults(),
                 graphAlignmentService,
                 TeacherResourceAssetService.disabled(),
                 null,
@@ -317,6 +338,7 @@ public class TeacherResourceBlockSearchService {
                     normalizedQuery,
                     focusedQuery,
                     safeLimit,
+                    normalizedFilter,
                     endpoint);
         }
         searchResponse = attachVisibleAssetRefs(
@@ -343,15 +365,22 @@ public class TeacherResourceBlockSearchService {
                         Function.identity(),
                         (left, ignored) -> left,
                         LinkedHashMap::new));
-        Map<String, List<BlockContext>> blocksByDocumentId = loadVisibleBlockContexts(tenantId, documents, filter.tags());
+        List<String> visibleDocumentIds = List.copyOf(documentsById.keySet());
+        VectorCoarseRecall vectorCoarseRecall = vectorCoarseRecall(
+                focusedQuery.semanticQuery(),
+                safeLimit,
+                visibleDocumentIds,
+                filter);
+        Map<String, List<BlockContext>> blocksByDocumentId = stageOneBlockContexts(
+                tenantId,
+                documentsById,
+                visibleDocumentIds,
+                vectorCoarseRecall.candidateDocumentIds(),
+                filter.tags());
         if (blocksByDocumentId.isEmpty()) {
             return response(normalizedQuery, safeLimit, retrievalMode(STRATEGY_TWO_STAGE_DOC_BLOCK, filter, "no_visible_blocks"), List.of());
         }
-        Map<String, Double> vectorScoreByKey = vectorScoreByKey(
-                focusedQuery.semanticQuery(),
-                safeLimit,
-                blocksByDocumentId,
-                filter);
+        Map<String, Double> vectorScoreByKey = vectorCoarseRecall.scoreByKey();
         List<DocumentCandidate> documentCandidates = rerankedDocumentCandidates(
                 documentsById,
                 blocksByDocumentId,
@@ -360,11 +389,30 @@ public class TeacherResourceBlockSearchService {
                 focusedQuery.terms(),
                 safeLimit,
                 queryGraph);
+        if (documentCandidates.isEmpty() && blocksByDocumentId.size() < visibleDocumentIds.size()) {
+            /*
+             * Semantic coarse recall is the primary path, but it must not become a hard gate. If the initial vector
+             * admission window missed every surviving document after block/tag filtering, fall back once to the full
+             * visible corpus so lexical rescue can still admit a document and the real reranker can judge it.
+             */
+            blocksByDocumentId = loadVisibleBlockContexts(tenantId, documentsById, visibleDocumentIds, filter.tags());
+            if (blocksByDocumentId.isEmpty()) {
+                return response(normalizedQuery, safeLimit, retrievalMode(STRATEGY_TWO_STAGE_DOC_BLOCK, filter, "no_visible_blocks"), List.of());
+            }
+            documentCandidates = rerankedDocumentCandidates(
+                    documentsById,
+                    blocksByDocumentId,
+                    vectorScoreByKey,
+                    focusedQuery.semanticQuery(),
+                    focusedQuery.terms(),
+                    safeLimit,
+                    queryGraph);
+        }
         List<DocumentCandidate> rankedDocuments = documentCandidates.stream()
                 .sorted(documentCandidateComparator()
                         .thenComparing(candidate -> candidate.document().title())
                         .thenComparing(candidate -> candidate.document().documentId()))
-                .limit(candidateDocumentLimit(safeLimit, documentCandidates.size()))
+                .limit(stageDocumentCandidateLimit(documentCandidates.size()))
                 .toList();
         List<TeacherResourceBlockSearchResponse.Hit> hits = rerankedBlockHits(
                 rankedDocuments,
@@ -376,6 +424,29 @@ public class TeacherResourceBlockSearchService {
                 filter,
                 queryGraph);
         return response(normalizedQuery, safeLimit, retrievalMode(STRATEGY_TWO_STAGE_DOC_BLOCK, filter, null), hits);
+    }
+
+    /**
+     * Stage one now loads block payload lazily. When vector coarse recall already narrowed the plausible document set,
+     * do not fetch parsed blocks for every visible teacher resource up front. Only the candidate documents are loaded
+     * into memory, and a full-corpus block scan is kept as a one-time fallback when semantic admission finds nothing.
+     */
+    private Map<String, List<BlockContext>> stageOneBlockContexts(
+            String tenantId,
+            Map<String, TeacherResourceDocumentResponse> documentsById,
+            List<String> visibleDocumentIds,
+            List<String> semanticCandidateDocumentIds,
+            List<String> tags) {
+        if (semanticCandidateDocumentIds == null || semanticCandidateDocumentIds.isEmpty()) {
+            return loadVisibleBlockContexts(tenantId, documentsById, visibleDocumentIds, tags);
+        }
+        LinkedHashSet<String> candidateDocumentIds = semanticCandidateDocumentIds.stream()
+                .filter(documentsById::containsKey)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        if (candidateDocumentIds.isEmpty()) {
+            return loadVisibleBlockContexts(tenantId, documentsById, visibleDocumentIds, tags);
+        }
+        return loadVisibleBlockContexts(tenantId, documentsById, List.copyOf(candidateDocumentIds), tags);
     }
 
     /**
@@ -391,13 +462,17 @@ public class TeacherResourceBlockSearchService {
             String normalizedQuery,
             FocusedSearchQuery focusedQuery,
             int safeLimit,
+            TeacherResourceSearchFilter filter,
             String endpoint) {
         if (textbookRetrievalService == null || textbookResourceProperties == null) {
             return teacherResponse;
         }
         TextbookSearchResponse textbookResponse = textbookRetrievalService.search(
                 textbookResourceProperties.processedBooksRoot(),
-                new TextbookSearchRequest(focusedQuery.semanticQuery(), safeLimit),
+                new TextbookSearchRequest(
+                        focusedQuery.semanticQuery(),
+                        safeLimit,
+                        filter == null ? List.of() : filter.documentIds()),
                 new RetrievalRequestContext(
                         tenantId,
                         viewerRole,
@@ -509,16 +584,25 @@ public class TeacherResourceBlockSearchService {
      */
     private Map<String, List<BlockContext>> loadVisibleBlockContexts(
             String tenantId,
-            List<TeacherResourceDocumentResponse> documents,
+            Map<String, TeacherResourceDocumentResponse> documentsById,
+            List<String> documentIds,
             List<String> tags) {
         Map<String, List<BlockContext>> contexts = new LinkedHashMap<>();
-        for (TeacherResourceDocumentResponse document : documents) {
-            List<BlockContext> blocks = blockStore.listByDocument(tenantId, document.documentId()).stream()
+        if (documentIds == null || documentIds.isEmpty()) {
+            return contexts;
+        }
+        Map<String, List<TeacherDocumentBlockResponse>> blocksByDocumentId = blockStore.listByDocuments(tenantId, documentIds);
+        for (String documentId : documentIds) {
+            TeacherResourceDocumentResponse document = documentsById.get(documentId);
+            if (document == null) {
+                continue;
+            }
+            List<BlockContext> blocks = blocksByDocumentId.getOrDefault(documentId, List.of()).stream()
                     .filter(block -> matchesTags(document, block, tags))
                     .map(block -> toContext(document, block))
                     .toList();
             if (!blocks.isEmpty()) {
-                contexts.put(document.documentId(), blocks);
+                contexts.put(documentId, blocks);
             }
         }
         return contexts;
@@ -529,27 +613,19 @@ public class TeacherResourceBlockSearchService {
      * main behavioral change: vector search helps decide which document is plausible, then stage two resolves the
      * correct block inside that document.
      */
-    private Map<String, Double> vectorScoreByKey(
+    private VectorCoarseRecall vectorCoarseRecall(
             String normalizedQuery,
             int safeLimit,
-            Map<String, List<BlockContext>> blocksByDocumentId,
+            List<String> visibleDocumentIds,
             TeacherResourceSearchFilter filter) {
-        Set<String> visibleDocumentIds = blocksByDocumentId.keySet();
-        if (visibleDocumentIds.isEmpty()) {
-            return Map.of();
+        if (visibleDocumentIds == null || visibleDocumentIds.isEmpty()) {
+            return VectorCoarseRecall.EMPTY;
         }
-        Map<String, Set<String>> blockIdsByDocument = new LinkedHashMap<>();
-        for (Map.Entry<String, List<BlockContext>> entry : blocksByDocumentId.entrySet()) {
-            blockIdsByDocument.put(
-                    entry.getKey(),
-                    entry.getValue().stream().map(context -> context.block().blockId()).collect(Collectors.toSet()));
-        }
-        int totalVisibleBlocks = blocksByDocumentId.values().stream().mapToInt(List::size).sum();
-        int vectorCandidateLimit = SEARCH_BUDGET.vectorCandidateLimit(
+        int vectorCandidateLimit = searchBudget.vectorCandidateLimit(
                 safeLimit,
-                candidateDocumentLimit(safeLimit, visibleDocumentIds.size()),
-                totalVisibleBlocks);
+                stageDocumentCandidateLimit(visibleDocumentIds.size()));
         Map<String, Double> scores = new LinkedHashMap<>();
+        LinkedHashSet<String> candidateDocumentIds = new LinkedHashSet<>();
         List<VectorSearchHit> hits;
         try {
             hits = vectorIndexService.searchTeacherResourceBlocks(
@@ -561,17 +637,18 @@ public class TeacherResourceBlockSearchService {
                     normalizedQuery,
                     textOrDefault(exception.getMessage(), ""),
                     exception);
-            return Map.of();
+            return VectorCoarseRecall.EMPTY;
         }
+        Set<String> visibleDocumentIdSet = new LinkedHashSet<>(visibleDocumentIds);
         for (VectorSearchHit hit : hits) {
-            Set<String> visibleBlockIds = blockIdsByDocument.get(hit.documentId());
-            if (visibleBlockIds == null || !visibleBlockIds.contains(hit.blockId())) {
+            if (!visibleDocumentIdSet.contains(hit.documentId())) {
                 continue;
             }
+            candidateDocumentIds.add(hit.documentId());
             String key = blockKey(hit.documentId(), hit.blockId());
             scores.merge(key, hit.score(), Math::max);
         }
-        return scores;
+        return new VectorCoarseRecall(Map.copyOf(scores), List.copyOf(candidateDocumentIds));
     }
 
     private List<DocumentCandidate> rerankedDocumentCandidates(
@@ -593,21 +670,14 @@ public class TeacherResourceBlockSearchService {
         if (coarseCandidates.isEmpty()) {
             return coarseCandidates;
         }
-        int rerankCandidateLimit = SEARCH_BUDGET.documentRerankCandidateLimit(coarseCandidates.size());
-        List<DocumentCandidate> rerankCandidates = coarseCandidates.stream()
-                .limit(rerankCandidateLimit)
-                .toList();
-        Map<String, Double> rerankScoreByDocumentId = documentRerankScoreById(
-                rerankCandidates,
-                blocksByDocumentId,
-                normalizedQuery);
-        return rerankCandidates.stream()
-                .map(candidate -> candidate.withSemanticScore(
-                        rerankScoreByDocumentId.getOrDefault(candidate.document().documentId(), candidate.semanticScore())))
-                .sorted(documentCandidateComparator()
-                        .thenComparing(candidate -> candidate.document().title())
-                        .thenComparing(candidate -> candidate.document().documentId()))
-                .limit(candidateDocumentLimit(safeLimit, coarseCandidates.size()))
+        /*
+         * Stage one is document-level coarse recall, not a second expensive final rank. Milvus semantic recall plus
+         * lexical rescue has already admitted and ordered plausible documents. Calling the cross-encoder here and
+         * again for blocks duplicates the query/model work while the only user-visible question is which in-document
+         * evidence block is correct. Keep the coarse document order and reserve the real reranker for stage two.
+         */
+        return coarseCandidates.stream()
+                .limit(searchBudget.documentRerankCandidateLimit(coarseCandidates.size()))
                 .toList();
     }
 
@@ -631,8 +701,7 @@ public class TeacherResourceBlockSearchService {
                     blocks,
                     vectorScoreByKey,
                     normalizedQuery,
-                    terms,
-                    queryGraph);
+                    terms);
             double bestVector = 0.0d;
             for (BlockContext block : supportedBlocks) {
                 String key = blockKey(document.documentId(), block.block().blockId());
@@ -645,14 +714,13 @@ public class TeacherResourceBlockSearchService {
             candidates.add(new DocumentCandidate(
                     document,
                     supportedBlocks,
-                    bestVector,
                     bestVector));
         }
         return candidates.stream()
                 .sorted(documentCandidateComparator()
                         .thenComparing(candidate -> candidate.document().title())
                         .thenComparing(candidate -> candidate.document().documentId()))
-                .limit(candidateDocumentLimit(safeLimit, candidates.size()))
+                .limit(stageDocumentCandidateLimit(candidates.size()))
                 .toList();
     }
 
@@ -661,67 +729,83 @@ public class TeacherResourceBlockSearchService {
      * signals per document, bounded by the caller's requested limit, so the real rerank model spends capacity on the
      * most plausible evidence instead of timing out on hundreds of weak siblings from the same file.
      */
-    private static List<BlockContext> supportedBlocks(
+    private List<BlockContext> supportedBlocks(
             TeacherResourceDocumentResponse document,
             List<BlockContext> blocks,
             Map<String, Double> vectorScoreByKey,
             String normalizedQuery,
-            String[] terms,
-            TeacherResourceGraphAlignmentService.QueryGraphContext queryGraph) {
+            String[] terms) {
         if (blocks == null || blocks.isEmpty()) {
             return List.of();
         }
+        boolean documentHasSemanticCandidates = blocks.stream().anyMatch(block ->
+                vectorScoreByKey.getOrDefault(blockKey(document.documentId(), block.block().blockId()), 0.0d) > 0.0d);
+        if (documentHasSemanticCandidates) {
+            return blocks.stream()
+                    .filter(block -> vectorScoreByKey.getOrDefault(blockKey(document.documentId(), block.block().blockId()), 0.0d) > 0.0d)
+                    .sorted(blockSupportComparator(document, vectorScoreByKey, normalizedQuery, terms))
+                    .toList();
+        }
+        Map<String, Double> semanticFallbackScores = semanticFallbackScoreByBlockKey(document, blocks, normalizedQuery);
+        if (!semanticFallbackScores.isEmpty()) {
+            return blocks.stream()
+                    .sorted(semanticFallbackBlockComparator(document, semanticFallbackScores, normalizedQuery, terms))
+                    .limit(searchBudget.maxBlocksPerDocumentForStageTwo())
+                    .toList();
+        }
+        /*
+         * Lexical rescue is now the last fallback only. When neither Milvus block search nor the embedding similarity
+         * fallback can provide support scores, we still allow a token-overlap path so completely degraded environments
+         * do not collapse to zero recall.
+         */
         return blocks.stream()
-                .filter(block -> {
-                    String key = blockKey(document.documentId(), block.block().blockId());
-                    double semantic = vectorScoreByKey.getOrDefault(key, 0.0d);
-                    int lexicalMatches = blockLexicalMatchCount(document, block, normalizedQuery, terms);
-                    int graphMatches = graphAlignmentMatchCount(block.graphTags(), block.graphNodeIds(), queryGraph, normalizedQuery, terms);
-                    return semantic > 0.0d || lexicalMatches > 0 || graphMatches > 0;
-                })
-                .sorted(blockSupportComparator(document, vectorScoreByKey, normalizedQuery, terms, queryGraph))
+                .filter(block -> blockLexicalMatchCount(document, block, normalizedQuery, terms) > 0)
+                .sorted(blockSupportComparator(document, vectorScoreByKey, normalizedQuery, terms))
+                .limit(searchBudget.maxBlocksPerDocumentForStageTwo())
                 .toList();
     }
 
     /**
-     * Stage one still uses vector coarse recall to decide which documents are plausible, then reranks only those
-     * candidate documents with a real rerank model.
-     *
-     * <p>Do not collapse the whole document into one long concatenated prompt here. When several runtime-authored
-     * teacher documents share a similar markdown skeleton, document-wide concatenation dilutes the exact block that
-     * actually answers the query and lets unrelated but stylistically similar documents steal rank. Instead, we reuse
-     * the same block semantic view used by stage two, score every candidate block inside the candidate documents once,
-     * and aggregate the strongest block score back to its document. That keeps stage one document-focused while making
-     * "does this document contain the right evidence somewhere inside it" the decisive semantic question.</p>
+     * If stage-one Milvus recall misses every block in a visible document, fall back once to embedding-space
+     * similarity over that document's own blocks instead of immediately gating the document by lexical overlap. This
+     * keeps the coarse stage semantic-first while still local to one document, avoiding a full-corpus rescoring pass.
      */
-    private Map<String, Double> documentRerankScoreById(
-            List<DocumentCandidate> candidates,
-            Map<String, List<BlockContext>> blocksByDocumentId,
+    private Map<String, Double> semanticFallbackScoreByBlockKey(
+            TeacherResourceDocumentResponse document,
+            List<BlockContext> blocks,
             String normalizedQuery) {
-        LinkedHashMap<String, String> candidateTexts = new LinkedHashMap<>();
-        for (DocumentCandidate candidate : candidates) {
-            List<BlockContext> documentBlocks =
-                    blocksByDocumentId.getOrDefault(candidate.document().documentId(), candidate.blocks());
-            candidateTexts.put(
-                    candidate.document().documentId(),
-                    documentSemanticText(candidate.document(), candidate.blocks(), documentBlocks));
-        }
-        if (candidateTexts.isEmpty()) {
+        if (blocks == null || blocks.isEmpty()) {
             return Map.of();
+        }
+        LinkedHashMap<String, String> candidateTexts = new LinkedHashMap<>();
+        for (BlockContext block : blocks) {
+            String key = blockKey(document.documentId(), block.block().blockId());
+            candidateTexts.put(
+                    key,
+                    semanticCandidateText(
+                            document,
+                            block,
+                            evidenceWindow(block, blocks),
+                            searchBudget.blockEvidenceChars()));
         }
         try {
             List<String> keys = new ArrayList<>(candidateTexts.keySet());
-            List<Double> scores = vectorIndexService.rerankTexts(
+            List<Double> scores = vectorIndexService.semanticSimilarity(
                     normalizedQuery,
                     keys.stream().map(candidateTexts::get).toList());
-            Map<String, Double> scoreById = new LinkedHashMap<>();
-            for (int index = 0; index < keys.size() && index < scores.size(); index += 1) {
-                scoreById.put(keys.get(index), scores.get(index));
+            if (scores.isEmpty()) {
+                return Map.of();
             }
-            return Map.copyOf(scoreById);
+            Map<String, Double> scoreByKey = new LinkedHashMap<>();
+            for (int index = 0; index < keys.size() && index < scores.size(); index += 1) {
+                scoreByKey.put(keys.get(index), scores.get(index));
+            }
+            boolean hasPositiveScore = scoreByKey.values().stream().anyMatch(score -> score > 0.0d);
+            return hasPositiveScore ? Map.copyOf(scoreByKey) : Map.of();
         } catch (RuntimeException exception) {
-            log.warn("teacher_resource_search_document_rerank_fallback query={} message={}",
+            log.warn("teacher_resource_search_semantic_block_rescue_fallback query={} documentId={} message={}",
                     normalizedQuery,
+                    document.documentId(),
                     textOrDefault(exception.getMessage(), ""),
                     exception);
             return Map.of();
@@ -754,13 +838,12 @@ public class TeacherResourceBlockSearchService {
                         key,
                         vectorScoreByKey.getOrDefault(key, 0.0d));
                 int lexicalMatches = blockLexicalMatchCount(candidate.document(), block, normalizedQuery, terms);
-                int graphMatches = graphAlignmentMatchCount(block.graphTags(), block.graphNodeIds(), queryGraph, normalizedQuery, terms);
                 blockCandidates.add(new BlockCandidate(
                         candidate.document(),
                         block,
                         semantic,
                         lexicalMatches,
-                        candidate.semanticScore(),
+                        candidate.coarseScore(),
                         vectorScoreByKey.getOrDefault(key, 0.0d)));
             }
         }
@@ -775,37 +858,50 @@ public class TeacherResourceBlockSearchService {
                 .toList();
     }
 
-    private static int candidateDocumentLimit(int safeLimit, int visibleDocumentCount) {
-        return Math.max(0, Math.min(safeLimit, visibleDocumentCount));
+    /**
+     * Stage-one document admission must stay wider than the final response size.
+     *
+     * <p>The final API limit answers "how many block hits should the caller see", not "how many documents are allowed
+     * to compete for those hits". If we clamp candidate documents to the final top-N too early, one lexically generic
+     * document can crowd out the actually correct document before semantic rerank ever sees it. The budget here is
+     * therefore an I/O ceiling for candidate admission, while the final response size is enforced only after block
+     * rerank.</p>
+     */
+    private int stageDocumentCandidateLimit(int visibleDocumentCount) {
+        return searchBudget.documentRerankCandidateLimit(visibleDocumentCount);
     }
 
     /**
-     * Stage-one document ordering is semantic-first. Lexical, graph, and role signals are only tie-breakers so
-     * retrieval no longer depends on opaque weighted score cocktails.
+     * Stage-one document order is the Milvus semantic coarse-recall order. Lexical, graph, and role data only admit
+     * fallback candidates or enrich the later rerank payload; they do not create an opaque weighted score cocktail.
      */
     private static Comparator<DocumentCandidate> documentCandidateComparator() {
-        Comparator<DocumentCandidate> comparator = Comparator.comparingDouble(DocumentCandidate::semanticScore).reversed();
-        return comparator.thenComparing(Comparator.comparingDouble(DocumentCandidate::vectorScore).reversed());
+        return Comparator.comparingDouble(DocumentCandidate::coarseScore).reversed();
     }
 
     private static Comparator<BlockContext> blockSupportComparator(
             TeacherResourceDocumentResponse document,
             Map<String, Double> vectorScoreByKey,
             String normalizedQuery,
-            String[] terms,
-            TeacherResourceGraphAlignmentService.QueryGraphContext queryGraph) {
+            String[] terms) {
         return Comparator.<BlockContext>comparingDouble(
                         block -> vectorScoreByKey.getOrDefault(blockKey(document.documentId(), block.block().blockId()), 0.0d))
                 .reversed()
                 .thenComparing(Comparator.comparingInt(
                         (BlockContext block) -> blockLexicalMatchCount(document, block, normalizedQuery, terms)).reversed())
+                .thenComparing(block -> block.block().blockOrder());
+    }
+
+    private static Comparator<BlockContext> semanticFallbackBlockComparator(
+            TeacherResourceDocumentResponse document,
+            Map<String, Double> semanticScoreByKey,
+            String normalizedQuery,
+            String[] terms) {
+        return Comparator.<BlockContext>comparingDouble(
+                        block -> semanticScoreByKey.getOrDefault(blockKey(document.documentId(), block.block().blockId()), 0.0d))
+                .reversed()
                 .thenComparing(Comparator.comparingInt(
-                        (BlockContext block) -> graphAlignmentMatchCount(
-                                block.graphTags(),
-                                block.graphNodeIds(),
-                                queryGraph,
-                                normalizedQuery,
-                                terms)).reversed())
+                        (BlockContext block) -> blockLexicalMatchCount(document, block, normalizedQuery, terms)).reversed())
                 .thenComparing(block -> block.block().blockOrder());
     }
 
@@ -826,7 +922,7 @@ public class TeacherResourceBlockSearchService {
                             candidate.document(),
                             candidate.block(),
                             evidenceWindow(candidate.block(), candidate.documentBlocks()),
-                            SEARCH_BUDGET.blockEvidenceChars()));
+                            searchBudget.blockEvidenceChars()));
         }
         if (candidateTexts.isEmpty()) {
             return Map.of();
@@ -850,53 +946,15 @@ public class TeacherResourceBlockSearchService {
     }
 
     /**
-     * Document-stage rerank should compare one semantic digest per document, not a max over several duplicated block
-     * prompts. We therefore pack the strongest supported block windows from that document into one bounded text view
-     * and let the reranker answer the real stage-one question: "does this document contain the right evidence?".
-     */
-    private static String documentSemanticText(
-            TeacherResourceDocumentResponse document,
-            List<BlockContext> supportedBlocks,
-            List<BlockContext> documentBlocks) {
-        StringBuilder builder = new StringBuilder();
-        appendRerankLine(builder, "documentTitle", truncateForRerank(textOrDefault(document.title(), ""), SEARCH_BUDGET.titleChars()));
-        appendRerankLine(builder, "library", TeacherResourceLibraryResolver.effectiveLibrary(document));
-        appendRerankLine(builder, "permissionScope", textOrDefault(document.permissionScope(), ""));
-        for (BlockContext block : supportedBlocks) {
-            EvidenceWindow evidence = evidenceWindow(block, documentBlocks);
-            appendRerankLine(builder, "blockRole", truncateForRerank(textOrDefault(block.blockRole(), ""), SEARCH_BUDGET.roleChars()));
-            appendRerankLine(builder, "chapter", truncateForRerank(textOrDefault(block.block().chapter(), ""), SEARCH_BUDGET.headingChars()));
-            appendRerankLine(builder, "section", truncateForRerank(textOrDefault(block.block().section(), ""), SEARCH_BUDGET.headingChars()));
-            appendRerankLine(builder, "sourcePath", truncateForRerank(textOrDefault(block.sourcePath(), ""), SEARCH_BUDGET.sourcePathChars()));
-            appendRerankLine(
-                    builder,
-                    "graphTags",
-                    truncateForRerank(String.join(" ", block.graphTags()), SEARCH_BUDGET.graphTagsChars()));
-            appendRerankLine(
-                    builder,
-                    "evidenceBlockIds",
-                    truncateForRerank(String.join(" ", evidence.blockIds()), SEARCH_BUDGET.evidenceBlockIdsChars()));
-            appendRerankLine(
-                    builder,
-                    "evidenceText",
-                    truncateForRerank(textOrDefault(evidence.text(), ""), SEARCH_BUDGET.documentEvidenceChars()));
-            if (builder.length() >= SEARCH_BUDGET.documentDigestChars()) {
-                break;
-            }
-        }
-        return truncateForRerank(builder.toString(), SEARCH_BUDGET.documentDigestChars());
-    }
-
-    /**
      * Stage two keeps candidate selection fair across documents. Instead of "take exactly N blocks from every
      * document", we draw supported blocks round-robin from the ranked documents until the worker budget is full.
      * This preserves multi-document competition while still giving rich documents more than one chance.
      */
-    private static List<StageTwoBlockCandidate> stageTwoCandidateBlocks(
+    private List<StageTwoBlockCandidate> stageTwoCandidateBlocks(
             List<DocumentCandidate> rankedDocuments,
             Map<String, List<BlockContext>> blocksByDocumentId) {
         List<StageTwoBlockCandidate> selected = new ArrayList<>();
-        int candidateBudget = SEARCH_BUDGET.blockRerankCandidateLimit(rankedDocuments.size());
+        int candidateBudget = searchBudget.blockRerankCandidateLimit(rankedDocuments.size());
         Map<String, List<BlockContext>> orderedBlocksByDoc = new LinkedHashMap<>();
         Map<String, Integer> cursorByDoc = new LinkedHashMap<>();
         for (DocumentCandidate candidate : rankedDocuments) {
@@ -946,35 +1004,39 @@ public class TeacherResourceBlockSearchService {
      */
     private static Comparator<BlockCandidate> blockCandidateComparator() {
         Comparator<BlockCandidate> comparator = Comparator.comparingDouble(BlockCandidate::rerankScore).reversed();
-        comparator = comparator.thenComparing(Comparator.comparingDouble(BlockCandidate::documentRerankScore).reversed());
+        comparator = comparator.thenComparing(Comparator.comparingDouble(BlockCandidate::documentCoarseScore).reversed());
         comparator = comparator.thenComparing(Comparator.comparingDouble(BlockCandidate::vectorSemanticScore).reversed());
         return comparator.thenComparing(Comparator.comparingInt(BlockCandidate::lexicalMatches).reversed());
     }
 
-    private static String semanticCandidateText(
+    private String semanticCandidateText(
             TeacherResourceDocumentResponse document,
             BlockContext block,
             EvidenceWindow evidence,
             int evidenceCharBudget) {
         String imageRefs = truncateForRerank(
-                String.join(" ", parseStringArray(block.block().imageRefs())),
-                SEARCH_BUDGET.imageRefsChars());
+                String.join(" ", parseImageAssetIds(block.block().imageRefs())),
+                searchBudget.imageRefsChars());
+        String formulaEvidence = truncateForRerank(
+                formulaEvidence(block.block().formulaRefs()),
+                searchBudget.blockEvidenceChars());
         String evidenceText = textOrDefault(
                 evidence == null ? "" : evidence.text(),
                 textOrDefault(block.block().normalizedText(), block.block().rawText()));
         return String.join(
                 "\n",
-                "documentTitle: " + truncateForRerank(textOrDefault(document.title(), ""), SEARCH_BUDGET.titleChars()),
+                "documentTitle: " + truncateForRerank(textOrDefault(document.title(), ""), searchBudget.titleChars()),
                 "library: " + TeacherResourceLibraryResolver.effectiveLibrary(document),
-                "role: " + truncateForRerank(textOrDefault(block.blockRole(), ""), SEARCH_BUDGET.roleChars()),
-                "chapter: " + truncateForRerank(textOrDefault(block.block().chapter(), ""), SEARCH_BUDGET.headingChars()),
-                "section: " + truncateForRerank(textOrDefault(block.block().section(), ""), SEARCH_BUDGET.headingChars()),
-                "sourcePath: " + truncateForRerank(textOrDefault(block.sourcePath(), ""), SEARCH_BUDGET.sourcePathChars()),
-                "graphTags: " + truncateForRerank(String.join(" ", block.graphTags()), SEARCH_BUDGET.graphTagsChars()),
+                "role: " + truncateForRerank(textOrDefault(block.blockRole(), ""), searchBudget.roleChars()),
+                "chapter: " + truncateForRerank(textOrDefault(block.block().chapter(), ""), searchBudget.headingChars()),
+                "section: " + truncateForRerank(textOrDefault(block.block().section(), ""), searchBudget.headingChars()),
+                "sourcePath: " + truncateForRerank(textOrDefault(block.sourcePath(), ""), searchBudget.sourcePathChars()),
+                "graphTags: " + truncateForRerank(String.join(" ", block.graphTags()), searchBudget.graphTagsChars()),
                 "imageRefs: " + imageRefs,
+                "formulaEvidence: " + formulaEvidence,
                 "evidenceBlockIds: " + truncateForRerank(
                         String.join(" ", evidence == null ? List.of() : evidence.blockIds()),
-                        SEARCH_BUDGET.evidenceBlockIdsChars()),
+                        searchBudget.evidenceBlockIdsChars()),
                 "evidenceText:\n" + truncateForRerank(evidenceText, evidenceCharBudget));
     }
 
@@ -1008,31 +1070,7 @@ public class TeacherResourceBlockSearchService {
         return matches;
     }
 
-    private static int graphAlignmentMatchCount(
-            List<String> graphTags,
-            List<String> graphNodeIds,
-            TeacherResourceGraphAlignmentService.QueryGraphContext queryGraph,
-            String normalizedQuery,
-            String[] terms) {
-        int matches = lexicalMatchCount(String.join(" ", graphTags == null ? List.of() : graphTags), normalizedQuery, terms);
-        if (queryGraph == null || queryGraph.empty()) {
-            return matches;
-        }
-        Set<String> blockNodeIdSet = new LinkedHashSet<>(graphNodeIds == null ? List.of() : graphNodeIds);
-        for (String nodeId : queryGraph.primaryNodeIds()) {
-            if (blockNodeIdSet.contains(nodeId)) {
-                matches += 1;
-            }
-        }
-        for (String nodeId : queryGraph.expandedNodeIds()) {
-            if (blockNodeIdSet.contains(nodeId)) {
-                matches += 1;
-            }
-        }
-        return matches;
-    }
-
-    private static TeacherResourceBlockSearchResponse.Hit toTwoStageHit(
+    private TeacherResourceBlockSearchResponse.Hit toTwoStageHit(
             BlockCandidate candidate,
             List<BlockContext> documentBlocks,
             String normalizedQuery,
@@ -1057,7 +1095,7 @@ public class TeacherResourceBlockSearchService {
                 evidence.text(),
                 snippet(textOrDefault(context.block().rawText(), context.block().normalizedText()), normalizedQuery, terms),
                 candidate.rerankScore(),
-                parseStringArray(context.block().imageRefs()),
+                parseImageAssetIds(context.block().imageRefs()),
                 List.of());
     }
 
@@ -1065,9 +1103,9 @@ public class TeacherResourceBlockSearchService {
      * Returns the central hit block plus adjacent parsed neighbors. We do not expand arbitrarily: the goal is to keep
      * citations stable while still handling real evidence that spans a prompt block and the following answer/analysis.
      */
-    private static EvidenceWindow evidenceWindow(BlockContext target, List<BlockContext> documentBlocks) {
+    private EvidenceWindow evidenceWindow(BlockContext target, List<BlockContext> documentBlocks) {
         if (documentBlocks == null || documentBlocks.isEmpty()) {
-            return new EvidenceWindow(List.of(target.block().blockId()), textOrDefault(target.block().rawText(), target.block().normalizedText()));
+            return new EvidenceWindow(List.of(target.block().blockId()), blockEvidenceText(target.block()));
         }
         int targetIndex = -1;
         for (int index = 0; index < documentBlocks.size(); index += 1) {
@@ -1077,16 +1115,16 @@ public class TeacherResourceBlockSearchService {
             }
         }
         if (targetIndex < 0) {
-            return new EvidenceWindow(List.of(target.block().blockId()), textOrDefault(target.block().rawText(), target.block().normalizedText()));
+            return new EvidenceWindow(List.of(target.block().blockId()), blockEvidenceText(target.block()));
         }
         List<String> blockIds = new ArrayList<>();
         List<String> texts = new ArrayList<>();
-        int start = Math.max(0, targetIndex - SEARCH_BUDGET.evidenceWindowRadius());
-        int end = Math.min(documentBlocks.size() - 1, targetIndex + SEARCH_BUDGET.evidenceWindowRadius());
+        int start = Math.max(0, targetIndex - searchBudget.evidenceWindowRadius());
+        int end = Math.min(documentBlocks.size() - 1, targetIndex + searchBudget.evidenceWindowRadius());
         for (int index = start; index <= end; index += 1) {
             BlockContext neighbor = documentBlocks.get(index);
             blockIds.add(neighbor.block().blockId());
-            String text = textOrDefault(neighbor.block().rawText(), neighbor.block().normalizedText());
+            String text = blockEvidenceText(neighbor.block());
             if (!text.isBlank()) {
                 texts.add(text);
             }
@@ -1130,7 +1168,7 @@ public class TeacherResourceBlockSearchService {
     /**
      * Builds a compact match snippet around the first exact or term match.
      */
-    private static String snippet(String rawText, String normalizedQuery, String[] terms) {
+    private String snippet(String rawText, String normalizedQuery, String[] terms) {
         String text = textOrDefault(rawText, "");
         if (text.isBlank()) {
             return "";
@@ -1145,8 +1183,8 @@ public class TeacherResourceBlockSearchService {
                     .findFirst()
                     .orElse(0);
         }
-        int start = Math.max(0, matchIndex - SEARCH_BUDGET.snippetRadius());
-        int end = Math.min(text.length(), matchIndex + normalizedQuery.length() + SEARCH_BUDGET.snippetRadius());
+        int start = Math.max(0, matchIndex - searchBudget.snippetRadius());
+        int end = Math.min(text.length(), matchIndex + normalizedQuery.length() + searchBudget.snippetRadius());
         String prefix = start > 0 ? "..." : "";
         String suffix = end < text.length() ? "..." : "";
         return prefix + text.substring(start, end).strip() + suffix;
@@ -1155,7 +1193,7 @@ public class TeacherResourceBlockSearchService {
     /**
      * Builds the response envelope.
      */
-    private static TeacherResourceBlockSearchResponse response(
+    private TeacherResourceBlockSearchResponse response(
             String normalizedQuery,
             int safeLimit,
             String retrievalMode,
@@ -1260,7 +1298,7 @@ public class TeacherResourceBlockSearchService {
         }
         List<TeacherResourceBlockSearchResponse.Hit> candidates = List.copyOf(deduplicated.values());
         List<String> candidateTexts = candidates.stream()
-                .map(TeacherResourceBlockSearchService::semanticMergeCandidateText)
+                .map(this::semanticMergeCandidateText)
                 .toList();
         List<Double> rerankScores;
         try {
@@ -1303,21 +1341,21 @@ public class TeacherResourceBlockSearchService {
         return left.score() >= right.score() ? left : withScore(left, right.score());
     }
 
-    private static String semanticMergeCandidateText(TeacherResourceBlockSearchResponse.Hit hit) {
+    private String semanticMergeCandidateText(TeacherResourceBlockSearchResponse.Hit hit) {
         return String.join(
                 "\n",
-                "documentTitle: " + truncateForRerank(textOrDefault(hit.documentTitle(), ""), SEARCH_BUDGET.titleChars()),
+                "documentTitle: " + truncateForRerank(textOrDefault(hit.documentTitle(), ""), searchBudget.titleChars()),
                 "sourceType: " + textOrDefault(hit.sourceType(), ""),
-                "blockRole: " + truncateForRerank(textOrDefault(hit.blockRole(), ""), SEARCH_BUDGET.roleChars()),
-                "chapter: " + truncateForRerank(textOrDefault(hit.chapter(), ""), SEARCH_BUDGET.headingChars()),
-                "section: " + truncateForRerank(textOrDefault(hit.section(), ""), SEARCH_BUDGET.headingChars()),
-                "sourcePath: " + truncateForRerank(textOrDefault(hit.sourcePath(), ""), SEARCH_BUDGET.sourcePathChars()),
+                "blockRole: " + truncateForRerank(textOrDefault(hit.blockRole(), ""), searchBudget.roleChars()),
+                "chapter: " + truncateForRerank(textOrDefault(hit.chapter(), ""), searchBudget.headingChars()),
+                "section: " + truncateForRerank(textOrDefault(hit.section(), ""), searchBudget.headingChars()),
+                "sourcePath: " + truncateForRerank(textOrDefault(hit.sourcePath(), ""), searchBudget.sourcePathChars()),
                 "graphTags: " + truncateForRerank(
                         String.join(" ", hit.graphTags() == null ? List.of() : hit.graphTags()),
-                        SEARCH_BUDGET.graphTagsChars()),
+                        searchBudget.graphTagsChars()),
                 "evidenceText:\n" + truncateForRerank(
                         textOrDefault(hit.evidenceText(), hit.snippet()),
-                        SEARCH_BUDGET.mergeEvidenceChars()));
+                        searchBudget.mergeEvidenceChars()));
     }
 
     private static TeacherResourceBlockSearchResponse.Hit withScore(
@@ -1411,19 +1449,22 @@ public class TeacherResourceBlockSearchService {
         if (filter == null) {
             return true;
         }
-        if (filter.documentIds() != null && !filter.documentIds().isEmpty()) {
-            /*
-             * Teacher-document ids refer to source_document rows, not processed_books textbook doc ids. Do not inject
-             * textbook corpus hits into a doc-id scoped query because that would violate the caller's explicit scope.
-             */
-            return false;
-        }
         if (filter.sourceTypes() == null || filter.sourceTypes().isEmpty()) {
-            return true;
+            // Without an explicit textbook library, document ids retain their teacher-resource meaning.
+            return filter.documentIds() == null || filter.documentIds().isEmpty();
         }
-        return filter.sourceTypes().stream()
+        boolean textbookLibrary = filter.sourceTypes().stream()
                 .map(TeacherResourceBlockSearchService::normalizeText)
                 .anyMatch(selector -> "textbook".equals(selector) || "public_textbook".equals(selector));
+        /*
+         * `library=textbook` changes documentId namespace from source_document to processed_books. This is required
+         * for a teacher/agent that selected a concrete publisher edition; all other library combinations preserve the
+         * teacher-document scope and never leak public textbook hits into a private document-id request.
+         */
+        return textbookLibrary && (filter.documentIds() == null || filter.documentIds().isEmpty()
+                || filter.sourceTypes().stream()
+                        .map(TeacherResourceBlockSearchService::normalizeText)
+                        .allMatch(selector -> "textbook".equals(selector) || "public_textbook".equals(selector)));
     }
 
     /**
@@ -1435,8 +1476,7 @@ public class TeacherResourceBlockSearchService {
         if (filter == null) {
             return false;
         }
-        if ((filter.documentIds() != null && !filter.documentIds().isEmpty())
-                || (filter.permissionScopes() != null && !filter.permissionScopes().isEmpty())
+        if ((filter.permissionScopes() != null && !filter.permissionScopes().isEmpty())
                 || (filter.tags() != null && !filter.tags().isEmpty())) {
             return false;
         }
@@ -1475,11 +1515,11 @@ public class TeacherResourceBlockSearchService {
     /**
      * Clamps query result size to keep the read path bounded.
      */
-    private static int clampLimit(int limit) {
+    private int clampLimit(int limit) {
         if (limit <= 0) {
-            return DEFAULT_LIMIT;
+            return searchProperties.defaultLimit();
         }
-        return Math.min(limit, MAX_LIMIT);
+        return Math.min(limit, searchProperties.maxLimit());
     }
 
     /**
@@ -1497,7 +1537,7 @@ public class TeacherResourceBlockSearchService {
      * <p>This focus builder is intentionally generic rather than benchmark-coupled: it keeps the clauses that overlap
      * with normalized graph tags and falls back to the longest content clauses when graph alignment is sparse.</p>
      */
-    private static FocusedSearchQuery focusedQuery(
+    private FocusedSearchQuery focusedQuery(
             String normalizedQuery,
             TeacherResourceGraphAlignmentService.QueryGraphContext queryGraph) {
         if (normalizedQuery.isBlank()) {
@@ -1509,21 +1549,16 @@ public class TeacherResourceBlockSearchService {
         LinkedHashSet<String> focusedParts = new LinkedHashSet<>();
         appendMatchingClauses(focusedParts, clauses, primaryTags);
         appendMatchingClauses(focusedParts, clauses, expandedTags);
-        if (focusedParts.isEmpty()) {
-            clauses.stream()
-                    .sorted(Comparator.comparingInt(String::length).reversed().thenComparing(String::compareTo))
-                    .limit(QUERY_FOCUS_BUDGET.maxClauses())
-                    .forEach(clause -> addFocusedPart(focusedParts, clause));
-        }
+        appendLongestRemainingClauses(focusedParts, clauses, queryFocusBudget.maxClauses());
         primaryTags.stream()
-                .limit(QUERY_FOCUS_BUDGET.maxGraphTags())
+                .limit(queryFocusBudget.maxGraphTags())
                 .forEach(tag -> addFocusedPart(focusedParts, tag));
         expandedTags.stream()
-                .limit(QUERY_FOCUS_BUDGET.maxGraphTags())
+                .limit(queryFocusBudget.maxGraphTags())
                 .forEach(tag -> addFocusedPart(focusedParts, tag));
         String semanticQuery = truncateForRerank(
                 String.join(" ", focusedParts),
-                QUERY_FOCUS_BUDGET.maxSemanticQueryChars());
+                queryFocusBudget.maxSemanticQueryChars());
         if (semanticQuery.isBlank()) {
             semanticQuery = normalizedQuery;
         }
@@ -1558,15 +1593,15 @@ public class TeacherResourceBlockSearchService {
         return List.copyOf(normalized);
     }
 
-    private static void appendMatchingClauses(
+    private void appendMatchingClauses(
             LinkedHashSet<String> focusedParts,
             List<String> clauses,
             List<String> normalizedTags) {
-        if (focusedParts.size() >= QUERY_FOCUS_BUDGET.maxClauses() || normalizedTags.isEmpty()) {
+        if (focusedParts.size() >= queryFocusBudget.maxClauses() || normalizedTags.isEmpty()) {
             return;
         }
         for (String clause : clauses) {
-            if (focusedParts.size() >= QUERY_FOCUS_BUDGET.maxClauses()) {
+            if (focusedParts.size() >= queryFocusBudget.maxClauses()) {
                 return;
             }
             boolean matched = normalizedTags.stream().anyMatch(tag -> containsNormalized(clause, tag));
@@ -1574,6 +1609,29 @@ public class TeacherResourceBlockSearchService {
                 addFocusedPart(focusedParts, clause);
             }
         }
+    }
+
+    /**
+     * Keep one long non-routing clause even when graph alignment already matched another clause.
+     *
+     * <p>Teacher queries often start with a broad topic clause such as "数列方法怎么讲", then add the real
+     * page- or block-discriminating evidence later in the sentence. If focus building keeps only the graph-matched
+     * topic clause, stage-one document recall becomes generic again and sibling documents with the same module tag can
+     * crowd out the actually correct handout. This helper preserves the normalized graph clue while still passing one
+     * longest unseen user clause into semantic retrieval.</p>
+     */
+    private static void appendLongestRemainingClauses(
+            LinkedHashSet<String> focusedParts,
+            List<String> clauses,
+            int maxClauses) {
+        if (focusedParts.size() >= maxClauses) {
+            return;
+        }
+        clauses.stream()
+                .filter(clause -> !focusedParts.contains(clause))
+                .sorted(Comparator.comparingInt(String::length).reversed().thenComparing(String::compareTo))
+                .limit(Math.max(0, maxClauses - focusedParts.size()))
+                .forEach(clause -> addFocusedPart(focusedParts, clause));
     }
 
     private static void addFocusedPart(LinkedHashSet<String> focusedParts, String candidate) {
@@ -1676,7 +1734,7 @@ public class TeacherResourceBlockSearchService {
         return List.copyOf(selectors);
     }
 
-    private static String retrievalMode(String strategy, TeacherResourceSearchFilter filter, String suffix) {
+    private String retrievalMode(String strategy, TeacherResourceSearchFilter filter, String suffix) {
         String mode = filter.empty() ? strategy : strategy + "_filtered";
         if (suffix == null || suffix.isBlank()) {
             return safeRetrievalMode(mode);
@@ -1688,30 +1746,30 @@ public class TeacherResourceBlockSearchService {
      * Audit rows persist retrieval mode in a compact varchar column. Truncation here is intentional: the response
      * label remains human-readable while search continues to work even if internal stage names evolve.
      */
-    private static String safeRetrievalMode(String retrievalMode) {
+    private String safeRetrievalMode(String retrievalMode) {
         String normalized = textOrDefault(retrievalMode, "").strip();
-        if (normalized.length() <= SEARCH_BUDGET.maxRetrievalModeLength()) {
+        if (normalized.length() <= searchBudget.maxRetrievalModeLength()) {
             return normalized;
         }
-        return normalized.substring(0, SEARCH_BUDGET.maxRetrievalModeLength());
+        return normalized.substring(0, searchBudget.maxRetrievalModeLength());
     }
 
     /**
      * Splits a normalized query into non-empty terms.
      */
-    private static String[] searchTerms(String normalizedQuery) {
+    private String[] searchTerms(String normalizedQuery) {
         if (normalizedQuery.isBlank()) {
             return new String[0];
         }
         LinkedHashSet<String> terms = new LinkedHashSet<>();
         for (String fragment : normalizedQuery.split("\\s+")) {
             appendSearchTerms(terms, fragment);
-            if (terms.size() >= SEARCH_BUDGET.maxSearchTerms()) {
+            if (terms.size() >= searchBudget.maxSearchTerms()) {
                 break;
             }
         }
         return terms.stream()
-                .limit(SEARCH_BUDGET.maxSearchTerms())
+                .limit(searchBudget.maxSearchTerms())
                 .toArray(String[]::new);
     }
 
@@ -1720,7 +1778,7 @@ public class TeacherResourceBlockSearchService {
      * one continuous Chinese sentence with little punctuation, so whitespace tokenization alone collapses the entire
      * request into one unusable term and erases the lightweight lexical signal that should only assist semantic recall.
      */
-    private static void appendSearchTerms(LinkedHashSet<String> terms, String fragment) {
+    private void appendSearchTerms(LinkedHashSet<String> terms, String fragment) {
         String normalizedFragment = normalizeText(textOrDefault(fragment, ""));
         if (normalizedFragment.isBlank()) {
             return;
@@ -1752,7 +1810,7 @@ public class TeacherResourceBlockSearchService {
                     cjk.setLength(0);
                 }
             }
-            if (terms.size() >= SEARCH_BUDGET.maxSearchTerms()) {
+            if (terms.size() >= searchBudget.maxSearchTerms()) {
                 return;
             }
         }
@@ -1764,7 +1822,7 @@ public class TeacherResourceBlockSearchService {
         }
     }
 
-    private static void appendCjkTerms(LinkedHashSet<String> terms, String fragment) {
+    private void appendCjkTerms(LinkedHashSet<String> terms, String fragment) {
         if (fragment.isBlank()) {
             return;
         }
@@ -1774,7 +1832,7 @@ public class TeacherResourceBlockSearchService {
         if (fragment.length() == 1) {
             return;
         }
-        for (int index = 0; index < fragment.length() - 1 && terms.size() < SEARCH_BUDGET.maxSearchTerms(); index += 1) {
+        for (int index = 0; index < fragment.length() - 1 && terms.size() < searchBudget.maxSearchTerms(); index += 1) {
             addSearchTerm(terms, fragment.substring(index, index + 2));
         }
     }
@@ -1880,6 +1938,60 @@ public class TeacherResourceBlockSearchService {
         }
     }
 
+    /**
+     * imageRefs is a JSON object array because each asset carries page and source metadata. Keep this parser distinct
+     * from graph-tag string arrays; treating it as a String list silently discarded asset ids after a successful hit.
+     */
+    private static List<String> parseImageAssetIds(String json) {
+        try {
+            JsonNode values = OBJECT_MAPPER.readTree(textOrDefault(json, "[]"));
+            if (!values.isArray()) {
+                return List.of();
+            }
+            List<String> assetIds = new ArrayList<>();
+            for (JsonNode value : values) {
+                String assetId = value.path("assetId").asText("").strip();
+                if (!assetId.isBlank()) {
+                    assetIds.add(assetId);
+                }
+            }
+            return List.copyOf(assetIds);
+        } catch (Exception ignored) {
+            return List.of();
+        }
+    }
+
+    /** Formula JSON stays structured in storage, while reranking receives only bounded canonical evidence. */
+    private static String formulaEvidence(String formulaRefs) {
+        try {
+            JsonNode formulas = OBJECT_MAPPER.readTree(textOrDefault(formulaRefs, "[]"));
+            if (!formulas.isArray()) {
+                return "";
+            }
+            List<String> values = new ArrayList<>();
+            for (JsonNode formula : formulas) {
+                String plainText = formula.path("plainText").asText("").strip();
+                String latex = formula.path("latex").asText("").strip();
+                if (!plainText.isBlank()) {
+                    values.add(plainText);
+                }
+                if (!latex.isBlank()) {
+                    values.add(latex);
+                }
+            }
+            return String.join(" ", values);
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
+
+    private static String blockEvidenceText(TeacherDocumentBlockResponse block) {
+        return normalizeText(String.join(
+                " ",
+                textOrDefault(block.rawText(), block.normalizedText()),
+                formulaEvidence(block.formulaRefs())));
+    }
+
     private static String blockKey(String documentId, String blockId) {
         return documentId + ":" + blockId;
     }
@@ -1897,11 +2009,7 @@ public class TeacherResourceBlockSearchService {
     private record DocumentCandidate(
             TeacherResourceDocumentResponse document,
             List<BlockContext> blocks,
-            double semanticScore,
-            double vectorScore) {
-        private DocumentCandidate withSemanticScore(double rerankedSemanticScore) {
-            return new DocumentCandidate(document, blocks, rerankedSemanticScore, vectorScore);
-        }
+            double coarseScore) {
     }
 
     private record BlockCandidate(
@@ -1909,7 +2017,7 @@ public class TeacherResourceBlockSearchService {
             BlockContext block,
             double rerankScore,
             int lexicalMatches,
-            double documentRerankScore,
+            double documentCoarseScore,
             double vectorSemanticScore) {
     }
 
@@ -1938,79 +2046,10 @@ public class TeacherResourceBlockSearchService {
             String[] terms) {
     }
 
-    private record QueryFocusBudget(
-            int maxSemanticQueryChars,
-            int maxClauses,
-            int maxGraphTags) {
-
-        private static QueryFocusBudget defaults() {
-            return new QueryFocusBudget(160, 3, 4);
-        }
-    }
-
-    private record SearchRuntimeBudget(
-            int maxRetrievalModeLength,
-            int snippetRadius,
-            int evidenceWindowRadius,
-            int maxSearchTerms,
-            int titleChars,
-            int roleChars,
-            int headingChars,
-            int sourcePathChars,
-            int graphTagsChars,
-            int imageRefsChars,
-            int evidenceBlockIdsChars,
-            int documentEvidenceChars,
-            int blockEvidenceChars,
-            int mergeEvidenceChars,
-            int documentDigestChars,
-            int maxDocumentRerankCandidates,
-            int maxVectorCandidates,
-            int maxBlockRerankCandidates,
-            int maxBlocksPerDocumentForStageTwo) {
-
-        private static SearchRuntimeBudget defaults() {
-            return new SearchRuntimeBudget(
-                    64,
-                    80,
-                    1,
-                    32,
-                    120,
-                    48,
-                    120,
-                    220,
-                    180,
-                    180,
-                    120,
-                    520,
-                    900,
-                    760,
-                    2600,
-                    12,
-                    96,
-                    36,
-                    3);
-        }
-
-        private int vectorCandidateLimit(int requestedLimit, int candidateDocumentCount, int visibleBlockCount) {
-            int requestedWindow = Math.max(1, requestedLimit) * Math.max(1, candidateDocumentCount);
-            return Math.max(1, Math.min(Math.min(maxVectorCandidates, requestedWindow), Math.max(1, visibleBlockCount)));
-        }
-
-        /**
-         * Stage-one document rerank is allowed to inspect more than the final top-N because candidate documents may
-         * still swap order after the real reranker sees their bounded evidence windows. This is an I/O budget, not a
-         * ranking rule.
-         */
-        private int documentRerankCandidateLimit(int visibleDocumentCount) {
-            return Math.max(1, Math.min(maxDocumentRerankCandidates, Math.max(1, visibleDocumentCount)));
-        }
-
-        private int blockRerankCandidateLimit(int rankedDocumentCount) {
-            return Math.max(1, Math.min(
-                    maxBlockRerankCandidates,
-                    Math.max(1, rankedDocumentCount) * Math.max(1, maxBlocksPerDocumentForStageTwo)));
-        }
+    private record VectorCoarseRecall(
+            Map<String, Double> scoreByKey,
+            List<String> candidateDocumentIds) {
+        private static final VectorCoarseRecall EMPTY = new VectorCoarseRecall(Map.of(), List.of());
     }
 
 }

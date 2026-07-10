@@ -90,6 +90,29 @@ math-agent:
     embedding-api-key: ${MATH_AGENT_EMBEDDING_API_KEY:${MATH_AGENT_WORKER_API_KEY:}}
     embedding-model: ${MATH_AGENT_EMBEDDING_MODEL:local-clip-vit-large-patch14-zh}
     request-timeout-ms: ${MATH_AGENT_VECTOR_INDEX_TIMEOUT_MS:30000}
+  teacher:
+    formula-recognition:
+      # Only documents uploaded with parseMode=AI consume this budget. TEXT parsing remains local and free.
+      enabled: ${MATH_AGENT_FORMULA_VISION_ENABLED:true}
+      max-images-per-document: ${MATH_AGENT_FORMULA_VISION_MAX_IMAGES_PER_DOCUMENT:48}
+      # Two full pages keep symbols legible for the default visual model; set exactly 4 only after a quality check.
+      pages-per-request: ${MATH_AGENT_FORMULA_VISION_PAGES_PER_REQUEST:2}
+  textbook:
+    retrieval:
+      # Transport windows for the local semantic worker. They are deliberately separate from ranking logic, so a
+      # deployment can meet its latency budget without reintroducing hidden score weights into Java code.
+      query-focus:
+        max-query-chars: ${MATH_AGENT_TEXTBOOK_QUERY_FOCUS_MAX_CHARS:120}
+        max-clauses: ${MATH_AGENT_TEXTBOOK_QUERY_FOCUS_MAX_CLAUSES:2}
+        max-graph-tags: ${MATH_AGENT_TEXTBOOK_QUERY_FOCUS_MAX_GRAPH_TAGS:4}
+      rerank:
+        max-document-candidates: ${MATH_AGENT_TEXTBOOK_RERANK_MAX_DOCUMENT_CANDIDATES:3}
+        max-pages-per-document: ${MATH_AGENT_TEXTBOOK_RERANK_MAX_PAGES_PER_DOCUMENT:3}
+        max-rerank-documents: ${MATH_AGENT_TEXTBOOK_RERANK_MAX_DOCUMENTS:2}
+        max-page-candidates: ${MATH_AGENT_TEXTBOOK_RERANK_MAX_PAGE_CANDIDATES:5}
+        page-text-chars: ${MATH_AGENT_TEXTBOOK_RERANK_PAGE_TEXT_CHARS:120}
+        formula-text-chars: ${MATH_AGENT_TEXTBOOK_RERANK_FORMULA_TEXT_CHARS:40}
+        document-text-chars: ${MATH_AGENT_TEXTBOOK_RERANK_DOCUMENT_TEXT_CHARS:320}
   protocol:
     mcp:
       registry:

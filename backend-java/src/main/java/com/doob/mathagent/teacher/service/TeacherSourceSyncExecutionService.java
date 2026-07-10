@@ -1,7 +1,18 @@
 package com.doob.mathagent.teacher.service;
 
-import com.doob.mathagent.teacher.vo.TeacherDocumentBlockResponse;
-import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
+import com.doob.mathagent.teacher.block.TeacherDocumentBlockResponse;
+import com.doob.mathagent.teacher.block.TeacherDocumentBlockStore;
+import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
+import com.doob.mathagent.teacher.document.TeacherResourceStore;
+import com.doob.mathagent.teacher.feishu.TeacherFeishuDownloadClient;
+import com.doob.mathagent.teacher.feishu.TeacherFeishuDownloadException;
+import com.doob.mathagent.teacher.formula.OmmlFormulaExtractor;
+import com.doob.mathagent.teacher.formula.TeacherFormulaRecognitionClient;
+import com.doob.mathagent.teacher.formula.TeacherFormulaRecognitionProperties;
+import com.doob.mathagent.teacher.search.TeacherResourceGraphAlignmentService;
+import com.doob.mathagent.teacher.sync.TeacherSourceSyncCheckpointStore;
+import com.doob.mathagent.teacher.sync.TeacherSourceSyncJobStore;
+import com.doob.mathagent.teacher.sync.TeacherSourceSyncProperties;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncCheckpointResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncJobResponse;
 import com.doob.mathagent.vector.service.VectorIndexRebuildResponse;
@@ -26,6 +37,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 import java.util.UUID;
 import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
@@ -63,6 +75,8 @@ public class TeacherSourceSyncExecutionService {
     private final VectorIndexService vectorIndexService;
     private final TeacherResourceGraphAlignmentService graphAlignmentService;
     private final TeacherResourceAssetService assetService;
+    private final TeacherFormulaRecognitionClient formulaRecognitionClient;
+    private final TeacherFormulaRecognitionProperties formulaRecognitionProperties;
 
     /**
      * Creates a sync execution service.
@@ -88,7 +102,9 @@ public class TeacherSourceSyncExecutionService {
                 checkpointStore,
                 vectorIndexService,
                 TeacherResourceGraphAlignmentService.disabled(),
-                TeacherResourceAssetService.disabled());
+                TeacherResourceAssetService.disabled(),
+                TeacherFormulaRecognitionClient.disabled(),
+                new TeacherFormulaRecognitionProperties(false, 0, 2));
     }
 
     /**
@@ -112,13 +128,14 @@ public class TeacherSourceSyncExecutionService {
                 checkpointStore,
                 vectorIndexService,
                 graphAlignmentService,
-                TeacherResourceAssetService.disabled());
+                TeacherResourceAssetService.disabled(),
+                TeacherFormulaRecognitionClient.disabled(),
+                new TeacherFormulaRecognitionProperties(false, 0, 2));
     }
 
     /**
      * Production constructor with graph normalization and persisted image assets.
      */
-    @Autowired
     public TeacherSourceSyncExecutionService(
             TeacherResourceStore resourceStore,
             TeacherSourceSyncJobStore jobStore,
@@ -129,6 +146,36 @@ public class TeacherSourceSyncExecutionService {
             VectorIndexService vectorIndexService,
             TeacherResourceGraphAlignmentService graphAlignmentService,
             TeacherResourceAssetService assetService) {
+        this(
+                resourceStore,
+                jobStore,
+                blockStore,
+                feishuDownloadClient,
+                syncProperties,
+                checkpointStore,
+                vectorIndexService,
+                graphAlignmentService,
+                assetService,
+                TeacherFormulaRecognitionClient.disabled(),
+                new TeacherFormulaRecognitionProperties(false, 0, 2));
+    }
+
+    /**
+     * Production constructor includes the worker-backed formula recognizer. Compatibility constructors above remain
+     * deliberately offline for focused tests and must not be selected by Spring production wiring.
+     */
+    public TeacherSourceSyncExecutionService(
+            TeacherResourceStore resourceStore,
+            TeacherSourceSyncJobStore jobStore,
+            TeacherDocumentBlockStore blockStore,
+            TeacherFeishuDownloadClient feishuDownloadClient,
+            TeacherSourceSyncProperties syncProperties,
+            TeacherSourceSyncCheckpointStore checkpointStore,
+            VectorIndexService vectorIndexService,
+            TeacherResourceGraphAlignmentService graphAlignmentService,
+            TeacherResourceAssetService assetService,
+            TeacherFormulaRecognitionClient formulaRecognitionClient,
+            TeacherFormulaRecognitionProperties formulaRecognitionProperties) {
         this.resourceStore = resourceStore;
         this.jobStore = jobStore;
         this.blockStore = blockStore;
@@ -138,6 +185,10 @@ public class TeacherSourceSyncExecutionService {
         this.vectorIndexService = Objects.requireNonNull(vectorIndexService, "vectorIndexService is required");
         this.graphAlignmentService = Objects.requireNonNull(graphAlignmentService, "graphAlignmentService is required");
         this.assetService = Objects.requireNonNull(assetService, "assetService is required");
+        this.formulaRecognitionClient = Objects.requireNonNull(formulaRecognitionClient, "formulaRecognitionClient is required");
+        this.formulaRecognitionProperties = Objects.requireNonNull(
+                formulaRecognitionProperties,
+                "formulaRecognitionProperties is required");
     }
 
     /**
@@ -504,13 +555,16 @@ public class TeacherSourceSyncExecutionService {
     }
 
     /**
-     * AI mode is a paid semantic-labeling request. Until a real model client is configured, sync keeps the TEXT parse
-     * result and says so explicitly instead of pretending AI role/tag labeling succeeded.
+     * Makes AI mode observable without claiming that every image is a formula. Native OMML is always extracted locally;
+     * AI mode adds an opt-in visual attempt for source-linked images and leaves uncertain ones as original assets.
      */
-    private static String aiModeSuffix(TeacherResourceDocumentResponse document) {
-        return "AI".equalsIgnoreCase(textOrDefault(document.parseMode(), "TEXT"))
-                ? "; AI labeling unavailable, kept TEXT extraction"
-                : "";
+    private String aiModeSuffix(TeacherResourceDocumentResponse document) {
+        if (!"AI".equalsIgnoreCase(textOrDefault(document.parseMode(), "TEXT"))) {
+            return "";
+        }
+        return formulaRecognitionProperties.enabled()
+                ? "; AI formula recognition attempted for eligible images; uncertain images retained as original assets"
+                : "; AI formula recognition is disabled by deployment configuration; kept TEXT extraction";
     }
 
     private static String assetCountSuffix(int assetCount) {
@@ -677,10 +731,20 @@ public class TeacherSourceSyncExecutionService {
             throw new IllegalArgumentException("Local resource path contains no supported .md, .txt, .docx, or .pdf files: " + root);
         }
         List<TeacherDocumentBlockResponse> blocks = new ArrayList<>();
+        FormulaVisionBudget formulaVisionBudget = FormulaVisionBudget.forDocument(document, formulaRecognitionProperties);
         int order = 0;
         for (Path file : files) {
             String relativePath = root.equals(file) ? file.getFileName().toString() : root.relativize(file).toString();
-            for (ParsedBlock parsed : parseFileBlocks(file)) {
+            List<ParsedBlock> parsedBlocks = new ArrayList<>(parseFileBlocks(file));
+            if ("AI".equalsIgnoreCase(textOrDefault(document.parseMode(), "TEXT"))
+                    && file.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".docx")) {
+                /* Render complete Word pages once, then feed them into the same PDF page-batch path. Do not inspect
+                 * individual WMF/PNG equation assets: that would multiply visual calls and lose page context. */
+                parsedBlocks.addAll(parseRenderedDocxPages(file));
+            }
+            List<List<FormulaReference>> pageFormulas = recognizePdfPageBatches(document, parsedBlocks, formulaVisionBudget);
+            for (int index = 0; index < parsedBlocks.size(); index += 1) {
+                ParsedBlock parsed = parsedBlocks.get(index);
                 blocks.add(toBlock(
                         tenantId,
                         viewerRole,
@@ -688,7 +752,8 @@ public class TeacherSourceSyncExecutionService {
                         document,
                         relativePath.replace('\\', '/'),
                         parsed,
-                        order++));
+                        order++,
+                        pageFormulas.get(index)));
             }
         }
         return blocks;
@@ -786,7 +851,7 @@ public class TeacherSourceSyncExecutionService {
     private static void flushBlock(List<ParsedBlock> blocks, String chapter, String section, StringBuilder current) {
         String value = current.toString().strip();
         if (!value.isBlank()) {
-            blocks.add(new ParsedBlock(chapter, section, null, value, List.of()));
+            blocks.add(new ParsedBlock(chapter, section, null, value, List.of(), List.of()));
         }
         current.setLength(0);
     }
@@ -829,13 +894,23 @@ public class TeacherSourceSyncExecutionService {
                     }
                 }
                 String paragraphText = textOrDefault(text.toString(), paragraph.getText());
-                if (!paragraphText.isBlank() || !assets.isEmpty()) {
+                /*
+                 * XWPFRun.text() intentionally does not flatten Word's m:oMath tree. Extract OMML from the same
+                 * paragraph before persistence so equations do not become invisible blank gaps in an otherwise valid
+                 * DOCX question. The original XML remains in formula_refs for lossless rendering/reprocessing.
+                 */
+                List<OmmlFormulaExtractor.ExtractedFormula> formulas =
+                        OmmlFormulaExtractor.extractFromParagraphXml(paragraph.getCTP().xmlText());
+                if (!paragraphText.isBlank() || !assets.isEmpty() || !formulas.isEmpty()) {
                     blocks.add(new ParsedBlock(
                             chapter,
                             null,
                             null,
-                            paragraphText.isBlank() ? "[DOCX image block; no extractable text]" : paragraphText,
-                            List.copyOf(assets)));
+                            paragraphText.isBlank() && formulas.isEmpty()
+                                    ? "[DOCX image block; no extractable text]"
+                                    : paragraphText,
+                            List.copyOf(assets),
+                            formulas));
                 }
             }
         } catch (IOException exception) {
@@ -884,13 +959,53 @@ public class TeacherSourceSyncExecutionService {
                             null,
                             page,
                             text.isBlank() ? "[PDF page image; no extractable text]" : text,
-                            List.copyOf(assets)));
+                            List.copyOf(assets),
+                            List.of()));
                 }
             }
         } catch (IOException exception) {
             throw new IllegalArgumentException("Failed to parse PDF resource file: " + file, exception);
         }
         return blocks;
+    }
+
+    /** Renders an AI-mode DOCX locally through Word, producing page images used by the shared two/four-page pipeline. */
+    private static List<ParsedBlock> parseRenderedDocxPages(Path docx) {
+        Path renderedPdf = null;
+        try {
+            renderedPdf = Files.createTempFile("math-agent-docx-pages-", ".pdf");
+            Path script = resolveDocxRenderScript();
+            Process process = new ProcessBuilder(
+                    "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                    "-File", script.toString(), "-SourcePath", docx.toString(), "-TargetPath", renderedPdf.toString())
+                    .redirectErrorStream(true)
+                    .start();
+            if (!process.waitFor(90, TimeUnit.SECONDS) || process.exitValue() != 0 || !Files.isRegularFile(renderedPdf)) {
+                return List.of();
+            }
+            return parsePdfBlocks(renderedPdf);
+        } catch (IOException | InterruptedException exception) {
+            if (exception instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            return List.of();
+        } finally {
+            if (renderedPdf != null) {
+                try { Files.deleteIfExists(renderedPdf); } catch (IOException ignored) { }
+            }
+        }
+    }
+
+    private static Path resolveDocxRenderScript() {
+        Path cwd = Path.of(System.getProperty("user.dir", ".")).toAbsolutePath().normalize();
+        for (Path candidate : List.of(
+                cwd.resolve("scripts/local/render-docx-to-pdf.ps1"),
+                cwd.resolve("../scripts/local/render-docx-to-pdf.ps1"))) {
+            if (Files.isRegularFile(candidate)) {
+                return candidate;
+            }
+        }
+        throw new IllegalStateException("DOCX page renderer script is unavailable");
     }
 
     /**
@@ -903,9 +1018,20 @@ public class TeacherSourceSyncExecutionService {
             TeacherResourceDocumentResponse document,
             String relativePath,
             ParsedBlock parsed,
-            int order) {
-        String normalized = normalizeText(parsed.text());
+            int order,
+            List<FormulaReference> pageFormulas) {
         String sourcePath = relativePath.replace('\\', '/');
+        List<StoredAssetReference> storedAssets = storeAssets(document, sourcePath, parsed);
+        List<FormulaReference> formulas = formulaReferences(parsed.formulas());
+        formulas.addAll(bindFormulaAssets(pageFormulas, storedAssets));
+        String formulaRefs = formulaRefs(formulas);
+        String formulaEvidence = formulaEvidence(formulas);
+        /*
+         * The canonical formula text belongs in normalizedText because this exact value is embedded into Milvus.
+         * Keeping rawText unmodified preserves the source extraction for display, while a formula-only paragraph is
+         * still indexable and receives the same graph/rerank treatment as ordinary teaching text.
+         */
+        String normalized = normalizeText(String.join(" ", parsed.text(), formulaEvidence));
         String externalBlockId = stableExternalBlockId(sourcePath, parsed, order);
         String blockRole = classifyBlockRole(sourcePath, parsed, normalized);
         /*
@@ -922,9 +1048,9 @@ public class TeacherSourceSyncExecutionService {
                 blockRole,
                 parsed.chapter(),
                 parsed.section(),
-                parsed.text(),
+                normalizeText(String.join(" ", parsed.text(), formulaEvidence)),
                 normalized);
-        String imageRefs = imageRefs(document, sourcePath, parsed);
+        String imageRefs = imageRefs(storedAssets);
         return new TeacherDocumentBlockResponse(
                 UUID.randomUUID().toString(),
                 document.documentId(),
@@ -940,7 +1066,7 @@ public class TeacherSourceSyncExecutionService {
                 parsed.text(),
                 normalized,
                 imageRefs,
-                "[]",
+                formulaRefs,
                 jsonArray(graphAlignment.nodeIds()),
                 jsonArray(graphAlignment.tagNames()),
                 sha256(normalized),
@@ -1018,14 +1144,14 @@ public class TeacherSourceSyncExecutionService {
     /**
      * Persists extracted images and converts them to safe asset references carried by block imageRefs.
      */
-    private String imageRefs(
+    private List<StoredAssetReference> storeAssets(
             TeacherResourceDocumentResponse document,
             String sourcePath,
             ParsedBlock parsed) {
         if (parsed.assets().isEmpty()) {
-            return "[]";
+            return List.of();
         }
-        List<Map<String, Object>> refs = new ArrayList<>();
+        List<StoredAssetReference> refs = new ArrayList<>();
         for (PendingAsset pending : parsed.assets()) {
             Optional<com.doob.mathagent.teacher.vo.TeacherResourceAssetResponse> saved =
                     assetService.saveExtractedAsset(
@@ -1036,19 +1162,204 @@ public class TeacherSourceSyncExecutionService {
                             pending.content(),
                             pending.mimeType());
             saved.ifPresent(asset -> {
-                Map<String, Object> ref = new LinkedHashMap<>();
-                ref.put("assetId", asset.assetId());
-                ref.put("pageNo", asset.pageNo());
-                ref.put("sourcePath", textOrDefault(asset.sourcePath(), ""));
-                ref.put("mimeType", asset.mimeType());
-                refs.add(ref);
+                refs.add(new StoredAssetReference(
+                        asset.assetId(),
+                        asset.pageNo(),
+                        textOrDefault(asset.sourcePath(), ""),
+                        textOrDefault(asset.mimeType(), "application/octet-stream"),
+                        pending.content()));
             });
+        }
+        return List.copyOf(refs);
+    }
+
+    private static String imageRefs(List<StoredAssetReference> assets) {
+        if (assets == null || assets.isEmpty()) {
+            return "[]";
+        }
+        List<Map<String, Object>> refs = new ArrayList<>();
+        for (StoredAssetReference asset : assets) {
+            Map<String, Object> ref = new LinkedHashMap<>();
+            ref.put("assetId", asset.assetId());
+            ref.put("pageNo", asset.pageNo());
+            ref.put("sourcePath", asset.sourcePath());
+            ref.put("mimeType", asset.mimeType());
+            refs.add(ref);
         }
         try {
             return OBJECT_MAPPER.writeValueAsString(refs);
         } catch (JsonProcessingException exception) {
             throw new IllegalStateException("Failed to serialize teacher resource imageRefs", exception);
         }
+    }
+
+    /**
+     * Serializes native DOCX equations into the existing JSON column rather than adding a parallel formula table.
+     *
+     * <p>{@code omml} is lossless source, {@code mathMl} is renderer-friendly structure, and {@code plainText} is
+     * the only retrieval evidence. No LaTex is fabricated when a verified converter is unavailable.</p>
+     */
+    private static List<FormulaReference> formulaReferences(List<OmmlFormulaExtractor.ExtractedFormula> formulas) {
+        if (formulas == null || formulas.isEmpty()) {
+            return new ArrayList<>();
+        }
+        List<FormulaReference> refs = new ArrayList<>();
+        for (OmmlFormulaExtractor.ExtractedFormula formula : formulas) {
+            refs.add(new FormulaReference(
+                    "docx_omml",
+                    "verified_native",
+                    1.0d,
+                    formula.omml(),
+                    formula.mathMl(),
+                    formula.latex(),
+                    formula.plainText(),
+                    null,
+                    null));
+        }
+        return refs;
+    }
+
+    /**
+     * Sends raster assets only when the uploader explicitly selected AI mode and the document-level budget allows it.
+     * Unsupported or uncertain images remain safely referenced through imageRefs, but never contribute invented formula
+     * text to graph alignment, Milvus vectors, or stage-two reranking.
+     */
+    private void recognizeFormulaImages(
+            TeacherResourceDocumentResponse document,
+            List<StoredAssetReference> assets,
+            List<FormulaReference> formulas,
+            FormulaVisionBudget budget) {
+        if (assets == null || assets.isEmpty() || !budget.enabled()) {
+            return;
+        }
+        for (StoredAssetReference asset : assets) {
+            if (!budget.tryAcquire()) {
+                return;
+            }
+            TeacherFormulaRecognitionClient.FormulaRecognitionResult recognized =
+                    formulaRecognitionClient.recognize(asset.content(), asset.mimeType());
+            if (recognized.recognized()) {
+                formulas.add(new FormulaReference(
+                        "image_vision",
+                        "verified_model",
+                        recognized.confidence(),
+                        null,
+                        null,
+                        recognized.latex(),
+                        recognized.plainText(),
+                        asset.assetId(),
+                        recognized.model()));
+            }
+        }
+    }
+
+    /**
+     * PDF parsing already creates one rendered image per page. Submit those pages in ordered two/four-page batches so
+     * the visual model sees page context while formula cost scales with page batches rather than formula count.
+     */
+    private List<List<FormulaReference>> recognizePdfPageBatches(
+            TeacherResourceDocumentResponse document,
+            List<ParsedBlock> parsedBlocks,
+            FormulaVisionBudget budget) {
+        List<List<FormulaReference>> formulasByBlock = new ArrayList<>();
+        for (int index = 0; index < parsedBlocks.size(); index += 1) {
+            formulasByBlock.add(new ArrayList<>());
+        }
+        if (!budget.enabled() || parsedBlocks.isEmpty()) {
+            return formulasByBlock;
+        }
+        List<Integer> pageBlockIndexes = new ArrayList<>();
+        for (int index = 0; index < parsedBlocks.size(); index += 1) {
+            ParsedBlock parsed = parsedBlocks.get(index);
+            if (parsed.pageNo() != null && !parsed.assets().isEmpty()) {
+                pageBlockIndexes.add(index);
+            }
+        }
+        int batchSize = formulaRecognitionProperties.normalizedPagesPerRequest();
+        for (int offset = 0; offset < pageBlockIndexes.size(); offset += batchSize) {
+            int end = Math.min(pageBlockIndexes.size(), offset + batchSize);
+            if (!budget.tryAcquirePages(end - offset)) {
+                break;
+            }
+            List<TeacherFormulaRecognitionClient.PageImage> pages = new ArrayList<>();
+            for (int cursor = offset; cursor < end; cursor += 1) {
+                ParsedBlock parsed = parsedBlocks.get(pageBlockIndexes.get(cursor));
+                PendingAsset pageImage = parsed.assets().getFirst();
+                pages.add(new TeacherFormulaRecognitionClient.PageImage(parsed.pageNo(), pageImage.content(), pageImage.mimeType()));
+            }
+            for (TeacherFormulaRecognitionClient.PageFormulaRecognitionResult page : formulaRecognitionClient.recognizePages(pages)) {
+                if (page.pageIndex() < 0 || page.pageIndex() >= pages.size()) {
+                    continue;
+                }
+                List<FormulaReference> target = formulasByBlock.get(pageBlockIndexes.get(offset + page.pageIndex()));
+                for (TeacherFormulaRecognitionClient.FormulaRecognitionResult formula : page.formulas()) {
+                    target.add(new FormulaReference(
+                            "page_vision",
+                            "verified_model",
+                            formula.confidence(),
+                            null,
+                            null,
+                            formula.latex(),
+                            formula.plainText(),
+                            null,
+                            page.model()));
+                }
+            }
+        }
+        return formulasByBlock;
+    }
+
+    private static List<FormulaReference> bindFormulaAssets(
+            List<FormulaReference> formulas,
+            List<StoredAssetReference> assets) {
+        if (formulas == null || formulas.isEmpty() || assets == null || assets.isEmpty()) {
+            return formulas == null ? List.of() : formulas;
+        }
+        String assetId = assets.getFirst().assetId();
+        return formulas.stream().map(formula -> new FormulaReference(
+                formula.source(), formula.recognitionStatus(), formula.confidence(), formula.omml(), formula.mathMl(),
+                formula.latex(), formula.plainText(), assetId, formula.model())).toList();
+    }
+
+    private static String formulaRefs(List<FormulaReference> formulas) {
+        if (formulas == null || formulas.isEmpty()) {
+            return "[]";
+        }
+        List<Map<String, Object>> refs = new ArrayList<>();
+        for (FormulaReference formula : formulas) {
+            Map<String, Object> ref = new LinkedHashMap<>();
+            ref.put("source", formula.source());
+            ref.put("recognitionStatus", formula.recognitionStatus());
+            ref.put("confidence", formula.confidence());
+            putIfPresent(ref, "omml", formula.omml());
+            putIfPresent(ref, "mathMl", formula.mathMl());
+            putIfPresent(ref, "latex", formula.latex());
+            putIfPresent(ref, "plainText", formula.plainText());
+            putIfPresent(ref, "assetId", formula.assetId());
+            putIfPresent(ref, "model", formula.model());
+            refs.add(ref);
+        }
+        try {
+            return OBJECT_MAPPER.writeValueAsString(refs);
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("Failed to serialize DOCX formula references", exception);
+        }
+    }
+
+    private static void putIfPresent(Map<String, Object> target, String key, String value) {
+        if (value != null && !value.isBlank()) {
+            target.put(key, value);
+        }
+    }
+
+    private static String formulaEvidence(List<FormulaReference> formulas) {
+        if (formulas == null || formulas.isEmpty()) {
+            return "";
+        }
+        return formulas.stream()
+                .map(FormulaReference::plainText)
+                .filter(value -> value != null && !value.isBlank())
+                .collect(java.util.stream.Collectors.joining(" "));
     }
 
     /**
@@ -1159,9 +1470,83 @@ public class TeacherSourceSyncExecutionService {
     /**
      * Internal parsed block model.
      */
-    private record ParsedBlock(String chapter, String section, Integer pageNo, String text, List<PendingAsset> assets) {
+    private record ParsedBlock(
+            String chapter,
+            String section,
+            Integer pageNo,
+            String text,
+            List<PendingAsset> assets,
+            List<OmmlFormulaExtractor.ExtractedFormula> formulas) {
     }
 
     private record PendingAsset(String providerAssetId, byte[] content, String mimeType) {
     }
+
+    /** Asset bytes are retained only through this sync call; durable references remain opaque asset ids in MySQL. */
+    private record StoredAssetReference(
+            String assetId,
+            Integer pageNo,
+            String sourcePath,
+            String mimeType,
+            byte[] content) {
+    }
+
+    /** Internal representation serialized into the existing document_block.formula_refs JSON column. */
+    private record FormulaReference(
+            String source,
+            String recognitionStatus,
+            double confidence,
+            String omml,
+            String mathMl,
+            String latex,
+            String plainText,
+            String assetId,
+            String model) {
+    }
+
+    /**
+     * Counts model invocations per source document rather than per worker process so one large PDF cannot unexpectedly
+     * consume an unbounded paid-vision budget. The uploader can increase this explicit deployment setting when needed.
+     */
+    private static final class FormulaVisionBudget {
+
+        private final boolean enabled;
+        private final int maximum;
+        private int consumed;
+
+        private FormulaVisionBudget(boolean enabled, int maximum) {
+            this.enabled = enabled;
+            this.maximum = maximum;
+        }
+
+        private static FormulaVisionBudget forDocument(
+                TeacherResourceDocumentResponse document,
+                TeacherFormulaRecognitionProperties properties) {
+            boolean aiMode = "AI".equalsIgnoreCase(textOrDefault(document.parseMode(), "TEXT"));
+            return new FormulaVisionBudget(
+                    aiMode && properties.enabled(),
+                    properties.normalizedMaxImagesPerDocument());
+        }
+
+        private boolean enabled() {
+            return enabled && maximum > 0;
+        }
+
+        private boolean tryAcquire() {
+            if (!enabled() || consumed >= maximum) {
+                return false;
+            }
+            consumed += 1;
+            return true;
+        }
+
+        private boolean tryAcquirePages(int pageCount) {
+            if (!enabled() || pageCount <= 0 || consumed + pageCount > maximum) {
+                return false;
+            }
+            consumed += pageCount;
+            return true;
+        }
+    }
 }
+

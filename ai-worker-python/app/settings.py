@@ -4,11 +4,21 @@ from pathlib import Path
 from typing import Mapping
 
 
+# CPU cross-encoders scale quadratically with sequence length. This is an explicit deployment budget, not a ranking
+# weight; operators can raise it for GPU deployments without touching retrieval semantics.
+DEFAULT_LOCAL_RERANK_MAX_TOKENS = 128
+DEFAULT_FORMULA_VISION_MODEL = "gpt-5.4-mini"
+DEFAULT_FORMULA_VISION_TIMEOUT_SECONDS = 45
+DEFAULT_FORMULA_VISION_MAX_IMAGE_BYTES = 4 * 1024 * 1024
+DEFAULT_FORMULA_VISION_MINIMUM_CONFIDENCE = 0.9
+
+
 @dataclass(frozen=True)
 class WorkerSettings:
     worker_api_key: str | None
     processed_books_root: str | None
     openai_api_key: str | None
+    openai_base_url: str
     qwen_api_key: str | None
     feishu_app_secret: str | None
     embedding_provider_order: tuple[str, ...]
@@ -19,10 +29,17 @@ class WorkerSettings:
     local_clip_provider_order: tuple[str, ...]
     local_rerank_model_path: str | None
     local_rerank_device: str
+    local_rerank_max_tokens: int
+    local_text_embedding_model_path: str | None
+    local_text_embedding_device: str
     dashscope_base_url: str
     dashscope_api_key: str | None
     dashscope_embedding_model: str
     embedding_dimensions: int
+    formula_vision_model: str
+    formula_vision_timeout_seconds: int
+    formula_vision_max_image_bytes: int
+    formula_vision_minimum_confidence: float
 
     @classmethod
     def from_environment(cls, env: Mapping[str, str] | None = None) -> "WorkerSettings":
@@ -46,6 +63,7 @@ class WorkerSettings:
             worker_api_key=source.get("MATH_AGENT_WORKER_API_KEY") or source.get("MATH_AGENT_EMBEDDING_API_KEY"),
             processed_books_root=resolve_processed_books_root(source),
             openai_api_key=source.get("OPENAI_API_KEY"),
+            openai_base_url=source.get("OPENAI_BASE_URL", "https://api.openai.com/v1"),
             qwen_api_key=source.get("QWEN_API_KEY"),
             feishu_app_secret=source.get("FEISHU_APP_SECRET"),
             embedding_provider_order=provider_order,
@@ -56,10 +74,34 @@ class WorkerSettings:
             local_clip_provider_order=clip_provider_order,
             local_rerank_model_path=resolve_local_rerank_model_path(source),
             local_rerank_device=source.get("MATH_AGENT_LOCAL_RERANK_DEVICE", "cpu"),
+            local_rerank_max_tokens=max(1, int(source.get("MATH_AGENT_LOCAL_RERANK_MAX_TOKENS", DEFAULT_LOCAL_RERANK_MAX_TOKENS))),
+            local_text_embedding_model_path=resolve_local_text_embedding_model_path(source),
+            local_text_embedding_device=source.get("MATH_AGENT_LOCAL_TEXT_EMBEDDING_DEVICE", "cpu"),
             dashscope_base_url=source.get("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
             dashscope_api_key=source.get("DASHSCOPE_API_KEY") or source.get("QWEN_API_KEY"),
             dashscope_embedding_model=source.get("MATH_AGENT_DASHSCOPE_EMBEDDING_MODEL", "text-embedding-v4"),
             embedding_dimensions=int(source.get("MATH_AGENT_EMBEDDING_DIMENSION", "512")),
+            # AI parse is explicitly selected per source document. These settings only determine its real provider,
+            # request limit and confidence floor; they never affect ordinary TEXT ingestion costs.
+            formula_vision_model=source.get(
+                "MATH_AGENT_FORMULA_VISION_MODEL",
+                source.get("OPENAI_FORMULA_VISION_MODEL", DEFAULT_FORMULA_VISION_MODEL),
+            ),
+            formula_vision_timeout_seconds=max(
+                1,
+                int(source.get("MATH_AGENT_FORMULA_VISION_TIMEOUT_SECONDS", DEFAULT_FORMULA_VISION_TIMEOUT_SECONDS)),
+            ),
+            formula_vision_max_image_bytes=max(
+                1,
+                int(source.get("MATH_AGENT_FORMULA_VISION_MAX_IMAGE_BYTES", DEFAULT_FORMULA_VISION_MAX_IMAGE_BYTES)),
+            ),
+            formula_vision_minimum_confidence=min(
+                1.0,
+                max(
+                    0.0,
+                    float(source.get("MATH_AGENT_FORMULA_VISION_MINIMUM_CONFIDENCE", DEFAULT_FORMULA_VISION_MINIMUM_CONFIDENCE)),
+                ),
+            ),
         )
 
 
@@ -103,6 +145,21 @@ def resolve_local_rerank_model_path(source: Mapping[str, str]) -> str | None:
         "D:\\project2026\\hf_cache\\hub\\models--BAAI--bge-reranker-base\\snapshots",
     )
     for candidate in candidates:
+        resolved = resolve_model_snapshot(Path(candidate))
+        if resolved is not None:
+            return str(resolved)
+    return None
+
+
+def resolve_local_text_embedding_model_path(source: Mapping[str, str]) -> str | None:
+    configured = source.get("MATH_AGENT_LOCAL_TEXT_EMBEDDING_MODEL_PATH")
+    if configured:
+        resolved = resolve_model_snapshot(Path(configured))
+        return str(resolved) if resolved is not None else None
+    for candidate in (
+        "D:\\ModelScope\\models\\BAAI\\bge-small-zh-v1.5",
+        "D:\\ModelScope\\models\\BAAI\\bge-m3",
+    ):
         resolved = resolve_model_snapshot(Path(candidate))
         if resolved is not None:
             return str(resolved)

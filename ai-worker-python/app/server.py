@@ -16,8 +16,10 @@ from app.embeddings import (
     clip_similarity_response,
     openai_embedding_response,
     rerank_response,
+    text_page_search_response,
 )
 from app.health import health_response
+from app.formula_recognition import FormulaRecognitionError, FormulaRecognitionService
 from app.settings import WorkerSettings
 
 
@@ -44,9 +46,24 @@ class ClipPageSearchRequest(BaseModel):
     docIds: list[str] | None = None
 
 
+class TextPageSearchRequest(BaseModel):
+    query: str
+    limit: int = 10
+    docIds: list[str] | None = None
+
+
 class RerankRequest(BaseModel):
     query: str
     documents: list[str]
+
+
+class FormulaRecognitionRequest(BaseModel):
+    imageDataUrl: str
+    mimeType: str
+
+
+class FormulaPageBatchRequest(BaseModel):
+    pages: list[FormulaRecognitionRequest]
 
 
 app = FastAPI(title="math-agent-rag-worker")
@@ -55,6 +72,11 @@ app = FastAPI(title="math-agent-rag-worker")
 @lru_cache(maxsize=1)
 def embedding_service() -> EmbeddingService:
     return EmbeddingService(WorkerSettings.from_environment())
+
+
+@lru_cache(maxsize=1)
+def formula_recognition_service() -> FormulaRecognitionService:
+    return FormulaRecognitionService(WorkerSettings.from_environment())
 
 
 def require_worker_key(
@@ -134,6 +156,19 @@ def clip_page_search(payload: ClipPageSearchRequest) -> dict:
     return clip_page_search_response(result)
 
 
+@app.post("/v1/text/page-search", dependencies=[Depends(require_worker_key)])
+def text_page_search(payload: TextPageSearchRequest) -> dict:
+    try:
+        result = embedding_service().search_page_text(
+            query=payload.query,
+            limit=payload.limit,
+            doc_ids=payload.docIds,
+        )
+    except (ValueError, EmbeddingProviderError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return text_page_search_response(result)
+
+
 @app.post("/v1/rerank", dependencies=[Depends(require_worker_key)])
 def rerank(payload: RerankRequest) -> dict:
     try:
@@ -141,3 +176,34 @@ def rerank(payload: RerankRequest) -> dict:
     except (ValueError, EmbeddingProviderError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return rerank_response(result)
+
+
+@app.post("/v1/formula-recognition", dependencies=[Depends(require_worker_key)])
+def formula_recognition(payload: FormulaRecognitionRequest) -> dict:
+    """Recognizes one raster formula through the configured real visual model, never through a local heuristic."""
+    try:
+        result = formula_recognition_service().recognize(payload.imageDataUrl, payload.mimeType)
+    except FormulaRecognitionError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {
+        "object": "formula.recognition",
+        "model": result.model,
+        "data": {
+            "status": result.status,
+            "latex": result.latex,
+            "plainText": result.plain_text,
+            "confidence": result.confidence,
+        },
+    }
+
+
+@app.post("/v1/formula-page-batch", dependencies=[Depends(require_worker_key)])
+def formula_page_batch(payload: FormulaPageBatchRequest) -> dict:
+    """Performs one real visual-model call over a page batch and returns formulas grouped by source page index."""
+    try:
+        data = formula_recognition_service().recognize_page_batch(
+            [(page.imageDataUrl, page.mimeType) for page in payload.pages]
+        )
+    except FormulaRecognitionError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"object": "formula.page_batch", "model": WorkerSettings.from_environment().formula_vision_model, "data": data}

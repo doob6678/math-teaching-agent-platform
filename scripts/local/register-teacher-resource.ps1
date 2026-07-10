@@ -6,6 +6,7 @@ param(
     [string]$Title = "teacher-resource-staged",
     [string]$LocalPath = "",
     [string]$PermissionScope = "MATH_VIP",
+    [ValidateSet("TEXT", "AI")][string]$ParseMode = "TEXT",
     [string]$FeishuExportFormat = "md",
     [switch]$SkipSync,
     [switch]$SkipExecute
@@ -48,8 +49,12 @@ function Invoke-Json {
         TimeoutSec = $TimeoutSec
     }
     if ($null -ne $Body) {
-        $parameters["ContentType"] = "application/json"
-        $parameters["Body"] = ($Body | ConvertTo-Json -Depth 20 -Compress)
+        # Windows PowerShell otherwise serializes a String request body with the active code page. Resource paths and
+        # teacher titles legitimately contain Chinese characters, so send explicit UTF-8 bytes for every JSON request
+        # instead of letting Jackson receive invalid GBK/ANSI bytes.
+        $json = $Body | ConvertTo-Json -Depth 20 -Compress
+        $parameters["ContentType"] = "application/json; charset=utf-8"
+        $parameters["Body"] = [System.Text.Encoding]::UTF8.GetBytes($json)
     }
     Invoke-RestMethod @parameters
 }
@@ -106,6 +111,7 @@ $registerBody = @{
     title = $Title
     localPath = $LocalPath
     permissionScope = $PermissionScope
+    parseMode = $ParseMode
     feishuExportFormat = $FeishuExportFormat
 }
 $registerJson = $registerBody | ConvertTo-Json -Depth 20 -Compress
