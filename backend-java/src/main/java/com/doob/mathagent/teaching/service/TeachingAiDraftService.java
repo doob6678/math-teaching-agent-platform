@@ -13,8 +13,11 @@ import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.springframework.stereotype.Service;
 
@@ -37,6 +40,8 @@ public class TeachingAiDraftService {
             "(?:写在|填写在|完成在|放在|留在)(?:课堂作答区|作答区|我的解答|推导区|手写区|教师手写区|留白区|空白区|板书区|教师板书区)");
     private static final Pattern INTERNAL_HANDOUT_LINE = Pattern.compile(
             "(?mi)^.*(?:MODEL_CALL|JSON_PARSE|\\btokens?\\b|模型健康|model health|debug|调试|JSON|页眉|页脚|颜色|PDF\\s*(?:规则|排版|版式)|排版说明|版式要求|渲染引擎|页边距|虚线折叠|documentclass|usepackage|fancyhdr|pagestyle|begin\\{document}|end\\{document}|作为\\s*AI|as an AI|本页只保留|课堂任务|本讲任务|讲后自查|教师审校清单|横版讲解提纲|模板偏向|本讲更偏向).*$");
+    /** Prevents a long source-grounded lesson from silently omitting atomic question-bank rows. */
+    private static final Pattern SOURCE_QUESTION_NUMBER = Pattern.compile("^\\s*(\\d{1,3})[.．、]");
     private static final List<String> PREFERRED_TOPIC_ANCHORS = List.of(
             "双曲线", "椭圆", "抛物线", "圆锥曲线", "导数", "函数", "数列", "概率",
             "统计", "三角函数", "平面向量", "空间向量", "立体几何", "直线", "圆", "排列组合");
@@ -142,6 +147,20 @@ public class TeachingAiDraftService {
                                     "Retrying after topic-alignment validation failure."));
                             nextPrompt = retryPrompt(request, evidence, memoryResponse, template, result.generatedContent(),
                                     "Structured output drifted away from the requested topic.");
+                            continue;
+                        }
+                        if (!coversEveryRetrievedQuestion(evidence, parsed)) {
+                            recoveryEvents.add(event(
+                                    "QUESTION_COVERAGE_REJECTED", result.providerName(), result.modelCode(), attempt,
+                                    false, canRetryProvider || canRotateProvider,
+                                    "Teacher draft omitted one or more retrieved atomic question numbers."));
+                            if (attempt == maxRetries) {
+                                lastUnstructuredDraft = toAiDraft(result, parsed, totalPromptTokens, totalCompletionTokens,
+                                        totalTokens, attempt, maxRetries, recoveryEvents);
+                                break;
+                            }
+                            nextPrompt = retryPrompt(request, evidence, memoryResponse, template, result.generatedContent(),
+                                    "Enumerate every retrieved source question number separately. For each write conditions, a named mathematical method, 2-5 checkable steps, conclusion, and a short source note.");
                             continue;
                         }
                         recoveryEvents.add(event(
@@ -528,6 +547,27 @@ public class TeachingAiDraftService {
             }
         }
         return matched >= 1 || weighted >= 2;
+    }
+
+    /** Requires all retrieved numbered questions to be explicitly represented in a long-form teacher draft. */
+    private static boolean coversEveryRetrievedQuestion(List<TeachingEvidence> evidence, ParsedDraft parsed) {
+        Set<String> expected = new LinkedHashSet<>();
+        for (TeachingEvidence item : evidence == null ? List.<TeachingEvidence>of() : evidence) {
+            if (!"QUESTION_BANK".equals(item.sourceScope())) {
+                continue;
+            }
+            Matcher matcher = SOURCE_QUESTION_NUMBER.matcher(questionTextOnly(item.snippet()));
+            if (matcher.find()) {
+                expected.add(matcher.group(1));
+            }
+        }
+        if (expected.size() < 2) {
+            return true;
+        }
+        String teacher = parsed.teacherExplanation() == null ? "" : parsed.teacherExplanation();
+        return expected.stream().allMatch(number -> Pattern.compile(
+                "(?m)(?:第\\s*" + Pattern.quote(number) + "\\s*题|^\\s*" + Pattern.quote(number) + "[.．、])")
+                .matcher(teacher).find());
     }
 
     private static List<String> topicAnchors(TeachingTaskRequest request) {
