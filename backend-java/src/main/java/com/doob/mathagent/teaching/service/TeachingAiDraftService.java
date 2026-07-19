@@ -13,8 +13,11 @@ import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.springframework.stereotype.Service;
 
@@ -42,6 +45,8 @@ public class TeachingAiDraftService {
             "(?i)(?:知识点\\s*[0-9一二三四五六七八九十]+|题型\\s*[0-9一二三四五六七八九十]+|例题\\s*(?:待补充|占位|框架)|题目内容待补充|示例待补充|待检索|待填写|\\{\\{[^}]+}})");
     private static final Pattern TASK_CONTROL_LINE = Pattern.compile(
             "(?mi)^.*(?:请依据教材.*组织讲义|给出教师资料命中|没有可用资料时|不得伪造来源|处理飞书文档|图片无法读取|学生版不得|内部提示词|模型诊断|验证.*讲解版|不从教师版截取|生成后保存|保存.*编辑|导出\\s*PDF|任务耗时|提示词|题目入口|讲评入口|题型入口|知识入口|审题提醒|模板|benchmark|synthetic-natural|量化评测|投票|工作流|智能体|子agent|子智能体).*$");
+    /** Source question numbers are a durable cross-check that a long-form draft did not silently omit real rows. */
+    private static final Pattern SOURCE_QUESTION_NUMBER = Pattern.compile("^\\s*(\\d{1,3})[.．、]");
     private static final List<String> PREFERRED_TOPIC_ANCHORS = List.of(
             "双曲线", "椭圆", "抛物线", "圆锥曲线", "导数", "函数", "数列", "概率",
             "统计", "三角函数", "平面向量", "空间向量", "立体几何", "直线", "圆", "排列组合");
@@ -147,6 +152,25 @@ public class TeachingAiDraftService {
                                     "Retrying after topic-alignment validation failure."));
                             nextPrompt = retryPrompt(request, evidence, memoryResponse, template, result.generatedContent(),
                                     "Structured output drifted away from the requested topic.");
+                            continue;
+                        }
+                        if (!coversEveryRetrievedQuestion(evidence, parsed)) {
+                            recoveryEvents.add(event(
+                                    "QUESTION_COVERAGE_REJECTED",
+                                    result.providerName(),
+                                    result.modelCode(),
+                                    attempt,
+                                    false,
+                                    canRetryProvider || canRotateProvider,
+                                    "Teacher draft omitted one or more retrieved atomic question numbers."));
+                            if (attempt == maxRetries) {
+                                lastUnstructuredDraft = toAiDraft(
+                                        result, parsed, totalPromptTokens, totalCompletionTokens, totalTokens,
+                                        attempt, maxRetries, recoveryEvents);
+                                break;
+                            }
+                            nextPrompt = retryPrompt(request, evidence, memoryResponse, template, result.generatedContent(),
+                                    "The teacher explanation must contain every retrieved source question number as a separate item, with conditions, method, checkable steps, conclusion, and source note.");
                             continue;
                         }
                         recoveryEvents.add(event(
@@ -554,6 +578,37 @@ public class TeachingAiDraftService {
             }
         }
         return matched >= 1 || weighted >= 2;
+    }
+
+    /**
+     * Rejects a polished-looking summary that silently drops real question-bank rows.
+     *
+     * <p>The requirement is intentionally tied to atomic source numbers rather than word count: a generic paragraph
+     * can be long yet still fail to explain any individual exam question.  Only enforce it when two or more numbered
+     * question-bank items are present, so a normal single-question chat-like handout remains valid.</p>
+     */
+    private static boolean coversEveryRetrievedQuestion(List<TeachingEvidence> evidence, ParsedDraft parsed) {
+        Set<String> expected = new LinkedHashSet<>();
+        for (TeachingEvidence item : evidence == null ? List.<TeachingEvidence>of() : evidence) {
+            if (!"QUESTION_BANK".equals(item.sourceScope())) {
+                continue;
+            }
+            Matcher matcher = SOURCE_QUESTION_NUMBER.matcher(questionTextOnly(item.snippet()));
+            if (matcher.find()) {
+                expected.add(matcher.group(1));
+            }
+        }
+        if (expected.size() < 2) {
+            return true;
+        }
+        String teacher = parsed.teacherExplanation() == null ? "" : parsed.teacherExplanation();
+        for (String number : expected) {
+            if (!Pattern.compile("(?m)(?:第\\s*" + Pattern.quote(number) + "\\s*题|^\\s*" + Pattern.quote(number) + "[.．、])")
+                    .matcher(teacher).find()) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static List<String> topicAnchors(TeachingTaskRequest request) {
