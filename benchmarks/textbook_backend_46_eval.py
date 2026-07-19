@@ -66,7 +66,7 @@ def write_json(path: Path, value: Any) -> None:
 
 def source_page_nos(source: dict[str, Any]) -> frozenset[int]:
     """Preserve a cross-page section's complete source-page set when available."""
-    values = source.get("source_page_nos") or source.get("page_nos") or [source.get("page_no")]
+    values = source.get("source_page_nos") or source.get("page_nos") or [source.get("page_no") or source.get("pageNo")]
     pages: set[int] = set()
     for value in values:
         try:
@@ -78,21 +78,26 @@ def source_page_nos(source: dict[str, Any]) -> frozenset[int]:
     return frozenset(pages)
 
 
-def load_cases(path: Path) -> list[ExpectedEvidence]:
+def load_cases(path: Path, expected_count: int) -> list[ExpectedEvidence]:
     """Validate that the fixed set contains only section-labelled real textbook rows."""
     raw_cases = read_json(path)
-    if not isinstance(raw_cases, list) or len(raw_cases) != EXPECTED_CASE_COUNT:
-        raise ValueError(f"expected exactly {EXPECTED_CASE_COUNT} persisted cases, got {len(raw_cases) if isinstance(raw_cases, list) else 'non-list'}")
+    if not isinstance(raw_cases, list) or (expected_count > 0 and len(raw_cases) != expected_count):
+        raise ValueError(f"expected exactly {expected_count} persisted cases, got {len(raw_cases) if isinstance(raw_cases, list) else 'non-list'}")
     cases: list[ExpectedEvidence] = []
     case_ids: set[str] = set()
     for row in raw_cases:
-        source = row.get("source") if isinstance(row, dict) else None
+        if not isinstance(row, dict) or row.get("polarity", "positive") != "positive":
+            continue
+        # The legacy 46-case fixture stores labels under source; the existing independent 110-case builder stores
+        # exactly the same immutable identities under expected. Supporting both lets the real backend runner cover
+        # the complete generated corpus instead of silently falling back to a five-query smoke check.
+        source = row.get("source") or row.get("expected")
         if not isinstance(source, dict):
             raise ValueError(f"case has no persisted source: {row}")
         case_id = str(row.get("caseId") or row.get("case_id") or "").strip()
         query = str(row.get("query") or "").strip()
-        doc_id = str(source.get("doc_id") or "").strip()
-        section_id = str(source.get("section_id") or "").strip()
+        doc_id = str(source.get("doc_id") or source.get("docId") or "").strip()
+        section_id = str(source.get("section_id") or source.get("sectionId") or source.get("blockId") or "").strip()
         if not case_id or case_id in case_ids or not query or not doc_id or not section_id:
             raise ValueError(f"case requires unique id, query, doc_id and section_id: {row}")
         case_ids.add(case_id)
@@ -102,7 +107,7 @@ def load_cases(path: Path) -> list[ExpectedEvidence]:
             doc_id=doc_id,
             page_nos=source_page_nos(source),
             section_id=section_id,
-            section_title=str(source.get("section_title") or ""),
+            section_title=str(source.get("section_title") or source.get("sectionTitle") or ""),
         ))
     return cases
 
@@ -260,6 +265,8 @@ def markdown(report: dict[str, Any], path: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run exactly 46 real textbook retrieval requests through the Java backend")
     parser.add_argument("--cases", type=Path, default=DEFAULT_CASES)
+    parser.add_argument("--expected-case-count", type=int, default=EXPECTED_CASE_COUNT,
+                        help="exact case count before optional negative filtering; use 0 only for ad-hoc fixtures")
     parser.add_argument("--backend-url", default=DEFAULT_BACKEND_URL)
     parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT)
     parser.add_argument("--timeout-seconds", type=int, default=DEFAULT_TIMEOUT_SECONDS)
@@ -268,7 +275,9 @@ def main() -> None:
     args = parser.parse_args()
     if args.limit < max(METRIC_CUTOFFS):
         raise ValueError(f"limit must be at least {max(METRIC_CUTOFFS)} to compute all declared cutoffs")
-    cases = load_cases(args.cases.expanduser().resolve())
+    cases = load_cases(args.cases.expanduser().resolve(), args.expected_case_count)
+    if not cases:
+        raise ValueError("no positive labelled textbook cases remain after filtering")
     endpoint = args.backend_url.rstrip("/") + "/api/retrieval/textbooks/search"
     output = args.output_dir or DEFAULT_OUTPUT_ROOT / f"textbook-backend-46-{datetime.now():%Y%m%d-%H%M%S}"
     output = output.expanduser().resolve()
