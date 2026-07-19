@@ -1,0 +1,43 @@
+{
+  "backendBaseUrl": "http://127.0.0.1:8080",
+  "teacherUsername": "teacher",
+  "teacherPassword": "teacher-123456",
+  "adminUsername": "admin",
+  "adminPassword": "admin-123456",
+  "ragSampleLimit": 100,
+  "strictRagLimit": 50,
+  "ragRequestDelayMs": 2400,
+  "strictTeacherResourceTitleHints": [
+    "benchmark-high-school-math",
+    "space-vector",
+    "数学"
+  ],
+  "agentRuns": 10,
+  "securityConcurrency": 20,
+  "benchmarkLlmNote": "Set BENCHMARK_LLM_PROVIDER=openai to prefer gpt-5.4 for benchmark-side query generation and judging.",
+  "deepseekDirectSearchSampleSize": 100,
+  "deepseekDirectSearchDelayMs": 2300,
+  "deepseekSourceGroundedSampleSize": 12,
+  "deepseekSourceGroundedDelayMs": 1000,
+  "deepseekSourceBlocksPerDocument": 4,
+  "deepseekExplanationSampleSize": 3,
+  "deepseekMcpSampleSize": 8,
+  "deepseekHandoutSampleSize": 1,
+  "questionRoots": [
+    "D:\\BaiduNetdiskDownload\\高中试卷",
+    "C:\\Users\\doob\\Desktop\\个人资料\\高考真题\\各省近17年高考真题【点进去分开保存，链接长期在】2025已更新\\数学高考真题试卷【点进去分开保存，链接长期在】\\【新·PDF版】2008-2024·高考数学真题"
+  ],
+  "textbookRoots": [
+    "C:\\Users\\doob\\Desktop\\个人资料\\高中数学\\高中数学课本"
+  ],
+  "querySeeds": [
+    "空间向量",
+    "导数",
+    "圆锥曲线",
+    "函数单调性",
+    "三角函数",
+    "数列",
+    "概率统计",
+    "立体几何"
+  ]
+}

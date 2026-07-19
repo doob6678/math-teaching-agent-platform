@@ -1,0 +1,754 @@
+package com.doob.mathagent.teaching;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import com.doob.mathagent.agent.service.InMemoryAgentTraceStore;
+import com.doob.mathagent.infrastructure.security.RequestSubjectResolver;
+import com.doob.mathagent.memory.service.InMemoryStudentMemoryStore;
+import com.doob.mathagent.memory.service.StudentMemoryReuseService;
+import com.doob.mathagent.resources.TextbookCatalogReader;
+import com.doob.mathagent.resources.TextbookChunkReader;
+import com.doob.mathagent.retrieval.LocalTextbookBm25SearchEngine;
+import com.doob.mathagent.retrieval.NoopRetrievalAuditSink;
+import com.doob.mathagent.retrieval.TextbookRetrievalService;
+import com.doob.mathagent.teaching.controller.TeachingTaskController;
+import com.doob.mathagent.teaching.dto.TeachingHandoutBatchExportRequest;
+import com.doob.mathagent.teaching.dto.TeachingHumanFeedbackRequest;
+import com.doob.mathagent.teaching.dto.TeachingTaskRequest;
+import com.doob.mathagent.teaching.service.TeachingHandoutBatchExportService;
+import com.doob.mathagent.teaching.service.TeachingHandoutPdfExportService;
+import com.doob.mathagent.teaching.service.InMemoryTeachingHumanFeedbackStore;
+import com.doob.mathagent.teaching.service.InMemoryTeachingTaskStore;
+import com.doob.mathagent.teaching.service.TeachingAiDraftService;
+import com.doob.mathagent.teaching.service.TeachingCapabilityVerifier;
+import com.doob.mathagent.teaching.service.TeachingHumanFeedbackService;
+import com.doob.mathagent.teaching.service.TeachingWorkflowService;
+import com.doob.mathagent.teaching.vo.TeachingHandoutBatchExportResponse;
+import com.doob.mathagent.teaching.vo.TeachingHandoutTemplateResponse;
+import com.doob.mathagent.teaching.vo.TeachingHumanFeedbackResponse;
+import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
+import java.io.ByteArrayInputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.util.List;
+import java.util.Map;
+import java.util.zip.ZipInputStream;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.server.ResponseStatusException;
+
+class TeachingTaskControllerTest {
+
+    @TempDir
+    Path tempDir;
+
+    private static TeachingWorkflowService testWorkflowService(
+            Path processedBooksRoot,
+            TextbookRetrievalService retrievalService,
+            InMemoryTeachingTaskStore taskStore,
+            StudentMemoryReuseService memoryReuseService) {
+        return new TeachingWorkflowService(
+                processedBooksRoot,
+                retrievalService,
+                taskStore,
+                memoryReuseService,
+                TeachingAiDraftServiceFixture.disabled(),
+                new InMemoryAgentTraceStore());
+    }
+
+    private static TeachingTaskController testController(
+            TeachingWorkflowService workflowService,
+            RequestSubjectResolver subjectResolver,
+            TeachingCapabilityVerifier capabilityVerifier,
+            TeachingHandoutPdfExportService pdfExportService,
+            TeachingHandoutBatchExportService batchExportService) {
+        return new TeachingTaskController(
+                workflowService,
+                subjectResolver,
+                capabilityVerifier,
+                pdfExportService,
+                batchExportService,
+                new TeachingHumanFeedbackService(new InMemoryTeachingHumanFeedbackStore()));
+    }
+
+    private static TeachingHandoutBatchExportService batchExportService(TeachingHandoutPdfExportService pdfExportService) {
+        return new TeachingHandoutBatchExportService(pdfExportService, Clock.systemUTC(), Duration.ofMinutes(30));
+    }
+
+    @Test
+    void exposesSubmitAndResumeContractForTeachingTask() throws Exception {
+        Path root = createTextbookCorpus();
+        TextbookRetrievalService retrievalService = com.doob.mathagent.retrieval.TextbookRetrievalServiceFixture.service(
+                new TextbookCatalogReader(),
+                new TextbookChunkReader(),
+                new LocalTextbookBm25SearchEngine(),
+                new NoopRetrievalAuditSink());
+        TeachingWorkflowService service = testWorkflowService(
+                root,
+                retrievalService,
+                new InMemoryTeachingTaskStore(),
+                new StudentMemoryReuseService(new InMemoryStudentMemoryStore()));
+        TeachingTaskController controller = testController(
+                service,
+                teacherResolver(),
+                (token, action, path, requestHash, subject) -> true,
+                new TeachingHandoutPdfExportService(),
+                batchExportService(new TeachingHandoutPdfExportService()));
+        TeachingTaskRequest request = new TeachingTaskRequest(
+                "client-001",
+                "How do I solve D(-1)?",
+                "Understand a function-domain definition problem",
+                3);
+
+        TeachingTaskResponse submitted = controller.submit(request, null);
+        TeachingTaskResponse loaded = controller.get(submitted.taskId(), null);
+        ResponseEntity<String> exported = controller.exportLatex(submitted.taskId(), null);
+        ResponseEntity<String> preview = controller.previewLatex(submitted.taskId(), null);
+        ResponseEntity<byte[]> exportedPdf = controller.exportPdf(submitted.taskId(), null);
+        ResponseEntity<String> studentPreview = controller.previewLatexVersion(submitted.taskId(), "student", null);
+        ResponseEntity<String> lecturePreview = controller.previewLatexVersion(submitted.taskId(), "lecture", null);
+        ResponseEntity<byte[]> teacherPdf = controller.exportPdfVersion(submitted.taskId(), "teacher", null);
+        ResponseEntity<byte[]> teacherPdfPreview = controller.previewPdfVersion(submitted.taskId(), "teacher", null);
+        ResponseEntity<byte[]> lecturePdfPreview = controller.previewPdfVersion(submitted.taskId(), "lecture", null);
+
+        assertThat(loaded.taskId()).isEqualTo(submitted.taskId());
+        assertThat(loaded.status()).isEqualTo(TeachingTaskStatus.COMPLETED);
+        assertThat(exported.getBody()).contains("\\section");
+        assertThat(preview.getBody()).contains("\\section");
+        assertThat(studentPreview.getBody()).contains("\\section", "\\vspace");
+        assertThat(lecturePreview.getBody())
+                // Projection output must start directly at the atomic question. A generic title card consumes a
+                // 16:10 page and is exactly the layout regression this contract protects against.
+                .contains("第 1 题：例题", "\\vfill")
+                .doesNotContain("16:10 横版讲解卡", "教师手写区", "手写区", "板书留白");
+        assertThat(preview.getHeaders().getContentDisposition().isInline()).isTrue();
+        assertThat(exported.getHeaders().getContentDisposition().getFilename()).isEqualTo(submitted.taskId() + ".tex");
+        assertThat(exportedPdf.getBody()).startsWith(new byte[] {'%', 'P', 'D', 'F'});
+        assertThat(teacherPdf.getBody()).startsWith(new byte[] {'%', 'P', 'D', 'F'});
+        assertThat(teacherPdfPreview.getBody()).startsWith(new byte[] {'%', 'P', 'D', 'F'});
+        assertThat(lecturePdfPreview.getBody()).startsWith(new byte[] {'%', 'P', 'D', 'F'});
+        assertThat(teacherPdfPreview.getHeaders().getContentDisposition().isInline()).isTrue();
+        assertThat(lecturePdfPreview.getHeaders().getContentDisposition().getFilename()).isEqualTo(submitted.taskId() + "-lecture.pdf");
+        assertThat(exportedPdf.getHeaders().getContentDisposition().getFilename()).isEqualTo(submitted.taskId() + ".pdf");
+        assertThat(exportedPdf.getHeaders().getFirst("X-Handout-Renderer")).isNotBlank();
+        assertThat(Integer.parseInt(exportedPdf.getHeaders().getFirst("X-Handout-Page-Count"))).isPositive();
+        assertThat(teacherPdf.getHeaders().getFirst("X-Handout-Renderer")).isNotBlank();
+        assertThat(lecturePdfPreview.getHeaders().getFirst("X-Handout-Renderer")).isNotBlank();
+        assertThat(loaded.handoutLatex()).contains("\\section");
+        assertThat(loaded.lectureHandoutLatex())
+                .contains("第 1 题：例题")
+                .doesNotContain("16:10 横版讲解卡");
+    }
+
+    @Test
+    void latexPreviewAndDownloadReturnSanitizedHandoutSource() throws Exception {
+        Path root = createTextbookCorpus();
+        TextbookRetrievalService retrievalService = com.doob.mathagent.retrieval.TextbookRetrievalServiceFixture.service(
+                new TextbookCatalogReader(),
+                new TextbookChunkReader(),
+                new LocalTextbookBm25SearchEngine(),
+                new NoopRetrievalAuditSink());
+        InMemoryTeachingTaskStore taskStore = new InMemoryTeachingTaskStore();
+        TeachingWorkflowService service = testWorkflowService(
+                root,
+                retrievalService,
+                taskStore,
+                new StudentMemoryReuseService(new InMemoryStudentMemoryStore()));
+        TeachingTaskController controller = testController(
+                service,
+                teacherResolver(),
+                (token, action, path, requestHash, subject) -> true,
+                new TeachingHandoutPdfExportService(),
+                batchExportService(new TeachingHandoutPdfExportService()));
+        TeachingTaskResponse task = new TeachingTaskResponse(
+                "task-controller-sanitize",
+                "client-controller-sanitize",
+                "school-a",
+                "teacher",
+                "teacher-001",
+                TeachingTaskStatus.COMPLETED,
+                "双曲线讲义",
+                "清理旧任务导出",
+                List.of(),
+                List.of(),
+                List.of(),
+                "",
+                """
+                \\section{讲义模板与版式}
+                PDF 版式要求：页眉展示主题和版本，页脚展示页码；教师版使用讲评色。
+                \\section{教材与资料证据}
+                # p159 - 书名：人教B版选择性必修一 - 页图：![p159](../../pages/p159.png)
+                ## 正文
+                旧 OCR 正文不应该出现在 TeX 下载里。
+                \\section{教师讲评页}
+                \\paragraph{方法步骤}
+                由 $2a=6$ 得 $a=3$。
+                """,
+                "\\section{学生版}\n\\vspace{6em}",
+                List.of(),
+                null,
+                List.of(),
+                null,
+                null);
+        taskStore.save(
+                new TeachingRequestContext("school-a", "teacher", "teacher-001", "dev-device").ownerKey(),
+                "controller-sanitize",
+                task);
+
+        String preview = controller.previewLatex(task.taskId(), null).getBody();
+        String exported = controller.exportLatexVersion(task.taskId(), "teacher", null).getBody();
+
+        assertThat(preview)
+                // The printable body keeps the teacher explanation, but internal source-index metadata belongs in
+                // the protected evidence panel rather than taking a page or exposing local resource paths.
+                .contains("\\section{教师讲评页}", "$2a=6$", "$a=3$")
+                .doesNotContain("讲义模板与版式", "PDF 版式要求", "页眉", "页脚", "讲评色", "![p159]",
+                        "../../pages", "## 正文", "旧 OCR 正文", "来源索引");
+        assertThat(exported).isEqualTo(preview);
+    }
+
+    @Test
+    void blocksUndersizedLongHandoutAcrossEveryPdfPublicationRoute() throws Exception {
+        InMemoryTeachingTaskStore taskStore = new InMemoryTeachingTaskStore();
+        TeachingWorkflowService workflowService = testWorkflowService(
+                createTextbookCorpus(),
+                com.doob.mathagent.retrieval.TextbookRetrievalServiceFixture.service(
+                        new TextbookCatalogReader(), new TextbookChunkReader(), new LocalTextbookBm25SearchEngine(),
+                        new NoopRetrievalAuditSink()),
+                taskStore,
+                new StudentMemoryReuseService(new InMemoryStudentMemoryStore()));
+        UnderQualifiedPdfExportService pdfExportService = new UnderQualifiedPdfExportService();
+        TeachingTaskController controller = testController(
+                workflowService,
+                teacherResolver(),
+                (token, action, path, requestHash, subject) -> true,
+                pdfExportService,
+                batchExportService(pdfExportService));
+        TeachingTaskResponse task = shortLongHandoutTask();
+        taskStore.save(new TeachingRequestContext("school-a", "teacher", "teacher-001", "dev-device").ownerKey(),
+                "short-long-handout", task);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.exportPdf(task.taskId(), null))
+                .isInstanceOfSatisfying(ResponseStatusException.class,
+                        exception -> assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.exportPdfVersion(task.taskId(), "teacher", null))
+                .isInstanceOfSatisfying(ResponseStatusException.class,
+                        exception -> assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.previewPdf(task.taskId(), null))
+                .isInstanceOfSatisfying(ResponseStatusException.class,
+                        exception -> assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.previewPdfVersion(task.taskId(), "teacher", null))
+                .isInstanceOfSatisfying(ResponseStatusException.class,
+                        exception -> assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.createBatchZip(
+                        new TeachingHandoutBatchExportRequest(List.of(task.taskId()), List.of(), List.of()), null))
+                .isInstanceOfSatisfying(ResponseStatusException.class,
+                        exception -> assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY));
+    }
+
+    @Test
+    void rejectsTeachingSubmitWithoutAcceptedCapabilityToken() throws Exception {
+        TeachingWorkflowService service = testWorkflowService(
+                createTextbookCorpus(),
+                com.doob.mathagent.retrieval.TextbookRetrievalServiceFixture.service(
+                        new TextbookCatalogReader(),
+                        new TextbookChunkReader(),
+                        new LocalTextbookBm25SearchEngine(),
+                        new NoopRetrievalAuditSink()),
+                new InMemoryTeachingTaskStore(),
+                new StudentMemoryReuseService(new InMemoryStudentMemoryStore()));
+        TeachingTaskController controller = testController(
+                service,
+                teacherResolver(),
+                (token, action, path, requestHash, subject) -> false,
+                new TeachingHandoutPdfExportService(),
+                batchExportService(new TeachingHandoutPdfExportService()));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.submit(
+                        new TeachingTaskRequest(
+                                "client-002",
+                                "How do I solve D(-1)?",
+                                "Understand a function-domain definition problem",
+                                3),
+                        null))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("Capability token");
+    }
+
+    @Test
+    void rejectsLatexExportWithoutAcceptedCapabilityToken() throws Exception {
+        TeachingWorkflowService service = testWorkflowService(
+                createTextbookCorpus(),
+                com.doob.mathagent.retrieval.TextbookRetrievalServiceFixture.service(
+                        new TextbookCatalogReader(),
+                        new TextbookChunkReader(),
+                        new LocalTextbookBm25SearchEngine(),
+                        new NoopRetrievalAuditSink()),
+                new InMemoryTeachingTaskStore(),
+                new StudentMemoryReuseService(new InMemoryStudentMemoryStore()));
+        TeachingTaskController setupController = testController(
+                service,
+                teacherResolver(),
+                (token, action, path, requestHash, subject) -> true,
+                new TeachingHandoutPdfExportService(),
+                batchExportService(new TeachingHandoutPdfExportService()));
+        TeachingTaskResponse submitted = setupController.submit(
+                new TeachingTaskRequest("client-003", "question", "goal", 3),
+                null);
+        TeachingTaskController protectedController = testController(
+                service,
+                teacherResolver(),
+                (token, action, path, requestHash, subject) -> false,
+                new TeachingHandoutPdfExportService(),
+                batchExportService(new TeachingHandoutPdfExportService()));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> protectedController.exportLatex(submitted.taskId(), null))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("Capability token");
+    }
+
+    @Test
+    void rejectsPdfExportWithoutAcceptedCapabilityToken() throws Exception {
+        TeachingWorkflowService service = testWorkflowService(
+                createTextbookCorpus(),
+                com.doob.mathagent.retrieval.TextbookRetrievalServiceFixture.service(
+                        new TextbookCatalogReader(),
+                        new TextbookChunkReader(),
+                        new LocalTextbookBm25SearchEngine(),
+                        new NoopRetrievalAuditSink()),
+                new InMemoryTeachingTaskStore(),
+                new StudentMemoryReuseService(new InMemoryStudentMemoryStore()));
+        TeachingTaskController setupController = testController(
+                service,
+                teacherResolver(),
+                (token, action, path, requestHash, subject) -> true,
+                new TeachingHandoutPdfExportService(),
+                batchExportService(new TeachingHandoutPdfExportService()));
+        TeachingTaskResponse submitted = setupController.submit(
+                new TeachingTaskRequest("client-004", "question", "goal", 3),
+                null);
+        TeachingTaskController protectedController = testController(
+                service,
+                teacherResolver(),
+                (token, action, path, requestHash, subject) -> false,
+                new TeachingHandoutPdfExportService(),
+                batchExportService(new TeachingHandoutPdfExportService()));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> protectedController.exportPdf(submitted.taskId(), null))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("Capability token");
+    }
+
+    @Test
+    void rejectsPreviewAndBatchZipWithoutAcceptedCapabilityToken() throws Exception {
+        TeachingWorkflowService service = testWorkflowService(
+                createTextbookCorpus(),
+                com.doob.mathagent.retrieval.TextbookRetrievalServiceFixture.service(
+                        new TextbookCatalogReader(),
+                        new TextbookChunkReader(),
+                        new LocalTextbookBm25SearchEngine(),
+                        new NoopRetrievalAuditSink()),
+                new InMemoryTeachingTaskStore(),
+                new StudentMemoryReuseService(new InMemoryStudentMemoryStore()));
+        TeachingHandoutPdfExportService pdfExportService = new TeachingHandoutPdfExportService();
+        TeachingHandoutBatchExportService batchExportService = batchExportService(pdfExportService);
+        TeachingTaskController setupController = testController(
+                service,
+                teacherResolver(),
+                (token, action, path, requestHash, subject) -> true,
+                pdfExportService,
+                batchExportService);
+        TeachingTaskResponse submitted = setupController.submit(
+                new TeachingTaskRequest("client-protected-batch", "question", "goal", 3),
+                null);
+        TeachingHandoutBatchExportResponse batch = setupController.createBatchZip(
+                new TeachingHandoutBatchExportRequest(List.of(submitted.taskId()), List.of(), List.of()),
+                null);
+        TeachingTaskController protectedController = testController(
+                service,
+                teacherResolver(),
+                (token, action, path, requestHash, subject) -> false,
+                pdfExportService,
+                batchExportService);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> protectedController.previewLatex(submitted.taskId(), null))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("Capability token");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> protectedController.previewPdf(submitted.taskId(), null))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("Capability token");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> protectedController.createBatchZip(
+                        new TeachingHandoutBatchExportRequest(List.of(submitted.taskId()), List.of(), List.of()),
+                        null))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("Capability token");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> protectedController.downloadBatchZip(batch.batchId(), null))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("Capability token");
+    }
+
+    @Test
+    void studentCannotPreviewOrExportTeacherHandoutVersion() throws Exception {
+        TeachingWorkflowService service = testWorkflowService(
+                createTextbookCorpus(),
+                com.doob.mathagent.retrieval.TextbookRetrievalServiceFixture.service(
+                        new TextbookCatalogReader(),
+                        new TextbookChunkReader(),
+                        new LocalTextbookBm25SearchEngine(),
+                        new NoopRetrievalAuditSink()),
+                new InMemoryTeachingTaskStore(),
+                new StudentMemoryReuseService(new InMemoryStudentMemoryStore()));
+        TeachingHandoutPdfExportService pdfExportService = new TeachingHandoutPdfExportService();
+        TeachingTaskController controller = testController(
+                service,
+                studentResolver(),
+                (token, action, path, requestHash, subject) -> true,
+                pdfExportService,
+                batchExportService(pdfExportService));
+        TeachingTaskResponse submitted = controller.submit(
+                new TeachingTaskRequest("client-student-version", "question", "goal", 3),
+                null);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.previewLatexVersion(
+                        submitted.taskId(),
+                        "teacher",
+                        null))
+                .isInstanceOfSatisfying(ResponseStatusException.class, exception ->
+                        assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.exportLatexVersion(
+                        submitted.taskId(),
+                        "teacher",
+                        null))
+                .isInstanceOfSatisfying(ResponseStatusException.class, exception ->
+                        assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.exportPdfVersion(
+                        submitted.taskId(),
+                        "teacher",
+                        null))
+                .isInstanceOfSatisfying(ResponseStatusException.class, exception ->
+                        assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.previewPdfVersion(
+                        submitted.taskId(),
+                        "teacher",
+                        null))
+                .isInstanceOfSatisfying(ResponseStatusException.class, exception ->
+                        assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.previewLatexVersion(
+                        submitted.taskId(),
+                        "lecture",
+                        null))
+                .isInstanceOfSatisfying(ResponseStatusException.class, exception ->
+                        assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.previewPdfVersion(
+                        submitted.taskId(),
+                        "lecture",
+                        null))
+                .isInstanceOfSatisfying(ResponseStatusException.class, exception ->
+                        assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
+        assertThat(controller.previewLatexVersion(submitted.taskId(), "student", null).getBody())
+                .contains("\\section", "\\vspace")
+                .doesNotContain("Teacher");
+        assertThat(controller.previewPdfVersion(submitted.taskId(), "student", null).getBody())
+                .startsWith(new byte[] {'%', 'P', 'D', 'F'});
+    }
+
+    @Test
+    void createsTemporaryBatchZipForOwnedTasksAndDownloadsIt() throws Exception {
+        TeachingWorkflowService service = testWorkflowService(
+                createTextbookCorpus(),
+                com.doob.mathagent.retrieval.TextbookRetrievalServiceFixture.service(
+                        new TextbookCatalogReader(),
+                        new TextbookChunkReader(),
+                        new LocalTextbookBm25SearchEngine(),
+                        new NoopRetrievalAuditSink()),
+                new InMemoryTeachingTaskStore(),
+                new StudentMemoryReuseService(new InMemoryStudentMemoryStore()));
+        TeachingHandoutPdfExportService pdfExportService = new TeachingHandoutPdfExportService();
+        TeachingTaskController controller = testController(
+                service,
+                teacherResolver(),
+                (token, action, path, requestHash, subject) -> true,
+                pdfExportService,
+                batchExportService(pdfExportService));
+        TeachingTaskResponse first = controller.submit(
+                new TeachingTaskRequest("client-batch-1", "question 1", "goal 1", 3),
+                null);
+        TeachingTaskResponse second = controller.submit(
+                new TeachingTaskRequest("client-batch-2", "question 2", "goal 2", 3),
+                null);
+
+        TeachingHandoutBatchExportResponse batch = controller.createBatchZip(
+                new TeachingHandoutBatchExportRequest(
+                        List.of(first.taskId(), second.taskId()),
+                        List.of("folder-algebra"),
+                        List.of("grade-10/functions")),
+                null);
+        ResponseEntity<byte[]> downloaded = controller.downloadBatchZip(batch.batchId(), null);
+
+        assertThat(batch.status()).isEqualTo("COMPLETED");
+        assertThat(batch.requestedCount()).isEqualTo(2);
+        assertThat(batch.exportedCount()).isEqualTo(2);
+        assertThat(batch.folderIds()).containsExactly("folder-algebra");
+        assertThat(batch.folderPaths()).containsExactly("grade-10/functions");
+        assertThat(batch.expiresAt()).isAfter(Instant.now().minusSeconds(5));
+        assertThat(downloaded.getBody()).startsWith(new byte[] {'P', 'K'});
+        assertThat(downloaded.getHeaders().getContentDisposition().getFilename()).isEqualTo(batch.batchId() + ".zip");
+        assertThat(zipEntries(downloaded.getBody())).contains(
+                "grade-10/functions/" + first.taskId() + ".tex",
+                "grade-10/functions/" + first.taskId() + ".pdf",
+                "grade-10/functions/" + second.taskId() + ".tex",
+                "grade-10/functions/" + second.taskId() + ".pdf",
+                "manifest.txt");
+    }
+
+    @Test
+    void rejectsExpiredTemporaryBatchZipDownloads() throws Exception {
+        MutableClock clock = new MutableClock(Instant.parse("2026-06-28T08:00:00Z"));
+        TeachingWorkflowService service = testWorkflowService(
+                createTextbookCorpus(),
+                com.doob.mathagent.retrieval.TextbookRetrievalServiceFixture.service(
+                        new TextbookCatalogReader(),
+                        new TextbookChunkReader(),
+                        new LocalTextbookBm25SearchEngine(),
+                        new NoopRetrievalAuditSink()),
+                new InMemoryTeachingTaskStore(),
+                new StudentMemoryReuseService(new InMemoryStudentMemoryStore()));
+        TeachingHandoutPdfExportService pdfExportService = new TeachingHandoutPdfExportService();
+        TeachingTaskController controller = testController(
+                service,
+                teacherResolver(),
+                (token, action, path, requestHash, subject) -> true,
+                pdfExportService,
+                new TeachingHandoutBatchExportService(pdfExportService, clock, Duration.ofMinutes(30)));
+        TeachingTaskResponse task = controller.submit(
+                new TeachingTaskRequest("client-expired", "question", "goal", 3),
+                null);
+        TeachingHandoutBatchExportResponse batch = controller.createBatchZip(
+                new TeachingHandoutBatchExportRequest(List.of(task.taskId()), List.of(), List.of()),
+                null);
+
+        clock.advance(Duration.ofMinutes(31));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.downloadBatchZip(batch.batchId(), null))
+                .isInstanceOfSatisfying(ResponseStatusException.class, exception ->
+                        assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.GONE));
+    }
+
+    @Test
+    void submitsAndListsHumanFeedbackForOwnedTeachingTask() throws Exception {
+        TeachingWorkflowService service = testWorkflowService(
+                createTextbookCorpus(),
+                com.doob.mathagent.retrieval.TextbookRetrievalServiceFixture.service(
+                        new TextbookCatalogReader(),
+                        new TextbookChunkReader(),
+                        new LocalTextbookBm25SearchEngine(),
+                        new NoopRetrievalAuditSink()),
+                new InMemoryTeachingTaskStore(),
+                new StudentMemoryReuseService(new InMemoryStudentMemoryStore()));
+        TeachingTaskController controller = testController(
+                service,
+                teacherResolver(),
+                (token, action, path, requestHash, subject) -> true,
+                new TeachingHandoutPdfExportService(),
+                batchExportService(new TeachingHandoutPdfExportService()));
+        TeachingTaskResponse task = controller.submit(
+                new TeachingTaskRequest("client-feedback", "question", "goal", 3),
+                null);
+
+        TeachingHumanFeedbackResponse feedback = controller.submitHumanFeedback(
+                task.taskId(),
+                new TeachingHumanFeedbackRequest(4, "needs_revision", "second step needs more detail", Map.of(
+                        "handoutVersion", "teacher",
+                        "pdfRenderer", "xelatex",
+                        "pdfPageCount", 2,
+                        "checks", Map.of("matchedCoreColumns", 5, "coreColumnTotal", 6))),
+                null);
+        List<TeachingHumanFeedbackResponse> feedbackList = controller.listHumanFeedback(task.taskId(), null);
+
+        assertThat(feedback.taskId()).isEqualTo(task.taskId());
+        assertThat(feedback.rating()).isEqualTo(4);
+        assertThat(feedback.decision()).isEqualTo("needs_revision");
+        assertThat(feedback.comment()).contains("second step");
+        assertThat(feedback.reviewContext()).containsEntry("handoutVersion", "teacher");
+        assertThat(feedback.reviewContext()).containsEntry("pdfRenderer", "xelatex");
+        assertThat(feedbackList.getFirst().reviewContext()).containsEntry("pdfPageCount", 2);
+        assertThat(feedbackList).extracting(TeachingHumanFeedbackResponse::feedbackId)
+                .containsExactly(feedback.feedbackId());
+    }
+
+    @Test
+    void keepsPdfPreviewImageDataUrlInsideFeedbackReviewContext() throws Exception {
+        TeachingWorkflowService service = testWorkflowService(
+                createTextbookCorpus(),
+                com.doob.mathagent.retrieval.TextbookRetrievalServiceFixture.service(
+                        new TextbookCatalogReader(),
+                        new TextbookChunkReader(),
+                        new LocalTextbookBm25SearchEngine(),
+                        new NoopRetrievalAuditSink()),
+                new InMemoryTeachingTaskStore(),
+                new StudentMemoryReuseService(new InMemoryStudentMemoryStore()));
+        TeachingTaskController controller = testController(
+                service,
+                teacherResolver(),
+                (token, action, path, requestHash, subject) -> true,
+                new TeachingHandoutPdfExportService(),
+                batchExportService(new TeachingHandoutPdfExportService()));
+        TeachingTaskResponse task = controller.submit(
+                new TeachingTaskRequest("client-feedback-image", "question", "goal", 3),
+                null);
+
+        String previewImageDataUrl = "data:image/png;base64," + "a".repeat(1600);
+        TeachingHumanFeedbackResponse feedback = controller.submitHumanFeedback(
+                task.taskId(),
+                new TeachingHumanFeedbackRequest(4, "needs_revision", "capture current PDF preview", Map.of(
+                        "handoutVersion", "teacher",
+                        "reviewEvidence", Map.of(
+                                "pdfPreview", Map.of(
+                                        "visualEvidence", Map.of(
+                                                "previewImageDataUrl", previewImageDataUrl))))),
+                null);
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> reviewEvidence = (Map<String, Object>) feedback.reviewContext().get("reviewEvidence");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> pdfPreview = (Map<String, Object>) reviewEvidence.get("pdfPreview");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> visualEvidence = (Map<String, Object>) pdfPreview.get("visualEvidence");
+
+        assertThat(visualEvidence.get("previewImageDataUrl")).isEqualTo(previewImageDataUrl);
+        assertThat(((String) visualEvidence.get("previewImageDataUrl")).length()).isGreaterThan(300);
+    }
+
+    @Test
+    void rejectsHumanFeedbackWithoutAcceptedCapabilityToken() throws Exception {
+        TeachingWorkflowService service = testWorkflowService(
+                createTextbookCorpus(),
+                com.doob.mathagent.retrieval.TextbookRetrievalServiceFixture.service(
+                        new TextbookCatalogReader(),
+                        new TextbookChunkReader(),
+                        new LocalTextbookBm25SearchEngine(),
+                        new NoopRetrievalAuditSink()),
+                new InMemoryTeachingTaskStore(),
+                new StudentMemoryReuseService(new InMemoryStudentMemoryStore()));
+        TeachingTaskController setupController = testController(
+                service,
+                teacherResolver(),
+                (token, action, path, requestHash, subject) -> true,
+                new TeachingHandoutPdfExportService(),
+                batchExportService(new TeachingHandoutPdfExportService()));
+        TeachingTaskResponse task = setupController.submit(
+                new TeachingTaskRequest("client-feedback-protected", "question", "goal", 3),
+                null);
+        TeachingTaskController protectedController = testController(
+                service,
+                teacherResolver(),
+                (token, action, path, requestHash, subject) -> false,
+                new TeachingHandoutPdfExportService(),
+                batchExportService(new TeachingHandoutPdfExportService()));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> protectedController.submitHumanFeedback(
+                        task.taskId(),
+                        new TeachingHumanFeedbackRequest(5, "helpful", "handout is usable"),
+                        null))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("Capability token");
+    }
+
+    private Path createTextbookCorpus() throws Exception {
+        Path root = tempDir.resolve("processed_books");
+        Path bookRoot = root.resolve("book_a");
+        Files.createDirectories(bookRoot.resolve("jsonl"));
+        Files.writeString(root.resolve("catalog.jsonl"), """
+                {"doc_id":"book_a","book_name":"Textbook A","volume":"required volume 1","book_root":"%s","manifest":"%s","chunk_count":1,"page_count":1,"ai_ok":false}
+                """.formatted(escape(bookRoot), escape(bookRoot.resolve("manifest.json"))));
+        Files.writeString(bookRoot.resolve("jsonl/chunks.jsonl"), """
+                {"chunk_id":"book_a_p101_text_001","doc_id":"book_a","book_name":"Textbook A","volume":"required volume 1","chapter_path":["Chapter 3 Functions"],"page_no":101,"printed_page_no":"98","chunk_type":"page_summary","section_title":"Function concept","text":"function concept piecewise function definition domain range set D x0 increment d","formula_text":"D(x_0)=\\\\{d\\\\in R|f(x_0+d)>f(x_0)\\\\}","image_rel_paths":[],"source_page_image":"pages/p101.png"}
+                """);
+        return root;
+    }
+
+    private static String escape(Path path) {
+        return path.toString().replace("\\", "\\\\");
+    }
+
+    private static List<String> zipEntries(byte[] zipBytes) throws Exception {
+        try (ZipInputStream input = new ZipInputStream(new ByteArrayInputStream(zipBytes))) {
+            java.util.ArrayList<String> names = new java.util.ArrayList<>();
+            java.util.zip.ZipEntry entry;
+            while ((entry = input.getNextEntry()) != null) {
+                names.add(entry.getName());
+            }
+            return names;
+        }
+    }
+
+    private static RequestSubjectResolver teacherResolver() {
+        return request -> new com.doob.mathagent.infrastructure.security.RequestSubject("school-a", "teacher", "teacher-001", "dev-device");
+    }
+
+    private static RequestSubjectResolver studentResolver() {
+        return request -> new com.doob.mathagent.infrastructure.security.RequestSubject("school-a", "student", "student-001", "dev-device");
+    }
+
+    /** Creates a persisted master-template task whose short PDF must never reach any publication route. */
+    private static TeachingTaskResponse shortLongHandoutTask() {
+        TeachingHandoutTemplateResponse template = new TeachingHandoutTemplateResponse(
+                "zhao_lixian_2025_master_v1", "连续真题讲义母版", "skill_config", "mixed",
+                "长讲义页数发布门禁回归", "专题训练", "讲义式专题课", List.of("基础"), List.of("真题"),
+                null, null, null, 7, 3);
+        return new TeachingTaskResponse(
+                "task-underqualified-master", "client-underqualified-master", "school-a", "teacher", "teacher-001",
+                template, TeachingTaskStatus.COMPLETED, "短讲义", "短讲义不允许发布", List.of(), List.of(), List.of(),
+                "\\section{短讲义}\n只有一页。", "\\section{短讲义}\n只有一页。", "\\section{短讲义}\n只有一页。",
+                "\\section{短讲义}\n只有一页。", List.of(), null, List.of(), null, null).withWatermarkText("数学讲义");
+    }
+
+    /** Avoids a renderer dependency: this class represents a verified one-page result for publication-gate tests. */
+    private static final class UnderQualifiedPdfExportService extends TeachingHandoutPdfExportService {
+
+        @Override
+        public RenderedHandoutPdf renderDetailed(TeachingTaskResponse task, String version) {
+            return new RenderedHandoutPdf(new byte[] {'%', 'P', 'D', 'F'}, "test", 1);
+        }
+
+        @Override
+        public int minimumQualifiedPages(TeachingTaskResponse task, String version) {
+            return "student".equalsIgnoreCase(version) ? 4 : "lecture".equalsIgnoreCase(version) ? 0 : 6;
+        }
+    }
+
+    private static final class MutableClock extends Clock {
+
+        private Instant instant;
+
+        private MutableClock(Instant instant) {
+            this.instant = instant;
+        }
+
+        @Override
+        public ZoneId getZone() {
+            return ZoneId.of("UTC");
+        }
+
+        @Override
+        public Clock withZone(ZoneId zone) {
+            return this;
+        }
+
+        @Override
+        public Instant instant() {
+            return instant;
+        }
+
+        void advance(Duration duration) {
+            instant = instant.plus(duration);
+        }
+    }
+}
+

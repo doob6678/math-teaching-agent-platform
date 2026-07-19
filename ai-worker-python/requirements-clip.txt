@@ -1,0 +1,5 @@
+torch>=2.3,<3
+transformers>=4.45,<5
+Pillow>=10,<12
+modelscope>=1.20,<2
+addict>=2.4,<3

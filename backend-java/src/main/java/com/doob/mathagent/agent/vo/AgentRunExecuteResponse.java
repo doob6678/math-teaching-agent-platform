@@ -1,0 +1,63 @@
+package com.doob.mathagent.agent.vo;
+
+import java.util.List;
+
+/**
+ * Agent execution trace response.
+ *
+ * @param traceId trace id used for later execution detail lookup
+ * @param planId plan id linked to the execution
+ * @param tenantId backend resolved tenant id
+ * @param subjectType backend resolved subject role
+ * @param subjectId backend resolved subject id
+ * @param agentCode executed agent code
+ * @param providerName selected provider name copied from the validated plan
+ * @param modelCode selected model code copied from the validated plan
+ * @param status execution status
+ * @param estimatedCost estimated local cost copied from the plan for monitoring
+ * @param allowedToolScopes tool scopes allowed by the plan and recorded for audit
+ * @param allowedDataScopes data scopes allowed by the plan and recorded for audit
+ * @param concurrencyKeys concurrency keys acquired for this execution
+ * @param stageTimings execution stage timing rows
+ * @param actualUsage provider-reported token usage; zero values mean no live call was made or provider omitted usage
+ * @param message safe status message; raw prompt and raw model output are intentionally omitted
+ * @param generatedContent model-generated content returned only to the immediate owner-facing caller
+ */
+public record AgentRunExecuteResponse(
+        String traceId,
+        String planId,
+        String tenantId,
+        String subjectType,
+        String subjectId,
+        String agentCode,
+        String providerName,
+        String modelCode,
+        String status,
+        double estimatedCost,
+        List<String> allowedToolScopes,
+        List<String> allowedDataScopes,
+        List<String> concurrencyKeys,
+        List<StageTiming> stageTimings,
+        TokenUsage actualUsage,
+        String message,
+        String generatedContent) {
+
+    /**
+     * Execution stage timing for monitoring dashboards.
+     *
+     * @param stage stable stage code
+     * @param elapsedMs elapsed milliseconds for the stage
+     */
+    public record StageTiming(String stage, long elapsedMs) {
+    }
+
+    /**
+     * Provider-reported token usage for real model calls.
+     *
+     * @param promptTokens input tokens reported by the provider
+     * @param completionTokens output tokens reported by the provider
+     * @param totalTokens total tokens reported by the provider
+     */
+    public record TokenUsage(int promptTokens, int completionTokens, int totalTokens) {
+    }
+}

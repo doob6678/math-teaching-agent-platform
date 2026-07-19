@@ -1,0 +1,6 @@
+-- Curated knowledge graph spine v0.1 is seeded by
+-- com.doob.mathagent.knowledge.service.KnowledgeGraphSpineSeedService.
+--
+-- Keep this migration version as a no-op because the original SQL seed carried
+-- Windows-encoding-corrupted Chinese text. Runtime seeding uses the UTF-8
+-- classpath source at knowledge/graph-spine-v0.1.md and deterministic IDs.
