@@ -3,7 +3,6 @@ param(
     [string]$DbUser = "math_agent",
     [string]$DbPassword = "123456",
     [string]$RedisAddress = "redis://127.0.0.1:6379",
-    [string]$MilvusUri = "http://127.0.0.1:19530",
     [string]$RabbitMqAddresses = "amqp://127.0.0.1:5672",
     [string]$Distro = "Ubuntu"
 )
@@ -109,7 +108,6 @@ if (-not [string]::IsNullOrWhiteSpace($wslProxyHost) `
     -and (Test-TcpPort $wslProxyHost 19531)) {
     $DbUrl = "jdbc:mysql://${wslProxyHost}:13306/math_agent?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false"
     $RedisAddress = "redis://${wslProxyHost}:16379"
-    $MilvusUri = "http://${wslProxyHost}:19531"
     $RabbitMqAddresses = "amqp://${wslProxyHost}:5672"
 } elseif (-not [string]::IsNullOrWhiteSpace($wslProxyHost) `
     -and (Test-TcpPort $wslProxyHost 3306) `
@@ -120,12 +118,10 @@ if (-not [string]::IsNullOrWhiteSpace($wslProxyHost) `
     # never falls back to creating an empty container volume after a Docker restart.
     $DbUrl = "jdbc:mysql://${wslProxyHost}:3306/math_agent?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false"
     $RedisAddress = "redis://${wslProxyHost}:6379"
-    $MilvusUri = "http://${wslProxyHost}:19530"
     $RabbitMqAddresses = "amqp://${wslProxyHost}:5672"
 } elseif ((Test-TcpPort "127.0.0.1" 13306) -and (Test-TcpPort "127.0.0.1" 16379) -and (Test-TcpPort "127.0.0.1" 19531)) {
     $DbUrl = "jdbc:mysql://127.0.0.1:13306/math_agent?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false"
     $RedisAddress = "redis://127.0.0.1:16379"
-    $MilvusUri = "http://127.0.0.1:19531"
 } elseif (-not ((Test-TcpPort "127.0.0.1" 3306) -and (Test-TcpPort "127.0.0.1" 6379) -and (Test-TcpPort "127.0.0.1" 19530))) {
     throw "Neither WSL proxy ports nor localhost services are reachable. Start MySQL/Redis/Milvus first."
 }
@@ -149,7 +145,6 @@ if ([string]::IsNullOrWhiteSpace($env:MATH_AGENT_REDIS_SEARCH_CACHE_ENABLED)) {
     $env:MATH_AGENT_REDIS_SEARCH_CACHE_ENABLED = "false"
 }
 $env:MATH_AGENT_VECTOR_INDEX_ENABLED = "true"
-$env:MATH_AGENT_MILVUS_URI = $MilvusUri
 # The CUDA worker serializes first-load/model batches across the parallel textbook and teacher retrieval branches.
 # Keep the vector request budget bounded but above the real cold-start queue so one branch does not fall back to a
 # second embedding pass merely because the first cross-encoder request waited behind a sibling request.
@@ -157,7 +152,7 @@ if ([string]::IsNullOrWhiteSpace($env:MATH_AGENT_VECTOR_INDEX_TIMEOUT_MS)) {
     $env:MATH_AGENT_VECTOR_INDEX_TIMEOUT_MS = "120000"
 }
 if ([string]::IsNullOrWhiteSpace($env:MATH_AGENT_MILVUS_TOKEN)) {
-    $env:MATH_AGENT_MILVUS_TOKEN = "root:doob67"
+    throw "MATH_AGENT_MILVUS_TOKEN must be provided by the environment; credentials are not stored in scripts or application.yml."
 }
 $env:MATH_AGENT_TEACHER_SYNC_FEISHU_PROCESS_DOWNLOADER_ENABLED = "true"
 # Scanned teacher PDFs are rendered page-by-page during sync. Resolve the native renderer from this machine's PATH
@@ -186,12 +181,6 @@ if ([string]::IsNullOrWhiteSpace($env:MATH_AGENT_EMBEDDING_API_KEY)) {
 if ([string]::IsNullOrWhiteSpace($env:MATH_AGENT_EMBEDDING_MODEL)) {
     # This model identifies the dedicated teacher text collection; image retrieval continues through CLIP worker APIs.
     $env:MATH_AGENT_EMBEDDING_MODEL = "local-bge-small-zh-v1.5"
-}
-if ([string]::IsNullOrWhiteSpace($env:MATH_AGENT_MILVUS_COLLECTION)) {
-    $env:MATH_AGENT_MILVUS_COLLECTION = "math_agent_teacher_text_blocks_bge"
-}
-if ([string]::IsNullOrWhiteSpace($env:MATH_AGENT_EMBEDDING_DIMENSION)) {
-    $env:MATH_AGENT_EMBEDDING_DIMENSION = "512"
 }
 if ([string]::IsNullOrWhiteSpace($env:MATH_AGENT_AI_DEFAULT_PROVIDER) -and -not [string]::IsNullOrWhiteSpace($env:OPENAI_API_KEY)) {
     # Student explanation requires a verified multimodal route. Prefer the configured OpenAI-compatible provider so

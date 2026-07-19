@@ -1,0 +1,358 @@
+{
+  "status": "verified",
+  "queries": [
+    "平面向量的基本定理",
+    "正弦定理的应用条件",
+    "椭圆的标准方程",
+    "导数的几何意义",
+    "等差数列前n项和"
+  ],
+  "text": {
+    "collection": "textbook_text_collection",
+    "dimension": 512,
+    "recallAt10": 0.98,
+    "mrr": 0.8,
+    "top1": 0.8,
+    "top3": 0.8,
+    "sectionTitleHitRate": 0.8,
+    "localNpyLatencyMs": {
+      "p50": 0.723,
+      "p95": 0.749
+    },
+    "milvusSearchLatencyMs": {
+      "p50": 22.273,
+      "p95": 364.487
+    },
+    "cases": [
+      {
+        "query": "平面向量的基本定理",
+        "baselineTop10": [
+          "renjiao_bbixiu2math_p168_ai_001__section_014",
+          "renjiao_bbixiu2math_p168_ai_001__section_015",
+          "renjiao_bbixiu2math_p170_ai_001__section_009",
+          "renjiao_bbixiu2math_p176_ai_001__section_001",
+          "renjiao_bbixiu2math_p172_ai_001__section_001",
+          "renjiao_bbixiu2math_p180_ai_001__section_013",
+          "renjiao_bbixiu2math_p166_ai_001__section_001",
+          "renjiao_bbixiu2math_p174_ai_001__section_001",
+          "renjiao_bbixiu2math_p180_ai_001__section_005",
+          "renjiao_bbixiu2math_p168_ai_001__section_004"
+        ],
+        "milvusTop10": [
+          "renjiao_bbixiu2math_p168_ai_001__section_014",
+          "renjiao_bbixiu2math_p168_ai_001__section_015",
+          "renjiao_bbixiu2math_p170_ai_001__section_009",
+          "renjiao_bbixiu2math_p176_ai_001__section_001",
+          "renjiao_bbixiu2math_p172_ai_001__section_001",
+          "renjiao_bbixiu2math_p180_ai_001__section_013",
+          "renjiao_bbixiu2math_p166_ai_001__section_001",
+          "renjiao_bbixiu2math_p174_ai_001__section_001",
+          "renjiao_bbixiu2math_p180_ai_001__section_005",
+          "renjiao_bbixiu2math_p168_ai_001__section_004"
+        ],
+        "recallAt10": 1.0,
+        "reciprocalRank": 1.0,
+        "top1Match": true,
+        "top3ContainsBaselineTop1": true
+      },
+      {
+        "query": "正弦定理的应用条件",
+        "baselineTop10": [
+          "math_b_bixiu_4_p022_p022__正弦定理与余弦定理的应用",
+          "math_b_bixiu_4_p022_ai_001__section_011",
+          "math_b_bixiu_4_p020_p020__正弦定理与余弦定理的应用",
+          "math_b_bixiu_4_p022_ai_001__section_001",
+          "math_b_bixiu_4_p022_ai_001__section_008",
+          "math_b_bixiu_4_p020_ai_001__section_001",
+          "math_b_bixiu_4_p020_ai_001__section_002",
+          "math_b_bixiu_4_p022_ai_001__section_012",
+          "math_b_bixiu_4_p022_ai_001__section_003",
+          "math_b_bixiu_4_p022_ai_001__section_007"
+        ],
+        "milvusTop10": [
+          "math_b_bixiu_4_p022_ai_001__section_011",
+          "math_b_bixiu_4_p020_p020__正弦定理与余弦定理的应用",
+          "math_b_bixiu_4_p022_ai_001__section_001",
+          "math_b_bixiu_4_p022_ai_001__section_008",
+          "math_b_bixiu_4_p020_ai_001__section_001",
+          "math_b_bixiu_4_p020_ai_001__section_002",
+          "math_b_bixiu_4_p022_ai_001__section_012",
+          "math_b_bixiu_4_p022_ai_001__section_003",
+          "math_b_bixiu_4_p022_ai_001__section_007",
+          "math_b_bixiu_4_p022_ai_001__section_013"
+        ],
+        "recallAt10": 0.9,
+        "reciprocalRank": 0,
+        "top1Match": false,
+        "top3ContainsBaselineTop1": false
+      },
+      {
+        "query": "椭圆的标准方程",
+        "baselineTop10": [
+          "math_b_xuanze_bixiu_1_p140_p140__椭圆及其方程",
+          "renjiao_bxuanze_bixiu1_p140_p140__椭圆及其方程",
+          "math_b_xuanze_bixiu_1_p142_p142__椭圆及其方程",
+          "math_b_xuanze_bixiu_1_p139_p139__二章平面解析几何",
+          "math_b_xuanze_bixiu_1_p146_p146__椭圆及其方程",
+          "math_b_xuanze_bixiu_1_p148_p148__焦点在x轴上.",
+          "math_b_xuanze_bixiu_1_p149_p149__二章平面解析几何",
+          "renjiao_bxuanze_bixiu1_p148_p148__焦点在x轴上.",
+          "renjiao_bxuanze_bixiu1_p142_p142__",
+          "math_b_xuanze_bixiu_1_p136_p136__"
+        ],
+        "milvusTop10": [
+          "math_b_xuanze_bixiu_1_p140_p140__椭圆及其方程",
+          "renjiao_bxuanze_bixiu1_p140_p140__椭圆及其方程",
+          "math_b_xuanze_bixiu_1_p142_p142__椭圆及其方程",
+          "math_b_xuanze_bixiu_1_p139_p139__二章平面解析几何",
+          "math_b_xuanze_bixiu_1_p146_p146__椭圆及其方程",
+          "math_b_xuanze_bixiu_1_p148_p148__焦点在x轴上.",
+          "math_b_xuanze_bixiu_1_p149_p149__二章平面解析几何",
+          "renjiao_bxuanze_bixiu1_p148_p148__焦点在x轴上.",
+          "renjiao_bxuanze_bixiu1_p142_p142__",
+          "math_b_xuanze_bixiu_1_p136_p136__"
+        ],
+        "recallAt10": 1.0,
+        "reciprocalRank": 1.0,
+        "top1Match": true,
+        "top3ContainsBaselineTop1": true
+      },
+      {
+        "query": "导数的几何意义",
+        "baselineTop10": [
+          "math_b_xuanze_bixiu_3_p078_ai_001__section_002",
+          "math_b_xuanze_bixiu_3_p078_ai_001__section_004",
+          "math_b_xuanze_bixiu_3_p075_ai_001__section_001",
+          "math_b_xuanze_bixiu_3_p078_ai_001__section_003",
+          "math_b_xuanze_bixiu_3_p075_ai_001__section_002",
+          "math_b_xuanze_bixiu_3_p075_ai_001__section_003",
+          "math_b_xuanze_bixiu_3_p083_ai_001__section_001",
+          "math_b_xuanze_bixiu_3_p095_ai_001__section_003",
+          "math_b_xuanze_bixiu_3_p087_ai_001__section_003",
+          "math_b_xuanze_bixiu_3_p082_ai_001__section_004"
+        ],
+        "milvusTop10": [
+          "math_b_xuanze_bixiu_3_p078_ai_001__section_002",
+          "math_b_xuanze_bixiu_3_p078_ai_001__section_004",
+          "math_b_xuanze_bixiu_3_p075_ai_001__section_001",
+          "math_b_xuanze_bixiu_3_p078_ai_001__section_003",
+          "math_b_xuanze_bixiu_3_p075_ai_001__section_002",
+          "math_b_xuanze_bixiu_3_p075_ai_001__section_003",
+          "math_b_xuanze_bixiu_3_p083_ai_001__section_001",
+          "math_b_xuanze_bixiu_3_p095_ai_001__section_003",
+          "math_b_xuanze_bixiu_3_p087_ai_001__section_003",
+          "math_b_xuanze_bixiu_3_p082_ai_001__section_004"
+        ],
+        "recallAt10": 1.0,
+        "reciprocalRank": 1.0,
+        "top1Match": true,
+        "top3ContainsBaselineTop1": true
+      },
+      {
+        "query": "等差数列前n项和",
+        "baselineTop10": [
+          "math_b_xuanze_bixiu_3_p031_ai_001__section_001",
+          "math_b_xuanze_bixiu_3_p029_ai_001__section_001",
+          "math_b_xuanze_bixiu_3_p023_ai_001__section_004",
+          "math_b_xuanze_bixiu_3_p025_ai_001__section_001",
+          "math_b_xuanze_bixiu_3_p032_ai_001__section_002",
+          "math_b_xuanze_bixiu_3_p027_ai_001__section_004",
+          "math_b_xuanze_bixiu_3_p034_ai_001__section_002",
+          "math_b_xuanze_bixiu_3_p066_ai_001__section_001",
+          "math_b_xuanze_bixiu_3_p035_ai_001__section_002",
+          "math_b_xuanze_bixiu_3_p051_ai_001__section_001"
+        ],
+        "milvusTop10": [
+          "math_b_xuanze_bixiu_3_p031_ai_001__section_001",
+          "math_b_xuanze_bixiu_3_p029_ai_001__section_001",
+          "math_b_xuanze_bixiu_3_p023_ai_001__section_004",
+          "math_b_xuanze_bixiu_3_p025_ai_001__section_001",
+          "math_b_xuanze_bixiu_3_p032_ai_001__section_002",
+          "math_b_xuanze_bixiu_3_p027_ai_001__section_004",
+          "math_b_xuanze_bixiu_3_p034_ai_001__section_002",
+          "math_b_xuanze_bixiu_3_p066_ai_001__section_001",
+          "math_b_xuanze_bixiu_3_p035_ai_001__section_002",
+          "math_b_xuanze_bixiu_3_p051_ai_001__section_001"
+        ],
+        "recallAt10": 1.0,
+        "reciprocalRank": 1.0,
+        "top1Match": true,
+        "top3ContainsBaselineTop1": true
+      }
+    ]
+  },
+  "image": {
+    "collection": "textbook_image_collection",
+    "dimension": 768,
+    "recallAt10": 1.0,
+    "mrr": 1.0,
+    "top1": 1.0,
+    "top3": 1.0,
+    "sectionTitleHitRate": 1.0,
+    "localNpyLatencyMs": {
+      "p50": 0.472,
+      "p95": 0.482
+    },
+    "milvusSearchLatencyMs": {
+      "p50": 7.966,
+      "p95": 215.296
+    },
+    "cases": [
+      {
+        "query": "平面向量的基本定理",
+        "baselineTop10": [
+          "renjiao_bbixiu1math:p0149:pages/p149.png",
+          "renjiao_bbixiu3math:p0124:pages/p124.png",
+          "renjiao_bbixiu1math:p0152:pages/p152.png",
+          "renjiao_bbixiu3math:p0125:pages/p125.png",
+          "renjiao_bbixiu1math:p0153:pages/p153.png",
+          "math_b_bixiu_4:p0139:pages/p139.png",
+          "math_b_xuanze_bixiu_3:p0124:pages/p124.png",
+          "math_b_xuanze_bixiu_3:p0125:pages/p125.png",
+          "math_b_xuanze_bixiu_1:p0189:pages/p189.png",
+          "math_b_xuanze_bixiu_3:p0123:pages/p123.png"
+        ],
+        "milvusTop10": [
+          "renjiao_bbixiu1math:p0149:pages/p149.png",
+          "renjiao_bbixiu1math:p0153:pages/p153.png",
+          "renjiao_bbixiu1math:p0152:pages/p152.png",
+          "renjiao_bbixiu3math:p0125:pages/p125.png",
+          "renjiao_bbixiu3math:p0124:pages/p124.png",
+          "math_b_bixiu_4:p0139:pages/p139.png",
+          "math_b_xuanze_bixiu_3:p0125:pages/p125.png",
+          "math_b_xuanze_bixiu_3:p0124:pages/p124.png",
+          "math_b_xuanze_bixiu_1:p0189:pages/p189.png",
+          "math_b_xuanze_bixiu_3:p0123:pages/p123.png"
+        ],
+        "recallAt10": 1.0,
+        "reciprocalRank": 1.0,
+        "top1Match": true,
+        "top3ContainsBaselineTop1": true
+      },
+      {
+        "query": "正弦定理的应用条件",
+        "baselineTop10": [
+          "math_b_xuanze_bixiu_3:p0123:pages/p123.png",
+          "math_b_xuanze_bixiu_1:p0189:pages/p189.png",
+          "math_b_bixiu_4:p0141:pages/p141.png",
+          "math_b_xuanze_bixiu_3:p0008:pages/p008.png",
+          "renjiao_bxuanze_bixiu1:p0189:pages/p189.png",
+          "math_b_xuanze_bixiu_3:p0124:pages/p124.png",
+          "math_b_xuanze_bixiu_3:p0125:pages/p125.png",
+          "math_b_bixiu_4:p0139:pages/p139.png",
+          "math_b_xuanze_bixiu_3:p0003:pages/p003.png",
+          "renjiao_bxuanze_bixiu1:p0001:pages/p001.png"
+        ],
+        "milvusTop10": [
+          "math_b_xuanze_bixiu_3:p0123:pages/p123.png",
+          "math_b_xuanze_bixiu_1:p0189:pages/p189.png",
+          "math_b_bixiu_4:p0141:pages/p141.png",
+          "math_b_xuanze_bixiu_3:p0008:pages/p008.png",
+          "renjiao_bxuanze_bixiu1:p0189:pages/p189.png",
+          "math_b_xuanze_bixiu_3:p0125:pages/p125.png",
+          "math_b_xuanze_bixiu_3:p0124:pages/p124.png",
+          "math_b_bixiu_4:p0139:pages/p139.png",
+          "math_b_xuanze_bixiu_3:p0003:pages/p003.png",
+          "renjiao_bxuanze_bixiu1:p0001:pages/p001.png"
+        ],
+        "recallAt10": 1.0,
+        "reciprocalRank": 1.0,
+        "top1Match": true,
+        "top3ContainsBaselineTop1": true
+      },
+      {
+        "query": "椭圆的标准方程",
+        "baselineTop10": [
+          "math_b_bixiu_4:p0009:pages/p009.png",
+          "math_b_xuanze_bixiu_3:p0068:pages/p068.png",
+          "renjiao_bbixiu1math:p0008:pages/p008.png",
+          "math_b_xuanze_bixiu_3:p0123:pages/p123.png",
+          "math_b_xuanze_bixiu_3:p0008:pages/p008.png",
+          "math_b_xuanze_bixiu_1:p0189:pages/p189.png",
+          "math_b_bixiu_4:p0141:pages/p141.png",
+          "math_b_bixiu_4:p0061:pages/p061.png",
+          "math_b_xuanze_bixiu_3:p0124:pages/p124.png",
+          "math_b_xuanze_bixiu_3:p0125:pages/p125.png"
+        ],
+        "milvusTop10": [
+          "math_b_bixiu_4:p0009:pages/p009.png",
+          "math_b_xuanze_bixiu_3:p0068:pages/p068.png",
+          "renjiao_bbixiu1math:p0008:pages/p008.png",
+          "math_b_xuanze_bixiu_3:p0123:pages/p123.png",
+          "math_b_xuanze_bixiu_3:p0008:pages/p008.png",
+          "math_b_xuanze_bixiu_1:p0189:pages/p189.png",
+          "math_b_bixiu_4:p0141:pages/p141.png",
+          "math_b_bixiu_4:p0061:pages/p061.png",
+          "math_b_xuanze_bixiu_3:p0125:pages/p125.png",
+          "math_b_xuanze_bixiu_3:p0124:pages/p124.png"
+        ],
+        "recallAt10": 1.0,
+        "reciprocalRank": 1.0,
+        "top1Match": true,
+        "top3ContainsBaselineTop1": true
+      },
+      {
+        "query": "导数的几何意义",
+        "baselineTop10": [
+          "math_b_xuanze_bixiu_3:p0003:pages/p003.png",
+          "math_b_xuanze_bixiu_3:p0124:pages/p124.png",
+          "math_b_xuanze_bixiu_3:p0125:pages/p125.png",
+          "math_b_bixiu_4:p0139:pages/p139.png",
+          "math_b_bixiu_4:p0003:pages/p003.png",
+          "renjiao_bbixiu3math:p0003:pages/p003.png",
+          "renjiao_bbixiu2math:p0096:pages/p096.png",
+          "renjiao_bbixiu1math:p0003:pages/p003.png",
+          "renjiao_bxuanze_bixiu1:p0003:pages/p003.png",
+          "math_b_xuanze_bixiu_1:p0003:pages/p003.png"
+        ],
+        "milvusTop10": [
+          "math_b_xuanze_bixiu_3:p0003:pages/p003.png",
+          "math_b_xuanze_bixiu_3:p0125:pages/p125.png",
+          "math_b_xuanze_bixiu_3:p0124:pages/p124.png",
+          "math_b_bixiu_4:p0139:pages/p139.png",
+          "math_b_bixiu_4:p0003:pages/p003.png",
+          "renjiao_bbixiu3math:p0003:pages/p003.png",
+          "renjiao_bbixiu2math:p0096:pages/p096.png",
+          "renjiao_bbixiu1math:p0003:pages/p003.png",
+          "renjiao_bxuanze_bixiu1:p0003:pages/p003.png",
+          "math_b_xuanze_bixiu_1:p0003:pages/p003.png"
+        ],
+        "recallAt10": 1.0,
+        "reciprocalRank": 1.0,
+        "top1Match": true,
+        "top3ContainsBaselineTop1": true
+      },
+      {
+        "query": "等差数列前n项和",
+        "baselineTop10": [
+          "math_b_xuanze_bixiu_1:p0189:pages/p189.png",
+          "math_b_xuanze_bixiu_3:p0123:pages/p123.png",
+          "math_b_xuanze_bixiu_3:p0124:pages/p124.png",
+          "math_b_xuanze_bixiu_3:p0125:pages/p125.png",
+          "math_b_bixiu_4:p0139:pages/p139.png",
+          "renjiao_bbixiu1math:p0149:pages/p149.png",
+          "renjiao_bbixiu3math:p0125:pages/p125.png",
+          "renjiao_bbixiu1math:p0152:pages/p152.png",
+          "renjiao_bbixiu3math:p0124:pages/p124.png",
+          "renjiao_bbixiu1math:p0153:pages/p153.png"
+        ],
+        "milvusTop10": [
+          "math_b_xuanze_bixiu_1:p0189:pages/p189.png",
+          "math_b_xuanze_bixiu_3:p0123:pages/p123.png",
+          "math_b_xuanze_bixiu_3:p0125:pages/p125.png",
+          "math_b_xuanze_bixiu_3:p0124:pages/p124.png",
+          "math_b_bixiu_4:p0139:pages/p139.png",
+          "renjiao_bbixiu1math:p0149:pages/p149.png",
+          "renjiao_bbixiu1math:p0153:pages/p153.png",
+          "renjiao_bbixiu1math:p0152:pages/p152.png",
+          "renjiao_bbixiu3math:p0125:pages/p125.png",
+          "renjiao_bbixiu3math:p0124:pages/p124.png"
+        ],
+        "recallAt10": 1.0,
+        "reciprocalRank": 1.0,
+        "top1Match": true,
+        "top3ContainsBaselineTop1": true
+      }
+    ]
+  }
+}

@@ -13,6 +13,11 @@ public record VectorIndexProperties(
         String milvusToken,
         String collectionName,
         String studentMemoryCollectionName,
+        String textbookTextCollectionName,
+        String textbookImageCollectionName,
+        int textbookTextDimension,
+        int textbookImageDimension,
+        int textbookImageQueryDimension,
         int dimension,
         String embeddingBaseUrl,
         String embeddingApiKey,
@@ -29,12 +34,29 @@ public record VectorIndexProperties(
             String milvusUri,
             String milvusToken,
             String collectionName,
+            String studentMemoryCollectionName,
             int dimension,
             String embeddingBaseUrl,
             String embeddingApiKey,
             String embeddingModel,
             int requestTimeoutMs) {
-        this(enabled, milvusUri, milvusToken, collectionName, "math_agent_student_memories_bge", dimension,
+        this(enabled, milvusUri, milvusToken, collectionName, studentMemoryCollectionName,
+                "math_agent_textbook_pages_bge", "math_agent_textbook_pages_clip", 512, 768, 512, dimension,
+                embeddingBaseUrl, embeddingApiKey, embeddingModel, requestTimeoutMs);
+    }
+
+    public VectorIndexProperties(
+            boolean enabled,
+            String milvusUri,
+            String milvusToken,
+            String collectionName,
+            int dimension,
+            String embeddingBaseUrl,
+            String embeddingApiKey,
+            String embeddingModel,
+            int requestTimeoutMs) {
+        this(enabled, milvusUri, milvusToken, collectionName, "math_agent_student_memories_bge",
+                "math_agent_textbook_pages_bge", "math_agent_textbook_pages_clip", 512, 768, 512, dimension,
                 embeddingBaseUrl, embeddingApiKey, embeddingModel, requestTimeoutMs);
     }
 
@@ -46,6 +68,31 @@ public record VectorIndexProperties(
         return studentMemoryCollectionName == null || studentMemoryCollectionName.isBlank()
                 ? "math_agent_student_memories_bge"
                 : studentMemoryCollectionName.strip();
+    }
+
+    /** Textbook BGE pages are isolated from teacher text because their lifecycle and source identity differ. */
+    public String normalizedTextbookTextCollectionName() {
+        return textbookTextCollectionName == null || textbookTextCollectionName.isBlank()
+                ? "math_agent_textbook_pages_bge" : textbookTextCollectionName.strip();
+    }
+
+    /** Textbook CLIP pages must never share a collection with 512-dimensional BGE vectors. */
+    public String normalizedTextbookImageCollectionName() {
+        return textbookImageCollectionName == null || textbookImageCollectionName.isBlank()
+                ? "math_agent_textbook_pages_clip" : textbookImageCollectionName.strip();
+    }
+
+    public int normalizedTextbookTextDimension() {
+        return textbookTextDimension <= 0 ? 512 : textbookTextDimension;
+    }
+
+    public int normalizedTextbookImageDimension() {
+        return textbookImageDimension <= 0 ? 768 : textbookImageDimension;
+    }
+
+    /** Effective CLIP prefix dimension used by the live worker before zero-padding into the stored image schema. */
+    public int normalizedTextbookImageQueryDimension() {
+        return textbookImageQueryDimension <= 0 ? normalizedTextbookImageDimension() : textbookImageQueryDimension;
     }
 
     public int normalizedDimension() {

@@ -109,13 +109,33 @@ math-agent:
       ttl: ${MATH_AGENT_REDIS_SEARCH_CACHE_TTL:10m}
       null-value-ttl: ${MATH_AGENT_REDIS_SEARCH_CACHE_NULL_VALUE_TTL:1m}
   vector-index:
-    enabled: ${MATH_AGENT_VECTOR_INDEX_ENABLED:true}
-    milvus-uri: ${MATH_AGENT_MILVUS_URI:http://127.0.0.1:19530}
+    # Milvus is a required local WSL service. URI and all non-sensitive collection parameters stay committed here;
+    # the optional authorization token remains external because credentials must never enter the repository.
+    enabled: true
+    milvus-uri: http://127.0.0.1:19530
     milvus-token: ${MATH_AGENT_MILVUS_TOKEN:}
-    # Teacher text blocks use BGE. CLIP page/image indexes are worker-owned and deliberately separate.
-    collection-name: ${MATH_AGENT_MILVUS_COLLECTION:math_agent_teacher_text_blocks_bge}
-    student-memory-collection-name: ${MATH_AGENT_STUDENT_MEMORY_COLLECTION:math_agent_student_memories_bge}
-    dimension: ${MATH_AGENT_EMBEDDING_DIMENSION:512}
+    collection-name: math_agent_teacher_text_blocks_bge
+    student-memory-collection-name: math_agent_student_memories_bge
+    textbook-text-collection-name: textbook_text_collection
+    textbook-image-collection-name: textbook_image_collection
+    dimension: 512
+    textbook-text-dimension: 512
+    textbook-image-dimension: 768
+    # The live local CLIP encoder is 512-dimensional while the historical page corpus is 768-dimensional.
+    # Migration normalizes its shared prefix and zero-pads it into the stable 768-d collection, reproducing the
+    # previous NPY common-prefix cosine exactly without mixing CLIP with BGE.
+    textbook-image-query-dimension: 512
+    textbook-metric-type: COSINE
+    # Exact FLAT cosine search is intentional for the current 3k/1k textbook corpus: it reproduces the audited NPY
+    # baseline exactly. A future corpus-size migration must benchmark an ANN replacement before changing this value.
+    textbook-index-type: FLAT
+    textbook-index-params: '{}'
+    textbook-top-k: 20
+    # Textbook pages carry full OCR and formulas in metadata; sixteen vectors keep each real Milvus REST payload
+    # below the Windows-to-WSL proxy timeout while preserving batched ingestion throughput.
+    textbook-upsert-batch-size: 16
+    textbook-timeout-ms: 120000
+    textbook-corpus-version: textbook-section-c2-milvus-v1
     # Local worker is the primary embedding path. Cloud embeddings remain available
     # only when explicitly configured through MATH_AGENT_EMBEDDING_BASE_URL/API_KEY.
     embedding-base-url: ${MATH_AGENT_EMBEDDING_BASE_URL:http://127.0.0.1:8091/v1}

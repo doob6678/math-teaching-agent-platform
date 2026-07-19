@@ -30,6 +30,7 @@ public class TextbookPageImageSearchService {
     private final VectorIndexProperties vectorIndexProperties;
     private final VectorHttpTransport transport;
     private final TextbookPageImageService pageImageService;
+    private final TextbookMilvusSearchClient milvusSearchClient;
 
     public TextbookPageImageSearchService(
             VectorIndexProperties vectorIndexProperties,
@@ -38,6 +39,7 @@ public class TextbookPageImageSearchService {
         this.vectorIndexProperties = vectorIndexProperties;
         this.transport = transport;
         this.pageImageService = pageImageService;
+        this.milvusSearchClient = new TextbookMilvusSearchClient(vectorIndexProperties, transport);
     }
 
     /**
@@ -54,48 +56,30 @@ public class TextbookPageImageSearchService {
             throw new IllegalArgumentException("query or image is required");
         }
         requireWorkerConfigured();
-        Map<String, Object> body = new LinkedHashMap<>();
-        if (!query.isBlank()) {
-            body.put("texts", List.of(query));
-        }
-        if (!image.isBlank()) {
-            body.put("images", List.of(image));
-        }
-        body.put("limit", normalized.normalizedLimit());
         List<String> docIds = normalizeDocIds(normalized.docIds());
-        if (!docIds.isEmpty()) {
-            body.put("docIds", docIds);
-        }
-        VectorHttpResponse response = transport.postJson(
-                endpoint(vectorIndexProperties.embeddingBaseUrl(), "/clip/page-search"),
-                Map.of("Authorization", "Bearer " + vectorIndexProperties.embeddingApiKey()),
-                writeJson(body),
-                Duration.ofMillis(vectorIndexProperties.normalizedTimeoutMs()));
-        JsonNode root = readJson(response);
-        if (!response.success2xx()) {
-            throw new IllegalStateException("CLIP textbook page search failed: HTTP " + response.statusCode()
-                    + " body=" + abbreviate(response.body(), 300));
-        }
+        List<TextbookMilvusSearchClient.MilvusHit> milvusHits = milvusSearchClient.searchImages(
+                query, image, normalized.normalizedLimit(), docIds);
         List<TextbookPageImageSearchHit> hits = new ArrayList<>();
-        for (JsonNode item : root.path("hits")) {
-            String docId = item.path("docId").asText("");
-            int pageNo = item.path("pageNo").asInt(0);
+        for (TextbookMilvusSearchClient.MilvusHit item : milvusHits) {
+            JsonNode metadata = item.metadata();
+            String docId = metadata.path("doc_id").asText("");
+            int pageNo = metadata.path("page_no").asInt(0);
             hits.add(new TextbookPageImageSearchHit(
-                    item.path("score").asDouble(0.0),
+                    item.score(),
                     docId,
-                    item.path("bookName").asText(""),
-                    repairMojibake(item.path("chapterPath").asText("")),
+                    metadata.path("book_name").asText(""),
+                    repairMojibake(metadata.path("chapter_path").asText("")),
                     pageNo,
-                    repairMojibake(item.path("printedPageNo").asText("")),
-                    repairMojibake(item.path("sectionTitle").asText("")),
-                    repairMojibake(item.path("text").asText("")),
+                    repairMojibake(metadata.path("printed_page_no").asText("")),
+                    repairMojibake(metadata.path("section_title").asText("")),
+                    repairMojibake(item.text()),
                     pageImageService.pageImageUri(docId, pageNo)));
         }
         return new TextbookPageImageSearchResponse(
                 query,
                 normalized.normalizedLimit(),
-                root.path("provider").asText(""),
-                root.path("model").asText(""),
+                "milvus",
+                "local_clip",
                 hits.size(),
                 List.copyOf(hits));
     }

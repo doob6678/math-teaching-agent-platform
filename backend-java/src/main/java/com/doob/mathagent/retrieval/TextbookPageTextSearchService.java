@@ -28,6 +28,7 @@ public class TextbookPageTextSearchService {
     private final VectorIndexProperties vectorIndexProperties;
     private final VectorHttpTransport transport;
     private final TextbookPageImageService pageImageService;
+    private final TextbookMilvusSearchClient milvusSearchClient;
 
     public TextbookPageTextSearchService(
             VectorIndexProperties vectorIndexProperties,
@@ -36,6 +37,7 @@ public class TextbookPageTextSearchService {
         this.vectorIndexProperties = vectorIndexProperties;
         this.transport = transport;
         this.pageImageService = pageImageService;
+        this.milvusSearchClient = new TextbookMilvusSearchClient(vectorIndexProperties, transport);
     }
 
     public TextbookPageTextSearchResponse search(TextbookPageTextSearchRequest request) {
@@ -46,43 +48,36 @@ public class TextbookPageTextSearchService {
             throw new IllegalArgumentException("query is required");
         }
         requireWorkerConfigured();
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("query", normalized.query());
-        body.put("limit", normalized.limit());
-        if (!normalized.docIds().isEmpty()) {
-            body.put("docIds", normalized.docIds());
-        }
-        VectorHttpResponse response = transport.postJson(
-                endpoint(vectorIndexProperties.embeddingBaseUrl(), "/text/page-search"),
-                Map.of("Authorization", "Bearer " + vectorIndexProperties.embeddingApiKey()),
-                writeJson(body),
-                Duration.ofMillis(vectorIndexProperties.normalizedTimeoutMs()));
-        JsonNode root = readJson(response);
-        if (!response.success2xx()) {
-            throw new IllegalStateException("BGE textbook page search failed: HTTP " + response.statusCode());
-        }
+        List<TextbookMilvusSearchClient.MilvusHit> milvusHits = milvusSearchClient.searchText(
+                normalized.query(), normalized.limit(), normalized.docIds());
         List<TextbookPageTextSearchHit> hits = new ArrayList<>();
-        for (JsonNode item : root.path("hits")) {
-            String docId = item.path("docId").asText("");
-            int pageNo = item.path("pageNo").asInt(0);
+        java.util.Set<String> seenSections = new java.util.LinkedHashSet<>();
+        for (TextbookMilvusSearchClient.MilvusHit item : milvusHits) {
+            JsonNode metadata = item.metadata();
+            String docId = metadata.path("doc_id").asText("");
+            int pageNo = metadata.path("page_no").asInt(0);
             if (!docId.isBlank() && pageNo > 0) {
+                String sectionId = metadata.path("section_id").asText(metadata.path("chunk_id").asText(""));
+                if (sectionId.isBlank() || !seenSections.add(docId + "#" + sectionId)) {
+                    continue;
+                }
                 hits.add(new TextbookPageTextSearchHit(
-                        item.path("score").asDouble(),
-                        item.path("chunkId").asText(""),
-                        item.path("sectionId").asText(item.path("chunkId").asText("")),
-                        item.path("sourceChunkId").asText(""),
+                        item.score(),
+                        metadata.path("chunk_id").asText(""),
+                        sectionId,
+                        metadata.path("source_chunk_id").asText(""),
                         docId,
-                        item.path("bookName").asText(""),
-                        item.path("chapterPath").asText(""),
+                        metadata.path("book_name").asText(""),
+                        metadata.path("chapter_path").asText(""),
                         pageNo,
-                        item.path("printedPageNo").asText(""),
-                        item.path("sectionTitle").asText(""),
-                        item.path("text").asText(""),
+                        metadata.path("printed_page_no").asText(""),
+                        metadata.path("section_title").asText(""),
+                        item.text(),
                         pageImageService.pageImageUri(docId, pageNo)));
             }
         }
         return new TextbookPageTextSearchResponse(
-                normalized.query(), normalized.limit(), root.path("provider").asText(""), root.path("model").asText(""), hits.size(), List.copyOf(hits));
+                normalized.query(), normalized.limit(), "milvus", vectorIndexProperties.embeddingModel(), hits.size(), List.copyOf(hits));
     }
 
     private void requireWorkerConfigured() {

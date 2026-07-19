@@ -311,8 +311,8 @@ def reuse_existing_book(source_root: Path, target_root: Path, doc_id: str) -> li
 
 
 def build_book(book_id: str, source_book: Path, target_root: Path, args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    # 优先复用已完成的目标教材，使中断后的全书构建可继续执行而无需再次调用结构抽取器。
-    # 页面语料库始终是真实来源，此快捷路径不会修改它。
+    # Reuse a completed target book first so an interrupted all-book build can be resumed without re-calling the
+    # section extractor.  The page library remains the source of truth and is never modified by this shortcut.
     completed_target = reuse_existing_book(target_root, target_root, book_id)
     if completed_target is not None:
         return completed_target, {"reused": True, "fallback_pages": 0, "source_page_rows": len({row.get("source_chunk_id") for row in completed_target})}
@@ -332,14 +332,17 @@ def build_book(book_id: str, source_book: Path, target_root: Path, args: argpars
             section_rows.extend(section_rows_for_page(row, result))
     section_rows.sort(key=lambda item: (int(item.get("page_no") or 0), item.get("chunk_id", "")))
     merged = merge_continuations(section_rows)
-    # 当 OCR 将编号子标题与真正父标题拆到相邻页面时，补全父级学科上下文。
-    # 该处理对所有教材通用，且不依赖任何检索查询。
+    # Preserve parent subject context when the OCR split a numbered child and
+    # its real parent heading across neighboring pages.  The helper is generic
+    # to every book and never receives a retrieval query.
     enrich_chapter_paths(merged)
-    # 仅含编号的 OCR 标题会让明确的定义无法被索引；从块正文推导展示/搜索后缀，
-    # 同时单独保留原始标题，以供审计和渲染使用。
+    # Number-only OCR headings otherwise hide an explicit definition from the
+    # index.  The helper derives a display/search suffix solely from the block
+    # text and retains the source title separately for audit and rendering.
     enrich_definition_titles(merged)
-    # 在层级修复和跨页合并后分配稳定语义身份；页面内临时 ID 适合抽取阶段，
-    # 但服务语料需将同一可见小标题的跨页来源归为同一逻辑单元。
+    # Assign one semantic identity after hierarchy repair and continuation merge.
+    # Page-local provisional ids are useful while extracting, but the serving
+    # corpus must group the same visible subheading across its source pages.
     for row in merged:
         row["section_id"] = stable_section_id(row)
     target_book = target_root / book_id
