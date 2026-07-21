@@ -32,15 +32,16 @@ public class TextbookRetrievalController {
             @RequestParam String query,
             @RequestParam(defaultValue = "10") int limit,
             @RequestParam(value = "documentId", required = false) List<String> documentIds,
+            @RequestParam(value = "retrievalMode", required = false) String retrievalMode,
             HttpServletRequest httpRequest) {
         return retrievalService.search(
                 resourceProperties.processedBooksRoot(),
-                new TextbookSearchRequest(query, limit, documentIds),
+                new TextbookSearchRequest(query, "", "", limit, documentIds, retrievalMode),
                 requestContext(httpRequest, subjectResolver.resolve(httpRequest)));
     }
 
     TextbookSearchResponse search(String query, int limit) {
-        return search(query, limit, null, null);
+        return search(query, limit, null, null, null);
     }
 
     /** Accepts formula text and image data that cannot safely fit in a GET query string. */

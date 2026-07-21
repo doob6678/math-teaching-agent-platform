@@ -4,7 +4,8 @@ import java.util.Locale;
 
 /** User-selectable strategy whose code is shared by requests, cache keys, and response diagnostics. */
 public enum TextbookRetrievalMode {
-    HYBRID("hybrid", "混合 RAG", "BGE 文本召回与 CLIP 页面图像召回合并后，使用 BGE 重排确认教材证据。", true, true),
+    // 默认链路只使用 BM25 + BGE 文本页召回 + 后端重排；CLIP 仅在用户明确选择 image_clip 时启用。
+    HYBRID("hybrid", "混合 RAG", "BM25 与 BGE 文本页召回合并后，使用后端重排确认教材证据。", true, false),
     TEXT_BGE("text_bge", "文本语义检索", "使用 BGE 教材页文本索引召回，并使用 BGE 重排确认相关性。", true, false),
     FORMULA_BGE("formula_bge", "公式语义检索", "将 LaTeX 公式与主题词送入 BGE 文本索引和重排器。", true, false),
     IMAGE_CLIP("image_clip", "公式图片检索", "使用 CLIP 比较上传公式图与教材页面图，再由 BGE 重排文本证据。", false, true);

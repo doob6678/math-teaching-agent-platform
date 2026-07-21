@@ -34,15 +34,15 @@ class TextbookRetrievalCandidatePolicyTest {
     }
 
     @Test
-    void titleRouteSharesTheSameBoundedDocumentWindowWithoutScoreFusion() {
+    void semanticRouteGetsFirstAdmissionChanceBeforeLexicalRescueRoutes() {
         List<String> selected = TextbookRetrievalService.interleaveDocumentIds(
                 List.of(
+                        List.of("semantic-a", "semantic-b"),
                         List.of("body-a", "body-b"),
-                        List.of("title-a", "title-b"),
-                        List.of("semantic-a", "semantic-b")),
+                        List.of("title-a", "title-b")),
                 3);
 
-        assertThat(selected).containsExactly("body-a", "title-a", "semantic-a");
+        assertThat(selected).containsExactly("semantic-a", "body-a", "title-a");
     }
 
     @Test

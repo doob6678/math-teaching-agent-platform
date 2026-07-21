@@ -112,6 +112,14 @@ export interface TextbookSearchOptions {
   retrievalMode?: "hybrid" | "text_bge" | "formula_bge" | "image_clip";
 }
 
+/** User-visible textbook strategies. The backend owns the actual stage semantics. */
+export const TEXTBOOK_RETRIEVAL_MODES = [
+  { value: "hybrid", label: "混合检索", description: "BM25 + BGE 文本页召回 + 后端重排" },
+  { value: "text_bge", label: "文本语义", description: "BGE 文本页召回 + 后端重排" },
+  { value: "formula_bge", label: "公式语义", description: "公式/主题文本走 BGE 文本页召回" },
+  { value: "image_clip", label: "图片检索", description: "明确使用 CLIP 搜索教材页面图片" },
+] as const;
+
 /**
  * 检索请求上下文审计字段。字段来自后端 `RetrievalRequestContext`，用于排查调用来源。
  */

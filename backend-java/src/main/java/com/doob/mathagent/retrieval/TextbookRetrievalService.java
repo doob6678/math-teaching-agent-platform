@@ -44,7 +44,7 @@ public class TextbookRetrievalService {
      */
     /** 为保持审计与 API 兼容而保留的稳定公开策略标识。 */
     // 候选准入规则变化时必须变更缓存身份，否则 Redis 会静默返回小标题 BM25 加入前生成的旧响应。
-    private static final String SEARCH_PIPELINE_VERSION = "two_stage_doc_page_v4_title_field_parent_rerank";
+    private static final String SEARCH_PIPELINE_VERSION = "two_stage_doc_page_v5_semantic_first_title_field_parent_rerank";
     /** 候选准入或校验语义变化时同步变更缓存结构版本。 */
     private static final String SEARCH_CACHE_SCHEMA_VERSION = "two_stage_section_block_reference_index";
     private static final Pattern QUERY_CLAUSE_SPLITTER = Pattern.compile("[\\r\\n,，。；;：:！？!?()（）\\[\\]【】]+");
@@ -138,7 +138,7 @@ public class TextbookRetrievalService {
     }
 
     /**
-     * 执行 BM25-first 教材检索，并同步写入检索审计事件。
+     * 执行多路候选、语义优先的教材检索，并同步写入检索审计事件。
      */
     public TextbookSearchResponse search(
             Path processedBooksRoot,
@@ -380,6 +380,7 @@ public class TextbookRetrievalService {
          */
         Map<String, List<TextbookSearchHit>> semanticCandidates = semanticPageDocumentCandidates(
                 query,
+                titleHits,
                 blockIndex,
                 request,
                 executionStages);
@@ -394,23 +395,29 @@ public class TextbookRetrievalService {
         }
         Map<String, List<TextbookSearchHit>> supportHitsByDocId = cappedSupportHitsByDocId(
                 coarseDocumentCandidates,
-                topLexicalCandidates,
+                semanticCandidates,
                 topTitleCandidates,
-                semanticCandidates);
+                topLexicalCandidates);
         /*
          * This is deliberately not a second cross-encoder pass. Stage one is document-level coarse recall: the BGE
          * page index contributes semantic document order and BM25 contributes independent lexical admission. Applying
          * the costly cross-encoder here and again at page level duplicates work and breaks the 2.2 second online
          * budget without increasing the in-document evidence precision that stage two is meant to solve.
          */
+        /*
+         * Semantic rescue is admitted first. The final reranker can improve the order of admitted evidence, but it
+         * cannot recover a semantic document that was excluded by the global document cap. Lexical routes remain
+         * available as complementary evidence and fill the remaining slots.
+         */
         List<String> rankedDocIds = interleaveDocumentIds(List.of(
+                new ArrayList<>(semanticCandidates.keySet()),
                 new ArrayList<>(topLexicalCandidates.keySet()),
-                new ArrayList<>(topTitleCandidates.keySet()),
-                new ArrayList<>(semanticCandidates.keySet())),
+                new ArrayList<>(topTitleCandidates.keySet())),
                 retrievalProperties.rerank().maxRerankDocuments());
         List<TextbookSearchHit> pageCandidates = pageCandidates(rankedDocIds, supportHitsByDocId, safeLimit);
-        Map<String, String> pageTexts = pageCandidateTexts(query, pageCandidates, blockIndex);
-        Map<String, Double> pageSemanticScores = semanticScoreByKey(query, pageTexts, executionStages);
+        String semanticQuery = semanticRecallQuery(query, titleHits);
+        Map<String, String> pageTexts = pageCandidateTexts(semanticQuery, pageCandidates, blockIndex);
+        Map<String, Double> pageSemanticScores = semanticScoreByKey(semanticQuery, pageTexts, executionStages);
         return pageCandidates.stream()
                 .map(hit -> new TextbookPageCandidate(
                         hit,
@@ -436,6 +443,7 @@ public class TextbookRetrievalService {
      */
     private Map<String, List<TextbookSearchHit>> semanticPageDocumentCandidates(
             String query,
+            List<TextbookSearchHit> titleHits,
             LogicalBlockIndex blockIndex,
             TextbookSearchRequest request,
             List<TextbookRetrievalStage> executionStages) {
@@ -451,7 +459,10 @@ public class TextbookRetrievalService {
             long startedAt = System.nanoTime();
             try {
                 TextbookPageTextSearchResponse response = pageTextSearchService.search(
-                        new TextbookPageTextSearchRequest(query, semanticPageLimit, request.documentIds()));
+                        new TextbookPageTextSearchRequest(
+                                semanticRecallQuery(query, titleHits),
+                                semanticPageLimit,
+                                request.documentIds()));
                 Map<String, List<TextbookSearchHit>> bgeCandidates = new LinkedHashMap<>();
                 for (TextbookPageTextSearchHit textHit : response.hits()) {
                     for (TextbookChunk chunk : matchingLogicalBlockRepresentatives(textHit, blockIndex)) {
@@ -502,6 +513,31 @@ public class TextbookRetrievalService {
                     "clip_page", "CLIP 页面图像召回", "unavailable", "CLIP 页面图像索引暂不可用，未把它伪装成命中。", -1L));
             return mergedCandidates;
         }
+    }
+
+    /**
+     * Gives the page embedding route both the user's wording and the corpus' visible terminology.
+     *
+     * <p>Users frequently search with a colloquial alias while the textbook uses a formal heading. The title BM25
+     * route has already found those real headings; feeding a bounded, deduplicated title context into BGE lets the
+     * semantic route retrieve continuation pages that contain the actual definition or formula. The context is
+     * corpus-derived and therefore does not encode a subject-specific alias or query special case.</p>
+     */
+    private String semanticRecallQuery(String query, List<TextbookSearchHit> titleHits) {
+        LinkedHashSet<String> parts = new LinkedHashSet<>();
+        if (query != null && !query.isBlank()) {
+            parts.add(query.strip());
+        }
+        int titleLimit = retrievalProperties.rerank().maxPageCandidates();
+        if (titleHits != null && titleLimit > 0) {
+            titleHits.stream()
+                    .map(TextbookSearchHit::sectionTitle)
+                    .map(TextbookRetrievalService::normalizeQueryText)
+                    .filter(value -> !value.isBlank())
+                    .limit(titleLimit)
+                    .forEach(parts::add);
+        }
+        return truncateForRerank(String.join(" ", parts), retrievalProperties.queryFocus().maxQueryChars());
     }
 
     /**
@@ -820,6 +856,7 @@ public class TextbookRetrievalService {
                 textOrFallback(chunk.sectionTitle(), imageHit.sectionTitle()),
                 textOrFallback(chunk.text(), imageHit.text()),
                 chunk.formulaText(),
+                chunk.imageRelPaths(),
                 chunk.sourcePageImage(),
                 "clip_semantic_page",
                 imageHit.imageUri());
@@ -841,6 +878,7 @@ public class TextbookRetrievalService {
                 textOrFallback(chunk.sectionTitle(), textHit.sectionTitle()),
                 textOrFallback(chunk.text(), textHit.text()),
                 chunk.formulaText(),
+                chunk.imageRelPaths(),
                 chunk.sourcePageImage(),
                 "bge_semantic_page",
                 textHit.imageUri());
@@ -881,6 +919,9 @@ public class TextbookRetrievalService {
         for (Map.Entry<String, List<TextbookSearchHit>> entry : hitsByDocId.entrySet()) {
             int limit = retrievalProperties.rerank().maxPagesPerDocument();
             LinkedHashMap<String, TextbookSearchHit> selected = new LinkedHashMap<>();
+            // Route order is semantic first because the final reranker cannot recover a page that was excluded here.
+            // BM25 and title routes remain in the same bounded window as lexical rescue evidence, but they must not
+            // consume every slot with sibling chunks from one visible page before BGE can contribute another page.
             for (Map<String, List<TextbookSearchHit>> route : candidateRoutes) {
                 List<TextbookSearchHit> candidates = route == null
                         ? List.of()
@@ -943,8 +984,9 @@ public class TextbookRetrievalService {
     }
 
     /**
-     * Interleaves the independently ordered lexical and semantic document routes without mixing their scores.
-     * Duplicate ids consume one slot, so a document supported by both routes does not crowd out independent evidence.
+     * Interleaves independently ordered semantic and lexical document routes without mixing their scores.
+     * The caller supplies semantic routes first so they receive the first admission chance under the global cap.
+     * Duplicate ids consume one slot, so a document supported by multiple routes does not crowd out independent evidence.
      */
     static List<String> interleaveDocumentIds(
             List<String> lexicalDocIds,
@@ -958,8 +1000,8 @@ public class TextbookRetrievalService {
     /**
      * Interleaves independently ranked routes under the existing global document cap.
      *
-     * <p>The title route is admitted in round-robin order with body BM25 and
-     * BGE. No route score is combined with another route's score.</p>
+     * <p>The semantic route is admitted first, followed by body BM25 and the title BM25 rescue route.
+     * No route score is combined with another route's score.</p>
      */
     static List<String> interleaveDocumentIds(List<List<String>> routes, int limit) {
         int safeLimit = Math.max(0, limit);
@@ -1247,6 +1289,7 @@ public class TextbookRetrievalService {
                 hit.sectionTitle(),
                 hit.textSnippet(),
                 hit.formulaText(),
+                hit.imageRelPaths(),
                 hit.sourcePageImage(),
                 hit.pageQualityLabel(),
                 hit.pageImageUri());

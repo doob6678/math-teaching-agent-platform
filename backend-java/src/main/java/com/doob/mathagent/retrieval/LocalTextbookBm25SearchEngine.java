@@ -515,6 +515,7 @@ public class LocalTextbookBm25SearchEngine {
                 chunk.sectionTitle(),
                 relevantSnippet(chunk.text(), snippetTerms),
                 chunk.formulaText(),
+                chunk.imageRelPaths(),
                 chunk.sourcePageImage(),
                 pageQualityLabel,
                 null);

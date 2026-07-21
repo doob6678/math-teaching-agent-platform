@@ -14,13 +14,18 @@ import numpy as np
 import yaml
 
 
-QUERIES = ("平面向量的基本定理", "正弦定理的应用条件", "椭圆的标准方程", "导数的几何意义", "等差数列前n项和")
 ROOT = Path(__file__).resolve().parents[2]
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--processed-books-root", required=True, type=Path)
+    parser.add_argument(
+        "--graph-spine",
+        type=Path,
+        default=ROOT / "backend-java" / "src" / "main" / "resources" / "knowledge" / "graph-spine-v0.1.md",
+        help="UTF-8 knowledge-point data source used to build the real evaluation query set",
+    )
     parser.add_argument("--output", type=Path, default=ROOT / "docs" / "textbook-milvus-recall-verification.json")
     args = parser.parse_args()
     cfg = yaml.safe_load((ROOT / "backend-java/src/main/resources/application.yml").read_text(encoding="utf-8"))["math-agent"]["vector-index"]
@@ -29,12 +34,41 @@ def main() -> int:
     if not token:
         raise RuntimeError("MATH_AGENT_MILVUS_TOKEN is required for real Milvus verification")
     root = args.processed_books_root.resolve()
-    text = evaluate_route(root, cfg, worker_key, token, "text", QUERIES)
-    image = evaluate_route(root, cfg, worker_key, token, "image", QUERIES)
-    result = {"status": "verified", "queries": list(QUERIES), "text": text, "image": image}
+    queries = tuple(load_graph_knowledge_points(args.graph_spine))
+    if not queries:
+        raise RuntimeError(f"No knowledge points were found in graph spine: {args.graph_spine}")
+    text = evaluate_route(root, cfg, worker_key, token, "text", queries)
+    image = evaluate_route(root, cfg, worker_key, token, "image", queries)
+    result = {
+        "status": "verified",
+        "querySource": str(args.graph_spine.resolve()),
+        "knowledgePointCount": len(queries),
+        "queries": list(queries),
+        "text": text,
+        "image": image,
+    }
     args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
+
+
+def load_graph_knowledge_points(path: Path) -> list[str]:
+    """Builds the benchmark from the maintained knowledge-point data, not code-level query fixtures."""
+    if not path.is_file():
+        raise FileNotFoundError(f"knowledge-point source does not exist: {path}")
+    points: list[str] = []
+    seen: set[str] = set()
+    prefix = "- 知识点："
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip().startswith(prefix):
+            continue
+        values = line.strip()[len(prefix):]
+        for value in values.replace("，", "、").split("、"):
+            point = " ".join(value.split()).strip(" 。；;")
+            if point and point not in seen:
+                seen.add(point)
+                points.append(point)
+    return points
 
 
 def evaluate_route(root: Path, cfg: dict[str, Any], worker_key: str, token: str, route: str, queries: tuple[str, ...]) -> dict[str, Any]:
@@ -73,10 +107,13 @@ def evaluate_route(root: Path, cfg: dict[str, Any], worker_key: str, token: str,
         comparisons.append({"query": query, "baselineTop10": baseline_ids, "milvusTop10": milvus_ids,
                             "recallAt10": overlap / max(1, len(baseline_ids)), "reciprocalRank": 0 if not rank else 1 / rank,
                             "top1Match": bool(baseline_ids and milvus_ids and baseline_ids[0] == milvus_ids[0]),
-                            "top3ContainsBaselineTop1": bool(baseline_ids and baseline_ids[0] in milvus_ids[:3])})
+                            "top3ContainsBaselineTop1": bool(baseline_ids and baseline_ids[0] in milvus_ids[:3]),
+                            "top5ContainsBaselineTop1": bool(baseline_ids and baseline_ids[0] in milvus_ids[:5])})
     return {"collection": collection, "dimension": dimension, "recallAt10": mean(comparisons, "recallAt10"),
             "mrr": mean(comparisons, "reciprocalRank"), "top1": mean_bool(comparisons, "top1Match"),
-            "top3": mean_bool(comparisons, "top3ContainsBaselineTop1"), "sectionTitleHitRate": mean_bool(comparisons, "top1Match"),
+            "top3": mean_bool(comparisons, "top3ContainsBaselineTop1"),
+            "top5": mean_bool(comparisons, "top5ContainsBaselineTop1"),
+            "sectionTitleHitRate": mean_bool(comparisons, "top1Match"),
             "localNpyLatencyMs": percentile_summary(local_times), "milvusSearchLatencyMs": percentile_summary(milvus_times), "cases": comparisons}
 
 
