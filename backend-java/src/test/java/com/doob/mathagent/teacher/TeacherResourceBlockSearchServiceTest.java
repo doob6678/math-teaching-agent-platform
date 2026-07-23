@@ -23,11 +23,19 @@ import com.doob.mathagent.teacher.search.TeacherResourceSearchFilter;
 import com.doob.mathagent.teacher.block.TeacherDocumentBlockResponse;
 import com.doob.mathagent.teacher.search.TeacherResourceBlockSearchResponse;
 import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
+import com.doob.mathagent.vector.service.VectorHttpResponse;
+import com.doob.mathagent.vector.service.VectorHttpTransport;
+import com.doob.mathagent.vector.service.VectorIndexProperties;
+import com.doob.mathagent.vector.service.VectorIndexService;
 import com.doob.mathagent.vector.service.TestVectorIndexService;
+import com.doob.mathagent.vector.service.VectorSearchHit;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.net.URI;
+import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -95,6 +103,70 @@ class TeacherResourceBlockSearchServiceTest {
         assertThat(response.hits()).extracting(TeacherResourceBlockSearchResponse.Hit::blockId)
                 .containsExactly("b-shared");
         assertThat(response.hits().getFirst().permissionScope()).isEqualTo("MATH_VIP");
+    }
+
+    @Test
+    void excludesRegisteredFeishuDocumentUntilItsOwnerScopedSyncAndParseFinish() {
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        resourceStore.save(new TeacherResourceDocumentResponse(
+                "doc-feishu-pending",
+                "school-a",
+                "teacher-1",
+                "feishu",
+                "涂色问题原始飞书文档",
+                "https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/authcode/?code=expired",
+                null,
+                "TEACHER_PRIVATE",
+                "registered",
+                "pending",
+                "pending",
+                "waiting_rebuild",
+                "md",
+                List.of()));
+        blockStore.replaceActiveBlocks("school-a", "doc-feishu-pending", List.of(block(
+                "b-feishu-pending",
+                "doc-feishu-pending",
+                1,
+                "涂色问题必须先按区域相邻关系分类讨论。")));
+        TeacherResourceBlockSearchService service = com.doob.mathagent.teacher.TeacherResourceBlockSearchServiceFixture.service(resourceStore, blockStore);
+
+        TeacherResourceBlockSearchResponse response = service.search(
+                "school-a", "teacher", "teacher-1", "涂色问题", 10);
+
+        assertThat(response.hits()).isEmpty();
+    }
+
+    @Test
+    void excludesParsedFeishuDocumentUntilItsOwnerScopedVectorIndexIsReady() {
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        resourceStore.save(new TeacherResourceDocumentResponse(
+                "doc-feishu-awaiting-index",
+                "school-a",
+                "teacher-1",
+                "feishu",
+                "涂色问题已解析但未索引",
+                "https://wiki.feishu.cn/docx/real-document-id",
+                null,
+                "TEACHER_PRIVATE",
+                "completed",
+                "completed",
+                "pending",
+                "waiting_rebuild",
+                "md",
+                List.of()));
+        blockStore.replaceActiveBlocks("school-a", "doc-feishu-awaiting-index", List.of(block(
+                "b-feishu-awaiting-index",
+                "doc-feishu-awaiting-index",
+                1,
+                "涂色问题需要先根据区域相邻关系确定分类顺序。")));
+        TeacherResourceBlockSearchService service = com.doob.mathagent.teacher.TeacherResourceBlockSearchServiceFixture.service(resourceStore, blockStore);
+
+        TeacherResourceBlockSearchResponse response = service.search(
+                "school-a", "teacher", "teacher-1", "涂色问题", 10);
+
+        assertThat(response.hits()).isEmpty();
     }
 
     @Test
@@ -387,6 +459,88 @@ class TeacherResourceBlockSearchServiceTest {
     }
 
     @Test
+    void semanticRerankCanRecoverCorrectDocumentEvenWhenFinalLimitIsOne() {
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        resourceStore.save(document("doc-generic", "teacher-1", "TEACHER_PRIVATE", "A generic earlier document"));
+        resourceStore.save(document("doc-correct", "teacher-1", "TEACHER_PRIVATE", "The correct later document"));
+        blockStore.replaceActiveBlocks("school-a", "doc-generic", List.of(detailedBlock(
+                "b-generic",
+                "doc-generic",
+                1,
+                "notes/generic.md",
+                "reference",
+                "General note",
+                "Generic overview",
+                "This overview mentions vector and method in a very generic way.")));
+        blockStore.replaceActiveBlocks("school-a", "doc-correct", List.of(detailedBlock(
+                "b-correct",
+                "doc-correct",
+                1,
+                "notes/correct.md",
+                "reference",
+                "空间向量",
+                "点积定号",
+                "Space vector dot product method with sign analysis proves the target explanation.")));
+        TeacherResourceBlockSearchService service = TeacherResourceBlockSearchServiceFixture.service(resourceStore, blockStore);
+
+        TeacherResourceBlockSearchResponse response = service.search(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                "space vector dot product sign analysis method",
+                1);
+
+        assertThat(response.hits()).hasSize(1);
+        assertThat(response.hits().getFirst().documentId()).isEqualTo("doc-correct");
+        assertThat(response.hits().getFirst().blockId()).isEqualTo("b-correct");
+    }
+
+    @Test
+    void semanticBlockRescueCanRecoverDocumentWhenVectorCoarseRecallReturnsNothing() {
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        resourceStore.save(document("doc-generic-rescue", "teacher-1", "TEACHER_PRIVATE", "Generic rescue document"));
+        resourceStore.save(document("doc-correct-rescue", "teacher-1", "TEACHER_PRIVATE", "Correct rescue document"));
+        blockStore.replaceActiveBlocks("school-a", "doc-generic-rescue", List.of(detailedBlock(
+                "b-generic-rescue",
+                "doc-generic-rescue",
+                1,
+                "notes/generic-rescue.md",
+                "reference",
+                "General note",
+                "Generic overview",
+                "Generic marker only. This block should lose semantic rescue.")));
+        blockStore.replaceActiveBlocks("school-a", "doc-correct-rescue", List.of(detailedBlock(
+                "b-correct-rescue",
+                "doc-correct-rescue",
+                1,
+                "notes/correct-rescue.md",
+                "reference",
+                "Correct note",
+                "Correct overview",
+                "Correct marker only. This block should win semantic rescue.")));
+        TeacherResourceBlockSearchService service = new TeacherResourceBlockSearchService(
+                resourceStore,
+                blockStore,
+                new RecentTeacherResourceBlockSearchAuditStore(10),
+                new SemanticOnlyFallbackVectorIndexService(resourceStore, blockStore),
+                TeacherResourceGraphAlignmentService.disabled(),
+                TeacherResourceAssetService.disabled());
+
+        TeacherResourceBlockSearchResponse response = service.search(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                "完全不重合的查询",
+                3);
+
+        assertThat(response.hits()).isNotEmpty();
+        assertThat(response.hits().getFirst().documentId()).isEqualTo("doc-correct-rescue");
+        assertThat(response.hits().getFirst().blockId()).isEqualTo("b-correct-rescue");
+    }
+
+    @Test
     void defaultsToTwoStageRetrievalAndReranksAnalysisBlockInsideCorrectDocument() {
         InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
         InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
@@ -657,6 +811,80 @@ class TeacherResourceBlockSearchServiceTest {
 
         assertThat(response.hits()).isNotEmpty();
         assertThat(response.hits().getFirst().documentId()).isEqualTo("doc-sequence");
+        assertThat(response.hits().getFirst().graphTags()).contains("数列");
+    }
+
+    @Test
+    void graphMatchedQueryStillKeepsDistinguishingClauseForSiblingSequenceHandouts() {
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        InMemoryKnowledgeQuestionBankStore knowledgeStore = new InMemoryKnowledgeQuestionBankStore();
+        knowledgeStore.saveKnowledgePoint(new KnowledgePointRecord(
+                "kp-module-sequence",
+                "school-a",
+                null,
+                "MATH_VIP",
+                "数列",
+                "数列",
+                "active",
+                "display_spine_v0.1; nodeType=MODULE"));
+        resourceStore.save(document("doc-a-generic-sequence", "teacher-1", "MATH_VIP", "数列讲法模板A"));
+        resourceStore.save(document("doc-z-difference-sequence", "teacher-1", "MATH_VIP", "数列讲法模板Z"));
+        blockStore.replaceActiveBlocks("school-a", "doc-a-generic-sequence", List.of(new TeacherDocumentBlockResponse(
+                "b-generic-sequence",
+                "doc-a-generic-sequence",
+                "doc-a-generic-sequence:1",
+                "text",
+                1,
+                "数列",
+                "先搭框架",
+                null,
+                null,
+                "handout/sequence-generic.md",
+                "method",
+                "数列方法讲解先搭递推框架，再看单调性和界。",
+                "数列方法讲解先搭递推框架，再看单调性和界。",
+                "[]",
+                "[]",
+                "[\"kp-module-sequence\"]",
+                "[\"数列\"]",
+                "b-generic-sequence-checksum",
+                1.0,
+                "active")));
+        blockStore.replaceActiveBlocks("school-a", "doc-z-difference-sequence", List.of(new TeacherDocumentBlockResponse(
+                "b-difference-sequence",
+                "doc-z-difference-sequence",
+                "doc-z-difference-sequence:1",
+                "text",
+                1,
+                "数列",
+                "错位相减怎么讲",
+                null,
+                null,
+                "handout/sequence-difference.md",
+                "method",
+                "数列方法讲解如果要说错位相减 前几项和 通项 的关系，先比较前几项和与通项，再决定怎么拆式子。",
+                "数列方法讲解如果要说错位相减 前几项和 通项 的关系，先比较前几项和与通项，再决定怎么拆式子。",
+                "[]",
+                "[]",
+                "[\"kp-module-sequence\"]",
+                "[\"数列\"]",
+                "b-difference-sequence-checksum",
+                1.0,
+                "active")));
+        TeacherResourceBlockSearchService service =
+                TeacherResourceBlockSearchServiceFixture.service(resourceStore, blockStore, knowledgeStore);
+
+        TeacherResourceBlockSearchResponse response = service.search(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                "数列方法怎么讲，错位相减 前几项和 通项 这几个点应该怎么串",
+                5);
+
+        assertThat(response.hits()).isNotEmpty();
+        assertThat(response.hits().getFirst().documentId()).isEqualTo("doc-z-difference-sequence");
+        assertThat(response.hits().getFirst().blockId()).isEqualTo("b-difference-sequence");
         assertThat(response.hits().getFirst().graphTags()).contains("数列");
     }
 
@@ -1109,8 +1337,8 @@ class TeacherResourceBlockSearchServiceTest {
                 permissionScope,
                 "synced",
                 "parsed",
-                "pending",
-                "waiting_rebuild",
+                "ready",
+                "ready",
                 List.of());
     }
 
@@ -1200,6 +1428,58 @@ class TeacherResourceBlockSearchServiceTest {
                 blockId + "-checksum",
                 1.0,
                 "active");
+    }
+
+    private static final class SemanticOnlyFallbackVectorIndexService extends VectorIndexService {
+
+        private SemanticOnlyFallbackVectorIndexService(
+                InMemoryTeacherResourceStore resourceStore,
+                InMemoryTeacherDocumentBlockStore blockStore) {
+            super(
+                    new VectorIndexProperties(
+                            true,
+                            "http://test-milvus.local:19530",
+                            "test-token",
+                            "math_agent_resource_blocks",
+                            512,
+                            "http://test-embedding.local/v1",
+                            "test-embedding-key",
+                            "local-clip-test",
+                            1000),
+                    new NoOpVectorTransport(),
+                    resourceStore,
+                    blockStore);
+        }
+
+        @Override
+        public List<VectorSearchHit> searchTeacherResourceBlocks(String query, int limit) {
+            return List.of();
+        }
+
+        @Override
+        public List<VectorSearchHit> searchTeacherResourceBlocks(String query, int limit, com.doob.mathagent.vector.service.VectorSearchFilter filter) {
+            return List.of();
+        }
+
+        @Override
+        public List<Double> semanticSimilarity(String query, List<String> candidateTexts) {
+            return candidateTexts.stream()
+                    .map(text -> text != null && text.contains("Correct marker") ? 0.95d : 0.05d)
+                    .toList();
+        }
+
+        @Override
+        public List<Double> rerankTexts(String query, List<String> candidateTexts) {
+            return semanticSimilarity(query, candidateTexts);
+        }
+    }
+
+    private static final class NoOpVectorTransport implements VectorHttpTransport {
+
+        @Override
+        public VectorHttpResponse postJson(URI uri, Map<String, String> headers, String body, Duration timeout) {
+            throw new UnsupportedOperationException("NoOpVectorTransport is never used in semantic fallback tests");
+        }
     }
 }
 

@@ -18,5 +18,6 @@ public record TextbookChunk(
         String text,
         @JsonProperty("formula_text") String formulaText,
         @JsonProperty("image_rel_paths") List<String> imageRelPaths,
-        @JsonProperty("source_page_image") String sourcePageImage) {
+        @JsonProperty("source_page_image") String sourcePageImage,
+        @JsonProperty("section_id") String sectionId) {
 }

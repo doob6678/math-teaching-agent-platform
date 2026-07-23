@@ -18,11 +18,20 @@ public class MultiAgentWritingAsyncConfiguration {
      */
     @Bean("multiAgentWritingTaskExecutor")
     public TaskExecutor multiAgentWritingTaskExecutor() {
+        return boundedExecutor("multi-agent-writing-", 2, 4, 32);
+    }
+
+    @Bean("teachingEvidenceTaskExecutor")
+    public TaskExecutor teachingEvidenceTaskExecutor() {
+        return boundedExecutor("teaching-evidence-", 4, 4, 64);
+    }
+
+    private static TaskExecutor boundedExecutor(String threadNamePrefix, int corePoolSize, int maxPoolSize, int queueCapacity) {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setThreadNamePrefix("multi-agent-writing-");
-        executor.setCorePoolSize(2);
-        executor.setMaxPoolSize(4);
-        executor.setQueueCapacity(32);
+        executor.setThreadNamePrefix(threadNamePrefix);
+        executor.setCorePoolSize(corePoolSize);
+        executor.setMaxPoolSize(maxPoolSize);
+        executor.setQueueCapacity(queueCapacity);
         executor.initialize();
         return executor;
     }

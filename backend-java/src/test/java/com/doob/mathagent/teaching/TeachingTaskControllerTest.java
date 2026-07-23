@@ -24,6 +24,7 @@ import com.doob.mathagent.teaching.service.TeachingCapabilityVerifier;
 import com.doob.mathagent.teaching.service.TeachingHumanFeedbackService;
 import com.doob.mathagent.teaching.service.TeachingWorkflowService;
 import com.doob.mathagent.teaching.vo.TeachingHandoutBatchExportResponse;
+import com.doob.mathagent.teaching.vo.TeachingHandoutTemplateResponse;
 import com.doob.mathagent.teaching.vo.TeachingHumanFeedbackResponse;
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
 import java.io.ByteArrayInputStream;
@@ -122,8 +123,10 @@ class TeachingTaskControllerTest {
         assertThat(preview.getBody()).contains("\\section");
         assertThat(studentPreview.getBody()).contains("\\section", "\\vspace");
         assertThat(lecturePreview.getBody())
-                .contains("16:10 横版讲解卡", "\\vspace")
-                .doesNotContain("教师手写区", "手写区", "板书留白");
+                // Projection output must start directly at the atomic question. A generic title card consumes a
+                // 16:10 page and is exactly the layout regression this contract protects against.
+                .contains("第 1 题：例题", "\\vfill")
+                .doesNotContain("16:10 横版讲解卡", "教师手写区", "手写区", "板书留白");
         assertThat(preview.getHeaders().getContentDisposition().isInline()).isTrue();
         assertThat(exported.getHeaders().getContentDisposition().getFilename()).isEqualTo(submitted.taskId() + ".tex");
         assertThat(exportedPdf.getBody()).startsWith(new byte[] {'%', 'P', 'D', 'F'});
@@ -138,7 +141,9 @@ class TeachingTaskControllerTest {
         assertThat(teacherPdf.getHeaders().getFirst("X-Handout-Renderer")).isNotBlank();
         assertThat(lecturePdfPreview.getHeaders().getFirst("X-Handout-Renderer")).isNotBlank();
         assertThat(loaded.handoutLatex()).contains("\\section");
-        assertThat(loaded.lectureHandoutLatex()).contains("16:10 横版讲解卡");
+        assertThat(loaded.lectureHandoutLatex())
+                .contains("第 1 题：例题")
+                .doesNotContain("16:10 横版讲解卡");
     }
 
     @Test
@@ -200,10 +205,51 @@ class TeachingTaskControllerTest {
         String exported = controller.exportLatexVersion(task.taskId(), "teacher", null).getBody();
 
         assertThat(preview)
-                .contains("\\section{来源索引}", "\\section{教师讲评页}", "$2a=6$", "$a=3$")
+                // The printable body keeps the teacher explanation, but internal source-index metadata belongs in
+                // the protected evidence panel rather than taking a page or exposing local resource paths.
+                .contains("\\section{教师讲评页}", "$2a=6$", "$a=3$")
                 .doesNotContain("讲义模板与版式", "PDF 版式要求", "页眉", "页脚", "讲评色", "![p159]",
-                        "../../pages", "## 正文", "旧 OCR 正文");
+                        "../../pages", "## 正文", "旧 OCR 正文", "来源索引");
         assertThat(exported).isEqualTo(preview);
+    }
+
+    @Test
+    void blocksUndersizedLongHandoutAcrossEveryPdfPublicationRoute() throws Exception {
+        InMemoryTeachingTaskStore taskStore = new InMemoryTeachingTaskStore();
+        TeachingWorkflowService workflowService = testWorkflowService(
+                createTextbookCorpus(),
+                com.doob.mathagent.retrieval.TextbookRetrievalServiceFixture.service(
+                        new TextbookCatalogReader(), new TextbookChunkReader(), new LocalTextbookBm25SearchEngine(),
+                        new NoopRetrievalAuditSink()),
+                taskStore,
+                new StudentMemoryReuseService(new InMemoryStudentMemoryStore()));
+        UnderQualifiedPdfExportService pdfExportService = new UnderQualifiedPdfExportService();
+        TeachingTaskController controller = testController(
+                workflowService,
+                teacherResolver(),
+                (token, action, path, requestHash, subject) -> true,
+                pdfExportService,
+                batchExportService(pdfExportService));
+        TeachingTaskResponse task = shortLongHandoutTask();
+        taskStore.save(new TeachingRequestContext("school-a", "teacher", "teacher-001", "dev-device").ownerKey(),
+                "short-long-handout", task);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.exportPdf(task.taskId(), null))
+                .isInstanceOfSatisfying(ResponseStatusException.class,
+                        exception -> assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.exportPdfVersion(task.taskId(), "teacher", null))
+                .isInstanceOfSatisfying(ResponseStatusException.class,
+                        exception -> assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.previewPdf(task.taskId(), null))
+                .isInstanceOfSatisfying(ResponseStatusException.class,
+                        exception -> assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.previewPdfVersion(task.taskId(), "teacher", null))
+                .isInstanceOfSatisfying(ResponseStatusException.class,
+                        exception -> assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.createBatchZip(
+                        new TeachingHandoutBatchExportRequest(List.of(task.taskId()), List.of(), List.of()), null))
+                .isInstanceOfSatisfying(ResponseStatusException.class,
+                        exception -> assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY));
     }
 
     @Test
@@ -648,6 +694,33 @@ class TeachingTaskControllerTest {
 
     private static RequestSubjectResolver studentResolver() {
         return request -> new com.doob.mathagent.infrastructure.security.RequestSubject("school-a", "student", "student-001", "dev-device");
+    }
+
+    /** Creates a persisted master-template task whose short PDF must never reach any publication route. */
+    private static TeachingTaskResponse shortLongHandoutTask() {
+        TeachingHandoutTemplateResponse template = new TeachingHandoutTemplateResponse(
+                "zhao_lixian_2025_master_v1", "连续真题讲义母版", "skill_config", "mixed",
+                "长讲义页数发布门禁回归", "专题训练", "讲义式专题课", List.of("基础"), List.of("真题"),
+                null, null, null, 7, 3);
+        return new TeachingTaskResponse(
+                "task-underqualified-master", "client-underqualified-master", "school-a", "teacher", "teacher-001",
+                template, TeachingTaskStatus.COMPLETED, "短讲义", "短讲义不允许发布", List.of(), List.of(), List.of(),
+                "\\section{短讲义}\n只有一页。", "\\section{短讲义}\n只有一页。", "\\section{短讲义}\n只有一页。",
+                "\\section{短讲义}\n只有一页。", List.of(), null, List.of(), null, null).withWatermarkText("数学讲义");
+    }
+
+    /** Avoids a renderer dependency: this class represents a verified one-page result for publication-gate tests. */
+    private static final class UnderQualifiedPdfExportService extends TeachingHandoutPdfExportService {
+
+        @Override
+        public RenderedHandoutPdf renderDetailed(TeachingTaskResponse task, String version) {
+            return new RenderedHandoutPdf(new byte[] {'%', 'P', 'D', 'F'}, "test", 1);
+        }
+
+        @Override
+        public int minimumQualifiedPages(TeachingTaskResponse task, String version) {
+            return "student".equalsIgnoreCase(version) ? 4 : "lecture".equalsIgnoreCase(version) ? 0 : 6;
+        }
     }
 
     private static final class MutableClock extends Clock {

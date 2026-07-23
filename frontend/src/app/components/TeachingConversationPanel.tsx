@@ -1,11 +1,12 @@
 import katex from "katex";
-import { ChangeEvent, ClipboardEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowRight, Loader2, Plus, Sparkles, X } from "lucide-react";
+import { ChangeEvent, ClipboardEvent, FormEvent, useEffect, useRef, useState } from "react";
+import { ArrowLeft, ArrowRight, ChevronDown, ExternalLink, Loader2, Plus, Sparkles, X } from "lucide-react";
 import {
-  StudentExplanationHistoryItem,
+  StudentExplanationConversationSummary,
   StudentExplanationImageUploadResponse,
   StudentExplanationResponse,
   StudentExplanationStage,
+  StudentExplanationStreamProgress,
 } from "../../shared/api/textbookApi";
 
 export type TeachingConversationThreadItem =
@@ -29,6 +30,12 @@ export type TeachingConversationThreadItem =
       loading?: boolean;
       error?: string;
       response?: StudentExplanationResponse;
+      /** Latest server-sent workflow snapshot, never advanced by a client timer. */
+      progress?: StudentExplanationStreamProgress;
+      /** Text delta received from the live model stream. */
+      liveContent?: string;
+      /** Provider-sent reasoning delta, rendered in a collapsible panel. */
+      liveThinking?: string;
     };
 
 type ConversationImageDraft = StudentExplanationImageUploadResponse & {
@@ -36,44 +43,66 @@ type ConversationImageDraft = StudentExplanationImageUploadResponse & {
 };
 
 export function TeachingConversationPanel({
+  conversationTitle,
   value,
   entries,
-  history,
+  recentConversations,
   loading,
   loadingHistory,
   error,
   imageDraft,
   uploadingImage,
   imageError,
+  conversationMemoryEnabled,
+  openingConversationId,
   onValueChange,
   onSubmit,
   onImageSelect,
   onClearImage,
+  onConversationMemoryChange,
+  onStartNewConversation,
+  onOpenConversation,
 }: {
+  conversationTitle: string;
   value: string;
   entries: TeachingConversationThreadItem[];
-  history: StudentExplanationHistoryItem[];
+  recentConversations: StudentExplanationConversationSummary[];
   loading: boolean;
   loadingHistory: boolean;
   error: string;
   imageDraft: ConversationImageDraft | null;
   uploadingImage: boolean;
   imageError: string;
+  conversationMemoryEnabled: boolean;
+  openingConversationId: string;
   onValueChange: (value: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onImageSelect: (file: File | null) => void;
   onClearImage: () => void;
+  onConversationMemoryChange: (enabled: boolean) => void;
+  onStartNewConversation: () => void;
+  onOpenConversation: (conversation: StudentExplanationConversationSummary) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const followsLatestRef = useRef(true);
   const [clipboardError, setClipboardError] = useState("");
-  const latestHistory = history.slice(0, 3);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const latestHistory = recentConversations.slice(0, 3);
 
   useEffect(() => {
     const container = scrollRef.current;
-    if (!container) return;
-    container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
+    // Do not steal the scroll position while the reader is inspecting an earlier streamed card.
+    if (!container || !followsLatestRef.current) return;
+    container.scrollTo({ top: container.scrollHeight, behavior: "auto" });
   }, [entries, loading]);
+
+  function handleConversationScroll() {
+    const container = scrollRef.current;
+    if (!container) return;
+    const remaining = container.scrollHeight - container.scrollTop - container.clientHeight;
+    followsLatestRef.current = remaining <= 24;
+  }
 
   function handlePickImage(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0] ?? null;
@@ -116,30 +145,82 @@ export function TeachingConversationPanel({
 
   return (
     <section className="teaching-live-shell teaching-chat-shell" aria-label="AI 讲题">
-      <header className="teaching-live-header">
-        <div className="teaching-live-brand">
-          <div className="teaching-live-brand-icon"><Sparkles size={16} /></div>
+      <header className="teaching-live-header teaching-chat-header-fixed">
+        <div className="teaching-live-brand teaching-chat-header-main">
+          <button
+            type="button"
+            className="teaching-live-brand-icon teaching-chat-drawer-trigger"
+            onClick={() => setDrawerOpen((current) => !current)}
+            aria-label={drawerOpen ? "收起历史抽屉" : "打开历史抽屉"}
+            aria-expanded={drawerOpen}
+          >
+            <Sparkles size={16} />
+          </button>
           <div className="teaching-live-brand-copy">
-            <strong>AI 讲题</strong>
-            <span>输入题目或题图，按步骤实时讲解。</span>
+            <strong>{conversationTitle}</strong>
           </div>
         </div>
         <div className="teaching-live-toolbar">
+          <button className="teaching-new-conversation-btn" type="button" disabled={loading} onClick={onStartNewConversation}>
+            <Plus size={15} />
+            <span>新建对话</span>
+          </button>
           {latestHistory.length ? (
             <div className="teaching-history-strip" aria-label="最近讲题记录">
               {loadingHistory ? (
                 <span className="teaching-history-chip muted"><Loader2 className="spin" size={12} />同步中</span>
               ) : latestHistory.map((item) => (
-                <span className="teaching-history-chip" key={item.explanationId}>
-                  {formatShortTime(item.createdAt)}
-                </span>
+                <button
+                  type="button"
+                  className="teaching-history-chip"
+                  key={item.conversationId}
+                  title={item.title}
+                  disabled={loading || openingConversationId === item.conversationId}
+                  onClick={() => onOpenConversation(item)}
+                >
+                  {safeUserFacingText(item.title, "最近讲题")}
+                </button>
               ))}
             </div>
           ) : null}
         </div>
       </header>
 
-      <div className="teaching-live-scroll" ref={scrollRef}>
+      <div
+        className={`teaching-chat-drawer-backdrop${drawerOpen ? " open" : ""}`}
+        onClick={() => setDrawerOpen(false)}
+        aria-hidden={!drawerOpen}
+      />
+      <aside className={`teaching-chat-drawer${drawerOpen ? " open" : ""}`} aria-label="AI讲题历史抽屉">
+        <div className="teaching-chat-drawer-head">
+          <strong>最近讲题</strong>
+          <button type="button" className="teaching-chat-drawer-close" onClick={() => setDrawerOpen(false)} aria-label="关闭历史抽屉">
+            <ArrowLeft size={16} />
+          </button>
+        </div>
+        <div className="teaching-chat-drawer-list">
+          {recentConversations.length ? recentConversations.slice(0, 12).map((item) => (
+            <button
+              type="button"
+              className="teaching-chat-drawer-item"
+              key={item.conversationId}
+              title={item.title}
+              disabled={loading || openingConversationId === item.conversationId}
+              onClick={() => {
+                setDrawerOpen(false);
+                onOpenConversation(item);
+              }}
+            >
+              <strong>{safeUserFacingText(item.title, "最近讲题")}</strong>
+              <span>{openingConversationId === item.conversationId ? "正在加载" : `${item.totalMessages} 轮`}</span>
+            </button>
+          )) : (
+            <div className="teaching-chat-drawer-empty">还没有历史讲题记录。</div>
+          )}
+        </div>
+      </aside>
+
+      <div className="teaching-live-scroll" ref={scrollRef} onScroll={handleConversationScroll}>
         {!entries.length ? (
           <div className="teaching-inline-guide">
             <span>发题目</span>
@@ -170,7 +251,7 @@ export function TeachingConversationPanel({
             <div className="teaching-assistant-avatar">AI</div>
             <div className="teaching-assistant-flow">
               {entry.loading ? (
-                <LoadingCard questionText={entry.questionText} hasImage={Boolean(entry.imagePreviewUrl || entry.imageFileName)} />
+                <LiveAssistantResponse entry={entry} />
               ) : entry.error ? (
                 <section className="teaching-status-card error">
                   <div className="teaching-status-head">
@@ -223,6 +304,15 @@ export function TeachingConversationPanel({
           ) : null}
 
           <div className="teaching-composer-field">
+            <label className="teaching-memory-toggle">
+              <input
+                type="checkbox"
+                checked={conversationMemoryEnabled}
+                disabled={loading}
+                onChange={(event) => onConversationMemoryChange(event.target.checked)}
+              />
+              <span>关联当前会话上下文</span>
+            </label>
             <textarea
               value={value}
               onChange={(event) => onValueChange(event.target.value)}
@@ -254,151 +344,278 @@ export function TeachingConversationPanel({
   );
 }
 
-function LoadingCard({ questionText, hasImage }: { questionText?: string; hasImage: boolean }) {
-  const stages = useMemo(() => hasImage
-    ? ["读取输入", "识别题图", "检索教材与题型", "整理讲解主线", "生成讲解卡片"]
-    : ["读取问题", "检索教材与题型", "整理讲解主线", "补充易错点", "生成讲解卡片"], [hasImage]);
-  const [stageIndex, setStageIndex] = useState(0);
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
-
-  useEffect(() => {
-    setStageIndex(0);
-    const timer = globalThis.setInterval(() => {
-      setStageIndex((current) => Math.min(current + 1, stages.length - 1));
-    }, 1200);
-    return () => globalThis.clearInterval(timer);
-  }, [stages]);
-
-  useEffect(() => {
-    setElapsedSeconds(0);
-    const timer = globalThis.setInterval(() => setElapsedSeconds((current) => current + 1), 1000);
-    return () => globalThis.clearInterval(timer);
-  }, []);
+/**
+ * Shows only state and text that have arrived from the backend SSE stream. This deliberately has no local stage or
+ * card timer: a slow provider must look slow instead of being disguised as client-side progress.
+ */
+function LiveAssistantResponse({ entry }: { entry: Extract<TeachingConversationThreadItem, { role: "assistant" }> }) {
+  const progress = entry.progress;
+  const stages = progress?.workflowStages ?? [];
+  const cards = progress?.cards ?? [];
+  const image = progress?.imageUnderstanding;
 
   return (
-    <section className="teaching-status-card pending compact">
-      <div className="teaching-status-head compact">
-        <strong>正在讲解</strong>
-        <span><Loader2 className="spin" size={12} />{elapsedSeconds}s</span>
-      </div>
-      {questionText ? <p className="teaching-status-question">{questionText}</p> : null}
-      <div className="teaching-trace-live compact">
-        {stages.map((stage, index) => {
-          const state = index < stageIndex ? "done" : index === stageIndex ? "active" : "waiting";
-          return (
-            <div className={`teaching-trace-live-item ${state}`} key={stage}>
-              <span className="teaching-trace-live-dot" />
-              <strong>{stage}</strong>
-            </div>
-          );
-        })}
-      </div>
-    </section>
+    <>
+      <section className="teaching-status-card pending compact">
+        <div className="teaching-status-head compact">
+          <strong>正在讲解</strong>
+          <span><Loader2 className="spin" size={12} />{formatElapsed(progress?.totalElapsedMs ?? 0)}</span>
+        </div>
+        {progress?.questionText || entry.questionText ? (
+          <p className="teaching-status-question">{progress?.questionText || entry.questionText}</p>
+        ) : null}
+        {stages.length ? (
+          <div className="teaching-trace-live compact" aria-label="真实处理过程">
+            {stages.map((stage) => (
+              <div className={`teaching-trace-live-item ${stageTone(stage.status)}`} key={stage.stageKey}>
+                <span className="teaching-trace-live-dot" />
+                <strong>{stageTitleText(stage.stageKey, stage.title)}</strong>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {image?.problemText ? (
+          <details className="teaching-live-details">
+            <summary>查看题图识别结果</summary>
+            <RichText text={image.problemText} />
+            <span>识别置信度 {Math.round(image.confidence * 100)}%</span>
+          </details>
+        ) : null}
+        {entry.liveThinking ? (
+          <details className="teaching-live-details">
+            <summary>模型思考</summary>
+            <RichText text={entry.liveThinking} />
+          </details>
+        ) : null}
+        {entry.liveContent ? (
+          <section className="teaching-live-model-output" aria-label="AI 实时输出">
+            <strong>AI 正在输出</strong>
+            <RichText text={entry.liveContent} />
+          </section>
+        ) : null}
+      </section>
+      {visibleExplanationCards(cards).map((card, index) => (
+        <ExplanationCard key={`live:${card.cardKey}:${index}`} card={card} />
+      ))}
+    </>
   );
 }
 
 function AssistantResponse({ response }: { response: StudentExplanationResponse }) {
-  const cards = response.cards ?? [];
+  const cards = visibleExplanationCards(response.cards ?? []);
   const sources = response.sources ?? [];
   const stages = response.workflowStages ?? [];
-  const maxReveal = Math.max(1, cards.length) + 1;
-  const [revealedCount, setRevealedCount] = useState(1);
-  const visibleCards = cards.length ? cards.slice(0, Math.min(revealedCount, cards.length)) : [];
-  const showDetails = revealedCount > Math.max(1, cards.length);
-
-  useEffect(() => {
-    setRevealedCount(1);
-    const timer = globalThis.setInterval(() => {
-      setRevealedCount((current) => {
-        if (current >= maxReveal) {
-          globalThis.clearInterval(timer);
-          return current;
-        }
-        return current + 1;
-      });
-    }, 340);
-    return () => globalThis.clearInterval(timer);
-  }, [response.explanationId, maxReveal]);
 
   return (
-    <>
-      {visibleCards.length ? visibleCards.map((card, index) => {
-        const safeTitle = safeUserFacingText(card.title, "讲解卡片");
-        const safeSummary = safeUserFacingText(card.summary, "");
-        const safeItems = (card.items ?? [])
-          .map((item) => safeUserFacingText(item, ""))
-          .filter((item) => item.trim().length > 0);
-        const tone = classifyCardTone(safeTitle, safeSummary, index);
-        return (
-          <section className={`teaching-response-card ${tone}${index === 0 ? " primary" : ""}`} key={`${response.explanationId}:${card.cardKey}:${index}`}>
+    <div className="teaching-answer-layout">
+      <div className="teaching-answer-content">
+        {cards.length ? cards.map((card, index) => (
+          <ExplanationCard key={`${response.explanationId}:${card.cardKey}:${index}`} card={card} />
+        )) : (
+          <section className="teaching-response-card primary core">
             <div className="teaching-response-head">
-              <div>
-                <strong>{safeTitle}</strong>
-                {card.renderMode ? <span className="teaching-response-mode">{renderModeText(card.renderMode)}</span> : null}
-              </div>
-              <span className={`teaching-response-badge ${tone}`}>{toneLabel(tone, index)}</span>
+              <div><strong>讲解结果</strong></div>
             </div>
-            {safeSummary ? <div className="teaching-rich-block"><RichText text={safeSummary} /></div> : null}
-            {safeItems.length ? (
-              <ul className="teaching-response-list">
-                {safeItems.map((item, itemIndex) => (
-                  <li key={`${response.explanationId}:${card.cardKey}:${itemIndex}`}><RichText text={item} /></li>
-                ))}
-              </ul>
-            ) : null}
+            <div className="teaching-rich-block"><RichText text={safeUserFacingText(response.questionText, "已收到本次问题。")} /></div>
           </section>
-        );
-      }) : (
-        <section className="teaching-response-card primary core">
-          <div className="teaching-response-head">
-            <div><strong>讲解结果</strong></div>
-            <span className="teaching-response-badge core">核心讲解</span>
-          </div>
-          <div className="teaching-rich-block"><RichText text={safeUserFacingText(response.questionText, "已收到本次问题。")} /></div>
-        </section>
-      )}
+        )}
+      </div>
+      <EvidenceInspector response={response} stages={stages} sources={sources} />
+    </div>
+  );
+}
 
-      {showDetails ? (
-        <div className="teaching-assistant-extras subtle">
+/**
+ * Exposes only server-produced evidence and stage snapshots. It is collapsed by default so the lesson remains the
+ * primary reading surface; opening it never fabricates a progress timeline or silently truncates source evidence.
+ */
+function EvidenceInspector({
+  response,
+  stages,
+  sources,
+}: {
+  response: StudentExplanationResponse;
+  stages: StudentExplanationStage[];
+  sources: StudentExplanationResponse["sources"];
+}) {
+  if (!stages.length && !sources.length) return null;
+  const sourceSummary = sourceSummaryText(sources);
+  const assignedSourceTypes = new Set(
+    stages.map((stage) => retrievalSourceType(stage.stageKey)).filter((type): type is string => type !== null),
+  );
+  const unassignedSources = sources.filter((source) => !assignedSourceTypes.has(source.sourceType));
+  return (
+    <aside className="teaching-evidence-inspector" aria-label="本轮检索与执行记录">
+      <details>
+        <summary>
+          <span>执行与证据</span>
+          <span className="teaching-evidence-summary">{stages.length ? `${stages.length} 个实际步骤` : sourceSummary}</span>
+          <ChevronDown size={15} aria-hidden="true" />
+        </summary>
+        <div className="teaching-evidence-body">
           {stages.length ? (
             <section className="teaching-subtle-panel">
               <div className="teaching-subtle-head">
                 <span>AI 轨迹</span>
-                <em>{stages.length} 步</em>
+                <em>{stages.length} 个实际步骤</em>
               </div>
               <div className="teaching-trace-inline-list">
                 {stages.map((stage, index) => (
-                  <article className={`teaching-trace-inline-item ${stageTone(stage.status)}`} key={`${response.explanationId}:${stage.stageKey}:${index}`}>
-                    <span>{index + 1}</span>
-                    <strong>{stageTitleText(stage.stageKey, stage.title)}</strong>
-                    <p>{stageDetailText(stage)}</p>
-                    <em>{formatElapsed(stage.elapsedMs)}</em>
-                  </article>
+                  <WorkflowStageEvidence
+                    key={`${response.explanationId}:${stage.stageKey}:${index}`}
+                    stage={stage}
+                    index={index}
+                    sources={sourcesForRetrievalStage(stage.stageKey, sources)}
+                  />
                 ))}
               </div>
             </section>
           ) : null}
-
-          {sources.length ? (
+          {unassignedSources.length ? (
             <section className="teaching-subtle-panel">
               <div className="teaching-subtle-head">
-                <span>命中来源</span>
-                <em>{sources.length} 条</em>
+                <span>其他来源</span>
+                <em>{unassignedSources.length} 条</em>
               </div>
-              <div className="teaching-source-inline-list">
-                {sources.slice(0, 4).map((source, index) => (
-                  <article className="teaching-source-inline-item" key={`${response.explanationId}:${source.sourceUri}:${index}`}>
-                    <strong>{safeUserFacingText(source.title, "命中资料")}</strong>
-                    <span>{source.score.toFixed(2)}</span>
-                    <p>{compactText(source.snippet, 72)}</p>
-                  </article>
-                ))}
-              </div>
+              <EvidenceSourceList sources={unassignedSources} />
             </section>
           ) : null}
         </div>
+      </details>
+    </aside>
+  );
+}
+
+/**
+ * Keeps a retrieval stage and the evidence used by that exact stage together. Non-retrieval stages intentionally
+ * remain plain timeline rows because they do not have a source collection to inspect.
+ */
+function WorkflowStageEvidence({
+  stage,
+  index,
+  sources,
+}: {
+  stage: StudentExplanationStage;
+  index: number;
+  sources: StudentExplanationResponse["sources"] | null;
+}) {
+  const stageContent = <WorkflowStageSummary stage={stage} index={index} />;
+  if (sources === null) return stageContent;
+  return (
+    <details className={`teaching-retrieval-stage ${stageTone(stage.status)}`} data-retrieval-stage={stage.stageKey}>
+      <summary>{stageContent}</summary>
+      <div className="teaching-retrieval-evidence">
+        {sources.length ? <EvidenceSourceList sources={sources} /> : (
+          <p className="teaching-retrieval-empty">本步骤没有纳入可展示的资料。</p>
+        )}
+      </div>
+    </details>
+  );
+}
+
+/** Renders a stage consistently whether it is a plain operation or an expandable retrieval operation. */
+function WorkflowStageSummary({ stage, index }: { stage: StudentExplanationStage; index: number }) {
+  return (
+    <article className={`teaching-trace-inline-item ${stageTone(stage.status)}`}>
+      <span>{index + 1}</span>
+      <strong>{stageTitleText(stage.stageKey, stage.title)}</strong>
+      <p>{stageDetailText(stage)}</p>
+      <em>{formatElapsed(stage.elapsedMs)}</em>
+      {retrievalSourceType(stage.stageKey) ? <ChevronDown className="teaching-retrieval-chevron" size={14} aria-hidden="true" /> : null}
+    </article>
+  );
+}
+
+/** Displays only backend-returned evidence; the same component is reused by every retrieval stage. */
+function EvidenceSourceList({ sources }: { sources: StudentExplanationResponse["sources"] }) {
+  return (
+    <div className="teaching-source-inline-list">
+      {sources.map((source, index) => (
+        <article className="teaching-source-inline-item" key={`${source.sourceUri}:${index}`}>
+          <strong>{safeUserFacingText(source.title, "命中资料")}</strong>
+          <span>{source.score.toFixed(2)}</span>
+          <p>{compactText(source.snippet, 72)}</p>
+          {isSafeSourceUrl(source.openUrl) ? (
+            <a className="teaching-source-open-link" href={source.openUrl} target="_blank" rel="noreferrer">
+              <span>查看原文</span>
+              <ExternalLink size={12} aria-hidden="true" />
+            </a>
+          ) : null}
+        </article>
+      ))}
+    </div>
+  );
+}
+
+/** Maps stable backend stage keys to their exact source category; titles are user-facing text and never routing data. */
+function retrievalSourceType(stageKey: string): string | null {
+  const sourceTypes: Record<string, string> = {
+    search_textbook: "textbook",
+    match_knowledge_graph: "knowledge_graph",
+    search_teacher_resources: "teacher_resource",
+  };
+  return sourceTypes[stageKey] ?? null;
+}
+
+/** Returns null for normal workflow steps and a possibly empty source list for a retrieval step. */
+function sourcesForRetrievalStage(
+  stageKey: string,
+  sources: StudentExplanationResponse["sources"],
+): StudentExplanationResponse["sources"] | null {
+  const sourceType = retrievalSourceType(stageKey);
+  return sourceType === null ? null : sources.filter((source) => source.sourceType === sourceType);
+}
+
+/** Counts the same source list delivered to the model and learner; no display-only limit may change these numbers. */
+function sourceSummaryText(sources: StudentExplanationResponse["sources"]) {
+  const counts = new Map<string, number>();
+  for (const source of sources) {
+    counts.set(source.sourceType, (counts.get(source.sourceType) ?? 0) + 1);
+  }
+  const labels: Record<string, string> = {
+    textbook: "教材",
+    knowledge_graph: "知识图谱",
+    teacher_resource: "教师资料",
+  };
+  return [...counts.entries()]
+    .map(([type, count]) => `${labels[type] ?? type} ${count} 条`)
+    .join(" · ");
+}
+
+/**
+ * Permits only browser-safe remote source URLs supplied by the backend.
+ *
+ * Source entries can originate from textbook pages, local files, and Feishu documents. The UI must not turn an
+ * opaque retrieval URI or a filesystem path into a clickable navigation target, but an audited HTTP(S) openUrl is
+ * intentionally safe to expose so learners can inspect the exact evidence used by the RAG result.
+ */
+function isSafeSourceUrl(value?: string): value is string {
+  return /^https?:\/\/\S+$/i.test(value?.trim() ?? "");
+}
+
+export function visibleExplanationCards(cards: StudentExplanationResponse["cards"]) {
+  // A card is only a typed transport unit. The agent decides whether it needs one section or many, and in what order.
+  return cards;
+}
+
+/** Renders one backend-produced section without inferring a template role from its title or position. */
+function ExplanationCard({ card }: { card: StudentExplanationResponse["cards"][number] }) {
+  // An absent title is intentional for a continuous agent answer; the UI must not inject a template heading.
+  const safeTitle = safeUserFacingText(card.title, "");
+  const safeSummary = safeUserFacingText(card.summary, "");
+  const safeItems = (card.items ?? [])
+    .map((item) => safeUserFacingText(item, ""))
+    .filter((item) => item.trim().length > 0);
+  return (
+    <section className="teaching-response-card agent">
+      {safeTitle ? <div className="teaching-response-head"><strong>{safeTitle}</strong></div> : null}
+      {safeSummary ? <div className="teaching-rich-block"><RichText text={safeSummary} /></div> : null}
+      {safeItems.length ? (
+        <ul className="teaching-response-list">
+          {safeItems.map((item, itemIndex) => <li key={`${card.cardKey}:${itemIndex}`}><RichText text={item} /></li>)}
+        </ul>
       ) : null}
-    </>
+    </section>
   );
 }
 
@@ -467,50 +684,15 @@ function hasUnbalancedBraces(value: string) {
   return depth !== 0;
 }
 
-function renderModeText(renderMode: string) {
-  if (renderMode === "formula") return "公式";
-  if (renderMode === "source_list") return "来源";
-  return "讲解";
-}
-
-function classifyCardTone(title: string, summary: string, index: number) {
-  const content = `${title} ${summary}`;
-  if (index === 0) return "core";
-  if (/(易错|误区|常见错误|注意)/.test(content)) return "mistake";
-  if (/(总结|回顾|归纳|结论)/.test(content)) return "summary";
-  if (/(练习|追问|下一步|自测|应用)/.test(content)) return "final";
-  return "default";
-}
-
-function toneLabel(tone: string, index: number) {
-  if (index === 0 || tone === "core") return "核心讲解";
-  if (tone === "mistake") return "常见错误";
-  if (tone === "summary") return "总结回顾";
-  if (tone === "final") return "继续练习";
-  return "补充说明";
-}
-
 function stageTone(status: string) {
   if (status === "failed") return "failed";
   if (status === "completed") return "completed";
   return "running";
 }
 
-export function stageTitleText(stageKey: string, title: string) {
-  const mapped: Record<string, string> = {
-    analyze_image: "识别题图",
-    load_conversation_context: "读取上下文",
-    understand_problem: "理解题意",
-    search_textbook: "检索教材",
-    match_knowledge_graph: "匹配知识点",
-    search_teacher_resources: "检索教师资料",
-    ai_compose_cards: "生成讲解",
-    assemble_cards: "整理卡片",
-    persist_history: "保存记录",
-  };
-  const normalizedKey = (stageKey || "").toLowerCase();
-  const fallbackTitle = safeUserFacingText(title, "处理步骤");
-  return mapped[stageKey] || mapped[normalizedKey] || fallbackTitle || "处理步骤";
+export function stageTitleText(_stageKey: string, title: string) {
+  // Stage titles are produced by the backend orchestration that actually ran. Never replace them with a UI template.
+  return safeUserFacingText(title, "实际处理步骤");
 }
 
 export function stageDetailText(stage: StudentExplanationStage) {

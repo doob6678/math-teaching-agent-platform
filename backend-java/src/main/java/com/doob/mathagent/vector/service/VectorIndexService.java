@@ -16,6 +16,7 @@ import java.util.Locale;
 import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 /**
@@ -36,6 +37,7 @@ public class VectorIndexService {
     private final VectorHttpTransport transport;
     private final TeacherResourceStore resourceStore;
     private final TeacherDocumentBlockStore blockStore;
+    private TeacherResourceImageClipService teacherImageClipService;
 
     public VectorIndexService(
             VectorIndexProperties properties,
@@ -46,6 +48,12 @@ public class VectorIndexService {
         this.transport = transport;
         this.resourceStore = resourceStore;
         this.blockStore = blockStore;
+    }
+
+    /** Optional setter keeps focused text-index tests independent while production rebuilds both vector routes. */
+    @Autowired(required = false)
+    public void setTeacherImageClipService(TeacherResourceImageClipService teacherImageClipService) {
+        this.teacherImageClipService = teacherImageClipService;
     }
 
     public VectorIndexStatusResponse status() {
@@ -104,10 +112,16 @@ public class VectorIndexService {
             EmbeddingBatch embeddings = embed(blocks.stream().map(TeacherDocumentBlockResponse::normalizedText).toList());
             ensureCollection();
             ensureVectorIndex();
+            // Milvus rejects deletes against an unloaded collection. Loading before the idempotent document cleanup
+            // makes the first rebuild of a newly-created BGE collection behave the same as later rebuilds.
+            loadCollection();
             deleteExistingDocumentVectors(document);
             int upserted = upsert(document, blocks, embeddings.vectors());
             flushCollection();
             loadCollection();
+            if (teacherImageClipService != null) {
+                teacherImageClipService.indexDocument(tenantId, subjectType, subjectId, documentId);
+            }
             resourceStore.save(withIndexStatus(document, "ready", "ready"));
             return new VectorIndexRebuildResponse(
                     "indexed",
@@ -140,6 +154,69 @@ public class VectorIndexService {
 
     public List<VectorSearchHit> searchTeacherResourceBlocks(String query, int limit, VectorSearchFilter filter) {
         return retryVectorSearch("teacher_resource_vector_search", () -> searchTeacherResourceBlocksOnce(query, limit, filter));
+    }
+
+    public void indexStudentMemory(String tenantId, String studentId, String memoryId, String content) {
+        properties.requireFullyConfigured();
+        String normalizedContent = text(content).strip();
+        if (text(tenantId).isBlank() || text(studentId).isBlank() || text(memoryId).isBlank() || normalizedContent.isBlank()) {
+            return;
+        }
+        EmbeddingBatch embedding = embed(List.of(normalizedContent));
+        String collectionName = properties.normalizedStudentMemoryCollectionName();
+        ensureCollection(collectionName);
+        ensureVectorIndex(collectionName);
+        loadCollection(collectionName);
+        Map<String, Object> metadata = Map.of("tenantId", tenantId, "studentId", studentId, "memoryId", memoryId);
+        VectorHttpResponse response = milvusPost("/v2/vectordb/entities/upsert", Map.of(
+                "collectionName", collectionName,
+                "data", List.of(Map.of("id", tenantId + ":" + studentId + ":" + memoryId,
+                        "vector", embedding.vectors().getFirst(), "text", normalizedContent, "metadata", metadata))));
+        JsonNode root = readJson("Milvus student memory upsert", response);
+        if (!response.success2xx() || root.path("code").asInt(-1) != 0) {
+            throw new IllegalStateException("Milvus student memory upsert failed: HTTP " + response.statusCode());
+        }
+        flushCollection(collectionName);
+    }
+
+    public List<StudentMemorySearchHit> searchStudentMemories(String tenantId, String studentId, String query, int limit) {
+        properties.requireFullyConfigured();
+        String normalizedQuery = text(query).strip();
+        if (text(tenantId).isBlank() || text(studentId).isBlank() || normalizedQuery.isBlank()) {
+            return List.of();
+        }
+        String collectionName = properties.normalizedStudentMemoryCollectionName();
+        EmbeddingBatch embedding = embed(List.of(normalizedQuery));
+        ensureCollection(collectionName);
+        ensureVectorIndex(collectionName);
+        loadCollection(collectionName);
+        String filter = "metadata[\"tenantId\"] == " + milvusStringLiteral(tenantId)
+                + " and metadata[\"studentId\"] == " + milvusStringLiteral(studentId);
+        Map<String, Object> body = Map.of(
+                "collectionName", collectionName,
+                "data", List.of(embedding.vectors().getFirst()),
+                "annsField", "vector",
+                "limit", Math.max(1, Math.min(limit, 20)),
+                "filter", filter,
+                "outputFields", List.of("text", "metadata"),
+                "searchParams", Map.of("metricType", "COSINE", "params", Map.of()));
+        VectorHttpResponse response = milvusPost("/v2/vectordb/entities/search", body);
+        JsonNode root = readJson("Milvus student memory search", response);
+        if (!response.success2xx() || root.path("code").asInt(-1) != 0) {
+            throw new IllegalStateException("Milvus student memory search failed: HTTP " + response.statusCode());
+        }
+        List<StudentMemorySearchHit> hits = new ArrayList<>();
+        for (JsonNode item : root.path("data")) {
+            JsonNode metadata = readMetadata(item.path("metadata").asText("{}"));
+            if (tenantId.equals(metadata.path("tenantId").asText()) && studentId.equals(metadata.path("studentId").asText())) {
+                String memoryId = metadata.path("memoryId").asText("");
+                String content = text(item.path("text").asText()).strip();
+                if (!memoryId.isBlank() && !content.isBlank()) {
+                    hits.add(new StudentMemorySearchHit(memoryId, content, item.path("distance").asDouble(0D)));
+                }
+            }
+        }
+        return List.copyOf(hits);
     }
 
     /**
@@ -185,10 +262,18 @@ public class VectorIndexService {
      * fallback here prevents callers from silently reintroducing bespoke score heuristics.</p>
      */
     public List<Double> rerankTexts(String query, List<String> candidateTexts) {
+        return rerankTextsWithTrace(query, candidateTexts).scores();
+    }
+
+    /**
+     * Runs the dedicated reranker when available and reports an explicit embedding fallback otherwise.
+     * Returning the mechanism with the scores prevents audit callers from inferring execution from timing or labels.
+     */
+    public VectorTextRerankResult rerankTextsWithTrace(String query, List<String> candidateTexts) {
         properties.requireFullyConfigured();
         String normalizedQuery = text(query).strip();
         if (normalizedQuery.isBlank() || candidateTexts == null || candidateTexts.isEmpty()) {
-            return List.of();
+            return new VectorTextRerankResult(List.of(), VectorTextRerankResult.CROSS_ENCODER);
         }
         List<String> normalizedCandidates = candidateTexts.stream()
                 .map(VectorIndexService::text)
@@ -216,13 +301,15 @@ public class VectorIndexService {
                 throw new IllegalStateException("Rerank API returned " + scores.size()
                         + " scores for " + normalizedCandidates.size() + " candidates");
             }
-            return List.copyOf(scores);
+            return new VectorTextRerankResult(scores, VectorTextRerankResult.CROSS_ENCODER);
         } catch (RuntimeException exception) {
             log.warn("vector_rerank_fallback query={} message={}",
                     normalizedQuery,
                     text(exception.getMessage()),
                     exception);
-            return semanticSimilarity(normalizedQuery, normalizedCandidates);
+            return new VectorTextRerankResult(
+                    semanticSimilarity(normalizedQuery, normalizedCandidates),
+                    VectorTextRerankResult.EMBEDDING_FALLBACK);
         }
     }
 
@@ -398,6 +485,13 @@ public class VectorIndexService {
         return blocks.size();
     }
 
+    /**
+     * Removes local parsed text only after vector deletion has completed, preserving the source-document audit row.
+     */
+    public void purgeTeacherResourceContent(String tenantId, String documentId) {
+        blockStore.purgeDocumentContent(tenantId, documentId);
+    }
+
     private EmbeddingBatch embed(List<String> texts) {
         List<List<Double>> vectors = new ArrayList<>();
         int promptTokens = 0;
@@ -445,6 +539,10 @@ public class VectorIndexService {
     }
 
     private void ensureCollection() {
+        ensureCollection(properties.normalizedCollectionName());
+    }
+
+    private void ensureCollection(String collectionName) {
         Map<String, Object> idField = Map.of(
                 "fieldName", "id",
                 "dataType", "VarChar",
@@ -468,7 +566,7 @@ public class VectorIndexService {
                 "enableDynamicField", true,
                 "fields", List.of(idField, vectorField, textField, metadataField));
         Map<String, Object> body = Map.of(
-                "collectionName", properties.normalizedCollectionName(),
+                "collectionName", collectionName,
                 "schema", schema);
         VectorHttpResponse response = milvusPost("/v2/vectordb/collections/create", body);
         if (!response.success2xx() || !milvusCodeOk(response.body())) {
@@ -480,13 +578,17 @@ public class VectorIndexService {
     }
 
     private void ensureVectorIndex() {
+        ensureVectorIndex(properties.normalizedCollectionName());
+    }
+
+    private void ensureVectorIndex(String collectionName) {
         Map<String, Object> index = Map.of(
                 "fieldName", "vector",
                 "indexName", "vector_index",
                 "metricType", "COSINE",
                 "indexType", "AUTOINDEX");
         VectorHttpResponse response = milvusPost("/v2/vectordb/indexes/create", Map.of(
-                "collectionName", properties.normalizedCollectionName(),
+                "collectionName", collectionName,
                 "indexParams", List.of(index)));
         if (!response.success2xx() || !milvusCodeOk(response.body())) {
             String bodyText = safe(response.body()).toLowerCase();
@@ -498,8 +600,12 @@ public class VectorIndexService {
     }
 
     private void loadCollection() {
+        loadCollection(properties.normalizedCollectionName());
+    }
+
+    private void loadCollection(String collectionName) {
         VectorHttpResponse response = milvusPost("/v2/vectordb/collections/load", Map.of(
-                "collectionName", properties.normalizedCollectionName()));
+                "collectionName", collectionName));
         if (!response.success2xx() || !milvusCodeOk(response.body())) {
             String bodyText = safe(response.body()).toLowerCase();
             if (!bodyText.contains("loaded")) {
@@ -510,8 +616,12 @@ public class VectorIndexService {
     }
 
     private void flushCollection() {
+        flushCollection(properties.normalizedCollectionName());
+    }
+
+    private void flushCollection(String collectionName) {
         VectorHttpResponse response = milvusPostWithRateLimitRetry("/v2/vectordb/collections/flush", Map.of(
-                "collectionName", properties.normalizedCollectionName()));
+                "collectionName", collectionName));
         if (!response.success2xx() || !milvusCodeOk(response.body())) {
             throw new IllegalStateException("Milvus collection flush failed: HTTP " + response.statusCode()
                     + " body=" + abbreviate(response.body(), 300));
@@ -779,7 +889,10 @@ public class VectorIndexService {
                 indexStatus,
                 document.feishuExportFormat(),
                 document.previewFiles(),
-                document.parseMode());
+                document.parseMode(),
+                document.providerRevision(),
+                document.contentChecksum(),
+                document.sourceIdentity());
     }
 
     private static String text(String value) {
@@ -831,4 +944,3 @@ public class VectorIndexService {
         }
     }
 }
-

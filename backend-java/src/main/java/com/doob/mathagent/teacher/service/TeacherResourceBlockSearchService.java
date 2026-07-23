@@ -21,6 +21,7 @@ import com.doob.mathagent.teacher.search.TeacherResourceSearchFilter;
 import com.doob.mathagent.teacher.search.audit.TeacherResourceBlockSearchAuditEvent;
 import com.doob.mathagent.teacher.search.audit.TeacherResourceBlockSearchAuditSink;
 import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
+import com.doob.mathagent.teacher.document.TeacherResourceReadiness;
 import com.doob.mathagent.teacher.support.TeacherResourceLibraryResolver;
 import com.doob.mathagent.vector.service.VectorIndexService;
 import com.doob.mathagent.vector.service.VectorSearchFilter;
@@ -31,6 +32,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.io.IOException;
+import java.io.InputStream;
 import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -40,7 +43,10 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.function.Function;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
@@ -72,7 +78,21 @@ public class TeacherResourceBlockSearchService {
     };
 
     private static final String STRATEGY_TWO_STAGE_DOC_BLOCK = "two_stage_doc_block";
+    private static final int MIN_TITLE_RECALL_TERM_LENGTH = 2;
+    private static final Pattern VISUAL_EVIDENCE_QUERY_PATTERN = Pattern.compile(
+            "(?:图|图片|如图|地图|image|figure)", Pattern.CASE_INSENSITIVE);
     private static final Pattern QUERY_CLAUSE_SPLITTER = Pattern.compile("[\\r\\n,，。；;：:！？!?()（）\\[\\]【】]+");
+    /**
+     * Feishu document tokens survive title edits and distinguish two otherwise similarly named teaching handouts.
+     * The resolver uses them only as one corroborating signal; a token alone never selects a block.
+     */
+    private static final Pattern STABLE_SOURCE_TOKEN = Pattern.compile(
+            "(?<![A-Za-z0-9])([A-Za-z][A-Za-z0-9]{11,})(?![A-Za-z0-9])");
+    /** Numbered source stems are the only safe boundary for associating an adjacent DOCX diagram. */
+    private static final Pattern TOP_LEVEL_QUESTION_NUMBER = Pattern.compile(
+            "(?m)^\\h*(\\d{1,2})[.．、]\\h*");
+    /** Keep the association local: an image beyond this many source blocks is not reliably question-owned. */
+    private static final int MAX_INLINE_FIGURE_LOOKAHEAD_BLOCKS = 3;
 
     private final TeacherResourceStore resourceStore;
     private final TeacherDocumentBlockStore blockStore;
@@ -110,6 +130,212 @@ public class TeacherResourceBlockSearchService {
                 null,
                 null,
                 null);
+    }
+
+    /**
+     * Converts a RAG hit from a historical synchronized mirror into an inspectable reference owned by the current
+     * viewer.  Search and the resource-detail endpoint intentionally use different visibility contracts: searchable
+     * shared mirrors may be returned by RAG, while the detail endpoint exposes only the viewer's current resource
+     * library.  Returning the mirror id directly therefore produced a broken citation link.
+     *
+     * <p>The resolver never widens the detail endpoint.  It considers only {@link TeacherResourceStore#listVisible}
+     * documents, then requires both a same-source signal (immutable source identity, source path, or stable Feishu
+     * token) and a same-block signal (checksum, source path plus section, or exact normalized content).  An
+     * ambiguous or incomplete match returns empty so callers can render evidence without advertising a false
+     * “view original” link.</p>
+     *
+     * @param tenantId backend-resolved tenant id
+     * @param viewerRole backend-resolved viewer role
+     * @param viewerSubjectId backend-resolved subject id
+     * @param hit original RAG hit, potentially from an old mirror
+     * @return current visible document/block reference when one can be verified
+     */
+    public Optional<CanonicalReference> resolveVisibleReference(
+            String tenantId,
+            String viewerRole,
+            String viewerSubjectId,
+            TeacherResourceBlockSearchResponse.Hit hit) {
+        if (hit == null || hit.documentId() == null || hit.documentId().isBlank()
+                || hit.blockId() == null || hit.blockId().isBlank()) {
+            return Optional.empty();
+        }
+        String normalizedTenantId = requireText(tenantId, "tenantId is required");
+        String normalizedRole = requireText(viewerRole, "viewerRole is required").toLowerCase(Locale.ROOT);
+        String normalizedSubjectId = requireText(viewerSubjectId, "viewerSubjectId is required");
+        requireTeacherOrAdmin(normalizedRole);
+
+        List<TeacherResourceDocumentResponse> visibleDocuments = resourceStore.listVisible(
+                normalizedTenantId, normalizedRole, normalizedSubjectId);
+        if (visibleDocuments.isEmpty()) {
+            return Optional.empty();
+        }
+        Map<String, TeacherResourceDocumentResponse> visibleById = visibleDocuments.stream()
+                .collect(Collectors.toMap(
+                        TeacherResourceDocumentResponse::documentId,
+                        Function.identity(),
+                        (left, ignored) -> left,
+                        LinkedHashMap::new));
+        Map<String, List<TeacherDocumentBlockResponse>> visibleBlocks = blockStore.listByDocuments(
+                normalizedTenantId, List.copyOf(visibleById.keySet()));
+
+        // The ordinary current-document path is also verified against active blocks.  This prevents a stale RAG
+        // block id from being made clickable merely because a document row still happens to be visible.
+        TeacherResourceDocumentResponse directlyVisible = visibleById.get(hit.documentId());
+        if (directlyVisible != null) {
+            Optional<TeacherDocumentBlockResponse> exactBlock = visibleBlocks
+                    .getOrDefault(directlyVisible.documentId(), List.of()).stream()
+                    .filter(block -> hit.blockId().equals(block.blockId()))
+                    .findFirst();
+            if (exactBlock.isPresent()) {
+                return Optional.of(new CanonicalReference(
+                        directlyVisible.documentId(), exactBlock.get().blockId(), directlyVisible.title()));
+            }
+        }
+
+        TeacherResourceDocumentResponse mirrorDocument = resourceStore.find(normalizedTenantId, hit.documentId());
+        TeacherDocumentBlockResponse mirrorBlock = mirrorDocument == null ? null : blockStore
+                .listByDocument(normalizedTenantId, mirrorDocument.documentId()).stream()
+                .filter(block -> hit.blockId().equals(block.blockId()))
+                .findFirst()
+                .orElse(null);
+        String mirrorSourceIdentity = textOrDefault(mirrorDocument == null ? null : mirrorDocument.sourceIdentity(), "");
+        String mirrorSourcePath = firstNonBlank(
+                hit.sourcePath(), mirrorBlock == null ? null : mirrorBlock.sourcePath());
+        String mirrorSection = firstNonBlank(hit.section(), mirrorBlock == null ? null : mirrorBlock.section());
+        String mirrorChecksum = textOrDefault(mirrorBlock == null ? null : mirrorBlock.checksum(), "");
+        String mirrorText = firstNonBlank(
+                mirrorBlock == null ? null : mirrorBlock.normalizedText(), hit.evidenceText(), hit.snippet());
+        Set<String> mirrorTokens = stableSourceTokens(
+                hit.documentTitle(),
+                mirrorDocument == null ? null : mirrorDocument.title(),
+                mirrorDocument == null ? null : mirrorDocument.originalUrl(),
+                mirrorSourceIdentity,
+                mirrorSourcePath);
+
+        List<CanonicalCandidate> candidates = new ArrayList<>();
+        for (TeacherResourceDocumentResponse visibleDocument : visibleDocuments) {
+            List<TeacherDocumentBlockResponse> candidateBlocks = visibleBlocks
+                    .getOrDefault(visibleDocument.documentId(), List.of());
+            int sourceScore = sourceAffinity(
+                    mirrorSourceIdentity, mirrorSourcePath, mirrorTokens, visibleDocument, candidateBlocks);
+            if (sourceScore == 0) {
+                continue;
+            }
+            for (TeacherDocumentBlockResponse candidateBlock : candidateBlocks) {
+                int blockScore = blockAffinity(
+                        hit, mirrorSourcePath, mirrorSection, mirrorChecksum, mirrorText, candidateBlock);
+                if (blockScore > 0) {
+                    candidates.add(new CanonicalCandidate(visibleDocument, candidateBlock, sourceScore, blockScore));
+                }
+            }
+        }
+        return candidates.stream()
+                .sorted(Comparator.comparingInt(CanonicalCandidate::sourceScore).reversed()
+                        .thenComparing(Comparator.comparingInt(CanonicalCandidate::blockScore).reversed())
+                        .thenComparing(candidate -> candidate.document().documentId())
+                        .thenComparing(candidate -> candidate.block().blockId()))
+                .findFirst()
+                .map(candidate -> new CanonicalReference(
+                        candidate.document().documentId(), candidate.block().blockId(), candidate.document().title()));
+    }
+
+    /** Scores only same-source metadata; it deliberately does not use a mutable display title as an identity. */
+    private static int sourceAffinity(
+            String mirrorSourceIdentity,
+            String mirrorSourcePath,
+            Set<String> mirrorTokens,
+            TeacherResourceDocumentResponse candidateDocument,
+            List<TeacherDocumentBlockResponse> candidateBlocks) {
+        if (!mirrorSourceIdentity.isBlank()
+                && mirrorSourceIdentity.equals(textOrDefault(candidateDocument.sourceIdentity(), ""))) {
+            return 3;
+        }
+        boolean sameSourcePath = !mirrorSourcePath.isBlank() && candidateBlocks.stream()
+                .anyMatch(block -> mirrorSourcePath.equals(textOrDefault(block.sourcePath(), "")));
+        if (sameSourcePath) {
+            return 2;
+        }
+        Set<String> candidateTokens = stableSourceTokens(
+                candidateDocument.title(), candidateDocument.originalUrl(), candidateDocument.sourceIdentity());
+        return mirrorTokens.stream().anyMatch(candidateTokens::contains) ? 1 : 0;
+    }
+
+    /**
+     * Requires a strong same-block anchor after the source has been correlated.  A reused section title alone is
+     * intentionally insufficient because many teacher collections have sections named “例题” or “方法”.
+     */
+    private static int blockAffinity(
+            TeacherResourceBlockSearchResponse.Hit hit,
+            String mirrorSourcePath,
+            String mirrorSection,
+            String mirrorChecksum,
+            String mirrorText,
+            TeacherDocumentBlockResponse candidateBlock) {
+        boolean sameChecksum = !mirrorChecksum.isBlank()
+                && mirrorChecksum.equals(textOrDefault(candidateBlock.checksum(), ""));
+        boolean sameSourcePath = !mirrorSourcePath.isBlank()
+                && mirrorSourcePath.equals(textOrDefault(candidateBlock.sourcePath(), ""));
+        boolean sameSection = sameReferenceText(mirrorSection, candidateBlock.section());
+        boolean sameText = sameReferenceText(mirrorText, candidateBlock.normalizedText())
+                || sameReferenceText(mirrorText, candidateBlock.rawText());
+        boolean sameExternalBlockId = mirrorBlockExternalIdMatches(hit, candidateBlock);
+        if (!sameChecksum
+                && !(sameSourcePath && sameSection)
+                && !(sameSection && sameText)
+                && !sameExternalBlockId) {
+            return 0;
+        }
+        int score = 0;
+        if (sameChecksum) {
+            score += 16;
+        }
+        if (sameSourcePath) {
+            score += 8;
+        }
+        if (sameSection) {
+            score += 4;
+        }
+        if (sameText) {
+            score += 3;
+        }
+        if (sameExternalBlockId) {
+            score += 12;
+        }
+        return score;
+    }
+
+    private static boolean mirrorBlockExternalIdMatches(
+            TeacherResourceBlockSearchResponse.Hit hit,
+            TeacherDocumentBlockResponse candidateBlock) {
+        return hit.blockId().equals(candidateBlock.blockId())
+                || hit.blockId().equals(textOrDefault(candidateBlock.externalBlockId(), ""));
+    }
+
+    /** Removes formatting-only differences before comparing synced Markdown blocks. */
+    private static boolean sameReferenceText(String left, String right) {
+        String normalizedLeft = normalizeText(textOrDefault(left, "")).replaceAll("[\\p{Punct}，。；：！？、】【（）\\s]+", "");
+        String normalizedRight = normalizeText(textOrDefault(right, "")).replaceAll("[\\p{Punct}，。；：！？、】【（）\\s]+", "");
+        return !normalizedLeft.isBlank() && normalizedLeft.equals(normalizedRight);
+    }
+
+    private static String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value.strip();
+            }
+        }
+        return "";
+    }
+
+    private static Set<String> stableSourceTokens(String... values) {
+        Set<String> tokens = new LinkedHashSet<>();
+        for (String value : values) {
+            Matcher matcher = STABLE_SOURCE_TOKEN.matcher(textOrDefault(value, ""));
+            while (matcher.find()) {
+                tokens.add(matcher.group(1).toLowerCase(Locale.ROOT));
+            }
+        }
+        return Set.copyOf(tokens);
     }
 
     /**
@@ -371,6 +597,22 @@ public class TeacherResourceBlockSearchService {
                 safeLimit,
                 visibleDocumentIds,
                 filter);
+        // A precise teacher document title is authoritative evidence even when a noisy global vector top-N admits
+        // unrelated pages first.  Add title matches to the bounded candidate set before block reranking so a newly
+        // synchronized Feishu document such as “涂色问题” cannot disappear behind older image-heavy resources.
+        LinkedHashSet<String> titleCandidateIds = VISUAL_EVIDENCE_QUERY_PATTERN.matcher(normalizedQuery).find()
+                ? documents.stream()
+                        .filter(document -> titleMatchesQuery(document.title(), normalizedQuery, focusedQuery.terms()))
+                        .map(TeacherResourceDocumentResponse::documentId)
+                        .collect(Collectors.toCollection(LinkedHashSet::new))
+                : new LinkedHashSet<>();
+        if (!titleCandidateIds.isEmpty()) {
+            LinkedHashSet<String> mergedCandidateIds = new LinkedHashSet<>(vectorCoarseRecall.candidateDocumentIds());
+            mergedCandidateIds.addAll(titleCandidateIds);
+            vectorCoarseRecall = new VectorCoarseRecall(
+                    vectorCoarseRecall.scoreByKey(),
+                    List.copyOf(mergedCandidateIds));
+        }
         Map<String, List<BlockContext>> blocksByDocumentId = stageOneBlockContexts(
                 tenantId,
                 documentsById,
@@ -426,6 +668,27 @@ public class TeacherResourceBlockSearchService {
         return response(normalizedQuery, safeLimit, retrievalMode(STRATEGY_TWO_STAGE_DOC_BLOCK, filter, null), hits);
     }
 
+    /** Matches meaningful focused terms against a real source title for deterministic lexical admission. */
+    private static boolean titleMatchesQuery(String title, String normalizedQuery, String[] focusedTerms) {
+        String normalizedTitle = normalizeQuery(title);
+        if (normalizedTitle.isBlank()) {
+            return false;
+        }
+        if (!normalizedQuery.isBlank() && normalizedTitle.contains(normalizedQuery)) {
+            return true;
+        }
+        if (focusedTerms == null) {
+            return false;
+        }
+        for (String term : focusedTerms) {
+            String normalizedTerm = normalizeQuery(term);
+            if (normalizedTerm.length() >= MIN_TITLE_RECALL_TERM_LENGTH && normalizedTitle.contains(normalizedTerm)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /**
      * Stage one now loads block payload lazily. When vector coarse recall already narrowed the plausible document set,
      * do not fetch parsed blocks for every visible teacher resource up front. Only the candidate documents are loaded
@@ -437,6 +700,16 @@ public class TeacherResourceBlockSearchService {
             List<String> visibleDocumentIds,
             List<String> semanticCandidateDocumentIds,
             List<String> tags) {
+        /*
+         * A narrow, explicit library can contain only a few documents while each older document contributes many
+         * vectors. Restricting that library to the global vector Top-N lets sibling blocks crowd a newly uploaded
+         * document out before the single BGE rerank is reached. When the complete library fits the configured
+         * document window, admit every visible document and let the bounded block rerank decide the final order.
+         */
+        if (visibleDocumentIds != null
+                && visibleDocumentIds.size() <= stageDocumentCandidateLimit(visibleDocumentIds.size())) {
+            return loadVisibleBlockContexts(tenantId, documentsById, visibleDocumentIds, tags);
+        }
         if (semanticCandidateDocumentIds == null || semanticCandidateDocumentIds.isEmpty()) {
             return loadVisibleBlockContexts(tenantId, documentsById, visibleDocumentIds, tags);
         }
@@ -514,8 +787,15 @@ public class TeacherResourceBlockSearchService {
         if (teacherResponse != null && teacherResponse.hits() != null) {
             combinedHits.addAll(teacherResponse.hits());
         }
+        boolean explicitMixedLibraries = isExplicitMixedLibraryFilter(filter);
+        int mergeCandidateLimit = explicitMixedLibraries ? Math.multiplyExact(safeLimit, 2) : safeLimit;
         List<TeacherResourceBlockSearchResponse.Hit> mergedHits =
-                semanticMergeHits(focusedQuery.semanticQuery(), focusedQuery.terms(), combinedHits, safeLimit);
+                semanticMergeHits(focusedQuery.semanticQuery(), focusedQuery.terms(), combinedHits, mergeCandidateLimit);
+        if (explicitMixedLibraries) {
+            // A mixed request is deliberately asking for two corpora. Reserve result capacity for teacher evidence so
+            // a large public textbook corpus cannot evict every uploaded document after the shared BGE rerank.
+            mergedHits = applyCrossSourceQuota(mergedHits, safeLimit);
+        }
         if (mergedHits.isEmpty()) {
             return teacherResponse;
         }
@@ -526,6 +806,51 @@ public class TeacherResourceBlockSearchService {
                 safeRetrievalMode(buildTextbookMergeMode(teacherResponse, textbookResponse, !textbookImageHits.isEmpty())),
                 mergedHits.size(),
                 mergedHits);
+    }
+
+    private static boolean isExplicitMixedLibraryFilter(TeacherResourceSearchFilter filter) {
+        if (filter == null || filter.sourceTypes() == null || filter.sourceTypes().isEmpty()) {
+            return false;
+        }
+        boolean includesTextbook = filter.sourceTypes().stream()
+                .map(TeacherResourceBlockSearchService::normalizeText)
+                .anyMatch(selector -> "textbook".equals(selector) || "public_textbook".equals(selector));
+        return includesTextbook && filter.sourceTypes().stream()
+                .map(TeacherResourceBlockSearchService::normalizeText)
+                .anyMatch(selector -> !"textbook".equals(selector) && !"public_textbook".equals(selector));
+    }
+
+    private static List<TeacherResourceBlockSearchResponse.Hit> applyCrossSourceQuota(
+            List<TeacherResourceBlockSearchResponse.Hit> rankedHits,
+            int limit) {
+        int boundedLimit = Math.max(1, limit);
+        int teacherQuota = (boundedLimit + 1) / 2;
+        int textbookQuota = boundedLimit - teacherQuota;
+        List<TeacherResourceBlockSearchResponse.Hit> selected = new ArrayList<>(boundedLimit);
+        int teacherCount = 0;
+        int textbookCount = 0;
+        for (TeacherResourceBlockSearchResponse.Hit hit : rankedHits) {
+            boolean textbook = "public_textbook".equals(normalizeText(hit.sourceType()));
+            if ((textbook && textbookCount >= textbookQuota) || (!textbook && teacherCount >= teacherQuota)) {
+                continue;
+            }
+            selected.add(hit);
+            if (textbook) {
+                textbookCount++;
+            } else {
+                teacherCount++;
+            }
+        }
+        // A source with fewer candidates must not leave result slots empty; retain global rerank order for the remainder.
+        for (TeacherResourceBlockSearchResponse.Hit hit : rankedHits) {
+            if (selected.size() >= boundedLimit) {
+                break;
+            }
+            if (!selected.contains(hit)) {
+                selected.add(hit);
+            }
+        }
+        return List.copyOf(selected);
     }
 
     /**
@@ -829,11 +1154,21 @@ public class TeacherResourceBlockSearchService {
                 rankedDocuments,
                 blocksByDocumentId,
                 normalizedQuery);
+        /*
+         * Cross-encoder logits and embedding cosine similarity are different score spaces. Once rerank produced a
+         * score for the bounded stage-two window, do not append unreranked vector candidates and compare their raw
+         * cosine values against those logits: that silently pushes reranked evidence out of the final Top K. The
+         * complete vector-backed list remains available only when the rerank call itself yielded no usable scores.
+         */
+        boolean rerankAvailable = !semanticScoreByKey.isEmpty();
         List<BlockCandidate> blockCandidates = new ArrayList<>();
         for (DocumentCandidate candidate : rankedDocuments) {
             List<BlockContext> documentBlocks = blocksByDocumentId.getOrDefault(candidate.document().documentId(), List.of());
             for (BlockContext block : candidate.blocks()) {
                 String key = blockKey(candidate.document().documentId(), block.block().blockId());
+                if (rerankAvailable && !semanticScoreByKey.containsKey(key)) {
+                    continue;
+                }
                 double semantic = semanticScoreByKey.getOrDefault(
                         key,
                         vectorScoreByKey.getOrDefault(key, 0.0d));
@@ -1420,6 +1755,164 @@ public class TeacherResourceBlockSearchService {
     }
 
     /**
+     * Materializes one already permission-checked teacher image for the server-side LaTeX export.
+     *
+     * The search response intentionally exposes only an opaque API URI.  The handout renderer still needs a local
+     * file, so this method opens the same authorized resource and returns its backend-owned persistent file when
+     * available. Copying it to a temporary directory caused persisted teaching tasks to retain a path which vanished
+     * before a later PDF export. The permission check still occurs on every call; no storage key reaches callers.
+     */
+    public Optional<Path> materializeVisibleAsset(String assetId, RequestSubject subject) {
+        if (assetId == null || assetId.isBlank() || subject == null) {
+            return Optional.empty();
+        }
+        try {
+            TeacherResourceAssetService.VisibleAsset asset = assetService.openVisibleAsset(assetId.strip(), subject);
+            try {
+                Path persisted = asset.resource().getFile().toPath().toRealPath();
+                if (Files.isRegularFile(persisted)) {
+                    return Optional.of(persisted);
+                }
+            } catch (IOException ignored) {
+                // Non-file resources (for example a future object-store adapter) use the safe backend staging copy
+                // below. The result is valid for the current request but must not be persisted as task evidence.
+            }
+            Path directory = Files.createTempDirectory("math-agent-teacher-asset-");
+            String fileName = Path.of(asset.fileName() == null ? "asset" : asset.fileName())
+                    .getFileName()
+                    .toString()
+                    .replaceAll("[^A-Za-z0-9._-]", "_");
+            if (fileName.isBlank()) {
+                fileName = "asset";
+            }
+            Path target = directory.resolve(fileName).normalize();
+            if (!target.startsWith(directory)) {
+                return Optional.empty();
+            }
+            try (InputStream input = asset.resource().getInputStream()) {
+                Files.copy(input, target);
+            }
+            return Optional.of(target);
+        } catch (IOException | IllegalArgumentException exception) {
+            log.warn("Unable to materialize authorized teacher asset {} for handout export", assetId, exception);
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * Finds the authorized page image for a question-bank child without weakening source visibility.
+     *
+     * <p>The importer stores atomic rows as {@code blockId#qN}; the page asset remains attached to {@code blockId}.
+     * This resolver removes only that importer-owned child suffix, verifies the parent block in the same document,
+     * then asks the asset service to apply tenant/owner/scope checks before it returns an opaque reference.</p>
+     */
+    public Optional<TeacherResourceBlockSearchResponse.AssetRef> resolveVisiblePageImageForQuestion(
+            String documentId,
+            String sourceBlockId,
+            RequestSubject subject) {
+        if (documentId == null || documentId.isBlank() || sourceBlockId == null || sourceBlockId.isBlank() || subject == null) {
+            return Optional.empty();
+        }
+        RequestSubject normalized = subject.normalize();
+        String parentBlockId = sourceBlockId.replaceFirst("#q\\d+$", "");
+        return blockStore.listByDocument(normalized.tenantId(), documentId.strip()).stream()
+                .filter(block -> parentBlockId.equals(block.blockId()))
+                .map(TeacherDocumentBlockResponse::pageNo)
+                .filter(Objects::nonNull)
+                .findFirst()
+                .flatMap(pageNo -> assetService.findVisiblePageImageReference(documentId, pageNo, normalized))
+                .map(TeacherResourceAssetService.VisibleAssetReference::toSearchAssetRef);
+    }
+
+    /**
+     * Resolves a DOCX's original diagram that immediately follows the exact numbered source stem.
+     *
+     * <p>Page renderings are useful for inspection but are not a question figure: they can contain the preceding
+     * answer, the next question, or no diagram at all.  This method therefore accepts only an image-only source
+     * block located after the matching stem and before another numbered stem.  It deliberately returns empty when
+     * that provenance cannot be established, allowing the handout gate to omit rather than mislabel a visual.</p>
+     */
+    public Optional<TeacherResourceBlockSearchResponse.AssetRef> resolveVisibleInlineFigureForQuestion(
+            String documentId,
+            String questionText,
+            RequestSubject subject) {
+        if (documentId == null || documentId.isBlank() || questionText == null || questionText.isBlank()
+                || subject == null) {
+            return Optional.empty();
+        }
+        Matcher requestedNumber = TOP_LEVEL_QUESTION_NUMBER.matcher(questionText);
+        if (!requestedNumber.find()) {
+            return Optional.empty();
+        }
+        String questionNumber = requestedNumber.group(1);
+        RequestSubject normalized = subject.normalize();
+        List<TeacherDocumentBlockResponse> blocks = blockStore.listByDocument(normalized.tenantId(), documentId.strip())
+                .stream()
+                .sorted(Comparator.comparingInt(TeacherDocumentBlockResponse::blockOrder))
+                .toList();
+        for (int index = 0; index < blocks.size(); index += 1) {
+            TeacherDocumentBlockResponse stem = blocks.get(index);
+            // Rendered pages are intentionally excluded: their asset represents a page, not an extracted figure.
+            if (stem.pageNo() != null || !matchesTopLevelQuestionNumber(stem.rawText(), questionNumber)) {
+                continue;
+            }
+            int finalIndex = Math.min(blocks.size(), index + 1 + MAX_INLINE_FIGURE_LOOKAHEAD_BLOCKS);
+            for (int candidateIndex = index + 1; candidateIndex < finalIndex; candidateIndex += 1) {
+                TeacherDocumentBlockResponse candidate = blocks.get(candidateIndex);
+                if (candidate.pageNo() != null || matchesAnyTopLevelQuestionNumber(candidate.rawText())) {
+                    break;
+                }
+                List<String> assetIds = parseImageAssetIds(candidate.imageRefs());
+                boolean imageOnlyBlock = !assetIds.isEmpty()
+                        && textOrDefault(candidate.rawText(), "").contains("[DOCX image block; no extractable text]");
+                if (!imageOnlyBlock) {
+                    continue;
+                }
+                return assetIds.stream()
+                        .map(assetId -> assetService.findVisibleAssetReference(assetId, normalized))
+                        .flatMap(Optional::stream)
+                        .map(TeacherResourceAssetService.VisibleAssetReference::toSearchAssetRef)
+                        .findFirst();
+            }
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Reads all parsed blocks from one visible document for an authorized agent.  The document is first resolved
+     * through the same tenant/role/owner visibility gate used by search; callers never receive a filesystem path.
+     */
+    public List<TeacherDocumentBlockResponse> listVisibleBlocks(
+            String tenantId,
+            String viewerRole,
+            String viewerSubjectId,
+            String documentId) {
+        requireTeacherOrAdmin(viewerRole);
+        String normalizedDocumentId = textOrDefault(documentId, "");
+        if (normalizedDocumentId.isBlank()) {
+            throw new IllegalArgumentException("documentId is required");
+        }
+        boolean visible = filteredDocuments(
+                resourceStore.listVisible(tenantId, viewerRole, viewerSubjectId), TeacherResourceSearchFilter.EMPTY)
+                .stream().anyMatch(document -> normalizedDocumentId.equals(document.documentId()));
+        if (!visible) {
+            throw new IllegalArgumentException("Teacher resource is not visible");
+        }
+        return blockStore.listByDocument(tenantId, normalizedDocumentId);
+    }
+
+    /** Tests the exact leading question number without letting formula or solution-line numerals cross-bind figures. */
+    private static boolean matchesTopLevelQuestionNumber(String text, String expectedNumber) {
+        Matcher matcher = TOP_LEVEL_QUESTION_NUMBER.matcher(textOrDefault(text, ""));
+        return matcher.find() && expectedNumber.equals(matcher.group(1));
+    }
+
+    /** A subsequent numbered stem ends the source ownership window for the preceding question. */
+    private static boolean matchesAnyTopLevelQuestionNumber(String text) {
+        return TOP_LEVEL_QUESTION_NUMBER.matcher(textOrDefault(text, "")).find();
+    }
+
+    /**
      * Ensures only teacher/admin backend subjects can use this teacher resource endpoint.
      */
     private static void requireTeacherOrAdmin(String viewerRole) {
@@ -1431,10 +1924,13 @@ public class TeacherResourceBlockSearchService {
     private static List<TeacherResourceDocumentResponse> filteredDocuments(
             List<TeacherResourceDocumentResponse> documents,
             TeacherResourceSearchFilter filter) {
-        if (filter.empty()) {
-            return documents;
-        }
         return documents.stream()
+                // A registered browser URL is not searchable evidence. This gates every caller (teacher UI, MCP, and
+                // handout workflow) on the same owner-scoped download, parser, and vector-index completion in MySQL.
+                .filter(TeacherResourceReadiness::isReady)
+                // Runtime fixtures and benchmark imports are never user teaching material.  Filtering them at the
+                // shared search boundary protects the UI, MCP callers, ordinary Q&A, and handout generation alike.
+                .filter(document -> !isSyntheticOrBenchmarkSource(document))
                 .filter(document -> filter.documentIds().isEmpty() || filter.documentIds().contains(document.documentId()))
                 .filter(document -> filter.permissionScopes().isEmpty()
                         || filter.permissionScopes().contains(textOrDefault(document.permissionScope(), "").toUpperCase(Locale.ROOT)))
@@ -1442,16 +1938,35 @@ public class TeacherResourceBlockSearchService {
                 .toList();
     }
 
+    private static boolean isSyntheticOrBenchmarkSource(TeacherResourceDocumentResponse document) {
+        String text = normalizeText(String.join(" ",
+                textOrDefault(document == null ? null : document.documentId(), ""),
+                textOrDefault(document == null ? null : document.title(), ""),
+                textOrDefault(document == null ? null : document.sourceIdentity(), ""),
+                textOrDefault(document == null ? null : document.localPath(), ""),
+                textOrDefault(document == null ? null : document.originalUrl(), "")));
+        return text.contains("synthetic-natural-math-benchmark")
+                || text.contains("benchmark-high-school-math")
+                || text.contains("runtime-authored")
+                || text.contains("runtime-teacher-resource")
+                || text.contains("design-system-docs")
+                || text.contains("knowledge-graph-spine")
+                || text.contains("synthetic-natural")
+                || text.contains("audit-feishu-rag")
+                || text.matches(".*(?:^|[\\s/_-])runtime-[a-z0-9_-]+.*");
+    }
+
     private boolean shouldUseRealTextbook(TeacherResourceSearchFilter filter) {
         if (!realTextbookAvailable()) {
             return false;
         }
         if (filter == null) {
-            return true;
+            return false;
         }
         if (filter.sourceTypes() == null || filter.sourceTypes().isEmpty()) {
-            // Without an explicit textbook library, document ids retain their teacher-resource meaning.
-            return filter.documentIds() == null || filter.documentIds().isEmpty();
+            // This endpoint owns teacher resources.  Textbook retrieval must be explicitly selected so an uploaded
+            // document cannot be displaced by public pages before it reaches the BGE reranker.
+            return false;
         }
         boolean textbookLibrary = filter.sourceTypes().stream()
                 .map(TeacherResourceBlockSearchService::normalizeText)
@@ -2050,6 +2565,18 @@ public class TeacherResourceBlockSearchService {
             Map<String, Double> scoreByKey,
             List<String> candidateDocumentIds) {
         private static final VectorCoarseRecall EMPTY = new VectorCoarseRecall(Map.of(), List.of());
+    }
+
+    /** Opaque reference that the authenticated teacher-resource detail endpoint can safely expand. */
+    public record CanonicalReference(String documentId, String blockId, String documentTitle) {
+    }
+
+    /** Internal ranked candidate; source and block scores remain separate to keep identity evidence auditable. */
+    private record CanonicalCandidate(
+            TeacherResourceDocumentResponse document,
+            TeacherDocumentBlockResponse block,
+            int sourceScore,
+            int blockScore) {
     }
 
 }

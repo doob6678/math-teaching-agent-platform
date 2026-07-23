@@ -26,7 +26,7 @@ public final class TextbookRetrievalServiceFixture {
                 searchEngine,
                 auditSink,
                 new DisabledTextbookSearchCache(),
-                new RedisTextbookSearchCacheProperties(false, "math-agent:test:disabled", Duration.ofMinutes(10)));
+                new RedisTextbookSearchCacheProperties(false, "math-agent:test:disabled", Duration.ofMinutes(10), Duration.ofMinutes(1)));
     }
 
     public static TextbookRetrievalService service(

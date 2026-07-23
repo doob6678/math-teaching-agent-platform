@@ -46,11 +46,23 @@
 
 多 Agent 写作 workflow 在此基础上扩展，支持异步启动、MyBatis 持久化、前端状态面板恢复和 MCP Trace 读取。教师可以围绕讲义、学生版材料、审稿反馈等角色组织多 Agent 协作，后台保留可查询的 workflow 状态和执行链路。
 
+## 分布式 Agent Worker
+
+多 Agent 写作支持控制面与 Worker 分离运行：控制面仅校验权限、保存 workflow 和释放满足依赖的阶段；独立 Java Worker 通过 RabbitMQ 领取阶段任务，执行后回写 Trace 和阶段结果。Worker 节点登记、心跳、离线判定、租约回收、重试和 DLQ 均由 MySQL 与 RabbitMQ 协同实现。
+
+任务消息只传任务/工作流/阶段引用，不传用户令牌、模型密钥或原始提示词。启动方式、环境变量、状态机与恢复流程见 [Agent Worker 架构文档](docs/agent-worker-architecture.md)。
+
 ## 模型治理与安全
 
 模型治理层维护 provider/model allow-list、fallback 顺序、真实连通性探测和密钥脱敏，前端只读取后端暴露的模型目录与健康状态，不接触 API Key。
 
 高价值 AI 接口使用 Capability Token、`X-Request-Hash`、角色/API 分级、Redis 固定窗口限流、一次性令牌消费与审计记录保护，降低高成本接口被盗刷、重放和越权调用的风险。MCP/A2A 暴露也遵循只读优先、范围可控、密钥不回显的原则。
+
+## 教师资料同步 MQ
+
+教师资料同步是当前最适合消息化的业务：一次操作可能下载飞书资料、解析 DOCX/PDF、调用 Python 视觉 Worker，并重建 Milvus 索引。接口先完成 Capability Token 校验，再仅把 `jobId`、`documentId` 与后端解析出的主体身份发布到 RabbitMQ；令牌、API Key 和请求哈希不会进入消息。
+
+RabbitMQ 使用持久化 direct exchange、命令队列和死信队列。MySQL `source_sync_job` 仍是状态机和幂等锚点：消费者只执行 `queued`（或恢复时 `paused`）任务，重复投递不会重复解析同一资料；业务/提供方失败继续使用已有 checkpoint/pause 机制，只有格式或基础设施异常进入 DLQ。默认并发为 1、预取为 1，避免单机预占过多 CUDA/解析任务；通过 `MATH_AGENT_RABBITMQ_SOURCE_SYNC_*` 环境变量调整。
 
 ## 前端设计
 
@@ -112,7 +124,7 @@ MATH_AGENT_PROCESSED_BOOKS_ROOT
 PowerShell 示例：
 
 ```powershell
-$env:MATH_AGENT_PROCESSED_BOOKS_ROOT = "C:\Users\doob\Desktop\个人资料\高中数学\下载课本代码\tchMaterial-parser-main\tchMaterial-parser-main\processed_books"
+$env:MATH_AGENT_PROCESSED_BOOKS_ROOT = "C:\Users\doob\Desktop\个人资料\高中数学\下载课本代码\tchMaterial-parser-main\tchMaterial-parser-main\processed_books_section_shadow_all_mini_b4"
 ```
 
 密钥和外部资源路径只从环境变量读取，不写入仓库。

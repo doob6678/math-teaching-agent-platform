@@ -1,6 +1,7 @@
 package com.doob.mathagent.teacher.service;
 
-import com.doob.mathagent.teacher.vo.TeacherDocumentBlockResponse;
+import com.doob.mathagent.teacher.block.TeacherDocumentBlockResponse;
+import com.doob.mathagent.teacher.block.TeacherDocumentBlockStore;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -40,9 +41,18 @@ public class InMemoryTeacherDocumentBlockStore implements TeacherDocumentBlockSt
     }
 
     /**
+     * Drops the in-memory payload after archive so tests model the production no-content-residue contract.
+     */
+    @Override
+    public void purgeDocumentContent(String tenantId, String documentId) {
+        blocksByDocument.remove(key(tenantId, documentId));
+    }
+
+    /**
      * Builds a stable map key from tenant and document id.
      */
     private static String key(String tenantId, String documentId) {
         return tenantId + ":" + documentId;
     }
 }
+

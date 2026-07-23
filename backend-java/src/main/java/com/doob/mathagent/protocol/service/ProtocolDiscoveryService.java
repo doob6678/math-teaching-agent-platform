@@ -62,7 +62,7 @@ public class ProtocolDiscoveryService {
                 new McpToolDescriptor(
                         "search_multi_source_evidence",
                         "Search multi-source evidence",
-                        "Preferred teacher search entrypoint that queries public textbooks and visible teacher resources together. When the request clearly targets one corpus, pass library or libraries first so the backend can avoid cross-library noise before stage-two rerank.",
+                        "Queries one or more explicitly selected libraries in parallel. The agent must always supply library or libraries; no implicit corpus expansion is allowed.",
                         true,
                         true,
                         TEACHER_ROLES,
@@ -76,15 +76,15 @@ public class ProtocolDiscoveryService {
                                         field("limit", "integer", "Maximum merged evidence snippets to return."),
                                         libraryField(
                                                 "library",
-                                                "Optional single logical library selector. Prefer this when the request clearly targets one corpus."),
+                                                "Required single logical library selector when libraries is not supplied."),
                                         libraryArrayField(
                                                 "libraries",
-                                                "Optional logical library selectors. Use one selector per corpus you want the backend to search."),
+                                                "Required logical library selectors. Use one selector per corpus you want the backend to search."),
                                         fieldArray("permissionScopes", "Optional teacher-resource permission scopes such as TEACHER_PRIVATE or MATH_VIP."),
                                         fieldArray("documentIds", "Optional teacher-resource document ids to search."),
                                         fieldArray("sourceTypes", "Optional teacher-resource source types such as feishu, qq_bundle, gaokao, or mock_exam."),
                                         fieldArray("tags", "Optional teacher-resource tags used as retrieval hints.")),
-                                "query")),
+                                "query", "libraries")),
                 new McpToolDescriptor(
                         "search_textbook_evidence",
                         "Search textbook evidence",
@@ -99,12 +99,13 @@ public class ProtocolDiscoveryService {
                         schema(
                                 fields(
                                         field("query", "string", "Search text submitted by the agent."),
-                                        field("limit", "integer", "Maximum evidence snippets to return.")),
-                                "query")),
+                                        field("limit", "integer", "Maximum evidence snippets to return."),
+                                        libraryField("library", "Required textbook selector: textbook or public_textbook.")),
+                                "query", "library")),
                 new McpToolDescriptor(
                         "search_teacher_resource_evidence",
                         "Search teacher resource evidence",
-                        "Search parsed teacher-resource blocks visible to the registered teacher or admin key. Prefer library or libraries when the question is obviously about one corpus such as a QQ bundle, Feishu method doc, gaokao paper, or mock exam.",
+                        "Search parsed teacher-resource blocks in explicitly selected libraries. The agent must supply library or libraries for every request.",
                         true,
                         true,
                         TEACHER_ROLES,
@@ -118,15 +119,33 @@ public class ProtocolDiscoveryService {
                                         field("limit", "integer", "Maximum evidence snippets to return."),
                                         libraryField(
                                                 "library",
-                                                "Optional single logical library selector. Prefer this over implementation-specific sourceType names when targeting one corpus."),
+                                                "Required single logical library selector when libraries is not supplied."),
                                         libraryArrayField(
                                                 "libraries",
-                                                "Optional logical library selectors. Use these when one request should search multiple named corpora."),
+                                                "Required logical library selectors. Use these when one request should search multiple named corpora."),
                                         fieldArray("permissionScopes", "Optional teacher-resource permission scopes such as TEACHER_PRIVATE or MATH_VIP."),
                                         fieldArray("documentIds", "Optional teacher-resource document ids to search."),
                                         fieldArray("sourceTypes", "Optional teacher-resource source types such as feishu, qq_bundle, gaokao, or mock_exam."),
                                         fieldArray("tags", "Optional teacher-resource tags used as retrieval hints.")),
-                                "query")),
+                                "query", "libraries")),
+                new McpToolDescriptor(
+                        "list_teacher_resources",
+                        "List visible teacher resources",
+                        "Lists files visible to the authenticated MCP subject. Storage paths are not exposed.",
+                        true, true, TEACHER_ROLES, "teacher-resource:read", "low", false, true, schema(fields())),
+                new McpToolDescriptor(
+                        "read_teacher_resource_blocks",
+                        "Read original teacher resource blocks",
+                        "Reads parsed original blocks from one already-visible teacher resource after tenant and owner checks.",
+                        true, true, TEACHER_ROLES, "teacher-resource:read", "low", false, true,
+                        schema(fields(field("documentId", "string", "Visible teacher resource document id.")), "documentId")),
+                new McpToolDescriptor(
+                        "search_question_bank_items",
+                        "Search readable question-bank items",
+                        "Returns visible question stems and stored answers for source-grounded AI verification.",
+                        true, true, TEACHER_ROLES, "question-bank:read", "low", false, true,
+                        schema(fields(field("query", "string", "Optional question or topic text; empty browses visible items."),
+                                field("limit", "integer", "Maximum visible questions to return.")))),
                 new McpToolDescriptor(
                         "get_teaching_ai_trace",
                         "Get teaching AI trace",

@@ -11,56 +11,91 @@ import com.doob.mathagent.retrieval.TextbookSearchRequest;
 import com.doob.mathagent.retrieval.TextbookSearchResponse;
 import com.doob.mathagent.student.dto.StudentExplanationRequest;
 import com.doob.mathagent.student.vo.StudentExplanationResponse;
+import com.doob.mathagent.student.vo.StudentExplanationStreamProgress;
 import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService;
-import com.doob.mathagent.teacher.vo.TeacherResourceBlockSearchResponse;
+import com.doob.mathagent.teacher.document.TeacherResourceStore;
+import com.doob.mathagent.teacher.search.TeacherResourceBlockSearchResponse;
+import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
- * Orchestrates the student-side explanation DAG from problem input to evidence-backed cards.
+ * 学生端讲题编排服务：从题目输入到基于证据的讲解卡片，负责串联完整流程。
+ *
+ * <p>核心设计：</p>
+ * <ol>
+ *   <li>只推送真实的后端处理进度，不使用前端模拟计时器；</li>
+ *   <li>只推送模型真实生成的内容，不预置固定讲解模板；</li>
+ *   <li>后端负责身份与证据边界，模型只负责选择讲解结构。</li>
+ * </ol>
  */
 @Service
 public class StudentExplanationService {
 
     private static final String ENDPOINT = "/api/students/explanations";
-    private static final String GENERATED_BY = "student_explanation_card_orchestrator_v0.1";
+    // 此版本号用于区分新版 Agent 结果与历史模板结果，无需重写既有会话记录。
+    private static final String GENERATED_BY = "student_explanation_react_agent_v1";
+    /** 可配置的最大步数可防止模型未给出最终决策时陷入无限模型/工具循环。 */
+    private static final int DEFAULT_REACT_MAX_STEPS = 4;
+    /** 优先读取环境变量，使桌面部署和容器部署共用无代码调参方式。 */
+    private static final String REACT_MAX_STEPS_ENV = "MATH_AGENT_STUDENT_EXPLANATION_REACT_MAX_STEPS";
+    /** 默认使用一次权限约束后的检索编排，显式设置为 agent 才启用多轮模型 ReAct。 */
+    private static final String REACT_MODE_ENV = "MATH_AGENT_STUDENT_EXPLANATION_REACT_MODE";
+    private static final Logger log = LoggerFactory.getLogger(StudentExplanationService.class);
 
     private final TextbookResourceProperties textbookResourceProperties;
     private final TextbookRetrievalService textbookRetrievalService;
     private final KnowledgeGraphSpineService knowledgeGraphSpineService;
     private final TeacherResourceBlockSearchService teacherResourceBlockSearchService;
+    private final TeacherResourceStore teacherResourceStore;
     private final StudentExplanationAiCardService aiCardService;
     private final StudentExplanationImageStoreService imageStoreService;
     private final StudentExplanationVisionService visionService;
     private final StudentExplanationHistoryStore historyStore;
+    private final StudentMemoryRagService studentMemoryRagService;
+    private final int conversationHistoryFetchLimit;
 
-    /**
-     * Creates the student explanation orchestrator.
-     *
-     * @param textbookResourceProperties configured textbook processed root
-     * @param textbookRetrievalService textbook BM25 retrieval service
-     * @param knowledgeGraphSpineService curated graph service
-     * @param teacherResourceBlockSearchService teacher resource block search service
-     */
+    public StudentExplanationService(
+            TextbookResourceProperties textbookResourceProperties,
+            TextbookRetrievalService textbookRetrievalService,
+            KnowledgeGraphSpineService knowledgeGraphSpineService,
+            TeacherResourceBlockSearchService teacherResourceBlockSearchService,
+            TeacherResourceStore teacherResourceStore,
+            StudentExplanationAiCardService aiCardService,
+            StudentExplanationImageStoreService imageStoreService,
+            StudentExplanationVisionService visionService,
+            StudentExplanationHistoryStore historyStore) {
+        this(textbookResourceProperties, textbookRetrievalService, knowledgeGraphSpineService,
+                teacherResourceBlockSearchService, teacherResourceStore, aiCardService, imageStoreService,
+                visionService, historyStore, null, 200);
+    }
+
     @Autowired
     public StudentExplanationService(
             TextbookResourceProperties textbookResourceProperties,
             TextbookRetrievalService textbookRetrievalService,
             KnowledgeGraphSpineService knowledgeGraphSpineService,
             TeacherResourceBlockSearchService teacherResourceBlockSearchService,
+            TeacherResourceStore teacherResourceStore,
             StudentExplanationAiCardService aiCardService,
             StudentExplanationImageStoreService imageStoreService,
             StudentExplanationVisionService visionService,
-            StudentExplanationHistoryStore historyStore) {
+            StudentExplanationHistoryStore historyStore,
+            StudentMemoryRagService studentMemoryRagService,
+            @org.springframework.beans.factory.annotation.Value("${math-agent.student.explanation.conversation-history-fetch-limit:200}") int conversationHistoryFetchLimit) {
         this.textbookResourceProperties = Objects.requireNonNull(
                 textbookResourceProperties, "textbookResourceProperties is required");
         this.textbookRetrievalService = Objects.requireNonNull(
@@ -69,23 +104,35 @@ public class StudentExplanationService {
                 knowledgeGraphSpineService, "knowledgeGraphSpineService is required");
         this.teacherResourceBlockSearchService = Objects.requireNonNull(
                 teacherResourceBlockSearchService, "teacherResourceBlockSearchService is required");
+        this.teacherResourceStore = Objects.requireNonNull(
+                teacherResourceStore, "teacherResourceStore is required");
         this.aiCardService = Objects.requireNonNull(aiCardService, "aiCardService is required");
         this.imageStoreService = Objects.requireNonNull(imageStoreService, "imageStoreService is required");
         this.visionService = Objects.requireNonNull(visionService, "visionService is required");
         this.historyStore = Objects.requireNonNull(historyStore, "historyStore is required");
+        this.studentMemoryRagService = studentMemoryRagService;
+        this.conversationHistoryFetchLimit = Math.max(1, Math.min(conversationHistoryFetchLimit, 500));
     }
 
     /**
-     * Runs the explanation DAG with backend-resolved identity and scoped retrieval toggles.
-     *
-     * @param request user problem and retrieval preferences
-     * @param subject backend-resolved request subject
-     * @return card-based explanation response
+     * Runs one explanation request without streaming.
      */
     public StudentExplanationResponse explain(StudentExplanationRequest request, RequestSubject subject) {
+        return explain(request, subject, StudentExplanationProgressListener.NOOP);
+    }
+
+    /**
+     * Runs one explanation request while emitting real progress snapshots for the streaming endpoint.
+     */
+    public StudentExplanationResponse explain(
+            StudentExplanationRequest request,
+            RequestSubject subject,
+            StudentExplanationProgressListener progressListener) {
         long startedNanos = System.nanoTime();
+        StudentExplanationProgressListener listener =
+                progressListener == null ? StudentExplanationProgressListener.NOOP : progressListener;
         StudentExplanationRequest normalizedRequest = request == null
-                ? new StudentExplanationRequest(null, null, null, null, null, null, null, null, null, null, null).normalize()
+                ? new StudentExplanationRequest(null, null, null, null, null, null, null, null, null, null, null, false).normalize()
                 : request.normalize();
         if (!normalizedRequest.hasProblemInput()) {
             throw new IllegalArgumentException("Student explanation requires questionText or image metadata");
@@ -93,61 +140,251 @@ public class StudentExplanationService {
         normalizedRequest = normalizedRequest.withConversationId(conversationId(normalizedRequest));
         RequestSubject normalizedSubject = requireSubject(subject).normalize();
         StudentExplanationImageRecord imageRecord = resolveImageRecord(normalizedRequest, normalizedSubject);
+
         List<StudentExplanationResponse.WorkflowStage> stages = new ArrayList<>();
+        List<StudentExplanationResponse.ExplanationCard> cards = new ArrayList<>();
         List<StudentExplanationResponse.ExplanationSource> sources = new ArrayList<>();
-        StudentExplanationVisionService.VisionAnalysis visionAnalysis = analyzeImage(imageRecord, stages);
+        StudentExplanationVisionService.VisionAnalysis visionAnalysis = StudentExplanationVisionService.VisionAnalysis.skipped("pending");
+        StudentExplanationResponse.ImageUnderstanding imageUnderstanding = StudentExplanationResponse.ImageUnderstanding.none();
+        StudentExplanationResponse.AiDraft aiDraft = StudentExplanationResponse.AiDraft.disabled("尚未开始生成讲解。");
+        String conversationTitle = StudentExplanationConversationTitleSupport.resolve("", normalizedRequest.questionText(), null);
+        String visibleQuestion = text(normalizedRequest.questionText());
+
+        upsertStage(stages, runningStage("plan_explanation", "规划流程"));
+        emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
+                imageUnderstanding, aiDraft, conversationTitle, startedNanos, "已接收题目，正在规划本轮讲解。");
+        upsertStage(stages, stage("plan_explanation", "规划流程", "completed",
+                planDetail(normalizedRequest, normalizedSubject, imageRecord != null), startedNanos));
+        emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
+                imageUnderstanding, aiDraft, conversationTitle, startedNanos, "流程规划完成。");
+
+        upsertStage(stages, runningStage("analyze_image", "识别题图"));
+        emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
+                imageUnderstanding, aiDraft, conversationTitle, startedNanos, "正在识别题图。");
+        visionAnalysis = analyzeImage(imageRecord, stages);
+        imageUnderstanding = imageUnderstanding(visionAnalysis);
+        emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
+                imageUnderstanding, aiDraft, conversationTitle, startedNanos, "题图识别步骤已更新。");
+
         requireRealTextForImageOnlyRequest(normalizedRequest, imageRecord, visionAnalysis);
-        String query = queryText(normalizedRequest, imageRecord, visionAnalysis);
+        String query = queryText(normalizedRequest, visionAnalysis);
+        visibleQuestion = visibleQuestion(normalizedRequest, visionAnalysis);
+
+        upsertStage(stages, runningStage("load_conversation_context", "读取上下文"));
+        emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
+                imageUnderstanding, aiDraft, conversationTitle, startedNanos, "正在读取最近会话。");
         List<StudentExplanationHistorySummary> recentHistory =
                 loadRecentHistory(normalizedRequest, normalizedSubject, stages);
+        List<String> longTermMemories = loadLongTermMemories(query, normalizedSubject, stages);
+        emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
+                imageUnderstanding, aiDraft, conversationTitle, startedNanos, "上下文已读取。");
 
-        stages.add(stage("understand_problem", "理解题意", "completed",
-                "已使用题目文本或真实视觉识别结果规划检索，不把图片文件名当作题目内容。",
-                startedNanos));
-        List<TextbookSearchHit> textbookHits = searchTextbooks(normalizedRequest, normalizedSubject, query, stages);
-        textbookHits.stream().map(StudentExplanationService::textbookSource).forEach(sources::add);
+        upsertStage(stages, runningStage("understand_problem", "理解题意"));
+        emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
+                imageUnderstanding, aiDraft, conversationTitle, startedNanos, "正在梳理原题。");
+        upsertStage(stages, stage("understand_problem", "理解题意", "completed",
+                "已使用题目文本或真实视觉识别结果规划检索，不把图片文件名当作题目内容。", startedNanos));
+        emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
+                imageUnderstanding, aiDraft, conversationTitle, startedNanos, "原题梳理已生成。");
 
-        List<KnowledgeGraphSpineResponse.Node> knowledgeNodes =
-                matchKnowledgeGraph(normalizedRequest, normalizedSubject, query, stages);
-        knowledgeNodes.stream().map(StudentExplanationService::knowledgeSource).forEach(sources::add);
+        ReactEvidence reactEvidence = reactModeEnabled()
+                ? executeReactTools(
+                        normalizedRequest, normalizedSubject, query, stages, sources, listener, visibleQuestion, cards,
+                        imageRecord, visionAnalysis, imageUnderstanding, aiDraft, conversationTitle, startedNanos)
+                : executeDefaultRetrieval(
+                        normalizedRequest, normalizedSubject, query, stages, sources, listener, visibleQuestion, cards,
+                        imageRecord, visionAnalysis, imageUnderstanding, aiDraft, conversationTitle, startedNanos);
+        List<KnowledgeGraphSpineResponse.Node> knowledgeNodes = reactEvidence.knowledgeNodes();
+        List<TeacherResourceBlockSearchResponse.Hit> teacherHits = reactEvidence.teacherHits();
 
-        List<TeacherResourceBlockSearchResponse.Hit> teacherHits =
-                searchTeacherResources(normalizedRequest, normalizedSubject, query, stages);
-        teacherHits.stream().map(StudentExplanationService::teacherSource).forEach(sources::add);
-
+        upsertStage(stages, runningStage("ai_compose_cards", "生成讲解"));
+        emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
+                imageUnderstanding, aiDraft, conversationTitle, startedNanos, "模型正在生成讲解。");
         StudentExplanationAiCardService.AiCardDraft aiCardDraft = aiCardService.generate(
                 normalizedRequest,
-                query,
+                aiContextQuery(query, knowledgeNodes, teacherHits),
                 imageStatus(normalizedRequest, imageRecord, visionAnalysis),
                 sources,
                 recentHistory,
-                stages);
-        stages.add(stage("assemble_cards", "整理讲解卡片", "completed",
-                "已使用真实模型输出并解析为讲解卡片。", startedNanos));
+                longTermMemories,
+                stages,
+                listener::onAiDelta);
+        aiDraft = aiCardDraft.aiDraft();
+        conversationTitle = StudentExplanationConversationTitleSupport.resolve(
+                aiCardDraft.conversationTitle(),
+                visibleQuestion,
+                null);
+        // Preserve the live model's section count, labels, and order. Cards are a transport format, not a lesson template.
+        cards.addAll(aiCardDraft.cards());
+        emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
+                imageUnderstanding, aiDraft, conversationTitle, startedNanos, "讲解卡片已生成，正在整理展示。");
+
+        upsertStage(stages, runningStage("assemble_cards", "整理卡片"));
+        emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
+                imageUnderstanding, aiDraft, conversationTitle, startedNanos, "正在整理讲解卡片。");
+        upsertStage(stages, stage("assemble_cards", "整理卡片", "completed",
+                "已使用真实模型输出并解析为讲解卡片，同时保留原题、知识点、方法和资源链接。", startedNanos));
+        emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
+                imageUnderstanding, aiDraft, conversationTitle, startedNanos, "讲解卡片已整理完成。");
+
         String explanationId = UUID.randomUUID().toString();
-        stages.add(stage("persist_history", "保存讲解记录", historyStore.durable() ? "completed" : "skipped",
+        upsertStage(stages, runningStage("persist_history", "保存记录"));
+        emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
+                imageUnderstanding, aiDraft, conversationTitle, startedNanos, "正在保存讲解记录。");
+        upsertStage(stages, stage("persist_history", "保存记录", historyStore.durable() ? "completed" : "skipped",
                 historyStore.durable()
                         ? "已写入 MySQL 历史记录，后续可恢复会话。"
-                        : "当前本地运行未启用数据库历史记录。",
+                        : "当前运行环境未启用数据库历史记录。",
                 startedNanos));
+
         StudentExplanationResponse response = new StudentExplanationResponse(
                 explanationId,
                 normalizedRequest.conversationId(),
+                conversationTitle,
                 normalizedSubject.tenantId(),
                 studentId(normalizedSubject),
                 normalizedSubject.subjectType(),
-                normalizedRequest.questionText(),
+                visibleQuestion,
                 imageStatus(normalizedRequest, imageRecord, visionAnalysis),
-                imageUnderstanding(visionAnalysis),
+                imageUnderstanding,
                 GENERATED_BY,
-                aiCardDraft.aiDraft(),
+                aiDraft,
                 List.copyOf(stages),
-                aiCardDraft.cards(),
+                List.copyOf(cards),
                 List.copyOf(sources),
                 elapsedMs(startedNanos));
         historyStore.save(normalizedRequest, normalizedSubject, imageRecord, response);
+        indexLongTermMemory(normalizedSubject, response, stages);
+        emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
+                imageUnderstanding, aiDraft, conversationTitle, startedNanos, "本轮讲解已完成。");
+        listener.onCompleted(response);
         return response;
     }
+
+    /**
+     * 有界 ReAct 循环：模型根据已有证据和观察结果决定下一项工具；后端实际执行工具，
+     * 从而始终在服务端保留身份、租户、请求开关和教师私有资料权限控制。
+     *
+     * <p>每项只读工具在单次讲解中最多调用一次，并由 maxSteps 限制总步数，避免模型陷入工具循环。</p>
+     */
+    private ReactEvidence executeReactTools(
+            StudentExplanationRequest request, RequestSubject subject, String query,
+            List<StudentExplanationResponse.WorkflowStage> stages,
+            List<StudentExplanationResponse.ExplanationSource> sources,
+            StudentExplanationProgressListener listener, String visibleQuestion,
+            List<StudentExplanationResponse.ExplanationCard> cards, StudentExplanationImageRecord imageRecord,
+            StudentExplanationVisionService.VisionAnalysis visionAnalysis,
+            StudentExplanationResponse.ImageUnderstanding imageUnderstanding,
+            StudentExplanationResponse.AiDraft aiDraft, String conversationTitle, long startedNanos) {
+        Set<String> available = availableReactTools(request, subject);
+        List<String> observations = new ArrayList<>();
+        List<KnowledgeGraphSpineResponse.Node> knowledgeNodes = new ArrayList<>();
+        List<TeacherResourceBlockSearchResponse.Hit> teacherHits = new ArrayList<>();
+        int maxSteps = reactMaxSteps();
+        for (int step = 0; step < maxSteps; step++) {
+            upsertStage(stages, runningStage("react_reason_" + step, "ReAct 决策"));
+            emitProgress(listener, request, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
+                    imageUnderstanding, aiDraft, conversationTitle, startedNanos, "正在决定下一次检索动作。");
+            // Thought/Decision：只向模型暴露后端根据权限计算出的工具白名单，而不是信任客户端传入的工具名。
+            StudentExplanationAiCardService.ReactDecision decision = aiCardService.nextReactDecision(
+                    query, sources, observations, available);
+            if ("final".equals(decision.kind())) { break; }
+            if (!"action".equals(decision.kind())) {
+                throw new IllegalStateException("ReAct 决策失败：" + decision.message());
+            }
+            String tool = decision.tool();
+            // Action：同一工具只执行一次；其结果会以 Observation 形式喂回下一轮模型决策。
+            available.remove(tool); // Each read-only source is queried at most once per answer, avoiding tool-loop inflation.
+            if ("search_textbook".equals(tool)) {
+                List<TextbookSearchHit> hits = searchTextbooks(request, subject, query, stages);
+                hits.stream().map(StudentExplanationService::textbookSource).forEach(sources::add);
+                observations.add("教材检索完成，获得 " + hits.size() + " 条证据。");
+            } else if ("match_knowledge_graph".equals(tool)) {
+                knowledgeNodes.addAll(matchKnowledgeGraph(request, subject, query, stages));
+                knowledgeNodes.stream().map(StudentExplanationService::knowledgeSource).forEach(sources::add);
+                observations.add("知识图谱匹配完成，获得 " + knowledgeNodes.size() + " 个节点。");
+            } else if ("search_teacher_resources".equals(tool)) {
+                teacherHits.addAll(searchTeacherResources(request, subject, query, stages));
+                Map<String, TeacherResourceDocumentResponse> documentsById = teacherDocumentsById(subject.tenantId(), teacherHits);
+                teacherHits.stream().map(hit -> teacherSource(hit, documentsById.get(hit.documentId()))).forEach(sources::add);
+                observations.add("教师资料检索完成，获得 " + teacherHits.size() + " 条证据。");
+            }
+            upsertStage(stages, stage("react_observation_" + step, "ReAct 观察", "completed",
+                    observations.getLast(), startedNanos));
+        }
+        // Preserve an explicit, truthful skipped stage for a requested teacher lookup by a student.  It is a policy
+        // observation, not a hidden tool call, and keeps the process trace clear about why no private source exists.
+        if (Boolean.TRUE.equals(request.searchTeacherResources()) && !isTeacherOrAdmin(subject.subjectType())) {
+            searchTeacherResources(request, subject, query, stages);
+        }
+        return new ReactEvidence(List.copyOf(knowledgeNodes), List.copyOf(teacherHits));
+    }
+
+    /**
+     * Fast default retrieval path.  Every source is still filtered by the backend-resolved tenant and role, but the
+     * service avoids spending one model round trip merely to choose a read-only tool.  The model-driven ReAct path
+     * remains available through {@code MATH_AGENT_STUDENT_EXPLANATION_REACT_MODE=agent} for explicit agent runs.
+     */
+    private ReactEvidence executeDefaultRetrieval(
+            StudentExplanationRequest request, RequestSubject subject, String query,
+            List<StudentExplanationResponse.WorkflowStage> stages,
+            List<StudentExplanationResponse.ExplanationSource> sources,
+            StudentExplanationProgressListener listener, String visibleQuestion,
+            List<StudentExplanationResponse.ExplanationCard> cards, StudentExplanationImageRecord imageRecord,
+            StudentExplanationVisionService.VisionAnalysis visionAnalysis,
+            StudentExplanationResponse.ImageUnderstanding imageUnderstanding,
+            StudentExplanationResponse.AiDraft aiDraft, String conversationTitle, long startedNanos) {
+        upsertStage(stages, runningStage("default_retrieval", "默认检索"));
+        emitProgress(listener, request, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
+                imageUnderstanding, aiDraft, conversationTitle, startedNanos, "正在读取当前账号可见的教材、知识图谱和教师资料。");
+
+        List<TextbookSearchHit> textbookHits = searchTextbooks(request, subject, query, stages);
+        List<KnowledgeGraphSpineResponse.Node> knowledgeNodes = matchKnowledgeGraph(request, subject, query, stages);
+        List<TeacherResourceBlockSearchResponse.Hit> teacherHits = searchTeacherResources(request, subject, query, stages);
+        textbookHits.stream().map(StudentExplanationService::textbookSource).forEach(sources::add);
+        knowledgeNodes.stream().map(StudentExplanationService::knowledgeSource).forEach(sources::add);
+        Map<String, TeacherResourceDocumentResponse> documentsById = teacherDocumentsById(subject.tenantId(), teacherHits);
+        teacherHits.stream().map(hit -> teacherSource(hit, documentsById.get(hit.documentId()))).forEach(sources::add);
+
+        upsertStage(stages, stage("default_retrieval", "默认检索", "completed",
+                "教材 " + textbookHits.size() + " 条、知识图谱 " + knowledgeNodes.size()
+                        + " 个、教师资料 " + teacherHits.size() + " 条，均已按当前账号权限过滤。", startedNanos));
+        emitProgress(listener, request, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
+                imageUnderstanding, aiDraft, conversationTitle, startedNanos, "默认检索完成，开始生成讲解。");
+        return new ReactEvidence(List.copyOf(knowledgeNodes), List.copyOf(teacherHits));
+    }
+
+    /** Defaults to the latency-bounded path; agent mode is opt-in and still capped by reactMaxSteps(). */
+    private static boolean reactModeEnabled() {
+        return "agent".equalsIgnoreCase(System.getenv(REACT_MODE_ENV));
+    }
+
+    /** Builds the model-visible tool allow-list from backend policy, never from client-supplied tool names. */
+    private static Set<String> availableReactTools(StudentExplanationRequest request, RequestSubject subject) {
+        Set<String> tools = new LinkedHashSet<>();
+        if (Boolean.TRUE.equals(request.searchTextbook())) tools.add("search_textbook");
+        if (Boolean.TRUE.equals(request.searchKnowledgeGraph())) tools.add("match_knowledge_graph");
+        if (Boolean.TRUE.equals(request.searchTeacherResources()) && isTeacherOrAdmin(subject.subjectType())) tools.add("search_teacher_resources");
+        return tools;
+    }
+
+    /** Reads the ReAct cap from the process environment and refuses invalid values instead of trusting raw strings. */
+    private static int reactMaxSteps() {
+        String configured = System.getenv(REACT_MAX_STEPS_ENV);
+        if (configured == null || configured.isBlank()) {
+            return DEFAULT_REACT_MAX_STEPS;
+        }
+        try {
+            int value = Integer.parseInt(configured.strip());
+            return value > 0 ? value : DEFAULT_REACT_MAX_STEPS;
+        } catch (NumberFormatException ignored) {
+            return DEFAULT_REACT_MAX_STEPS;
+        }
+    }
+
+    /** Evidence accumulated by ReAct actions and supplied to the final answer composer. */
+    private record ReactEvidence(List<KnowledgeGraphSpineResponse.Node> knowledgeNodes,
+                                 List<TeacherResourceBlockSearchResponse.Hit> teacherHits) { }
 
     /**
      * Requires backend-resolved identity; callers that need a test subject must pass it explicitly.
@@ -167,28 +404,60 @@ public class StudentExplanationService {
             RequestSubject subject,
             List<StudentExplanationResponse.WorkflowStage> stages) {
         long stageStarted = System.nanoTime();
+        if (!Boolean.TRUE.equals(request.useConversationMemory())) {
+            // Fresh explanations must not silently inherit previous turns, even inside the currently open conversation.
+            upsertStage(stages, stageFrom(stageStarted, "load_conversation_context", "读取上下文", "skipped",
+                    "当前会话未启用上下文关联。"));
+            return List.of();
+        }
         try {
             List<StudentExplanationHistorySummary> history = historyStore.findRecent(
                     subject.tenantId(),
                     subject.subjectType(),
                     subject.subjectId(),
                     request.conversationId(),
-                    6);
-            stages.add(stageFrom(stageStarted, "load_conversation_context", "读取上下文", "completed",
+                    conversationHistoryFetchLimit);
+            upsertStage(stages, stageFrom(stageStarted, "load_conversation_context", "读取上下文", "completed",
                     "已读取 " + history.size() + " 条最近会话。"));
             return history;
         } catch (RuntimeException e) {
-            stages.add(stageFrom(stageStarted, "load_conversation_context", "读取上下文", "failed",
+            upsertStage(stages, stageFrom(stageStarted, "load_conversation_context", "读取上下文", "failed",
                     e.getClass().getSimpleName()));
             throw e;
         }
+    }
+
+    private List<String> loadLongTermMemories(
+            String query,
+            RequestSubject subject,
+            List<StudentExplanationResponse.WorkflowStage> stages) {
+        long stageStarted = System.nanoTime();
+        if (studentMemoryRagService == null || studentId(subject) == null) {
+            upsertStage(stages, stageFrom(stageStarted, "retrieve_long_term_memory", "检索长期记忆", "skipped",
+                    "当前身份不使用学生长期记忆。"));
+            return List.of();
+        }
+        List<String> memories = studentMemoryRagService.retrieve(subject, query);
+        upsertStage(stages, stageFrom(stageStarted, "retrieve_long_term_memory", "检索长期记忆", "completed",
+                memories.isEmpty() ? "未检索到相关长期记忆。" : "已检索 " + memories.size() + " 条相关长期记忆。"));
+        return memories;
+    }
+
+    private void indexLongTermMemory(
+            RequestSubject subject,
+            StudentExplanationResponse response,
+            List<StudentExplanationResponse.WorkflowStage> stages) {
+        if (studentMemoryRagService == null || studentId(subject) == null) {
+            return;
+        }
+        studentMemoryRagService.index(subject, response);
     }
 
     /**
      * Returns a backend conversation id, preserving a valid caller-supplied one.
      */
     private static String conversationId(StudentExplanationRequest request) {
-        String value = safe(request.conversationId()).strip();
+        String value = text(request.conversationId()).strip();
         return value.isBlank() ? UUID.randomUUID().toString() : value;
     }
 
@@ -213,20 +482,20 @@ public class StudentExplanationService {
             List<StudentExplanationResponse.WorkflowStage> stages) {
         long stageStarted = System.nanoTime();
         if (imageRecord == null) {
-            stages.add(stageFrom(stageStarted, "analyze_image", "识别题图", "skipped", "未上传题图。"));
+            upsertStage(stages, stageFrom(stageStarted, "analyze_image", "识别题图", "skipped", "未上传题图。"));
             return StudentExplanationVisionService.VisionAnalysis.skipped("no-image");
         }
         StudentExplanationVisionService.VisionAnalysis analysis = visionService.analyze(imageRecord);
-        stages.add(stageFrom(stageStarted, "analyze_image", "识别题图",
+        upsertStage(stages, stageFrom(stageStarted, "analyze_image", "识别题图",
                 analysis.succeeded() ? "completed" : analysis.enabled() ? "failed" : "skipped",
                 analysis.succeeded()
-                        ? analysis.providerName() + "/" + analysis.modelCode() + " tokens=" + analysis.totalTokens()
+                        ? analysis.providerName() + "/" + analysis.modelCode()
                         : analysis.message()));
         return analysis;
     }
 
     /**
-     * Searches configured textbook resources when the student allows textbook retrieval.
+     * Searches configured textbook resources when the caller enables textbook retrieval.
      */
     private List<TextbookSearchHit> searchTextbooks(
             StudentExplanationRequest request,
@@ -235,8 +504,7 @@ public class StudentExplanationService {
             List<StudentExplanationResponse.WorkflowStage> stages) {
         long stageStarted = System.nanoTime();
         if (!Boolean.TRUE.equals(request.searchTextbook())) {
-            stages.add(stageFrom(stageStarted, "search_textbook", "检索教材", "skipped",
-                    "本轮未启用教材检索。"));
+            upsertStage(stages, stageFrom(stageStarted, "search_textbook", "检索教材", "skipped", "本轮未启用教材检索。"));
             return List.of();
         }
         try {
@@ -251,17 +519,22 @@ public class StudentExplanationService {
                             subject.deviceId(),
                             null,
                             ENDPOINT));
-            stages.add(stageFrom(stageStarted, "search_textbook", "检索教材", "completed",
-                    "命中 " + response.total() + " 条教材证据。"));
-            return response.hits();
+            List<TextbookSearchHit> acceptedHits = response.hits().stream()
+                    .filter(hit -> matchesConcreteTopic(query, hit.sectionTitle(), hit.textSnippet()))
+                    .toList();
+            // The trace must describe the exact evidence list later exposed to the learner, not an upstream candidate
+            // total that may be capped or filtered before source cards are assembled.
+            upsertStage(stages, stageFrom(stageStarted, "search_textbook", "检索教材", "completed",
+                    "本轮纳入 " + acceptedHits.size() + " 条教材证据。"));
+            return acceptedHits;
         } catch (RuntimeException e) {
-            stages.add(stageFrom(stageStarted, "search_textbook", "检索教材", "failed", e.getMessage()));
+            upsertStage(stages, stageFrom(stageStarted, "search_textbook", "检索教材", "failed", e.getMessage()));
             throw e;
         }
     }
 
     /**
-     * Matches the curated display spine without using the noisy OCR-level graph.
+     * Matches the curated display spine instead of the noisy OCR-level raw graph.
      */
     private List<KnowledgeGraphSpineResponse.Node> matchKnowledgeGraph(
             StudentExplanationRequest request,
@@ -270,8 +543,7 @@ public class StudentExplanationService {
             List<StudentExplanationResponse.WorkflowStage> stages) {
         long stageStarted = System.nanoTime();
         if (!Boolean.TRUE.equals(request.searchKnowledgeGraph())) {
-            stages.add(stageFrom(stageStarted, "match_knowledge_graph", "匹配知识点", "skipped",
-                    "本轮未启用知识点匹配。"));
+            upsertStage(stages, stageFrom(stageStarted, "match_knowledge_graph", "匹配知识点", "skipped", "本轮未启用知识点匹配。"));
             return List.of();
         }
         try {
@@ -280,18 +552,22 @@ public class StudentExplanationService {
                     subject.subjectType(),
                     subject.subjectId());
             List<KnowledgeGraphSpineResponse.Node> nodes = spine.nodes().stream()
-                    .map(node -> new NodeMatch(node, knowledgeScore(query, node)))
-                    .filter(match -> match.score() > 0)
+                    .filter(node -> matchesKnowledgeTopic(query, node))
+                    .map(node -> new NodeMatch(node, knowledgeScore(query, node), knowledgeMatchReason(query, node)))
+                    .filter(match -> qualifiesNodeMatch(match.node(), match.score(), match.reason()))
                     .sorted(Comparator.comparingInt(NodeMatch::score).reversed()
                             .thenComparing(match -> match.node().label()))
                     .limit(5)
                     .map(NodeMatch::node)
                     .toList();
-            stages.add(stageFrom(stageStarted, "match_knowledge_graph", "匹配知识点", "completed",
-                    "命中 " + nodes.size() + " 个主干知识点。"));
+            String detail = nodes.isEmpty()
+                    ? "本轮未找到可确认匹配的主干知识点。"
+                    : "本轮纳入 " + nodes.size() + " 个主干知识点：" + String.join("、",
+                            nodes.stream().map(KnowledgeGraphSpineResponse.Node::label).toList()) + "。";
+            upsertStage(stages, stageFrom(stageStarted, "match_knowledge_graph", "匹配知识点", "completed", detail));
             return nodes;
         } catch (RuntimeException e) {
-            stages.add(stageFrom(stageStarted, "match_knowledge_graph", "匹配知识点", "failed", e.getMessage()));
+            upsertStage(stages, stageFrom(stageStarted, "match_knowledge_graph", "匹配知识点", "failed", e.getMessage()));
             throw e;
         }
     }
@@ -306,13 +582,12 @@ public class StudentExplanationService {
             List<StudentExplanationResponse.WorkflowStage> stages) {
         long stageStarted = System.nanoTime();
         if (!Boolean.TRUE.equals(request.searchTeacherResources())) {
-            stages.add(stageFrom(stageStarted, "search_teacher_resources", "检索教师资料", "skipped",
-                    "本轮未启用教师资料检索。"));
+            upsertStage(stages, stageFrom(stageStarted, "search_teacher_resources", "检索教师资料", "skipped", "本轮未启用教师资料检索。"));
             return List.of();
         }
         if (!isTeacherOrAdmin(subject.subjectType())) {
-            stages.add(stageFrom(stageStarted, "search_teacher_resources", "检索教师资料", "skipped",
-                    "学生身份不能读取教师私有资料。"));
+            upsertStage(stages, stageFrom(stageStarted, "search_teacher_resources", "检索教师资料", "skipped",
+                    "当前身份不能读取教师私有资料。"));
             return List.of();
         }
         try {
@@ -323,13 +598,43 @@ public class StudentExplanationService {
                     query,
                     request.maxTeacherResourceHits(),
                     ENDPOINT);
-            stages.add(stageFrom(stageStarted, "search_teacher_resources", "检索教师资料", "completed",
-                    "命中 " + response.hitCount() + " 条教师资料。"));
-            return response.hits();
+            List<TeacherResourceBlockSearchResponse.Hit> acceptedHits = response.hits().stream()
+                    .filter(hit -> matchesConcreteTopic(query, hit.documentTitle(), hit.snippet()))
+                    .toList();
+            // Keep the trace count aligned with the teacher_resource sources actually sent to the explanation model.
+            upsertStage(stages, stageFrom(stageStarted, "search_teacher_resources", "检索教师资料", "completed",
+                    "本轮纳入 " + acceptedHits.size() + " 条教师资料。"));
+            return acceptedHits;
         } catch (RuntimeException e) {
-            stages.add(stageFrom(stageStarted, "search_teacher_resources", "检索教师资料", "failed", e.getMessage()));
+            log.warn("student_explanation_teacher_resource_search_failed tenantId={} subjectType={} subjectId={} query={}",
+                    subject.tenantId(),
+                    subject.subjectType(),
+                    subject.subjectId(),
+                    compact(query),
+                    e);
+            upsertStage(stages, stageFrom(stageStarted, "search_teacher_resources", "检索教师资料", "failed",
+                    "教师资料暂时未取到，先按教材和知识点继续讲。" + compact(e.getMessage())));
             return List.of();
         }
+    }
+
+    /**
+     * Resolves teacher document metadata so cards can expose real Feishu or local links.
+     */
+    private Map<String, TeacherResourceDocumentResponse> teacherDocumentsById(
+            String tenantId,
+            List<TeacherResourceBlockSearchResponse.Hit> hits) {
+        Map<String, TeacherResourceDocumentResponse> documentsById = new LinkedHashMap<>();
+        for (TeacherResourceBlockSearchResponse.Hit hit : hits) {
+            if (documentsById.containsKey(hit.documentId())) {
+                continue;
+            }
+            TeacherResourceDocumentResponse document = teacherResourceStore.find(tenantId, hit.documentId());
+            if (document != null) {
+                documentsById.put(hit.documentId(), document);
+            }
+        }
+        return documentsById;
     }
 
     /**
@@ -338,11 +643,13 @@ public class StudentExplanationService {
     private static StudentExplanationResponse.ExplanationSource textbookSource(TextbookSearchHit hit) {
         return new StudentExplanationResponse.ExplanationSource(
                 "textbook",
-                hit.bookName() + " p." + hit.pageNo(),
+                hit.bookName() + " 第 " + hit.pageNo() + " 页",
                 textbookUri(hit),
                 "PUBLIC_TEXTBOOK",
                 compact(hit.textSnippet()),
-                hit.score());
+                hit.score(),
+                chapterPath(hit),
+                text(hit.pageImageUri()));
     }
 
     /**
@@ -354,39 +661,72 @@ public class StudentExplanationService {
                 node.label(),
                 knowledgeUri(node),
                 node.permissionScope(),
-                safe(node.chapterPath()),
-                1.0);
+                text(node.sourceSummary()),
+                1.0,
+                text(node.chapterPath()),
+                "");
     }
 
     /**
-     * Converts a teacher resource hit to a stable source entry.
+     * Converts a teacher resource hit to a stable source entry with a real local or Feishu URL when available.
      */
-    private static StudentExplanationResponse.ExplanationSource teacherSource(TeacherResourceBlockSearchResponse.Hit hit) {
+    private static StudentExplanationResponse.ExplanationSource teacherSource(
+            TeacherResourceBlockSearchResponse.Hit hit,
+            TeacherResourceDocumentResponse document) {
         return new StudentExplanationResponse.ExplanationSource(
                 "teacher_resource",
                 hit.documentTitle(),
-                "teacher-resource://" + hit.documentId() + "/block/" + hit.blockId(),
+                teacherSourceUri(hit),
                 hit.permissionScope(),
                 compact(hit.snippet()),
-                hit.score());
+                hit.score(),
+                teacherSourcePath(hit, document),
+                teacherOpenUrl(document));
     }
 
-    /**
-     * Builds a stable textbook source URI.
-     */
+    private static String teacherSourceUri(TeacherResourceBlockSearchResponse.Hit hit) {
+        return "teacher-resource://" + hit.documentId() + "/block/" + hit.blockId();
+    }
+
     private static String textbookUri(TextbookSearchHit hit) {
         return "textbook://" + hit.docId() + "/page/" + hit.pageNo() + "#chunk=" + hit.chunkId();
     }
 
-    /**
-     * Builds a stable curated graph source URI.
-     */
     private static String knowledgeUri(KnowledgeGraphSpineResponse.Node node) {
         return "math-agent://knowledge/graph-spine/v0.1#node=" + node.id();
     }
 
+    private static String chapterPath(TextbookSearchHit hit) {
+        if (hit.chapterPath() == null || hit.chapterPath().isEmpty()) {
+            return text(hit.sectionTitle());
+        }
+        return String.join(" / ", hit.chapterPath());
+    }
+
+    private static String teacherSourcePath(
+            TeacherResourceBlockSearchResponse.Hit hit,
+            TeacherResourceDocumentResponse document) {
+        if (!text(hit.sourcePath()).isBlank()) {
+            return hit.sourcePath();
+        }
+        if (document != null && !text(document.localPath()).isBlank()) {
+            return document.localPath();
+        }
+        return text(hit.section()).isBlank() ? text(hit.chapter()) : text(hit.chapter()) + " / " + text(hit.section());
+    }
+
+    private static String teacherOpenUrl(TeacherResourceDocumentResponse document) {
+        if (document == null) {
+            return "";
+        }
+        if (!text(document.originalUrl()).isBlank()) {
+            return document.originalUrl();
+        }
+        return text(document.localPath());
+    }
+
     /**
-     * Scores a graph node against the query using exact and character-overlap signals.
+     * Scores one graph node against the query using exact and character-overlap signals.
      */
     private static int knowledgeScore(String query, KnowledgeGraphSpineResponse.Node node) {
         String compactQuery = compactForMatch(query);
@@ -406,24 +746,68 @@ public class StudentExplanationService {
         return score + (int) Math.min(overlap, 10);
     }
 
-    /**
-     * Builds a query from text first, then image metadata when text is absent.
-     */
-    private static String queryText(
-            StudentExplanationRequest request,
-            StudentExplanationImageRecord imageRecord,
-            StudentExplanationVisionService.VisionAnalysis visionAnalysis) {
-        if (request.questionText() != null) {
-            return String.join(" ", request.questionText(), safe(visionAnalysis.problemText())).strip();
+    /** Keeps ordinary AI retrieval on the concrete requested branch before score-based ranking. */
+    private static boolean matchesConcreteTopic(String query, String title, String snippet) {
+        String normalizedQuery = compactForMatch(query);
+        String text = compactForMatch(text(title) + " " + text(snippet));
+        if (normalizedQuery.contains("二次函数")) {
+            boolean quadratic = text.contains("二次函数") || text.contains("x^2") || text.contains("x²")
+                    || text.contains("x2");
+            return quadratic && !text.contains("x^3") && !text.contains("x³") && !text.contains("x3")
+                    && !text.contains("双曲线") && !text.contains("椭圆") && !text.contains("圆锥曲线")
+                    && !text.contains("抛物线");
         }
-        if (visionAnalysis.succeeded() && !safe(visionAnalysis.problemText()).isBlank()) {
-            return visionAnalysis.problemText();
+        if (normalizedQuery.contains("隐零点")) {
+            return text.contains("隐零点") || text.contains("零点");
         }
-        return "";
+        return true;
+    }
+
+    /** Prevents graph character-overlap from adding sibling modules to a quadratic query. */
+    private static boolean matchesKnowledgeTopic(String query, KnowledgeGraphSpineResponse.Node node) {
+        String normalizedQuery = compactForMatch(query);
+        String label = compactForMatch(node.label());
+        String chapter = compactForMatch(node.chapterPath());
+        if (!normalizedQuery.contains("二次函数")) {
+            return true;
+        }
+        if (label.equals("函数") || label.contains("二次") || label.contains("一元二次")) {
+            return true;
+        }
+        return (chapter.contains("二次") || chapter.contains("方程不等式"))
+                && !label.contains("三角") && !label.contains("统计") && !label.contains("数列");
     }
 
     /**
-     * Prevents image metadata or filenames from being used as a fake math problem.
+     * Builds the retrieval query from user text plus real vision text when available.
+     */
+    private static String queryText(
+            StudentExplanationRequest request,
+            StudentExplanationVisionService.VisionAnalysis visionAnalysis) {
+        String typed = text(request.questionText());
+        String visual = text(visionAnalysis.problemText());
+        if (!typed.isBlank() && !visual.isBlank()) {
+            return typed + "\n" + visual;
+        }
+        return !typed.isBlank() ? typed : visual;
+    }
+
+    /**
+     * Determines the visible problem text shown to the user and stored in history.
+     */
+    private static String visibleQuestion(
+            StudentExplanationRequest request,
+            StudentExplanationVisionService.VisionAnalysis visionAnalysis) {
+        String value = text(request.questionText()).strip();
+        if (!value.isBlank()) {
+            return value;
+        }
+        String visual = text(visionAnalysis.problemText()).strip();
+        return visual.isBlank() ? "图片讲题" : visual;
+    }
+
+    /**
+     * Prevents image metadata or filenames from becoming fake problem text.
      */
     private static void requireRealTextForImageOnlyRequest(
             StudentExplanationRequest request,
@@ -437,13 +821,12 @@ public class StudentExplanationService {
                 || request.imageFileName() != null
                 || request.imageContentType() != null;
         if (hasImageReference && !visionAnalysis.succeeded()) {
-            throw new IllegalArgumentException(
-                    "Image-only explanation requires successful real vision analysis or explicit questionText");
+            throw new IllegalArgumentException("Image-only explanation requires successful real vision analysis or explicit questionText");
         }
     }
 
     /**
-     * Returns the image handling status without claiming OCR work.
+     * Returns the image handling status without over-claiming OCR.
      */
     private static String imageStatus(
             StudentExplanationRequest request,
@@ -475,14 +858,14 @@ public class StudentExplanationService {
         return new StudentExplanationResponse.ImageUnderstanding(
                 analysis.enabled(),
                 analysis.succeeded(),
-                safe(analysis.providerName()),
-                safe(analysis.modelCode()),
-                safe(analysis.problemText()),
+                text(analysis.providerName()),
+                text(analysis.modelCode()),
+                text(analysis.problemText()),
                 analysis.confidence(),
                 analysis.promptTokens(),
                 analysis.completionTokens(),
                 analysis.totalTokens(),
-                safe(analysis.message()));
+                text(analysis.message()));
     }
 
     /**
@@ -492,11 +875,203 @@ public class StudentExplanationService {
         return "student".equals(subject.subjectType()) ? subject.subjectId() : null;
     }
 
-    /**
-     * Returns whether the backend subject may use teacher resources.
-     */
     private static boolean isTeacherOrAdmin(String role) {
         return "teacher".equals(role) || "admin".equals(role);
+    }
+
+    /**
+     * Emits a dynamic plan instead of a hard-coded fixed flow line.
+     */
+    private static String planDetail(
+            StudentExplanationRequest request,
+            RequestSubject subject,
+            boolean hasImage) {
+        List<String> steps = new ArrayList<>();
+        if (hasImage) {
+            steps.add("先识别题图");
+        }
+        steps.add("理清原题");
+        if (Boolean.TRUE.equals(request.searchTextbook())) {
+            steps.add("检索教材");
+        }
+        if (Boolean.TRUE.equals(request.searchKnowledgeGraph())) {
+            steps.add("匹配知识点");
+        }
+        if (Boolean.TRUE.equals(request.searchTeacherResources()) && isTeacherOrAdmin(subject.subjectType())) {
+            steps.add("查看教师资料");
+        }
+        steps.add("生成讲解");
+        steps.add("整理卡片");
+        return "本轮计划：" + String.join(" → ", steps) + "。";
+    }
+
+    /**
+     * Adds matched nodes and teacher tags into the AI prompt context so the model can speak more like a teacher.
+     */
+    private static String aiContextQuery(
+            String query,
+            List<KnowledgeGraphSpineResponse.Node> knowledgeNodes,
+            List<TeacherResourceBlockSearchResponse.Hit> teacherHits) {
+        List<String> lines = new ArrayList<>();
+        lines.add(query);
+        if (knowledgeNodes != null && !knowledgeNodes.isEmpty()) {
+            lines.add("Matched knowledge nodes: " + String.join(", ",
+                    knowledgeNodes.stream().map(KnowledgeGraphSpineResponse.Node::label).toList()));
+        }
+        LinkedHashSet<String> tags = new LinkedHashSet<>();
+        if (teacherHits != null) {
+            for (TeacherResourceBlockSearchResponse.Hit hit : teacherHits) {
+                if (hit.graphTags() == null) {
+                    continue;
+                }
+                for (String tag : hit.graphTags()) {
+                    if (!text(tag).isBlank()) {
+                        tags.add(tag.strip());
+                    }
+                }
+            }
+        }
+        if (!tags.isEmpty()) {
+            lines.add("Matched method tags: " + String.join(", ", tags));
+        }
+        return String.join("\n", lines);
+    }
+
+    private static String friendlyNodeType(String nodeType) {
+        return switch (text(nodeType).toUpperCase(Locale.ROOT)) {
+            case "MODULE" -> "模块";
+            case "TOPIC" -> "知识点";
+            case "METHOD" -> "方法";
+            default -> "条目";
+        };
+    }
+
+    /**
+     * 说明知识点为什么会命中，避免前端只看到裸标签。
+     */
+    private static String knowledgeMatchReason(String query, KnowledgeGraphSpineResponse.Node node) {
+        String compactQuery = compactForMatch(query);
+        String label = compactForMatch(node.label());
+        String chapter = compactForMatch(node.chapterPath());
+        if (!label.isBlank() && compactQuery.contains(label)) {
+            return "题目里直接出现了这个概念或它的同类表述";
+        }
+        if (!chapter.isBlank() && compactQuery.contains(chapter)) {
+            return "题目条件与这个模块的典型场景一致";
+        }
+        if ("METHOD".equalsIgnoreCase(text(node.nodeType()))) {
+            return "题目更像是在调用这种思想方法，而不只是单个公式";
+        }
+        return "根据题型、条件和所求的组合关系匹配到这里";
+    }
+
+    /**
+     * 过滤掉只有一两个公共字就误命中的节点，尤其避免把无关方法节点塞进前五。
+     */
+    private static boolean qualifiesNodeMatch(
+            KnowledgeGraphSpineResponse.Node node,
+            int score,
+            String reason) {
+        String nodeType = text(node.nodeType()).toUpperCase(Locale.ROOT);
+        if (score <= 0) {
+            return false;
+        }
+        if (reason.contains("直接出现")) {
+            return true;
+        }
+        return switch (nodeType) {
+            case "METHOD" -> score >= 8;
+            case "TOPIC" -> score >= 3;
+            case "MODULE" -> score >= 2;
+            default -> score >= 4;
+        };
+    }
+
+    /**
+     * 提炼方法判断里可展示的触发线索，让“为什么用这个方法”说得更像老师。
+     */
+    private static List<String> methodClues(
+            String query,
+            List<KnowledgeGraphSpineResponse.Node> knowledgeNodes,
+            List<TeacherResourceBlockSearchResponse.Hit> teacherHits) {
+        LinkedHashSet<String> clues = new LinkedHashSet<>();
+        String normalizedQuery = compact(query);
+        if (!normalizedQuery.isBlank()) {
+            String clipped = normalizedQuery.length() > 26 ? normalizedQuery.substring(0, 26).strip() + "…" : normalizedQuery;
+            clues.add("题干关键词“" + clipped + "”");
+        }
+        if (knowledgeNodes != null) {
+            knowledgeNodes.stream()
+                    .map(KnowledgeGraphSpineResponse.Node::label)
+                    .filter(label -> !text(label).isBlank())
+                    .limit(3)
+                    .forEach(label -> clues.add("命中知识点“" + label + "”"));
+        }
+        if (teacherHits != null) {
+            for (TeacherResourceBlockSearchResponse.Hit hit : teacherHits) {
+                if (hit.graphTags() == null) {
+                    continue;
+                }
+                for (String tag : hit.graphTags()) {
+                    if (!text(tag).isBlank()) {
+                        clues.add("教师资料标签“" + tag.strip() + "”");
+                    }
+                    if (clues.size() >= 4) {
+                        return List.copyOf(clues);
+                    }
+                }
+            }
+        }
+        return List.copyOf(clues);
+    }
+
+    /**
+     * 当知识图谱和教师标签还没提供明确方法时，用题型和已知条件生成更像老师的话。
+     */
+    private static List<String> derivedMethodItems(
+            String query,
+            List<KnowledgeGraphSpineResponse.Node> knowledgeNodes,
+            String sourceText) {
+        boolean hyperbola = knowledgeNodes.stream().anyMatch(node -> "双曲线".equals(text(node.label())));
+        String compactQuery = compact(query);
+        if (hyperbola && compactQuery.contains("焦距") && compactQuery.contains("2a")) {
+            return List.of(
+                    "基本量关系法｜题目直接给了焦距和 $2a$，先把 $c$ 和 $a$ 定出来，再用 $c^2=a^2+b^2$ 回收 $b^2$｜" + sourceText,
+                    "参数回代法｜这类题的关键不是上来列大方程，而是先认清双曲线的基本量之间有什么固定关系｜" + sourceText);
+        }
+        return List.of("先判断路径｜先从题型、条件和所求出发，缩小解法范围｜" + sourceText);
+    }
+
+    private static String knownConditions(String question) {
+        String value = text(question).strip();
+        int start = value.indexOf("已知");
+        int solve = firstPositiveIndex(value.indexOf("求"), value.indexOf("证明"), value.indexOf("说明"));
+        if (start >= 0 && solve > start) {
+            return value.substring(start + 2, solve).replaceAll("^[：:，,\\s]+", "").strip();
+        }
+        if (solve > 0) {
+            return value.substring(0, solve).replaceAll("^[：:，,\\s]+", "").strip();
+        }
+        return "";
+    }
+
+    private static String targetTask(String question) {
+        String value = text(question).strip();
+        int solve = firstPositiveIndex(value.indexOf("求"), value.indexOf("证明"), value.indexOf("说明"));
+        if (solve < 0 || solve >= value.length()) {
+            return "";
+        }
+        return value.substring(solve).replaceAll("^[：:，,\\s]+", "").strip();
+    }
+
+    private static int firstPositiveIndex(int... values) {
+        int result = Integer.MAX_VALUE;
+        for (int value : values) {
+            if (value >= 0 && value < result) {
+                result = value;
+            }
+        }
+        return result == Integer.MAX_VALUE ? -1 : result;
     }
 
     /**
@@ -520,42 +1095,81 @@ public class StudentExplanationService {
             String title,
             String status,
             String detail) {
-        return new StudentExplanationResponse.WorkflowStage(key, title, status, safe(detail), elapsedMs(stageStartedNanos));
+        return new StudentExplanationResponse.WorkflowStage(key, title, status, text(detail), elapsedMs(stageStartedNanos));
     }
 
     /**
-     * Returns elapsed milliseconds from a nanoTime start.
+     * Creates a visible running stage so the streaming UI shows only real active work.
      */
+    private static StudentExplanationResponse.WorkflowStage runningStage(String key, String title) {
+        return new StudentExplanationResponse.WorkflowStage(key, title, "running", "处理中。", 0);
+    }
+
+    /**
+     * Replaces earlier stage snapshots with the newest state for the same stage key.
+     */
+    private static void upsertStage(
+            List<StudentExplanationResponse.WorkflowStage> stages,
+            StudentExplanationResponse.WorkflowStage nextStage) {
+        for (int index = 0; index < stages.size(); index++) {
+            if (text(stages.get(index).stageKey()).equals(nextStage.stageKey())) {
+                stages.set(index, nextStage);
+                return;
+            }
+        }
+        stages.add(nextStage);
+    }
+
+    /**
+     * Emits a compact progress snapshot for the streaming frontend.
+     */
+    private static void emitProgress(
+            StudentExplanationProgressListener listener,
+            StudentExplanationRequest request,
+            String visibleQuestion,
+            List<StudentExplanationResponse.WorkflowStage> stages,
+            List<StudentExplanationResponse.ExplanationCard> cards,
+            List<StudentExplanationResponse.ExplanationSource> sources,
+            StudentExplanationImageRecord imageRecord,
+            StudentExplanationVisionService.VisionAnalysis visionAnalysis,
+            StudentExplanationResponse.ImageUnderstanding imageUnderstanding,
+            StudentExplanationResponse.AiDraft aiDraft,
+            String conversationTitle,
+            long startedNanos,
+            String message) {
+        listener.onProgress(new StudentExplanationStreamProgress(
+                request.conversationId(),
+                conversationTitle,
+                visibleQuestion,
+                imageStatus(request, imageRecord, visionAnalysis),
+                imageUnderstanding,
+                aiDraft,
+                List.copyOf(stages),
+                List.copyOf(cards),
+                List.copyOf(sources),
+                elapsedMs(startedNanos)), text(message));
+    }
+
     private static long elapsedMs(long startedNanos) {
         return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedNanos);
     }
 
-    /**
-     * Compacts evidence text for card display.
-     */
     private static String compact(String value) {
-        String stripped = safe(value).replaceAll("\\s+", " ").strip();
-        return stripped.length() <= 180 ? stripped : stripped.substring(0, 180);
+        String stripped = text(value).replaceAll("\\s+", " ").strip();
+        return stripped.length() <= 180 ? stripped : stripped.substring(0, 180).strip() + "…";
     }
 
-    /**
-     * Compacts text for rough matching.
-     */
     private static String compactForMatch(String value) {
-        return safe(value).replaceAll("\\s+", "").toLowerCase(Locale.ROOT);
+        return text(value).replaceAll("\\s+", "").toLowerCase(Locale.ROOT);
     }
 
-    /**
-     * Returns non-null text.
-     */
-    private static String safe(String value) {
+    private static String text(String value) {
         return value == null ? "" : value;
     }
-
 
     /**
      * Internal graph node match score.
      */
-    private record NodeMatch(KnowledgeGraphSpineResponse.Node node, int score) {
+    private record NodeMatch(KnowledgeGraphSpineResponse.Node node, int score, String reason) {
     }
 }

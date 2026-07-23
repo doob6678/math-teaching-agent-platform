@@ -3,10 +3,10 @@ package com.doob.mathagent.teacher;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.doob.mathagent.teacher.service.ProcessTeacherFeishuDiscoveryClient;
-import com.doob.mathagent.teacher.service.TeacherFeishuDiscoveryException;
-import com.doob.mathagent.teacher.service.TeacherFeishuDiscoveryQuery;
-import com.doob.mathagent.teacher.service.TeacherSourceSyncProperties;
+import com.doob.mathagent.teacher.feishu.ProcessTeacherFeishuDiscoveryClient;
+import com.doob.mathagent.teacher.feishu.TeacherFeishuDiscoveryException;
+import com.doob.mathagent.teacher.feishu.TeacherFeishuDiscoveryQuery;
+import com.doob.mathagent.teacher.sync.TeacherSourceSyncProperties;
 import com.doob.mathagent.teacher.vo.TeacherFeishuDiscoveryResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;

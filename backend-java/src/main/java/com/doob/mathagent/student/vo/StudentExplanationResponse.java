@@ -7,6 +7,7 @@ import java.util.List;
  *
  * @param explanationId server-generated id for retry/audit correlation
  * @param conversationId durable conversation id for follow-up context and history recovery
+ * @param conversationTitle short title shown in the AI 讲题 workspace and history sidebar
  * @param tenantId backend-resolved tenant id
  * @param studentId backend-resolved student id, or inspected student id for teacher/admin views
  * @param viewerRole backend-resolved viewer role
@@ -23,6 +24,7 @@ import java.util.List;
 public record StudentExplanationResponse(
         String explanationId,
         String conversationId,
+        String conversationTitle,
         String tenantId,
         String studentId,
         String viewerRole,
@@ -35,6 +37,45 @@ public record StudentExplanationResponse(
         List<ExplanationCard> cards,
         List<ExplanationSource> sources,
         long totalElapsedMs) {
+
+    /**
+     * Keeps older history fixtures and integrations source-compatible after conversation titles became durable data.
+     *
+     * <p>The legacy payload did not have a title field, so an empty title is the only honest value until the history
+     * store derives one from the persisted conversation.</p>
+     */
+    public StudentExplanationResponse(
+            String explanationId,
+            String conversationId,
+            String tenantId,
+            String studentId,
+            String viewerRole,
+            String questionText,
+            String imageStatus,
+            ImageUnderstanding imageUnderstanding,
+            String generatedBy,
+            AiDraft aiDraft,
+            List<WorkflowStage> workflowStages,
+            List<ExplanationCard> cards,
+            List<ExplanationSource> sources,
+            long totalElapsedMs) {
+        this(
+                explanationId,
+                conversationId,
+                "",
+                tenantId,
+                studentId,
+                viewerRole,
+                questionText,
+                imageStatus,
+                imageUnderstanding,
+                generatedBy,
+                aiDraft,
+                workflowStages,
+                cards,
+                sources,
+                totalElapsedMs);
+    }
 
     /**
      * One orchestration stage.
@@ -81,6 +122,8 @@ public record StudentExplanationResponse(
      * @param permissionScope backend-controlled visibility scope
      * @param snippet compact evidence text
      * @param score retrieval or match score
+     * @param sourcePath source page path, block path, or chapter path shown beside the link
+     * @param openUrl clickable local/remote URL when the backend can expose one safely
      */
     public record ExplanationSource(
             String sourceType,
@@ -88,7 +131,9 @@ public record StudentExplanationResponse(
             String sourceUri,
             String permissionScope,
             String snippet,
-            double score) {
+            double score,
+            String sourcePath,
+            String openUrl) {
     }
 
     /**

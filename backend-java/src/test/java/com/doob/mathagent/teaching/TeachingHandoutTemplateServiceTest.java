@@ -125,6 +125,14 @@ class TeachingHandoutTemplateServiceTest {
         TeachingHandoutTemplateService service = new TeachingHandoutTemplateService();
 
         assertThat(service.list())
+                .filteredOn(template -> "zhao_lixian_2025_master_v1".equals(template.templateCode()))
+                .singleElement()
+                .satisfies(template -> {
+                    assertThat(template.displayName()).isEqualTo("连续真题讲义母版");
+                    assertThat(template.referencePath()).endsWith("2025暑秋讲义.pdf");
+                    assertThat(template.sourceType()).isEqualTo("local_reference");
+                });
+        assertThat(service.list())
                 .isNotEmpty()
                 .anySatisfy(template -> {
                     if ("local_inverse_student_sample_v1".equals(template.templateCode())) {

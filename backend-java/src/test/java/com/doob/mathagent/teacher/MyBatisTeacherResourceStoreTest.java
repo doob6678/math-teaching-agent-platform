@@ -4,10 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
-import com.doob.mathagent.teacher.entity.TeacherSourceDocumentEntity;
-import com.doob.mathagent.teacher.mapper.TeacherSourceDocumentMapper;
-import com.doob.mathagent.teacher.service.MyBatisTeacherResourceStore;
-import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
+import com.doob.mathagent.teacher.document.entity.TeacherSourceDocumentEntity;
+import com.doob.mathagent.teacher.document.mapper.TeacherSourceDocumentMapper;
+import com.doob.mathagent.teacher.document.MyBatisTeacherResourceStore;
+import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.List;
@@ -143,3 +143,4 @@ class MyBatisTeacherResourceStoreTest {
         }
     }
 }
+

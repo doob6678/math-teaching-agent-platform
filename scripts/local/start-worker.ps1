@@ -8,6 +8,18 @@ $ErrorActionPreference = "Stop"
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 $Worker = Join-Path $Root "ai-worker-python"
 
+# Desktop launchers do not always inherit freshly persisted user variables.
+# Import only the project's namespaced settings before resolving Python so the
+# worker does not silently fall back to CPU defaults in a new PowerShell.
+$userEnvironment = [Environment]::GetEnvironmentVariables("User")
+foreach ($entry in $userEnvironment.GetEnumerator()) {
+    if ($entry.Key -like "MATH_AGENT_*") {
+        if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($entry.Key, "Process"))) {
+            [Environment]::SetEnvironmentVariable($entry.Key, [string]$entry.Value, "Process")
+        }
+    }
+}
+
 function Test-TcpPort {
     param(
         [string]$HostName,
@@ -51,15 +63,18 @@ function Resolve-WorkerPython {
     if (-not [string]::IsNullOrWhiteSpace($env:MATH_AGENT_WORKER_PYTHON)) {
         $candidates += $env:MATH_AGENT_WORKER_PYTHON
     }
+    $candidates += @(
+        (Join-Path $Worker ".venv\Scripts\python.exe"),
+        # The project venv is installed with the CUDA wheel and must win over a
+        # machine-wide CPU conda interpreter; otherwise the same 8091 port can
+        # silently expose a CPU-only worker after a restart.
+        "D:\conda\envs\py_12\python.exe",
+        "C:\Users\doob\.workbuddy\binaries\python\envs\default\Scripts\python.exe"
+    )
     $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
     if ($pythonCommand) {
         $candidates += $pythonCommand.Source
     }
-    $candidates += @(
-        "D:\conda\envs\py_12\python.exe",
-        (Join-Path $Worker ".venv\Scripts\python.exe"),
-        "C:\Users\doob\.workbuddy\binaries\python\envs\default\Scripts\python.exe"
-    )
     foreach ($candidate in $candidates | Select-Object -Unique) {
         if (Test-PythonDependencies $candidate @("fastapi", "uvicorn", "pydantic", "torch", "PIL")) {
             return $candidate
@@ -91,15 +106,39 @@ function Resolve-WorkerApiKey {
 
 $Python = Resolve-WorkerPython $PythonPath
 
+# On Windows, the venv redirector may create the long-lived child with the
+# interpreter recorded in pyvenv.cfg.  Put the project's site-packages first so
+# that child still imports the CUDA torch/model stack from this worker venv,
+# instead of silently resolving the machine-wide CPU conda packages.
+$projectVenvSitePackages = Join-Path $Worker ".venv\Lib\site-packages"
+if ((Test-Path $projectVenvSitePackages) -and ($Python -eq (Join-Path $Worker ".venv\Scripts\python.exe"))) {
+    $existingPythonPath = $env:PYTHONPATH
+    $env:PYTHONPATH = if ([string]::IsNullOrWhiteSpace($existingPythonPath)) {
+        $projectVenvSitePackages
+    } else {
+        "$projectVenvSitePackages;$existingPythonPath"
+    }
+}
+
 $env:MATH_AGENT_WORKER_API_KEY = Resolve-WorkerApiKey
+# The teacher sync invokes this worker for authorized page-image transcription. Keep its model and timeout explicit
+# in the launcher so a restarted hidden worker cannot inherit an older short-lived process environment.
+if ([string]::IsNullOrWhiteSpace($env:MATH_AGENT_FORMULA_VISION_MODEL)) {
+    $env:MATH_AGENT_FORMULA_VISION_MODEL = "gpt-5.6-luna"
+}
+if ([string]::IsNullOrWhiteSpace($env:MATH_AGENT_FORMULA_VISION_TIMEOUT_SECONDS)) {
+    $env:MATH_AGENT_FORMULA_VISION_TIMEOUT_SECONDS = "180"
+}
 if ([string]::IsNullOrWhiteSpace($env:KMP_DUPLICATE_LIB_OK)) {
     $env:KMP_DUPLICATE_LIB_OK = "TRUE"
 }
-if ([string]::IsNullOrWhiteSpace($env:MATH_AGENT_EMBEDDING_PROVIDER_ORDER)) {
-    $env:MATH_AGENT_EMBEDDING_PROVIDER_ORDER = "local_clip"
-}
 if ([string]::IsNullOrWhiteSpace($env:MATH_AGENT_PROCESSED_BOOKS_ROOT)) {
     $processedBookRoots = @(
+        # Keep the worker's BGE and CLIP page indexes aligned with the Java
+        # textbook service.  b4 remains available as an explicit rollback
+        # corpus, but c2 is the default searchable small-heading corpus.
+        "C:\Users\doob\Desktop\个人资料\高中数学\下载课本代码\tchMaterial-parser-main\tchMaterial-parser-main\processed_books_section_shadow_all_mini_c2",
+        "C:\Users\doob\Desktop\个人资料\高中数学\下载课本代码\tchMaterial-parser-main\tchMaterial-parser-main\processed_books_section_shadow_all_mini_b4",
         "C:\Users\doob\Desktop\个人资料\高中数学\下载课本代码\tchMaterial-parser-main\tchMaterial-parser-main\processed_books",
         (Join-Path $Root "processed_books")
     )
@@ -162,6 +201,36 @@ if ([string]::IsNullOrWhiteSpace($env:MATH_AGENT_LOCAL_RERANK_MODEL_PATH)) {
     }
 }
 
+# Keep CPU rerank latency bounded by the worker's explicit token budget. This is intentionally separate from result
+# limits: changing it controls model compute only and never injects a relevance score heuristic.
+if ([string]::IsNullOrWhiteSpace($env:MATH_AGENT_LOCAL_RERANK_MAX_TOKENS)) {
+    $env:MATH_AGENT_LOCAL_RERANK_MAX_TOKENS = "128"
+}
+
+# BGE text embeddings serve semantic document/page recall. Do not point this at a partial download: the worker checks
+# for both config and model weights before changing the default CLIP embedding provider.
+if ([string]::IsNullOrWhiteSpace($env:MATH_AGENT_LOCAL_TEXT_EMBEDDING_MODEL_PATH)) {
+    $textEmbeddingCandidates = @(
+        "D:\ModelScope\models\BAAI\bge-small-zh-v1.5",
+        "D:\ModelScope\models\BAAI\bge-m3"
+    )
+    foreach ($candidate in $textEmbeddingCandidates) {
+        if ((Test-Path (Join-Path $candidate "config.json")) -and
+            ((Test-Path (Join-Path $candidate "model.safetensors")) -or (Test-Path (Join-Path $candidate "pytorch_model.bin")))) {
+            $env:MATH_AGENT_LOCAL_TEXT_EMBEDDING_MODEL_PATH = $candidate
+            break
+        }
+    }
+}
+if ([string]::IsNullOrWhiteSpace($env:MATH_AGENT_EMBEDDING_PROVIDER_ORDER)) {
+    # Prefer BGE for the text-only teacher vector collection; CLIP remains available for image/page routes.
+    $env:MATH_AGENT_EMBEDDING_PROVIDER_ORDER = if (-not [string]::IsNullOrWhiteSpace($env:MATH_AGENT_LOCAL_TEXT_EMBEDDING_MODEL_PATH)) {
+        "local_bge_embedding,local_clip"
+    } else {
+        "local_clip"
+    }
+}
+
 if ([string]::IsNullOrWhiteSpace($env:MATH_AGENT_LOCAL_CLIP_MODEL_PATH)) {
     throw "MATH_AGENT_LOCAL_CLIP_MODEL_PATH is required; no local CLIP model with weights was detected"
 }
@@ -189,6 +258,9 @@ try {
     Write-Host "Using local CLIP model: $env:MATH_AGENT_LOCAL_CLIP_MODEL_PATH"
     if (-not [string]::IsNullOrWhiteSpace($env:MATH_AGENT_LOCAL_RERANK_MODEL_PATH)) {
         Write-Host "Using local rerank model: $env:MATH_AGENT_LOCAL_RERANK_MODEL_PATH"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:MATH_AGENT_LOCAL_TEXT_EMBEDDING_MODEL_PATH)) {
+        Write-Host "Using local BGE text embedding model: $env:MATH_AGENT_LOCAL_TEXT_EMBEDDING_MODEL_PATH"
     }
     if ($Background) {
         $logDir = Join-Path $Root "output\local-services"

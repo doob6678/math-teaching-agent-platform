@@ -22,24 +22,26 @@ describe("MultiAgentWritingPanel", () => {
       status: "COMPLETED",
       stages: [
         {
-          stageCode: "draft",
-          agentCode: "CoursewareAgent",
-          traceId: "trace-draft",
+          stageCode: "resource_curation",
+          agentCode: "TeacherAssistantAgent",
+          traceId: "trace-resource",
           providerName: "openai",
           modelCode: "gpt-5.4",
           status: "COMPLETED",
           actualUsage: { promptTokens: 100, completionTokens: 40, totalTokens: 140 },
-          message: "Draft completed",
+          message: "Evidence curation completed",
+          elapsedMs: 42,
         },
         {
-          stageCode: "review",
-          agentCode: "CoursewareReviewer",
-          traceId: "trace-review",
+          stageCode: "teacher_writer",
+          agentCode: "CoursewareAgent",
+          traceId: "trace-teacher",
           providerName: "dashscope",
           modelCode: "qwen3.6-flash",
           status: "COMPLETED",
           actualUsage: { promptTokens: 80, completionTokens: 30, totalTokens: 110 },
-          message: "Fallback review completed",
+          message: "Teacher version completed",
+          elapsedMs: 137,
         },
       ],
       totalUsage: { promptTokens: 180, completionTokens: 70, totalTokens: 250 },
@@ -54,13 +56,13 @@ describe("MultiAgentWritingPanel", () => {
       totalUsage: { promptTokens: 180, completionTokens: 70, totalTokens: 250 },
       stages: [
         {
-          traceId: "trace-review",
-          planId: "workflow-1:review",
+          traceId: "trace-teacher",
+          planId: "workflow-1:teacher_writer",
           createdAt: "2026-07-01T04:20:00Z",
           tenantId: "school-a",
           subjectType: "teacher",
           subjectId: "teacher-1",
-          agentCode: "CoursewareReviewer",
+          agentCode: "CoursewareAgent",
           providerName: "dashscope",
           modelCode: "qwen3.6-flash",
           status: "COMPLETED",
@@ -111,9 +113,14 @@ describe("MultiAgentWritingPanel", () => {
     expect(html).toContain("讲义已生成");
     expect(html).toContain("实际模型");
     expect(html).toContain("通义千问 / qwen3.6-flash");
-    expect(html).toContain("讲义初稿");
+    expect(html).toContain("资料汇总");
+    expect(html).toContain("教师版");
+    expect(html).toContain("学生版");
+    expect(html).toContain("16:10 讲解版");
+    expect(html).toContain("合并结果");
+    expect(html).toContain("耗时 137 ms");
     expect(html).toContain("OpenAI / gpt-5.4");
-    expect(html).toContain("质量审校");
+    expect(html).toContain("来源审查");
     expect(html).toContain("通义千问 / qwen3.6-flash");
     expect(html).not.toContain("tokens");
     expect(html).toContain("建议先预览 PDF");

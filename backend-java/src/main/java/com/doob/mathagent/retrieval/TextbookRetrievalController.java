@@ -4,7 +4,10 @@ import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.infrastructure.security.RequestSubjectResolver;
 import com.doob.mathagent.resources.TextbookResourceProperties;
 import jakarta.servlet.http.HttpServletRequest;
+import java.util.List;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -28,15 +31,29 @@ public class TextbookRetrievalController {
     public TextbookSearchResponse search(
             @RequestParam String query,
             @RequestParam(defaultValue = "10") int limit,
+            @RequestParam(value = "documentId", required = false) List<String> documentIds,
+            @RequestParam(value = "retrievalMode", required = false) String retrievalMode,
             HttpServletRequest httpRequest) {
         return retrievalService.search(
                 resourceProperties.processedBooksRoot(),
-                new TextbookSearchRequest(query, limit),
+                new TextbookSearchRequest(query, "", "", limit, documentIds, retrievalMode),
                 requestContext(httpRequest, subjectResolver.resolve(httpRequest)));
     }
 
     TextbookSearchResponse search(String query, int limit) {
-        return search(query, limit, null);
+        return search(query, limit, null, null, null);
+    }
+
+    /** Accepts formula text and image data that cannot safely fit in a GET query string. */
+    @PostMapping("/api/retrieval/textbooks/search")
+    public TextbookSearchResponse searchWithConfiguration(
+            @RequestBody TextbookSearchRequest request,
+            HttpServletRequest httpRequest) {
+        TextbookSearchRequest normalized = request == null ? new TextbookSearchRequest("", 10) : request;
+        return retrievalService.search(
+                resourceProperties.processedBooksRoot(),
+                normalized,
+                requestContext(httpRequest, subjectResolver.resolve(httpRequest)));
     }
 
     private static RetrievalRequestContext requestContext(HttpServletRequest httpRequest, RequestSubject subject) {

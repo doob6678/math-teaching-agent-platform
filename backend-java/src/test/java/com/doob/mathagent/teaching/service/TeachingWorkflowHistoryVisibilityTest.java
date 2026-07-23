@@ -26,6 +26,13 @@ class TeachingWorkflowHistoryVisibilityTest {
                 null))).isFalse();
 
         assertThat(TeachingWorkflowService.isFrontendDisplayableTask(task(
+                TeachingTaskStatus.FAILED,
+                "反比例函数学生讲义",
+                "\\section{反比例函数}\\n已完成检索，等待恢复生成。",
+                "",
+                null))).isTrue();
+
+        assertThat(TeachingWorkflowService.isFrontendDisplayableTask(task(
                 TeachingTaskStatus.COMPLETED,
                 "反比例函数学生讲义",
                 "",

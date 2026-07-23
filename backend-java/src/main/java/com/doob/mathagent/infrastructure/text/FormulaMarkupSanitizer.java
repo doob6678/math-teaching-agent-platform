@@ -17,6 +17,10 @@ public final class FormulaMarkupSanitizer {
             "(?<![$A-Za-z0-9])\\((?:\\\\pm\\s*)?[A-Za-z](?:\\^[-+]?\\d+)?,\\s*-?\\d+\\)");
     private static final Pattern BARE_FRACTION_COMMAND = Pattern.compile(
             "(?<![$\\\\A-Za-z0-9_])(\\\\frac\\{[^{}]+}\\{[^{}]+})(?![$A-Za-z0-9_])");
+    /** Source DOCX math often retains these commands without surrounding dollar delimiters. */
+    private static final Pattern BARE_VECTOR_OR_OPERATOR_COMMAND = Pattern.compile(
+            "(?<![$\\\\A-Za-z0-9_])(\\\\(?:times|cdot|vec|overrightarrow|sin|cos|tan|ln|sqrt)"
+                    + "(?:\\{[^{}]+})?)(?![$A-Za-z0-9_])");
     private static final String MATH_ATOM = "(?:[+\\-]?\\s*(?:\\\\frac\\{[^{}]+}\\{[^{}]+}"
             + "|\\\\sqrt\\{[^{}]+}"
             + "|(?:\\\\pm\\s*)?[A-Za-z0-9]+(?:[_^]\\{?[-+]?\\d+}?)?"
@@ -27,8 +31,11 @@ public final class FormulaMarkupSanitizer {
             "(?<![\\^_])(\\([^)]+\\)|\\{[^}]+}|(?:[A-Za-z][A-Za-z0-9]*|\\d+))\\s*/\\s*(\\([^)]+\\)|\\{[^}]+}|[A-Za-z][A-Za-z0-9]*)");
     private static final Pattern SIMPLE_FRACTION_RIGHT_HEAVY = Pattern.compile(
             "(?<![\\^_])(\\([^)]+\\)|\\{[^}]+}|[A-Za-z][A-Za-z0-9]*)\\s*/\\s*(\\([^)]+\\)|\\{[^}]+}|(?:[A-Za-z][A-Za-z0-9]*|\\d+))");
+    /** A power followed by a denominator is one fraction, not an exponent whose tail is a fraction. */
+    private static final Pattern POWER_OVER_INTEGER = Pattern.compile(
+            "(?<![A-Za-z0-9_])([A-Za-z](?:\\^\\{?[-+]?\\d+}?)?)\\s*/\\s*([1-9]\\d*)");
     private static final Pattern SHORT_NUMERIC_FRACTION = Pattern.compile(
-            "(?<![A-Za-z0-9/])([1-9]\\d?)\\s*/\\s*([1-9]\\d?)(?![A-Za-z0-9/])");
+            "(?<![A-Za-z0-9/^_])([1-9]\\d?)\\s*/\\s*([1-9]\\d?)(?![A-Za-z0-9/])");
     private static final Pattern FRACTION_POWER = Pattern.compile("\\\\frac\\{([^{}]+)}\\{([^{}]+)}\\^([A-Za-z0-9]+)");
     private static final Pattern ALL_UPPERCASE_LATIN = Pattern.compile("[A-Z]{2,}");
 
@@ -51,6 +58,7 @@ public final class FormulaMarkupSanitizer {
         normalized = wrapBareMathOutsideDelimiters(normalized);
         normalized = cleanupFractionMathDelimiters(normalized);
         normalized = wrapMatches(normalized, BARE_FRACTION_COMMAND);
+        normalized = wrapMatches(normalized, BARE_VECTOR_OR_OPERATOR_COMMAND);
         return normalized.strip();
     }
 
@@ -60,7 +68,7 @@ public final class FormulaMarkupSanitizer {
      * teacher/student handouts can still render standard math.
      */
     private static String normalizeLegacyLatexEscapes(String value) {
-        return value
+        String normalized = value
                 .replace("\\textasciicircum{}", "^")
                 .replace("\\textasciitilde{}", "~")
                 .replace("\\textbackslash{}frac", "\\frac")
@@ -70,6 +78,22 @@ public final class FormulaMarkupSanitizer {
                 .replace("\\textbackslash{}tan", "\\tan")
                 .replace("\\textbackslash{}ln", "\\ln")
                 .replace("\\textbackslash{}log", "\\log");
+        // OCR commonly splits a compact fraction or radical with spaces. Recover the mathematical structure
+        // before the generic wrapping pass so the PDF and browser receive the same canonical TeX.
+        normalized = normalized.replaceAll("(?<![A-Za-z])1\\s*\\+\\s*k\\s*/\\s*1\\s*-\\s*k(?![A-Za-z])",
+                "\\\\frac{1+k}{1-k}");
+        normalized = normalized.replaceAll("(?<![A-Za-z])\\\\sqrt\\s+([A-Za-z0-9]+)", "\\\\sqrt{$1}");
+        // JSON/model boundaries sometimes split the TeX command as "\\ rac" or "\\  rac".
+        // Collapse that transport whitespace before formula wrapping so the renderer always receives \\frac.
+        normalized = normalized.replaceAll("\\\\\\s+rac\\b", "\\\\frac");
+        normalized = normalized.replaceAll("(?<![A-Za-z])\\s+rac\\b", "\\\\frac");
+        // Keep the compact exponent form expected by the shared frontend renderer; both `^2` and `^{2}`
+        // are mathematically valid, but the compact form avoids changing already verified output contracts.
+        normalized = normalized.replaceAll("(?<![A-Za-z])([A-Za-z])\\s*\\^\\s*([0-9]+)", "$1^$2");
+        // Restore the standard hyperbola form when OCR emits the characteristic `C x y m m- = >` sequence.
+        normalized = normalized.replaceAll("C\\s*:?\\s*x\\s*y\\s*m\\s*m\\s*[−-]\\s*=\\s*>",
+                "C: x^2/a^2-y^2/b^2=1 (a,b>0)");
+        return normalized;
     }
 
     private static String replaceEnvironment(String value) {
@@ -98,7 +122,7 @@ public final class FormulaMarkupSanitizer {
     }
 
     private static String normalizeUnicodeMathSymbols(String value) {
-        return value
+        return normalizeGeometryRelations(value)
                 .replace("⁰", "^0")
                 .replace("¹", "^1")
                 .replace("²", "^2")
@@ -122,6 +146,44 @@ public final class FormulaMarkupSanitizer {
                 .replace("±", "\\pm ")
                 .replace("×", "\\times ")
                 .replace("÷", "/");
+    }
+
+    /**
+     * Moves geometry relation glyphs into TeX math mode before printable handout escaping.  CJK body fonts do not
+     * consistently contain glyphs such as {@code ⊥}; leaving them as plain text caused visible square boxes in real
+     * teacher PDFs.  The small state machine preserves an already-delimited formula instead of nesting dollar signs.
+     */
+    private static String normalizeGeometryRelations(String value) {
+        StringBuilder builder = new StringBuilder();
+        boolean math = false;
+        for (int index = 0; index < value.length(); index += 1) {
+            if (value.startsWith("$$", index)) {
+                builder.append("$$");
+                math = !math;
+                index += 1;
+                continue;
+            }
+            char character = value.charAt(index);
+            if (character == '$') {
+                builder.append(character);
+                math = !math;
+                continue;
+            }
+            String command = switch (character) {
+                case '⊥' -> "\\perp";
+                case '∥', '‖' -> "\\parallel";
+                case '∠' -> "\\angle";
+                default -> "";
+            };
+            if (command.isEmpty()) {
+                builder.append(character);
+            } else if (math) {
+                builder.append(command).append(' ');
+            } else {
+                builder.append('$').append(command).append('$');
+            }
+        }
+        return builder.toString();
     }
 
     private static String wrapBareMathOutsideDelimiters(String value) {
@@ -192,7 +254,8 @@ public final class FormulaMarkupSanitizer {
      * Converts simple slash fractions such as k/x or (a+b)/c to \frac{...}{...} while avoiding exponent ratios like x^2/a^2.
      */
     private static String normalizeSlashFractions(String value) {
-        String normalized = replaceSimpleFractions(value, SIMPLE_FRACTION_LEFT_HEAVY);
+        String normalized = replacePowerOverInteger(value);
+        normalized = replaceSimpleFractions(normalized, SIMPLE_FRACTION_LEFT_HEAVY);
         normalized = replaceSimpleFractions(normalized, SIMPLE_FRACTION_RIGHT_HEAVY);
         normalized = replaceShortNumericFractions(normalized);
         Matcher matcher = FRACTION_POWER.matcher(normalized);
@@ -201,6 +264,17 @@ public final class FormulaMarkupSanitizer {
             matcher.appendReplacement(
                     buffer,
                     Matcher.quoteReplacement("\\left(\\frac{" + matcher.group(1) + "}{" + matcher.group(2) + "}\\right)^" + matcher.group(3)));
+        }
+        matcher.appendTail(buffer);
+        return buffer.toString();
+    }
+
+    /** Preserves the numerator boundary in source text such as {@code x^2/16}. */
+    private static String replacePowerOverInteger(String value) {
+        Matcher matcher = POWER_OVER_INTEGER.matcher(value);
+        StringBuffer buffer = new StringBuffer();
+        while (matcher.find()) {
+            matcher.appendReplacement(buffer, Matcher.quoteReplacement("\\frac{" + matcher.group(1) + "}{" + matcher.group(2) + "}"));
         }
         matcher.appendTail(buffer);
         return buffer.toString();

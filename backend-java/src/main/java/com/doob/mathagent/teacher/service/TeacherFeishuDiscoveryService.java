@@ -1,5 +1,7 @@
 package com.doob.mathagent.teacher.service;
 
+import com.doob.mathagent.teacher.feishu.TeacherFeishuDiscoveryClient;
+import com.doob.mathagent.teacher.feishu.TeacherFeishuDiscoveryQuery;
 import com.doob.mathagent.teacher.vo.TeacherFeishuDiscoveryResponse;
 import java.util.Locale;
 import org.springframework.stereotype.Service;

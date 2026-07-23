@@ -10,6 +10,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Repository;
 
 /**
@@ -50,6 +51,11 @@ public class MyBatisTeachingTaskStore implements TeachingTaskStore {
     }
 
     @Override
+    public Optional<TeachingTaskResponse> findByTaskId(String taskId) {
+        return taskId == null || taskId.isBlank() ? Optional.empty() : Optional.ofNullable(mapper.selectById(taskId.strip())).map(this::readResponse);
+    }
+
+    @Override
     public List<TeachingTaskResponse> listRecentByOwnerKey(String ownerKey, int limit) {
         if (ownerKey == null || ownerKey.isBlank()) {
             return List.of();
@@ -65,12 +71,35 @@ public class MyBatisTeachingTaskStore implements TeachingTaskStore {
     }
 
     @Override
+    public TeachingTaskResponse createIfAbsent(String ownerKey, String idempotencyKey, TeachingTaskResponse task) {
+        TeachingTaskEntity entity = toEntity(ownerKey, idempotencyKey, task);
+        try {
+            mapper.insert(entity);
+            return task;
+        } catch (DuplicateKeyException exception) {
+            return findByIdempotencyKey(idempotencyKey).orElseThrow(() -> exception);
+        }
+    }
+
+    @Override
     public TeachingTaskResponse save(String ownerKey, String idempotencyKey, TeachingTaskResponse task) {
         TeachingTaskEntity entity = toEntity(ownerKey, idempotencyKey, task);
         TeachingTaskEntity existing = mapper.selectById(task.taskId());
         if (existing == null) {
             mapper.insert(entity);
         } else {
+            // Workflow snapshots change visible DAG progress, while the Worker CAS state machine owns lease/retry
+            // columns. Preserving those values prevents a progress checkpoint from accidentally stealing a lease.
+            entity.setStatus(existing.getStatus());
+            entity.setRetryCount(existing.getRetryCount());
+            entity.setLeaseOwner(existing.getLeaseOwner());
+            entity.setLeaseToken(existing.getLeaseToken());
+            entity.setLeaseExpireAt(existing.getLeaseExpireAt());
+            entity.setCurrentStage(currentStage(task, existing.getCurrentStage()));
+            entity.setLastError(existing.getLastError());
+            entity.setStartedAt(existing.getStartedAt());
+            entity.setFinishedAt(existing.getFinishedAt());
+            entity.setCreatedAt(existing.getCreatedAt());
             mapper.updateById(entity);
         }
         return task;
@@ -91,6 +120,15 @@ public class MyBatisTeachingTaskStore implements TeachingTaskStore {
         entity.setCreatedAt(now);
         entity.setUpdatedAt(now);
         return entity;
+    }
+
+    /** Mirrors the visible DAG checkpoint into a queryable task-table column for stuck-task operations. */
+    private static String currentStage(TeachingTaskResponse task, String fallback) {
+        return task.nodes().stream()
+                .filter(node -> "running".equalsIgnoreCase(node.status()))
+                .map(node -> node.code())
+                .findFirst()
+                .orElse(fallback);
     }
 
     private String writeResponse(TeachingTaskResponse task) {

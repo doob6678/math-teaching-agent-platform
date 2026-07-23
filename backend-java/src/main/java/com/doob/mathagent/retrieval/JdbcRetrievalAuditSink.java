@@ -23,6 +23,7 @@ import java.util.Optional;
 public class JdbcRetrievalAuditSink implements RetrievalAuditSink, RetrievalAuditLookup {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final int MAX_RETRIEVAL_STRATEGY_LENGTH = 64;
     private static final TypeReference<Map<String, String>> STRING_MAP_TYPE = new TypeReference<>() {
     };
     private static final TypeReference<Map<String, Object>> OBJECT_MAP_TYPE = new TypeReference<>() {
@@ -121,7 +122,7 @@ public class JdbcRetrievalAuditSink implements RetrievalAuditSink, RetrievalAudi
             setNullableString(statement, 3, event.subjectType());
             setNullableString(statement, 4, event.subjectId());
             statement.setString(5, event.queryText());
-            statement.setString(6, event.retrievalStrategy());
+            statement.setString(6, safeRetrievalStrategy(event.retrievalStrategy()));
             statement.setInt(7, event.requestedLimit());
             statement.setInt(8, event.hitCount());
             statement.setInt(9, event.elapsedMs());
@@ -145,7 +146,7 @@ public class JdbcRetrievalAuditSink implements RetrievalAuditSink, RetrievalAudi
                 }
                 setNullableString(statement, 7, hit.printedPageNo());
                 statement.setDouble(8, hit.score());
-                statement.setString(9, hit.retrievalStrategy());
+                statement.setString(9, safeRetrievalStrategy(hit.retrievalStrategy()));
                 setNullableString(statement, 10, hit.pageQualityLabel());
                 setNullableString(statement, 11, hit.sourcePageImage());
                 statement.setString(12, toJson(hit.evidenceJson()));
@@ -214,6 +215,20 @@ public class JdbcRetrievalAuditSink implements RetrievalAuditSink, RetrievalAudi
         } else {
             statement.setString(index, value);
         }
+    }
+
+    /**
+     * Retrieval strategy is a compact diagnostic label persisted into VARCHAR(64).
+     *
+     * <p>Do not let evolving pipeline version names break production search. Audit should record a short readable mode
+     * string, not the full internal implementation detail.</p>
+     */
+    private static String safeRetrievalStrategy(String value) {
+        String normalized = value == null ? "" : value.strip();
+        if (normalized.length() <= MAX_RETRIEVAL_STRATEGY_LENGTH) {
+            return normalized;
+        }
+        return normalized.substring(0, MAX_RETRIEVAL_STRATEGY_LENGTH);
     }
 
     private static String toJson(Object value) {

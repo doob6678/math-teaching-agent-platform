@@ -61,7 +61,7 @@ public final class OmmlFormulaExtractor {
                         + " xmlns:m=\"" + MATH_NAMESPACE + "\">" + omml + "</formula-fragment>";
                 Document document = factory.newDocumentBuilder().parse(new InputSource(new StringReader(wrapped)));
                 Element formula = (Element) document.getElementsByTagNameNS(MATH_NAMESPACE, "oMath").item(0);
-                String plainText = normalizeFormulaText(plainText(formula));
+                String plainText = normalizeFormulaText(formulaPlainText(formula));
                 if (!plainText.isBlank()) {
                     formulas.add(new ExtractedFormula(
                             serialize(formula),
@@ -194,6 +194,43 @@ public final class OmmlFormulaExtractor {
             result.append(plainText(child));
         }
         return result.toString();
+    }
+
+    /** Preserves the minimal operators that carry meaning in searchable formula text. */
+    private static String formulaPlainText(Element element) {
+        String name = localName(element);
+        return switch (name) {
+            case "f" -> childPlainText(element, "num") + "/" + childPlainText(element, "den");
+            case "sSup" -> childPlainText(element, "e") + "^" + childPlainText(element, "sup");
+            case "sSub" -> childPlainText(element, "e") + "_" + childPlainText(element, "sub");
+            case "sSubSup" -> childPlainText(element, "e") + "_" + childPlainText(element, "sub")
+                    + "^" + childPlainText(element, "sup");
+            default -> {
+                StringBuilder result = new StringBuilder();
+                boolean hasElementChild = false;
+                for (Node child = element.getFirstChild(); child != null; child = child.getNextSibling()) {
+                    hasElementChild |= child instanceof Element;
+                }
+                if (!hasElementChild) {
+                    yield plainText(element);
+                }
+                for (Node child = element.getFirstChild(); child != null; child = child.getNextSibling()) {
+                    if (child instanceof Element childElement) {
+                        result.append(formulaPlainText(childElement));
+                    }
+                }
+                yield result.toString();
+            }
+        };
+    }
+
+    private static String childPlainText(Element parent, String childName) {
+        for (Node child = parent.getFirstChild(); child != null; child = child.getNextSibling()) {
+            if (child instanceof Element childElement && childName.equals(localName(childElement))) {
+                return formulaPlainText(childElement);
+            }
+        }
+        return "";
     }
 
     private static String normalizeFormulaText(String value) {

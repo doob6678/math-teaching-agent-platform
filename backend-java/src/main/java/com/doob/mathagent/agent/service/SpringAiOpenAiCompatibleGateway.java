@@ -3,11 +3,24 @@ package com.doob.mathagent.agent.service;
 import com.doob.mathagent.infrastructure.ai.AiProviderProperties;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URI;
+import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Primary;
@@ -59,6 +72,32 @@ public class SpringAiOpenAiCompatibleGateway implements AiChatGateway {
      */
     @Override
     public AiChatResult call(AiChatRequest request) {
+        // A socket read timeout alone is not a total request deadline: some relays keep a connection open while
+        // never completing a JSON response.  Run each blocking exchange in its own cancellable worker so a stalled
+        // relay cannot leave the durable teaching task at RUNNING forever.
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        Future<AiChatResult> future = executor.submit(() -> callProvider(request));
+        try {
+            return future.get(requestTimeout.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (TimeoutException exception) {
+            future.cancel(true);
+            throw new IllegalStateException("AI provider request exceeded configured total timeout", exception);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("AI provider request interrupted", exception);
+        } catch (ExecutionException exception) {
+            Throwable cause = exception.getCause();
+            if (cause instanceof RuntimeException runtimeException) {
+                throw runtimeException;
+            }
+            throw new IllegalStateException("AI provider request failed", cause);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    /** Performs the actual OpenAI-compatible request; the public method owns its total-deadline boundary. */
+    private AiChatResult callProvider(AiChatRequest request) {
         AiProviderProperties.Provider provider = provider(request.providerName());
         // Ark follows the OpenAI-compatible /api/v3 contract documented by Volcengine:
         // https://www.volcengine.com/docs/82379/1330626. The official Chat API is still the
@@ -78,6 +117,114 @@ public class SpringAiOpenAiCompatibleGateway implements AiChatGateway {
         return resultFromBody(request, readJson(responseBody));
     }
 
+    /**
+     * Calls the same provider endpoint with {@code stream=true} and forwards only provider-originated text deltas.
+     * The HTTP connection has the configured read timeout, preventing a stalled provider from holding a servlet worker
+     * indefinitely. A final usage-only event is preserved in the returned result.
+     */
+    @Override
+    public AiChatResult stream(AiChatRequest request, AiChatStreamListener listener) {
+        AiProviderProperties.Provider provider = provider(request.providerName());
+        HttpURLConnection connection = null;
+        try {
+            URL endpoint = URI.create(chatCompletionsUri(provider.getBaseUrl())).toURL();
+            connection = (HttpURLConnection) endpoint.openConnection();
+            connection.setRequestMethod("POST");
+            connection.setConnectTimeout((int) requestTimeout.toMillis());
+            connection.setReadTimeout((int) requestTimeout.toMillis());
+            connection.setDoOutput(true);
+            connection.setRequestProperty("Content-Type", MediaType.APPLICATION_JSON_VALUE);
+            connection.setRequestProperty("Accept", MediaType.TEXT_EVENT_STREAM_VALUE);
+            connection.setRequestProperty("Authorization", "Bearer " + provider.getApiKey());
+            byte[] requestBody = OBJECT_MAPPER.writeValueAsBytes(streamChatCompletionBody(request));
+            connection.setFixedLengthStreamingMode(requestBody.length);
+            try (OutputStream output = connection.getOutputStream()) {
+                output.write(requestBody);
+            }
+            int status = connection.getResponseCode();
+            if (status < HttpURLConnection.HTTP_OK || status >= HttpURLConnection.HTTP_MULT_CHOICE) {
+                throw new IllegalStateException("AI provider stream returned HTTP " + status);
+            }
+            return consumeStream(request, connection.getInputStream(), listener);
+        } catch (Exception exception) {
+            throw new IllegalStateException("AI provider stream failed: " + exception.getClass().getSimpleName(), exception);
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
+        }
+    }
+
+    /** Consumes OpenAI-compatible SSE lines while retaining complete content for the existing structured parser. */
+    private static AiChatResult consumeStream(
+            AiChatRequest request,
+            InputStream input,
+            AiChatStreamListener listener) throws Exception {
+        StringBuilder content = new StringBuilder();
+        StringBuilder reasoning = new StringBuilder();
+        String modelCode = request.modelCode();
+        int promptTokens = 0;
+        int completionTokens = 0;
+        int totalTokens = 0;
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(input, StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (!line.startsWith("data:")) {
+                    continue;
+                }
+                String data = line.substring("data:".length()).strip();
+                if (data.isBlank() || "[DONE]".equals(data)) {
+                    continue;
+                }
+                AiChatStreamDelta delta = streamDeltaFromBody(readJson(data)).withProviderName(request.providerName());
+                if (!delta.modelCode().isBlank()) {
+                    modelCode = delta.modelCode();
+                }
+                if (!delta.reasoningDelta().isBlank()) {
+                    reasoning.append(delta.reasoningDelta());
+                }
+                if (!delta.contentDelta().isBlank()) {
+                    content.append(delta.contentDelta());
+                }
+                promptTokens = Math.max(promptTokens, delta.promptTokens());
+                completionTokens = Math.max(completionTokens, delta.completionTokens());
+                totalTokens = Math.max(totalTokens, delta.totalTokens());
+                if (listener != null && (!delta.reasoningDelta().isBlank() || !delta.contentDelta().isBlank())) {
+                    listener.onDelta(delta);
+                }
+            }
+        }
+        return new AiChatResult(
+                request.providerName(),
+                modelCode,
+                promptTokens,
+                completionTokens,
+                totalTokens,
+                "Live model stream completed.",
+                content.toString());
+    }
+
+    /** Parses one provider SSE payload, accepting content arrays and common reasoning field names. */
+    static AiChatStreamDelta streamDeltaFromBody(JsonNode body) {
+        JsonNode choice = body.path("choices").isArray() && !body.path("choices").isEmpty()
+                ? body.path("choices").get(0)
+                : OBJECT_MAPPER.createObjectNode();
+        JsonNode delta = choice.path("delta");
+        JsonNode usage = body.path("usage");
+        String reasoning = text(delta.path("reasoning_content"));
+        if (reasoning.isBlank()) {
+            reasoning = text(delta.path("reasoning"));
+        }
+        return new AiChatStreamDelta(
+                "",
+                text(body.path("model")),
+                reasoning,
+                streamContent(delta.path("content")),
+                intValue(usage.path("prompt_tokens").asInt(0)),
+                intValue(usage.path("completion_tokens").asInt(0)),
+                intValue(usage.path("total_tokens").asInt(0)));
+    }
+
     static AiChatResult resultFromBody(AiChatRequest request, JsonNode body) {
         JsonNode usage = body.path("usage");
         return new AiChatResult(
@@ -94,6 +241,18 @@ public class SpringAiOpenAiCompatibleGateway implements AiChatGateway {
         return Map.of(
                 "model", request.modelCode(),
                 "temperature", 0.2d,
+                "messages", List.of(
+                        Map.of("role", "system", "content", systemPrompt(request)),
+                        Map.of("role", "user", "content", userPrompt(request))));
+    }
+
+    /** Keeps the stream request identical to the normal request except for documented OpenAI-compatible SSE flags. */
+    private static Map<String, Object> streamChatCompletionBody(AiChatRequest request) {
+        return Map.of(
+                "model", request.modelCode(),
+                "temperature", 0.2d,
+                "stream", true,
+                "stream_options", Map.of("include_usage", true),
                 "messages", List.of(
                         Map.of("role", "system", "content", systemPrompt(request)),
                         Map.of("role", "user", "content", userPrompt(request))));
@@ -204,6 +363,27 @@ public class SpringAiOpenAiCompatibleGateway implements AiChatGateway {
             return joined.toString();
         }
         return "";
+    }
+
+    private static String streamContent(JsonNode content) {
+        if (content.isTextual()) {
+            return content.asText();
+        }
+        if (!content.isArray()) {
+            return "";
+        }
+        StringBuilder joined = new StringBuilder();
+        for (JsonNode item : content) {
+            String text = text(item.path("text"));
+            if (!text.isBlank()) {
+                joined.append(text);
+            }
+        }
+        return joined.toString();
+    }
+
+    private static String text(JsonNode value) {
+        return value != null && value.isTextual() ? value.asText() : "";
     }
 
     /**

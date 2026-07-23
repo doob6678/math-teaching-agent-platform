@@ -5,7 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.doob.mathagent.teacher.entity.TeacherSourceSyncCheckpointEntity;
 import com.doob.mathagent.teacher.mapper.TeacherSourceSyncCheckpointMapper;
-import com.doob.mathagent.teacher.service.MyBatisTeacherSourceSyncCheckpointStore;
+import com.doob.mathagent.teacher.sync.MyBatisTeacherSourceSyncCheckpointStore;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncCheckpointResponse;
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;

@@ -117,7 +117,8 @@ class MyBatisStudentExplanationHistoryStoreTest {
                 List.of(new StudentExplanationResponse.ExplanationCard(
                         "step_by_step", "Steps", "Use vectors.", List.of("Build coordinates"), List.of(), "formula")),
                 List.of(new StudentExplanationResponse.ExplanationSource(
-                        "textbook", "book p.12", "textbook://book/page/12#chunk=c1", "PUBLIC_TEXTBOOK", "vector", 1.0)),
+                        "textbook", "book p.12", "textbook://book/page/12#chunk=c1", "PUBLIC_TEXTBOOK", "vector", 1.0,
+                        "空间向量 / 第 12 页", "")),
                 22L);
     }
 
@@ -166,6 +167,13 @@ class MyBatisStudentExplanationHistoryStoreTest {
                         case "updateById" -> {
                             updated.add((StudentExplanationSessionEntity) args[0]);
                             yield 1;
+                        }
+                        case "selectBatchIds" -> {
+                            @SuppressWarnings("unchecked")
+                            java.util.Collection<String> ids = (java.util.Collection<String>) args[0];
+                            yield inserted.stream()
+                                    .filter(row -> ids.contains(row.getConversationId()))
+                                    .toList();
                         }
                         default -> throw new UnsupportedOperationException(method.getName());
                     });

@@ -4,6 +4,7 @@ import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.infrastructure.security.RequestSubjectResolver;
 import com.doob.mathagent.teaching.TeachingRequestContext;
 import com.doob.mathagent.teaching.dto.TeachingHandoutBatchExportRequest;
+import com.doob.mathagent.teaching.dto.TeachingHandoutVersionUpdateRequest;
 import com.doob.mathagent.teaching.dto.TeachingHumanFeedbackRequest;
 import com.doob.mathagent.teaching.dto.TeachingTaskRequest;
 import com.doob.mathagent.teaching.service.TeachingHandoutBatchExportRecord;
@@ -13,6 +14,8 @@ import com.doob.mathagent.teaching.service.TeachingHumanFeedbackService;
 import com.doob.mathagent.teaching.service.TeachingHandoutPdfExportService;
 import com.doob.mathagent.teaching.service.TeachingHandoutTemplatePreviewService;
 import com.doob.mathagent.teaching.service.TeachingHandoutTemplateService;
+import com.doob.mathagent.teaching.service.LectureTaskSubmissionService;
+import com.doob.mathagent.teaching.service.TeachingTaskEventStreamService;
 import com.doob.mathagent.teaching.service.TeachingWorkflowService;
 import com.doob.mathagent.teaching.vo.TeachingHandoutBatchExportResponse;
 import com.doob.mathagent.teaching.vo.TeachingHandoutTemplateResponse;
@@ -31,10 +34,12 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 /**
  * 教学任务接口：前端提交任务后可通过 taskId 持续查询结果，支持页面离开后的恢复。
@@ -43,10 +48,12 @@ import org.springframework.web.server.ResponseStatusException;
 public class TeachingTaskController {
 
     private static final String TEACHING_SUBMIT_ACTION = "teaching:submit";
+    private static final String TEACHING_RESUME_ACTION = "teaching:resume";
     private static final String TEACHING_HANDOUT_LATEX_EXPORT_ACTION = "teaching-handout:export-latex";
     private static final String TEACHING_HANDOUT_LATEX_PREVIEW_ACTION = "teaching-handout:preview-latex";
     private static final String TEACHING_HANDOUT_PDF_EXPORT_ACTION = "teaching-handout:export-pdf";
     private static final String TEACHING_HANDOUT_PDF_PREVIEW_ACTION = "teaching-handout:preview-pdf";
+    private static final String TEACHING_HANDOUT_UPDATE_ACTION = "teaching-handout:update";
     private static final String TEACHING_HANDOUT_BATCH_ZIP_EXPORT_ACTION = "teaching-handout:batch-export-zip";
     private static final String TEACHING_HANDOUT_BATCH_ZIP_DOWNLOAD_ACTION = "teaching-handout:batch-download-zip";
     private static final String TEACHING_FEEDBACK_SUBMIT_ACTION = "teaching-feedback:submit";
@@ -56,6 +63,7 @@ public class TeachingTaskController {
     private static final String HANDOUT_PAGE_COUNT_HEADER = "X-Handout-Page-Count";
 
     private final TeachingWorkflowService workflowService;
+    private final LectureTaskSubmissionService lectureTaskSubmissionService;
     private final RequestSubjectResolver subjectResolver;
     private final TeachingCapabilityVerifier capabilityVerifier;
     private final TeachingHandoutPdfExportService pdfExportService;
@@ -63,6 +71,7 @@ public class TeachingTaskController {
     private final TeachingHumanFeedbackService feedbackService;
     private final TeachingHandoutTemplateService handoutTemplateService;
     private final TeachingHandoutTemplatePreviewService handoutTemplatePreviewService;
+    private final TeachingTaskEventStreamService eventStreamService;
 
     /**
      * 注入教学编排服务。
@@ -70,14 +79,17 @@ public class TeachingTaskController {
     @Autowired
     public TeachingTaskController(
             TeachingWorkflowService workflowService,
+            LectureTaskSubmissionService lectureTaskSubmissionService,
             RequestSubjectResolver subjectResolver,
             TeachingCapabilityVerifier capabilityVerifier,
             TeachingHandoutPdfExportService pdfExportService,
             TeachingHandoutBatchExportService batchExportService,
             TeachingHumanFeedbackService feedbackService,
             TeachingHandoutTemplateService handoutTemplateService,
-            TeachingHandoutTemplatePreviewService handoutTemplatePreviewService) {
+            TeachingHandoutTemplatePreviewService handoutTemplatePreviewService,
+            TeachingTaskEventStreamService eventStreamService) {
         this.workflowService = workflowService;
+        this.lectureTaskSubmissionService = lectureTaskSubmissionService;
         this.subjectResolver = subjectResolver;
         this.capabilityVerifier = capabilityVerifier;
         this.pdfExportService = pdfExportService;
@@ -85,6 +97,7 @@ public class TeachingTaskController {
         this.feedbackService = feedbackService;
         this.handoutTemplateService = handoutTemplateService;
         this.handoutTemplatePreviewService = handoutTemplatePreviewService;
+        this.eventStreamService = eventStreamService;
     }
 
     /**
@@ -99,13 +112,15 @@ public class TeachingTaskController {
             TeachingHumanFeedbackService feedbackService) {
         this(
                 workflowService,
+                null,
                 subjectResolver,
                 capabilityVerifier,
                 pdfExportService,
                 batchExportService,
                 feedbackService,
                 new TeachingHandoutTemplateService(),
-                new TeachingHandoutTemplatePreviewService(new TeachingHandoutTemplateService()));
+                new TeachingHandoutTemplatePreviewService(new TeachingHandoutTemplateService()),
+                new TeachingTaskEventStreamService());
     }
 
     /**
@@ -124,7 +139,10 @@ public class TeachingTaskController {
                 subject)) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for teaching submit");
         }
-        return workflowService.submit(request, requestContext(subject));
+        // The HTTP request creates only durable MySQL state. The outbox publisher later sends the opaque taskId.
+        return lectureTaskSubmissionService == null
+                ? workflowService.submit(request, requestContext(subject))
+                : lectureTaskSubmissionService.submit(request, requestContext(subject));
     }
 
     /**
@@ -192,6 +210,84 @@ public class TeachingTaskController {
             HttpServletRequest httpRequest) {
         return workflowService.get(taskId, requestContext(subjectResolver.resolve(httpRequest)))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Teaching task not found"));
+    }
+
+    /** Resumes an owned failed task using its original task ID and idempotency identity. */
+    @PostMapping("/api/teaching/tasks/{taskId}/resume")
+    public TeachingTaskResponse resume(
+            @PathVariable String taskId,
+            HttpServletRequest httpRequest) {
+        RequestSubject subject = subjectResolver.resolve(httpRequest);
+        String path = TEACHING_TASKS_PATH + "/" + taskId + "/resume";
+        if (!capabilityVerifier.verify(
+                headerOrNull(httpRequest, "X-Capability-Token"),
+                TEACHING_RESUME_ACTION,
+                path,
+                headerOrNull(httpRequest, "X-Request-Hash"),
+                subject)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for teaching task resume");
+        }
+        try {
+            return lectureTaskSubmissionService == null
+                    ? workflowService.resume(taskId, requestContext(subject))
+                    : lectureTaskSubmissionService.resume(taskId, requestContext(subject), workflowService);
+        } catch (IllegalArgumentException exception) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, exception.getMessage());
+        } catch (IllegalStateException exception) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, exception.getMessage());
+        }
+    }
+
+    /**
+     * Streams user-visible snapshots from the same owned task record returned by the normal read endpoint.
+     *
+     * <p>The first snapshot is delivered immediately. Subsequent snapshots appear only after a durable state change,
+     * while an ordinary GET remains the reconnect and page-recovery contract.</p>
+     */
+    @GetMapping(value = "/api/teaching/tasks/{taskId}/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter stream(
+            @PathVariable String taskId,
+            HttpServletRequest httpRequest) {
+        TeachingRequestContext context = requestContext(subjectResolver.resolve(httpRequest));
+        if (workflowService.get(taskId, context).isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Teaching task not found");
+        }
+        return eventStreamService.stream(() -> workflowService.get(taskId, context));
+    }
+
+    /**
+     * Saves one editable version back onto its original owned task. The route is capability-bound to the version and
+     * the workflow service re-applies generation-time safety filters before writing the durable task snapshot.
+     */
+    @PutMapping("/api/teaching/tasks/{taskId}/handout/{version}")
+    public TeachingTaskResponse updateHandoutVersion(
+            @PathVariable String taskId,
+            @PathVariable String version,
+            @Valid @RequestBody TeachingHandoutVersionUpdateRequest request,
+            HttpServletRequest httpRequest) {
+        String normalizedVersion = normalizeHandoutVersion(version);
+        RequestSubject subject = subjectResolver.resolve(httpRequest);
+        requireHandoutVersionAllowed(normalizedVersion, subject);
+        String path = TEACHING_TASKS_PATH + "/" + taskId + "/handout/" + normalizedVersion;
+        if (!capabilityVerifier.verify(
+                headerOrNull(httpRequest, "X-Capability-Token"),
+                TEACHING_HANDOUT_UPDATE_ACTION,
+                path,
+                headerOrNull(httpRequest, "X-Request-Hash"),
+                subject)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for handout update");
+        }
+        try {
+            return workflowService.updateHandoutVersion(
+                    taskId,
+                    normalizedVersion,
+                    request.normalizedLatex(),
+                    requestContext(subject));
+        } catch (IllegalArgumentException exception) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, exception.getMessage());
+        } catch (IllegalStateException exception) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, exception.getMessage());
+        }
     }
 
     /**
@@ -337,7 +433,7 @@ public class TeachingTaskController {
         TeachingTaskResponse task = workflowService.get(taskId, requestContext(subject))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Teaching task not found"));
         String effectiveVersion = defaultHandoutVersion(subject);
-        TeachingHandoutPdfExportService.RenderedHandoutPdf rendered = pdfExportService.renderDetailed(task, effectiveVersion);
+        TeachingHandoutPdfExportService.RenderedHandoutPdf rendered = renderForPublication(task, effectiveVersion);
         return pdfResponse(rendered, task.taskId() + ".pdf", false);
     }
 
@@ -363,7 +459,7 @@ public class TeachingTaskController {
         }
         TeachingTaskResponse task = workflowService.get(taskId, requestContext(subject))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Teaching task not found"));
-        TeachingHandoutPdfExportService.RenderedHandoutPdf rendered = pdfExportService.renderDetailed(task, normalizedVersion);
+        TeachingHandoutPdfExportService.RenderedHandoutPdf rendered = renderForPublication(task, normalizedVersion);
         return pdfResponse(rendered, task.taskId() + "-" + normalizedVersion + ".pdf", false);
     }
 
@@ -387,7 +483,7 @@ public class TeachingTaskController {
         TeachingTaskResponse task = workflowService.get(taskId, requestContext(subject))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Teaching task not found"));
         String effectiveVersion = defaultHandoutVersion(subject);
-        TeachingHandoutPdfExportService.RenderedHandoutPdf rendered = pdfExportService.renderDetailed(task, effectiveVersion);
+        TeachingHandoutPdfExportService.RenderedHandoutPdf rendered = renderForPublication(task, effectiveVersion);
         return pdfResponse(rendered, task.taskId() + ".pdf", true);
     }
 
@@ -413,8 +509,19 @@ public class TeachingTaskController {
         }
         TeachingTaskResponse task = workflowService.get(taskId, requestContext(subject))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Teaching task not found"));
-        TeachingHandoutPdfExportService.RenderedHandoutPdf rendered = pdfExportService.renderDetailed(task, normalizedVersion);
+        TeachingHandoutPdfExportService.RenderedHandoutPdf rendered = renderForPublication(task, normalizedVersion);
         return pdfResponse(rendered, task.taskId() + "-" + normalizedVersion + ".pdf", true);
+    }
+
+    /** Maps the shared publication gate to one consistent HTTP contract for preview and download routes. */
+    private TeachingHandoutPdfExportService.RenderedHandoutPdf renderForPublication(
+            TeachingTaskResponse task,
+            String version) {
+        try {
+            return pdfExportService.renderForPublication(task, version);
+        } catch (IllegalStateException exception) {
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, exception.getMessage(), exception);
+        }
     }
 
     private static ResponseEntity<byte[]> pdfResponse(
@@ -455,9 +562,23 @@ public class TeachingTaskController {
                         .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Teaching task not found")))
                 .toList();
         try {
+            validateBatchPublicationTasks(tasks, subject);
             return batchExportService.create(normalized, context, tasks);
         } catch (IllegalArgumentException exception) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, exception.getMessage(), exception);
+        } catch (IllegalStateException exception) {
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, exception.getMessage(), exception);
+        }
+    }
+
+    /** Applies the same page-count contract to every version the requested ZIP will publish. */
+    private void validateBatchPublicationTasks(List<TeachingTaskResponse> tasks, RequestSubject subject) {
+        for (TeachingTaskResponse task : tasks) {
+            if (canUseTeacherHandout(subject)) {
+                pdfExportService.renderForPublication(task, "teacher");
+                pdfExportService.renderForPublication(task, "lecture");
+            }
+            pdfExportService.renderForPublication(task, "student");
         }
     }
 

@@ -45,7 +45,7 @@ public class RedissonAgentConcurrencyGuard implements AgentConcurrencyGuard {
     }
 
     /**
-     * Tries to lock every concurrency key with zero wait and a bounded lease.
+     * Tries to lock every concurrency key with zero wait and Redisson watchdog renewal.
      */
     @Override
     public Optional<AgentConcurrencyLease> tryAcquire(List<String> keys, String traceId, Duration leaseTime) {
@@ -53,7 +53,7 @@ public class RedissonAgentConcurrencyGuard implements AgentConcurrencyGuard {
         for (String key : normalizeKeys(keys)) {
             RLock lock = redissonClient.getLock(keyPrefix + ":" + key);
             try {
-                boolean locked = lock.tryLock(0L, leaseTime.toMillis(), TimeUnit.MILLISECONDS);
+                boolean locked = lock.tryLock(0L, TimeUnit.MILLISECONDS);
                 if (!locked) {
                     unlockAll(acquired);
                     return Optional.empty();

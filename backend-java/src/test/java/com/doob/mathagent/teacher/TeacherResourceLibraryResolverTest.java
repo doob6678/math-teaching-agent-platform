@@ -2,8 +2,8 @@ package com.doob.mathagent.teacher;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.doob.mathagent.teacher.service.TeacherResourceLibraryResolver;
-import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
+import com.doob.mathagent.teacher.support.TeacherResourceLibraryResolver;
+import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
@@ -212,4 +212,48 @@ class TeacherResourceLibraryResolverTest {
         assertThat(TeacherResourceLibraryResolver.matchesAny(runtimeGaokao, List.of("gaokao"))).isTrue();
         assertThat(TeacherResourceLibraryResolver.matchesAny(runtimeMock, List.of("mock_exam"))).isTrue();
     }
+
+    @Test
+    void recognizesRuntimeQqBundleTitlesThatUseTheLogicalLibraryUnderscore() {
+        TeacherResourceDocumentResponse runtimeQq = new TeacherResourceDocumentResponse(
+                "doc-runtime-qq-underscore",
+                "school-a",
+                "admin-1",
+                "local_path",
+                "runtime-qq_bundle-library-rag-001",
+                null,
+                "C:/workspace/output/benchmarks/library-rag/uploaded-libraries/qq_bundle",
+                "MATH_VIP",
+                "synced",
+                "parsed",
+                "ready",
+                "ready",
+                List.of());
+
+        assertThat(TeacherResourceLibraryResolver.effectiveLibrary(runtimeQq)).isEqualTo("qq_bundle");
+        assertThat(TeacherResourceLibraryResolver.matchesAny(runtimeQq, List.of("qq_bundle"))).isTrue();
+    }
+
+    @Test
+    void doesNotInferTextbookLibraryFromGenericTeacherTitleOrPathAnyMore() {
+        TeacherResourceDocumentResponse teacherHandout = new TeacherResourceDocumentResponse(
+                "doc-teacher-textbook-wording",
+                "school-a",
+                "teacher-1",
+                "local_path",
+                "教材配套导数讲义",
+                null,
+                "C:/workspace/uploads/chapter-derivative-handout",
+                "TEACHER_PRIVATE",
+                "synced",
+                "parsed",
+                "ready",
+                "ready",
+                List.of());
+
+        assertThat(TeacherResourceLibraryResolver.effectiveLibrary(teacherHandout)).isEqualTo("teacher_resource");
+        assertThat(TeacherResourceLibraryResolver.matchesAny(teacherHandout, List.of("textbook"))).isFalse();
+        assertThat(TeacherResourceLibraryResolver.matchesAny(teacherHandout, List.of("teacher_resource"))).isTrue();
+    }
 }
+

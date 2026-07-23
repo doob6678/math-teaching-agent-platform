@@ -1,5 +1,8 @@
 package com.doob.mathagent.teacher.service;
 
+import com.doob.mathagent.teacher.feishu.TeacherFeishuDownloadClient;
+import com.doob.mathagent.teacher.feishu.TeacherFeishuDownloadClient.FeishuDownloadCheckpoint;
+import com.doob.mathagent.teacher.feishu.TeacherFeishuDownloadClient.FeishuDownloadResult;
 import java.nio.file.Path;
 
 /**

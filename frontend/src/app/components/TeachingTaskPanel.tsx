@@ -194,8 +194,8 @@ export function TeachingTaskPanel({
           </section>
 
           <section className="teaching-summary-grid">
-            <InfoTile label="模板" value={task.selectedTemplate?.displayName ?? "标准讲义"} />
-            <InfoTile label="内容来源" value={task.aiDraft?.enabled ? "检索 + 模型生成" : "检索 + 模板生成"} />
+            <InfoTile label="生成方式" value="自动生成" />
+            <InfoTile label="内容来源" value={task.aiDraft?.enabled ? "检索 + 模型生成" : "检索生成"} />
             <InfoTile label="当前状态" value={statusLabel(task.status)} />
             <InfoTile label="记忆复用" value={task.memoryReuse?.reused ? "已复用" : "未复用"} />
           </section>
@@ -296,7 +296,7 @@ export function LectureHandoutPreview({ task, version }: { task: TeachingTaskRes
   const knowledgePoints = aiDraft?.knowledgePoints?.slice(0, 6) ?? [];
   const followUps = (aiDraft?.followUpQuestions?.length ? aiDraft.followUpQuestions : task.interactiveSuggestions).slice(0, 6);
   const evidencePreview = task.evidence.slice(0, 3);
-  const modelLine = aiDraft?.enabled ? `${providerLabel(aiDraft.providerName)} / ${aiDraft.modelCode}` : "模板生成";
+  const modelLine = aiDraft?.enabled ? `${providerLabel(aiDraft.providerName)} / ${aiDraft.modelCode}` : "自动生成";
   const lectureCardItems = version === "student" ? [] : extractLectureCardItems(task.lectureHandoutLatex || task.teacherHandoutLatex || task.handoutLatex || "");
 
   return (
@@ -317,7 +317,6 @@ export function LectureHandoutPreview({ task, version }: { task: TeachingTaskRes
         <PreviewCard index="01" title="本轮要求">
           <p><MathRichText text={task.learningGoal || task.questionText || "未提供学习目标"} /></p>
           <div className="handout-live-tag-row">
-            <span>{task.selectedTemplate?.displayName || "标准讲义模板"}</span>
             <span>{modelLine}</span>
           </div>
         </PreviewCard>

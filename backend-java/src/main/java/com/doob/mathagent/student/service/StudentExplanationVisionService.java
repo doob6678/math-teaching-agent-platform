@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -23,8 +24,14 @@ import org.springframework.web.client.RestClient;
 public class StudentExplanationVisionService {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    /** A complete exam page can contain five questions and options; keep enough output budget for valid JSON. */
+    private static final int VISION_TRANSCRIPTION_MAX_TOKENS = 1800;
+    /** Matches the upload service's bounded image contract so a large teacher scan cannot exhaust vision memory. */
+    private static final long MAX_AUTHORIZED_IMAGE_BYTES = 8L * 1024L * 1024L;
+    private final AiProviderProperties.Provider openaiProvider;
     private final AiProviderProperties.Provider dashscopeProvider;
     private final AiProviderProperties.Provider arkProvider;
+    private final String openaiVisionModel;
     private final String dashscopeVisionModel;
     private final String arkVisionModel;
     private final boolean enabled;
@@ -39,14 +46,18 @@ public class StudentExplanationVisionService {
      */
     public StudentExplanationVisionService(
             AiProviderProperties properties,
+            @Value("${math-agent.student.explanation.openai-vision-model:${OPENAI_VISION_MODEL:${OPENAI_CHAT_MODEL:gpt-5.6-luna}}}")
+            String openaiVisionModel,
             @Value("${math-agent.student.explanation.vision-model:${DASHSCOPE_VISION_MODEL:qwen-vl-plus-latest}}")
             String dashscopeVisionModel,
             @Value("${math-agent.student.explanation.ark-vision-model:${ARK_VISION_MODEL:${ARK_CHAT_MODEL:doubao-seed-2-0-lite-260428}}}")
             String arkVisionModel,
             @Value("${math-agent.student.explanation.vision-enabled:true}") boolean enabled,
             @Value("${math-agent.student.explanation.vision-timeout-ms:45000}") long requestTimeoutMs) {
+        this.openaiProvider = properties.getOpenai();
         this.dashscopeProvider = properties.getDashscope();
         this.arkProvider = properties.getArk();
+        this.openaiVisionModel = textOrDefault(openaiVisionModel, properties.getOpenai().getChatModel());
         this.dashscopeVisionModel = textOrDefault(dashscopeVisionModel, "qwen-vl-plus-latest");
         this.arkVisionModel = textOrDefault(arkVisionModel, properties.getArk().getChatModel());
         this.enabled = enabled;
@@ -64,24 +75,7 @@ public class StudentExplanationVisionService {
             return VisionAnalysis.skipped("vision-disabled");
         }
         try {
-            String dataUrl = "data:" + imageRecord.contentType() + ";base64,"
-                    + java.util.Base64.getEncoder().encodeToString(Files.readAllBytes(imageRecord.localPath()));
-            VisionAnalysis lastFailure = null;
-            for (VisionProviderCandidate candidate : List.of(
-                    new VisionProviderCandidate("dashscope", dashscopeProvider, dashscopeVisionModel),
-                    new VisionProviderCandidate("ark", arkProvider, arkVisionModel))) {
-                if (candidate.provider().getApiKey() == null || candidate.provider().getApiKey().isBlank()) {
-                    lastFailure = new VisionAnalysis(true, false, candidate.name(), candidate.modelCode(), "",
-                            0.0, 0, 0, 0, "api-key-missing");
-                    continue;
-                }
-                VisionAnalysis analysis = analyzeWithProvider(candidate, dataUrl);
-                if (analysis.succeeded()) {
-                    return analysis;
-                }
-                lastFailure = analysis;
-            }
-            return lastFailure == null ? VisionAnalysis.skipped("no-vision-provider") : lastFailure;
+            return analyzeImageBytes(Files.readAllBytes(imageRecord.localPath()), imageRecord.contentType());
         } catch (IOException e) {
             return new VisionAnalysis(
                     true,
@@ -98,6 +92,83 @@ public class StudentExplanationVisionService {
     }
 
     /**
+     * Reads a short-lived local image materialized by a server-side authorization boundary.
+     *
+     * <p>This overload is intentionally not an upload lookup: callers must validate tenant, role, ownership, and
+     * asset visibility before passing the path. It is used by teacher-resource handout generation after
+     * {@code openVisibleAsset} has performed those checks. The method validates file existence, MIME shape, and byte
+     * budget again, preventing the model client from becoming a generic arbitrary-file reader.</p>
+     */
+    public VisionAnalysis analyzeAuthorizedLocalImage(Path authorizedImage, String contentType) {
+        return analyzeAuthorizedLocalImage(authorizedImage, contentType, true);
+    }
+
+    /**
+     * Reads a permission-checked teacher page with the explicitly configured primary model only.
+     *
+     * <p>Source transcription is evidence creation, so silently switching providers after a timeout creates mixed
+     * OCR provenance and can multiply one page into three long relay waits. The handout pipeline requires the
+     * configured gpt-5.6-luna result or records no transcription; it never substitutes another model's text.</p>
+     */
+    public VisionAnalysis analyzeAuthorizedLocalImageWithPrimaryProvider(Path authorizedImage, String contentType) {
+        return analyzeAuthorizedLocalImage(authorizedImage, contentType, false);
+    }
+
+    /** Shared authorized-file boundary with an explicit fallback policy for student UI versus source ingestion. */
+    private VisionAnalysis analyzeAuthorizedLocalImage(Path authorizedImage, String contentType, boolean allowFallback) {
+        if (!enabled) {
+            return VisionAnalysis.skipped("vision-disabled");
+        }
+        if (authorizedImage == null || contentType == null || !contentType.strip().toLowerCase(java.util.Locale.ROOT).startsWith("image/")) {
+            return new VisionAnalysis(true, false, "", "", "", 0.0, 0, 0, 0, "unsupported-image");
+        }
+        try {
+            Path normalized = authorizedImage.toAbsolutePath().normalize();
+            if (!Files.isRegularFile(normalized)) {
+                return new VisionAnalysis(true, false, "", "", "", 0.0, 0, 0, 0, "image-unavailable");
+            }
+            if (Files.size(normalized) > MAX_AUTHORIZED_IMAGE_BYTES) {
+                return new VisionAnalysis(true, false, "", "", "", 0.0, 0, 0, 0, "image-too-large");
+            }
+            return analyzeImageBytes(Files.readAllBytes(normalized), contentType, allowFallback);
+        } catch (IOException exception) {
+            return new VisionAnalysis(true, false, "", "", "", 0.0, 0, 0, 0,
+                    exception.getClass().getSimpleName());
+        }
+    }
+
+    /** Shares the real provider path across owned student uploads and permission-checked teacher materializations. */
+    private VisionAnalysis analyzeImageBytes(byte[] image, String contentType) {
+        return analyzeImageBytes(image, contentType, true);
+    }
+
+    /** Executes the primary provider alone for auditable source transcription, otherwise keeps UI fallbacks. */
+    private VisionAnalysis analyzeImageBytes(byte[] image, String contentType, boolean allowFallback) {
+        String dataUrl = "data:" + contentType + ";base64,"
+                + java.util.Base64.getEncoder().encodeToString(image);
+        VisionAnalysis lastFailure = null;
+        // Try the configured multimodal explanation model first so a question image and its answer share one
+        // capability. Existing DashScope and Ark integrations remain real-provider fallbacks.
+        List<VisionProviderCandidate> candidates = List.of(
+                new VisionProviderCandidate("openai", openaiProvider, openaiVisionModel),
+                new VisionProviderCandidate("dashscope", dashscopeProvider, dashscopeVisionModel),
+                new VisionProviderCandidate("ark", arkProvider, arkVisionModel));
+        for (VisionProviderCandidate candidate : allowFallback ? candidates : List.of(candidates.getFirst())) {
+            if (candidate.provider().getApiKey() == null || candidate.provider().getApiKey().isBlank()) {
+                lastFailure = new VisionAnalysis(true, false, candidate.name(), candidate.modelCode(), "",
+                        0.0, 0, 0, 0, "api-key-missing");
+                continue;
+            }
+            VisionAnalysis analysis = analyzeWithProvider(candidate, dataUrl);
+            if (analysis.succeeded()) {
+                return analysis;
+            }
+            lastFailure = analysis;
+        }
+        return lastFailure == null ? VisionAnalysis.skipped("no-vision-provider") : lastFailure;
+    }
+
+    /**
      * Calls one OpenAI-compatible multimodal provider.
      */
     private VisionAnalysis analyzeWithProvider(VisionProviderCandidate candidate, String dataUrl) {
@@ -110,7 +181,7 @@ public class StudentExplanationVisionService {
                                     Map.of("type", "image_url", "image_url", Map.of("url", dataUrl)),
                                     Map.of("type", "text", "text", strictVisionPrompt())))),
                     "temperature", 0,
-                    "max_tokens", 800);
+                    "max_tokens", VISION_TRANSCRIPTION_MAX_TOKENS);
             JsonNode response = RestClient.builder()
                     .requestFactory(requestFactory(requestTimeout))
                     .build()

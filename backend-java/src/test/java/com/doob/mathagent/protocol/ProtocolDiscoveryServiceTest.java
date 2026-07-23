@@ -24,6 +24,9 @@ class ProtocolDiscoveryServiceTest {
                         "search_multi_source_evidence",
                         "search_textbook_evidence",
                         "search_teacher_resource_evidence",
+                        "list_teacher_resources",
+                        "read_teacher_resource_blocks",
+                        "search_question_bank_items",
                         "get_teaching_ai_trace",
                         "get_ai_diagnostic_summary",
                         "get_multi_agent_writing_trace",
@@ -36,13 +39,16 @@ class ProtocolDiscoveryServiceTest {
                         "discover_feishu_resources",
                         "download_feishu_resource");
         assertThat(tools).extracting(McpToolDescriptor::name)
-                .doesNotContain("create_teaching_task", "export_handout_pdf", "list_teacher_resources");
+                .doesNotContain("create_teaching_task", "export_handout_pdf");
         assertThat(tools).filteredOn(McpToolDescriptor::executionEndpointEnabled)
                 .extracting(McpToolDescriptor::name)
                 .containsExactly(
                         "search_multi_source_evidence",
                         "search_textbook_evidence",
                         "search_teacher_resource_evidence",
+                        "list_teacher_resources",
+                        "read_teacher_resource_blocks",
+                        "search_question_bank_items",
                         "get_teaching_ai_trace",
                         "get_ai_diagnostic_summary",
                         "get_multi_agent_writing_trace",

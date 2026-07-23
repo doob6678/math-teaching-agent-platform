@@ -14,6 +14,7 @@ public record StudentExplanationHistoryResponse(List<Item> items) {
     public record Item(
             String explanationId,
             String conversationId,
+            String title,
             String questionText,
             String imageStatus,
             String imageProblemText,

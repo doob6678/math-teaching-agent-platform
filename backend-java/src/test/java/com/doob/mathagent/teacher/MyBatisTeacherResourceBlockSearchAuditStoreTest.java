@@ -2,12 +2,12 @@ package com.doob.mathagent.teacher;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.doob.mathagent.teacher.entity.TeacherResourceSearchAuditHitEntity;
-import com.doob.mathagent.teacher.entity.TeacherResourceSearchAuditLogEntity;
-import com.doob.mathagent.teacher.mapper.TeacherResourceSearchAuditHitMapper;
-import com.doob.mathagent.teacher.mapper.TeacherResourceSearchAuditLogMapper;
-import com.doob.mathagent.teacher.service.MyBatisTeacherResourceBlockSearchAuditStore;
-import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchAuditEvent;
+import com.doob.mathagent.teacher.search.entity.TeacherResourceSearchAuditHitEntity;
+import com.doob.mathagent.teacher.search.entity.TeacherResourceSearchAuditLogEntity;
+import com.doob.mathagent.teacher.search.mapper.TeacherResourceSearchAuditHitMapper;
+import com.doob.mathagent.teacher.search.mapper.TeacherResourceSearchAuditLogMapper;
+import com.doob.mathagent.teacher.search.audit.MyBatisTeacherResourceBlockSearchAuditStore;
+import com.doob.mathagent.teacher.search.audit.TeacherResourceBlockSearchAuditEvent;
 import java.lang.reflect.Proxy;
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -141,3 +141,4 @@ class MyBatisTeacherResourceBlockSearchAuditStoreTest {
         }
     }
 }
+

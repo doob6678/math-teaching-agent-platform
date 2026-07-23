@@ -23,19 +23,32 @@ import com.doob.mathagent.infrastructure.security.RequestSubject;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.task.TaskExecutor;
 
 class MultiAgentWritingServiceTest {
 
     @Test
-    void runsThreeWritingAgentsAndPersistsRecoverableTraces() {
+    void runsControlledEvidenceOutlineAndThreeVersionWritingTopology() {
         CapturingGateway gateway = new CapturingGateway(List.of(
-                new AiChatResult("dashscope", "qwen3.6-flash", 11, 7, 18, "draft recorded", "teacher draft"),
-                new AiChatResult("dashscope", "qwen3.6-flash", 9, 5, 14, "review recorded", reviewJson("quality review")),
-                new AiChatResult("dashscope", "qwen3.6-flash", 8, 4, 12, "format recorded", "formatted handout")));
+                new AiChatResult("dashscope", "qwen3.6-flash", 8, 4, 12, "resources recorded", "evidence pack"),
+                new AiChatResult("dashscope", "qwen3.6-flash", 7, 3, 10, "template recorded", "{\"content\":\"template selection\"}"),
+                new AiChatResult("dashscope", "qwen3.6-flash", 9, 5, 14, "outline recorded", "{\"content\":\"shared outline\"}"),
+                new AiChatResult("dashscope", "qwen3.6-flash", 11, 7, 18, "teacher recorded", "{\"teacherExplanation\":\"teacher handout\"}"),
+                new AiChatResult("dashscope", "qwen3.6-flash", 10, 6, 16, "student recorded", "{\"studentWorksheet\":\"student worksheet\"}"),
+                new AiChatResult("dashscope", "qwen3.6-flash", 9, 5, 14, "lecture recorded", "{\"lectureCards\":\"16:10 lecture cards\"}"),
+                new AiChatResult("dashscope", "qwen3.6-flash", 6, 3, 9, "source review recorded", reviewJson("source review")),
+                new AiChatResult("dashscope", "qwen3.6-flash", 6, 3, 9, "student review recorded", reviewJson("student safety review")),
+                new AiChatResult("dashscope", "qwen3.6-flash", 6, 3, 9, "layout review recorded", reviewJson("layout review")),
+                new AiChatResult("dashscope", "qwen3.6-flash", 8, 4, 12, "merge recorded", "{\"markdown\":\"merged handout\"}")));
         InMemoryAgentTraceStore traceStore = new InMemoryAgentTraceStore();
         InMemoryMultiAgentWritingWorkflowStore workflowStore = new InMemoryMultiAgentWritingWorkflowStore();
         MultiAgentWritingService service = service(traceStore, workflowStore, gateway);
@@ -43,16 +56,39 @@ class MultiAgentWritingServiceTest {
         MultiAgentWritingResponse response = service.run(request(false), subject());
 
         assertThat(response.status()).isEqualTo("COMPLETED");
-        assertThat(response.stages()).extracting(MultiAgentWritingResponse.StageResult::agentCode)
-                .containsExactly("CoursewareAgent", "QualityCheckAgent", "HandoutFormatterAgent");
-        assertThat(response.totalUsage().totalTokens()).isEqualTo(44);
+        assertThat(response.stages()).extracting(MultiAgentWritingResponse.StageResult::stageCode)
+                .containsExactly(
+                        "resource_curation",
+                        "template_selection",
+                        "outline_planning",
+                        "teacher_writer",
+                        "student_writer",
+                        "lecture_writer",
+                        "source_review",
+                        "student_safety_review",
+                        "layout_review",
+                        "merge_coordinator");
+        assertThat(response.totalUsage().totalTokens()).isEqualTo(123);
         assertThat(response.stages()).extracting(MultiAgentWritingResponse.StageResult::generatedContent)
-                .containsExactly("teacher draft", reviewJson("quality review"), "formatted handout");
+                .anySatisfy(content -> assertThat(content).contains("teacher handout"))
+                .anySatisfy(content -> assertThat(content).contains("student worksheet"))
+                .anySatisfy(content -> assertThat(content).contains("16:10 lecture cards"))
+                .anySatisfy(content -> assertThat(content).contains("merged handout"));
         assertThat(service.artifact(response.workflowId(), subject()).mergedMarkdown())
-                .contains("teacher draft", "formatted handout");
+                .contains("teacher handout", "student worksheet", "16:10 lecture cards", "merged handout");
         assertThat(gateway.requests()).extracting(AiChatRequest::agentCode)
-                .containsExactly("CoursewareAgent", "QualityCheckAgent", "HandoutFormatterAgent");
-        assertThat(traceStore.find(response.stages().get(1).traceId()).orElseThrow().diagnosticEvents())
+                .containsExactlyInAnyOrder(
+                        "TeacherAssistantAgent",
+                        "HandoutFormatterAgent",
+                        "CoursewareAgent",
+                        "CoursewareAgent",
+                        "TeacherAssistantAgent",
+                        "HandoutFormatterAgent",
+                        "QualityCheckAgent",
+                        "TeacherAssistantAgent",
+                        "HandoutFormatterAgent",
+                        "HandoutFormatterAgent");
+        assertThat(traceStore.find(response.stages().get(6).traceId()).orElseThrow().diagnosticEvents())
                 .extracting(com.doob.mathagent.agent.service.AgentTraceRecord.DiagnosticEvent::eventType)
                 .containsExactly("MODEL_CALL_SUCCEEDED", "JSON_PARSE_SUCCEEDED");
         assertThat(service.find(response.workflowId(), subject()).orElseThrow().status()).isEqualTo("COMPLETED");
@@ -60,6 +96,106 @@ class MultiAgentWritingServiceTest {
                         response.workflowId(),
                         new RequestSubject("school-a", "teacher", "teacher-2", "device-1")))
                 .isEmpty();
+    }
+
+    @Test
+    void laterWritingStagesReceiveCompletedStageArtifacts() {
+        StageAwareGateway gateway = topologyGateway(Map.of(
+                "resource_curation", "evidence pack",
+                "template_selection", "template choice",
+                "outline_planning", "shared outline",
+                "teacher_writer", "teacher-only-answer",
+                "student_writer", "student worksheet",
+                "lecture_writer", "lecture cards",
+                "source_review", "source review",
+                "student_safety_review", "student safety review",
+                "layout_review", "layout review",
+                "merge_coordinator", "formatted handout"));
+        MultiAgentWritingService service = service(
+                new InMemoryAgentTraceStore(),
+                new InMemoryMultiAgentWritingWorkflowStore(),
+                gateway);
+
+        service.run(request(false), subject());
+
+        assertThat(gateway.requestFor("student_writer").userInputSummary())
+                .contains("outline_planning", "shared outline")
+                .doesNotContain("teacher-only-answer");
+        assertThat(gateway.requestFor("merge_coordinator").userInputSummary())
+                .contains("teacher_writer", "student_writer", "lecture_writer", "source_review", "student_safety_review", "layout_review");
+    }
+
+    @Test
+    void artifactExposesStructuredSectionsForMergeAndCollaboration() {
+        StageAwareGateway gateway = topologyGateway(Map.of(
+                "resource_curation", "evidence pack",
+                "template_selection", "template choice",
+                "outline_planning", "shared outline",
+                "teacher_writer", "Explain the vector angle theorem.",
+                "student_writer", "Practice with one scaffolded problem.",
+                "lecture_writer", "Lecture cards for projection.",
+                "source_review", "Check theorem prerequisites before exercises.",
+                "student_safety_review", "No answer leakage.",
+                "layout_review", "Notation must stay consistent.",
+                "merge_coordinator", "# Final Handout\nFormatted for classroom use."));
+        MultiAgentWritingService service = service(
+                new InMemoryAgentTraceStore(),
+                new InMemoryMultiAgentWritingWorkflowStore(),
+                gateway);
+
+        MultiAgentWritingResponse response = service.run(request(false), subject());
+
+        var artifact = service.artifact(response.workflowId(), subject());
+        assertThat(artifact.sections()).extracting(section -> section.sectionCode())
+                .contains("teacher-explanation", "student-worksheet", "lecture-cards", "quality-review", "final-handout");
+        assertThat(artifact.sections().stream()
+                .filter(section -> "teacher-explanation".equals(section.sectionCode()))
+                .findFirst()
+                .orElseThrow()
+                .artifactRefs())
+                .containsExactly("PUBLIC_TEXTBOOK:space-vector:angle");
+        assertThat(artifact.sections().stream()
+                .filter(section -> "teacher-explanation".equals(section.sectionCode()))
+                .findFirst()
+                .orElseThrow()
+                .risks())
+                .containsExactly("Diagram still needs a visual check.");
+        assertThat(artifact.sections().stream()
+                .filter(section -> "quality-review".equals(section.sectionCode()))
+                .findFirst()
+                .orElseThrow()
+                .reviewNotes())
+                .containsExactly("Check theorem prerequisites before exercises.");
+        assertThat(artifact.mergedMarkdown())
+                .contains("## Teacher Explanation", "Explain the vector angle theorem.")
+                .contains("## Quality Review", "Check theorem prerequisites before exercises.")
+                .contains("# Final Handout", "Formatted for classroom use.")
+                .doesNotContain("\"teacherExplanation\"");
+    }
+
+    @Test
+    void startsThreeVersionWritersConcurrentlyWithoutPassingTeacherAnswersToStudentWriter() {
+        CountDownLatch writersStarted = new CountDownLatch(3);
+        AtomicBoolean writersObservedParallel = new AtomicBoolean(false);
+        StageAwareGateway gateway = topologyGateway(Map.of(
+                "outline_planning", "shared outline",
+                "teacher_writer", "teacher-only-answer",
+                "student_writer", "student worksheet",
+                "lecture_writer", "lecture cards"),
+                writersStarted,
+                writersObservedParallel);
+        MultiAgentWritingService service = service(
+                new InMemoryAgentTraceStore(),
+                new InMemoryMultiAgentWritingWorkflowStore(),
+                gateway);
+
+        MultiAgentWritingResponse response = service.run(request(false), subject());
+
+        assertThat(response.stages()).hasSize(10);
+        assertThat(writersObservedParallel).isTrue();
+        assertThat(gateway.requestFor("student_writer").userInputSummary())
+                .contains("shared outline")
+                .doesNotContain("teacher-only-answer");
     }
 
     @Test
@@ -80,10 +216,7 @@ class MultiAgentWritingServiceTest {
 
     @Test
     void startsAsyncWorkflowAndCompletesWhenExecutorRuns() {
-        CapturingGateway gateway = new CapturingGateway(List.of(
-                new AiChatResult("dashscope", "qwen3.6-flash", 11, 7, 18, "draft recorded", "draft"),
-                new AiChatResult("dashscope", "qwen3.6-flash", 9, 5, 14, "review recorded", reviewJson("review")),
-                new AiChatResult("dashscope", "qwen3.6-flash", 8, 4, 12, "format recorded", "format")));
+        StageAwareGateway gateway = topologyGateway(Map.of());
         InMemoryMultiAgentWritingWorkflowStore workflowStore = new InMemoryMultiAgentWritingWorkflowStore();
         CapturingTaskExecutor taskExecutor = new CapturingTaskExecutor();
         MultiAgentWritingService service = service(
@@ -101,15 +234,13 @@ class MultiAgentWritingServiceTest {
 
         MultiAgentWritingResponse completed = service.find(started.workflowId(), subject()).orElseThrow();
         assertThat(completed.status()).isEqualTo("COMPLETED");
-        assertThat(completed.stages()).hasSize(3);
-        assertThat(completed.totalUsage().totalTokens()).isEqualTo(44);
+        assertThat(completed.stages()).hasSize(10);
+        assertThat(completed.totalUsage().totalTokens()).isPositive();
     }
 
     @Test
     void resumesFailedWorkflowFromFirstMissingStageWithoutRepeatingCompletedDraft() {
-        CapturingGateway gateway = new CapturingGateway(List.of(
-                new AiChatResult("dashscope", "qwen3.6-flash", 9, 5, 14, "review recorded", reviewJson("review")),
-                new AiChatResult("dashscope", "qwen3.6-flash", 8, 4, 12, "format recorded", "format")));
+        StageAwareGateway gateway = topologyGateway(Map.of());
         InMemoryAgentTraceStore traceStore = new InMemoryAgentTraceStore();
         InMemoryMultiAgentWritingWorkflowStore workflowStore = new InMemoryMultiAgentWritingWorkflowStore();
         workflowStore.save(new MultiAgentWritingWorkflowRecord(
@@ -121,14 +252,15 @@ class MultiAgentWritingServiceTest {
                 Instant.parse("2026-06-30T00:00:00Z"),
                 Instant.parse("2026-06-30T00:01:00Z"),
                 List.of(new MultiAgentWritingResponse.StageResult(
-                        "draft",
-                        "CoursewareAgent",
-                        "trace-draft",
+                        "resource_curation",
+                        "TeacherAssistantAgent",
+                        "trace-resource-curation",
                         "dashscope",
                         "qwen3.6-flash",
                         "COMPLETED",
                         new AgentRunExecuteResponse.TokenUsage(11, 7, 18),
-                        "draft recorded")),
+                        "resource curation recorded",
+                        "evidence pack")),
                 new AgentRunExecuteResponse.TokenUsage(11, 7, 18),
                 "failed after draft"));
         MultiAgentWritingService service = service(traceStore, workflowStore, gateway);
@@ -137,14 +269,15 @@ class MultiAgentWritingServiceTest {
 
         assertThat(response.status()).isEqualTo("COMPLETED");
         assertThat(response.stages()).extracting(MultiAgentWritingResponse.StageResult::stageCode)
-                .containsExactly("draft", "review", "format");
+                .containsExactly(
+                        "resource_curation", "template_selection", "outline_planning",
+                        "teacher_writer", "student_writer", "lecture_writer",
+                        "source_review", "student_safety_review", "layout_review", "merge_coordinator");
+        assertThat(gateway.stageCodes()).doesNotContain("resource_curation");
         assertThat(gateway.requests()).extracting(AiChatRequest::agentCode)
-                .containsExactly("QualityCheckAgent", "HandoutFormatterAgent");
-        assertThat(response.totalUsage().totalTokens()).isEqualTo(44);
+                .contains("CoursewareAgent", "QualityCheckAgent", "HandoutFormatterAgent", "TeacherAssistantAgent");
         assertThat(traceStore.find(response.stages().get(1).traceId()).orElseThrow().planId())
-                .isEqualTo("workflow-resume-123:review");
-        assertThat(traceStore.find(response.stages().get(2).traceId()).orElseThrow().planId())
-                .isEqualTo("workflow-resume-123:format");
+                .isEqualTo("workflow-resume-123:template_selection");
     }
 
     @Test
@@ -162,6 +295,62 @@ class MultiAgentWritingServiceTest {
                 .containsExactly("RUNNING", "RUNNING", "FAILED");
         assertThat(workflowStore.saved().getLast().stages()).hasSize(1);
         assertThat(workflowStore.saved().getLast().message()).contains("failed");
+    }
+
+    @Test
+    void preservesSuccessfulParallelBranchesAndResumesOnlyTheFailedWriter() {
+        BranchFailureGateway gateway = new BranchFailureGateway();
+        CapturingWorkflowStore workflowStore = new CapturingWorkflowStore();
+        MultiAgentWritingService service = service(
+                new InMemoryAgentTraceStore(),
+                workflowStore,
+                gateway);
+
+        assertThatThrownBy(() -> service.run(request(false), subject()))
+                .isInstanceOf(RuntimeException.class);
+
+        MultiAgentWritingWorkflowRecord failed = workflowStore.saved().getLast();
+        assertThat(failed.status()).isEqualTo("FAILED");
+        assertThat(failed.stages()).extracting(MultiAgentWritingResponse.StageResult::stageCode)
+                .contains("resource_curation", "template_selection", "outline_planning", "teacher_writer")
+                .doesNotContain("student_writer");
+
+        gateway.failStudent(false);
+        MultiAgentWritingResponse resumed = service.resume(failed.workflowId(), request(false), subject());
+
+        assertThat(resumed.status()).isEqualTo("COMPLETED");
+        assertThat(gateway.callsFor("teacher_writer")).isEqualTo(1);
+        // The first failed structured call is retried by the shared JSON-repair policy before resume adds one success.
+        assertThat(gateway.callsFor("student_writer")).isEqualTo(4);
+        assertThat(resumed.stages()).extracting(MultiAgentWritingResponse.StageResult::stageCode)
+                .containsExactly(
+                        "resource_curation", "template_selection", "outline_planning",
+                        "teacher_writer", "student_writer", "lecture_writer",
+                        "source_review", "student_safety_review", "layout_review", "merge_coordinator");
+    }
+
+    @Test
+    void boundsEvidenceReferencesBeforeSendingEachAgentContext() {
+        StageAwareGateway gateway = topologyGateway(Map.of());
+        MultiAgentWritingService service = service(
+                new InMemoryAgentTraceStore(),
+                new InMemoryMultiAgentWritingWorkflowStore(),
+                gateway);
+        List<String> oversizedEvidence = java.util.stream.IntStream.range(0, 80)
+                .mapToObj(index -> "TEACHER_PRIVATE:document-" + index + ":" + "x".repeat(900))
+                .toList();
+
+        service.run(new MultiAgentWritingRequest(
+                "teacher handout",
+                "space vector angle",
+                oversizedEvidence,
+                false,
+                "dashscope",
+                "qwen3.6-flash"), subject());
+
+        assertThat(gateway.requestFor("resource_curation").evidenceRefs())
+                .hasSizeLessThanOrEqualTo(24)
+                .allSatisfy(reference -> assertThat(reference).hasSizeLessThanOrEqualTo(240));
     }
 
     private static MultiAgentWritingService service(
@@ -215,6 +404,124 @@ class MultiAgentWritingServiceTest {
         return "{\"review\":\"" + text + "\",\"status\":\"ok\"}";
     }
 
+    /** Supplies stage-addressed structured output so concurrent test scheduling cannot swap model fixtures. */
+    private static StageAwareGateway topologyGateway(Map<String, String> contentOverrides) {
+        return topologyGateway(contentOverrides, null, null);
+    }
+
+    private static StageAwareGateway topologyGateway(
+            Map<String, String> contentOverrides,
+            CountDownLatch writersStarted,
+            AtomicBoolean writersObservedParallel) {
+        Map<String, AiChatResult> outcomes = new LinkedHashMap<>();
+        for (String stageCode : List.of(
+                "resource_curation", "template_selection", "outline_planning",
+                "teacher_writer", "student_writer", "lecture_writer",
+                "source_review", "student_safety_review", "layout_review", "merge_coordinator")) {
+            String content = contentOverrides.getOrDefault(stageCode, stageCode + " content");
+            outcomes.put(stageCode, new AiChatResult(
+                    "dashscope",
+                    "qwen3.6-flash",
+                    8,
+                    4,
+                    12,
+                    stageCode + " recorded",
+                    topologyJson(stageCode, content)));
+        }
+        return new StageAwareGateway(outcomes, writersStarted, writersObservedParallel);
+    }
+
+    /** Mirrors the real structured contracts for every stage in the controlled topology. */
+    private static String topologyJson(String stageCode, String content) {
+        String value = jsonString(content);
+        return switch (stageCode) {
+            case "resource_curation" -> content;
+            case "template_selection", "outline_planning" -> "{\"content\":" + value + "}";
+            case "teacher_writer" -> "{\"teacherExplanation\":" + value
+                    + ",\"sourceRefs\":[\"PUBLIC_TEXTBOOK:space-vector:angle\"]"
+                    + ",\"risks\":[\"Diagram still needs a visual check.\"]}";
+            case "student_writer" -> "{\"studentWorksheet\":" + value + "}";
+            case "lecture_writer" -> "{\"lectureCards\":" + value + "}";
+            case "source_review", "student_safety_review", "layout_review" -> reviewJson(content);
+            case "merge_coordinator" -> "{\"markdown\":" + value + "}";
+            default -> throw new IllegalArgumentException("Unknown topology stage " + stageCode);
+        };
+    }
+
+    private static String jsonString(String value) {
+        return "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n") + "\"";
+    }
+
+    private static final class StageAwareGateway implements AiChatGateway {
+        private final Map<String, AiChatResult> outcomes;
+        private final Map<String, AiChatRequest> requestsByStage = new LinkedHashMap<>();
+        private final CountDownLatch writersStarted;
+        private final AtomicBoolean writersObservedParallel;
+
+        private StageAwareGateway(
+                Map<String, AiChatResult> outcomes,
+                CountDownLatch writersStarted,
+                AtomicBoolean writersObservedParallel) {
+            this.outcomes = Map.copyOf(outcomes);
+            this.writersStarted = writersStarted;
+            this.writersObservedParallel = writersObservedParallel;
+        }
+
+        @Override
+        public AiChatResult call(AiChatRequest request) {
+            String stageCode = stageCode(request.userInputSummary());
+            AiChatResult outcome;
+            synchronized (this) {
+                requestsByStage.put(stageCode, request);
+                outcome = outcomes.get(stageCode);
+            }
+            if (outcome == null) {
+                throw new IllegalStateException("No test output for stage " + stageCode);
+            }
+            observeParallelWriters(stageCode);
+            return outcome;
+        }
+
+        private void observeParallelWriters(String stageCode) {
+            if (writersStarted == null || !List.of("teacher_writer", "student_writer", "lecture_writer").contains(stageCode)) {
+                return;
+            }
+            writersStarted.countDown();
+            try {
+                writersObservedParallel.set(writersStarted.await(1, TimeUnit.SECONDS));
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("Interrupted while observing parallel writers", exception);
+            }
+        }
+
+        private synchronized List<AiChatRequest> requests() {
+            return List.copyOf(requestsByStage.values());
+        }
+
+        private synchronized AiChatRequest requestFor(String stageCode) {
+            AiChatRequest request = requestsByStage.get(stageCode);
+            if (request == null) {
+                throw new AssertionError("No request captured for stage " + stageCode);
+            }
+            return request;
+        }
+
+        private synchronized List<String> stageCodes() {
+            return List.copyOf(requestsByStage.keySet());
+        }
+
+        private static String stageCode(String userInputSummary) {
+            String prefix = "stage=";
+            int start = userInputSummary.indexOf(prefix);
+            int end = userInputSummary.indexOf(';', start);
+            if (start < 0 || end < 0) {
+                throw new IllegalStateException("Test request did not carry a stage code");
+            }
+            return userInputSummary.substring(start + prefix.length(), end);
+        }
+    }
+
     private static final class CapturingGateway implements AiChatGateway {
         private final List<AiChatResult> outcomes;
         private final List<AiChatRequest> requests = new ArrayList<>();
@@ -225,13 +532,13 @@ class MultiAgentWritingServiceTest {
         }
 
         @Override
-        public AiChatResult call(AiChatRequest request) {
+        public synchronized AiChatResult call(AiChatRequest request) {
             requests.add(request);
             return outcomes.get(index++);
         }
 
-        private List<AiChatRequest> requests() {
-            return requests;
+        private synchronized List<AiChatRequest> requests() {
+            return List.copyOf(requests);
         }
     }
 
@@ -262,11 +569,53 @@ class MultiAgentWritingServiceTest {
         public Optional<MultiAgentWritingWorkflowRecord> findVisible(String workflowId, RequestSubject subject) {
             return saved.stream()
                     .filter(record -> record.workflowId().equals(workflowId))
-                    .findFirst();
+                    .reduce((first, latest) -> latest);
         }
 
         private List<MultiAgentWritingWorkflowRecord> saved() {
             return saved;
+        }
+    }
+
+    /** Fails only the student branch once, after the teacher branch has completed. */
+    private static final class BranchFailureGateway implements AiChatGateway {
+        private final Map<String, AtomicInteger> calls = new java.util.concurrent.ConcurrentHashMap<>();
+        private final CountDownLatch teacherCompleted = new CountDownLatch(1);
+        private final AtomicBoolean failStudent = new AtomicBoolean(true);
+
+        @Override
+        public AiChatResult call(AiChatRequest request) {
+            String stage = StageAwareGateway.stageCode(request.userInputSummary());
+            calls.computeIfAbsent(stage, ignored -> new AtomicInteger()).incrementAndGet();
+            if ("teacher_writer".equals(stage)) {
+                teacherCompleted.countDown();
+            }
+            if ("student_writer".equals(stage) && failStudent.get()) {
+                try {
+                    teacherCompleted.await(1, TimeUnit.SECONDS);
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                }
+                throw new IllegalStateException("student branch failed");
+            }
+            String content = switch (stage) {
+                case "teacher_writer" -> "{\"teacherExplanation\":\"teacher\"}";
+                case "student_writer" -> "{\"studentWorksheet\":\"student\"}";
+                case "lecture_writer" -> "{\"lectureCards\":\"lecture\"}";
+                case "merge_coordinator" -> "{\"markdown\":\"merged\"}";
+                case "template_selection", "outline_planning" -> "{\"content\":\"" + stage + "\"}";
+                case "source_review", "student_safety_review", "layout_review" -> reviewJson(stage);
+                default -> stage + " content";
+            };
+            return new AiChatResult("dashscope", "qwen3.6-flash", 8, 4, 12, stage + " recorded", content);
+        }
+
+        private void failStudent(boolean value) {
+            failStudent.set(value);
+        }
+
+        private int callsFor(String stage) {
+            return calls.getOrDefault(stage, new AtomicInteger()).get();
         }
     }
 }

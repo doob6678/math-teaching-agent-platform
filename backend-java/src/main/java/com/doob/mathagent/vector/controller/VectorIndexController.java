@@ -2,7 +2,7 @@ package com.doob.mathagent.vector.controller;
 
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.infrastructure.security.RequestSubjectResolver;
-import com.doob.mathagent.teacher.service.TeacherResourceCapabilityVerifier;
+import com.doob.mathagent.teacher.support.TeacherResourceCapabilityVerifier;
 import com.doob.mathagent.vector.service.VectorIndexRebuildResponse;
 import com.doob.mathagent.vector.service.VectorIndexService;
 import com.doob.mathagent.vector.service.VectorIndexStatusResponse;

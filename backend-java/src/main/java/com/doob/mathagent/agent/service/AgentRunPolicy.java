@@ -17,6 +17,28 @@ public final class AgentRunPolicy {
                     Set.of("tool:search:textbook", "tool:student:progress:read"),
                     Set.of("PUBLIC_TEXTBOOK", "STUDENT_PRIVATE", "MATH_VIP"),
                     false),
+            // Marketplace-facing retrieval specialist. It receives only read scopes; a later workflow executor
+            // resolves those scopes to concrete search tools after the normal plan/capability checks.
+            new AgentDefinition(
+                    "KnowledgeRetrievalAgent",
+                    Set.of("student", "teacher", "admin"),
+                    Set.of("tool:search:textbook", "tool:search:private"),
+                    Set.of("PUBLIC_TEXTBOOK", "TEACHER_PRIVATE", "STUDENT_PRIVATE"),
+                    false),
+            // Writing consumes task-scoped evidence references rather than accessing the source corpus itself.
+            new AgentDefinition(
+                    "DocumentWriterAgent",
+                    Set.of("teacher", "admin"),
+                    Set.of("tool:courseware:generate"),
+                    Set.of("PUBLIC_TEXTBOOK", "TEACHER_PRIVATE", "CLASS_AUTHORIZED"),
+                    true),
+            // The supervisor can propose a task graph but never receives an implicit tool/data super-set.
+            new AgentDefinition(
+                    "SupervisorAgent",
+                    Set.of("teacher", "admin"),
+                    Set.of(),
+                    Set.of("PUBLIC_TEXTBOOK", "TEACHER_PRIVATE", "CLASS_AUTHORIZED"),
+                    true),
             new AgentDefinition(
                     "TeacherAssistantAgent",
                     Set.of("teacher", "admin"),
@@ -65,6 +87,11 @@ public final class AgentRunPolicy {
                 .filter(candidate -> candidate.code().equals(agentCode))
                 .findFirst()
                 .orElseThrow(() -> new IllegalArgumentException("Unsupported agent code: " + agentCode));
+    }
+
+    /** Returns the immutable policy catalog used by marketplace discovery; callers must still filter by subject. */
+    public static List<AgentDefinition> definitions() {
+        return AGENTS;
     }
 
     /**

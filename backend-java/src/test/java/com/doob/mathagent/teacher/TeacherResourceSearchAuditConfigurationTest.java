@@ -4,11 +4,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.doob.mathagent.teacher.config.TeacherResourceSearchAuditConfiguration;
-import com.doob.mathagent.teacher.service.CompositeTeacherResourceBlockSearchAuditLookup;
-import com.doob.mathagent.teacher.service.CompositeTeacherResourceBlockSearchAuditSink;
-import com.doob.mathagent.teacher.service.MyBatisTeacherResourceBlockSearchAuditStore;
-import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchAuditLookup;
-import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchAuditSink;
+import com.doob.mathagent.teacher.search.audit.CompositeTeacherResourceBlockSearchAuditLookup;
+import com.doob.mathagent.teacher.search.audit.CompositeTeacherResourceBlockSearchAuditSink;
+import com.doob.mathagent.teacher.search.audit.MyBatisTeacherResourceBlockSearchAuditStore;
+import com.doob.mathagent.teacher.search.audit.TeacherResourceBlockSearchAuditLookup;
+import com.doob.mathagent.teacher.search.audit.TeacherResourceBlockSearchAuditSink;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
@@ -41,3 +41,4 @@ class TeacherResourceSearchAuditConfigurationTest {
         }
     }
 }
+

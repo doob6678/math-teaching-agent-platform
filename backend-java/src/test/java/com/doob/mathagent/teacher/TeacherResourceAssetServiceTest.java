@@ -7,9 +7,9 @@ import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.teacher.service.InMemoryTeacherResourceAssetStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherResourceStore;
 import com.doob.mathagent.teacher.service.TeacherResourceAssetService;
-import com.doob.mathagent.teacher.service.TeacherSourceSyncProperties;
+import com.doob.mathagent.teacher.sync.TeacherSourceSyncProperties;
 import com.doob.mathagent.teacher.vo.TeacherResourceAssetResponse;
-import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
+import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
 import java.awt.Color;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
@@ -160,3 +160,4 @@ class TeacherResourceAssetServiceTest {
         return output.toByteArray();
     }
 }
+

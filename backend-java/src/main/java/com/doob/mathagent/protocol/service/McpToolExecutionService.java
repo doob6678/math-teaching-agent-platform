@@ -15,6 +15,7 @@ import com.doob.mathagent.agent.vo.AgentTraceResponse;
 import com.doob.mathagent.agent.vo.MultiAgentWritingArtifactExportResponse;
 import com.doob.mathagent.agent.vo.MultiAgentWritingResponse;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
+import com.doob.mathagent.knowledge.service.KnowledgeQuestionBankService;
 import com.doob.mathagent.protocol.dto.McpToolCallRequest;
 import com.doob.mathagent.protocol.vo.McpReactToolPlan;
 import com.doob.mathagent.protocol.vo.McpToolCallResponse;
@@ -26,14 +27,14 @@ import com.doob.mathagent.retrieval.TextbookSearchHit;
 import com.doob.mathagent.retrieval.TextbookSearchResponse;
 import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService;
 import com.doob.mathagent.teacher.service.TeacherFeishuDiscoveryService;
-import com.doob.mathagent.teacher.service.TeacherResourceRegistrationCommand;
-import com.doob.mathagent.teacher.service.TeacherResourceSearchFilter;
+import com.doob.mathagent.teacher.support.TeacherResourceRegistrationCommand;
+import com.doob.mathagent.teacher.search.TeacherResourceSearchFilter;
 import com.doob.mathagent.teacher.service.TeacherResourceService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncExecutionService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncJobService;
-import com.doob.mathagent.teacher.vo.TeacherResourceBlockSearchResponse;
+import com.doob.mathagent.teacher.search.TeacherResourceBlockSearchResponse;
 import com.doob.mathagent.teacher.vo.TeacherFeishuDiscoveryResponse;
-import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
+import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncJobResponse;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -41,6 +42,7 @@ import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -53,6 +55,9 @@ public class McpToolExecutionService {
     private static final String MULTI_SOURCE_EVIDENCE_TOOL = "search_multi_source_evidence";
     private static final String TEXTBOOK_EVIDENCE_TOOL = "search_textbook_evidence";
     private static final String TEACHER_RESOURCE_EVIDENCE_TOOL = "search_teacher_resource_evidence";
+    private static final String LIST_TEACHER_RESOURCES_TOOL = "list_teacher_resources";
+    private static final String READ_TEACHER_RESOURCE_BLOCKS_TOOL = "read_teacher_resource_blocks";
+    private static final String SEARCH_QUESTION_BANK_ITEMS_TOOL = "search_question_bank_items";
     private static final String TEACHING_AI_TRACE_TOOL = "get_teaching_ai_trace";
     private static final String AI_DIAGNOSTIC_SUMMARY_TOOL = "get_ai_diagnostic_summary";
     private static final String MULTI_AGENT_WRITING_TRACE_TOOL = "get_multi_agent_writing_trace";
@@ -75,6 +80,7 @@ public class McpToolExecutionService {
     private final TeacherResourceService teacherResourceService;
     private final TeacherSourceSyncJobService teacherSourceSyncJobService;
     private final TeacherSourceSyncExecutionService teacherSourceSyncExecutionService;
+    private final KnowledgeQuestionBankService questionBankService;
     private final MultiAgentWritingService multiAgentWritingService;
     private final MultiAgentWritingArtifactExportService multiAgentWritingArtifactExportService;
 
@@ -97,6 +103,7 @@ public class McpToolExecutionService {
             TeacherResourceService teacherResourceService,
             TeacherSourceSyncJobService teacherSourceSyncJobService,
             TeacherSourceSyncExecutionService teacherSourceSyncExecutionService,
+            KnowledgeQuestionBankService questionBankService,
             MultiAgentWritingService multiAgentWritingService,
             MultiAgentWritingArtifactExportService multiAgentWritingArtifactExportService) {
         this.clientResolver = Objects.requireNonNull(clientResolver, "clientResolver is required");
@@ -113,6 +120,7 @@ public class McpToolExecutionService {
                 teacherSourceSyncJobService, "teacherSourceSyncJobService is required");
         this.teacherSourceSyncExecutionService = Objects.requireNonNull(
                 teacherSourceSyncExecutionService, "teacherSourceSyncExecutionService is required");
+        this.questionBankService = Objects.requireNonNull(questionBankService, "questionBankService is required");
         this.multiAgentWritingService = Objects.requireNonNull(
                 multiAgentWritingService, "multiAgentWritingService is required");
         this.multiAgentWritingArtifactExportService = Objects.requireNonNull(
@@ -139,6 +147,9 @@ public class McpToolExecutionService {
             case MULTI_SOURCE_EVIDENCE_TOOL -> searchMultiSourceEvidence(client, request);
             case TEXTBOOK_EVIDENCE_TOOL -> searchTextbookEvidence(client, request);
             case TEACHER_RESOURCE_EVIDENCE_TOOL -> searchTeacherResourceEvidence(client, request);
+            case LIST_TEACHER_RESOURCES_TOOL -> listTeacherResources(client);
+            case READ_TEACHER_RESOURCE_BLOCKS_TOOL -> readTeacherResourceBlocks(client, request);
+            case SEARCH_QUESTION_BANK_ITEMS_TOOL -> searchQuestionBankItems(client, request);
             case TEACHING_AI_TRACE_TOOL -> getTeachingAiTrace(client, request);
             case AI_DIAGNOSTIC_SUMMARY_TOOL -> getAiDiagnosticSummary(client, request);
             case MULTI_AGENT_WRITING_TRACE_TOOL -> getMultiAgentWritingTrace(client, request);
@@ -182,6 +193,7 @@ public class McpToolExecutionService {
         if (query.isBlank()) {
             throw new IllegalArgumentException("query is required for search_textbook_evidence");
         }
+        requireExactlyTextbookLibrary(arguments, TEXTBOOK_EVIDENCE_TOOL);
         TextbookSearchResponse response = textbookRetrievalService.search(
                 textbookResourceProperties.processedBooksRoot(),
                 new TextbookSearchRequest(query, limit),
@@ -220,49 +232,22 @@ public class McpToolExecutionService {
             throw new IllegalArgumentException("query is required for search_multi_source_evidence");
         }
         SourceSelection selection = sourceSelection(arguments);
-        List<String> teacherSourceTypes = mergeDistinct(
-                selection.teacherSourceTypes(),
-                flexibleStringListArgument(arguments, "sourceTypes", "sourceType"));
-        List<TextbookSearchHit> textbookHits = selection.includeTextbook()
-                ? textbookRetrievalService.search(
-                                textbookResourceProperties.processedBooksRoot(),
-                                new TextbookSearchRequest(query, limit),
-                                new RetrievalRequestContext(
-                                        client.tenantId(),
-                                        normalizedProfile(client.profile()),
-                                        client.subjectId(),
-                                        null,
-                                        "mcp:" + client.clientId(),
-                                        "mcp-client",
-                                        "/api/mcp/tools/search_multi_source_evidence/call"))
-                        .hits()
-                : List.of();
-        List<TeacherResourceBlockSearchResponse.Hit> teacherHits = selection.includeTeacherResources()
-                ? teacherResourceBlockSearchService.search(
-                                client.tenantId(),
-                                normalizedProfile(client.profile()),
-                                client.subjectId(),
-                                query,
-                                limit,
-                                "/api/mcp/tools/search_multi_source_evidence/call",
-                                TeacherResourceSearchFilter.of(
-                                        flexibleStringListArgument(arguments, "permissionScopes", "permissionScope"),
-                                        flexibleStringListArgument(arguments, "documentIds", "documentId"),
-                                        teacherSourceTypes,
-                                        flexibleStringListArgument(arguments, "tags", "tag")))
-                        .hits()
-                : List.of();
+        List<CompletableFuture<LibraryEvidence>> pending = selection.libraries().stream()
+                .map(library -> CompletableFuture.supplyAsync(() -> searchOneLibrary(client, query, limit, arguments, library)))
+                .toList();
+        List<LibraryEvidence> libraryEvidence = pending.stream().map(CompletableFuture::join).toList();
+        List<TextbookSearchHit> textbookHits = libraryEvidence.stream()
+                .flatMap(result -> result.textbookHits().stream())
+                .toList();
+        List<TeacherResourceBlockSearchResponse.Hit> teacherHits = libraryEvidence.stream()
+                .flatMap(result -> result.teacherHits().stream())
+                .toList();
         List<Map<String, Object>> mergedHits = mergedEvidenceHits(textbookHits, teacherHits, limit);
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("query", query);
         result.put("limit", limit);
         result.put("libraries", selection.libraries());
-        result.put("sources", Map.of(
-                "textbook", Map.of("enabled", selection.includeTextbook(), "hitCount", textbookHits.size()),
-                "teacherResource", Map.of(
-                        "enabled", selection.includeTeacherResources(),
-                        "hitCount", teacherHits.size(),
-                        "sourceTypes", teacherSourceTypes)));
+        result.put("libraryStats", libraryEvidence.stream().map(LibraryEvidence::toSummary).toList());
         result.put("textbookHits", textbookHits);
         result.put("teacherResourceHits", teacherHits);
         result.put("mergedHits", mergedHits);
@@ -327,6 +312,10 @@ public class McpToolExecutionService {
         List<String> librarySelectors = mergeDistinct(
                 flexibleStringListArgument(arguments, "libraries", "library"),
                 flexibleStringListArgument(arguments, "sourceTypes", "sourceType"));
+        requireLibrarySelectors(librarySelectors, TEACHER_RESOURCE_EVIDENCE_TOOL);
+        if (librarySelectors.stream().anyMatch(McpToolExecutionService::isTextbookLibrary)) {
+            throw new IllegalArgumentException("search_teacher_resource_evidence only accepts teacher-resource libraries");
+        }
         TeacherResourceBlockSearchResponse response = teacherResourceBlockSearchService.search(
                 client.tenantId(),
                 normalizedProfile(client.profile()),
@@ -347,6 +336,44 @@ public class McpToolExecutionService {
         result.put("hitCount", response.hitCount());
         result.put("hits", response.hits());
         return result;
+    }
+
+    /** Lists only the documents visible to the registered MCP subject; local paths are never returned by this tool. */
+    private Object listTeacherResources(McpClientRegistryProperties.Client client) {
+        return teacherResourceService.list(client.tenantId(), normalizedProfile(client.profile()), client.subjectId())
+                .stream().map(document -> {
+                    Map<String, Object> result = new LinkedHashMap<>();
+                    result.put("documentId", document.documentId());
+                    result.put("title", document.title());
+                    result.put("sourceType", document.sourceType());
+                    result.put("permissionScope", document.permissionScope());
+                    result.put("syncStatus", document.syncStatus());
+                    result.put("parseStatus", document.parseStatus());
+                    result.put("embeddingStatus", document.embeddingStatus());
+                    result.put("indexStatus", document.indexStatus());
+                    result.put("files", document.previewFiles().stream().map(file -> Map.of(
+                            "fileName", file.fileName(), "fileSizeBytes", file.fileSizeBytes())).toList());
+                    return result;
+                }).toList();
+    }
+
+    /** Reads every parsed source block for one already-visible document so the agent can verify original wording. */
+    private Object readTeacherResourceBlocks(McpClientRegistryProperties.Client client, McpToolCallRequest request) {
+        String documentId = stringArgument(request == null ? Map.of() : request.arguments(), "documentId");
+        return teacherResourceBlockSearchService.listVisibleBlocks(
+                client.tenantId(), normalizedProfile(client.profile()), client.subjectId(), documentId);
+    }
+
+    /**
+     * Returns permission-filtered question stems and stored answers for AI verification.  The query may be empty for
+     * an explicit browse, but tenant/owner filtering remains in the question-bank service rather than trusting MCP
+     * arguments for identity.
+     */
+    private Object searchQuestionBankItems(McpClientRegistryProperties.Client client, McpToolCallRequest request) {
+        Map<String, Object> arguments = request == null ? Map.of() : request.arguments();
+        return questionBankService.searchQuestions(
+                client.tenantId(), normalizedProfile(client.profile()), client.subjectId(),
+                stringArgument(arguments, "query"), intArgument(arguments, "limit", 10));
     }
 
     /**
@@ -761,16 +788,7 @@ public class McpToolExecutionService {
                 .distinct()
                 .toList();
         if (libraries.isEmpty()) {
-            /*
-             * The default AI-facing path should search the teaching libraries we actually expect in classroom RAG,
-             * not every legacy local_path package that happens to be visible in the same tenant. Callers that need the
-             * broader corpus can still request teacher_resource explicitly.
-             */
-            return new SourceSelection(
-                    true,
-                    true,
-                    List.of("qq_bundle", "feishu", "gaokao", "mock_exam"),
-                    List.of("textbook", "qq_bundle", "feishu", "gaokao", "mock_exam"));
+            throw new IllegalArgumentException("libraries is required for search_multi_source_evidence");
         }
         boolean includeTextbook = libraries.stream().anyMatch(McpToolExecutionService::isTextbookLibrary);
         List<String> teacherSourceTypes = libraries.stream()
@@ -781,6 +799,57 @@ public class McpToolExecutionService {
         boolean includeTeacherResources = libraries.stream().anyMatch(McpToolExecutionService::isTeacherResourceLibrary)
                 || !teacherSourceTypes.isEmpty();
         return new SourceSelection(includeTextbook, includeTeacherResources, teacherSourceTypes, libraries);
+    }
+
+    /** Runs one explicitly selected corpus independently so callers can inspect its real latency and hit count. */
+    private LibraryEvidence searchOneLibrary(
+            McpClientRegistryProperties.Client client,
+            String query,
+            int limit,
+            Map<String, Object> arguments,
+            String library) {
+        long startedNanos = System.nanoTime();
+        if (isTextbookLibrary(library)) {
+            List<TextbookSearchHit> hits = textbookRetrievalService.search(
+                            textbookResourceProperties.processedBooksRoot(),
+                            new TextbookSearchRequest(query, limit),
+                            new RetrievalRequestContext(
+                                    client.tenantId(), normalizedProfile(client.profile()), client.subjectId(), null,
+                                    "mcp:" + client.clientId(), "mcp-client",
+                                    "/api/mcp/tools/search_multi_source_evidence/call"))
+                    .hits();
+            return new LibraryEvidence(library, hits, List.of(), elapsedMs(startedNanos));
+        }
+        List<TeacherResourceBlockSearchResponse.Hit> hits = teacherResourceBlockSearchService.search(
+                        client.tenantId(), normalizedProfile(client.profile()), client.subjectId(), query, limit,
+                        "/api/mcp/tools/search_multi_source_evidence/call",
+                        TeacherResourceSearchFilter.of(
+                                flexibleStringListArgument(arguments, "permissionScopes", "permissionScope"),
+                                flexibleStringListArgument(arguments, "documentIds", "documentId"),
+                                List.of(library),
+                                flexibleStringListArgument(arguments, "tags", "tag")))
+                .hits();
+        return new LibraryEvidence(library, List.of(), hits, elapsedMs(startedNanos));
+    }
+
+    private static void requireLibrarySelectors(List<String> libraries, String toolName) {
+        if (libraries == null || libraries.isEmpty()) {
+            throw new IllegalArgumentException("library or libraries is required for " + toolName);
+        }
+    }
+
+    private static void requireExactlyTextbookLibrary(Map<String, Object> arguments, String toolName) {
+        List<String> libraries = mergeDistinct(
+                flexibleStringListArgument(arguments, "libraries", "library"),
+                flexibleStringListArgument(arguments, "sourceTypes", "sourceType"));
+        requireLibrarySelectors(libraries, toolName);
+        if (libraries.size() != 1 || !isTextbookLibrary(libraries.getFirst())) {
+            throw new IllegalArgumentException(toolName + " requires library=textbook or public_textbook");
+        }
+    }
+
+    private static long elapsedMs(long startedNanos) {
+        return Math.max(0L, (System.nanoTime() - startedNanos) / 1_000_000L);
     }
 
     private static boolean isTextbookLibrary(String library) {
@@ -872,6 +941,18 @@ public class McpToolExecutionService {
             List<String> libraries) {
     }
 
+    private record LibraryEvidence(
+            String library,
+            List<TextbookSearchHit> textbookHits,
+            List<TeacherResourceBlockSearchResponse.Hit> teacherHits,
+            long elapsedMs) {
+        private Map<String, Object> toSummary() {
+            return Map.of("library", library, "elapsedMs", elapsedMs,
+                    "hitCount", textbookHits.size() + teacherHits.size(),
+                    "source", isTextbookLibrary(library) ? "textbook" : "teacher_resource");
+        }
+    }
+
     /**
      * Checks the exact tool allow-list configured for this MCP client.
      */
@@ -916,7 +997,9 @@ public class McpToolExecutionService {
         return switch (toolName) {
             case MULTI_SOURCE_EVIDENCE_TOOL -> "PUBLIC_TEXTBOOK + teacher-resource:read";
             case TEXTBOOK_EVIDENCE_TOOL -> "PUBLIC_TEXTBOOK";
-            case TEACHER_RESOURCE_EVIDENCE_TOOL, DISCOVER_FEISHU_RESOURCES_TOOL -> "teacher-resource:read";
+            case TEACHER_RESOURCE_EVIDENCE_TOOL, LIST_TEACHER_RESOURCES_TOOL, READ_TEACHER_RESOURCE_BLOCKS_TOOL,
+                    DISCOVER_FEISHU_RESOURCES_TOOL -> "teacher-resource:read";
+            case SEARCH_QUESTION_BANK_ITEMS_TOOL -> "question-bank:read";
             case DOWNLOAD_FEISHU_RESOURCE_TOOL -> "teacher-resource:sync-execute";
             case TEACHING_AI_TRACE_TOOL, AI_DIAGNOSTIC_SUMMARY_TOOL, MULTI_AGENT_WRITING_TRACE_TOOL -> "agent-trace:read";
             case PLAN_AGENT_RUN_TOOL -> "agent:plan";
@@ -1233,3 +1316,4 @@ public class McpToolExecutionService {
         return profile == null || profile.isBlank() ? "teacher" : profile.strip().toLowerCase();
     }
 }
+

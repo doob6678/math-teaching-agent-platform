@@ -6,11 +6,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.doob.mathagent.teacher.service.InMemoryTeacherResourceStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherSourceSyncCheckpointStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherSourceSyncJobStore;
-import com.doob.mathagent.teacher.service.TeacherResourceRegistrationCommand;
+import com.doob.mathagent.teacher.support.TeacherResourceRegistrationCommand;
 import com.doob.mathagent.teacher.service.TeacherResourceService;
-import com.doob.mathagent.teacher.service.TeacherSourceSyncCheckpointQueryService;
+import com.doob.mathagent.teacher.sync.TeacherSourceSyncCheckpointQueryService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncJobService;
-import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
+import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncCheckpointResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncJobResponse;
 import org.junit.jupiter.api.Test;
@@ -123,3 +123,4 @@ class TeacherSourceSyncCheckpointQueryServiceTest {
                 job.jobId())).isPresent();
     }
 }
+

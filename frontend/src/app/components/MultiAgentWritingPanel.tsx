@@ -20,6 +20,20 @@ import {
 import { compactText, formatDateTime, statusClass, StatusBadge, StatusLine } from "./panelShared";
 import { PdfCanvasPreview } from "./PdfCanvasPreview";
 
+const CONTROLLED_STAGE_CODES = [
+  "resource_curation",
+  "template_selection",
+  "outline_planning",
+  "teacher_writer",
+  "student_writer",
+  "lecture_writer",
+  "source_review",
+  "student_safety_review",
+  "layout_review",
+  "merge_coordinator",
+];
+const LEGACY_STAGE_CODES = ["draft", "review", "format"];
+
 export function MultiAgentWritingPanel({
   workflow,
   traces,
@@ -75,7 +89,9 @@ export function MultiAgentWritingPanel({
   onPreviewPdf?: () => void;
   onExportArtifact?: (format: "markdown" | "latex" | "pdf" | "zip") => void;
 }) {
-  const stageCodes = ["draft", "review", "format"];
+  const stageCodes = workflow?.stages.some((stage) => CONTROLLED_STAGE_CODES.includes(stage.stageCode))
+    ? CONTROLLED_STAGE_CODES
+    : LEGACY_STAGE_CODES;
   const normalizedWorkflowStatus = workflow?.status?.toUpperCase() ?? "";
   const actualStage = workflow?.stages?.at(-1);
   const actualModel = actualStage
@@ -174,7 +190,7 @@ export function MultiAgentWritingPanel({
                 <strong>{index + 1}. {stageLabel(stageCode)}</strong>
                 <span>
                   {stage
-                    ? `${statusLabel(stage.status)} / ${providerLabel(stage.providerName)} / ${stage.modelCode} / 用量 ${stage.actualUsage.totalTokens.toLocaleString("zh-CN")}`
+                    ? stageMetrics(stage)
                     : isCurrentStage
                       ? "正在执行"
                       : workflow.status === "RUNNING"
@@ -958,6 +974,16 @@ function cleanPreviewText(value: string) {
 
 function stageLabel(stage: string) {
   const labels: Record<string, string> = {
+    resource_curation: "资料汇总",
+    template_selection: "模板选择",
+    outline_planning: "共享大纲",
+    teacher_writer: "教师版",
+    student_writer: "学生版",
+    lecture_writer: "16:10 讲解版",
+    source_review: "来源审查",
+    student_safety_review: "学生版安全审查",
+    layout_review: "版式审查",
+    merge_coordinator: "合并结果",
     draft: "讲义初稿",
     review: "质量审校",
     format: "排版整理",
@@ -970,6 +996,14 @@ function stageLabel(stage: string) {
     HandoutFormatterAgent: "排版整理",
   };
   return labels[stage] ?? stage;
+}
+
+/** Formats the durable per-stage timing supplied by the backend without inventing a client-side duration. */
+function stageMetrics(stage: MultiAgentWritingResponse["stages"][number]) {
+  const duration = typeof stage.elapsedMs === "number" && stage.elapsedMs >= 0
+    ? ` / 耗时 ${stage.elapsedMs.toLocaleString("zh-CN")} ms`
+    : "";
+  return `${statusLabel(stage.status)} / ${providerLabel(stage.providerName)} / ${stage.modelCode} / 用量 ${stage.actualUsage.totalTokens.toLocaleString("zh-CN")}${duration}`;
 }
 
 function statusLabel(status: string) {

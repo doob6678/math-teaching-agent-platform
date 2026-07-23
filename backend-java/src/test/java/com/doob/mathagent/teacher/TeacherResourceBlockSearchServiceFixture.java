@@ -1,12 +1,12 @@
 package com.doob.mathagent.teacher;
 
 import com.doob.mathagent.knowledge.service.InMemoryKnowledgeQuestionBankStore;
-import com.doob.mathagent.teacher.service.TeacherDocumentBlockStore;
-import com.doob.mathagent.teacher.service.TeacherResourceGraphAlignmentService;
-import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchAuditEvent;
-import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchAuditSink;
+import com.doob.mathagent.teacher.block.TeacherDocumentBlockStore;
+import com.doob.mathagent.teacher.search.TeacherResourceGraphAlignmentService;
+import com.doob.mathagent.teacher.search.audit.TeacherResourceBlockSearchAuditEvent;
+import com.doob.mathagent.teacher.search.audit.TeacherResourceBlockSearchAuditSink;
 import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService;
-import com.doob.mathagent.teacher.service.TeacherResourceStore;
+import com.doob.mathagent.teacher.document.TeacherResourceStore;
 import com.doob.mathagent.vector.service.TestVectorIndexService;
 
 public final class TeacherResourceBlockSearchServiceFixture {
@@ -39,3 +39,4 @@ public final class TeacherResourceBlockSearchServiceFixture {
         }
     }
 }
+

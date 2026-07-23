@@ -58,6 +58,34 @@ public class TeachingHandoutTemplateService {
                 段落要短，公式优先，避免聊天式解释和大段散文。
                 """,
                 false));
+        // The user supplied this master as the accepted visual reference.  Registering it explicitly instead of
+        // relying on a desktop scan keeps template identity, preview access, and the Zhao PDF renderer stable after
+        // a restart or a cache clear.  The path is a user-authorized local source, never model input text.
+        map.put("zhao_lixian_2025_master_v1", new TeachingHandoutTemplateProfile(
+                new TeachingHandoutTemplateResponse(
+                        "zhao_lixian_2025_master_v1",
+                        "连续真题讲义母版",
+                        "local_reference",
+                        "mixed",
+                        "按连续真题页、页眉页脚和紧凑层级导出；品牌名称由任务自定义。",
+                        "高考一轮讲义",
+                        "连续真题页",
+                        List.of("基础", "提高", "压轴"),
+                        List.of("高考一轮", "连续题组", "真题溯源", "矢量边框"),
+                        "2025暑秋讲义.pdf",
+                        "D:/BaiduNetdiskDownload/111高考研究/高考数学研究/赵礼显2025/2025高三【赵礼显】/2025一轮复习/2025暑秋讲义.pdf",
+                        "用户提供的连续真题讲义参考；用于尺寸、色彩、题组密度和题图同页的视觉对照。",
+                        6,
+                        3),
+                """
+                按赵礼显高考一轮讲义的连续真题页组织内容：直接进入知识点和真实题目，不生成通用封面、
+                本节目标、来源索引或空泛方法卡来占页。每个知识点只保留已核验的资料依据、条件识别、
+                推导和结论；每道题必须紧跟完整题干，题干含“如图”时仅在同源授权图已同步后输出。
+                例题与变式只能来自当前知识点命中的真实题库或用户题目，资料不足就省略该题，绝不补造。
+                教师版给出可复核的数学理由和答案，学生版只给题目、必要提示和合理作答空间；横版版每题独立。
+                正文不得出现模板、页眉页脚、渲染、提示词、OCR、模型或系统工作流说明。
+                """,
+                false));
         map.put("inverse_student_pdf_v1", new TeachingHandoutTemplateProfile(
                 new TeachingHandoutTemplateResponse(
                         "inverse_student_pdf_v1",

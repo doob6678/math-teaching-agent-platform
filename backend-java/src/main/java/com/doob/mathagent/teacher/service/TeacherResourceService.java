@@ -1,6 +1,10 @@
 package com.doob.mathagent.teacher.service;
 
-import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
+import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
+import com.doob.mathagent.teacher.document.TeacherResourceStore;
+import com.doob.mathagent.teacher.support.TeacherResourceRegistrationCommand;
+import com.doob.mathagent.teacher.support.TeacherResourceSourceIdentity;
+import com.doob.mathagent.teacher.sync.TeacherSourceSyncProperties;
 import com.doob.mathagent.vector.service.VectorIndexService;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -9,6 +13,8 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Stream;
+import java.util.Comparator;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 /**
@@ -17,20 +23,36 @@ import org.springframework.stereotype.Service;
 @Service
 public class TeacherResourceService {
 
-    private static final int MAX_PREVIEW_FILES = 8;
     private static final int MAX_PREVIEW_DEPTH = 6;
 
     private final TeacherResourceStore store;
     private final VectorIndexService vectorIndexService;
+    private final TeacherResourceAssetService assetService;
+    private final TeacherSourceSyncProperties syncProperties;
 
     /**
      * Creates a teacher resource service.
      *
      * @param store resource store
      */
+    @Autowired
+    public TeacherResourceService(
+            TeacherResourceStore store,
+            VectorIndexService vectorIndexService,
+            TeacherResourceAssetService assetService,
+            TeacherSourceSyncProperties syncProperties) {
+        this.store = store;
+        this.vectorIndexService = vectorIndexService;
+        this.assetService = assetService;
+        this.syncProperties = syncProperties;
+    }
+
+    /** Compatibility constructor for narrow parser tests that intentionally do not provision asset storage. */
     public TeacherResourceService(TeacherResourceStore store, VectorIndexService vectorIndexService) {
         this.store = store;
         this.vectorIndexService = vectorIndexService;
+        this.assetService = TeacherResourceAssetService.disabled();
+        this.syncProperties = null;
     }
 
     /**
@@ -43,6 +65,27 @@ public class TeacherResourceService {
         TeacherResourceRegistrationCommand normalized = request.normalize();
         requireTeacherOrAdmin(normalized.viewerRole());
         requireSourceLocation(normalized);
+        String sourceIdentity = TeacherResourceSourceIdentity.resolve(
+                normalized.sourceType(), normalized.originalUrl(), normalized.localPath());
+        TeacherResourceDocumentResponse existing = store.findBySourceIdentity(
+                normalized.tenantId(), normalized.viewerSubjectId(), normalized.sourceType(), sourceIdentity,
+                normalized.feishuExportFormat());
+        if (existing != null) {
+            if (!"archived".equalsIgnoreCase(existing.syncStatus())) {
+                // Re-registration is deliberately a read operation: no duplicate source rows and no surprise resync.
+                return existing;
+            }
+            /*
+             * Archive deletes content but keeps source audit identity. Re-registering that same real source revives
+             * the audit row in a clean pending state so a deliberate new sync can rebuild it without a second row.
+             */
+            return store.save(new TeacherResourceDocumentResponse(
+                    existing.documentId(), existing.tenantId(), existing.ownerSubjectId(), existing.sourceType(),
+                    normalized.title(), normalized.originalUrl(), normalized.localPath(),
+                    normalizePermissionScope(normalized.permissionScope(), normalized.viewerRole()),
+                    "registered", "pending", "pending", "waiting_rebuild", normalized.feishuExportFormat(),
+                    previewFiles(normalized.localPath()), normalized.parseMode(), null, null, sourceIdentity));
+        }
         TeacherResourceDocumentResponse document = new TeacherResourceDocumentResponse(
                 UUID.randomUUID().toString(),
                 normalized.tenantId(),
@@ -58,7 +101,10 @@ public class TeacherResourceService {
                 "waiting_rebuild",
                 normalized.feishuExportFormat(),
                 previewFiles(normalized.localPath()),
-                normalized.parseMode());
+                normalized.parseMode(),
+                null,
+                null,
+                sourceIdentity);
         return store.save(document);
     }
 
@@ -75,7 +121,40 @@ public class TeacherResourceService {
         String normalizedRole = requireText(viewerRole, "viewerRole is required").toLowerCase();
         String normalizedSubjectId = requireText(viewerSubjectId, "viewerSubjectId is required");
         requireTeacherOrAdmin(normalizedRole);
-        return store.listVisible(normalizedTenantId, normalizedRole, normalizedSubjectId);
+        /*
+         * Preview entries are intentionally derived from the current local source on read. The document table stores
+         * the authoritative path and lifecycle state, while this keeps folder names and PDF filenames current without
+         * duplicating a large file manifest in MySQL.
+         */
+        return store.listVisible(normalizedTenantId, normalizedRole, normalizedSubjectId).stream()
+                .map(this::withLocalPreviewFiles)
+                .toList();
+    }
+
+    /** Rehydrates the small UI preview while preserving every source filename exactly as found on disk. */
+    private TeacherResourceDocumentResponse withLocalPreviewFiles(TeacherResourceDocumentResponse document) {
+        if (document == null || document.localPath() == null || document.localPath().isBlank()) {
+            return document;
+        }
+        return new TeacherResourceDocumentResponse(
+                document.documentId(),
+                document.tenantId(),
+                document.ownerSubjectId(),
+                document.sourceType(),
+                document.title(),
+                document.originalUrl(),
+                document.localPath(),
+                document.permissionScope(),
+                document.syncStatus(),
+                document.parseStatus(),
+                document.embeddingStatus(),
+                document.indexStatus(),
+                document.feishuExportFormat(),
+                previewFiles(document.localPath()),
+                document.parseMode(),
+                document.providerRevision(),
+                document.contentChecksum(),
+                document.sourceIdentity());
     }
 
     /**
@@ -104,6 +183,10 @@ public class TeacherResourceService {
             throw new IllegalArgumentException("Teacher can archive only own resources");
         }
         vectorIndexService.deleteTeacherResourceVectors(normalizedTenantId, documentId);
+        // Archive keeps source identity for audit, but its parsed body must not remain in the local corpus.
+        vectorIndexService.purgeTeacherResourceContent(normalizedTenantId, documentId);
+        assetService.purgeDocumentAssets(normalizedTenantId, documentId);
+        purgeFeishuStagingContent(document);
         TeacherResourceDocumentResponse archived = new TeacherResourceDocumentResponse(
                 document.documentId(),
                 document.tenantId(),
@@ -119,7 +202,10 @@ public class TeacherResourceService {
                 "archived",
                 document.feishuExportFormat(),
                 document.previewFiles(),
-                document.parseMode());
+                document.parseMode(),
+                document.providerRevision(),
+                document.contentChecksum(),
+                document.sourceIdentity());
         return store.save(archived);
     }
 
@@ -188,11 +274,49 @@ public class TeacherResourceService {
         try (Stream<Path> stream = Files.walk(root, MAX_PREVIEW_DEPTH)) {
             return stream
                     .filter(Files::isRegularFile)
-                    .limit(MAX_PREVIEW_FILES)
                     .map(path -> previewFile(root, path))
+                    .sorted(Comparator.comparing(TeacherResourceDocumentResponse.PreviewFile::relativePath))
                     .toList();
         } catch (IOException exception) {
             return List.of();
+        }
+    }
+
+    /**
+     * Deletes only a document's Feishu downloader output. `localPath` is retained in the archived source row for
+     * auditability, while its content is removed. Non-Feishu local paths are never touched by this archive action.
+     */
+    private void purgeFeishuStagingContent(TeacherResourceDocumentResponse document) {
+        if (syncProperties == null || !"feishu".equalsIgnoreCase(document.sourceType())
+                || document.localPath() == null || document.localPath().isBlank()) {
+            return;
+        }
+        Path root = syncProperties.feishuStagingRoot().toAbsolutePath().normalize();
+        Path candidate;
+        try {
+            candidate = Path.of(document.localPath()).toAbsolutePath().normalize();
+        } catch (InvalidPathException exception) {
+            throw new IllegalArgumentException("Archived Feishu staging path is invalid", exception);
+        }
+        if (!candidate.startsWith(root) || candidate.equals(root) || candidate.equals(syncProperties.assetStorageRoot())) {
+            throw new IllegalArgumentException("Archived Feishu staging path is outside the configured staging root");
+        }
+        try {
+            if (Files.isDirectory(candidate)) {
+                try (Stream<Path> paths = Files.walk(candidate)) {
+                    paths.sorted(Comparator.reverseOrder()).forEach(path -> {
+                        try {
+                            Files.deleteIfExists(path);
+                        } catch (IOException exception) {
+                            throw new IllegalStateException("Failed to remove archived Feishu staging content", exception);
+                        }
+                    });
+                }
+            } else {
+                Files.deleteIfExists(candidate);
+            }
+        } catch (IOException exception) {
+            throw new IllegalStateException("Failed to scan archived Feishu staging content", exception);
         }
     }
 

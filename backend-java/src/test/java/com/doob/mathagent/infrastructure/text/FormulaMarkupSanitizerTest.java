@@ -90,4 +90,23 @@ class FormulaMarkupSanitizerTest {
                 .contains("$c^2=a^2+b^2$", "$y=\\frac{k}{x}$")
                 .doesNotContain("textasciicircum", "textbackslash{}frac");
     }
+
+    @Test
+    void convertsBareUnicodeGeometryRelationsToMathCommandsWithoutBreakingExistingMath() {
+        String sanitized = FormulaMarkupSanitizer.sanitizeFeishuMath(
+                "CC1⊥平面 ABC，且 $A⊥B$，再判断 l∥m。");
+
+        assertThat(sanitized)
+                .contains("CC1$\\perp$平面 ABC", "$A\\perp B$", "l$\\parallel$m")
+                .doesNotContain("⊥", "∥");
+    }
+
+    @Test
+    void repairsTransportWhitespaceInsideFracCommand() {
+        String sanitized = FormulaMarkupSanitizer.sanitizeFeishuMath(
+                "对称轴 x=-\\\\ rac{b}{2a}，结果为 $\\\\ rac{1}{2}$。");
+
+        assertThat(sanitized).contains("\\\\frac{b}{2a}", "\\\\frac{1}{2}");
+        assertThat(sanitized).doesNotContain(" rac");
+    }
 }

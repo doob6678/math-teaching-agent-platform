@@ -11,8 +11,8 @@ import com.doob.mathagent.knowledge.service.TeacherBlockQuestionImportService;
 import com.doob.mathagent.knowledge.vo.TeacherBlockQuestionImportResponse;
 import com.doob.mathagent.teacher.service.InMemoryTeacherDocumentBlockStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherResourceStore;
-import com.doob.mathagent.teacher.vo.TeacherDocumentBlockResponse;
-import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
+import com.doob.mathagent.teacher.block.TeacherDocumentBlockResponse;
+import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletRequest;
@@ -112,8 +112,8 @@ class TeacherBlockQuestionImportControllerTest {
                 "TEACHER_PRIVATE",
                 "synced",
                 "parsed",
-                "pending",
-                "waiting_rebuild",
+                "ready",
+                "ready",
                 List.of());
     }
 
@@ -137,3 +137,4 @@ class TeacherBlockQuestionImportControllerTest {
                 "active");
     }
 }
+

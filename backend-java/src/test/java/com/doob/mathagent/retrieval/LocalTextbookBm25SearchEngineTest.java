@@ -51,6 +51,34 @@ class LocalTextbookBm25SearchEngineTest {
     }
 
     @Test
+    void exposesVisibleHeadingAsAnIndependentLexicalCandidateRoute() {
+        TextbookChunk headingMatch = chunk(
+                "book_a_p123_heading_001",
+                "4.3.2 独立性检验",
+                "本页正文使用图表说明分类变量的关系。",
+                "pages/p123.png",
+                123,
+                "116");
+        TextbookChunk bodyMatch = chunk(
+                "book_a_p124_body_001",
+                "4.3 统计模型",
+                "独立性检验 独立性检验 独立性检验 的练习提示。",
+                "pages/p124.png",
+                124,
+                "117");
+
+        LocalTextbookBm25SearchEngine engine = new LocalTextbookBm25SearchEngine();
+
+        List<TextbookSearchHit> hits = engine.searchSectionTitles(
+                "卡方与独立性检验", List.of(bodyMatch, headingMatch), 2);
+
+        assertThat(hits)
+                .extracting(TextbookSearchHit::chunkId)
+                .containsExactly("book_a_p123_heading_001");
+        assertThat(hits.getFirst().retrievalStrategy()).isEqualTo("local_title_bm25");
+    }
+
+    @Test
     void downranksCoverBackmatterBelowContentPage() {
         TextbookChunk cover = chunk(
                 "book_a_p190_text_001",
@@ -99,6 +127,55 @@ class LocalTextbookBm25SearchEngineTest {
                 .isEqualTo("numeric_appendix");
     }
 
+    @Test
+    void keepsMidPageEvidenceInSnippetForSemanticRerank() {
+        String prefix = "导数定义、函数图象、切线斜率、极限符号。".repeat(20);
+        TextbookChunk target = chunk(
+                "book_a_p130_text_001",
+                "统计与概率",
+                prefix + "我们已经知道,利用古典概型能够方便地确定出有关随机事件的概率,但是并不是所有试验都能归结为古典概型。",
+                "pages/p130.png",
+                130,
+                "123");
+
+        LocalTextbookBm25SearchEngine engine = new LocalTextbookBm25SearchEngine();
+
+        List<TextbookSearchHit> hits = engine.search("利用古典概型能够方便地确定出有关随机事件的概率", List.of(target), 1);
+
+        assertThat(hits)
+                .hasSize(1)
+                .first()
+                .satisfies(hit -> assertThat(hit.textSnippet())
+                        .contains("利用古典概型能够方便地确定出有关随机事件的概率")
+                        .doesNotStartWith(prefix.substring(0, 40)));
+    }
+
+    @Test
+    void skipsOcrEmptyPlaceholderPageInTextRetrieval() {
+        TextbookChunk emptyPage = chunk(
+                "book_a_p080_text_001",
+                "第六章导数及其应用",
+                "# p080\n## 正文\n（本页文本层为空，需 OCR 或视觉模型补充。）",
+                "pages/p080.png",
+                80,
+                "未识别");
+        TextbookChunk contentPage = chunk(
+                "book_a_p083_text_001",
+                "第六章导数及其应用",
+                "这就说明，导函数存在时，可以把某一点的导数看成导函数在该点的取值。",
+                "pages/p083.png",
+                83,
+                "76");
+
+        LocalTextbookBm25SearchEngine engine = new LocalTextbookBm25SearchEngine();
+
+        List<TextbookSearchHit> hits = engine.search("第六章导数及其应用 这就说明", List.of(emptyPage, contentPage), 5);
+
+        assertThat(hits)
+                .extracting(TextbookSearchHit::chunkId)
+                .containsExactly("book_a_p083_text_001");
+    }
+
     private static TextbookChunk chunk(String chunkId, String sectionTitle, String text, String sourcePageImage) {
         return chunk(
                 chunkId,
@@ -129,6 +206,7 @@ class LocalTextbookBm25SearchEngineTest {
                 text,
                 "",
                 List.of(),
-                sourcePageImage);
+                sourcePageImage,
+                chunkId + "__section");
     }
 }

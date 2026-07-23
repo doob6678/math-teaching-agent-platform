@@ -17,7 +17,7 @@ import org.redisson.api.RedissonClient;
 class RedissonAgentConcurrencyGuardTest {
 
     @Test
-    void acquiresLeaseBasedLocksAndReleasesThem() {
+    void acquiresWatchdogLocksAndReleasesThem() {
         FakeRedisson redisson = new FakeRedisson(true);
         RedissonAgentConcurrencyGuard guard =
                 new RedissonAgentConcurrencyGuard(redisson.client(), "math-agent:test:agent-concurrency");
@@ -31,7 +31,7 @@ class RedissonAgentConcurrencyGuardTest {
         assertThat(redisson.lockNames()).containsExactly(
                 "math-agent:test:agent-concurrency:concurrent:user:teacher-1:CoursewareAgent",
                 "math-agent:test:agent-concurrency:concurrent:model:gpt-5.4");
-        assertThat(redisson.leaseMillis()).containsOnly(45000L);
+        assertThat(redisson.watchdogLockCount()).isEqualTo(2);
 
         lease.get().close();
 
@@ -56,7 +56,6 @@ class RedissonAgentConcurrencyGuardTest {
     private static final class FakeRedisson {
         private final boolean allLocksAllowed;
         private final List<String> lockNames = new ArrayList<>();
-        private final List<Long> leaseMillis = new ArrayList<>();
         private int tryLockCalls;
         private int unlockCount;
 
@@ -82,11 +81,10 @@ class RedissonAgentConcurrencyGuardTest {
                     RLock.class.getClassLoader(),
                     new Class<?>[] {RLock.class},
                     (proxy, method, args) -> {
-                        if ("tryLock".equals(method.getName()) && args.length == 3) {
+                        if ("tryLock".equals(method.getName()) && args.length == 2) {
                             tryLockCalls += 1;
-                            leaseMillis.add((Long) args[1]);
                             assertThat(args[0]).isEqualTo(0L);
-                            assertThat(args[2]).isEqualTo(TimeUnit.MILLISECONDS);
+                            assertThat(args[1]).isEqualTo(TimeUnit.MILLISECONDS);
                             return allLocksAllowed || tryLockCalls == 1;
                         }
                         if ("isHeldByCurrentThread".equals(method.getName())) {
@@ -104,8 +102,8 @@ class RedissonAgentConcurrencyGuardTest {
             return lockNames;
         }
 
-        List<Long> leaseMillis() {
-            return leaseMillis;
+        int watchdogLockCount() {
+            return tryLockCalls;
         }
 
         int unlockCount() {

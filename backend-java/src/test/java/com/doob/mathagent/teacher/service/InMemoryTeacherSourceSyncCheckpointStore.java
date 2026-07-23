@@ -1,5 +1,6 @@
 package com.doob.mathagent.teacher.service;
 
+import com.doob.mathagent.teacher.sync.TeacherSourceSyncCheckpointStore;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncCheckpointResponse;
 import java.util.Map;
 import java.util.Optional;

@@ -1,9 +1,12 @@
 package com.doob.mathagent.teacher.service;
 
 import com.doob.mathagent.infrastructure.security.RequestSubject;
+import com.doob.mathagent.teacher.asset.TeacherResourceAssetStore;
+import com.doob.mathagent.teacher.document.TeacherResourceStore;
 import com.doob.mathagent.teacher.vo.TeacherResourceAssetResponse;
-import com.doob.mathagent.teacher.vo.TeacherResourceBlockSearchResponse;
-import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
+import com.doob.mathagent.teacher.search.TeacherResourceBlockSearchResponse;
+import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
+import com.doob.mathagent.teacher.sync.TeacherSourceSyncProperties;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -15,14 +18,16 @@ import java.util.HexFormat;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Comparator;
 import java.util.UUID;
+import java.util.List;
 import javax.imageio.ImageIO;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /**
  * Persists extracted images/assets and serves them only through backend permission checks.
@@ -67,10 +72,43 @@ public class TeacherResourceAssetService {
         return new TeacherResourceAssetService();
     }
 
+    /**
+     * Returns active image assets for one document.  CLIP indexing uses this permission-neutral metadata view only
+     * after the caller has already checked document ownership; binary reads still go through openVisibleAsset().
+     */
+    public List<TeacherResourceAssetResponse> listActiveImageAssets(String tenantId, String documentId) {
+        if (!enabled) {
+            return List.of();
+        }
+        return assetStore.listByDocument(tenantId, documentId).stream()
+                .filter(asset -> "active".equalsIgnoreCase(textOrDefault(asset.status(), "")))
+                .filter(asset -> textOrDefault(asset.mimeType(), "").toLowerCase(Locale.ROOT).startsWith("image/"))
+                .sorted(Comparator.comparing(asset -> asset.pageNo() == null ? Integer.MAX_VALUE : asset.pageNo()))
+                .toList();
+    }
+
     public void markDocumentAssetsInactive(String tenantId, String documentId) {
         if (enabled) {
             assetStore.markDocumentAssetsInactive(tenantId, documentId);
         }
+    }
+
+    /**
+     * Removes all binary generations for an archived source and then its asset metadata. Storage keys are resolved
+     * through safeStoragePath, so a corrupt database value cannot escape the configured backend-owned asset root.
+     */
+    public void purgeDocumentAssets(String tenantId, String documentId) {
+        if (!enabled) {
+            return;
+        }
+        for (TeacherResourceAssetResponse asset : assetStore.listByDocument(tenantId, documentId)) {
+            try {
+                Files.deleteIfExists(safeStoragePath(asset.storageKey()));
+            } catch (IOException exception) {
+                throw new IllegalStateException("Failed to remove archived teacher resource asset", exception);
+            }
+        }
+        assetStore.purgeDocumentAssets(tenantId, documentId);
     }
 
     /**
@@ -102,13 +140,27 @@ public class TeacherResourceAssetService {
         }
         String checksum = sha256(content);
         String normalizedProviderId = textOrDefault(providerAssetId, sourcePath + ":" + checksum);
-        Optional<TeacherResourceAssetResponse> existing = assetStore.findActiveByProviderChecksum(
+        Optional<TeacherResourceAssetResponse> existing = assetStore.findByProviderChecksum(
                 document.tenantId(),
                 document.documentId(),
                 normalizedProviderId,
                 checksum);
         if (existing.isPresent()) {
-            return existing;
+            TeacherResourceAssetResponse previous = existing.get();
+            if (!"active".equalsIgnoreCase(textOrDefault(previous.status(), ""))) {
+                /*
+                 * Feishu parser extraction runs before manifest ingestion.  The sync service intentionally marks the
+                 * old generation inactive between those phases; reactivating the exact checksum row preserves the
+                 * block's opaque asset id and keeps the ready gate truthful without creating a duplicate binary.
+                 */
+                previous = new TeacherResourceAssetResponse(
+                        previous.assetId(), previous.tenantId(), previous.ownerSubjectId(), previous.documentId(),
+                        previous.blockId(), previous.permissionScope(), previous.sourcePath(), previous.pageNo(),
+                        previous.providerAssetId(), previous.checksum(), previous.mimeType(), previous.width(),
+                        previous.height(), previous.storageKey(), "active");
+                return Optional.of(assetStore.save(previous));
+            }
+            return Optional.of(previous);
         }
         String assetId = UUID.randomUUID().toString();
         String extension = extensionForMime(mimeType);
@@ -183,6 +235,30 @@ public class TeacherResourceAssetService {
                         safeDownloadName(asset),
                         asset.sourcePath(),
                         asset.pageNo()));
+    }
+
+    /**
+     * Resolves one active image from the exact page that produced an imported atomic question.
+     *
+     * <p>Question-bank children retain a {@code parentBlockId#qN} identity, while DOCX page assets belong to the
+     * parent page. Resolving through document/page keeps that provenance intact and repeats the same owner/scope
+     * check as ordinary asset delivery; a question id is never treated as an asset id.</p>
+     */
+    public Optional<VisibleAssetReference> findVisiblePageImageReference(
+            String documentId,
+            Integer pageNo,
+            RequestSubject subject) {
+        if (!enabled || documentId == null || documentId.isBlank() || pageNo == null || pageNo <= 0 || subject == null) {
+            return Optional.empty();
+        }
+        RequestSubject normalized = subject.normalize();
+        return assetStore.listByDocument(normalized.tenantId(), documentId.strip()).stream()
+                .filter(asset -> "active".equalsIgnoreCase(textOrDefault(asset.status(), "")))
+                .filter(asset -> pageNo.equals(asset.pageNo()))
+                .filter(asset -> textOrDefault(asset.mimeType(), "").toLowerCase(Locale.ROOT).startsWith("image/"))
+                .map(asset -> findVisibleAssetReference(asset.assetId(), normalized))
+                .flatMap(Optional::stream)
+                .findFirst();
     }
 
     public String assetUri(String assetId) {

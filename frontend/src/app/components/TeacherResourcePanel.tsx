@@ -1,5 +1,5 @@
 import { FormEvent } from "react";
-import { AlertCircle, Database, Loader2, Search } from "lucide-react";
+import { AlertCircle, Database, Loader2, Search, X } from "lucide-react";
 import {
   TeacherBlockQuestionImportResponse,
   TeacherFeishuDiscoveryCandidate,
@@ -13,9 +13,12 @@ import {
 } from "../../shared/api/textbookApi";
 import { compactText, countJsonArray, PanelTitle, StatusLine } from "./panelShared";
 
+const COMPLETED_SYNC_STATUSES = new Set(["synced", "completed"]);
+const COMPLETED_PARSE_STATUSES = new Set(["parsed", "completed"]);
+const COMPLETED_INDEX_STATUSES = new Set(["ready", "completed"]);
+
 export function TeacherResourcePanel({
   resources,
-  title,
   location,
   files,
   sourceType,
@@ -28,6 +31,7 @@ export function TeacherResourcePanel({
   syncingResourceId,
   importingResourceId,
   rebuildingResourceId,
+  deletingResourceId,
   importResult,
   indexRebuildResult,
   syncJobsByDocument,
@@ -39,7 +43,6 @@ export function TeacherResourcePanel({
   feishuDiscoveryResult,
   discoveringFeishu,
   error,
-  onTitleChange,
   onLocationChange,
   onFilesChange,
   onSourceTypeChange,
@@ -59,7 +62,6 @@ export function TeacherResourcePanel({
   onRebuildIndex,
 }: {
   resources: TeacherResourceDocumentResponse[];
-  title: string;
   location: string;
   files: File[];
   sourceType: string;
@@ -72,6 +74,7 @@ export function TeacherResourcePanel({
   syncingResourceId: string;
   importingResourceId: string;
   rebuildingResourceId: string;
+  deletingResourceId: string;
   importResult: TeacherBlockQuestionImportResponse | null;
   indexRebuildResult: VectorIndexRebuildResponse | null;
   syncJobsByDocument: Record<string, TeacherSourceSyncJobResponse[]>;
@@ -83,7 +86,6 @@ export function TeacherResourcePanel({
   feishuDiscoveryResult: TeacherFeishuDiscoveryResponse | null;
   discoveringFeishu: boolean;
   error: string;
-  onTitleChange: (value: string) => void;
   onLocationChange: (value: string) => void;
   onFilesChange: (files: FileList | null) => void;
   onSourceTypeChange: (value: string) => void;
@@ -116,15 +118,6 @@ export function TeacherResourcePanel({
       </details>
 
       <form className="search-form" onSubmit={onRegister}>
-        <label>
-          <span>自定义标题（可选）</span>
-          <input
-            className="form-input"
-            value={title}
-            onChange={(event) => onTitleChange(event.target.value)}
-            placeholder="留空时自动使用文件名、文件夹名或飞书节点名"
-          />
-        </label>
         <label>
           <span>来源类型</span>
           <select className="form-select" value={sourceType} onChange={(event) => onSourceTypeChange(event.target.value)}>
@@ -362,6 +355,7 @@ export function TeacherResourcePanel({
         {resources.map((resource) => {
           const latestJob = syncJobsByDocument[resource.documentId]?.[0];
           const latestCheckpoint = latestJob ? syncCheckpointsByJob[latestJob.jobId] : undefined;
+          const readyForQuestionImport = isTeacherResourceReady(resource);
           return (
             <article className="resource-item" key={resource.documentId}>
               <div>
@@ -374,15 +368,18 @@ export function TeacherResourcePanel({
               </div>
               <div className="resource-status">
                 <span>同步 {statusLabel(latestJob?.status ?? resource.syncStatus)}</span>
+                {latestJob?.failure?.providerCode ? <span>飞书错误 {latestJob.failure.providerCode}</span> : null}
                 <span>解析 {statusLabel(resource.parseStatus)}</span>
                 <span>向量 {statusLabel(resource.embeddingStatus)}</span>
-                <span>索引 {phaseLabel(latestJob?.phase ?? resource.indexStatus ?? "waiting_rebuild")}</span>
+                <span>索引 {statusLabel(resource.indexStatus ?? "waiting_rebuild")}</span>
               </div>
               {latestJob ? (
                 <p>{compactText(syncJobMessage(latestJob.message) || latestJob.createdAt || latestJob.jobId, 120)}</p>
               ) : resource.previewFiles?.length ? (
                 <p>{compactText(resource.previewFiles.map((file) => file.fileName).join("，"), 120)}</p>
               ) : null}
+              {resource.previewFiles?.length ? <ResourceFolderTree files={resource.previewFiles} /> : null}
+              {latestJob?.failure ? <SyncFailureView failure={latestJob.failure} /> : null}
               {latestCheckpoint ? <SyncCheckpointView checkpoint={latestCheckpoint} /> : null}
               <div className="resource-action-row">
                 <button
@@ -409,7 +406,8 @@ export function TeacherResourcePanel({
                   className="btn btn-secondary btn-sm"
                   type="button"
                   onClick={() => onImportQuestions(resource.documentId)}
-                  disabled={importingResourceId === resource.documentId}
+                  disabled={importingResourceId === resource.documentId || !readyForQuestionImport}
+                  title={readyForQuestionImport ? "" : "资料需完成同步、解析和索引后才能入题库"}
                 >
                   {importingResourceId === resource.documentId ? <Loader2 className="spin" size={15} /> : <Database size={15} />}
                   <span>入题库</span>
@@ -423,8 +421,14 @@ export function TeacherResourcePanel({
                   {rebuildingResourceId === resource.documentId ? <Loader2 className="spin" size={15} /> : <Database size={15} />}
                   <span>重建向量</span>
                 </button>
-                <button className="btn btn-ghost btn-sm" type="button" onClick={() => onArchive(resource.documentId)}>
-                  归档
+                <button
+                  className="btn btn-danger btn-sm"
+                  type="button"
+                  onClick={() => onArchive(resource.documentId)}
+                  disabled={deletingResourceId === resource.documentId}
+                >
+                  {deletingResourceId === resource.documentId ? <Loader2 className="spin" size={15} /> : <X size={15} />}
+                  <span>删除</span>
                 </button>
               </div>
             </article>
@@ -432,6 +436,42 @@ export function TeacherResourcePanel({
         })}
       </div>
     </section>
+  );
+}
+
+/**
+ * Keeps the source hierarchy visible without making a long preview list dominate the resource card.
+ * The backend owns `relativePath`, so the UI never reconstructs or renames the original PDF filename.
+ */
+function ResourceFolderTree({ files }: { files: TeacherResourceDocumentResponse["previewFiles"] }) {
+  const groups = new Map<string, NonNullable<typeof files>>();
+  for (const file of files ?? []) {
+    const relativePath = file.relativePath || file.fileName;
+    const parts = relativePath.split(/[\\/]/).filter(Boolean);
+    const folder = parts.length > 1 ? parts.slice(0, -1).join("/") : "根目录";
+    const current = groups.get(folder) ?? [];
+    current.push(file);
+    groups.set(folder, current);
+  }
+
+  return (
+    <details className="resource-folder-tree">
+      <summary>资料文件夹（{files?.length ?? 0} 个预览文件）</summary>
+      <div className="resource-folder-groups">
+        {[...groups.entries()].map(([folder, folderFiles]) => (
+          <details className="resource-folder-group" key={folder}>
+            <summary>{folder}（{folderFiles.length}）</summary>
+            <ul>
+              {folderFiles.map((file) => (
+                <li key={`${file.relativePath}:${file.fileSizeBytes}`} title={file.relativePath || file.fileName}>
+                  {file.fileName}
+                </li>
+              ))}
+            </ul>
+          </details>
+        ))}
+      </div>
+    </details>
   );
 }
 
@@ -481,6 +521,18 @@ function phaseLabel(value?: string | null) {
     ready_to_index: "待索引",
   };
   return labels[normalized] ?? statusLabel(value);
+}
+
+/** Mirrors the backend evidence gate so unavailable resources cannot be selected from this management surface. */
+function isTeacherResourceReady(resource: TeacherResourceDocumentResponse) {
+  return COMPLETED_SYNC_STATUSES.has(normalizedStatus(resource.syncStatus))
+    && COMPLETED_PARSE_STATUSES.has(normalizedStatus(resource.parseStatus))
+    && COMPLETED_INDEX_STATUSES.has(normalizedStatus(resource.indexStatus));
+}
+
+/** Normalizes durable backend status values before comparing them with the accepted readiness vocabulary. */
+function normalizedStatus(value: string | undefined) {
+  return (value || "").trim().toLowerCase();
 }
 
 function sourceTypeLabel(value?: string | null) {
@@ -610,6 +662,27 @@ function syncJobMessage(value?: string | null) {
     parts.push("任务已完成");
   }
   return parts.length ? parts.join("，") : "同步状态已更新";
+}
+
+/** Displays only provider-confirmed authorization details; no tenant app id or guessed grant URL is exposed. */
+function SyncFailureView({
+  failure,
+}: {
+  failure: NonNullable<TeacherSourceSyncJobResponse["failure"]>;
+}) {
+  if (!failure.providerCode && !failure.requiredScopes.length && !failure.authorizationUrl) {
+    return null;
+  }
+  return (
+    <div className="resource-sync-failure" role="alert">
+      {failure.requiredScopes.length ? <span>需要权限：{failure.requiredScopes.join("，")}</span> : null}
+      {failure.authorizationUrl ? (
+        <a href={failure.authorizationUrl} target="_blank" rel="noreferrer">
+          前往授权
+        </a>
+      ) : null}
+    </div>
+  );
 }
 
 export function SyncCheckpointView({ checkpoint }: { checkpoint: TeacherSourceSyncCheckpointResponse }) {

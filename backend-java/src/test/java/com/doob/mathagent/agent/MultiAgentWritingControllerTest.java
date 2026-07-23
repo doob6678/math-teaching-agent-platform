@@ -58,7 +58,11 @@ class MultiAgentWritingControllerTest {
         MultiAgentWritingResponse response = controller.run(request(), null);
 
         assertThat(response.subjectId()).isEqualTo("teacher-1");
-        assertThat(response.stages()).hasSize(3);
+        assertThat(response.stages()).extracting(MultiAgentWritingResponse.StageResult::stageCode)
+                .containsExactly(
+                        "resource_curation", "template_selection", "outline_planning",
+                        "teacher_writer", "student_writer", "lecture_writer",
+                        "source_review", "student_safety_review", "layout_review", "merge_coordinator");
         assertThat(capabilityChecks)
                 .containsExactly("agent-run:CoursewareAgent|/api/agents/writing/courseware|teacher-1");
         MultiAgentWritingResponse recovered = controller.get(response.workflowId(), null);
@@ -128,7 +132,10 @@ class MultiAgentWritingControllerTest {
 
         assertThat(response.status()).isEqualTo("COMPLETED");
         assertThat(response.stages()).extracting(MultiAgentWritingResponse.StageResult::stageCode)
-                .containsExactly("draft", "review", "format");
+                .containsExactly(
+                        "resource_curation", "template_selection", "outline_planning",
+                        "teacher_writer", "student_writer", "lecture_writer",
+                        "source_review", "student_safety_review", "layout_review", "merge_coordinator");
         assertThat(capabilityChecks)
                 .containsExactly("agent-run:CoursewareAgent|/api/agents/writing/workflow-resume-abc/resume|teacher-1");
     }

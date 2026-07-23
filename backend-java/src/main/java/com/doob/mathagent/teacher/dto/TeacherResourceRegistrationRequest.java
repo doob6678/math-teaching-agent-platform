@@ -1,11 +1,12 @@
 package com.doob.mathagent.teacher.dto;
 
-import com.doob.mathagent.teacher.service.TeacherResourceTitleResolver;
+import com.doob.mathagent.teacher.support.TeacherResourceSourceTypePolicy;
+import com.doob.mathagent.teacher.support.TeacherResourceTitleResolver;
 
 /**
  * Request body used by teachers or admins to register a managed resource source.
  *
- * @param sourceType resource source type, such as feishu, local_path, local_docx, or textbook_md
+ * @param sourceType resource source type, such as feishu, local_path, teacher_resource, qq_bundle, gaokao, or mock_exam
  * @param title display title shown in teacher resource management pages
  * @param originalUrl original Feishu URL or external source URL
  * @param localPath local folder or file path configured by teacher/admin
@@ -38,7 +39,7 @@ public record TeacherResourceRegistrationRequest(
      * @return normalized request body
      */
     public TeacherResourceRegistrationRequest normalize() {
-        String normalizedSourceType = textOrDefault(sourceType, "local_path").toLowerCase();
+        String normalizedSourceType = TeacherResourceSourceTypePolicy.normalizeForRegistration(sourceType);
         String normalizedOriginalUrl = blankToNull(originalUrl);
         String normalizedLocalPath = blankToNull(localPath);
         return new TeacherResourceRegistrationRequest(

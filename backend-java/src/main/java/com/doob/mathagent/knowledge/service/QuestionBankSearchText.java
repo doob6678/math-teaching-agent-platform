@@ -15,14 +15,14 @@ import java.util.Set;
 public final class QuestionBankSearchText {
 
     private static final List<String> CORE_TERMS = List.of(
-            "函数", "定义域", "值域", "分段函数", "单调性", "奇偶性", "零点",
+            "函数", "函数新概念", "二次函数", "一元二次函数", "反比例函数", "定义域", "值域", "分段函数", "单调性", "奇偶性", "零点",
             "导数", "切线", "极值", "最值", "恒成立", "参数范围",
             "三角函数", "正弦定理", "余弦定理", "平面向量", "数量积",
             "空间向量", "立体几何", "线面角", "二面角", "法向量", "点到面距离",
             "棱柱", "三棱柱", "四棱柱", "棱锥", "四棱锥", "圆锥", "体积", "夹角", "垂直", "平行",
             "直线", "圆", "圆锥曲线", "椭圆", "双曲线", "抛物线", "渐近线", "离心率", "焦距",
             "数列", "等差数列", "等比数列", "递推", "错位相减", "裂项相消",
-            "概率", "统计", "随机变量", "排列组合", "二项式");
+            "概率", "统计", "随机变量", "排列组合", "二项式", "涂色问题", "地图着色", "分类计数");
 
     private QuestionBankSearchText() {
     }
@@ -56,6 +56,27 @@ public final class QuestionBankSearchText {
         return candidateQueries(query).stream()
                 .filter(keyword -> query == null || !keyword.equals(query.strip()))
                 .limit(10)
+                .toList();
+    }
+
+    /**
+     * Returns concrete curriculum terms that must be present when a query names a specific topic.
+     *
+     * <p>The management search still uses the broader {@link #keywords(String)} list for recall, but a broad
+     * expansion such as "函数" must not make an unrelated statistics or geometry row look like a quadratic-function
+     * result. Keeping this vocabulary beside the shared query normalizer ensures the UI and teaching workflow apply
+     * the same strict-topic boundary before semantic reranking.</p>
+     */
+    public static List<String> specificTopicTerms(String query) {
+        String normalized = normalize(query);
+        if (normalized.isBlank()) {
+            return List.of();
+        }
+        return CORE_TERMS.stream()
+                .filter(term -> term.length() >= 3)
+                .filter(term -> normalized.contains(term.toLowerCase()))
+                .filter(term -> !Set.of("函数", "三角函数", "空间向量", "立体几何", "平面向量", "圆锥曲线", "直线", "圆", "数列", "概率", "统计", "导数").contains(term))
+                .distinct()
                 .toList();
     }
 

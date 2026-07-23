@@ -37,6 +37,11 @@ public class MultiAgentWritingController {
     private static final String PATH = "/api/agents/writing/courseware";
     private static final String ASYNC_PATH = "/api/agents/writing/courseware/async";
     private static final String RESUME_PATH = "/api/agents/writing/{workflowId}/resume";
+    private static final List<String> CONTROLLED_STAGE_CODES = List.of(
+            "resource_curation", "template_selection", "outline_planning",
+            "teacher_writer", "student_writer", "lecture_writer",
+            "source_review", "student_safety_review", "layout_review", "merge_coordinator");
+    private static final int UNKNOWN_STAGE_ORDER = 99;
 
     private final MultiAgentWritingService writingService;
     private final MultiAgentWritingArtifactExportService artifactExportService;
@@ -299,16 +304,21 @@ public class MultiAgentWritingController {
      */
     private static int stageOrder(AgentTraceResponse trace) {
         String planId = trace.planId() == null ? "" : trace.planId();
+        for (int index = 0; index < CONTROLLED_STAGE_CODES.size(); index += 1) {
+            if (planId.endsWith(":" + CONTROLLED_STAGE_CODES.get(index))) {
+                return index;
+            }
+        }
         if (planId.endsWith(":draft")) {
-            return 0;
+            return CONTROLLED_STAGE_CODES.size();
         }
         if (planId.endsWith(":review")) {
-            return 1;
+            return CONTROLLED_STAGE_CODES.size() + 1;
         }
         if (planId.endsWith(":format")) {
-            return 2;
+            return CONTROLLED_STAGE_CODES.size() + 2;
         }
-        return 99;
+        return UNKNOWN_STAGE_ORDER;
     }
 
     /**

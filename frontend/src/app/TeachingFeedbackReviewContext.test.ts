@@ -100,10 +100,10 @@ describe("buildTeachingFeedbackReviewContext", () => {
       subjectType: "teacher",
     });
     expect(context.templateSnapshot).toMatchObject({
-      templateCode: "teacher_blackboard_solution_v1",
-      templateName: "教师详解版",
-      sourceType: "builtin",
-      audience: "teacher",
+      templateCode: "automatic",
+      templateName: "自动生成",
+      sourceType: "automatic",
+      audience: "mixed",
     });
     expect(context.evidenceScopes).toEqual(["PUBLIC_TEXTBOOK", "QUESTION_BANK"]);
     expect(context.evidenceSummary[0]).toMatchObject({

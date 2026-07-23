@@ -2,10 +2,10 @@ package com.doob.mathagent.teacher;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.doob.mathagent.teacher.service.ProcessTeacherFeishuDownloadClient;
-import com.doob.mathagent.teacher.service.TeacherFeishuDownloadClient;
-import com.doob.mathagent.teacher.service.TeacherFeishuDownloadException;
-import com.doob.mathagent.teacher.service.TeacherSourceSyncProperties;
+import com.doob.mathagent.teacher.feishu.ProcessTeacherFeishuDownloadClient;
+import com.doob.mathagent.teacher.feishu.TeacherFeishuDownloadClient;
+import com.doob.mathagent.teacher.feishu.TeacherFeishuDownloadException;
+import com.doob.mathagent.teacher.sync.TeacherSourceSyncProperties;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Test;

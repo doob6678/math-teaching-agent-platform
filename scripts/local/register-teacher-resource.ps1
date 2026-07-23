@@ -4,6 +4,7 @@ param(
     [string]$Password = "admin-123456",
     [string]$SourceType = "local_path",
     [string]$Title = "teacher-resource-staged",
+    [string]$OriginalUrl = "",
     [string]$LocalPath = "",
     [string]$PermissionScope = "MATH_VIP",
     [ValidateSet("TEXT", "AI")][string]$ParseMode = "TEXT",
@@ -109,6 +110,7 @@ $headers[$login.tokenName] = $login.tokenValue
 $registerBody = @{
     sourceType = $SourceType
     title = $Title
+    originalUrl = $OriginalUrl
     localPath = $LocalPath
     permissionScope = $PermissionScope
     parseMode = $ParseMode

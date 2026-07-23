@@ -32,6 +32,14 @@ tmp/
 .playwright-cli/
 docs/superpowers/plans/
 
+# Local work folders and generated previews
+.resume_work/
+.tmp/
+.trae/
+artifacts-*.png
+artifacts-*.pdf
+tmp-*.txt
+
 # OS
 Thumbs.db
 .DS_Store

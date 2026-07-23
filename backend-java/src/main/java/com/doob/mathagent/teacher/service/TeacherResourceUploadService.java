@@ -2,6 +2,7 @@ package com.doob.mathagent.teacher.service;
 
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.resources.ProjectResourceProperties;
+import com.doob.mathagent.teacher.support.TeacherResourceTitleResolver;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;

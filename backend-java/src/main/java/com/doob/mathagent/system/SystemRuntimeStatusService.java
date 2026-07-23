@@ -7,7 +7,7 @@ import com.doob.mathagent.infrastructure.security.config.RedissonClientPropertie
 import com.doob.mathagent.retrieval.RedisTextbookSearchCacheProperties;
 import com.doob.mathagent.securityrisk.config.CapabilityTokenStoreProperties;
 import com.doob.mathagent.student.service.StudentExplanationHistoryStore;
-import com.doob.mathagent.teacher.service.TeacherSourceSyncProperties;
+import com.doob.mathagent.teacher.sync.TeacherSourceSyncProperties;
 import com.doob.mathagent.vector.service.VectorIndexService;
 import com.doob.mathagent.vector.service.VectorIndexStatusResponse;
 import java.net.URI;
@@ -137,8 +137,6 @@ public class SystemRuntimeStatusService {
                 urlConfigured,
                 usernameConfigured,
                 historyDurable,
-                enabled,
-                enabled ? "classpath:db/migration" : "",
                 historyDurable ? "mysql" : enabled ? "mysql_not_ready" : "disabled");
     }
 
@@ -169,9 +167,6 @@ public class SystemRuntimeStatusService {
         }
         if (!database.studentExplanationHistoryDurable()) {
             blockingIssues.add("STUDENT_EXPLANATION_HISTORY_NOT_DURABLE");
-        }
-        if (database.enabled() && !database.migrationRunnerEnabled()) {
-            blockingIssues.add("DB_MIGRATION_RUNNER_DISABLED");
         }
         if (!redis.redissonEnabled()) {
             blockingIssues.add("REDIS_REDISSON_DISABLED");

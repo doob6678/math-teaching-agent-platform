@@ -64,6 +64,33 @@ class ClipPageSearchResult:
 
 
 @dataclass(frozen=True)
+class TextPageSearchHit:
+    """A public textbook page admitted by the BGE text-vector index."""
+
+    score: float
+    chunk_id: str
+    section_id: str
+    source_chunk_id: str
+    doc_id: str
+    book_name: str
+    chapter_path: str
+    page_no: int
+    printed_page_no: str
+    section_title: str
+    source_page_image: str
+    text: str
+
+
+@dataclass(frozen=True)
+class TextPageSearchResult:
+    """Keeps the text-index response distinct from CLIP image retrieval in audit data."""
+
+    model: str
+    provider: str
+    hits: list[TextPageSearchHit]
+
+
+@dataclass(frozen=True)
 class RerankResult:
     model: str
     provider: str
@@ -72,6 +99,22 @@ class RerankResult:
 
 @dataclass(frozen=True)
 class LoadedPageImageIndex:
+    processed_books_root: str
+    index_dir: str
+    fingerprint: str
+    metadata: list[dict[str, object]]
+    embeddings: object
+
+
+@dataclass(frozen=True)
+class LoadedPageTextIndex:
+    """Immutable BGE page index loaded once per manifest fingerprint.
+
+    The index intentionally lives beside processed_books rather than in Milvus. Teacher-resource vectors and
+    textbook pages have different update lifecycles, and mixing BGE textbook vectors into the existing CLIP-backed
+    512-d collection would silently corrupt its distance semantics.
+    """
+
     processed_books_root: str
     index_dir: str
     fingerprint: str
@@ -534,6 +577,87 @@ class LocalClipBackend:
         return image_module.open(BytesIO(image_bytes)).convert("RGB")
 
 
+class LocalTextEmbeddingBackend:
+    """Loads a local BGE sentence embedding model for semantic text recall."""
+
+    def __init__(self, settings: WorkerSettings):
+        self.settings = settings
+        self._model = None
+
+    def status(self) -> dict[str, object]:
+        model_path = self.settings.local_text_embedding_model_path
+        if not model_path:
+            return {
+                "provider": "local_bge_embedding",
+                "status": "configuration_error",
+                "reason": "No complete local BGE embedding model was detected",
+                "modelPathConfigured": False,
+                "device": self.settings.local_text_embedding_device,
+            }
+        try:
+            self._import_dependencies()
+        except EmbeddingConfigurationError as exc:
+            return {
+                "provider": "local_bge_embedding",
+                "status": "configuration_error",
+                "reason": str(exc),
+                "modelPathConfigured": True,
+                "modelPath": model_path,
+                "device": self.settings.local_text_embedding_device,
+            }
+        return {
+            "provider": "local_bge_embedding",
+            "status": "ready",
+            "modelPathConfigured": True,
+            "modelPath": model_path,
+            "device": self.settings.local_text_embedding_device,
+        }
+
+    def embed_text(self, texts: list[str], dimensions: int | None = None) -> EmbeddingResult:
+        normalized_texts = normalize_inputs(texts)
+        if not normalized_texts:
+            raise ValueError("input must contain at least one non-empty text")
+        self._load()
+        try:
+            matrix = self._model.encode(
+                normalized_texts,
+                batch_size=len(normalized_texts),
+                convert_to_numpy=True,
+                normalize_embeddings=True,
+                show_progress_bar=False,
+            )
+            vectors = [[float(value) for value in row] for row in matrix.tolist()]
+        except Exception as exc:
+            raise EmbeddingProviderError(f"local BGE embedding failed: {exc}") from exc
+        expected_dimension = dimensions or self.settings.embedding_dimensions
+        validate_dimensions(vectors, expected_dimension, "local BGE embedding")
+        return EmbeddingResult(
+            model=self.settings.local_text_embedding_model_path or "local_bge_embedding",
+            provider="local_bge_embedding",
+            vectors=vectors,
+            prompt_tokens=sum(len(value) for value in normalized_texts),
+        )
+
+    def _load(self) -> None:
+        if self._model is not None:
+            return
+        self._import_dependencies()
+        model_path = self.settings.local_text_embedding_model_path
+        if not model_path:
+            raise EmbeddingConfigurationError("MATH_AGENT_LOCAL_TEXT_EMBEDDING_MODEL_PATH requires complete model weights")
+        try:
+            from sentence_transformers import SentenceTransformer
+
+            self._model = SentenceTransformer(model_path, device=self.settings.local_text_embedding_device)
+        except Exception as exc:
+            raise EmbeddingConfigurationError(f"failed to load local BGE embedding model: {exc}") from exc
+
+    @staticmethod
+    def _import_dependencies() -> None:
+        if importlib.util.find_spec("sentence_transformers") is None:
+            raise EmbeddingConfigurationError("sentence-transformers is required for local BGE embedding")
+
+
 class LocalRerankBackend:
     def __init__(self, settings: WorkerSettings):
         self.settings = settings
@@ -585,7 +709,7 @@ class LocalRerankBackend:
                 normalized_documents,
                 padding=True,
                 truncation=True,
-                max_length=512,
+                max_length=self.settings.local_rerank_max_tokens,
                 return_tensors="pt",
             )
             encoded = {key: value.to(self.settings.local_rerank_device) for key, value in encoded.items()}
@@ -710,17 +834,21 @@ class EmbeddingService:
         opener: Callable[[request.Request, int], object] | None = None,
         local_clip_backend: LocalClipBackend | None = None,
         local_rerank_backend: LocalRerankBackend | None = None,
+        local_text_embedding_backend: LocalTextEmbeddingBackend | None = None,
     ):
         self.settings = settings
         self.opener = opener or request.urlopen
         self.local_clip_backend = local_clip_backend or LocalClipBackend(settings)
         self.local_rerank_backend = local_rerank_backend or LocalRerankBackend(settings)
+        self.local_text_embedding_backend = local_text_embedding_backend or LocalTextEmbeddingBackend(settings)
         self._page_image_index: LoadedPageImageIndex | None = None
+        self._page_text_index: LoadedPageTextIndex | None = None
 
     def status(self) -> dict[str, object]:
         dashscope_status = "ready" if self.settings.dashscope_api_key else "configuration_error"
         local_clip_status = self.local_clip_backend.status()
         local_rerank_status = self.local_rerank_backend.status()
+        local_text_embedding_status = self.local_text_embedding_backend.status()
         local_text_status = local_clip_status.get("textEmbedding", {}).get("status", local_clip_status.get("status"))
         local_image_status = local_clip_status.get("imageEmbedding", {}).get("status", local_clip_status.get("status"))
         return {
@@ -730,7 +858,7 @@ class EmbeddingService:
                     "providers": list(self.settings.embedding_provider_order),
                     "dimension": self.settings.embedding_dimensions,
                     "defaultModel": self._default_text_embedding_model(),
-                    "status": local_text_status if "local_clip" in self.settings.embedding_provider_order else dashscope_status,
+                    "status": self._text_embedding_status(local_text_status, local_text_embedding_status, dashscope_status),
                 },
                 "clipTextEmbedding": {
                     "providers": list(self.settings.local_clip_provider_order),
@@ -752,6 +880,11 @@ class EmbeddingService:
                     "dimension": self.settings.local_clip_dimension,
                     "status": self._page_search_status(local_text_status, local_image_status),
                 },
+                "textPageSearch": {
+                    "providers": ["local_bge_embedding"],
+                    "dimension": self.settings.embedding_dimensions,
+                    "status": self._text_page_search_status(local_text_embedding_status),
+                },
                 "textRerank": {
                     "providers": list(self.settings.rerank_provider_order),
                     "status": local_rerank_status.get("status", "configuration_error"),
@@ -765,6 +898,7 @@ class EmbeddingService:
                     "apiKeyConfigured": bool(self.settings.dashscope_api_key),
                 },
                 "local_clip": local_clip_status,
+                "local_bge_embedding": local_text_embedding_status,
                 "local_bge_reranker": local_rerank_status,
             },
         }
@@ -773,17 +907,39 @@ class EmbeddingService:
         texts = normalize_inputs(inputs)
         if not texts:
             raise ValueError("input must contain at least one non-empty text")
+        # The teacher-resource Milvus collection is a text-only index.  Its caller explicitly requests the
+        # BGE model so it never accidentally shares CLIP embeddings with image-oriented retrieval paths.
+        requested_model = text_or_default(model, "").lower()
+        if "bge" in requested_model:
+            return self.local_text_embedding_backend.embed_text(texts, dimensions)
         errors: list[str] = []
         for provider in self.settings.embedding_provider_order:
             try:
                 if provider == "local_clip":
                     return self.local_clip_backend.embed_text(texts, dimensions)
+                if provider == "local_bge_embedding":
+                    return self.local_text_embedding_backend.embed_text(texts, dimensions)
                 if provider == "dashscope":
                     return self._embed_dashscope(texts, model, dimensions)
                 errors.append(f"{provider}: unsupported provider")
             except (EmbeddingConfigurationError, EmbeddingProviderError) as exc:
                 errors.append(f"{provider}: {exc}")
         raise EmbeddingProviderError("No real embedding provider succeeded: " + "; ".join(errors))
+
+    def _text_embedding_status(
+        self,
+        local_clip_status: object,
+        local_bge_status: dict[str, object],
+        dashscope_status: str,
+    ) -> object:
+        for provider in self.settings.embedding_provider_order:
+            if provider == "local_bge_embedding":
+                return local_bge_status.get("status", "configuration_error")
+            if provider == "local_clip":
+                return local_clip_status
+            if provider == "dashscope":
+                return dashscope_status
+        return "configuration_error"
 
     def embed_clip_text(self, inputs: str | list[str], dimensions: int | None = None) -> EmbeddingResult:
         texts = normalize_inputs(inputs)
@@ -874,11 +1030,92 @@ class EmbeddingService:
             ))
         return ClipPageSearchResult(model=model, provider="local_clip", hits=hits)
 
+    def search_page_text(
+        self,
+        query: str,
+        limit: int = 10,
+        doc_ids: list[str] | None = None,
+    ) -> TextPageSearchResult:
+        """Retrieves real textbook pages from a BGE index without re-encoding corpus text.
+
+        Query-time work is exactly one BGE encoding plus an in-memory matrix product. The builder owns all page
+        encodings and fingerprints their source, so this path stays inside the online latency budget and an updated
+        textbook cannot be confused with a stale vector file.
+        """
+        normalized_query = text_or_default(query, "").strip()
+        if not normalized_query:
+            raise ValueError("query must contain non-empty text")
+        query_result = self.local_text_embedding_backend.embed_text([normalized_query])
+        index = self._load_page_text_index()
+        import numpy as np
+
+        candidate_indexes = [
+            idx for idx, item in enumerate(index.metadata)
+            if not doc_ids or text_or_default(item.get("doc_id"), "") in doc_ids
+        ]
+        if not candidate_indexes:
+            return TextPageSearchResult(
+                model=query_result.model,
+                provider=query_result.provider,
+                hits=[],
+            )
+        embedding_rows = index.embeddings[np.array(candidate_indexes)]
+        query_vector = np.asarray(query_result.vectors[0], dtype=np.float32)
+        if embedding_rows.shape[1] != query_vector.shape[0]:
+            raise EmbeddingProviderError(
+                "text page index dimension does not match the configured BGE embedding model; rebuild the index"
+            )
+        best_scores = embedding_rows @ query_vector
+        requested_limit = max(1, int(limit))
+        # The section corpus can contain a heading, figure caption and prose
+        # block with one shared section id.  Returning all siblings here would
+        # spend the fixed page-recall budget on one concept before Java can
+        # choose its richest evidence block.  Keep the highest vector match per
+        # stable section and let later distinct sections compete downstream.
+        ranked_indexes = np.argsort(-best_scores)
+        hits = []
+        seen_sections: set[str] = set()
+        for rank_idx in ranked_indexes.tolist():
+            metadata_index = candidate_indexes[int(rank_idx)]
+            item = index.metadata[metadata_index]
+            doc_id = text_or_default(item.get("doc_id"), "")
+            section_id = text_or_default(item.get("section_id"), text_or_default(item.get("chunk_id"), ""))
+            section_key = doc_id + "#" + section_id
+            if not section_id or section_key in seen_sections:
+                continue
+            seen_sections.add(section_key)
+            hits.append(TextPageSearchHit(
+                score=float(best_scores[rank_idx]),
+                chunk_id=text_or_default(item.get("chunk_id"), ""),
+                section_id=section_id,
+                source_chunk_id=text_or_default(item.get("source_chunk_id"), ""),
+                doc_id=doc_id,
+                book_name=text_or_default(item.get("book_name"), ""),
+                chapter_path=text_or_default(item.get("chapter_path"), ""),
+                page_no=int(item.get("page_no", 0) or 0),
+                printed_page_no=text_or_default(item.get("printed_page_no"), ""),
+                section_title=text_or_default(item.get("section_title"), ""),
+                source_page_image=text_or_default(item.get("source_page_image"), ""),
+                text=text_or_default(item.get("text"), ""),
+            ))
+            if len(hits) >= requested_limit:
+                break
+        return TextPageSearchResult(model=query_result.model, provider=query_result.provider, hits=hits)
+
     def _page_search_status(self, text_status: object, image_status: object) -> str:
         if text_status != "ready" and image_status != "ready":
             return "configuration_error"
         try:
             self._page_image_index_root()
+            return "ready"
+        except EmbeddingConfigurationError:
+            return "configuration_error"
+
+    def _text_page_search_status(self, embedding_status: dict[str, object]) -> str:
+        if embedding_status.get("status") != "ready":
+            return "configuration_error"
+        try:
+            self._page_text_index_root()
             return "ready"
         except EmbeddingConfigurationError:
             return "configuration_error"
@@ -934,12 +1171,64 @@ class EmbeddingService:
             raise EmbeddingConfigurationError(f"page image index directory does not exist: {index_dir}")
         return index_dir
 
+    def _load_page_text_index(self) -> LoadedPageTextIndex:
+        import numpy as np
+
+        index_dir = self._page_text_index_root()
+        manifest_path = index_dir / "manifest.json"
+        metadata_path = index_dir / "metadata.jsonl"
+        embeddings_path = index_dir / "page_embeddings.npy"
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise EmbeddingConfigurationError(f"page text index manifest is unreadable: {manifest_path}") from exc
+        if text_or_default(manifest.get("kind"), "") != "page_text_bge_index":
+            raise EmbeddingConfigurationError("page text index manifest has an unexpected kind")
+        fingerprint = text_or_default(manifest.get("fingerprint"), "")
+        cache = self._page_text_index
+        if cache is not None and cache.index_dir == str(index_dir) and cache.fingerprint == fingerprint:
+            return cache
+        try:
+            metadata = [
+                json.loads(line)
+                for line in metadata_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            embeddings = np.load(embeddings_path)
+        except Exception as exc:
+            raise EmbeddingConfigurationError(f"page text index data is unreadable: {index_dir}") from exc
+        expected_rows = int(manifest.get("row_count", -1))
+        if expected_rows != len(metadata) or embeddings.shape[0] != len(metadata):
+            raise EmbeddingConfigurationError("page text index row_count does not match metadata and embeddings")
+        expected_dimension = int(manifest.get("dimension", 0))
+        if expected_dimension <= 0 or embeddings.shape[1] != expected_dimension:
+            raise EmbeddingConfigurationError("page text index dimension does not match its manifest")
+        loaded = LoadedPageTextIndex(
+            processed_books_root=text_or_default(self.settings.processed_books_root, ""),
+            index_dir=str(index_dir),
+            fingerprint=fingerprint,
+            metadata=metadata,
+            embeddings=normalize_numpy_rows(embeddings),
+        )
+        self._page_text_index = loaded
+        return loaded
+
+    def _page_text_index_root(self) -> Path:
+        if not self.settings.processed_books_root:
+            raise EmbeddingConfigurationError("MATH_AGENT_PROCESSED_BOOKS_ROOT is required for text page search")
+        index_dir = Path(self.settings.processed_books_root).expanduser().resolve() / "_page_text_index"
+        if not index_dir.is_dir():
+            raise EmbeddingConfigurationError(f"page text index directory does not exist: {index_dir}")
+        return index_dir
+
     def _overall_status(self) -> str:
         statuses = []
         local_status = self.local_clip_backend.status().get("status")
         for provider in self.settings.embedding_provider_order:
             if provider == "local_clip":
                 statuses.append(local_status == "ready")
+            elif provider == "local_bge_embedding":
+                statuses.append(self.local_text_embedding_backend.status().get("status") == "ready")
             elif provider == "dashscope":
                 statuses.append(bool(self.settings.dashscope_api_key))
             else:
@@ -954,6 +1243,8 @@ class EmbeddingService:
         first_provider = self.settings.embedding_provider_order[0] if self.settings.embedding_provider_order else ""
         if first_provider == "local_clip":
             return self.settings.local_clip_model_path or "local_clip"
+        if first_provider == "local_bge_embedding":
+            return self.settings.local_text_embedding_model_path or "local_bge_embedding"
         if first_provider == "dashscope":
             return self.settings.dashscope_embedding_model
         return first_provider or "configuration_error:no_embedding_provider"
@@ -1152,6 +1443,36 @@ def clip_page_search_response(result: ClipPageSearchResult) -> dict:
         "hits": [
             {
                 "score": hit.score,
+                "docId": hit.doc_id,
+                "bookName": hit.book_name,
+                "chapterPath": hit.chapter_path,
+                "pageNo": hit.page_no,
+                "printedPageNo": hit.printed_page_no,
+                "sectionTitle": hit.section_title,
+                "sourcePageImage": hit.source_page_image,
+                "text": hit.text,
+            }
+            for hit in result.hits
+        ],
+    }
+
+
+def text_page_search_response(result: TextPageSearchResult) -> dict:
+    """Serializes BGE page retrieval with the same public fields as the CLIP route.
+
+    Keeping the payload shape aligned lets Java choose the right coarse-recall route without leaking worker-specific
+    index details to agents, while `object` and `provider` preserve truthful audit attribution.
+    """
+    return {
+        "object": "text.page_search",
+        "model": result.model,
+        "provider": result.provider,
+        "hits": [
+            {
+                "score": hit.score,
+                "chunkId": hit.chunk_id,
+                "sectionId": hit.section_id,
+                "sourceChunkId": hit.source_chunk_id,
                 "docId": hit.doc_id,
                 "bookName": hit.book_name,
                 "chapterPath": hit.chapter_path,

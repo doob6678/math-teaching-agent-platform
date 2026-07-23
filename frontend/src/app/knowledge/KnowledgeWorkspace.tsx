@@ -9,8 +9,9 @@ import {
   KnowledgePointResponse,
   KnowledgeRelationResponse,
   QuestionBankItemResponse,
-  TeacherResourceBlockSearchAuditEvent,
-  TeacherResourceBlockSearchResponse,
+  QUESTION_BANK_MAX_SEARCH_ROWS,
+  TextbookSearchResponse,
+  TEXTBOOK_RETRIEVAL_MODES,
   VectorIndexStatusResponse,
   createTextbookApiClient,
 } from "../../shared/api/textbookApi";
@@ -56,8 +57,8 @@ export function KnowledgeWorkspace({ api }: KnowledgeWorkspaceProps) {
   const [chapterPath, setChapterPath] = useState("");
   const [questionTitle, setQuestionTitle] = useState("");
   const [questionText, setQuestionText] = useState("");
-  const [searchResult, setSearchResult] = useState<TeacherResourceBlockSearchResponse | null>(null);
-  const [searchAudit, setSearchAudit] = useState<TeacherResourceBlockSearchAuditEvent | null>(null);
+  const [searchResult, setSearchResult] = useState<TextbookSearchResponse | null>(null);
+  const [retrievalMode, setRetrievalMode] = useState<"hybrid" | "text_bge" | "formula_bge" | "image_clip">("hybrid");
   const [loading, setLoading] = useState(false);
   const [searching, setSearching] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -214,10 +215,16 @@ export function KnowledgeWorkspace({ api }: KnowledgeWorkspaceProps) {
     Promise.all([
       api.getKnowledgeGraphSpine(), api.listKnowledgePoints(), api.listKnowledgeRelations(),
       api.getVectorIndexStatus(),
-      api.searchQuestionBankItems(questionQuery.trim(), 50),
+      api.searchQuestionBankItems(questionQuery.trim(), QUESTION_BANK_MAX_SEARCH_ROWS),
     ])
       .then(([g, pts, rels, vs, qs]) => { setGraph(g); setKnowledgePoints(pts); setKnowledgeRelations(rels); setVectorStatus(vs); setQuestions(qs); })
-      .catch((e: Error) => setError(userFacingError(e.message)))
+      .catch((e: Error) => {
+        // Clear partial/previous rows on a failed protected request. A stale graph or question list is misleading and
+        // was previously mistaken for a fake, hard-coded corpus when the session had actually expired.
+        setGraph(null); setKnowledgePoints([]); setKnowledgeRelations([]); setQuestions([]); setVectorStatus(null);
+        setSearchResult(null);
+        setError(userFacingError(e.message));
+      })
       .finally(() => setLoading(false));
   }
 
@@ -226,16 +233,20 @@ export function KnowledgeWorkspace({ api }: KnowledgeWorkspaceProps) {
   function handleSearchResources(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!query.trim()) { setError("请输入资源检索词。"); return; }
-    setSearching(true); setError(""); setSearchAudit(null);
-    api.searchTeacherResourceBlocks(query.trim(), 8)
-      .then((r) => { setSearchResult(r); return api.getTeacherResourceBlockSearchAudit(r.queryId).then(setSearchAudit).catch((e: Error) => setError(userFacingError(e.message))); })
+    setSearching(true); setError("");
+    api.search({ query: query.trim(), limit: 8, retrievalMode })
+      .then(setSearchResult)
       .catch((e: Error) => setError(userFacingError(e.message))).finally(() => setSearching(false));
   }
 
   function handleSearchQuestions(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setLoading(true); setError("");
-    api.searchQuestionBankItems(questionQuery.trim(), 50).then(setQuestions).catch((e: Error) => setError(userFacingError(e.message))).finally(() => setLoading(false));
+    setQuestions([]);
+    api.searchQuestionBankItems(questionQuery.trim(), QUESTION_BANK_MAX_SEARCH_ROWS)
+      .then(setQuestions)
+      .catch((e: Error) => { setQuestions([]); setError(userFacingError(e.message)); })
+      .finally(() => setLoading(false));
   }
 
   function handleCreatePoint(e: FormEvent<HTMLFormElement>) {
@@ -531,11 +542,14 @@ export function KnowledgeWorkspace({ api }: KnowledgeWorkspaceProps) {
       <div className="kw-section">
         <div className="kw-section-header">
           <h3 className="kw-section-title">向量检索</h3>
-          <span className="kw-section-badge">{retrievalModeLabel(searchResult?.retrievalMode)}</span>
+          <span className="kw-section-badge">{retrievalModeLabel(searchResult?.retrievalStrategy)}</span>
         </div>
         <form className="kw-search-form" onSubmit={handleSearchResources}>
           <div className="kw-search-row">
             <input className="form-input" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="输入知识点、题型或公式关键词进行 RAG 检索" />
+            <select className="form-input" value={retrievalMode} onChange={(e) => setRetrievalMode(e.target.value as typeof retrievalMode)} aria-label="教材检索方式">
+              {TEXTBOOK_RETRIEVAL_MODES.map((mode) => <option key={mode.value} value={mode.value}>{mode.label} · {mode.description}</option>)}
+            </select>
             <button className="btn btn-primary" type="submit" disabled={searching}>
               {searching ? <Loader2 className="spin" size={16} /> : <Search size={16} />}
               <span>检索</span>
@@ -544,19 +558,17 @@ export function KnowledgeWorkspace({ api }: KnowledgeWorkspaceProps) {
         </form>
         {searchResult ? (
           <div className="kw-hits">
-            {searchAudit ? (
-              <div className="kw-audit">
-                <span>{searchAudit.elapsedMs} 毫秒</span>
-                <span>{subjectLabel(searchAudit.subjectType)} · {compactText(searchAudit.subjectId, 18)}</span>
-              </div>
-            ) : null}
+            <div className="kw-audit">
+              <span>{searchResult.retrievalDescription}</span>
+              <span>{searchResult.retrievalStages.filter((stage) => stage.status === "completed" || stage.status === "hit").map((stage) => stage.label).join(" · ")}</span>
+            </div>
             {searchResult.hits.map((hit) => (
-              <div className="kw-hit" key={`${hit.documentId}:${hit.blockId}`}>
-                <div className="kw-hit-header"><strong>{hit.documentTitle}</strong><span className="kw-badge kw-badge-blue">#{hit.blockOrder}</span></div>
-                <p>{compactText(hit.snippet, 140)}</p>
+              <div className="kw-hit" key={hit.chunkId}>
+                <div className="kw-hit-header"><strong>{hit.bookName}</strong><span className="kw-badge kw-badge-blue">第{hit.pageNo}页</span></div>
+                <p>{compactText(`${hit.sectionTitle} ${hit.textSnippet}`, 140)}</p>
                 <details className="review-details">
                   <summary>查看完整片段</summary>
-                  <p>{hit.snippet}</p>
+                  <p>{hit.textSnippet}</p>
                 </details>
                 <div className="kw-hit-score">相关度 {hit.score.toFixed(4)}</div>
               </div>
@@ -711,17 +723,6 @@ function retrievalModeLabel(value?: string | null) {
     return "关键词检索";
   }
   return "资料检索";
-}
-
-function subjectLabel(value?: string | null) {
-  const labels: Record<string, string> = {
-    admin: "管理员",
-    teacher: "教师",
-    student: "学生",
-    api_key: "接口密钥",
-    guest: "访客",
-  };
-  return labels[(value ?? "").trim().toLowerCase()] ?? "当前账号";
 }
 
 function userFacingError(message: string) {

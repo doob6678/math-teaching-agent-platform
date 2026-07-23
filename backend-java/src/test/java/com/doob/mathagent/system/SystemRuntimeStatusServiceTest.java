@@ -48,7 +48,7 @@ class SystemRuntimeStatusServiceTest {
                 environment,
                 new RedisRateLimitProperties(true, "math-agent:test:rate-limit"),
                 new CapabilityTokenStoreProperties(true, "math-agent:test:capability"),
-                new RedisTextbookSearchCacheProperties(true, "math-agent:test:search", Duration.ofMinutes(3)),
+                new RedisTextbookSearchCacheProperties(true, "math-agent:test:search", Duration.ofMinutes(3), Duration.ofMinutes(1)),
                 new VectorIndexService(
                         new VectorIndexProperties(false, "", "", "math_agent_resource_blocks", 1024, "", "", "", 10000),
                         SystemRuntimeStatusServiceTest::vectorStatusResponse,
@@ -71,8 +71,6 @@ class SystemRuntimeStatusServiceTest {
         assertThat(response.database().enabled()).isTrue();
         assertThat(response.database().configured()).isTrue();
         assertThat(response.database().studentExplanationHistoryDurable()).isTrue();
-        assertThat(response.database().migrationRunnerEnabled()).isTrue();
-        assertThat(response.database().migrationLocation()).isEqualTo("classpath:db/migration");
         assertThat(response.database().mode()).isEqualTo("mysql");
         assertThat(response.redis().redissonEnabled()).isTrue();
         assertThat(response.redis().redissonAddress()).isEqualTo("redis://***@127.0.0.1:6379");
@@ -92,7 +90,7 @@ class SystemRuntimeStatusServiceTest {
                 new MockEnvironment(),
                 new RedisRateLimitProperties(false, "math-agent:test:rate-limit"),
                 new CapabilityTokenStoreProperties(false, "math-agent:test:capability"),
-                new RedisTextbookSearchCacheProperties(false, "math-agent:test:search", Duration.ofMinutes(3)),
+                new RedisTextbookSearchCacheProperties(false, "math-agent:test:search", Duration.ofMinutes(3), Duration.ofMinutes(1)),
                 new VectorIndexService(
                         new VectorIndexProperties(false, "", "", "math_agent_resource_blocks", 1024, "", "", "", 10000),
                         SystemRuntimeStatusServiceTest::vectorStatusResponse,
@@ -116,8 +114,6 @@ class SystemRuntimeStatusServiceTest {
         assertThat(response.database().enabled()).isFalse();
         assertThat(response.database().configured()).isFalse();
         assertThat(response.database().studentExplanationHistoryDurable()).isFalse();
-        assertThat(response.database().migrationRunnerEnabled()).isFalse();
-        assertThat(response.database().migrationLocation()).isEmpty();
         assertThat(response.database().mode()).isEqualTo("disabled");
         assertThat(response.feishu().processDownloaderEnabled()).isFalse();
         assertThat(response.feishu().mode()).isEqualTo("disabled");
@@ -141,7 +137,7 @@ class SystemRuntimeStatusServiceTest {
                 environment,
                 new RedisRateLimitProperties(true, "math-agent:test:rate-limit"),
                 new CapabilityTokenStoreProperties(true, "math-agent:test:capability"),
-                new RedisTextbookSearchCacheProperties(true, "math-agent:test:search", Duration.ofMinutes(3)),
+                new RedisTextbookSearchCacheProperties(true, "math-agent:test:search", Duration.ofMinutes(3), Duration.ofMinutes(1)),
                 new VectorIndexService(
                         new VectorIndexProperties(
                                 true,
@@ -204,6 +200,25 @@ class SystemRuntimeStatusServiceTest {
                     String conversationId,
                     int limit) {
                 return List.of();
+            }
+
+            @Override
+            public List<com.doob.mathagent.student.service.StudentExplanationConversationSummary> listConversations(
+                    String tenantId,
+                    String subjectType,
+                    String subjectId,
+                    int limit) {
+                return List.of();
+            }
+
+            @Override
+            public com.doob.mathagent.student.service.StudentExplanationConversationDetail loadConversation(
+                    String tenantId,
+                    String subjectType,
+                    String subjectId,
+                    String conversationId,
+                    int limit) {
+                return null;
             }
         };
     }

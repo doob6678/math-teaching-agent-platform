@@ -10,6 +10,8 @@ import com.doob.mathagent.agent.service.MultiAgentWritingArtifactExportService;
 import com.doob.mathagent.agent.service.MultiAgentWritingService;
 import com.doob.mathagent.infrastructure.ai.AiProviderCatalog;
 import com.doob.mathagent.infrastructure.ai.AiProviderProperties;
+import com.doob.mathagent.knowledge.service.InMemoryKnowledgeQuestionBankStore;
+import com.doob.mathagent.knowledge.service.KnowledgeQuestionBankService;
 import com.doob.mathagent.protocol.service.McpClientRegistryProperties;
 import com.doob.mathagent.protocol.service.McpToolExecutionService;
 import com.doob.mathagent.resources.TextbookCatalogReader;
@@ -24,12 +26,12 @@ import com.doob.mathagent.teacher.service.InMemoryTeacherResourceStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherSourceSyncCheckpointStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherSourceSyncJobStore;
 import com.doob.mathagent.teacher.service.TeacherFeishuDiscoveryService;
-import com.doob.mathagent.teacher.service.TeacherFeishuDownloadClient;
+import com.doob.mathagent.teacher.feishu.TeacherFeishuDownloadClient;
 import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService;
 import com.doob.mathagent.teacher.service.TeacherResourceService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncExecutionService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncJobService;
-import com.doob.mathagent.teacher.service.TeacherSourceSyncProperties;
+import com.doob.mathagent.teacher.sync.TeacherSourceSyncProperties;
 import com.doob.mathagent.teacher.vo.TeacherFeishuDiscoveryResponse;
 import com.doob.mathagent.vector.service.TestVectorIndexService;
 import java.io.IOException;
@@ -198,6 +200,7 @@ final class McpToolExecutionServiceFixture {
                 resolvedResourceService,
                 resolvedJobService,
                 resolvedExecutionService,
+                new KnowledgeQuestionBankService(new InMemoryKnowledgeQuestionBankStore()),
                 resolvedWritingService,
                 multiAgentWritingArtifactExportService == null
                         ? new MultiAgentWritingArtifactExportService(resolvedWritingService, 30)

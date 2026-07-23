@@ -1,11 +1,14 @@
 package com.doob.mathagent.teacher.service;
 
-import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
+import com.doob.mathagent.teacher.document.TeacherResourceStore;
+import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
+import com.doob.mathagent.teacher.sync.TeacherSourceSyncJobStore;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncJobResponse;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
+import org.springframework.dao.DataIntegrityViolationException;
 
 /**
  * Queues and lists teacher source synchronization jobs.
@@ -50,6 +53,10 @@ public class TeacherSourceSyncJobService {
                 normalizedRole,
                 normalizedSubjectId,
                 documentId);
+        TeacherSourceSyncJobResponse active = jobStore.findActiveByDocument(document.tenantId(), document.documentId());
+        if (active != null) {
+            return active;
+        }
         String now = Instant.now().toString();
         TeacherSourceSyncJobResponse job = new TeacherSourceSyncJobResponse(
                 UUID.randomUUID().toString(),
@@ -65,7 +72,19 @@ public class TeacherSourceSyncJobService {
                 messageFor(document.sourceType()),
                 now,
                 now);
-        return jobStore.save(job);
+        try {
+            return jobStore.save(job);
+        } catch (DataIntegrityViolationException exception) {
+            /*
+             * The MySQL generated-column unique key is the cross-node arbiter. A concurrent click can pass the
+             * preceding read, so resolve the winning active job instead of returning a spurious duplicate failure.
+             */
+            TeacherSourceSyncJobResponse winner = jobStore.findActiveByDocument(document.tenantId(), document.documentId());
+            if (winner != null) {
+                return winner;
+            }
+            throw exception;
+        }
     }
 
     /**
@@ -94,6 +113,29 @@ public class TeacherSourceSyncJobService {
         return jobStore.listByDocument(document.tenantId(), document.documentId());
     }
 
+    /**
+     * Returns one job only after applying the same resource visibility rule used by the list endpoint.
+     * This lets asynchronous dispatch return the durable queued state without letting a caller probe another tenant.
+     */
+    public TeacherSourceSyncJobResponse findVisibleJob(
+            String tenantId,
+            String viewerRole,
+            String viewerSubjectId,
+            String documentId,
+            String jobId) {
+        String normalizedTenantId = requireText(tenantId, "tenantId is required");
+        String normalizedRole = requireText(viewerRole, "viewerRole is required").toLowerCase();
+        String normalizedSubjectId = requireText(viewerSubjectId, "viewerSubjectId is required");
+        requireTeacherOrAdmin(normalizedRole);
+        TeacherResourceDocumentResponse document = requireVisibleDocument(
+                normalizedTenantId, normalizedRole, normalizedSubjectId, documentId);
+        String normalizedJobId = requireText(jobId, "jobId is required");
+        return jobStore.listByDocument(document.tenantId(), document.documentId()).stream()
+                .filter(job -> normalizedJobId.equals(job.jobId()))
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("Teacher source sync job not found: " + normalizedJobId));
+    }
+
     private static void requireTeacherOrAdmin(String viewerRole) {
         if (!"teacher".equals(viewerRole) && !"admin".equals(viewerRole)) {
             throw new IllegalArgumentException("Teacher resource sync requires teacher or admin role");
@@ -118,8 +160,7 @@ public class TeacherSourceSyncJobService {
     private static String operationFor(String sourceType) {
         return switch (textOrDefault(sourceType, "resource").toLowerCase()) {
             case "feishu" -> "feishu_download";
-            case "local_path", "local_docx" -> "local_scan";
-            case "textbook_md" -> "textbook_md_import";
+            case "local_path" -> "local_scan";
             default -> "resource_sync";
         };
     }
@@ -127,8 +168,7 @@ public class TeacherSourceSyncJobService {
     private static String phaseFor(String sourceType) {
         return switch (textOrDefault(sourceType, "resource").toLowerCase()) {
             case "feishu" -> "download_pending";
-            case "local_path", "local_docx" -> "scan_pending";
-            case "textbook_md" -> "import_pending";
+            case "local_path" -> "scan_pending";
             default -> "sync_pending";
         };
     }

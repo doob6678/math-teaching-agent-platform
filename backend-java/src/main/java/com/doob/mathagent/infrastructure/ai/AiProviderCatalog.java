@@ -7,11 +7,10 @@ import java.util.Set;
 import org.springframework.stereotype.Component;
 
 /**
- * Catalog of configured AI providers.
+ * 已配置的 AI 提供商目录。
  *
- * <p>The catalog is intentionally separate from Spring AI model beans. It lets workflows record which provider is
- * allowed for a task, exposes a frontend-safe model catalog, and prevents a provider with a missing API key from being
- * selected silently.</p>
+ * <p>该目录特意与 Spring AI 模型 Bean 分离。它允许工作流记录任务可使用的提供商，向前端提供安全的模型目录，
+ * 并防止 API 密钥缺失的提供商被静默选中。</p>
  */
 @Component
 public class AiProviderCatalog {
@@ -19,18 +18,18 @@ public class AiProviderCatalog {
     private final AiProviderProperties properties;
 
     /**
-     * Creates the provider catalog.
+     * 创建提供商目录。
      *
-     * @param properties environment-backed provider properties
+     * @param properties 从环境变量读取的提供商配置
      */
     public AiProviderCatalog(AiProviderProperties properties) {
         this.properties = properties;
     }
 
     /**
-     * Returns enabled providers in backend fallback order.
+     * 按后端回退顺序返回已启用的提供商。
      *
-     * @return enabled providers
+     * @return 已启用的提供商
      */
     public List<Provider> enabledProviders() {
         return configuredProviders()
@@ -44,9 +43,9 @@ public class AiProviderCatalog {
     }
 
     /**
-     * Returns a frontend-safe model catalog built from backend configuration and allow-lists.
+     * 根据后端配置和允许列表构建前端安全的模型目录。
      *
-     * @return provider/model catalog without API keys
+     * @return 不包含 API 密钥的提供商和模型目录
      */
     public ModelCatalog modelCatalog() {
         Provider defaultProvider = defaultProvider();
@@ -68,10 +67,10 @@ public class AiProviderCatalog {
     }
 
     /**
-     * Looks up an enabled provider by name.
+     * 按名称查找已启用的提供商。
      *
-     * @param name provider name
-     * @return enabled provider when configured
+     * @param name 提供商名称
+     * @return 已配置时返回对应的已启用提供商
      */
     public Optional<Provider> provider(String name) {
         String normalized = normalize(name);
@@ -81,11 +80,11 @@ public class AiProviderCatalog {
     }
 
     /**
-     * Looks up an enabled provider and validates that the requested model belongs to that provider's allow-list.
+     * 查找已启用的提供商，并校验请求的模型是否属于该提供商的允许列表。
      *
-     * @param providerName provider name requested by a user preference
-     * @param modelCode model code requested by a user preference
-     * @return provider with the requested model when allowed
+     * @param providerName 用户偏好中请求的提供商名称
+     * @param modelCode 用户偏好中请求的模型编码
+     * @return 请求模型在允许列表中时，返回使用该模型的提供商
      */
     public Optional<Provider> preferredProvider(String providerName, String modelCode) {
         String normalizedModel = safeText(modelCode);
@@ -98,9 +97,9 @@ public class AiProviderCatalog {
     }
 
     /**
-     * Returns the configured default provider.
+     * 返回已配置的默认提供商。
      *
-     * @return default provider
+     * @return 默认提供商
      */
     public Provider defaultProvider() {
         return provider(properties.getDefaultProvider())
@@ -109,7 +108,7 @@ public class AiProviderCatalog {
     }
 
     /**
-     * Returns configured providers in the desired fallback order.
+     * 按指定的回退顺序返回已配置的提供商。
      */
     private List<AiProviderProperties.Provider> configuredProviders() {
         return List.of(
@@ -120,10 +119,10 @@ public class AiProviderCatalog {
     }
 
     /**
-     * Checks whether provider settings are complete enough to be used.
+     * 检查提供商配置是否完整到足以使用。
      *
-     * @param provider provider settings
-     * @return true when name, base URL, API key, and chat model are all present
+     * @param provider 提供商配置
+     * @return 名称、基础地址、API 密钥和聊天模型均存在时返回 true
      */
     private static boolean hasUsableCredentials(AiProviderProperties.Provider provider) {
         return hasText(provider.getName())
@@ -133,10 +132,10 @@ public class AiProviderCatalog {
     }
 
     /**
-     * Converts mutable configuration properties to an immutable runtime provider.
+     * 将可变的配置属性转换为不可变的运行时提供商对象。
      *
-     * @param provider provider settings
-     * @return runtime provider
+     * @param provider 提供商配置
+     * @return 运行时提供商对象
      */
     private static Provider toProvider(AiProviderProperties.Provider provider) {
         return new Provider(
@@ -146,24 +145,26 @@ public class AiProviderCatalog {
     }
 
     /**
-     * Normalizes provider names for stable comparisons.
+     * 规范化提供商名称，以便进行稳定比较。
      *
-     * @param value provider name
-     * @return normalized provider name
+     * @param value 提供商名称
+     * @return 规范化后的提供商名称
      */
     private static String normalize(String value) {
         return value == null ? "" : value.strip().toLowerCase(Locale.ROOT);
     }
 
     /**
-     * Returns an allow-list of model codes the frontend may request for one provider.
+     * 返回前端可以为指定提供商请求的模型编码允许列表。
      *
-     * @param providerName normalized provider name
-     * @return allowed model codes
+     * @param providerName 规范化后的提供商名称
+     * @return 允许使用的模型编码
      */
     private static List<String> allowedModels(String providerName) {
         return switch (normalize(providerName)) {
-            case "openai" -> List.of("gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano");
+            // Terra is the verified low-latency default; Luna remains an explicit opt-in model in the allow-list.
+            
+            case "openai" -> List.of("gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano");
             case "dashscope" -> List.of("qwen3.6-flash", "qwen3.7-plus", "qwen3.7-max");
             case "deepseek" -> List.of("deepseek-v4-flash", "deepseek-v4-pro");
             case "ark" -> List.of("doubao-seed-2-0-lite-260428", "doubao-seed-2.0-mini");
@@ -172,7 +173,7 @@ public class AiProviderCatalog {
     }
 
     /**
-     * Returns frontend-safe model options with coarse capability and cost labels.
+     * 返回带有粗粒度能力和费用标签的前端安全模型选项。
      */
     private static List<ModelOption> allowedModelOptions(String providerName) {
         return allowedModels(providerName).stream()
@@ -181,7 +182,7 @@ public class AiProviderCatalog {
     }
 
     /**
-     * Keeps the default provider first and all other providers in configured fallback order.
+     * 将默认提供商置于首位，其余提供商按已配置的回退顺序排列。
      */
     private static int providerOrder(String defaultProviderName, String providerName) {
         if (normalize(defaultProviderName).equals(normalize(providerName))) {
@@ -197,11 +198,11 @@ public class AiProviderCatalog {
     }
 
     /**
-     * Maps an allow-listed model to a coarse routing capability label.
+     * 将允许列表中的模型映射为粗粒度的路由能力标签。
      */
     private static String modelLevel(String modelCode) {
         String normalized = normalize(modelCode);
-        if (normalized.contains("max") || normalized.equals("gpt-5.4") || normalized.endsWith("-pro")) {
+        if (normalized.contains("max") || normalized.equals("gpt-5.4") || normalized.contains("gpt-5.6") || normalized.endsWith("-pro")) {
             return "reasoning";
         }
         if (normalized.contains("mini") || normalized.contains("nano")
@@ -212,7 +213,7 @@ public class AiProviderCatalog {
     }
 
     /**
-     * Maps model codes to coarse price labels used only for UI hints.
+     * 将模型编码映射为仅用于界面提示的粗粒度价格标签。
      */
     private static String priceTier(String modelCode) {
         String normalized = normalize(modelCode);
@@ -221,42 +222,42 @@ public class AiProviderCatalog {
     }
 
     /**
-     * Returns stripped text or an empty string.
+     * 返回去除首尾空白后的文本；文本为空时返回空字符串。
      *
-     * @param value text value
-     * @return stripped text
+     * @param value 文本值
+     * @return 去除首尾空白后的文本
      */
     private static String safeText(String value) {
         return value == null || value.isBlank() ? "" : value.strip();
     }
 
     /**
-     * Returns whether a string contains non-whitespace text.
+     * 判断字符串是否包含非空白文本。
      *
-     * @param value text value
-     * @return true when non-blank
+     * @param value 文本值
+     * @return 不为空白时返回 true
      */
     private static boolean hasText(String value) {
         return value != null && !value.isBlank();
     }
 
     /**
-     * Runtime provider view safe for logging and audit.
+     * 用于运行时的提供商视图，可安全用于日志记录和审计。
      *
-     * @param name provider name
-     * @param baseUrl OpenAI-compatible base URL
-     * @param chatModel chat model name
+     * @param name 提供商名称
+     * @param baseUrl 兼容 OpenAI 接口的基础地址
+     * @param chatModel 聊天模型名称
      */
     public record Provider(String name, String baseUrl, String chatModel) {
     }
 
     /**
-     * Frontend-safe model catalog with no provider secrets.
+     * 不包含提供商敏感信息的前端安全模型目录。
      *
-     * @param defaultProviderName backend default provider
-     * @param defaultModelCode backend default model
-     * @param fallbackProviderOrder provider rotation order
-     * @param providers enabled providers and model options
+     * @param defaultProviderName 后端默认提供商
+     * @param defaultModelCode 后端默认模型
+     * @param fallbackProviderOrder 提供商轮换顺序
+     * @param providers 已启用的提供商及其模型选项
      */
     public record ModelCatalog(
             String defaultProviderName,
@@ -266,12 +267,12 @@ public class AiProviderCatalog {
     }
 
     /**
-     * Frontend-safe provider model list.
+     * 前端安全的提供商模型列表。
      *
-     * @param name provider name
-     * @param enabled whether credentials are configured
-     * @param defaultModelCode provider default model
-     * @param models allowed model options
+     * @param name 提供商名称
+     * @param enabled 是否已配置凭据
+     * @param defaultModelCode 提供商默认模型
+     * @param models 允许使用的模型选项
      */
     public record ModelProvider(
             String name,
@@ -281,11 +282,11 @@ public class AiProviderCatalog {
     }
 
     /**
-     * One allow-listed model option.
+     * 允许列表中的一个模型选项。
      *
-     * @param modelCode provider model code
-     * @param modelLevel coarse model capability label
-     * @param priceTier coarse price label
+     * @param modelCode 提供商模型编码
+     * @param modelLevel 粗粒度模型能力标签
+     * @param priceTier 粗粒度价格标签
      */
     public record ModelOption(String modelCode, String modelLevel, String priceTier) {
     }

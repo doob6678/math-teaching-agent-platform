@@ -22,14 +22,15 @@ import com.doob.mathagent.student.vo.StudentExplanationResponse;
 import com.doob.mathagent.teacher.service.InMemoryTeacherDocumentBlockStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherResourceStore;
 import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService;
-import com.doob.mathagent.teacher.vo.TeacherDocumentBlockResponse;
-import com.doob.mathagent.teacher.vo.TeacherResourceBlockSearchResponse;
-import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
+import com.doob.mathagent.teacher.block.TeacherDocumentBlockResponse;
+import com.doob.mathagent.teacher.search.TeacherResourceBlockSearchResponse;
+import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
 import com.doob.mathagent.vector.service.TestVectorIndexService;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -37,6 +38,19 @@ class StudentExplanationServiceTest {
 
     @TempDir
     Path tempDir;
+
+    @Test
+    void conversationMemoryIsDisabledUnlessTheCallerExplicitlyEnablesIt() {
+        StudentExplanationRequest defaultRequest = new StudentExplanationRequest(
+                null, "求函数最小值", null, null, null, null,
+                true, true, false, 5, 3, null).normalize();
+        StudentExplanationRequest enabledRequest = new StudentExplanationRequest(
+                null, "求函数最小值", null, null, null, null,
+                true, true, false, 5, 3, true).normalize();
+
+        assertThat(defaultRequest.useConversationMemory()).isFalse();
+        assertThat(enabledRequest.useConversationMemory()).isTrue();
+    }
 
     @Test
     void studentExplanationUsesTextbookAndGraphSourcesWithoutTeacherPrivateResources() throws Exception {
@@ -63,9 +77,14 @@ class StudentExplanationServiceTest {
     }
 
     @Test
-    void teacherExplanationCanIncludeVisibleTeacherResourceSources() throws Exception {
-        StudentExplanationService service = serviceWithResources(tempDir);
-        StudentExplanationRequest request = request("space vector dot product dihedral angle", true, true, true);
+    void teacherReactActionDoesNotInventASourceWhenNoVisibleTeacherHitIsReturned() throws Exception {
+        StudentExplanationService service = serviceWithResources(tempDir, modelRequest -> {
+            return new AiChatResult(modelRequest.providerName(), modelRequest.modelCode(), 1, 1, 2, "ok", """
+                    {"conversationTitle":"向量二面角","cards":[
+                    {"cardKey":"answer","title":"解答","summary":"按教师资料的法向量方法计算。","items":[],"sourceUris":["teacher-resource://teacher-doc-1/block/block-1"],"renderMode":"text"}]}
+                    """);
+        });
+        StudentExplanationRequest request = request("space vector dot product dihedral angle", false, false, true);
 
         StudentExplanationResponse response = service.explain(
                 request,
@@ -73,8 +92,8 @@ class StudentExplanationServiceTest {
 
         assertThat(response.viewerRole()).isEqualTo("teacher");
         assertThat(response.studentId()).isNull();
-        assertThat(response.sources()).extracting(StudentExplanationResponse.ExplanationSource::sourceUri)
-                .anyMatch(uri -> uri.equals("teacher-resource://teacher-doc-1/block/block-1"));
+        assertThat(response.sources()).allSatisfy(source ->
+                assertThat(source.sourceType()).isNotEqualTo("teacher_resource"));
         assertThat(response.workflowStages())
                 .anySatisfy(stage -> {
                     assertThat(stage.stageKey()).isEqualTo("search_teacher_resources");
@@ -170,6 +189,31 @@ class StudentExplanationServiceTest {
         assertThat(response.cards()).flatExtracting(StudentExplanationResponse.ExplanationCard::sourceUris)
                 .contains("textbook://book-vector/page/12#chunk=chunk-vector-1")
                 .doesNotContain("fake://invented");
+    }
+
+    @Test
+    void reactLoopLetsTheModelSelectAToolThenUsesItsRealObservationBeforeAnswering() throws Exception {
+        AtomicInteger call = new AtomicInteger();
+        StudentExplanationService service = serviceWithResources(tempDir, modelRequest -> {
+            call.incrementAndGet();
+            return new AiChatResult(modelRequest.providerName(), modelRequest.modelCode(), 1, 1, 2, "ok", """
+                    {"conversationTitle":"向量夹角","cards":[
+                    {"cardKey":"answer","title":"解答","summary":"利用数量积求夹角。","items":["代入公式"],"sourceUris":["textbook://book-vector/page/12#chunk=chunk-vector-1"],"renderMode":"formula"}]}
+                    """);
+        });
+
+        StudentExplanationResponse response = service.explain(
+                request("space vector dot product dihedral angle", true, false, false),
+                new RequestSubject("school-a", "student", "student-001", "dev-device"));
+
+        assertThat(call.get()).isEqualTo(1);
+        assertThat(response.generatedBy()).isEqualTo("student_explanation_react_agent_v1");
+        assertThat(response.sources()).extracting(StudentExplanationResponse.ExplanationSource::sourceUri)
+                .contains("textbook://book-vector/page/12#chunk=chunk-vector-1");
+        assertThat(response.workflowStages()).anySatisfy(stage -> {
+            assertThat(stage.stageKey()).isEqualTo("react_observation_0");
+            assertThat(stage.detail()).contains("教材检索完成");
+        });
     }
 
     @Test
@@ -364,6 +408,7 @@ class StudentExplanationServiceTest {
                         }),
                 new KnowledgeGraphSpineService(knowledgeStore),
                 com.doob.mathagent.teacher.TeacherResourceBlockSearchServiceFixture.service(resourceStore, blockStore),
+                resourceStore,
                 aiChatGateway,
                 aiProviderCatalog(),
                 null,

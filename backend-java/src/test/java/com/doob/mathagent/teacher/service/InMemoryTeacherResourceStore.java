@@ -1,6 +1,7 @@
 package com.doob.mathagent.teacher.service;
 
-import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
+import com.doob.mathagent.teacher.document.TeacherResourceStore;
+import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -117,3 +118,4 @@ public class InMemoryTeacherResourceStore implements TeacherResourceStore {
                 || "CLASS_AUTHORIZED".equals(permissionScope);
     }
 }
+

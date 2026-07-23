@@ -41,6 +41,7 @@ public record MultiAgentWritingResponse(
      * @param actualUsage provider-reported token usage
      * @param message safe status message without raw model output
      * @param generatedContent model-generated content for this owned writing workflow stage
+     * @param elapsedMs wall-clock duration from stage planning through provider completion
      */
     public record StageResult(
             String stageCode,
@@ -51,7 +52,8 @@ public record MultiAgentWritingResponse(
             String status,
             AgentRunExecuteResponse.TokenUsage actualUsage,
             String message,
-            String generatedContent) {
+            String generatedContent,
+            long elapsedMs) {
 
         /**
          * Backward-compatible constructor for stored rows created before generated content snapshots existed.
@@ -65,7 +67,21 @@ public record MultiAgentWritingResponse(
                 String status,
                 AgentRunExecuteResponse.TokenUsage actualUsage,
                 String message) {
-            this(stageCode, agentCode, traceId, providerName, modelCode, status, actualUsage, message, "");
+            this(stageCode, agentCode, traceId, providerName, modelCode, status, actualUsage, message, "", 0L);
+        }
+
+        /** Compatibility constructor for snapshots created before stage wall-clock timing was exposed. */
+        public StageResult(
+                String stageCode,
+                String agentCode,
+                String traceId,
+                String providerName,
+                String modelCode,
+                String status,
+                AgentRunExecuteResponse.TokenUsage actualUsage,
+                String message,
+                String generatedContent) {
+            this(stageCode, agentCode, traceId, providerName, modelCode, status, actualUsage, message, generatedContent, 0L);
         }
     }
 }

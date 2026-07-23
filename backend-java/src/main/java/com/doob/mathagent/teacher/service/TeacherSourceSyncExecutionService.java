@@ -14,7 +14,9 @@ import com.doob.mathagent.teacher.sync.TeacherSourceSyncCheckpointStore;
 import com.doob.mathagent.teacher.sync.TeacherSourceSyncJobStore;
 import com.doob.mathagent.teacher.sync.TeacherSourceSyncProperties;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncCheckpointResponse;
+import com.doob.mathagent.teacher.vo.TeacherSourceSyncFailureResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncJobResponse;
+import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.vector.service.VectorIndexRebuildResponse;
 import com.doob.mathagent.vector.service.VectorIndexService;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -23,6 +25,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.net.URLDecoder;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
@@ -40,6 +43,8 @@ import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.UUID;
 import java.util.stream.Stream;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import javax.imageio.ImageIO;
@@ -47,12 +52,15 @@ import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.rendering.PDFRenderer;
 import org.apache.pdfbox.text.PDFTextStripper;
+import org.apache.poi.openxml4j.util.ZipSecureFile;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.apache.poi.xwpf.usermodel.XWPFParagraph;
 import org.apache.poi.xwpf.usermodel.XWPFPicture;
 import org.apache.poi.xwpf.usermodel.XWPFPictureData;
 import org.apache.poi.xwpf.usermodel.XWPFRun;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Executes queued teacher source synchronization jobs.
@@ -63,8 +71,40 @@ import org.springframework.beans.factory.annotation.Autowired;
  */
 public class TeacherSourceSyncExecutionService {
 
+    /** PDF text layers use private-use glyphs for several operators; those pages require visual formula recovery. */
+    private static final Pattern UNRESOLVED_PDF_MATH_GLYPH = Pattern.compile("[\\p{Co}□�]");
+
+    /** POI's default 1,000 package-entry guard rejects real exam DOCX files with hundreds of formula/image parts. */
+    private static final int DEFAULT_DOCX_MAX_ZIP_ENTRIES = 5_000;
+    /** Launch configuration is supplied by the local backend script and remains bounded to resist ZIP entry attacks. */
+    private static final String DOCX_MAX_ZIP_ENTRIES_PROPERTY = "math.agent.teacher.sync.docx-max-zip-entries";
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(TeacherSourceSyncExecutionService.class);
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final int MAX_SCAN_DEPTH = 8;
+    private static final int PDF_PAGE_RENDER_DPI = 144;
+    private static final String PDF_PAGE_RENDER_DPI_ENV = "MATH_AGENT_PDF_PAGE_RENDER_DPI";
+    private static final long NATIVE_PDF_RENDER_TIMEOUT_SECONDS = 30L;
+    /** Page transcription is paid remote work; first 48 pages are enough to form a qualified ten-question seed. */
+    private static final int MAX_PAGE_TRANSCRIPTION_PAGES_PER_DOCUMENT = 48;
+    private static final String NATIVE_PDF_RENDERER = "pdftocairo.exe";
+    private static final String NATIVE_PDF_RENDERER_ENV = "MATH_AGENT_PDF_RENDERER_EXECUTABLE";
+    private static final Pattern MARKDOWN_IMAGE_PATTERN = Pattern.compile(
+            "!\\[([^]]*)\\]\\(\\s*(?:<([^>]+)>|([^\\s)]+))", Pattern.CASE_INSENSITIVE);
+    // Feishu's document export may materialize an image URL as either `src` or `href` (and may place
+    // either attribute first). Keep the accepted forms aligned with the Python downloader so a successfully
+    // downloaded image is still discovered and persisted during the Java-side local asset scan.
+    private static final Pattern HTML_IMAGE_TAG_PATTERN = Pattern.compile(
+            "<img\\b[^>]*>", Pattern.CASE_INSENSITIVE);
+    private static final Pattern HTML_IMAGE_HREF_PATTERN = Pattern.compile(
+            "\\bhref\\s*=\\s*(?:\\\"([^\\\"]*)\\\"|'([^']*)'|([^\\s>]+))",
+            Pattern.CASE_INSENSITIVE);
+    private static final Pattern HTML_IMAGE_SRC_PATTERN = Pattern.compile(
+            "\\bsrc\\s*=\\s*(?:\\\"([^\\\"]*)\\\"|'([^']*)'|([^\\s>]+))",
+            Pattern.CASE_INSENSITIVE);
+    private static final Pattern PAGE_SECTION_PATTERN = Pattern.compile("^page\\s+(\\d+)$", Pattern.CASE_INSENSITIVE);
+    /** Only pages with an explicit replacement glyph need an expensive full-page text repair call. */
+    private static final Pattern UNRESOLVED_MATHEMATICAL_OCR_GLYPH = Pattern.compile("[□�]");
 
     private final TeacherResourceStore resourceStore;
     private final TeacherSourceSyncJobStore jobStore;
@@ -77,6 +117,7 @@ public class TeacherSourceSyncExecutionService {
     private final TeacherResourceAssetService assetService;
     private final TeacherFormulaRecognitionClient formulaRecognitionClient;
     private final TeacherFormulaRecognitionProperties formulaRecognitionProperties;
+    private final TeacherPageTranscriptionClient pageTranscriptionClient;
 
     /**
      * Creates a sync execution service.
@@ -104,7 +145,8 @@ public class TeacherSourceSyncExecutionService {
                 TeacherResourceGraphAlignmentService.disabled(),
                 TeacherResourceAssetService.disabled(),
                 TeacherFormulaRecognitionClient.disabled(),
-                new TeacherFormulaRecognitionProperties(false, 0, 2));
+                new TeacherFormulaRecognitionProperties(false, 0, 2),
+                TeacherPageTranscriptionClient.disabled());
     }
 
     /**
@@ -130,7 +172,8 @@ public class TeacherSourceSyncExecutionService {
                 graphAlignmentService,
                 TeacherResourceAssetService.disabled(),
                 TeacherFormulaRecognitionClient.disabled(),
-                new TeacherFormulaRecognitionProperties(false, 0, 2));
+                new TeacherFormulaRecognitionProperties(false, 0, 2),
+                TeacherPageTranscriptionClient.disabled());
     }
 
     /**
@@ -157,7 +200,8 @@ public class TeacherSourceSyncExecutionService {
                 graphAlignmentService,
                 assetService,
                 TeacherFormulaRecognitionClient.disabled(),
-                new TeacherFormulaRecognitionProperties(false, 0, 2));
+                new TeacherFormulaRecognitionProperties(false, 0, 2),
+                TeacherPageTranscriptionClient.disabled());
     }
 
     /**
@@ -176,6 +220,29 @@ public class TeacherSourceSyncExecutionService {
             TeacherResourceAssetService assetService,
             TeacherFormulaRecognitionClient formulaRecognitionClient,
             TeacherFormulaRecognitionProperties formulaRecognitionProperties) {
+        this(
+                resourceStore, jobStore, blockStore, feishuDownloadClient, syncProperties, checkpointStore,
+                vectorIndexService, graphAlignmentService, assetService, formulaRecognitionClient,
+                formulaRecognitionProperties, TeacherPageTranscriptionClient.disabled());
+    }
+
+    /**
+     * Production constructor adds page-level visible-text transcription after the image asset has been persisted and
+     * authorized. Compatibility constructors intentionally keep this disabled so unit tests never call a provider.
+     */
+    public TeacherSourceSyncExecutionService(
+            TeacherResourceStore resourceStore,
+            TeacherSourceSyncJobStore jobStore,
+            TeacherDocumentBlockStore blockStore,
+            TeacherFeishuDownloadClient feishuDownloadClient,
+            TeacherSourceSyncProperties syncProperties,
+            TeacherSourceSyncCheckpointStore checkpointStore,
+            VectorIndexService vectorIndexService,
+            TeacherResourceGraphAlignmentService graphAlignmentService,
+            TeacherResourceAssetService assetService,
+            TeacherFormulaRecognitionClient formulaRecognitionClient,
+            TeacherFormulaRecognitionProperties formulaRecognitionProperties,
+            TeacherPageTranscriptionClient pageTranscriptionClient) {
         this.resourceStore = resourceStore;
         this.jobStore = jobStore;
         this.blockStore = blockStore;
@@ -189,6 +256,11 @@ public class TeacherSourceSyncExecutionService {
         this.formulaRecognitionProperties = Objects.requireNonNull(
                 formulaRecognitionProperties,
                 "formulaRecognitionProperties is required");
+        this.pageTranscriptionClient = Objects.requireNonNull(pageTranscriptionClient, "pageTranscriptionClient is required");
+        // Startup evidence for the production wiring: only the boolean is logged, never a source page, path, prompt,
+        // provider key, or teacher-private text. This makes a stale compatibility constructor immediately visible.
+        LOGGER.info("teacher_source_sync_wiring assetPersistenceEnabled=true pageTranscriptionEnabled={}",
+                this.pageTranscriptionClient.isEnabled());
     }
 
     /**
@@ -254,7 +326,7 @@ public class TeacherSourceSyncExecutionService {
                         document.tenantId(),
                         document.ownerSubjectId(),
                         document.sourceType(),
-                        document.title(),
+                        firstNonBlank(result.providerTitle(), document.title()),
                         document.originalUrl(),
                         result.savedPath().toString(),
                         document.permissionScope(),
@@ -264,16 +336,46 @@ public class TeacherSourceSyncExecutionService {
                         "waiting_rebuild",
                         document.feishuExportFormat(),
                         document.previewFiles(),
-                        document.parseMode());
-                resourceStore.save(downloaded);
-                assetService.markDocumentAssetsInactive(document.tenantId(), document.documentId());
-                int feishuManifestAssets = ingestFeishuDownloadedAssetManifest(downloaded, result);
+                        document.parseMode(),
+                        firstNonBlank(result.providerRevision(), document.providerRevision()),
+                        null,
+                        document.sourceIdentity());
                 List<TeacherDocumentBlockResponse> blocks = parseResourceFiles(
                         normalizedTenantId,
                         normalizedRole,
                         normalizedSubjectId,
                         downloaded,
                         true);
+                String contentChecksum = semanticContentChecksum(blocks, downloaded.title());
+                downloaded = withSyncFingerprint(downloaded, contentChecksum);
+                if (contentChecksum.equals(document.contentChecksum())) {
+                    /*
+                     * Feishu can change title/revision without changing parsed body. Persist those real provider
+                     * metadata changes, but retain active block/asset/vector rows: a delete-and-rebuild here would
+                     * make title-only renames unnecessarily expensive and briefly degrade retrieval availability.
+                     */
+                    TeacherResourceDocumentResponse unchanged = markUnchangedFeishuResourceSynced(downloaded, document);
+                    TeacherSourceSyncJobResponse completed = updateJob(
+                            running,
+                            "completed",
+                            "skipped_unchanged",
+                            result.savedPath().toString(),
+                            result.message() + "; body checksum unchanged; vector index retained");
+                    TeacherSourceSyncCheckpointResponse successCheckpoint = result.checkpoint().hasCursor()
+                            ? toStoredCheckpoint(unchanged, completed, result.checkpoint(), result.failedItemsJson())
+                            : null;
+                    saveFeishuCheckpoint(
+                            unchanged,
+                            completed,
+                            successCheckpoint,
+                            mergeDownloadedItemsJson(result),
+                            result.failedItemsJson(),
+                            2);
+                    return jobStore.save(completed);
+                }
+                resourceStore.save(downloaded);
+                assetService.markDocumentAssetsInactive(document.tenantId(), document.documentId());
+                int feishuManifestAssets = ingestFeishuDownloadedAssetManifest(downloaded, result);
                 String vectorMessage = "";
                 if (!blocks.isEmpty()) {
                     blockStore.replaceActiveBlocks(document.tenantId(), document.documentId(), blocks);
@@ -336,9 +438,11 @@ public class TeacherSourceSyncExecutionService {
                 TeacherFeishuDownloadClient.FeishuDownloadCheckpoint failureCheckpoint =
                         TeacherFeishuDownloadClient.FeishuDownloadCheckpoint.empty();
                 boolean retryable = false;
+                TeacherSourceSyncFailureResponse failure = TeacherSourceSyncFailureResponse.none();
                 if (exception instanceof TeacherFeishuDownloadException feishuException) {
                     retryable = feishuException.retryable();
                     failureCheckpoint = feishuException.checkpoint();
+                    failure = feishuException.failure();
                 }
                 TeacherSourceSyncCheckpointResponse checkpointToSave = failureCheckpoint.hasCursor()
                         ? toStoredCheckpoint(document, running, failureCheckpoint, "[]")
@@ -348,7 +452,8 @@ public class TeacherSourceSyncExecutionService {
                         retryable ? "paused" : "failed",
                         retryable ? "download_paused" : "download_failed",
                         null,
-                        exception.getMessage());
+                        exception.getMessage(),
+                        failure);
                 saveFeishuCheckpoint(
                         document,
                         pausedOrFailed,
@@ -603,7 +708,14 @@ public class TeacherSourceSyncExecutionService {
                 continue;
             }
             try {
-                String providerAssetId = "feishu:" + textOrDefault(item.path("token").asText(""), relativePath);
+                /*
+                 * Markdown image blocks use the same relative provider id that the worker writes in its manifest.
+                 * Keeping this id stable makes parser extraction and manifest ingestion converge on one active asset
+                 * instead of leaving block.imageRefs pointing at an inactive duplicate after a resync.
+                 */
+                String providerAssetId = textOrDefault(
+                        item.path("providerAssetId").asText(""),
+                        "feishu:" + textOrDefault(item.path("token").asText(""), relativePath));
                 Optional<com.doob.mathagent.teacher.vo.TeacherResourceAssetResponse> saved =
                         assetService.saveExtractedAsset(
                                 document,
@@ -664,9 +776,105 @@ public class TeacherSourceSyncExecutionService {
                 "waiting_rebuild",
                 document.feishuExportFormat(),
                 document.previewFiles(),
-                document.parseMode());
+                document.parseMode(),
+                document.providerRevision(),
+                document.contentChecksum(),
+                document.sourceIdentity());
         resourceStore.save(synced);
         return synced;
+    }
+
+    /**
+     * Persists provider metadata from an unchanged Feishu download without invalidating vectors that were already
+     * verified for the same parsed body. The checksum comparison above is the proof that retaining this index is safe.
+     */
+    private TeacherResourceDocumentResponse markUnchangedFeishuResourceSynced(
+            TeacherResourceDocumentResponse downloaded,
+            TeacherResourceDocumentResponse previouslyIndexed) {
+        TeacherResourceDocumentResponse synced = new TeacherResourceDocumentResponse(
+                downloaded.documentId(),
+                downloaded.tenantId(),
+                downloaded.ownerSubjectId(),
+                downloaded.sourceType(),
+                downloaded.title(),
+                downloaded.originalUrl(),
+                downloaded.localPath(),
+                downloaded.permissionScope(),
+                "synced",
+                "parsed",
+                previouslyIndexed.embeddingStatus(),
+                previouslyIndexed.indexStatus(),
+                downloaded.feishuExportFormat(),
+                downloaded.previewFiles(),
+                downloaded.parseMode(),
+                downloaded.providerRevision(),
+                downloaded.contentChecksum(),
+                downloaded.sourceIdentity());
+        resourceStore.save(synced);
+        return synced;
+    }
+
+    /**
+     * Applies the body fingerprint only after actual parser output exists. This deliberately ignores Feishu titles:
+     * Markdown headings become chapter metadata and are not paragraph body text, so a pure rename does not churn
+     * blocks or Milvus vectors.
+     */
+    private static TeacherResourceDocumentResponse withSyncFingerprint(
+            TeacherResourceDocumentResponse document, String contentChecksum) {
+        return new TeacherResourceDocumentResponse(
+                document.documentId(), document.tenantId(), document.ownerSubjectId(), document.sourceType(),
+                document.title(), document.originalUrl(), document.localPath(), document.permissionScope(),
+                document.syncStatus(), document.parseStatus(), document.embeddingStatus(), document.indexStatus(),
+                document.feishuExportFormat(), document.previewFiles(), document.parseMode(),
+                document.providerRevision(), contentChecksum, document.sourceIdentity());
+    }
+
+    /**
+     * Produces a deterministic document-body checksum from real parsed blocks. Source paths, title/chapter labels,
+     * generated asset ids, and provider filenames are excluded so presentation-only rename events remain metadata-only.
+     */
+    private static String semanticContentChecksum(List<TeacherDocumentBlockResponse> blocks, String providerTitle) {
+        List<TeacherDocumentBlockResponse> ordered = blocks.stream()
+                .sorted(Comparator.comparingInt(TeacherDocumentBlockResponse::blockOrder)
+                        .thenComparing(block -> textOrDefault(block.sourcePath(), "")))
+                .toList();
+        String canonical = java.util.stream.IntStream.range(0, ordered.size())
+                .mapToObj(index -> {
+                    TeacherDocumentBlockResponse block = ordered.get(index);
+                    boolean firstBlock = index == 0;
+                    String raw = firstBlock ? removeLeadingProviderTitle(block.rawText(), providerTitle) : block.rawText();
+                    String normalized = firstBlock
+                            ? removeLeadingProviderTitle(block.normalizedText(), providerTitle)
+                            : block.normalizedText();
+                    return normalizeText(raw) + "\n" + normalizeText(normalized);
+                })
+                .collect(java.util.stream.Collectors.joining("\n\u001e\n"));
+        return sha256(canonical);
+    }
+
+    /**
+     * Feishu's content endpoint currently emits the document title as a plain first line instead of a Markdown
+     * heading. Remove exactly that leading provider-owned display value from the first parsed block only; ordinary
+     * occurrences later in the teaching body remain part of the fingerprint and still cause a reindex.
+     */
+    private static String removeLeadingProviderTitle(String value, String providerTitle) {
+        String text = value == null ? "" : value;
+        String title = normalizeText(providerTitle);
+        if (title.isBlank()) {
+            return text;
+        }
+        String normalized = normalizeText(text);
+        if (!normalized.startsWith(title)) {
+            return text;
+        }
+        if (normalized.length() == title.length()) {
+            return "";
+        }
+        char separator = normalized.charAt(title.length());
+        if (!Character.isWhitespace(separator)) {
+            return text;
+        }
+        return normalized.substring(title.length()).strip();
     }
 
     /**
@@ -735,6 +943,25 @@ public class TeacherSourceSyncExecutionService {
         int order = 0;
         for (Path file : files) {
             String relativePath = root.equals(file) ? file.getFileName().toString() : root.relativize(file).toString();
+            if (file.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".pdf")) {
+                /*
+                 * A scanned teaching PDF can contain hundreds of rendered page images. Persist each bounded visual
+                 * batch before rendering the next one so the source file is indexed losslessly without retaining an
+                 * entire handout's PNG payload in the JVM heap.
+                 */
+                List<TeacherDocumentBlockResponse> pdfBlocks = parsePdfBlocksIncrementally(
+                        tenantId,
+                        viewerRole,
+                        viewerSubjectId,
+                        document,
+                        file,
+                        relativePath.replace('\\', '/'),
+                        order,
+                        formulaVisionBudget);
+                blocks.addAll(pdfBlocks);
+                order += pdfBlocks.size();
+                continue;
+            }
             List<ParsedBlock> parsedBlocks = new ArrayList<>(parseFileBlocks(file));
             if ("AI".equalsIgnoreCase(textOrDefault(document.parseMode(), "TEXT"))
                     && file.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".docx")) {
@@ -742,7 +969,18 @@ public class TeacherSourceSyncExecutionService {
                  * individual WMF/PNG equation assets: that would multiply visual calls and lose page context. */
                 parsedBlocks.addAll(parseRenderedDocxPages(file));
             }
-            List<List<FormulaReference>> pageFormulas = recognizePdfPageBatches(document, parsedBlocks, formulaVisionBudget);
+            /*
+             * AI-mode DOCX sources now have real rendered pages.  Their visible text is transcribed later by
+             * TeacherPageTranscriptionClient after the page asset is persisted and authorization is rechecked.  Do
+             * not first spend the formula worker budget on the same page raster: it serializes a large paper into
+             * dozens of redundant vision calls before source blocks exist. Native OMML remains in formula_refs, and
+             * the page transcription is the authoritative gpt-5.6-luna evidence for visible equations and diagrams.
+             */
+            boolean hasRenderedDocxPages = file.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".docx")
+                    && parsedBlocks.stream().anyMatch(parsed -> parsed.pageNo() != null && !parsed.assets().isEmpty());
+            List<List<FormulaReference>> pageFormulas = hasRenderedDocxPages
+                    ? emptyFormulaBatches(parsedBlocks.size())
+                    : recognizePdfPageBatches(document, parsedBlocks, formulaVisionBudget);
             for (int index = 0; index < parsedBlocks.size(); index += 1) {
                 ParsedBlock parsed = parsedBlocks.get(index);
                 blocks.add(toBlock(
@@ -757,6 +995,159 @@ public class TeacherSourceSyncExecutionService {
             }
         }
         return blocks;
+    }
+
+    /** Returns one independent mutable formula list per parsed block when page transcription owns vision work. */
+    private static List<List<FormulaReference>> emptyFormulaBatches(int blockCount) {
+        List<List<FormulaReference>> batches = new ArrayList<>();
+        for (int index = 0; index < blockCount; index += 1) {
+            batches.add(new ArrayList<>());
+        }
+        return batches;
+    }
+
+    /**
+     * Renders and persists PDF pages in the same bounded groups used by page-vision recognition.
+     *
+     * <p>Keeping only one group in memory is essential for real scanned courseware: each page is still stored as the
+     * original-color PNG asset and remains available through the normal permission gate, but a large source cannot
+     * exhaust the backend before its first block has been written.</p>
+     */
+    private List<TeacherDocumentBlockResponse> parsePdfBlocksIncrementally(
+            String tenantId,
+            String viewerRole,
+            String viewerSubjectId,
+            TeacherResourceDocumentResponse resourceDocument,
+            Path file,
+            String relativePath,
+            int firstOrder,
+            FormulaVisionBudget formulaVisionBudget) {
+        List<TeacherDocumentBlockResponse> result = new ArrayList<>();
+        String chapter = stripExtension(file.getFileName().toString());
+        int batchSize = formulaRecognitionProperties.normalizedPagesPerRequest();
+        try (PDDocument pdf = Loader.loadPDF(file.toFile())) {
+            PDFTextStripper stripper = new PDFTextStripper();
+            PDFRenderer renderer = new PDFRenderer(pdf);
+            List<ParsedBlock> batch = new ArrayList<>(batchSize);
+            for (int page = 1; page <= pdf.getNumberOfPages(); page += 1) {
+                stripper.setStartPage(page);
+                stripper.setEndPage(page);
+                String text = textOrDefault(stripper.getText(pdf), "");
+                ByteArrayOutputStream imageBytes = new ByteArrayOutputStream();
+                imageBytes.write(renderPdfPageAsPng(file, page, renderer));
+                batch.add(new ParsedBlock(
+                        chapter,
+                        null,
+                        page,
+                        text.isBlank() ? "[PDF page image; no extractable text]" : text,
+                        List.of(new PendingAsset("pdf-page:" + page, imageBytes.toByteArray(), "image/png")),
+                        List.of()));
+                if (batch.size() == batchSize || page == pdf.getNumberOfPages()) {
+                    List<List<FormulaReference>> formulas =
+                            recognizePdfPageBatches(resourceDocument, batch, formulaVisionBudget);
+                    for (int index = 0; index < batch.size(); index += 1) {
+                        // `toBlock` first persists the same rendered PNG, then re-opens it through the tenant/role/
+                        // owner permission boundary before it can call the visual reader. Keeping that order is what
+                        // prevents a temporary local page or a stale pre-sync file from becoming source-of-record text.
+                        ParsedBlock pageWithVisibleText = batch.get(index);
+                        result.add(toBlock(
+                                tenantId,
+                                viewerRole,
+                                viewerSubjectId,
+                                resourceDocument,
+                                relativePath,
+                                pageWithVisibleText,
+                                firstOrder + result.size(),
+                                formulas.get(index)));
+                    }
+                    // `toBlock` has persisted the binary. Clearing the list releases this page group's byte arrays.
+                    batch.clear();
+                }
+            }
+        } catch (IOException exception) {
+            throw new IllegalArgumentException("Failed to parse PDF resource file: " + file, exception);
+        }
+        return result;
+    }
+
+    /**
+     * Renders one PDF page through the installed native Poppler renderer when it is available.
+     *
+     * <p>Some scanned courseware stores very large page photographs. Poppler preserves the page's color raster while
+     * avoiding PDFBox's slow Java2D pixel transforms; PDFBox remains the deterministic fallback for deployments that
+     * do not install the native executable.</p>
+     */
+    private static byte[] renderPdfPageAsPng(Path pdf, int pageNo, PDFRenderer fallbackRenderer) throws IOException {
+        Optional<byte[]> nativeImage = tryRenderPdfPageWithNativeRenderer(pdf, pageNo);
+        if (nativeImage.isPresent()) {
+            return nativeImage.get();
+        }
+        ByteArrayOutputStream imageBytes = new ByteArrayOutputStream();
+        ImageIO.write(fallbackRenderer.renderImageWithDPI(pageNo - 1, pdfPageRenderDpi()), "png", imageBytes);
+        return imageBytes.toByteArray();
+    }
+
+    /** Attempts one isolated Poppler render and cleans all temporary files irrespective of renderer success. */
+    private static Optional<byte[]> tryRenderPdfPageWithNativeRenderer(Path pdf, int pageNo) {
+        Path temporaryDirectory = null;
+        try {
+            temporaryDirectory = Files.createTempDirectory("math-agent-pdf-page-");
+            Path outputStem = temporaryDirectory.resolve("page");
+            String rendererExecutable = textOrDefault(System.getenv(NATIVE_PDF_RENDERER_ENV), NATIVE_PDF_RENDERER);
+            Process process = new ProcessBuilder(
+                    rendererExecutable,
+                    "-png",
+                    "-singlefile",
+                    "-f", String.valueOf(pageNo),
+                    "-l", String.valueOf(pageNo),
+                    "-r", String.valueOf(pdfPageRenderDpi()),
+                    pdf.toAbsolutePath().toString(),
+                    outputStem.toString())
+                    // Rendering has no caller-visible diagnostics. Discard it so the timeout remains enforceable even
+                    // when a native PDF reports verbose font warnings on stderr.
+                    .redirectError(ProcessBuilder.Redirect.DISCARD)
+                    .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                    .start();
+            if (!process.waitFor(NATIVE_PDF_RENDER_TIMEOUT_SECONDS, TimeUnit.SECONDS) || process.exitValue() != 0) {
+                process.destroyForcibly();
+                return Optional.empty();
+            }
+            Path output = temporaryDirectory.resolve("page.png");
+            return Files.isRegularFile(output) ? Optional.of(Files.readAllBytes(output)) : Optional.empty();
+        } catch (IOException exception) {
+            return Optional.empty();
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            return Optional.empty();
+        } finally {
+            if (temporaryDirectory != null) {
+                try (Stream<Path> paths = Files.walk(temporaryDirectory)) {
+                    paths.sorted(Comparator.reverseOrder()).forEach(path -> {
+                        try {
+                            Files.deleteIfExists(path);
+                        } catch (IOException ignored) {
+                            // Temporary native-render outputs never participate in source indexing.
+                        }
+                    });
+                } catch (IOException ignored) {
+                    // The regular PDFBox fallback remains safe even if Windows releases a temp handle late.
+                }
+            }
+        }
+    }
+
+    /** Reads an operator-selected indexing DPI while retaining the high-fidelity default for normal deployments. */
+    private static int pdfPageRenderDpi() {
+        String configured = textOrDefault(System.getenv(PDF_PAGE_RENDER_DPI_ENV), "");
+        if (configured.isBlank()) {
+            return PDF_PAGE_RENDER_DPI;
+        }
+        try {
+            int dpi = Integer.parseInt(configured);
+            return dpi > 0 ? dpi : PDF_PAGE_RENDER_DPI;
+        } catch (NumberFormatException exception) {
+            return PDF_PAGE_RENDER_DPI;
+        }
     }
 
     /**
@@ -823,37 +1214,188 @@ public class TeacherSourceSyncExecutionService {
         List<ParsedBlock> blocks = new ArrayList<>();
         String chapter = stripExtension(file.getFileName().toString());
         String section = null;
+        Integer pageNo = null;
         StringBuilder current = new StringBuilder();
+        List<PendingAsset> currentAssets = new ArrayList<>();
         for (String line : text.replace("\r\n", "\n").replace('\r', '\n').split("\n")) {
             String stripped = line.strip();
             if (stripped.startsWith("# ")) {
-                flushBlock(blocks, chapter, section, current);
+                flushBlock(blocks, chapter, section, pageNo, current, currentAssets);
                 chapter = stripped.substring(2).strip();
                 section = null;
+                pageNo = null;
                 continue;
             }
             if (stripped.startsWith("## ")) {
-                flushBlock(blocks, chapter, section, current);
+                flushBlock(blocks, chapter, section, pageNo, current, currentAssets);
                 section = stripped.substring(3).strip();
+                pageNo = pageNumberFromSection(section);
+                continue;
+            }
+            if (stripped.startsWith("### ")) {
+                // A third-level Markdown heading commonly starts a concrete source question (for example “2013 年
+                // 涂色问题”).  It must own its following answer, rather than being fused with later variations under
+                // the same H2 topic; otherwise RAG can select one question's image but another question's answer.
+                flushBlock(blocks, chapter, section, pageNo, current, currentAssets);
+                section = stripped.substring(4).strip();
+                pageNo = pageNumberFromSection(section);
+                continue;
+            }
+            ImageReference image = markdownImageReference(stripped);
+            if (image != null) {
+                readMarkdownAsset(file, image.path()).ifPresent(currentAssets::add);
+                // Keep alt text as retrieval evidence, but never persist a signed Feishu URL in a searchable block.
+                if (!image.altText().isBlank()) {
+                    current.append(image.altText()).append('\n');
+                }
                 continue;
             }
             if (!stripped.isBlank()) {
+                if (!currentAssets.isEmpty()) {
+                    /*
+                     * The preceding text plus its immediately following image is a complete visual source unit.
+                     * Start the next explanation in a new block: otherwise a later “6 种颜色” note remains in the
+                     * same searchable block as the original 4-colour map and the renderer cannot prove which
+                     * condition owns that image.
+                     */
+                    flushBlock(blocks, chapter, section, pageNo, current, currentAssets);
+                }
                 current.append(stripped).append('\n');
             }
         }
-        flushBlock(blocks, chapter, section, current);
+        flushBlock(blocks, chapter, section, pageNo, current, currentAssets);
         return blocks;
     }
 
     /**
-     * Appends a non-empty parsed block and clears the buffer.
+     * Appends a non-empty parsed block and clears the text/asset buffers together so Markdown image refs stay bound
+     * to the paragraph that introduced them.
      */
-    private static void flushBlock(List<ParsedBlock> blocks, String chapter, String section, StringBuilder current) {
+    private static void flushBlock(
+            List<ParsedBlock> blocks,
+            String chapter,
+            String section,
+            Integer pageNo,
+            StringBuilder current,
+            List<PendingAsset> currentAssets) {
         String value = current.toString().strip();
-        if (!value.isBlank()) {
-            blocks.add(new ParsedBlock(chapter, section, null, value, List.of(), List.of()));
+        if (!value.isBlank() || !currentAssets.isEmpty()) {
+            String text = value.isBlank() ? "[Markdown image block; no extractable text]" : value;
+            blocks.add(new ParsedBlock(chapter, section, pageNo, text, List.copyOf(currentAssets), List.of()));
         }
         current.setLength(0);
+        currentAssets.clear();
+    }
+
+    /** Extracts a page number only from explicit Markdown page sections, never from arbitrary lesson text. */
+    private static Integer pageNumberFromSection(String section) {
+        Matcher matcher = PAGE_SECTION_PATTERN.matcher(textOrDefault(section, ""));
+        if (!matcher.matches()) {
+            return null;
+        }
+        try {
+            return Integer.valueOf(matcher.group(1));
+        } catch (NumberFormatException exception) {
+            return null;
+        }
+    }
+
+    /** Finds a Markdown or HTML image whose target has already been materialized by the Feishu worker. */
+    private static ImageReference markdownImageReference(String line) {
+        Matcher markdown = MARKDOWN_IMAGE_PATTERN.matcher(line);
+        if (markdown.find()) {
+            return new ImageReference(
+                    textOrDefault(markdown.group(1), ""),
+                    decodeLocalImagePath(textOrDefault(markdown.group(2), textOrDefault(markdown.group(3), ""))));
+        }
+        Matcher html = HTML_IMAGE_TAG_PATTERN.matcher(line);
+        if (html.find()) {
+            String tag = html.group();
+            String href = htmlAttributeValue(HTML_IMAGE_HREF_PATTERN, tag);
+            String src = htmlAttributeValue(HTML_IMAGE_SRC_PATTERN, tag);
+            return new ImageReference(
+                    "",
+                    decodeLocalImagePath(firstNonBlank(href, src)));
+        }
+        return null;
+    }
+
+    /** Reads one image attribute without allowing a later provider token to override a local href. */
+    private static String htmlAttributeValue(Pattern attributePattern, String tag) {
+        Matcher matcher = attributePattern.matcher(textOrDefault(tag, ""));
+        if (!matcher.find()) {
+            return "";
+        }
+        return textOrDefault(matcher.group(1), textOrDefault(matcher.group(2), textOrDefault(matcher.group(3), "")));
+    }
+
+    /** Reads a local image only when it remains under the exported document's parent directory. */
+    private static Optional<PendingAsset> readMarkdownAsset(Path markdownFile, String imagePath) {
+        String normalizedPath = textOrDefault(imagePath, "");
+        if (normalizedPath.isBlank()
+                || normalizedPath.startsWith("http://")
+                || normalizedPath.startsWith("https://")
+                || normalizedPath.startsWith("data:")) {
+            return Optional.empty();
+        }
+        Path parent = markdownFile.toAbsolutePath().normalize().getParent();
+        if (parent == null) {
+            return Optional.empty();
+        }
+        Path target = parent.resolve(normalizedPath).normalize();
+        if (!target.startsWith(parent) || !Files.isRegularFile(target)) {
+            return Optional.empty();
+        }
+        try {
+            byte[] content = Files.readAllBytes(target);
+            if (content.length == 0) {
+                return Optional.empty();
+            }
+            String mimeType = Files.probeContentType(target);
+            if (mimeType == null || mimeType.isBlank()) {
+                mimeType = mimeTypeFromName(target.getFileName().toString());
+            }
+            return Optional.of(new PendingAsset(
+                    normalizedPath.replace('\\', '/'),
+                    content,
+                    textOrDefault(mimeType, "application/octet-stream")));
+        } catch (IOException exception) {
+            return Optional.empty();
+        }
+    }
+
+    private static String decodeLocalImagePath(String path) {
+        String value = textOrDefault(path, "");
+        int query = value.indexOf('?');
+        if (query >= 0) {
+            value = value.substring(0, query);
+        }
+        int fragment = value.indexOf('#');
+        if (fragment >= 0) {
+            value = value.substring(0, fragment);
+        }
+        try {
+            return URLDecoder.decode(value, StandardCharsets.UTF_8);
+        } catch (IllegalArgumentException exception) {
+            return value;
+        }
+    }
+
+    private static String mimeTypeFromName(String fileName) {
+        String normalized = textOrDefault(fileName, "").toLowerCase(Locale.ROOT);
+        if (normalized.endsWith(".jpg") || normalized.endsWith(".jpeg")) {
+            return "image/jpeg";
+        }
+        if (normalized.endsWith(".gif")) {
+            return "image/gif";
+        }
+        if (normalized.endsWith(".webp")) {
+            return "image/webp";
+        }
+        if (normalized.endsWith(".bmp")) {
+            return "image/bmp";
+        }
+        return "image/png";
     }
 
     /**
@@ -862,6 +1404,7 @@ public class TeacherSourceSyncExecutionService {
     private static List<ParsedBlock> parseDocxBlocks(Path file) {
         List<ParsedBlock> blocks = new ArrayList<>();
         String chapter = stripExtension(file.getFileName().toString());
+        configurePoiDocxEntryLimit();
         try (XWPFDocument document = new XWPFDocument(Files.newInputStream(file))) {
             for (XWPFParagraph paragraph : document.getParagraphs()) {
                 List<PendingAsset> assets = new ArrayList<>();
@@ -914,9 +1457,24 @@ public class TeacherSourceSyncExecutionService {
                 }
             }
         } catch (IOException exception) {
-            throw new IllegalArgumentException("Failed to parse DOCX resource file: " + file, exception);
+            // A top-level “parse failed” status without the native DOCX/ZIP reason forces operators to guess whether
+            // the source is corrupt, the path is wrong, or POI rejected a particular Word package. Keep the filename
+            // and the bounded exception message in the resumable job record; neither contains model prompts or
+            // teacher content, but it makes a real source failure actionable.
+            String reason = textOrDefault(exception.getMessage(), exception.getClass().getSimpleName());
+            throw new IllegalArgumentException("Failed to parse DOCX resource file: " + file + "; reason: " + reason, exception);
         }
         return blocks;
+    }
+
+    /**
+     * Raises only POI's package-entry count for trusted, permission-checked local exam resources. The 2024 source
+     * contains 1,489 legitimate equation/image entries; compressed-size and zip-bomb protections remain owned by
+     * POI, while this independently configurable ceiling avoids rejecting a valid paper as malicious.
+     */
+    private static synchronized void configurePoiDocxEntryLimit() {
+        int configured = Integer.getInteger(DOCX_MAX_ZIP_ENTRIES_PROPERTY, DEFAULT_DOCX_MAX_ZIP_ENTRIES);
+        ZipSecureFile.setMaxFileCount(Math.max(1, configured));
     }
 
     private static byte[] readDocxPackagePart(Path file, String providerId) throws IOException {
@@ -951,7 +1509,7 @@ public class TeacherSourceSyncExecutionService {
                 String text = textOrDefault(stripper.getText(document), "");
                 List<PendingAsset> assets = new ArrayList<>();
                 ByteArrayOutputStream imageBytes = new ByteArrayOutputStream();
-                ImageIO.write(renderer.renderImageWithDPI(page - 1, 144), "png", imageBytes);
+                imageBytes.write(renderPdfPageAsPng(file, page, renderer));
                 assets.add(new PendingAsset("pdf-page:" + page, imageBytes.toByteArray(), "image/png"));
                 if (!text.isBlank() || !assets.isEmpty()) {
                     blocks.add(new ParsedBlock(
@@ -1021,7 +1579,16 @@ public class TeacherSourceSyncExecutionService {
             int order,
             List<FormulaReference> pageFormulas) {
         String sourcePath = relativePath.replace('\\', '/');
-        List<StoredAssetReference> storedAssets = storeAssets(document, sourcePath, parsed);
+        // Markdown render manifests identify pages in their explicit `Page N` section rather than a PDF parser field.
+        // Resolve it again here because this is the single persistence boundary shared by Markdown, DOCX, and PDF.
+        Integer resolvedPageNo = parsed.pageNo() == null ? pageNumberFromSection(parsed.section()) : parsed.pageNo();
+        List<StoredAssetReference> storedAssets = storeAssets(document, sourcePath, parsed, resolvedPageNo);
+        Optional<TeacherPageTranscriptionClient.PageTranscription> pageTranscription = transcribeAuthorizedPage(
+                tenantId, viewerRole, viewerSubjectId, document, resolvedPageNo, storedAssets, parsed.text());
+        // The model is allowed to replace only a page's visibly corrupted extraction. It never writes an answer or a
+        // synthetic exercise: if it is unavailable or below its confidence gate, the original parser text remains.
+        String sourceText = pageTranscription.map(TeacherPageTranscriptionClient.PageTranscription::text)
+                .orElse(parsed.text());
         List<FormulaReference> formulas = formulaReferences(parsed.formulas());
         formulas.addAll(bindFormulaAssets(pageFormulas, storedAssets));
         String formulaRefs = formulaRefs(formulas);
@@ -1031,7 +1598,7 @@ public class TeacherSourceSyncExecutionService {
          * Keeping rawText unmodified preserves the source extraction for display, while a formula-only paragraph is
          * still indexable and receives the same graph/rerank treatment as ordinary teaching text.
          */
-        String normalized = normalizeText(String.join(" ", parsed.text(), formulaEvidence));
+        String normalized = normalizeText(String.join(" ", sourceText, formulaEvidence));
         String externalBlockId = stableExternalBlockId(sourcePath, parsed, order);
         String blockRole = classifyBlockRole(sourcePath, parsed, normalized);
         /*
@@ -1048,7 +1615,7 @@ public class TeacherSourceSyncExecutionService {
                 blockRole,
                 parsed.chapter(),
                 parsed.section(),
-                normalizeText(String.join(" ", parsed.text(), formulaEvidence)),
+                normalizeText(String.join(" ", sourceText, formulaEvidence)),
                 normalized);
         String imageRefs = imageRefs(storedAssets);
         return new TeacherDocumentBlockResponse(
@@ -1059,18 +1626,18 @@ public class TeacherSourceSyncExecutionService {
                 order,
                 parsed.chapter(),
                 parsed.section(),
-                parsed.pageNo(),
+                resolvedPageNo,
                 null,
                 sourcePath,
                 blockRole,
-                parsed.text(),
+                sourceText,
                 normalized,
                 imageRefs,
                 formulaRefs,
                 jsonArray(graphAlignment.nodeIds()),
                 jsonArray(graphAlignment.tagNames()),
                 sha256(normalized),
-                1.0,
+                pageTranscription.map(TeacherPageTranscriptionClient.PageTranscription::confidence).orElse(1.0d),
                 "active");
     }
 
@@ -1147,7 +1714,8 @@ public class TeacherSourceSyncExecutionService {
     private List<StoredAssetReference> storeAssets(
             TeacherResourceDocumentResponse document,
             String sourcePath,
-            ParsedBlock parsed) {
+            ParsedBlock parsed,
+            Integer pageNo) {
         if (parsed.assets().isEmpty()) {
             return List.of();
         }
@@ -1157,7 +1725,7 @@ public class TeacherSourceSyncExecutionService {
                     assetService.saveExtractedAsset(
                             document,
                             sourcePath,
-                            parsed.pageNo(),
+                            pageNo,
                             pending.providerAssetId(),
                             pending.content(),
                             pending.mimeType());
@@ -1171,6 +1739,58 @@ public class TeacherSourceSyncExecutionService {
             });
         }
         return List.copyOf(refs);
+    }
+
+    /**
+     * Performs visible-text transcription only after the source page is stored as a teacher asset and re-opened through
+     * the same tenant/role/owner check used by normal resource access. The configured page cap is an explicit paid-AI
+     * budget; later pages remain synchronized as images and can be resumed in a later authorized sync rather than being
+     * silently invented from a broken text layer.
+     */
+    private Optional<TeacherPageTranscriptionClient.PageTranscription> transcribeAuthorizedPage(
+            String tenantId,
+            String viewerRole,
+            String viewerSubjectId,
+            TeacherResourceDocumentResponse document,
+            Integer pageNo,
+            List<StoredAssetReference> assets,
+            String extractedText) {
+        boolean aiMode = "AI".equalsIgnoreCase(textOrDefault(document.parseMode(), "TEXT"));
+        boolean eligiblePage = pageNo != null && pageNo > 0 && pageNo <= MAX_PAGE_TRANSCRIPTION_PAGES_PER_DOCUMENT;
+        boolean hasImage = assets != null && !assets.isEmpty();
+        String visibleText = textOrDefault(extractedText, "");
+        boolean needsVisualTextRepair = visibleText.isBlank() || UNRESOLVED_MATHEMATICAL_OCR_GLYPH.matcher(visibleText).find();
+        LOGGER.info("teacher_page_transcription_gate document={} aiMode={} page={} eligiblePage={} hasImage={} clientEnabled={}",
+                document.documentId(), aiMode, pageNo, eligiblePage, hasImage, pageTranscriptionClient.isEnabled());
+        if (!aiMode || !eligiblePage || !hasImage || !needsVisualTextRepair) {
+            LOGGER.info("teacher_page_transcription_skipped document={} aiMode={} page={} eligiblePage={} hasImage={}",
+                    document.documentId(), aiMode, pageNo, eligiblePage, hasImage);
+            return Optional.empty();
+        }
+        for (StoredAssetReference asset : assets) {
+            if (!textOrDefault(asset.mimeType(), "").toLowerCase(Locale.ROOT).startsWith("image/")) {
+                continue;
+            }
+            try {
+                TeacherResourceAssetService.VisibleAsset visibleAsset = assetService.openVisibleAsset(
+                        asset.assetId(),
+                        new RequestSubject(tenantId, viewerRole, viewerSubjectId, "teacher-source-sync").normalize());
+                Optional<TeacherPageTranscriptionClient.PageTranscription> transcription =
+                        pageTranscriptionClient.transcribe(visibleAsset.resource().getFile().toPath(), visibleAsset.mimeType());
+                if (transcription.isPresent()) {
+                    return transcription;
+                }
+            } catch (IOException | IllegalArgumentException exception) {
+                // Source synchronization remains lossless even when the relay/model is unavailable; the original image
+                // and parser text stay persisted and the question importer will refuse unresolved glyphs later.
+                // Do not emit page text, asset paths, or provider payloads because these images are teacher-private
+                // source material. The exception category is sufficient to establish which permission/materialization
+                // boundary rejected the page during a real sync.
+                LOGGER.warn("teacher_page_transcription_open_failed document={} page={} reason={}",
+                        document.documentId(), pageNo, exception.getClass().getSimpleName());
+            }
+        }
+        return Optional.empty();
     }
 
     private static String imageRefs(List<StoredAssetReference> assets) {
@@ -1271,7 +1891,14 @@ public class TeacherSourceSyncExecutionService {
         List<Integer> pageBlockIndexes = new ArrayList<>();
         for (int index = 0; index < parsedBlocks.size(); index += 1) {
             ParsedBlock parsed = parsedBlocks.get(index);
-            if (parsed.pageNo() != null && !parsed.assets().isEmpty()) {
+            /*
+             * Normal PDF pages already have a usable text layer and a durable PNG asset. Calling the visual model
+             * for every page multiplies cost without improving those pages. Restrict recovery to pages whose text
+             * layer contains a private-use/replacement glyph, while keeping every page image available for CLIP and
+             * manual verification when a caller needs the original visual equation.
+             */
+            if (parsed.pageNo() != null && !parsed.assets().isEmpty()
+                    && UNRESOLVED_PDF_MATH_GLYPH.matcher(textOrDefault(parsed.text(), "")).find()) {
                 pageBlockIndexes.add(index);
             }
         }
@@ -1428,6 +2055,17 @@ public class TeacherSourceSyncExecutionService {
             String phase,
             String stagingPath,
             String message) {
+        return updateJob(job, status, phase, stagingPath, message, job.failure());
+    }
+
+    /** Updates a job while replacing provider failure details only for the terminal failure being recorded. */
+    private static TeacherSourceSyncJobResponse updateJob(
+            TeacherSourceSyncJobResponse job,
+            String status,
+            String phase,
+            String stagingPath,
+            String message,
+            TeacherSourceSyncFailureResponse failure) {
         return new TeacherSourceSyncJobResponse(
                 job.jobId(),
                 job.documentId(),
@@ -1441,7 +2079,8 @@ public class TeacherSourceSyncExecutionService {
                 stagingPath == null ? job.stagingPath() : stagingPath,
                 message,
                 job.createdAt(),
-                Instant.now().toString());
+                Instant.now().toString(),
+                failure);
     }
 
     /**
@@ -1449,6 +2088,10 @@ public class TeacherSourceSyncExecutionService {
      */
     private static String textOrDefault(String value, String defaultValue) {
         return value == null || value.isBlank() ? defaultValue : value.strip();
+    }
+
+    private static String firstNonBlank(String first, String second) {
+        return first == null || first.isBlank() ? second : first.strip();
     }
 
     private static String requireText(String value, String message) {
@@ -1477,6 +2120,10 @@ public class TeacherSourceSyncExecutionService {
             String text,
             List<PendingAsset> assets,
             List<OmmlFormulaExtractor.ExtractedFormula> formulas) {
+    }
+
+    /** Local Markdown image metadata extracted before the block is persisted. */
+    private record ImageReference(String altText, String path) {
     }
 
     private record PendingAsset(String providerAssetId, byte[] content, String mimeType) {

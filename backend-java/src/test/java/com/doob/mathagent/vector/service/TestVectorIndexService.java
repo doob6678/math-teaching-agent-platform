@@ -84,7 +84,11 @@ public final class TestVectorIndexService extends VectorIndexService {
                 nextEmbeddingStatus,
                 nextIndexStatus,
                 document.feishuExportFormat(),
-                document.previewFiles()));
+                document.previewFiles(),
+                document.parseMode(),
+                document.providerRevision(),
+                document.contentChecksum(),
+                document.sourceIdentity()));
         return new VectorIndexRebuildResponse(
                 status,
                 documentId,
@@ -146,6 +150,13 @@ public final class TestVectorIndexService extends VectorIndexService {
     @Override
     public List<Double> rerankTexts(String query, List<String> candidateTexts) {
         return semanticSimilarity(query, candidateTexts);
+    }
+
+    @Override
+    public VectorTextRerankResult rerankTextsWithTrace(String query, List<String> candidateTexts) {
+        return new VectorTextRerankResult(
+                rerankTexts(query, candidateTexts),
+                VectorTextRerankResult.EMBEDDING_FALLBACK);
     }
 
     @Override

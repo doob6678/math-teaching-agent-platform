@@ -20,11 +20,13 @@ public class CapabilityTokenService {
 
     private static final Duration TOKEN_TTL = Duration.ofMinutes(2);
     private static final String TEACHING_SUBMIT_ACTION = "teaching:submit";
+    private static final String TEACHING_RESUME_ACTION = "teaching:resume";
     private static final String TEACHING_TASKS_PATH = "/api/teaching/tasks";
     private static final String TEACHING_HANDOUT_LATEX_EXPORT_ACTION = "teaching-handout:export-latex";
     private static final String TEACHING_HANDOUT_LATEX_PREVIEW_ACTION = "teaching-handout:preview-latex";
     private static final String TEACHING_HANDOUT_PDF_EXPORT_ACTION = "teaching-handout:export-pdf";
     private static final String TEACHING_HANDOUT_PDF_PREVIEW_ACTION = "teaching-handout:preview-pdf";
+    private static final String TEACHING_HANDOUT_UPDATE_ACTION = "teaching-handout:update";
     private static final String TEACHING_HANDOUT_BATCH_ZIP_EXPORT_ACTION = "teaching-handout:batch-export-zip";
     private static final String TEACHING_HANDOUT_BATCH_ZIP_DOWNLOAD_ACTION = "teaching-handout:batch-download-zip";
     private static final String TEACHING_FEEDBACK_SUBMIT_ACTION = "teaching-feedback:submit";
@@ -214,6 +216,10 @@ public class CapabilityTokenService {
             }
             return;
         }
+        if (TEACHING_RESUME_ACTION.equals(action) && isTeachingTaskResumePath(path)) {
+            validateTeachingSubject(subject);
+            return;
+        }
         if (TEACHING_HANDOUT_LATEX_EXPORT_ACTION.equals(action)
                 && isTeachingHandoutPath(path, "/latex")) {
             validateTeachingSubject(subject);
@@ -231,6 +237,11 @@ public class CapabilityTokenService {
         }
         if (TEACHING_HANDOUT_PDF_PREVIEW_ACTION.equals(action)
                 && isTeachingHandoutPath(path, "/pdf/preview")) {
+            validateTeachingSubject(subject);
+            return;
+        }
+        if (TEACHING_HANDOUT_UPDATE_ACTION.equals(action)
+                && isTeachingHandoutVersionUpdatePath(path)) {
             validateTeachingSubject(subject);
             return;
         }
@@ -364,6 +375,21 @@ public class CapabilityTokenService {
                     && "preview".equals(parts[4]));
         }
         return false;
+    }
+
+    /** Allows a capability only for the task-level recovery route, never for arbitrary task paths. */
+    private static boolean isTeachingTaskResumePath(String path) {
+        String[] parts = pathPartsAfterPrefix(path, TEACHING_TASKS_PATH);
+        return parts.length == 2 && hasText(parts[0]) && "resume".equals(parts[1]);
+    }
+
+    /** Validates the mutable version endpoint without allowing legacy export paths to be used for edits. */
+    private static boolean isTeachingHandoutVersionUpdatePath(String path) {
+        String[] parts = pathPartsAfterPrefix(path, TEACHING_TASKS_PATH);
+        return parts.length == 3
+                && hasText(parts[0])
+                && "handout".equals(parts[1])
+                && isHandoutVersion(parts[2]);
     }
 
     /**

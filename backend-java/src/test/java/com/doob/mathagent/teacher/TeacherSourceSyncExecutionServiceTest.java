@@ -14,20 +14,20 @@ import com.doob.mathagent.teacher.service.InMemoryTeacherResourceAssetStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherResourceStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherSourceSyncCheckpointStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherSourceSyncJobStore;
-import com.doob.mathagent.teacher.service.ProcessTeacherFeishuDownloadClient;
-import com.doob.mathagent.teacher.service.TeacherFeishuDownloadClient;
-import com.doob.mathagent.teacher.service.TeacherFeishuDownloadException;
-import com.doob.mathagent.teacher.service.TeacherResourceRegistrationCommand;
+import com.doob.mathagent.teacher.feishu.ProcessTeacherFeishuDownloadClient;
+import com.doob.mathagent.teacher.feishu.TeacherFeishuDownloadClient;
+import com.doob.mathagent.teacher.feishu.TeacherFeishuDownloadException;
+import com.doob.mathagent.teacher.support.TeacherResourceRegistrationCommand;
 import com.doob.mathagent.teacher.service.TeacherResourceAssetService;
 import com.doob.mathagent.teacher.service.TeacherResourceService;
-import com.doob.mathagent.teacher.service.TeacherResourceGraphAlignmentService;
+import com.doob.mathagent.teacher.search.TeacherResourceGraphAlignmentService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncExecutionService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncJobService;
-import com.doob.mathagent.teacher.service.TeacherSourceSyncProperties;
+import com.doob.mathagent.teacher.sync.TeacherSourceSyncProperties;
 import com.doob.mathagent.teacher.service.UnconfiguredTeacherFeishuDownloadClient;
-import com.doob.mathagent.teacher.vo.TeacherDocumentBlockResponse;
+import com.doob.mathagent.teacher.block.TeacherDocumentBlockResponse;
 import com.doob.mathagent.teacher.vo.TeacherResourceAssetResponse;
-import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
+import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncCheckpointResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncJobResponse;
 import com.doob.mathagent.vector.service.VectorHttpResponse;
@@ -74,6 +74,10 @@ class TeacherSourceSyncExecutionServiceTest {
                 Space vectors describe magnitude and direction.
                 ## Dot Product
                 Dot product supports angle and projection problems.
+                ### Three Colors
+                Three-color construction has 24 valid arrangements.
+                ### Four Colors
+                Four-color construction has 48 valid arrangements.
                 """);
         Files.writeString(bank.resolve("exercise.txt"), "Exercise: given vectors a and b, compute a*b.");
         InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
@@ -116,17 +120,18 @@ class TeacherSourceSyncExecutionServiceTest {
 
         assertThat(completed.status()).isEqualTo("completed");
         assertThat(completed.phase()).isEqualTo("parse_completed");
-        assertThat(completed.message()).contains("3 blocks");
+        assertThat(completed.message()).contains("5 blocks");
         TeacherResourceDocumentResponse synced = resourceStore.find("school-a", resource.documentId());
         assertThat(synced.syncStatus()).isEqualTo("synced");
         assertThat(synced.parseStatus()).isEqualTo("parsed");
         assertThat(synced.embeddingStatus()).isEqualTo("ready");
         assertThat(synced.indexStatus()).isEqualTo("ready");
         List<TeacherDocumentBlockResponse> blocks = blockStore.listByDocument("school-a", resource.documentId());
-        assertThat(blocks).hasSize(3);
+        assertThat(blocks).hasSize(5);
         assertThat(blocks).extracting(TeacherDocumentBlockResponse::chapter).contains("Space Vector");
         assertThat(blocks).extracting(TeacherDocumentBlockResponse::normalizedText)
-                .anySatisfy(text -> assertThat(text).contains("Dot product supports angle"));
+                .anySatisfy(text -> assertThat(text).contains("Dot product supports angle"))
+                .anySatisfy(text -> assertThat(text).contains("Three-color construction").doesNotContain("Four-color construction"));
     }
 
     @Test
@@ -277,6 +282,8 @@ class TeacherSourceSyncExecutionServiceTest {
                         URI.create("https://embedding.local/v1/embeddings"),
                         URI.create("http://milvus.local:19530/v2/vectordb/collections/create"),
                         URI.create("http://milvus.local:19530/v2/vectordb/indexes/create"),
+                        // The initial load makes a newly-created collection queryable before the post-upsert reload.
+                        URI.create("http://milvus.local:19530/v2/vectordb/collections/load"),
                         URI.create("http://milvus.local:19530/v2/vectordb/entities/delete"),
                         URI.create("http://milvus.local:19530/v2/vectordb/entities/upsert"),
                         URI.create("http://milvus.local:19530/v2/vectordb/collections/flush"),
@@ -352,7 +359,7 @@ class TeacherSourceSyncExecutionServiceTest {
                 # Space Vector
 
                 ## Dot Product
-                Find a*b for vectors a=(1,2,2), b=(2,0,1)?
+                已知向量 $a=(1,2,2)$，$b=(2,0,1)$，求 $a\\cdot b$ 的值。
                 """);
         InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
         InMemoryTeacherSourceSyncJobStore jobStore = new InMemoryTeacherSourceSyncJobStore();
@@ -411,7 +418,7 @@ class TeacherSourceSyncExecutionServiceTest {
                 .satisfies(block -> {
                     assertThat(block.chapter()).isEqualTo("Space Vector");
                     assertThat(block.section()).isEqualTo("Dot Product");
-                    assertThat(block.normalizedText()).contains("a*b");
+                    assertThat(block.normalizedText()).contains("a\\cdot b");
                 });
         assertThat(imported.importedQuestionCount()).isEqualTo(1);
         assertThat(imported.skippedBlockCount()).isZero();
@@ -421,7 +428,7 @@ class TeacherSourceSyncExecutionServiceTest {
         assertThat(question.sourceBlockId()).isEqualTo(parsedBlocks.getFirst().blockId());
         assertThat(question.sourceChecksum()).isEqualTo(parsedBlocks.getFirst().checksum());
         assertThat(question.knowledgePointIds()).hasSize(1);
-        assertThat(importService.searchQuestions("school-a", "teacher", "teacher-1", "a*b", 10))
+        assertThat(importService.searchQuestions("school-a", "teacher", "teacher-1", "a\\cdot b", 10))
                 .extracting(QuestionBankItemResponse::questionId)
                 .containsExactly(question.questionId());
     }
@@ -632,6 +639,51 @@ class TeacherSourceSyncExecutionServiceTest {
         assertThat(checkpoint.downloadedItemsJson()).contains("downloaded-feishu").contains("\"files\":1");
         assertThat(checkpoint.failedItemsJson()).isEqualTo("[]");
         assertThat(checkpoint.cursorVersion()).isEqualTo(2);
+    }
+
+    @Test
+    void unchangedFeishuResyncRetainsThePreviouslyVerifiedVectorReadiness() throws Exception {
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherSourceSyncJobStore jobStore = new InMemoryTeacherSourceSyncJobStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        InMemoryTeacherSourceSyncCheckpointStore checkpointStore = new InMemoryTeacherSourceSyncCheckpointStore();
+        TeacherResourceService resourceService = TeacherResourceServiceFixture.service(resourceStore);
+        TeacherResourceDocumentResponse resource = resourceService.register(new TeacherResourceRegistrationCommand(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                "feishu",
+                "涂色问题",
+                "https://wiki.feishu.cn/docx/coloring-problem",
+                null,
+                "TEACHER_PRIVATE",
+                "md"));
+        Path savedPath = tempDir.resolve("unchanged-feishu-document");
+        Files.createDirectories(savedPath);
+        Files.writeString(savedPath.resolve("coloring.md"), "# 涂色问题\n\n相邻区域不能使用同一种颜色。");
+        TeacherSourceSyncJobService jobService = new TeacherSourceSyncJobService(resourceStore, jobStore);
+        TeacherSourceSyncExecutionService executionService = new TeacherSourceSyncExecutionService(
+                resourceStore,
+                jobStore,
+                blockStore,
+                new SuccessfulFeishuDownloadClient(savedPath),
+                testSyncProperties(),
+                checkpointStore,
+                TestVectorIndexService.successful(resourceStore, blockStore));
+
+        TeacherSourceSyncJobResponse firstJob = jobService.createSyncJob(
+                "school-a", "teacher", "teacher-1", resource.documentId());
+        executionService.execute("school-a", "teacher", "teacher-1", resource.documentId(), firstJob.jobId());
+        TeacherSourceSyncJobResponse secondJob = jobService.createSyncJob(
+                "school-a", "teacher", "teacher-1", resource.documentId());
+        TeacherSourceSyncJobResponse secondResult = executionService.execute(
+                "school-a", "teacher", "teacher-1", resource.documentId(), secondJob.jobId());
+
+        TeacherResourceDocumentResponse resynced = resourceStore.find("school-a", resource.documentId());
+        assertThat(secondResult.status()).isEqualTo("completed");
+        assertThat(secondResult.phase()).isEqualTo("skipped_unchanged");
+        assertThat(resynced.embeddingStatus()).isEqualTo("ready");
+        assertThat(resynced.indexStatus()).isEqualTo("ready");
     }
 
     @Test
@@ -881,6 +933,74 @@ class TeacherSourceSyncExecutionServiceTest {
                 });
         TeacherResourceAssetResponse asset = assetStore.snapshot().getFirst();
         assertThat(Files.exists(testSyncProperties().assetStorageRoot().resolve(asset.storageKey()))).isTrue();
+    }
+
+    @Test
+    void singleFeishuMarkdownDocumentBindsMaterializedImageToTheOwningBlock() throws Exception {
+        Path savedPath = tempDir.resolve("single-feishu-markdown");
+        Files.createDirectories(savedPath.resolve("_feishu_images"));
+        Files.writeString(
+                savedPath.resolve("coloring.md"),
+                "# 涂色问题\n\n2013年涂色问题如图，行政区域地图如下。\n\n"
+                        + "<img href=\"_feishu_images/map.png\" mime=\"image/png\" src=\"provider-token\"/>\n\n"
+                        // The next paragraph belongs to a later variation.  It must not become part of the map
+                        // question's searchable source window, otherwise a 4-colour asset can be reused for 6 colours.
+                        + "后续的6种颜色变式另作讨论。\n");
+        Files.write(savedPath.resolve("_feishu_images/map.png"), new byte[] {1, 2, 3, 4});
+        String manifest = """
+                [{
+                  "type":"image",
+                  "token":"media-map-1",
+                  "name":"map.png",
+                  "path":"_feishu_images/map.png",
+                  "relativePath":"_feishu_images/map.png",
+                  "providerAssetId":"_feishu_images/map.png",
+                  "mimeType":"image/png",
+                  "assetKind":"image"
+                }]
+                """;
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherSourceSyncJobStore jobStore = new InMemoryTeacherSourceSyncJobStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        InMemoryTeacherResourceAssetStore assetStore = new InMemoryTeacherResourceAssetStore();
+        TeacherResourceService resourceService = TeacherResourceServiceFixture.service(resourceStore);
+        TeacherResourceDocumentResponse resource = resourceService.register(new TeacherResourceRegistrationCommand(
+                "school-a",
+                "teacher",
+                "teacher-1",
+                "feishu",
+                "涂色问题",
+                "https://my.feishu.cn/docx/coloring-problem",
+                null,
+                "TEACHER_PRIVATE",
+                "md"));
+        TeacherSourceSyncJobResponse queued = new TeacherSourceSyncJobService(resourceStore, jobStore).createSyncJob(
+                "school-a", "teacher", "teacher-1", resource.documentId());
+        TeacherSourceSyncExecutionService executionService = new TeacherSourceSyncExecutionService(
+                resourceStore,
+                jobStore,
+                blockStore,
+                new ManifestMarkdownFeishuDownloadClient(savedPath, manifest),
+                testSyncProperties(),
+                new InMemoryTeacherSourceSyncCheckpointStore(),
+                TestVectorIndexService.successful(resourceStore, blockStore),
+                TeacherResourceGraphAlignmentService.disabled(),
+                new TeacherResourceAssetService(assetStore, resourceStore, testSyncProperties()));
+
+        TeacherSourceSyncJobResponse completed = executionService.execute(
+                "school-a", "teacher", "teacher-1", resource.documentId(), queued.jobId());
+
+        assertThat(completed.status()).isEqualTo("completed");
+        assertThat(assetStore.snapshot()).hasSize(1);
+        TeacherResourceAssetResponse asset = assetStore.snapshot().getFirst();
+        assertThat(asset.providerAssetId()).isEqualTo("_feishu_images/map.png");
+        assertThat(blockStore.listByDocument("school-a", resource.documentId()))
+                .anySatisfy(block -> {
+                    assertThat(block.rawText()).contains("行政区域地图");
+                    assertThat(block.rawText()).doesNotContain("6种颜色");
+                    assertThat(block.rawText()).doesNotContain("internal-api-drive-stream");
+                    assertThat(block.imageRefs()).contains(asset.assetId());
+                });
     }
 
     @Test
@@ -1238,6 +1358,40 @@ class TeacherSourceSyncExecutionServiceTest {
         }
     }
 
+    private static final class ManifestMarkdownFeishuDownloadClient implements TeacherFeishuDownloadClient {
+
+        private final Path savedPath;
+        private final String manifest;
+
+        private ManifestMarkdownFeishuDownloadClient(Path savedPath, String manifest) {
+            this.savedPath = savedPath;
+            this.manifest = manifest;
+        }
+
+        @Override
+        public FeishuDownloadResult download(
+                String url,
+                Path stagingRoot,
+                int maxFiles,
+                String fileExtension,
+                FeishuDownloadCheckpoint checkpoint) {
+            return new FeishuDownloadResult(
+                    savedPath,
+                    1,
+                    0,
+                    0,
+                    "Downloaded 1 Feishu document with materialized image",
+                    new FeishuDownloadCheckpoint(
+                            "",
+                            "coloring.md",
+                            "",
+                            "[]",
+                            manifest),
+                    manifest,
+                    "[]");
+        }
+    }
+
     private static final class FailingWithCheckpointFeishuDownloadClient implements TeacherFeishuDownloadClient {
 
         @Override
@@ -1289,3 +1443,4 @@ class TeacherSourceSyncExecutionServiceTest {
         }
     }
 }
+

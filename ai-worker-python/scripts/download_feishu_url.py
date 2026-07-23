@@ -1,4 +1,5 @@
 import argparse
+import html
 import hashlib
 import json
 import mimetypes
@@ -7,6 +8,7 @@ import re
 import sys
 import time
 import urllib.parse
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -16,6 +18,86 @@ import requests
 DEFAULT_TIMEOUT_SECONDS = 30
 EXPORTABLE_TYPES = {"docx"}
 DIRECT_DOWNLOAD_TYPES = {"file"}
+
+# Feishu's Markdown export can contain signed ``internal-api-drive-stream`` URLs.  Those URLs are short-lived and
+# cannot be sent to Java/AI callers safely, so we materialize every image into the owner-scoped staging directory.
+MARKDOWN_IMAGE_PATTERN = re.compile(r"!\[[^\]]*\]\(\s*(?:<([^>]+)>|([^\s)]+))(?:\s+[^)]*)?\s*\)", re.IGNORECASE)
+# Feishu's docs/v1/content response has historically emitted both ``src`` and ``href`` image attributes.
+# Parse the complete tag first, then inspect either attribute so attribute order and additional metadata do not
+# affect extraction.  Keeping this separate from the Markdown pattern also prevents links in surrounding HTML from
+# being mistaken for images.
+HTML_IMAGE_TAG_PATTERN = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
+HTML_IMAGE_ATTRIBUTE_PATTERN = re.compile(
+    r"\b(?:src|href)\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s>\"']+))",
+    re.IGNORECASE,
+)
+
+
+class _FeishuMarkupNormalizer(HTMLParser):
+    """Converts Feishu's XML export into line-oriented Markdown-compatible text.
+
+    The docs_ai endpoint returns rich XML as one long string.  The Java source parser works on logical lines, so
+    this small standard-library parser keeps headings and image tags on their own lines while retaining every text
+    and formula datum.  Image tags are deliberately emitted unchanged; the authenticated asset pass rewrites only
+    their signed URL afterwards.
+    """
+
+    _BLOCK_TAGS = {"p", "blockquote", "callout", "title", "ul", "ol", "li", "h1", "h2", "h3", "h4", "h5", "h6"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: List[str] = []
+
+    def _newline(self) -> None:
+        if not self.parts or not self.parts[-1].endswith("\n"):
+            self.parts.append("\n")
+
+    def handle_starttag(self, tag: str, attrs: List[Tuple[str, Optional[str]]]) -> None:
+        normalized_tag = tag.lower()
+        if normalized_tag.startswith("h") and len(normalized_tag) == 2 and normalized_tag[1].isdigit():
+            self._newline()
+            self.parts.append("#" * int(normalized_tag[1]) + " ")
+        elif normalized_tag in self._BLOCK_TAGS:
+            self._newline()
+        elif normalized_tag == "img":
+            self._newline()
+            self.parts.append(self.get_starttag_text() or "<img>")
+            self._newline()
+        elif normalized_tag in {"br", "hr"}:
+            self._newline()
+            if normalized_tag == "hr":
+                self.parts.append("---")
+            self._newline()
+
+    def handle_startendtag(self, tag: str, attrs: List[Tuple[str, Optional[str]]]) -> None:
+        self.handle_starttag(tag, attrs)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() in self._BLOCK_TAGS:
+            self._newline()
+
+    def handle_data(self, data: str) -> None:
+        if data:
+            self.parts.append(data)
+
+
+def normalize_feishu_document_markup(content: str) -> str:
+    """Makes docs_ai XML line-oriented without dropping image or formula content."""
+    if not content or "<" not in content:
+        return content
+    parser = _FeishuMarkupNormalizer()
+    try:
+        parser.feed(content)
+        parser.close()
+    except Exception:
+        # Keep the original payload for the existing fallback parser when a provider adds unknown malformed markup.
+        return content
+    normalized = "".join(parser.parts).replace("\r\n", "\n").replace("\r", "\n")
+    return normalized.strip() + "\n" if normalized.strip() else ""
+
+
+class FeishuHttpError(RuntimeError):
+    """HTTP-level Feishu failure whose JSON provider payload must survive the process boundary."""
 
 
 def mask_secret(secret: str) -> str:
@@ -218,8 +300,16 @@ class FeishuClient:
             stream=stream,
             timeout=self.timeout_seconds,
         )
-        response.raise_for_status()
         response.encoding = "utf-8"
+        if not response.ok:
+            # requests.raise_for_status() discards the structured Feishu code/body that an administrator needs to
+            # authorize the app. Keep the provider payload in the exception without exposing credentials.
+            try:
+                provider_body = response.json()
+                detail = json.dumps(provider_body, ensure_ascii=False, separators=(",", ":"))
+            except ValueError:
+                detail = response.text.strip()
+            raise FeishuHttpError(f"Feishu HTTP {response.status_code}: {detail}")
         return response
 
     def get_tenant_access_token(self) -> str:
@@ -340,6 +430,31 @@ class FeishuClient:
         return response.content, filename, len(response.content)
 
     def download_docx_markdown(self, document_token: str) -> Tuple[bytes, str, int]:
+        # The v2 document fetch API is the only Feishu content endpoint that preserves image blocks as signed
+        # `<img href="...">` nodes. Prefer it for Markdown materialization so the subsequent asset pass can
+        # download every real image; older docs/v1 endpoints silently flatten those nodes to empty paragraphs.
+        try:
+            data = self.api_json(
+                "POST",
+                f"https://open.feishu.cn/open-apis/docs_ai/v1/documents/{urllib.parse.quote(document_token)}/fetch",
+                json_body={
+                    "export_option": {
+                        "export_block_id": False,
+                        "export_cite_extra_data": False,
+                        "export_style_attrs": False,
+                    },
+                    "format": "xml",
+                },
+            )
+            content = self.extract_content_text(data)
+            if content:
+                encoded = content.encode("utf-8")
+                return encoded, f"{document_token}.md", len(encoded)
+        except Exception as exc:
+            ai_fetch_error = exc
+        else:
+            ai_fetch_error = RuntimeError("docs_ai/v1/fetch returned empty content")
+
         try:
             data = self.api_json(
                 "GET",
@@ -365,8 +480,186 @@ class FeishuClient:
                 encoded = content.encode("utf-8")
                 return encoded, f"{document_token}.md", len(encoded)
         except Exception as exc:
-            raise RuntimeError(f"Feishu markdown download failed: {first_error}; raw_content failed: {exc}") from exc
+            raise RuntimeError(
+                f"Feishu markdown download failed: docs_ai={ai_fetch_error}; docs_v1={first_error}; raw_content={exc}"
+            ) from exc
         raise RuntimeError(f"Feishu markdown download failed: {first_error}; raw_content returned empty content")
+
+    def download_docx_markdown_with_assets(
+        self,
+        document_token: str,
+        output_dir: Path,
+    ) -> Tuple[bytes, str, int, List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """Downloads one document and replaces signed Markdown image URLs with local assets.
+
+        The document body and image binaries are fetched with the same tenant credential.  A failed image is
+        returned as an item-level failure instead of being silently left as an expired provider URL; Java then
+        keeps the source out of the ``ready`` state and exposes the exact failed item in the sync checkpoint.
+        """
+        content, suggested_name, _ = self.download_docx_markdown(document_token)
+        # docs_ai returns XML in one long line; normalize its block structure before the Java parser scans local
+        # files, while preserving image tags for the authenticated materialization pass below.
+        markdown = normalize_feishu_document_markup(content.decode("utf-8", errors="replace"))
+        normalized, manifests, failures = self.materialize_markdown_images(
+            document_token,
+            markdown,
+            output_dir,
+        )
+        encoded = normalized.encode("utf-8")
+        return encoded, suggested_name, len(encoded), manifests, failures
+
+    def materialize_markdown_images(
+        self,
+        document_token: str,
+        markdown: str,
+        output_dir: Path,
+    ) -> Tuple[str, List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """Materializes Markdown/HTML images and returns a provider-neutral manifest.
+
+        The direct URL is attempted first because it preserves the exact image represented by the export.  If a
+        signed stream URL has expired, the document block API is consulted and the corresponding media token is
+        downloaded with the same authenticated Feishu client.  No image URL or provider token is emitted in the
+        rewritten Markdown; only a safe relative path remains for the Java parser.
+        """
+        references = markdown_image_references(markdown)
+        if not references:
+            return markdown, [], []
+        image_tokens = self.list_document_image_tokens(document_token)
+        asset_dir = output_dir / "_feishu_images"
+        manifests: List[Dict[str, Any]] = []
+        failures: List[Dict[str, Any]] = []
+        rewritten = markdown
+        token_index = 0
+        replacements: Dict[str, str] = {}
+        for index, reference in enumerate(references, start=1):
+            source_url = reference["url"]
+            if source_url in replacements:
+                continue
+            try:
+                payload, name, mime_type = self.download_embedded_image(source_url)
+            except Exception as direct_error:
+                # A signed stream URL may be expired.  The block API gives us the durable media token for the
+                # same document, which still honours the tenant app's real Feishu permissions.
+                if token_index >= len(image_tokens):
+                    failures.append({
+                        "type": "image",
+                        "token": source_url,
+                        "name": source_url,
+                        "path": reference["url"],
+                        "message": str(direct_error),
+                    })
+                    continue
+                media_token = image_tokens[token_index]
+                token_index += 1
+                try:
+                    payload, name, mime_type = self.download_media(media_token)
+                except Exception as media_error:
+                    failures.append({
+                        "type": "image",
+                        "token": media_token,
+                        "name": source_url,
+                        "path": reference["url"],
+                        "message": f"signed URL failed: {direct_error}; media token failed: {media_error}",
+                    })
+                    continue
+            target_name = safe_image_filename(name, index, mime_type)
+            target = save_bytes(payload, asset_dir, target_name)
+            relative_path = target.relative_to(output_dir).as_posix()
+            provider_token = image_tokens[token_index - 1] if token_index > 0 else source_url
+            manifest = file_manifest(
+                target,
+                output_dir,
+                item_type="image",
+                token=provider_token,
+                name=target.name,
+                item_path=relative_path,
+                asset_kind="image",
+                provider_asset_id=relative_path,
+            )
+            manifests.append(manifest)
+            replacements[source_url] = relative_path
+        for source_url, relative_path in replacements.items():
+            rewritten = rewritten.replace(source_url, relative_path)
+            # HTML attributes may encode query separators (for example ``&amp;``).  The downloader uses the
+            # decoded URL for the authenticated request, so replace its encoded spelling as well to guarantee no
+            # provider URL survives in the normalized document.
+            rewritten = rewritten.replace(html.escape(source_url, quote=False), relative_path)
+        return rewritten, manifests, failures
+
+    def download_embedded_image(self, image_url: str) -> Tuple[bytes, str, str]:
+        """Downloads a provider image URL with the tenant authorization header."""
+        normalized = urllib.parse.urljoin("https://open.feishu.cn", str(image_url or "").strip())
+        response = self.request("GET", normalized)
+        mime_type = str(response.headers.get("Content-Type", "") or "").split(";", 1)[0].strip()
+        name = parse_content_disposition_filename(response.headers.get("Content-Disposition", ""), "image")
+        return response.content, name, mime_type or "application/octet-stream"
+
+    def list_document_image_tokens(self, document_token: str) -> List[str]:
+        """Reads durable image block tokens for a single document, preserving provider order."""
+        tokens: List[str] = []
+        page_token = ""
+        while True:
+            try:
+                params: Dict[str, Any] = {"document_revision_id": "-1", "page_size": 500}
+                if page_token:
+                    params["page_token"] = page_token
+                data = self.api_json(
+                    "GET",
+                    f"https://open.feishu.cn/open-apis/docx/v1/documents/{urllib.parse.quote(document_token)}/blocks",
+                    params=params,
+                )
+            except Exception:
+                return tokens
+            raw_items = data.get("items", [])
+            if isinstance(raw_items, list):
+                for item in raw_items:
+                    if not isinstance(item, dict):
+                        continue
+                    try:
+                        block_type = int(item.get("block_type", 0) or 0)
+                    except (TypeError, ValueError):
+                        block_type = 0
+                    if block_type != 27:
+                        continue
+                    image = item.get("image", {})
+                    if not isinstance(image, dict):
+                        continue
+                    token = str(image.get("token", "") or image.get("file_token", "") or "").strip()
+                    if token and token not in tokens:
+                        tokens.append(token)
+            next_page_token = str(data.get("page_token", "") or data.get("next_page_token", "") or "").strip()
+            if not bool(data.get("has_more")) or not next_page_token or next_page_token == page_token:
+                break
+            page_token = next_page_token
+        return tokens
+
+    def download_media(self, media_token: str) -> Tuple[bytes, str, str]:
+        """Downloads a durable Feishu media token using the authenticated Drive API."""
+        url = f"https://open.feishu.cn/open-apis/drive/v1/medias/{urllib.parse.quote(media_token)}/download"
+        response = self.request("GET", url)
+        mime_type = str(response.headers.get("Content-Type", "") or "").split(";", 1)[0].strip()
+        name = parse_content_disposition_filename(response.headers.get("Content-Disposition", ""), media_token)
+        return response.content, name, mime_type or "application/octet-stream"
+
+    def get_docx_sync_metadata(self, document_token: str) -> Dict[str, str]:
+        """Returns provider-owned title/revision values without deriving them from filenames or local timestamps."""
+        data = self.api_json(
+            "GET",
+            f"https://open.feishu.cn/open-apis/docx/v1/documents/{urllib.parse.quote(document_token)}",
+        )
+        document = data.get("document", data)
+        if not isinstance(document, dict):
+            return {}
+        title = str(document.get("title", "") or data.get("title", "") or "").strip()
+        revision = str(
+            document.get("revision_id", "")
+            or document.get("revision", "")
+            or document.get("version", "")
+            or data.get("revision_id", "")
+            or data.get("revision", "")
+            or ""
+        ).strip()
+        return {"title": title, "revision": revision}
 
     @staticmethod
     def extract_content_text(data: Dict[str, Any]) -> str:
@@ -412,6 +705,9 @@ def file_manifest(
     name: str,
     item_path: str,
     asset_kind: str,
+    provider_title: str = "",
+    provider_revision: str = "",
+    provider_asset_id: str = "",
 ) -> Dict[str, Any]:
     try:
         relative_path = target.relative_to(base_dir).as_posix()
@@ -429,7 +725,47 @@ def file_manifest(
         "mimeType": mime_type or "application/octet-stream",
         "sizeBytes": len(content),
         "assetKind": asset_kind,
+        "providerTitle": provider_title,
+        "providerRevision": provider_revision,
+        "providerAssetId": provider_asset_id,
     }
+
+
+def markdown_image_references(markdown: str) -> List[Dict[str, str]]:
+    """Returns unique Markdown/HTML image references in source order.
+
+    Feishu may return image blocks as ``<img href="...">`` instead of Markdown or ``src``.  The parser therefore
+    scans complete image tags and accepts both provider spellings, while unescaping HTML entities before download.
+    """
+    references: List[Dict[str, str]] = []
+    seen: set[str] = set()
+    located: List[Tuple[int, str]] = []
+    for match in MARKDOWN_IMAGE_PATTERN.finditer(markdown or ""):
+        url = str(match.group(1) or match.group(2) or "").strip()
+        if url:
+            located.append((match.start(), url))
+    for tag in HTML_IMAGE_TAG_PATTERN.finditer(markdown or ""):
+        for attribute in HTML_IMAGE_ATTRIBUTE_PATTERN.finditer(tag.group(0)):
+            url = str(attribute.group(1) or attribute.group(2) or attribute.group(3) or "").strip()
+            if url:
+                located.append((tag.start(), url))
+                break
+    for _, raw_url in sorted(located, key=lambda item: item[0]):
+        url = html.unescape(raw_url).strip()
+        if url and url not in seen and not url.lower().startswith("data:"):
+            seen.add(url)
+            references.append({"url": url})
+    return references
+
+
+def safe_image_filename(name: str, index: int, mime_type: str) -> str:
+    """Creates a deterministic, path-safe image filename while retaining the provider extension when available."""
+    candidate = sanitize_name(name, f"image-{index}")
+    suffix = Path(candidate).suffix.lower()
+    if not suffix or len(suffix) > 8:
+        guessed = mimetypes.guess_extension(str(mime_type or "").split(";", 1)[0].strip()) or ".bin"
+        candidate = f"{Path(candidate).stem}{guessed}"
+    return candidate
 
 
 def load_resume_checkpoint(checkpoint_path: str = "") -> Dict[str, Any]:
@@ -473,6 +809,19 @@ def path_to_dir(output_base: Path, path_text: str, fallback: Path) -> Path:
     return output_base.joinpath(*cleaned) if cleaned else fallback
 
 
+def download_markdown_document(
+    client: Any,
+    document_token: str,
+    output_dir: Path,
+) -> Tuple[bytes, str, int, List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Uses image-aware download when the real client supports it while preserving old client test doubles."""
+    enhanced = getattr(client, "download_docx_markdown_with_assets", None)
+    if callable(enhanced):
+        return enhanced(document_token, output_dir)
+    content, suggested_name, size = client.download_docx_markdown(document_token)
+    return content, suggested_name, size, [], []
+
+
 def download_folder(
     client: FeishuClient,
     folder_token: str,
@@ -488,7 +837,15 @@ def download_folder(
     meta = client.get_folder_meta(folder_token)
     resolved_folder_name = folder_name or str(meta.get("name", "") or folder_token)
     root_dir = output_base / sanitize_name(resolved_folder_name)
-    counters = stats if stats is not None else {"folders": 0, "files": 0, "skipped": 0, "failed": 0, "limit_reached": 0}
+    counters = stats if stats is not None else {
+        "folders": 0,
+        "files": 0,
+        "assets": 0,
+        "skipped": 0,
+        "failed": 0,
+        "limit_reached": 0,
+    }
+    counters.setdefault("assets", 0)
     checkpoint = resume_checkpoint or {}
     visited_folder_tokens = [str(token) for token in list_field(checkpoint.get("visited_folder_tokens")) if str(token)]
     visited_set = set(visited_folder_tokens)
@@ -557,7 +914,12 @@ def download_folder(
                 try:
                     if item_type in EXPORTABLE_TYPES:
                         if file_extension == "md":
-                            content, suggested_name, _ = client.download_docx_markdown(item_token)
+                            content, suggested_name, _, image_items, image_failures = download_markdown_document(
+                                client, item_token, current_dir)
+                            downloaded_items.extend(image_items)
+                            counters["assets"] += len(image_items)
+                            failed_items.extend(image_failures)
+                            counters["failed"] += len(image_failures)
                         else:
                             content, suggested_name, _ = client.export_docx(item_token, file_extension)
                         target_name = f"{item_name}.{file_extension}" if not suggested_name.lower().endswith(f".{file_extension}") else suggested_name
@@ -647,8 +1009,17 @@ def download_from_url(
         )
         return {**parsed, **folder_result, "max_files": max_files}
     if resource_type == "docx":
+        # Metadata is read from the same real cloud document. A metadata endpoint failure must not be hidden: it is
+        # reported in the summary while the independently successful export remains usable for body fingerprints.
+        provider_metadata: Dict[str, str] = {}
+        provider_metadata_error = ""
+        try:
+            provider_metadata = client.get_docx_sync_metadata(token)
+        except Exception as exc:
+            provider_metadata_error = str(exc)
         if file_extension == "md":
-            content, suggested_name, size = client.download_docx_markdown(token)
+            content, suggested_name, size, image_items, image_failures = download_markdown_document(
+                client, token, output_dir)
         else:
             content, suggested_name, size = client.export_docx(token, file_extension)
         target = save_bytes(content, output_dir, suggested_name or f"{token}.{file_extension}")
@@ -659,21 +1030,35 @@ def download_from_url(
             token=token,
             name=target.name,
             item_path=target.name,
-            asset_kind="document")
+            asset_kind="document",
+            provider_title=provider_metadata.get("title", ""),
+            provider_revision=provider_metadata.get("revision", ""))
         return {
             **parsed,
             "saved_path": str(target),
             "file_size": size,
             "file_extension": file_extension,
-            "stats": {"folders": 0, "files": 1, "skipped": 0, "failed": 0, "limit_reached": 0},
+            "stats": {
+                "folders": 0,
+                "files": 1,
+                "assets": len(image_items),
+                "skipped": 0,
+                "failed": len(image_failures),
+                "limit_reached": 0,
+            },
             "checkpoint": {
                 "current_folder_token": "",
                 "page_token": "",
                 "current_path": target.name,
                 "visited_folder_tokens": [],
-                "downloaded_items": [downloaded_item],
+                "downloaded_items": [downloaded_item, *image_items],
             },
-            "failed_items": [],
+            "failed_items": image_failures,
+            "provider": {
+                "title": provider_metadata.get("title", ""),
+                "revision": provider_metadata.get("revision", ""),
+                "metadata_error": provider_metadata_error,
+            },
         }
     if resource_type == "file":
         content, suggested_name, size = client.download_file(token)

@@ -20,8 +20,10 @@ function Invoke-Json {
         Headers = $Headers
     }
     if ($null -ne $Body) {
-        $parameters["ContentType"] = "application/json"
-        $parameters["Body"] = ($Body | ConvertTo-Json -Depth 20 -Compress)
+        # Keep capability payloads UTF-8 on Windows so non-ASCII resource titles and paths hash and parse identically.
+        $json = $Body | ConvertTo-Json -Depth 20 -Compress
+        $parameters["ContentType"] = "application/json; charset=utf-8"
+        $parameters["Body"] = [System.Text.Encoding]::UTF8.GetBytes($json)
     }
     Invoke-RestMethod @parameters
 }

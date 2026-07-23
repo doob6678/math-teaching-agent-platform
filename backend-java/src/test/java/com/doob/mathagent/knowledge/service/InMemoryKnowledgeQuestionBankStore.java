@@ -101,6 +101,21 @@ public class InMemoryKnowledgeQuestionBankStore implements KnowledgeQuestionBank
         return archived;
     }
 
+    /** Mirrors production's non-destructive replacement behaviour for parser upgrades. */
+    @Override
+    public boolean archiveQuestion(String tenantId, String questionId) {
+        QuestionBankItemRecord existing = questions.get(questionId);
+        if (existing == null || !existing.tenantId().equals(tenantId) || !"active".equals(existing.status())) {
+            return false;
+        }
+        questions.put(questionId, new QuestionBankItemRecord(
+                existing.questionId(), existing.tenantId(), existing.ownerSubjectId(), existing.permissionScope(),
+                existing.questionTitle(), existing.questionText(), existing.answerJson(), existing.difficulty(),
+                "archived", existing.sourceResourceDocumentId(), existing.sourceBlockId(), existing.sourceChecksum(),
+                existing.knowledgePointIds()));
+        return true;
+    }
+
     @Override
     public List<KnowledgePointRecord> listKnowledgePoints(String tenantId, String viewerRole, String viewerSubjectId) {
         return knowledgePoints.values().stream()

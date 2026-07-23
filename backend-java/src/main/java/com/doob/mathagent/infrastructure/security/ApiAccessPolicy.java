@@ -51,9 +51,18 @@ public class ApiAccessPolicy {
                 new ApiAccessRule("/api/knowledge/relations", ApiAccessLevel.ADMIN, Set.of("teacher", "admin"), 0, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/vector-index/status", ApiAccessLevel.ADMIN, Set.of("teacher", "admin"), 0, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/vector-index/teacher-resources", ApiAccessLevel.ADMIN, Set.of("teacher", "admin"), 5, Duration.ofMinutes(1)),
+                new ApiAccessRule("/api/teacher/resources/image-search", ApiAccessLevel.ADMIN, Set.of("teacher", "admin"), 20, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/question-bank/import/teacher-resources", ApiAccessLevel.ADMIN, Set.of("teacher", "admin"), 0, Duration.ofMinutes(1)),
-                new ApiAccessRule("/api/question-bank/items", ApiAccessLevel.ADMIN, Set.of("teacher", "admin"), 0, Duration.ofMinutes(1)),
+                /*
+                 * The collection endpoint serves both the teacher management UI and the student's read-only
+                 * question browser.  POST writes remain protected by the controller capability token and service
+                 * role checks, while GET visibility is narrowed by the tenant-aware store query.
+                 */
+                new ApiAccessRule("/api/question-bank/items", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 0, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/agents/model-catalog", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 0, Duration.ofMinutes(1)),
+                new ApiAccessRule("/api/agents/registry", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 0, Duration.ofMinutes(1)),
+                new ApiAccessRule("/api/agents/workers", ApiAccessLevel.ADMIN, Set.of("teacher", "admin"), 0, Duration.ofMinutes(1)),
+                new ApiAccessRule("/api/agents/knowledge-retrieval", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 20, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/agents/model-health", ApiAccessLevel.ADMIN, Set.of("teacher", "admin"), 0, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/agents/traces", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 0, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/agents/execute", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 20, Duration.ofMinutes(1)),

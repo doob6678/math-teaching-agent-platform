@@ -8,6 +8,7 @@ import java.time.LocalDateTime;
 public record StudentExplanationHistorySummary(
         String explanationId,
         String conversationId,
+        String title,
         String tenantId,
         String subjectType,
         String subjectId,

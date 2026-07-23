@@ -1,9 +1,9 @@
 package com.doob.mathagent.teacher;
 
 import com.doob.mathagent.teacher.service.InMemoryTeacherDocumentBlockStore;
-import com.doob.mathagent.teacher.service.TeacherDocumentBlockStore;
+import com.doob.mathagent.teacher.block.TeacherDocumentBlockStore;
 import com.doob.mathagent.teacher.service.TeacherResourceService;
-import com.doob.mathagent.teacher.service.TeacherResourceStore;
+import com.doob.mathagent.teacher.document.TeacherResourceStore;
 import com.doob.mathagent.vector.service.TestVectorIndexService;
 
 public final class TeacherResourceServiceFixture {
@@ -23,3 +23,4 @@ public final class TeacherResourceServiceFixture {
                 TestVectorIndexService.successful(resourceStore, blockStore));
     }
 }
+

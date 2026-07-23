@@ -8,6 +8,7 @@ import com.doob.mathagent.teacher.search.audit.TeacherResourceBlockSearchAuditEv
 import com.doob.mathagent.teacher.search.audit.TeacherResourceBlockSearchAuditLookup;
 import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService;
 import com.doob.mathagent.teacher.support.TeacherResourceRegistrationCommand;
+import com.doob.mathagent.teacher.support.TeacherResourceSourceTypePolicy;
 import com.doob.mathagent.teacher.search.TeacherResourceSearchFilter;
 import com.doob.mathagent.teacher.service.TeacherResourceService;
 import com.doob.mathagent.teacher.service.TeacherResourceAssetService;
@@ -15,6 +16,9 @@ import com.doob.mathagent.teacher.support.TeacherResourceTitleResolver;
 import com.doob.mathagent.teacher.block.TeacherDocumentBlockStore;
 import com.doob.mathagent.teacher.service.TeacherResourceUploadService;
 import com.doob.mathagent.teacher.sync.TeacherSourceSyncCheckpointQueryService;
+import com.doob.mathagent.teacher.sync.mq.SynchronousTeacherSourceSyncCommandDispatcher;
+import com.doob.mathagent.teacher.sync.mq.TeacherSourceSyncCommand;
+import com.doob.mathagent.teacher.sync.mq.TeacherSourceSyncCommandDispatcher;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncExecutionService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncJobService;
 import com.doob.mathagent.teacher.block.TeacherDocumentBlockResponse;
@@ -22,8 +26,10 @@ import com.doob.mathagent.teacher.search.TeacherResourceBlockSearchResponse;
 import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncCheckpointResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncJobResponse;
+import com.doob.mathagent.vector.service.TeacherResourceImageClipSearchRequest;
+import com.doob.mathagent.vector.service.TeacherResourceImageClipSearchResponse;
+import com.doob.mathagent.vector.service.TeacherResourceImageClipService;
 import jakarta.servlet.http.HttpServletRequest;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -61,12 +67,14 @@ public class TeacherResourceController {
     private final TeacherResourceService teacherResourceService;
     private final TeacherSourceSyncJobService syncJobService;
     private final TeacherSourceSyncExecutionService syncExecutionService;
+    private final TeacherSourceSyncCommandDispatcher syncCommandDispatcher;
     private final TeacherResourceBlockSearchService blockSearchService;
     private final TeacherResourceBlockSearchAuditLookup blockSearchAuditLookup;
     private final TeacherSourceSyncCheckpointQueryService checkpointQueryService;
     private final TeacherDocumentBlockStore blockStore;
     private final TeacherResourceAssetService assetService;
     private final TeacherResourceUploadService uploadService;
+    private final TeacherResourceImageClipService imageClipService;
     private final RequestSubjectResolver subjectResolver;
     private final TeacherResourceCapabilityVerifier capabilityVerifier;
 
@@ -90,17 +98,22 @@ public class TeacherResourceController {
                 teacherResourceService,
                 syncJobService,
                 syncExecutionService,
+                new SynchronousTeacherSourceSyncCommandDispatcher(syncExecutionService),
                 blockSearchService,
                 blockSearchAuditLookup,
                 checkpointQueryService,
                 blockStore,
                 TeacherResourceAssetService.disabled(),
                 TeacherResourceUploadService.disabled(),
+                null,
                 subjectResolver,
                 capabilityVerifier);
     }
 
-    @Autowired
+    /**
+     * Compatibility constructor for focused controller tests and callers that execute work in-process.
+     * Production component wiring selects the overload below and injects the RabbitMQ dispatcher.
+     */
     public TeacherResourceController(
             TeacherResourceService teacherResourceService,
             TeacherSourceSyncJobService syncJobService,
@@ -113,15 +126,48 @@ public class TeacherResourceController {
             TeacherResourceUploadService uploadService,
             RequestSubjectResolver subjectResolver,
             TeacherResourceCapabilityVerifier capabilityVerifier) {
+        this(
+                teacherResourceService,
+                syncJobService,
+                syncExecutionService,
+                new SynchronousTeacherSourceSyncCommandDispatcher(syncExecutionService),
+                blockSearchService,
+                blockSearchAuditLookup,
+                checkpointQueryService,
+                blockStore,
+                assetService,
+                uploadService,
+                null,
+                subjectResolver,
+                capabilityVerifier);
+    }
+
+    @Autowired
+    public TeacherResourceController(
+            TeacherResourceService teacherResourceService,
+            TeacherSourceSyncJobService syncJobService,
+            TeacherSourceSyncExecutionService syncExecutionService,
+            TeacherSourceSyncCommandDispatcher syncCommandDispatcher,
+            TeacherResourceBlockSearchService blockSearchService,
+            TeacherResourceBlockSearchAuditLookup blockSearchAuditLookup,
+            TeacherSourceSyncCheckpointQueryService checkpointQueryService,
+            TeacherDocumentBlockStore blockStore,
+            TeacherResourceAssetService assetService,
+            TeacherResourceUploadService uploadService,
+            TeacherResourceImageClipService imageClipService,
+            RequestSubjectResolver subjectResolver,
+            TeacherResourceCapabilityVerifier capabilityVerifier) {
         this.teacherResourceService = Objects.requireNonNull(teacherResourceService, "teacherResourceService");
         this.syncJobService = Objects.requireNonNull(syncJobService, "syncJobService");
         this.syncExecutionService = Objects.requireNonNull(syncExecutionService, "syncExecutionService");
+        this.syncCommandDispatcher = Objects.requireNonNull(syncCommandDispatcher, "syncCommandDispatcher");
         this.blockSearchService = Objects.requireNonNull(blockSearchService, "blockSearchService");
         this.blockSearchAuditLookup = Objects.requireNonNull(blockSearchAuditLookup, "blockSearchAuditLookup");
         this.checkpointQueryService = Objects.requireNonNull(checkpointQueryService, "checkpointQueryService");
         this.blockStore = Objects.requireNonNull(blockStore, "blockStore");
         this.assetService = Objects.requireNonNull(assetService, "assetService");
         this.uploadService = Objects.requireNonNull(uploadService, "uploadService");
+        this.imageClipService = imageClipService;
         this.subjectResolver = Objects.requireNonNull(subjectResolver, "subjectResolver");
         this.capabilityVerifier = Objects.requireNonNull(capabilityVerifier, "capabilityVerifier");
     }
@@ -176,7 +222,7 @@ public class TeacherResourceController {
         }
         try {
             RequestSubject normalized = subject.normalize();
-            String normalizedSourceType = sourceType == null || sourceType.isBlank() ? "local_path" : sourceType.strip();
+            String normalizedSourceType = TeacherResourceSourceTypePolicy.normalizeForRegistration(sourceType);
             if ("feishu".equalsIgnoreCase(normalizedSourceType)) {
                 throw new IllegalArgumentException("Upload endpoint does not accept feishu sourceType; use register with originalUrl instead");
             }
@@ -220,6 +266,10 @@ public class TeacherResourceController {
     /**
      * Searches parsed blocks from teacher-managed resources visible to the backend subject.
      *
+     * <p>The search API now accepts only logical {@code library} selectors. Raw {@code sourceType} remains document
+     * metadata for ingestion/debugging, but it is no longer exposed as a retrieval filter because mixing storage
+     * implementation names with retrieval libraries made AI callers leak across QQ/Feishu/mock/textbook boundaries.</p>
+     *
      * @param query search query
      * @param limit maximum hit count
      * @param httpRequest HTTP request containing backend session
@@ -231,7 +281,6 @@ public class TeacherResourceController {
             @RequestParam(defaultValue = "10") int limit,
             @RequestParam(value = "permissionScope", required = false) List<String> permissionScopes,
             @RequestParam(value = "documentId", required = false) List<String> documentIds,
-            @RequestParam(value = "sourceType", required = false) List<String> sourceTypes,
             @RequestParam(value = "library", required = false) List<String> libraries,
             @RequestParam(value = "tag", required = false) List<String> tags,
             HttpServletRequest httpRequest) {
@@ -247,10 +296,35 @@ public class TeacherResourceController {
                     TeacherResourceSearchFilter.of(
                             permissionScopes,
                             documentIds,
-                            mergeLibrarySelectors(sourceTypes, libraries),
+                            libraries,
                             tags));
         } catch (IllegalArgumentException exception) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, exception.getMessage(), exception);
+        }
+    }
+
+    /**
+     * Searches only rendered teacher-resource page assets through the private CLIP collection.  The request image is
+     * a data URI supplied by the browser; no local path is accepted, so the backend remains the only file boundary.
+     */
+    @PostMapping("/api/teacher/resources/image-search")
+    public TeacherResourceImageClipSearchResponse searchImages(
+            @RequestBody TeacherResourceImageClipSearchRequest request,
+            HttpServletRequest httpRequest) {
+        if (imageClipService == null) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Teacher image CLIP is not configured");
+        }
+        RequestSubject subject = subjectResolver.resolve(httpRequest).normalize();
+        if (!"teacher".equals(subject.subjectType()) && !"admin".equals(subject.subjectType())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Teacher image CLIP requires teacher or admin role");
+        }
+        try {
+            TeacherResourceImageClipSearchRequest normalized = request == null
+                    ? new TeacherResourceImageClipSearchRequest(null, null, 10, List.of()) : request;
+            return imageClipService.search(subject.tenantId(), subject.subjectType(), subject.subjectId(),
+                    normalized.query(), normalized.image(), normalized.normalizedLimit(), normalized.documentIds());
+        } catch (IllegalArgumentException exception) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, exception.getMessage(), exception);
         }
     }
 
@@ -261,31 +335,7 @@ public class TeacherResourceController {
             String query,
             int limit,
             HttpServletRequest httpRequest) {
-        return searchBlocks(query, limit, null, null, null, null, null, httpRequest);
-    }
-
-    /**
-     * Accepts both legacy sourceType selectors and the clearer library alias. Both ultimately route into the same
-     * logical-library resolver so existing clients keep working while AI callers can express intent with a less
-     * implementation-specific parameter name.
-     */
-    private static List<String> mergeLibrarySelectors(List<String> sourceTypes, List<String> libraries) {
-        LinkedHashSet<String> selectors = new LinkedHashSet<>();
-        if (sourceTypes != null) {
-            for (String sourceType : sourceTypes) {
-                if (sourceType != null && !sourceType.isBlank()) {
-                    selectors.add(sourceType.strip());
-                }
-            }
-        }
-        if (libraries != null) {
-            for (String library : libraries) {
-                if (library != null && !library.isBlank()) {
-                    selectors.add(library.strip());
-                }
-            }
-        }
-        return List.copyOf(selectors);
+        return searchBlocks(query, limit, null, null, null, null, httpRequest);
     }
 
     /**
@@ -442,12 +492,8 @@ public class TeacherResourceController {
                 subject)) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for teacher resource sync execution");
         }
-        return syncExecutionService.execute(
-                subject.tenantId(),
-                subject.subjectType(),
-                subject.subjectId(),
-                documentId,
-                jobId);
+        syncCommandDispatcher.dispatch(command(TeacherSourceSyncCommand.EXECUTE, subject, documentId, jobId));
+        return syncJobService.findVisibleJob(subject.tenantId(), subject.subjectType(), subject.subjectId(), documentId, jobId);
     }
 
     /**
@@ -473,12 +519,8 @@ public class TeacherResourceController {
                 subject)) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for teacher resource sync resume");
         }
-        return syncExecutionService.resume(
-                subject.tenantId(),
-                subject.subjectType(),
-                subject.subjectId(),
-                documentId,
-                jobId);
+        syncCommandDispatcher.dispatch(command(TeacherSourceSyncCommand.RESUME, subject, documentId, jobId));
+        return syncJobService.findVisibleJob(subject.tenantId(), subject.subjectType(), subject.subjectId(), documentId, jobId);
     }
 
     /**
@@ -524,6 +566,23 @@ public class TeacherResourceController {
         } catch (IllegalArgumentException exception) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, exception.getMessage(), exception);
         }
+    }
+
+    /** Builds the token-free command after the controller has performed the relevant capability verification. */
+    private static TeacherSourceSyncCommand command(
+            String action,
+            RequestSubject subject,
+            String documentId,
+            String jobId) {
+        RequestSubject normalized = subject.normalize();
+        return new TeacherSourceSyncCommand(
+                TeacherSourceSyncCommand.CURRENT_SCHEMA_VERSION,
+                action,
+                normalized.tenantId(),
+                normalized.subjectType(),
+                normalized.subjectId(),
+                documentId,
+                jobId);
     }
 
     /**

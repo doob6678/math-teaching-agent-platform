@@ -62,8 +62,6 @@ public record SystemRuntimeStatusResponse(
             boolean urlConfigured,
             boolean usernameConfigured,
             boolean studentExplanationHistoryDurable,
-            boolean migrationRunnerEnabled,
-            String migrationLocation,
             String mode) {
     }
 

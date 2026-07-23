@@ -1,5 +1,6 @@
 package com.doob.mathagent.teacher.service;
 
+import com.doob.mathagent.teacher.asset.TeacherResourceAssetStore;
 import com.doob.mathagent.teacher.vo.TeacherResourceAssetResponse;
 import java.util.ArrayList;
 import java.util.List;
@@ -45,6 +46,20 @@ public class InMemoryTeacherResourceAssetStore implements TeacherResourceAssetSt
     }
 
     @Override
+    public Optional<TeacherResourceAssetResponse> findByProviderChecksum(
+            String tenantId,
+            String documentId,
+            String providerAssetId,
+            String checksum) {
+        return assets.values().stream()
+                .filter(asset -> asset.tenantId().equals(tenantId))
+                .filter(asset -> asset.documentId().equals(documentId))
+                .filter(asset -> asset.providerAssetId().equals(providerAssetId))
+                .filter(asset -> asset.checksum().equals(checksum))
+                .findFirst();
+    }
+
+    @Override
     public void markDocumentAssetsInactive(String tenantId, String documentId) {
         List<TeacherResourceAssetResponse> snapshot = new ArrayList<>(assets.values());
         for (TeacherResourceAssetResponse asset : snapshot) {
@@ -72,5 +87,12 @@ public class InMemoryTeacherResourceAssetStore implements TeacherResourceAssetSt
 
     public List<TeacherResourceAssetResponse> snapshot() {
         return new ArrayList<>(assets.values());
+    }
+
+    @Override
+    public List<TeacherResourceAssetResponse> listByDocument(String tenantId, String documentId) {
+        return assets.values().stream()
+                .filter(asset -> asset.tenantId().equals(tenantId) && asset.documentId().equals(documentId))
+                .toList();
     }
 }

@@ -3,12 +3,15 @@ package com.doob.mathagent.teacher;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.doob.mathagent.teacher.block.TeacherDocumentBlockResponse;
+import com.doob.mathagent.teacher.service.InMemoryTeacherDocumentBlockStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherResourceStore;
-import com.doob.mathagent.teacher.service.TeacherResourceRegistrationCommand;
+import com.doob.mathagent.teacher.support.TeacherResourceRegistrationCommand;
 import com.doob.mathagent.teacher.service.TeacherResourceService;
-import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
+import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -130,8 +133,29 @@ class TeacherResourceServiceTest {
     }
 
     @Test
-    void ownerTeacherCanArchiveOwnResource() {
+    void rejectsLegacyTextbookBridgeSourceTypeDuringRegistration() {
         TeacherResourceService service = TeacherResourceServiceFixture.service(new InMemoryTeacherResourceStore());
+        TeacherResourceRegistrationCommand request = new TeacherResourceRegistrationCommand(
+                "default",
+                "admin",
+                "admin-001",
+                "textbook_md",
+                "旧教材桥接入口",
+                null,
+                "C:/workspace/old-textbook-bridge",
+                "PUBLIC_TEXTBOOK",
+                null);
+
+        assertThatThrownBy(() -> service.register(request))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Legacy textbook sourceType");
+    }
+
+    @Test
+    void ownerTeacherCanArchiveOwnResource() {
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        TeacherResourceService service = TeacherResourceServiceFixture.service(resourceStore, blockStore);
         TeacherResourceDocumentResponse created = service.register(new TeacherResourceRegistrationCommand(
                 "default",
                 "teacher",
@@ -143,6 +167,28 @@ class TeacherResourceServiceTest {
                 "TEACHER_PRIVATE",
                 "md"));
 
+        blockStore.replaceActiveBlocks("default", created.documentId(), List.of(new TeacherDocumentBlockResponse(
+                "block-1",
+                created.documentId(),
+                "feishu-token|0",
+                "markdown",
+                0,
+                "test",
+                null,
+                null,
+                null,
+                "feishu-token.md",
+                "reference",
+                "sensitive source text",
+                "sensitive source text",
+                "[]",
+                "[]",
+                "[]",
+                "[]",
+                "checksum",
+                1.0,
+                "active")));
+
         TeacherResourceDocumentResponse archived = service.archive(
                 "default",
                 "teacher",
@@ -153,5 +199,7 @@ class TeacherResourceServiceTest {
         assertThat(service.list("default", "teacher", "teacher-001"))
                 .extracting(TeacherResourceDocumentResponse::documentId)
                 .doesNotContain(created.documentId());
+        assertThat(blockStore.listByDocument("default", created.documentId())).isEmpty();
     }
 }
+

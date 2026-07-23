@@ -7,8 +7,10 @@ from typing import Mapping
 # CPU cross-encoders scale quadratically with sequence length. This is an explicit deployment budget, not a ranking
 # weight; operators can raise it for GPU deployments without touching retrieval semantics.
 DEFAULT_LOCAL_RERANK_MAX_TOKENS = 128
-DEFAULT_FORMULA_VISION_MODEL = "gpt-5.4-mini"
-DEFAULT_FORMULA_VISION_TIMEOUT_SECONDS = 45
+# Page OCR is executed only for an explicitly authorized AI parse. Use the verified multimodal model and allow a
+# bounded three-minute relay window, so a slow real response is not silently discarded as an empty recognition.
+DEFAULT_FORMULA_VISION_MODEL = "gpt-5.6-luna"
+DEFAULT_FORMULA_VISION_TIMEOUT_SECONDS = 180
 DEFAULT_FORMULA_VISION_MAX_IMAGE_BYTES = 4 * 1024 * 1024
 DEFAULT_FORMULA_VISION_MINIMUM_CONFIDENCE = 0.9
 
@@ -110,6 +112,10 @@ def resolve_processed_books_root(source: Mapping[str, str]) -> str | None:
     if configured:
         return configured
     for candidate in (
+        # Must match application.yml: c2 carries the searchable small-heading
+        # chunks while retaining page images through its shared page index.
+        "C:\\Users\\doob\\Desktop\\个人资料\\高中数学\\下载课本代码\\tchMaterial-parser-main\\tchMaterial-parser-main\\processed_books_section_shadow_all_mini_c2",
+        "C:\\Users\\doob\\Desktop\\个人资料\\高中数学\\下载课本代码\\tchMaterial-parser-main\\tchMaterial-parser-main\\processed_books_section_shadow_all_mini_b4",
         "C:\\Users\\doob\\Desktop\\个人资料\\高中数学\\下载课本代码\\tchMaterial-parser-main\\tchMaterial-parser-main\\processed_books",
         "C:\\Users\\doob\\Desktop\\code\\dev\\math_agent_rag\\processed_books",
     ):

@@ -1,6 +1,10 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { HandoutCollaborationPanel, HandoutCollaborationThreadItem } from "./components/HandoutCollaborationPanel";
+import {
+  buildWorkflowNodeInspection,
+  HandoutCollaborationPanel,
+  HandoutCollaborationThreadItem,
+} from "./components/HandoutCollaborationPanel";
 import { TeachingTaskResponse } from "../shared/api/textbookApi";
 
 function buildTask(overrides: Partial<TeachingTaskResponse> = {}): TeachingTaskResponse {
@@ -72,7 +76,6 @@ function renderPanel(task = buildTask(), entries?: HandoutCollaborationThreadIte
       questionText=""
       evidenceLimit={5}
       selectedTemplateName="教师详解版"
-      currentTaskId={task.taskId}
       version="lecture"
       entries={entries ?? [{
         id: "assistant-1",
@@ -80,19 +83,17 @@ function renderPanel(task = buildTask(), entries?: HandoutCollaborationThreadIte
         createdAt: "2026-07-08T10:00:00Z",
         task,
       }]}
-      history={[task]}
       loading={false}
-      loadingHistory={false}
       error=""
       onLearningGoalChange={vi.fn()}
       onQuestionTextChange={vi.fn()}
       onEvidenceLimitChange={vi.fn()}
       onSubmit={vi.fn()}
-      onSelectHistory={vi.fn()}
-      onPreviewPdf={vi.fn()}
-      onPreviewLatex={vi.fn()}
-      onExportPdf={vi.fn()}
-    />,
+        onPreviewPdf={vi.fn()}
+        onPreviewLatex={vi.fn()}
+        onExportPdf={vi.fn()}
+        onVersionChange={vi.fn()}
+      />,
   );
 }
 
@@ -105,43 +106,78 @@ describe("HandoutCollaborationPanel", () => {
     expect(html).not.toContain("当前版本</span><strong>学生版");
   });
 
-  it("renders readable Chinese copy and hides corrupted history items", () => {
+  it("renders readable Chinese copy without exposing internal prompt/debug text", () => {
     const goodTask = buildTask();
-    const badTask = buildTask({
-      taskId: "bad-task",
-      learningGoal: "？？？？",
-      teacherHandoutLatex: "MODEL_CALL_SUCCEEDED JSON_PARSE tokens=100",
-    });
     const html = renderPanel(goodTask, []);
-    const htmlWithHistory = renderToStaticMarkup(
-      <HandoutCollaborationPanel
-        learningGoal=""
-        questionText=""
-        evidenceLimit={5}
-        selectedTemplateName="教师详解版"
-        currentTaskId=""
-        version="teacher"
-        entries={[]}
-        history={[badTask, goodTask]}
-        loading={false}
-        loadingHistory={false}
-        error=""
-        onLearningGoalChange={vi.fn()}
-        onQuestionTextChange={vi.fn()}
-        onEvidenceLimitChange={vi.fn()}
-        onSubmit={vi.fn()}
-        onSelectHistory={vi.fn()}
-        onPreviewPdf={vi.fn()}
-        onPreviewLatex={vi.fn()}
-        onExportPdf={vi.fn()}
-      />,
-    );
 
-    expect(html).toContain("讲义协作");
-    expect(html).toContain("输入主题后开始生成讲义");
-    expect(htmlWithHistory).toContain("最近讲义");
-    expect(htmlWithHistory).toContain("双曲线专题");
-    expect(htmlWithHistory).not.toContain("？？？？");
-    expect(htmlWithHistory).not.toContain("MODEL_CALL");
+    expect(html).toContain("讲义工作台");
+    expect(html).toContain("输入主题后开始");
+    expect(html).toContain("双曲线专题");
+    expect(html).not.toContain("MODEL_CALL");
+    expect(html).not.toContain("JSON_PARSE");
+    expect(html).not.toContain("tokens=100");
+  });
+
+  it("opens a retrieval node through an inspectable control and keeps its evidence scope exact", () => {
+    const task = buildTask({
+      nodes: [{ code: "QUESTION_BANK_RETRIEVAL", name: "题库检索", status: "completed", summary: "命中题库题目 1 条。" }],
+      workflowEvents: [{
+        eventId: "evidence",
+        sourceType: "tool",
+        sourceName: "EvidenceCollector",
+        eventType: "evidence",
+        status: "completed",
+        title: "并行收集资料",
+        summary: "题库实际命中 1 条。",
+        artifactRefs: ["QUESTION_BANK"],
+      }],
+      evidence: [
+        {
+          sourceScope: "QUESTION_BANK",
+          sourceTitle: "空间向量例题 3",
+          chunkId: "question-3",
+          pageNo: 0,
+          snippet: "在四棱锥中求线面角，先建立空间直角坐标系。",
+        },
+        {
+          sourceScope: "TEACHER_RESOURCE",
+          sourceTitle: "教师私有拓展",
+          chunkId: "teacher-1",
+          pageNo: 12,
+          snippet: "这条资料不属于题库检索节点。",
+        },
+      ],
+    });
+
+    const inspection = buildWorkflowNodeInspection(task, "QUESTION_BANK_RETRIEVAL");
+    const html = renderPanel(task);
+
+    expect(html).toContain("查看节点详情");
+    expect(html).toContain('aria-expanded="false"');
+    expect(inspection?.events).toEqual([expect.objectContaining({ title: "并行收集资料", summary: "题库实际命中 1 条。" })]);
+    expect(inspection?.evidence).toEqual([expect.objectContaining({ sourceTitle: "空间向量例题 3", chunkId: "question-3" })]);
+    expect(inspection?.evidence.some((item) => item.sourceScope === "TEACHER_RESOURCE")).toBe(false);
+  });
+
+  it("keeps the complete authorized workflow record available to the inspector", () => {
+    const fullRecord = `已找到资料：${"原始资料内容".repeat(100)}\n下一步：逐题核对答案。`;
+    const task = buildTask({
+      nodes: [{ code: "QUESTION_BANK_RETRIEVAL", name: "题库检索", status: "completed", summary: "已完成。" }],
+      workflowEvents: [{
+        eventId: "evidence",
+        sourceType: "tool",
+        sourceName: "EvidenceCollector",
+        eventType: "evidence",
+        status: "completed",
+        title: "并行收集资料",
+        summary: fullRecord,
+        artifactRefs: ["QUESTION_BANK"],
+      }],
+    });
+
+    const inspection = buildWorkflowNodeInspection(task, "QUESTION_BANK_RETRIEVAL");
+
+    expect(inspection?.events[0]?.summary).toContain("下一步：逐题核对答案。");
+    expect(inspection?.events[0]?.summary.length).toBeGreaterThan(360);
   });
 });

@@ -30,5 +30,25 @@ public record TeacherSourceSyncJobResponse(
         String stagingPath,
         String message,
         String createdAt,
-        String updatedAt) {
+        String updatedAt,
+        TeacherSourceSyncFailureResponse failure) {
+
+    /** Compatibility constructor for callers that do not have structured provider failure information. */
+    public TeacherSourceSyncJobResponse(
+            String jobId,
+            String documentId,
+            String tenantId,
+            String sourceType,
+            String operation,
+            String status,
+            String phase,
+            int attempt,
+            String createdBy,
+            String stagingPath,
+            String message,
+            String createdAt,
+            String updatedAt) {
+        this(jobId, documentId, tenantId, sourceType, operation, status, phase, attempt, createdBy, stagingPath,
+                message, createdAt, updatedAt, TeacherSourceSyncFailureResponse.none());
+    }
 }

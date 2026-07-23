@@ -79,7 +79,6 @@ class SqlInjectionGuardContractTest {
         String normalized = path.toString().replace('\\', '/');
         return normalized.endsWith(".xml")
                 || normalized.contains("/mapper/")
-                || normalized.contains("/db/migration/")
                 || normalized.matches(".*/MyBatis[A-Za-z0-9]+Store\\.java");
     }
 }

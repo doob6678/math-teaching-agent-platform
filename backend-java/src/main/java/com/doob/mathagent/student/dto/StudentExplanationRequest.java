@@ -14,6 +14,7 @@ package com.doob.mathagent.student.dto;
  * @param searchTeacherResources whether the backend may search teacher resource blocks; only teacher/admin subjects can use it
  * @param maxTextbookHits maximum textbook evidence hits to use
  * @param maxTeacherResourceHits maximum teacher resource hits to use
+ * @param useConversationMemory whether the model may read previous turns from this conversation
  */
 public record StudentExplanationRequest(
         String conversationId,
@@ -26,7 +27,38 @@ public record StudentExplanationRequest(
         Boolean searchKnowledgeGraph,
         Boolean searchTeacherResources,
         Integer maxTextbookHits,
-        Integer maxTeacherResourceHits) {
+        Integer maxTeacherResourceHits,
+        Boolean useConversationMemory) {
+
+    /**
+     * Preserves existing callers while making conversation memory explicit opt-in rather than an implicit default.
+     */
+    public StudentExplanationRequest(
+            String conversationId,
+            String questionText,
+            String imageUploadId,
+            String imageFileName,
+            String imageContentType,
+            Long imageSizeBytes,
+            Boolean searchTextbook,
+            Boolean searchKnowledgeGraph,
+            Boolean searchTeacherResources,
+            Integer maxTextbookHits,
+            Integer maxTeacherResourceHits) {
+        this(
+                conversationId,
+                questionText,
+                imageUploadId,
+                imageFileName,
+                imageContentType,
+                imageSizeBytes,
+                searchTextbook,
+                searchKnowledgeGraph,
+                searchTeacherResources,
+                maxTextbookHits,
+                maxTeacherResourceHits,
+                false);
+    }
 
     /**
      * Returns a normalized request with bounded retrieval limits and safe default toggles.
@@ -43,7 +75,8 @@ public record StudentExplanationRequest(
                 searchKnowledgeGraph == null || searchKnowledgeGraph,
                 searchTeacherResources != null && searchTeacherResources,
                 clamp(maxTextbookHits, 3, 1, 8),
-                clamp(maxTeacherResourceHits, 3, 1, 6));
+                clamp(maxTeacherResourceHits, 3, 1, 6),
+                Boolean.TRUE.equals(useConversationMemory));
     }
 
     /**
@@ -71,7 +104,8 @@ public record StudentExplanationRequest(
                 searchKnowledgeGraph,
                 searchTeacherResources,
                 maxTextbookHits,
-                maxTeacherResourceHits).normalize();
+                maxTeacherResourceHits,
+                useConversationMemory).normalize();
     }
 
     /**

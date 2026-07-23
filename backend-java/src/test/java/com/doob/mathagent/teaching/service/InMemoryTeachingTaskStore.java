@@ -37,6 +37,11 @@ public class InMemoryTeachingTaskStore implements TeachingTaskStore {
     }
 
     @Override
+    public Optional<TeachingTaskResponse> findByTaskId(String taskId) {
+        return Optional.ofNullable(tasksById.get(taskId));
+    }
+
+    @Override
     public List<TeachingTaskResponse> listRecentByOwnerKey(String ownerKey, int limit) {
         int safeLimit = Math.max(1, Math.min(50, limit));
         return tasksById.values().stream()

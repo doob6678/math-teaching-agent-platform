@@ -3,8 +3,8 @@ package com.doob.mathagent.teacher;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.doob.mathagent.teacher.service.TeacherFeishuDiscoveryClient;
-import com.doob.mathagent.teacher.service.TeacherFeishuDiscoveryQuery;
+import com.doob.mathagent.teacher.feishu.TeacherFeishuDiscoveryClient;
+import com.doob.mathagent.teacher.feishu.TeacherFeishuDiscoveryQuery;
 import com.doob.mathagent.teacher.service.TeacherFeishuDiscoveryService;
 import com.doob.mathagent.teacher.vo.TeacherFeishuDiscoveryResponse;
 import java.util.List;

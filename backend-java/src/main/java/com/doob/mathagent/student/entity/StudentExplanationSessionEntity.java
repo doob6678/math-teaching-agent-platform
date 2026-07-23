@@ -17,6 +17,7 @@ public class StudentExplanationSessionEntity {
     private String subjectId;
     private String studentId;
     private String viewerRole;
+    private String title;
     private String lastExplanationId;
     private String lastQuestionText;
     private Integer totalMessages;
@@ -69,6 +70,14 @@ public class StudentExplanationSessionEntity {
 
     public void setViewerRole(String viewerRole) {
         this.viewerRole = viewerRole;
+    }
+
+    public String getTitle() {
+        return title;
+    }
+
+    public void setTitle(String title) {
+        this.title = title;
     }
 
     public String getLastExplanationId() {

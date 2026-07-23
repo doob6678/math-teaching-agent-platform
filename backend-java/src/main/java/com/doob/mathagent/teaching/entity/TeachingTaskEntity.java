@@ -20,8 +20,16 @@ public class TeachingTaskEntity {
     private String clientRequestId;
     private String status;
     private String responseJson;
+    private int retryCount;
+    private String leaseOwner;
+    private String leaseToken;
+    private Instant leaseExpireAt;
+    private String currentStage;
+    private String lastError;
     private Instant createdAt;
     private Instant updatedAt;
+    private Instant startedAt;
+    private Instant finishedAt;
 
     public String getTaskId() {
         return taskId;
@@ -95,6 +103,19 @@ public class TeachingTaskEntity {
         this.responseJson = responseJson;
     }
 
+    public int getRetryCount() { return retryCount; }
+    public void setRetryCount(int value) { retryCount = value; }
+    public String getLeaseOwner() { return leaseOwner; }
+    public void setLeaseOwner(String value) { leaseOwner = value; }
+    public String getLeaseToken() { return leaseToken; }
+    public void setLeaseToken(String value) { leaseToken = value; }
+    public Instant getLeaseExpireAt() { return leaseExpireAt; }
+    public void setLeaseExpireAt(Instant value) { leaseExpireAt = value; }
+    public String getCurrentStage() { return currentStage; }
+    public void setCurrentStage(String value) { currentStage = value; }
+    public String getLastError() { return lastError; }
+    public void setLastError(String value) { lastError = value; }
+
     public Instant getCreatedAt() {
         return createdAt;
     }
@@ -110,4 +131,9 @@ public class TeachingTaskEntity {
     public void setUpdatedAt(Instant updatedAt) {
         this.updatedAt = updatedAt;
     }
+
+    public Instant getStartedAt() { return startedAt; }
+    public void setStartedAt(Instant value) { startedAt = value; }
+    public Instant getFinishedAt() { return finishedAt; }
+    public void setFinishedAt(Instant value) { finishedAt = value; }
 }

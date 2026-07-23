@@ -87,6 +87,7 @@ function renderPanel(task: TeachingTaskResponse, version: "teacher" | "student" 
       previewPdfTaskKey=""
       action=""
       exportMessage=""
+      previewError=""
       feedbackRating={4}
       feedbackDecision="needs_revision"
       feedbackComment="学生版第 2 题增加作答空间。"
@@ -105,10 +106,12 @@ function renderPanel(task: TeachingTaskResponse, version: "teacher" | "student" 
       }]}
       loadingFeedbackHistory={false}
       onVersionChange={vi.fn()}
-      onPreviewPdf={vi.fn()}
+        onPreviewPdf={vi.fn()}
       onPreviewLatex={vi.fn()}
-      onExportPdf={vi.fn()}
-      onFeedbackRatingChange={vi.fn()}
+      onResumeTask={vi.fn()}
+        onExportPdf={vi.fn()}
+        onSaveHandoutVersion={vi.fn()}
+        onFeedbackRatingChange={vi.fn()}
       onFeedbackDecisionChange={vi.fn()}
       onFeedbackCommentChange={vi.fn()}
       onSubmitFeedback={vi.fn()}
@@ -117,18 +120,15 @@ function renderPanel(task: TeachingTaskResponse, version: "teacher" | "student" 
 }
 
 describe("HandoutWorkspacePreviewPanel", () => {
-  it("renders the handout review checkpoint in readable Chinese", () => {
+  it("renders the preview workspace in readable Chinese without exposing internal text", () => {
     const html = renderPanel(buildTask(), "student");
 
-    expect(html).toContain("人工审查");
-    expect(html).toContain("核对学生版是否只保留题目、提示和作答空间");
-    expect(html).toContain("真实 PDF");
-    expect(html).toContain("结构审查");
-    expect(html).toContain("版本隔离");
-    expect(html).toContain("当前无明显泄漏");
-    expect(html).toContain("提交审查");
-    expect(html).toContain("审查记录");
-    expect(html).toContain("学生版补留白。");
+    expect(html).toContain("当前讲义");
+    expect(html).toContain("反比例函数基础题型");
+    expect(html).toContain("校对结论");
+    expect(html).toContain("未返回");
+    expect(html).toContain("当前任务还没有结构化校对摘要");
+    expect(html).toContain("学生版");
     expect(html).not.toContain("MODEL_CALL");
     expect(html).not.toContain("JSON_PARSE");
     expect(html).not.toContain("？？？");
@@ -137,7 +137,7 @@ describe("HandoutWorkspacePreviewPanel", () => {
   it("keeps lecture preview available for legacy tasks without stored lecture latex", () => {
     const html = renderPanel(buildTask({ lectureHandoutLatex: undefined }), "teacher");
 
-    expect(html).toContain("16:10 讲解版");
+    expect(html).toContain("16:10");
   });
 
   it("warns when a student handout draft leaks answer-like content", () => {
@@ -154,10 +154,25 @@ describe("HandoutWorkspacePreviewPanel", () => {
     const html = renderPanel(buildTask(), "lecture");
 
     expect(html).toContain("16:10 讲解版");
-    expect(html).toContain("核对 16:10 讲解版是否适合投屏");
+    expect(html).toContain("适合投屏讲解");
     expect(html).not.toContain("留白区");
     expect(html).not.toContain("教师手写区");
     expect(html).not.toContain("手写区");
     expect(html).not.toContain("板书留白");
+  });
+
+  it("shows durable failure progress and a continue action", () => {
+    const html = renderPanel(buildTask({
+      status: "FAILED",
+      errorMessage: "PDF 预览请求过于频繁",
+      nodes: [{ code: "PUBLIC_TEXTBOOK_RETRIEVAL", name: "公开教材检索", status: "completed", summary: "命中公开教材证据 2 条" }],
+      evidence: [{ sourceScope: "PUBLIC_TEXTBOOK", sourceTitle: "教材A", pageNo: 101, chunkId: "chunk-1", snippet: "函数定义" }],
+      stageTimings: [{ stage: "textbook_retrieval", elapsedMs: 1200 }],
+    }), "teacher");
+
+    expect(html).toContain("生成失败");
+    expect(html).toContain("PDF 预览请求过于频繁");
+    expect(html).toContain("继续生成");
+    expect(html).toContain("已记录 1 个阶段耗时");
   });
 });

@@ -145,4 +145,23 @@ class SpringAiOpenAiCompatibleGatewayTest {
         assertThat(result.generatedContent()).contains("题意理解");
         assertThat(result.generatedContent()).doesNotContain("é¢");
     }
+
+    @Test
+    void extractsContentReasoningAndUsageFromOneOpenAiCompatibleSseDelta() throws Exception {
+        var delta = SpringAiOpenAiCompatibleGateway.streamDeltaFromBody(OBJECT_MAPPER.readTree("""
+                {
+                  "model": "deepseek-v4-flash",
+                  "choices": [{"delta": {
+                    "reasoning_content": "先将方程因式分解。",
+                    "content": "令 $(x-2)(x-3)=0$。"
+                  }}],
+                  "usage": {"prompt_tokens": 8, "completion_tokens": 12, "total_tokens": 20}
+                }
+                """));
+
+        assertThat(delta.reasoningDelta()).isEqualTo("先将方程因式分解。");
+        assertThat(delta.contentDelta()).isEqualTo("令 $(x-2)(x-3)=0$。");
+        assertThat(delta.modelCode()).isEqualTo("deepseek-v4-flash");
+        assertThat(delta.totalTokens()).isEqualTo(20);
+    }
 }

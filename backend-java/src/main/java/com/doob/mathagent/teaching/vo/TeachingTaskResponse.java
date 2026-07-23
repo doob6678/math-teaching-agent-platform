@@ -1,8 +1,12 @@
 package com.doob.mathagent.teaching.vo;
 
+import com.doob.mathagent.teaching.TeachingDraftSections;
+import com.doob.mathagent.teaching.TeachingDraftMergeResult;
+import com.doob.mathagent.teaching.TeachingDraftReview;
 import com.doob.mathagent.teaching.TeachingEvidence;
 import com.doob.mathagent.teaching.TeachingReactStep;
 import com.doob.mathagent.teaching.TeachingTaskStatus;
+import com.doob.mathagent.teaching.TeachingWorkflowEvent;
 import com.doob.mathagent.teaching.TeachingWorkflowNode;
 import java.util.List;
 
@@ -19,6 +23,7 @@ import java.util.List;
  * @param questionText 原始题目或学习问题。
  * @param learningGoal 用户学习目标。
  * @param nodes 固定 DAG 节点执行结果。
+ * @param workflowEvents 可恢复工作流事件；比 nodes 更适合前端过程流和后续 event 表持久化。
  * @param reactTrace 解题 ReAct 轨迹。
  * @param evidence 使用的证据列表。
  * @param handoutLatex LaTeX 讲义草稿。
@@ -37,7 +42,9 @@ public record TeachingTaskResponse(
         TeachingTaskStatus status,
         String questionText,
         String learningGoal,
+        String watermarkText,
         List<TeachingWorkflowNode> nodes,
+        List<TeachingWorkflowEvent> workflowEvents,
         List<TeachingReactStep> reactTrace,
         List<TeachingEvidence> evidence,
         String handoutLatex,
@@ -48,7 +55,80 @@ public record TeachingTaskResponse(
         MemoryReuse memoryReuse,
         List<StageTiming> stageTimings,
         AiDraft aiDraft,
+        TeachingDraftSections draftSections,
+        TeachingDraftReview draftReview,
+        TeachingDraftMergeResult mergeResult,
         String errorMessage) {
+
+    public TeachingTaskResponse {
+        // Legacy snapshots used a product name as an implicit default. Treat it as an absent user choice so a
+        // re-export cannot reintroduce a brand the current task did not explicitly choose.
+        watermarkText = normalizeWatermarkText(watermarkText);
+        draftSections = draftSections == null
+                ? new TeachingDraftSections("", "", List.of(), List.of(), List.of(), List.of())
+                : draftSections;
+        draftReview = draftReview == null
+                ? new TeachingDraftReview("READY", List.of(), List.of())
+                : draftReview;
+        mergeResult = mergeResult == null
+                ? new TeachingDraftMergeResult("READY", draftSections, List.of(), List.of(), List.of())
+                : mergeResult;
+    }
+
+    /**
+     * Backward-compatible constructor for call sites that already set a selected template and lecture version
+     * before workflow events were added.
+     */
+    public TeachingTaskResponse(
+            String taskId,
+            String clientRequestId,
+            String tenantId,
+            String subjectType,
+            String subjectId,
+            TeachingHandoutTemplateResponse selectedTemplate,
+            TeachingTaskStatus status,
+            String questionText,
+            String learningGoal,
+            List<TeachingWorkflowNode> nodes,
+            List<TeachingReactStep> reactTrace,
+            List<TeachingEvidence> evidence,
+            String handoutLatex,
+            String teacherHandoutLatex,
+            String studentHandoutLatex,
+            String lectureHandoutLatex,
+            List<String> interactiveSuggestions,
+            MemoryReuse memoryReuse,
+            List<StageTiming> stageTimings,
+            AiDraft aiDraft,
+            String errorMessage) {
+        this(
+                taskId,
+                clientRequestId,
+                tenantId,
+                subjectType,
+                subjectId,
+                selectedTemplate,
+                status,
+                questionText,
+                learningGoal,
+                "数学讲义",
+                nodes,
+                List.of(),
+                reactTrace,
+                evidence,
+                handoutLatex,
+                teacherHandoutLatex,
+                studentHandoutLatex,
+                lectureHandoutLatex,
+                interactiveSuggestions,
+                memoryReuse,
+                stageTimings,
+                aiDraft,
+                null,
+                null,
+                null,
+                errorMessage);
+    }
 
     /**
      * Backward-compatible constructor for call sites that already set a selected template but do not
@@ -85,7 +165,9 @@ public record TeachingTaskResponse(
                 status,
                 questionText,
                 learningGoal,
+                "数学讲义",
                 nodes,
+                List.of(),
                 reactTrace,
                 evidence,
                 handoutLatex,
@@ -96,6 +178,9 @@ public record TeachingTaskResponse(
                 memoryReuse,
                 stageTimings,
                 aiDraft,
+                null,
+                null,
+                null,
                 errorMessage);
     }
 
@@ -132,7 +217,9 @@ public record TeachingTaskResponse(
                 status,
                 questionText,
                 learningGoal,
+                "数学讲义",
                 nodes,
+                List.of(),
                 reactTrace,
                 evidence,
                 handoutLatex,
@@ -143,6 +230,9 @@ public record TeachingTaskResponse(
                 memoryReuse,
                 stageTimings,
                 aiDraft,
+                null,
+                null,
+                null,
                 errorMessage);
     }
 
@@ -160,6 +250,52 @@ public record TeachingTaskResponse(
             return studentHandoutLatex == null || studentHandoutLatex.isBlank() ? handoutLatex : studentHandoutLatex;
         }
         return teacherHandoutLatex == null || teacherHandoutLatex.isBlank() ? handoutLatex : teacherHandoutLatex;
+    }
+
+    /** Returns a transport-safe snapshot with only the persisted PDF attribution changed. */
+    public TeachingTaskResponse withWatermarkText(String value) {
+        return new TeachingTaskResponse(
+                taskId, clientRequestId, tenantId, subjectType, subjectId, selectedTemplate, status,
+                questionText, learningGoal, value, nodes, workflowEvents, reactTrace, evidence, handoutLatex,
+                teacherHandoutLatex, studentHandoutLatex, lectureHandoutLatex, interactiveSuggestions, memoryReuse,
+                stageTimings, aiDraft, draftSections, draftReview, mergeResult, errorMessage);
+    }
+
+    /** Normalizes display-only attribution while preserving a teacher's own custom label. */
+    private static String normalizeWatermarkText(String value) {
+        String normalized = value == null ? "" : value.strip();
+        return normalized.isBlank() || "飞猪数学".equals(normalized) ? "数学讲义" : normalized;
+    }
+
+    /**
+     * Produces a copy with exactly one persisted handout version replaced. The compatibility `handoutLatex` field
+     * continues to mirror the teacher version so older exporters and historical clients see the edited teacher draft.
+     *
+     * @param version teacher, student, or lecture
+     * @param latex already validated LaTeX source
+     * @return task snapshot with all workflow evidence, timings, and other versions preserved
+     */
+    public TeachingTaskResponse withHandoutVersion(String version, String latex) {
+        String normalized = version == null ? "teacher" : version.strip().toLowerCase(java.util.Locale.ROOT);
+        String value = latex == null ? "" : latex;
+        return switch (normalized) {
+            case "student" -> new TeachingTaskResponse(
+                    taskId, clientRequestId, tenantId, subjectType, subjectId, selectedTemplate, status,
+                    questionText, learningGoal, watermarkText, nodes, workflowEvents, reactTrace, evidence, handoutLatex,
+                    teacherHandoutLatex, value, lectureHandoutLatex, interactiveSuggestions, memoryReuse,
+                    stageTimings, aiDraft, draftSections, draftReview, mergeResult, errorMessage);
+            case "lecture" -> new TeachingTaskResponse(
+                    taskId, clientRequestId, tenantId, subjectType, subjectId, selectedTemplate, status,
+                    questionText, learningGoal, watermarkText, nodes, workflowEvents, reactTrace, evidence, handoutLatex,
+                    teacherHandoutLatex, studentHandoutLatex, value, interactiveSuggestions, memoryReuse,
+                    stageTimings, aiDraft, draftSections, draftReview, mergeResult, errorMessage);
+            case "teacher" -> new TeachingTaskResponse(
+                    taskId, clientRequestId, tenantId, subjectType, subjectId, selectedTemplate, status,
+                    questionText, learningGoal, watermarkText, nodes, workflowEvents, reactTrace, evidence, value,
+                    value, studentHandoutLatex, lectureHandoutLatex, interactiveSuggestions, memoryReuse,
+                    stageTimings, aiDraft, draftSections, draftReview, mergeResult, errorMessage);
+            default -> throw new IllegalArgumentException("Unsupported handout version: " + version);
+        };
     }
 
     /**

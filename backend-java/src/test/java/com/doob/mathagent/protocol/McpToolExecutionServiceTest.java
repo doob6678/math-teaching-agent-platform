@@ -36,18 +36,18 @@ import com.doob.mathagent.teacher.service.InMemoryTeacherResourceStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherSourceSyncCheckpointStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherSourceSyncJobStore;
 import com.doob.mathagent.teacher.service.TeacherFeishuDiscoveryService;
-import com.doob.mathagent.teacher.service.TeacherFeishuDownloadClient;
+import com.doob.mathagent.teacher.feishu.TeacherFeishuDownloadClient;
 import com.doob.mathagent.teacher.service.TeacherResourceAssetService;
-import com.doob.mathagent.teacher.service.TeacherResourceGraphAlignmentService;
+import com.doob.mathagent.teacher.search.TeacherResourceGraphAlignmentService;
 import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService;
 import com.doob.mathagent.teacher.service.TeacherResourceService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncExecutionService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncJobService;
-import com.doob.mathagent.teacher.service.TeacherSourceSyncProperties;
-import com.doob.mathagent.teacher.vo.TeacherDocumentBlockResponse;
+import com.doob.mathagent.teacher.sync.TeacherSourceSyncProperties;
+import com.doob.mathagent.teacher.block.TeacherDocumentBlockResponse;
 import com.doob.mathagent.teacher.vo.TeacherResourceAssetResponse;
 import com.doob.mathagent.teacher.vo.TeacherFeishuDiscoveryResponse;
-import com.doob.mathagent.teacher.vo.TeacherResourceDocumentResponse;
+import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
 import com.doob.mathagent.vector.service.TestVectorIndexService;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -183,8 +183,8 @@ class McpToolExecutionServiceTest {
         assertThat(result.toString()).contains("b-own");
         assertThat(result.toString()).doesNotContain("b-other");
         @SuppressWarnings("unchecked")
-        List<com.doob.mathagent.teacher.vo.TeacherResourceBlockSearchResponse.Hit> hits =
-                (List<com.doob.mathagent.teacher.vo.TeacherResourceBlockSearchResponse.Hit>) result.get("hits");
+        List<com.doob.mathagent.teacher.search.TeacherResourceBlockSearchResponse.Hit> hits =
+                (List<com.doob.mathagent.teacher.search.TeacherResourceBlockSearchResponse.Hit>) result.get("hits");
         assertThat(hits)
                 .singleElement()
                 .satisfies(hit -> {
@@ -1170,3 +1170,4 @@ class McpToolExecutionServiceTest {
         }
     }
 }
+

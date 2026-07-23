@@ -1,4 +1,4 @@
-﻿import {
+import {
   AlertCircle, BookOpen, Bot, BrainCircuit, Check, ChevronDown, Database,
   Eye, FileText, FolderKanban, GitBranch, Globe, GraduationCap, Home,
   LayoutDashboard, Library, Loader2, LogOut, Network, RefreshCw,
@@ -11,6 +11,7 @@ import {
   AgentRunExecuteResponse,
   AgentModelHealthResponse,
   AgentModelCatalogResponse,
+  AgentRegistryResponse,
   AgentRunPlanResponse,
   AgentTraceDiagnosticSummaryResponse,
   AgentTraceResponse,
@@ -27,7 +28,8 @@ import {
   QuestionBankItemResponse,
   RetrievalAuditDetail,
   StudentDashboardResponse,
-  StudentExplanationHistoryItem,
+  StudentExplanationConversationSummary,
+  StudentExplanationConversationResponse,
   StudentExplanationImageUploadResponse,
   StudentExplanationResponse,
   StudentExplanationStreamEvent,
@@ -45,12 +47,12 @@ import {
   TeacherSourceSyncCheckpointResponse,
   TeacherSourceSyncJobResponse,
   TextbookSearchResponse,
+  TextbookSearchOptions,
   TextbookSummary,
-  UNTITLED_TEACHER_RESOURCE_TITLE,
   VectorIndexRebuildResponse,
+  QUESTION_BANK_MAX_SEARCH_ROWS,
   LoginResponse,
   createTextbookApiClient,
-  deriveTeacherResourceTitle,
 } from "../shared/api/textbookApi";
 import { AgentModelHealthPanel, AgentPlanPanel, AgentTracePanel } from "./components/AgentPanels";
 import { AuditDetailPanel, EvidenceCard } from "./components/EvidencePanels";
@@ -64,7 +66,9 @@ import {
 } from "./components/McpPanels";
 import { MultiAgentWritingPanel } from "./components/MultiAgentWritingPanel";
 import { HandoutCollaborationPanel, HandoutCollaborationThreadItem } from "./components/HandoutCollaborationPanel";
+import { HandoutHistorySidebar, replaceHistoryTaskInPlace } from "./components/HandoutHistorySidebar";
 import { HandoutWorkspacePreviewPanel } from "./components/HandoutWorkspacePreviewPanel";
+import { beginCurrentHandoutRun, replaceCurrentHandoutTask } from "./handoutWorkspaceState";
 import {
   compactText,
   formatDateTime,
@@ -86,11 +90,17 @@ export { SyncCheckpointView } from "./components/TeacherResourcePanel";
 export { AgentTracePanel } from "./components/AgentPanels";
 export { statusClass, statusTone } from "./components/panelShared";
 
-const DEFAULT_BACKEND_URL = import.meta.env.VITE_BACKEND_URL ?? "http://127.0.0.1:8080";
-const TEACHING_TASK_STORAGE_KEY = "math-agent:last-teaching-task-id";
+// Prefer same-origin API calls so local browser sandboxes can use the Vite
+// proxy; deployments can still provide an explicit backend URL at build time.
+const DEFAULT_BACKEND_URL = import.meta.env.VITE_BACKEND_URL
+  ?? (typeof window === "undefined" ? "" : window.location.origin);
 const MULTI_AGENT_WORKFLOW_STORAGE_KEY = "math-agent:last-multi-agent-workflow-id";
 const TEACHING_CONVERSATION_STORAGE_KEY = "math-agent:teaching-conversation-thread";
-const HANDOUT_COLLABORATION_STORAGE_KEY = "math-agent:handout-collaboration-thread";
+// These legacy keys used to restore browser-side handout state. Tasks now recover only from owner-scoped backend history.
+const LEGACY_TEACHING_TASK_STORAGE_KEY = "math-agent:last-teaching-task-id";
+const LEGACY_HANDOUT_COLLABORATION_STORAGE_KEY = "math-agent:handout-collaboration-thread";
+// This timer is used only after an SSE transport interruption; normal task progress is event-driven.
+const TASK_RECOVERY_POLL_DELAY_MS = 5_000;
 
 type MathSegment = {
   key: string;
@@ -181,6 +191,9 @@ type TeachingConversationImageDraft = StudentExplanationImageUploadResponse & {
   previewUrl: string;
 };
 
+/** Keeps formula image payloads within the request size supported by the local CLIP worker. */
+const MAX_FORMULA_IMAGE_BYTES = 5 * 1024 * 1024;
+
 export function App() {
   const api = useMemo(() => createTextbookApiClient(DEFAULT_BACKEND_URL), []);
   const [activePage, setActivePage] = useState<PageId>("dashboard");
@@ -190,26 +203,46 @@ export function App() {
   const [summary, setSummary] = useState<TextbookSummary | null>(null);
   const [summaryError, setSummaryError] = useState("");
   const [query, setQuery] = useState("");
-  const [limit, setLimit] = useState(5);
+  const [formulaQuery, setFormulaQuery] = useState("");
+  const [formulaImage, setFormulaImage] = useState("");
+  const [selectedTextbookIds, setSelectedTextbookIds] = useState<string[]>([]);
+  const [textbookRetrievalMode, setTextbookRetrievalMode] = useState<TextbookSearchOptions["retrievalMode"]>("hybrid");
+  // The selected Zhao-style long-form template has a ten-question publication floor. Starting at that floor avoids
+  // a request that appears valid in the browser but is correctly rejected by the server after expensive retrieval.
+  const [limit, setLimit] = useState(10);
   const [searchResult, setSearchResult] = useState<TextbookSearchResponse | null>(null);
   const [auditDetail, setAuditDetail] = useState<RetrievalAuditDetail | null>(null);
   const [searchError, setSearchError] = useState("");
   const [auditError, setAuditError] = useState("");
   const [teachingQuestion, setTeachingQuestion] = useState("");
+  const [teachingSupplement, setTeachingSupplement] = useState("");
   const [learningGoal, setLearningGoal] = useState("");
+  // The attribution is task metadata, not generation input: it is persisted only for PDF layout and later re-exports.
+  const [handoutWatermarkText, setHandoutWatermarkText] = useState("数学讲义");
+  // Handout model routing is scoped to one generation request and is validated by the server allow-list.
+  const [handoutAiProvider, setHandoutAiProvider] = useState("");
+  const [handoutAiModel, setHandoutAiModel] = useState("");
   const [teachingTask, setTeachingTask] = useState<TeachingTaskResponse | null>(null);
   const [teachingConversationInput, setTeachingConversationInput] = useState("");
   const [teachingConversationId, setTeachingConversationId] = useState(() => readStoredTeachingConversation().conversationId);
-  const [teachingConversationHistory, setTeachingConversationHistory] = useState<StudentExplanationHistoryItem[]>([]);
+  const [teachingConversationTitle, setTeachingConversationTitle] = useState("AI 讲题");
+  const [teachingConversationSummaries, setTeachingConversationSummaries] = useState<StudentExplanationConversationSummary[]>([]);
   const [teachingConversationEntries, setTeachingConversationEntries] =
     useState<TeachingConversationThreadItem[]>(() => readStoredTeachingConversation().entries);
+  // Conversation context changes model input, so it starts disabled and is never silently carried into a new chat.
+  const [teachingConversationMemoryEnabled, setTeachingConversationMemoryEnabled] = useState(false);
+  const [openingTeachingConversationId, setOpeningTeachingConversationId] = useState("");
   const [teachingConversationImageDraft, setTeachingConversationImageDraft] = useState<TeachingConversationImageDraft | null>(null);
   const [uploadingTeachingConversationImage, setUploadingTeachingConversationImage] = useState(false);
   const [teachingConversationImageError, setTeachingConversationImageError] = useState("");
-  const [handoutCollaborationEntries, setHandoutCollaborationEntries] =
-    useState<HandoutCollaborationThreadItem[]>(() => readStoredHandoutCollaboration());
+  // The workspace is intentionally transient. Persisted task history is queried from the backend with session ownership.
+  const [handoutCollaborationEntries, setHandoutCollaborationEntries] = useState<HandoutCollaborationThreadItem[]>([]);
+  // One ref prevents an older SSE connection from writing its task card into a newer handout workspace.
+  const activeTeachingStreamTaskIdRef = useRef("");
   const [teachingTemplates, setTeachingTemplates] = useState<TeachingHandoutTemplateResponse[]>([]);
-  const [selectedTeachingTemplateCode, setSelectedTeachingTemplateCode] = useState("default_standard");
+  // The user-provided Zhao master is the default for new tasks.  A persisted task still synchronizes its own
+  // immutable template snapshot below, and the shelf remains freely selectable for deliberate alternatives.
+  const [selectedTeachingTemplateCode, setSelectedTeachingTemplateCode] = useState("zhao_lixian_2025_master_v1");
   const [studentDashboard, setStudentDashboard] = useState<StudentDashboardResponse | null>(null);
   const [dashboardStudentId, setDashboardStudentId] = useState("");
   const [teacherResources, setTeacherResources] = useState<TeacherResourceDocumentResponse[]>([]);
@@ -233,6 +266,7 @@ export function App() {
   const [teachingHistory, setTeachingHistory] = useState<TeachingTaskResponse[]>([]);
   const [loadingTeachingHistory, setLoadingTeachingHistory] = useState(false);
   const [openingTeachingHistoryTaskId, setOpeningTeachingHistoryTaskId] = useState("");
+  const [handoutHistoryOpen, setHandoutHistoryOpen] = useState(true);
   const [handoutVersion, setHandoutVersion] = useState<TeachingHandoutVersion>("teacher");
   const [handoutAction, setHandoutAction] = useState("");
   const [handoutExportMessage, setHandoutExportMessage] = useState("");
@@ -266,6 +300,8 @@ export function App() {
   const [agentExecutionError, setAgentExecutionError] = useState("");
   const [agentTraceError, setAgentTraceError] = useState("");
   const [agentModelCatalog, setAgentModelCatalog] = useState<AgentModelCatalogResponse | null>(null);
+  const [agentRegistry, setAgentRegistry] = useState<AgentRegistryResponse | null>(null);
+  const [selectedMarketplaceAgentCode, setSelectedMarketplaceAgentCode] = useState("");
   const [agentModelCatalogError, setAgentModelCatalogError] = useState("");
   const [agentModelHealth, setAgentModelHealth] = useState<AgentModelHealthResponse | null>(null);
   const [agentModelHealthError, setAgentModelHealthError] = useState("");
@@ -294,7 +330,6 @@ export function App() {
   const [teacherResourceError, setTeacherResourceError] = useState("");
   const [knowledgeBankError, setKnowledgeBankError] = useState("");
   const [authError, setAuthError] = useState("");
-  const [resourceTitle, setResourceTitle] = useState("");
   const [resourceLocation, setResourceLocation] = useState("");
   const [resourceSourceType, setResourceSourceType] = useState("teacher_resource");
   const [resourceScope, setResourceScope] = useState("TEACHER_PRIVATE");
@@ -315,6 +350,9 @@ export function App() {
   const [authSessionChecked, setAuthSessionChecked] = useState(() => readStoredAuthSession() === null);
   const hasVerifiedSession = authSessionChecked && authSession !== null;
   const canReadRetrievalAudit = authSession?.role === "teacher" || authSession?.role === "admin";
+  // Teacher-resource APIs are intentionally restricted by the backend. Keep the client-side lifecycle aligned with
+  // that policy so student sessions never issue forbidden requests during app startup or page initialization.
+  const canManageTeacherResources = authSession?.role === "teacher" || authSession?.role === "admin";
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [searching, setSearching] = useState(false);
   const [loadingAudit, setLoadingAudit] = useState(false);
@@ -331,6 +369,7 @@ export function App() {
   const [syncingResourceId, setSyncingResourceId] = useState("");
   const [importingResourceId, setImportingResourceId] = useState("");
   const [rebuildingResourceId, setRebuildingResourceId] = useState("");
+  const [deletingResourceId, setDeletingResourceId] = useState("");
   const [teacherResourceImportResult, setTeacherResourceImportResult] =
     useState<TeacherBlockQuestionImportResponse | null>(null);
   const [teacherResourceIndexRebuildResult, setTeacherResourceIndexRebuildResult] =
@@ -433,8 +472,16 @@ export function App() {
   }
 
   useEffect(() => {
-    if (!hasVerifiedSession) return;
+    if (!hasVerifiedSession || !canManageTeacherResources) return;
     refreshTeacherResources();
+  }, [api, hasVerifiedSession, canManageTeacherResources]);
+
+  useEffect(() => {
+    if (!hasVerifiedSession) return;
+    api.getAgentRegistry().then((registry) => {
+      setAgentRegistry(registry);
+      setSelectedMarketplaceAgentCode((current) => current || registry.agents[0]?.code || "");
+    }).catch((error: Error) => setAgentPlanError(toUserFacingError(error)));
   }, [api, hasVerifiedSession]);
 
   useEffect(() => {
@@ -498,6 +545,8 @@ export function App() {
         setAgentModelCatalog(catalog);
         setAgentProvider(catalog.defaultProviderName);
         setAgentModel(catalog.defaultModelCode);
+        setHandoutAiProvider(catalog.defaultProviderName);
+        setHandoutAiModel(catalog.defaultModelCode);
         setAgentModelCatalogError("");
       })
       .catch((error: Error) => setAgentModelCatalogError(toUserFacingError(error)));
@@ -510,7 +559,7 @@ export function App() {
 
   useEffect(() => {
     if (!hasVerifiedSession) return;
-    refreshTeachingConversationHistory();
+    refreshTeachingConversationSummaries();
   }, [api, hasVerifiedSession]);
 
   useEffect(() => {
@@ -524,38 +573,17 @@ export function App() {
   }, [teachingConversationEntries, teachingConversationId]);
 
   useEffect(() => {
-    globalThis.localStorage?.setItem(
-      HANDOUT_COLLABORATION_STORAGE_KEY,
-      JSON.stringify(handoutCollaborationEntries),
-    );
-  }, [handoutCollaborationEntries]);
+    // Remove both previous handout caches once so a browser upgrade cannot resurrect a stale task beside the current run.
+    globalThis.localStorage?.removeItem(LEGACY_TEACHING_TASK_STORAGE_KEY);
+    globalThis.localStorage?.removeItem(LEGACY_HANDOUT_COLLABORATION_STORAGE_KEY);
+  }, []);
 
   useEffect(() => {
     if (!hasVerifiedSession) return;
-    const taskId = window.localStorage.getItem(TEACHING_TASK_STORAGE_KEY);
-    if (!taskId) return;
-    setLoadingTeachingTask(true);
-    api
-      .getTeachingTask(taskId)
-      .then((task) => {
-        syncSelectedTeachingTemplate(task);
-        setTeachingTask(task);
-        loadTeachingFeedbackHistory(task.taskId);
-        if (task.status === "CREATED" || task.status === "RUNNING") {
-          pollTeachingTask(task.taskId);
-        }
-      })
-      .catch((error: Error) => {
-        if (isBackendNotFound(error)) {
-          window.localStorage.removeItem(TEACHING_TASK_STORAGE_KEY);
-          setTeachingTask(null);
-          setTeachingError("");
-          return;
-        }
-        setTeachingError(toUserFacingError(error));
-      })
-      .finally(() => setLoadingTeachingTask(false));
-  }, [api, hasVerifiedSession]);
+    setTeachingTask(null);
+    setFeedbackHistory([]);
+    clearHandoutPreview();
+  }, [hasVerifiedSession]);
 
   useEffect(() => () => {
     if (handoutPreviewPdfUrl) {
@@ -567,7 +595,15 @@ export function App() {
     setLoadingTeachingHistory(true);
     api
       .listTeachingTasks(20)
-      .then(setTeachingHistory)
+      .then((latest) => setTeachingHistory((current) => {
+        // A background progress refresh must update task payloads in place rather than making the selected record
+        // jump under the cursor. Newly created server records are appended in API order after stable existing items.
+        const received = new Map(latest.map((item) => [item.taskId, item]));
+        const retained = current.filter((item) => received.has(item.taskId))
+          .map((item) => received.get(item.taskId) ?? item);
+        const appended = latest.filter((item) => !current.some((currentItem) => currentItem.taskId === item.taskId));
+        return [...retained, ...appended];
+      }))
       .catch((error: Error) => {
         if (error.message.includes("405") || error.message.includes("404")) {
           setTeachingHistory([]);
@@ -580,7 +616,7 @@ export function App() {
 
   function refreshTeacherResources() {
     setLoadingTeacherResources(true);
-    api
+    return api
       .listTeacherResources()
       .then((resources) => {
         setTeacherResources(resources);
@@ -643,11 +679,14 @@ export function App() {
 
   function refreshKnowledgeQuestionBank() {
     setKnowledgeBankError("");
+    setKnowledgePoints([]);
+    setKnowledgeRelations([]);
+    setQuestionBankItems([]);
     setLoadingQuestionBank(true);
     Promise.all([
       api.listKnowledgePoints(),
       api.listKnowledgeRelations(),
-      api.searchQuestionBankItems(questionBankQuery.trim(), 50),
+      api.searchQuestionBankItems(questionBankQuery.trim(), QUESTION_BANK_MAX_SEARCH_ROWS),
     ])
       .then(([points, relations, questions]) => {
         setKnowledgePoints(points);
@@ -655,7 +694,12 @@ export function App() {
         setQuestionBankItems(questions);
         setQuestionBankPage(1);
       })
-      .catch((error: Error) => setKnowledgeBankError(toUserFacingError(error)))
+      .catch((error: Error) => {
+        setKnowledgePoints([]);
+        setKnowledgeRelations([]);
+        setQuestionBankItems([]);
+        setKnowledgeBankError(toUserFacingError(error));
+      })
       .finally(() => setLoadingQuestionBank(false));
   }
 
@@ -674,13 +718,23 @@ export function App() {
 
   function handleSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!query.trim()) { setSearchError("请输入检索词。"); return; }
+    if (!query.trim() && !formulaQuery.trim() && !formulaImage) {
+      setSearchError("请输入主题词、公式文本或选择公式图片。");
+      return;
+    }
     setSearching(true);
     setSearchError("");
     setAuditError("");
     setAuditDetail(null);
     api
-      .search(query.trim(), limit)
+      .search({
+        query: query.trim(),
+        formulaQuery: formulaQuery.trim(),
+        formulaImage,
+        limit,
+        documentIds: selectedTextbookIds,
+        retrievalMode: textbookRetrievalMode,
+      })
       .then((result) => {
         setSearchResult(result);
         if (!canReadRetrievalAudit) {
@@ -699,38 +753,37 @@ export function App() {
       .finally(() => setSearching(false));
   }
 
+  /** Reads formula pixels into a data URL because the worker CLIP route receives image content, never a filename. */
+  function handleFormulaImageChange(file: File | null) {
+    if (!file) {
+      setFormulaImage("");
+      return;
+    }
+    if (!file.type.startsWith("image/")) {
+      setSearchError("公式图片必须是浏览器支持的图片格式。");
+      return;
+    }
+    if (file.size > MAX_FORMULA_IMAGE_BYTES) {
+      setSearchError(`公式图片不能超过 ${MAX_FORMULA_IMAGE_BYTES / 1024 / 1024} MB。`);
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => setFormulaImage(typeof reader.result === "string" ? reader.result : "");
+    reader.onerror = () => setSearchError("读取公式图片失败，请重新选择文件。");
+    reader.readAsDataURL(file);
+  }
+
+  /** Keeps the public textbook scope explicit instead of hiding a library constraint inside the natural-language query. */
+  function toggleTextbookScope(documentId: string) {
+    setSelectedTextbookIds((current) => current.includes(documentId)
+      ? current.filter((value) => value !== documentId)
+      : [...current, documentId]);
+  }
+
   function upsertHandoutCollaborationTask(task: TeachingTaskResponse, requestId?: string) {
-    setHandoutCollaborationEntries((current) => {
-      const updated = current.map((entry) => {
-        if (entry.role !== "assistant") {
-          return entry;
-        }
-        if (entry.taskId === task.taskId || (requestId && entry.id === `assistant-pending:${requestId}`)) {
-          return {
-            id: `assistant:${task.taskId}`,
-            role: "assistant" as const,
-            taskId: task.taskId,
-            task,
-            createdAt: entry.createdAt,
-          };
-        }
-        return entry;
-      });
-      const exists = updated.some((entry) => entry.role === "assistant" && entry.taskId === task.taskId);
-      if (exists) {
-        return updated;
-      }
-      return [
-        ...updated,
-        {
-          id: `assistant:${task.taskId}`,
-          role: "assistant" as const,
-          taskId: task.taskId,
-          task,
-          createdAt: new Date().toISOString(),
-        },
-      ];
-    });
+    void requestId;
+    setHandoutCollaborationEntries((current) =>
+      replaceCurrentHandoutTask<TeachingTaskResponse>(current, task) as HandoutCollaborationThreadItem[]);
   }
 
   function handleTeachingTask(event: FormEvent<HTMLFormElement>) {
@@ -739,39 +792,33 @@ export function App() {
     const clientRequestId = globalThis.crypto.randomUUID();
     const submittedGoal = learningGoal.trim();
     const submittedQuestion = teachingQuestion.trim();
-    const selectedTemplate = teachingTemplates.find((item) => item.templateCode === selectedTeachingTemplateCode);
+    const submittedSupplement = teachingSupplement.trim();
+    const submittedAt = new Date().toISOString();
     setSubmittingTeachingTask(true);
     setTeachingError("");
-    setHandoutCollaborationEntries((current) => [
-      ...current,
-      {
-        id: `user:${clientRequestId}`,
-        role: "user" as const,
-        learningGoal: submittedGoal,
-        questionText: submittedQuestion || undefined,
-        templateName: selectedTemplate?.displayName ?? "标准讲义模板",
-        evidenceLimit: limit,
-        createdAt: new Date().toISOString(),
-      },
-      {
-        id: `assistant-pending:${clientRequestId}`,
-        role: "assistant" as const,
-        createdAt: new Date().toISOString(),
-        loading: true,
-      },
-    ]);
+    setHandoutCollaborationEntries(beginCurrentHandoutRun<TeachingTaskResponse>({
+      requestId: clientRequestId,
+      learningGoal: submittedGoal,
+      questionText: submittedQuestion,
+      supplementaryRequirements: submittedSupplement,
+      templateName: "自动生成",
+      evidenceLimit: limit,
+      createdAt: submittedAt,
+    }) as HandoutCollaborationThreadItem[]);
     api
       .submitTeachingTask({
         clientRequestId,
         questionText: submittedQuestion || undefined,
-        learningGoal: submittedGoal,
-        evidenceLimit: limit,
-        handoutTemplateCode: selectedTeachingTemplateCode || undefined,
+          learningGoal: submittedGoal,
+          supplementaryRequirements: submittedSupplement || undefined,
+          evidenceLimit: limit,
+          handoutTemplateCode: selectedTeachingTemplateCode,
+          watermarkText: handoutWatermarkText,
+          aiProviderName: handoutAiProvider || undefined,
+          aiModelCode: handoutAiModel || undefined,
       })
       .then((task) => {
-        syncSelectedTeachingTemplate(task);
-        window.localStorage.setItem(TEACHING_TASK_STORAGE_KEY, task.taskId);
-        setTeachingTask(task);
+        focusTeachingTask(task);
         setHandoutPreviewLatex("");
         setHandoutPreviewTaskId("");
         setHandoutPreviewPdfUrl((current) => {
@@ -786,9 +833,8 @@ export function App() {
         setFeedbackHistory([]);
         upsertHandoutCollaborationTask(task, clientRequestId);
         refreshTeachingHistory();
-        loadTeachingFeedbackHistory(task.taskId);
         if (task.status !== "COMPLETED") {
-          pollTeachingTask(task.taskId);
+          followTeachingTask(task.taskId);
         }
       })
       .catch((error: Error) => {
@@ -810,13 +856,57 @@ export function App() {
       .finally(() => setSubmittingTeachingTask(false));
   }
 
-  function refreshTeachingConversationHistory(conversationId?: string) {
+  function refreshTeachingConversationSummaries(conversationId?: string) {
     setLoadingTeachingConversationHistory(true);
     return api
-      .getStudentExplanationHistory(conversationId || teachingConversationId || undefined, 12)
-      .then((history) => setTeachingConversationHistory(history.items))
+      .listStudentExplanationConversations(12)
+      .then((response) => {
+        setTeachingConversationSummaries(response.items);
+        const targetConversationId = conversationId || teachingConversationId || "";
+        const matched = response.items.find((item) => item.conversationId === targetConversationId);
+        if (matched?.title) {
+          setTeachingConversationTitle(matched.title);
+        } else if (!targetConversationId) {
+          setTeachingConversationTitle("AI 讲题");
+        }
+      })
       .catch((error: Error) => setTeachingError(toUserFacingError(error)))
       .finally(() => setLoadingTeachingConversationHistory(false));
+  }
+
+  /** Starts an isolated durable conversation before its first model call, preventing rapid first messages from splitting. */
+  function startNewTeachingConversation() {
+    setTeachingConversationId(globalThis.crypto.randomUUID());
+    setTeachingConversationTitle("新对话");
+    setTeachingConversationEntries([]);
+    setTeachingConversationInput("");
+    setTeachingConversationImageDraft(null);
+    setTeachingConversationImageError("");
+    setTeachingConversationMemoryEnabled(false);
+    setTeachingError("");
+  }
+
+  /** Loads the complete server-owned thread so history selection never relies on a stale browser snapshot. */
+  function openTeachingConversation(summary: StudentExplanationConversationSummary) {
+    if (submittingTeachingConversation || openingTeachingConversationId === summary.conversationId) {
+      return;
+    }
+    setOpeningTeachingConversationId(summary.conversationId);
+    setTeachingError("");
+    api
+      .getStudentExplanationConversation(summary.conversationId, 50)
+      .then((conversation) => {
+        setTeachingConversationId(conversation.conversationId);
+        setTeachingConversationTitle(conversation.title || "AI 讲题");
+        setTeachingConversationEntries(entriesFromConversation(conversation));
+        setTeachingConversationInput("");
+        setTeachingConversationImageDraft(null);
+        setTeachingConversationImageError("");
+        // Loading a past thread must never enable context reuse without a fresh user choice.
+        setTeachingConversationMemoryEnabled(false);
+      })
+      .catch((error: Error) => setTeachingError(toUserFacingError(error)))
+      .finally(() => setOpeningTeachingConversationId(""));
   }
 
   function handleTeachingConversation(event: FormEvent<HTMLFormElement>) {
@@ -828,10 +918,13 @@ export function App() {
       return;
     }
     const requestId = globalThis.crypto.randomUUID();
+    // Allocate before awaiting the server so every turn from this browser state has one stable conversation id.
+    const activeConversationId = teachingConversationId || globalThis.crypto.randomUUID();
     const pendingAssistantId = `assistant-pending:${requestId}`;
     setSubmittingTeachingConversation(true);
     setTeachingError("");
     setTeachingConversationImageError("");
+    setTeachingConversationId(activeConversationId);
     // 发送后立刻清空输入区的题图草稿，避免底部上传条在请求期间继续占位。
     setTeachingConversationImageDraft(null);
     setTeachingConversationEntries((current) => [
@@ -860,7 +953,7 @@ export function App() {
     setTeachingConversationInput("");
     api
       .streamStudentQuestion({
-        conversationId: teachingConversationId || undefined,
+        conversationId: activeConversationId,
         questionText: submittedQuestion || undefined,
         imageUploadId: submittedImage?.uploadId,
         imageFileName: submittedImage?.originalFileName,
@@ -871,27 +964,39 @@ export function App() {
         searchTeacherResources: authSession?.role === "teacher" || authSession?.role === "admin",
         maxTextbookHits: 5,
         maxTeacherResourceHits: 3,
+        useConversationMemory: teachingConversationMemoryEnabled,
       }, (_eventName: string, payload: StudentExplanationStreamEvent) => {
-        if (!payload.progress) {
-          return;
-        }
-        if (payload.progress.conversationId) {
+        if (payload.progress?.conversationId) {
           setTeachingConversationId(payload.progress.conversationId);
+        }
+        if (payload.progress?.conversationTitle) {
+          setTeachingConversationTitle(payload.progress.conversationTitle);
         }
         setTeachingConversationEntries((current) =>
           current.map((entry) =>
-            entry.id === pendingAssistantId
-              ? {
-                  ...entry,
-                  progress: payload.progress ?? undefined,
-                  imageStatus: payload.progress?.imageStatus || entry.imageStatus,
-                }
+            entry.role === "assistant" && entry.id === pendingAssistantId
+              ? (() => {
+                  const snapshot = payload.progress ?? entry.progress;
+                  const streamCards = payload.cards ?? [];
+                  const mergedCards = streamCards.length && snapshot
+                    ? [...snapshot.cards.filter((card) => !streamCards.some((incoming) => incoming.cardKey === card.cardKey)), ...streamCards]
+                    : snapshot?.cards;
+                  return {
+                    ...entry,
+                    progress: snapshot ? { ...snapshot, cards: mergedCards ?? [] } : undefined,
+                    imageStatus: payload.progress?.imageStatus || entry.imageStatus,
+                    // These fields append only bytes received from the provider. No client timer manufactures prose.
+                    liveContent: `${entry.liveContent || ""}${payload.aiContentDelta || ""}`,
+                    liveThinking: `${entry.liveThinking || ""}${payload.aiReasoningDelta || ""}`,
+                  };
+                })()
               : entry,
           ),
         );
       })
       .then((response: StudentExplanationResponse) => {
         setTeachingConversationId(response.conversationId);
+        setTeachingConversationTitle(response.conversationTitle || "AI 讲题");
         setTeachingConversationEntries((current) =>
           current.map((entry) =>
             entry.id === pendingAssistantId
@@ -908,7 +1013,7 @@ export function App() {
               : entry,
           ),
         );
-        return refreshTeachingConversationHistory(response.conversationId);
+        return refreshTeachingConversationSummaries(response.conversationId);
       })
       .catch((error: Error) => {
         const message = toUserFacingError(error);
@@ -988,28 +1093,51 @@ export function App() {
       .finally(() => setLoggingIn(false));
   }
 
-  function pollTeachingTask(taskId: string) {
-    const startedAt = Date.now();
-    const poll = (attempt = 0) => {
+  /** Follows durable server-sent task snapshots; polling below is recovery-only for interrupted SSE connections. */
+  function followTeachingTask(taskId: string) {
+    activeTeachingStreamTaskIdRef.current = taskId;
+    api.streamTeachingTask(taskId, (_eventName, _progress) => {
+      if (activeTeachingStreamTaskIdRef.current !== taskId) {
+        return;
+      }
       api.getTeachingTask(taskId).then((task) => {
+        if (activeTeachingStreamTaskIdRef.current !== taskId) {
+          return;
+        }
         syncSelectedTeachingTemplate(task);
         setTeachingTask(task);
         upsertHandoutCollaborationTask(task);
-        if (task.status === "CREATED" || task.status === "RUNNING") {
-          const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1000);
-          const nextDelay = elapsedSeconds < 20 ? 4000 : elapsedSeconds < 60 ? 7000 : 10000;
-          globalThis.setTimeout(() => poll(attempt + 1), nextDelay);
-          return;
+        if (task.status === "COMPLETED" || task.status === "FAILED") {
+          activeTeachingStreamTaskIdRef.current = "";
+          refreshTeachingHistory();
         }
-        refreshTeachingHistory();
-      }).catch((error: Error) => {
-        const message = error.message || "";
-        const hitRateLimit = message.includes("Rate limit exceeded") || message.includes("429");
-        const nextDelay = hitRateLimit ? 12000 : Math.min(12000, 5000 + attempt * 1000);
-        globalThis.setTimeout(() => poll(attempt + 1), nextDelay);
       });
-    };
-    globalThis.setTimeout(() => poll(0), 2000);
+    }).catch(() => {
+      if (activeTeachingStreamTaskIdRef.current === taskId) {
+        pollTeachingTask(taskId);
+      }
+    });
+  }
+
+  /** Uses the ordinary owned-task endpoint only when the real-time connection was interrupted. */
+  function pollTeachingTask(taskId: string) {
+    if (activeTeachingStreamTaskIdRef.current !== taskId) {
+      return;
+    }
+    api.getTeachingTask(taskId).then((task) => {
+      if (activeTeachingStreamTaskIdRef.current !== taskId) {
+        return;
+      }
+      syncSelectedTeachingTemplate(task);
+      setTeachingTask(task);
+      upsertHandoutCollaborationTask(task);
+      if (task.status === "COMPLETED" || task.status === "FAILED") {
+        activeTeachingStreamTaskIdRef.current = "";
+        refreshTeachingHistory();
+        return;
+      }
+      globalThis.setTimeout(() => pollTeachingTask(taskId), TASK_RECOVERY_POLL_DELAY_MS);
+    }).catch((error: Error) => setTeachingError(toUserFacingError(error)));
   }
 
   function handleRegisterResource(event: FormEvent<HTMLFormElement>) {
@@ -1023,22 +1151,11 @@ export function App() {
       setTeacherResourceError("请上传文件、选择文件夹，或填写服务器本地路径。");
       return;
     }
-    const effectiveTitle = deriveTeacherResourceTitle({
-      title: resourceTitle,
-      files: resourceFiles,
-      originalUrl: feishuMode ? resourceLocation : undefined,
-      localPath: feishuMode ? undefined : resourceLocation,
-    });
-    if (effectiveTitle === UNTITLED_TEACHER_RESOURCE_TITLE) {
-      setTeacherResourceError("无法识别资源名称，请重新选择文件、文件夹或链接。");
-      return;
-    }
     setRegisteringResource(true);
     setTeacherResourceError("");
     const registerPromise = feishuMode
       ? api.registerTeacherResource({
         sourceType: resourceSourceType,
-        title: effectiveTitle,
         originalUrl: resourceLocation.trim(),
         permissionScope: resourceScope,
         feishuExportFormat: feishuExportFormat,
@@ -1047,14 +1164,12 @@ export function App() {
       : resourceFiles.length > 0
         ? api.uploadTeacherResource({
           sourceType: resourceSourceType,
-          title: effectiveTitle,
           permissionScope: resourceScope,
           parseMode: resourceParseMode,
           files: resourceFiles,
         })
         : api.registerTeacherResource({
           sourceType: resourceSourceType,
-          title: effectiveTitle,
           localPath: resourceLocation.trim(),
           permissionScope: resourceScope,
           parseMode: resourceParseMode,
@@ -1063,10 +1178,40 @@ export function App() {
       .then((resource) => {
         setTeacherResources((current) => [resource, ...current]);
         setTeacherSyncJobs((current) => ({ ...current, [resource.documentId]: [] }));
-        setResourceTitle("");
         setResourceLocation("");
         setResourceFiles([]);
         setFeishuDiscoveryResult(null);
+        if (!feishuMode) {
+          return undefined;
+        }
+        // A Feishu browser URL is short-lived presentation data, not evidence. Immediately enter the existing
+        // owner-scoped checkpointed sync flow so only parsed local assets and blocks can reach later RAG generation.
+        setSyncingResourceId(resource.documentId);
+        return api
+          .createTeacherResourceSyncJob(resource.documentId)
+          .then((job) => {
+            setTeacherSyncJobs((current) => ({ ...current, [resource.documentId]: [job, ...(current[resource.documentId] ?? [])] }));
+            setTeacherSyncCheckpoints((current) => { const next = { ...current }; delete next[job.jobId]; return next; });
+            return api.executeTeacherResourceSyncJob(resource.documentId, job.jobId);
+          })
+          .then((executedJob) => {
+            setTeacherSyncJobs((current) => ({
+              ...current,
+              [resource.documentId]: [executedJob, ...(current[resource.documentId] ?? []).filter((item) => item.jobId !== executedJob.jobId)],
+            }));
+            if (!isCompletedTeacherResourceSync(executedJob.status)) {
+              throw new Error(executedJob.message || "飞书资料同步未完成，不能进入讲义检索。");
+            }
+            return api.getTeacherResourceSyncCheckpoint(resource.documentId, executedJob.jobId)
+              .then((checkpoint) => {
+                if (checkpoint) {
+                  setTeacherSyncCheckpoints((current) => ({ ...current, [executedJob.jobId]: checkpoint }));
+                }
+              })
+              .catch(() => undefined);
+          })
+          .then(() => refreshTeacherResources())
+          .finally(() => setSyncingResourceId(""));
       })
       .catch((error: Error) => setTeacherResourceError(toUserFacingError(error)))
       .finally(() => setRegisteringResource(false));
@@ -1077,47 +1222,12 @@ export function App() {
    * share the same resource form without one mode accidentally leaking stale values into the other.
    */
   function handleResourceFilesChange(files: FileList | null) {
-    const nextFiles = files ? Array.from(files) : [];
-    const previousDerivedTitle = deriveTeacherResourceTitle({
-      files: resourceFiles,
-      originalUrl: resourceSourceType === "feishu" ? resourceLocation : undefined,
-      localPath: resourceSourceType === "feishu" ? undefined : resourceLocation,
-    });
-    const nextDerivedTitle = deriveTeacherResourceTitle({ files: nextFiles });
-    setResourceFiles(nextFiles);
-    setResourceTitle((current) => {
-      const normalizedCurrent = current.trim();
-      if (
-        normalizedCurrent.length > 0
-        && normalizedCurrent !== previousDerivedTitle
-      ) {
-        return current;
-      }
-      return nextDerivedTitle === UNTITLED_TEACHER_RESOURCE_TITLE ? current : nextDerivedTitle;
-    });
+    setResourceFiles(files ? Array.from(files) : []);
     setTeacherResourceError("");
   }
 
   function handleResourceLocationChange(value: string) {
-    const previousDerivedTitle = deriveTeacherResourceTitle({
-      originalUrl: resourceSourceType === "feishu" ? resourceLocation : undefined,
-      localPath: resourceSourceType === "feishu" ? undefined : resourceLocation,
-    });
-    const nextDerivedTitle = deriveTeacherResourceTitle({
-      originalUrl: resourceSourceType === "feishu" ? value : undefined,
-      localPath: resourceSourceType === "feishu" ? undefined : value,
-    });
     setResourceLocation(value);
-    setResourceTitle((current) => {
-      const normalizedCurrent = current.trim();
-      if (
-        normalizedCurrent.length > 0
-        && normalizedCurrent !== previousDerivedTitle
-      ) {
-        return current;
-      }
-      return nextDerivedTitle === UNTITLED_TEACHER_RESOURCE_TITLE ? current : nextDerivedTitle;
-    });
     setTeacherResourceError("");
   }
 
@@ -1132,11 +1242,13 @@ export function App() {
   }
 
   function handleArchiveResource(documentId: string) {
+    setDeletingResourceId(documentId);
     setTeacherResourceError("");
     api
       .archiveTeacherResource(documentId)
       .then(() => setTeacherResources((current) => current.filter((r) => r.documentId !== documentId)))
-      .catch((error: Error) => setTeacherResourceError(toUserFacingError(error)));
+      .catch((error: Error) => setTeacherResourceError(toUserFacingError(error)))
+      .finally(() => setDeletingResourceId(""));
   }
 
   function handleCreateKnowledgePoint(event: FormEvent<HTMLFormElement>) {
@@ -1182,14 +1294,21 @@ export function App() {
   function handleSearchQuestionBank(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setKnowledgeBankError("");
+    // Never leave a previous page of rows visible while a new query is in flight or has failed. Showing stale rows
+    // beside the new keyword makes an authorization/transport failure look like a successful, hard-coded search.
+    setQuestionBankItems([]);
+    setQuestionBankPage(1);
     setLoadingQuestionBank(true);
     api
-      .searchQuestionBankItems(questionBankQuery.trim(), 50)
+      .searchQuestionBankItems(questionBankQuery.trim(), QUESTION_BANK_MAX_SEARCH_ROWS)
       .then((questions) => {
         setQuestionBankItems(questions);
         setQuestionBankPage(1);
       })
-      .catch((error: Error) => setKnowledgeBankError(toUserFacingError(error)))
+      .catch((error: Error) => {
+        setQuestionBankItems([]);
+        setKnowledgeBankError(toUserFacingError(error));
+      })
       .finally(() => setLoadingQuestionBank(false));
   }
 
@@ -1212,6 +1331,7 @@ export function App() {
           .then((cp) => { if (cp) setTeacherSyncCheckpoints((cur) => ({ ...cur, [executedJob.jobId]: cp })); })
           .catch(() => undefined);
       })
+      .then(() => refreshTeacherResources())
       .catch((error: Error) => setTeacherResourceError(toUserFacingError(error)))
       .finally(() => setSyncingResourceId(""));
   }
@@ -1230,6 +1350,7 @@ export function App() {
           .then((cp) => { if (cp) setTeacherSyncCheckpoints((cur) => ({ ...cur, [resumedJob.jobId]: cp })); })
           .catch(() => undefined);
       })
+      .then(() => refreshTeacherResources())
       .catch((error: Error) => setTeacherResourceError(toUserFacingError(error)))
       .finally(() => setSyncingResourceId(""));
   }
@@ -1285,10 +1406,10 @@ export function App() {
       .finally(() => setDiscoveringFeishu(false));
   }
 
-  function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
+function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
     setResourceSourceType("feishu");
     setResourceLocation(candidate.url);
-    setResourceTitle(candidate.name || candidate.path || "飞书资源");
+    setTeacherResourceError("");
   }
 
   function handlePreviewLatex() {
@@ -1313,6 +1434,56 @@ export function App() {
   function handlePreviewPdf() {
     if (!teachingTask) return;
     previewTeachingTaskPdf(teachingTask.taskId, handoutVersion);
+  }
+
+  /** Resumes the existing failed task; it never submits a second client request or task ID. */
+  function handleResumeTeachingTask() {
+    if (!teachingTask || teachingTask.status !== "FAILED") return;
+    const taskId = teachingTask.taskId;
+    setHandoutAction("resume");
+    setTeachingError("");
+    setHandoutExportMessage("");
+    api
+      .resumeTeachingTask(taskId)
+      .then((resumedTask) => {
+        clearHandoutPreview();
+        focusTeachingTask(resumedTask);
+        setTeachingHistory((current) => replaceHistoryTaskInPlace(current, resumedTask));
+        refreshTeachingHistory();
+        if (resumedTask.status !== "COMPLETED") {
+          followTeachingTask(taskId);
+        }
+      })
+      .catch((error: Error) => setTeachingError(toUserFacingError(error)))
+      .finally(() => setHandoutAction(""));
+  }
+
+  /** Saves the selected version onto its current task and invalidates only its derived PDF preview. */
+  function handleSaveHandoutVersion(latex: string) {
+    if (!teachingTask) return;
+    const taskId = teachingTask.taskId;
+    const version = handoutVersion;
+    setHandoutAction("save-version");
+    setTeachingError("");
+    setHandoutExportMessage("");
+    api
+      .updateTeachingTaskHandout(taskId, version, latex)
+      .then((updatedTask) => {
+        focusTeachingTask(updatedTask);
+        setHandoutPreviewLatex(latex);
+        setHandoutPreviewTaskId(`${taskId}:${version}`);
+        setHandoutPreviewPdfUrl((current) => {
+          if (current) URL.revokeObjectURL(current);
+          return "";
+        });
+        setHandoutPreviewPdfBytes(null);
+        setHandoutPreviewPdfTaskId("");
+        setHandoutPreviewPdfMeta(null);
+        setHandoutExportMessage(`${handoutVersionLabel(version)}已保存，可重新预览 PDF。`);
+        refreshTeachingHistory();
+      })
+      .catch((error: Error) => setTeachingError(toUserFacingError(error)))
+      .finally(() => setHandoutAction(""));
   }
 
   function previewTeachingTaskPdf(taskId: string, version: TeachingHandoutVersion) {
@@ -1355,11 +1526,21 @@ export function App() {
   }
 
   function focusTeachingTask(task: TeachingTaskResponse) {
-    window.localStorage.setItem(TEACHING_TASK_STORAGE_KEY, task.taskId);
     syncSelectedTeachingTemplate(task);
+    setLearningGoal(task.learningGoal ?? "");
+    setTeachingQuestion(task.questionText ?? "");
     setTeachingTask(task);
     loadTeachingFeedbackHistory(task.taskId);
     upsertHandoutCollaborationTask(task);
+  }
+
+  function clearFocusedTeachingTask() {
+    activeTeachingStreamTaskIdRef.current = "";
+    setTeachingTask(null);
+    setFeedbackHistory([]);
+    setFeedbackMessage("");
+    setHandoutExportMessage("");
+    clearHandoutPreview();
   }
 
   function previewHandoutTaskPdf(task: TeachingTaskResponse) {
@@ -1474,10 +1655,21 @@ export function App() {
     setHandoutPreviewPdfMeta(null);
   }
 
+  function handleRemoveTeachingHistory(taskId: string) {
+    setTeachingHistory((current) => current.filter((item) => item.taskId !== taskId));
+    setHandoutCollaborationEntries((current) => current.filter((entry) => entry.role !== "assistant" || entry.taskId !== taskId));
+    if (teachingTask?.taskId === taskId) {
+      clearFocusedTeachingTask();
+    }
+  }
+
   function handleSelectTeachingHistory(task: TeachingTaskResponse) {
-    window.localStorage.setItem(TEACHING_TASK_STORAGE_KEY, task.taskId);
-    setOpeningTeachingHistoryTaskId(task.taskId);
+    if (teachingTask?.taskId === task.taskId) {
+      // Selecting the already-open task is idempotent; it must not clear the current context or alter history order.
+      return;
+    }
     setLoadingTeachingTask(true);
+    setOpeningTeachingHistoryTaskId(task.taskId);
     clearHandoutPreview();
     setHandoutExportMessage("");
     setFeedbackMessage("");
@@ -1485,24 +1677,24 @@ export function App() {
     api
       .getTeachingTask(task.taskId)
       .then((latestTask) => {
-        window.localStorage.setItem(TEACHING_TASK_STORAGE_KEY, latestTask.taskId);
-        syncSelectedTeachingTemplate(latestTask);
-        setTeachingTask(latestTask);
-        upsertHandoutCollaborationTask(latestTask);
-        setTeachingHistory((current) => [latestTask, ...current.filter((item) => item.taskId !== latestTask.taskId)]);
-        loadTeachingFeedbackHistory(latestTask.taskId);
+        focusTeachingTask(latestTask);
+        // Keep the server-provided history order stable while replacing only the refreshed task payload.
+        setTeachingHistory((current) => replaceHistoryTaskInPlace(current, latestTask));
         if (latestTask.status === "CREATED" || latestTask.status === "RUNNING") {
-          pollTeachingTask(latestTask.taskId);
+          followTeachingTask(latestTask.taskId);
+        } else if (latestTask.status === "COMPLETED") {
+          const resolvedVersion = resolvePreviewHandoutVersion(latestTask, handoutVersion);
+          if (resolvedVersion !== handoutVersion) {
+            setHandoutVersion(resolvedVersion);
+          }
+          previewTeachingTaskPdf(latestTask.taskId, resolvedVersion);
         }
       })
       .catch((error: Error) => {
         if (isBackendNotFound(error)) {
           setTeachingHistory((current) => current.filter((item) => item.taskId !== task.taskId));
-          if (window.localStorage.getItem(TEACHING_TASK_STORAGE_KEY) === task.taskId) {
-            window.localStorage.removeItem(TEACHING_TASK_STORAGE_KEY);
-          }
           if (teachingTask?.taskId === task.taskId) {
-            setTeachingTask(null);
+            clearFocusedTeachingTask();
           }
           setTeachingError("这条历史讲义记录已经失效，已从列表移除。");
           return;
@@ -1510,8 +1702,8 @@ export function App() {
         setTeachingError(toUserFacingError(error));
       })
       .finally(() => {
-        setOpeningTeachingHistoryTaskId("");
         setLoadingTeachingTask(false);
+        setOpeningTeachingHistoryTaskId("");
       });
   }
 
@@ -1557,6 +1749,8 @@ export function App() {
     event.preventDefault();
     const selectedModels = agentModelsForProvider(agentModelCatalog, agentProvider);
     if (!selectedModels.some((model) => model.modelCode === agentModel)) { setAgentPlanError("模型目录还没有加载完成，或当前模型不可用。"); return; }
+    const selectedAgent = agentRegistry?.agents.find((agent) => agent.code === selectedMarketplaceAgentCode);
+    if (!selectedAgent) { setAgentPlanError("智能体目录尚未加载完成。"); return; }
     const disabledToolScopes = [disablePrivateSearch ? "tool:search:private" : "", disableTextbookSearch ? "tool:search:textbook" : ""].filter(Boolean);
     setPlanningAgent(true);
     setAgentPlanError("");
@@ -1564,12 +1758,12 @@ export function App() {
     setAgentExecution(null);
     api
       .planAgentRun({
-        agentCode: "CoursewareAgent", taskType: "courseware_generation", userVipLevel: "teacher",
+        agentCode: selectedAgent.code, taskType: selectedAgent.category, userVipLevel: "teacher",
         estimatedInputTokens: 3200, estimatedOutputTokens: 1800, hasImage: false, hasFormula: true,
         difficulty: "medium", latencyRequirement: "normal", costBudget: 2.5, previousFailureCount: 0,
-        requiredJsonSchema: true, requestedToolScopes: ["tool:courseware:generate", "tool:search:private", "tool:search:textbook"],
-        disabledToolScopes, requestedDataScopes: ["TEACHER_PRIVATE", "CLASS_AUTHORIZED", "PUBLIC_TEXTBOOK"],
-        highValueOperation: true, preferredProviderName: agentProvider, preferredModelCode: agentModel,
+        requiredJsonSchema: true, requestedToolScopes: selectedAgent.allowedToolScopes,
+        disabledToolScopes, requestedDataScopes: selectedAgent.allowedDataScopes,
+        highValueOperation: selectedAgent.capabilityRequired, preferredProviderName: agentProvider, preferredModelCode: agentModel,
       })
       .then(setAgentPlan)
       .catch((error: Error) => setAgentPlanError(toUserFacingError(error)))
@@ -2014,6 +2208,37 @@ export function App() {
                   />
                 </label>
                 <label>
+                  <span>检索策略</span>
+                  <select
+                    className="form-input"
+                    value={textbookRetrievalMode}
+                    onChange={(event) => setTextbookRetrievalMode(event.target.value as TextbookSearchOptions["retrievalMode"])}
+                  >
+                    <option value="hybrid">混合 RAG：BM25 + BGE 文本 + BGE 重排</option>
+                    <option value="text_bge">文本语义检索：BGE</option>
+                    <option value="formula_bge">公式语义检索：LaTeX + BGE</option>
+                    <option value="image_clip">图片检索：CLIP（仅明确选择时启用）</option>
+                  </select>
+                </label>
+                <label>
+                  <span>公式文本（可选）</span>
+                  <textarea
+                    className="form-input formula-query-input"
+                    value={formulaQuery}
+                    onChange={(event) => setFormulaQuery(event.target.value)}
+                    placeholder="例如 K^{2}=\\frac{n(ad-bc)^{2}}{(a+b)(c+d)(a+c)(b+d)}"
+                  />
+                </label>
+                <label>
+                  <span>公式图片（可选，CLIP）</span>
+                  <input
+                    className="form-input"
+                    type="file"
+                    accept="image/*"
+                    onChange={(event) => handleFormulaImageChange(event.target.files?.item(0) ?? null)}
+                  />
+                </label>
+                <label>
                   <span>返回条数</span>
                   <input
                     className="form-input"
@@ -2022,6 +2247,30 @@ export function App() {
                     onChange={(event) => setLimit(Number(event.target.value))}
                   />
                 </label>
+                <details className="textbook-scope-picker">
+                  <summary>教材范围：{selectedTextbookIds.length ? `已选择 ${selectedTextbookIds.length} 本` : "全部已入库教材"}</summary>
+                  <div className="textbook-scope-actions">
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => setSelectedTextbookIds([])}>检索全部</button>
+                  </div>
+                  <div className="textbook-scope-list">
+                    {(summary?.books ?? []).map((book) => (
+                      <label className="textbook-scope-option" key={book.doc_id}>
+                        <input
+                          type="checkbox"
+                          checked={selectedTextbookIds.includes(book.doc_id)}
+                          onChange={() => toggleTextbookScope(book.doc_id)}
+                        />
+                        <span>{book.book_name}（{book.volume}，{book.page_count} 页）</span>
+                      </label>
+                    ))}
+                  </div>
+                </details>
+                {formulaImage ? (
+                  <div className="formula-image-preview">
+                    <img src={formulaImage} alt="待检索的公式图片" />
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => setFormulaImage("")}>移除图片</button>
+                  </div>
+                ) : null}
                 <button className="btn btn-primary" type="submit" disabled={searching}>
                   {searching ? <Loader2 className="spin" size={16} /> : <Search size={16} />}
                   <span>检索</span>
@@ -2035,7 +2284,7 @@ export function App() {
               {searchResult ? (
                 <span className="strategy-pill">
                   <ShieldCheck size={14} />
-                  <span>{searchResult.retrievalStrategy}</span>
+                  <span>真实检索链路</span>
                 </span>
               ) : null}
             </div>
@@ -2056,10 +2305,29 @@ export function App() {
               ) : null}
               {searchResult ? (
                 <>
+                  <StatusLine
+                    icon={searchResult.total > 0 ? <ShieldCheck size={16} /> : <AlertCircle size={16} />}
+                    text={searchResult.retrievalDescription}
+                    tone={searchResult.total > 0 ? "muted" : "danger"}
+                  />
+                  <div className="retrieval-stage-list">
+                    {searchResult.retrievalStages.map((stage) => (
+                      <div className={`retrieval-stage ${stage.status}`} key={stage.code}>
+                        <strong>{stage.label}{typeof stage.elapsedMs === "number" && stage.elapsedMs >= 0 ? ` ${stage.elapsedMs} ms` : ""}</strong>
+                        <span>{stage.description}</span>
+                      </div>
+                    ))}
+                  </div>
                   <div className="audit-row">
                     <span>审计追踪号</span>
                     <strong>{searchResult.queryId}</strong>
                   </div>
+                  {searchResult.hits.length === 0 ? (
+                    <div className="empty-state">
+                      <div className="empty-state-icon"><Library size={20} /></div>
+                      <div className="empty-state-text">当前选定教材库没有可验证证据。可切换教材范围，或先将包含该章节的教材入库。</div>
+                    </div>
+                  ) : null}
                   <div className="hit-list">
                     {searchResult.hits.map((hit, index) => (
                       <EvidenceCard key={hit.chunkId} hit={hit} rank={index + 1} />
@@ -2077,19 +2345,25 @@ export function App() {
   function renderTeaching() {
     return renderRequiresAuth(
       <TeachingConversationPanel
+        conversationTitle={teachingConversationTitle}
         value={teachingConversationInput}
         entries={teachingConversationEntries}
-        history={teachingConversationHistory}
+        recentConversations={teachingConversationSummaries}
         loading={submittingTeachingConversation}
         loadingHistory={loadingTeachingConversationHistory}
         error={teachingError}
         imageDraft={teachingConversationImageDraft}
         uploadingImage={uploadingTeachingConversationImage}
         imageError={teachingConversationImageError}
+        conversationMemoryEnabled={teachingConversationMemoryEnabled}
+        openingConversationId={openingTeachingConversationId}
         onValueChange={setTeachingConversationInput}
         onSubmit={handleTeachingConversation}
         onImageSelect={handleTeachingConversationImageUpload}
         onClearImage={clearTeachingConversationImage}
+        onConversationMemoryChange={setTeachingConversationMemoryEnabled}
+        onStartNewConversation={startNewTeachingConversation}
+        onOpenConversation={openTeachingConversation}
       />,
     );
   }
@@ -2120,6 +2394,17 @@ export function App() {
               />
               <div className="divider" />
               <form className="search-form agent-tool-form" onSubmit={handlePlanAgent}>
+                <label>
+                  <span>广场智能体</span>
+                  <select className="form-select" value={selectedMarketplaceAgentCode} onChange={(e) => setSelectedMarketplaceAgentCode(e.target.value)}>
+                    {(agentRegistry?.agents ?? []).map((agent) => (
+                      <option key={agent.code} value={agent.code}>{agent.category} · {agent.name}</option>
+                    ))}
+                  </select>
+                  {agentRegistry?.agents.find((agent) => agent.code === selectedMarketplaceAgentCode) ? (
+                    <small>{agentRegistry.agents.find((agent) => agent.code === selectedMarketplaceAgentCode)?.description}</small>
+                  ) : null}
+                </label>
                 <label>
                   <span>服务商</span>
                   <select className="form-select" value={agentProvider} onChange={(e) => handleAgentProviderChange(e.target.value)}>
@@ -2189,65 +2474,82 @@ export function App() {
 
   function renderStreaming() {
     return renderRequiresAuth(
-      <section className="handout-studio-shell">
-        <div className="handout-studio-header">
-          <div>
-            <h1 className="page-title">讲义生成</h1>
-            <p className="page-subtitle">教师讲义、学生讲义、PDF 预览和人工审查在同一工作区完成。</p>
-          </div>
-        </div>
-
-        <div className="handout-studio-grid">
-          <div className="handout-studio-main">
-            <section className="handout-studio-pane">
-              <HandoutCollaborationPanel
-                learningGoal={learningGoal}
-                questionText={teachingQuestion}
-                evidenceLimit={limit}
-                selectedTemplateName={
-                  teachingTemplates.find((item) => item.templateCode === selectedTeachingTemplateCode)?.displayName
-                  ?? "标准讲义模板"
-                }
-                currentTaskId={teachingTask?.taskId ?? ""}
-                version={handoutVersion}
-                entries={handoutCollaborationEntries}
-                history={teachingHistory}
-                loading={submittingTeachingTask}
-                loadingHistory={loadingTeachingHistory}
-                error={teachingError}
-                onLearningGoalChange={setLearningGoal}
-                onQuestionTextChange={setTeachingQuestion}
-                onEvidenceLimitChange={setLimit}
-                onSubmit={handleTeachingTask}
-                onSelectHistory={handleSelectTeachingHistory}
-                onPreviewPdf={previewHandoutTaskPdf}
-                onPreviewLatex={previewHandoutTaskLatex}
-                onExportPdf={exportHandoutTaskPdf}
-              />
-            </section>
-
-            <section className="handout-studio-pane handout-template-pane">
-              <div className="handout-pane-head">
-                <h2 className="card-title"><BookOpen size={16} /> 模板书架</h2>
-                <span>参考真实讲义版式，当前仅影响结构与排版风格。</span>
-              </div>
-              <TemplateShelf
-                templates={teachingTemplates}
-                selectedCode={selectedTeachingTemplateCode}
-                loading={loadingTeachingTemplates}
-                onSelect={setSelectedTeachingTemplateCode}
-                loadPreviewImage={api.getTeachingHandoutTemplatePreviewImage}
-                loadReferencePdf={api.getTeachingHandoutTemplateReferencePdf}
-              />
-            </section>
-          </div>
-
-          <aside className="handout-studio-pane handout-preview-pane">
-            <div className="handout-pane-head">
-              <h2 className="card-title"><Eye size={16} /> 讲义预览</h2>
-              <span>支持真实 PDF 翻页、结构审查和教师/学生双版本切换。</span>
+      <section className="handout-workbench-shell">
+        <header className="teaching-live-header handout-workbench-header">
+          <div className="teaching-live-brand">
+            <div className="teaching-live-brand-icon handout-live-brand-icon">
+              <BookOpen size={16} />
             </div>
-            <div className="handout-preview-pane-body">
+            <div className="teaching-live-brand-copy">
+              <strong>讲义生成</strong>
+              <span>填写需求后开始，生成进度和结果会在同一工作区连续呈现。</span>
+            </div>
+          </div>
+        </header>
+
+        <div className="handout-workbench-main">
+            <div className="handout-workbench-grid">
+              <HandoutHistorySidebar
+                history={teachingHistory}
+                currentTaskId={teachingTask?.taskId ?? ""}
+                loading={loadingTeachingHistory}
+                openingTaskId={openingTeachingHistoryTaskId}
+                isOpen={handoutHistoryOpen}
+                onToggle={() => setHandoutHistoryOpen((current) => !current)}
+                onSelect={handleSelectTeachingHistory}
+                onRemove={handleRemoveTeachingHistory}
+              />
+              <section className="handout-floating-panel">
+                <label className="handout-brief-field handout-template-selector">
+                  <span>讲义母版</span>
+                  <select
+                    className="handout-composer-input"
+                    value={selectedTeachingTemplateCode}
+                    disabled={loadingTeachingTemplates || submittingTeachingTask}
+                    onChange={(event) => {
+                      const templateCode = event.target.value;
+                      setSelectedTeachingTemplateCode(templateCode);
+                      // Zhao long-form layout must have ten traceable questions; enforce it before network submission.
+                      if (templateCode === "zhao_lixian_2025_master_v1") setLimit((current) => Math.max(10, current));
+                    }}
+                  >
+                    {teachingTemplates.map((template) => <option key={template.templateCode} value={template.templateCode}>{template.displayName}</option>)}
+                  </select>
+                </label>
+                <HandoutCollaborationPanel
+                  learningGoal={learningGoal}
+                  questionText={teachingQuestion}
+                  supplementaryRequirements={teachingSupplement}
+                  evidenceLimit={limit}
+                    watermarkText={handoutWatermarkText}
+                    aiProviderName={handoutAiProvider}
+                    aiModelCode={handoutAiModel}
+                    aiProviders={agentProviders(agentModelCatalog)}
+                    aiModels={agentModelsForProvider(agentModelCatalog, handoutAiProvider).map((model) => model.modelCode)}
+                  version={handoutVersion}
+                  entries={handoutCollaborationEntries}
+                  loading={submittingTeachingTask}
+                  error={teachingError}
+                  onLearningGoalChange={setLearningGoal}
+                  onQuestionTextChange={setTeachingQuestion}
+                  onSupplementaryRequirementsChange={setTeachingSupplement}
+                  onEvidenceLimitChange={setLimit}
+                  onWatermarkTextChange={setHandoutWatermarkText}
+                  onAiProviderChange={(provider) => {
+                    setHandoutAiProvider(provider);
+                    setHandoutAiModel(agentModelsForProvider(agentModelCatalog, provider)[0]?.modelCode ?? "");
+                  }}
+                  onAiModelChange={setHandoutAiModel}
+                  onSubmit={handleTeachingTask}
+                  onPreviewPdf={previewHandoutTaskPdf}
+                  onPreviewLatex={previewHandoutTaskLatex}
+                  onExportPdf={exportHandoutTaskPdf}
+                  onVersionChange={setHandoutVersion}
+                  onInspectEvidence={(evidence) => evidence.sourceScope === "TEACHER_RESOURCE" && evidence.sourceDocumentId
+                    ? api.listTeacherResourceBlocks(evidence.sourceDocumentId)
+                    : Promise.resolve([])}
+                />
+              </section>
               <HandoutWorkspacePreviewPanel
                 task={teachingTask}
                 version={handoutVersion}
@@ -2259,6 +2561,7 @@ export function App() {
                 previewPdfTaskKey={handoutPreviewPdfTaskId}
                 action={handoutAction}
                 exportMessage={handoutExportMessage}
+                previewError={teachingError}
                 feedbackRating={feedbackRating}
                 feedbackDecision={feedbackDecision}
                 feedbackComment={feedbackComment}
@@ -2269,21 +2572,23 @@ export function App() {
                 onVersionChange={setHandoutVersion}
                 onPreviewPdf={handlePreviewPdf}
                 onPreviewLatex={handlePreviewLatex}
+                onResumeTask={handleResumeTeachingTask}
                 onExportPdf={handleExportPdf}
+                onSaveHandoutVersion={handleSaveHandoutVersion}
                 onFeedbackRatingChange={setFeedbackRating}
                 onFeedbackDecisionChange={setFeedbackDecision}
                 onFeedbackCommentChange={setFeedbackComment}
                 onSubmitFeedback={handleSubmitFeedback}
               />
             </div>
-          </aside>
-        </div>
+          </div>
       </section>
     );
   }
 
   function renderKnowledge() {
     return renderRequiresAuth(
+      canManageTeacherResources ? (
       <>
         <div className="page-header">
           <h1 className="page-title">知识库</h1>
@@ -2341,6 +2646,13 @@ export function App() {
           </div>
         </div>
       </>
+      ) : (
+        <div className="card card-full" style={{ marginTop: 24 }}>
+          <div className="card-body">
+            <StatusLine icon={<ShieldCheck size={16} />} text="知识库管理仅对教师和管理员开放。学生账号可使用教材检索与 AI 讲题。" tone="muted" />
+          </div>
+        </div>
+      ),
     );
   }
 
@@ -2458,7 +2770,6 @@ export function App() {
             <div className="card-body">
               <TeacherResourcePanel
                 resources={teacherResources}
-                title={resourceTitle}
                 location={resourceLocation}
                 files={resourceFiles}
                 sourceType={resourceSourceType}
@@ -2471,6 +2782,7 @@ export function App() {
                 syncingResourceId={syncingResourceId}
                 importingResourceId={importingResourceId}
                 rebuildingResourceId={rebuildingResourceId}
+                deletingResourceId={deletingResourceId}
                 importResult={teacherResourceImportResult}
                 indexRebuildResult={teacherResourceIndexRebuildResult}
                 syncJobsByDocument={teacherSyncJobs}
@@ -2482,7 +2794,6 @@ export function App() {
                 feishuDiscoveryResult={feishuDiscoveryResult}
                 discoveringFeishu={discoveringFeishu}
                 error={teacherResourceError}
-                onTitleChange={setResourceTitle}
                 onLocationChange={handleResourceLocationChange}
                 onFilesChange={handleResourceFilesChange}
                 onSourceTypeChange={handleResourceSourceTypeChange}
@@ -2645,24 +2956,42 @@ function isRestorableTeachingConversationEntry(entry: TeachingConversationThread
   ]);
 }
 
+/** Uses one display vocabulary for saved, previewed, and edited artifacts. */
+function handoutVersionLabel(version: TeachingHandoutVersion) {
+  if (version === "lecture") return "16:10 讲解版";
+  return version === "student" ? "学生版" : "教师版";
+}
+
+function entriesFromConversation(conversation: StudentExplanationConversationResponse): TeachingConversationThreadItem[] {
+  return conversation.messages.flatMap((message) => {
+    const questionText = message.questionText?.trim() || message.imageProblemText?.trim() || "图片讲题";
+    return [
+      {
+        id: `user:${message.explanationId}`,
+        role: "user" as const,
+        questionText,
+        imageFileName: message.imageFileName || undefined,
+        imageStatus: message.imageStatus || undefined,
+        createdAt: message.createdAt,
+      },
+      {
+        id: `assistant:${message.explanationId}`,
+        role: "assistant" as const,
+        questionText,
+        imageFileName: message.imageFileName || undefined,
+        imageStatus: message.response.imageStatus || message.imageStatus || undefined,
+        response: message.response,
+        createdAt: message.createdAt,
+      },
+    ];
+  });
+}
+
 function isNoisyTeachingConversationText(values: Array<string | undefined>) {
   return values.some((value) => {
     const text = value ?? "";
     return /API_ACCESS_DENIED|Endpoint requires|没有执行这个操作的权限|权限不足|MODEL_CALL|JSON_PARSE|bearer|MCP|requestHash|idempotencyKey/i.test(text);
   });
-}
-
-function readStoredHandoutCollaboration(): HandoutCollaborationThreadItem[] {
-  try {
-    const value = globalThis.localStorage?.getItem(HANDOUT_COLLABORATION_STORAGE_KEY);
-    if (!value) {
-      return [];
-    }
-    const parsed = JSON.parse(value) as HandoutCollaborationThreadItem[];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
 }
 
 function multiAgentEvidenceRefs(searchResult: TextbookSearchResponse | null) {
@@ -2673,6 +3002,12 @@ function multiAgentEvidenceRefs(searchResult: TextbookSearchResponse | null) {
 function isWorkflowNotFound(error: Error) {
   return error.message.includes("Backend request failed: 404")
     && error.message.includes("/api/agents/writing/");
+}
+
+/** Accepts the durable sync vocabulary emitted by both the current and earlier worker implementations. */
+function isCompletedTeacherResourceSync(status: string | undefined) {
+  const normalized = (status || "").trim().toLowerCase();
+  return normalized === "completed" || normalized === "synced";
 }
 
 function isBackendNotFound(error: Error) {
@@ -3423,16 +3758,16 @@ export function buildTeachingFeedbackReviewContext(
       subjectType: task.subjectType,
       subjectId: task.subjectId,
     },
-    templateCode: task.selectedTemplate?.templateCode ?? "default_standard",
-    templateName: task.selectedTemplate?.displayName ?? "标准讲义",
+    templateCode: "automatic",
+    templateName: "自动生成",
     templateSnapshot: {
-      templateCode: task.selectedTemplate?.templateCode ?? "default_standard",
-      templateName: task.selectedTemplate?.displayName ?? "标准讲义",
-      sourceType: task.selectedTemplate?.sourceType ?? "builtin",
-      audience: task.selectedTemplate?.audience ?? "mixed",
-      category: task.selectedTemplate?.category ?? "",
-      visualStyle: task.selectedTemplate?.visualStyle ?? "",
-      referenceTitle: task.selectedTemplate?.referenceTitle ?? "",
+      templateCode: "automatic",
+      templateName: "自动生成",
+      sourceType: "automatic",
+      audience: "mixed",
+      category: "",
+      visualStyle: "",
+      referenceTitle: "",
     },
     pdfRenderer,
     pdfPageCount,
@@ -3444,7 +3779,7 @@ export function buildTeachingFeedbackReviewContext(
     sourceTraceable,
     aiReviewBrief: [
       `版本：${version === "teacher" ? "教师版" : version === "lecture" ? "讲解版" : "学生版"}`,
-      `模板：${task.selectedTemplate?.displayName ?? "标准讲义"}`,
+      "生成：自动编排",
       `结构：${coreColumnCoverage} 核心栏目`,
       `PDF：${pdfPreviewReady ? `${pdfRenderer || "unknown"} / ${pdfPageCount}页` : "未预览"}`,
       `预览图：${pdfVisualEvidenceCaptured ? "已记录首屏渲染证据" : "未记录"}`,

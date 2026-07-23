@@ -1,11 +1,11 @@
 package com.doob.mathagent.teacher.config;
 
-import com.doob.mathagent.teacher.service.CompositeTeacherResourceBlockSearchAuditLookup;
-import com.doob.mathagent.teacher.service.CompositeTeacherResourceBlockSearchAuditSink;
-import com.doob.mathagent.teacher.service.MyBatisTeacherResourceBlockSearchAuditStore;
-import com.doob.mathagent.teacher.service.RecentTeacherResourceBlockSearchAuditStore;
-import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchAuditLookup;
-import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchAuditSink;
+import com.doob.mathagent.teacher.search.audit.CompositeTeacherResourceBlockSearchAuditLookup;
+import com.doob.mathagent.teacher.search.audit.CompositeTeacherResourceBlockSearchAuditSink;
+import com.doob.mathagent.teacher.search.audit.MyBatisTeacherResourceBlockSearchAuditStore;
+import com.doob.mathagent.teacher.search.audit.RecentTeacherResourceBlockSearchAuditStore;
+import com.doob.mathagent.teacher.search.audit.TeacherResourceBlockSearchAuditLookup;
+import com.doob.mathagent.teacher.search.audit.TeacherResourceBlockSearchAuditSink;
 import java.util.List;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -57,3 +57,4 @@ public class TeacherResourceSearchAuditConfiguration {
         return new CompositeTeacherResourceBlockSearchAuditLookup(List.of(persistentStore, recentAuditStore));
     }
 }
+

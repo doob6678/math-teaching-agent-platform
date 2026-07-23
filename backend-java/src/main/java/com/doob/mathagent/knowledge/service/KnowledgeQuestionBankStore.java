@@ -80,6 +80,14 @@ public interface KnowledgeQuestionBankStore {
             Set<String> activeSourceKeys);
 
     /**
+     * Archives one imported question before a parser upgrade writes its corrected replacement.  This is deliberately
+     * archival rather than destructive deletion so a source/checksum audit trail remains available.
+     */
+    default boolean archiveQuestion(String tenantId, String questionId) {
+        return false;
+    }
+
+    /**
      * Lists visible knowledge points after backend role and owner filtering.
      *
      * @param tenantId backend tenant id

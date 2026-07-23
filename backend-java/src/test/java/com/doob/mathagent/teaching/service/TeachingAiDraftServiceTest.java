@@ -19,6 +19,16 @@ import org.junit.jupiter.api.Test;
 class TeachingAiDraftServiceTest {
 
     @Test
+    void removesTrailingSeparatorsLeftByOpaqueEvidenceIdentifiers() {
+        assertThat(TeachingAiDraftService.safeEvidenceTitle("教师讲义 / AnZ3d5Qbfo9K8IxK7AecZa3unBg"))
+                .isEqualTo("教师讲义");
+        assertThat(TeachingAiDraftService.safeEvidenceTitle("题型方法 /"))
+                .isEqualTo("题型方法");
+        assertThat(TeachingAiDraftService.safeEvidenceTitle("A/B 章节"))
+                .isEqualTo("A/B 章节");
+    }
+
+    @Test
     void parsesStructuredJsonFromCodeFence() {
         TeachingAiDraftService.ParsedDraft parsed = TeachingAiDraftService.parseStructuredDraft("""
                 ```json
@@ -72,6 +82,22 @@ class TeachingAiDraftServiceTest {
         assertThat(gateway.requests().get(1).userInputSummary())
                 .contains("【知识定位】", "【知识速记】", "no answer/scoring/solution leakage",
                         "printable handouts only");
+    }
+
+    @Test
+    void usesAnAllowedTeacherSelectedProviderAndModelForTheHandoutDraft() {
+        CapturingGateway gateway = new CapturingGateway(List.of(new AiChatResult(
+                "openai", "gpt-5.4-mini", 10, 4, 14, "ok", structuredJson("selected model draft"))));
+        TeachingAiDraftService service = new TeachingAiDraftService(gateway, catalog(true, true), defaultPolicy());
+        TeachingTaskRequest request = new TeachingTaskRequest(
+                "req-selected-model", "函数新定义", "函数新定义", 2, null, null, "openai", "gpt-5.4-mini");
+
+        service.draft(request, evidence(), memory());
+
+        assertThat(gateway.requests()).isNotEmpty().allSatisfy(call -> {
+                    assertThat(call.providerName()).isEqualTo("openai");
+                    assertThat(call.modelCode()).isEqualTo("gpt-5.4-mini");
+                });
     }
 
     @Test
@@ -135,6 +161,39 @@ class TeachingAiDraftServiceTest {
                 .containsExactly("已知焦距为 10，求 c。", "判断焦点在哪个轴。");
     }
 
+    /** A mathematical colour-counting statement is lesson content, not a layout instruction. */
+    @Test
+    void preservesColoringProblemReasoningWhileStillRemovingActualLayoutRules() {
+        TeachingAiDraftService.ParsedDraft parsed = TeachingAiDraftService.parseStructuredDraft("""
+                {
+                  "teacherExplanation": "【知识定位】地图着色的分类计数。\\n【方法步骤】第3步：相邻区域颜色不同，因此可选颜色数为 $4-r$。\\n页面颜色规则：使用蓝色。\\n【答案与评分点】按相邻关系逐区计数。",
+                  "studentHint": "【知识速记】相邻区域不得使用同一颜色。\\n【练习任务】比较颜色相同与不同的分类。",
+                  "knowledgePoints": ["地图着色", "相邻区域颜色不同"],
+                  "followUpQuestions": ["四种颜色下如何按区域顺序分类？"]
+                }
+                """);
+
+        assertThat(parsed.structured()).isTrue();
+        assertThat(parsed.teacherExplanation()).contains("第3步", "颜色不同", "$4-r$")
+                .doesNotContain("页面颜色规则");
+        assertThat(parsed.studentHint()).contains("不得使用同一颜色", "颜色相同与不同");
+    }
+
+    @Test
+    void rejectsUnresolvedTemplatePlaceholdersInsteadOfLettingThemReachThePdf() {
+        TeachingAiDraftService.ParsedDraft parsed = TeachingAiDraftService.parseStructuredDraft("""
+                {
+                  "teacherExplanation": "【知识定位】二次函数。\\n【方法步骤】知识点1：待补充。",
+                  "studentHint": "【知识速记】二次函数顶点。\\n【练习任务】题型2。",
+                  "knowledgePoints": ["二次函数"],
+                  "followUpQuestions": ["求顶点坐标。"]
+                }
+                """);
+
+        assertThat(parsed.structured()).isFalse();
+        assertThat(parsed.parseError()).contains("placeholder");
+    }
+
     @Test
     void formatsQuestionBankEvidenceForPromptWithoutRawAnswerJsonKeys() {
         CapturingGateway gateway = new CapturingGateway(List.of(new AiChatResult(
@@ -165,6 +224,28 @@ class TeachingAiDraftServiceTest {
                         "步骤：1. 由 $2a=6$ 得 $a=3$", "评分点：补充1：写出参数关系得分",
                         "补充1：注意 $b^2$ 不是 b")
                 .doesNotContain("\"answer\"", "\"steps\"", "\"scoring\"", "\"extraNote\"");
+    }
+
+    @Test
+    void passesVerifiedFigureDescriptionToDraftWithoutLeakingLocalImagePath() {
+        CapturingGateway gateway = new CapturingGateway(List.of(new AiChatResult(
+                "openai", "gpt-5.4", 12, 6, 18, "ok", structuredJson("figure grounded draft"))));
+        TeachingAiDraftService service = new TeachingAiDraftService(gateway, catalog(true, false), defaultPolicy());
+        TeachingEvidence figureEvidence = new TeachingEvidence(
+                "TEACHER_RESOURCE",
+                "涂色问题讲义",
+                "teacher-figure-1",
+                0,
+                "如图，五个区域相邻处不能同色。",
+                "C:/Users/doob/AppData/Local/Temp/private-figure.jpg",
+                "图像可见文字：区域标号 1、2、3、4、5。图中未给出颜色方案或最终答案。");
+
+        service.draft(request(), List.of(figureEvidence), memory());
+
+        assertThat(gateway.requests()).hasSize(1);
+        assertThat(gateway.requests().getFirst().userInputSummary())
+                .contains("图像可见文字：区域标号 1、2、3、4、5", "图中未给出颜色方案或最终答案")
+                .doesNotContain("C:/Users", "private-figure.jpg");
     }
 
     @Test
@@ -211,6 +292,31 @@ class TeachingAiDraftServiceTest {
         assertThat(instructionLine)
                 .contains("连续题号", "$y=\\frac{k}{x}$")
                 .doesNotContain("页眉", "页脚", "颜色", "PDF规则", "token", "debug", "JSON");
+    }
+
+    @Test
+    void removesWorkflowDirectivesFromProblemContextBeforeModelCall() {
+        CapturingGateway gateway = new CapturingGateway(List.of(new AiChatResult(
+                "openai",
+                "gpt-5.4",
+                18,
+                9,
+                27,
+                "ok",
+                structuredJson("real math explanation"))));
+        TeachingAiDraftService service = new TeachingAiDraftService(gateway, catalog(true, false), defaultPolicy());
+        TeachingTaskRequest request = new TeachingTaskRequest(
+                "req-control-text",
+                "生成后保存一次教师版编辑并导出 PDF。",
+                "二次函数顶点与对称轴",
+                2);
+
+        service.draft(request, evidence(), memory());
+
+        String prompt = gateway.requests().getFirst().userInputSummary();
+        assertThat(prompt)
+                .contains("二次函数顶点与对称轴")
+                .doesNotContain("生成后保存", "教师版编辑", "导出 PDF");
     }
 
     @Test

@@ -25,6 +25,8 @@ import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public final class StudentExplanationServiceFixture {
 
@@ -71,13 +73,30 @@ public final class StudentExplanationServiceFixture {
             AiProviderCatalog aiProviderCatalog,
             StudentExplanationImageStoreService imageStoreService,
             StudentExplanationVisionService visionService) {
+        return service(
+                textbookResourceProperties, textbookRetrievalService, knowledgeGraphSpineService,
+                teacherResourceBlockSearchService, new InMemoryTeacherResourceStore(), aiChatGateway, aiProviderCatalog,
+                imageStoreService, visionService);
+    }
+
+    /** Uses the same document store as the search service when a test needs to verify teacher-source visibility. */
+    public static StudentExplanationService service(
+            TextbookResourceProperties textbookResourceProperties,
+            TextbookRetrievalService textbookRetrievalService,
+            KnowledgeGraphSpineService knowledgeGraphSpineService,
+            TeacherResourceBlockSearchService teacherResourceBlockSearchService,
+            TeacherResourceStore teacherResourceStore,
+            AiChatGateway aiChatGateway,
+            AiProviderCatalog aiProviderCatalog,
+            StudentExplanationImageStoreService imageStoreService,
+            StudentExplanationVisionService visionService) {
         return new StudentExplanationService(
                 textbookResourceProperties,
                 textbookRetrievalService,
                 knowledgeGraphSpineService,
                 teacherResourceBlockSearchService,
-                new InMemoryTeacherResourceStore(),
-                new StudentExplanationAiCardService(aiChatGateway, aiProviderCatalog),
+                teacherResourceStore,
+                new StudentExplanationAiCardService(new ReactProtocolGateway(aiChatGateway), aiProviderCatalog),
                 imageStoreService == null ? testImageStore() : imageStoreService,
                 visionService == null ? testVisionService() : visionService,
                 testHistoryStore());
@@ -105,7 +124,7 @@ public final class StudentExplanationServiceFixture {
     }
 
     private static StudentExplanationVisionService testVisionService() {
-        return new StudentExplanationVisionService(new AiProviderProperties(), "", "", false, 1000);
+        return new StudentExplanationVisionService(new AiProviderProperties(), "", "", "", false, 1000);
     }
 
     private static StudentExplanationHistoryStore testHistoryStore() {
@@ -152,6 +171,41 @@ public final class StudentExplanationServiceFixture {
                 return null;
             }
         };
+    }
+
+    /**
+     * Test-only model adapter: ReAct decisions are generated from the tool list in the real controller prompt, while
+     * the supplied gateway still produces the final answer. This keeps every service test on the same multi-turn
+     * protocol as production instead of silently accepting the retired one-shot card prompt.
+     */
+    private static final class ReactProtocolGateway implements AiChatGateway {
+        private static final Pattern TOOL_LIST = Pattern.compile("Available tools: \\[([^]]*)]", Pattern.MULTILINE);
+        private final AiChatGateway finalAnswerGateway;
+
+        private ReactProtocolGateway(AiChatGateway finalAnswerGateway) {
+            this.finalAnswerGateway = finalAnswerGateway;
+        }
+
+        @Override
+        public AiChatResult call(com.doob.mathagent.agent.service.AiChatRequest request) {
+            if (!"StudentExplanationReactAgent".equals(request.agentCode())) {
+                return finalAnswerGateway.call(request);
+            }
+            Matcher matcher = TOOL_LIST.matcher(request.userInputSummary());
+            String tools = matcher.find() ? matcher.group(1) : "";
+            String action = nextTool(tools);
+            String content = action.isBlank()
+                    ? "{\"decision\":\"final\"}"
+                    : "{\"decision\":\"action\",\"tool\":\"" + action + "\"}";
+            return new AiChatResult(request.providerName(), request.modelCode(), 1, 1, 2, "react", content);
+        }
+
+        private static String nextTool(String tools) {
+            if (tools.contains("search_textbook")) return "search_textbook";
+            if (tools.contains("match_knowledge_graph")) return "match_knowledge_graph";
+            if (tools.contains("search_teacher_resources")) return "search_teacher_resources";
+            return "";
+        }
     }
 }
 

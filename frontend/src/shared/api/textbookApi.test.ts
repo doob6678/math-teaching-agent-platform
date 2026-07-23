@@ -131,7 +131,7 @@ describe("textbookApi", () => {
     expect(summary.totalChunkCount).toBe(1169);
   });
 
-  it("searches textbooks with encoded query and limit", async () => {
+  it("posts configurable textbook RAG inputs", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -145,11 +145,25 @@ describe("textbookApi", () => {
     });
     const client = createTextbookApiClient("http://127.0.0.1:8080/", fetchMock);
 
-    const response = await client.search("piecewise function", 3);
+    const response = await client.search({
+      query: "piecewise function",
+      formulaQuery: "x^2+y^2=1",
+      limit: 3,
+      documentIds: ["book-a"],
+      retrievalMode: "formula_bge",
+    });
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:8080/api/retrieval/textbooks/search?query=piecewise+function&limit=3",
+      "http://127.0.0.1:8080/api/retrieval/textbooks/search",
       expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          query: "piecewise function",
+          formulaQuery: "x^2+y^2=1",
+          limit: 3,
+          documentIds: ["book-a"],
+          retrievalMode: "formula_bge",
+        }),
         headers: expect.not.objectContaining({ "X-Subject-Type": expect.any(String) }),
       }),
     );
@@ -409,6 +423,140 @@ describe("textbookApi", () => {
       }),
     );
     expect(task.nodes[0].code).toBe("LEARNING_GOAL");
+  });
+
+  it("resumes a failed teaching task with the same task id", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          token: "resume-capability",
+          action: "teaching:resume",
+          path: "/api/teaching/tasks/task-1/resume",
+          requestHash: "resume-hash",
+          expiresAt: "2026-07-12T08:05:00Z",
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          taskId: "task-1",
+          clientRequestId: "client-1",
+          status: "RUNNING",
+          nodes: [],
+          workflowEvents: [],
+          reactTrace: [],
+          evidence: [],
+          handoutLatex: "",
+          interactiveSuggestions: [],
+        }),
+      });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const task = await client.resumeTeachingTask("task-1");
+
+    expect(fetchMock.mock.calls[1][0]).toBe("http://127.0.0.1:8080/api/teaching/tasks/task-1/resume");
+    expect(fetchMock.mock.calls[1][1]).toEqual(expect.objectContaining({
+      method: "POST",
+      headers: expect.objectContaining({
+        "X-Capability-Token": "resume-capability",
+        "X-Request-Hash": expect.stringMatching(/^sha256:/),
+      }),
+    }));
+    expect(task.taskId).toBe("task-1");
+  });
+
+  it("streams durable teaching progress instead of timer-generated placeholder stages", async () => {
+    const encoder = new TextEncoder();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode("event: progress\ndata: {\"taskId\":\"task-1\",\"status\":\"RUNNING\",\"nodes\":[{\"code\":\"OUTLINE\",\"name\":\"讲解大纲\",\"status\":\"running\",\"summary\":\"正在整理\"}],\"workflowEvents\":[],\"evidence\":[],\"stageTimings\":[],\"versions\":{\"teacherReady\":false,\"studentReady\":false,\"lectureReady\":false}}\n\n"));
+          controller.enqueue(encoder.encode("event: completed\ndata: {\"taskId\":\"task-1\",\"status\":\"COMPLETED\",\"nodes\":[],\"workflowEvents\":[],\"evidence\":[],\"stageTimings\":[],\"versions\":{\"teacherReady\":true,\"studentReady\":true,\"lectureReady\":true}}\n\n"));
+          controller.close();
+        },
+      }),
+    });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+    const events: Array<{ name: string; status: string }> = [];
+
+    await client.streamTeachingTask("task-1", (eventName, progress) => {
+      events.push({ name: eventName, status: progress.status });
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8080/api/teaching/tasks/task-1/events",
+      expect.objectContaining({
+        method: "GET",
+        cache: "no-store",
+        headers: expect.objectContaining({
+          Accept: "text/event-stream",
+          "Cache-Control": "no-store, no-cache, max-age=0",
+          Pragma: "no-cache",
+        }),
+      }),
+    );
+    expect(events).toEqual([
+      { name: "progress", status: "RUNNING" },
+      { name: "completed", status: "COMPLETED" },
+    ]);
+  });
+
+  it("saves an edited student handout through a version-bound capability", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          token: "handout-edit-capability",
+          action: "teaching-handout:update",
+          path: "/api/teaching/tasks/task-1/handout/student",
+          requestHash: "hash-edit",
+          expiresAt: "2026-07-12T08:05:00Z",
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          taskId: "task-1",
+          status: "COMPLETED",
+          nodes: [],
+          reactTrace: [],
+          evidence: [],
+          handoutLatex: "\\section{教师版}",
+          teacherHandoutLatex: "\\section{教师版}",
+          studentHandoutLatex: "\\section{学生版}\n请完成第 1 题。",
+          lectureHandoutLatex: "\\section{16:10}",
+          interactiveSuggestions: [],
+        }),
+      });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const task = await client.updateTeachingTaskHandout("task-1", "student", "\\section{学生版}\n请完成第 1 题。");
+
+    const capabilityBody = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
+    expect(capabilityBody).toEqual({
+      action: "teaching-handout:update",
+      path: "/api/teaching/tasks/task-1/handout/student",
+      requestHash: expect.any(String),
+      idempotencyKey: "teaching-handout-update:task-1:student",
+      maxCost: 1,
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://127.0.0.1:8080/api/teaching/tasks/task-1/handout/student",
+      expect.objectContaining({
+        method: "PUT",
+        headers: expect.objectContaining({
+          "X-Capability-Token": "handout-edit-capability",
+          "X-Request-Hash": capabilityBody.requestHash,
+        }),
+        body: JSON.stringify({ latex: "\\section{学生版}\n请完成第 1 题。" }),
+      }),
+    );
+    expect(task.studentHandoutLatex).toContain("请完成第 1 题");
   });
 
   it("exports teaching task latex with one-time capability token", async () => {
@@ -1311,8 +1459,8 @@ describe("textbookApi", () => {
         ok: true,
         json: async () => ({
           token: "writing-capability",
-          action: "agent-run:CoursewareAgent",
-          path: "/api/agents/writing/courseware",
+          action: "agent-writing:run",
+          path: "/api/agents/writing",
           requestHash: "hash-writing",
           expiresAt: "2026-06-30T12:02:00Z",
           maxCost: 3,
@@ -1345,15 +1493,15 @@ describe("textbookApi", () => {
 
     const capabilityBody = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
     expect(capabilityBody).toEqual({
-      action: "agent-run:CoursewareAgent",
-      path: "/api/agents/writing/courseware",
+      action: "agent-writing:run",
+      path: "/api/agents/writing",
       requestHash: expect.any(String),
       idempotencyKey: "multi-agent-writing:teacher handout:space vector angle",
       maxCost: 3,
     });
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
-      "http://127.0.0.1:8080/api/agents/writing/courseware",
+      "http://127.0.0.1:8080/api/agents/writing",
       expect.objectContaining({
         method: "POST",
         headers: expect.objectContaining({
@@ -1476,8 +1624,8 @@ describe("textbookApi", () => {
         ok: true,
         json: async () => ({
           token: "writing-capability",
-          action: "agent-run:CoursewareAgent",
-          path: "/api/agents/writing/courseware/async",
+          action: "agent-writing:run",
+          path: "/api/agents/writing/async",
           requestHash: "hash-writing",
           expiresAt: "2026-06-30T12:02:00Z",
           maxCost: 3,
@@ -1501,15 +1649,15 @@ describe("textbookApi", () => {
 
     const capabilityBody = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
     expect(capabilityBody).toEqual({
-      action: "agent-run:CoursewareAgent",
-      path: "/api/agents/writing/courseware/async",
+      action: "agent-writing:run",
+      path: "/api/agents/writing/async",
       requestHash: expect.any(String),
       idempotencyKey: "multi-agent-writing-async:teacher handout:space vector angle",
       maxCost: 3,
     });
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
-      "http://127.0.0.1:8080/api/agents/writing/courseware/async",
+      "http://127.0.0.1:8080/api/agents/writing/async",
       expect.objectContaining({
         method: "POST",
         headers: expect.objectContaining({
@@ -1551,7 +1699,7 @@ describe("textbookApi", () => {
         ok: true,
         json: async () => ({
           token: "resume-capability",
-          action: "agent-run:CoursewareAgent",
+          action: "agent-writing:resume",
           path: "/api/agents/writing/workflow-async-1/resume",
           requestHash: "hash-resume",
           expiresAt: "2026-06-30T12:02:00Z",
@@ -1576,7 +1724,7 @@ describe("textbookApi", () => {
 
     const capabilityBody = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
     expect(capabilityBody).toEqual({
-      action: "agent-run:CoursewareAgent",
+      action: "agent-writing:resume",
       path: "/api/agents/writing/workflow-async-1/resume",
       requestHash: expect.any(String),
       idempotencyKey: "multi-agent-writing-resume:workflow-async-1:teacher handout:space vector angle",
@@ -1593,7 +1741,7 @@ describe("textbookApi", () => {
           "X-Capability-Token": "resume-capability",
           "X-Request-Hash": capabilityBody.requestHash,
         }),
-        body: JSON.stringify(request),
+        body: JSON.stringify({ workflowId: "workflow-async-1", ...request }),
       }),
     );
     expect(fetchMock.mock.calls[1][1]?.headers).not.toHaveProperty("X-Subject-Id");
@@ -2755,7 +2903,7 @@ describe("textbookApi", () => {
       action: "teacher-resource:register",
       path: "/api/teacher/resources/upload",
       requestHash: expect.any(String),
-      idempotencyKey: "teacher-resource-upload:qq_bundle:lesson",
+      idempotencyKey: "teacher-resource-upload:qq_bundle",
       maxCost: 1,
     });
     expect(fetchMock).toHaveBeenNthCalledWith(
@@ -3188,8 +3336,6 @@ describe("textbookApi", () => {
           urlConfigured: true,
           usernameConfigured: true,
           studentExplanationHistoryDurable: true,
-          migrationRunnerEnabled: true,
-          migrationLocation: "classpath:db/migration",
           mode: "mysql",
         },
         redis: {
@@ -3249,8 +3395,6 @@ describe("textbookApi", () => {
     expect(status.auth.mode).toBe("mysql_only");
     expect(status.database.mode).toBe("mysql");
     expect(status.database.studentExplanationHistoryDurable).toBe(true);
-    expect(status.database.migrationRunnerEnabled).toBe(true);
-    expect(status.database.migrationLocation).toBe("classpath:db/migration");
     expect(status.redis.searchCacheEnabled).toBe(true);
     expect(status.vectorIndex.status).toBe("configuration_error");
     expect(status.feishu.mode).toBe("process_ready");

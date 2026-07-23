@@ -15,16 +15,13 @@ from benchmarks.http_client import MathAgentClient
 
 
 DEFAULT_OUTPUT_ROOT = Path("output") / "benchmarks"
-STRATEGY_LEGACY = "legacy_block_hybrid"
-STRATEGY_TWO_STAGE = "two_stage_doc_block"
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate runtime-authored teacher-resource JSON cases against the real backend.")
     parser.add_argument("--config", default=".tmp/grounded-compare-6.json")
     parser.add_argument("--cases-json", required=True)
     parser.add_argument("--output-dir", default="")
     parser.add_argument("--request-delay-ms", type=int, default=120)
+    parser.add_argument("--baseline-metrics", default="")
     args = parser.parse_args()
 
     config = json.loads(Path(args.config).read_text(encoding="utf-8"))
@@ -37,15 +34,13 @@ def main() -> None:
 
     rows: list[dict[str, Any]] = []
     for mode in (
-        {"name": "legacy_mixed", "strategy": STRATEGY_LEGACY, "library": False},
-        {"name": "two_stage_mixed", "strategy": STRATEGY_TWO_STAGE, "library": False},
-        {"name": "two_stage_specified_library", "strategy": STRATEGY_TWO_STAGE, "library": True},
+        {"name": "current_mixed", "library": False},
+        {"name": "current_specified_library", "library": True},
     ):
         for case in cases:
             params: dict[str, Any] = {
                 "query": case["query"],
                 "limit": 5,
-                "strategy": mode["strategy"],
             }
             library_param = ""
             if mode["library"]:
@@ -133,11 +128,13 @@ def main() -> None:
         },
         "dataset": {
             "queryCount": len(cases),
-            "modeCount": 3,
+            "modeCount": 2,
             "runDir": str(output_dir.resolve()),
         },
         "teacherDirectSearch": _summarize_rows(rows),
     }
+    if args.baseline_metrics:
+        metrics["historicalBaseline"] = _load_baseline_metrics(Path(args.baseline_metrics))
 
     (output_dir / "query_rows.jsonl").write_text(
         "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n",
@@ -177,7 +174,13 @@ def _load_cases(path: Path) -> list[dict[str, Any]]:
 
 def _default_output_dir() -> Path:
     timestamp = time.strftime("%Y%m%d-%H%M%S")
-    return DEFAULT_OUTPUT_ROOT / f"live-two-stage-teacher-generated-100-{timestamp}"
+    return DEFAULT_OUTPUT_ROOT / f"live-teacher-current-generated-100-{timestamp}"
+
+
+def _load_baseline_metrics(path: Path) -> dict[str, Any]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    teacher_metrics = payload.get("teacherDirectSearch") if isinstance(payload, dict) else None
+    return teacher_metrics if isinstance(teacher_metrics, dict) else {}
 
 
 def _summarize_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:

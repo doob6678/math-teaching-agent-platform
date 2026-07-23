@@ -114,7 +114,8 @@ final class TeachingHandoutLocalReferenceScanner {
         Path cwd = Path.of("").toAbsolutePath().normalize();
         Path repoRoot = repoRoot(cwd);
         roots.put(repoRoot.resolve("文档").resolve("项目测试数据位置"), new RootSpec(repoRoot.resolve("文档").resolve("项目测试数据位置"), -10));
-        roots.put(repoRoot.resolve("文档").resolve("量化评测"), new RootSpec(repoRoot.resolve("文档").resolve("量化评测"), -6));
+        // Evaluation reports and benchmark PDFs are test fixtures, not teaching references. Scanning them here
+        // makes benchmark wording appear as a user-facing template and contaminates otherwise real handouts.
         for (Path root : defaultDesktopReferenceRoots()) {
             roots.putIfAbsent(root, new RootSpec(root, 0));
         }

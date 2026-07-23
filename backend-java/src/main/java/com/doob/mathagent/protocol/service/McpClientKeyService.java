@@ -12,6 +12,7 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Service;
 
@@ -29,13 +30,22 @@ public class McpClientKeyService implements McpClientResolver {
 
     private final McpClientKeyStore keyStore;
     private final ProtocolDiscoveryService discoveryService;
+    private final McpClientRegistryProperties configuredClientRegistry;
     private final SecureRandom secureRandom = new SecureRandom();
 
+    /** Compatibility constructor for direct tests that do not need deployment-owned client fallback. */
+    public McpClientKeyService(McpClientKeyStore keyStore, ProtocolDiscoveryService discoveryService) {
+        this(keyStore, discoveryService, new McpClientRegistryProperties());
+    }
+
+    @Autowired
     public McpClientKeyService(
             McpClientKeyStore keyStore,
-            ProtocolDiscoveryService discoveryService) {
+            ProtocolDiscoveryService discoveryService,
+            McpClientRegistryProperties configuredClientRegistry) {
         this.keyStore = keyStore;
         this.discoveryService = discoveryService;
+        this.configuredClientRegistry = configuredClientRegistry == null ? new McpClientRegistryProperties() : configuredClientRegistry;
     }
 
     /**
@@ -108,11 +118,14 @@ public class McpClientKeyService implements McpClientResolver {
 
     @Override
     public Optional<McpClientRegistryProperties.Client> findEnabledClientBySecret(String secret) {
-        return keyStore.findActiveBySecretHash(McpClientRegistryProperties.secretHash(secret))
+        Optional<McpClientRegistryProperties.Client> persisted = keyStore.findActiveBySecretHash(McpClientRegistryProperties.secretHash(secret))
                 .map(record -> {
                     keyStore.updateLastUsedAt(record.keyId(), LocalDateTime.now());
                     return toClient(record);
                 });
+        // Deployment-owned clients are intentionally hash-only configuration.  They are needed before a user has
+        // created a database key (for local WorkBuddy and integration probes), while persisted keys retain priority.
+        return persisted.isPresent() ? persisted : configuredClientRegistry.findEnabledClientBySecret(secret);
     }
 
     private McpConfigurationResponse configurationForRecord(McpClientKeyRecord record, String mcpUrl) {

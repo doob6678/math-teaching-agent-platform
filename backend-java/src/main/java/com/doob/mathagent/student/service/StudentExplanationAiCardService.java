@@ -9,12 +9,15 @@ import com.doob.mathagent.student.dto.StudentExplanationRequest;
 import com.doob.mathagent.student.vo.StudentExplanationResponse;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 /**
@@ -23,17 +26,98 @@ import org.springframework.stereotype.Service;
 @Service
 public class StudentExplanationAiCardService {
 
-    private static final int MAX_AI_RETRIES_PER_PROVIDER = 1;
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private final AiChatGateway aiChatGateway;
     private final AiProviderCatalog aiProviderCatalog;
+    private final int maxProviderAttempts;
+    private final int conversationContextMaxChars;
+
+    /**
+     * Asks the model for its next ReAct decision.  The returned action is only a request: the caller remains the
+     * authority that checks permissions and executes the read-only retrieval tool before returning an observation.
+     */
+    public ReactDecision nextReactDecision(
+            String problem,
+            List<StudentExplanationResponse.ExplanationSource> sources,
+            List<String> observations,
+            Set<String> availableTools) {
+        List<AiProviderCatalog.Provider> providers = aiProviderCatalog.enabledProviders();
+        if (providers.isEmpty()) {
+            throw new IllegalStateException("No enabled AI provider.");
+        }
+        AiProviderCatalog.Provider provider = providers.getFirst();
+        AiChatResult result = aiChatGateway.call(new AiChatRequest(
+                provider.name(), provider.chatModel(), "StudentExplanationReactAgent",
+                reactPrompt(problem, sources, observations, availableTools), sourceRefs(sources)));
+        try {
+            JsonNode root = OBJECT_MAPPER.readTree(extractJsonObject(stripCodeFence(safe(result.generatedContent()).strip())));
+            String decision = safe(root.path("decision").asText()).strip().toLowerCase(java.util.Locale.ROOT);
+            if ("action".equals(decision)) {
+                String tool = safe(root.path("tool").asText()).strip();
+                if (!availableTools.contains(tool)) {
+                    // The model cannot expand the server-side allow-list.  A malformed or stale tool name must not
+                    // turn an otherwise valid user turn into a hard failure; the first remaining permitted tool is
+                    // a deterministic, auditable recovery action and is still executed by the backend below.
+                    return fallbackDecision(availableTools, "模型请求了不可用工具：" + tool);
+                }
+                return ReactDecision.action(tool);
+            }
+            if ("final".equals(decision)) {
+                return ReactDecision.finalAnswer();
+            }
+            return fallbackDecision(availableTools, "模型未返回 ReAct decision");
+        } catch (JsonProcessingException exception) {
+            return fallbackDecision(availableTools, "ReAct 决策格式无效");
+        }
+    }
+
+    /**
+     * Recovers one bounded retrieval step when a provider violates the machine-readable ReAct contract.
+     * The set is assembled by {@code StudentExplanationService} after permission checks, so this fallback cannot
+     * access a teacher-private tool that the current subject is not allowed to use.
+     */
+    private static ReactDecision fallbackDecision(Set<String> availableTools, String reason) {
+        return availableTools.stream()
+                .findFirst()
+                .map(tool -> ReactDecision.recoveredAction(tool, reason))
+                .orElseGet(() -> ReactDecision.invalid(reason));
+    }
+
+    /** Keeps internal reasoning private while making the action contract strict and machine-verifiable. */
+    private static String reactPrompt(
+            String problem,
+            List<StudentExplanationResponse.ExplanationSource> sources,
+            List<String> observations,
+            Set<String> availableTools) {
+        return """
+                You are a math-solving ReAct controller. Decide the next step; do not solve the problem yet.
+                Return exactly JSON and nothing else: {"decision":"action","tool":"one available tool"}
+                or {"decision":"final"}. You may choose final only after sufficient evidence is available.
+                Available tools: %s
+                Problem: %s
+                Observations from actually executed tools: %s
+                Current evidence: %s
+                """.formatted(availableTools, safe(problem), observations, sourceLines(sources));
+    }
 
     public StudentExplanationAiCardService(
             AiChatGateway aiChatGateway,
             AiProviderCatalog aiProviderCatalog) {
+        this(aiChatGateway, aiProviderCatalog, 2, 100_000);
+    }
+
+    /** Limits one student turn to a bounded provider budget instead of multiplying every timeout by every provider. */
+    @Autowired
+    public StudentExplanationAiCardService(
+            AiChatGateway aiChatGateway,
+            AiProviderCatalog aiProviderCatalog,
+            @Value("${math-agent.student.explanation.max-provider-attempts:2}") int maxProviderAttempts,
+            @Value("${math-agent.student.explanation.conversation-context-max-chars:100000}") int conversationContextMaxChars) {
         this.aiChatGateway = aiChatGateway;
         this.aiProviderCatalog = aiProviderCatalog;
+        this.maxProviderAttempts = Math.max(1, maxProviderAttempts);
+        this.conversationContextMaxChars = Math.max(1_000, Math.min(conversationContextMaxChars, 100_000));
     }
 
     /**
@@ -45,17 +129,41 @@ public class StudentExplanationAiCardService {
             String imageStatus,
             List<StudentExplanationResponse.ExplanationSource> sources,
             List<StudentExplanationHistorySummary> recentHistory,
+            List<String> longTermMemories,
             List<StudentExplanationResponse.WorkflowStage> stages) {
+        return generate(request, query, imageStatus, sources, recentHistory, longTermMemories, stages, StudentExplanationAiStreamListener.NOOP);
+    }
+
+    public AiCardDraft generate(
+            StudentExplanationRequest request,
+            String query,
+            String imageStatus,
+            List<StudentExplanationResponse.ExplanationSource> sources,
+            List<StudentExplanationHistorySummary> recentHistory,
+            List<StudentExplanationResponse.WorkflowStage> stages) {
+        return generate(request, query, imageStatus, sources, recentHistory, List.of(), stages, StudentExplanationAiStreamListener.NOOP);
+    }
+
+    /** Streams actual provider deltas to the caller while retaining the final strict JSON validation. */
+    public AiCardDraft generate(
+            StudentExplanationRequest request,
+            String query,
+            String imageStatus,
+            List<StudentExplanationResponse.ExplanationSource> sources,
+            List<StudentExplanationHistorySummary> recentHistory,
+            List<String> longTermMemories,
+            List<StudentExplanationResponse.WorkflowStage> stages,
+            StudentExplanationAiStreamListener streamListener) {
         long stageStarted = System.nanoTime();
         List<AiProviderCatalog.Provider> providers;
         try {
             providers = aiProviderCatalog.enabledProviders();
         } catch (RuntimeException e) {
-            stages.add(stageFrom(stageStarted, "ai_compose_cards", "AI 生成卡片", "skipped", e.getMessage()));
+            upsertStage(stages, stageFrom(stageStarted, "ai_compose_cards", "AI 生成卡片", "skipped", e.getMessage()));
             throw new IllegalStateException("No enabled AI provider: " + e.getMessage(), e);
         }
         if (providers.isEmpty()) {
-            stages.add(stageFrom(stageStarted, "ai_compose_cards", "AI 生成卡片", "skipped", "没有可用模型配置。"));
+            upsertStage(stages, stageFrom(stageStarted, "ai_compose_cards", "AI 生成卡片", "skipped", "没有可用模型配置。"));
             throw new IllegalStateException("No enabled AI provider.");
         }
         List<StudentExplanationResponse.AiRecoveryEvent> events = new ArrayList<>();
@@ -64,19 +172,26 @@ public class StudentExplanationAiCardService {
         int totalTokens = 0;
         RuntimeException lastFailure = null;
         ParsedAiCards lastParseFailure = ParsedAiCards.failed("model was not called");
-        String queryForPrompt = queryWithHistory(query, recentHistory);
-        for (int providerIndex = 0; providerIndex < providers.size(); providerIndex++) {
+        String queryForPrompt = queryWithContext(query, recentHistory, longTermMemories);
+        int providerLimit = Math.min(providers.size(), maxProviderAttempts);
+        for (int providerIndex = 0; providerIndex < providerLimit; providerIndex++) {
             AiProviderCatalog.Provider provider = providers.get(providerIndex);
             String userInput = aiPrompt(request, queryForPrompt, imageStatus, sources);
-            for (int attempt = 0; attempt <= MAX_AI_RETRIES_PER_PROVIDER; attempt++) {
-                boolean canRetry = attempt < MAX_AI_RETRIES_PER_PROVIDER || providerIndex < providers.size() - 1;
+            for (int attempt = 0; attempt < 1; attempt++) {
+                boolean canRetry = providerIndex < providerLimit - 1;
                 try {
-                    AiChatResult result = aiChatGateway.call(new AiChatRequest(
+                    StringBuilder streamedContent = new StringBuilder();
+                    Set<String> streamedCardKeys = new LinkedHashSet<>();
+                    AiChatResult result = aiChatGateway.stream(new AiChatRequest(
                             provider.name(),
                             provider.chatModel(),
                             "StudentExplanationAgent",
                             userInput,
-                            sourceRefs(sources)));
+                            sourceRefs(sources)), delta -> {
+                                streamedContent.append(delta.contentDelta());
+                                streamListener.onDelta(delta, completeStreamedCards(
+                                        streamedContent.toString(), sources, streamedCardKeys));
+                            });
                     totalPromptTokens += result.promptTokens();
                     totalCompletionTokens += result.completionTokens();
                     totalTokens += result.totalTokens();
@@ -86,9 +201,9 @@ public class StudentExplanationAiCardService {
                     if (parsed.structured()) {
                         events.add(aiEvent("JSON_PARSE_SUCCEEDED", result.providerName(), result.modelCode(), attempt,
                                 true, false, "Student explanation cards parsed."));
-                        stages.add(stageFrom(stageStarted, "ai_compose_cards", "AI 生成卡片", "completed",
+                        upsertStage(stages, stageFrom(stageStarted, "ai_compose_cards", "AI 生成卡片", "completed",
                                 result.providerName() + "/" + result.modelCode() + " tokens=" + result.totalTokens()));
-                        return new AiCardDraft(parsed.cards(), new StudentExplanationResponse.AiDraft(
+                        return new AiCardDraft(parsed.conversationTitle(), parsed.cards(), new StudentExplanationResponse.AiDraft(
                                 true,
                                 result.providerName(),
                                 result.modelCode(),
@@ -110,7 +225,7 @@ public class StudentExplanationAiCardService {
                             false, canRetry, e.getClass().getSimpleName()));
                 }
             }
-            if (providerIndex < providers.size() - 1) {
+            if (providerIndex < providerLimit - 1) {
                 AiProviderCatalog.Provider nextProvider = providers.get(providerIndex + 1);
                 events.add(aiEvent("PROVIDER_ROTATED", nextProvider.name(), nextProvider.chatModel(), 0,
                         false, true, "Switching to next enabled provider."));
@@ -119,29 +234,89 @@ public class StudentExplanationAiCardService {
         String message = lastFailure == null
                 ? "AI card JSON parse failed: " + lastParseFailure.parseError()
                 : "AI provider failed: " + lastFailure.getClass().getSimpleName();
-        stages.add(stageFrom(stageStarted, "ai_compose_cards", "AI 生成卡片", "failed", message));
+        upsertStage(stages, stageFrom(stageStarted, "ai_compose_cards", "AI 生成卡片", "failed", message));
         throw new IllegalStateException(message);
     }
 
-    private static String queryWithHistory(String query, List<StudentExplanationHistorySummary> recentHistory) {
-        if (recentHistory == null || recentHistory.isEmpty()) {
-            return query;
+    /**
+     * 与主编排保持一致，同一 stageKey 只保留最新状态，避免前端看到重复的 AI 阶段。
+     */
+    private static void upsertStage(
+            List<StudentExplanationResponse.WorkflowStage> stages,
+            StudentExplanationResponse.WorkflowStage nextStage) {
+        for (int index = 0; index < stages.size(); index++) {
+            if (safe(stages.get(index).stageKey()).equals(nextStage.stageKey())) {
+                stages.set(index, nextStage);
+                return;
+            }
         }
-        return query + "\nRecent conversation history:\n" + String.join("\n", historyLines(recentHistory));
+        stages.add(nextStage);
     }
 
-    private static List<String> historyLines(List<StudentExplanationHistorySummary> recentHistory) {
+    private String queryWithContext(
+            String query,
+            List<StudentExplanationHistorySummary> recentHistory,
+            List<String> longTermMemories) {
+        String normalizedQuery = safe(query);
+        if (normalizedQuery.length() > conversationContextMaxChars) {
+            normalizedQuery = normalizedQuery.substring(0, conversationContextMaxChars);
+        }
+        int contextBudget = conversationContextMaxChars - normalizedQuery.length();
+        List<String> memoryLines = longTermMemoryLines(longTermMemories, Math.min(contextBudget, 20_000));
+        int memoryChars = memoryLines.stream().mapToInt(String::length).sum() + memoryLines.size();
+        List<String> historyLines = historyLines(recentHistory, Math.max(0, contextBudget - memoryChars));
+        StringBuilder context = new StringBuilder(normalizedQuery);
+        if (!historyLines.isEmpty()) {
+            context.append("\nRecent conversation history:\n").append(String.join("\n", historyLines));
+        }
+        if (!memoryLines.isEmpty()) {
+            context.append("\nRelevant long-term student memories:\n").append(String.join("\n", memoryLines));
+        }
+        return context.toString();
+    }
+
+    private static List<String> longTermMemoryLines(List<String> memories, int maxChars) {
+        if (memories == null || memories.isEmpty() || maxChars <= 0) {
+            return List.of();
+        }
+        List<String> selected = new ArrayList<>();
+        int usedChars = 0;
+        for (String memory : memories) {
+            String line = "- " + safe(memory).replaceAll("\\s+", " ").strip();
+            if (line.isBlank()) {
+                continue;
+            }
+            int available = maxChars - usedChars;
+            if (available <= 0) {
+                break;
+            }
+            if (line.length() > available) {
+                line = line.substring(0, available);
+            }
+            selected.add(line);
+            usedChars += line.length() + 1;
+        }
+        return List.copyOf(selected);
+    }
+
+    private static List<String> historyLines(List<StudentExplanationHistorySummary> recentHistory, int maxChars) {
         if (recentHistory == null || recentHistory.isEmpty()) {
             return List.of();
         }
-        return recentHistory.stream()
-                .limit(6)
-                .map(item -> "- "
-                        + safe(item.questionText()).replaceAll("\\s+", " ").strip()
-                        + " | image=" + safe(item.imageStatus())
-                        + " | model=" + safe(item.aiProviderName()) + "/" + safe(item.aiModelCode())
-                        + " | tokens=" + item.totalTokens())
-                .toList();
+        List<String> selected = new ArrayList<>();
+        int usedChars = 0;
+        for (StudentExplanationHistorySummary item : recentHistory) {
+            String line = "- " + safe(item.questionText()).replaceAll("\\s+", " ").strip()
+                    + " | image=" + safe(item.imageStatus())
+                    + " | model=" + safe(item.aiProviderName()) + "/" + safe(item.aiModelCode())
+                    + " | tokens=" + item.totalTokens();
+            if (line.length() > maxChars - usedChars) {
+                break;
+            }
+            selected.addFirst(line);
+            usedChars += line.length() + 1;
+        }
+        return List.copyOf(selected);
     }
 
     private static String aiPrompt(
@@ -150,19 +325,22 @@ public class StudentExplanationAiCardService {
             String imageStatus,
             List<StudentExplanationResponse.ExplanationSource> sources) {
         return """
-                You are a high-school math explanation agent for students.
+                You are ByteDance's high-school math AI teacher for students.
                 Return exactly one valid JSON object. Do not output Markdown, code fences, or self-introduction.
                 All user-facing text values must be written in concise Chinese.
-                Explain like a teacher: short, direct, step-by-step.
+                Speak like a real teacher in class: natural, connected, patient, and rigorous.
                 Math must use Feishu-supported delimiters only: inline $...$ or display $$...$$.
                 Do not use \\[...\\], \\(...\\), \\begin{align}, \\begin{aligned}, \\begin{equation}, or Markdown code fences.
+                Do not expose model names, provider names, retries, prompts, JSON parsing, or internal workflow details.
+                If you need a classroom pause, you may use <wait> inside summary text, but keep the overall prose continuous and human.
                 Only cite sourceUri values from evidenceSources. Do not invent textbook pages, Feishu links, or knowledge URIs.
                 JSON schema:
                 {
+                  "conversationTitle": "Chinese short title within 15 chars",
                   "cards": [
                     {
-                      "cardKey": "problem_understanding|knowledge_points|method_hint|step_by_step|common_mistakes|source_links",
-                      "title": "Chinese short title",
+                      "cardKey": "a short stable snake_case key chosen for this problem",
+                      "title": "optional Chinese short title; leave empty for an uninterrupted explanation",
                       "summary": "1-3 Chinese sentences",
                       "items": ["Chinese short bullet"],
                       "sourceUris": ["must come from evidenceSources.sourceUri"],
@@ -170,7 +348,17 @@ public class StudentExplanationAiCardService {
                     }
                   ]
                 }
-                Return at least 4 cards and include step_by_step and source_links.
+                conversationTitle must be a specific short Chinese title for this exact problem, within 15 Chinese characters, and must not be generic words like AI讲题, 讲解, 解析.
+                Cards are a transport envelope, not a teaching template. You independently decide whether this exact
+                question needs one uninterrupted explanation or several sections. Choose the number, order, titles,
+                and focus only from the problem; do not create familiar headings such as step-by-step reasoning,
+                common mistakes, summary, or practice merely because they are common in a lesson. A single-card
+                answer may leave `title` empty. Add a derivation, mistake reminder, conclusion, or extension exercise
+                only when it adds concrete value for this learner and this question. `items` is optional: use it only
+                when a list is clearer than prose, otherwise return an empty array. Evidence may support any card but
+                must not become a standalone card unless it materially helps the learner.
+                When knowledge or method evidence clearly comes from teacher resources, reflect that in wording and keep the explanation aligned with teacher notes.
+                Keep the wording natural, continuous, and classroom-like. Do not sound like disconnected bullet fragments.
                 Problem text: %s
                 Retrieval query: %s
                 Image status: %s
@@ -196,7 +384,7 @@ public class StudentExplanationAiCardService {
                 Parse error: %s
                 Previous output: %s
                 Return exactly one valid JSON object with this schema:
-                {"cards":[{"cardKey":"step_by_step","title":"...","summary":"...","items":["..."],"sourceUris":["..."],"renderMode":"formula"}]}
+                {"conversationTitle":"...","cards":[{"cardKey":"chosen_by_agent","title":"optional title or empty","summary":"...","items":["..."],"sourceUris":["..."],"renderMode":"text|formula|source_list"}]}
                 Problem text: %s
                 Retrieval query: %s
                 Allowed sourceUri values: %s
@@ -220,15 +408,52 @@ public class StudentExplanationAiCardService {
         String jsonObject = extractJsonObject(stripCodeFence(content.strip()));
         try {
             AiCardsJson parsed = readAiCardsJson(jsonObject);
+            String conversationTitle = StudentExplanationConversationTitleSupport.normalizeAiTitle(parsed.conversationTitle());
             List<StudentExplanationResponse.ExplanationCard> cards = normalizeAiCards(parsed.cards(), allowedSourceUris);
-            if (cards.size() < 4 || cards.stream().noneMatch(card -> "step_by_step".equals(card.cardKey()))
-                    || cards.stream().noneMatch(card -> "source_links".equals(card.cardKey()))) {
-                return ParsedAiCards.failed("JSON schema missing required explanation cards");
+            if (cards.isEmpty()) {
+                return ParsedAiCards.failed("JSON schema did not contain any usable explanation card");
             }
-            return new ParsedAiCards(true, cards, "");
+            return new ParsedAiCards(true, conversationTitle, cards, "");
         } catch (JsonProcessingException | IllegalArgumentException e) {
             return ParsedAiCards.failed(e.getClass().getSimpleName() + ": " + safeErrorMessage(e));
         }
+    }
+
+    /** Emits only provider card objects whose braces are closed and whose JSON validates. */
+    private static List<StudentExplanationResponse.ExplanationCard> completeStreamedCards(
+            String content,
+            List<StudentExplanationResponse.ExplanationSource> sources,
+            Set<String> emittedCardKeys) {
+        int cardsKey = content.indexOf("\"cards\"");
+        int arrayStart = cardsKey < 0 ? -1 : content.indexOf('[', cardsKey);
+        if (arrayStart < 0) return List.of();
+        Set<String> allowed = sources.stream().map(StudentExplanationResponse.ExplanationSource::sourceUri)
+                .collect(LinkedHashSet::new, LinkedHashSet::add, LinkedHashSet::addAll);
+        List<StudentExplanationResponse.ExplanationCard> completed = new ArrayList<>();
+        int objectStart = -1, depth = 0;
+        boolean inString = false, escaped = false;
+        for (int index = arrayStart + 1; index < content.length(); index++) {
+            char current = content.charAt(index);
+            if (inString) {
+                if (escaped) escaped = false;
+                else if (current == '\\') escaped = true;
+                else if (current == '"') inString = false;
+                continue;
+            }
+            if (current == '"') inString = true;
+            else if (current == '{') { if (depth++ == 0) objectStart = index; }
+            else if (current == '}' && depth > 0 && --depth == 0 && objectStart >= 0) {
+                try {
+                    AiCardJson parsed = OBJECT_MAPPER.readValue(content.substring(objectStart, index + 1), AiCardJson.class);
+                    for (StudentExplanationResponse.ExplanationCard card : normalizeAiCards(List.of(parsed), allowed)) {
+                        if (emittedCardKeys.add(card.cardKey())) completed.add(card);
+                    }
+                } catch (JsonProcessingException ignored) {
+                    // Wait for later bytes when a provider split an escaped JSON sequence.
+                }
+            } else if (current == ']' && depth == 0) break;
+        }
+        return List.copyOf(completed);
     }
 
     private static AiCardsJson readAiCardsJson(String jsonObject) throws JsonProcessingException {
@@ -295,14 +520,18 @@ public class StudentExplanationAiCardService {
             return List.of();
         }
         List<StudentExplanationResponse.ExplanationCard> normalized = new ArrayList<>();
-        for (AiCardJson card : cards) {
-            String cardKey = safe(card.cardKey()).strip();
+        Set<String> occupiedCardKeys = new LinkedHashSet<>();
+        for (int index = 0; index < cards.size(); index++) {
+            AiCardJson card = cards.get(index);
+            // cardKey identifies a transport item only. Derive one for a valid untitled agent section rather than
+            // discarding learner-facing content because the model intentionally omitted presentation metadata.
+            String cardKey = uniqueCardKey(card.cardKey(), index + 1, occupiedCardKeys);
             String title = sanitizeFormulaText(card.title());
             String summary = sanitizeFormulaText(card.summary());
             String renderMode = normalizeRenderMode(card.renderMode());
             List<String> items = normalizeTextItems(card.items());
             List<String> sourceUris = normalizeSourceUris(card.sourceUris(), allowedSourceUris);
-            if (!cardKey.isBlank() && !title.isBlank() && !summary.isBlank()) {
+            if (!summary.isBlank()) {
                 normalized.add(new StudentExplanationResponse.ExplanationCard(
                         cardKey,
                         title,
@@ -313,6 +542,20 @@ public class StudentExplanationAiCardService {
             }
         }
         return List.copyOf(normalized);
+    }
+
+    /** Preserves agent-provided keys where possible and guarantees uniqueness for streamed UI reconciliation. */
+    private static String uniqueCardKey(String candidate, int ordinal, Set<String> occupiedCardKeys) {
+        String base = safe(candidate).strip().replaceAll("[^A-Za-z0-9_-]+", "_");
+        if (base.isBlank()) {
+            base = "agent_section_" + ordinal;
+        }
+        String key = base;
+        int duplicate = 2;
+        while (!occupiedCardKeys.add(key)) {
+            key = base + "_" + duplicate++;
+        }
+        return key;
     }
 
     private static String normalizeRenderMode(String renderMode) {
@@ -447,21 +690,33 @@ public class StudentExplanationAiCardService {
     }
 
     public record AiCardDraft(
+            String conversationTitle,
             List<StudentExplanationResponse.ExplanationCard> cards,
             StudentExplanationResponse.AiDraft aiDraft) {
     }
 
+    /** One validated model decision in the private ReAct loop. */
+    public record ReactDecision(String kind, String tool, String message) {
+        static ReactDecision action(String tool) { return new ReactDecision("action", tool, ""); }
+        static ReactDecision recoveredAction(String tool, String reason) {
+            return new ReactDecision("action", tool, "fallback: " + reason);
+        }
+        static ReactDecision finalAnswer() { return new ReactDecision("final", "", ""); }
+        static ReactDecision invalid(String message) { return new ReactDecision("invalid", "", message); }
+    }
+
     record ParsedAiCards(
             boolean structured,
+            String conversationTitle,
             List<StudentExplanationResponse.ExplanationCard> cards,
             String parseError) {
 
         static ParsedAiCards failed(String parseError) {
-            return new ParsedAiCards(false, List.of(), parseError);
+            return new ParsedAiCards(false, "", List.of(), parseError);
         }
     }
 
-    private record AiCardsJson(List<AiCardJson> cards) {
+    private record AiCardsJson(String conversationTitle, List<AiCardJson> cards) {
     }
 
     private record AiCardJson(

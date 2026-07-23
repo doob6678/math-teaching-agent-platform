@@ -162,6 +162,18 @@ public class MyBatisKnowledgeQuestionBankStore implements KnowledgeQuestionBankS
         return archived;
     }
 
+    /** Archives one stale parser representation while preserving the database row for audit review. */
+    @Override
+    public boolean archiveQuestion(String tenantId, String questionId) {
+        return questionMapper.update(
+                null,
+                new LambdaUpdateWrapper<QuestionBankItemEntity>()
+                        .eq(QuestionBankItemEntity::getTenantId, tenantId)
+                        .eq(QuestionBankItemEntity::getQuestionId, questionId)
+                        .eq(QuestionBankItemEntity::getStatus, "active")
+                        .set(QuestionBankItemEntity::getStatus, "archived")) > 0;
+    }
+
     /**
      * Lists visible active knowledge points.
      */
@@ -234,7 +246,9 @@ public class MyBatisKnowledgeQuestionBankStore implements KnowledgeQuestionBankS
         }
         wrapper.orderByAsc(QuestionBankItemEntity::getQuestionTitle);
         return questionMapper.selectList(wrapper).stream()
-                .limit(Math.max(1, Math.min(50, limit)))
+                // Keep enough rows for the frontend's explicit page controls; the service applies strict topic
+                // filtering and BGE reranking before the UI slices the result set.
+                .limit(Math.max(1, Math.min(KnowledgeQuestionBankService.MAX_SEARCH_ROWS, limit)))
                 .map(entity -> toRecord(entity, links(tenantId, entity.getQuestionId())))
                 .toList();
     }
