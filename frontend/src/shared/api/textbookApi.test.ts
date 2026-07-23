@@ -213,6 +213,54 @@ describe("textbookApi", () => {
     expect(audit.hits[0].rankNo).toBe(1);
   });
 
+  it("loads the student learning path from the authenticated backend subject", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        studentId: "student-a",
+        steps: [{ knowledgePointId: "base", relationToNext: "PREREQUISITE_FOR" }],
+        generatedFrom: "student_knowledge_mastery+visible_PREREQUISITE_FOR",
+      }),
+    });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const response = await client.getStudentLearningPath();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8080/api/students/learning/path",
+      expect.objectContaining({
+        credentials: "include",
+        headers: expect.objectContaining({ "X-Device-Id": "local-browser-console" }),
+      }),
+    );
+    expect(response.steps[0].relationToNext).toBe("PREREQUISITE_FOR");
+  });
+
+  it("routes a student learning message through the backend intent contract", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        intentCode: "LEARNING_PATH",
+        confidence: 0.98,
+        knowledgePointId: "kp-1",
+        suggestedApi: "/api/students/learning/path",
+        recognizedBy: "model_openai:gpt-5.6-luna",
+      }),
+    });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const response = await client.recognizeStudentLearningIntent("函数单调性要先学什么？");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8080/api/students/learning/intent",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ message: "函数单调性要先学什么？" }),
+      }),
+    );
+    expect(response.intentCode).toBe("LEARNING_PATH");
+  });
+
   it("loads capability audits without client supplied identity", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
@@ -2222,6 +2270,60 @@ describe("textbookApi", () => {
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).not.toHaveProperty("studentId");
     expect(response.sources[0].sourceUri).toBe("textbook://book/page/12#chunk=c1");
     expect(response.aiDraft.modelCode).toBe("gpt-5.4");
+  });
+
+  it("creates and reads student-safe targeted practice through its dedicated endpoints", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          taskId: "practice-task-1",
+          clientRequestId: "practice-client-1",
+          status: "CREATED",
+          studentId: "local-student",
+          knowledgePointIds: ["function-monotonicity"],
+          questionText: "真实题库参考题",
+          learningGoal: "针对薄弱知识点生成学生专项练习",
+          interactiveSuggestions: [],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          taskId: "practice-task-1",
+          clientRequestId: "practice-client-1",
+          status: "COMPLETED",
+          studentId: "local-student",
+          knowledgePointIds: ["function-monotonicity"],
+          questionText: "真实题库参考题",
+          learningGoal: "针对薄弱知识点生成学生专项练习",
+          studentHandoutLatex: "\\section{专项练习}",
+          interactiveSuggestions: [],
+        }),
+      });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const created = await client.submitTargetedPractice({
+      clientRequestId: "practice-client-1",
+      knowledgePointId: "function-monotonicity",
+      exerciseCount: 5,
+      evidenceLimit: 3,
+    });
+    const completed = await client.getTargetedPractice(created.taskId);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "http://127.0.0.1:8080/api/students/learning/practice",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "http://127.0.0.1:8080/api/students/learning/practice/practice-task-1",
+      expect.objectContaining({
+        headers: expect.objectContaining({ "X-Device-Id": "local-browser-console" }),
+      }),
+    );
+    expect(completed.studentHandoutLatex).toContain("专项练习");
   });
 
   it("loads student explanation history without client supplied identity headers", async () => {

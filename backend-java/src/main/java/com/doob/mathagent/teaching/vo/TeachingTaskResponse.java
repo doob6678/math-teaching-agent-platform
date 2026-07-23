@@ -76,6 +76,18 @@ public record TeachingTaskResponse(
     }
 
     /**
+     * Removes teacher explanations, answer-bearing evidence, ReAct details, and draft review fields for student
+     * readers. The task owner still receives the student worksheet and durable progress status.
+     */
+    public TeachingTaskResponse studentSafe() {
+        return new TeachingTaskResponse(
+                taskId, clientRequestId, tenantId, subjectType, subjectId, selectedTemplate, status,
+                questionText, learningGoal, watermarkText, nodes, workflowEvents, List.of(), List.of(),
+                "", "", studentHandoutLatex, "", interactiveSuggestions, memoryReuse, stageTimings,
+                null, null, null, null, errorMessage);
+    }
+
+    /**
      * Backward-compatible constructor for call sites that already set a selected template and lecture version
      * before workflow events were added.
      */

@@ -140,9 +140,10 @@ public class TeachingTaskController {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for teaching submit");
         }
         // The HTTP request creates only durable MySQL state. The outbox publisher later sends the opaque taskId.
-        return lectureTaskSubmissionService == null
+        TeachingTaskResponse response = lectureTaskSubmissionService == null
                 ? workflowService.submit(request, requestContext(subject))
                 : lectureTaskSubmissionService.submit(request, requestContext(subject));
+        return visibleToSubject(response, subject);
     }
 
     /**
@@ -152,7 +153,10 @@ public class TeachingTaskController {
     public List<TeachingTaskResponse> list(
             @RequestParam(defaultValue = "20") int limit,
             HttpServletRequest httpRequest) {
-        return workflowService.listRecent(requestContext(subjectResolver.resolve(httpRequest)), limit);
+        RequestSubject subject = subjectResolver.resolve(httpRequest);
+        return workflowService.listRecent(requestContext(subject), limit).stream()
+                .map(task -> visibleToSubject(task, subject))
+                .toList();
     }
 
     /**
@@ -208,7 +212,9 @@ public class TeachingTaskController {
     public TeachingTaskResponse get(
             @PathVariable String taskId,
             HttpServletRequest httpRequest) {
-        return workflowService.get(taskId, requestContext(subjectResolver.resolve(httpRequest)))
+        RequestSubject subject = subjectResolver.resolve(httpRequest);
+        return workflowService.get(taskId, requestContext(subject))
+                .map(task -> visibleToSubject(task, subject))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Teaching task not found"));
     }
 
@@ -228,9 +234,10 @@ public class TeachingTaskController {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for teaching task resume");
         }
         try {
-            return lectureTaskSubmissionService == null
+            TeachingTaskResponse response = lectureTaskSubmissionService == null
                     ? workflowService.resume(taskId, requestContext(subject))
                     : lectureTaskSubmissionService.resume(taskId, requestContext(subject), workflowService);
+            return visibleToSubject(response, subject);
         } catch (IllegalArgumentException exception) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, exception.getMessage());
         } catch (IllegalStateException exception) {
@@ -252,7 +259,8 @@ public class TeachingTaskController {
         if (workflowService.get(taskId, context).isEmpty()) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Teaching task not found");
         }
-        return eventStreamService.stream(() -> workflowService.get(taskId, context));
+        return eventStreamService.stream(() -> workflowService.get(taskId, context)
+                .map(task -> visibleToSubject(task, subjectResolver.resolve(httpRequest))));
     }
 
     /**
@@ -657,6 +665,14 @@ public class TeachingTaskController {
                 normalized.subjectType(),
                 normalized.subjectId(),
                 normalized.deviceId());
+    }
+
+    /** Applies the same answer-redaction contract to every generic task response, not only the practice endpoint. */
+    private static TeachingTaskResponse visibleToSubject(TeachingTaskResponse task, RequestSubject subject) {
+        if (task == null || subject == null) {
+            return task;
+        }
+        return "student".equals(subject.normalize().subjectType()) ? task.studentSafe() : task;
     }
 
     /**

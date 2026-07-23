@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertCircle, ArrowLeft, ArrowRight, Database, Loader2, Search } from "lucide-react";
-import { StudentDashboardResponse } from "../../shared/api/textbookApi";
+import { AlertCircle, ArrowLeft, ArrowRight, BookOpen, Database, Loader2, Search, Sparkles } from "lucide-react";
+import { StudentDashboardResponse, StudentLearningPathResponse } from "../../shared/api/textbookApi";
 import { boundedPercent, StatusLine } from "./panelShared";
 
 const DEFAULT_PAGE_SIZE = 10;
@@ -8,6 +8,7 @@ const PAGE_SIZE_OPTIONS = [10, 20, 50];
 
 export function StudentDashboardPanel({
   dashboard,
+  learningPath,
   loading,
   error,
   viewerRole,
@@ -15,8 +16,12 @@ export function StudentDashboardPanel({
   onTargetStudentIdChange,
   onLoad,
   onRefresh,
+  onExplainWeakPoint,
+  onGenerateHandout,
+  onGeneratePractice,
 }: {
   dashboard: StudentDashboardResponse | null;
+  learningPath?: StudentLearningPathResponse | null;
   loading: boolean;
   error: string;
   viewerRole?: string;
@@ -24,6 +29,9 @@ export function StudentDashboardPanel({
   onTargetStudentIdChange?: (value: string) => void;
   onLoad?: () => void;
   onRefresh?: () => void;
+  onExplainWeakPoint?: (knowledgePointId: string) => void;
+  onGenerateHandout?: () => void;
+  onGeneratePractice?: () => void;
 }) {
   const [progressPage, setProgressPage] = useState(1);
   const [weakPage, setWeakPage] = useState(1);
@@ -82,6 +90,18 @@ export function StudentDashboardPanel({
         </div>
         <div className="result-actions">
           {dashboard ? <div className="strategy-pill">{viewerRoleLabel(dashboard.viewerRole)}查看</div> : null}
+          {needsTarget && onGenerateHandout ? (
+            <button type="button" className="inline-action btn btn-secondary btn-sm" onClick={onGenerateHandout} disabled={loading || !hasDashboardStudent}>
+              <BookOpen size={15} />
+              <span>生成针对性讲义</span>
+            </button>
+          ) : null}
+          {!needsTarget && onGeneratePractice ? (
+            <button type="button" className="inline-action btn btn-secondary btn-sm" onClick={onGeneratePractice} disabled={loading || !hasDashboardStudent}>
+              <Sparkles size={15} />
+              <span>生成专项练习</span>
+            </button>
+          ) : null}
           {onRefresh ? (
             <button
               type="button"
@@ -173,6 +193,26 @@ export function StudentDashboardPanel({
             )}
           </div>
 
+          {viewerRole === "student" && learningPath?.steps.length ? (
+            <div className="knowledge-panel">
+              <h3>个性化学习路径</h3>
+              <div className="progress-list">
+                {learningPath.steps.map((step, index) => (
+                  <div className="progress-item" key={step.knowledgePointId}>
+                    <div className="progress-head">
+                      <strong>{index + 1}. {step.knowledgePointName}</strong>
+                      <span>{step.masteryPercent}%</span>
+                    </div>
+                    <div className="progress-track" aria-label={`${step.knowledgePointName} ${step.masteryPercent}%`}>
+                      <div className="progress-fill" style={{ width: `${boundedPercent(step.masteryPercent)}%` }} />
+                    </div>
+                    <p>{step.recommendation}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
           <CompactList
             title="薄弱点"
             empty="暂无薄弱点。"
@@ -180,6 +220,10 @@ export function StudentDashboardPanel({
               key: item.knowledgePointId ?? item.knowledgePointName,
               title: item.knowledgePointName,
               meta: `等级 ${item.weaknessLevel}`,
+              action: item.knowledgePointId && onExplainWeakPoint
+                ? () => onExplainWeakPoint(item.knowledgePointId as string)
+                : undefined,
+              actionLabel: viewerRole === "student" ? "针对性讲解" : undefined,
             }))}
             total={weakPointItems.length}
             page={weakPage}
@@ -247,7 +291,7 @@ function CompactList({
 }: {
   title: string;
   empty: string;
-  items: Array<{ key: string; title: string; meta: string }>;
+  items: Array<{ key: string; title: string; meta: string; action?: () => void; actionLabel?: string }>;
   total: number;
   page: number;
   pageSize: number;
@@ -261,8 +305,16 @@ function CompactList({
         <>
           {items.map((item) => (
             <div className="question-item" key={item.key}>
-              <strong>{item.title}</strong>
-              <span>{item.meta}</span>
+              <div>
+                <strong>{item.title}</strong>
+                <span>{item.meta}</span>
+              </div>
+              {item.action && item.actionLabel ? (
+                <button type="button" className="btn btn-ghost btn-sm" onClick={item.action}>
+                  <Sparkles size={14} />
+                  <span>{item.actionLabel}</span>
+                </button>
+              ) : null}
             </div>
           ))}
           <PaginationControls

@@ -525,6 +525,103 @@ export interface TeachingAiDraft {
   recoveryEvents: TeachingAiRecoveryEvent[];
 }
 
+/** One student answer fact used to update knowledge-point mastery. */
+export interface StudentLearningAttemptRequest {
+  questionId: string;
+  questionText?: string;
+  knowledgePointIds: string[];
+  correct: boolean;
+  responseTimeMs: number;
+}
+
+/** Explainable mastery projection returned by the learning loop. */
+export interface StudentKnowledgeMasteryResponse {
+  tenantId: string;
+  studentId: string;
+  knowledgePointId: string;
+  masteryPercent: number;
+  attemptCount: number;
+  correctCount: number;
+  incorrectCount: number;
+  weaknessLevel: number;
+  lastAttemptAt?: string;
+  evidenceSummary: string;
+}
+
+export interface StudentLearningPathStep {
+  knowledgePointId: string;
+  knowledgePointName: string;
+  masteryPercent: number;
+  weaknessLevel: number;
+  relationToNext: string;
+  recommendation: string;
+}
+
+export interface StudentLearningPathResponse {
+  studentId: string;
+  steps: StudentLearningPathStep[];
+  generatedFrom: string;
+}
+
+export interface StudentLearningIntentResponse {
+  intentCode: string;
+  confidence: number;
+  knowledgePointId?: string;
+  knowledgePointName?: string;
+  suggestedApi?: string;
+  recognizedBy: string;
+}
+
+export interface StudentLearningAttemptResponse {
+  attemptId: string;
+  updatedMastery: StudentKnowledgeMasteryResponse[];
+  weakPoints: StudentKnowledgeMasteryResponse[];
+}
+
+export interface StudentLearningRecommendationResponse {
+  question: QuestionBankItemResponse;
+  knowledgePointId: string;
+  weaknessLevel: number;
+}
+
+/** Request for a student explanation that carries the current weak-point context. */
+export interface TargetedStudentExplanationRequest {
+  questionText: string;
+  knowledgePointId?: string;
+  questionId?: string;
+}
+
+/** Request for a teacher handout assembled from diagnosed weak points and linked question-bank items. */
+export interface TargetedLearningHandoutRequest {
+  clientRequestId: string;
+  studentId?: string;
+  knowledgePointId?: string;
+  questionLimit: number;
+  handoutTemplateCode?: string;
+  evidenceLimit: number;
+}
+
+/** Student-owned practice generation request; the backend returns only student-safe task fields. */
+export interface TargetedPracticeRequest {
+  clientRequestId: string;
+  knowledgePointId?: string;
+  exerciseCount: number;
+  evidenceLimit: number;
+}
+
+export interface StudentPracticeTaskResponse {
+  taskId: string;
+  clientRequestId: string;
+  status: string;
+  studentId: string;
+  knowledgePointIds: string[];
+  questionText: string;
+  learningGoal: string;
+  studentHandoutLatex?: string;
+  interactiveSuggestions: string[];
+  errorMessage?: string;
+}
+
 /**
  * Structured teaching draft sections collected before review and merge.
  */
@@ -3414,6 +3511,82 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(request),
       });
+    },
+
+    explainStudentWeakPoint(request: TargetedStudentExplanationRequest): Promise<StudentExplanationResponse> {
+      return requestJson<StudentExplanationResponse>("/api/students/learning/explanations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
+      });
+    },
+
+    recordStudentLearningAttempt(request: StudentLearningAttemptRequest): Promise<StudentLearningAttemptResponse> {
+      return requestJson<StudentLearningAttemptResponse>("/api/students/learning/attempts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
+      });
+    },
+
+    getStudentMastery(): Promise<StudentKnowledgeMasteryResponse[]> {
+      return requestJson<StudentKnowledgeMasteryResponse[]>("/api/students/learning/mastery");
+    },
+
+    getStudentLearningRecommendations(limit = 10): Promise<StudentLearningRecommendationResponse[]> {
+      return requestJson<StudentLearningRecommendationResponse[]>(
+        `/api/students/learning/recommendations?limit=${encodeURIComponent(String(limit))}`,
+      );
+    },
+
+    getStudentLearningPath(): Promise<StudentLearningPathResponse> {
+      return requestJson<StudentLearningPathResponse>("/api/students/learning/path");
+    },
+
+    recognizeStudentLearningIntent(message: string): Promise<StudentLearningIntentResponse> {
+      return requestJson<StudentLearningIntentResponse>("/api/students/learning/intent", {
+        method: "POST",
+        body: JSON.stringify({ message }),
+      });
+    },
+
+    getTeacherLearningWeakPoints(studentId?: string): Promise<StudentKnowledgeMasteryResponse[]> {
+      const suffix = studentId ? `?studentId=${encodeURIComponent(studentId)}` : "";
+      return requestJson<StudentKnowledgeMasteryResponse[]>(`/api/teachers/learning/weak-points${suffix}`);
+    },
+
+    async submitTargetedLearningHandout(request: TargetedLearningHandoutRequest): Promise<TeachingTaskResponse> {
+      const body = JSON.stringify(request);
+      const capability = await applyCapability(
+        "teaching:targeted-handout",
+        "/api/teachers/learning/handout",
+        body,
+        request.clientRequestId,
+        Math.max(1, request.evidenceLimit),
+      );
+      return requestJson<TeachingTaskResponse>("/api/teachers/learning/handout", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Capability-Token": capability.token,
+          "X-Request-Hash": capability.requestHash,
+        },
+        body,
+      });
+    },
+
+    submitTargetedPractice(request: TargetedPracticeRequest): Promise<StudentPracticeTaskResponse> {
+      return requestJson<StudentPracticeTaskResponse>("/api/students/learning/practice", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
+      });
+    },
+
+    getTargetedPractice(taskId: string): Promise<StudentPracticeTaskResponse> {
+      return requestJson<StudentPracticeTaskResponse>(
+        `/api/students/learning/practice/${encodeURIComponent(taskId)}`,
+      );
     },
 
     async streamStudentQuestion(

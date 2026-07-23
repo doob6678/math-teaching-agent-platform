@@ -254,6 +254,45 @@ public class MyBatisKnowledgeQuestionBankStore implements KnowledgeQuestionBankS
     }
 
     /**
+     * Uses the normalized question-to-knowledge link table for targeted learning recommendations and handouts.
+     * This avoids treating a UUID-like knowledge-point ID as natural-language search text.
+     */
+    @Override
+    public List<QuestionBankItemRecord> searchQuestionsByKnowledgePoint(
+            String tenantId,
+            String viewerRole,
+            String viewerSubjectId,
+            String knowledgePointId,
+            int limit) {
+        String normalizedTenant = tenantId == null ? "" : tenantId.strip();
+        String normalizedPoint = knowledgePointId == null ? "" : knowledgePointId.strip();
+        if (normalizedTenant.isBlank() || normalizedPoint.isBlank()) {
+            return List.of();
+        }
+        List<String> questionIds = linkMapper.selectList(new LambdaQueryWrapper<QuestionKnowledgeLinkEntity>()
+                        .eq(QuestionKnowledgeLinkEntity::getTenantId, normalizedTenant)
+                        .eq(QuestionKnowledgeLinkEntity::getKnowledgePointId, normalizedPoint)
+                        .eq(QuestionKnowledgeLinkEntity::getStatus, "active"))
+                .stream()
+                .map(QuestionKnowledgeLinkEntity::getQuestionId)
+                .filter(value -> value != null && !value.isBlank())
+                .distinct()
+                .toList();
+        if (questionIds.isEmpty()) {
+            return List.of();
+        }
+        LambdaQueryWrapper<QuestionBankItemEntity> wrapper = new LambdaQueryWrapper<QuestionBankItemEntity>()
+                .eq(QuestionBankItemEntity::getTenantId, normalizedTenant)
+                .eq(QuestionBankItemEntity::getStatus, "active")
+                .in(QuestionBankItemEntity::getQuestionId, questionIds);
+        applyQuestionVisibility(wrapper, viewerRole == null ? "student" : viewerRole.strip().toLowerCase(), viewerSubjectId);
+        return questionMapper.selectList(wrapper).stream()
+                .limit(Math.max(1, Math.min(KnowledgeQuestionBankService.MAX_SEARCH_ROWS, limit)))
+                .map(entity -> toRecord(entity, links(normalizedTenant, entity.getQuestionId())))
+                .toList();
+    }
+
+    /**
      * Splits user search text into bounded non-blank terms so "双曲线 大题" does not become one exact LIKE.
      */
     private static List<String> searchKeywords(String query) {

@@ -4485,7 +4485,12 @@ public class TeachingWorkflowService {
 
     private static boolean canUseQuestionBank(TeachingRequestContext context) {
         String subjectType = context == null ? "" : context.subjectType();
-        return "teacher".equalsIgnoreCase(subjectType) || "admin".equalsIgnoreCase(subjectType);
+        // Students may use only rows already filtered by the question-bank visibility query. This is required for
+        // weak-point practice generation; teacher resources and answer-bearing management operations remain gated
+        // separately by canUseTeacherResources and the controller capability checks.
+        return "student".equalsIgnoreCase(subjectType)
+                || "teacher".equalsIgnoreCase(subjectType)
+                || "admin".equalsIgnoreCase(subjectType);
     }
 
     private static boolean canUseTeacherResources(TeachingRequestContext context) {

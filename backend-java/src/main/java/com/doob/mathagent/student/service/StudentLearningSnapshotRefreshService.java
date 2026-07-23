@@ -2,6 +2,8 @@ package com.doob.mathagent.student.service;
 
 import com.doob.mathagent.memory.service.StudentMemoryEntry;
 import com.doob.mathagent.memory.service.StudentMemoryStore;
+import com.doob.mathagent.learning.StudentKnowledgeMastery;
+import com.doob.mathagent.learning.StudentLearningLoopService;
 import com.doob.mathagent.student.dto.StudentDashboardQuery;
 import com.doob.mathagent.student.vo.StudentDashboardResponse;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -26,6 +28,7 @@ public class StudentLearningSnapshotRefreshService {
     private final StudentLearningSnapshotStore snapshotStore;
     private final StudentDashboardSubjectResolver subjectResolver;
     private final ObjectMapper objectMapper;
+    private final StudentLearningLoopService learningLoopService;
 
     /**
      * Creates a snapshot refresh service.
@@ -35,16 +38,27 @@ public class StudentLearningSnapshotRefreshService {
      * @param subjectResolver resolves the represented subject role from backend identity data
      * @param objectMapper JSON mapper for snapshot payloads
      */
-    @Autowired
     public StudentLearningSnapshotRefreshService(
             StudentMemoryStore memoryStore,
             StudentLearningSnapshotStore snapshotStore,
             StudentDashboardSubjectResolver subjectResolver,
             ObjectMapper objectMapper) {
+        this(memoryStore, snapshotStore, subjectResolver, objectMapper, null);
+    }
+
+    /** Production constructor that adds answer-based mastery without changing the existing snapshot contract. */
+    @Autowired
+    public StudentLearningSnapshotRefreshService(
+            StudentMemoryStore memoryStore,
+            StudentLearningSnapshotStore snapshotStore,
+            StudentDashboardSubjectResolver subjectResolver,
+            ObjectMapper objectMapper,
+            StudentLearningLoopService learningLoopService) {
         this.memoryStore = memoryStore;
         this.snapshotStore = snapshotStore;
         this.subjectResolver = subjectResolver;
         this.objectMapper = objectMapper;
+        this.learningLoopService = learningLoopService;
     }
 
     /**
@@ -88,8 +102,11 @@ public class StudentLearningSnapshotRefreshService {
         String tenantId = normalized.tenantId();
         String studentId = normalized.targetStudentId();
         List<StudentMemoryEntry> entries = activeMemoryEntries(tenantId, studentId);
-        List<StudentDashboardResponse.KnowledgeProgress> progress = progress(entries);
-        List<StudentDashboardResponse.WeakPoint> weakPoints = List.of();
+        List<StudentKnowledgeMastery> mastery = learningLoopService == null
+                ? List.of()
+                : learningLoopService.mastery(tenantId, studentId);
+        List<StudentDashboardResponse.KnowledgeProgress> progress = progress(entries, mastery);
+        List<StudentDashboardResponse.WeakPoint> weakPoints = weakPoints(mastery);
         List<StudentDashboardResponse.RecentQuestion> recentQuestions = recentQuestions(entries);
         List<StudentDashboardResponse.ScorePoint> scoreTrend = List.of();
         List<StudentDashboardResponse.ResourceScope> resourceScopes = resourceScopes(entries);
@@ -131,7 +148,12 @@ public class StudentLearningSnapshotRefreshService {
     /**
      * Builds knowledge progress from actual memory coverage by knowledge point.
      */
-    private static List<StudentDashboardResponse.KnowledgeProgress> progress(List<StudentMemoryEntry> entries) {
+    private static List<StudentDashboardResponse.KnowledgeProgress> progress(
+            List<StudentMemoryEntry> entries, List<StudentKnowledgeMastery> mastery) {
+        if (!mastery.isEmpty()) {
+            return mastery.stream().map(item -> new StudentDashboardResponse.KnowledgeProgress(
+                    item.knowledgePointId(), item.knowledgePointId(), "", "", item.masteryPercent())).toList();
+        }
         Map<String, List<StudentMemoryEntry>> byKnowledgePoint = new LinkedHashMap<>();
         for (StudentMemoryEntry entry : entries) {
             String knowledgePoint = clean(entry.knowledgePointName());
@@ -147,6 +169,13 @@ public class StudentLearningSnapshotRefreshService {
                         "",
                         progressPercent(item.getValue().size())))
                 .toList();
+    }
+
+    /** Converts the explainable mastery projection into the dashboard's existing weak-point shape. */
+    private static List<StudentDashboardResponse.WeakPoint> weakPoints(List<StudentKnowledgeMastery> mastery) {
+        return mastery.stream().filter(item -> item.weaknessLevel() > 0)
+                .map(item -> new StudentDashboardResponse.WeakPoint(item.knowledgePointId(), item.knowledgePointId(),
+                        item.weaknessLevel(), item.evidenceSummary())).toList();
     }
 
     /**

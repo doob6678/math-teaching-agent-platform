@@ -123,4 +123,27 @@ public interface KnowledgeQuestionBankStore {
             String viewerSubjectId,
             String query,
             int limit);
+
+    /**
+     * Finds visible questions linked to one real knowledge-point ID.
+     *
+     * <p>The default implementation keeps isolated test stores and older adapters compatible.  The MyBatis
+     * implementation overrides it with a link-table query so production recommendation never depends on a broad
+     * text search accidentally returning the right topic.</p>
+     */
+    default List<QuestionBankItemRecord> searchQuestionsByKnowledgePoint(
+            String tenantId,
+            String viewerRole,
+            String viewerSubjectId,
+            String knowledgePointId,
+            int limit) {
+        String point = knowledgePointId == null ? "" : knowledgePointId.strip();
+        if (point.isBlank()) {
+            return List.of();
+        }
+        return searchQuestions(tenantId, viewerRole, viewerSubjectId, "", Math.max(1, limit)).stream()
+                .filter(question -> question.knowledgePointIds().contains(point))
+                .limit(Math.max(1, limit))
+                .toList();
+    }
 }

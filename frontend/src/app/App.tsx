@@ -28,11 +28,13 @@ import {
   QuestionBankItemResponse,
   RetrievalAuditDetail,
   StudentDashboardResponse,
+  StudentLearningPathResponse,
   StudentExplanationConversationSummary,
   StudentExplanationConversationResponse,
   StudentExplanationImageUploadResponse,
   StudentExplanationResponse,
   StudentExplanationStreamEvent,
+  StudentPracticeTaskResponse,
   TeachingHandoutVersion,
   TeachingHandoutPdfResponse,
   TeachingHandoutTemplateResponse,
@@ -244,6 +246,7 @@ export function App() {
   // immutable template snapshot below, and the shelf remains freely selectable for deliberate alternatives.
   const [selectedTeachingTemplateCode, setSelectedTeachingTemplateCode] = useState("zhao_lixian_2025_master_v1");
   const [studentDashboard, setStudentDashboard] = useState<StudentDashboardResponse | null>(null);
+  const [studentLearningPath, setStudentLearningPath] = useState<StudentLearningPathResponse | null>(null);
   const [dashboardStudentId, setDashboardStudentId] = useState("");
   const [teacherResources, setTeacherResources] = useState<TeacherResourceDocumentResponse[]>([]);
   const [teacherSyncJobs, setTeacherSyncJobs] = useState<Record<string, TeacherSourceSyncJobResponse[]>>({});
@@ -439,11 +442,15 @@ export function App() {
     setLoadingStudentDashboard(true);
     setStudentDashboardError("");
     setStudentDashboard(null);
+    setStudentLearningPath(null);
     api
       .getStudentDashboard(studentId.trim() || undefined)
       .then(setStudentDashboard)
       .catch((error: Error) => setStudentDashboardError(error.message))
       .finally(() => setLoadingStudentDashboard(false));
+    if (authSession?.role === "student") {
+      api.getStudentLearningPath().then(setStudentLearningPath).catch(() => setStudentLearningPath(null));
+    }
   }
 
   function handleRefreshStudentDashboard() {
@@ -455,11 +462,15 @@ export function App() {
     setLoadingStudentDashboard(true);
     setStudentDashboardError("");
     setStudentDashboard(null);
+    setStudentLearningPath(null);
     api
       .refreshStudentDashboard(requestedStudentId || undefined)
       .then(setStudentDashboard)
       .catch((error: Error) => setStudentDashboardError(error.message))
       .finally(() => setLoadingStudentDashboard(false));
+    if (authSession?.role === "student") {
+      api.getStudentLearningPath().then(setStudentLearningPath).catch(() => setStudentLearningPath(null));
+    }
   }
 
   function handleLoadStudentDashboard() {
@@ -469,6 +480,86 @@ export function App() {
       return;
     }
     loadStudentDashboard(requestedStudentId);
+  }
+
+  /** Loads one real weak-point recommendation and opens the existing student explanation workspace with it. */
+  function handleExplainWeakPoint(knowledgePointId: string) {
+    setStudentDashboardError("");
+    api.getStudentLearningRecommendations(10)
+      .then((recommendations) => {
+        const recommendation = recommendations.find((item) => item.knowledgePointId === knowledgePointId)
+          ?? recommendations[0];
+        if (!recommendation?.question.questionText) {
+          throw new Error("该薄弱知识点暂时没有可见的真实题库题目。");
+        }
+        setTeachingConversationInput(
+          `请针对知识点 ${knowledgePointId} 讲解下面这道推荐题，并结合教材证据指出我最容易出错的步骤：\n${recommendation.question.questionText}`,
+        );
+        navigate("teaching");
+      })
+      .catch((error: Error) => setStudentDashboardError(toUserFacingError(error)));
+  }
+
+  /** Submits the high-value targeted-handout action through the backend capability-token flow. */
+  function handleGenerateTargetedHandout() {
+    const studentId = authSession?.role === "student"
+      ? undefined
+      : (studentDashboard?.studentId ?? (dashboardStudentId.trim() || undefined));
+    const clientRequestId = globalThis.crypto.randomUUID();
+    setTeachingError("");
+    api.submitTargetedLearningHandout({
+      clientRequestId,
+      studentId,
+      questionLimit: 5,
+      evidenceLimit: Math.max(1, limit),
+      handoutTemplateCode: selectedTeachingTemplateCode || undefined,
+    })
+      .then((task) => {
+        focusTeachingTask(task);
+        navigate("streaming");
+        if (task.status !== "COMPLETED") {
+          followTeachingTask(task.taskId);
+        }
+      })
+      .catch((error: Error) => setTeachingError(toUserFacingError(error)));
+  }
+
+  /** Creates a student-owned practice task from the current weak-point snapshot; the response excludes teacher answers. */
+  function handleGenerateTargetedPractice() {
+    setStudentDashboardError("");
+    setTeachingError("");
+    api.submitTargetedPractice({
+      clientRequestId: globalThis.crypto.randomUUID(),
+      exerciseCount: 5,
+      evidenceLimit: Math.max(1, Math.min(limit, 8)),
+    })
+      .then((task) => {
+        setTeachingError("");
+        focusStudentPracticeTask(task);
+        navigate("streaming");
+        if (task.status !== "COMPLETED") {
+          pollTargetedPractice(task.taskId);
+        }
+      })
+      .catch((error: Error) => setStudentDashboardError(toUserFacingError(error)));
+  }
+
+  /** Converts the deliberately redacted practice contract into the existing student worksheet renderer shape. */
+  function focusStudentPracticeTask(task: StudentPracticeTaskResponse) {
+    const safeTask = studentPracticeAsTeachingTask(task);
+    setLearningGoal(safeTask.learningGoal ?? "");
+    setTeachingQuestion(safeTask.questionText ?? "");
+    setTeachingTask(safeTask);
+    upsertHandoutCollaborationTask(safeTask);
+  }
+
+  /** Polls only the redacted practice endpoint; generic teaching-task reads would expose teacher-only fields. */
+  function pollTargetedPractice(taskId: string) {
+    api.getTargetedPractice(taskId).then((task) => {
+      focusStudentPracticeTask(task);
+      if (task.status === "COMPLETED" || task.status === "FAILED") return;
+      globalThis.setTimeout(() => pollTargetedPractice(taskId), TASK_RECOVERY_POLL_DELAY_MS);
+    }).catch((error: Error) => setStudentDashboardError(toUserFacingError(error)));
   }
 
   useEffect(() => {
@@ -2131,6 +2222,7 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
             <div className="card-body">
               <StudentDashboardPanel
                 dashboard={studentDashboard}
+                learningPath={studentLearningPath}
                 loading={loadingStudentDashboard}
                 error={studentDashboardError}
                 viewerRole={authSession?.role}
@@ -2138,6 +2230,11 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
                 onTargetStudentIdChange={setDashboardStudentId}
                 onLoad={handleLoadStudentDashboard}
                 onRefresh={handleRefreshStudentDashboard}
+                onExplainWeakPoint={authSession?.role === "student" ? handleExplainWeakPoint : undefined}
+                onGenerateHandout={authSession?.role === "teacher" || authSession?.role === "admin"
+                  ? handleGenerateTargetedHandout
+                  : undefined}
+                onGeneratePractice={authSession?.role === "student" ? handleGenerateTargetedPractice : undefined}
               />
             </div>
           </div>
@@ -3862,6 +3959,30 @@ function buildTeachingFeedbackEvidenceSummary(task: TeachingTaskResponse) {
     sourceRef: safeReviewText(item.chunkId, 120),
     snippetPreview: safeReviewText(cleanEvidenceSnippetForReview(item.snippet), 140),
   }));
+}
+
+function studentPracticeAsTeachingTask(task: StudentPracticeTaskResponse): TeachingTaskResponse {
+  const status = ["CREATED", "RUNNING", "COMPLETED", "FAILED"].includes(task.status)
+    ? task.status as TeachingTaskResponse["status"]
+    : "CREATED";
+  return {
+    taskId: task.taskId,
+    clientRequestId: task.clientRequestId,
+    subjectType: "student",
+    subjectId: task.studentId,
+    status,
+    questionText: task.questionText,
+    learningGoal: task.learningGoal,
+    nodes: [],
+    reactTrace: [],
+    evidence: [],
+    handoutLatex: "",
+    teacherHandoutLatex: "",
+    studentHandoutLatex: task.studentHandoutLatex ?? "",
+    lectureHandoutLatex: "",
+    interactiveSuggestions: task.interactiveSuggestions ?? [],
+    errorMessage: task.errorMessage,
+  };
 }
 
 function cleanEvidenceSnippetForReview(value: string) {

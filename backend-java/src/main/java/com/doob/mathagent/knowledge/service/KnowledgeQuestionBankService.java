@@ -218,7 +218,7 @@ public class KnowledgeQuestionBankService {
             String viewerRole,
             String viewerSubjectId) {
         String role = normalizeRole(viewerRole);
-        requireTeacherOrAdmin(role);
+        requireReadRole(role);
         return store.listKnowledgePoints(
                         requireText(tenantId, "tenantId"),
                         role,
@@ -236,7 +236,7 @@ public class KnowledgeQuestionBankService {
             String viewerRole,
             String viewerSubjectId) {
         String role = normalizeRole(viewerRole);
-        requireTeacherOrAdmin(role);
+        requireReadRole(role);
         return store.listKnowledgeRelations(
                         requireText(tenantId, "tenantId"),
                         role,
@@ -270,6 +270,25 @@ public class KnowledgeQuestionBankService {
                 .toList();
         List<QuestionBankItemResponse> topicAligned = strictTopicFilter(query, candidates);
         return rerank(query, topicAligned);
+    }
+
+    /** Returns questions linked to a real knowledge point, preserving tenant and visibility filtering. */
+    public List<QuestionBankItemResponse> searchQuestionsByKnowledgePoint(
+            String tenantId,
+            String viewerRole,
+            String viewerSubjectId,
+            String knowledgePointId,
+            int limit) {
+        String role = normalizeRole(viewerRole);
+        return store.searchQuestionsByKnowledgePoint(
+                        requireText(tenantId, "tenantId"),
+                        role,
+                        requireText(viewerSubjectId, "viewerSubjectId"),
+                        requireText(knowledgePointId, "knowledgePointId"),
+                        normalizedLimit(limit))
+                .stream()
+                .map(KnowledgeQuestionBankService::toResponse)
+                .toList();
     }
 
     /**
@@ -455,6 +474,13 @@ public class KnowledgeQuestionBankService {
     private static void requireTeacherOrAdmin(String viewerRole) {
         if (!"teacher".equals(viewerRole) && !"admin".equals(viewerRole)) {
             throw new IllegalArgumentException("Knowledge question bank management requires teacher or admin role");
+        }
+    }
+
+    /** Read-only graph projections are also needed by the student's prerequisite path; writes remain teacher/admin. */
+    private static void requireReadRole(String viewerRole) {
+        if (!"student".equals(viewerRole) && !"teacher".equals(viewerRole) && !"admin".equals(viewerRole)) {
+            throw new IllegalArgumentException("Student, teacher, or admin role required");
         }
     }
 
