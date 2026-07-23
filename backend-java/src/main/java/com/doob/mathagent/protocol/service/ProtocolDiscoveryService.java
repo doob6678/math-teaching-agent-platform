@@ -129,6 +129,24 @@ public class ProtocolDiscoveryService {
                                         fieldArray("tags", "Optional teacher-resource tags used as retrieval hints.")),
                                 "query", "libraries")),
                 new McpToolDescriptor(
+                        "list_teacher_resources",
+                        "List visible teacher resources",
+                        "Lists files visible to the authenticated MCP subject. Storage paths are not exposed.",
+                        true, true, TEACHER_ROLES, "teacher-resource:read", "low", false, true, schema(fields())),
+                new McpToolDescriptor(
+                        "read_teacher_resource_blocks",
+                        "Read original teacher resource blocks",
+                        "Reads parsed original blocks from one already-visible teacher resource after tenant and owner checks.",
+                        true, true, TEACHER_ROLES, "teacher-resource:read", "low", false, true,
+                        schema(fields(field("documentId", "string", "Visible teacher resource document id.")), "documentId")),
+                new McpToolDescriptor(
+                        "search_question_bank_items",
+                        "Search readable question-bank items",
+                        "Returns visible question stems and stored answers for source-grounded AI verification.",
+                        true, true, TEACHER_ROLES, "question-bank:read", "low", false, true,
+                        schema(fields(field("query", "string", "Optional question or topic text; empty browses visible items."),
+                                field("limit", "integer", "Maximum visible questions to return.")))),
+                new McpToolDescriptor(
                         "get_teaching_ai_trace",
                         "Get teaching AI trace",
                         "Read the safe teaching-agent trace linked to an owned teaching task id.",

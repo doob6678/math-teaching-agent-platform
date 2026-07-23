@@ -302,6 +302,8 @@ class TeachingWorkflowServiceTest {
                     assertThat(event.sourceName()).isEqualTo("EvidenceCollector");
                     assertThat(event.title()).contains("并行");
                     assertThat(event.artifactRefs()).contains("PUBLIC_TEXTBOOK");
+                    assertThat(event.summary()).contains("教材A");
+                    assertThat(event.summary()).contains("下一步：以这些来源逐题核对知识点、题干与答案");
                 });
         assertThat(response.evidence()).isNotEmpty();
         assertThat(response.evidence().getFirst().sourceScope()).isEqualTo("PUBLIC_TEXTBOOK");

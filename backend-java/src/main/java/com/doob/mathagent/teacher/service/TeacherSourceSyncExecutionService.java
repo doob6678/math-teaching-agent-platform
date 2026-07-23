@@ -71,6 +71,9 @@ import org.slf4j.LoggerFactory;
  */
 public class TeacherSourceSyncExecutionService {
 
+    /** PDF text layers use private-use glyphs for several operators; those pages require visual formula recovery. */
+    private static final Pattern UNRESOLVED_PDF_MATH_GLYPH = Pattern.compile("[\\p{Co}□�]");
+
     /** POI's default 1,000 package-entry guard rejects real exam DOCX files with hundreds of formula/image parts. */
     private static final int DEFAULT_DOCX_MAX_ZIP_ENTRIES = 5_000;
     /** Launch configuration is supplied by the local backend script and remains bounded to resist ZIP entry attacks. */
@@ -100,6 +103,8 @@ public class TeacherSourceSyncExecutionService {
             "\\bsrc\\s*=\\s*(?:\\\"([^\\\"]*)\\\"|'([^']*)'|([^\\s>]+))",
             Pattern.CASE_INSENSITIVE);
     private static final Pattern PAGE_SECTION_PATTERN = Pattern.compile("^page\\s+(\\d+)$", Pattern.CASE_INSENSITIVE);
+    /** Only pages with an explicit replacement glyph need an expensive full-page text repair call. */
+    private static final Pattern UNRESOLVED_MATHEMATICAL_OCR_GLYPH = Pattern.compile("[□�]");
 
     private final TeacherResourceStore resourceStore;
     private final TeacherSourceSyncJobStore jobStore;
@@ -1579,7 +1584,7 @@ public class TeacherSourceSyncExecutionService {
         Integer resolvedPageNo = parsed.pageNo() == null ? pageNumberFromSection(parsed.section()) : parsed.pageNo();
         List<StoredAssetReference> storedAssets = storeAssets(document, sourcePath, parsed, resolvedPageNo);
         Optional<TeacherPageTranscriptionClient.PageTranscription> pageTranscription = transcribeAuthorizedPage(
-                tenantId, viewerRole, viewerSubjectId, document, resolvedPageNo, storedAssets);
+                tenantId, viewerRole, viewerSubjectId, document, resolvedPageNo, storedAssets, parsed.text());
         // The model is allowed to replace only a page's visibly corrupted extraction. It never writes an answer or a
         // synthetic exercise: if it is unavailable or below its confidence gate, the original parser text remains.
         String sourceText = pageTranscription.map(TeacherPageTranscriptionClient.PageTranscription::text)
@@ -1748,13 +1753,16 @@ public class TeacherSourceSyncExecutionService {
             String viewerSubjectId,
             TeacherResourceDocumentResponse document,
             Integer pageNo,
-            List<StoredAssetReference> assets) {
+            List<StoredAssetReference> assets,
+            String extractedText) {
         boolean aiMode = "AI".equalsIgnoreCase(textOrDefault(document.parseMode(), "TEXT"));
         boolean eligiblePage = pageNo != null && pageNo > 0 && pageNo <= MAX_PAGE_TRANSCRIPTION_PAGES_PER_DOCUMENT;
         boolean hasImage = assets != null && !assets.isEmpty();
+        String visibleText = textOrDefault(extractedText, "");
+        boolean needsVisualTextRepair = visibleText.isBlank() || UNRESOLVED_MATHEMATICAL_OCR_GLYPH.matcher(visibleText).find();
         LOGGER.info("teacher_page_transcription_gate document={} aiMode={} page={} eligiblePage={} hasImage={} clientEnabled={}",
                 document.documentId(), aiMode, pageNo, eligiblePage, hasImage, pageTranscriptionClient.isEnabled());
-        if (!aiMode || !eligiblePage || !hasImage) {
+        if (!aiMode || !eligiblePage || !hasImage || !needsVisualTextRepair) {
             LOGGER.info("teacher_page_transcription_skipped document={} aiMode={} page={} eligiblePage={} hasImage={}",
                     document.documentId(), aiMode, pageNo, eligiblePage, hasImage);
             return Optional.empty();
@@ -1883,7 +1891,14 @@ public class TeacherSourceSyncExecutionService {
         List<Integer> pageBlockIndexes = new ArrayList<>();
         for (int index = 0; index < parsedBlocks.size(); index += 1) {
             ParsedBlock parsed = parsedBlocks.get(index);
-            if (parsed.pageNo() != null && !parsed.assets().isEmpty()) {
+            /*
+             * Normal PDF pages already have a usable text layer and a durable PNG asset. Calling the visual model
+             * for every page multiplies cost without improving those pages. Restrict recovery to pages whose text
+             * layer contains a private-use/replacement glyph, while keeping every page image available for CLIP and
+             * manual verification when a caller needs the original visual equation.
+             */
+            if (parsed.pageNo() != null && !parsed.assets().isEmpty()
+                    && UNRESOLVED_PDF_MATH_GLYPH.matcher(textOrDefault(parsed.text(), "")).find()) {
                 pageBlockIndexes.add(index);
             }
         }

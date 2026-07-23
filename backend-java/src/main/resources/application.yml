@@ -1,6 +1,12 @@
 spring:
   application:
     name: math-agent-rag-backend
+  rabbitmq:
+    listener:
+      simple:
+        # RabbitMQ is optional for local HTTP development. Keep the consumers off by default when the
+        # broker is not present, while allowing a deployment to opt in explicitly through the environment.
+        auto-startup: ${MATH_AGENT_RABBITMQ_LISTENER_AUTO_STARTUP:false}
   servlet:
     encoding:
       # Resource paths and titles are user-provided Chinese text. Force UTF-8 before Jackson reads requests so a
@@ -29,10 +35,9 @@ spring:
         options:
           # Verified against the configured OpenAI-compatible /models endpoint. This model is also the default for
           # question-image understanding, so text and visual explanations remain on one multimodal route.
-          model: ${OPENAI_CHAT_MODEL:gpt-5.6-luna}
-  flyway:
-    enabled: false
-
+          # Terra is the verified low-latency production default. Luna remains selectable when explicitly configured,
+          # but a cold local start must not silently choose the rate-limited model that caused 429 stalls.
+          model: ${OPENAI_CHAT_MODEL:gpt-5.6-terra}
 server:
   port: 8080
   tomcat:
@@ -55,7 +60,7 @@ math-agent:
       name: openai
       base-url: ${OPENAI_BASE_URL:https://api.openai.com}
       api-key: ${OPENAI_API_KEY:}
-      chat-model: ${OPENAI_CHAT_MODEL:gpt-5.6-luna}
+      chat-model: ${OPENAI_CHAT_MODEL:gpt-5.6-terra}
     deepseek:
       name: deepseek
       base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
@@ -76,7 +81,7 @@ math-agent:
   student:
     explanation:
       # Keep student question OCR and explanation generation on the same verified multimodal provider by default.
-      openai-vision-model: ${OPENAI_VISION_MODEL:${OPENAI_CHAT_MODEL:gpt-5.6-luna}}
+      openai-vision-model: ${OPENAI_VISION_MODEL:${OPENAI_CHAT_MODEL:gpt-5.6-terra}}
       # Authorized teacher page transcription uses this same client. A relay can need longer than chat completion, so
       # retain an explicit three-minute ceiling instead of failing a real visual read at the old 45-second default.
       vision-timeout-ms: ${MATH_AGENT_STUDENT_EXPLANATION_VISION_TIMEOUT_MS:180000}
@@ -109,11 +114,11 @@ math-agent:
       ttl: ${MATH_AGENT_REDIS_SEARCH_CACHE_TTL:10m}
       null-value-ttl: ${MATH_AGENT_REDIS_SEARCH_CACHE_NULL_VALUE_TTL:1m}
   vector-index:
-    # Milvus is a required local WSL service. URI and all non-sensitive collection parameters stay committed here;
-    # the optional authorization token remains external because credentials must never enter the repository.
+    # Local WSL Milvus is intentionally unauthenticated. Remote deployments may override this value in a separate
+    # profile, but local startup must not require a needless environment variable.
     enabled: true
     milvus-uri: http://127.0.0.1:19530
-    milvus-token: ${MATH_AGENT_MILVUS_TOKEN:}
+    milvus-token: ""
     collection-name: math_agent_teacher_text_blocks_bge
     student-memory-collection-name: math_agent_student_memories_bge
     textbook-text-collection-name: textbook_text_collection
@@ -125,6 +130,10 @@ math-agent:
     # Migration normalizes its shared prefix and zero-pads it into the stable 768-d collection, reproducing the
     # previous NPY common-prefix cosine exactly without mixing CLIP with BGE.
     textbook-image-query-dimension: 512
+    # Teacher PDF page images use a private collection; it must never share rows with public textbook CLIP pages.
+    teacher-image-collection-name: ${MATH_AGENT_TEACHER_IMAGE_CLIP_COLLECTION:math_agent_teacher_page_assets_clip}
+    teacher-image-dimension: ${MATH_AGENT_TEACHER_IMAGE_CLIP_DIMENSION:768}
+    teacher-image-query-dimension: ${MATH_AGENT_TEACHER_IMAGE_CLIP_QUERY_DIMENSION:512}
     textbook-metric-type: COSINE
     # Exact FLAT cosine search is intentional for the current 3k/1k textbook corpus: it reproduces the audited NPY
     # baseline exactly. A future corpus-size migration must benchmark an ANN replacement before changing this value.
@@ -146,6 +155,16 @@ math-agent:
     request-timeout-ms: ${MATH_AGENT_VECTOR_INDEX_TIMEOUT_MS:120000}
   teacher:
     sync:
+      feishu:
+        # Local development uses the approved research-sharing folder. Operators can override the URL in the environment.
+        default-url: ${MATH_AGENT_TEACHER_SYNC_FEISHU_DEFAULT_URL:https://my.feishu.cn/drive/folder/XVn7fXppJlQMK5dkuOkc1ePan2f}
+        process-downloader-enabled: ${MATH_AGENT_TEACHER_SYNC_FEISHU_PROCESS_DOWNLOADER_ENABLED:true}
+        downloader-script: ${MATH_AGENT_TEACHER_SYNC_FEISHU_DOWNLOADER_SCRIPT:C:/Users/doob/Desktop/code/dev/math_agent_rag/ai-worker-python/scripts/download_feishu_url.py}
+        appkey-path: ${MATH_AGENT_TEACHER_SYNC_FEISHU_APPKEY_PATH:}
+        staging-root: ${MATH_AGENT_TEACHER_SYNC_FEISHU_STAGING_ROOT:C:/Users/doob/Desktop/code/dev/math_agent_rag/.local-storage/teacher-source-imports}
+        smoke-max-files: ${MATH_AGENT_TEACHER_SYNC_FEISHU_SMOKE_MAX_FILES:20}
+        process-timeout-seconds: ${MATH_AGENT_TEACHER_SYNC_FEISHU_PROCESS_TIMEOUT_SECONDS:180}
+      asset-storage-root: ${MATH_AGENT_TEACHER_SYNC_ASSET_STORAGE_ROOT:C:/Users/doob/Desktop/code/dev/math_agent_rag/.local-storage/teacher-assets}
       rabbitmq:
         # A sync job can render PDFs, call Feishu, invoke Python vision and rebuild Milvus. Keep that work out of
         # the MCP/HTTP request thread and let the durable MySQL job remain the idempotency authority.
@@ -226,7 +245,7 @@ math-agent:
     # c2 is the searchable small-heading corpus.  The original page corpus b4
     # remains independently stored for page-level comparison and rollback; it
     # is not overwritten or merged into the section index.
-    processed-books-root: ${MATH_AGENT_PROCESSED_BOOKS_ROOT:C:/Users/doob/Desktop/个人资料/高中数学/下载课本代码/tchMaterial-parser-main/tchMaterial-parser-main/processed_books_section_shadow_all_mini_c2}
+    processed-books-root: ${MATH_AGENT_PROCESSED_BOOKS_ROOT:C:/Users/doob/Desktop/个人资料/高中数学/下载课本代码/tchMaterial-parser-main/tchMaterial-parser-main/processed_books_section_shadow_all_mini_b4}
     project-test-data-root: ${MATH_AGENT_PROJECT_TEST_DATA_ROOT:C:/Users/doob/Desktop/code/dev/math_agent_rag/文档/项目测试数据位置}
     design-spec-root: ${MATH_AGENT_DESIGN_SPEC_ROOT:C:/Users/doob/Desktop/code/dev/math_agent_rag/文档/设计方案体系}
     reference-handout-pdf: ${MATH_AGENT_REFERENCE_HANDOUT_PDF:C:/Users/doob/Desktop/code/dev/math_agent_rag/文档/项目测试数据位置/参考讲义数学空间向量.pdf}

@@ -12,9 +12,11 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -28,13 +30,13 @@ public class TeacherBlockQuestionImportService {
 
     private static final int TITLE_LIMIT = 80;
     /** A printable exercise stem longer than this is a lesson/article block, not one atomic question. */
-    private static final int MAX_PRINTABLE_QUESTION_CHARS = 1200;
+    private static final int MAX_PRINTABLE_QUESTION_CHARS = 4000;
     /** A parsed block needs an actual prompt signal, not merely a chapter title containing the character “题”. */
     private static final Pattern QUESTION_PROMPT_SIGNAL = Pattern.compile(
             "(?:求(?:证|出|得|解|值|下列|该)?|证明|计算|判断|填写|作答|选择|问[：:]|则|多少(?:种|个|条|种方法)?|共有|何值|几种|哪些|是否|能否|有几|请)[^。；]{1,}");
     /** Separates a visible source answer/analysis section from the question stem without treating inline prose as a marker. */
     private static final Pattern SOURCE_ANSWER_MARKER = Pattern.compile(
-            "(?m)^(?:[-—]{3,}\\s*)?(?:#{1,6}\\s*)?(?:答案|参考答案|答案要点|解析|解答|解)\\s*[：:]");
+            "(?m)^\\h*(?:[-—]{3,}\\s*)?(?:#{1,6}\\h*)?(?:【\\h*)?(?:答案|参考答案|答案要点|解析|解答|解)(?:\\h*】)?\\h*[：:]?");
     /** Narrative teaching notes are searchable source material, but not exercises even when they mention a method. */
     private static final Pattern INSTRUCTIONAL_ARTICLE_SIGNAL = Pattern.compile(
             "(?:一定要记住|考试时候|自己算就行|多默念|复习一下|下面的公式|直接默写|装模作样|"
@@ -47,16 +49,19 @@ public class TeacherBlockQuestionImportService {
     private static final Pattern COMPLETE_STEM_CONTEXT = Pattern.compile(
             "(?:如图|已知|若[\\s，,]|设[\\s，,]|在[^。；]{2,80}中|题目[：:]|选择题|填空题|"
                     + "(?:例题|变式|证明)[：:]|\\d{4}年[^。；]{2,}|^(?:求|证明))");
+    /** Page-level exam splitting already proved a real top-level question number; do not reject compact stems such as “若集合…”. */
+    private static final Pattern NUMBERED_EXAM_STEM = Pattern.compile(
+            "^\\s*[1-9]\\d?(?:[.．、]|\\h{2,})(?=\\S)");
     /** An OCR square/replacement glyph can conceal perpendicular, parallel, or inclusion relations. */
     private static final Pattern UNRESOLVED_MATHEMATICAL_OCR_GLYPH = Pattern.compile("[□�]");
-    /** PDF text layers sometimes leak private-use glyphs or broken Latin-1 fragments in place of mathematical symbols. */
-    private static final Pattern CORRUPTED_EXTRACTED_MATH_GLYPH = Pattern.compile("[\\p{Co}ìí³æöç÷¢]");
     /**
      * Starts of independent numbered questions in a text-extracted exam page. Two spaces distinguish `1  已知…`
      * from ordinary inline numerals while the punctuation branch accepts common PDF extraction forms such as `2.`.
+     * The first digit is deliberately non-zero: analysis pages commonly begin with decimal evidence such as `0.038`,
+     * and treating that decimal as question zero creates a false extra bank item.
      */
     private static final Pattern TOP_LEVEL_NUMBERED_QUESTION = Pattern.compile(
-            "(?m)^\\h*\\d{1,2}(?:[.．、]\\h*|\\h{2,})(?=\\S)");
+            "(?m)^\\h*[1-9]\\d?(?:[.．、]\\h*|\\h{2,})(?=\\S)(?!(?:由|因为|所以|故|因此|当|令|解|可得|得到|从而|于是|不妨|显然|代入|联立|利用|根据|这个|这里|此时|可知))");
     /** Exam instructions contain imperative verbs but are never mathematical questions. */
     private static final Pattern EXAM_ADMINISTRATION_NOTICE = Pattern.compile(
             "(?:注意事项|答题卡|准考证|考试结束|选择题的作答|填空题和解答题的作答)");
@@ -123,39 +128,28 @@ public class TeacherBlockQuestionImportService {
          * checksum changes create stale duplicates that survive forever and poison downstream retrieval.
          */
         List<TeacherDocumentBlockResponse> importBlocks = preferredImportBlocks(blocks);
+        ImportCandidateSet candidateSet = collectCandidates(importBlocks);
         questionBankStore.archiveQuestionsBySourceDocumentExcept(
                 normalizedTenantId,
                 document.documentId(),
-                activeQuestionSourceKeys(importBlocks));
+                activeQuestionSourceKeys(candidateSet.candidates()));
         List<QuestionBankItemResponse> imported = new ArrayList<>();
         Set<String> linkedKnowledgePointIds = new LinkedHashSet<>();
-        int skipped = 0;
-        int duplicates = 0;
-        for (int blockIndex = 0; blockIndex < importBlocks.size(); blockIndex += 1) {
-            TeacherDocumentBlockResponse block = importBlocks.get(blockIndex);
-            String prefix = pageContinuationPrefix(importBlocks, blockIndex);
-            for (AtomicSourcePart sourcePart : splitAtomicSourceParts(block, prefix)) {
-                var existingQuestion = questionBankStore.findQuestionBySource(
-                                normalizedTenantId,
-                                document.documentId(),
-                                sourcePart.sourceBlockId(),
-                                sourcePart.sourceChecksum());
-                ImportedQuestion importedQuestion = parseAtomicQuestion(sourcePart.text());
-                if (importedQuestion != null && "{}".equals(importedQuestion.answerJson())) {
-                    String continuationAnswer = followingPageAnswerEvidence(importBlocks, blockIndex, importedQuestion.questionText());
-                    if (!continuationAnswer.isBlank()) {
-                        // A long-form exam can put a numbered multi-part prompt at the top of one page and its
-                        // official derivation on the next. Persist that derivation as answer evidence instead of
-                        // asking a model to invent the omitted source steps at PDF time.
-                        importedQuestion = new ImportedQuestion(
-                                importedQuestion.questionText(), answerJson(continuationAnswer));
-                    }
-                }
-                if (importedQuestion == null) {
-                    skipped++;
-                    continue;
-                }
+        int duplicates = candidateSet.duplicateCount();
+        for (ImportCandidate candidate : candidateSet.candidates()) {
+            TeacherDocumentBlockResponse block = candidate.block();
+            AtomicSourcePart sourcePart = candidate.sourcePart();
+            ImportedQuestion importedQuestion = candidate.question();
+            var existingQuestion = questionBankStore.findQuestionBySource(
+                    normalizedTenantId,
+                    document.documentId(),
+                    sourcePart.sourceBlockId(),
+                    sourcePart.sourceChecksum());
                 String questionTitle = knowledgePointName(block, document.title()) + " / " + title(importedQuestion.questionText());
+                String sourceFileName = sourceFileName(block.sourcePath());
+                if (!sourceFileName.isBlank()) {
+                    questionTitle = sourceFileName + " / " + questionTitle;
+                }
                 if (existingQuestion.isPresent()) {
                     if (equivalentImport(existingQuestion.get(), importedQuestion, questionTitle)) {
                         duplicates++;
@@ -188,13 +182,12 @@ public class TeacherBlockQuestionImportService {
                         List.of(point.knowledgePointId()));
                 imported.add(question);
                 linkedKnowledgePointIds.add(point.knowledgePointId());
-            }
         }
         return new TeacherBlockQuestionImportResponse(
                 document.documentId(),
                 blocks.size(),
                 imported.size(),
-                skipped,
+                candidateSet.skippedCount(),
                 duplicates,
                 linkedKnowledgePointIds.size(),
                 List.copyOf(imported));
@@ -277,10 +270,10 @@ public class TeacherBlockQuestionImportService {
                 // Reject before persistence: deleting the character would turn an unknown geometric relation into a
                 // plausible but mathematically different prompt, while keeping it makes an unreviewable handout.
                 || UNRESOLVED_MATHEMATICAL_OCR_GLYPH.matcher(questionText).find()
-                || CORRUPTED_EXTRACTED_MATH_GLYPH.matcher(questionText).find()
                 || INSTRUCTIONAL_ARTICLE_SIGNAL.matcher(questionText).find()
                 || SOURCE_EXPLANATION_LEAD.matcher(questionText).find()
-                || !COMPLETE_STEM_CONTEXT.matcher(questionText).find()) {
+                || (!NUMBERED_EXAM_STEM.matcher(questionText).find()
+                        && !COMPLETE_STEM_CONTEXT.matcher(questionText).find())) {
             return null;
         }
         return new ImportedQuestion(questionText, answerJson(answerText));
@@ -402,17 +395,100 @@ public class TeacherBlockQuestionImportService {
         return value == null || value.isBlank() ? defaultValue : value.strip();
     }
 
-    private static Set<String> activeQuestionSourceKeys(List<TeacherDocumentBlockResponse> blocks) {
+    private static Set<String> activeQuestionSourceKeys(List<ImportCandidate> candidates) {
         Set<String> keys = new LinkedHashSet<>();
+        for (ImportCandidate candidate : candidates) {
+            AtomicSourcePart part = candidate.sourcePart();
+            keys.add(sourceKey(part.sourceBlockId(), part.sourceChecksum()));
+        }
+        return keys;
+    }
+
+    /**
+     * Parses before writing so a blank paper and its solution paper can be paired deterministically.
+     * The solution candidate wins when it contains source answer evidence; the PDF filename remains in the row title.
+     */
+    private static ImportCandidateSet collectCandidates(List<TeacherDocumentBlockResponse> blocks) {
+        List<ImportCandidate> parsed = new ArrayList<>();
+        int skipped = 0;
         for (int blockIndex = 0; blockIndex < blocks.size(); blockIndex += 1) {
             TeacherDocumentBlockResponse block = blocks.get(blockIndex);
-            for (AtomicSourcePart part : splitAtomicSourceParts(block, pageContinuationPrefix(blocks, blockIndex))) {
-                if (parseAtomicQuestion(part.text()) != null) {
-                    keys.add(sourceKey(part.sourceBlockId(), part.sourceChecksum()));
+            String prefix = pageContinuationPrefix(blocks, blockIndex);
+            for (AtomicSourcePart sourcePart : splitAtomicSourceParts(block, prefix)) {
+                ImportedQuestion question = parseAtomicQuestion(sourcePart.text());
+                if (question != null && isGaokaoExamPdf(block.sourcePath())
+                        && topLevelQuestionNumber(question.questionText()).isBlank()) {
+                    // A rendered exam page without a top-level number is normally an instruction/solution residue.
+                    // Keeping it would create pseudo-questions such as a lone statistical value or answer paragraph.
+                    question = null;
+                }
+                if (question != null && "{}".equals(question.answerJson())) {
+                    String continuationAnswer = followingPageAnswerEvidence(blocks, blockIndex, question.questionText());
+                    if (!continuationAnswer.isBlank()) {
+                        question = new ImportedQuestion(question.questionText(), answerJson(continuationAnswer));
+                    }
+                }
+                if (question == null) {
+                    skipped++;
+                } else {
+                    parsed.add(new ImportCandidate(block, sourcePart, question));
                 }
             }
         }
-        return keys;
+
+        Map<String, ImportCandidate> canonical = new LinkedHashMap<>();
+        int duplicateCount = 0;
+        for (ImportCandidate candidate : parsed) {
+            String key = pairedExamQuestionKey(candidate);
+            ImportCandidate previous = canonical.get(key);
+            if (previous == null) {
+                canonical.put(key, candidate);
+                continue;
+            }
+            // Only blank/solution variants share a key; unrelated PDFs retain separate source-traceable rows.
+            if (hasAnswer(candidate.question()) && !hasAnswer(previous.question())) {
+                canonical.put(key, candidate);
+            }
+            duplicateCount++;
+        }
+        return new ImportCandidateSet(List.copyOf(canonical.values()), skipped, duplicateCount);
+    }
+
+    /** Uses the PDF basename and top-level number so only blank/solution variants of one paper collapse together. */
+    private static String pairedExamQuestionKey(ImportCandidate candidate) {
+        String file = sourceFileName(candidate.block().sourcePath()).toLowerCase(Locale.ROOT)
+                .replace("（空白卷）", "").replace("（解析卷）", "")
+                .replace("(空白卷)", "").replace("(解析卷)", "");
+        String number = topLevelQuestionNumber(candidate.question().questionText());
+        if (file.isBlank() || number.isBlank()) {
+            return "source:" + normalizeQuestionText(candidate.question().questionText());
+        }
+        return "pdf:" + file + "#q" + number;
+    }
+
+    private static boolean hasAnswer(ImportedQuestion question) {
+        return question != null && question.answerJson() != null && !"{}".equals(question.answerJson());
+    }
+
+    private static String topLevelQuestionNumber(String text) {
+        Matcher matcher = Pattern.compile("^\\s*(\\d{1,2})(?:[.．、]|\\s{2,})").matcher(textOrDefault(text, ""));
+        return matcher.find() ? matcher.group(1) : "";
+    }
+
+    private static String normalizeQuestionText(String text) {
+        return textOrDefault(text, "").replaceAll("\\s+", " ").strip();
+    }
+
+    private static String sourceFileName(String sourcePath) {
+        String normalized = textOrDefault(sourcePath, "").replace('\\', '/');
+        int slash = normalized.lastIndexOf('/');
+        return slash >= 0 ? normalized.substring(slash + 1) : normalized;
+    }
+
+    /** Limits the numbered-page rule to high-school exam PDFs; ordinary teacher PDFs may contain unnumbered examples. */
+    private static boolean isGaokaoExamPdf(String sourcePath) {
+        String file = sourceFileName(sourcePath).toLowerCase(Locale.ROOT);
+        return file.endsWith(".pdf") && (file.contains("高考") || file.contains("真题") || file.contains("试卷"));
     }
 
     /**
@@ -430,7 +506,9 @@ public class TeacherBlockQuestionImportService {
                 .filter(block -> block.confidence() >= MIN_PAGE_BACKED_BLOCK_CONFIDENCE)
                 // Storage writes from parallel page transcription are not guaranteed to preserve document order.
                 // Continuation repair may only consult the physically adjacent source page, never a random block.
-                .sorted(java.util.Comparator.comparingInt(TeacherDocumentBlockResponse::pageNo))
+                .sorted(java.util.Comparator
+                        .comparing((TeacherDocumentBlockResponse block) -> textOrDefault(block.sourcePath(), ""))
+                        .thenComparingInt(TeacherDocumentBlockResponse::pageNo))
                 .toList();
         long pageQuestionCount = pageBlocks.stream()
                 .flatMap(block -> splitAtomicSourceParts(block).stream())
@@ -486,7 +564,8 @@ public class TeacherBlockQuestionImportService {
         TeacherDocumentBlockResponse current = blocks.get(index);
         TeacherDocumentBlockResponse previous = blocks.get(index - 1);
         if (current.pageNo() == null || previous.pageNo() == null
-                || current.pageNo().intValue() != previous.pageNo().intValue() + 1) {
+                || current.pageNo().intValue() != previous.pageNo().intValue() + 1
+                || !sameSourcePath(current, previous)) {
             return "";
         }
         String currentText = textOrDefault(current.rawText(), current.normalizedText()).strip();
@@ -513,7 +592,8 @@ public class TeacherBlockQuestionImportService {
         TeacherDocumentBlockResponse current = blocks.get(index);
         TeacherDocumentBlockResponse next = blocks.get(index + 1);
         if (current.pageNo() == null || next.pageNo() == null
-                || next.pageNo().intValue() != current.pageNo().intValue() + 1) {
+                || next.pageNo().intValue() != current.pageNo().intValue() + 1
+                || !sameSourcePath(current, next)) {
             return "";
         }
         String raw = textOrDefault(next.rawText(), next.normalizedText()).strip();
@@ -553,8 +633,28 @@ public class TeacherBlockQuestionImportService {
         return textOrDefault(sourceBlockId, "") + "\n" + textOrDefault(sourceChecksum, "");
     }
 
+    /** Prevents page-continuation repair from borrowing text or answers from a different PDF in one folder upload. */
+    private static boolean sameSourcePath(TeacherDocumentBlockResponse left, TeacherDocumentBlockResponse right) {
+        return textOrDefault(left == null ? null : left.sourcePath(), "")
+                .equals(textOrDefault(right == null ? null : right.sourcePath(), ""));
+    }
+
     /** Immutable, source-traceable result of conservative block parsing before it reaches the shared question bank. */
     private record ImportedQuestion(String questionText, String answerJson) {
+    }
+
+    /** Candidate retained between parsing and persistence so paired PDF variants can be resolved once. */
+    private record ImportCandidate(
+            TeacherDocumentBlockResponse block,
+            AtomicSourcePart sourcePart,
+            ImportedQuestion question) {
+    }
+
+    /** Immutable import summary after non-question blocks and blank/solution duplicates are accounted for. */
+    private record ImportCandidateSet(
+            List<ImportCandidate> candidates,
+            int skippedCount,
+            int duplicateCount) {
     }
 
     /** A child of one parsed source page with an independently durable question-bank identity. */

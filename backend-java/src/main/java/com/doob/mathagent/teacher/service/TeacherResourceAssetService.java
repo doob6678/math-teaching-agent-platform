@@ -20,6 +20,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Comparator;
 import java.util.UUID;
+import java.util.List;
 import javax.imageio.ImageIO;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -69,6 +70,21 @@ public class TeacherResourceAssetService {
      */
     public static TeacherResourceAssetService disabled() {
         return new TeacherResourceAssetService();
+    }
+
+    /**
+     * Returns active image assets for one document.  CLIP indexing uses this permission-neutral metadata view only
+     * after the caller has already checked document ownership; binary reads still go through openVisibleAsset().
+     */
+    public List<TeacherResourceAssetResponse> listActiveImageAssets(String tenantId, String documentId) {
+        if (!enabled) {
+            return List.of();
+        }
+        return assetStore.listByDocument(tenantId, documentId).stream()
+                .filter(asset -> "active".equalsIgnoreCase(textOrDefault(asset.status(), "")))
+                .filter(asset -> textOrDefault(asset.mimeType(), "").toLowerCase(Locale.ROOT).startsWith("image/"))
+                .sorted(Comparator.comparing(asset -> asset.pageNo() == null ? Integer.MAX_VALUE : asset.pageNo()))
+                .toList();
     }
 
     public void markDocumentAssetsInactive(String tenantId, String documentId) {

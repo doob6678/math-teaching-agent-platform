@@ -23,7 +23,6 @@ import org.springframework.stereotype.Service;
 @Service
 public class TeacherResourceService {
 
-    private static final int MAX_PREVIEW_FILES = 8;
     private static final int MAX_PREVIEW_DEPTH = 6;
 
     private final TeacherResourceStore store;
@@ -122,7 +121,40 @@ public class TeacherResourceService {
         String normalizedRole = requireText(viewerRole, "viewerRole is required").toLowerCase();
         String normalizedSubjectId = requireText(viewerSubjectId, "viewerSubjectId is required");
         requireTeacherOrAdmin(normalizedRole);
-        return store.listVisible(normalizedTenantId, normalizedRole, normalizedSubjectId);
+        /*
+         * Preview entries are intentionally derived from the current local source on read. The document table stores
+         * the authoritative path and lifecycle state, while this keeps folder names and PDF filenames current without
+         * duplicating a large file manifest in MySQL.
+         */
+        return store.listVisible(normalizedTenantId, normalizedRole, normalizedSubjectId).stream()
+                .map(this::withLocalPreviewFiles)
+                .toList();
+    }
+
+    /** Rehydrates the small UI preview while preserving every source filename exactly as found on disk. */
+    private TeacherResourceDocumentResponse withLocalPreviewFiles(TeacherResourceDocumentResponse document) {
+        if (document == null || document.localPath() == null || document.localPath().isBlank()) {
+            return document;
+        }
+        return new TeacherResourceDocumentResponse(
+                document.documentId(),
+                document.tenantId(),
+                document.ownerSubjectId(),
+                document.sourceType(),
+                document.title(),
+                document.originalUrl(),
+                document.localPath(),
+                document.permissionScope(),
+                document.syncStatus(),
+                document.parseStatus(),
+                document.embeddingStatus(),
+                document.indexStatus(),
+                document.feishuExportFormat(),
+                previewFiles(document.localPath()),
+                document.parseMode(),
+                document.providerRevision(),
+                document.contentChecksum(),
+                document.sourceIdentity());
     }
 
     /**
@@ -242,8 +274,8 @@ public class TeacherResourceService {
         try (Stream<Path> stream = Files.walk(root, MAX_PREVIEW_DEPTH)) {
             return stream
                     .filter(Files::isRegularFile)
-                    .limit(MAX_PREVIEW_FILES)
                     .map(path -> previewFile(root, path))
+                    .sorted(Comparator.comparing(TeacherResourceDocumentResponse.PreviewFile::relativePath))
                     .toList();
         } catch (IOException exception) {
             return List.of();

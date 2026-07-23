@@ -14,6 +14,7 @@ import com.doob.mathagent.teaching.service.TeachingHumanFeedbackService;
 import com.doob.mathagent.teaching.service.TeachingHandoutPdfExportService;
 import com.doob.mathagent.teaching.service.TeachingHandoutTemplatePreviewService;
 import com.doob.mathagent.teaching.service.TeachingHandoutTemplateService;
+import com.doob.mathagent.teaching.service.LectureTaskSubmissionService;
 import com.doob.mathagent.teaching.service.TeachingTaskEventStreamService;
 import com.doob.mathagent.teaching.service.TeachingWorkflowService;
 import com.doob.mathagent.teaching.vo.TeachingHandoutBatchExportResponse;
@@ -62,6 +63,7 @@ public class TeachingTaskController {
     private static final String HANDOUT_PAGE_COUNT_HEADER = "X-Handout-Page-Count";
 
     private final TeachingWorkflowService workflowService;
+    private final LectureTaskSubmissionService lectureTaskSubmissionService;
     private final RequestSubjectResolver subjectResolver;
     private final TeachingCapabilityVerifier capabilityVerifier;
     private final TeachingHandoutPdfExportService pdfExportService;
@@ -77,6 +79,7 @@ public class TeachingTaskController {
     @Autowired
     public TeachingTaskController(
             TeachingWorkflowService workflowService,
+            LectureTaskSubmissionService lectureTaskSubmissionService,
             RequestSubjectResolver subjectResolver,
             TeachingCapabilityVerifier capabilityVerifier,
             TeachingHandoutPdfExportService pdfExportService,
@@ -86,6 +89,7 @@ public class TeachingTaskController {
             TeachingHandoutTemplatePreviewService handoutTemplatePreviewService,
             TeachingTaskEventStreamService eventStreamService) {
         this.workflowService = workflowService;
+        this.lectureTaskSubmissionService = lectureTaskSubmissionService;
         this.subjectResolver = subjectResolver;
         this.capabilityVerifier = capabilityVerifier;
         this.pdfExportService = pdfExportService;
@@ -108,6 +112,7 @@ public class TeachingTaskController {
             TeachingHumanFeedbackService feedbackService) {
         this(
                 workflowService,
+                null,
                 subjectResolver,
                 capabilityVerifier,
                 pdfExportService,
@@ -134,7 +139,10 @@ public class TeachingTaskController {
                 subject)) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for teaching submit");
         }
-        return workflowService.submit(request, requestContext(subject));
+        // The HTTP request creates only durable MySQL state. The outbox publisher later sends the opaque taskId.
+        return lectureTaskSubmissionService == null
+                ? workflowService.submit(request, requestContext(subject))
+                : lectureTaskSubmissionService.submit(request, requestContext(subject));
     }
 
     /**
@@ -220,7 +228,9 @@ public class TeachingTaskController {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for teaching task resume");
         }
         try {
-            return workflowService.resume(taskId, requestContext(subject));
+            return lectureTaskSubmissionService == null
+                    ? workflowService.resume(taskId, requestContext(subject))
+                    : lectureTaskSubmissionService.resume(taskId, requestContext(subject), workflowService);
         } catch (IllegalArgumentException exception) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, exception.getMessage());
         } catch (IllegalStateException exception) {

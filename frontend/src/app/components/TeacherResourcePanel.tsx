@@ -378,6 +378,7 @@ export function TeacherResourcePanel({
               ) : resource.previewFiles?.length ? (
                 <p>{compactText(resource.previewFiles.map((file) => file.fileName).join("，"), 120)}</p>
               ) : null}
+              {resource.previewFiles?.length ? <ResourceFolderTree files={resource.previewFiles} /> : null}
               {latestJob?.failure ? <SyncFailureView failure={latestJob.failure} /> : null}
               {latestCheckpoint ? <SyncCheckpointView checkpoint={latestCheckpoint} /> : null}
               <div className="resource-action-row">
@@ -435,6 +436,42 @@ export function TeacherResourcePanel({
         })}
       </div>
     </section>
+  );
+}
+
+/**
+ * Keeps the source hierarchy visible without making a long preview list dominate the resource card.
+ * The backend owns `relativePath`, so the UI never reconstructs or renames the original PDF filename.
+ */
+function ResourceFolderTree({ files }: { files: TeacherResourceDocumentResponse["previewFiles"] }) {
+  const groups = new Map<string, NonNullable<typeof files>>();
+  for (const file of files ?? []) {
+    const relativePath = file.relativePath || file.fileName;
+    const parts = relativePath.split(/[\\/]/).filter(Boolean);
+    const folder = parts.length > 1 ? parts.slice(0, -1).join("/") : "根目录";
+    const current = groups.get(folder) ?? [];
+    current.push(file);
+    groups.set(folder, current);
+  }
+
+  return (
+    <details className="resource-folder-tree">
+      <summary>资料文件夹（{files?.length ?? 0} 个预览文件）</summary>
+      <div className="resource-folder-groups">
+        {[...groups.entries()].map(([folder, folderFiles]) => (
+          <details className="resource-folder-group" key={folder}>
+            <summary>{folder}（{folderFiles.length}）</summary>
+            <ul>
+              {folderFiles.map((file) => (
+                <li key={`${file.relativePath}:${file.fileSizeBytes}`} title={file.relativePath || file.fileName}>
+                  {file.fileName}
+                </li>
+              ))}
+            </ul>
+          </details>
+        ))}
+      </div>
+    </details>
   );
 }
 

@@ -5,6 +5,7 @@ import java.awt.Color;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
@@ -70,6 +71,9 @@ public class TeachingHandoutPdfExportService {
     private static final Pattern SUPERSCRIPT_SIMPLE = Pattern.compile("\\^([0-9a-zA-Z+-])");
     private static final Pattern SUBSCRIPT_BRACED = Pattern.compile("_\\{([^{}]+)}");
     private static final Pattern SUBSCRIPT_SIMPLE = Pattern.compile("_([0-9a-zA-Z+-])");
+    /** Bare OCR variables such as x^2 must enter math mode before ordinary TeX escaping turns ^ into visible text. */
+    private static final Pattern BARE_MATH_ATOM = Pattern.compile(
+            "(?<![$A-Za-z0-9])([A-Za-z](?:\\^\\{?[A-Za-z0-9]+\\}?|_\\{?[A-Za-z0-9]+\\}?))(?![$A-Za-z0-9])");
     private static final Pattern VSPACE_COMMAND = Pattern.compile("\\\\vspace\\{([0-9.]+)em}");
     private static final Pattern UNDERLINE_HSPACE_COMMAND = Pattern.compile("\\\\underline\\{\\\\hspace\\{[0-9.]+em}}");
     private static final Pattern VISIBLE_WORKSPACE_LABEL = Pattern.compile(
@@ -165,8 +169,15 @@ public class TeachingHandoutPdfExportService {
             PDFont font = loadReadableFont(document);
             PdfStyle style = PdfStyle.forVersion(version, templateName);
             String handoutSource = sanitizeLatexForExport(task.handoutLatexFor(version));
+            if (style.isLecture()) {
+                handoutSource = stripLectureProjectionColumns(handoutSource);
+            } else if ("学生版".equals(style.versionLabel())) {
+                handoutSource = stripStudentQuestionUnits(handoutSource);
+            } else {
+                handoutSource = stripTeacherOcrAnswerBlocks(handoutSource);
+            }
             boolean hasStructuredBody = containsStructuredSections(handoutSource);
-            String watermark = normalizedWatermark(task.watermarkText());
+            String watermark = normalizedWatermark(repairMojibake(task.watermarkText()));
             PdfWriter writer = new PdfWriter(document, font, style, title, templateName, watermark);
             writer.writeMuted("任务编号：" + safeText(task.taskId()));
             writer.writeMuted(watermark);
@@ -488,13 +499,22 @@ public class TeachingHandoutPdfExportService {
         String templateName = templateNameForVersion(task, version);
         PdfStyle style = PdfStyle.forVersion(version, templateName);
         String sanitizedBody = sanitizeLatexForExport(task.handoutLatexFor(version));
+        // Old persisted snapshots may still contain the previous two-column projection or student scaffolding.
+        // Apply the audience boundary at export time too, so a stale cache cannot reintroduce teacher explanations.
+        if (style.isLecture()) {
+            sanitizedBody = stripLectureProjectionColumns(sanitizedBody);
+        } else if ("学生版".equals(style.versionLabel())) {
+            sanitizedBody = stripStudentQuestionUnits(sanitizedBody);
+        } else {
+            sanitizedBody = stripTeacherOcrAnswerBlocks(sanitizedBody);
+        }
         // The 16:10 lecture is a projection deck: keep one question per slide so unrelated
         // questions are never visually locked together.
         String body = renderLatexBody(style.isLecture()
                 ? insertLectureQuestionBreaks(sanitizedBody)
                 : insertPrintedQuestionSpacing(sanitizedBody));
-        String headerTopic = safeHeaderTopic(task.learningGoal());
-        String watermark = latexText(normalizedWatermark(task.watermarkText()));
+        String headerTopic = safeHeaderTopic(repairMojibake(task.learningGoal()));
+        String watermark = latexText(normalizedWatermark(repairMojibake(task.watermarkText())));
         String documentOptions = style.isLecture() ? "10pt" : "11pt,a4paper";
         String geometryOptions = style.isLecture()
                 ? "paperwidth=16in,paperheight=10in,top=14mm,bottom=18mm,left=18mm,right=18mm"
@@ -550,7 +570,14 @@ public class TeachingHandoutPdfExportService {
                 \\renewcommand{\\frac}[2]{\\ensuremath{\\MathAgentOriginalFrac{#1}{#2}}}
                 \\let\\MathAgentOriginalTimes\\times
                 \\renewcommand{\\times}{\\ensuremath{\\MathAgentOriginalTimes}}
+                %% Keep Noto Sans SC as the body font because it has the complete maths glyph fallback required by
+                %% imported Chinese sources.  Only display headings use the serif companion, giving hierarchy without
+                %% turning a source root sign into a missing-glyph square.
                 \\IfFontExistsTF{Noto Sans SC}{\\setCJKmainfont{Noto Sans SC}}{\\IfFontExistsTF{Microsoft YaHei UI}{\\setCJKmainfont{Microsoft YaHei UI}}{\\IfFontExistsTF{SimSun}{\\setCJKmainfont{SimSun}}{}}}
+                \\IfFontExistsTF{Noto Sans SC}{\\setCJKsansfont{Noto Sans SC}}{\\IfFontExistsTF{Microsoft YaHei UI}{\\setCJKsansfont{Microsoft YaHei UI}}{}}
+                \\IfFontExistsTF{Noto Serif SC}{\\newCJKfontfamily\\HandoutDisplayFont{Noto Serif SC}}{\\newcommand{\\HandoutDisplayFont}{}}
+                %% Imported inline root signs are classified as Latin symbols by XeLaTeX.  Arial is the verified
+                %% fallback on this Windows renderer; display typography is applied only to CJK headings above.
                 \\IfFontExistsTF{Arial}{\\setmainfont{Arial}}{}
                 \\setlength{\\parindent}{0pt}
                 \\setlength{\\parskip}{0.72em}
@@ -568,6 +595,8 @@ public class TeachingHandoutPdfExportService {
                 \\pagestyle{fancy}
                 %s
                 \\color{HandoutText}
+                \\everymath{\\color{HandoutText}}
+                \\everydisplay{\\color{HandoutText}}
                 %s
                 \\begin{document}
                 %s
@@ -664,7 +693,7 @@ public class TeachingHandoutPdfExportService {
                 %%%% Vector header: task-owned display name plus a crisp blue/orange frame, never a pasted source logo.
                 \\chead{\\tikz[baseline=-0.65ex]{
                   \\draw[HandoutText,line width=0.08ex] (0,0) -- (15.8,0);
-                  \\node[anchor=west,font=\\scriptsize\\bfseries,text=HandoutAccent] at (0,0.28) {%s};
+                  \\node[anchor=west,font=\\sffamily\\scriptsize\\bfseries,text=HandoutAccent] at (0,0.28) {%s};
                   \\draw[HandoutAccent,line width=0.14ex] (15.1,0.10) rectangle (15.55,0.55);
                   \\draw[ZhaoOrange,line width=0.11ex] (15.25,0.23) rectangle (15.70,0.68);}}
                 \\lfoot{\\ifodd\\value{page}\\zhaopagetab\\fi}
@@ -677,13 +706,13 @@ public class TeachingHandoutPdfExportService {
     private static String genericHeadingCommands() {
         return """
                 \\titleformat{\\section}
-                  {\\Large\\bfseries\\color{HandoutAccent}}
+                  {\\HandoutDisplayFont\\Large\\bfseries\\color{HandoutAccent}}
                   {}{0pt}{\\makebox[0pt][r]{\\color{HandoutAccent}\\rule{4pt}{1.15em}\\hspace{0.7em}}}
                   [{\\vspace{0.2em}\\color{HandoutAccent!35}\\titlerule[0.5pt]}]
                 \\titleformat{\\subsection}
-                  {\\large\\bfseries\\color{HandoutAccent}}
+                  {\\HandoutDisplayFont\\large\\bfseries\\color{HandoutAccent}}
                   {}{0pt}{\\makebox[0pt][r]{\\color{HandoutAccent!80}\\rule{3pt}{1em}\\hspace{0.6em}}}
-                \\titleformat{\\paragraph}{\\normalsize\\bfseries\\color{HandoutAccent}}{}{0pt}{}
+                \\titleformat{\\paragraph}{\\HandoutDisplayFont\\normalsize\\bfseries\\color{HandoutText}}{}{0pt}{}
                 \\titlespacing*{\\section}{0pt}{1.45em}{0.8em}
                 \\titlespacing*{\\subsection}{0pt}{1.1em}{0.55em}
                 """;
@@ -697,17 +726,17 @@ public class TeachingHandoutPdfExportService {
         return """
                 % The Zhao master uses a compact navy title tab with white lettering for a question type.
                 % Keep the fill only behind the words so long Chinese titles never cross the fixed print grid.
-                \\newcommand{\\zhaosectiontitle}[1]{\\colorbox{HandoutAccent}{\\strut\\hspace{0.52em}\\color{white}\\bfseries #1\\hspace{0.52em}}}
+                \\newcommand{\\zhaosectiontitle}[1]{\\colorbox{HandoutAccent}{\\strut\\hspace{0.52em}\\color{white}\\HandoutDisplayFont\\bfseries #1\\hspace{0.52em}}}
                 \\titleformat{\\section}
-                  {\\large\\bfseries\\color{HandoutAccent}}
+                  {\\HandoutDisplayFont\\large\\bfseries\\color{HandoutAccent}}
                   {}{0pt}{\\zhaosectiontitle}
                 \\titleformat{\\subsection}
-                  {\\normalsize\\bfseries\\color{HandoutText}}
+                  {\\HandoutDisplayFont\\normalsize\\bfseries\\color{HandoutText}}
                   {}{0pt}{}
                 \\titleformat{\\subsubsection}
-                  {\\normalsize\\bfseries\\color{HandoutText}}
+                  {\\HandoutDisplayFont\\normalsize\\bfseries\\color{HandoutText}}
                   {}{0pt}{}
-                \\titleformat{\\paragraph}{\\normalsize\\bfseries\\color{HandoutText}}{}{0pt}{}
+                \\titleformat{\\paragraph}{\\HandoutDisplayFont\\normalsize\\bfseries\\color{HandoutText}}{}{0pt}{}
                 \\titlespacing*{\\section}{0pt}{1.0em}{0.55em}
                 \\titlespacing*{\\subsection}{0pt}{0.72em}{0.32em}
                 \\titlespacing*{\\subsubsection}{0pt}{0.55em}{0.25em}
@@ -720,7 +749,7 @@ public class TeachingHandoutPdfExportService {
      * instructions, OCR page fragments, or provider diagnostics while preserving real handout images.
      */
     public static String sanitizeLatexForExport(String source) {
-        String normalized = safeText(source)
+        String normalized = repairMojibake(safeText(source))
                 // JSON producers can interpret LaTeX commands as control characters (\b, \t, \f).
                 // Repair those persisted legacy values before any line-level filtering or math normalization.
                 .replace("\u0008oldsymbol", "\\boldsymbol")
@@ -761,7 +790,8 @@ public class TeachingHandoutPdfExportService {
         boolean skippingBlankWorkspaceSection = false;
         int evidenceLineCount = 0;
         for (String rawLine : normalized.replace("\r\n", "\n").replace('\r', '\n').split("\n")) {
-            String line = normalizeMixedMathDelimiters(normalizeCircledNumerals(rawLine.strip()));
+            String line = normalizeMixedMathDelimiters(
+                    normalizeBareMathFragments(normalizeCircledNumerals(rawLine.strip())));
             // Some model/Markdown adapters serialize an environment boundary as visible text, for example
             // "- itemize - 内容".  It is layout syntax, not lesson content, so strip only the leading
             // environment label while preserving the actual evidence sentence that follows it.
@@ -1080,6 +1110,250 @@ public class TeachingHandoutPdfExportService {
         }
         undelimitedMatcher.appendTail(normalized);
         return normalized.toString();
+    }
+
+    /** Keeps only the first (question) minipage from legacy lecture pages; the second was the teacher cue column. */
+    private static String stripLectureProjectionColumns(String body) {
+        if (body == null || body.isBlank()) {
+            return body;
+        }
+        StringBuilder result = new StringBuilder(body.length());
+        int questionMinipages = 0;
+        int minipageDepth = 0;
+        boolean dropping = false;
+        boolean hasNumberedQuestion = false;
+        for (String rawLine : body.replace("\r\n", "\n").replace('\r', '\n').split("\n", -1)) {
+            String line = rawLine.strip();
+            if (line.matches("^\\\\subsection\\*?\\{第\\s*\\d+\\s*题.*")) {
+                hasNumberedQuestion = true;
+                questionMinipages = 0;
+                dropping = false;
+            }
+            if ("\\clearpage".equals(line) || "\\newpage".equals(line)) {
+                questionMinipages = 0;
+                dropping = false;
+                minipageDepth = 0;
+            }
+            if (line.startsWith("\\begin{minipage}")) {
+                questionMinipages += 1;
+                minipageDepth = 1;
+                if (questionMinipages > 1) {
+                    dropping = true;
+                    continue;
+                }
+            } else if (dropping && line.startsWith("\\begin{minipage}")) {
+                minipageDepth += 1;
+            }
+            if (dropping) {
+                if (line.startsWith("\\begin{minipage}")) {
+                    minipageDepth += 1;
+                } else if (line.startsWith("\\end{minipage}")) {
+                    minipageDepth -= 1;
+                    if (minipageDepth <= 0) {
+                        dropping = false;
+                        minipageDepth = 0;
+                    }
+                }
+                continue;
+            }
+            if (line.startsWith("\\end{minipage}")) {
+                minipageDepth = 0;
+            }
+            result.append(rawLine).append('\n');
+        }
+        // A projection without a numbered atomic question is an old topic-only scaffold, not a printable slide.
+        return hasNumberedQuestion ? result.toString().strip() : "";
+    }
+
+    /** Removes old student-only knowledge/explanation blocks while retaining actual question sections and blanks. */
+    private static String stripStudentTeacherBlocks(String body) {
+        if (body == null || body.isBlank()) {
+            return body;
+        }
+        StringBuilder result = new StringBuilder(body.length());
+        boolean dropping = false;
+        int droppedLevel = Integer.MAX_VALUE;
+        for (String rawLine : body.replace("\r\n", "\n").replace('\r', '\n').split("\n", -1)) {
+            String line = rawLine.strip();
+            Matcher heading = LATEX_HEADING_LINE.matcher(line);
+            if (heading.matches()) {
+                int level = latexHeadingLevel(heading.group(1));
+                String title = heading.group(2).replaceAll("\\s+", "");
+                if (dropping && level <= droppedLevel) {
+                    dropping = false;
+                }
+                if (List.of("知识速记", "题型识别", "注意", "作答提醒", "自检任务", "错因整理", "订正与错因")
+                        .stream().anyMatch(title::contains)) {
+                    dropping = true;
+                    droppedLevel = level;
+                    continue;
+                }
+            }
+            if (dropping) {
+                continue;
+            }
+            if (line.contains("作答提示：") || line.contains("自检任务") || line.contains("题型定位")
+                    || line.contains("推导路径") || line.contains("结论核对")) {
+                continue;
+            }
+            result.append(rawLine).append('\n');
+        }
+        return result.toString().strip();
+    }
+
+    /** Student publication keeps only explicitly marked question units; every teacher/explanation block is dropped. */
+    private static String stripStudentQuestionUnits(String body) {
+        if (body == null || body.isBlank()) {
+            return "";
+        }
+        String[] lines = body.replace("\r\n", "\n").replace('\r', '\n').split("\n", -1);
+        StringBuilder result = new StringBuilder(body.length());
+        String pendingHeading = "";
+        boolean inQuestion = false;
+        boolean foundQuestion = false;
+        for (String rawLine : lines) {
+            String line = rawLine.strip();
+            Matcher heading = LATEX_HEADING_LINE.matcher(line);
+            boolean questionHeading = line.matches("^\\\\paragraph\\*?\\{题目}\\s*$");
+            if (heading.matches() && (line.startsWith("\\section") || line.startsWith("\\subsection"))) {
+                if (inQuestion) {
+                    result.append("\\clearpage\n");
+                    inQuestion = false;
+                }
+                pendingHeading = rawLine;
+                continue;
+            }
+            if (questionHeading) {
+                if (!pendingHeading.isBlank()) {
+                    result.append(pendingHeading).append('\n');
+                }
+                result.append(rawLine).append('\n');
+                pendingHeading = "";
+                inQuestion = true;
+                foundQuestion = true;
+                continue;
+            }
+            if (inQuestion && ("\\clearpage".equals(line) || "\\newpage".equals(line))) {
+                result.append(rawLine).append('\n');
+                inQuestion = false;
+                continue;
+            }
+            if (inQuestion) {
+                if (line.contains("答案") || line.contains("解析") || line.contains("评分点")
+                        || line.contains("作答提示") || line.contains("自检任务")
+                        || line.contains("完成配套课后拓展习题")) {
+                    continue;
+                }
+                result.append(rawLine).append('\n');
+            }
+        }
+        return foundQuestion ? result.toString().strip() : "";
+    }
+
+    /** Removes persisted whole-paper OCR answers; a missing question-level answer must not be disguised as one. */
+    private static String stripTeacherOcrAnswerBlocks(String body) {
+        if (body == null || body.isBlank()) {
+            return body;
+        }
+        StringBuilder result = new StringBuilder(body.length());
+        boolean dropping = false;
+        for (String rawLine : body.replace("\r\n", "\n").replace('\r', '\n').split("\n", -1)) {
+            String line = rawLine.strip();
+            boolean answerHeading = line.matches("^\\\\paragraph\\*?\\{答案与评分点}\\s*$");
+            boolean noisyAnswer = line.matches("(?s).*答案要点：.*(?:学科网|股份有限公司|第\\s*\\d+\\s*页).*" )
+                    || line.matches("(?s).*(?:学科网|股份有限公司|第\\s*\\d+\\s*页/共\\s*\\d+\\s*页|【解析】|【分析】|【小问).*" );
+            if (answerHeading || noisyAnswer) {
+                dropping = true;
+                continue;
+            }
+            if (dropping && (line.startsWith("\\paragraph{") || line.startsWith("\\subsection")
+                    || line.startsWith("\\section"))) {
+                dropping = false;
+            }
+            if (!dropping) {
+                result.append(rawLine).append('\n');
+            }
+        }
+        return result.toString().strip();
+    }
+
+    /** Repairs old task snapshots written as UTF-8 bytes decoded through a Latin-1 code page. */
+    private static String repairMojibake(String value) {
+        if (value == null || value.isBlank()
+                || !value.matches("(?s).*[ÃÂåæçèéêïðñã].*")) {
+            return value == null ? "" : value;
+        }
+        try {
+            String candidate = new String(value.getBytes(StandardCharsets.ISO_8859_1), StandardCharsets.UTF_8);
+            long sourceNoise = mojibakeScore(value);
+            long candidateNoise = mojibakeScore(candidate);
+            long candidateHan = candidate.chars().filter(character -> character >= 0x4E00 && character <= 0x9FFF).count();
+            return candidateHan > 0 && candidateNoise < sourceNoise ? candidate : value;
+        } catch (RuntimeException ignored) {
+            return value;
+        }
+    }
+
+    private static long mojibakeScore(String value) {
+        return value == null ? 0 : value.chars()
+                .filter(character -> character == 'Ã' || character == 'Â' || character == 'å'
+                        || character == 'æ' || character == 'ç' || character == 'è'
+                        || character == 'é' || character == 'ê' || character == 'ï'
+                        || character == 'ð' || character == 'ñ' || character == 'ã')
+                .count();
+    }
+
+    /**
+     * Wraps only exponent/subscript atoms found outside existing dollar-delimited math. This keeps ordinary prose
+     * untouched while guaranteeing that a persisted x^2 or P_1 renders as a real superscript/subscript.
+     */
+    private static String normalizeBareMathFragments(String value) {
+        String source = safeText(value);
+        StringBuilder result = new StringBuilder(source.length() + 16);
+        boolean inMath = false;
+        int segmentStart = 0;
+        for (int index = 0; index < source.length(); index += 1) {
+            if (source.charAt(index) != '$') {
+                continue;
+            }
+            // Display math uses a two-character delimiter. Treat it atomically; otherwise the two '$' characters
+            // would toggle the inline state twice and the text inside would be incorrectly rewritten as prose.
+            if (index + 1 < source.length() && source.charAt(index + 1) == '$') {
+                if (!inMath) {
+                    result.append(rewriteBareMathAtoms(source.substring(segmentStart, index)));
+                    inMath = true;
+                } else {
+                    result.append(source, segmentStart, index);
+                    inMath = false;
+                }
+                result.append("$$");
+                index += 1;
+                segmentStart = index + 1;
+                continue;
+            }
+            if (!inMath) {
+                result.append(rewriteBareMathAtoms(source.substring(segmentStart, index)));
+                inMath = true;
+            } else {
+                result.append(source, segmentStart, index);
+                inMath = false;
+            }
+            result.append('$');
+            segmentStart = index + 1;
+        }
+        String tail = source.substring(segmentStart);
+        result.append(inMath ? tail : rewriteBareMathAtoms(tail));
+        return result.toString();
+    }
+
+    private static String rewriteBareMathAtoms(String value) {
+        Matcher matcher = BARE_MATH_ATOM.matcher(value);
+        StringBuffer rewritten = new StringBuffer();
+        while (matcher.find()) {
+            matcher.appendReplacement(rewritten, Matcher.quoteReplacement("$" + matcher.group(1) + "$"));
+        }
+        matcher.appendTail(rewritten);
+        return rewritten.toString();
     }
 
     private static String removeVisibleWorkspaceLabels(String value) {
@@ -2512,35 +2786,40 @@ public class TeachingHandoutPdfExportService {
         }
 
         private void drawImageCell(HandoutImage image, float left, float top, float width, float reservedHeight) throws IOException {
-            String caption = safeText(image.alt());
-            float captionHeight = caption.isBlank() ? 0f : 18f;
+            String caption = INLINE_FIGURE_TRANSPORT_ALT.equals(safeText(image.alt())) ? "" : safeText(image.alt());
+            List<String> captionLines = caption.isBlank() ? List.of() : wrap(caption, Math.max(12, Math.round(width / 7.4f)));
+            float captionHeight = captionLines.isEmpty() ? 0f : captionLines.size() * IMAGE_CAPTION_SIZE * 1.35f + 4f;
             float imageAreaHeight = Math.max(72f, reservedHeight - captionHeight - 8f);
             Optional<Path> localPath = existingLocalImagePath(image.path());
+            boolean rendered = false;
             if (localPath.isPresent()) {
-                PDImageXObject pdImage = PDImageXObject.createFromFileByExtension(localPath.get().toFile(), document);
-                float scale = Math.min(width / pdImage.getWidth(), imageAreaHeight / pdImage.getHeight());
-                float drawWidth = pdImage.getWidth() * scale;
-                float drawHeight = pdImage.getHeight() * scale;
-                float drawX = left + (width - drawWidth) / 2f;
-                float drawY = top - drawHeight;
-                stream.drawImage(pdImage, drawX, drawY, drawWidth, drawHeight);
-            } else {
+                try {
+                    PDImageXObject pdImage = PDImageXObject.createFromFileByExtension(localPath.get().toFile(), document);
+                    float scale = Math.min(width / pdImage.getWidth(), imageAreaHeight / pdImage.getHeight());
+                    float drawWidth = pdImage.getWidth() * scale;
+                    float drawHeight = pdImage.getHeight() * scale;
+                    stream.drawImage(pdImage, left + (width - drawWidth) / 2f, top - drawHeight, drawWidth, drawHeight);
+                    rendered = true;
+                } catch (IOException | RuntimeException ignored) {
+                    rendered = false;
+                }
+            }
+            if (!rendered) {
                 float boxHeight = Math.min(imageAreaHeight, 108f);
                 stream.setStrokingColor(style.border());
                 stream.setLineWidth(0.45f);
                 stream.addRect(left, top - boxHeight, width, boxHeight);
                 stream.stroke();
-                writeCenteredSmallText("图片未找到", left, top - boxHeight / 2f + 8f, width);
-                if (!caption.isBlank()) {
-                    writeCenteredSmallText(caption, left + 10f, top - boxHeight / 2f - 8f, width - 20f);
-                }
+                writeCenteredSmallText(localPath.isPresent() ? "\u56fe\u7247\u65e0\u6cd5\u8bfb\u53d6" : "\u56fe\u7247\u672a\u627e\u5230", left, top - boxHeight / 2f, width);
             }
-            if (!caption.isBlank()) {
+            if (!captionLines.isEmpty()) {
                 stream.beginText();
                 stream.setFont(font, IMAGE_CAPTION_SIZE);
                 stream.setNonStrokingColor(style.mutedText());
-                stream.newLineAtOffset(left, top - imageAreaHeight - 14f);
-                stream.showText(supportedText(font, truncateCaption(caption, width)));
+                for (int index = 0; index < captionLines.size(); index += 1) {
+                    stream.newLineAtOffset(index == 0 ? left : 0f, index == 0 ? top - imageAreaHeight - 14f : -IMAGE_CAPTION_SIZE * 1.35f);
+                    stream.showText(supportedText(font, captionLines.get(index)));
+                }
                 stream.endText();
             }
         }

@@ -30,9 +30,8 @@ def main() -> int:
     args = parser.parse_args()
     cfg = yaml.safe_load((ROOT / "backend-java/src/main/resources/application.yml").read_text(encoding="utf-8"))["math-agent"]["vector-index"]
     worker_key = worker_key_from_local_secret()
-    token = os.environ.get("MATH_AGENT_MILVUS_TOKEN", "")
-    if not token:
-        raise RuntimeError("MATH_AGENT_MILVUS_TOKEN is required for real Milvus verification")
+    # Local WSL Milvus is unauthenticated; a token remains optional for remote deployments.
+    token = os.environ.get("MATH_AGENT_MILVUS_TOKEN", "").strip()
     root = args.processed_books_root.resolve()
     queries = tuple(load_graph_knowledge_points(args.graph_spine))
     if not queries:
@@ -139,8 +138,9 @@ def worker_embedding(path: str, payload: dict[str, Any], key: str) -> list[float
 
 
 def milvus_search(uri: str, token: str, collection: str, vector: list[float], limit: int) -> list[str]:
+    headers = {"Authorization": "Bearer " + token} if token else {}
     data = post(uri.rstrip("/") + "/v2/vectordb/entities/search", {"collectionName": collection, "data": [vector], "limit": limit,
-        "outputFields": ["id"], "searchParams": {"metricType": "COSINE", "params": {}}}, {"Authorization": "Bearer " + token})["data"]
+        "outputFields": ["id"], "searchParams": {"metricType": "COSINE", "params": {}}}, headers)["data"]
     return [str(row["id"]) for row in data]
 
 

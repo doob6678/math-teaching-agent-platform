@@ -88,6 +88,11 @@ public class TeacherResourceBlockSearchService {
      */
     private static final Pattern STABLE_SOURCE_TOKEN = Pattern.compile(
             "(?<![A-Za-z0-9])([A-Za-z][A-Za-z0-9]{11,})(?![A-Za-z0-9])");
+    /** Numbered source stems are the only safe boundary for associating an adjacent DOCX diagram. */
+    private static final Pattern TOP_LEVEL_QUESTION_NUMBER = Pattern.compile(
+            "(?m)^\\h*(\\d{1,2})[.．、]\\h*");
+    /** Keep the association local: an image beyond this many source blocks is not reliably question-owned. */
+    private static final int MAX_INLINE_FIGURE_LOOKAHEAD_BLOCKS = 3;
 
     private final TeacherResourceStore resourceStore;
     private final TeacherDocumentBlockStore blockStore;
@@ -1820,6 +1825,94 @@ public class TeacherResourceBlockSearchService {
     }
 
     /**
+     * Resolves a DOCX's original diagram that immediately follows the exact numbered source stem.
+     *
+     * <p>Page renderings are useful for inspection but are not a question figure: they can contain the preceding
+     * answer, the next question, or no diagram at all.  This method therefore accepts only an image-only source
+     * block located after the matching stem and before another numbered stem.  It deliberately returns empty when
+     * that provenance cannot be established, allowing the handout gate to omit rather than mislabel a visual.</p>
+     */
+    public Optional<TeacherResourceBlockSearchResponse.AssetRef> resolveVisibleInlineFigureForQuestion(
+            String documentId,
+            String questionText,
+            RequestSubject subject) {
+        if (documentId == null || documentId.isBlank() || questionText == null || questionText.isBlank()
+                || subject == null) {
+            return Optional.empty();
+        }
+        Matcher requestedNumber = TOP_LEVEL_QUESTION_NUMBER.matcher(questionText);
+        if (!requestedNumber.find()) {
+            return Optional.empty();
+        }
+        String questionNumber = requestedNumber.group(1);
+        RequestSubject normalized = subject.normalize();
+        List<TeacherDocumentBlockResponse> blocks = blockStore.listByDocument(normalized.tenantId(), documentId.strip())
+                .stream()
+                .sorted(Comparator.comparingInt(TeacherDocumentBlockResponse::blockOrder))
+                .toList();
+        for (int index = 0; index < blocks.size(); index += 1) {
+            TeacherDocumentBlockResponse stem = blocks.get(index);
+            // Rendered pages are intentionally excluded: their asset represents a page, not an extracted figure.
+            if (stem.pageNo() != null || !matchesTopLevelQuestionNumber(stem.rawText(), questionNumber)) {
+                continue;
+            }
+            int finalIndex = Math.min(blocks.size(), index + 1 + MAX_INLINE_FIGURE_LOOKAHEAD_BLOCKS);
+            for (int candidateIndex = index + 1; candidateIndex < finalIndex; candidateIndex += 1) {
+                TeacherDocumentBlockResponse candidate = blocks.get(candidateIndex);
+                if (candidate.pageNo() != null || matchesAnyTopLevelQuestionNumber(candidate.rawText())) {
+                    break;
+                }
+                List<String> assetIds = parseImageAssetIds(candidate.imageRefs());
+                boolean imageOnlyBlock = !assetIds.isEmpty()
+                        && textOrDefault(candidate.rawText(), "").contains("[DOCX image block; no extractable text]");
+                if (!imageOnlyBlock) {
+                    continue;
+                }
+                return assetIds.stream()
+                        .map(assetId -> assetService.findVisibleAssetReference(assetId, normalized))
+                        .flatMap(Optional::stream)
+                        .map(TeacherResourceAssetService.VisibleAssetReference::toSearchAssetRef)
+                        .findFirst();
+            }
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Reads all parsed blocks from one visible document for an authorized agent.  The document is first resolved
+     * through the same tenant/role/owner visibility gate used by search; callers never receive a filesystem path.
+     */
+    public List<TeacherDocumentBlockResponse> listVisibleBlocks(
+            String tenantId,
+            String viewerRole,
+            String viewerSubjectId,
+            String documentId) {
+        requireTeacherOrAdmin(viewerRole);
+        String normalizedDocumentId = textOrDefault(documentId, "");
+        if (normalizedDocumentId.isBlank()) {
+            throw new IllegalArgumentException("documentId is required");
+        }
+        boolean visible = filteredDocuments(
+                resourceStore.listVisible(tenantId, viewerRole, viewerSubjectId), TeacherResourceSearchFilter.EMPTY)
+                .stream().anyMatch(document -> normalizedDocumentId.equals(document.documentId()));
+        if (!visible) {
+            throw new IllegalArgumentException("Teacher resource is not visible");
+        }
+        return blockStore.listByDocument(tenantId, normalizedDocumentId);
+    }
+
+    /** Tests the exact leading question number without letting formula or solution-line numerals cross-bind figures. */
+    private static boolean matchesTopLevelQuestionNumber(String text, String expectedNumber) {
+        Matcher matcher = TOP_LEVEL_QUESTION_NUMBER.matcher(textOrDefault(text, ""));
+        return matcher.find() && expectedNumber.equals(matcher.group(1));
+    }
+
+    /** A subsequent numbered stem ends the source ownership window for the preceding question. */
+    private static boolean matchesAnyTopLevelQuestionNumber(String text) {
+        return TOP_LEVEL_QUESTION_NUMBER.matcher(textOrDefault(text, "")).find();
+    }
+
+    /**
      * Ensures only teacher/admin backend subjects can use this teacher resource endpoint.
      */
     private static void requireTeacherOrAdmin(String viewerRole) {
@@ -1835,11 +1928,32 @@ public class TeacherResourceBlockSearchService {
                 // A registered browser URL is not searchable evidence. This gates every caller (teacher UI, MCP, and
                 // handout workflow) on the same owner-scoped download, parser, and vector-index completion in MySQL.
                 .filter(TeacherResourceReadiness::isReady)
+                // Runtime fixtures and benchmark imports are never user teaching material.  Filtering them at the
+                // shared search boundary protects the UI, MCP callers, ordinary Q&A, and handout generation alike.
+                .filter(document -> !isSyntheticOrBenchmarkSource(document))
                 .filter(document -> filter.documentIds().isEmpty() || filter.documentIds().contains(document.documentId()))
                 .filter(document -> filter.permissionScopes().isEmpty()
                         || filter.permissionScopes().contains(textOrDefault(document.permissionScope(), "").toUpperCase(Locale.ROOT)))
                 .filter(document -> TeacherResourceLibraryResolver.matchesAny(document, filter.sourceTypes()))
                 .toList();
+    }
+
+    private static boolean isSyntheticOrBenchmarkSource(TeacherResourceDocumentResponse document) {
+        String text = normalizeText(String.join(" ",
+                textOrDefault(document == null ? null : document.documentId(), ""),
+                textOrDefault(document == null ? null : document.title(), ""),
+                textOrDefault(document == null ? null : document.sourceIdentity(), ""),
+                textOrDefault(document == null ? null : document.localPath(), ""),
+                textOrDefault(document == null ? null : document.originalUrl(), "")));
+        return text.contains("synthetic-natural-math-benchmark")
+                || text.contains("benchmark-high-school-math")
+                || text.contains("runtime-authored")
+                || text.contains("runtime-teacher-resource")
+                || text.contains("design-system-docs")
+                || text.contains("knowledge-graph-spine")
+                || text.contains("synthetic-natural")
+                || text.contains("audit-feishu-rag")
+                || text.matches(".*(?:^|[\\s/_-])runtime-[a-z0-9_-]+.*");
     }
 
     private boolean shouldUseRealTextbook(TeacherResourceSearchFilter filter) {

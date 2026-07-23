@@ -60,6 +60,27 @@ public final class QuestionBankSearchText {
     }
 
     /**
+     * Returns concrete curriculum terms that must be present when a query names a specific topic.
+     *
+     * <p>The management search still uses the broader {@link #keywords(String)} list for recall, but a broad
+     * expansion such as "函数" must not make an unrelated statistics or geometry row look like a quadratic-function
+     * result. Keeping this vocabulary beside the shared query normalizer ensures the UI and teaching workflow apply
+     * the same strict-topic boundary before semantic reranking.</p>
+     */
+    public static List<String> specificTopicTerms(String query) {
+        String normalized = normalize(query);
+        if (normalized.isBlank()) {
+            return List.of();
+        }
+        return CORE_TERMS.stream()
+                .filter(term -> term.length() >= 3)
+                .filter(term -> normalized.contains(term.toLowerCase()))
+                .filter(term -> !Set.of("函数", "三角函数", "空间向量", "立体几何", "平面向量", "圆锥曲线", "直线", "圆", "数列", "概率", "统计", "导数").contains(term))
+                .distinct()
+                .toList();
+    }
+
+    /**
      * Normalizes null and repeated whitespace.
      */
     public static String normalize(String value) {

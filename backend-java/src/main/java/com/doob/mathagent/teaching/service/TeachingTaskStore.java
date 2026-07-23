@@ -19,6 +19,11 @@ public interface TeachingTaskStore {
      */
     Optional<TeachingTaskResponse> findByTaskIdAndOwnerKey(String taskId, String ownerKey);
 
+    /** Internal Worker lookup; access control remains at HTTP boundaries, while Workers execute only durable task IDs. */
+    default Optional<TeachingTaskResponse> findByTaskId(String taskId) {
+        return Optional.empty();
+    }
+
     /**
      * Lists recent teaching tasks owned by the current backend session subject.
      */

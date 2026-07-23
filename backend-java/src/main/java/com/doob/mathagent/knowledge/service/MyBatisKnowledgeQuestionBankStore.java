@@ -246,7 +246,9 @@ public class MyBatisKnowledgeQuestionBankStore implements KnowledgeQuestionBankS
         }
         wrapper.orderByAsc(QuestionBankItemEntity::getQuestionTitle);
         return questionMapper.selectList(wrapper).stream()
-                .limit(Math.max(1, Math.min(50, limit)))
+                // Keep enough rows for the frontend's explicit page controls; the service applies strict topic
+                // filtering and BGE reranking before the UI slices the result set.
+                .limit(Math.max(1, Math.min(KnowledgeQuestionBankService.MAX_SEARCH_ROWS, limit)))
                 .map(entity -> toRecord(entity, links(tenantId, entity.getQuestionId())))
                 .toList();
     }

@@ -158,4 +158,26 @@ describe("HandoutCollaborationPanel", () => {
     expect(inspection?.evidence).toEqual([expect.objectContaining({ sourceTitle: "空间向量例题 3", chunkId: "question-3" })]);
     expect(inspection?.evidence.some((item) => item.sourceScope === "TEACHER_RESOURCE")).toBe(false);
   });
+
+  it("keeps the complete authorized workflow record available to the inspector", () => {
+    const fullRecord = `已找到资料：${"原始资料内容".repeat(100)}\n下一步：逐题核对答案。`;
+    const task = buildTask({
+      nodes: [{ code: "QUESTION_BANK_RETRIEVAL", name: "题库检索", status: "completed", summary: "已完成。" }],
+      workflowEvents: [{
+        eventId: "evidence",
+        sourceType: "tool",
+        sourceName: "EvidenceCollector",
+        eventType: "evidence",
+        status: "completed",
+        title: "并行收集资料",
+        summary: fullRecord,
+        artifactRefs: ["QUESTION_BANK"],
+      }],
+    });
+
+    const inspection = buildWorkflowNodeInspection(task, "QUESTION_BANK_RETRIEVAL");
+
+    expect(inspection?.events[0]?.summary).toContain("下一步：逐题核对答案。");
+    expect(inspection?.events[0]?.summary.length).toBeGreaterThan(360);
+  });
 });

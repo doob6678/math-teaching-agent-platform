@@ -137,8 +137,6 @@ public class SystemRuntimeStatusService {
                 urlConfigured,
                 usernameConfigured,
                 historyDurable,
-                enabled,
-                enabled ? "classpath:db/migration" : "",
                 historyDurable ? "mysql" : enabled ? "mysql_not_ready" : "disabled");
     }
 
@@ -169,9 +167,6 @@ public class SystemRuntimeStatusService {
         }
         if (!database.studentExplanationHistoryDurable()) {
             blockingIssues.add("STUDENT_EXPLANATION_HISTORY_NOT_DURABLE");
-        }
-        if (database.enabled() && !database.migrationRunnerEnabled()) {
-            blockingIssues.add("DB_MIGRATION_RUNNER_DISABLED");
         }
         if (!redis.redissonEnabled()) {
             blockingIssues.add("REDIS_REDISSON_DISABLED");

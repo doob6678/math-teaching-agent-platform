@@ -9,6 +9,7 @@ export type HandoutWorkspaceEntry<TTask extends HandoutTaskIdentity = HandoutTas
       createdAt: string;
       learningGoal: string;
       questionText?: string;
+      supplementaryRequirements?: string;
       templateName?: string;
       evidenceLimit: number;
     }
@@ -27,6 +28,8 @@ export type HandoutTaskIdentity = {
   taskId: string;
   learningGoal?: string;
   questionText?: string;
+  supplementaryRequirements?: string;
+  evidence?: unknown[];
   selectedTemplate?: { displayName?: string };
   status: string;
 };
@@ -36,6 +39,7 @@ export type BeginHandoutRunInput = {
   requestId: string;
   learningGoal: string;
   questionText?: string;
+  supplementaryRequirements?: string;
   templateName: string;
   evidenceLimit: number;
   createdAt: string;
@@ -55,6 +59,7 @@ export function beginCurrentHandoutRun<TTask extends HandoutTaskIdentity = Hando
       createdAt: input.createdAt,
       learningGoal: input.learningGoal,
       questionText: input.questionText || undefined,
+      supplementaryRequirements: input.supplementaryRequirements || undefined,
       templateName: input.templateName,
       evidenceLimit: input.evidenceLimit,
     },
@@ -95,7 +100,9 @@ export function replaceCurrentHandoutTask<TTask extends HandoutTaskIdentity>(
     learningGoal: task.learningGoal?.trim() || "历史讲义任务",
     questionText: task.questionText?.trim() || undefined,
     templateName: task.selectedTemplate?.displayName?.trim() || undefined,
-    evidenceLimit: 0,
+    // History selections do not have the original composer state, so derive the visible count from the durable
+    // evidence list instead of rendering a misleading hard-coded zero.
+    evidenceLimit: Array.isArray(task.evidence) ? task.evidence.length : 0,
   };
   const updatedAssistant: HandoutWorkspaceEntry<TTask> = {
     id: `assistant:${task.taskId}`,

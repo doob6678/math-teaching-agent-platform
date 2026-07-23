@@ -71,8 +71,6 @@ class SystemRuntimeStatusServiceTest {
         assertThat(response.database().enabled()).isTrue();
         assertThat(response.database().configured()).isTrue();
         assertThat(response.database().studentExplanationHistoryDurable()).isTrue();
-        assertThat(response.database().migrationRunnerEnabled()).isTrue();
-        assertThat(response.database().migrationLocation()).isEqualTo("classpath:db/migration");
         assertThat(response.database().mode()).isEqualTo("mysql");
         assertThat(response.redis().redissonEnabled()).isTrue();
         assertThat(response.redis().redissonAddress()).isEqualTo("redis://***@127.0.0.1:6379");
@@ -116,8 +114,6 @@ class SystemRuntimeStatusServiceTest {
         assertThat(response.database().enabled()).isFalse();
         assertThat(response.database().configured()).isFalse();
         assertThat(response.database().studentExplanationHistoryDurable()).isFalse();
-        assertThat(response.database().migrationRunnerEnabled()).isFalse();
-        assertThat(response.database().migrationLocation()).isEmpty();
         assertThat(response.database().mode()).isEqualTo("disabled");
         assertThat(response.feishu().processDownloaderEnabled()).isFalse();
         assertThat(response.feishu().mode()).isEqualTo("disabled");

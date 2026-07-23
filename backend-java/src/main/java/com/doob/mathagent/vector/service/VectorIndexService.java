@@ -16,6 +16,7 @@ import java.util.Locale;
 import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 /**
@@ -36,6 +37,7 @@ public class VectorIndexService {
     private final VectorHttpTransport transport;
     private final TeacherResourceStore resourceStore;
     private final TeacherDocumentBlockStore blockStore;
+    private TeacherResourceImageClipService teacherImageClipService;
 
     public VectorIndexService(
             VectorIndexProperties properties,
@@ -46,6 +48,12 @@ public class VectorIndexService {
         this.transport = transport;
         this.resourceStore = resourceStore;
         this.blockStore = blockStore;
+    }
+
+    /** Optional setter keeps focused text-index tests independent while production rebuilds both vector routes. */
+    @Autowired(required = false)
+    public void setTeacherImageClipService(TeacherResourceImageClipService teacherImageClipService) {
+        this.teacherImageClipService = teacherImageClipService;
     }
 
     public VectorIndexStatusResponse status() {
@@ -111,6 +119,9 @@ public class VectorIndexService {
             int upserted = upsert(document, blocks, embeddings.vectors());
             flushCollection();
             loadCollection();
+            if (teacherImageClipService != null) {
+                teacherImageClipService.indexDocument(tenantId, subjectType, subjectId, documentId);
+            }
             resourceStore.save(withIndexStatus(document, "ready", "ready"));
             return new VectorIndexRebuildResponse(
                     "indexed",
@@ -933,4 +944,3 @@ public class VectorIndexService {
         }
     }
 }
-

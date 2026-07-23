@@ -10,6 +10,8 @@ import com.doob.mathagent.agent.service.MultiAgentWritingArtifactExportService;
 import com.doob.mathagent.agent.service.MultiAgentWritingService;
 import com.doob.mathagent.infrastructure.ai.AiProviderCatalog;
 import com.doob.mathagent.infrastructure.ai.AiProviderProperties;
+import com.doob.mathagent.knowledge.service.InMemoryKnowledgeQuestionBankStore;
+import com.doob.mathagent.knowledge.service.KnowledgeQuestionBankService;
 import com.doob.mathagent.protocol.service.McpClientRegistryProperties;
 import com.doob.mathagent.protocol.service.McpToolExecutionService;
 import com.doob.mathagent.resources.TextbookCatalogReader;
@@ -198,6 +200,7 @@ final class McpToolExecutionServiceFixture {
                 resolvedResourceService,
                 resolvedJobService,
                 resolvedExecutionService,
+                new KnowledgeQuestionBankService(new InMemoryKnowledgeQuestionBankStore()),
                 resolvedWritingService,
                 multiAgentWritingArtifactExportService == null
                         ? new MultiAgentWritingArtifactExportService(resolvedWritingService, 30)

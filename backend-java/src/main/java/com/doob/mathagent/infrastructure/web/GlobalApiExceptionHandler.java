@@ -10,6 +10,7 @@ import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 
 /**
  * Centralizes JSON error shaping and backend logging so the frontend receives readable errors with a trace id.
@@ -70,6 +71,24 @@ public class GlobalApiExceptionHandler {
         log.warn("api_bad_request traceId={} path={} message={}", traceId, request.getRequestURI(), safe(exception.getMessage()));
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(new ApiErrorResponse(
                 "BAD_REQUEST", safe(exception.getMessage()), traceId, request.getRequestURI()));
+    }
+
+    /**
+     * Bean-validation failures happen before controller code runs.  Returning 400 here keeps a malformed request
+     * distinct from a server fault and gives the browser a usable field-level reason instead of a misleading 500.
+     */
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ResponseEntity<ApiErrorResponse> handleValidation(
+            MethodArgumentNotValidException exception,
+            HttpServletRequest request) {
+        String traceId = traceId();
+        String reason = exception.getBindingResult().getFieldErrors().stream()
+                .findFirst()
+                .map(error -> error.getField() + ": " + error.getDefaultMessage())
+                .orElse("请求参数不正确。");
+        log.warn("api_validation_error traceId={} path={} message={}", traceId, request.getRequestURI(), safe(reason));
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(new ApiErrorResponse(
+                "VALIDATION_ERROR", safe(reason), traceId, request.getRequestURI()));
     }
 
     /**

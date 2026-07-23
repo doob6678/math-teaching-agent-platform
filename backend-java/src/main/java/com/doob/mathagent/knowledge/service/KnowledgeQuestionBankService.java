@@ -5,9 +5,16 @@ import com.doob.mathagent.knowledge.dto.QuestionBankItemCreateRequest;
 import com.doob.mathagent.knowledge.vo.KnowledgePointResponse;
 import com.doob.mathagent.knowledge.vo.KnowledgeRelationResponse;
 import com.doob.mathagent.knowledge.vo.QuestionBankItemResponse;
+import com.doob.mathagent.vector.service.VectorIndexService;
+import com.doob.mathagent.vector.service.VectorTextRerankResult;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 /**
@@ -16,7 +23,13 @@ import org.springframework.stereotype.Service;
 @Service
 public class KnowledgeQuestionBankService {
 
+    private static final Logger log = LoggerFactory.getLogger(KnowledgeQuestionBankService.class);
+
+    /** Maximum visible rows loaded for one UI query so client-side paging never paginates an arbitrary 50-row slice. */
+    public static final int MAX_SEARCH_ROWS = 500;
+
     private final KnowledgeQuestionBankStore store;
+    private final VectorIndexService vectorIndexService;
 
     /**
      * Creates a knowledge and question bank service.
@@ -24,7 +37,25 @@ public class KnowledgeQuestionBankService {
      * @param store store abstraction
      */
     public KnowledgeQuestionBankService(KnowledgeQuestionBankStore store) {
+        // Disambiguate the two production/test constructors so the local test path still skips the optional worker.
+        this(store, (VectorIndexService) null);
+    }
+
+    /**
+     * Creates the production service with the same real BGE reranker used by textbook and teacher-resource search.
+     * The one-argument constructor remains for isolated store tests where no HTTP worker is configured.
+     */
+    @Autowired
+    public KnowledgeQuestionBankService(
+            KnowledgeQuestionBankStore store,
+            Optional<VectorIndexService> vectorIndexService) {
+        this(store, vectorIndexService == null ? null : vectorIndexService.orElse(null));
+    }
+
+    /** Creates a testable service with an optional semantic reranker. */
+    KnowledgeQuestionBankService(KnowledgeQuestionBankStore store, VectorIndexService vectorIndexService) {
         this.store = store;
+        this.vectorIndexService = vectorIndexService;
     }
 
     /**
@@ -222,11 +253,13 @@ public class KnowledgeQuestionBankService {
             String tenantId,
             String viewerRole,
             String viewerSubjectId,
-            String query,
+        String query,
             int limit) {
         String role = normalizeRole(viewerRole);
-        requireTeacherOrAdmin(role);
-        return store.searchQuestions(
+        // Search is a read-only operation.  The store applies tenant, public/shared, and owner-private visibility
+        // rules for every role; keeping this method readable by students prevents the management-role guard from
+        // turning the populated 2022-2024 bank into a misleading 403/zero-result screen.
+        List<QuestionBankItemResponse> candidates = store.searchQuestions(
                         requireText(tenantId, "tenantId"),
                         role,
                         requireText(viewerSubjectId, "viewerSubjectId"),
@@ -235,6 +268,90 @@ public class KnowledgeQuestionBankService {
                 .stream()
                 .map(KnowledgeQuestionBankService::toResponse)
                 .toList();
+        List<QuestionBankItemResponse> topicAligned = strictTopicFilter(query, candidates);
+        return rerank(query, topicAligned);
+    }
+
+    /**
+     * Prevents broad SQL keyword expansion from leaking unrelated rows into a specific topic search.
+     * An empty strict-term set means the caller asked for a broad browse and keeps the complete visible candidate set.
+     */
+    private static List<QuestionBankItemResponse> strictTopicFilter(
+            String query,
+            List<QuestionBankItemResponse> candidates) {
+        List<String> strictTerms = QuestionBankSearchText.specificTopicTerms(query);
+        if (strictTerms.isEmpty()) {
+            return candidates;
+        }
+        return candidates.stream()
+                .filter(candidate -> containsAnyStrictTopic(candidate, strictTerms))
+                .toList();
+    }
+
+    /** Allows OCR variants of quadratic notation while still rejecting rows that only contain the word "函数". */
+    private static boolean containsAnyStrictTopic(
+            QuestionBankItemResponse candidate,
+            List<String> strictTerms) {
+        String text = ((candidate.questionTitle() == null ? "" : candidate.questionTitle()) + " "
+                + (candidate.questionText() == null ? "" : candidate.questionText()))
+                .replaceAll("\\s+", "")
+                .toLowerCase();
+        int matchedStrictTerms = 0;
+        for (String term : strictTerms) {
+            if (text.contains(term.toLowerCase())) {
+                matchedStrictTerms++;
+                continue;
+            }
+            if ("二次函数".equals(term)
+                    && text.contains("函数")
+                    && (text.contains("x^2") || text.contains("x²") || text.contains("x2"))
+                    // OCR frequently drops parentheses and the literal f(x). The combination of a function
+                    // marker and a quadratic x-term is therefore the stable fallback; cubic/conic signatures
+                    // are excluded so an x^2 term inside a higher-degree or conic question cannot leak in.
+                    && !text.contains("x^3") && !text.contains("x³") && !text.contains("x3")
+                    && !text.contains("双曲线") && !text.contains("椭圆") && !text.contains("圆锥曲线")) {
+                matchedStrictTerms++;
+            }
+        }
+        // A compound query such as "二次函数最值" must satisfy every concrete term; accepting an OR here lets a
+        // generic quadratic transformation row displace the requested minimum-value examples.
+        return matchedStrictTerms == strictTerms.size();
+    }
+
+    /**
+     * Applies the production cross-encoder reranker to the visible candidate window. If the worker is unavailable,
+     * VectorIndexService explicitly returns its embedding fallback and this method preserves the deterministic store
+     * order instead of silently inventing a score.
+     */
+    private List<QuestionBankItemResponse> rerank(
+            String query,
+            List<QuestionBankItemResponse> candidates) {
+        if (vectorIndexService == null || query == null || query.isBlank() || candidates.size() < 2) {
+            return candidates;
+        }
+        List<String> texts = candidates.stream()
+                .map(candidate -> ((candidate.questionTitle() == null ? "" : candidate.questionTitle()) + "\n"
+                        + (candidate.questionText() == null ? "" : candidate.questionText())).strip())
+                .toList();
+        VectorTextRerankResult result;
+        try {
+            result = vectorIndexService.rerankTextsWithTrace(query, texts);
+        } catch (RuntimeException exception) {
+            // A broken worker must not turn a permission-checked lexical query into a blank page; retain the visible
+            // candidate order and leave a server-side diagnostic for the retrieval audit instead.
+            log.warn("question_bank_rerank_failed query={} candidates={} message={}", query, candidates.size(), exception.getMessage());
+            return candidates;
+        }
+        if (result.scores().size() != candidates.size()) {
+            return candidates;
+        }
+        List<Integer> order = new ArrayList<>();
+        for (int index = 0; index < candidates.size(); index++) {
+            order.add(index);
+        }
+        order.sort(Comparator.comparingDouble((Integer index) -> result.scores().get(index)).reversed()
+                .thenComparingInt(Integer::intValue));
+        return order.stream().map(candidates::get).toList();
     }
 
     /**
@@ -373,7 +490,7 @@ public class KnowledgeQuestionBankService {
      * Keeps question-bank browse/search bounded for frontend pagination.
      */
     private static int normalizedLimit(int limit) {
-        return Math.max(1, Math.min(50, limit));
+        return Math.max(1, Math.min(MAX_SEARCH_ROWS, limit));
     }
 
     /**

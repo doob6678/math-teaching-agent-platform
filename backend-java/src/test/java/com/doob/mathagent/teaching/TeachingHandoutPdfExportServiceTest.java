@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.doob.mathagent.teaching.service.TeachingHandoutPdfExportService;
+import com.doob.mathagent.teaching.service.TeachingWorkflowService;
 import com.doob.mathagent.teaching.vo.TeachingHandoutTemplateResponse;
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
 import java.awt.Color;
@@ -166,6 +167,30 @@ class TeachingHandoutPdfExportServiceTest {
         assertThat(sanitized)
                 .contains("$x^2+y^2=16$", "$\\frac{x^{2}}{16}+\\frac{y^{2}}{4}=1$", "$4\\times 4$")
                 .doesNotContain("$$$", "\\textasciicircum", "\\textbackslash");
+    }
+
+    @Test
+    void wrapsBareSuperscriptsInMathModeWithoutTouchingExistingMath() {
+        String sanitized = TeachingHandoutPdfExportService.sanitizeLatexForExport("""
+                \\section{公式检查}
+                曲线 x^2+y^2=9（y>0），点 P_1 在曲线上；已有公式 $a^2+b^2=c^2$ 保持不变。
+                """);
+
+        assertThat(sanitized)
+                .contains("$x^2$", "$y^2$", "$P_1$")
+                .contains("$a^2+b^2=c^2$")
+                .doesNotContain("\\textasciicircum");
+    }
+
+    @Test
+    void rejectsChineseAndMojibakeOcrAnswerHeaderBeforeArithmeticCompaction() throws Exception {
+        var method = TeachingWorkflowService.class.getDeclaredMethod("compactQuestionBankAnswer", String.class);
+        method.setAccessible(true);
+        String chineseOcr = "答案要点：答案：第 15 页/共 25 页学科网（北京）股份有限公司【解析】【分析】（1）根据辅助角公式化简。";
+        String mojibakeOcr = "ç­”æ¡ˆè¦要ç‚¹ï¼šç­”æ¡ˆï¼šç¬¬15é¡µ/å…±25é¡µå­¦ç§‘ç½‘ï¼ˆåŒ—äº¬ï¼‰è‚¡ä»½æœ‰é™å…¬å¸";
+
+        assertThat((String) method.invoke(null, chineseOcr)).isBlank();
+        assertThat((String) method.invoke(null, mojibakeOcr)).isBlank();
     }
 
     @Test
@@ -607,8 +632,9 @@ class TeachingHandoutPdfExportServiceTest {
                 assertThat(mediaBox.getWidth() / mediaBox.getHeight()).isBetween(1.58f, 1.62f);
                 String text = new PDFTextStripper().getText(document);
                 assertThat(text)
-                        .contains("横版讲解稿", "16:10 横版讲解卡", "课堂投屏", "双曲线核心公式")
-                        .doesNotContain("教师手写区", "手写区", "板书留白");
+                        .contains("横版讲解稿")
+                        .doesNotContain("16:10 横版讲解卡", "课堂投屏", "双曲线核心公式",
+                                "题型定位", "推导路径", "结论核对", "教师手写区", "手写区", "板书留白");
             }
         } finally {
             Files.deleteIfExists(fakeEngine);
@@ -1066,13 +1092,9 @@ class TeachingHandoutPdfExportServiceTest {
                     "\\section{教师版}\n教师答案：$y=\\frac{k}{x}$。",
                     """
                     \\section{学生版}
-                    \\subsection*{知识速记}
+                    \\subsection*{第 1 题}
+                    \\paragraph{题目}
                     反比例函数可写为 $y=\\frac{k}{x}$，其中 $k\\ne 0$。
-                    \\subsection*{练习任务}
-                    \\begin{itemize}
-                    \\item 写出定义：\\underline{\\hspace{4em}}
-                    \\item 判断点是否在图像上：\\underline{\\hspace{5em}}
-                    \\end{itemize}
                     \\vspace{8em}
                     """,
                     List.of(),
@@ -1085,9 +1107,9 @@ class TeachingHandoutPdfExportServiceTest {
 
             try (PDDocument document = Loader.loadPDF(pdf)) {
                 String text = new PDFTextStripper().getText(document);
-                assertThat(text).contains("学生版讲义", "知识速记", "练习任务", "________");
+                assertThat(text).contains("学生版讲义", "第 1 题", "题目");
                 assertThat(text).contains("y=(k)/(x)", "k", "0");
-                assertThat(text).doesNotContain("作答区", "手写区", "留白区",
+                assertThat(text).doesNotContain("知识速记", "练习任务", "作答提示", "作答区", "手写区", "留白区",
                         "\\underline", "\\hspace", "\\begin", "\\item", "\\frac", "4em", "5em");
             }
         } finally {
@@ -1150,6 +1172,64 @@ class TeachingHandoutPdfExportServiceTest {
         } finally {
             Files.deleteIfExists(firstImage);
             Files.deleteIfExists(secondImage);
+            Files.deleteIfExists(fakeEngine);
+            if (previous == null) {
+                System.clearProperty("math.agent.xelatex.path");
+            } else {
+                System.setProperty("math.agent.xelatex.path", previous);
+            }
+        }
+    }
+
+    @Test
+    void pdfboxFallbackKeepsLongCaptionsAndIsolatesUnreadableImages() throws Exception {
+        Path image = createSolidImage("handout-long-caption");
+        Path unreadable = Files.createTempFile("handout-unreadable-image", ".png");
+        Files.writeString(unreadable, "not-a-png");
+        Path fakeEngine = Files.createTempFile("fake-xelatex", ".exe");
+        String previous = System.getProperty("math.agent.xelatex.path");
+        System.setProperty("math.agent.xelatex.path", fakeEngine.toString());
+        String longCaption = "Projection diagram caption retains every detail for hidden edges, correspondence, and final verification.";
+        try {
+            TeachingTaskResponse task = new TeachingTaskResponse(
+                    "task-image-layout",
+                    "client-image-layout",
+                    "school-a",
+                    "teacher",
+                    "teacher-001",
+                    TeachingTaskStatus.COMPLETED,
+                    "image layout",
+                    "verify long captions and unreadable images",
+                    List.of(),
+                    List.of(),
+                    List.of(),
+                    "",
+                    """
+                    \section{Question}
+                    ![%s](%s)
+                    ![UnreadableDiagram](%s)
+                    \section{Review}
+                    The body continues after the image block.
+                    """.formatted(longCaption, image.toString().replace("\\", "/"), unreadable.toString().replace("\\", "/")),
+                    "\section{Student}\nFinish the exercise.",
+                    List.of(),
+                    null,
+                    List.of(),
+                    null,
+                    null);
+
+            TeachingHandoutPdfExportService.RenderedHandoutPdf rendered =
+                    new TeachingHandoutPdfExportService().renderDetailed(task, "teacher");
+
+            assertThat(rendered.renderer()).isEqualTo("pdfbox_fallback");
+            try (PDDocument document = Loader.loadPDF(rendered.bytes())) {
+                String text = new PDFTextStripper().getText(document);
+                assertThat(countPdfImages(document)).isGreaterThanOrEqualTo(1);
+                assertThat(text).contains("caption retai", "ns every detail", "final veri", "fication.", "UnreadableDiagram", "The body continues after the image block.");
+            }
+        } finally {
+            Files.deleteIfExists(image);
+            Files.deleteIfExists(unreadable);
             Files.deleteIfExists(fakeEngine);
             if (previous == null) {
                 System.clearProperty("math.agent.xelatex.path");

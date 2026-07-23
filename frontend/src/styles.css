@@ -10059,6 +10059,44 @@ h1, h2, h3, h4, h5, h6 {
   margin: 0;
 }
 
+.resource-folder-tree {
+  margin-top: 10px;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.resource-folder-tree summary,
+.resource-folder-group summary {
+  cursor: pointer;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.resource-folder-groups {
+  display: grid;
+  gap: 6px;
+  margin-top: 7px;
+}
+
+.resource-folder-group {
+  border-left: 2px solid var(--line);
+  padding-left: 8px;
+}
+
+.resource-folder-group ul {
+  display: grid;
+  gap: 3px;
+  margin: 6px 0 0;
+  padding-left: 16px;
+}
+
+.resource-folder-group li {
+  color: var(--slate);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
 .sync-checkpoint-grid {
   display: flex;
   flex-wrap: wrap;

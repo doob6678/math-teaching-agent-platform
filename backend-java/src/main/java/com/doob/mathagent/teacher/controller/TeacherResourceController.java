@@ -26,6 +26,9 @@ import com.doob.mathagent.teacher.search.TeacherResourceBlockSearchResponse;
 import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncCheckpointResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncJobResponse;
+import com.doob.mathagent.vector.service.TeacherResourceImageClipSearchRequest;
+import com.doob.mathagent.vector.service.TeacherResourceImageClipSearchResponse;
+import com.doob.mathagent.vector.service.TeacherResourceImageClipService;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.List;
 import java.util.Objects;
@@ -71,6 +74,7 @@ public class TeacherResourceController {
     private final TeacherDocumentBlockStore blockStore;
     private final TeacherResourceAssetService assetService;
     private final TeacherResourceUploadService uploadService;
+    private final TeacherResourceImageClipService imageClipService;
     private final RequestSubjectResolver subjectResolver;
     private final TeacherResourceCapabilityVerifier capabilityVerifier;
 
@@ -101,6 +105,7 @@ public class TeacherResourceController {
                 blockStore,
                 TeacherResourceAssetService.disabled(),
                 TeacherResourceUploadService.disabled(),
+                null,
                 subjectResolver,
                 capabilityVerifier);
     }
@@ -132,6 +137,7 @@ public class TeacherResourceController {
                 blockStore,
                 assetService,
                 uploadService,
+                null,
                 subjectResolver,
                 capabilityVerifier);
     }
@@ -148,6 +154,7 @@ public class TeacherResourceController {
             TeacherDocumentBlockStore blockStore,
             TeacherResourceAssetService assetService,
             TeacherResourceUploadService uploadService,
+            TeacherResourceImageClipService imageClipService,
             RequestSubjectResolver subjectResolver,
             TeacherResourceCapabilityVerifier capabilityVerifier) {
         this.teacherResourceService = Objects.requireNonNull(teacherResourceService, "teacherResourceService");
@@ -160,6 +167,7 @@ public class TeacherResourceController {
         this.blockStore = Objects.requireNonNull(blockStore, "blockStore");
         this.assetService = Objects.requireNonNull(assetService, "assetService");
         this.uploadService = Objects.requireNonNull(uploadService, "uploadService");
+        this.imageClipService = imageClipService;
         this.subjectResolver = Objects.requireNonNull(subjectResolver, "subjectResolver");
         this.capabilityVerifier = Objects.requireNonNull(capabilityVerifier, "capabilityVerifier");
     }
@@ -292,6 +300,31 @@ public class TeacherResourceController {
                             tags));
         } catch (IllegalArgumentException exception) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, exception.getMessage(), exception);
+        }
+    }
+
+    /**
+     * Searches only rendered teacher-resource page assets through the private CLIP collection.  The request image is
+     * a data URI supplied by the browser; no local path is accepted, so the backend remains the only file boundary.
+     */
+    @PostMapping("/api/teacher/resources/image-search")
+    public TeacherResourceImageClipSearchResponse searchImages(
+            @RequestBody TeacherResourceImageClipSearchRequest request,
+            HttpServletRequest httpRequest) {
+        if (imageClipService == null) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Teacher image CLIP is not configured");
+        }
+        RequestSubject subject = subjectResolver.resolve(httpRequest).normalize();
+        if (!"teacher".equals(subject.subjectType()) && !"admin".equals(subject.subjectType())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Teacher image CLIP requires teacher or admin role");
+        }
+        try {
+            TeacherResourceImageClipSearchRequest normalized = request == null
+                    ? new TeacherResourceImageClipSearchRequest(null, null, 10, List.of()) : request;
+            return imageClipService.search(subject.tenantId(), subject.subjectType(), subject.subjectId(),
+                    normalized.query(), normalized.image(), normalized.normalizedLimit(), normalized.documentIds());
+        } catch (IllegalArgumentException exception) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, exception.getMessage(), exception);
         }
     }
 

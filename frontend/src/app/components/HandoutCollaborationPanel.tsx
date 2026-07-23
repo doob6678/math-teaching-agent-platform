@@ -12,7 +12,6 @@ import {
 } from "../../shared/api/textbookApi";
 import { compactText } from "./panelShared";
 
-const WORKFLOW_INSPECTOR_TEXT_LIMIT = 360;
 
 /**
  * Relates persisted DAG codes to workflow event ids. This is deliberately explicit: event titles are editorial copy
@@ -54,6 +53,7 @@ export type HandoutCollaborationThreadItem =
       createdAt: string;
       learningGoal: string;
       questionText?: string;
+      supplementaryRequirements?: string;
       templateName?: string;
       evidenceLimit: number;
     }
@@ -70,6 +70,7 @@ export type HandoutCollaborationThreadItem =
 export function HandoutCollaborationPanel({
   learningGoal,
   questionText,
+  supplementaryRequirements,
   evidenceLimit,
   watermarkText = "数学讲义",
   aiProviderName = "",
@@ -83,6 +84,7 @@ export function HandoutCollaborationPanel({
   error,
   onLearningGoalChange,
   onQuestionTextChange,
+  onSupplementaryRequirementsChange,
   onEvidenceLimitChange,
   onWatermarkTextChange,
   onAiProviderChange,
@@ -96,6 +98,7 @@ export function HandoutCollaborationPanel({
 }: {
   learningGoal: string;
   questionText: string;
+  supplementaryRequirements?: string;
   evidenceLimit: number;
   watermarkText?: string;
   aiProviderName?: string;
@@ -110,6 +113,7 @@ export function HandoutCollaborationPanel({
   error: string;
   onLearningGoalChange: (value: string) => void;
   onQuestionTextChange: (value: string) => void;
+  onSupplementaryRequirementsChange?: (value: string) => void;
   onEvidenceLimitChange: (value: number) => void;
   onWatermarkTextChange?: (value: string) => void;
   onAiProviderChange?: (value: string) => void;
@@ -163,8 +167,8 @@ export function HandoutCollaborationPanel({
             <span>证据</span>
             <input
               type="number"
-              min={3}
-              max={12}
+              min={1}
+              step={1}
               value={evidenceLimit}
               onChange={(event) => onEvidenceLimitChange(Number(event.target.value))}
             />
@@ -193,12 +197,21 @@ export function HandoutCollaborationPanel({
           </label> : null}
         </div>
         <label className="handout-brief-field full">
-          <span>补充要求</span>
+          <span>原题或学习问题</span>
           <textarea
             value={questionText}
             onChange={(event) => onQuestionTextChange(event.target.value)}
-            placeholder="例如：偏基础、保留留白、课堂讲评口径。"
+            placeholder="例如：已知 f(x)=x^2-4x+3，求其在 [0,3] 上的最小值。"
             rows={3}
+          />
+        </label>
+        <label className="handout-brief-field full">
+          <span>补充要求</span>
+          <textarea
+            value={supplementaryRequirements ?? ""}
+            onChange={(event) => onSupplementaryRequirementsChange?.(event.target.value)}
+            placeholder="例如：教师版含答案和评分点，学生版保留作答留白，16:10 一页一道题。"
+            rows={2}
           />
         </label>
         <div className="handout-brief-actions">
@@ -843,11 +856,15 @@ function stageSummaryText(value: string | undefined) {
   return compactText(text, 120);
 }
 
-/** Applies the same prompt/debug guard to expandable records and keeps long source snippets readable. */
+/**
+ * Expandable workflow records are the audit surface for the current task.  Do not clip an authorized source here:
+ * the user must be able to inspect the exact text that informed the handout, while the guard still excludes prompts
+ * and diagnostics that are never part of the user-visible workflow contract.
+ */
 function safeInspectorText(value: string | undefined, fallback: string) {
   const text = cleanText(value);
   if (!text || isInternalDisplayText(text)) return fallback;
-  return compactText(text, WORKFLOW_INSPECTOR_TEXT_LIMIT);
+  return text;
 }
 
 /** Converts execution categories to user-facing labels without exposing internal agent class names as primary copy. */

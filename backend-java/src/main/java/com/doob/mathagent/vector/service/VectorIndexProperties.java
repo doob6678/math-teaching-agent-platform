@@ -22,7 +22,10 @@ public record VectorIndexProperties(
         String embeddingBaseUrl,
         String embeddingApiKey,
         String embeddingModel,
-        int requestTimeoutMs) {
+        int requestTimeoutMs,
+        String teacherImageCollectionName,
+        int teacherImageDimension,
+        int teacherImageQueryDimension) {
 
     /** Pins Spring property binding to the full production configuration shape. */
     @ConstructorBinding
@@ -42,7 +45,8 @@ public record VectorIndexProperties(
             int requestTimeoutMs) {
         this(enabled, milvusUri, milvusToken, collectionName, studentMemoryCollectionName,
                 "math_agent_textbook_pages_bge", "math_agent_textbook_pages_clip", 512, 768, 512, dimension,
-                embeddingBaseUrl, embeddingApiKey, embeddingModel, requestTimeoutMs);
+                embeddingBaseUrl, embeddingApiKey, embeddingModel, requestTimeoutMs,
+                "math_agent_teacher_page_assets_clip", 768, 512);
     }
 
     public VectorIndexProperties(
@@ -57,7 +61,8 @@ public record VectorIndexProperties(
             int requestTimeoutMs) {
         this(enabled, milvusUri, milvusToken, collectionName, "math_agent_student_memories_bge",
                 "math_agent_textbook_pages_bge", "math_agent_textbook_pages_clip", 512, 768, 512, dimension,
-                embeddingBaseUrl, embeddingApiKey, embeddingModel, requestTimeoutMs);
+                embeddingBaseUrl, embeddingApiKey, embeddingModel, requestTimeoutMs,
+                "math_agent_teacher_page_assets_clip", 768, 512);
     }
 
     public String normalizedCollectionName() {
@@ -93,6 +98,20 @@ public record VectorIndexProperties(
     /** Effective CLIP prefix dimension used by the live worker before zero-padding into the stored image schema. */
     public int normalizedTextbookImageQueryDimension() {
         return textbookImageQueryDimension <= 0 ? normalizedTextbookImageDimension() : textbookImageQueryDimension;
+    }
+
+    /** Keeps private teacher-page CLIP vectors isolated from public textbook images. */
+    public String normalizedTeacherImageCollectionName() {
+        return teacherImageCollectionName == null || teacherImageCollectionName.isBlank()
+                ? "math_agent_teacher_page_assets_clip" : teacherImageCollectionName.strip();
+    }
+
+    public int normalizedTeacherImageDimension() {
+        return teacherImageDimension <= 0 ? 768 : teacherImageDimension;
+    }
+
+    public int normalizedTeacherImageQueryDimension() {
+        return teacherImageQueryDimension <= 0 ? 512 : teacherImageQueryDimension;
     }
 
     public int normalizedDimension() {

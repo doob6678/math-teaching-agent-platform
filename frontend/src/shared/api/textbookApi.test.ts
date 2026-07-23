@@ -1459,8 +1459,8 @@ describe("textbookApi", () => {
         ok: true,
         json: async () => ({
           token: "writing-capability",
-          action: "agent-run:CoursewareAgent",
-          path: "/api/agents/writing/courseware",
+          action: "agent-writing:run",
+          path: "/api/agents/writing",
           requestHash: "hash-writing",
           expiresAt: "2026-06-30T12:02:00Z",
           maxCost: 3,
@@ -1493,15 +1493,15 @@ describe("textbookApi", () => {
 
     const capabilityBody = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
     expect(capabilityBody).toEqual({
-      action: "agent-run:CoursewareAgent",
-      path: "/api/agents/writing/courseware",
+      action: "agent-writing:run",
+      path: "/api/agents/writing",
       requestHash: expect.any(String),
       idempotencyKey: "multi-agent-writing:teacher handout:space vector angle",
       maxCost: 3,
     });
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
-      "http://127.0.0.1:8080/api/agents/writing/courseware",
+      "http://127.0.0.1:8080/api/agents/writing",
       expect.objectContaining({
         method: "POST",
         headers: expect.objectContaining({
@@ -1624,8 +1624,8 @@ describe("textbookApi", () => {
         ok: true,
         json: async () => ({
           token: "writing-capability",
-          action: "agent-run:CoursewareAgent",
-          path: "/api/agents/writing/courseware/async",
+          action: "agent-writing:run",
+          path: "/api/agents/writing/async",
           requestHash: "hash-writing",
           expiresAt: "2026-06-30T12:02:00Z",
           maxCost: 3,
@@ -1649,15 +1649,15 @@ describe("textbookApi", () => {
 
     const capabilityBody = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
     expect(capabilityBody).toEqual({
-      action: "agent-run:CoursewareAgent",
-      path: "/api/agents/writing/courseware/async",
+      action: "agent-writing:run",
+      path: "/api/agents/writing/async",
       requestHash: expect.any(String),
       idempotencyKey: "multi-agent-writing-async:teacher handout:space vector angle",
       maxCost: 3,
     });
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
-      "http://127.0.0.1:8080/api/agents/writing/courseware/async",
+      "http://127.0.0.1:8080/api/agents/writing/async",
       expect.objectContaining({
         method: "POST",
         headers: expect.objectContaining({
@@ -1699,7 +1699,7 @@ describe("textbookApi", () => {
         ok: true,
         json: async () => ({
           token: "resume-capability",
-          action: "agent-run:CoursewareAgent",
+          action: "agent-writing:resume",
           path: "/api/agents/writing/workflow-async-1/resume",
           requestHash: "hash-resume",
           expiresAt: "2026-06-30T12:02:00Z",
@@ -1724,7 +1724,7 @@ describe("textbookApi", () => {
 
     const capabilityBody = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
     expect(capabilityBody).toEqual({
-      action: "agent-run:CoursewareAgent",
+      action: "agent-writing:resume",
       path: "/api/agents/writing/workflow-async-1/resume",
       requestHash: expect.any(String),
       idempotencyKey: "multi-agent-writing-resume:workflow-async-1:teacher handout:space vector angle",
@@ -1741,7 +1741,7 @@ describe("textbookApi", () => {
           "X-Capability-Token": "resume-capability",
           "X-Request-Hash": capabilityBody.requestHash,
         }),
-        body: JSON.stringify(request),
+        body: JSON.stringify({ workflowId: "workflow-async-1", ...request }),
       }),
     );
     expect(fetchMock.mock.calls[1][1]?.headers).not.toHaveProperty("X-Subject-Id");
@@ -3336,8 +3336,6 @@ describe("textbookApi", () => {
           urlConfigured: true,
           usernameConfigured: true,
           studentExplanationHistoryDurable: true,
-          migrationRunnerEnabled: true,
-          migrationLocation: "classpath:db/migration",
           mode: "mysql",
         },
         redis: {
@@ -3397,8 +3395,6 @@ describe("textbookApi", () => {
     expect(status.auth.mode).toBe("mysql_only");
     expect(status.database.mode).toBe("mysql");
     expect(status.database.studentExplanationHistoryDurable).toBe(true);
-    expect(status.database.migrationRunnerEnabled).toBe(true);
-    expect(status.database.migrationLocation).toBe("classpath:db/migration");
     expect(status.redis.searchCacheEnabled).toBe(true);
     expect(status.vectorIndex.status).toBe("configuration_error");
     expect(status.feishu.mode).toBe("process_ready");

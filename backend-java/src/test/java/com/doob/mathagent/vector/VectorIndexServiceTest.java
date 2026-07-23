@@ -1,6 +1,7 @@
 package com.doob.mathagent.vector;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.doob.mathagent.teacher.service.InMemoryTeacherDocumentBlockStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherResourceStore;
@@ -70,6 +71,23 @@ class VectorIndexServiceTest {
     }
 
     @Test
+    void localMilvusWithoutAuthenticationIsFullyConfigured() {
+        VectorIndexProperties properties = new VectorIndexProperties(
+                true,
+                "http://milvus.local:19530",
+                "",
+                "math_agent_resource_blocks",
+                3,
+                "https://embedding.local/v1",
+                "embedding-key",
+                "text-embedding-3-small",
+                10000);
+
+        assertThat(properties.fullyConfigured()).isTrue();
+        properties.requireFullyConfigured();
+    }
+
+    @Test
     void rebuildEmbedsBlocksUpsertsMilvusAndMarksDocumentReady() {
         InMemoryTeacherResourceStore resources = new InMemoryTeacherResourceStore();
         InMemoryTeacherDocumentBlockStore blocks = new InMemoryTeacherDocumentBlockStore();
@@ -103,13 +121,14 @@ class VectorIndexServiceTest {
                         URI.create("https://embedding.local/v1/embeddings"),
                         URI.create("http://milvus.local:19530/v2/vectordb/collections/create"),
                         URI.create("http://milvus.local:19530/v2/vectordb/indexes/create"),
+                        URI.create("http://milvus.local:19530/v2/vectordb/collections/load"),
                         URI.create("http://milvus.local:19530/v2/vectordb/entities/delete"),
                         URI.create("http://milvus.local:19530/v2/vectordb/entities/upsert"),
                         URI.create("http://milvus.local:19530/v2/vectordb/collections/flush"),
                         URI.create("http://milvus.local:19530/v2/vectordb/collections/load"));
-        assertThat(transport.requests.get(3).body()).contains("metadata[\\\"tenantId\\\"] == \\\"school-a\\\"")
+        assertThat(transport.requests.get(4).body()).contains("metadata[\\\"tenantId\\\"] == \\\"school-a\\\"")
                 .contains("metadata[\\\"documentId\\\"] == \\\"doc-1\\\"");
-        assertThat(transport.requests.get(4).body()).contains("space vector angle", "doc-1:block-1")
+        assertThat(transport.requests.get(5).body()).contains("space vector angle", "doc-1:block-1")
                 .contains("sourceType", "sourcePath", "blockRole", "graphTagsJson");
         TeacherResourceDocumentResponse updated = resources.find("school-a", "doc-1");
         assertThat(updated.embeddingStatus()).isEqualTo("ready");
@@ -215,4 +234,3 @@ class VectorIndexServiceTest {
     private record Request(URI uri, Map<String, String> headers, String body, Duration timeout) {
     }
 }
-

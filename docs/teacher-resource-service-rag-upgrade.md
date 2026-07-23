@@ -51,7 +51,7 @@
 
 ## Verified Runtime Evidence
 
-- Local service status used real MySQL/Redis/Milvus through WSL proxy. Flyway schema version is 18 and Milvus collection is `math_agent_resource_blocks`.
+- Local service status uses real MySQL/Redis/Milvus through the WSL proxy. Database tables are managed outside application startup; no migration runner is bundled.
 - DOCX image smoke used `output/smoke/teacher-resource-assets/asset_smoke_docxlib.docx`, which contains `word/media/image1.png`.
 - Real backend register/sync produced document `2074840927429881858`, parsed 3 blocks, rebuilt only that document's vectors, and inserted asset `6b78231b-4953-4c61-a772-9b9021842487`.
 - MySQL evidence: block order 2 has `image_refs` containing the asset id, and `teacher_resource_asset` has one active `image/png` row with width 80, height 40, provider asset id `/word/media/image1.png`, and server storage key `school-a/2074840927429881858/6b78231b-4953-4c61-a772-9b9021842487.png`.

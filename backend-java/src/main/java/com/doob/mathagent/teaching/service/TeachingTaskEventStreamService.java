@@ -25,8 +25,13 @@ public class TeachingTaskEventStreamService {
 
     /** Snapshot cadence balances live feedback with MySQL read pressure. */
     private static final Duration SNAPSHOT_POLL_INTERVAL = Duration.ofMillis(400);
-    /** The browser reconnects through the normal task endpoint after this bounded stream window. */
-    private static final Duration STREAM_TIMEOUT = Duration.ofMinutes(5);
+    private static final String STREAM_TIMEOUT_ENV = "MATH_AGENT_TEACHING_SSE_TIMEOUT_MS";
+    private static final long DEFAULT_STREAM_TIMEOUT_MILLIS = 900_000L;
+    /**
+     * Keeps the live stream open through a slow but valid long-form model call. The value is operator-configurable;
+     * the default is longer than the seven-minute provider budget used by the local real-worker launch.
+     */
+    private static final Duration STREAM_TIMEOUT = Duration.ofMillis(readStreamTimeoutMillis());
 
     private final ExecutorService streamExecutor;
 
@@ -38,6 +43,19 @@ public class TeachingTaskEventStreamService {
     /** Visible for deterministic tests with a caller-owned executor. */
     TeachingTaskEventStreamService(ExecutorService streamExecutor) {
         this.streamExecutor = streamExecutor;
+    }
+
+    /** Reads a bounded SSE timeout without requiring a code change for slower production providers. */
+    private static long readStreamTimeoutMillis() {
+        String configured = System.getenv(STREAM_TIMEOUT_ENV);
+        if (configured == null || configured.isBlank()) {
+            return DEFAULT_STREAM_TIMEOUT_MILLIS;
+        }
+        try {
+            return Math.max(60_000L, Long.parseLong(configured.strip()));
+        } catch (NumberFormatException ignored) {
+            return DEFAULT_STREAM_TIMEOUT_MILLIS;
+        }
     }
 
     /**

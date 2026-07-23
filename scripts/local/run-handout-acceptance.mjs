@@ -41,6 +41,10 @@ const pdfToTextBin = pdfTool("PDFTOTEXT_BIN", "pdftotext");
 const retryDelayMs = Number(process.env.ACCEPTANCE_RETRY_DELAY_MS ?? "30000");
 const templateOverride = process.env.ACCEPTANCE_TEMPLATE_CODE?.trim() || "";
 const evidenceLimitOverride = Number(process.env.ACCEPTANCE_EVIDENCE_LIMIT ?? "");
+// An acceptance run can pin one enabled real provider/model. This exercises the same allow-listed route exposed
+// to the frontend while preventing a stalled provider fallback chain from hiding a PDF-layout regression.
+const aiProviderOverride = process.env.ACCEPTANCE_AI_PROVIDER?.trim() || "";
+const aiModelOverride = process.env.ACCEPTANCE_AI_MODEL?.trim() || "";
 
 /** Returns a SHA-256 request hash in the exact format expected by the backend. */
 function requestHash(body) {
@@ -95,6 +99,8 @@ async function submitTask(session, scenario) {
     ...(templateOverride || scenario.templateCode
       ? { handoutTemplateCode: templateOverride || scenario.templateCode }
       : {}),
+    ...(aiProviderOverride ? { aiProviderName: aiProviderOverride } : {}),
+    ...(aiModelOverride ? { aiModelCode: aiModelOverride } : {}),
   };
   const body = JSON.stringify(request);
   const capability = await acquireCapability(

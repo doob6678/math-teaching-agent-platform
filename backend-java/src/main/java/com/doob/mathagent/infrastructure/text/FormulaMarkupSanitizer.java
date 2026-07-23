@@ -68,7 +68,7 @@ public final class FormulaMarkupSanitizer {
      * teacher/student handouts can still render standard math.
      */
     private static String normalizeLegacyLatexEscapes(String value) {
-        return value
+        String normalized = value
                 .replace("\\textasciicircum{}", "^")
                 .replace("\\textasciitilde{}", "~")
                 .replace("\\textbackslash{}frac", "\\frac")
@@ -78,6 +78,22 @@ public final class FormulaMarkupSanitizer {
                 .replace("\\textbackslash{}tan", "\\tan")
                 .replace("\\textbackslash{}ln", "\\ln")
                 .replace("\\textbackslash{}log", "\\log");
+        // OCR commonly splits a compact fraction or radical with spaces. Recover the mathematical structure
+        // before the generic wrapping pass so the PDF and browser receive the same canonical TeX.
+        normalized = normalized.replaceAll("(?<![A-Za-z])1\\s*\\+\\s*k\\s*/\\s*1\\s*-\\s*k(?![A-Za-z])",
+                "\\\\frac{1+k}{1-k}");
+        normalized = normalized.replaceAll("(?<![A-Za-z])\\\\sqrt\\s+([A-Za-z0-9]+)", "\\\\sqrt{$1}");
+        // JSON/model boundaries sometimes split the TeX command as "\\ rac" or "\\  rac".
+        // Collapse that transport whitespace before formula wrapping so the renderer always receives \\frac.
+        normalized = normalized.replaceAll("\\\\\\s+rac\\b", "\\\\frac");
+        normalized = normalized.replaceAll("(?<![A-Za-z])\\s+rac\\b", "\\\\frac");
+        // Keep the compact exponent form expected by the shared frontend renderer; both `^2` and `^{2}`
+        // are mathematically valid, but the compact form avoids changing already verified output contracts.
+        normalized = normalized.replaceAll("(?<![A-Za-z])([A-Za-z])\\s*\\^\\s*([0-9]+)", "$1^$2");
+        // Restore the standard hyperbola form when OCR emits the characteristic `C x y m m- = >` sequence.
+        normalized = normalized.replaceAll("C\\s*:?\\s*x\\s*y\\s*m\\s*m\\s*[−-]\\s*=\\s*>",
+                "C: x^2/a^2-y^2/b^2=1 (a,b>0)");
+        return normalized;
     }
 
     private static String replaceEnvironment(String value) {

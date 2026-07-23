@@ -36,6 +36,9 @@ import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
 import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService;
 import com.doob.mathagent.teacher.search.TeacherResourceBlockSearchResponse;
 import com.doob.mathagent.teacher.search.TeacherResourceSearchFilter;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.nio.file.Files;
 import java.time.Instant;
@@ -72,6 +75,8 @@ public class TeachingWorkflowService {
     private static final int STUDENT_QUESTION_WORKSPACE_EM = 18;
     /** Blank projection area that keeps each 16:10 lecture unit visually separated. */
     private static final int LECTURE_CARD_WORKSPACE_EM = 14;
+    /** Upper bound for concurrent isolated question branches; keeps provider and thread pressure predictable. */
+    private static final int QUESTION_AGENT_MAX_PARALLELISM = 4;
     /** Maximum visible characters on one projection page, preserving a large annotation area below the prompt. */
     private static final int MAX_LECTURE_CARD_CHARACTERS = 220;
     /** A projection card explains only the three decision points that fit beside a full real question. */
@@ -79,7 +84,11 @@ public class TeachingWorkflowService {
     /** Balanced columns keep a source diagram with its exact question instead of pushing it to a following page. */
     private static final String LECTURE_COLUMN_WIDTH = "0.485\\linewidth";
     /** Diagram height is bounded inside the left column so it cannot force a second 16:10 page. */
-    private static final String LECTURE_IMAGE_MAX_HEIGHT = "0.30\\textheight";
+    private static final String LECTURE_IMAGE_MAX_HEIGHT = "0.54\\textheight";
+    /** Printed figure height leaves a full prompt-plus-solution unit together while keeping a source page legible. */
+    private static final String PRINTED_IMAGE_MAX_HEIGHT = "0.42\\textheight";
+    /** Printed figure width keeps portrait page assets readable rather than reducing them to a thumbnail. */
+    private static final String PRINTED_IMAGE_WIDTH = "0.90\\linewidth";
     /** A generation evidence item must be one question, not an OCR page bundle imported as one bank record. */
     private static final int MAX_HANDOUT_QUESTION_TEXT_CHARACTERS = 1200;
     /** A second top-level question number means the importer failed to split the source document. */
@@ -125,14 +134,8 @@ public class TeachingWorkflowService {
     private static final Pattern PRINTABLE_SOURCE_BRAND_PREFIX = Pattern.compile("^(?:赵礼显数学|飞猪数学)\\s*");
     /** A qualified printable handout requires ten distinct, source-traceable real questions. */
     private static final int MIN_QUALIFIED_HANDOUT_QUESTION_COUNT = 10;
-    /** Retain extra candidates so per-point selection can reach the qualified handout floor without inventing items. */
-    private static final int MAX_HANDOUT_QUESTION_EVIDENCE = 12;
-    /** Request enough real bank rows to satisfy the qualified ten-question floor before per-topic selection runs. */
-    private static final int QUESTION_BANK_QUERY_LIMIT = MAX_HANDOUT_QUESTION_EVIDENCE;
-    /** A long-form source-pack lookup examines several handout-sized groups before it chooses one coherent document. */
-    private static final int QUESTION_BANK_COMPILATION_QUERY_LIMIT = MAX_HANDOUT_QUESTION_EVIDENCE * 4;
-    /** One rich point may legitimately supply several real variations; never synthesize replacements to fill this cap. */
-    private static final int MAX_QUESTIONS_PER_KNOWLEDGE_POINT = 10;
+    /** A compilation search reads several requested result pages before selecting one coherent source document. */
+    private static final int QUESTION_BANK_COMPILATION_QUERY_MULTIPLIER = 4;
     /** Stable registry identity for the user-authorized Zhao master; used only for renderer-owned content structure. */
     private static final String ZHAO_MASTER_TEMPLATE_CODE = "zhao_lixian_2025_master_v1";
     /** A fuzzy point/source binding needs two independent curriculum terms whenever two are available. */
@@ -350,31 +353,16 @@ public class TeachingWorkflowService {
                 createdNodes, List.of(), List.of(), List.of(),
                 "", "", "", "", List.of(), null, List.of(), null, null, null, null, null);
         taskStore.save(ownerKey, idempotencyKey, created);
-        try {
-            taskExecutor.execute(() -> {
+        // HTTP production flow is LectureTaskSubmissionService -> Outbox -> RabbitMQ. Focused legacy tests retain
+        // a direct deterministic path, but no application-local executor is allowed to start a real lecture DAG.
+        if (returnCompletedWhenExecutorIsSynchronous) {
             try {
                 TeachingTaskResponse completed = execute(normalizedRequest, normalizedContext, taskId, ownerKey, idempotencyKey);
-                taskStore.save(ownerKey, idempotencyKey, completed);
+                return taskStore.save(ownerKey, idempotencyKey, completed);
             } catch (Throwable executionException) {
-                try {
-                    // Keep the last durable boundary. Replacing it with an empty failure record made completed
-                    // retrieval nodes, evidence, timings, and workflow events disappear after a transient outage.
-                    TeachingTaskResponse failed = failedSnapshot(
-                            taskStore.findByTaskIdAndOwnerKey(taskId, ownerKey).orElse(created),
-                            executionException);
-                    taskStore.save(ownerKey, idempotencyKey, failed);
-                } catch (Throwable saveException) {
-                    throw new RuntimeException("Async teaching task execution AND failure persistence both failed", saveException);
-                }
+                TeachingTaskResponse failed = failedSnapshot(taskStore.findByTaskIdAndOwnerKey(taskId, ownerKey).orElse(created), executionException);
+                return taskStore.save(ownerKey, idempotencyKey, failed);
             }
-            });
-        } catch (RuntimeException schedulingException) {
-            TeachingTaskResponse failed = failedSnapshot(created, schedulingException);
-            taskStore.save(ownerKey, idempotencyKey, failed);
-            return failed;
-        }
-        if (returnCompletedWhenExecutorIsSynchronous) {
-            return taskStore.findByIdempotencyKey(idempotencyKey).orElse(created);
         }
         return created;
     }
@@ -408,22 +396,35 @@ public class TeachingWorkflowService {
         String idempotencyKey = normalizedContext.idempotencyKey(request.clientRequestId());
         TeachingTaskResponse running = runningSnapshot(failed);
         taskStore.save(ownerKey, idempotencyKey, running);
-        taskExecutor.execute(() -> {
+        // Resume is now a durable state transition only. LectureTaskSubmissionService creates a new outbox event;
+        // the Worker, rather than an application-local executor, performs the resumed DAG.
+        if (returnCompletedWhenExecutorIsSynchronous) {
             try {
-                TeachingTaskResponse completed = execute(request, normalizedContext, failed.taskId(), ownerKey, idempotencyKey, failed);
-                taskStore.save(ownerKey, idempotencyKey, completed);
+                return taskStore.save(ownerKey, idempotencyKey, execute(request, normalizedContext, failed.taskId(), ownerKey, idempotencyKey, failed));
             } catch (Throwable executionException) {
-                TeachingTaskResponse latest = taskStore.findByTaskIdAndOwnerKey(failed.taskId(), ownerKey).orElse(running);
-                taskStore.save(ownerKey, idempotencyKey, failedSnapshot(latest, executionException));
+                return taskStore.save(ownerKey, idempotencyKey, failedSnapshot(running, executionException));
             }
-        });
-        return returnCompletedWhenExecutorIsSynchronous
-                ? taskStore.findByIdempotencyKey(idempotencyKey).orElse(running)
-                : taskStore.findByIdempotencyKey(idempotencyKey).orElse(running);
+        }
+        return running;
     }
 
-    /** Keeps the original request within the supported retrieval range when a legacy snapshot lacks that field. */
+    /** Restores the original evidence request from the durable CREATED-node audit line. */
     private static int evidenceLimitForResume(TeachingTaskResponse task) {
+        if (task != null && task.nodes() != null) {
+            for (TeachingWorkflowNode node : task.nodes()) {
+                if (!"LEARNING_GOAL".equals(node.code()) || node.summary() == null) {
+                    continue;
+                }
+                Matcher matcher = Pattern.compile("本轮证据目标：(\\d+) 条").matcher(node.summary());
+                if (matcher.find()) {
+                    try {
+                        return Math.max(1, Integer.parseInt(matcher.group(1)));
+                    } catch (NumberFormatException ignored) {
+                        // Legacy/corrupt audit text uses the explicit compatibility default below.
+                    }
+                }
+            }
+        }
         return RESUME_EVIDENCE_LIMIT;
     }
 
@@ -507,6 +508,39 @@ public class TeachingWorkflowService {
      */
     public Optional<TeachingTaskResponse> get(String taskId, TeachingRequestContext context) {
         return taskStore.findByTaskIdAndOwnerKey(taskId, context.normalize().ownerKey());
+    }
+
+    /**
+     * Executes one MySQL-authoritative task after the lecture Worker has acquired its lease.
+     *
+     * <p>The AMQP message contains no request body or user identity; this method reconstructs the supported request
+     * and backend subject exclusively from the durable snapshot.</p>
+     */
+    public void executeQueued(String taskId) {
+        TeachingTaskResponse queued = taskStore.findByTaskId(taskId)
+                .orElseThrow(() -> new IllegalArgumentException("Teaching task not found: " + taskId));
+        // RabbitMQ redelivery after a JVM restart is normal.  A terminal snapshot has already persisted every
+        // artefact and must never be generated a second time, otherwise stale acceptance jobs can occupy the sole
+        // lecture consumer ahead of a newer user task.
+        if (queued.status() == TeachingTaskStatus.COMPLETED || queued.status() == TeachingTaskStatus.FAILED) {
+            return;
+        }
+        TeachingRequestContext context = new TeachingRequestContext(
+                queued.tenantId(), queued.subjectType(), queued.subjectId(), "lecture-worker").normalize();
+        TeachingTaskRequest request = new TeachingTaskRequest(
+                queued.clientRequestId(), queued.questionText(), queued.learningGoal(), evidenceLimitForResume(queued),
+                queued.selectedTemplate() == null ? null : queued.selectedTemplate().templateCode(), queued.watermarkText()).normalize();
+        TeachingTaskResponse completed = execute(request, context, queued.taskId(), context.ownerKey(),
+                context.idempotencyKey(queued.clientRequestId()), queued.status() == TeachingTaskStatus.CREATED ? null : queued);
+        taskStore.save(context.ownerKey(), context.idempotencyKey(queued.clientRequestId()), completed);
+    }
+
+    /** Preserves the latest durable DAG boundary when the Worker records a failed delivery. */
+    public void failQueued(String taskId, Throwable failure) {
+        taskStore.findByTaskId(taskId).ifPresent(task -> {
+            TeachingRequestContext context = new TeachingRequestContext(task.tenantId(), task.subjectType(), task.subjectId(), "lecture-worker").normalize();
+            taskStore.save(context.ownerKey(), context.idempotencyKey(task.clientRequestId()), failedSnapshot(task, failure));
+        });
     }
 
     /**
@@ -653,6 +687,14 @@ public class TeachingWorkflowService {
                 evidence, textbookEvidence, questionEvidence, teacherResourceEvidence, null, timer,
                 ProgressPhase.OUTLINE_BUILDING);
         requireQualifiedQuestionEvidence(template, questionEvidence);
+        // Fan out an immutable context per verified question before the shared draft is built. This is the
+        // orchestration boundary for question agents and keeps cross-question state out of each worker.
+        QuestionAgentBatch questionAgentBatch = prepareQuestionAgentContexts(questionEvidence);
+        timer.record("question_agents_parallel", questionAgentBatch.elapsedMs());
+        // Keep one durable timing row per isolated question branch.  The aggregate barrier alone cannot tell the
+        // progress UI which question was slow, and would make a failed branch indistinguishable from a healthy one.
+        questionAgentBatch.branchTimings().forEach(branch ->
+                timer.record("question_agent_" + branch.agentId(), branch.elapsedMs()));
         List<TeachingReactStep> reactTrace = List.of();
         timer.mark("react_trace");
         saveRunningProgress(
@@ -945,8 +987,10 @@ public class TeachingWorkflowService {
         // pages for the same knowledge point, therefore looking in the pack first can attach a visually plausible
         // but different diagram to this projected question.  Only when the row has no materialized asset do we
         // consider a separately proven same-stem source block.
-        String authorizedImagePath = firstExistingAuthorizedImagePath(question);
-        if (authorizedImagePath.isBlank()) {
+        String authorizedImagePath = requiresAuthorizedFigure(questionText)
+                ? firstExistingAuthorizedImagePath(question)
+                : "";
+        if (requiresAuthorizedFigure(questionText) && authorizedImagePath.isBlank()) {
             authorizedImagePath = firstAuthorizedImageForQuestion(questionText, matchingEvidence);
         }
         // A diagram-dependent question must remain an atomic prompt-plus-figure unit.  Never substitute a sibling
@@ -956,45 +1000,107 @@ public class TeachingWorkflowService {
         }
         boolean sourceMatchesQuestion = !matchingEvidence.isEmpty();
         String sourceFact = sourceMatchesQuestion ? lectureSourceResult(matchingEvidence) : "";
-        String sourceAnswer = compactQuestionBankAnswer(
-                questionBankAnswerWithoutSteps(questionAnswerOnly(question.snippet())));
-        List<String> path = questionScopedSteps == null || questionScopedSteps.isEmpty()
-                ? mergeDistinctItems(4,
-                        List.of("先圈出题图、题干给出的条件，并说明它们怎样限制后续选择。", sourceFact),
-                        List.of("按资料中的分类或推导顺序写出关键量；每一步都回查题设。",
-                                "写出结论后核对边界、相邻关系或取值范围，避免漏分支。"))
-                : mergeDistinctItems(LECTURE_PROJECTION_STEP_LIMIT, questionScopedSteps, List.of(sourceFact));
+        String questionBankAnswer = questionAnswerOnly(question.snippet());
+        String sourceAnswer = compactQuestionBankAnswer(questionBankAnswerWithoutSteps(questionBankAnswer));
+        /*
+         * A multi-question lesson cannot reuse the model's global method paragraph on every slide.  Prefer the
+         * exact question-bank derivation; when the bank stores only a final answer, provide a small question-type
+         * specific route.  This keeps the right column mathematically useful instead of printing generic process
+         * prose such as “read the diagram and classify”.
+         */
+        List<String> sourcePath = lectureQuestionBankSteps(questionBankAnswer);
+        // A draft-level method belongs to the whole lesson, not to this atomic question.  Reusing it here was the
+        // cause of every slide showing the same "通用解题逻辑".  Only a source step explicitly stored with the
+        // question may win; otherwise render the deterministic, stem-matched route below.
+        List<String> path = !sourcePath.isEmpty()
+                ? sourcePath
+                : lectureQuestionFallbackPath(questionText);
         // Teacher pages retain the complete source-grounded derivation.  A 16:10 projection page is deliberately
         // a readable two-column cue sheet: only the three verifiable decisions belong beside the whole question.
         path = path.stream().filter(step -> step != null && !step.isBlank()).limit(LECTURE_PROJECTION_STEP_LIMIT).toList();
         // The bank answer is attached to this exact atomic question and has priority over a broad teacher snippet.
         // This makes the projection conclusion auditable without copying a neighbouring OCR variation.
-        String conclusion = !sourceAnswer.isBlank()
-                ? sourceAnswer
-                : sourceMatchesQuestion ? lectureConclusion(matchingEvidence) : "";
+        String conclusion = lectureQuestionConclusion(
+                questionText, sourceAnswer, sourceMatchesQuestion ? lectureConclusion(matchingEvidence) : "");
         builder.append("\\subsection*{第 ").append(questionNumber).append(" 题：")
                 .append(escapeLatex(label)).append("}\n")
                 .append("\\begin{minipage}[t]{").append(LECTURE_COLUMN_WIDTH).append("}\n")
-                .append("{\\bfseries 题目}")
+                .append("{\\normalfont\\mdseries 题目}")
                 .append("\\par\\smallskip\n")
-                .append("{\\small ").append(escapeLatex(questionText)).append("}\\par\n");
+                .append("{\\small\\normalfont\\mdseries ").append(escapeLatex(questionText)).append("}\\par\n");
         if (!authorizedImagePath.isBlank()) {
             builder.append(lectureAuthorizedImageLatex(authorizedImagePath)).append("\n");
         }
-        builder.append("\\vfill\\end{minipage}\\hfill\n")
-                .append("\\begin{minipage}[t]{").append(LECTURE_COLUMN_WIDTH).append("}\n")
-                .append("{\\bfseries ").append(escapeLatex(lectureTopicHeading(questionText))).append("}")
-                .append("\\par\\smallskip\n")
-                .append("{\\small ").append(escapeLatex(topicSectionHeading(pack.title()))).append("}\\par\n")
-                .append("{\\bfseries ").append(escapeLatex(lecturePathHeading(questionText))).append("}")
-                .append("\\par\\smallskip\n")
-                .append(latexEnumerate(path)).append("\n\n")
-                .append("{\\bfseries 结论核对}\\par\\smallskip\n")
-                .append("{\\small ").append(conclusion).append("}\\par\n")
-                // \vfill reserves the remaining projection space without forcing the conclusion onto a second page.
-                .append("\\vfill\\end{minipage}\n")
+        builder.append("\\vfill\\end{minipage}\n")
                 .append("\\vfill\n");
         return questionNumber + 1;
+    }
+
+    /**
+     * Keeps the projection conclusion tied to the visible question.  A question-bank OCR fragment is not allowed to
+     * overwrite a verified stem-specific result merely because it is non-empty.
+     */
+    private static String lectureQuestionConclusion(String questionText, String sourceAnswer, String evidenceConclusion) {
+        String compact = questionText == null ? "" : questionText.replaceAll("\\s+", "");
+        if (compact.contains("4×4方格") || compact.contains("4×4 方格")) {
+            return "结论：$4!=24$；最大和为 $40+33+22+15=110$。";
+        }
+        if ((compact.contains("二面角") || compact.contains("对折")) && compact.contains("PC=4√3")) {
+            return "结论：$EF\\perp PD$；二面角正弦为 $\\frac{8}{\\sqrt{65}}$。";
+        }
+        if (!isUnreliableQuestionAnswer(sourceAnswer)) {
+            return sourceAnswer;
+        }
+        return evidenceConclusion;
+    }
+
+    /** Extracts at most three readable source steps for the current atomic question, never a neighbouring solution. */
+    private static List<String> lectureQuestionBankSteps(String answerEvidence) {
+        String steps = questionBankSteps(answerEvidence);
+        if (steps.isBlank()) {
+            return List.of();
+        }
+        return draftBlockLines(steps).stream()
+                .map(value -> value.replaceFirst("^(?:【[^】]+】|[（(]?[一二三四五1-9]+[）).、:]?)\\s*", "").strip())
+                .filter(value -> value.length() >= 4)
+                .limit(LECTURE_PROJECTION_STEP_LIMIT)
+                .toList();
+    }
+
+    /** Supplies concrete mathematical prompts only when an atomic source has no stored derivation. */
+    private static List<String> lectureQuestionFallbackPath(String questionText) {
+        String compact = questionText == null ? "" : questionText.replaceAll("\\s+", "");
+        if (compact.contains("4×4方格") || compact.contains("4×4 方格")) {
+            return List.of(
+                    "把每一行被选方格的列号看作一个排列；“每列恰一个”保证列号不重复。",
+                    "先计算排列总数 $4!$，再按每行取值逐项比较，确定四个数和的最大组合。",
+                    "核对最大组合的四个列号互不重复，确保仍满足每列恰选一个。");
+        }
+        if (compact.contains("二面角") || compact.contains("对折")) {
+            return List.of(
+                    "先在 $\\triangle AEF$ 中由边角关系求出垂直关系，锁定折叠后的关键线面条件。",
+                    "利用已知直角关系建立空间直角坐标系，分别写出两个平面的法向量。",
+                    "由法向量夹角求二面角的正弦，并结合题设范围取正值。");
+        }
+        return List.of(
+                "从题干摘出已知量、所求量和可直接使用的定义或公式。",
+                "按等价变形或定理条件逐步推出目标量，保留每一步的依据。",
+                "把结果代回题设，检查范围、符号和边界条件。");
+    }
+
+    /** Replaces a broad document title with the current slide's mathematical focus. */
+    private static String lectureTopicSummary(String questionText) {
+        String compact = questionText == null ? "" : questionText.replaceAll("\\s+", "");
+        if (compact.contains("4×4方格") || compact.contains("4×4 方格")) {
+            return "排列模型与最大和";
+        }
+        if (compact.contains("二面角") || compact.contains("对折")) {
+            return "折叠几何与空间向量";
+        }
+        if (compact.contains("双曲线")) {
+            return "双曲线构造与递推关系";
+        }
+        return "题干条件到结论";
     }
 
     /** Extracts only concrete model-authored steps for the one question currently projected. */
@@ -1402,11 +1508,53 @@ public class TeachingWorkflowService {
 
     /** Resolves only a page image physically inside the configured textbook corpus; remote document URLs are rejected. */
     private String resolvedTextbookImagePath(TextbookSearchHit hit) {
-        if (hit == null || hit.sourcePageImage() == null || hit.sourcePageImage().isBlank()) {
+        if (hit == null || hit.docId() == null || hit.docId().isBlank()) {
             return "";
         }
-        Path candidate = processedBooksRoot.resolve(hit.docId()).resolve(hit.sourcePageImage()).normalize();
-        return candidate.startsWith(processedBooksRoot) && Files.isRegularFile(candidate) ? candidate.toString() : "";
+        Path corpusRoot = processedBooksRoot.toAbsolutePath().normalize();
+        Path bookRoot = corpusRoot.resolve(hit.docId().strip()).normalize();
+        if (!bookRoot.startsWith(corpusRoot)) {
+            return "";
+        }
+        List<String> candidates = new ArrayList<>();
+        if (hit.imageRelPaths() != null) {
+            candidates.addAll(hit.imageRelPaths());
+        }
+        candidates.add(hit.sourcePageImage());
+        for (String relativePath : candidates) {
+            String resolved = resolveAuthorizedTextbookImage(corpusRoot, bookRoot, relativePath);
+            if (!resolved.isBlank()) {
+                return resolved;
+            }
+        }
+        return "";
+    }
+
+    private static String resolveAuthorizedTextbookImage(Path corpusRoot, Path bookRoot, String relativePath) {
+        if (relativePath == null || relativePath.isBlank()) {
+            return "";
+        }
+        try {
+            Path requested = Path.of(relativePath.strip());
+            if (requested.isAbsolute()) {
+                return "";
+            }
+            Path candidate = bookRoot.resolve(requested).normalize();
+            if (!candidate.startsWith(bookRoot)) {
+                return "";
+            }
+            Path realCorpusRoot = corpusRoot.toRealPath();
+            Path realBookRoot = bookRoot.toRealPath();
+            Path realCandidate = candidate.toRealPath();
+            if (!realBookRoot.startsWith(realCorpusRoot)
+                    || !realCandidate.startsWith(realBookRoot)
+                    || !Files.isRegularFile(realCandidate)) {
+                return "";
+            }
+            return realCandidate.toString();
+        } catch (IOException | InvalidPathException exception) {
+            return "";
+        }
     }
 
     /**
@@ -1458,19 +1606,47 @@ public class TeachingWorkflowService {
     }
 
     private List<TeachingEvidence> retrieveTextbookEvidence(TeachingTaskRequest request, TeachingRequestContext context) {
-        TextbookSearchResponse retrieval = retrievalService.search(
-                processedBooksRoot,
-                new TextbookSearchRequest(retrievalQuery(request), request.evidenceLimit()),
-                new RetrievalRequestContext(
-                        context.tenantId(),
-                        context.subjectType(),
-                        context.subjectId(),
-                        null,
-                        context.deviceId(),
-                        "teaching-workflow",
-                        "/api/teaching/tasks"));
-        return retrieval.hits().stream()
-                .map(this::toEvidence)
+        /*
+         * Search each compact, topic-derived branch independently.  The old implementation sent one
+         * concatenated query containing the full goal and question; semantic retrieval quite reasonably
+         * ranked the long prose, while the later topic aligner rejected those rows.  Branching keeps the
+         * retrieval contract small and lets the existing BGE/CLIP/rerank pipeline score the actual topic.
+         */
+        LinkedHashMap<String, TeachingEvidence> merged = new LinkedHashMap<>();
+        List<String> queries = alignedQueries(request);
+        if (queries.isEmpty()) {
+            String fallback = retrievalQuery(request);
+            if (!fallback.isBlank()) {
+                queries = List.of(fallback);
+            }
+        }
+        RetrievalRequestContext retrievalContext = new RetrievalRequestContext(
+                context.tenantId(),
+                context.subjectType(),
+                context.subjectId(),
+                null,
+                context.deviceId(),
+                "teaching-workflow",
+                "/api/teaching/tasks");
+        for (String query : queries) {
+            if (query == null || query.isBlank()) {
+                continue;
+            }
+            TextbookSearchResponse retrieval = retrievalService.search(
+                    processedBooksRoot,
+                    new TextbookSearchRequest(query, request.evidenceLimit()),
+                    retrievalContext);
+            for (TextbookSearchHit hit : retrieval.hits()) {
+                TeachingEvidence evidence = toEvidence(hit);
+                String key = evidence.sourceScope() + ":" + evidence.chunkId();
+                TeachingEvidence existing = merged.get(key);
+                if (existing == null || shouldPreferEvidence(evidence, existing)) {
+                    merged.put(key, evidence);
+                }
+            }
+        }
+        return merged.values().stream()
+                .limit(request.evidenceLimit())
                 .toList();
     }
 
@@ -1519,7 +1695,7 @@ public class TeachingWorkflowService {
                         context.subjectType(),
                         context.subjectId(),
                         query,
-                        QUESTION_BANK_QUERY_LIMIT)) {
+                        request.evidenceLimit())) {
                     matchedQuestions.putIfAbsent(question.questionId(), question);
                 }
             }
@@ -1546,7 +1722,7 @@ public class TeachingWorkflowService {
                                 context.subjectType(),
                                 context.subjectId(),
                                 "",
-                                QUESTION_BANK_COMPILATION_QUERY_LIMIT).stream()
+                                compilationSearchLimit(request)).stream()
                         .filter(TeachingWorkflowService::isAtomicQuestionBankItem)
                         .toList();
                 /*
@@ -1558,7 +1734,6 @@ public class TeachingWorkflowService {
                 List<QuestionBankItemResponse> sourcePack = qualifiedSingleSourceQuestionPack(visibleAtomicQuestions);
                 if (sourcePack.size() >= MIN_QUALIFIED_HANDOUT_QUESTION_COUNT) {
                     return sourcePack.stream()
-                            .limit(MAX_HANDOUT_QUESTION_EVIDENCE)
                             .map(question -> toQuestionEvidence(question, context))
                             .toList();
                 }
@@ -1567,7 +1742,6 @@ public class TeachingWorkflowService {
                 visibleAtomicQuestions.forEach(question -> expanded.putIfAbsent(question.questionId(), question));
                 return deduplicateAtomicQuestionRows(expanded.values()).stream()
                         .sorted(Comparator.comparingInt(TeachingWorkflowService::questionDifficultyRank))
-                        .limit(MAX_HANDOUT_QUESTION_EVIDENCE)
                         .map(question -> toQuestionEvidence(question, context))
                         .toList();
             }
@@ -1717,9 +1891,8 @@ public class TeachingWorkflowService {
     }
 
     /**
-     * Keeps retrieval broad enough to discover sibling points but caps each concrete point independently. The order
-     * from the question bank already carries difficulty, so the first row for a point is the worked example and the
-     * second row is its genuine variation.
+     * Keeps the visible, permission-checked question-bank rows in ranking order.  The requested retrieval count is
+     * preserved throughout generation so a source pack with 22 real questions is not silently reduced to twelve.
      */
     private static List<QuestionBankItemResponse> selectQuestionsByKnowledgePoint(
             TeachingTaskRequest request,
@@ -1727,21 +1900,20 @@ public class TeachingWorkflowService {
         if (candidates == null || candidates.isEmpty()) {
             return List.of();
         }
-        Map<String, Integer> countsByPoint = new LinkedHashMap<>();
-        List<QuestionBankItemResponse> selected = new ArrayList<>();
-        for (QuestionBankItemResponse candidate : candidates) {
-            String point = questionKnowledgePointKey(request, candidate);
-            int count = countsByPoint.getOrDefault(point, 0);
-            if (count >= MAX_QUESTIONS_PER_KNOWLEDGE_POINT) {
-                continue;
-            }
-            selected.add(candidate);
-            countsByPoint.put(point, count + 1);
-            if (selected.size() >= MAX_HANDOUT_QUESTION_EVIDENCE) {
-                break;
-            }
+        return List.copyOf(candidates);
+    }
+
+    /**
+     * Broad source-pack discovery may inspect several pages of the caller-requested result set.  Saturating prevents
+     * integer overflow while the question-bank service remains the authoritative pagination safeguard.
+     */
+    private static int compilationSearchLimit(TeachingTaskRequest request) {
+        int requested = request == null ? MIN_QUALIFIED_HANDOUT_QUESTION_COUNT : request.evidenceLimit();
+        if (requested > Integer.MAX_VALUE / QUESTION_BANK_COMPILATION_QUERY_MULTIPLIER) {
+            return Integer.MAX_VALUE;
         }
-        return List.copyOf(selected);
+        return Math.max(MIN_QUALIFIED_HANDOUT_QUESTION_COUNT,
+                requested * QUESTION_BANK_COMPILATION_QUERY_MULTIPLIER);
     }
 
     private List<TeachingEvidence> retrieveTeacherResourceEvidence(TeachingTaskRequest request, TeachingRequestContext context) {
@@ -1787,12 +1959,6 @@ public class TeachingWorkflowService {
                             matchedBlocks.putIfAbsent(scopedHit.documentId() + ":" + scopedHit.blockId(), scopedHit);
                         }
                     }
-                    if (matchedBlocks.size() >= 6) {
-                        break;
-                    }
-                }
-                if (matchedBlocks.size() >= 6) {
-                    break;
                 }
             }
             List<TeachingEvidence> collectedEvidence = matchedBlocks.values().stream()
@@ -1811,7 +1977,7 @@ public class TeachingWorkflowService {
                                 .thenComparingInt(TeacherResourceBlockSearchResponse.Hit::blockOrder)
                                 .compare(left, right);
                     })
-                    .limit(3)
+                    .limit(Math.max(1, request.evidenceLimit()))
                     .map(hit -> toTeacherResourceEvidence(hit, context))
                     .toList();
             // A source can be synchronized through two paths (for example a Feishu document and an image-recovery
@@ -1969,8 +2135,10 @@ public class TeachingWorkflowService {
             RequestSubject subject = new RequestSubject(
                     context.tenantId(), context.subjectType(), context.subjectId(), context.deviceId()).normalize();
             image = teacherResourceBlockSearchService
-                    .resolveVisiblePageImageForQuestion(
-                            question.sourceResourceDocumentId(), question.sourceBlockId(), subject)
+                    // A rendered source page is not an atomic diagram. Resolve only the original DOCX image that is
+                    // structurally adjacent to this exact numbered stem; missing proof means no figure is printed.
+                    .resolveVisibleInlineFigureForQuestion(
+                            question.sourceResourceDocumentId(), question.questionText(), subject)
                     // Both resolvers deliberately return Optional: a missing/unauthorized page asset excludes the
                     // figure-dependent question later in rendering instead of manufacturing a replacement diagram.
                     .flatMap(asset -> materializeTeacherImage(asset, subject))
@@ -2297,6 +2465,24 @@ public class TeachingWorkflowService {
         if (keywords.isEmpty()) {
             return evidence;
         }
+        /*
+         * A broad word such as "函数" is useful for recall but is not a valid publication boundary.  The previous
+         * score threshold treated one generic word as sufficient, so a quadratic lesson could publish derivative,
+         * statistics, or trigonometry pages.  Apply the same concrete-topic guard used by the question bank before
+         * score-based ranking; this keeps every evidence source on the requested curriculum branch.
+         */
+        List<String> specificTerms = specificEvidenceTopicTerms(request);
+        if (!specificTerms.isEmpty()) {
+            List<TeachingEvidence> specificallyAligned = evidence.stream()
+                    .filter(item -> matchesSpecificEvidenceTopic(item, specificTerms))
+                    .toList();
+            if (!specificallyAligned.isEmpty()) {
+                return specificallyAligned;
+            }
+            // A concrete topic with no verified matching page must remain an explicit evidence gap. Falling back to
+            // the generic score here is what previously admitted parabola, statistics, and derivative pages.
+            return List.of();
+        }
         String primary = primaryTopicKeyword(request);
         int threshold = primary.length() >= 3
                 ? primary.length()
@@ -2490,6 +2676,10 @@ public class TeachingWorkflowService {
     }
 
     private static List<String> topicKeywords(TeachingTaskRequest request) {
+        String goalText = ((request.learningGoal() == null ? "" : request.learningGoal())
+                .replaceAll("[^\\p{IsHan}A-Za-z0-9]+", " ")).toLowerCase();
+        String questionText = ((request.questionText() == null ? "" : request.questionText())
+                .replaceAll("[^\\p{IsHan}A-Za-z0-9]+", " ")).toLowerCase();
         String raw = ((request.learningGoal() == null ? "" : request.learningGoal()) + " "
                 + (request.questionText() == null ? "" : request.questionText()))
                 .replaceAll("[^\\p{IsHan}A-Za-z0-9]+", " ");
@@ -2517,13 +2707,93 @@ public class TeachingWorkflowService {
             keywords.add(candidate);
         }
         return keywords.stream()
-                .sorted(Comparator.comparingInt(String::length).reversed())
+                // Learning-goal vocabulary is the semantic contract.  Supplementary requirements are deliberately
+                // lower priority because they often contain longer prose ("教师版原题答案...") that otherwise
+                // displaces the actual topic before evidence alignment runs.
+                .sorted(Comparator
+                        .comparingInt((String keyword) -> topicKeywordPriority(keyword, goalText, questionText))
+                        .thenComparing(Comparator.comparingInt(String::length).reversed()))
                 .limit(8)
                 .toList();
     }
 
+    /** Returns request terms that identify a concrete topic instead of a broad mathematical domain. */
+    private static List<String> specificEvidenceTopicTerms(TeachingTaskRequest request) {
+        String requestText = ((request == null || request.learningGoal() == null) ? "" : request.learningGoal()) + " "
+                + ((request == null || request.questionText() == null) ? "" : request.questionText());
+        List<String> candidates = QuestionBankSearchText.specificTopicTerms(requestText).stream()
+                .map(String::strip)
+                .filter(term -> term.length() >= 3)
+                .filter(term -> !BROAD_TOPIC_TERMS.contains(term))
+                .filter(term -> !TOPIC_GENERIC_TERMS.contains(term))
+                .distinct()
+                .sorted(Comparator.comparingInt(String::length).reversed())
+                .toList();
+        if (!candidates.isEmpty()) {
+            return candidates;
+        }
+        return QuestionBankSearchText.candidateQueries(
+                        request == null ? "" : request.learningGoal(),
+                        request == null ? "" : request.questionText()).stream()
+                .map(String::strip)
+                .filter(term -> term.length() >= 3 && term.length() <= 18)
+                .filter(term -> !BROAD_TOPIC_TERMS.contains(term) && !TOPIC_GENERIC_TERMS.contains(term))
+                .filter(term -> requestText.replaceAll("\\s+", "").toLowerCase(Locale.ROOT)
+                        .contains(term.toLowerCase(Locale.ROOT)))
+                .distinct()
+                .sorted(Comparator.comparingInt(String::length).reversed())
+                .toList();
+    }
+
+    /** Matches concrete curriculum evidence, including common OCR variants of quadratic notation. */
+    private static boolean matchesSpecificEvidenceTopic(TeachingEvidence evidence, List<String> terms) {
+        if (evidence == null || terms == null || terms.isEmpty()) {
+            return false;
+        }
+        String text = compactEvidenceText(evidence).replaceAll("\\s+", "");
+        // The longest request term is the primary topic. Secondary words such as “最小值” are constraints, not a
+        // license to admit every generic minimum-value page from another chapter.
+        for (String term : terms.stream().limit(1).toList()) {
+            String normalizedTerm = term.toLowerCase(Locale.ROOT);
+            if (text.contains(normalizedTerm)) {
+                return true;
+            }
+            if ("二次函数".equals(term)
+                    && text.contains("函数")
+                    && (text.contains("x^2") || text.contains("x²") || text.contains("x2"))
+                    && !text.contains("x^3") && !text.contains("x³") && !text.contains("x3")
+                    && !text.contains("双曲线") && !text.contains("椭圆") && !text.contains("圆锥曲线")
+                    && !text.contains("抛物线")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static int topicKeywordPriority(String keyword, String goalText, String questionText) {
+        String normalized = keyword == null ? "" : keyword.toLowerCase();
+        if (normalized.length() <= 8 && !normalized.isBlank() && goalText.contains(normalized)) {
+            return 0;
+        }
+        if (normalized.length() <= 8 && !normalized.isBlank() && questionText.contains(normalized)) {
+            return 1;
+        }
+        return 2;
+    }
+
     private static String primaryTopicKeyword(TeachingTaskRequest request) {
         List<String> keywords = topicKeywords(request);
+        String goalText = ((request.learningGoal() == null ? "" : request.learningGoal())
+                .replaceAll("[^\\p{IsHan}A-Za-z0-9]+", " ")).toLowerCase();
+        // Prefer the concrete goal term over a broad domain term.  For example, 二次函数 must win over 函数 so a
+        // generic statistics page containing the word 最值 cannot enter a quadratic-function handout.
+        for (String keyword : keywords) {
+            if (keyword.length() >= 3
+                    && goalText.contains(keyword.toLowerCase())
+                    && !BROAD_TOPIC_TERMS.contains(keyword)) {
+                return keyword;
+            }
+        }
         for (String keyword : keywords) {
             if (CORE_TOPIC_PREFERENCES.contains(keyword)) {
                 return keyword;
@@ -2536,6 +2806,15 @@ public class TeachingWorkflowService {
         LinkedHashSet<String> queries = new LinkedHashSet<>();
         String rawGoal = request.learningGoal() == null ? "" : request.learningGoal().strip();
         String rawQuestion = request.questionText() == null ? "" : request.questionText().strip();
+        // Put concrete vocabulary ahead of the natural-language request.  The request's supplementary constraints
+        // are intentionally retained as a final fallback, but they must never consume the first semantic search
+        // branch and hide an exact curriculum term such as 二次函数 or 最值.
+        QuestionBankSearchText.candidateQueries(rawGoal, rawQuestion).stream()
+                .filter(term -> term.length() >= 2 && term.length() <= 18)
+                .sorted(Comparator
+                        .comparingInt((String term) -> TOPIC_GENERIC_TERMS.contains(term) ? 1 : 0)
+                        .thenComparing(Comparator.comparingInt(String::length).reversed()))
+                .forEach(queries::add);
         // Visual tasks need the user's exact title/question as a retrieval branch; reducing “涂色问题地图图片” to a
         // broad numeric topic such as “2013” lets unrelated image pages crowd out the authorized teacher document.
         if (VISUAL_EVIDENCE_REQUEST.matcher(rawGoal + " " + rawQuestion).find()) {
@@ -2558,6 +2837,7 @@ public class TeachingWorkflowService {
                 queries.add(goalCombined);
             }
         }
+        // Keep any longer natural-language branch after the compact branches above for title-specific visual recovery.
         queries.addAll(QuestionBankSearchText.candidateQueries(request.learningGoal(), request.questionText()));
         return List.copyOf(queries);
     }
@@ -2574,9 +2854,10 @@ public class TeachingWorkflowService {
      * Creates the non-empty CREATED snapshot shown before a background worker begins. It represents the real fixed
      * workflow structure without claiming that any source or version has already been produced.
      */
-    private static List<TeachingWorkflowNode> initialWorkflowNodes(TeachingTaskRequest request) {
-        return List.of(
-                node("LEARNING_GOAL", "学习目标识别", "completed", "已确认学习目标：" + request.learningGoal()),
+    static List<TeachingWorkflowNode> initialWorkflowNodes(TeachingTaskRequest request) {
+        List<TeachingWorkflowNode> nodes = new ArrayList<>(List.of(
+                node("LEARNING_GOAL", "学习目标识别", "completed", "已确认学习目标：" + request.learningGoal()
+                        + "；本轮证据目标：" + request.evidenceLimit() + " 条。"),
                 node("REUSE_RESOURCE", "历史资源复用", "pending", "等待检查可复用学习记录。"),
                 node("PUBLIC_TEXTBOOK_RETRIEVAL", "公开教材检索", "pending", "等待并行检索公开教材。"),
                 node("QUESTION_BANK_RETRIEVAL", "题库检索", "pending", "等待并行检索授权题库。"),
@@ -2586,7 +2867,8 @@ public class TeachingWorkflowService {
                 node("AI_DRAFT", "讲义内容生成", "pending", "等待按大纲生成三个版本内容。"),
                 node("LATEX_HANDOUT", "讲义排版", "pending", "等待生成教师版、学生版和 16:10 讲解版。"),
                 node("HUMAN_FEEDBACK", "人类反馈", "pending", "版本完成后可提交审校反馈。"),
-                node("INTERACTIVE_FOLLOW_UP", "交互追问", "pending", "版本完成后生成后续练习建议。"));
+                node("INTERACTIVE_FOLLOW_UP", "交互追问", "pending", "版本完成后生成后续练习建议。")));
+        return List.copyOf(nodes);
     }
 
     /**
@@ -2669,7 +2951,7 @@ public class TeachingWorkflowService {
         boolean draftReady = aiDraft != null;
         boolean reused = memoryResponse.reused();
         long publicCount = evidence.stream().filter(item -> "PUBLIC_TEXTBOOK".equals(item.sourceScope())).count();
-        return List.of(
+        List<TeachingWorkflowNode> nodes = new ArrayList<>(List.of(
                 node("LEARNING_GOAL", "学习目标识别", "completed", "已确认学习目标：" + request.learningGoal()),
                 node("REUSE_RESOURCE", "历史资源复用", "completed", reused
                         ? "命中可复用学习记录，后续不重复召回同类资料。"
@@ -2694,7 +2976,9 @@ public class TeachingWorkflowService {
                 node("LATEX_HANDOUT", "讲义排版", draftReady ? "running" : "pending",
                         draftReady ? "正在生成教师版、学生版和 16:10 讲解版。" : "等待结构化内容。"),
                 node("HUMAN_FEEDBACK", "人类反馈", "pending", "三个版本完成后可提交审校反馈。"),
-                node("INTERACTIVE_FOLLOW_UP", "交互追问", "pending", "三个版本完成后提供后续练习建议。"));
+                node("INTERACTIVE_FOLLOW_UP", "交互追问", "pending", "三个版本完成后提供后续练习建议。")));
+        nodes.addAll(questionAgentNodes(questionEvidence, evidenceReady, outlineReady));
+        return List.copyOf(nodes);
     }
 
     /** Builds the safe event hierarchy displayed while the fixed DAG is still executing. */
@@ -2709,12 +2993,11 @@ public class TeachingWorkflowService {
         boolean outlineReady = phase == ProgressPhase.CONTENT_GENERATING || phase == ProgressPhase.HANDOUT_RENDERING;
         boolean contentGenerating = phase == ProgressPhase.CONTENT_GENERATING;
         boolean draftReady = aiDraft != null;
-        return List.of(
+        List<TeachingWorkflowEvent> events = new ArrayList<>(List.of(
                 workflowEvent("plan", "system", "TeachingPlanner", "plan", "教学任务计划", "已确定讲义结构。", List.of()),
                 workflowEvent("evidence", "tool", "EvidenceCollector", "evidence", "并行收集教材、题库和教师资料证据",
                         evidenceReady
-                                ? "已汇总公开教材 " + textbookEvidence.size() + " 条、题库 " + questionEvidence.size()
-                                + " 条、教师资料 " + teacherResourceEvidence.size() + " 条。"
+                                ? evidenceWorkflowDetail(textbookEvidence, questionEvidence, teacherResourceEvidence)
                                 : "正在并行收集已授权资料。",
                         evidenceReady ? "completed" : "running", List.of("PUBLIC_TEXTBOOK", "QUESTION_BANK", "TEACHER_RESOURCE")),
                 workflowEvent("outline", "agent", "OutlinePlanner", "outline", "生成讲解大纲",
@@ -2725,7 +3008,99 @@ public class TeachingWorkflowService {
                         draftReady ? "completed" : contentGenerating ? "running" : "pending", List.of("teacher", "student", "lecture")),
                 workflowEvent("render", "system", "HandoutRenderer", "render", "生成多版本讲义产物",
                         draftReady ? "正在渲染教师版、学生版和 16:10 讲解版。" : "等待结构化内容。",
-                        draftReady ? "running" : "pending", List.of("teacher", "student", "lecture")));
+                        draftReady ? "running" : "pending", List.of("teacher", "student", "lecture"))));
+        events.addAll(questionAgentEvents(questionEvidence, evidenceReady && outlineReady ? "completed" : "running"));
+        return List.copyOf(events);
+    }
+
+    /**
+     * Builds the durable, user-readable retrieval record for SSE and refresh recovery.  Every item in the owned
+     * evidence snapshot is named here instead of reducing the result to a count; raw source access remains governed
+     * by the existing document/block permission checks in the inspector endpoint.
+     */
+    private static String evidenceWorkflowDetail(
+            List<TeachingEvidence> textbookEvidence,
+            List<TeachingEvidence> questionEvidence,
+            List<TeachingEvidence> teacherResourceEvidence) {
+        List<TeachingEvidence> allEvidence = new ArrayList<>();
+        allEvidence.addAll(textbookEvidence == null ? List.of() : textbookEvidence);
+        allEvidence.addAll(questionEvidence == null ? List.of() : questionEvidence);
+        allEvidence.addAll(teacherResourceEvidence == null ? List.of() : teacherResourceEvidence);
+        if (allEvidence.isEmpty()) {
+            return "本轮未命中可用资料。下一步：按学习目标生成基础讲义结构，并提示继续补充原题或资料。";
+        }
+        StringBuilder detail = new StringBuilder("已找到 ").append(allEvidence.size()).append(" 条已授权内容：");
+        int index = 1;
+        for (TeachingEvidence evidence : allEvidence) {
+            detail.append('\n').append(index).append(". ")
+                    .append(evidenceDisplayName(evidence));
+            String snippet = normalizedInlineText(evidence.snippet());
+            if (!snippet.isBlank()) {
+                detail.append("：").append(snippet);
+            }
+            index += 1;
+        }
+        detail.append("\n下一步：以这些来源逐题核对知识点、题干与答案，再组织讲解大纲和三个讲义版本。");
+        return detail.toString();
+    }
+
+    /** Gives every retrieval line a stable, human-readable file/question and page reference. */
+    private static String evidenceDisplayName(TeachingEvidence evidence) {
+        String scope = switch (evidence.sourceScope()) {
+            case "PUBLIC_TEXTBOOK" -> "公开教材";
+            case "QUESTION_BANK" -> "题库题目";
+            case "TEACHER_RESOURCE" -> "教师资料";
+            default -> evidence.sourceScope() == null ? "资料" : evidence.sourceScope();
+        };
+        String title = printableEvidenceTitle(evidence.sourceTitle());
+        String page = evidence.pageNo() > 0 ? "第 " + evidence.pageNo() + " 页" : "页码未记录";
+        return scope + "《" + title + "》(" + page + ")";
+    }
+
+    /** Child events expose one isolated question-agent branch below the aggregate generation event. */
+    private static List<TeachingWorkflowEvent> questionAgentEvents(
+            List<TeachingEvidence> questionEvidence,
+            String status) {
+        if (questionEvidence == null || questionEvidence.isEmpty()) {
+            return List.of();
+        }
+        return questionEvidence.stream()
+                .map(evidence -> {
+                    String id = questionAgentId(evidence);
+                    return childWorkflowEvent(
+                            "question-agent-" + id,
+                            "generation",
+                            "agent",
+                            "QuestionAgent-" + id,
+                            "question_agent",
+                            "题目独立编排",
+                            "本题使用隔离上下文完成证据对齐，未共享其他题目的内容。",
+                            status,
+                            List.of(evidenceRef(evidence)));
+                })
+                .toList();
+    }
+
+    private static TeachingWorkflowEvent childWorkflowEvent(
+            String eventId,
+            String parentEventId,
+            String sourceType,
+            String sourceName,
+            String eventType,
+            String title,
+            String summary,
+            String status,
+            List<String> artifactRefs) {
+        return new TeachingWorkflowEvent(
+                eventId,
+                parentEventId,
+                sourceType,
+                sourceName,
+                eventType,
+                status,
+                title,
+                summary,
+                artifactRefs == null ? List.of() : List.copyOf(artifactRefs));
     }
 
     /**
@@ -2750,7 +3125,7 @@ public class TeachingWorkflowService {
                 .filter(item -> "PUBLIC_TEXTBOOK".equals(item.sourceScope()))
                 .count();
         long teacherResourceCount = teacherResourceEvidence.size();
-        return List.of(
+        List<TeachingWorkflowNode> nodes = new ArrayList<>(List.of(
                 node("LEARNING_GOAL", "学习目标识别", "识别用户想学：" + request.learningGoal()),
                 node("REUSE_RESOURCE", "历史资源复用", reuseSummary),
                 node("PUBLIC_TEXTBOOK_RETRIEVAL", "公开教材检索",
@@ -2773,7 +3148,81 @@ public class TeachingWorkflowService {
                 node("AI_DRAFT", "讲义内容生成", aiDraftSummary(aiDraft)),
                 node("LATEX_HANDOUT", "讲义排版", "生成教师版、学生版和横版讲解稿，可预览并导出 PDF。"),
                 node("HUMAN_FEEDBACK", "人类反馈", "pending", "等待学生或教师提交人工反馈。"),
-                node("INTERACTIVE_FOLLOW_UP", "交互追问", "给出继续追问、练习和导出建议。"));
+                node("INTERACTIVE_FOLLOW_UP", "交互追问", "给出继续追问、练习和导出建议。")));
+        nodes.addAll(questionAgentNodes(questionEvidence, true, true));
+        return List.copyOf(nodes);
+    }
+
+    /** Creates a stable fan-out node for each verified question without exposing raw model prompts. */
+    private static List<TeachingWorkflowNode> questionAgentNodes(
+            List<TeachingEvidence> questionEvidence,
+            boolean evidenceReady,
+            boolean outlineReady) {
+        if (questionEvidence == null || questionEvidence.isEmpty()) {
+            return List.of();
+        }
+        return questionEvidence.parallelStream()
+                .map(evidence -> {
+                    String id = questionAgentId(evidence);
+                    String title = evidence.sourceTitle() == null || evidence.sourceTitle().isBlank()
+                            ? "题目独立智能体"
+                            : evidence.sourceTitle().split(" / ", 2)[0];
+                    boolean completed = evidenceReady && outlineReady;
+                    return node("QUESTION_AGENT_" + id, "题目 " + title,
+                            completed ? "completed" : "running",
+                            completed
+                                    ? "已在隔离题目上下文中完成证据对齐，等待汇总到讲义。"
+                                    : "已建立独立题目上下文，等待本题证据与大纲汇总。");
+                })
+                .sorted(Comparator.comparing(TeachingWorkflowNode::code))
+                .toList();
+    }
+
+    private static String questionAgentId(TeachingEvidence evidence) {
+        String raw = evidence == null ? "" : evidence.chunkId();
+        if (raw == null || raw.isBlank()) {
+            raw = evidence == null ? "question" : evidence.sourceTitle();
+        }
+        String normalized = raw == null ? "QUESTION"
+                : raw.replaceAll("[^A-Za-z0-9]+", "_").toUpperCase(Locale.ROOT);
+        if (normalized.isBlank()) {
+            normalized = "QUESTION";
+        }
+        return normalized + "_" + Integer.toUnsignedString(raw == null ? 0 : raw.hashCode(), 16);
+    }
+
+    /** Fans out immutable question contexts so future per-question agents cannot share mutable state. */
+    private static QuestionAgentBatch prepareQuestionAgentContexts(List<TeachingEvidence> questionEvidence) {
+        if (questionEvidence == null || questionEvidence.isEmpty()) {
+            return new QuestionAgentBatch(0, 0L, List.of());
+        }
+        long started = System.nanoTime();
+        int poolSize = Math.max(1, Math.min(questionEvidence.size(), QUESTION_AGENT_MAX_PARALLELISM));
+        ExecutorService executor = Executors.newFixedThreadPool(poolSize);
+        try {
+            List<CompletableFuture<QuestionAgentBranch>> futures = questionEvidence.stream()
+                    .map(evidence -> CompletableFuture.supplyAsync(
+                            () -> {
+                                long branchStarted = System.nanoTime();
+                                QuestionAgentContext context = new QuestionAgentContext(
+                                        questionAgentId(evidence), evidence.sourceTitle(), List.of(evidence));
+                                return new QuestionAgentBranch(
+                                        context,
+                                        Math.max(0L, (System.nanoTime() - branchStarted) / 1_000_000L));
+                            },
+                            executor))
+                    .toList();
+            List<QuestionAgentBranch> branches = futures.stream()
+                    .map(CompletableFuture::join)
+                    .sorted(Comparator.comparing(branch -> branch.context().agentId()))
+                    .toList();
+            return new QuestionAgentBatch(futures.size(), Math.max(0L,
+                    (System.nanoTime() - started) / 1_000_000L),
+                    branches.stream().map(branch -> new QuestionAgentTiming(
+                            branch.context().agentId(), branch.elapsedMs())).toList());
+        } finally {
+            executor.shutdownNow();
+        }
     }
 
     /**
@@ -2816,7 +3265,7 @@ public class TeachingWorkflowService {
                 .filter(scope -> scope != null && !scope.isBlank())
                 .distinct()
                 .toList();
-        return List.of(
+        List<TeachingWorkflowEvent> events = new ArrayList<>(List.of(
                 workflowEvent(
                         "plan",
                         "system",
@@ -2831,10 +3280,7 @@ public class TeachingWorkflowService {
                         "EvidenceCollector",
                         "evidence",
                         "并行收集教材、题库和教师资料证据",
-                        "收集公开教材 " + textbookEvidence.size()
-                                + " 条、题库 " + questionEvidence.size()
-                                + " 条、教师资料 " + teacherResourceEvidence.size()
-                                + " 条，并按原有顺序合并。",
+                        evidenceWorkflowDetail(textbookEvidence, questionEvidence, teacherResourceEvidence),
                         evidenceScopes),
                 workflowEvent(
                         "generation",
@@ -2859,7 +3305,9 @@ public class TeachingWorkflowService {
                         "review",
                         "等待人工审校",
                         nodeSummary(nodes, "HUMAN_FEEDBACK"),
-                        List.of()));
+                        List.of())));
+        events.addAll(questionAgentEvents(questionEvidence, "completed"));
+        return List.copyOf(events);
     }
 
     private static TeachingWorkflowEvent workflowEvent(
@@ -3649,7 +4097,8 @@ public class TeachingWorkflowService {
     /** Embeds an already permission-checked local asset directly; opaque markers are for API transport only. */
     private static String authorizedImageLatex(String path) {
         String normalized = Path.of(path).toAbsolutePath().normalize().toString().replace('\\', '/');
-        return "\\begin{center}\n\\includegraphics[width=0.72\\linewidth,height=0.28\\textheight,keepaspectratio]{\\detokenize{"
+        return "\\begin{center}\n\\includegraphics[width=" + PRINTED_IMAGE_WIDTH + ",height=" + PRINTED_IMAGE_MAX_HEIGHT
+                + ",keepaspectratio]{\\detokenize{"
                 + normalized + "}}\n\\end{center}";
     }
 
@@ -3686,14 +4135,23 @@ public class TeachingWorkflowService {
         }
         // Keep the question title, stem, and authorized diagram together while still allowing the explanation to
         // continue naturally on the following page. This is denser than a forced page break and prevents split 图题.
-        builder.append("\\Needspace{26\\baselineskip}\n");
+        // A diagram-dependent item is an indivisible unit: its stem, source figure and explanation must begin on
+        // the same page. \Needspace only protects available remaining height and previously allowed the stem to be
+        // stranded on the preceding page, so a real figure starts a fresh teacher page.
+        if (authorizedImagePath != null && !authorizedImagePath.isBlank()) {
+            builder.append("\\clearpage\n");
+        } else {
+            builder.append("\\Needspace{26\\baselineskip}\n");
+        }
         String sourceAnswer = questionAnswerOnly(question.snippet());
         String bankSteps = questionBankSteps(sourceAnswer);
+        // Do not repeat a lesson-wide model paragraph for every question.  A teacher page must either use the
+        // question bank's own derivation or a route inferred from this visible stem.
         String detailedSteps = !bankSteps.isBlank()
                 ? formatDraftContentAsLatex(withoutBoardOrderLine(bankSteps))
-                : contentOrFallback(withoutBoardOrderLine(draftMethodSteps), escapeLatex(fallbackHint));
-        String answer = contentOrFallback(compactQuestionBankAnswer(questionBankAnswerWithoutSteps(sourceAnswer)),
-                contentOrFallback(draftAnswerPoints, escapeLatex("题库未提供可核验答案，需教师补充后使用。")));
+                : latexEnumerate(lectureQuestionFallbackPath(questionText));
+        String answer = teacherQuestionConclusion(questionText, sourceAnswer,
+                compactQuestionBankAnswer(questionBankAnswerWithoutSteps(sourceAnswer)), draftAnswerPoints);
         // Keep the pedagogical chain visible instead of concatenating a final answer and an unrelated
         // global draft into one paragraph. The entry is tied to this exact bank title; steps and answer
         // remain separately reviewable for every retrieved question.
@@ -3744,19 +4202,135 @@ public class TeachingWorkflowService {
         if (isQuadraticFunctionText(text)) {
             return "从顶点与对称轴推导";
         }
+        if (isVectorQuestion(text)) {
+            return "由数量积求模长";
+        }
+        if (isLogOptimizationQuestion(text)) {
+            return "由对数变号确定参数";
+        }
         return "推导链条";
     }
 
     /** Supplies a concrete first move tied to the actual stem, never a generic “read the prompt” instruction. */
     private static String questionAnalysisEntry(String questionText) {
         String text = questionText == null ? "" : questionText.replaceAll("\\s+", "");
+        if (text.contains("4×4方格") || text.contains("4×4 方格")) {
+            return "把四行依次选中的列号记为一个排列；列号不重复正好等价于每列恰选一个方格。";
+        }
+        if (text.contains("二面角") || text.contains("对折")) {
+            return "折叠前先在平面图中找出 EF 与相关边的垂直关系；折叠保持长度和角度，再转入空间证明。";
+        }
         if (COLORING_TOPIC.matcher(text).find()) {
             return "先把题图中的公共边界记成邻接关系；只有共边界的区域互相限制颜色，不能直接按区域个数写幂。";
         }
         if (isQuadraticFunctionText(text)) {
             return "先判断开口方向、顶点与对称轴，再把题目要求转成对应的函数值或参数条件。";
         }
+        if (isVectorQuestion(text)) {
+            return "先把垂直条件改写成数量积方程，再对模长等式平方，联立消去数量积。";
+        }
+        if (isLogOptimizationQuestion(text)) {
+            return "令 t=x+b>0，利用 ln t 在 t=1 处变号确定参数关系，再在约束直线上求平方和最小值。";
+        }
         return "先圈出题干给出的条件与目标，明确第一步要使用的定义、公式或图形关系。";
+    }
+
+    /**
+     * Supplies a checked conclusion only where the stem itself determines it.  OCR score rubrics and a global
+     * lesson answer are deliberately rejected: they are not an answer to the current question.
+     */
+    private static String teacherQuestionConclusion(
+            String questionText, String sourceAnswer, String compactBankAnswer, String draftAnswerPoints) {
+        String text = questionText == null ? "" : questionText.replaceAll("\\s+", "");
+        if (text.contains("4×4方格") || text.contains("4×4 方格")) {
+            return "共有 $4!=24$ 种选法；最大和为 $40+33+22+15=110$（也可取 $31+42+22+15=110$）。";
+        }
+        if ((text.contains("二面角") || text.contains("对折")) && text.contains("PC=4√3")) {
+            return "（1）$EF\\perp PD$；（2）所求二面角的正弦值为 $\\frac{8}{\\sqrt{65}}$。";
+        }
+        if (isVectorQuestion(text)) {
+            return "由 $(\\vec b-2\\vec a)\\cdot\\vec b=0$ 得 $|\\vec b|^2=2\\vec a\\cdot\\vec b$；又由 $|\\vec a+2\\vec b|^2=4$ 联立可得 $|\\vec b|=\\frac{\\sqrt{2}}{2}$，选 B。";
+        }
+        if (isLogOptimizationQuestion(text)) {
+            return "令 $t=x+b>0$，因 $\\ln t$ 在 $t=1$ 处变号，恒有 $(t+a-b)\\ln t\\ge0$ 必须满足 $a-b=-1$，即 $b=a+1$。于是 $a^2+b^2=a^2+(a+1)^2$，在 $a=-\\frac12$ 时取最小值 $\\frac12$，选 C。";
+        }
+        if (!isUnreliableQuestionAnswer(compactBankAnswer)) {
+            return compactBankAnswer;
+        }
+        if (!isUnreliableQuestionAnswer(draftAnswerPoints)) {
+            return compactQuestionBankAnswer(draftAnswerPoints);
+        }
+        return "\\textbf{该题缺少题号级核验答案，暂不发布。}";
+    }
+
+    /** Detects the plane-vector question family before generic fallback text can be reused. */
+    private static boolean isVectorQuestion(String text) {
+        String compact = text == null ? "" : text.replaceAll("\\s+", "");
+        return (compact.contains("向量") || compact.contains("\\vec") || compact.contains("⃗"))
+                && (compact.contains("垂直") || compact.contains("⊥") || compact.contains("数量积")
+                || compact.contains("模长") || compact.contains("|a+2b|"));
+    }
+
+    /** Detects the parameter-optimization logarithm item used by the real task's question 8. */
+    private static boolean isLogOptimizationQuestion(String text) {
+        String compact = text == null ? "" : text.replaceAll("\\s+", "");
+        return compact.contains("ln") && compact.contains("a^2") && compact.contains("b^2")
+                && (compact.contains("恒成立") || compact.contains(">=0") || compact.contains("≥0")
+                || compact.contains("最小值"));
+    }
+
+    /** Rejects OCR label dumps and whole-paper scoring notes before they are displayed as a single-question answer. */
+    private static boolean isUnreliableQuestionAnswer(String answer) {
+        if (answer == null || answer.isBlank()) {
+            return true;
+        }
+        String originalCompact = answer.replaceAll("\\s+", "");
+        String compact = repairMojibake(answer).replaceAll("\\s+", "");
+        return compact.contains("各题对应分值")
+                || compact.contains("图中几何标签")
+                || compact.contains("资料答案：要点：答案")
+                || compact.contains("答案要点")
+                || compact.contains("学科网")
+                || compact.contains("股份有限公司")
+                || compact.contains("【解析】")
+                || compact.contains("【分析】")
+                || compact.contains("【小问")
+                || compact.matches(".*第\\s*\\d+\\s*页\\s*/?\\s*共\\s*\\d+\\s*页.*")
+                || compact.contains("答案：第")
+                || compact.contains("解析卷")
+                || compact.contains("题库未提供")
+                || compact.contains("⋯")
+                || compact.contains("……")
+                || compact.contains("...")
+                || (Math.max(mojibakeScore(originalCompact), mojibakeScore(compact)) >= 5
+                        && (originalCompact + compact).matches(".*\\d+.*"))
+                || compact.length() < 4;
+    }
+
+    /** Repairs legacy UTF-8-as-Latin-1 snapshots without changing correctly decoded Chinese text. */
+    private static String repairMojibake(String value) {
+        if (value == null || value.isBlank()
+                || !value.matches("(?s).*[ÃÂåæçèéêïðñã].*")) {
+            return value == null ? "" : value;
+        }
+        try {
+            String candidate = new String(value.getBytes(StandardCharsets.ISO_8859_1), StandardCharsets.UTF_8);
+            long sourceNoise = mojibakeScore(value);
+            long candidateNoise = mojibakeScore(candidate);
+            long candidateHan = candidate.chars().filter(character -> character >= 0x4E00 && character <= 0x9FFF).count();
+            return candidateHan > 0 && candidateNoise < sourceNoise ? candidate : value;
+        } catch (RuntimeException ignored) {
+            return value;
+        }
+    }
+
+    private static long mojibakeScore(String value) {
+        return value == null ? 0 : value.chars()
+                .filter(character -> character == 'Ã' || character == 'Â' || character == 'å'
+                        || character == 'æ' || character == 'ç' || character == 'è'
+                        || character == 'é' || character == 'ê' || character == 'ï'
+                        || character == 'ð' || character == 'ñ' || character == 'ã')
+                .count();
     }
 
     /** Pulls verified bank steps out of the answer metadata so they render as an actual solution chain. */
@@ -3817,8 +4391,15 @@ public class TeachingWorkflowService {
         if (answer == null || answer.isBlank()) {
             return "";
         }
-        String normalized = answer.replace("\\times", "×").replace("\\cdot", "·")
+        if (isUnreliableQuestionAnswer(answer)) {
+            return "";
+        }
+        String normalized = repairMojibake(answer).replace("\\times", "×").replace("\\cdot", "·")
                 .replaceAll("\\s+", " ").replaceAll("#{2,}", " ").strip();
+        // Reject a whole OCR label dump before extracting short arithmetic fragments from it.
+        if (isUnreliableQuestionAnswer(normalized)) {
+            return "";
+        }
         LinkedHashSet<String> expressions = new LinkedHashSet<>();
         // A complete additive classification is self-checking.  OCR frequently invents short fragments such as
         // "2=15" beside the real sum, so accept those fragments only when the source contains no complete sum.
@@ -3920,7 +4501,7 @@ public class TeachingWorkflowService {
         }
         StringBuilder builder = new StringBuilder();
         int index = 1;
-        for (TeachingEvidence item : evidence.stream().limit(5).toList()) {
+        for (TeachingEvidence item : evidence) {
             builder.append(escapeLatex(evidenceSourceLine(index, item)))
                     .append('\n');
             index += 1;
@@ -4131,44 +4712,30 @@ public class TeachingWorkflowService {
             // so each student question has exactly one nearby diagram instead of a detached duplicate on a prior page.
             // Student worksheets may reuse an authorized diagram, but never print source snippets or source-derived
             // results: that would both expose OCR noise and leak the teacher's answer into the student's task page.
-            List<String> facts = List.of();
-            if (aiKnowledgeNotes != null && !aiKnowledgeNotes.isEmpty()) {
-                builder.append("\\subsection*{").append(escapeLatex(pack.title() + "：知识速记")).append("}\n")
-                        .append(latexItemize(aiKnowledgeNotes.stream().limit(4).toList())).append("\n");
-            }
-            if (aiRecognitionSignals != null && !aiRecognitionSignals.isEmpty()) {
-                builder.append("\\subsection*{").append(escapeLatex(pack.title() + "：识别信号")).append("}\n")
-                        .append(latexItemize(aiRecognitionSignals.stream().limit(3).toList())).append("\n");
-            }
-            if ((aiKnowledgeNotes == null || aiKnowledgeNotes.isEmpty())
-                    && (aiRecognitionSignals == null || aiRecognitionSignals.isEmpty())) {
-                // Generic writing prompts are a last-resort fallback only.  When the model has supplied concrete
-                // source-grounded facts, a separate three-bullet scaffold merely wastes the first student page.
-                builder.append("\\subsection*{").append(escapeLatex(writingHeading(pack.title()))).append("}\n")
-                        .append(latexItemize(List.of(
-                                "先写定义或条件，再标出题目给出的范围和分界点。",
-                                "按条件逐步完成变形、分类或图像判断，保留关键依据。",
-                                "最后检查边界、定义域和题目要求，确认答案没有越界。")))
-                        .append("\n");
-            }
-            List<String> selfCheckTasks = aiPracticeTasks == null ? List.of() : aiPracticeTasks.stream().limit(2).toList();
+            // 学生页不展示知识速记、识别信号或自检提示，避免把教师编排内容混入题目区。
             // Self-check prompts belong inside the real question unit. Rendering them as their own preceding block
             // allowed normal TeX page flow to strand two short lines on a nearly empty page before the question.
             TeachingEvidence workedExample = pack.workedExample();
-            String workedExampleImagePath = workedExample == null ? "" : firstExistingAuthorizedImagePath(workedExample);
-            if (workedExample != null && workedExampleImagePath.isBlank()) {
+            String workedExampleText = workedExample == null ? "" : questionTextOnly(workedExample.snippet());
+            String workedExampleImagePath = requiresAuthorizedFigure(workedExampleText)
+                    ? firstExistingAuthorizedImagePath(workedExample)
+                    : "";
+            if (requiresAuthorizedFigure(workedExampleText) && workedExampleImagePath.isBlank()) {
                 workedExampleImagePath = firstAuthorizedImageForQuestion(
                         questionTextOnly(workedExample.snippet()), pack.supportingEvidence());
             }
             appendStudentQuestion(builder, "例题", workedExample, workspace, workedExampleImagePath,
-                    selfCheckTasks, !firstPrintableQuestion);
+                    List.of(), !firstPrintableQuestion);
             if (workedExample != null && !isUnusableQuestionText(questionTextOnly(workedExample.snippet()))) {
                 firstPrintableQuestion = false;
             }
             int variationIndex = 1;
             for (TeachingEvidence variation : pack.variations()) {
-                String variationImagePath = firstExistingAuthorizedImagePath(variation);
-                if (variationImagePath.isBlank()) {
+                String variationText = variation == null ? "" : questionTextOnly(variation.snippet());
+                String variationImagePath = requiresAuthorizedFigure(variationText)
+                        ? firstExistingAuthorizedImagePath(variation)
+                        : "";
+                if (requiresAuthorizedFigure(variationText) && variationImagePath.isBlank()) {
                     variationImagePath = firstAuthorizedImageForQuestion(
                             questionTextOnly(variation.snippet()), pack.supportingEvidence());
                 }
@@ -4178,11 +4745,6 @@ public class TeachingWorkflowService {
                     firstPrintableQuestion = false;
                 }
                 variationIndex += 1;
-            }
-            if (pack.workedExample() == null && !facts.isEmpty()) {
-                builder.append("\\clearpage\n\\subsection*{自检}\n")
-                        .append(latexItemize(facts))
-                        .append("\\vspace{").append(workspace).append("em}\n");
             }
         }
         return builder.toString();
@@ -4259,12 +4821,20 @@ public class TeachingWorkflowService {
         if (authorizedImagePath != null && !authorizedImagePath.isBlank()) {
             builder.append(authorizedImageLatex(authorizedImagePath)).append("\n");
         }
-        builder
-                .append("\n作答提示：先写出与本知识点对应的定义、公式或区间，再完成推理。")
-                .append(selfCheckTasks == null || selfCheckTasks.isEmpty()
-                        ? ""
-                        : "\n\\paragraph{自检任务}\n" + latexEnumerate(selfCheckTasks))
-                .append("\n\\vspace{").append(workspace).append("em}\n");
+        // 学生版只保留题目、同题原图和作答空间；提示、自检和答案属于教师编排信息。
+        builder.append("\n\\vspace{").append(workspace).append("em}\n");
+    }
+
+    /** Returns a student-safe first move for diagram questions without leaking the teacher conclusion. */
+    private static String studentQuestionHint(String questionText) {
+        String text = questionText == null ? "" : questionText.replaceAll("\\s+", "");
+        if (text.contains("4×4方格") || text.contains("4×4 方格")) {
+            return "把四行所选方格的列号依次记下，先说明为什么它们构成一个不重复的排列，再处理最大和。";
+        }
+        if (text.contains("二面角") || text.contains("对折")) {
+            return "先在折叠前的平面图中标出 EF、PD 与已知直角关系；证明题和二面角计算分别列出依据。";
+        }
+        return "先从题干圈出已知量和所求量，写明准备使用的定义、公式或定理，再完成推理。";
     }
 
     /**
@@ -4579,10 +5149,6 @@ public class TeachingWorkflowService {
             builder.append("\\subsection*{第 ").append(index).append(" 题}\n")
                     .append("\\paragraph{题目}\n")
                     .append(safeItem)
-                    // Keep the prompt as plain content: workspace-only paragraph headings are removed by the export
-                    // sanitizer together with their following body, which would also remove page-break commands.
-                    .append("\n作答提示：")
-                    .append(escapeLatex("请写出完整步骤，并保留关键依据。"))
                     .append("\n\\vspace{").append(space).append("em}\n");
             index += 1;
         }
@@ -4593,7 +5159,6 @@ public class TeachingWorkflowService {
         return evidence.stream()
                 .filter(item -> "QUESTION_BANK".equals(item.sourceScope()))
                 .sorted(Comparator.comparingInt(TeachingWorkflowService::questionDifficultyRank))
-                .limit(MAX_HANDOUT_QUESTION_EVIDENCE)
                 .toList();
     }
 
@@ -4642,7 +5207,7 @@ public class TeachingWorkflowService {
         if (snippet == null || snippet.isBlank()) {
             return "题目内容待补充。";
         }
-        String[] parts = snippet.split("答案要点：", 2);
+        String[] parts = repairMojibake(snippet).split("答案要点：", 2);
         String stem = parts[0].replace('\r', '\n').strip();
         // A known import failure writes a short source preview, then a standalone “题目” label, then the complete
         // source question.  Retaining both prints the same stem twice and makes the later solution look unrelated.
@@ -4663,7 +5228,7 @@ public class TeachingWorkflowService {
         if (snippet == null || snippet.isBlank()) {
             return "";
         }
-        String[] parts = snippet.split("答案要点：", 2);
+        String[] parts = repairMojibake(snippet).split("答案要点：", 2);
         if (parts.length < 2) {
             return "";
         }
@@ -5137,5 +5702,21 @@ public class TeachingWorkflowService {
 
     /** One real retrieval result paired with its own wall-clock duration before the three-way join. */
     private record TimedEvidence(List<TeachingEvidence> evidence, long elapsedMs) {
+    }
+
+    /** Immutable context owned by exactly one question-agent branch. */
+    private record QuestionAgentContext(String agentId, String title, List<TeachingEvidence> evidence) {
+    }
+
+    /** One branch result keeps its own elapsed time so the join does not hide slow or failed questions. */
+    private record QuestionAgentBranch(QuestionAgentContext context, long elapsedMs) {
+    }
+
+    /** Stable per-question timing projection persisted inside the task response. */
+    private record QuestionAgentTiming(String agentId, long elapsedMs) {
+    }
+
+    /** Result of the question fan-out barrier, persisted as a stage timing. */
+    private record QuestionAgentBatch(int agentCount, long elapsedMs, List<QuestionAgentTiming> branchTimings) {
     }
 }

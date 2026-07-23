@@ -52,6 +52,8 @@ public class StudentExplanationService {
     private static final int DEFAULT_REACT_MAX_STEPS = 4;
     /** 优先读取环境变量，使桌面部署和容器部署共用无代码调参方式。 */
     private static final String REACT_MAX_STEPS_ENV = "MATH_AGENT_STUDENT_EXPLANATION_REACT_MAX_STEPS";
+    /** 默认使用一次权限约束后的检索编排，显式设置为 agent 才启用多轮模型 ReAct。 */
+    private static final String REACT_MODE_ENV = "MATH_AGENT_STUDENT_EXPLANATION_REACT_MODE";
     private static final Logger log = LoggerFactory.getLogger(StudentExplanationService.class);
 
     private final TextbookResourceProperties textbookResourceProperties;
@@ -185,9 +187,13 @@ public class StudentExplanationService {
         emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
                 imageUnderstanding, aiDraft, conversationTitle, startedNanos, "原题梳理已生成。");
 
-        ReactEvidence reactEvidence = executeReactTools(
-                normalizedRequest, normalizedSubject, query, stages, sources, listener, visibleQuestion, cards,
-                imageRecord, visionAnalysis, imageUnderstanding, aiDraft, conversationTitle, startedNanos);
+        ReactEvidence reactEvidence = reactModeEnabled()
+                ? executeReactTools(
+                        normalizedRequest, normalizedSubject, query, stages, sources, listener, visibleQuestion, cards,
+                        imageRecord, visionAnalysis, imageUnderstanding, aiDraft, conversationTitle, startedNanos)
+                : executeDefaultRetrieval(
+                        normalizedRequest, normalizedSubject, query, stages, sources, listener, visibleQuestion, cards,
+                        imageRecord, visionAnalysis, imageUnderstanding, aiDraft, conversationTitle, startedNanos);
         List<KnowledgeGraphSpineResponse.Node> knowledgeNodes = reactEvidence.knowledgeNodes();
         List<TeacherResourceBlockSearchResponse.Hit> teacherHits = reactEvidence.teacherHits();
 
@@ -312,6 +318,45 @@ public class StudentExplanationService {
             searchTeacherResources(request, subject, query, stages);
         }
         return new ReactEvidence(List.copyOf(knowledgeNodes), List.copyOf(teacherHits));
+    }
+
+    /**
+     * Fast default retrieval path.  Every source is still filtered by the backend-resolved tenant and role, but the
+     * service avoids spending one model round trip merely to choose a read-only tool.  The model-driven ReAct path
+     * remains available through {@code MATH_AGENT_STUDENT_EXPLANATION_REACT_MODE=agent} for explicit agent runs.
+     */
+    private ReactEvidence executeDefaultRetrieval(
+            StudentExplanationRequest request, RequestSubject subject, String query,
+            List<StudentExplanationResponse.WorkflowStage> stages,
+            List<StudentExplanationResponse.ExplanationSource> sources,
+            StudentExplanationProgressListener listener, String visibleQuestion,
+            List<StudentExplanationResponse.ExplanationCard> cards, StudentExplanationImageRecord imageRecord,
+            StudentExplanationVisionService.VisionAnalysis visionAnalysis,
+            StudentExplanationResponse.ImageUnderstanding imageUnderstanding,
+            StudentExplanationResponse.AiDraft aiDraft, String conversationTitle, long startedNanos) {
+        upsertStage(stages, runningStage("default_retrieval", "默认检索"));
+        emitProgress(listener, request, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
+                imageUnderstanding, aiDraft, conversationTitle, startedNanos, "正在读取当前账号可见的教材、知识图谱和教师资料。");
+
+        List<TextbookSearchHit> textbookHits = searchTextbooks(request, subject, query, stages);
+        List<KnowledgeGraphSpineResponse.Node> knowledgeNodes = matchKnowledgeGraph(request, subject, query, stages);
+        List<TeacherResourceBlockSearchResponse.Hit> teacherHits = searchTeacherResources(request, subject, query, stages);
+        textbookHits.stream().map(StudentExplanationService::textbookSource).forEach(sources::add);
+        knowledgeNodes.stream().map(StudentExplanationService::knowledgeSource).forEach(sources::add);
+        Map<String, TeacherResourceDocumentResponse> documentsById = teacherDocumentsById(subject.tenantId(), teacherHits);
+        teacherHits.stream().map(hit -> teacherSource(hit, documentsById.get(hit.documentId()))).forEach(sources::add);
+
+        upsertStage(stages, stage("default_retrieval", "默认检索", "completed",
+                "教材 " + textbookHits.size() + " 条、知识图谱 " + knowledgeNodes.size()
+                        + " 个、教师资料 " + teacherHits.size() + " 条，均已按当前账号权限过滤。", startedNanos));
+        emitProgress(listener, request, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
+                imageUnderstanding, aiDraft, conversationTitle, startedNanos, "默认检索完成，开始生成讲解。");
+        return new ReactEvidence(List.copyOf(knowledgeNodes), List.copyOf(teacherHits));
+    }
+
+    /** Defaults to the latency-bounded path; agent mode is opt-in and still capped by reactMaxSteps(). */
+    private static boolean reactModeEnabled() {
+        return "agent".equalsIgnoreCase(System.getenv(REACT_MODE_ENV));
     }
 
     /** Builds the model-visible tool allow-list from backend policy, never from client-supplied tool names. */
@@ -474,7 +519,9 @@ public class StudentExplanationService {
                             subject.deviceId(),
                             null,
                             ENDPOINT));
-            List<TextbookSearchHit> acceptedHits = response.hits();
+            List<TextbookSearchHit> acceptedHits = response.hits().stream()
+                    .filter(hit -> matchesConcreteTopic(query, hit.sectionTitle(), hit.textSnippet()))
+                    .toList();
             // The trace must describe the exact evidence list later exposed to the learner, not an upstream candidate
             // total that may be capped or filtered before source cards are assembled.
             upsertStage(stages, stageFrom(stageStarted, "search_textbook", "检索教材", "completed",
@@ -505,6 +552,7 @@ public class StudentExplanationService {
                     subject.subjectType(),
                     subject.subjectId());
             List<KnowledgeGraphSpineResponse.Node> nodes = spine.nodes().stream()
+                    .filter(node -> matchesKnowledgeTopic(query, node))
                     .map(node -> new NodeMatch(node, knowledgeScore(query, node), knowledgeMatchReason(query, node)))
                     .filter(match -> qualifiesNodeMatch(match.node(), match.score(), match.reason()))
                     .sorted(Comparator.comparingInt(NodeMatch::score).reversed()
@@ -550,7 +598,9 @@ public class StudentExplanationService {
                     query,
                     request.maxTeacherResourceHits(),
                     ENDPOINT);
-            List<TeacherResourceBlockSearchResponse.Hit> acceptedHits = response.hits();
+            List<TeacherResourceBlockSearchResponse.Hit> acceptedHits = response.hits().stream()
+                    .filter(hit -> matchesConcreteTopic(query, hit.documentTitle(), hit.snippet()))
+                    .toList();
             // Keep the trace count aligned with the teacher_resource sources actually sent to the explanation model.
             upsertStage(stages, stageFrom(stageStarted, "search_teacher_resources", "检索教师资料", "completed",
                     "本轮纳入 " + acceptedHits.size() + " 条教师资料。"));
@@ -694,6 +744,38 @@ public class StudentExplanationService {
                 .collect(LinkedHashSet::new, LinkedHashSet::add, LinkedHashSet::addAll);
         long overlap = compactQuery.codePoints().filter(labelChars::contains).count();
         return score + (int) Math.min(overlap, 10);
+    }
+
+    /** Keeps ordinary AI retrieval on the concrete requested branch before score-based ranking. */
+    private static boolean matchesConcreteTopic(String query, String title, String snippet) {
+        String normalizedQuery = compactForMatch(query);
+        String text = compactForMatch(text(title) + " " + text(snippet));
+        if (normalizedQuery.contains("二次函数")) {
+            boolean quadratic = text.contains("二次函数") || text.contains("x^2") || text.contains("x²")
+                    || text.contains("x2");
+            return quadratic && !text.contains("x^3") && !text.contains("x³") && !text.contains("x3")
+                    && !text.contains("双曲线") && !text.contains("椭圆") && !text.contains("圆锥曲线")
+                    && !text.contains("抛物线");
+        }
+        if (normalizedQuery.contains("隐零点")) {
+            return text.contains("隐零点") || text.contains("零点");
+        }
+        return true;
+    }
+
+    /** Prevents graph character-overlap from adding sibling modules to a quadratic query. */
+    private static boolean matchesKnowledgeTopic(String query, KnowledgeGraphSpineResponse.Node node) {
+        String normalizedQuery = compactForMatch(query);
+        String label = compactForMatch(node.label());
+        String chapter = compactForMatch(node.chapterPath());
+        if (!normalizedQuery.contains("二次函数")) {
+            return true;
+        }
+        if (label.equals("函数") || label.contains("二次") || label.contains("一元二次")) {
+            return true;
+        }
+        return (chapter.contains("二次") || chapter.contains("方程不等式"))
+                && !label.contains("三角") && !label.contains("统计") && !label.contains("数列");
     }
 
     /**

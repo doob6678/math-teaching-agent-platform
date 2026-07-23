@@ -167,6 +167,48 @@ class TeacherBlockQuestionImportServiceTest {
     }
 
     @Test
+    void keepsAnalysisStepNumbersInsideTheSameQuestionAndReadsBracketedAnswerMarkers() {
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        InMemoryKnowledgeQuestionBankStore questionStore = new InMemoryKnowledgeQuestionBankStore();
+        resourceStore.save(document("doc-analysis-steps", "teacher-1", "TEACHER_PRIVATE", "2022 真题"));
+        blockStore.replaceActiveBlocks("school-a", "doc-analysis-steps", List.of(pageBlock(
+                "analysis-page", "doc-analysis-steps", 1, 1,
+                "1. 已知函数 f(x)=x^2，求 f(1) 的值。\n"
+                        + "【答案】A\n【解析】\n1. 先代入 x=1，得到 f(1)=1。\n"
+                        + "2. 这个 2 是幂次，不是下一道题。\n"
+                        + "2. 已知向量 a=(1,0)，求 |a|。\n【答案】1")));
+
+        TeacherBlockQuestionImportService service = service(resourceStore, blockStore, questionStore);
+
+        TeacherBlockQuestionImportResponse response = service.importFromTeacherResource(
+                "school-a", "teacher", "teacher-1", "doc-analysis-steps");
+
+        assertThat(response.importedQuestionCount()).isEqualTo(2);
+        assertThat(response.importedQuestions())
+                .extracting(QuestionBankItemResponse::questionText)
+                .allSatisfy(text -> assertThat(text).doesNotContain("先代入", "这个 2 是幂次"));
+        assertThat(response.importedQuestions().getFirst().answerJson()).contains("A");
+    }
+
+    @Test
+    void doesNotTreatDecimalEvidenceAsAnExamQuestionNumber() {
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        InMemoryKnowledgeQuestionBankStore questionStore = new InMemoryKnowledgeQuestionBankStore();
+        resourceStore.save(document("doc-decimal-evidence", "teacher-1", "TEACHER_PRIVATE", "2024 真题"));
+        blockStore.replaceActiveBlocks("school-a", "doc-decimal-evidence", List.of(pageBlock(
+                "decimal-page", "doc-decimal-evidence", 1, 8,
+                "解析中间统计量为 0.038，1.6158，0.2474，求该林区平均值。")));
+
+        TeacherBlockQuestionImportResponse response = service(resourceStore, blockStore, questionStore)
+                .importFromTeacherResource("school-a", "teacher", "teacher-1", "doc-decimal-evidence");
+
+        assertThat(response.importedQuestionCount()).isZero();
+        assertThat(response.skippedBlockCount()).isEqualTo(1);
+    }
+
+    @Test
     void prefersHighConfidencePageTranscriptionWhenItAlreadyContainsAQualifiedQuestionSet() {
         InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
         InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();

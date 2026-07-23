@@ -15,6 +15,7 @@ import com.doob.mathagent.agent.vo.AgentTraceResponse;
 import com.doob.mathagent.agent.vo.MultiAgentWritingArtifactExportResponse;
 import com.doob.mathagent.agent.vo.MultiAgentWritingResponse;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
+import com.doob.mathagent.knowledge.service.KnowledgeQuestionBankService;
 import com.doob.mathagent.protocol.dto.McpToolCallRequest;
 import com.doob.mathagent.protocol.vo.McpReactToolPlan;
 import com.doob.mathagent.protocol.vo.McpToolCallResponse;
@@ -54,6 +55,9 @@ public class McpToolExecutionService {
     private static final String MULTI_SOURCE_EVIDENCE_TOOL = "search_multi_source_evidence";
     private static final String TEXTBOOK_EVIDENCE_TOOL = "search_textbook_evidence";
     private static final String TEACHER_RESOURCE_EVIDENCE_TOOL = "search_teacher_resource_evidence";
+    private static final String LIST_TEACHER_RESOURCES_TOOL = "list_teacher_resources";
+    private static final String READ_TEACHER_RESOURCE_BLOCKS_TOOL = "read_teacher_resource_blocks";
+    private static final String SEARCH_QUESTION_BANK_ITEMS_TOOL = "search_question_bank_items";
     private static final String TEACHING_AI_TRACE_TOOL = "get_teaching_ai_trace";
     private static final String AI_DIAGNOSTIC_SUMMARY_TOOL = "get_ai_diagnostic_summary";
     private static final String MULTI_AGENT_WRITING_TRACE_TOOL = "get_multi_agent_writing_trace";
@@ -76,6 +80,7 @@ public class McpToolExecutionService {
     private final TeacherResourceService teacherResourceService;
     private final TeacherSourceSyncJobService teacherSourceSyncJobService;
     private final TeacherSourceSyncExecutionService teacherSourceSyncExecutionService;
+    private final KnowledgeQuestionBankService questionBankService;
     private final MultiAgentWritingService multiAgentWritingService;
     private final MultiAgentWritingArtifactExportService multiAgentWritingArtifactExportService;
 
@@ -98,6 +103,7 @@ public class McpToolExecutionService {
             TeacherResourceService teacherResourceService,
             TeacherSourceSyncJobService teacherSourceSyncJobService,
             TeacherSourceSyncExecutionService teacherSourceSyncExecutionService,
+            KnowledgeQuestionBankService questionBankService,
             MultiAgentWritingService multiAgentWritingService,
             MultiAgentWritingArtifactExportService multiAgentWritingArtifactExportService) {
         this.clientResolver = Objects.requireNonNull(clientResolver, "clientResolver is required");
@@ -114,6 +120,7 @@ public class McpToolExecutionService {
                 teacherSourceSyncJobService, "teacherSourceSyncJobService is required");
         this.teacherSourceSyncExecutionService = Objects.requireNonNull(
                 teacherSourceSyncExecutionService, "teacherSourceSyncExecutionService is required");
+        this.questionBankService = Objects.requireNonNull(questionBankService, "questionBankService is required");
         this.multiAgentWritingService = Objects.requireNonNull(
                 multiAgentWritingService, "multiAgentWritingService is required");
         this.multiAgentWritingArtifactExportService = Objects.requireNonNull(
@@ -140,6 +147,9 @@ public class McpToolExecutionService {
             case MULTI_SOURCE_EVIDENCE_TOOL -> searchMultiSourceEvidence(client, request);
             case TEXTBOOK_EVIDENCE_TOOL -> searchTextbookEvidence(client, request);
             case TEACHER_RESOURCE_EVIDENCE_TOOL -> searchTeacherResourceEvidence(client, request);
+            case LIST_TEACHER_RESOURCES_TOOL -> listTeacherResources(client);
+            case READ_TEACHER_RESOURCE_BLOCKS_TOOL -> readTeacherResourceBlocks(client, request);
+            case SEARCH_QUESTION_BANK_ITEMS_TOOL -> searchQuestionBankItems(client, request);
             case TEACHING_AI_TRACE_TOOL -> getTeachingAiTrace(client, request);
             case AI_DIAGNOSTIC_SUMMARY_TOOL -> getAiDiagnosticSummary(client, request);
             case MULTI_AGENT_WRITING_TRACE_TOOL -> getMultiAgentWritingTrace(client, request);
@@ -326,6 +336,44 @@ public class McpToolExecutionService {
         result.put("hitCount", response.hitCount());
         result.put("hits", response.hits());
         return result;
+    }
+
+    /** Lists only the documents visible to the registered MCP subject; local paths are never returned by this tool. */
+    private Object listTeacherResources(McpClientRegistryProperties.Client client) {
+        return teacherResourceService.list(client.tenantId(), normalizedProfile(client.profile()), client.subjectId())
+                .stream().map(document -> {
+                    Map<String, Object> result = new LinkedHashMap<>();
+                    result.put("documentId", document.documentId());
+                    result.put("title", document.title());
+                    result.put("sourceType", document.sourceType());
+                    result.put("permissionScope", document.permissionScope());
+                    result.put("syncStatus", document.syncStatus());
+                    result.put("parseStatus", document.parseStatus());
+                    result.put("embeddingStatus", document.embeddingStatus());
+                    result.put("indexStatus", document.indexStatus());
+                    result.put("files", document.previewFiles().stream().map(file -> Map.of(
+                            "fileName", file.fileName(), "fileSizeBytes", file.fileSizeBytes())).toList());
+                    return result;
+                }).toList();
+    }
+
+    /** Reads every parsed source block for one already-visible document so the agent can verify original wording. */
+    private Object readTeacherResourceBlocks(McpClientRegistryProperties.Client client, McpToolCallRequest request) {
+        String documentId = stringArgument(request == null ? Map.of() : request.arguments(), "documentId");
+        return teacherResourceBlockSearchService.listVisibleBlocks(
+                client.tenantId(), normalizedProfile(client.profile()), client.subjectId(), documentId);
+    }
+
+    /**
+     * Returns permission-filtered question stems and stored answers for AI verification.  The query may be empty for
+     * an explicit browse, but tenant/owner filtering remains in the question-bank service rather than trusting MCP
+     * arguments for identity.
+     */
+    private Object searchQuestionBankItems(McpClientRegistryProperties.Client client, McpToolCallRequest request) {
+        Map<String, Object> arguments = request == null ? Map.of() : request.arguments();
+        return questionBankService.searchQuestions(
+                client.tenantId(), normalizedProfile(client.profile()), client.subjectId(),
+                stringArgument(arguments, "query"), intArgument(arguments, "limit", 10));
     }
 
     /**
@@ -949,7 +997,9 @@ public class McpToolExecutionService {
         return switch (toolName) {
             case MULTI_SOURCE_EVIDENCE_TOOL -> "PUBLIC_TEXTBOOK + teacher-resource:read";
             case TEXTBOOK_EVIDENCE_TOOL -> "PUBLIC_TEXTBOOK";
-            case TEACHER_RESOURCE_EVIDENCE_TOOL, DISCOVER_FEISHU_RESOURCES_TOOL -> "teacher-resource:read";
+            case TEACHER_RESOURCE_EVIDENCE_TOOL, LIST_TEACHER_RESOURCES_TOOL, READ_TEACHER_RESOURCE_BLOCKS_TOOL,
+                    DISCOVER_FEISHU_RESOURCES_TOOL -> "teacher-resource:read";
+            case SEARCH_QUESTION_BANK_ITEMS_TOOL -> "question-bank:read";
             case DOWNLOAD_FEISHU_RESOURCE_TOOL -> "teacher-resource:sync-execute";
             case TEACHING_AI_TRACE_TOOL, AI_DIAGNOSTIC_SUMMARY_TOOL, MULTI_AGENT_WRITING_TRACE_TOOL -> "agent-trace:read";
             case PLAN_AGENT_RUN_TOOL -> "agent:plan";

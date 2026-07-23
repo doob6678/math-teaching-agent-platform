@@ -264,6 +264,8 @@ export interface TeachingTaskRequest {
   aiProviderName?: string;
   /** Optional backend allow-listed model selected for this handout only. */
   aiModelCode?: string;
+  /** Supplementary layout/review requirements; never treated as printable question text. */
+  supplementaryRequirements?: string;
 }
 
 export interface TeachingHandoutTemplateResponse {
@@ -2311,8 +2313,6 @@ export interface SystemRuntimeStatusResponse {
     urlConfigured: boolean;
     usernameConfigured: boolean;
     studentExplanationHistoryDurable: boolean;
-    migrationRunnerEnabled: boolean;
-    migrationLocation: string;
     mode: string;
   };
   redis: {
@@ -2366,6 +2366,8 @@ const NO_STORE_HEADERS = {
   "Cache-Control": "no-store, no-cache, max-age=0",
   Pragma: "no-cache",
 };
+/** Upper bound fetched for one real question-bank query before the UI applies visible page slicing. */
+export const QUESTION_BANK_MAX_SEARCH_ROWS = 500;
 
 export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = fetch) {
   const normalizedBaseUrl = baseUrl.replace(/\/+$/, "");
@@ -2724,11 +2726,24 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     /**
      * 执行教材证据检索。
      */
-    search(options: TextbookSearchOptions): Promise<TextbookSearchResponse> {
-      return requestJson<TextbookSearchResponse>("/api/retrieval/textbooks/search", {
+    async search(options: TextbookSearchOptions): Promise<TextbookSearchResponse> {
+      const path = "/api/retrieval/textbooks/search";
+      const body = JSON.stringify(options);
+      const capability = await applyCapability(
+        "retrieval:textbook-search",
+        path,
+        body,
+        `textbook-search:${options.query}:${options.limit}:${(options.documentIds ?? []).join(",")}`,
+        1,
+      );
+      return requestJson<TextbookSearchResponse>(path, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(options),
+        headers: {
+          "Content-Type": "application/json",
+          "X-Capability-Token": capability.token,
+          "X-Request-Hash": capability.requestHash,
+        },
+        body,
       });
     },
 
@@ -3137,9 +3152,9 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
      */
     async runMultiAgentWriting(request: MultiAgentWritingRequest): Promise<MultiAgentWritingResponse> {
       const body = JSON.stringify(request);
-      const path = "/api/agents/writing/courseware";
+      const path = "/api/agents/writing";
       const capability = await applyCapability(
-        "agent-run:CoursewareAgent",
+        "agent-writing:run",
         path,
         body,
         `multi-agent-writing:${request.writingGoal}:${request.questionText}`,
@@ -3161,9 +3176,9 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
      */
     async startAsyncMultiAgentWriting(request: MultiAgentWritingRequest): Promise<MultiAgentWritingResponse> {
       const body = JSON.stringify(request);
-      const path = "/api/agents/writing/courseware/async";
+      const path = "/api/agents/writing/async";
       const capability = await applyCapability(
-        "agent-run:CoursewareAgent",
+        "agent-writing:run",
         path,
         body,
         `multi-agent-writing-async:${request.writingGoal}:${request.questionText}`,
@@ -3187,11 +3202,11 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
       workflowId: string,
       request: MultiAgentWritingRequest,
     ): Promise<MultiAgentWritingResponse> {
-      const body = JSON.stringify(request);
       const encodedWorkflowId = encodeURIComponent(workflowId);
       const path = `/api/agents/writing/${encodedWorkflowId}/resume`;
+      const body = JSON.stringify({ workflowId, ...request });
       const capability = await applyCapability(
-        "agent-run:CoursewareAgent",
+        "agent-writing:resume",
         path,
         body,
         `multi-agent-writing-resume:${workflowId}:${request.writingGoal}:${request.questionText}`,

@@ -151,9 +151,8 @@ $env:MATH_AGENT_VECTOR_INDEX_ENABLED = "true"
 if ([string]::IsNullOrWhiteSpace($env:MATH_AGENT_VECTOR_INDEX_TIMEOUT_MS)) {
     $env:MATH_AGENT_VECTOR_INDEX_TIMEOUT_MS = "120000"
 }
-if ([string]::IsNullOrWhiteSpace($env:MATH_AGENT_MILVUS_TOKEN)) {
-    throw "MATH_AGENT_MILVUS_TOKEN must be provided by the environment; credentials are not stored in scripts or application.yml."
-}
+# Local WSL Milvus is intentionally unauthenticated. Remote deployments can provide a token through the environment.
+# Do not block the local Java backend when the local collection is reachable without authentication.
 $env:MATH_AGENT_TEACHER_SYNC_FEISHU_PROCESS_DOWNLOADER_ENABLED = "true"
 # Scanned teacher PDFs are rendered page-by-page during sync. Resolve the native renderer from this machine's PATH
 # once and pass its absolute executable path to Java, so hidden backend processes retain the same reliable renderer.

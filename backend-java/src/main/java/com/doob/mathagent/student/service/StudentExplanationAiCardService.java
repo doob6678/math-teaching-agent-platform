@@ -56,17 +56,32 @@ public class StudentExplanationAiCardService {
             if ("action".equals(decision)) {
                 String tool = safe(root.path("tool").asText()).strip();
                 if (!availableTools.contains(tool)) {
-                    return ReactDecision.invalid("模型请求了不可用工具：" + tool);
+                    // The model cannot expand the server-side allow-list.  A malformed or stale tool name must not
+                    // turn an otherwise valid user turn into a hard failure; the first remaining permitted tool is
+                    // a deterministic, auditable recovery action and is still executed by the backend below.
+                    return fallbackDecision(availableTools, "模型请求了不可用工具：" + tool);
                 }
                 return ReactDecision.action(tool);
             }
             if ("final".equals(decision)) {
                 return ReactDecision.finalAnswer();
             }
-            return ReactDecision.invalid("模型未返回 ReAct decision");
+            return fallbackDecision(availableTools, "模型未返回 ReAct decision");
         } catch (JsonProcessingException exception) {
-            return ReactDecision.invalid("ReAct 决策格式无效");
+            return fallbackDecision(availableTools, "ReAct 决策格式无效");
         }
+    }
+
+    /**
+     * Recovers one bounded retrieval step when a provider violates the machine-readable ReAct contract.
+     * The set is assembled by {@code StudentExplanationService} after permission checks, so this fallback cannot
+     * access a teacher-private tool that the current subject is not allowed to use.
+     */
+    private static ReactDecision fallbackDecision(Set<String> availableTools, String reason) {
+        return availableTools.stream()
+                .findFirst()
+                .map(tool -> ReactDecision.recoveredAction(tool, reason))
+                .orElseGet(() -> ReactDecision.invalid(reason));
     }
 
     /** Keeps internal reasoning private while making the action contract strict and machine-verifiable. */
@@ -683,6 +698,9 @@ public class StudentExplanationAiCardService {
     /** One validated model decision in the private ReAct loop. */
     public record ReactDecision(String kind, String tool, String message) {
         static ReactDecision action(String tool) { return new ReactDecision("action", tool, ""); }
+        static ReactDecision recoveredAction(String tool, String reason) {
+            return new ReactDecision("action", tool, "fallback: " + reason);
+        }
         static ReactDecision finalAnswer() { return new ReactDecision("final", "", ""); }
         static ReactDecision invalid(String message) { return new ReactDecision("invalid", "", message); }
     }

@@ -50,6 +50,7 @@ import {
   TextbookSearchOptions,
   TextbookSummary,
   VectorIndexRebuildResponse,
+  QUESTION_BANK_MAX_SEARCH_ROWS,
   LoginResponse,
   createTextbookApiClient,
 } from "../shared/api/textbookApi";
@@ -89,7 +90,10 @@ export { SyncCheckpointView } from "./components/TeacherResourcePanel";
 export { AgentTracePanel } from "./components/AgentPanels";
 export { statusClass, statusTone } from "./components/panelShared";
 
-const DEFAULT_BACKEND_URL = import.meta.env.VITE_BACKEND_URL ?? "http://127.0.0.1:8080";
+// Prefer same-origin API calls so local browser sandboxes can use the Vite
+// proxy; deployments can still provide an explicit backend URL at build time.
+const DEFAULT_BACKEND_URL = import.meta.env.VITE_BACKEND_URL
+  ?? (typeof window === "undefined" ? "" : window.location.origin);
 const MULTI_AGENT_WORKFLOW_STORAGE_KEY = "math-agent:last-multi-agent-workflow-id";
 const TEACHING_CONVERSATION_STORAGE_KEY = "math-agent:teaching-conversation-thread";
 // These legacy keys used to restore browser-side handout state. Tasks now recover only from owner-scoped backend history.
@@ -211,6 +215,7 @@ export function App() {
   const [searchError, setSearchError] = useState("");
   const [auditError, setAuditError] = useState("");
   const [teachingQuestion, setTeachingQuestion] = useState("");
+  const [teachingSupplement, setTeachingSupplement] = useState("");
   const [learningGoal, setLearningGoal] = useState("");
   // The attribution is task metadata, not generation input: it is persisted only for PDF layout and later re-exports.
   const [handoutWatermarkText, setHandoutWatermarkText] = useState("数学讲义");
@@ -345,6 +350,9 @@ export function App() {
   const [authSessionChecked, setAuthSessionChecked] = useState(() => readStoredAuthSession() === null);
   const hasVerifiedSession = authSessionChecked && authSession !== null;
   const canReadRetrievalAudit = authSession?.role === "teacher" || authSession?.role === "admin";
+  // Teacher-resource APIs are intentionally restricted by the backend. Keep the client-side lifecycle aligned with
+  // that policy so student sessions never issue forbidden requests during app startup or page initialization.
+  const canManageTeacherResources = authSession?.role === "teacher" || authSession?.role === "admin";
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [searching, setSearching] = useState(false);
   const [loadingAudit, setLoadingAudit] = useState(false);
@@ -464,9 +472,9 @@ export function App() {
   }
 
   useEffect(() => {
-    if (!hasVerifiedSession) return;
+    if (!hasVerifiedSession || !canManageTeacherResources) return;
     refreshTeacherResources();
-  }, [api, hasVerifiedSession]);
+  }, [api, hasVerifiedSession, canManageTeacherResources]);
 
   useEffect(() => {
     if (!hasVerifiedSession) return;
@@ -671,11 +679,14 @@ export function App() {
 
   function refreshKnowledgeQuestionBank() {
     setKnowledgeBankError("");
+    setKnowledgePoints([]);
+    setKnowledgeRelations([]);
+    setQuestionBankItems([]);
     setLoadingQuestionBank(true);
     Promise.all([
       api.listKnowledgePoints(),
       api.listKnowledgeRelations(),
-      api.searchQuestionBankItems(questionBankQuery.trim(), 50),
+      api.searchQuestionBankItems(questionBankQuery.trim(), QUESTION_BANK_MAX_SEARCH_ROWS),
     ])
       .then(([points, relations, questions]) => {
         setKnowledgePoints(points);
@@ -683,7 +694,12 @@ export function App() {
         setQuestionBankItems(questions);
         setQuestionBankPage(1);
       })
-      .catch((error: Error) => setKnowledgeBankError(toUserFacingError(error)))
+      .catch((error: Error) => {
+        setKnowledgePoints([]);
+        setKnowledgeRelations([]);
+        setQuestionBankItems([]);
+        setKnowledgeBankError(toUserFacingError(error));
+      })
       .finally(() => setLoadingQuestionBank(false));
   }
 
@@ -776,6 +792,7 @@ export function App() {
     const clientRequestId = globalThis.crypto.randomUUID();
     const submittedGoal = learningGoal.trim();
     const submittedQuestion = teachingQuestion.trim();
+    const submittedSupplement = teachingSupplement.trim();
     const submittedAt = new Date().toISOString();
     setSubmittingTeachingTask(true);
     setTeachingError("");
@@ -783,6 +800,7 @@ export function App() {
       requestId: clientRequestId,
       learningGoal: submittedGoal,
       questionText: submittedQuestion,
+      supplementaryRequirements: submittedSupplement,
       templateName: "自动生成",
       evidenceLimit: limit,
       createdAt: submittedAt,
@@ -792,6 +810,7 @@ export function App() {
         clientRequestId,
         questionText: submittedQuestion || undefined,
           learningGoal: submittedGoal,
+          supplementaryRequirements: submittedSupplement || undefined,
           evidenceLimit: limit,
           handoutTemplateCode: selectedTeachingTemplateCode,
           watermarkText: handoutWatermarkText,
@@ -1275,14 +1294,21 @@ export function App() {
   function handleSearchQuestionBank(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setKnowledgeBankError("");
+    // Never leave a previous page of rows visible while a new query is in flight or has failed. Showing stale rows
+    // beside the new keyword makes an authorization/transport failure look like a successful, hard-coded search.
+    setQuestionBankItems([]);
+    setQuestionBankPage(1);
     setLoadingQuestionBank(true);
     api
-      .searchQuestionBankItems(questionBankQuery.trim(), 50)
+      .searchQuestionBankItems(questionBankQuery.trim(), QUESTION_BANK_MAX_SEARCH_ROWS)
       .then((questions) => {
         setQuestionBankItems(questions);
         setQuestionBankPage(1);
       })
-      .catch((error: Error) => setKnowledgeBankError(toUserFacingError(error)))
+      .catch((error: Error) => {
+        setQuestionBankItems([]);
+        setKnowledgeBankError(toUserFacingError(error));
+      })
       .finally(() => setLoadingQuestionBank(false));
   }
 
@@ -2188,10 +2214,10 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
                     value={textbookRetrievalMode}
                     onChange={(event) => setTextbookRetrievalMode(event.target.value as TextbookSearchOptions["retrievalMode"])}
                   >
-                    <option value="hybrid">混合 RAG：BGE 文本 + CLIP 图片 + BGE 重排</option>
+                    <option value="hybrid">混合 RAG：BM25 + BGE 文本 + BGE 重排</option>
                     <option value="text_bge">文本语义检索：BGE</option>
                     <option value="formula_bge">公式语义检索：LaTeX + BGE</option>
-                    <option value="image_clip">公式图片检索：CLIP + BGE 重排</option>
+                    <option value="image_clip">图片检索：CLIP（仅明确选择时启用）</option>
                   </select>
                 </label>
                 <label>
@@ -2493,6 +2519,7 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
                 <HandoutCollaborationPanel
                   learningGoal={learningGoal}
                   questionText={teachingQuestion}
+                  supplementaryRequirements={teachingSupplement}
                   evidenceLimit={limit}
                     watermarkText={handoutWatermarkText}
                     aiProviderName={handoutAiProvider}
@@ -2505,6 +2532,7 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
                   error={teachingError}
                   onLearningGoalChange={setLearningGoal}
                   onQuestionTextChange={setTeachingQuestion}
+                  onSupplementaryRequirementsChange={setTeachingSupplement}
                   onEvidenceLimitChange={setLimit}
                   onWatermarkTextChange={setHandoutWatermarkText}
                   onAiProviderChange={(provider) => {
@@ -2560,6 +2588,7 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
 
   function renderKnowledge() {
     return renderRequiresAuth(
+      canManageTeacherResources ? (
       <>
         <div className="page-header">
           <h1 className="page-title">知识库</h1>
@@ -2617,6 +2646,13 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
           </div>
         </div>
       </>
+      ) : (
+        <div className="card card-full" style={{ marginTop: 24 }}>
+          <div className="card-body">
+            <StatusLine icon={<ShieldCheck size={16} />} text="知识库管理仅对教师和管理员开放。学生账号可使用教材检索与 AI 讲题。" tone="muted" />
+          </div>
+        </div>
+      ),
     );
   }
 
