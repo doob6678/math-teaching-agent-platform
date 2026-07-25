@@ -73,7 +73,9 @@ public class MyBatisTeacherSourceSyncJobStore implements TeacherSourceSyncJobSto
         TeacherSourceSyncJobEntity entity = mapper.selectOne(new LambdaQueryWrapper<TeacherSourceSyncJobEntity>()
                 .eq(TeacherSourceSyncJobEntity::getTenantId, tenantId)
                 .eq(TeacherSourceSyncJobEntity::getSourceDocumentId, sourceDocumentId)
-                .in(TeacherSourceSyncJobEntity::getStatus, List.of("queued", "running", "paused"))
+                // Authorization recovery is a durable pause, not a terminal failure.  Treat it as active so a
+                // scheduler tick or duplicate browser click cannot create a competing traversal from the root.
+                .in(TeacherSourceSyncJobEntity::getStatus, List.of("queued", "running", "paused", "AUTH_REQUIRED"))
                 .orderByDesc(TeacherSourceSyncJobEntity::getCreatedAt)
                 .last("LIMIT 1"));
         return entity == null ? null : toResponse(entity);

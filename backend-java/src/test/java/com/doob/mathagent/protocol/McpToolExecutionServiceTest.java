@@ -644,6 +644,9 @@ class McpToolExecutionServiceTest {
         assertThat(result.get("phase")).isEqualTo("download_completed");
         assertThat(result.get("syncStatus")).isEqualTo("synced");
         assertThat(result.get("parseStatus")).isEqualTo("parsed");
+        assertThat(result.get("parseMode")).isEqualTo("MARKDOWN_ASSETS");
+        assertThat(resourceStore.find("default", result.get("documentId").toString()).parseMode())
+                .isEqualTo("MARKDOWN_ASSETS");
         assertThat(result.get("stagingPath").toString()).contains("downloaded-feishu");
         assertThat(blockStore.listByDocument("default", result.get("documentId").toString()))
                 .hasSize(1)

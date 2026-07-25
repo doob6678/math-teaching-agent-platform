@@ -225,8 +225,10 @@ public class ProcessTeacherFeishuDiscoveryClient implements TeacherFeishuDiscove
         if (!Files.isRegularFile(properties.feishuDownloaderScript())) {
             throw new IllegalStateException("Feishu downloader script not found");
         }
-        if (!Files.isRegularFile(properties.feishuAppkeyPath())) {
-            throw new IllegalStateException("Feishu APPKEY path not found");
+        if (!properties.credentialsConfigured()) {
+            throw new TeacherFeishuDiscoveryException(
+                    "Feishu authorization is required: APP_ID/APP_SECRET are not configured",
+                    false);
         }
     }
 

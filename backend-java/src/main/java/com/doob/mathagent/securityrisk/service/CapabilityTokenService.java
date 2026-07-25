@@ -256,7 +256,7 @@ public class CapabilityTokenService {
             return;
         }
         if (TEACHING_FEEDBACK_SUBMIT_ACTION.equals(action)
-                && isTeachingFeedbackPath(path)) {
+                && (isTeachingFeedbackPath(path) || isTeachingReviewPath(path))) {
             validateTeachingSubject(subject);
             return;
         }
@@ -398,6 +398,12 @@ public class CapabilityTokenService {
     private static boolean isTeachingFeedbackPath(String path) {
         String[] parts = pathPartsAfterPrefix(path, TEACHING_TASKS_PATH);
         return parts.length == 2 && hasText(parts[0]) && "feedback".equals(parts[1]);
+    }
+
+    /** Allows the review decision route while keeping feedback capability scoped to one owned task. */
+    private static boolean isTeachingReviewPath(String path) {
+        String[] parts = pathPartsAfterPrefix(path, TEACHING_TASKS_PATH);
+        return parts.length == 2 && hasText(parts[0]) && "review".equals(parts[1]);
     }
 
     /**

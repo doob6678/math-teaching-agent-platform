@@ -250,7 +250,9 @@ export function TeachingConversationPanel({
           <article className="teaching-assistant-row" key={entry.id}>
             <div className="teaching-assistant-avatar">AI</div>
             <div className="teaching-assistant-flow">
-              {entry.loading ? (
+              {entry.response ? (
+                <AssistantResponse response={entry.response} />
+              ) : entry.loading ? (
                 <LiveAssistantResponse entry={entry} />
               ) : entry.error ? (
                 <section className="teaching-status-card error">
@@ -260,8 +262,6 @@ export function TeachingConversationPanel({
                   </div>
                   <p>{safeOperationMessage(entry.error)}</p>
                 </section>
-              ) : entry.response ? (
-                <AssistantResponse response={entry.response} />
               ) : null}
             </div>
           </article>
@@ -345,21 +345,30 @@ export function TeachingConversationPanel({
 }
 
 /**
- * Shows only state and text that have arrived from the backend SSE stream. This deliberately has no local stage or
- * card timer: a slow provider must look slow instead of being disguised as client-side progress.
+ * Shows only stages and text that have arrived from the backend SSE stream. The elapsed clock is measured locally
+ * from the real request start because backend snapshots do not advance while the provider is producing deltas.
  */
 function LiveAssistantResponse({ entry }: { entry: Extract<TeachingConversationThreadItem, { role: "assistant" }> }) {
   const progress = entry.progress;
-  const stages = progress?.workflowStages ?? [];
+  const stages = visibleWorkflowStages(progress?.workflowStages ?? []);
   const cards = progress?.cards ?? [];
   const image = progress?.imageUnderstanding;
+  const [liveElapsedMs, setLiveElapsedMs] = useState(() => liveElapsedSince(entry.createdAt, progress?.totalElapsedMs));
+
+  useEffect(() => {
+    if (entry.response || entry.error) return;
+    const refresh = () => setLiveElapsedMs(liveElapsedSince(entry.createdAt, progress?.totalElapsedMs));
+    refresh();
+    const timer = globalThis.setInterval(refresh, LIVE_ELAPSED_REFRESH_MS);
+    return () => globalThis.clearInterval(timer);
+  }, [entry.createdAt, entry.error, entry.response, progress?.totalElapsedMs]);
 
   return (
     <>
       <section className="teaching-status-card pending compact">
         <div className="teaching-status-head compact">
           <strong>正在讲解</strong>
-          <span><Loader2 className="spin" size={12} />{formatElapsed(progress?.totalElapsedMs ?? 0)}</span>
+          <span><Loader2 className="spin" size={12} />{formatElapsed(liveElapsedMs)}</span>
         </div>
         {progress?.questionText || entry.questionText ? (
           <p className="teaching-status-question">{progress?.questionText || entry.questionText}</p>
@@ -369,7 +378,10 @@ function LiveAssistantResponse({ entry }: { entry: Extract<TeachingConversationT
             {stages.map((stage) => (
               <div className={`teaching-trace-live-item ${stageTone(stage.status)}`} key={stage.stageKey}>
                 <span className="teaching-trace-live-dot" />
-                <strong>{stageTitleText(stage.stageKey, stage.title)}</strong>
+                <div>
+                  <strong>{stageTitleText(stage.stageKey, stage.title)}</strong>
+                  <small>{stageDetailText(stage)}</small>
+                </div>
               </div>
             ))}
           </div>
@@ -381,17 +393,11 @@ function LiveAssistantResponse({ entry }: { entry: Extract<TeachingConversationT
             <span>识别置信度 {Math.round(image.confidence * 100)}%</span>
           </details>
         ) : null}
-        {entry.liveThinking ? (
-          <details className="teaching-live-details">
-            <summary>模型思考</summary>
-            <RichText text={entry.liveThinking} />
+        {entry.liveContent?.trim() ? (
+          <details className="teaching-live-details" open>
+            <summary>AI 实时输出</summary>
+            <pre className="teaching-live-provider-output">{entry.liveContent}</pre>
           </details>
-        ) : null}
-        {entry.liveContent ? (
-          <section className="teaching-live-model-output" aria-label="AI 实时输出">
-            <strong>AI 正在输出</strong>
-            <RichText text={entry.liveContent} />
-          </section>
         ) : null}
       </section>
       {visibleExplanationCards(cards).map((card, index) => (
@@ -404,7 +410,7 @@ function LiveAssistantResponse({ entry }: { entry: Extract<TeachingConversationT
 function AssistantResponse({ response }: { response: StudentExplanationResponse }) {
   const cards = visibleExplanationCards(response.cards ?? []);
   const sources = response.sources ?? [];
-  const stages = response.workflowStages ?? [];
+  const stages = visibleWorkflowStages(response.workflowStages ?? []);
 
   return (
     <div className="teaching-answer-layout">
@@ -598,6 +604,16 @@ export function visibleExplanationCards(cards: StudentExplanationResponse["cards
   return cards;
 }
 
+const LEGACY_SYNTHETIC_STAGE_KEYS = new Set(["plan_explanation", "understand_problem", "default_retrieval"]);
+
+/** Keeps the trace factual: skipped/pending work and legacy pre-announced stages are never presented as execution. */
+export function visibleWorkflowStages(stages: StudentExplanationStage[]) {
+  return stages.filter((stage) =>
+    stage.status !== "skipped"
+    && stage.status !== "pending"
+    && !LEGACY_SYNTHETIC_STAGE_KEYS.has(stage.stageKey));
+}
+
 /** Renders one backend-produced section without inferring a template role from its title or position. */
 function ExplanationCard({ card }: { card: StudentExplanationResponse["cards"][number] }) {
   // An absent title is intentional for a continuous agent answer; the UI must not inject a template heading.
@@ -705,6 +721,7 @@ export function stageDetailText(stage: StudentExplanationStage) {
 
 function imageStatusText(status?: string) {
   if (status === "image_understood_by_vision") return "题图已识别";
+  if (status === "image_direct_context") return "题图已传入 AI 上下文";
   if (status === "image_uploaded_without_vision_analysis") return "已上传，等待识别";
   if (status === "image_vision_failed") return "题图识别失败";
   if (status === "none") return "未使用图片";
@@ -715,6 +732,14 @@ function formatShortTime(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "最近";
   return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+const LIVE_ELAPSED_REFRESH_MS = 250;
+
+function liveElapsedSince(createdAt: string, backendElapsedMs?: number) {
+  const createdAtMs = Date.parse(createdAt);
+  const wallClockMs = Number.isNaN(createdAtMs) ? 0 : Math.max(0, Date.now() - createdAtMs);
+  return Math.max(0, backendElapsedMs ?? 0, wallClockMs);
 }
 
 function formatElapsed(value?: number) {

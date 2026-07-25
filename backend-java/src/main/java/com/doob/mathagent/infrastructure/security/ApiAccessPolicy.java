@@ -37,6 +37,14 @@ public class ApiAccessPolicy {
                 new ApiAccessRule("/api/auth/register", ApiAccessLevel.PUBLIC, Set.of("*"), 0, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/auth/session", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 0, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/auth/login", ApiAccessLevel.PUBLIC, Set.of("*"), 0, Duration.ofMinutes(1)),
+                /*
+                 * Only teachers and administrators may start or inspect a Feishu binding. The provider callback is
+                 * public because cross-site redirects are not guaranteed to carry the local login cookie; the OAuth
+                 * service still requires its short-lived, one-time state that is bound to the initiating user.
+                 */
+                new ApiAccessRule("/api/feishu/oauth/authorize", ApiAccessLevel.USER, Set.of("teacher", "admin"), 0, Duration.ofMinutes(1)),
+                new ApiAccessRule("/api/feishu/oauth/status", ApiAccessLevel.USER, Set.of("teacher", "admin"), 0, Duration.ofMinutes(1)),
+                new ApiAccessRule("/api/feishu/oauth/callback", ApiAccessLevel.PUBLIC, Set.of("*"), 0, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/a2a/.well-known/agent-card.json", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 0, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/mcp/configuration/me", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 0, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/mcp/keys/", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 0, Duration.ofMinutes(1)),
@@ -45,7 +53,6 @@ public class ApiAccessPolicy {
                 new ApiAccessRule("/api/mcp/tools", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 0, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/mcp", ApiAccessLevel.GUEST, Set.of("anonymous", "guest", "student", "teacher", "admin"), 0, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/security/capability-audits", ApiAccessLevel.ADMIN, Set.of("teacher", "admin"), 0, Duration.ofMinutes(1)),
-                new ApiAccessRule("/api/security/capabilities", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 0, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/knowledge/graph/spine", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 0, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/knowledge/points", ApiAccessLevel.ADMIN, Set.of("teacher", "admin"), 0, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/knowledge/relations", ApiAccessLevel.ADMIN, Set.of("teacher", "admin"), 0, Duration.ofMinutes(1)),

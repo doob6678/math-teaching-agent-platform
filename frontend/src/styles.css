@@ -4283,6 +4283,32 @@ h1, h2, h3, h4, h5, h6 {
   background: #ffffff;
 }
 
+.teaching-chat-shell .teaching-trace-live-item > div {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.teaching-chat-shell .teaching-trace-live-item small {
+  max-width: min(520px, 72vw);
+  overflow-wrap: anywhere;
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.teaching-chat-shell .teaching-live-provider-output {
+  max-height: 180px;
+  margin: 8px 0 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: #334155;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
 .teaching-chat-shell .teaching-trace-live-item strong {
   font-size: 13px;
   font-weight: 500;

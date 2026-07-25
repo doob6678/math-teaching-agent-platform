@@ -4,12 +4,35 @@ param(
     [string]$DbPassword = "123456",
     [string]$RedisAddress = "redis://127.0.0.1:6379",
     [string]$RabbitMqAddresses = "amqp://127.0.0.1:5672",
+    [int]$WorkerPort = 8091,
     [string]$Distro = "Ubuntu"
 )
 
 $ErrorActionPreference = "Stop"
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 $Backend = Join-Path $Root "backend-java"
+
+function Import-UserEnvironmentValue {
+    param([string]$Name)
+    if (-not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($Name, "Process"))) { return }
+    $userValue = [Environment]::GetEnvironmentVariable($Name, "User")
+    if (-not [string]::IsNullOrWhiteSpace($userValue)) {
+        # Hidden launchers inherit the parent process snapshot, which may predate variables written through the
+        # Windows environment settings UI. Import the current user value without printing the secret.
+        [Environment]::SetEnvironmentVariable($Name, $userValue, "Process")
+    }
+}
+
+# Feishu browser OAuth and the process downloader use both the canonical and legacy aliases. Keeping them synchronized
+# here makes a backend restart behave exactly like an interactive download without persisting any credential in code.
+@("FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_APPID", "FEISHU_APPSECRET",
+  "FEISHU_OAUTH_REDIRECT_URI", "FEISHU_OAUTH_SUCCESS_REDIRECT_URI") | ForEach-Object {
+    Import-UserEnvironmentValue $_
+}
+if ([string]::IsNullOrWhiteSpace($env:FEISHU_APP_ID)) { $env:FEISHU_APP_ID = $env:FEISHU_APPID }
+if ([string]::IsNullOrWhiteSpace($env:FEISHU_APP_SECRET)) { $env:FEISHU_APP_SECRET = $env:FEISHU_APPSECRET }
+if ([string]::IsNullOrWhiteSpace($env:APP_ID)) { $env:APP_ID = $env:FEISHU_APP_ID }
+if ([string]::IsNullOrWhiteSpace($env:APP_SECRET)) { $env:APP_SECRET = $env:FEISHU_APP_SECRET }
 
 function Test-TcpPort {
     param(
@@ -29,6 +52,42 @@ function Test-TcpPort {
     } catch {
         return $false
     }
+}
+
+function Test-WorkerReady {
+    param([int]$Port)
+    try {
+        $response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/health" -Method Get -TimeoutSec 5
+        return [int]$response.StatusCode -eq 200
+    } catch {
+        return $false
+    }
+}
+
+function Ensure-Worker {
+    param([int]$Port)
+
+    if (-not (Test-WorkerReady $Port)) {
+        # The Java retrieval path calls the worker for every semantic textbook query. Starting Java without this
+        # dependency creates a misleading healthy HTTP port while every real explanation fails in vector recall.
+        $workerScript = Join-Path $Root "scripts\local\start-worker.ps1"
+        Write-Host "AI Worker is not ready on 127.0.0.1:$Port; starting the real local worker."
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $workerScript -Port $Port -Background
+        if ($LASTEXITCODE -ne 0) {
+            throw "AI Worker startup script failed with exit code $LASTEXITCODE"
+        }
+    }
+
+    $deadline = (Get-Date).AddSeconds(120)
+    do {
+        if (Test-WorkerReady $Port) {
+            Write-Host "AI Worker ready on 127.0.0.1:$Port"
+            return
+        }
+        Start-Sleep -Seconds 2
+    } while ((Get-Date) -lt $deadline)
+
+    throw "AI Worker did not become ready on 127.0.0.1:$Port; Java backend startup cancelled"
 }
 
 function Resolve-WslProxyHost {
@@ -59,6 +118,35 @@ function Resolve-WorkerApiKey {
     $generated = [Convert]::ToBase64String($bytes).TrimEnd("=").Replace("+", "-").Replace("/", "_")
     Set-Content -LiteralPath $secretFile -Value $generated -NoNewline
     return $generated
+}
+
+function Resolve-FeishuTokenEncryptionKey {
+    if (-not [string]::IsNullOrWhiteSpace($env:FEISHU_TOKEN_ENCRYPTION_KEY)) { return $env:FEISHU_TOKEN_ENCRYPTION_KEY }
+    $secretDir = Join-Path $Root ".local-secrets"
+    $secretFile = Join-Path $secretDir "feishu-token-encryption-key.txt"
+    if (Test-Path -LiteralPath $secretFile) {
+        $existing = (Get-Content -LiteralPath $secretFile -Raw -Encoding utf8).Trim()
+        if (-not [string]::IsNullOrWhiteSpace($existing)) { return $existing }
+    }
+    New-Item -ItemType Directory -Force -Path $secretDir | Out-Null
+    $bytes = New-Object byte[] 32
+    $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+    $rng.GetBytes($bytes)
+    $generated = [Convert]::ToBase64String($bytes)
+    Set-Content -LiteralPath $secretFile -Value $generated -NoNewline -Encoding utf8
+    return $generated
+}
+
+function Resolve-MilvusToken {
+    param([string]$LinuxDistro)
+    if (-not [string]::IsNullOrWhiteSpace($env:MATH_AGENT_MILVUS_TOKEN)) {
+        return $env:MATH_AGENT_MILVUS_TOKEN
+    }
+    # The local WSL Milvus container is the source of truth for its generated/root password. Read it without
+    # printing it, then pass the standard `username:password` token only to the Java child process.
+    $passwordLine = (wsl -d $LinuxDistro -- bash -lc "docker inspect milvus-standalone --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | sed -n 's/^COMMON_SECURITY_DEFAULTROOTPASSWORD=//p' | head -n1").Trim()
+    if ([string]::IsNullOrWhiteSpace($passwordLine)) { return "" }
+    return "root:$passwordLine"
 }
 
 function New-UrlSafeSecret {
@@ -130,6 +218,7 @@ $env:MATH_AGENT_DB_ENABLED = "true"
 $env:MATH_AGENT_DB_URL = $DbUrl
 $env:MATH_AGENT_DB_USERNAME = $DbUser
 $env:MATH_AGENT_DB_PASSWORD = $DbPassword
+$env:FEISHU_TOKEN_ENCRYPTION_KEY = Resolve-FeishuTokenEncryptionKey
 $env:MATH_AGENT_REDIS_REDISSON_ENABLED = "true"
 $env:MATH_AGENT_REDIS_REDISSON_ADDRESS = $RedisAddress
 $env:SPRING_DATA_REDIS_URL = $RedisAddress
@@ -145,6 +234,7 @@ if ([string]::IsNullOrWhiteSpace($env:MATH_AGENT_REDIS_SEARCH_CACHE_ENABLED)) {
     $env:MATH_AGENT_REDIS_SEARCH_CACHE_ENABLED = "false"
 }
 $env:MATH_AGENT_VECTOR_INDEX_ENABLED = "true"
+$env:MATH_AGENT_MILVUS_TOKEN = Resolve-MilvusToken $Distro
 # The CUDA worker serializes first-load/model batches across the parallel textbook and teacher retrieval branches.
 # Keep the vector request budget bounded but above the real cold-start queue so one branch does not fall back to a
 # second embedding pass merely because the first cross-encoder request waited behind a sibling request.
@@ -171,8 +261,11 @@ if ([string]::IsNullOrWhiteSpace($env:MATH_AGENT_HANDOUT_TEMPLATE_DIRS)) {
     }
 }
 if ([string]::IsNullOrWhiteSpace($env:MATH_AGENT_EMBEDDING_BASE_URL)) {
-    $env:MATH_AGENT_EMBEDDING_BASE_URL = "http://127.0.0.1:8091/v1"
+    # Keep Java's vector client on the exact Worker port passed to this launcher; custom local ports must not
+    # silently fall back to 8091 after start-all has already launched the Worker elsewhere.
+    $env:MATH_AGENT_EMBEDDING_BASE_URL = "http://127.0.0.1:$WorkerPort/v1"
 }
+
 $env:MATH_AGENT_WORKER_API_KEY = Resolve-WorkerApiKey
 if ([string]::IsNullOrWhiteSpace($env:MATH_AGENT_EMBEDDING_API_KEY)) {
     $env:MATH_AGENT_EMBEDDING_API_KEY = $env:MATH_AGENT_WORKER_API_KEY
@@ -253,6 +346,8 @@ $env:MATH_AGENT_PROTOCOL_MCP_REGISTRY_CLIENTS_0_ALLOWED_SCOPES = @(
     "agent-writing:read",
     "agent-writing:export"
 ) -join ","
+
+Ensure-Worker $WorkerPort
 
 if ([string]::IsNullOrWhiteSpace($env:MATH_AGENT_EMBEDDING_API_KEY)) {
     throw "MATH_AGENT_EMBEDDING_API_KEY or MATH_AGENT_WORKER_API_KEY is required"

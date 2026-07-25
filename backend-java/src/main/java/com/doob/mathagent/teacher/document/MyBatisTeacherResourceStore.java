@@ -5,7 +5,6 @@ import com.doob.mathagent.teacher.document.entity.TeacherSourceDocumentEntity;
 import com.doob.mathagent.teacher.document.mapper.TeacherSourceDocumentMapper;
 import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
 import com.doob.mathagent.teacher.support.TeacherResourceSourceIdentity;
-import java.util.Collection;
 import java.util.List;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Repository;
@@ -16,11 +15,6 @@ import org.springframework.stereotype.Repository;
 @Repository
 @ConditionalOnProperty(prefix = "math-agent.database", name = "enabled", havingValue = "true")
 public class MyBatisTeacherResourceStore implements TeacherResourceStore {
-
-    private static final Collection<String> SHARED_SEARCH_SCOPES = List.of(
-            "MATH_VIP",
-            "PUBLIC_TEXTBOOK",
-            "CLASS_AUTHORIZED");
 
     private final TeacherSourceDocumentMapper mapper;
 
@@ -67,8 +61,15 @@ public class MyBatisTeacherResourceStore implements TeacherResourceStore {
                 .eq(TeacherSourceDocumentEntity::getTenantId, tenantId)
                 .ne(TeacherSourceDocumentEntity::getSyncStatus, "archived")
                 .orderByAsc(TeacherSourceDocumentEntity::getId);
-        if (!"admin".equals(viewerRole)) {
-            query.eq(TeacherSourceDocumentEntity::getCreatedBy, viewerSubjectId);
+        if ("teacher".equals(viewerRole)) {
+            query.and(wrapper -> wrapper.eq(TeacherSourceDocumentEntity::getCreatedBy, viewerSubjectId)
+                    .or().in(TeacherSourceDocumentEntity::getPermissionScope,
+                            TeacherResourceVisibilityPolicy.TEACHER_SHARED_SCOPES));
+        } else if ("student".equals(viewerRole)) {
+            query.in(TeacherSourceDocumentEntity::getPermissionScope,
+                    TeacherResourceVisibilityPolicy.STUDENT_SHARED_SCOPES);
+        } else if (!"admin".equals(viewerRole)) {
+            return List.of();
         }
         return mapper.selectList(query).stream()
                 .map(MyBatisTeacherResourceStore::toResponse)
@@ -88,9 +89,6 @@ public class MyBatisTeacherResourceStore implements TeacherResourceStore {
             String tenantId,
             String viewerRole,
             String viewerSubjectId) {
-        if (!"teacher".equals(viewerRole) && !"admin".equals(viewerRole)) {
-            return List.of();
-        }
         LambdaQueryWrapper<TeacherSourceDocumentEntity> query = new LambdaQueryWrapper<TeacherSourceDocumentEntity>()
                 .eq(TeacherSourceDocumentEntity::getTenantId, tenantId)
                 .ne(TeacherSourceDocumentEntity::getSyncStatus, "archived")
@@ -100,7 +98,13 @@ public class MyBatisTeacherResourceStore implements TeacherResourceStore {
             query.and(wrapper -> wrapper
                     .eq(TeacherSourceDocumentEntity::getCreatedBy, viewerSubjectId)
                     .or()
-                    .in(TeacherSourceDocumentEntity::getPermissionScope, SHARED_SEARCH_SCOPES));
+                    .in(TeacherSourceDocumentEntity::getPermissionScope,
+                            TeacherResourceVisibilityPolicy.TEACHER_SHARED_SCOPES));
+        } else if ("student".equals(viewerRole)) {
+            query.in(TeacherSourceDocumentEntity::getPermissionScope,
+                    TeacherResourceVisibilityPolicy.STUDENT_SHARED_SCOPES);
+        } else if (!"admin".equals(viewerRole)) {
+            return List.of();
         }
         return mapper.selectList(query).stream()
                 .map(MyBatisTeacherResourceStore::toResponse)
@@ -294,7 +298,10 @@ public class MyBatisTeacherResourceStore implements TeacherResourceStore {
 
     private static String normalizeParseMode(String value) {
         String normalized = value == null || value.isBlank() ? "TEXT" : value.strip().toUpperCase();
-        return "AI".equals(normalized) ? "AI" : "TEXT";
+        if ("AI".equals(normalized)) return "AI";
+        // Keep the persisted value so existing resources can be distinguished from image-localized Markdown imports.
+        if ("MARKDOWN_ASSETS".equals(normalized)) return "MARKDOWN_ASSETS";
+        return "TEXT";
     }
 
     private static String normalizedFormat(String value) {

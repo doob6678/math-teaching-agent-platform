@@ -59,7 +59,8 @@ public class TeacherSourceSyncCommandConsumer {
 
     private static boolean canExecute(String action, String status) {
         return (TeacherSourceSyncCommand.EXECUTE.equals(action) && "queued".equalsIgnoreCase(status))
-                || (TeacherSourceSyncCommand.RESUME.equals(action) && "paused".equalsIgnoreCase(status));
+                || (TeacherSourceSyncCommand.RESUME.equals(action)
+                        && ("paused".equalsIgnoreCase(status) || "AUTH_REQUIRED".equalsIgnoreCase(status)));
     }
 
     private static void validate(TeacherSourceSyncCommand command) {

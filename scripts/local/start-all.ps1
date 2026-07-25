@@ -88,7 +88,8 @@ if (-not ((Test-TcpPort "127.0.0.1" 3306) -and (Test-TcpPort "127.0.0.1" 6379) -
 Ensure-LocalService "ai-worker" (Join-Path $PSScriptRoot "start-worker.ps1") @("-Port", "$WorkerPort") @($WorkerPort)
 Ensure-LocalService "backend" (Join-Path $PSScriptRoot "start-backend.ps1") @(
     "-DbUser", $DatabaseUser,
-    "-DbPassword", $DatabasePassword
+    "-DbPassword", $DatabasePassword,
+    "-WorkerPort", "$WorkerPort"
 ) @(8080)
 Ensure-LocalService "frontend" (Join-Path $PSScriptRoot "start-frontend.ps1") @() @(5173, 5174)
 

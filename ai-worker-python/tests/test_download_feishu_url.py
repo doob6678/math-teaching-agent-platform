@@ -35,6 +35,10 @@ class FakeFeishuClient:
         content = f"# {document_token}\n\n数量积用于判断垂直。".encode("utf-8")
         return content, f"{document_token}.md", len(content)
 
+    def get_docx_sync_metadata(self, _document_token):
+        # The Feishu title is the visible source filename; the token remains only the provider identity.
+        return {"title": "向量和角度", "revision": "revision-1"}
+
     def export_docx(self, document_token, file_extension):
         self.docx_exports.append((document_token, file_extension))
         content = b"docx-or-pdf-bytes"
@@ -63,6 +67,14 @@ class DownloadedHtmlImageFeishuClient(download_feishu_url.FeishuClient):
     def download_embedded_image(self, image_url):
         self.downloaded_urls.append(image_url)
         return b"html-image-bytes", "map.jpg", "image/jpeg"
+
+
+class MultipleNamedImageFeishuClient(download_feishu_url.FeishuClient):
+    def list_document_image_tokens(self, _document_token):
+        return []
+
+    def download_embedded_image(self, image_url):
+        return str(image_url).encode("utf-8"), "image.png", "image/png"
 
 
 class EmbeddedImageFeishuClient(FakeFeishuClient):
@@ -147,6 +159,7 @@ class DownloadFeishuUrlTest(unittest.TestCase):
             saved_path = Path(result["saved_path"])
             self.assertEqual(client.markdown_tokens, ["docToken"])
             self.assertEqual(client.docx_exports, [])
+            self.assertEqual(saved_path.name, "向量和角度.md")
             self.assertEqual(saved_path.suffix, ".md")
             self.assertIn("数量积用于判断垂直", saved_path.read_text(encoding="utf-8"))
             self.assertEqual(result["file_extension"], "md")
@@ -190,12 +203,14 @@ class DownloadFeishuUrlTest(unittest.TestCase):
                 file_extension="md",
             )
 
-            saved_file = Path(result["saved_path"]) / "doc_token_1.md"
+            # Folder listing names are the Feishu titles and must remain the persisted Markdown names.
+            saved_file = Path(result["saved_path"]) / "空间向量.md"
             self.assertEqual(client.markdown_tokens, ["doc_token_1"])
             self.assertEqual(client.docx_exports, [])
             self.assertTrue(saved_file.exists())
             self.assertEqual(result["stats"]["files"], 1)
             self.assertEqual(result["checkpoint"]["downloaded_items"][0]["token"], "doc_token_1")
+            self.assertEqual(result["checkpoint"]["downloaded_items"][0]["relativePath"], "空间向量.md")
             self.assertEqual(result["failed_items"], [])
 
     def test_file_url_summary_reports_one_file(self):
@@ -249,6 +264,23 @@ class DownloadFeishuUrlTest(unittest.TestCase):
             self.assertEqual(manifests[0]["assetKind"], "image")
             self.assertTrue((output_dir / manifests[0]["relativePath"]).exists())
 
+    def test_multiple_images_do_not_overwrite_same_provider_name(self):
+        client = MultipleNamedImageFeishuClient.__new__(MultipleNamedImageFeishuClient)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            rewritten, manifests, failures = client.materialize_markdown_images(
+                "doc-token",
+                "![一](https://img.test/1)\n![二](https://img.test/2)",
+                output_dir,
+            )
+            self.assertEqual(failures, [])
+            self.assertEqual(
+                [item["relativePath"] for item in manifests],
+                ["_feishu_images/image.png", "_feishu_images/image-2.png"],
+            )
+            self.assertIn("_feishu_images/image.png", rewritten)
+            self.assertIn("_feishu_images/image-2.png", rewritten)
+
     def test_feishu_html_href_images_are_extracted_in_document_order(self):
         markdown = (
             '<p>前文</p><img data-block="27" href="https://example.test/map?a=1&amp;b=2">'
@@ -283,6 +315,20 @@ class DownloadFeishuUrlTest(unittest.TestCase):
             self.assertNotIn('internal-api-drive-stream', rewritten)
             self.assertEqual(len(manifests), 1)
             self.assertTrue((Path(temp_dir) / manifests[0]["relativePath"]).is_file())
+
+    def test_feishu_html_image_is_rewritten_to_standard_markdown_image(self):
+        """HTML image nodes must not become literal text in Markdown-only previewers."""
+        client = DownloadedHtmlImageFeishuClient()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            rewritten, manifests, failures = client.materialize_markdown_images(
+                "doc-token",
+                '<img name="image.png" href="https://internal-api-drive-stream.feishu.cn/stream?x=1&amp;sig=2"/>',
+                Path(temp_dir),
+            )
+
+            self.assertEqual(failures, [])
+            self.assertEqual(len(manifests), 1)
+            self.assertEqual(rewritten, '![](_feishu_images/map.jpg)')
 
     def test_expired_markdown_image_falls_back_to_durable_media_token(self):
         client = download_feishu_url.FeishuClient.__new__(download_feishu_url.FeishuClient)

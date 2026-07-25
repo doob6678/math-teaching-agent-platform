@@ -2,3 +2,11 @@ fastapi>=0.116,<1
 uvicorn[standard]>=0.35,<1
 pydantic>=2,<3
 requests>=2.32,<3
+pymysql>=1.1,<2
+pillow>=11,<13
+numpy>=2,<3
+# Local BGE/CLIP inference is part of the production worker contract. Model weights remain external read-only mounts.
+torch>=2.5,<3
+transformers>=4.48,<6
+# Python owns Agent orchestration; Java remains the protected tool and persistence boundary.
+langgraph>=0.6,<1

@@ -88,4 +88,11 @@ describe("TeacherResourcePanel", () => {
     expect(html).toContain("索引 待重建");
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*>.*?<span>入题库<\/span><\/button>/);
   });
+
+  it("offers Markdown image materialization as a distinct parse mode", () => {
+    const html = renderPanel();
+
+    expect(html).toContain('value="MARKDOWN_ASSETS"');
+    expect(html).toContain("Markdown：下载图片到本地");
+  });
 });

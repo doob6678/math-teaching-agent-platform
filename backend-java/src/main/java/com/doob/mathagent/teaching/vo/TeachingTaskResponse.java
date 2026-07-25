@@ -87,6 +87,15 @@ public record TeachingTaskResponse(
                 null, null, null, null, errorMessage);
     }
 
+    /** Creates a durable review transition without discarding the verified draft, evidence, or sibling versions. */
+    public TeachingTaskResponse withReviewStatus(TeachingTaskStatus nextStatus, String nextErrorMessage) {
+        return new TeachingTaskResponse(
+                taskId, clientRequestId, tenantId, subjectType, subjectId, selectedTemplate, nextStatus,
+                questionText, learningGoal, watermarkText, nodes, workflowEvents, reactTrace, evidence,
+                handoutLatex, teacherHandoutLatex, studentHandoutLatex, lectureHandoutLatex, interactiveSuggestions,
+                memoryReuse, stageTimings, aiDraft, draftSections, draftReview, mergeResult, nextErrorMessage);
+    }
+
     /**
      * Backward-compatible constructor for call sites that already set a selected template and lecture version
      * before workflow events were added.

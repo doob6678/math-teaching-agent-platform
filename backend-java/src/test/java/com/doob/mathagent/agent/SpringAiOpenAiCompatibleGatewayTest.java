@@ -71,6 +71,19 @@ class SpringAiOpenAiCompatibleGatewayTest {
     }
 
     @Test
+    void ownerValidatedImageIsEncodedAsNativeMultimodalContent() {
+        AiChatRequest request = new AiChatRequest(
+                "openai", "gpt-5.6-luna", "StudentExplanationAgent", "识别题图并检索", List.of(),
+                "data:image/png;base64,aGVsbG8=");
+
+        var message = SpringAiOpenAiCompatibleGateway.userMessage(request);
+
+        assertThat(message.get("role")).isEqualTo("user");
+        assertThat(message.get("content")).isInstanceOf(List.class);
+        assertThat(message.get("content").toString()).contains("image_url", "data:image/png;base64,aGVsbG8=");
+    }
+
+    @Test
     void genericJsonSchemaPromptIsTreatedAsStrictJson() {
         AiChatRequest request = new AiChatRequest(
                 "deepseek",

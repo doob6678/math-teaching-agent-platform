@@ -16,6 +16,9 @@ import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService;
 import com.doob.mathagent.teacher.document.TeacherResourceStore;
 import com.doob.mathagent.teacher.search.TeacherResourceBlockSearchResponse;
 import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.util.Base64;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -46,14 +49,10 @@ import org.slf4j.LoggerFactory;
 public class StudentExplanationService {
 
     private static final String ENDPOINT = "/api/students/explanations";
+    /** The curated graph is a compact concept hint, not a long evidence list. */
+    private static final int MAX_KNOWLEDGE_GRAPH_MATCHES = 5;
     // 此版本号用于区分新版 Agent 结果与历史模板结果，无需重写既有会话记录。
     private static final String GENERATED_BY = "student_explanation_react_agent_v1";
-    /** 可配置的最大步数可防止模型未给出最终决策时陷入无限模型/工具循环。 */
-    private static final int DEFAULT_REACT_MAX_STEPS = 4;
-    /** 优先读取环境变量，使桌面部署和容器部署共用无代码调参方式。 */
-    private static final String REACT_MAX_STEPS_ENV = "MATH_AGENT_STUDENT_EXPLANATION_REACT_MAX_STEPS";
-    /** 默认使用一次权限约束后的检索编排，显式设置为 agent 才启用多轮模型 ReAct。 */
-    private static final String REACT_MODE_ENV = "MATH_AGENT_STUDENT_EXPLANATION_REACT_MODE";
     private static final Logger log = LoggerFactory.getLogger(StudentExplanationService.class);
 
     private final TextbookResourceProperties textbookResourceProperties;
@@ -63,7 +62,6 @@ public class StudentExplanationService {
     private final TeacherResourceStore teacherResourceStore;
     private final StudentExplanationAiCardService aiCardService;
     private final StudentExplanationImageStoreService imageStoreService;
-    private final StudentExplanationVisionService visionService;
     private final StudentExplanationHistoryStore historyStore;
     private final StudentMemoryRagService studentMemoryRagService;
     private final int conversationHistoryFetchLimit;
@@ -76,11 +74,10 @@ public class StudentExplanationService {
             TeacherResourceStore teacherResourceStore,
             StudentExplanationAiCardService aiCardService,
             StudentExplanationImageStoreService imageStoreService,
-            StudentExplanationVisionService visionService,
             StudentExplanationHistoryStore historyStore) {
         this(textbookResourceProperties, textbookRetrievalService, knowledgeGraphSpineService,
                 teacherResourceBlockSearchService, teacherResourceStore, aiCardService, imageStoreService,
-                visionService, historyStore, null, 200);
+                historyStore, null, 200);
     }
 
     @Autowired
@@ -92,7 +89,6 @@ public class StudentExplanationService {
             TeacherResourceStore teacherResourceStore,
             StudentExplanationAiCardService aiCardService,
             StudentExplanationImageStoreService imageStoreService,
-            StudentExplanationVisionService visionService,
             StudentExplanationHistoryStore historyStore,
             StudentMemoryRagService studentMemoryRagService,
             @org.springframework.beans.factory.annotation.Value("${math-agent.student.explanation.conversation-history-fetch-limit:200}") int conversationHistoryFetchLimit) {
@@ -108,7 +104,6 @@ public class StudentExplanationService {
                 teacherResourceStore, "teacherResourceStore is required");
         this.aiCardService = Objects.requireNonNull(aiCardService, "aiCardService is required");
         this.imageStoreService = Objects.requireNonNull(imageStoreService, "imageStoreService is required");
-        this.visionService = Objects.requireNonNull(visionService, "visionService is required");
         this.historyStore = Objects.requireNonNull(historyStore, "historyStore is required");
         this.studentMemoryRagService = studentMemoryRagService;
         this.conversationHistoryFetchLimit = Math.max(1, Math.min(conversationHistoryFetchLimit, 500));
@@ -150,65 +145,64 @@ public class StudentExplanationService {
         String conversationTitle = StudentExplanationConversationTitleSupport.resolve("", normalizedRequest.questionText(), null);
         String visibleQuestion = text(normalizedRequest.questionText());
 
-        upsertStage(stages, runningStage("plan_explanation", "规划流程"));
-        emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
-                imageUnderstanding, aiDraft, conversationTitle, startedNanos, "已接收题目，正在规划本轮讲解。");
-        upsertStage(stages, stage("plan_explanation", "规划流程", "completed",
-                planDetail(normalizedRequest, normalizedSubject, imageRecord != null), startedNanos));
-        emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
-                imageUnderstanding, aiDraft, conversationTitle, startedNanos, "流程规划完成。");
+        if (imageRecord != null) {
+            /* The original image is the interactive visual context; do not block a user request on separate OCR. */
+            visionAnalysis = StudentExplanationVisionService.VisionAnalysis.skipped("direct-image-context");
+            upsertStage(stages, stageFrom(System.nanoTime(), "analyze_image", "题图上下文", "completed",
+                    "原图已直接传入多模态讲解模型。"));
+            emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
+                    imageUnderstanding, aiDraft, conversationTitle, startedNanos, "题图已加入模型上下文。");
+        }
 
-        upsertStage(stages, runningStage("analyze_image", "识别题图"));
-        emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
-                imageUnderstanding, aiDraft, conversationTitle, startedNanos, "正在识别题图。");
-        visionAnalysis = analyzeImage(imageRecord, stages);
-        imageUnderstanding = imageUnderstanding(visionAnalysis);
-        emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
-                imageUnderstanding, aiDraft, conversationTitle, startedNanos, "题图识别步骤已更新。");
-
-        requireRealTextForImageOnlyRequest(normalizedRequest, imageRecord, visionAnalysis);
+        // The original upload is the authoritative visual context. OCR is useful for a text retrieval query, but a
+        // failed transcription must not prevent the multimodal ReAct model from seeing and answering the image.
+        String imageDataUrl = imageDataUrl(imageRecord);
         String query = queryText(normalizedRequest, visionAnalysis);
+        if (query.isBlank() && imageRecord != null) {
+            query = "请识别上传图片中的数学内容，并生成适合资料检索的具体关键词";
+        }
         visibleQuestion = visibleQuestion(normalizedRequest, visionAnalysis);
 
-        upsertStage(stages, runningStage("load_conversation_context", "读取上下文"));
-        emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
-                imageUnderstanding, aiDraft, conversationTitle, startedNanos, "正在读取最近会话。");
-        List<StudentExplanationHistorySummary> recentHistory =
-                loadRecentHistory(normalizedRequest, normalizedSubject, stages);
-        List<String> longTermMemories = loadLongTermMemories(query, normalizedSubject, stages);
-        emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
-                imageUnderstanding, aiDraft, conversationTitle, startedNanos, "上下文已读取。");
+        List<StudentExplanationHistorySummary> recentHistory = List.of();
+        List<String> longTermMemories = List.of();
+        if (Boolean.TRUE.equals(normalizedRequest.useConversationMemory())) {
+            // Conversation and long-term memory are one user-controlled context action. Keeping both behind the same
+            // switch avoids an invisible vector lookup on every fresh question and removes its avoidable latency.
+            upsertStage(stages, runningStage("load_conversation_context", "读取学习记忆"));
+            emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
+                    imageUnderstanding, aiDraft, conversationTitle, startedNanos, "正在读取已关联的学习记忆。");
+            recentHistory = loadRecentHistory(normalizedRequest, normalizedSubject, stages);
+            longTermMemories = loadLongTermMemories(query, normalizedSubject, stages);
+            emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
+                    imageUnderstanding, aiDraft, conversationTitle, startedNanos, "学习记忆已读取。");
+        }
 
-        upsertStage(stages, runningStage("understand_problem", "理解题意"));
-        emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
-                imageUnderstanding, aiDraft, conversationTitle, startedNanos, "正在梳理原题。");
-        upsertStage(stages, stage("understand_problem", "理解题意", "completed",
-                "已使用题目文本或真实视觉识别结果规划检索，不把图片文件名当作题目内容。", startedNanos));
-        emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
-                imageUnderstanding, aiDraft, conversationTitle, startedNanos, "原题梳理已生成。");
-
-        ReactEvidence reactEvidence = reactModeEnabled()
-                ? executeReactTools(
-                        normalizedRequest, normalizedSubject, query, stages, sources, listener, visibleQuestion, cards,
-                        imageRecord, visionAnalysis, imageUnderstanding, aiDraft, conversationTitle, startedNanos)
-                : executeDefaultRetrieval(
-                        normalizedRequest, normalizedSubject, query, stages, sources, listener, visibleQuestion, cards,
-                        imageRecord, visionAnalysis, imageUnderstanding, aiDraft, conversationTitle, startedNanos);
+        // Student explanations have one stable orchestration contract: the model decides whether a permitted
+        // retrieval tool is useful. Deployment configuration cannot replace it with a different fixed pipeline.
+        ReactEvidence reactEvidence = executeReactTools(
+                normalizedRequest, normalizedSubject, query, stages, sources, listener, visibleQuestion, cards,
+                imageRecord, imageDataUrl, visionAnalysis, imageUnderstanding, aiDraft, conversationTitle, startedNanos);
         List<KnowledgeGraphSpineResponse.Node> knowledgeNodes = reactEvidence.knowledgeNodes();
         List<TeacherResourceBlockSearchResponse.Hit> teacherHits = reactEvidence.teacherHits();
 
-        upsertStage(stages, runningStage("ai_compose_cards", "生成讲解"));
-        emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
-                imageUnderstanding, aiDraft, conversationTitle, startedNanos, "模型正在生成讲解。");
-        StudentExplanationAiCardService.AiCardDraft aiCardDraft = aiCardService.generate(
-                normalizedRequest,
-                aiContextQuery(query, knowledgeNodes, teacherHits),
-                imageStatus(normalizedRequest, imageRecord, visionAnalysis),
-                sources,
-                recentHistory,
-                longTermMemories,
-                stages,
-                listener::onAiDelta);
+        StudentExplanationAiCardService.AiCardDraft aiCardDraft = reactEvidence.finalDraft();
+        if (aiCardDraft == null) {
+            // A retrieval plan needs one post-observation composition call. A self-contained question already carries
+            // its validated cards in the first ReAct turn and must not pay for a redundant second provider request.
+            upsertStage(stages, runningStage("ai_compose_cards", "生成讲解"));
+            emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
+                    imageUnderstanding, aiDraft, conversationTitle, startedNanos, "模型正在根据检索结果生成讲解。");
+            aiCardDraft = aiCardService.generate(
+                    normalizedRequest,
+                    aiContextQuery(query, knowledgeNodes, teacherHits),
+                    imageStatus(normalizedRequest, imageRecord, visionAnalysis),
+                    sources,
+                    recentHistory,
+                    longTermMemories,
+                    stages,
+                    imageDataUrl,
+                    listener::onAiDelta);
+        }
         aiDraft = aiCardDraft.aiDraft();
         conversationTitle = StudentExplanationConversationTitleSupport.resolve(
                 aiCardDraft.conversationTitle(),
@@ -231,11 +225,12 @@ public class StudentExplanationService {
         upsertStage(stages, runningStage("persist_history", "保存记录"));
         emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
                 imageUnderstanding, aiDraft, conversationTitle, startedNanos, "正在保存讲解记录。");
-        upsertStage(stages, stage("persist_history", "保存记录", historyStore.durable() ? "completed" : "skipped",
-                historyStore.durable()
-                        ? "已写入 MySQL 历史记录，后续可恢复会话。"
-                        : "当前运行环境未启用数据库历史记录。",
-                startedNanos));
+        if (historyStore.durable()) {
+            upsertStage(stages, stage("persist_history", "保存记录", "completed",
+                    "已写入 MySQL 历史记录，后续可恢复会话。", startedNanos));
+        } else {
+            stages.removeIf(stage -> "persist_history".equals(stage.stageKey()));
+        }
 
         StudentExplanationResponse response = new StudentExplanationResponse(
                 explanationId,
@@ -262,10 +257,10 @@ public class StudentExplanationService {
     }
 
     /**
-     * 有界 ReAct 循环：模型根据已有证据和观察结果决定下一项工具；后端实际执行工具，
-     * 从而始终在服务端保留身份、租户、请求开关和教师私有资料权限控制。
+     * 有界 ReAct 回合：模型一次规划本题所需的全部只读工具；后端实际执行工具，
+     * 从而减少逐工具模型握手，同时始终在服务端保留身份、租户、请求开关和教师私有资料权限控制。
      *
-     * <p>每项只读工具在单次讲解中最多调用一次，并由 maxSteps 限制总步数，避免模型陷入工具循环。</p>
+     * <p>工具计划会按服务端白名单校验并去重，因此每项只读工具在单次讲解中最多调用一次。</p>
      */
     private ReactEvidence executeReactTools(
             StudentExplanationRequest request, RequestSubject subject, String query,
@@ -273,90 +268,60 @@ public class StudentExplanationService {
             List<StudentExplanationResponse.ExplanationSource> sources,
             StudentExplanationProgressListener listener, String visibleQuestion,
             List<StudentExplanationResponse.ExplanationCard> cards, StudentExplanationImageRecord imageRecord,
+            String imageDataUrl,
             StudentExplanationVisionService.VisionAnalysis visionAnalysis,
             StudentExplanationResponse.ImageUnderstanding imageUnderstanding,
             StudentExplanationResponse.AiDraft aiDraft, String conversationTitle, long startedNanos) {
         Set<String> available = availableReactTools(request, subject);
-        List<String> observations = new ArrayList<>();
         List<KnowledgeGraphSpineResponse.Node> knowledgeNodes = new ArrayList<>();
         List<TeacherResourceBlockSearchResponse.Hit> teacherHits = new ArrayList<>();
-        int maxSteps = reactMaxSteps();
-        for (int step = 0; step < maxSteps; step++) {
-            upsertStage(stages, runningStage("react_reason_" + step, "ReAct 决策"));
+        long planStarted = System.nanoTime();
+        upsertStage(stages, runningStage("react_plan", "规划讲解"));
+        emitProgress(listener, request, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
+                imageUnderstanding, aiDraft, conversationTitle, startedNanos, "正在规划本题所需的资料与讲解。");
+        // Decision：模型只看到后端按请求和身份生成的工具白名单，无法扩大自己的资料权限。
+        StudentExplanationAiCardService.ReactDecision decision = aiCardService.nextReactDecision(
+                query, sources, List.of(), available, imageDataUrl, listener::onAiDelta);
+        if ("final".equals(decision.kind())) {
+            upsertStage(stages, stageFrom(planStarted, "react_plan", "规划并生成讲解", "completed",
+                    "题目信息完整，已在一次模型调用中完成规划和讲解。"));
             emitProgress(listener, request, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
-                    imageUnderstanding, aiDraft, conversationTitle, startedNanos, "正在决定下一次检索动作。");
-            // Thought/Decision：只向模型暴露后端根据权限计算出的工具白名单，而不是信任客户端传入的工具名。
-            StudentExplanationAiCardService.ReactDecision decision = aiCardService.nextReactDecision(
-                    query, sources, observations, available);
-            if ("final".equals(decision.kind())) { break; }
-            if (!"action".equals(decision.kind())) {
-                throw new IllegalStateException("ReAct 决策失败：" + decision.message());
-            }
-            String tool = decision.tool();
-            // Action：同一工具只执行一次；其结果会以 Observation 形式喂回下一轮模型决策。
-            available.remove(tool); // Each read-only source is queried at most once per answer, avoiding tool-loop inflation.
+                    imageUnderstanding, decision.finalDraft().aiDraft(), conversationTitle, startedNanos,
+                    "讲解已生成，正在整理展示。");
+            return new ReactEvidence(List.of(), List.of(), decision.finalDraft());
+        }
+        if (!"action".equals(decision.kind())) {
+            throw new IllegalStateException("ReAct 决策失败：" + decision.message());
+        }
+        upsertStage(stages, stageFrom(planStarted, "react_plan", "规划资料检索", "completed",
+                "已一次规划 " + decision.tools().size() + " 项只读资料检索：" + String.join("、", decision.tools()) + "。"));
+        String retrievalQuery = text(decision.searchQuery()).isBlank() ? query : decision.searchQuery().strip();
+        // Action：工具计划已在决策解析时按白名单校验和去重，下面只负责逐项执行真实检索。
+        for (String tool : decision.tools()) {
             if ("search_textbook".equals(tool)) {
-                List<TextbookSearchHit> hits = searchTextbooks(request, subject, query, stages);
+                upsertStage(stages, runningToolStage("search_textbook", "检索教材", retrievalQuery, request.maxTextbookHits()));
+                emitProgress(listener, request, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
+                        imageUnderstanding, aiDraft, conversationTitle, startedNanos, "正在执行模型选择的教材检索。");
+                List<TextbookSearchHit> hits = searchTextbooks(request, subject, retrievalQuery, stages);
                 hits.stream().map(StudentExplanationService::textbookSource).forEach(sources::add);
-                observations.add("教材检索完成，获得 " + hits.size() + " 条证据。");
             } else if ("match_knowledge_graph".equals(tool)) {
-                knowledgeNodes.addAll(matchKnowledgeGraph(request, subject, query, stages));
+                upsertStage(stages, runningToolStage(
+                        "match_knowledge_graph", "匹配知识点", retrievalQuery, MAX_KNOWLEDGE_GRAPH_MATCHES));
+                emitProgress(listener, request, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
+                        imageUnderstanding, aiDraft, conversationTitle, startedNanos, "正在执行模型选择的知识点匹配。");
+                knowledgeNodes.addAll(matchKnowledgeGraph(request, subject, retrievalQuery, stages));
                 knowledgeNodes.stream().map(StudentExplanationService::knowledgeSource).forEach(sources::add);
-                observations.add("知识图谱匹配完成，获得 " + knowledgeNodes.size() + " 个节点。");
             } else if ("search_teacher_resources".equals(tool)) {
-                teacherHits.addAll(searchTeacherResources(request, subject, query, stages));
+                upsertStage(stages, runningToolStage(
+                        "search_teacher_resources", "检索教师资料", retrievalQuery, request.maxTeacherResourceHits()));
+                emitProgress(listener, request, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
+                        imageUnderstanding, aiDraft, conversationTitle, startedNanos, "正在执行模型选择的教师资料检索。");
+                teacherHits.addAll(searchTeacherResources(request, subject, retrievalQuery, stages));
                 Map<String, TeacherResourceDocumentResponse> documentsById = teacherDocumentsById(subject.tenantId(), teacherHits);
                 teacherHits.stream().map(hit -> teacherSource(hit, documentsById.get(hit.documentId()))).forEach(sources::add);
-                observations.add("教师资料检索完成，获得 " + teacherHits.size() + " 条证据。");
             }
-            upsertStage(stages, stage("react_observation_" + step, "ReAct 观察", "completed",
-                    observations.getLast(), startedNanos));
         }
-        // Preserve an explicit, truthful skipped stage for a requested teacher lookup by a student.  It is a policy
-        // observation, not a hidden tool call, and keeps the process trace clear about why no private source exists.
-        if (Boolean.TRUE.equals(request.searchTeacherResources()) && !isTeacherOrAdmin(subject.subjectType())) {
-            searchTeacherResources(request, subject, query, stages);
-        }
-        return new ReactEvidence(List.copyOf(knowledgeNodes), List.copyOf(teacherHits));
-    }
-
-    /**
-     * Fast default retrieval path.  Every source is still filtered by the backend-resolved tenant and role, but the
-     * service avoids spending one model round trip merely to choose a read-only tool.  The model-driven ReAct path
-     * remains available through {@code MATH_AGENT_STUDENT_EXPLANATION_REACT_MODE=agent} for explicit agent runs.
-     */
-    private ReactEvidence executeDefaultRetrieval(
-            StudentExplanationRequest request, RequestSubject subject, String query,
-            List<StudentExplanationResponse.WorkflowStage> stages,
-            List<StudentExplanationResponse.ExplanationSource> sources,
-            StudentExplanationProgressListener listener, String visibleQuestion,
-            List<StudentExplanationResponse.ExplanationCard> cards, StudentExplanationImageRecord imageRecord,
-            StudentExplanationVisionService.VisionAnalysis visionAnalysis,
-            StudentExplanationResponse.ImageUnderstanding imageUnderstanding,
-            StudentExplanationResponse.AiDraft aiDraft, String conversationTitle, long startedNanos) {
-        upsertStage(stages, runningStage("default_retrieval", "默认检索"));
-        emitProgress(listener, request, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
-                imageUnderstanding, aiDraft, conversationTitle, startedNanos, "正在读取当前账号可见的教材、知识图谱和教师资料。");
-
-        List<TextbookSearchHit> textbookHits = searchTextbooks(request, subject, query, stages);
-        List<KnowledgeGraphSpineResponse.Node> knowledgeNodes = matchKnowledgeGraph(request, subject, query, stages);
-        List<TeacherResourceBlockSearchResponse.Hit> teacherHits = searchTeacherResources(request, subject, query, stages);
-        textbookHits.stream().map(StudentExplanationService::textbookSource).forEach(sources::add);
-        knowledgeNodes.stream().map(StudentExplanationService::knowledgeSource).forEach(sources::add);
-        Map<String, TeacherResourceDocumentResponse> documentsById = teacherDocumentsById(subject.tenantId(), teacherHits);
-        teacherHits.stream().map(hit -> teacherSource(hit, documentsById.get(hit.documentId()))).forEach(sources::add);
-
-        upsertStage(stages, stage("default_retrieval", "默认检索", "completed",
-                "教材 " + textbookHits.size() + " 条、知识图谱 " + knowledgeNodes.size()
-                        + " 个、教师资料 " + teacherHits.size() + " 条，均已按当前账号权限过滤。", startedNanos));
-        emitProgress(listener, request, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
-                imageUnderstanding, aiDraft, conversationTitle, startedNanos, "默认检索完成，开始生成讲解。");
-        return new ReactEvidence(List.copyOf(knowledgeNodes), List.copyOf(teacherHits));
-    }
-
-    /** Defaults to the latency-bounded path; agent mode is opt-in and still capped by reactMaxSteps(). */
-    private static boolean reactModeEnabled() {
-        return "agent".equalsIgnoreCase(System.getenv(REACT_MODE_ENV));
+        return new ReactEvidence(List.copyOf(knowledgeNodes), List.copyOf(teacherHits), null);
     }
 
     /** Builds the model-visible tool allow-list from backend policy, never from client-supplied tool names. */
@@ -364,27 +329,17 @@ public class StudentExplanationService {
         Set<String> tools = new LinkedHashSet<>();
         if (Boolean.TRUE.equals(request.searchTextbook())) tools.add("search_textbook");
         if (Boolean.TRUE.equals(request.searchKnowledgeGraph())) tools.add("match_knowledge_graph");
-        if (Boolean.TRUE.equals(request.searchTeacherResources()) && isTeacherOrAdmin(subject.subjectType())) tools.add("search_teacher_resources");
+        // Visibility is resolved by TeacherResourceVisibilityPolicy at the Java tool boundary.  Students may search
+        // TENANT_PUBLIC/PUBLIC_TEXTBOOK material, but never receive a private document simply because a UI flag says
+        // "teacher resources".  Keeping the tool available lets the model actively retrieve public follow-up facts.
+        if (Boolean.TRUE.equals(request.searchTeacherResources())) tools.add("search_teacher_resources");
         return tools;
-    }
-
-    /** Reads the ReAct cap from the process environment and refuses invalid values instead of trusting raw strings. */
-    private static int reactMaxSteps() {
-        String configured = System.getenv(REACT_MAX_STEPS_ENV);
-        if (configured == null || configured.isBlank()) {
-            return DEFAULT_REACT_MAX_STEPS;
-        }
-        try {
-            int value = Integer.parseInt(configured.strip());
-            return value > 0 ? value : DEFAULT_REACT_MAX_STEPS;
-        } catch (NumberFormatException ignored) {
-            return DEFAULT_REACT_MAX_STEPS;
-        }
     }
 
     /** Evidence accumulated by ReAct actions and supplied to the final answer composer. */
     private record ReactEvidence(List<KnowledgeGraphSpineResponse.Node> knowledgeNodes,
-                                 List<TeacherResourceBlockSearchResponse.Hit> teacherHits) { }
+                                 List<TeacherResourceBlockSearchResponse.Hit> teacherHits,
+                                 StudentExplanationAiCardService.AiCardDraft finalDraft) { }
 
     /**
      * Requires backend-resolved identity; callers that need a test subject must pass it explicitly.
@@ -475,26 +430,6 @@ public class StudentExplanationService {
     }
 
     /**
-     * Runs real image understanding for an owner-validated temporary upload.
-     */
-    private StudentExplanationVisionService.VisionAnalysis analyzeImage(
-            StudentExplanationImageRecord imageRecord,
-            List<StudentExplanationResponse.WorkflowStage> stages) {
-        long stageStarted = System.nanoTime();
-        if (imageRecord == null) {
-            upsertStage(stages, stageFrom(stageStarted, "analyze_image", "识别题图", "skipped", "未上传题图。"));
-            return StudentExplanationVisionService.VisionAnalysis.skipped("no-image");
-        }
-        StudentExplanationVisionService.VisionAnalysis analysis = visionService.analyze(imageRecord);
-        upsertStage(stages, stageFrom(stageStarted, "analyze_image", "识别题图",
-                analysis.succeeded() ? "completed" : analysis.enabled() ? "failed" : "skipped",
-                analysis.succeeded()
-                        ? analysis.providerName() + "/" + analysis.modelCode()
-                        : analysis.message()));
-        return analysis;
-    }
-
-    /**
      * Searches configured textbook resources when the caller enables textbook retrieval.
      */
     private List<TextbookSearchHit> searchTextbooks(
@@ -504,7 +439,6 @@ public class StudentExplanationService {
             List<StudentExplanationResponse.WorkflowStage> stages) {
         long stageStarted = System.nanoTime();
         if (!Boolean.TRUE.equals(request.searchTextbook())) {
-            upsertStage(stages, stageFrom(stageStarted, "search_textbook", "检索教材", "skipped", "本轮未启用教材检索。"));
             return List.of();
         }
         try {
@@ -525,7 +459,8 @@ public class StudentExplanationService {
             // The trace must describe the exact evidence list later exposed to the learner, not an upstream candidate
             // total that may be capped or filtered before source cards are assembled.
             upsertStage(stages, stageFrom(stageStarted, "search_textbook", "检索教材", "completed",
-                    "本轮纳入 " + acceptedHits.size() + " 条教材证据。"));
+                    "调用参数：" + toolParameters(query, request.maxTextbookHits())
+                            + "；本轮纳入 " + acceptedHits.size() + " 条教材证据。"));
             return acceptedHits;
         } catch (RuntimeException e) {
             upsertStage(stages, stageFrom(stageStarted, "search_textbook", "检索教材", "failed", e.getMessage()));
@@ -543,7 +478,6 @@ public class StudentExplanationService {
             List<StudentExplanationResponse.WorkflowStage> stages) {
         long stageStarted = System.nanoTime();
         if (!Boolean.TRUE.equals(request.searchKnowledgeGraph())) {
-            upsertStage(stages, stageFrom(stageStarted, "match_knowledge_graph", "匹配知识点", "skipped", "本轮未启用知识点匹配。"));
             return List.of();
         }
         try {
@@ -557,12 +491,12 @@ public class StudentExplanationService {
                     .filter(match -> qualifiesNodeMatch(match.node(), match.score(), match.reason()))
                     .sorted(Comparator.comparingInt(NodeMatch::score).reversed()
                             .thenComparing(match -> match.node().label()))
-                    .limit(5)
+                    .limit(MAX_KNOWLEDGE_GRAPH_MATCHES)
                     .map(NodeMatch::node)
                     .toList();
             String detail = nodes.isEmpty()
-                    ? "本轮未找到可确认匹配的主干知识点。"
-                    : "本轮纳入 " + nodes.size() + " 个主干知识点：" + String.join("、",
+                    ? "调用参数：" + toolParameters(query, MAX_KNOWLEDGE_GRAPH_MATCHES) + "；本轮未找到可确认匹配的主干知识点。"
+                    : "调用参数：" + toolParameters(query, MAX_KNOWLEDGE_GRAPH_MATCHES) + "；本轮纳入 " + nodes.size() + " 个主干知识点：" + String.join("、",
                             nodes.stream().map(KnowledgeGraphSpineResponse.Node::label).toList()) + "。";
             upsertStage(stages, stageFrom(stageStarted, "match_knowledge_graph", "匹配知识点", "completed", detail));
             return nodes;
@@ -582,12 +516,6 @@ public class StudentExplanationService {
             List<StudentExplanationResponse.WorkflowStage> stages) {
         long stageStarted = System.nanoTime();
         if (!Boolean.TRUE.equals(request.searchTeacherResources())) {
-            upsertStage(stages, stageFrom(stageStarted, "search_teacher_resources", "检索教师资料", "skipped", "本轮未启用教师资料检索。"));
-            return List.of();
-        }
-        if (!isTeacherOrAdmin(subject.subjectType())) {
-            upsertStage(stages, stageFrom(stageStarted, "search_teacher_resources", "检索教师资料", "skipped",
-                    "当前身份不能读取教师私有资料。"));
             return List.of();
         }
         try {
@@ -603,7 +531,8 @@ public class StudentExplanationService {
                     .toList();
             // Keep the trace count aligned with the teacher_resource sources actually sent to the explanation model.
             upsertStage(stages, stageFrom(stageStarted, "search_teacher_resources", "检索教师资料", "completed",
-                    "本轮纳入 " + acceptedHits.size() + " 条教师资料。"));
+                    "调用参数：" + toolParameters(query, request.maxTeacherResourceHits())
+                            + "；本轮纳入 " + acceptedHits.size() + " 条教师资料。"));
             return acceptedHits;
         } catch (RuntimeException e) {
             log.warn("student_explanation_teacher_resource_search_failed tenantId={} subjectType={} subjectId={} query={}",
@@ -806,22 +735,16 @@ public class StudentExplanationService {
         return visual.isBlank() ? "图片讲题" : visual;
     }
 
-    /**
-     * Prevents image metadata or filenames from becoming fake problem text.
-     */
-    private static void requireRealTextForImageOnlyRequest(
-            StudentExplanationRequest request,
-            StudentExplanationImageRecord imageRecord,
-            StudentExplanationVisionService.VisionAnalysis visionAnalysis) {
-        if (request.questionText() != null) {
-            return;
+    /** Materializes one owner-validated upload as ephemeral model context without exposing its server path. */
+    private static String imageDataUrl(StudentExplanationImageRecord imageRecord) {
+        if (imageRecord == null) {
+            return "";
         }
-        boolean hasImageReference = imageRecord != null
-                || request.imageUploadId() != null
-                || request.imageFileName() != null
-                || request.imageContentType() != null;
-        if (hasImageReference && !visionAnalysis.succeeded()) {
-            throw new IllegalArgumentException("Image-only explanation requires successful real vision analysis or explicit questionText");
+        try {
+            byte[] bytes = Files.readAllBytes(imageRecord.localPath());
+            return "data:" + imageRecord.contentType() + ";base64," + Base64.getEncoder().encodeToString(bytes);
+        } catch (IOException exception) {
+            throw new IllegalStateException("Uploaded image is no longer readable", exception);
         }
     }
 
@@ -832,6 +755,9 @@ public class StudentExplanationService {
             StudentExplanationRequest request,
             StudentExplanationImageRecord imageRecord,
             StudentExplanationVisionService.VisionAnalysis visionAnalysis) {
+        if ("direct-image-context".equals(visionAnalysis.message())) {
+            return "image_direct_context";
+        }
         if (visionAnalysis.succeeded()) {
             return "image_understood_by_vision";
         }
@@ -1103,6 +1029,21 @@ public class StudentExplanationService {
      */
     private static StudentExplanationResponse.WorkflowStage runningStage(String key, String title) {
         return new StudentExplanationResponse.WorkflowStage(key, title, "running", "处理中。", 0);
+    }
+
+    /**
+     * Makes the server-derived input of one read-only tool observable in the live trace.
+     * Identity, tenant IDs, capability tokens, and raw provider prompts intentionally never cross this boundary.
+     */
+    private static StudentExplanationResponse.WorkflowStage runningToolStage(
+            String key, String title, String query, int limit) {
+        return new StudentExplanationResponse.WorkflowStage(
+                key, title, "running", "调用参数：" + toolParameters(query, limit) + "。", 0);
+    }
+
+    /** Formats only learner-visible retrieval arguments after the request's server-side bounds have been applied. */
+    private static String toolParameters(String query, int limit) {
+        return "query=" + compact(query) + "；limit=" + Math.max(0, limit);
     }
 
     /**

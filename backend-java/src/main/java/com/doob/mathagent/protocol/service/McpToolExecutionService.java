@@ -326,7 +326,7 @@ public class McpToolExecutionService {
                 TeacherResourceSearchFilter.of(
                         flexibleStringListArgument(arguments, "permissionScopes", "permissionScope"),
                         flexibleStringListArgument(arguments, "documentIds", "documentId"),
-                        librarySelectors,
+                        teacherSourceTypeSelectors(librarySelectors),
                         flexibleStringListArgument(arguments, "tags", "tag")));
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("queryId", response.queryId());
@@ -425,7 +425,11 @@ public class McpToolExecutionService {
                 url,
                 null,
                 "TEACHER_PRIVATE",
-                stringArgumentOrDefault(arguments, "exportFormat", "md")));
+                stringArgumentOrDefault(arguments, "exportFormat", "md"),
+                // MCP Feishu downloads must preserve authenticated image blocks as owner-scoped local assets.  The
+                // former nine-argument constructor silently selected TEXT and made the downloaded Markdown look
+                // complete while its images were unavailable to later retrieval and handout generation.
+                "MARKDOWN_ASSETS"));
         TeacherSourceSyncJobResponse queued = teacherSourceSyncJobService.createSyncJob(
                 client.tenantId(),
                 normalizedProfile(client.profile()),
@@ -456,6 +460,7 @@ public class McpToolExecutionService {
         result.put("parseStatus", latestDocument.parseStatus());
         result.put("embeddingStatus", latestDocument.embeddingStatus());
         result.put("feishuExportFormat", latestDocument.feishuExportFormat());
+        result.put("parseMode", latestDocument.parseMode());
         result.put("previewFiles", latestDocument.previewFiles());
         return result;
     }
@@ -826,7 +831,7 @@ public class McpToolExecutionService {
                         TeacherResourceSearchFilter.of(
                                 flexibleStringListArgument(arguments, "permissionScopes", "permissionScope"),
                                 flexibleStringListArgument(arguments, "documentIds", "documentId"),
-                                List.of(library),
+                                teacherSourceTypeSelectors(List.of(library)),
                                 flexibleStringListArgument(arguments, "tags", "tag")))
                 .hits();
         return new LibraryEvidence(library, List.of(), hits, elapsedMs(startedNanos));
@@ -842,6 +847,11 @@ public class McpToolExecutionService {
         List<String> libraries = mergeDistinct(
                 flexibleStringListArgument(arguments, "libraries", "library"),
                 flexibleStringListArgument(arguments, "sourceTypes", "sourceType"));
+        // The tool itself is already the public-textbook endpoint. Standard MCP clients commonly submit only the
+        // required query, so an absent selector means the one safe default textbook corpus rather than ambiguity.
+        if (libraries.isEmpty()) {
+            return;
+        }
         requireLibrarySelectors(libraries, toolName);
         if (libraries.size() != 1 || !isTextbookLibrary(libraries.getFirst())) {
             throw new IllegalArgumentException(toolName + " requires library=textbook or public_textbook");
@@ -872,6 +882,16 @@ public class McpToolExecutionService {
             case "feishu", "qq_bundle", "gaokao", "mock_exam", "public_textbook_derivative" -> library;
             default -> "";
         };
+    }
+
+    /** Generic teacher-resource aliases select the whole visible corpus; only concrete provider names filter it. */
+    private static List<String> teacherSourceTypeSelectors(List<String> libraries) {
+        if (libraries == null || libraries.isEmpty()) return List.of();
+        return libraries.stream()
+                .map(McpToolExecutionService::teacherSourceTypeSelector)
+                .filter(value -> !value.isBlank())
+                .distinct()
+                .toList();
     }
 
     private static List<Map<String, Object>> mergedEvidenceHits(

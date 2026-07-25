@@ -71,20 +71,38 @@ public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownload
     }
 
     @Override
+    public FeishuDownloadResult downloadWithAccessToken(String url, Path stagingRoot, int maxFiles,
+            String fileExtension, FeishuDownloadCheckpoint checkpoint, String accessToken) {
+        if (accessToken == null || accessToken.isBlank()) return download(url, stagingRoot, maxFiles, fileExtension, checkpoint);
+        try {
+            Files.createDirectories(stagingRoot.toAbsolutePath().normalize());
+            Path credentialFile = Files.createTempFile(stagingRoot.toAbsolutePath().normalize(), ".feishu-user-", ".credentials");
+            Files.writeString(credentialFile, "ACCESS_TOKEN\n" + accessToken.strip() + "\n", StandardCharsets.UTF_8);
+            try { return download(url, stagingRoot, maxFiles, fileExtension, checkpoint, credentialFile); }
+            finally { Files.deleteIfExists(credentialFile); }
+        } catch (IOException exception) { throw new IllegalStateException("Failed to prepare Feishu user credential", exception); }
+    }
+
+    @Override
     public FeishuDownloadResult download(
             String url,
             Path stagingRoot,
             int maxFiles,
             String fileExtension,
             FeishuDownloadCheckpoint checkpoint) {
-        validateConfiguredFiles();
+        return download(url, stagingRoot, maxFiles, fileExtension, checkpoint, null);
+    }
+
+    private FeishuDownloadResult download(String url, Path stagingRoot, int maxFiles, String fileExtension,
+            FeishuDownloadCheckpoint checkpoint, Path credentialFile) {
+        validateConfiguredFiles(url, credentialFile);
         Path outputRoot = stagingRoot.toAbsolutePath().normalize();
         IllegalStateException lastFailure = null;
         String normalizedFileExtension = normalizeFileExtension(fileExtension);
         FeishuDownloadCheckpoint activeCheckpoint = checkpoint == null ? FeishuDownloadCheckpoint.empty() : checkpoint;
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
             try {
-                return runDownloader(url, outputRoot, maxFiles, normalizedFileExtension, activeCheckpoint, attempt);
+                return runDownloader(url, outputRoot, maxFiles, normalizedFileExtension, activeCheckpoint, attempt, credentialFile);
             } catch (IllegalStateException exception) {
                 lastFailure = exception;
                 FeishuDownloadCheckpoint latestCheckpoint = latestCheckpoint(exception);
@@ -113,7 +131,8 @@ public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownload
             int maxFiles,
             String fileExtension,
             FeishuDownloadCheckpoint checkpoint,
-            int attempt) {
+            int attempt,
+            Path credentialFile) {
         Path summaryPath = outputRoot.resolve("summary-" + Instant.now().toEpochMilli() + "-attempt-" + attempt + ".json");
         Path checkpointPath = outputRoot.resolve("resume-checkpoint-" + Instant.now().toEpochMilli()
                 + "-attempt-" + attempt + ".json");
@@ -128,7 +147,7 @@ public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownload
                     checkpointPath,
                     maxFiles,
                     fileExtension,
-                    checkpoint))
+                    checkpoint, credentialFile))
                     .redirectErrorStream(true)
                     .redirectOutput(processOutputPath.toFile())
                     .start();
@@ -256,14 +275,14 @@ public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownload
             Path checkpointPath,
             int maxFiles,
             String fileExtension,
-            FeishuDownloadCheckpoint checkpoint) throws IOException {
+            FeishuDownloadCheckpoint checkpoint, Path credentialFile) throws IOException {
         List<String> command = new java.util.ArrayList<>(List.of(
                 "python",
                 properties.feishuDownloaderScript().toString(),
                 "--url",
                 url,
                 "--appkey-path",
-                properties.feishuAppkeyPath().toString(),
+                credentialFile == null ? properties.feishuAppkeyPath().toString() : credentialFile.toString(),
                 "--output-dir",
                 outputRoot.toString(),
                 "--summary-path",
@@ -376,7 +395,13 @@ public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownload
                 || message.contains("remote end closed")
                 || message.contains("502")
                 || message.contains("503")
-                || message.contains("504");
+                || message.contains("504")
+                // Feishu uses HTTP 429 for per-app/global request concurrency and frequency limits.  The durable
+                // downloader checkpoint means the next attempt resumes from the completed folder cursor instead of
+                // restarting the whole tree and immediately hitting the same limit again.
+                || message.contains("429")
+                || message.contains("too many requests")
+                || message.contains("rate limit");
     }
 
     /**
@@ -451,12 +476,19 @@ public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownload
     /**
      * Validates local files needed by the process downloader.
      */
-    private void validateConfiguredFiles() {
+    private void validateConfiguredFiles(String sourceUrl, Path credentialFile) {
         if (!Files.isRegularFile(properties.feishuDownloaderScript())) {
             throw new IllegalStateException("Feishu downloader script not found");
         }
-        if (!Files.isRegularFile(properties.feishuAppkeyPath())) {
-            throw new IllegalStateException("Feishu APPKEY path not found");
+        if (credentialFile == null && !properties.credentialsConfigured()) {
+            // Missing app credentials is an authorization recovery state, not a terminal parse failure.  The original
+            // administrator-supplied root is safe to show as the re-login destination and contains no browser cookie.
+            throw new TeacherFeishuDownloadException(
+                    "Feishu authorization is required: APPKEY credentials are not configured",
+                    false,
+                    null,
+                    FeishuDownloadCheckpoint.empty(),
+                    new TeacherSourceSyncFailureResponse("AUTH_REQUIRED", false, List.of(), sourceUrl));
         }
     }
 

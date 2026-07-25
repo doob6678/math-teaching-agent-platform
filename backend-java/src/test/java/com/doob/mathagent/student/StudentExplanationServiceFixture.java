@@ -98,7 +98,6 @@ public final class StudentExplanationServiceFixture {
                 teacherResourceStore,
                 new StudentExplanationAiCardService(new ReactProtocolGateway(aiChatGateway), aiProviderCatalog),
                 imageStoreService == null ? testImageStore() : imageStoreService,
-                visionService == null ? testVisionService() : visionService,
                 testHistoryStore());
     }
 
@@ -174,9 +173,8 @@ public final class StudentExplanationServiceFixture {
     }
 
     /**
-     * Test-only model adapter: ReAct decisions are generated from the tool list in the real controller prompt, while
-     * the supplied gateway still produces the final answer. This keeps every service test on the same multi-turn
-     * protocol as production instead of silently accepting the retired one-shot card prompt.
+     * Test-only model adapter: a non-empty allow-list becomes one complete retrieval plan; otherwise the supplied
+     * gateway's real card JSON is wrapped as the same one-call ReAct final contract used in production.
      */
     private static final class ReactProtocolGateway implements AiChatGateway {
         private static final Pattern TOOL_LIST = Pattern.compile("Available tools: \\[([^]]*)]", Pattern.MULTILINE);
@@ -193,18 +191,28 @@ public final class StudentExplanationServiceFixture {
             }
             Matcher matcher = TOOL_LIST.matcher(request.userInputSummary());
             String tools = matcher.find() ? matcher.group(1) : "";
-            String action = nextTool(tools);
-            String content = action.isBlank()
-                    ? "{\"decision\":\"final\"}"
-                    : "{\"decision\":\"action\",\"tool\":\"" + action + "\"}";
-            return new AiChatResult(request.providerName(), request.modelCode(), 1, 1, 2, "react", content);
+            List<String> plannedTools = plannedTools(tools);
+            if (!plannedTools.isEmpty()) {
+                String values = plannedTools.stream().map(tool -> "\"" + tool + "\"")
+                        .collect(java.util.stream.Collectors.joining(","));
+                return new AiChatResult(request.providerName(), request.modelCode(), 1, 1, 2, "react",
+                        "{\"decision\":\"action\",\"tools\":[" + values + "]}");
+            }
+            AiChatResult finalResult = finalAnswerGateway.call(request);
+            String cardsJson = finalResult.generatedContent() == null ? "" : finalResult.generatedContent().strip();
+            String combined = cardsJson.startsWith("{")
+                    ? "{\"decision\":\"final\"," + cardsJson.substring(1)
+                    : cardsJson;
+            return new AiChatResult(finalResult.providerName(), finalResult.modelCode(), finalResult.promptTokens(),
+                    finalResult.completionTokens(), finalResult.totalTokens(), finalResult.safeMessage(), combined);
         }
 
-        private static String nextTool(String tools) {
-            if (tools.contains("search_textbook")) return "search_textbook";
-            if (tools.contains("match_knowledge_graph")) return "match_knowledge_graph";
-            if (tools.contains("search_teacher_resources")) return "search_teacher_resources";
-            return "";
+        private static List<String> plannedTools(String tools) {
+            List<String> plan = new java.util.ArrayList<>();
+            if (tools.contains("search_textbook")) plan.add("search_textbook");
+            if (tools.contains("match_knowledge_graph")) plan.add("match_knowledge_graph");
+            if (tools.contains("search_teacher_resources")) plan.add("search_teacher_resources");
+            return List.copyOf(plan);
         }
     }
 }

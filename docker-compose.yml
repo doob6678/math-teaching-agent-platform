@@ -1,0 +1,179 @@
+name: math-agent-rag
+
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set in .env}
+      MYSQL_DATABASE: ${MATH_AGENT_DB_NAME:-math_agent_rag}
+    command: ["mysqld", "--character-set-server=utf8mb4", "--collation-server=utf8mb4_0900_ai_ci"]
+    ports: ["${MATH_AGENT_MYSQL_HOST_PORT:-3307}:3306"]
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./backend-java/src/main/resources/db:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    ports: ["${MATH_AGENT_REDIS_HOST_PORT:-6380}:6379"]
+    volumes: ["redis-data:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  rabbitmq:
+    image: rabbitmq:4-management
+    restart: unless-stopped
+    ports:
+      - "${MATH_AGENT_RABBITMQ_HOST_PORT:-5673}:5672"
+      - "${MATH_AGENT_RABBITMQ_MANAGEMENT_HOST_PORT:-15673}:15672"
+    volumes: ["rabbitmq-data:/var/lib/rabbitmq"]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  milvus-etcd:
+    image: quay.io/coreos/etcd:v3.5.18
+    restart: unless-stopped
+    environment:
+      ETCD_AUTO_COMPACTION_MODE: revision
+      ETCD_AUTO_COMPACTION_RETENTION: "1000"
+      ETCD_QUOTA_BACKEND_BYTES: "4294967296"
+      ETCD_SNAPSHOT_COUNT: "50000"
+    command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls=http://0.0.0.0:2379 --data-dir /etcd
+    volumes: ["milvus-etcd-data:/etcd"]
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  milvus-minio:
+    image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+    restart: unless-stopped
+    environment:
+      MINIO_ACCESS_KEY: ${MATH_AGENT_MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MATH_AGENT_MINIO_SECRET_KEY:?set in .env}
+    command: minio server /minio_data --console-address ":9001"
+    volumes: ["milvus-minio-data:/minio_data"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  milvus:
+    image: milvusdb/milvus:v2.6.11
+    restart: unless-stopped
+    command: ["milvus", "run", "standalone"]
+    security_opt: ["seccomp:unconfined"]
+    environment:
+      ETCD_ENDPOINTS: milvus-etcd:2379
+      MINIO_ADDRESS: milvus-minio:9000
+      MINIO_ACCESS_KEY_ID: ${MATH_AGENT_MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_ACCESS_KEY: ${MATH_AGENT_MINIO_SECRET_KEY:?set in .env}
+      COMMON_SECURITY_AUTHORIZATIONENABLED: "true"
+      COMMON_SECURITY_DEFAULTROOTPASSWORD: ${MATH_AGENT_MILVUS_ROOT_PASSWORD:?set in .env}
+    ports:
+      - "${MATH_AGENT_MILVUS_HOST_PORT:-19531}:19530"
+      - "${MATH_AGENT_MILVUS_METRICS_HOST_PORT:-9092}:9091"
+    volumes: ["milvus-data:/var/lib/milvus"]
+    depends_on:
+      milvus-etcd: {condition: service_healthy}
+      milvus-minio: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9091/healthz"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 20
+
+  ai-worker:
+    build: ./ai-worker-python
+    restart: unless-stopped
+    environment:
+      MATH_AGENT_WORKER_API_KEY: ${MATH_AGENT_WORKER_API_KEY:?set in .env}
+      MATH_AGENT_TOOL_BROKER_BASE_URL: http://backend:8080
+      MATH_AGENT_AGENT_WORKER_SHARED_KEY: ${MATH_AGENT_AGENT_WORKER_SHARED_KEY:?set in .env}
+      MATH_AGENT_DB_HOST: mysql
+      MATH_AGENT_DB_PORT: 3306
+      MATH_AGENT_DB_USERNAME: root
+      MATH_AGENT_DB_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set in .env}
+      MATH_AGENT_DB_NAME: ${MATH_AGENT_DB_NAME:-math_agent_rag}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      MATH_AGENT_LOCAL_CLIP_MODEL_PATH: ${MATH_AGENT_CONTAINER_CLIP_MODEL_PATH:-}
+      MATH_AGENT_LOCAL_RERANK_MODEL_PATH: ${MATH_AGENT_CONTAINER_RERANK_MODEL_PATH:-}
+      MATH_AGENT_LOCAL_TEXT_EMBEDDING_MODEL_PATH: ${MATH_AGENT_CONTAINER_TEXT_MODEL_PATH:-}
+      MATH_AGENT_USAGE_LEDGER_PATH: /app/data/usage/provider-usage.jsonl
+    ports: ["${MATH_AGENT_WORKER_HOST_PORT:-8092}:8091"]
+    volumes:
+      - worker-data:/app/data
+      - ${MATH_AGENT_MODEL_ROOT:-./.local-models}:/models:ro
+    depends_on:
+      mysql: {condition: service_healthy}
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend-java/Dockerfile
+    restart: unless-stopped
+    environment:
+      MATH_AGENT_DB_URL: jdbc:mysql://mysql:3306/${MATH_AGENT_DB_NAME:-math_agent_rag}?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true
+      MATH_AGENT_DB_USERNAME: root
+      MATH_AGENT_DB_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set in .env}
+      MATH_AGENT_REDIS_REDISSON_ADDRESS: redis://redis:6379
+      SPRING_RABBITMQ_HOST: rabbitmq
+      MATH_AGENT_RABBITMQ_LISTENER_AUTO_STARTUP: "true"
+      MATH_AGENT_AGENT_WORKER_SHARED_KEY: ${MATH_AGENT_AGENT_WORKER_SHARED_KEY:?set in .env}
+      MATH_AGENT_AGENT_WORKER_CAPABILITY_SECRET: ${MATH_AGENT_AGENT_WORKER_CAPABILITY_SECRET:?set in .env}
+      MATH_AGENT_EMBEDDING_BASE_URL: http://ai-worker:8091/v1
+      MATH_AGENT_EMBEDDING_API_KEY: ${MATH_AGENT_WORKER_API_KEY:?set in .env}
+      MATH_AGENT_VECTOR_INDEX_MILVUS_URI: http://milvus:19530
+      MATH_AGENT_MILVUS_TOKEN: root:${MATH_AGENT_MILVUS_ROOT_PASSWORD:?set in .env}
+      MATH_AGENT_TEACHER_SYNC_FEISHU_DOWNLOADER_SCRIPT: /app/scripts/download_feishu_url.py
+      MATH_AGENT_TEACHER_SYNC_FEISHU_STAGING_ROOT: /app/data/teacher-source-imports
+      MATH_AGENT_TEACHER_SYNC_ASSET_STORAGE_ROOT: /app/data/teacher-assets
+      FEISHU_APP_ID: ${FEISHU_APP_ID:-${FEISHU_APPID:-}}
+      FEISHU_APP_SECRET: ${FEISHU_APP_SECRET:-${FEISHU_APPSECRET:-}}
+      FEISHU_OAUTH_REDIRECT_URI: ${FEISHU_OAUTH_REDIRECT_URI:-}
+      FEISHU_OAUTH_SUCCESS_REDIRECT_URI: ${FEISHU_OAUTH_SUCCESS_REDIRECT_URI:-}
+      FEISHU_TOKEN_ENCRYPTION_KEY: ${FEISHU_TOKEN_ENCRYPTION_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_CHAT_MODEL: ${OPENAI_CHAT_MODEL:-gpt-5.6-luna}
+    ports: ["${MATH_AGENT_BACKEND_HOST_PORT:-8081}:8080"]
+    volumes: ["backend-data:/app/data"]
+    depends_on:
+      mysql: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      rabbitmq: {condition: service_healthy}
+      milvus: {condition: service_healthy}
+      ai-worker: {condition: service_healthy}
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    ports: ["${MATH_AGENT_FRONTEND_HOST_PORT:-5174}:80"]
+    depends_on:
+      backend: {condition: service_healthy}
+
+volumes:
+  mysql-data:
+  redis-data:
+  rabbitmq-data:
+  milvus-etcd-data:
+  milvus-minio-data:
+  milvus-data:
+  worker-data:
+  backend-data:

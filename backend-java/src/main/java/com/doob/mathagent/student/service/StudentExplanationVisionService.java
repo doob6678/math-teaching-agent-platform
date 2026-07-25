@@ -75,7 +75,12 @@ public class StudentExplanationVisionService {
             return VisionAnalysis.skipped("vision-disabled");
         }
         try {
-            return analyzeImageBytes(Files.readAllBytes(imageRecord.localPath()), imageRecord.contentType());
+            /*
+             * Interactive explanations must not wait for every provider in sequence. The selected multimodal
+             * provider receives the original image again during answer generation, so a failed OCR pass can safely
+             * fall through to planning instead of turning one upload into several long relay timeouts.
+             */
+            return analyzeImageBytes(Files.readAllBytes(imageRecord.localPath()), imageRecord.contentType(), false);
         } catch (IOException e) {
             return new VisionAnalysis(
                     true,

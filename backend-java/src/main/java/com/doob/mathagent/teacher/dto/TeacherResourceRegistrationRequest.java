@@ -11,8 +11,8 @@ import com.doob.mathagent.teacher.support.TeacherResourceTitleResolver;
  * @param originalUrl original Feishu URL or external source URL
  * @param localPath local folder or file path configured by teacher/admin
  * @param permissionScope resource access scope, such as TEACHER_PRIVATE, MATH_VIP, or PUBLIC_TEXTBOOK
- * @param feishuExportFormat native Feishu export format for Feishu sources; supported values are md, docx, and pdf
- * @param parseMode TEXT for deterministic extraction or AI for higher-cost semantic labeling
+ * @param feishuExportFormat Feishu export format: md, docx, or pdf
+ * @param parseMode TEXT for deterministic extraction, MARKDOWN_ASSETS for local Markdown image materialization, or AI for semantic labeling
  */
 public record TeacherResourceRegistrationRequest(
         String sourceType,
@@ -51,7 +51,9 @@ public record TeacherResourceRegistrationRequest(
                         normalizedLocalPath),
                 normalizedOriginalUrl,
                 normalizedLocalPath,
-                textOrDefault(permissionScope, "TEACHER_PRIVATE"),
+                // New uploads participate in the tenant knowledge base by default; callers may still explicitly
+                // select private or class publication and Java applies the final visibility validation.
+                textOrDefault(permissionScope, "TENANT_PUBLIC"),
                 normalizeFeishuExportFormat(normalizedSourceType, feishuExportFormat),
                 normalizeParseMode(parseMode));
     }
@@ -115,7 +117,8 @@ public record TeacherResourceRegistrationRequest(
 
     private static String normalizeParseMode(String value) {
         String normalized = textOrDefault(value, "TEXT").toUpperCase();
-        if ("TEXT".equals(normalized) || "AI".equals(normalized)) {
+        // MARKDOWN_ASSETS keeps deterministic text parsing but makes the image-localization contract explicit.
+        if ("TEXT".equals(normalized) || "MARKDOWN_ASSETS".equals(normalized) || "AI".equals(normalized)) {
             return normalized;
         }
         throw new IllegalArgumentException("Unsupported teacher resource parse mode: " + value);

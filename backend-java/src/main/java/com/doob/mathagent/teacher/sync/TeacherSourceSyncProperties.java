@@ -75,15 +75,15 @@ public record TeacherSourceSyncProperties(
                         defaultFeishuDownloaderScript().toString())),
                 Path.of(textOrDefault(
                         environment.getProperty("math-agent.teacher.sync.feishu.appkey-path"),
-                        "D:/project2026/feishutest/APPKEY.md")),
+                        "")),
                 Path.of(textOrDefault(
                         environment.getProperty("math-agent.teacher.sync.feishu.staging-root"),
-                        "D:/project2026/feishutest/codex-app-staging")),
+                        Path.of(System.getProperty("user.dir", "."), ".local-storage", "teacher-source-imports").toString())),
                 Path.of(textOrDefault(
                         environment.getProperty("math-agent.teacher.sync.asset-storage-root"),
                         environment.getProperty(
                                 "math-agent.teacher.sync.feishu.staging-root",
-                                "D:/project2026/feishutest/codex-app-staging") + "/_assets")),
+                                Path.of(System.getProperty("user.dir", "."), ".local-storage", "teacher-source-imports").toString()) + "/_assets")),
                 integerOrDefault(environment.getProperty("math-agent.teacher.sync.feishu.smoke-max-files"), 1),
                 integerOrDefault(environment.getProperty("math-agent.teacher.sync.feishu.process-timeout-seconds"), 30));
     }
@@ -98,6 +98,17 @@ public record TeacherSourceSyncProperties(
         assetStorageRoot = assetStorageRoot.toAbsolutePath().normalize();
         feishuSmokeMaxFiles = Math.max(0, feishuSmokeMaxFiles);
         feishuProcessTimeoutSeconds = Math.max(1, feishuProcessTimeoutSeconds);
+    }
+
+    /**
+     * Checks the same credential precedence used by the Python worker without exposing either credential value.
+     * Environment credentials are preferred for deployment; the APPKEY file remains a local-development fallback.
+     */
+    public boolean credentialsConfigured() {
+        String appId = System.getenv("APP_ID");
+        String appSecret = System.getenv("APP_SECRET");
+        return (appId != null && !appId.isBlank() && appSecret != null && !appSecret.isBlank())
+                || java.nio.file.Files.isRegularFile(feishuAppkeyPath());
     }
 
     /**

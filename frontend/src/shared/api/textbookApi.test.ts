@@ -112,6 +112,36 @@ describe("textbookApi", () => {
     expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Id");
   });
 
+  it("invalidates a stale browser session when backend cannot resolve its subject role", async () => {
+    globalThis.localStorage.setItem(
+      "math-agent:auth-session",
+      JSON.stringify({
+        userId: "local-student",
+        username: "student",
+        role: "student",
+        tenantId: "default",
+        tokenName: "satoken",
+        tokenValue: "stale-token",
+      }),
+    );
+    const dispatchEvent = vi.fn();
+    vi.stubGlobal("dispatchEvent", dispatchEvent);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      text: async () => JSON.stringify({
+        code: "API_ACCESS_DENIED",
+        message: "Endpoint requires subject type in [student, teacher, admin]",
+      }),
+    });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    await expect(client.getStudentDashboard()).rejects.toThrow("Endpoint requires subject type");
+
+    expect(globalThis.localStorage.getItem("math-agent:auth-session")).toBeNull();
+    expect(dispatchEvent).toHaveBeenCalledWith(expect.objectContaining({ type: "math-agent:auth-invalid" }));
+  });
+
   it("loads textbook summary from backend", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

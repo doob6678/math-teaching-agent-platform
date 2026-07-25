@@ -74,6 +74,10 @@ class FormulaRecognitionService:
                 },
             ],
         }
+        # A number of OpenAI-compatible relays require a non-null tool schema even for plain JSON output.
+        if "api.openai.com" not in endpoint:
+            request_body["tools"] = [{"type": "function", "function": {"name": "__no_tool__", "description": "internal compatibility schema", "parameters": {"type": "object", "properties": {}}}}]
+            request_body["tool_choice"] = "none"
         try:
             response = requests.post(
                 endpoint,

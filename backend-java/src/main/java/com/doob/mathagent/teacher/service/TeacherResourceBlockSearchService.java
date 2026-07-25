@@ -22,6 +22,7 @@ import com.doob.mathagent.teacher.search.audit.TeacherResourceBlockSearchAuditEv
 import com.doob.mathagent.teacher.search.audit.TeacherResourceBlockSearchAuditSink;
 import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
 import com.doob.mathagent.teacher.document.TeacherResourceReadiness;
+import com.doob.mathagent.teacher.document.TeacherResourceVisibilityPolicy;
 import com.doob.mathagent.teacher.support.TeacherResourceLibraryResolver;
 import com.doob.mathagent.vector.service.VectorIndexService;
 import com.doob.mathagent.vector.service.VectorSearchFilter;
@@ -162,7 +163,7 @@ public class TeacherResourceBlockSearchService {
         String normalizedTenantId = requireText(tenantId, "tenantId is required");
         String normalizedRole = requireText(viewerRole, "viewerRole is required").toLowerCase(Locale.ROOT);
         String normalizedSubjectId = requireText(viewerSubjectId, "viewerSubjectId is required");
-        requireTeacherOrAdmin(normalizedRole);
+        requireReaderRole(normalizedRole);
 
         List<TeacherResourceDocumentResponse> visibleDocuments = resourceStore.listVisible(
                 normalizedTenantId, normalizedRole, normalizedSubjectId);
@@ -494,7 +495,7 @@ public class TeacherResourceBlockSearchService {
         String normalizedTenantId = requireText(tenantId, "tenantId is required");
         String normalizedRole = requireText(viewerRole, "viewerRole is required").toLowerCase(Locale.ROOT);
         String normalizedSubjectId = requireText(viewerSubjectId, "viewerSubjectId is required");
-        requireTeacherOrAdmin(normalizedRole);
+        requireReaderRole(normalizedRole);
         String normalizedQuery = normalizeQuery(query);
         int safeLimit = clampLimit(limit);
         TeacherResourceSearchFilter normalizedFilter = normalizeFilter(filter, normalizedQuery);
@@ -1887,7 +1888,7 @@ public class TeacherResourceBlockSearchService {
             String viewerRole,
             String viewerSubjectId,
             String documentId) {
-        requireTeacherOrAdmin(viewerRole);
+        requireReaderRole(viewerRole);
         String normalizedDocumentId = textOrDefault(documentId, "");
         if (normalizedDocumentId.isBlank()) {
             throw new IllegalArgumentException("documentId is required");
@@ -1915,9 +1916,9 @@ public class TeacherResourceBlockSearchService {
     /**
      * Ensures only teacher/admin backend subjects can use this teacher resource endpoint.
      */
-    private static void requireTeacherOrAdmin(String viewerRole) {
-        if (!"teacher".equals(viewerRole) && !"admin".equals(viewerRole)) {
-            throw new IllegalArgumentException("Teacher resource block search requires teacher or admin role");
+    private static void requireReaderRole(String viewerRole) {
+        if (!TeacherResourceVisibilityPolicy.isReaderRole(viewerRole)) {
+            throw new IllegalArgumentException("Teacher resource block search requires an authenticated reader role");
         }
     }
 

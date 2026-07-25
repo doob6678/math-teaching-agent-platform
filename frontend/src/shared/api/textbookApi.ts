@@ -2011,7 +2011,7 @@ export interface TeacherResourceRegistrationRequest {
   /** Native Feishu export format for Feishu resources; defaults to md. */
   feishuExportFormat?: "md" | "docx" | "pdf";
   /** TEXT uses deterministic extraction; AI requests higher-cost semantic labeling when backend is configured. */
-  parseMode?: "TEXT" | "AI";
+  parseMode?: "TEXT" | "MARKDOWN_ASSETS" | "AI";
 }
 
 /**
@@ -2025,7 +2025,7 @@ export interface TeacherResourceUploadRequest {
   /** RAG 权限域，例如 TEACHER_PRIVATE、MATH_VIP 或 PUBLIC_TEXTBOOK。 */
   permissionScope: string;
   /** TEXT uses deterministic extraction; AI requests higher-cost semantic labeling when backend is configured. */
-  parseMode?: "TEXT" | "AI";
+  parseMode?: "TEXT" | "MARKDOWN_ASSETS" | "AI";
   /** 上传的真实文件，可来自多文件选择、文件夹选择或 ZIP。 */
   files: File[];
 }
@@ -2457,6 +2457,8 @@ type FetchLike = (
 ) => Promise<Pick<Response, "ok" | "status" | "json" | "text" | "arrayBuffer" | "headers" | "body">>;
 
 const AUTH_STORAGE_KEY = "math-agent:auth-session";
+/** Broadcast when the backend rejects a persisted token whose server-side session or role has disappeared. */
+export const AUTH_INVALID_EVENT = "math-agent:auth-invalid";
 const DEVICE_ID_HEADER = { "X-Device-Id": "local-browser-console" };
 /** Task data, protected artifacts, and SSE snapshots must never reuse a stale browser/proxy response. */
 const NO_STORE_HEADERS = {
@@ -2468,6 +2470,24 @@ export const QUESTION_BANK_MAX_SEARCH_ROWS = 500;
 
 export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = fetch) {
   const normalizedBaseUrl = baseUrl.replace(/\/+$/, "");
+
+  /**
+   * Removes headers from the retired one-time capability-token protocol.
+   *
+   * Authentication is provided by the server-side session. Keeping this guard at the shared transport boundary
+   * also protects older call sites and browser bundles from accidentally sending stale capability credentials.
+   */
+  function withoutLegacyCapabilityHeaders(headers?: HeadersInit): Record<string, string> {
+    const entries = headers instanceof Headers
+      ? Array.from(headers.entries())
+      : Array.isArray(headers)
+        ? headers
+        : Object.entries(headers ?? {});
+    return Object.fromEntries(entries.filter(([name]) => {
+      const normalizedName = name.toLowerCase();
+      return normalizedName !== "x-capability-token" && normalizedName !== "x-request-hash";
+    }));
+  }
 
   /**
    * 请求后端 JSON。身份只通过后端登录 token 传递，不能使用前端自报角色或学生 ID。
@@ -2511,6 +2531,18 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     return `Backend request failed: ${status} ${trimmed}`.trim();
   }
 
+  /**
+   * Clears a demonstrably stale login immediately after a backend restart or session expiry.
+   * Other policy 403s remain visible and must never silently log the user out.
+   */
+  function invalidateStaleSession(status: number, body: string): void {
+    const expiredSession = status === 403
+      && /SESSION_EXPIRED|AUTH(?:ENTICATION)?_REQUIRED|login session (?:is )?expired/i.test(body);
+    if (status !== 401 && !expiredSession) return;
+    globalThis.localStorage?.removeItem(AUTH_STORAGE_KEY);
+    globalThis.dispatchEvent?.(new Event(AUTH_INVALID_EVENT));
+  }
+
   async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> {
     const auth = readAuthSession();
     const authHeader = auth ? { [auth.tokenName]: auth.tokenValue } : {};
@@ -2521,12 +2553,13 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
       headers: {
         ...DEVICE_ID_HEADER,
         ...authHeader,
-        ...init.headers,
+        ...withoutLegacyCapabilityHeaders(init.headers),
         ...NO_STORE_HEADERS,
       },
     });
     if (!response.ok) {
       const body = await response.text();
+      invalidateStaleSession(response.status, body);
       throw new Error(backendErrorMessage(response.status, body));
     }
     return response.json() as Promise<T>;
@@ -2555,12 +2588,13 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
       headers: {
         ...DEVICE_ID_HEADER,
         ...authHeader,
-        ...init.headers,
+        ...withoutLegacyCapabilityHeaders(init.headers),
         ...NO_STORE_HEADERS,
       },
     });
     if (!response.ok) {
       const body = await response.text();
+      invalidateStaleSession(response.status, body);
       throw new Error(backendErrorMessage(response.status, body));
     }
     return response.text();
@@ -2579,12 +2613,13 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
       headers: {
         ...DEVICE_ID_HEADER,
         ...authHeader,
-        ...init.headers,
+        ...withoutLegacyCapabilityHeaders(init.headers),
         ...NO_STORE_HEADERS,
       },
     });
     if (!response.ok) {
       const body = await response.text();
+      invalidateStaleSession(response.status, body);
       throw new Error(backendErrorMessage(response.status, body));
     }
     return new Uint8Array(await response.arrayBuffer());
@@ -2603,12 +2638,13 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
       headers: {
         ...DEVICE_ID_HEADER,
         ...authHeader,
-        ...init.headers,
+        ...withoutLegacyCapabilityHeaders(init.headers),
         ...NO_STORE_HEADERS,
       },
     });
     if (!response.ok) {
       const body = await response.text();
+      invalidateStaleSession(response.status, body);
       throw new Error(backendErrorMessage(response.status, body));
     }
     return {
@@ -2631,13 +2667,14 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
       headers: {
         ...DEVICE_ID_HEADER,
         ...authHeader,
-        ...init.headers,
+        ...withoutLegacyCapabilityHeaders(init.headers),
         ...NO_STORE_HEADERS,
       },
       body: formData,
     });
     if (!response.ok) {
       const body = await response.text();
+      invalidateStaleSession(response.status, body);
       throw new Error(backendErrorMessage(response.status, body));
     }
     return response.json() as Promise<T>;
@@ -2661,12 +2698,13 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
         Accept: "text/event-stream",
         ...DEVICE_ID_HEADER,
         ...authHeader,
-        ...init.headers,
+        ...withoutLegacyCapabilityHeaders(init.headers),
         ...NO_STORE_HEADERS,
       },
     });
     if (!response.ok) {
       const body = await response.text();
+      invalidateStaleSession(response.status, body);
       throw new Error(backendErrorMessage(response.status, body));
     }
     if (!response.body) {
@@ -2725,28 +2763,19 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
   }
 
   /**
-   * Applies for a one-time capability token bound to the exact consuming request body.
+   * Compatibility shim for callers that still assemble the former capability headers.
+   *
+   * Authorization now comes exclusively from the authenticated backend session. No network request is made and
+   * no credential is minted; backend endpoints independently enforce role, tenant, owner and resource visibility.
    */
-  async function applyCapability(
-    action: string,
-    path: string,
-    body: string,
-    idempotencyKey: string,
-    maxCost = 1,
+  function applyCapability(
+    _action: string,
+    _path: string,
+    _body: string,
+    _idempotencyKey: string,
+    _maxCost = 1,
   ): Promise<CapabilityTokenResponse> {
-    const requestHash = await hashRequestBody(body);
-    const capability = await requestJson<CapabilityTokenResponse>("/api/security/capabilities", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        action,
-        path,
-        requestHash,
-        idempotencyKey,
-        maxCost,
-      }),
-    });
-    return { ...capability, requestHash };
+    return Promise.resolve({ token: "", action: "", path: "", requestHash: "", expiresAt: "" });
   }
 
   /**
@@ -2824,23 +2853,10 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
      * 执行教材证据检索。
      */
     async search(options: TextbookSearchOptions): Promise<TextbookSearchResponse> {
-      const path = "/api/retrieval/textbooks/search";
-      const body = JSON.stringify(options);
-      const capability = await applyCapability(
-        "retrieval:textbook-search",
-        path,
-        body,
-        `textbook-search:${options.query}:${options.limit}:${(options.documentIds ?? []).join(",")}`,
-        1,
-      );
-      return requestJson<TextbookSearchResponse>(path, {
+      return requestJson<TextbookSearchResponse>("/api/retrieval/textbooks/search", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Capability-Token": capability.token,
-          "X-Request-Hash": capability.requestHash,
-        },
-        body,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(options),
       });
     },
 

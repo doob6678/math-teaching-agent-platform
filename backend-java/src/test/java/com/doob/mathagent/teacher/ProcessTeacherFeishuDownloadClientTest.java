@@ -163,7 +163,9 @@ class ProcessTeacherFeishuDownloadClientTest {
                 1,
                 "md",
                 TeacherFeishuDownloadClient.FeishuDownloadCheckpoint.empty()))
-                .isInstanceOf(IllegalStateException.class)
+                // The process adapter intentionally exposes the structured provider exception so the job can retain
+                // retryability and the last durable folder checkpoint instead of discarding that recovery context.
+                .isInstanceOf(TeacherFeishuDownloadException.class)
                 .hasMessageContaining("reported failed files: 1");
     }
 
@@ -371,5 +373,50 @@ class ProcessTeacherFeishuDownloadClientTest {
                 .isInstanceOf(TeacherFeishuDownloadException.class)
                 .satisfies(error -> assertThat(((TeacherFeishuDownloadException) error).retryable()).isTrue())
                 .hasMessageContaining("timed out after 1 seconds");
+    }
+
+    @Test
+    void processDownloaderMarksFeishuRateLimitAsRetryableAndKeepsCheckpoint() throws Exception {
+        Path script = tempDir.resolve("rate_limited_downloader.py");
+        Files.writeString(script, """
+                import json
+                import pathlib
+                import sys
+
+                args = sys.argv[1:]
+                checkpoint_path = pathlib.Path(args[args.index("--resume-checkpoint-path") + 1])
+                checkpoint_path.write_text(json.dumps({
+                    "current_folder_token": "folder-rate-limit",
+                    "page_token": "page-rate-limit",
+                    "current_path": "高中数学/限流恢复",
+                    "visited_folder_tokens": ["rootToken", "folder-rate-limit"],
+                    "downloaded_items": [{"token": "docx-complete"}]
+                }, ensure_ascii=False), encoding="utf-8")
+                print("HTTP 429 Too Many Requests: rate limit exceeded")
+                sys.exit(29)
+                """);
+        Path appkey = tempDir.resolve("APPKEY.md");
+        Files.writeString(appkey, "APPID\ncli_dummy\nAPP Secret\nsecret_dummy\n");
+        TeacherSourceSyncProperties properties = new TeacherSourceSyncProperties(
+                "https://my.feishu.cn/drive/folder/rootToken",
+                script,
+                appkey,
+                tempDir.resolve("staging"),
+                1);
+        ProcessTeacherFeishuDownloadClient client = new ProcessTeacherFeishuDownloadClient(properties);
+
+        assertThatThrownBy(() -> client.download(
+                "https://my.feishu.cn/drive/folder/rootToken",
+                tempDir.resolve("staging"),
+                1,
+                new TeacherFeishuDownloadClient.FeishuDownloadCheckpoint(
+                        "rootToken", "高中数学", "", "[\"rootToken\"]", "[]")))
+                .isInstanceOf(TeacherFeishuDownloadException.class)
+                .satisfies(error -> {
+                    TeacherFeishuDownloadException exception = (TeacherFeishuDownloadException) error;
+                    assertThat(exception.retryable()).isTrue();
+                    assertThat(exception.checkpoint().currentFolderToken()).isEqualTo("folder-rate-limit");
+                    assertThat(exception.checkpoint().downloadedItemsJson()).contains("docx-complete");
+                });
     }
 }

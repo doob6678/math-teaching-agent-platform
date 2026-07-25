@@ -17,6 +17,7 @@ import com.doob.mathagent.resources.TextbookResourceProperties;
 import com.doob.mathagent.retrieval.LocalTextbookBm25SearchEngine;
 import com.doob.mathagent.retrieval.TextbookRetrievalService;
 import com.doob.mathagent.student.dto.StudentExplanationRequest;
+import com.doob.mathagent.student.service.StudentExplanationAiCardService;
 import com.doob.mathagent.student.service.StudentExplanationService;
 import com.doob.mathagent.student.vo.StudentExplanationResponse;
 import com.doob.mathagent.teacher.service.InMemoryTeacherDocumentBlockStore;
@@ -31,6 +32,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -38,6 +40,50 @@ class StudentExplanationServiceTest {
 
     @TempDir
     Path tempDir;
+
+    @Test
+    void reactFinalDecisionCarriesValidatedCardsWithoutASecondProviderCall() {
+        AtomicInteger calls = new AtomicInteger();
+        AtomicReference<String> streamedContent = new AtomicReference<>("");
+        StudentExplanationAiCardService cardService = new StudentExplanationAiCardService(
+                request -> {
+                    calls.incrementAndGet();
+                    return new AiChatResult(request.providerName(), request.modelCode(), 7, 13, 20, "ok", """
+                            {"decision":"final","conversationTitle":"一元一次方程","cards":[
+                            {"cardKey":"answer","title":"","summary":"移项得 $2x=-6$，所以 $x=-3$。","items":[],"sourceUris":[],"renderMode":"formula"}]}
+                            """);
+                },
+                aiProviderCatalog());
+
+        StudentExplanationAiCardService.ReactDecision decision = cardService.nextReactDecision(
+                "解方程 2x+6=0", List.of(), List.of(), java.util.Set.of(),
+                (delta, cards) -> streamedContent.set(streamedContent.get() + delta.contentDelta()));
+
+        assertThat(decision.kind()).isEqualTo("final");
+        assertThat(decision.finalDraft()).isNotNull();
+        assertThat(decision.finalDraft().cards()).extracting(StudentExplanationResponse.ExplanationCard::cardKey)
+                .containsExactly("answer");
+        assertThat(calls.get()).isEqualTo(1);
+        // The default gateway implementation emits its real final content as one delta. Production uses provider SSE
+        // chunks, but both paths must make the self-contained ReAct answer observable before completion.
+        assertThat(streamedContent.get()).contains("\"decision\":\"final\"");
+    }
+
+    @Test
+    void reactActionDecisionPlansAllPermittedRetrievalToolsInOneTurn() {
+        StudentExplanationAiCardService cardService = new StudentExplanationAiCardService(
+                request -> new AiChatResult(request.providerName(), request.modelCode(), 4, 4, 8, "ok", """
+                        {"decision":"action","tools":["search_teacher_resources","search_textbook","search_teacher_resources"]}
+                        """),
+                aiProviderCatalog());
+
+        StudentExplanationAiCardService.ReactDecision decision = cardService.nextReactDecision(
+                "教师资料和教材哪里讲了卡方检验", List.of(), List.of(),
+                new java.util.LinkedHashSet<>(List.of("search_textbook", "search_teacher_resources")));
+
+        assertThat(decision.kind()).isEqualTo("action");
+        assertThat(decision.tools()).containsExactly("search_teacher_resources", "search_textbook");
+    }
 
     @Test
     void conversationMemoryIsDisabledUnlessTheCallerExplicitlyEnablesIt() {
@@ -53,7 +99,30 @@ class StudentExplanationServiceTest {
     }
 
     @Test
-    void studentExplanationUsesTextbookAndGraphSourcesWithoutTeacherPrivateResources() throws Exception {
+    void textOnlyTurnOmitsSyntheticAndSkippedWorkflowStages() throws Exception {
+        StudentExplanationService service = serviceWithResources(tempDir);
+
+        StudentExplanationResponse response = service.explain(
+                request("solve x squared minus four x plus three", false, false, false),
+                new RequestSubject("school-a", "student", "student-001", "dev-device"));
+
+        assertThat(response.workflowStages())
+                .noneSatisfy(stage -> assertThat(stage.status()).isIn("pending", "skipped"))
+                .extracting(StudentExplanationResponse.WorkflowStage::stageKey)
+                .doesNotContain(
+                        "plan_explanation",
+                        "analyze_image",
+                        "load_conversation_context",
+                        "retrieve_long_term_memory",
+                        "understand_problem",
+                        "default_retrieval",
+                        "search_textbook",
+                        "match_knowledge_graph",
+                        "search_teacher_resources");
+    }
+
+    @Test
+    void studentExplanationUsesTextbookGraphAndTenantPublicResourcesWithoutTeacherPrivateResources() throws Exception {
         StudentExplanationService service = serviceWithResources(tempDir);
         StudentExplanationRequest request = request("space vector dot product dihedral angle", true, true, true);
 
@@ -72,7 +141,7 @@ class StudentExplanationServiceTest {
         assertThat(response.workflowStages())
                 .anySatisfy(stage -> {
                     assertThat(stage.stageKey()).isEqualTo("search_teacher_resources");
-                    assertThat(stage.status()).isEqualTo("skipped");
+                    assertThat(stage.status()).isEqualTo("completed");
                 });
     }
 
@@ -128,7 +197,7 @@ class StudentExplanationServiceTest {
     }
 
     @Test
-    void imageOnlyRequestRequiresRealVisionOrQuestionText() throws Exception {
+    void imageOnlyRequestPassesTheOriginalImageDirectlyToTheMultimodalAgent() throws Exception {
         StudentExplanationService service = serviceWithResources(tempDir);
         StudentExplanationRequest request = new StudentExplanationRequest(
                 null,
@@ -143,11 +212,11 @@ class StudentExplanationServiceTest {
                 null,
                 null);
 
-        assertThatThrownBy(() -> service.explain(
-                        request,
-                        new RequestSubject("default", "student", "student-1", "device-1")))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("requires successful real vision analysis");
+        StudentExplanationResponse response = service.explain(
+                request,
+                new RequestSubject("default", "student", "student-1", "device-1"));
+
+        assertThat(response.cards()).isNotEmpty();
     }
 
     @Test
@@ -211,8 +280,11 @@ class StudentExplanationServiceTest {
         assertThat(response.sources()).extracting(StudentExplanationResponse.ExplanationSource::sourceUri)
                 .contains("textbook://book-vector/page/12#chunk=chunk-vector-1");
         assertThat(response.workflowStages()).anySatisfy(stage -> {
-            assertThat(stage.stageKey()).isEqualTo("react_observation_0");
-            assertThat(stage.detail()).contains("教材检索完成");
+            assertThat(stage.stageKey()).isEqualTo("search_textbook");
+            assertThat(stage.detail())
+                    .contains("1 条教材证据")
+                    .contains("query=space vector dot product dihedral angle")
+                    .contains("limit=5");
         });
     }
 

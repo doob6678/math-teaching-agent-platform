@@ -237,7 +237,7 @@ describe("TeachingConversationPanel", () => {
     expect(safeUserFacingText('{"model":"gpt","tokens":123,"cards":[]}')).toBe("内容已整理。");
   });
 
-  it("renders real streamed progress and model text without timer-driven placeholder stages", () => {
+  it("renders actual provider deltas and visible tool parameters while validated cards are still incomplete", () => {
     const entries: TeachingConversationThreadItem[] = [
       {
         id: "assistant-loading",
@@ -255,10 +255,10 @@ describe("TeachingConversationPanel", () => {
           imageUnderstanding: buildResponse().imageUnderstanding,
           aiDraft: buildResponse().aiDraft,
           workflowStages: [{
-            stageKey: "ai_compose_cards",
-            title: "生成讲解",
+            stageKey: "search_textbook",
+            title: "检索教材",
             status: "running",
-            detail: "已收到模型的实时输出。",
+            detail: "调用参数：query=一元二次方程求根；limit=5。",
             elapsedMs: 620,
           }],
           cards: [{
@@ -303,9 +303,151 @@ describe("TeachingConversationPanel", () => {
     // A streamed card is model output, so its title must not be removed because it resembles an older layout.
     expect(html).toContain("题意理解");
     expect(html).toContain("先把等式左边因式分解");
-    expect(html).toContain("模型思考");
+    expect(html).toContain("query=一元二次方程求根");
+    expect(html).not.toContain("模型思考");
     expect(html).not.toContain("读取问题");
     expect(html).not.toContain("讲义中心");
+  });
+
+  it("hides unused stages while keeping incomplete provider bytes visible as safe text", () => {
+    const response = buildResponse();
+    const html = renderToStaticMarkup(
+      <TeachingConversationPanel
+        conversationTitle="流式讲题"
+        value=""
+        entries={[{
+          id: "assistant-safe-stream",
+          role: "assistant",
+          createdAt: new Date().toISOString(),
+          loading: true,
+          liveContent: '{"cards":[{"summary":"配方得到 $(x-2',
+          progress: {
+            conversationId: response.conversationId,
+            conversationTitle: response.conversationTitle,
+            questionText: "求最小值",
+            imageStatus: "none",
+            imageUnderstanding: response.imageUnderstanding,
+            aiDraft: response.aiDraft,
+            workflowStages: [
+              { stageKey: "plan_explanation", title: "规划流程", status: "completed", detail: "预置流程", elapsedMs: 1 },
+              { stageKey: "analyze_image", title: "识别题图", status: "skipped", detail: "未上传题图", elapsedMs: 1 },
+              { stageKey: "search_textbook", title: "检索教材", status: "pending", detail: "未执行", elapsedMs: 0 },
+              { stageKey: "ai_compose_cards", title: "生成讲解", status: "running", detail: "模型正在生成", elapsedMs: 300 },
+            ],
+            cards: [],
+            sources: [],
+            totalElapsedMs: 300,
+          },
+        }]}
+        recentConversations={[]}
+        loading={true}
+        loadingHistory={false}
+        error=""
+        imageDraft={null}
+        uploadingImage={false}
+        imageError=""
+        conversationMemoryEnabled={false}
+        openingConversationId=""
+        onValueChange={vi.fn()}
+        onSubmit={vi.fn()}
+        onImageSelect={vi.fn()}
+        onClearImage={vi.fn()}
+        onConversationMemoryChange={vi.fn()}
+        onStartNewConversation={vi.fn()}
+        onOpenConversation={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain("生成讲解");
+    expect(html).not.toContain("识别题图");
+    expect(html).not.toContain("检索教材");
+    expect(html).not.toContain("规划流程");
+    expect(html).toContain("配方得到");
+    expect(html).toContain("AI 实时输出");
+  });
+
+  it("shows real wall-clock seconds instead of a stale millisecond progress snapshot", () => {
+    const response = buildResponse();
+    const entry: TeachingConversationThreadItem = {
+      id: "assistant-live-elapsed",
+      role: "assistant",
+      createdAt: new Date(Date.now() - 2_500).toISOString(),
+      loading: true,
+      progress: {
+        conversationId: response.conversationId,
+        conversationTitle: response.conversationTitle,
+        questionText: response.questionText,
+        imageStatus: response.imageStatus,
+        imageUnderstanding: response.imageUnderstanding,
+        aiDraft: response.aiDraft,
+        workflowStages: response.workflowStages,
+        cards: [],
+        sources: [],
+        totalElapsedMs: 2,
+      },
+    };
+
+    const html = renderToStaticMarkup(
+      <TeachingConversationPanel
+        conversationTitle="实时讲题"
+        value=""
+        entries={[entry]}
+        recentConversations={[]}
+        loading={true}
+        loadingHistory={false}
+        error=""
+        imageDraft={null}
+        uploadingImage={false}
+        imageError=""
+        conversationMemoryEnabled={false}
+        openingConversationId=""
+        onValueChange={vi.fn()}
+        onSubmit={vi.fn()}
+        onImageSelect={vi.fn()}
+        onClearImage={vi.fn()}
+        onConversationMemoryChange={vi.fn()}
+        onStartNewConversation={vi.fn()}
+        onOpenConversation={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain("2.5 秒");
+    expect(html).not.toContain("2 毫秒");
+  });
+
+  it("renders a completed response before the SSE transport finishes closing", () => {
+    const html = renderToStaticMarkup(
+      <TeachingConversationPanel
+        conversationTitle="完成事件已到达"
+        value=""
+        entries={[{
+          id: "assistant-completed-before-close",
+          role: "assistant",
+          createdAt: new Date().toISOString(),
+          loading: true,
+          response: buildResponse(),
+        }]}
+        recentConversations={[]}
+        loading={true}
+        loadingHistory={false}
+        error=""
+        imageDraft={null}
+        uploadingImage={false}
+        imageError=""
+        conversationMemoryEnabled={false}
+        openingConversationId=""
+        onValueChange={vi.fn()}
+        onSubmit={vi.fn()}
+        onImageSelect={vi.fn()}
+        onClearImage={vi.fn()}
+        onConversationMemoryChange={vi.fn()}
+        onStartNewConversation={vi.fn()}
+        onOpenConversation={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain("核心思路");
+    expect(html).not.toContain("正在讲解");
   });
 
   it("keeps an agent-selected mistake section neutral instead of assigning it a fixed template role", () => {

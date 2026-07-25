@@ -29,6 +29,8 @@ import com.doob.mathagent.teacher.vo.TeacherSourceSyncJobResponse;
 import com.doob.mathagent.vector.service.TeacherResourceImageClipSearchRequest;
 import com.doob.mathagent.vector.service.TeacherResourceImageClipSearchResponse;
 import com.doob.mathagent.vector.service.TeacherResourceImageClipService;
+import com.doob.mathagent.feishu.FeishuCredentialService;
+import com.doob.mathagent.feishu.FeishuResourceBindingService;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.List;
 import java.util.Objects;
@@ -77,6 +79,8 @@ public class TeacherResourceController {
     private final TeacherResourceImageClipService imageClipService;
     private final RequestSubjectResolver subjectResolver;
     private final TeacherResourceCapabilityVerifier capabilityVerifier;
+    private final FeishuCredentialService feishuCredentialService;
+    private final FeishuResourceBindingService feishuResourceBindingService;
 
     /**
      * Creates a teacher resource controller.
@@ -107,7 +111,9 @@ public class TeacherResourceController {
                 TeacherResourceUploadService.disabled(),
                 null,
                 subjectResolver,
-                capabilityVerifier);
+                capabilityVerifier,
+                null,
+                null);
     }
 
     /**
@@ -139,7 +145,9 @@ public class TeacherResourceController {
                 uploadService,
                 null,
                 subjectResolver,
-                capabilityVerifier);
+                capabilityVerifier,
+                null,
+                null);
     }
 
     @Autowired
@@ -156,7 +164,9 @@ public class TeacherResourceController {
             TeacherResourceUploadService uploadService,
             TeacherResourceImageClipService imageClipService,
             RequestSubjectResolver subjectResolver,
-            TeacherResourceCapabilityVerifier capabilityVerifier) {
+            TeacherResourceCapabilityVerifier capabilityVerifier,
+            FeishuCredentialService feishuCredentialService,
+            FeishuResourceBindingService feishuResourceBindingService) {
         this.teacherResourceService = Objects.requireNonNull(teacherResourceService, "teacherResourceService");
         this.syncJobService = Objects.requireNonNull(syncJobService, "syncJobService");
         this.syncExecutionService = Objects.requireNonNull(syncExecutionService, "syncExecutionService");
@@ -170,6 +180,8 @@ public class TeacherResourceController {
         this.imageClipService = imageClipService;
         this.subjectResolver = Objects.requireNonNull(subjectResolver, "subjectResolver");
         this.capabilityVerifier = Objects.requireNonNull(capabilityVerifier, "capabilityVerifier");
+        this.feishuCredentialService = feishuCredentialService;
+        this.feishuResourceBindingService = feishuResourceBindingService;
     }
 
     /**
@@ -184,6 +196,11 @@ public class TeacherResourceController {
             @RequestBody TeacherResourceRegistrationRequest request,
             HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest);
+        if (feishuCredentialService != null && request != null
+                && "feishu".equalsIgnoreCase(request.sourceType())
+                && feishuCredentialService.findActive(subject.normalize().tenantId(), subject.normalize().subjectId()) == null) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "AUTH_REQUIRED");
+        }
         if (!capabilityVerifier.verify(
                 headerOrNull(httpRequest, "X-Capability-Token"),
                 REGISTER_ACTION,
@@ -193,7 +210,11 @@ public class TeacherResourceController {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for teacher resource register");
         }
         try {
-            return teacherResourceService.register(enrich(request, subject));
+            TeacherResourceDocumentResponse registered = teacherResourceService.register(enrich(request, subject));
+            if (feishuResourceBindingService != null && "feishu".equalsIgnoreCase(request.sourceType())) {
+                feishuResourceBindingService.bind(subject.normalize().tenantId(), registered.documentId(), subject.normalize().subjectId());
+            }
+            return registered;
         } catch (IllegalArgumentException exception) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, exception.getMessage(), exception);
         }

@@ -252,7 +252,9 @@ export function AgentTracePanel({
                         {event.detail ? <p>{event.detail}</p> : null}
                         {event.meta.length ? (
                           <div className="agent-process-tags">
-                            {event.meta.map((item) => <strong key={item}>{item}</strong>)}
+                            {event.meta.map((item, index) => (
+                              <strong key={scopedTraceTagKey(`${trace.traceId}:${event.eventId}`, index, item)}>{item}</strong>
+                            ))}
                           </div>
                         ) : null}
                       </div>
@@ -370,10 +372,17 @@ function TraceBadgeRow({ label, values }: { label: string; values: string[] }) {
     <div className="trace-badge-row">
       <span>{label}</span>
       <div>
-        {values.length > 0 ? values.map((value) => <strong key={value}>{value}</strong>) : <strong>无</strong>}
+        {values.length > 0 ? values.map((value, index) => (
+          <strong key={scopedTraceTagKey(label, index, value)}>{value}</strong>
+        )) : <strong>无</strong>}
       </div>
     </div>
   );
+}
+
+/** Repeated evidence and retry events are legitimate; position keeps their React identities distinct and stable. */
+export function scopedTraceTagKey(scope: string, index: number, value: string) {
+  return `${scope}:${index}:${value}`;
 }
 
 function providerLabel(provider: string) {

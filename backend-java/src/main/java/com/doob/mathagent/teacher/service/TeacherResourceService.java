@@ -232,21 +232,23 @@ public class TeacherResourceService {
     }
 
     /**
-     * Prevents non-admin teachers from self-assigning shared or public RAG permission scopes.
+     * Normalizes publication choices for new resources. Tenant-public is the product default so synchronized Feishu
+     * material is available to authorized students; class membership is enforced by the later reader policy.
      *
      * @param permissionScope requested permission scope
      * @param viewerRole backend resolved viewer role
      * @return safe permission scope
      */
     private static String normalizePermissionScope(String permissionScope, String viewerRole) {
-        if (!"admin".equals(viewerRole)) {
-            return "TEACHER_PRIVATE";
-        }
-        String normalizedScope = textOrDefault(permissionScope, "TEACHER_PRIVATE").toUpperCase();
-        if ("MATH_VIP".equals(normalizedScope) || "PUBLIC_TEXTBOOK".equals(normalizedScope)) {
+        String normalizedScope = textOrDefault(permissionScope, "TENANT_PUBLIC").toUpperCase();
+        if ("TEACHER_PRIVATE".equals(normalizedScope)
+                || "CLASS_AUTHORIZED".equals(normalizedScope)
+                || "TENANT_PUBLIC".equals(normalizedScope)
+                || "PUBLIC_TEXTBOOK".equals(normalizedScope)
+                || "MATH_VIP".equals(normalizedScope)) {
             return normalizedScope;
         }
-        return "TEACHER_PRIVATE";
+        return "TENANT_PUBLIC";
     }
 
     /**

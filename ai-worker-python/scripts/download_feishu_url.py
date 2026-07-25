@@ -144,30 +144,38 @@ def find_default_appkey_path(explicit_path: str = "") -> Optional[Path]:
     return None
 
 
-def load_appkey(path: Path) -> Tuple[str, str]:
+def load_appkey(path: Path) -> Tuple[str, str, str]:
     content = path.read_text(encoding="utf-8")
     app_id_match = re.search(r"(?im)^APPID\s*$\s*^([^\r\n]+)\s*$", content)
     app_secret_match = re.search(r"(?im)^APP Secret\s*$\s*^([^\r\n]+)\s*$", content)
     app_id = app_id_match.group(1).strip() if app_id_match else ""
     app_secret = app_secret_match.group(1).strip() if app_secret_match else ""
-    return app_id, app_secret
+    access_token_match = re.search(r"(?im)^ACCESS_TOKEN\s*$\s*^([^\r\n]+)\s*$", content)
+    access_token = access_token_match.group(1).strip() if access_token_match else ""
+    return app_id, app_secret, access_token
 
 
-def resolve_credentials(args: argparse.Namespace) -> Tuple[str, str]:
+def resolve_credentials(args: argparse.Namespace) -> Tuple[str, str, str]:
+    # A user OAuth token is already scoped to the authenticated user. It must win over platform app credentials and
+    # is never printed or forwarded through RabbitMQ; Java supplies it through a short-lived private credential file.
+    if getattr(args, "access_token", ""):
+        return "", "", args.access_token.strip()
     if args.app_id and args.app_secret:
-        return args.app_id.strip(), args.app_secret.strip()
+        return args.app_id.strip(), args.app_secret.strip(), ""
 
     if not args.no_env:
         env_app_id = os.getenv("APP_ID", "").strip()
         env_app_secret = os.getenv("APP_SECRET", "").strip()
         if env_app_id and env_app_secret:
-            return env_app_id, env_app_secret
+            return env_app_id, env_app_secret, ""
 
     appkey_path = find_default_appkey_path(args.appkey_path)
     if appkey_path:
-        app_id, app_secret = load_appkey(appkey_path)
+        app_id, app_secret, access_token = load_appkey(appkey_path)
+        if access_token:
+            return app_id, app_secret, access_token
         if app_id and app_secret:
-            return app_id, app_secret
+            return app_id, app_secret, ""
 
     raise RuntimeError("Missing credentials. Set APP_ID/APP_SECRET or provide --appkey-path pointing to APPKEY.md.")
 
@@ -263,12 +271,15 @@ def resolve_root(config: Dict[str, Any], root_url: str = "", root_key: str = "")
 
 
 class FeishuClient:
-    def __init__(self, app_id: str, app_secret: str, verbose: bool = True, timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS) -> None:
+    def __init__(self, app_id: str, app_secret: str, verbose: bool = True, timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS, access_token: str = "") -> None:
         self.app_id = app_id
         self.app_secret = app_secret
         self.verbose = verbose
         self.timeout_seconds = max(int(timeout_seconds), 1)
-        self.access_token = self.get_tenant_access_token()
+        # Reuse one TCP/TLS pool across folder listing, export polling, document fetches, and image downloads.
+        # This reduces handshake latency without changing provider concurrency or request ordering.
+        self.http = requests.Session()
+        self.access_token = access_token.strip() if access_token else self.get_tenant_access_token()
 
     def log(self, message: str) -> None:
         if self.verbose:
@@ -289,7 +300,7 @@ class FeishuClient:
         request_headers = dict(headers or {})
         if self.access_token and "Authorization" not in request_headers:
             request_headers["Authorization"] = f"Bearer {self.access_token}"
-        response = requests.request(
+        response = self.http.request(
             method,
             url,
             params=params,
@@ -317,7 +328,7 @@ class FeishuClient:
         payload = {"app_id": self.app_id, "app_secret": self.app_secret}
         self.log(f"POST {url}")
         self.log(json.dumps({"app_id": self.app_id, "app_secret": mask_secret(self.app_secret)}, ensure_ascii=False))
-        response = requests.post(url, json=payload, headers={"Content-Type": "application/json; charset=utf-8"}, timeout=self.timeout_seconds)
+        response = self.http.post(url, json=payload, headers={"Content-Type": "application/json; charset=utf-8"}, timeout=self.timeout_seconds)
         response.raise_for_status()
         response.encoding = "utf-8"
         body = response.json()
@@ -563,7 +574,9 @@ class FeishuClient:
                     })
                     continue
             target_name = safe_image_filename(name, index, mime_type)
-            target = save_bytes(payload, asset_dir, target_name)
+            target = unique_image_path(asset_dir, target_name)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(payload)
             relative_path = target.relative_to(output_dir).as_posix()
             provider_token = image_tokens[token_index - 1] if token_index > 0 else source_url
             manifest = file_manifest(
@@ -584,6 +597,10 @@ class FeishuClient:
             # decoded URL for the authenticated request, so replace its encoded spelling as well to guarantee no
             # provider URL survives in the normalized document.
             rewritten = rewritten.replace(html.escape(source_url, quote=False), relative_path)
+        # The Feishu export uses HTML image blocks.  Several Markdown previewers intentionally escape raw HTML,
+        # which made a successfully downloaded image appear as literal `<img ...>` text.  Convert only the local
+        # paths written by this worker; unresolved provider URLs remain untouched so their item failure is visible.
+        rewritten = normalize_materialized_html_images(rewritten)
         return rewritten, manifests, failures
 
     def download_embedded_image(self, image_url: str) -> Tuple[bytes, str, str]:
@@ -758,6 +775,23 @@ def markdown_image_references(markdown: str) -> List[Dict[str, str]]:
     return references
 
 
+def normalize_materialized_html_images(markdown: str) -> str:
+    """Converts worker-owned local HTML image tags into portable Markdown image syntax.
+
+    A rewritten `href` can coexist with Feishu's opaque `src` token, therefore inspect all image attributes and
+    select only the `_feishu_images/` relative path.  This keeps remote URLs and non-image HTML unchanged.
+    """
+    def replace_tag(match: re.Match[str]) -> str:
+        tag = match.group(0)
+        for attribute in HTML_IMAGE_ATTRIBUTE_PATTERN.finditer(tag):
+            value = html.unescape(str(attribute.group(1) or attribute.group(2) or attribute.group(3) or "")).strip()
+            if value.startswith("_feishu_images/"):
+                return f"![]({value})"
+        return tag
+
+    return HTML_IMAGE_TAG_PATTERN.sub(replace_tag, markdown or "")
+
+
 def safe_image_filename(name: str, index: int, mime_type: str) -> str:
     """Creates a deterministic, path-safe image filename while retaining the provider extension when available."""
     candidate = sanitize_name(name, f"image-{index}")
@@ -766,6 +800,19 @@ def safe_image_filename(name: str, index: int, mime_type: str) -> str:
         guessed = mimetypes.guess_extension(str(mime_type or "").split(";", 1)[0].strip()) or ".bin"
         candidate = f"{Path(candidate).stem}{guessed}"
     return candidate
+
+
+def unique_image_path(asset_dir: Path, filename: str) -> Path:
+    """Keeps provider image names and suffixes only a collision on disk."""
+    candidate = asset_dir / filename
+    if not candidate.exists():
+        return candidate
+    collision_index = 2
+    while True:
+        alternative = asset_dir / f"{candidate.stem}-{collision_index}{candidate.suffix}"
+        if not alternative.exists():
+            return alternative
+        collision_index += 1
 
 
 def load_resume_checkpoint(checkpoint_path: str = "") -> Dict[str, Any]:
@@ -834,6 +881,7 @@ def download_folder(
     resume_checkpoint: Optional[Dict[str, Any]] = None,
     checkpoint_path: str = "",
 ) -> Dict[str, Any]:
+    started_at = time.perf_counter()
     meta = client.get_folder_meta(folder_token)
     resolved_folder_name = folder_name or str(meta.get("name", "") or folder_token)
     root_dir = output_base / sanitize_name(resolved_folder_name)
@@ -844,8 +892,10 @@ def download_folder(
         "skipped": 0,
         "failed": 0,
         "limit_reached": 0,
+        "bytes": 0,
     }
     counters.setdefault("assets", 0)
+    counters.setdefault("bytes", 0)
     checkpoint = resume_checkpoint or {}
     visited_folder_tokens = [str(token) for token in list_field(checkpoint.get("visited_folder_tokens")) if str(token)]
     visited_set = set(visited_folder_tokens)
@@ -918,12 +968,17 @@ def download_folder(
                                 client, item_token, current_dir)
                             downloaded_items.extend(image_items)
                             counters["assets"] += len(image_items)
+                            counters["bytes"] += sum(int(item.get("sizeBytes", 0) or 0) for item in image_items)
                             failed_items.extend(image_failures)
                             counters["failed"] += len(image_failures)
                         else:
                             content, suggested_name, _ = client.export_docx(item_token, file_extension)
-                        target_name = f"{item_name}.{file_extension}" if not suggested_name.lower().endswith(f".{file_extension}") else suggested_name
+                        # Folder listing names are the authoritative Feishu document titles.  Keep Unicode intact;
+                        # only Windows-forbidden path characters are escaped by save_bytes for filesystem safety.
+                        extension = f".{file_extension.lower()}"
+                        target_name = item_name if item_name.lower().endswith(extension) else f"{item_name}{extension}"
                         target = save_bytes(content, current_dir, target_name)
+                        counters["bytes"] += target.stat().st_size
                         counters["files"] += 1
                         manifest = file_manifest(
                             target,
@@ -936,6 +991,7 @@ def download_folder(
                     elif item_type in DIRECT_DOWNLOAD_TYPES:
                         content, suggested_name, _ = client.download_file(item_token)
                         target = save_bytes(content, current_dir, suggested_name or item_name)
+                        counters["bytes"] += target.stat().st_size
                         counters["files"] += 1
                         mime_type, _ = mimetypes.guess_type(target.name)
                         asset_kind = "image" if str(mime_type or "").startswith("image/") else "attachment"
@@ -981,6 +1037,7 @@ def download_folder(
         "stats": counters,
         "checkpoint": latest_checkpoint,
         "failed_items": failed_items,
+        "elapsed_ms": round((time.perf_counter() - started_at) * 1000),
     }
 
 
@@ -994,6 +1051,7 @@ def download_from_url(
     resume_checkpoint: Optional[Dict[str, Any]] = None,
     checkpoint_path: str = "",
 ) -> Dict[str, Any]:
+    started_at = time.perf_counter()
     parsed = parse_feishu_url(resource_url)
     resource_type = parsed["resource_type"]
     token = parsed["token"]
@@ -1022,7 +1080,14 @@ def download_from_url(
                 client, token, output_dir)
         else:
             content, suggested_name, size = client.export_docx(token, file_extension)
-        target = save_bytes(content, output_dir, suggested_name or f"{token}.{file_extension}")
+        canonical_title = str(provider_metadata.get("title", "") or "").strip()
+        # The document title is the stable visible filename.  Python writes UTF-8 and Windows receives the Unicode
+        # path unchanged; the provider token remains only in the manifest for idempotent identity.
+        extension = f".{file_extension.lower()}"
+        target_name = canonical_title if canonical_title.lower().endswith(extension) else f"{canonical_title}{extension}"
+        if not canonical_title:
+            target_name = suggested_name or f"{token}{extension}"
+        target = save_bytes(content, output_dir, target_name)
         downloaded_item = file_manifest(
             target,
             output_dir,
@@ -1045,7 +1110,9 @@ def download_from_url(
                 "skipped": 0,
                 "failed": len(image_failures),
                 "limit_reached": 0,
+                "bytes": target.stat().st_size,
             },
+            "elapsed_ms": round((time.perf_counter() - started_at) * 1000),
             "checkpoint": {
                 "current_folder_token": "",
                 "page_token": "",
@@ -1212,11 +1279,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", default="", help="Output directory. Defaults to the current user's Downloads folder.")
     parser.add_argument("--summary-path", default="", help="Optional JSON summary path.")
     parser.add_argument("--resume-checkpoint-path", default="", help="Optional UTF-8 JSON checkpoint path for resumable folder download.")
-    parser.add_argument("--file-extension", default="md", choices=["md", "docx", "pdf"], help="Feishu native export format.")
+    parser.add_argument("--file-extension", default="md", choices=["md", "docx", "pdf"], help="Feishu export format.")
     parser.add_argument("--max-files", type=int, default=0, help="Folder download limit. Use 0 for the full folder.")
     parser.add_argument("--timeout-seconds", type=int, default=DEFAULT_TIMEOUT_SECONDS, help="HTTP request timeout in seconds.")
     parser.add_argument("--app-id", default="", help="Feishu app id. Prefer env or APPKEY.md when empty.")
     parser.add_argument("--app-secret", default="", help="Feishu app secret. Prefer env or APPKEY.md when empty.")
+    parser.add_argument("--access-token", default="", help="User OAuth access token supplied through a private temporary file; never log this value.")
     parser.add_argument("--appkey-path", default="", help="APPKEY.md path. Defaults to searching cwd and parent dirs.")
     parser.add_argument("--no-env", action="store_true", help="Do not read APP_ID/APP_SECRET from environment.")
     parser.add_argument("--quiet", action="store_true", help="Reduce logs.")
@@ -1234,8 +1302,8 @@ def write_summary(args: argparse.Namespace, result: Dict[str, Any], prefix: str)
 
 def run(args: argparse.Namespace) -> Dict[str, Any]:
     config = load_default_config(args.config_path)
-    app_id, app_secret = resolve_credentials(args)
-    client = FeishuClient(app_id, app_secret, verbose=not args.quiet, timeout_seconds=args.timeout_seconds)
+    app_id, app_secret, access_token = resolve_credentials(args)
+    client = FeishuClient(app_id, app_secret, verbose=not args.quiet, timeout_seconds=args.timeout_seconds, access_token=access_token)
 
     if args.search_root:
         root = resolve_root(config, args.root_url, args.root_key)

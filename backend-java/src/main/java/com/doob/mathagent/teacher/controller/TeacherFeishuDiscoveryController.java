@@ -3,6 +3,7 @@ package com.doob.mathagent.teacher.controller;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.infrastructure.security.RequestSubjectResolver;
 import com.doob.mathagent.teacher.service.TeacherFeishuDiscoveryService;
+import com.doob.mathagent.teacher.feishu.TeacherFeishuDiscoveryException;
 import com.doob.mathagent.teacher.vo.TeacherFeishuDiscoveryResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpStatus;
@@ -71,6 +72,8 @@ public class TeacherFeishuDiscoveryController {
             throw new ResponseStatusException(status, exception.getMessage(), exception);
         } catch (IllegalStateException exception) {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, exception.getMessage(), exception);
+        } catch (TeacherFeishuDiscoveryException exception) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "AUTH_REQUIRED: " + exception.getMessage(), exception);
         }
     }
 }

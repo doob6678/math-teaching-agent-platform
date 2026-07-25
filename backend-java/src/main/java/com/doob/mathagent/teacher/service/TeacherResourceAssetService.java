@@ -6,6 +6,7 @@ import com.doob.mathagent.teacher.document.TeacherResourceStore;
 import com.doob.mathagent.teacher.vo.TeacherResourceAssetResponse;
 import com.doob.mathagent.teacher.search.TeacherResourceBlockSearchResponse;
 import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
+import com.doob.mathagent.teacher.document.TeacherResourceVisibilityPolicy;
 import com.doob.mathagent.teacher.sync.TeacherSourceSyncProperties;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
@@ -273,14 +274,20 @@ public class TeacherResourceAssetService {
         if ("admin".equals(role)) {
             return true;
         }
+        String scope = textOrDefault(asset.permissionScope(), TEACHER_PRIVATE).toUpperCase(Locale.ROOT);
+        // A student can open only the same tenant-public image asset that retrieval was allowed to cite.  Applying
+        // this policy at binary delivery closes the common bypass where block search filters a private asset but a
+        // guessed asset id could still be fetched directly.
+        if ("student".equals(role)) {
+            return TeacherResourceVisibilityPolicy.STUDENT_SHARED_SCOPES.contains(scope);
+        }
         if (!"teacher".equals(role)) {
             return false;
         }
         if (asset.ownerSubjectId().equals(subject.subjectId())) {
             return true;
         }
-        String scope = textOrDefault(asset.permissionScope(), TEACHER_PRIVATE).toUpperCase(Locale.ROOT);
-        if (!SHARED_SCOPES.contains(scope)) {
+        if (!TeacherResourceVisibilityPolicy.TEACHER_SHARED_SCOPES.contains(scope)) {
             return false;
         }
         TeacherResourceDocumentResponse document = resourceStore.find(asset.tenantId(), asset.documentId());

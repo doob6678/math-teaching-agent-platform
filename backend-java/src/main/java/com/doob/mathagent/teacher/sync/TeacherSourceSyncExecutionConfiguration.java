@@ -9,6 +9,8 @@ import com.doob.mathagent.teacher.search.TeacherResourceGraphAlignmentService;
 import com.doob.mathagent.teacher.service.TeacherResourceAssetService;
 import com.doob.mathagent.teacher.service.TeacherPageTranscriptionClient;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncExecutionService;
+import com.doob.mathagent.feishu.FeishuCredentialService;
+import com.doob.mathagent.feishu.FeishuResourceBindingService;
 import com.doob.mathagent.vector.service.VectorIndexService;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -37,7 +39,9 @@ public class TeacherSourceSyncExecutionConfiguration {
             TeacherResourceAssetService assetService,
             TeacherFormulaRecognitionClient formulaRecognitionClient,
             TeacherFormulaRecognitionProperties formulaRecognitionProperties,
-            TeacherPageTranscriptionClient pageTranscriptionClient) {
+            TeacherPageTranscriptionClient pageTranscriptionClient,
+            FeishuCredentialService feishuCredentialService,
+            FeishuResourceBindingService feishuResourceBindingService) {
         return new TeacherSourceSyncExecutionService(
                 resourceStore,
                 jobStore,
@@ -50,6 +54,8 @@ public class TeacherSourceSyncExecutionConfiguration {
                 assetService,
                 formulaRecognitionClient,
                 formulaRecognitionProperties,
-                pageTranscriptionClient);
+                pageTranscriptionClient,
+                feishuCredentialService,
+                feishuResourceBindingService);
     }
 }

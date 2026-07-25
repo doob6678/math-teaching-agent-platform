@@ -84,7 +84,9 @@ math-agent:
       openai-vision-model: ${OPENAI_VISION_MODEL:${OPENAI_CHAT_MODEL:gpt-5.6-terra}}
       # Authorized teacher page transcription uses this same client. A relay can need longer than chat completion, so
       # retain an explicit three-minute ceiling instead of failing a real visual read at the old 45-second default.
-      vision-timeout-ms: ${MATH_AGENT_STUDENT_EXPLANATION_VISION_TIMEOUT_MS:180000}
+      # Interactive OCR is an optional preparation step. Bound it tightly so the original image can proceed to
+      # the multimodal explanation model instead of holding the entire SSE workflow for minutes.
+      vision-timeout-ms: ${MATH_AGENT_STUDENT_EXPLANATION_VISION_TIMEOUT_MS:12000}
       # Two providers preserve one recovery path while capping a failed turn at two 30-second attempts.
       max-provider-attempts: ${MATH_AGENT_STUDENT_EXPLANATION_MAX_PROVIDER_ATTEMPTS:2}
       conversation-context-max-chars: ${MATH_AGENT_STUDENT_EXPLANATION_CONVERSATION_CONTEXT_MAX_CHARS:100000}
@@ -116,9 +118,12 @@ math-agent:
   vector-index:
     # Local WSL Milvus is intentionally unauthenticated. Remote deployments may override this value in a separate
     # profile, but local startup must not require a needless environment variable.
-    enabled: true
-    milvus-uri: http://127.0.0.1:19530
-    milvus-token: ""
+    enabled: ${MATH_AGENT_VECTOR_INDEX_ENABLED:true}
+    # Containers resolve Milvus by service name while Windows development keeps the loopback default.
+    milvus-uri: ${MATH_AGENT_VECTOR_INDEX_MILVUS_URI:http://127.0.0.1:19530}
+    # Keep credentials outside source control. Local startup resolves the authenticated WSL container password into
+    # this environment variable; deployments provide the same variable through their secret manager.
+    milvus-token: ${MATH_AGENT_MILVUS_TOKEN:}
     collection-name: math_agent_teacher_text_blocks_bge
     student-memory-collection-name: math_agent_student_memories_bge
     textbook-text-collection-name: textbook_text_collection
@@ -221,6 +226,8 @@ math-agent:
   agent-worker:
     # Dedicated Worker authentication is intentionally separate from user capability tokens.
     shared-key: ${MATH_AGENT_AGENT_WORKER_SHARED_KEY:}
+    # Visual-model calls receive only a bounded, permission-checked data URL; large originals stay in Java storage.
+    asset-max-bytes: ${MATH_AGENT_AGENT_WORKER_ASSET_MAX_BYTES:4194304}
     dispatch:
       enabled: ${MATH_AGENT_AGENT_WORKER_DISPATCH_ENABLED:true}
     runtime:

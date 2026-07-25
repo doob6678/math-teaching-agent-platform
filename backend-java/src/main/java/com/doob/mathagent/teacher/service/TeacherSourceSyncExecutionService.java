@@ -6,6 +6,9 @@ import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
 import com.doob.mathagent.teacher.document.TeacherResourceStore;
 import com.doob.mathagent.teacher.feishu.TeacherFeishuDownloadClient;
 import com.doob.mathagent.teacher.feishu.TeacherFeishuDownloadException;
+import com.doob.mathagent.feishu.FeishuCredential;
+import com.doob.mathagent.feishu.FeishuCredentialService;
+import com.doob.mathagent.feishu.FeishuResourceBindingService;
 import com.doob.mathagent.teacher.formula.OmmlFormulaExtractor;
 import com.doob.mathagent.teacher.formula.TeacherFormulaRecognitionClient;
 import com.doob.mathagent.teacher.formula.TeacherFormulaRecognitionProperties;
@@ -118,6 +121,8 @@ public class TeacherSourceSyncExecutionService {
     private final TeacherFormulaRecognitionClient formulaRecognitionClient;
     private final TeacherFormulaRecognitionProperties formulaRecognitionProperties;
     private final TeacherPageTranscriptionClient pageTranscriptionClient;
+    private FeishuCredentialService feishuCredentialService;
+    private FeishuResourceBindingService feishuResourceBindingService;
 
     /**
      * Creates a sync execution service.
@@ -257,10 +262,40 @@ public class TeacherSourceSyncExecutionService {
                 formulaRecognitionProperties,
                 "formulaRecognitionProperties is required");
         this.pageTranscriptionClient = Objects.requireNonNull(pageTranscriptionClient, "pageTranscriptionClient is required");
+        this.feishuCredentialService = null;
+        this.feishuResourceBindingService = null;
         // Startup evidence for the production wiring: only the boolean is logged, never a source page, path, prompt,
         // provider key, or teacher-private text. This makes a stale compatibility constructor immediately visible.
         LOGGER.info("teacher_source_sync_wiring assetPersistenceEnabled=true pageTranscriptionEnabled={}",
                 this.pageTranscriptionClient.isEnabled());
+    }
+
+    /** Production constructor that resolves a tenant/user OAuth token immediately before Feishu I/O. */
+    public TeacherSourceSyncExecutionService(
+            TeacherResourceStore resourceStore, TeacherSourceSyncJobStore jobStore, TeacherDocumentBlockStore blockStore,
+            TeacherFeishuDownloadClient feishuDownloadClient, TeacherSourceSyncProperties syncProperties,
+            TeacherSourceSyncCheckpointStore checkpointStore, VectorIndexService vectorIndexService,
+            TeacherResourceGraphAlignmentService graphAlignmentService, TeacherResourceAssetService assetService,
+            TeacherFormulaRecognitionClient formulaRecognitionClient, TeacherFormulaRecognitionProperties formulaRecognitionProperties,
+            TeacherPageTranscriptionClient pageTranscriptionClient, FeishuCredentialService feishuCredentialService) {
+        this(resourceStore, jobStore, blockStore, feishuDownloadClient, syncProperties, checkpointStore, vectorIndexService,
+                graphAlignmentService, assetService, formulaRecognitionClient, formulaRecognitionProperties, pageTranscriptionClient);
+        this.feishuCredentialService = feishuCredentialService;
+        this.feishuResourceBindingService = null;
+    }
+
+    /** Full production wiring with explicit resource-to-user authorization binding. */
+    public TeacherSourceSyncExecutionService(
+            TeacherResourceStore resourceStore, TeacherSourceSyncJobStore jobStore, TeacherDocumentBlockStore blockStore,
+            TeacherFeishuDownloadClient feishuDownloadClient, TeacherSourceSyncProperties syncProperties,
+            TeacherSourceSyncCheckpointStore checkpointStore, VectorIndexService vectorIndexService,
+            TeacherResourceGraphAlignmentService graphAlignmentService, TeacherResourceAssetService assetService,
+            TeacherFormulaRecognitionClient formulaRecognitionClient, TeacherFormulaRecognitionProperties formulaRecognitionProperties,
+            TeacherPageTranscriptionClient pageTranscriptionClient, FeishuCredentialService credentials,
+            FeishuResourceBindingService bindings) {
+        this(resourceStore,jobStore,blockStore,feishuDownloadClient,syncProperties,checkpointStore,vectorIndexService,graphAlignmentService,
+                assetService,formulaRecognitionClient,formulaRecognitionProperties,pageTranscriptionClient,credentials);
+        this.feishuResourceBindingService = bindings;
     }
 
     /**
@@ -315,12 +350,27 @@ public class TeacherSourceSyncExecutionService {
                 if (resumeCheckpoint == null) {
                     saveFeishuCheckpoint(document, running, "[]", "[]", 1);
                 }
-                TeacherFeishuDownloadClient.FeishuDownloadResult result = feishuDownloadClient.download(
+                String boundSubjectId = feishuResourceBindingService == null ? normalizedSubjectId
+                        : feishuResourceBindingService.subjectId(normalizedTenantId, document.documentId());
+                FeishuCredential userCredential = feishuCredentialService == null ? null
+                        : feishuCredentialService.findActive(normalizedTenantId, boundSubjectId);
+                boolean administratorAppCredentialFallback = "admin".equals(normalizedRole) && userCredential == null;
+                if (feishuCredentialService != null
+                        && !administratorAppCredentialFallback
+                        && (userCredential == null || userCredential.expired(Instant.now()))) {
+                    if (userCredential != null) feishuCredentialService.markExpired(normalizedTenantId, boundSubjectId);
+                    throw new TeacherFeishuDownloadException("Feishu authorization is required", false, null,
+                            toDownloadCheckpoint(resumeCheckpoint), new TeacherSourceSyncFailureResponse("AUTH_REQUIRED", false, List.of(), null));
+                }
+                // An administrator MCP key may operate the tenant bot against folders explicitly shared with that
+                // bot. A missing per-user credential therefore delegates token acquisition to the process downloader;
+                // teacher/student identities still require their own OAuth credential above.
+                TeacherFeishuDownloadClient.FeishuDownloadResult result = feishuDownloadClient.downloadWithAccessToken(
                         requireText(document.originalUrl(), "Feishu resource originalUrl is required"),
                         syncProperties.feishuStagingRoot(),
                         syncProperties.feishuSmokeMaxFiles(),
                         textOrDefault(document.feishuExportFormat(), "md"),
-                        toDownloadCheckpoint(resumeCheckpoint));
+                        toDownloadCheckpoint(resumeCheckpoint), userCredential == null ? null : userCredential.accessToken());
                 TeacherResourceDocumentResponse downloaded = new TeacherResourceDocumentResponse(
                         document.documentId(),
                         document.tenantId(),
@@ -447,10 +497,12 @@ public class TeacherSourceSyncExecutionService {
                 TeacherSourceSyncCheckpointResponse checkpointToSave = failureCheckpoint.hasCursor()
                         ? toStoredCheckpoint(document, running, failureCheckpoint, "[]")
                         : resumeCheckpoint;
+                boolean authorizationRequired = failure.authorizationUrl() != null
+                        || (failure.requiredScopes() != null && !failure.requiredScopes().isEmpty());
                 TeacherSourceSyncJobResponse pausedOrFailed = updateJob(
                         running,
-                        retryable ? "paused" : "failed",
-                        retryable ? "download_paused" : "download_failed",
+                        authorizationRequired ? "AUTH_REQUIRED" : (retryable ? "paused" : "failed"),
+                        authorizationRequired ? "authorization_required" : (retryable ? "download_paused" : "download_failed"),
                         null,
                         exception.getMessage(),
                         failure);
@@ -499,8 +551,9 @@ public class TeacherSourceSyncExecutionService {
                 normalizedSubjectId,
                 documentId);
         TeacherSourceSyncJobResponse job = requireJob(document.tenantId(), document.documentId(), jobId);
-        if (!"paused".equalsIgnoreCase(textOrDefault(job.status(), ""))) {
-            throw new IllegalArgumentException("Only paused source sync jobs can be resumed");
+        if (!"paused".equalsIgnoreCase(textOrDefault(job.status(), ""))
+                && !"AUTH_REQUIRED".equalsIgnoreCase(textOrDefault(job.status(), ""))) {
+            throw new IllegalArgumentException("Only paused or authorization-required source sync jobs can be resumed");
         }
         TeacherSourceSyncCheckpointResponse checkpoint = checkpointStore.findByJobId(document.tenantId(), job.jobId())
                 .orElseThrow(() -> new IllegalArgumentException("Source sync checkpoint not found: " + job.jobId()));

@@ -178,7 +178,8 @@ public record TeacherResourceRegistrationCommand(
 
     private static String normalizeParseMode(String value) {
         String normalized = textOrDefault(value, "TEXT").toUpperCase();
-        if ("TEXT".equals(normalized) || "AI".equals(normalized)) {
+        // Preserve the explicit image-aware Markdown mode from JSON and multipart registration commands.
+        if ("TEXT".equals(normalized) || "MARKDOWN_ASSETS".equals(normalized) || "AI".equals(normalized)) {
             return normalized;
         }
         throw new IllegalArgumentException("Unsupported teacher resource parse mode: " + value);

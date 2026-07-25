@@ -193,7 +193,7 @@ public class SystemRuntimeStatusService {
             blockingIssues.add("FEISHU_DOWNLOADER_SCRIPT_NOT_FOUND");
         }
         if (!feishu.appkeyFileExists()) {
-            blockingIssues.add("FEISHU_APPKEY_FILE_NOT_FOUND");
+            blockingIssues.add("FEISHU_CREDENTIALS_NOT_CONFIGURED");
         }
         if (!feishu.stagingRootExistsOrCreatable()) {
             blockingIssues.add("FEISHU_STAGING_ROOT_NOT_READY");
@@ -221,7 +221,9 @@ public class SystemRuntimeStatusService {
                 && Files.isRegularFile(properties.feishuDownloaderScript());
         boolean appkeyPathConfigured = properties.feishuAppkeyPath() != null
                 && !properties.feishuAppkeyPath().toString().isBlank();
-        boolean appkeyFileExists = appkeyPathConfigured && Files.isRegularFile(properties.feishuAppkeyPath());
+        // The public status field is retained for frontend compatibility, but now represents usable credentials:
+        // either the deployment environment pair or the local APPKEY fallback can satisfy the worker.
+        boolean appkeyFileExists = properties.credentialsConfigured();
         boolean stagingRootConfigured = properties.feishuStagingRoot() != null
                 && !properties.feishuStagingRoot().toString().isBlank();
         boolean stagingRootReady = stagingRootConfigured && stagingRootExistsOrCreatable(properties.feishuStagingRoot());

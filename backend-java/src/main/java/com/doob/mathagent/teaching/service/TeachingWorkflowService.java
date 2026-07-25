@@ -28,6 +28,7 @@ import com.doob.mathagent.teaching.TeachingHandoutVersions;
 import com.doob.mathagent.teaching.TeachingKnowledgePointPack;
 import com.doob.mathagent.teaching.TeachingReactStep;
 import com.doob.mathagent.teaching.TeachingRequestContext;
+import com.doob.mathagent.teaching.TeachingReviewPolicy;
 import com.doob.mathagent.teaching.TeachingTaskStatus;
 import com.doob.mathagent.teaching.TeachingWorkflowEvent;
 import com.doob.mathagent.teaching.TeachingWorkflowNode;
@@ -511,6 +512,66 @@ public class TeachingWorkflowService {
     }
 
     /**
+     * Applies the publish/reject decision after a task entered WAITING_REVIEW.
+     *
+     * <p>Only teacher/admin subjects may release a handout. The method preserves the generated artefacts so a reject
+     * can be resumed using the existing durable recovery workflow instead of paying for duplicate retrieval.</p>
+     */
+    public TeachingTaskResponse decideReview(
+            String taskId, TeachingRequestContext context, String decision, String comment) {
+        TeachingRequestContext normalized = context.normalize();
+        if (!"teacher".equals(normalized.subjectType()) && !"admin".equals(normalized.subjectType())) {
+            throw new IllegalArgumentException("Only teacher or admin may decide handout review");
+        }
+        TeachingTaskResponse existing = taskStore.findByTaskIdAndOwnerKey(taskId, normalized.ownerKey())
+                .orElseThrow(() -> new IllegalArgumentException("Teaching task not found"));
+        if (existing.status() != TeachingTaskStatus.WAITING_REVIEW) {
+            throw new IllegalStateException("Teaching task is not waiting for review");
+        }
+        String normalizedDecision = decision == null ? "" : decision.strip().toUpperCase(Locale.ROOT);
+        TeachingTaskResponse updated = switch (normalizedDecision) {
+            // Approval is the rendering boundary.  The evidence and structured draft were already quality-gated, so
+            // this method deliberately does not retrieve again or make another model call.
+            case "APPROVE" -> renderApprovedHandoutVersions(existing, normalized);
+            case "REJECT" -> existing.withReviewStatus(TeachingTaskStatus.FAILED,
+                    comment == null || comment.isBlank() ? "Human reviewer rejected this handout" : comment.strip());
+            default -> throw new IllegalArgumentException("Unsupported review decision: " + decision);
+        };
+        return taskStore.save(normalized.ownerKey(), normalized.idempotencyKey(existing.clientRequestId()), updated);
+    }
+
+    /** Renders three independent publishable versions from an already approved, immutable common draft. */
+    private TeachingTaskResponse renderApprovedHandoutVersions(
+            TeachingTaskResponse task, TeachingRequestContext reviewer) {
+        TeachingTaskRequest request = new TeachingTaskRequest(
+                task.clientRequestId(), task.questionText(), task.learningGoal(), evidenceLimitForResume(task),
+                task.selectedTemplate() == null ? null : task.selectedTemplate().templateCode(), task.watermarkText()).normalize();
+        TeachingHandoutTemplateProfile template = handoutTemplateService.resolve(request.handoutTemplateCode());
+        StudentMemoryResponse memory = task.memoryReuse() == null
+                ? new StudentMemoryResponse(false, null, "private", "", 0D,
+                        "review rendering has no memory snapshot", List.of())
+                : fromMemoryReuse(task.memoryReuse());
+        List<TeachingEvidence> questionEvidence = task.evidence().stream()
+                .filter(item -> "QUESTION_BANK".equals(item.sourceScope())).toList();
+        List<TeachingEvidence> textbookEvidence = task.evidence().stream()
+                .filter(item -> "PUBLIC_TEXTBOOK".equals(item.sourceScope())).toList();
+        List<TeachingEvidence> teacherEvidence = task.evidence().stream()
+                .filter(item -> "TEACHER_RESOURCE".equals(item.sourceScope())).toList();
+        List<TeachingKnowledgePointPack> retrievedPacks = buildKnowledgePointPacks(
+                request, textbookEvidence, teacherEvidence, questionEvidence);
+        List<TeachingKnowledgePointPack> knowledgePacks = retrievedPacks.isEmpty()
+                ? fallbackKnowledgePointPacks(request, task.evidence())
+                : retrievedPacks;
+        TeachingHandoutVersions versions = renderHandoutVersions(
+                request, task.evidence(), knowledgePacks, memory, template, task.aiDraft(), task.mergeResult().mergedSections());
+        requireQualifiedRenderedQuestionCount(template, versions.teacherHandoutLatex());
+        return task.withHandoutVersion("teacher", versions.teacherHandoutLatex())
+                .withHandoutVersion("student", versions.studentHandoutLatex())
+                .withHandoutVersion("lecture", versions.lectureHandoutLatex())
+                .withReviewStatus(TeachingTaskStatus.COMPLETED, null);
+    }
+
+    /**
      * Executes one MySQL-authoritative task after the lecture Worker has acquired its lease.
      *
      * <p>The AMQP message contains no request body or user identity; this method reconstructs the supported request
@@ -522,7 +583,10 @@ public class TeachingWorkflowService {
         // RabbitMQ redelivery after a JVM restart is normal.  A terminal snapshot has already persisted every
         // artefact and must never be generated a second time, otherwise stale acceptance jobs can occupy the sole
         // lecture consumer ahead of a newer user task.
-        if (queued.status() == TeachingTaskStatus.COMPLETED || queued.status() == TeachingTaskStatus.FAILED) {
+        if (queued.status() == TeachingTaskStatus.COMPLETED
+                || queued.status() == TeachingTaskStatus.FAILED
+                || queued.status() == TeachingTaskStatus.WAITING_REVIEW
+                || queued.status() == TeachingTaskStatus.DRAFT_ONLY) {
             return;
         }
         TeachingRequestContext context = new TeachingRequestContext(
@@ -740,6 +804,11 @@ public class TeachingWorkflowService {
         TeachingDraftSections draftSections = collectDraftSections(request, evidence, aiDraft);
         TeachingDraftReview draftReview = TeachingDraftReviewCollector.collect(draftSections);
         TeachingDraftMergeResult mergeResult = TeachingDraftMerger.merge(draftSections, draftReview);
+        // Publication is a Java-owned state transition. The model may draft/review content, but cannot bypass a
+        // tenant's human-review policy or publish an unresolved structural review.
+        TeachingReviewPolicy reviewPolicy = TeachingReviewPolicy.fromEnvironment();
+        TeachingTaskStatus publicationStatus = reviewPolicy
+                .statusAfterQualityGate("READY".equalsIgnoreCase(mergeResult.status()));
         TeachingDraftSections renderSections = mergeResult.mergedSections();
         // Retrieval determines the printable lesson spine. AI may enrich explanations, but cannot merge unrelated
         // question-bank items back into a generic section or invent a knowledge-point title.
@@ -748,17 +817,11 @@ public class TeachingWorkflowService {
         List<TeachingKnowledgePointPack> knowledgePointPacks = retrievedKnowledgePointPacks.isEmpty()
                 ? fallbackKnowledgePointPacks(request, evidence)
                 : retrievedKnowledgePointPacks;
-        TeachingHandoutVersions handoutVersions = TeachingHandoutVersionCollector.collect(
-                () -> guardHandoutLatex(
-                        buildTeacherHandoutLatex(
-                                request, evidence, knowledgePointPacks, memoryResponse, template, aiDraft, renderSections),
-                        true),
-                () -> guardHandoutLatex(
-                        buildStudentHandoutLatex(
-                                request, evidence, knowledgePointPacks, memoryResponse, template, aiDraft, renderSections),
-                        false),
-                () -> buildLectureHandoutLatex(request, knowledgePointPacks, renderSections));
-        requireQualifiedRenderedQuestionCount(template, handoutVersions.teacherHandoutLatex());
+        // A pending human review stores only the shared, traceable draft. Rendering exportable variants before a
+        // decision would both waste work for rejected drafts and create a path to publish unreviewed material.
+        TeachingHandoutVersions handoutVersions = reviewPolicy == TeachingReviewPolicy.AUTO_PUBLISH
+                ? renderHandoutVersions(request, evidence, knowledgePointPacks, memoryResponse, template, aiDraft, renderSections)
+                : new TeachingHandoutVersions("", "", "");
         timer.mark("handout_generation");
         List<TeachingWorkflowEvent> workflowEvents = buildWorkflowEvents(
                 nodes,
@@ -778,7 +841,7 @@ public class TeachingWorkflowService {
                 context.subjectType(),
                 context.subjectId(),
                 template.summary(),
-                TeachingTaskStatus.COMPLETED,
+                publicationStatus,
                 request.questionText(),
                 request.learningGoal(),
                 request.watermarkText(),
@@ -803,6 +866,32 @@ public class TeachingWorkflowService {
         }
         saveAiDraftTrace(response, context);
         return response;
+    }
+
+    /**
+     * Generates the independent versions only from the common reviewed draft.  This has no model or retrieval call,
+     * so approval is deterministic, retryable per version, and cannot incur another provider charge.
+     */
+    private static TeachingHandoutVersions renderHandoutVersions(
+            TeachingTaskRequest request,
+            List<TeachingEvidence> evidence,
+            List<TeachingKnowledgePointPack> knowledgePointPacks,
+            StudentMemoryResponse memoryResponse,
+            TeachingHandoutTemplateProfile template,
+            TeachingTaskResponse.AiDraft aiDraft,
+            TeachingDraftSections renderSections) {
+        TeachingHandoutVersions versions = TeachingHandoutVersionCollector.collect(
+                () -> guardHandoutLatex(
+                        buildTeacherHandoutLatex(
+                                request, evidence, knowledgePointPacks, memoryResponse, template, aiDraft, renderSections),
+                        true),
+                () -> guardHandoutLatex(
+                        buildStudentHandoutLatex(
+                                request, evidence, knowledgePointPacks, memoryResponse, template, aiDraft, renderSections),
+                        false),
+                () -> buildLectureHandoutLatex(request, knowledgePointPacks, renderSections));
+        requireQualifiedRenderedQuestionCount(template, versions.teacherHandoutLatex());
+        return versions;
     }
 
     /**

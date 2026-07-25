@@ -3,14 +3,17 @@ package com.doob.mathagent.teaching.controller;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.infrastructure.security.RequestSubjectResolver;
 import com.doob.mathagent.teaching.TeachingRequestContext;
+import com.doob.mathagent.teaching.TeachingReviewPolicy;
 import com.doob.mathagent.teaching.dto.TeachingHandoutBatchExportRequest;
 import com.doob.mathagent.teaching.dto.TeachingHandoutVersionUpdateRequest;
 import com.doob.mathagent.teaching.dto.TeachingHumanFeedbackRequest;
+import com.doob.mathagent.teaching.dto.TeachingReviewDecisionRequest;
 import com.doob.mathagent.teaching.dto.TeachingTaskRequest;
 import com.doob.mathagent.teaching.service.TeachingHandoutBatchExportRecord;
 import com.doob.mathagent.teaching.service.TeachingHandoutBatchExportService;
 import com.doob.mathagent.teaching.service.TeachingCapabilityVerifier;
 import com.doob.mathagent.teaching.service.TeachingHumanFeedbackService;
+import com.doob.mathagent.teaching.service.TeachingReviewAuditService;
 import com.doob.mathagent.teaching.service.TeachingHandoutPdfExportService;
 import com.doob.mathagent.teaching.service.TeachingHandoutTemplatePreviewService;
 import com.doob.mathagent.teaching.service.TeachingHandoutTemplateService;
@@ -24,7 +27,10 @@ import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
@@ -40,6 +46,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
  * 教学任务接口：前端提交任务后可通过 taskId 持续查询结果，支持页面离开后的恢复。
@@ -69,6 +76,7 @@ public class TeachingTaskController {
     private final TeachingHandoutPdfExportService pdfExportService;
     private final TeachingHandoutBatchExportService batchExportService;
     private final TeachingHumanFeedbackService feedbackService;
+    private final TeachingReviewAuditService reviewAuditService;
     private final TeachingHandoutTemplateService handoutTemplateService;
     private final TeachingHandoutTemplatePreviewService handoutTemplatePreviewService;
     private final TeachingTaskEventStreamService eventStreamService;
@@ -85,6 +93,7 @@ public class TeachingTaskController {
             TeachingHandoutPdfExportService pdfExportService,
             TeachingHandoutBatchExportService batchExportService,
             TeachingHumanFeedbackService feedbackService,
+            TeachingReviewAuditService reviewAuditService,
             TeachingHandoutTemplateService handoutTemplateService,
             TeachingHandoutTemplatePreviewService handoutTemplatePreviewService,
             TeachingTaskEventStreamService eventStreamService) {
@@ -95,6 +104,7 @@ public class TeachingTaskController {
         this.pdfExportService = pdfExportService;
         this.batchExportService = batchExportService;
         this.feedbackService = feedbackService;
+        this.reviewAuditService = reviewAuditService;
         this.handoutTemplateService = handoutTemplateService;
         this.handoutTemplatePreviewService = handoutTemplatePreviewService;
         this.eventStreamService = eventStreamService;
@@ -118,6 +128,7 @@ public class TeachingTaskController {
                 pdfExportService,
                 batchExportService,
                 feedbackService,
+                new TeachingReviewAuditService(new com.doob.mathagent.teaching.service.InMemoryTeachingReviewAuditStore()),
                 new TeachingHandoutTemplateService(),
                 new TeachingHandoutTemplatePreviewService(new TeachingHandoutTemplateService()),
                 new TeachingTaskEventStreamService());
@@ -242,6 +253,75 @@ public class TeachingTaskController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, exception.getMessage());
         } catch (IllegalStateException exception) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, exception.getMessage());
+        }
+    }
+
+    /** Approves or rejects a quality-gated handout without repeating any model call. */
+    @PostMapping("/api/teaching/tasks/{taskId}/review")
+    @Transactional
+    public TeachingTaskResponse decideReview(
+            @PathVariable String taskId,
+            @Valid @RequestBody TeachingReviewDecisionRequest request,
+            HttpServletRequest httpRequest) {
+        RequestSubject subject = subjectResolver.resolve(httpRequest);
+        String path = TEACHING_TASKS_PATH + "/" + taskId + "/review";
+        if (!capabilityVerifier.verify(
+                headerOrNull(httpRequest, "X-Capability-Token"),
+                TEACHING_FEEDBACK_SUBMIT_ACTION,
+                path,
+                headerOrNull(httpRequest, "X-Request-Hash"),
+                subject)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for handout review");
+        }
+        try {
+            TeachingRequestContext context = requestContext(subject);
+            TeachingTaskResponse before = workflowService.get(taskId, context)
+                    .orElseThrow(() -> new IllegalArgumentException("Teaching task not found"));
+            TeachingTaskResponse decided = workflowService.decideReview(
+                    taskId, context, request.normalizedDecision(), request.normalizedComment());
+            // Feedback storage is append-only in MySQL.  The review record links the exact common draft and the
+            // released version hashes without persisting raw private handout text a second time.
+            feedbackService.submit(taskId, context, new TeachingHumanFeedbackRequest(
+                    "APPROVE".equals(request.normalizedDecision()) ? 5 : 1,
+                    "handout_" + request.normalizedDecision().toLowerCase(java.util.Locale.ROOT),
+                    request.normalizedComment(),
+                    Map.of(
+                            "reviewedAt", Instant.now().toString(),
+                            "policy", TeachingReviewPolicy.fromEnvironment().name(),
+                            "draftHash", sha256(before.aiDraft() == null ? "" : before.aiDraft().content()),
+                            "qualityStatus", before.mergeResult().status(),
+                            "teacherVersionHash", sha256(decided.teacherHandoutLatex()),
+                            "studentVersionHash", sha256(decided.studentHandoutLatex()),
+                            "lectureVersionHash", sha256(decided.lectureHandoutLatex()),
+                            "publishedStatus", decided.status().name())));
+            reviewAuditService.record(
+                    taskId,
+                    context,
+                    TeachingReviewPolicy.fromEnvironment(),
+                    request.normalizedDecision(),
+                    request.normalizedComment(),
+                    sha256(before.aiDraft() == null ? "" : before.aiDraft().content()),
+                    before.mergeResult().status(),
+                    sha256(decided.teacherHandoutLatex()),
+                    sha256(decided.studentHandoutLatex()),
+                    sha256(decided.lectureHandoutLatex()),
+                    decided.status().name());
+            return decided;
+        } catch (IllegalArgumentException exception) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, exception.getMessage(), exception);
+        } catch (IllegalStateException exception) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, exception.getMessage(), exception);
+        }
+    }
+
+    /** Hashes review snapshots for immutable audit linkage without writing source material into the feedback row. */
+    private static String sha256(String value) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest((value == null ? "" : value).getBytes(StandardCharsets.UTF_8));
+            return java.util.HexFormat.of().formatHex(digest);
+        } catch (java.security.NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 is unavailable", exception);
         }
     }
 

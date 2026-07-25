@@ -6,14 +6,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.stereotype.Repository;
 
 /**
  * In-memory fallback MCP key store for local runtime paths without MySQL.
  */
 @Repository
-@ConditionalOnMissingBean(McpClientKeyStore.class)
 public class InMemoryMcpClientKeyStore implements McpClientKeyStore {
 
     private final Map<String, McpClientKeyRecord> records = new ConcurrentHashMap<>();

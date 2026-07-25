@@ -66,6 +66,13 @@ public interface TeacherFeishuDownloadClient {
             String fileExtension,
             FeishuDownloadCheckpoint checkpoint);
 
+    /** Downloads with a decrypted user OAuth token kept only for this backend process invocation. */
+    default FeishuDownloadResult downloadWithAccessToken(
+            String url, Path stagingRoot, int maxFiles, String fileExtension,
+            FeishuDownloadCheckpoint checkpoint, String accessToken) {
+        return download(url, stagingRoot, maxFiles, fileExtension, checkpoint);
+    }
+
     /**
      * Durable Feishu traversal cursor passed to process-backed downloaders.
      *

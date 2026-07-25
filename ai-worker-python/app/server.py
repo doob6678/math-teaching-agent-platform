@@ -21,6 +21,10 @@ from app.embeddings import (
 from app.health import health_response
 from app.formula_recognition import FormulaRecognitionError, FormulaRecognitionService
 from app.settings import WorkerSettings
+from app.agent_runtime import AgentRunRequest, AgentRuntime
+from app.streaming_runtime import AgentStreamingRuntime
+from fastapi.responses import StreamingResponse
+import json
 
 
 class EmbeddingRequest(BaseModel):
@@ -79,6 +83,18 @@ def formula_recognition_service() -> FormulaRecognitionService:
     return FormulaRecognitionService(WorkerSettings.from_environment())
 
 
+@lru_cache(maxsize=1)
+def agent_runtime() -> AgentRuntime:
+    """Keeps Python stateless: Java remains the only authority for tenant data and files."""
+    return AgentRuntime()
+
+
+@lru_cache(maxsize=1)
+def agent_streaming_runtime() -> AgentStreamingRuntime:
+    """Owns the production SSE protocol; provider sockets remain open only for the active response."""
+    return AgentStreamingRuntime()
+
+
 def require_worker_key(
     authorization: str | None = Header(default=None),
     x_worker_api_key: str | None = Header(default=None),
@@ -104,6 +120,21 @@ def health() -> dict[str, str]:
 @app.get("/v1/capabilities", dependencies=[Depends(require_worker_key)])
 def capabilities() -> dict:
     return embedding_service().status()
+
+
+@app.post("/v1/agent-runs", dependencies=[Depends(require_worker_key)])
+def agent_run(payload: AgentRunRequest) -> StreamingResponse:
+    """Streams typed SSE events; usage is emitted only after the provider's final usage chunk is persisted."""
+    def encoded_events():
+        for item in agent_streaming_runtime().stream(payload):
+            yield f"event: {item['event']}\ndata: {json.dumps(item['data'], ensure_ascii=False, separators=(',', ':'))}\n\n"
+    return StreamingResponse(encoded_events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.post("/v1/agent-runs/sync", dependencies=[Depends(require_worker_key)])
+def agent_run_sync(payload: AgentRunRequest) -> dict:
+    """Temporary compatibility adapter for callers that cannot consume SSE yet."""
+    return agent_runtime().execute(payload).as_response()
 
 
 @app.post("/v1/embeddings", dependencies=[Depends(require_worker_key)])

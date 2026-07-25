@@ -42,29 +42,92 @@ public class StudentExplanationAiCardService {
             List<StudentExplanationResponse.ExplanationSource> sources,
             List<String> observations,
             Set<String> availableTools) {
+        return nextReactDecision(problem, sources, observations, availableTools, StudentExplanationAiStreamListener.NOOP);
+    }
+
+    /**
+     * Plans the bounded ReAct turn while forwarding the provider's actual visible content as it arrives.
+     *
+     * <p>A self-contained question can finish during this planning call.  It must therefore use the same streaming
+     * gateway as the later card-composition call; otherwise that common path leaves the browser waiting for the
+     * complete JSON response with no visible AI output.</p>
+     */
+    public ReactDecision nextReactDecision(
+            String problem,
+            List<StudentExplanationResponse.ExplanationSource> sources,
+            List<String> observations,
+            Set<String> availableTools,
+            StudentExplanationAiStreamListener streamListener) {
+        return nextReactDecision(problem, sources, observations, availableTools, "", streamListener);
+    }
+
+    /** Plans retrieval while allowing the model to inspect the original owner-validated image. */
+    public ReactDecision nextReactDecision(
+            String problem,
+            List<StudentExplanationResponse.ExplanationSource> sources,
+            List<String> observations,
+            Set<String> availableTools,
+            String imageDataUrl,
+            StudentExplanationAiStreamListener streamListener) {
         List<AiProviderCatalog.Provider> providers = aiProviderCatalog.enabledProviders();
         if (providers.isEmpty()) {
             throw new IllegalStateException("No enabled AI provider.");
         }
         AiProviderCatalog.Provider provider = providers.getFirst();
-        AiChatResult result = aiChatGateway.call(new AiChatRequest(
+        StudentExplanationAiStreamListener listener = streamListener == null
+                ? StudentExplanationAiStreamListener.NOOP
+                : streamListener;
+        AiChatResult result = aiChatGateway.stream(new AiChatRequest(
                 provider.name(), provider.chatModel(), "StudentExplanationReactAgent",
-                reactPrompt(problem, sources, observations, availableTools), sourceRefs(sources)));
+                reactPrompt(problem, sources, observations, availableTools), sourceRefs(sources), imageDataUrl),
+                // Planning output is not yet a trusted card.  Forward its visible JSON text only; cards are emitted
+                // after the final parser validates the source allow-list below.
+                delta -> listener.onDelta(delta, List.of()));
         try {
             JsonNode root = OBJECT_MAPPER.readTree(extractJsonObject(stripCodeFence(safe(result.generatedContent()).strip())));
             String decision = safe(root.path("decision").asText()).strip().toLowerCase(java.util.Locale.ROOT);
             if ("action".equals(decision)) {
-                String tool = safe(root.path("tool").asText()).strip();
-                if (!availableTools.contains(tool)) {
+                LinkedHashSet<String> requestedTools = new LinkedHashSet<>();
+                JsonNode toolsNode = root.path("tools");
+                if (toolsNode.isArray()) {
+                    toolsNode.forEach(node -> requestedTools.add(safe(node.asText()).strip()));
+                } else {
+                    // Accept the former single-tool form while providers roll over to the batched planning contract.
+                    requestedTools.add(safe(root.path("tool").asText()).strip());
+                }
+                requestedTools.removeIf(String::isBlank);
+                if (requestedTools.isEmpty() || !availableTools.containsAll(requestedTools)) {
                     // The model cannot expand the server-side allow-list.  A malformed or stale tool name must not
                     // turn an otherwise valid user turn into a hard failure; the first remaining permitted tool is
                     // a deterministic, auditable recovery action and is still executed by the backend below.
-                    return fallbackDecision(availableTools, "模型请求了不可用工具：" + tool);
+                    return fallbackDecision(availableTools, "模型请求了不可用工具：" + requestedTools);
                 }
-                return ReactDecision.action(tool);
+                return ReactDecision.action(List.copyOf(requestedTools), safe(root.path("query").asText()).strip());
             }
             if ("final".equals(decision)) {
-                return ReactDecision.finalAnswer();
+                // The same provider turn must contain the actual answer. Removing controller-only fields lets the
+                // existing strict card parser remain the single validation and source-allow-list boundary.
+                com.fasterxml.jackson.databind.node.ObjectNode cardsJson = root.deepCopy();
+                cardsJson.remove(List.of("decision", "tool", "tools", "query"));
+                ParsedAiCards parsed = parseAiCards(cardsJson.toString(), sources);
+                if (!parsed.structured()) {
+                    return fallbackDecision(availableTools, "ReAct final 缺少有效讲解卡片：" + parsed.parseError());
+                }
+                StudentExplanationResponse.AiDraft aiDraft = new StudentExplanationResponse.AiDraft(
+                        true,
+                        result.providerName(),
+                        result.modelCode(),
+                        result.promptTokens(),
+                        result.completionTokens(),
+                        result.totalTokens(),
+                        true,
+                        result.safeMessage(),
+                        List.of(
+                                aiEvent("MODEL_CALL_SUCCEEDED", result.providerName(), result.modelCode(), 0,
+                                        false, true, result.safeMessage()),
+                                aiEvent("JSON_PARSE_SUCCEEDED", result.providerName(), result.modelCode(), 0,
+                                        true, false, "Student explanation cards parsed in ReAct final.")));
+                return ReactDecision.finalAnswer(new AiCardDraft(parsed.conversationTitle(), parsed.cards(), aiDraft));
             }
             return fallbackDecision(availableTools, "模型未返回 ReAct decision");
         } catch (JsonProcessingException exception) {
@@ -80,7 +143,7 @@ public class StudentExplanationAiCardService {
     private static ReactDecision fallbackDecision(Set<String> availableTools, String reason) {
         return availableTools.stream()
                 .findFirst()
-                .map(tool -> ReactDecision.recoveredAction(tool, reason))
+                .map(tool -> ReactDecision.recoveredAction(List.of(tool), reason))
                 .orElseGet(() -> ReactDecision.invalid(reason));
     }
 
@@ -91,9 +154,16 @@ public class StudentExplanationAiCardService {
             List<String> observations,
             Set<String> availableTools) {
         return """
-                You are a math-solving ReAct controller. Decide the next step; do not solve the problem yet.
-                Return exactly JSON and nothing else: {"decision":"action","tool":"one available tool"}
-                or {"decision":"final"}. You may choose final only after sufficient evidence is available.
+                You are a high-school math teacher operating one bounded ReAct turn. Return exactly one JSON object.
+                If retrieval is required, plan every useful permitted read-only tool now and return:
+                {"decision":"action","tools":["tool_a","tool_b"],"query":"concrete search terms extracted from text and image"}.
+                Do not split independent retrieval tools across later turns and never repeat a tool.
+                If the problem is self-contained, solve it in this same turn and return:
+                {"decision":"final","conversationTitle":"15 Chinese characters or fewer","cards":[{"cardKey":"stable_snake_case","title":"optional Chinese title or empty","summary":"concise Chinese explanation","items":[],"sourceUris":[],"renderMode":"text|formula|source_list"}]}.
+                For final answers, math uses only $...$ or $$...$$ and sourceUris must come from Current evidence.
+                A self-contained calculation or proof normally needs no retrieval. Choose retrieval only when the user asks
+                for a source/teaching material, or the statement lacks a fact that an available tool can actually supply.
+                Never retrieve merely because a tool is available. Do not expose private reasoning or output Markdown fences.
                 Available tools: %s
                 Problem: %s
                 Observations from actually executed tools: %s
@@ -154,6 +224,20 @@ public class StudentExplanationAiCardService {
             List<String> longTermMemories,
             List<StudentExplanationResponse.WorkflowStage> stages,
             StudentExplanationAiStreamListener streamListener) {
+        return generate(request, query, imageStatus, sources, recentHistory, longTermMemories, stages, "", streamListener);
+    }
+
+    /** Streams a final explanation while retaining the original image as first-class model context. */
+    public AiCardDraft generate(
+            StudentExplanationRequest request,
+            String query,
+            String imageStatus,
+            List<StudentExplanationResponse.ExplanationSource> sources,
+            List<StudentExplanationHistorySummary> recentHistory,
+            List<String> longTermMemories,
+            List<StudentExplanationResponse.WorkflowStage> stages,
+            String imageDataUrl,
+            StudentExplanationAiStreamListener streamListener) {
         long stageStarted = System.nanoTime();
         List<AiProviderCatalog.Provider> providers;
         try {
@@ -187,7 +271,8 @@ public class StudentExplanationAiCardService {
                             provider.chatModel(),
                             "StudentExplanationAgent",
                             userInput,
-                            sourceRefs(sources)), delta -> {
+                            sourceRefs(sources),
+                            imageDataUrl), delta -> {
                                 streamedContent.append(delta.contentDelta());
                                 streamListener.onDelta(delta, completeStreamedCards(
                                         streamedContent.toString(), sources, streamedCardKeys));
@@ -695,14 +780,23 @@ public class StudentExplanationAiCardService {
             StudentExplanationResponse.AiDraft aiDraft) {
     }
 
-    /** One validated model decision in the private ReAct loop. */
-    public record ReactDecision(String kind, String tool, String message) {
-        static ReactDecision action(String tool) { return new ReactDecision("action", tool, ""); }
-        static ReactDecision recoveredAction(String tool, String reason) {
-            return new ReactDecision("action", tool, "fallback: " + reason);
+    /** One validated model decision: either a complete tool plan or a complete final answer. */
+    public record ReactDecision(String kind, List<String> tools, String searchQuery, String message, AiCardDraft finalDraft) {
+        static ReactDecision action(List<String> tools, String searchQuery) {
+            return new ReactDecision("action", List.copyOf(tools), safe(searchQuery), "", null);
         }
-        static ReactDecision finalAnswer() { return new ReactDecision("final", "", ""); }
-        static ReactDecision invalid(String message) { return new ReactDecision("invalid", "", message); }
+        static ReactDecision recoveredAction(List<String> tools, String reason) {
+            return new ReactDecision("action", List.copyOf(tools), "", "fallback: " + reason, null);
+        }
+        static ReactDecision finalAnswer(AiCardDraft finalDraft) {
+            return new ReactDecision("final", List.of(), "", "", finalDraft);
+        }
+        static ReactDecision invalid(String message) {
+            return new ReactDecision("invalid", List.of(), "", message, null);
+        }
+
+        /** Compatibility accessor for diagnostics that still display the first selected tool. */
+        public String tool() { return tools.isEmpty() ? "" : tools.getFirst(); }
     }
 
     record ParsedAiCards(

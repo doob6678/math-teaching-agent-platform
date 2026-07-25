@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { AgentTracePanel } from "./App";
+import { scopedTraceTagKey } from "./components/AgentPanels";
 import {
   AgentTraceDiagnosticSummaryResponse,
   AgentTraceResponse,
@@ -8,6 +9,11 @@ import {
 } from "../shared/api/textbookApi";
 
 describe("AgentTracePanel", () => {
+  it("creates distinct React keys for repeated trace labels", () => {
+    expect(scopedTraceTagKey("trace-1:diagnostics", 0, "模型调用成功"))
+      .not.toEqual(scopedTraceTagKey("trace-1:diagnostics", 1, "模型调用成功"));
+  });
+
   it("renders recoverable traces as a Chinese conversation process timeline", () => {
     const traces: AgentTraceResponse[] = [
       {
@@ -24,11 +30,19 @@ describe("AgentTracePanel", () => {
         estimatedCost: 0.46,
         allowedToolScopes: ["tool:courseware:generate", "tool:search:textbook"],
         allowedDataScopes: ["TEACHER_PRIVATE", "PUBLIC_TEXTBOOK"],
-        evidenceRefs: ["teaching-task:task-1", "textbook:chapter-1"],
+        evidenceRefs: ["textbook:chapter-1", "textbook:chapter-1"],
         stageTimings: [{ stage: "model_call", elapsedMs: 14 }],
         actualUsage: { promptTokens: 123, completionTokens: 45, totalTokens: 168 },
         message: "Live model response recorded with provider usage metadata.",
         diagnosticEvents: [
+          {
+            eventType: "JSON_PARSE_SUCCEEDED",
+            providerName: "openai",
+            modelCode: "gpt-5.4",
+            attemptNo: 0,
+            retryable: false,
+            message: "Structured teaching draft parsed.",
+          },
           {
             eventType: "JSON_PARSE_SUCCEEDED",
             providerName: "openai",
@@ -88,6 +102,7 @@ describe("AgentTracePanel", () => {
       ],
     };
 
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const html = renderToStaticMarkup(
       <AgentTracePanel
         traces={traces}
@@ -119,5 +134,7 @@ describe("AgentTracePanel", () => {
     expect(html).toContain("公开教材");
     expect(html).not.toContain("tokens");
     expect(html).not.toContain("Model health");
+    expect(consoleError).not.toHaveBeenCalled();
+    consoleError.mockRestore();
   });
 });

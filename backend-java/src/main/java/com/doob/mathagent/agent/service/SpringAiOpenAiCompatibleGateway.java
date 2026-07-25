@@ -243,7 +243,7 @@ public class SpringAiOpenAiCompatibleGateway implements AiChatGateway {
                 "temperature", 0.2d,
                 "messages", List.of(
                         Map.of("role", "system", "content", systemPrompt(request)),
-                        Map.of("role", "user", "content", userPrompt(request))));
+                        userMessage(request)));
     }
 
     /** Keeps the stream request identical to the normal request except for documented OpenAI-compatible SSE flags. */
@@ -255,7 +255,26 @@ public class SpringAiOpenAiCompatibleGateway implements AiChatGateway {
                 "stream_options", Map.of("include_usage", true),
                 "messages", List.of(
                         Map.of("role", "system", "content", systemPrompt(request)),
-                        Map.of("role", "user", "content", userPrompt(request))));
+                        userMessage(request)));
+    }
+
+    /**
+     * Sends an authorized upload as native multimodal context instead of reducing it to filename/OCR metadata.
+     * The data URL exists only in the provider request object and is never included in traces or persistence.
+     */
+    static Map<String, Object> userMessage(AiChatRequest request) {
+        String imageDataUrl = request.imageDataUrl() == null ? "" : request.imageDataUrl().strip();
+        if (imageDataUrl.isBlank()) {
+            return Map.of("role", "user", "content", userPrompt(request));
+        }
+        if (!imageDataUrl.startsWith("data:image/")) {
+            throw new IllegalArgumentException("AI image context must be an image data URL");
+        }
+        return Map.of(
+                "role", "user",
+                "content", List.of(
+                        Map.of("type", "image_url", "image_url", Map.of("url", imageDataUrl)),
+                        Map.of("type", "text", "text", userPrompt(request))));
     }
 
     private static String chatCompletionsUri(String baseUrl) {

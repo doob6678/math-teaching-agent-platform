@@ -120,11 +120,19 @@ public class TeachingTaskEventStreamService {
     }
 
     private static boolean terminal(TeachingTaskStatus status) {
-        return status == TeachingTaskStatus.COMPLETED || status == TeachingTaskStatus.FAILED;
+        return status == TeachingTaskStatus.COMPLETED
+                || status == TeachingTaskStatus.FAILED
+                || status == TeachingTaskStatus.WAITING_REVIEW
+                || status == TeachingTaskStatus.DRAFT_ONLY;
     }
 
     private static String terminalEventName(TeachingTaskStatus status) {
-        return status == TeachingTaskStatus.COMPLETED ? "completed" : "failed";
+        return switch (status) {
+            case COMPLETED -> "completed";
+            case WAITING_REVIEW -> "waiting_review";
+            case DRAFT_ONLY -> "draft_only";
+            case FAILED, CREATED, RUNNING -> "failed";
+        };
     }
 
     /** Releases virtual-thread resources when the Spring context closes. */

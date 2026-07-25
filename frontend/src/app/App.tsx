@@ -53,6 +53,7 @@ import {
   TextbookSummary,
   VectorIndexRebuildResponse,
   QUESTION_BANK_MAX_SEARCH_ROWS,
+  AUTH_INVALID_EVENT,
   LoginResponse,
   createTextbookApiClient,
 } from "../shared/api/textbookApi";
@@ -335,9 +336,11 @@ export function App() {
   const [authError, setAuthError] = useState("");
   const [resourceLocation, setResourceLocation] = useState("");
   const [resourceSourceType, setResourceSourceType] = useState("teacher_resource");
-  const [resourceScope, setResourceScope] = useState("TEACHER_PRIVATE");
+  // New uploads are tenant-visible by default; Java still enforces tenant/class/owner checks during every read.
+  const [resourceScope, setResourceScope] = useState("TENANT_PUBLIC");
   const [feishuExportFormat, setFeishuExportFormat] = useState<"md" | "docx" | "pdf">("md");
-  const [resourceParseMode, setResourceParseMode] = useState<"TEXT" | "AI">("TEXT");
+  // Markdown asset mode preserves the original Markdown while materializing every referenced Feishu image locally.
+  const [resourceParseMode, setResourceParseMode] = useState<"TEXT" | "MARKDOWN_ASSETS" | "AI">("TEXT");
   const [resourceFiles, setResourceFiles] = useState<File[]>([]);
   const [knowledgePointName, setKnowledgePointName] = useState("");
   const [knowledgeChapterPath, setKnowledgeChapterPath] = useState("");
@@ -389,6 +392,18 @@ export function App() {
       .catch((error: Error) => setSummaryError(error.message))
       .finally(() => setLoadingSummary(false));
   }, [api]);
+
+  useEffect(() => {
+    /** Avoids leaving a restarted backend's invalid token displayed as an active browser login. */
+    const clearRejectedSession = () => {
+      globalThis.localStorage?.removeItem("math-agent:auth-session");
+      setAuthSession(null);
+      setAuthSessionChecked(true);
+      setAuthError("登录态已失效，请重新登录。");
+    };
+    globalThis.addEventListener?.(AUTH_INVALID_EVENT, clearRejectedSession);
+    return () => globalThis.removeEventListener?.(AUTH_INVALID_EVENT, clearRejectedSession);
+  }, []);
 
   useEffect(() => {
     if (!authSession) {
@@ -1012,6 +1027,8 @@ export function App() {
     // Allocate before awaiting the server so every turn from this browser state has one stable conversation id.
     const activeConversationId = teachingConversationId || globalThis.crypto.randomUUID();
     const pendingAssistantId = `assistant-pending:${requestId}`;
+    // The completed event is authoritative even if the SSE transport needs extra time to close cleanly.
+    let completedResponseReceived = false;
     setSubmittingTeachingConversation(true);
     setTeachingError("");
     setTeachingConversationImageError("");
@@ -1052,17 +1069,23 @@ export function App() {
         imageSizeBytes: submittedImage?.sizeBytes,
         searchTextbook: true,
         searchKnowledgeGraph: true,
-        searchTeacherResources: authSession?.role === "teacher" || authSession?.role === "admin",
+        // Students may retrieve tenant-public learning material; the backend remains the only authority for private
+        // and class-scoped documents, so this flag never grants visibility by itself.
+        searchTeacherResources: true,
         maxTextbookHits: 5,
         maxTeacherResourceHits: 3,
         useConversationMemory: teachingConversationMemoryEnabled,
       }, (_eventName: string, payload: StudentExplanationStreamEvent) => {
+        if (payload.response) {
+          completedResponseReceived = true;
+          setSubmittingTeachingConversation(false);
+        }
         if (payload.progress?.conversationId) {
           setTeachingConversationId(payload.progress.conversationId);
         }
-        if (payload.progress?.conversationTitle) {
-          setTeachingConversationTitle(payload.progress.conversationTitle);
-        }
+        // Progress snapshots carry a provisional title derived from the question.  Only the completed model result
+        // may rename a conversation, otherwise every stage refresh makes the header visibly jump between titles.
+        if (payload.response?.conversationTitle) setTeachingConversationTitle(payload.response.conversationTitle);
         setTeachingConversationEntries((current) =>
           current.map((entry) =>
             entry.role === "assistant" && entry.id === pendingAssistantId
@@ -1075,13 +1098,22 @@ export function App() {
                   return {
                     ...entry,
                     progress: snapshot ? { ...snapshot, cards: mergedCards ?? [] } : undefined,
+                    response: payload.response ?? entry.response,
+                    loading: payload.response ? false : entry.loading,
                     imageStatus: payload.progress?.imageStatus || entry.imageStatus,
-                    // These fields append only bytes received from the provider. No client timer manufactures prose.
+                    // Keep provider-originated bytes visible while strict card parsing continues in parallel. React
+                    // renders this as text, so unfinished JSON cannot execute markup or scripts in the browser.
                     liveContent: `${entry.liveContent || ""}${payload.aiContentDelta || ""}`,
-                    liveThinking: `${entry.liveThinking || ""}${payload.aiReasoningDelta || ""}`,
                   };
                 })()
-              : entry,
+              : entry.id === `user:${requestId}`
+                ? {
+                    ...entry,
+                    // User attachment state follows the same SSE workflow as the assistant card; otherwise a
+                    // completed image analysis is permanently rendered as the stale initial upload state.
+                    imageStatus: payload.progress?.imageStatus || entry.imageStatus,
+                  }
+                : entry,
           ),
         );
       })
@@ -1101,12 +1133,16 @@ export function App() {
                   response,
                   createdAt: new Date().toISOString(),
                 }
+              : entry.id === `user:${requestId}`
+                ? { ...entry, imageStatus: response.imageStatus || entry.imageStatus }
               : entry,
           ),
         );
         return refreshTeachingConversationSummaries(response.conversationId);
       })
       .catch((error: Error) => {
+        // Do not replace a delivered final answer when only the transport close/drain step failed afterward.
+        if (completedResponseReceived) return;
         const message = toUserFacingError(error);
         setTeachingError(message);
         setTeachingConversationEntries((current) =>
@@ -1326,6 +1362,10 @@ export function App() {
     setResourceSourceType(value);
     setTeacherResourceError("");
     if (value === "feishu") {
+      // Feishu Markdown exports contain authenticated image blocks.  Make asset materialization the safe default
+      // whenever the source changes to Feishu, so a user cannot accidentally register a text-only copy that the
+      // later sync/index/handout path cannot cite with its local images.
+      setResourceParseMode("MARKDOWN_ASSETS");
       setResourceFiles([]);
       return;
     }
@@ -1499,6 +1539,9 @@ export function App() {
 
 function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
     setResourceSourceType("feishu");
+    // Discovery is another entry point into the same Feishu registration flow; keep its default aligned with the
+    // source selector above rather than retaining a stale mode selected for a previous local upload.
+    setResourceParseMode("MARKDOWN_ASSETS");
     setResourceLocation(candidate.url);
     setTeacherResourceError("");
   }

@@ -54,4 +54,25 @@ class ApiAccessControlFilterTest {
         assertThat(rule.level()).isEqualTo(ApiAccessLevel.USER);
         assertThat(rule.allowedSubjectTypes()).containsExactlyInAnyOrder("teacher", "admin");
     }
+
+    @Test
+    void feishuOAuthBrowserEndpointsUseLeastPrivilegeRules() {
+        ApiAccessPolicy policy = ApiAccessPolicy.defaultRules();
+
+        assertThat(policy.findRule("/api/feishu/oauth/authorize")).isPresent();
+        assertThat(policy.findRule("/api/feishu/oauth/status")).isPresent();
+        assertThat(policy.findRule("/api/feishu/oauth/callback")).isPresent();
+        ApiAccessRule authorize = policy.findRule("/api/feishu/oauth/authorize").orElseThrow();
+        ApiAccessRule status = policy.findRule("/api/feishu/oauth/status").orElseThrow();
+        ApiAccessRule callback = policy.findRule("/api/feishu/oauth/callback").orElseThrow();
+
+        // Starting and inspecting a binding requires a signed-in teacher, while the provider callback is protected
+        // by its short-lived one-time state and must remain reachable when a cross-site redirect omits login cookies.
+        assertThat(authorize.level()).isEqualTo(ApiAccessLevel.USER);
+        assertThat(authorize.allowedSubjectTypes()).containsExactlyInAnyOrder("teacher", "admin");
+        assertThat(status.level()).isEqualTo(ApiAccessLevel.USER);
+        assertThat(status.allowedSubjectTypes()).containsExactlyInAnyOrder("teacher", "admin");
+        assertThat(callback.level()).isEqualTo(ApiAccessLevel.PUBLIC);
+        assertThat(callback.allowedSubjectTypes()).containsExactly("*");
+    }
 }

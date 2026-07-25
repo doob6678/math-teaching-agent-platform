@@ -1,4 +1,4 @@
-import { FormEvent } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { AlertCircle, Database, Loader2, Search, X } from "lucide-react";
 import {
   TeacherBlockQuestionImportResponse,
@@ -67,7 +67,7 @@ export function TeacherResourcePanel({
   sourceType: string;
   scope: string;
   feishuExportFormat: "md" | "docx" | "pdf";
-  parseMode: "TEXT" | "AI";
+  parseMode: "TEXT" | "MARKDOWN_ASSETS" | "AI";
   loading: boolean;
   registering: boolean;
   searchingBlocks: boolean;
@@ -91,7 +91,7 @@ export function TeacherResourcePanel({
   onSourceTypeChange: (value: string) => void;
   onScopeChange: (value: string) => void;
   onFeishuExportFormatChange: (value: "md" | "docx" | "pdf") => void;
-  onParseModeChange: (value: "TEXT" | "AI") => void;
+  onParseModeChange: (value: "TEXT" | "MARKDOWN_ASSETS" | "AI") => void;
   onBlockSearchQueryChange: (value: string) => void;
   onBlockSearch: (event: FormEvent<HTMLFormElement>) => void;
   onFeishuDiscoveryQueryChange: (value: string) => void;
@@ -104,6 +104,21 @@ export function TeacherResourcePanel({
   onImportQuestions: (documentId: string) => void;
   onRebuildIndex: (documentId: string) => void;
 }) {
+  const [feishuAuthStatus, setFeishuAuthStatus] = useState<"AUTHORIZED" | "AUTH_REQUIRED" | "LOADING">("LOADING");
+  useEffect(() => {
+    let active = true;
+    fetch("/api/feishu/oauth/status", { credentials: "include" })
+      .then((response) => response.ok ? response.json() : { status: "AUTH_REQUIRED" })
+      .then((body) => { if (active) setFeishuAuthStatus(body.status === "AUTHORIZED" ? "AUTHORIZED" : "AUTH_REQUIRED"); })
+      .catch(() => { if (active) setFeishuAuthStatus("AUTH_REQUIRED"); });
+    return () => { active = false; };
+  }, []);
+  const startFeishuAuthorization = async () => {
+    const response = await fetch("/api/feishu/oauth/authorize", { credentials: "include" });
+    if (!response.ok) { setFeishuAuthStatus("AUTH_REQUIRED"); return; }
+    const body = await response.json() as { authorizationUrl: string };
+    window.location.assign(body.authorizationUrl);
+  };
   return (
     <section className="teacher-resource-panel">
       <PanelTitle icon={<Database size={18} />} title="教师资源" />
@@ -129,6 +144,14 @@ export function TeacherResourcePanel({
             <option value="local_path">服务器本地路径</option>
           </select>
         </label>
+        {sourceType === "feishu" ? (
+          <div className="resource-search-summary" role="status">
+            <span>飞书授权：{feishuAuthStatus === "AUTHORIZED" ? "已绑定" : feishuAuthStatus === "LOADING" ? "检查中" : "需要授权"}</span>
+            <button className="btn btn-secondary btn-sm" type="button" onClick={startFeishuAuthorization}>
+              {feishuAuthStatus === "AUTHORIZED" ? "重新授权" : "绑定飞书"}
+            </button>
+          </div>
+        ) : null}
         {sourceType === "feishu" ? (
           <label>
             <span>飞书链接</span>
@@ -209,19 +232,22 @@ export function TeacherResourcePanel({
         <label>
           <span>资源范围</span>
           <select className="form-select" value={scope} onChange={(event) => onScopeChange(event.target.value)}>
+            <option value="TENANT_PUBLIC">租户公开（默认）</option>
             <option value="TEACHER_PRIVATE">教师私有</option>
+            <option value="CLASS_AUTHORIZED">班级授权</option>
             <option value="MATH_VIP">教研共享</option>
             <option value="PUBLIC_TEXTBOOK">公开教材</option>
           </select>
         </label>
         <label>
           <span>解析模式</span>
-          <select className="form-select" value={parseMode} onChange={(event) => onParseModeChange(event.target.value as "TEXT" | "AI")}>
+          <select className="form-select" value={parseMode} onChange={(event) => onParseModeChange(event.target.value as "TEXT" | "MARKDOWN_ASSETS" | "AI")}>
             <option value="TEXT">TEXT：文字与结构提取</option>
+            <option value="MARKDOWN_ASSETS">Markdown：下载图片到本地</option>
             <option value="AI">AI：图文语义标注</option>
           </select>
         </label>
-        <button className="btn btn-primary" type="submit" disabled={registering}>
+        <button className="btn btn-primary" type="submit" disabled={registering || (sourceType === "feishu" && feishuAuthStatus !== "AUTHORIZED")}>
           {registering ? <Loader2 className="spin" size={17} /> : <Database size={17} />}
           <span>登记资源</span>
         </button>
@@ -391,7 +417,7 @@ export function TeacherResourcePanel({
                   {syncingResourceId === resource.documentId ? <Loader2 className="spin" size={15} /> : <Database size={15} />}
                   <span>同步</span>
                 </button>
-                {latestJob?.status === "paused" ? (
+                {latestJob?.status === "paused" || latestJob?.status === "AUTH_REQUIRED" ? (
                   <button
                     className="btn btn-secondary btn-sm"
                     type="button"
@@ -399,7 +425,7 @@ export function TeacherResourcePanel({
                     disabled={syncingResourceId === resource.documentId}
                   >
                     {syncingResourceId === resource.documentId ? <Loader2 className="spin" size={15} /> : <Database size={15} />}
-                    <span>恢复</span>
+                    <span>{latestJob?.status === "AUTH_REQUIRED" ? "验证授权并继续" : "恢复"}</span>
                   </button>
                 ) : null}
                 <button
@@ -624,7 +650,10 @@ function exportFormatLabel(value?: string | null) {
 }
 
 function parseModeLabel(value?: string | null) {
-  return (value ?? "TEXT").toUpperCase() === "AI" ? "AI 解析" : "TEXT 解析";
+  const normalized = (value ?? "TEXT").toUpperCase();
+  if (normalized === "AI") return "AI 解析";
+  if (normalized === "MARKDOWN_ASSETS") return "Markdown 图片落地";
+  return "TEXT 解析";
 }
 
 function syncJobMessage(value?: string | null) {
