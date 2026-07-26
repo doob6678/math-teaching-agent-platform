@@ -28,6 +28,7 @@ DEFAULT_BACKEND_URL = "http://127.0.0.1:8080"
 DEFAULT_MODEL = "gpt-5.6-luna"
 DEFAULT_MAX_TURNS = 36
 DEFAULT_HTTP_TIMEOUT_SECONDS = 600
+DEFAULT_STATUS_POLL_INTERVAL_SECONDS = 5
 MCP_PROTOCOL_VERSION = "2025-11-25"
 APPLICATION_USER_AGENT = "math-agent-rag-luna-react/1.0"
 TERMINAL_STATUSES = {"completed", "failed", "cancelled", "canceled"}
@@ -280,6 +281,8 @@ def main() -> int:
     parser.add_argument("--timeout", type=int, default=DEFAULT_HTTP_TIMEOUT_SECONDS)
     parser.add_argument("--record", type=Path)
     args = parser.parse_args()
+    if args.model != DEFAULT_MODEL:
+        raise RuntimeError(f"Luna acceptance requires model={DEFAULT_MODEL}; received {args.model}")
 
     project_root = Path(__file__).resolve().parents[2]
     record_path = args.record or project_root / "docs" / f"luna-mcp-react-acceptance-{datetime.now().date().isoformat()}.json"
@@ -317,7 +320,7 @@ def main() -> int:
     system_prompt = (
         "你是一个通过真实 MCP 工具工作的 ReAct 验收代理。不要输出隐藏思维过程，只输出简短进度。"
         "必须依次完成：检索 teacher_resource 中的‘解三角形 向量 面积’；使用检索返回的 evidenceRefs 启动教师讲义多智能体写作，"
-        "provider=openai、model=gpt-5.6-luna；轮询状态直到 completed（运行中就继续调用状态工具）；读取讲义 artifact；"
+        f"provider=openai、model={args.model}；轮询状态直到 completed（运行中就继续调用状态工具）；读取讲义 artifact；"
         "最后导出 markdown。不得跳过任何步骤，不得编造工具结果。"
     )
     messages: list[dict[str, Any]] = [
@@ -348,9 +351,32 @@ def main() -> int:
     loop_exhausted = True
     for turn_number in range(1, args.max_turns + 1):
         model_started = time.perf_counter()
-        assistant, usage = call_model(
-            chat_completions_url(base_url), api_key, args.model, messages, openai_tools, args.timeout
-        )
+        try:
+            assistant, usage = call_model(
+                chat_completions_url(base_url), api_key, args.model, messages, openai_tools, args.timeout
+            )
+        except RuntimeError as error:
+            # Provider capacity is an acceptance result, not a runner crash. Persist the exact bounded relay response
+            # so nobody can replace Luna with another model and still label the run as a Luna pass.
+            record.update({
+                "completedAt": utc_now(),
+                "status": "provider_model_unavailable",
+                "calledTools": called_tools,
+                "missingRequiredCalls": sorted(required - set(called_tools)),
+                "modelUsage": total_usage,
+                "finalVisibleText": "",
+                "loopExhausted": False,
+                "providerError": str(error)[:2000],
+                "credentialsPersisted": False,
+            })
+            record_path.parent.mkdir(parents=True, exist_ok=True)
+            record_path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            print(json.dumps({
+                "status": record["status"],
+                "record": str(record_path.resolve()),
+                "exports": [],
+            }, ensure_ascii=False))
+            return 2
         model_latency_ms = round((time.perf_counter() - model_started) * 1000)
         messages.append(assistant)
         for key, value in usage.items():
@@ -376,26 +402,44 @@ def main() -> int:
                 arguments = json.loads(function.get("arguments") or "{}")
             except json.JSONDecodeError as error:
                 raise RuntimeError(f"Model emitted invalid JSON arguments for {name}") from error
-            if name == "get_multi_agent_writing_status":
-                # The workflow is asynchronous; spacing status reads prevents a hot polling loop and rate-limit noise.
-                time.sleep(3)
             tool_started = time.perf_counter()
             result, is_error = client.call_tool(name, arguments)
             tool_latency_ms = round((time.perf_counter() - tool_started) * 1000)
             called_tools.append(name)
+            polls: list[dict[str, Any]] = []
+            if name == "get_multi_agent_writing_status" and not is_error:
+                # Luna chooses the status action once. The MCP executor then performs ordinary asynchronous polling
+                # without spending another full model turn for every unchanged RUNNING response.
+                poll_deadline = time.monotonic() + args.timeout
+                while (
+                    isinstance(result, dict)
+                    and str(result.get("status") or "").lower() not in TERMINAL_STATUSES
+                    and time.monotonic() < poll_deadline
+                ):
+                    time.sleep(DEFAULT_STATUS_POLL_INTERVAL_SECONDS)
+                    poll_started = time.perf_counter()
+                    result, is_error = client.call_tool(name, arguments)
+                    called_tools.append(name)
+                    polls.append({
+                        "latencyMs": round((time.perf_counter() - poll_started) * 1000),
+                        "result": tool_result_summary(name, result, is_error),
+                    })
+                    if is_error:
+                        break
             exported = save_export(result, output_dir) if name == "export_multi_agent_writing_artifact" and not is_error else None
             if exported:
                 record["exports"].append(exported)
             summary = tool_result_summary(name, result, is_error)
-            turn_record["toolCalls"].append(
-                {
+            tool_record = {
                     "id": tool_call.get("id"),
                     "name": name,
                     "arguments": sanitized_arguments(arguments),
                     "latencyMs": tool_latency_ms,
                     "result": summary,
                 }
-            )
+            if polls:
+                tool_record["polls"] = polls
+            turn_record["toolCalls"].append(tool_record)
             messages.append(
                 {
                     "role": "tool",

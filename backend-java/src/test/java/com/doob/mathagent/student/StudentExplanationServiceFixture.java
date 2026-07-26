@@ -16,7 +16,6 @@ import com.doob.mathagent.student.service.StudentExplanationHistorySummary;
 import com.doob.mathagent.student.service.StudentExplanationImageRecord;
 import com.doob.mathagent.student.service.StudentExplanationImageStoreService;
 import com.doob.mathagent.student.service.StudentExplanationService;
-import com.doob.mathagent.student.service.StudentExplanationVisionService;
 import com.doob.mathagent.student.vo.StudentExplanationResponse;
 import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService;
 import com.doob.mathagent.teacher.document.TeacherResourceStore;
@@ -60,8 +59,7 @@ public final class StudentExplanationServiceFixture {
                                 ]}
                                 """),
                 deterministicProviderCatalog(),
-                testImageStore(),
-                testVisionService());
+                testImageStore());
     }
 
     public static StudentExplanationService service(
@@ -71,12 +69,11 @@ public final class StudentExplanationServiceFixture {
             TeacherResourceBlockSearchService teacherResourceBlockSearchService,
             AiChatGateway aiChatGateway,
             AiProviderCatalog aiProviderCatalog,
-            StudentExplanationImageStoreService imageStoreService,
-            StudentExplanationVisionService visionService) {
+            StudentExplanationImageStoreService imageStoreService) {
         return service(
                 textbookResourceProperties, textbookRetrievalService, knowledgeGraphSpineService,
                 teacherResourceBlockSearchService, new InMemoryTeacherResourceStore(), aiChatGateway, aiProviderCatalog,
-                imageStoreService, visionService);
+                imageStoreService);
     }
 
     /** Uses the same document store as the search service when a test needs to verify teacher-source visibility. */
@@ -88,8 +85,7 @@ public final class StudentExplanationServiceFixture {
             TeacherResourceStore teacherResourceStore,
             AiChatGateway aiChatGateway,
             AiProviderCatalog aiProviderCatalog,
-            StudentExplanationImageStoreService imageStoreService,
-            StudentExplanationVisionService visionService) {
+            StudentExplanationImageStoreService imageStoreService) {
         return new StudentExplanationService(
                 textbookResourceProperties,
                 textbookRetrievalService,
@@ -120,10 +116,6 @@ public final class StudentExplanationServiceFixture {
                 "test-key",
                 "gpt-5.4"));
         return new AiProviderCatalog(properties);
-    }
-
-    private static StudentExplanationVisionService testVisionService() {
-        return new StudentExplanationVisionService(new AiProviderProperties(), "", "", "", false, 1000);
     }
 
     private static StudentExplanationHistoryStore testHistoryStore() {

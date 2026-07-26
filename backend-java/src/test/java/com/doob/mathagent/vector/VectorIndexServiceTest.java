@@ -12,6 +12,8 @@ import com.doob.mathagent.vector.service.VectorHttpTransport;
 import com.doob.mathagent.vector.service.VectorIndexProperties;
 import com.doob.mathagent.vector.service.VectorIndexRebuildResponse;
 import com.doob.mathagent.vector.service.VectorIndexService;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -135,6 +137,43 @@ class VectorIndexServiceTest {
         assertThat(updated.indexStatus()).isEqualTo("ready");
     }
 
+    @Test
+    void rebuildSplitsEmbeddingRequestsAtConfiguredProviderLimit() {
+        InMemoryTeacherResourceStore resources = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blocks = new InMemoryTeacherDocumentBlockStore();
+        resources.save(document("doc-1", "waiting_rebuild", "waiting_rebuild"));
+        List<TeacherDocumentBlockResponse> manyBlocks = new ArrayList<>();
+        for (int index = 1; index <= 25; index++) {
+            manyBlocks.add(block("block-" + index, "batch text " + index));
+        }
+        blocks.replaceActiveBlocks("school-a", "doc-1", manyBlocks);
+        CapturingTransport transport = new CapturingTransport();
+        VectorIndexService service = new VectorIndexService(
+                new VectorIndexProperties(
+                        true,
+                        "http://milvus.local:19530",
+                        "token",
+                        "math_agent_resource_blocks",
+                        3,
+                        "https://embedding.local/v1",
+                        "embedding-key",
+                        "text-embedding-v4",
+                        10000),
+                transport,
+                resources,
+                blocks);
+
+        VectorIndexRebuildResponse response =
+                service.rebuildTeacherResource("school-a", "teacher", "teacher-1", "doc-1");
+
+        assertThat(response.status()).isEqualTo("indexed");
+        assertThat(response.embeddedCount()).isEqualTo(25);
+        assertThat(transport.requests.stream()
+                .filter(request -> request.uri().toString().endsWith("/embeddings"))
+                .map(request -> inputCount(request.body())))
+                .containsExactly(10, 10, 5);
+    }
+
     private static TeacherResourceDocumentResponse document(
             String documentId,
             String embeddingStatus,
@@ -181,6 +220,7 @@ class VectorIndexServiceTest {
     }
 
     private static final class CapturingTransport implements VectorHttpTransport {
+        private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
         private final List<Request> requests = new ArrayList<>();
 
         @Override
@@ -191,9 +231,11 @@ class VectorIndexServiceTest {
                 Duration timeout) {
             requests.add(new Request(uri, headers, body, timeout));
             if (uri.toString().endsWith("/embeddings")) {
-                return new VectorHttpResponse(200, """
-                        {"data":[{"embedding":[0.1,0.2,0.3]}],"usage":{"prompt_tokens":7}}
-                        """);
+                int count = inputCount(body);
+                String vector = "{\"embedding\":[0.1,0.2,0.3]}";
+                return new VectorHttpResponse(200,
+                        "{\"data\":[" + String.join(",", java.util.Collections.nCopies(count, vector))
+                                + "],\"usage\":{\"prompt_tokens\":7}}");
             }
             if (uri.toString().endsWith("/collections/create")) {
                 return new VectorHttpResponse(200, "{\"code\":0}");
@@ -228,6 +270,15 @@ class VectorIndexServiceTest {
                 return new VectorHttpResponse(200, "{\"code\":0}");
             }
             return new VectorHttpResponse(404, "{}");
+        }
+    }
+
+    private static int inputCount(String body) {
+        try {
+            JsonNode input = CapturingTransport.OBJECT_MAPPER.readTree(body).path("input");
+            return input.isArray() ? input.size() : 1;
+        } catch (Exception exception) {
+            throw new IllegalArgumentException("Embedding request body must be valid JSON", exception);
         }
     }
 

@@ -354,13 +354,18 @@ public class TeacherSourceSyncExecutionService {
                         : feishuResourceBindingService.subjectId(normalizedTenantId, document.documentId());
                 FeishuCredential userCredential = feishuCredentialService == null ? null
                         : feishuCredentialService.findActive(normalizedTenantId, boundSubjectId);
-                boolean administratorAppCredentialFallback = "admin".equals(normalizedRole) && userCredential == null;
+                boolean usableUserCredential = userCredential != null && !userCredential.expired(Instant.now());
+                boolean administratorAppCredentialFallback = "admin".equals(normalizedRole) && !usableUserCredential;
                 if (feishuCredentialService != null
                         && !administratorAppCredentialFallback
-                        && (userCredential == null || userCredential.expired(Instant.now()))) {
+                        && !usableUserCredential) {
                     if (userCredential != null) feishuCredentialService.markExpired(normalizedTenantId, boundSubjectId);
                     throw new TeacherFeishuDownloadException("Feishu authorization is required", false, null,
                             toDownloadCheckpoint(resumeCheckpoint), new TeacherSourceSyncFailureResponse("AUTH_REQUIRED", false, List.of(), null));
+                }
+                if (administratorAppCredentialFallback && userCredential != null && feishuCredentialService != null) {
+                    // Expired rows must not suppress the tenant-bot fallback for administrator-managed shared roots.
+                    feishuCredentialService.markExpired(normalizedTenantId, boundSubjectId);
                 }
                 // An administrator MCP key may operate the tenant bot against folders explicitly shared with that
                 // bot. A missing per-user credential therefore delegates token acquisition to the process downloader;
@@ -370,7 +375,7 @@ public class TeacherSourceSyncExecutionService {
                         syncProperties.feishuStagingRoot(),
                         syncProperties.feishuSmokeMaxFiles(),
                         textOrDefault(document.feishuExportFormat(), "md"),
-                        toDownloadCheckpoint(resumeCheckpoint), userCredential == null ? null : userCredential.accessToken());
+                        toDownloadCheckpoint(resumeCheckpoint), usableUserCredential ? userCredential.accessToken() : null);
                 TeacherResourceDocumentResponse downloaded = new TeacherResourceDocumentResponse(
                         document.documentId(),
                         document.tenantId(),
@@ -390,6 +395,12 @@ public class TeacherSourceSyncExecutionService {
                         firstNonBlank(result.providerRevision(), document.providerRevision()),
                         null,
                         document.sourceIdentity());
+                /*
+                 * Retire the prior generation before parsing. Parsing persists and reactivates the exact assets used
+                 * by the new blocks; doing this after parsing incorrectly retires those newly written rows and leaves
+                 * valid imageRefs pointing at assets that the delivery endpoint refuses to serve.
+                 */
+                assetService.markDocumentAssetsInactive(document.tenantId(), document.documentId());
                 List<TeacherDocumentBlockResponse> blocks = parseResourceFiles(
                         normalizedTenantId,
                         normalizedRole,
@@ -424,7 +435,6 @@ public class TeacherSourceSyncExecutionService {
                     return jobStore.save(completed);
                 }
                 resourceStore.save(downloaded);
-                assetService.markDocumentAssetsInactive(document.tenantId(), document.documentId());
                 int feishuManifestAssets = ingestFeishuDownloadedAssetManifest(downloaded, result);
                 String vectorMessage = "";
                 if (!blocks.isEmpty()) {

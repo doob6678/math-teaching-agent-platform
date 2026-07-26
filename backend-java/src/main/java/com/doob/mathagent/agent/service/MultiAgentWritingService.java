@@ -247,6 +247,28 @@ public class MultiAgentWritingService {
         return toResponse(saved);
     }
 
+    /**
+     * Marks a distributed workflow recoverable after its stage task exhausts durable retries.
+     * Completed sibling stages remain persisted so a later resume does not repeat successful provider calls.
+     */
+    public MultiAgentWritingResponse failDispatchedStage(
+            String workflowId, RequestSubject subject, String errorSummary) {
+        RequestSubject normalizedSubject = subject.normalize();
+        MultiAgentWritingWorkflowRecord existing = workflowStore.findVisible(workflowId, normalizedSubject)
+                .orElseThrow(() -> new IllegalArgumentException("Multi-agent writing workflow not found"));
+        String safeMessage = errorSummary == null || errorSummary.isBlank()
+                ? "Distributed writing stage failed after retries."
+                : "Distributed writing stage failed after retries: "
+                        + errorSummary.substring(0, Math.min(300, errorSummary.length()));
+        return toResponse(saveWorkflow(
+                workflowId,
+                normalizedSubject,
+                "FAILED",
+                existing.createdAt(),
+                validCompletedStages(existing.stages()),
+                safeMessage));
+    }
+
     /** Creates opaque tasks only for the first dependency-ready barrier; later barriers are released by completion. */
     private void dispatchReadyStageTasks(String workflowId, RequestSubject subject, MultiAgentWritingRequest request,
             List<MultiAgentWritingResponse.StageResult> completedStages) {

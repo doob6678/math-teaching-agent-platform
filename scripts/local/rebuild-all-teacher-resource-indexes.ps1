@@ -20,50 +20,12 @@ function Invoke-Json {
         Headers = $Headers
     }
     if ($null -ne $Body) {
-        # Keep capability payloads UTF-8 on Windows so non-ASCII resource titles and paths hash and parse identically.
+        # Keep JSON payloads UTF-8 on Windows so non-ASCII resource titles and paths parse identically.
         $json = $Body | ConvertTo-Json -Depth 20 -Compress
         $parameters["ContentType"] = "application/json; charset=utf-8"
         $parameters["Body"] = [System.Text.Encoding]::UTF8.GetBytes($json)
     }
     Invoke-RestMethod @parameters
-}
-
-function Get-RequestHash {
-    param([string]$Body)
-    $sha = [System.Security.Cryptography.SHA256]::Create()
-    try {
-        $bytes = [System.Text.Encoding]::UTF8.GetBytes($Body)
-        $hash = $sha.ComputeHash($bytes)
-        return "sha256:" + ([System.BitConverter]::ToString($hash).Replace("-", "").ToLowerInvariant())
-    } finally {
-        $sha.Dispose()
-    }
-}
-
-function Apply-Capability {
-    param(
-        [string]$Action,
-        [string]$Path,
-        [string]$Body,
-        [string]$IdempotencyKey,
-        [hashtable]$Headers
-    )
-    $requestHash = Get-RequestHash $Body
-    $capability = Invoke-Json `
-        -Method "Post" `
-        -Uri ($BackendUrl.TrimEnd("/") + "/api/security/capabilities") `
-        -Headers $Headers `
-        -Body @{
-            action = $Action
-            path = $Path
-            requestHash = $requestHash
-            idempotencyKey = $IdempotencyKey
-            maxCost = 1
-        }
-    return @{
-        token = $capability.token
-        requestHash = $requestHash
-    }
 }
 
 $base = $BackendUrl.TrimEnd("/")
@@ -104,19 +66,10 @@ foreach ($resource in $targets) {
         continue
     }
     $rebuildPath = "/api/vector-index/teacher-resources/$([Uri]::EscapeDataString($resource.documentId))/rebuild"
-    $capability = Apply-Capability `
-        -Action "vector-index:rebuild" `
-        -Path $rebuildPath `
-        -Body "" `
-        -IdempotencyKey ("vector-index-rebuild:" + $resource.documentId + ":" + (Get-Date -Format yyyyMMddHHmmss)) `
-        -Headers $headers
-    $rebuildHeaders = @{} + $headers
-    $rebuildHeaders["X-Capability-Token"] = $capability.token
-    $rebuildHeaders["X-Request-Hash"] = $capability.requestHash
     $response = Invoke-Json `
         -Method "Post" `
         -Uri ($base + $rebuildPath) `
-        -Headers $rebuildHeaders
+        -Headers $headers
     $results += [pscustomobject]@{
         documentId = $resource.documentId
         title = $resource.title

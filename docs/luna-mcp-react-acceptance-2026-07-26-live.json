@@ -1,0 +1,34 @@
+{
+  "startedAt": "2026-07-26T10:38:48.288843+00:00",
+  "model": "gpt-5.6-luna",
+  "mcp": {
+    "url": "http://127.0.0.1:8080/api/mcp",
+    "protocolVersion": "2025-11-25",
+    "keyId": "b4a072cf-9e25-4104-b492-0c30c7b1847f",
+    "exposedToolCount": 14,
+    "requiredToolsExposed": [
+      "export_multi_agent_writing_artifact",
+      "get_multi_agent_writing_artifact",
+      "get_multi_agent_writing_status",
+      "search_multi_source_evidence",
+      "start_multi_agent_writing"
+    ]
+  },
+  "turns": [],
+  "exports": [],
+  "completedAt": "2026-07-26T10:38:50.325038+00:00",
+  "status": "provider_model_unavailable",
+  "calledTools": [],
+  "missingRequiredCalls": [
+    "export_multi_agent_writing_artifact",
+    "get_multi_agent_writing_artifact",
+    "get_multi_agent_writing_status",
+    "search_multi_source_evidence",
+    "start_multi_agent_writing"
+  ],
+  "modelUsage": {},
+  "finalVisibleText": "",
+  "loopExhausted": false,
+  "providerError": "HTTP 503 from https://api1.aisz.mom/v1/chat/completions: {\"error\":{\"code\":\"model_not_found\",\"message\":\"No available channel for model gpt-5.6-luna under group gpt福利 (distributor) (request id: 202607261038213881903118268d9d6rUFMNgGJ)\",\"type\":\"new_api_error\"}}",
+  "credentialsPersisted": false
+}

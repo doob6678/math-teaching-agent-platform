@@ -4,6 +4,7 @@ import com.doob.mathagent.infrastructure.ai.AiProviderProperties;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
@@ -21,6 +22,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Primary;
@@ -37,9 +40,14 @@ import org.springframework.web.client.RestClient;
 public class SpringAiOpenAiCompatibleGateway implements AiChatGateway {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final Logger log = LoggerFactory.getLogger(SpringAiOpenAiCompatibleGateway.class);
+    private static final int MAX_PROVIDER_ERROR_BODY_BYTES = 4096;
 
     private final AiProviderProperties properties;
     private final Duration requestTimeout;
+    private final int maxOutputTokens;
+    private final int maxStreamAttempts;
+    private final Duration retryBaseDelay;
 
     /**
      * Creates the gateway from environment-backed provider properties.
@@ -47,7 +55,12 @@ public class SpringAiOpenAiCompatibleGateway implements AiChatGateway {
      * @param properties provider properties
      */
     public SpringAiOpenAiCompatibleGateway(AiProviderProperties properties) {
-        this(properties, 45000);
+        this(properties, 45000, 1200, 3, 400);
+    }
+
+    /** Compatibility constructor for focused timeout tests. */
+    public SpringAiOpenAiCompatibleGateway(AiProviderProperties properties, long requestTimeoutMs) {
+        this(properties, requestTimeoutMs, 1200, 3, 400);
     }
 
     /**
@@ -59,9 +72,15 @@ public class SpringAiOpenAiCompatibleGateway implements AiChatGateway {
     @Autowired
     public SpringAiOpenAiCompatibleGateway(
             AiProviderProperties properties,
-            @Value("${math-agent.ai.chat.request-timeout-ms:45000}") long requestTimeoutMs) {
+            @Value("${math-agent.ai.chat.request-timeout-ms:45000}") long requestTimeoutMs,
+            @Value("${math-agent.ai.chat.max-output-tokens:1200}") int maxOutputTokens,
+            @Value("${math-agent.ai.chat.stream-max-attempts:3}") int maxStreamAttempts,
+            @Value("${math-agent.ai.chat.retry-base-delay-ms:400}") long retryBaseDelayMs) {
         this.properties = properties;
         this.requestTimeout = Duration.ofMillis(Math.max(1000, requestTimeoutMs));
+        this.maxOutputTokens = Math.max(1, maxOutputTokens);
+        this.maxStreamAttempts = Math.max(1, maxStreamAttempts);
+        this.retryBaseDelay = Duration.ofMillis(Math.max(0, retryBaseDelayMs));
     }
 
     /**
@@ -111,7 +130,7 @@ public class SpringAiOpenAiCompatibleGateway implements AiChatGateway {
                 .uri(chatCompletionsUri(provider.getBaseUrl()))
                 .contentType(MediaType.APPLICATION_JSON)
                 .headers(headers -> headers.setBearerAuth(provider.getApiKey()))
-                .body(chatCompletionBody(request))
+                .body(chatCompletionBody(request, maxOutputTokens))
                 .retrieve()
                 .body(byte[].class);
         return resultFromBody(request, readJson(responseBody));
@@ -125,6 +144,28 @@ public class SpringAiOpenAiCompatibleGateway implements AiChatGateway {
     @Override
     public AiChatResult stream(AiChatRequest request, AiChatStreamListener listener) {
         AiProviderProperties.Provider provider = provider(request.providerName());
+        for (int attempt = 1; attempt <= maxStreamAttempts; attempt++) {
+            StreamAttempt result = streamAttempt(request, listener, provider, attempt);
+            if (result.response() != null) {
+                return result.response();
+            }
+            if (!isRetriableStatus(result.statusCode()) || attempt >= maxStreamAttempts) {
+                throw providerFailure(request, result.statusCode(), result.errorBody(), attempt);
+            }
+            sleepBeforeRetry(attempt);
+        }
+        throw new IllegalStateException("AI provider stream exhausted without a result");
+    }
+
+    /**
+     * Executes one connection attempt. A failed HTTP status occurs before any SSE delta is delivered, which makes a
+     * retry safe: model output and ReAct tool execution cannot be duplicated by this boundary.
+     */
+    private StreamAttempt streamAttempt(
+            AiChatRequest request,
+            AiChatStreamListener listener,
+            AiProviderProperties.Provider provider,
+            int attempt) {
         HttpURLConnection connection = null;
         try {
             URL endpoint = URI.create(chatCompletionsUri(provider.getBaseUrl())).toURL();
@@ -136,23 +177,95 @@ public class SpringAiOpenAiCompatibleGateway implements AiChatGateway {
             connection.setRequestProperty("Content-Type", MediaType.APPLICATION_JSON_VALUE);
             connection.setRequestProperty("Accept", MediaType.TEXT_EVENT_STREAM_VALUE);
             connection.setRequestProperty("Authorization", "Bearer " + provider.getApiKey());
-            byte[] requestBody = OBJECT_MAPPER.writeValueAsBytes(streamChatCompletionBody(request));
+            byte[] requestBody = OBJECT_MAPPER.writeValueAsBytes(streamChatCompletionBody(request, maxOutputTokens));
             connection.setFixedLengthStreamingMode(requestBody.length);
             try (OutputStream output = connection.getOutputStream()) {
                 output.write(requestBody);
             }
             int status = connection.getResponseCode();
             if (status < HttpURLConnection.HTTP_OK || status >= HttpURLConnection.HTTP_MULT_CHOICE) {
-                throw new IllegalStateException("AI provider stream returned HTTP " + status);
+                String errorBody = readBoundedErrorBody(connection);
+                log.warn(
+                        "ai_provider_stream_rejected provider={} model={} status={} attempt={}/{} body={}",
+                        request.providerName(), request.modelCode(), status, attempt, maxStreamAttempts, errorBody);
+                return new StreamAttempt(null, status, errorBody);
             }
-            return consumeStream(request, connection.getInputStream(), listener);
+            return new StreamAttempt(consumeStream(request, connection.getInputStream(), listener), status, "");
         } catch (Exception exception) {
+            if (exception instanceof AiProviderUnavailableException unavailable) {
+                throw unavailable;
+            }
             throw new IllegalStateException("AI provider stream failed: " + exception.getClass().getSimpleName(), exception);
         } finally {
             if (connection != null) {
                 connection.disconnect();
             }
         }
+    }
+
+    /** Converts an exhausted provider status into a typed, browser-safe failure while retaining details in logs. */
+    private static AiProviderUnavailableException providerFailure(
+            AiChatRequest request, int statusCode, String errorBody, int attempts) {
+        String reason = providerErrorReason(errorBody);
+        log.error(
+                "ai_provider_stream_unavailable provider={} model={} status={} attempts={} reason={} body={}",
+                request.providerName(), request.modelCode(), statusCode, attempts, reason, errorBody);
+        return new AiProviderUnavailableException(
+                statusCode,
+                "Configured AI model is temporarily unavailable (HTTP " + statusCode + ", reason=" + reason + ")");
+    }
+
+    /** Reads only a bounded provider error body so logs keep the request id without accepting unbounded relay output. */
+    private static String readBoundedErrorBody(HttpURLConnection connection) {
+        InputStream error = connection.getErrorStream();
+        if (error == null) {
+            return "";
+        }
+        try (InputStream input = error; ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            byte[] buffer = new byte[512];
+            int remaining = MAX_PROVIDER_ERROR_BODY_BYTES;
+            while (remaining > 0) {
+                int read = input.read(buffer, 0, Math.min(buffer.length, remaining));
+                if (read < 0) {
+                    break;
+                }
+                output.write(buffer, 0, read);
+                remaining -= read;
+            }
+            return output.toString(StandardCharsets.UTF_8).replaceAll("[\\r\\n]+", " ").strip();
+        } catch (Exception exception) {
+            return "unreadable-error-body:" + exception.getClass().getSimpleName();
+        }
+    }
+
+    /** Extracts a stable provider error code without depending on one relay's full response schema. */
+    static String providerErrorReason(String errorBody) {
+        try {
+            JsonNode root = readJson(errorBody);
+            String code = text(root.path("error").path("code"));
+            return code.isBlank() ? "http_error" : code;
+        } catch (RuntimeException ignored) {
+            return "http_error";
+        }
+    }
+
+    private static boolean isRetriableStatus(int statusCode) {
+        return statusCode == 429 || statusCode == 502 || statusCode == 503 || statusCode == 504;
+    }
+
+    /** Uses bounded exponential delay only before a request has produced any model output. */
+    private void sleepBeforeRetry(int completedAttempt) {
+        long multiplier = 1L << Math.min(Math.max(0, completedAttempt - 1), 8);
+        long delayMs = Math.multiplyExact(retryBaseDelay.toMillis(), multiplier);
+        try {
+            Thread.sleep(delayMs);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("AI provider retry interrupted", exception);
+        }
+    }
+
+    private record StreamAttempt(AiChatResult response, int statusCode, String errorBody) {
     }
 
     /** Consumes OpenAI-compatible SSE lines while retaining complete content for the existing structured parser. */
@@ -237,20 +350,22 @@ public class SpringAiOpenAiCompatibleGateway implements AiChatGateway {
                 firstContent(body));
     }
 
-    private static Map<String, Object> chatCompletionBody(AiChatRequest request) {
+    static Map<String, Object> chatCompletionBody(AiChatRequest request, int maxOutputTokens) {
         return Map.of(
                 "model", request.modelCode(),
                 "temperature", 0.2d,
+                "max_tokens", Math.max(1, maxOutputTokens),
                 "messages", List.of(
                         Map.of("role", "system", "content", systemPrompt(request)),
                         userMessage(request)));
     }
 
     /** Keeps the stream request identical to the normal request except for documented OpenAI-compatible SSE flags. */
-    private static Map<String, Object> streamChatCompletionBody(AiChatRequest request) {
+    static Map<String, Object> streamChatCompletionBody(AiChatRequest request, int maxOutputTokens) {
         return Map.of(
                 "model", request.modelCode(),
                 "temperature", 0.2d,
+                "max_tokens", Math.max(1, maxOutputTokens),
                 "stream", true,
                 "stream_options", Map.of("include_usage", true),
                 "messages", List.of(
@@ -330,12 +445,16 @@ public class SpringAiOpenAiCompatibleGateway implements AiChatGateway {
             return """
                     %s
                     Evidence references: %s
+                    Preserve every TEACHER_IMAGE asset URI in a Markdown image field or artifact reference using
+                    ![资料图片](URI). Never invent, omit, or replace a supplied URI.
                     """.formatted(request.userInputSummary(), request.evidenceRefs());
         }
         return """
                 Task summary: %s
                 Evidence references: %s
                 Return classroom-ready Chinese teaching content. Keep it concise, structured, and directly usable.
+                For every TEACHER_IMAGE reference, preserve its asset URI in Markdown as ![资料图片](URI); do not
+                invent, omit, or replace the URI. The authenticated application resolves the image when rendering.
                 """.formatted(request.userInputSummary(), request.evidenceRefs());
     }
 

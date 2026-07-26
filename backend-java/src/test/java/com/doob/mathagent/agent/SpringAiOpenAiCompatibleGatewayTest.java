@@ -97,6 +97,29 @@ class SpringAiOpenAiCompatibleGatewayTest {
     }
 
     @Test
+    void chatAndStreamRequestsBoundProviderOutputTokens() {
+        AiChatRequest request = new AiChatRequest(
+                "openai", "gpt-5.6-sol", "CoursewareAgent", "生成讲义", List.of());
+
+        assertThat(SpringAiOpenAiCompatibleGateway.chatCompletionBody(request, 1200))
+                .containsEntry("max_tokens", 1200);
+        assertThat(SpringAiOpenAiCompatibleGateway.streamChatCompletionBody(request, 1200))
+                .containsEntry("max_tokens", 1200)
+                .containsEntry("stream", true);
+    }
+
+    @Test
+    void extractsStableProviderErrorCodeWithoutExposingRelayMessage() {
+        String body = """
+                {"error":{"code":"model_not_found","message":"No available channel; request id: private-id"}}
+                """;
+
+        assertThat(SpringAiOpenAiCompatibleGateway.providerErrorReason(body)).isEqualTo("model_not_found");
+        assertThat(SpringAiOpenAiCompatibleGateway.providerErrorReason("upstream unavailable"))
+                .isEqualTo("http_error");
+    }
+
+    @Test
     void parsesArkCompatibleResponseWhileIgnoringExtraMessageFields() throws Exception {
         AiChatRequest request = new AiChatRequest(
                 "ark",

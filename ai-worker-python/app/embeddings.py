@@ -1270,7 +1270,9 @@ class EmbeddingService:
             method="POST",
         )
         try:
-            with self.opener(req, 60) as response:
+            # urllib's second positional argument is request data, not timeout. Use the keyword so the real
+            # provider receives the JSON bytes already attached to Request instead of an invalid integer body.
+            with self.opener(req, timeout=60) as response:
                 body = response.read().decode("utf-8")
         except Exception as exc:
             raise EmbeddingProviderError(f"DashScope embedding request failed: {exc}") from exc

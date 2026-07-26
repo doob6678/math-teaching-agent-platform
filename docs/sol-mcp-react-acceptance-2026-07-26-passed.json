@@ -1,0 +1,1571 @@
+{
+  "startedAt": "2026-07-26T04:15:32.923095+00:00",
+  "model": "gpt-5.6-sol",
+  "mcp": {
+    "url": "http://127.0.0.1:8080/api/mcp",
+    "protocolVersion": "2025-11-25",
+    "keyId": "5ac40c99-dd8f-4d1f-8aae-d5df932d3e33",
+    "exposedToolCount": 14,
+    "requiredToolsExposed": [
+      "export_multi_agent_writing_artifact",
+      "get_multi_agent_writing_artifact",
+      "get_multi_agent_writing_status",
+      "search_multi_source_evidence",
+      "start_multi_agent_writing"
+    ]
+  },
+  "turns": [
+    {
+      "turn": 1,
+      "modelLatencyMs": 4714,
+      "visibleText": "先检索 `teacher_resource` 中“解三角形 向量 面积”，拿到真实证据引用后再启动写作流程。",
+      "toolCalls": [
+        {
+          "id": "call_tOxhLgK3IGrMEec3m869U35P",
+          "name": "search_multi_source_evidence",
+          "arguments": {
+            "libraries": [
+              "teacher_resource"
+            ],
+            "limit": 10,
+            "query": "解三角形 向量 面积"
+          },
+          "latencyMs": 983,
+          "result": {
+            "tool": "search_multi_source_evidence",
+            "isError": false,
+            "evidenceRefs": [
+              "TENANT_PUBLIC:2081199796528934914:2081207028050935810",
+              "TENANT_PUBLIC:2081199796528934914:2081207024708075522",
+              "TENANT_PUBLIC:2081199796528934914:2081207027870580737"
+            ],
+            "hitCount": 3,
+            "hits": [
+              {
+                "source": "teacher_resource",
+                "sourceType": "feishu",
+                "documentId": "2081199796528934914",
+                "blockId": "2081207028050935810",
+                "title": "GEcbf1b5SlQLE2dDiQuccUthnWb",
+                "evidenceRef": "TENANT_PUBLIC:2081199796528934914:2081207028050935810",
+                "imageAssetIds": [],
+                "assetRefs": []
+              },
+              {
+                "source": "teacher_resource",
+                "sourceType": "feishu",
+                "documentId": "2081199796528934914",
+                "blockId": "2081207024708075522",
+                "title": "GEcbf1b5SlQLE2dDiQuccUthnWb",
+                "evidenceRef": "TENANT_PUBLIC:2081199796528934914:2081207024708075522",
+                "imageAssetIds": [],
+                "assetRefs": []
+              },
+              {
+                "source": "teacher_resource",
+                "sourceType": "feishu",
+                "documentId": "2081199796528934914",
+                "blockId": "2081207027870580737",
+                "title": "GEcbf1b5SlQLE2dDiQuccUthnWb",
+                "evidenceRef": "TENANT_PUBLIC:2081199796528934914:2081207027870580737",
+                "imageAssetIds": [],
+                "assetRefs": []
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "turn": 2,
+      "modelLatencyMs": 8229,
+      "visibleText": "检索成功，返回 3 个 `evidenceRefs`。现在使用这些引用，并按指定 `openai / gpt-5.6-sol` 启动教师讲义写作。",
+      "toolCalls": [
+        {
+          "id": "call_dpL6WyfBZhKowaXaRr8OmuDa",
+          "name": "start_multi_agent_writing",
+          "arguments": {
+            "evidenceRefs": [
+              "TENANT_PUBLIC:2081199796528934914:2081207028050935810",
+              "TENANT_PUBLIC:2081199796528934914:2081207024708075522",
+              "TENANT_PUBLIC:2081199796528934914:2081207027870580737"
+            ],
+            "preferredModelCode": "gpt-5.6-sol",
+            "preferredProviderName": "openai",
+            "questionText": "解三角形 向量 面积",
+            "writingGoal": "教师讲义"
+          },
+          "latencyMs": 155,
+          "result": {
+            "tool": "start_multi_agent_writing",
+            "isError": false,
+            "status": "RUNNING",
+            "message": "Multi-agent writing workflow queued.",
+            "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+            "stageCount": 0
+          }
+        }
+      ]
+    },
+    {
+      "turn": 3,
+      "modelLatencyMs": 11381,
+      "visibleText": "工作流 `972d84fb-50bc-40a1-8101-30517e138160` 已进入 `RUNNING`，开始轮询状态。",
+      "toolCalls": [
+        {
+          "id": "call_7GjdaOeO2gUiftBics3TAVe4",
+          "name": "get_multi_agent_writing_status",
+          "arguments": {
+            "workflowId": "972d84fb-50bc-40a1-8101-30517e138160"
+          },
+          "latencyMs": 66,
+          "result": {
+            "tool": "get_multi_agent_writing_status",
+            "isError": false,
+            "status": "COMPLETED",
+            "message": "Multi-agent writing workflow completed.",
+            "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+            "stageCount": 10
+          },
+          "polls": [
+            {
+              "latencyMs": 81,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Multi-agent writing workflow queued.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 0
+              }
+            },
+            {
+              "latencyMs": 69,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Evidence curation completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 1
+              }
+            },
+            {
+              "latencyMs": 54,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Evidence curation completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 1
+              }
+            },
+            {
+              "latencyMs": 60,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Evidence curation completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 1
+              }
+            },
+            {
+              "latencyMs": 85,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Evidence curation completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 1
+              }
+            },
+            {
+              "latencyMs": 67,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Evidence curation completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 1
+              }
+            },
+            {
+              "latencyMs": 59,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Evidence curation completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 1
+              }
+            },
+            {
+              "latencyMs": 74,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Evidence curation completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 1
+              }
+            },
+            {
+              "latencyMs": 68,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Evidence curation completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 1
+              }
+            },
+            {
+              "latencyMs": 78,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Template selection completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 2
+              }
+            },
+            {
+              "latencyMs": 57,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Template selection completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 2
+              }
+            },
+            {
+              "latencyMs": 56,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Template selection completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 2
+              }
+            },
+            {
+              "latencyMs": 72,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Template selection completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 2
+              }
+            },
+            {
+              "latencyMs": 54,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Template selection completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 2
+              }
+            },
+            {
+              "latencyMs": 58,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Template selection completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 2
+              }
+            },
+            {
+              "latencyMs": 62,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Template selection completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 2
+              }
+            },
+            {
+              "latencyMs": 63,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Template selection completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 2
+              }
+            },
+            {
+              "latencyMs": 80,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Template selection completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 2
+              }
+            },
+            {
+              "latencyMs": 66,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Template selection completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 2
+              }
+            },
+            {
+              "latencyMs": 81,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Shared outline completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 3
+              }
+            },
+            {
+              "latencyMs": 55,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Shared outline completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 3
+              }
+            },
+            {
+              "latencyMs": 61,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Shared outline completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 3
+              }
+            },
+            {
+              "latencyMs": 47,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Shared outline completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 3
+              }
+            },
+            {
+              "latencyMs": 67,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Shared outline completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 3
+              }
+            },
+            {
+              "latencyMs": 60,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Shared outline completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 3
+              }
+            },
+            {
+              "latencyMs": 58,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Shared outline completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 3
+              }
+            },
+            {
+              "latencyMs": 56,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Shared outline completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 3
+              }
+            },
+            {
+              "latencyMs": 60,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Shared outline completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 3
+              }
+            },
+            {
+              "latencyMs": 53,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Shared outline completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 3
+              }
+            },
+            {
+              "latencyMs": 79,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Shared outline completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 3
+              }
+            },
+            {
+              "latencyMs": 57,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Shared outline completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 3
+              }
+            },
+            {
+              "latencyMs": 54,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Shared outline completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 3
+              }
+            },
+            {
+              "latencyMs": 50,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Shared outline completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 3
+              }
+            },
+            {
+              "latencyMs": 65,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Shared outline completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 3
+              }
+            },
+            {
+              "latencyMs": 74,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Shared outline completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 3
+              }
+            },
+            {
+              "latencyMs": 54,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Shared outline completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 3
+              }
+            },
+            {
+              "latencyMs": 49,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Shared outline completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 3
+              }
+            },
+            {
+              "latencyMs": 71,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Shared outline completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 3
+              }
+            },
+            {
+              "latencyMs": 60,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Shared outline completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 3
+              }
+            },
+            {
+              "latencyMs": 51,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Shared outline completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 3
+              }
+            },
+            {
+              "latencyMs": 52,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Shared outline completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 3
+              }
+            },
+            {
+              "latencyMs": 55,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Shared outline completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 3
+              }
+            },
+            {
+              "latencyMs": 69,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Shared outline completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 3
+              }
+            },
+            {
+              "latencyMs": 56,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Teacher, student, and 16:10 versions completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 4
+              }
+            },
+            {
+              "latencyMs": 65,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Teacher, student, and 16:10 versions completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 4
+              }
+            },
+            {
+              "latencyMs": 53,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Teacher, student, and 16:10 versions completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 4
+              }
+            },
+            {
+              "latencyMs": 73,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Teacher, student, and 16:10 versions completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 4
+              }
+            },
+            {
+              "latencyMs": 58,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Teacher, student, and 16:10 versions completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 4
+              }
+            },
+            {
+              "latencyMs": 56,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Teacher, student, and 16:10 versions completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 4
+              }
+            },
+            {
+              "latencyMs": 53,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Teacher, student, and 16:10 versions completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 4
+              }
+            },
+            {
+              "latencyMs": 71,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Teacher, student, and 16:10 versions completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 4
+              }
+            },
+            {
+              "latencyMs": 56,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Teacher, student, and 16:10 versions completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 4
+              }
+            },
+            {
+              "latencyMs": 57,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Teacher, student, and 16:10 versions completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 4
+              }
+            },
+            {
+              "latencyMs": 51,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Teacher, student, and 16:10 versions completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 4
+              }
+            },
+            {
+              "latencyMs": 53,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Teacher, student, and 16:10 versions completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 4
+              }
+            },
+            {
+              "latencyMs": 53,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Teacher, student, and 16:10 versions completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 4
+              }
+            },
+            {
+              "latencyMs": 91,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Teacher, student, and 16:10 versions completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 4
+              }
+            },
+            {
+              "latencyMs": 60,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Teacher, student, and 16:10 versions completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 5
+              }
+            },
+            {
+              "latencyMs": 48,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Teacher, student, and 16:10 versions completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 5
+              }
+            },
+            {
+              "latencyMs": 74,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Teacher, student, and 16:10 versions completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 5
+              }
+            },
+            {
+              "latencyMs": 56,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Teacher, student, and 16:10 versions completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 5
+              }
+            },
+            {
+              "latencyMs": 53,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Teacher, student, and 16:10 versions completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 5
+              }
+            },
+            {
+              "latencyMs": 60,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Teacher, student, and 16:10 versions completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 5
+              }
+            },
+            {
+              "latencyMs": 52,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Teacher, student, and 16:10 versions completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 5
+              }
+            },
+            {
+              "latencyMs": 47,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Teacher, student, and 16:10 versions completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 5
+              }
+            },
+            {
+              "latencyMs": 57,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Teacher, student, and 16:10 versions completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 5
+              }
+            },
+            {
+              "latencyMs": 54,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Teacher, student, and 16:10 versions completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 5
+              }
+            },
+            {
+              "latencyMs": 51,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Teacher, student, and 16:10 versions completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 5
+              }
+            },
+            {
+              "latencyMs": 48,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Teacher, student, and 16:10 versions completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 5
+              }
+            },
+            {
+              "latencyMs": 73,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Teacher, student, and 16:10 versions completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 5
+              }
+            },
+            {
+              "latencyMs": 39,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Teacher, student, and 16:10 versions completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 5
+              }
+            },
+            {
+              "latencyMs": 75,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Teacher, student, and 16:10 versions completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 5
+              }
+            },
+            {
+              "latencyMs": 58,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Teacher, student, and 16:10 versions completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 5
+              }
+            },
+            {
+              "latencyMs": 51,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Teacher, student, and 16:10 versions completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 5
+              }
+            },
+            {
+              "latencyMs": 54,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Teacher, student, and 16:10 versions completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 5
+              }
+            },
+            {
+              "latencyMs": 58,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Teacher, student, and 16:10 versions completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 6
+              }
+            },
+            {
+              "latencyMs": 54,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Teacher, student, and 16:10 versions completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 6
+              }
+            },
+            {
+              "latencyMs": 59,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Teacher, student, and 16:10 versions completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 6
+              }
+            },
+            {
+              "latencyMs": 47,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Teacher, student, and 16:10 versions completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 6
+              }
+            },
+            {
+              "latencyMs": 59,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Teacher, student, and 16:10 versions completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 6
+              }
+            },
+            {
+              "latencyMs": 70,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Teacher, student, and 16:10 versions completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 6
+              }
+            },
+            {
+              "latencyMs": 54,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Teacher, student, and 16:10 versions completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 6
+              }
+            },
+            {
+              "latencyMs": 56,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Teacher, student, and 16:10 versions completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 6
+              }
+            },
+            {
+              "latencyMs": 61,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Teacher, student, and 16:10 versions completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 6
+              }
+            },
+            {
+              "latencyMs": 85,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Source, student-safety, and layout reviews completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 7
+              }
+            },
+            {
+              "latencyMs": 71,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Source, student-safety, and layout reviews completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 7
+              }
+            },
+            {
+              "latencyMs": 87,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Source, student-safety, and layout reviews completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 7
+              }
+            },
+            {
+              "latencyMs": 52,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Source, student-safety, and layout reviews completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 7
+              }
+            },
+            {
+              "latencyMs": 74,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Source, student-safety, and layout reviews completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 8
+              }
+            },
+            {
+              "latencyMs": 59,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Source, student-safety, and layout reviews completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 8
+              }
+            },
+            {
+              "latencyMs": 59,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Source, student-safety, and layout reviews completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 8
+              }
+            },
+            {
+              "latencyMs": 59,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Source, student-safety, and layout reviews completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 8
+              }
+            },
+            {
+              "latencyMs": 49,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Source, student-safety, and layout reviews completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 8
+              }
+            },
+            {
+              "latencyMs": 43,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Source, student-safety, and layout reviews completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 8
+              }
+            },
+            {
+              "latencyMs": 73,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Source, student-safety, and layout reviews completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 8
+              }
+            },
+            {
+              "latencyMs": 69,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Source, student-safety, and layout reviews completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 8
+              }
+            },
+            {
+              "latencyMs": 64,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Source, student-safety, and layout reviews completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 8
+              }
+            },
+            {
+              "latencyMs": 46,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Source, student-safety, and layout reviews completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 8
+              }
+            },
+            {
+              "latencyMs": 52,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Source, student-safety, and layout reviews completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 8
+              }
+            },
+            {
+              "latencyMs": 53,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Source, student-safety, and layout reviews completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 9
+              }
+            },
+            {
+              "latencyMs": 73,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Source, student-safety, and layout reviews completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 9
+              }
+            },
+            {
+              "latencyMs": 74,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Source, student-safety, and layout reviews completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 9
+              }
+            },
+            {
+              "latencyMs": 61,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Source, student-safety, and layout reviews completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 9
+              }
+            },
+            {
+              "latencyMs": 45,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Source, student-safety, and layout reviews completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 9
+              }
+            },
+            {
+              "latencyMs": 61,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Source, student-safety, and layout reviews completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 9
+              }
+            },
+            {
+              "latencyMs": 77,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Source, student-safety, and layout reviews completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 9
+              }
+            },
+            {
+              "latencyMs": 51,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Source, student-safety, and layout reviews completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 9
+              }
+            },
+            {
+              "latencyMs": 74,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Source, student-safety, and layout reviews completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 9
+              }
+            },
+            {
+              "latencyMs": 52,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Source, student-safety, and layout reviews completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 9
+              }
+            },
+            {
+              "latencyMs": 57,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Source, student-safety, and layout reviews completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 9
+              }
+            },
+            {
+              "latencyMs": 89,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Source, student-safety, and layout reviews completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 9
+              }
+            },
+            {
+              "latencyMs": 59,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "RUNNING",
+                "message": "Source, student-safety, and layout reviews completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 9
+              }
+            },
+            {
+              "latencyMs": 52,
+              "result": {
+                "tool": "get_multi_agent_writing_status",
+                "isError": false,
+                "status": "COMPLETED",
+                "message": "Multi-agent writing workflow completed.",
+                "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+                "stageCount": 10
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "turn": 4,
+      "modelLatencyMs": 8685,
+      "visibleText": "状态已确认 `COMPLETED`。按要求立即读取讲义 artifact，随后导出 Markdown，不再轮询。",
+      "toolCalls": [
+        {
+          "id": "call_SBuP4DKI3m97mD1oT45MEZ4I",
+          "name": "get_multi_agent_writing_artifact",
+          "arguments": {
+            "workflowId": "972d84fb-50bc-40a1-8101-30517e138160"
+          },
+          "latencyMs": 77,
+          "result": {
+            "tool": "get_multi_agent_writing_artifact",
+            "isError": false,
+            "status": "COMPLETED",
+            "workflowId": "972d84fb-50bc-40a1-8101-30517e138160"
+          }
+        }
+      ]
+    },
+    {
+      "turn": 5,
+      "modelLatencyMs": 5999,
+      "visibleText": "artifact 已成功读取，包含合并讲义 Markdown 及各阶段产物。现在执行最终的 Markdown 导出。",
+      "toolCalls": [
+        {
+          "id": "call_TBQr1GTdT37y5Z5m0xBomId2",
+          "name": "export_multi_agent_writing_artifact",
+          "arguments": {
+            "format": "markdown",
+            "workflowId": "972d84fb-50bc-40a1-8101-30517e138160"
+          },
+          "latencyMs": 41,
+          "result": {
+            "tool": "export_multi_agent_writing_artifact",
+            "isError": false,
+            "workflowId": "972d84fb-50bc-40a1-8101-30517e138160",
+            "format": "markdown",
+            "fileName": "972d84fb-50bc-40a1-8101-30517e138160.md",
+            "mimeType": "text/markdown; charset=UTF-8",
+            "byteSize": 50513,
+            "sha256": "00c4fe518a0c9dde6c8e2f842653c77a17e5b6e38a581bb67522176fe8e00789",
+            "exportId": "ad13613f-456f-4a98-8fc9-1919b4be72a9",
+            "expiresAt": "2026-07-26T04:55:45.369813316Z"
+          }
+        }
+      ]
+    },
+    {
+      "turn": 6,
+      "modelLatencyMs": 20015,
+      "visibleText": "完整验收任务已全部通过真实工具调用完成：\n\n- 已检索 `teacher_resource`：“解三角形 向量 面积”，获得 3 个 `evidenceRefs`\n- 已使用指定 `provider=openai`、`model=gpt-5.6-sol` 完成多智能体教师讲义写作\n- 工作流状态：`COMPLETED`\n- Workflow ID：`972d84fb-50bc-40a1-8101-30517e138160`\n- 已成功读取讲义 artifact\n- 已成功导出 Markdown：`972d84fb-50bc-40a1-8101-30517e138160.md`\n- 文件大小：50,513 bytes\n- SHA-256：`00c4fe518a0c9dde6c8e2f842653c77a17e5b6e38a581bb67522176fe8e00789`",
+      "toolCalls": []
+    }
+  ],
+  "exports": [
+    {
+      "path": "C:\\Users\\doob\\Desktop\\code\\dev\\math_agent_rag\\.local-storage\\mcp-react-exports\\972d84fb-50bc-40a1-8101-30517e138160.md",
+      "byteSize": 50513,
+      "sha256": "00c4fe518a0c9dde6c8e2f842653c77a17e5b6e38a581bb67522176fe8e00789"
+    }
+  ],
+  "completedAt": "2026-07-26T04:26:05.208170+00:00",
+  "status": "passed",
+  "calledTools": [
+    "search_multi_source_evidence",
+    "start_multi_agent_writing",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_artifact",
+    "export_multi_agent_writing_artifact"
+  ],
+  "missingRequiredCalls": [],
+  "modelUsage": {
+    "prompt_tokens": 88546,
+    "completion_tokens": 718,
+    "total_tokens": 89264
+  },
+  "finalVisibleText": "完整验收任务已全部通过真实工具调用完成：\n\n- 已检索 `teacher_resource`：“解三角形 向量 面积”，获得 3 个 `evidenceRefs`\n- 已使用指定 `provider=openai`、`model=gpt-5.6-sol` 完成多智能体教师讲义写作\n- 工作流状态：`COMPLETED`\n- Workflow ID：`972d84fb-50bc-40a1-8101-30517e138160`\n- 已成功读取讲义 artifact\n- 已成功导出 Markdown：`972d84fb-50bc-40a1-8101-30517e138160.md`\n- 文件大小：50,513 bytes\n- SHA-256：`00c4fe518a0c9dde6c8e2f842653c77a17e5b6e38a581bb67522176fe8e00789`",
+  "loopExhausted": false
+}

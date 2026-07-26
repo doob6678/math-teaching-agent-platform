@@ -38,6 +38,10 @@ spring:
           # Terra is the verified low-latency production default. Luna remains selectable when explicitly configured,
           # but a cold local start must not silently choose the rate-limited model that caused 429 stalls.
           model: ${OPENAI_CHAT_MODEL:gpt-5.6-terra}
+  # The project migration runner validates the deployment URL and baselines Docker's operational bootstrap tables
+  # at version zero before applying V1+. Disable Boot's earlier initializer so it cannot race that policy.
+  flyway:
+    enabled: false
 server:
   port: 8080
   tomcat:
@@ -51,6 +55,10 @@ math-agent:
     # A streamed student answer must begin promptly; this is per provider attempt, not an unbounded request lifetime.
     chat:
       request-timeout-ms: ${MATH_AGENT_AI_CHAT_REQUEST_TIMEOUT_MS:30000}
+      max-output-tokens: ${MATH_AGENT_AI_CHAT_MAX_OUTPUT_TOKENS:1200}
+      # Retry only provider statuses received before the first stream delta, so a retry cannot duplicate tool work.
+      stream-max-attempts: ${MATH_AGENT_AI_CHAT_STREAM_MAX_ATTEMPTS:3}
+      retry-base-delay-ms: ${MATH_AGENT_AI_CHAT_RETRY_BASE_DELAY_MS:400}
     dashscope:
       name: dashscope
       base-url: ${DASHSCOPE_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
@@ -78,15 +86,12 @@ math-agent:
   teaching:
     ai-draft:
       max-retries: ${MATH_AGENT_TEACHING_AI_DRAFT_MAX_RETRIES:1}
+    # Teacher-side source transcription is independent from student uploads. Student images go directly to ReAct.
+    image-transcription:
+      openai-model: ${OPENAI_VISION_MODEL:${OPENAI_CHAT_MODEL:gpt-5.6-terra}}
+      timeout-ms: ${MATH_AGENT_TEACHING_IMAGE_TRANSCRIPTION_TIMEOUT_MS:12000}
   student:
     explanation:
-      # Keep student question OCR and explanation generation on the same verified multimodal provider by default.
-      openai-vision-model: ${OPENAI_VISION_MODEL:${OPENAI_CHAT_MODEL:gpt-5.6-terra}}
-      # Authorized teacher page transcription uses this same client. A relay can need longer than chat completion, so
-      # retain an explicit three-minute ceiling instead of failing a real visual read at the old 45-second default.
-      # Interactive OCR is an optional preparation step. Bound it tightly so the original image can proceed to
-      # the multimodal explanation model instead of holding the entire SSE workflow for minutes.
-      vision-timeout-ms: ${MATH_AGENT_STUDENT_EXPLANATION_VISION_TIMEOUT_MS:12000}
       # Two providers preserve one recovery path while capping a failed turn at two 30-second attempts.
       max-provider-attempts: ${MATH_AGENT_STUDENT_EXPLANATION_MAX_PROVIDER_ATTEMPTS:2}
       conversation-context-max-chars: ${MATH_AGENT_STUDENT_EXPLANATION_CONVERSATION_CONTEXT_MAX_CHARS:100000}
@@ -150,11 +155,15 @@ math-agent:
     textbook-upsert-batch-size: 16
     textbook-timeout-ms: 120000
     textbook-corpus-version: textbook-section-c2-milvus-v1
-    # Local worker is the primary embedding path. Cloud embeddings remain available
-    # only when explicitly configured through MATH_AGENT_EMBEDDING_BASE_URL/API_KEY.
+    # The local worker proxies the configured embedding provider. Runtime images intentionally exclude the
+    # heavyweight local BGE dependency, so text-embedding-v4 is the deployable default and remains 512-dimensional.
     embedding-base-url: ${MATH_AGENT_EMBEDDING_BASE_URL:http://127.0.0.1:8091/v1}
     embedding-api-key: ${MATH_AGENT_EMBEDDING_API_KEY:${MATH_AGENT_WORKER_API_KEY:}}
-    embedding-model: ${MATH_AGENT_EMBEDDING_MODEL:local-bge-small-zh-v1.5}
+    embedding-model: ${MATH_AGENT_EMBEDDING_MODEL:text-embedding-v4}
+    # DashScope's compatible endpoint accepts at most ten input strings per request; keeping this configurable lets
+    # another provider raise or lower the limit without changing indexing code.
+    embedding-batch-size: ${MATH_AGENT_EMBEDDING_BATCH_SIZE:10}
+    teacher-image-clip-enabled: ${MATH_AGENT_TEACHER_IMAGE_CLIP_ENABLED:false}
     # Parallel textbook/teacher retrieval can queue one cold CUDA rerank batch behind another; keep the request
     # bounded while allowing the real worker to finish instead of triggering an expensive embedding fallback.
     request-timeout-ms: ${MATH_AGENT_VECTOR_INDEX_TIMEOUT_MS:120000}

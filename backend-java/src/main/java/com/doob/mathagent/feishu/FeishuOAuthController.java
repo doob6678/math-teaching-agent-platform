@@ -20,7 +20,7 @@ public class FeishuOAuthController {
     @GetMapping("/api/feishu/oauth/callback")
     public ResponseEntity<Void> callback(@RequestParam String state,@RequestParam String code){oauth.callback(state,code);return ResponseEntity.status(org.springframework.http.HttpStatus.FOUND).location(URI.create(oauth.successRedirectUri())).build();}
     @GetMapping("/api/feishu/oauth/status")
-    public OAuthStatusResponse status(HttpServletRequest request){RequestSubject s=subjects.resolve(request).normalize();requireUser(s);FeishuCredential c=oauth.status(s.tenantId(),s.subjectId());if(c==null)return new OAuthStatusResponse("AUTH_REQUIRED",null);if(c.expired(Instant.now()))return new OAuthStatusResponse("AUTH_REQUIRED",c.expiresAt());return new OAuthStatusResponse("AUTHORIZED",c.expiresAt());}
+    public OAuthStatusResponse status(HttpServletRequest request){RequestSubject s=subjects.resolve(request).normalize();requireUser(s);FeishuCredential c=oauth.status(s.tenantId(),s.subjectId());if(c!=null&&!c.expired(Instant.now()))return new OAuthStatusResponse("AUTHORIZED",c.expiresAt());if("admin".equals(s.subjectType())&&oauth.botCredentialsConfigured())return new OAuthStatusResponse("BOT_AUTHORIZED",null);return new OAuthStatusResponse("AUTH_REQUIRED",null);}
     private static void requireUser(RequestSubject s){if(s.subjectId()==null||s.subjectId().isBlank()||"anonymous".equals(s.subjectType()))throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.UNAUTHORIZED,"authenticated user required");}
     public record OAuthAuthorizeResponse(String authorizationUrl){}
     public record OAuthStatusResponse(String status,Instant expiresAt){}

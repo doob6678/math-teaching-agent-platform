@@ -112,6 +112,12 @@ services:
       MATH_AGENT_DB_NAME: ${MATH_AGENT_DB_NAME:-math_agent_rag}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      # Teacher documents use the existing DashScope account for 512-dimensional text vectors. The runtime image
+      # intentionally omits the heavyweight local BGE stack, so the provider and dimension must be explicit here.
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
+      MATH_AGENT_EMBEDDING_PROVIDER_ORDER: ${MATH_AGENT_EMBEDDING_PROVIDER_ORDER:-dashscope}
+      MATH_AGENT_DASHSCOPE_EMBEDDING_MODEL: ${MATH_AGENT_DASHSCOPE_EMBEDDING_MODEL:-text-embedding-v4}
+      MATH_AGENT_EMBEDDING_DIMENSION: ${MATH_AGENT_EMBEDDING_DIMENSION:-512}
       MATH_AGENT_LOCAL_CLIP_MODEL_PATH: ${MATH_AGENT_CONTAINER_CLIP_MODEL_PATH:-}
       MATH_AGENT_LOCAL_RERANK_MODEL_PATH: ${MATH_AGENT_CONTAINER_RERANK_MODEL_PATH:-}
       MATH_AGENT_LOCAL_TEXT_EMBEDDING_MODEL_PATH: ${MATH_AGENT_CONTAINER_TEXT_MODEL_PATH:-}
@@ -128,32 +134,62 @@ services:
       context: .
       dockerfile: backend-java/Dockerfile
     restart: unless-stopped
+    # Docker Desktop's inherited WSL resolver cannot resolve the configured OpenAI relay CNAME chain. Google DNS
+    # resolves it from the same host network and keeps provider calls inside the container deterministic.
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     environment:
       MATH_AGENT_DB_URL: jdbc:mysql://mysql:3306/${MATH_AGENT_DB_NAME:-math_agent_rag}?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true
       MATH_AGENT_DB_USERNAME: root
       MATH_AGENT_DB_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set in .env}
+      # Redisson and Spring Data Redis are separate clients; both must target the Compose service rather than localhost.
       MATH_AGENT_REDIS_REDISSON_ADDRESS: redis://redis:6379
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
       SPRING_RABBITMQ_HOST: rabbitmq
       MATH_AGENT_RABBITMQ_LISTENER_AUTO_STARTUP: "true"
       MATH_AGENT_AGENT_WORKER_SHARED_KEY: ${MATH_AGENT_AGENT_WORKER_SHARED_KEY:?set in .env}
       MATH_AGENT_AGENT_WORKER_CAPABILITY_SECRET: ${MATH_AGENT_AGENT_WORKER_CAPABILITY_SECRET:?set in .env}
+      # Distributed writing dispatch publishes durable RabbitMQ tasks. This service also hosts the Java worker
+      # runtime, so queued workflows always have a live lease-owning consumer in the standard Compose deployment.
+      MATH_AGENT_AGENT_WORKER_DISPATCH_ENABLED: "true"
+      MATH_AGENT_AGENT_WORKER_RUNTIME_ENABLED: "true"
+      MATH_AGENT_AGENT_WORKER_ID: ${MATH_AGENT_AGENT_WORKER_ID:-compose-agent-worker}
+      MATH_AGENT_AGENT_WORKER_MAX_CONCURRENCY: ${MATH_AGENT_AGENT_WORKER_MAX_CONCURRENCY:-1}
       MATH_AGENT_EMBEDDING_BASE_URL: http://ai-worker:8091/v1
       MATH_AGENT_EMBEDDING_API_KEY: ${MATH_AGENT_WORKER_API_KEY:?set in .env}
+      MATH_AGENT_EMBEDDING_MODEL: ${MATH_AGENT_EMBEDDING_MODEL:-text-embedding-v4}
+      MATH_AGENT_EMBEDDING_BATCH_SIZE: ${MATH_AGENT_EMBEDDING_BATCH_SIZE:-10}
+      MATH_AGENT_TEACHER_IMAGE_CLIP_ENABLED: ${MATH_AGENT_TEACHER_IMAGE_CLIP_ENABLED:-false}
+      MATH_AGENT_PROCESSED_BOOKS_ROOT: /app/data/textbooks
       MATH_AGENT_VECTOR_INDEX_MILVUS_URI: http://milvus:19530
       MATH_AGENT_MILVUS_TOKEN: root:${MATH_AGENT_MILVUS_ROOT_PASSWORD:?set in .env}
       MATH_AGENT_TEACHER_SYNC_FEISHU_DOWNLOADER_SCRIPT: /app/scripts/download_feishu_url.py
+      MATH_AGENT_PYTHON_EXECUTABLE: python3
       MATH_AGENT_TEACHER_SYNC_FEISHU_STAGING_ROOT: /app/data/teacher-source-imports
       MATH_AGENT_TEACHER_SYNC_ASSET_STORAGE_ROOT: /app/data/teacher-assets
       FEISHU_APP_ID: ${FEISHU_APP_ID:-${FEISHU_APPID:-}}
       FEISHU_APP_SECRET: ${FEISHU_APP_SECRET:-${FEISHU_APPSECRET:-}}
+      # The bundled Python downloader uses APP_ID/APP_SECRET; keep the aliases sourced from the same operator values
+      # so OAuth and tenant-bot synchronization cannot disagree about whether Feishu is configured.
+      APP_ID: ${FEISHU_APP_ID:-${FEISHU_APPID:-}}
+      APP_SECRET: ${FEISHU_APP_SECRET:-${FEISHU_APPSECRET:-}}
       FEISHU_OAUTH_REDIRECT_URI: ${FEISHU_OAUTH_REDIRECT_URI:-}
       FEISHU_OAUTH_SUCCESS_REDIRECT_URI: ${FEISHU_OAUTH_SUCCESS_REDIRECT_URI:-}
+      FEISHU_OAUTH_SCOPES: "${FEISHU_OAUTH_SCOPES:-drive:drive:readonly drive:drive.metadata:readonly docx:document:readonly}"
       FEISHU_TOKEN_ENCRYPTION_KEY: ${FEISHU_TOKEN_ENCRYPTION_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
       OPENAI_CHAT_MODEL: ${OPENAI_CHAT_MODEL:-gpt-5.6-luna}
+      MATH_AGENT_AI_CHAT_REQUEST_TIMEOUT_MS: ${MATH_AGENT_AI_CHAT_REQUEST_TIMEOUT_MS:-120000}
+      MATH_AGENT_AI_CHAT_MAX_OUTPUT_TOKENS: ${MATH_AGENT_AI_CHAT_MAX_OUTPUT_TOKENS:-800}
+      MATH_AGENT_AI_CHAT_STREAM_MAX_ATTEMPTS: ${MATH_AGENT_AI_CHAT_STREAM_MAX_ATTEMPTS:-3}
+      MATH_AGENT_AI_CHAT_RETRY_BASE_DELAY_MS: ${MATH_AGENT_AI_CHAT_RETRY_BASE_DELAY_MS:-400}
     ports: ["${MATH_AGENT_BACKEND_HOST_PORT:-8081}:8080"]
-    volumes: ["backend-data:/app/data"]
+    volumes:
+      - backend-data:/app/data
+      - ${MATH_AGENT_PROCESSED_BOOKS_HOST_ROOT:?set in .env}:/app/data/textbooks:ro
     depends_on:
       mysql: {condition: service_healthy}
       redis: {condition: service_healthy}

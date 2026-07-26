@@ -17,6 +17,16 @@ const COMPLETED_SYNC_STATUSES = new Set(["synced", "completed"]);
 const COMPLETED_PARSE_STATUSES = new Set(["parsed", "completed"]);
 const COMPLETED_INDEX_STATUSES = new Set(["ready", "completed"]);
 
+export type FeishuAuthStatus = "AUTHORIZED" | "BOT_AUTHORIZED" | "AUTH_REQUIRED" | "LOADING";
+
+/** Keeps tenant-bot access distinct from personal OAuth so the UI never overstates private-drive access. */
+export function feishuAuthStatusText(status: FeishuAuthStatus) {
+  if (status === "AUTHORIZED") return "个人账号已绑定";
+  if (status === "BOT_AUTHORIZED") return "机器人已配置，可同步共享资料";
+  if (status === "LOADING") return "检查中";
+  return "需要授权";
+}
+
 export function TeacherResourcePanel({
   resources,
   location,
@@ -60,6 +70,8 @@ export function TeacherResourcePanel({
   onResume,
   onImportQuestions,
   onRebuildIndex,
+  loadFeishuAuthStatus,
+  loadFeishuAuthorizationUrl,
 }: {
   resources: TeacherResourceDocumentResponse[];
   location: string;
@@ -103,21 +115,24 @@ export function TeacherResourcePanel({
   onResume: (documentId: string, jobId: string) => void;
   onImportQuestions: (documentId: string) => void;
   onRebuildIndex: (documentId: string) => void;
+  loadFeishuAuthStatus: () => Promise<{ status: "AUTHORIZED" | "BOT_AUTHORIZED" | "AUTH_REQUIRED" }>;
+  loadFeishuAuthorizationUrl: () => Promise<{ authorizationUrl: string }>;
 }) {
-  const [feishuAuthStatus, setFeishuAuthStatus] = useState<"AUTHORIZED" | "AUTH_REQUIRED" | "LOADING">("LOADING");
+  const [feishuAuthStatus, setFeishuAuthStatus] = useState<FeishuAuthStatus>("LOADING");
   useEffect(() => {
     let active = true;
-    fetch("/api/feishu/oauth/status", { credentials: "include" })
-      .then((response) => response.ok ? response.json() : { status: "AUTH_REQUIRED" })
-      .then((body) => { if (active) setFeishuAuthStatus(body.status === "AUTHORIZED" ? "AUTHORIZED" : "AUTH_REQUIRED"); })
+    loadFeishuAuthStatus()
+      .then((body) => { if (active) setFeishuAuthStatus(body.status); })
       .catch(() => { if (active) setFeishuAuthStatus("AUTH_REQUIRED"); });
     return () => { active = false; };
-  }, []);
+  }, [loadFeishuAuthStatus]);
   const startFeishuAuthorization = async () => {
-    const response = await fetch("/api/feishu/oauth/authorize", { credentials: "include" });
-    if (!response.ok) { setFeishuAuthStatus("AUTH_REQUIRED"); return; }
-    const body = await response.json() as { authorizationUrl: string };
-    window.location.assign(body.authorizationUrl);
+    try {
+      const body = await loadFeishuAuthorizationUrl();
+      window.location.assign(body.authorizationUrl);
+    } catch {
+      setFeishuAuthStatus("AUTH_REQUIRED");
+    }
   };
   return (
     <section className="teacher-resource-panel">
@@ -146,9 +161,9 @@ export function TeacherResourcePanel({
         </label>
         {sourceType === "feishu" ? (
           <div className="resource-search-summary" role="status">
-            <span>飞书授权：{feishuAuthStatus === "AUTHORIZED" ? "已绑定" : feishuAuthStatus === "LOADING" ? "检查中" : "需要授权"}</span>
+            <span>飞书授权：{feishuAuthStatusText(feishuAuthStatus)}</span>
             <button className="btn btn-secondary btn-sm" type="button" onClick={startFeishuAuthorization}>
-              {feishuAuthStatus === "AUTHORIZED" ? "重新授权" : "绑定飞书"}
+              {feishuAuthStatus === "AUTHORIZED" ? "重新授权" : feishuAuthStatus === "BOT_AUTHORIZED" ? "绑定个人飞书" : "绑定飞书"}
             </button>
           </div>
         ) : null}

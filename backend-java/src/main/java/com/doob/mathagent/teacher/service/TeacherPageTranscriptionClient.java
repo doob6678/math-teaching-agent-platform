@@ -1,6 +1,5 @@
 package com.doob.mathagent.teacher.service;
 
-import com.doob.mathagent.student.service.StudentExplanationVisionService;
 import java.nio.file.Path;
 import java.util.Optional;
 import org.slf4j.Logger;
@@ -21,11 +20,11 @@ public class TeacherPageTranscriptionClient {
     /** The minimum self-reported confidence accepted as a replacement for a broken PDF text layer. */
     private static final double MINIMUM_CONFIDENCE = 0.95d;
 
-    private final StudentExplanationVisionService visionService;
+    private final AuthorizedImageTranscriptionService visionService;
     private final boolean enabled;
 
     @Autowired
-    public TeacherPageTranscriptionClient(StudentExplanationVisionService visionService) {
+    public TeacherPageTranscriptionClient(AuthorizedImageTranscriptionService visionService) {
         this.visionService = visionService;
         this.enabled = true;
     }
@@ -55,7 +54,7 @@ public class TeacherPageTranscriptionClient {
         if (!enabled) {
             return Optional.empty();
         }
-        StudentExplanationVisionService.VisionAnalysis analysis =
+        AuthorizedImageTranscriptionService.VisionAnalysis analysis =
                 // Teacher-source pages are audited evidence.  Pin their visible-text transcription to the configured
                 // gpt-5.6-luna provider instead of silently falling through to a different vendor after a relay wait.
                 visionService.analyzeAuthorizedLocalImageWithPrimaryProvider(authorizedPageImage, mimeType);

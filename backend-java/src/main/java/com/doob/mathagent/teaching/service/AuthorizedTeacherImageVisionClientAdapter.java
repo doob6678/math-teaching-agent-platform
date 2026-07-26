@@ -1,6 +1,6 @@
 package com.doob.mathagent.teaching.service;
 
-import com.doob.mathagent.student.service.StudentExplanationVisionService;
+import com.doob.mathagent.teacher.service.AuthorizedImageTranscriptionService;
 import java.nio.file.Path;
 import java.util.Optional;
 import org.springframework.stereotype.Service;
@@ -14,17 +14,17 @@ import org.springframework.stereotype.Service;
  * only that short-lived, backend-controlled materialization.</p>
  */
 @Service
-public class StudentExplanationTeacherImageVisionClient implements AuthorizedTeacherImageVisionClient {
+public class AuthorizedTeacherImageVisionClientAdapter implements AuthorizedTeacherImageVisionClient {
 
-    private final StudentExplanationVisionService visionService;
+    private final AuthorizedImageTranscriptionService visionService;
 
-    public StudentExplanationTeacherImageVisionClient(StudentExplanationVisionService visionService) {
+    public AuthorizedTeacherImageVisionClientAdapter(AuthorizedImageTranscriptionService visionService) {
         this.visionService = visionService;
     }
 
     @Override
     public Optional<String> describe(Path authorizedImage, String mimeType) {
-        StudentExplanationVisionService.VisionAnalysis analysis =
+        AuthorizedImageTranscriptionService.VisionAnalysis analysis =
                 visionService.analyzeAuthorizedLocalImage(authorizedImage, mimeType);
         if (!analysis.succeeded() || analysis.problemText() == null || analysis.problemText().isBlank()) {
             return Optional.empty();

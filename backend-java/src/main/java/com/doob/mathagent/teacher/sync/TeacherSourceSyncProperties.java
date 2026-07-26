@@ -105,10 +105,21 @@ public record TeacherSourceSyncProperties(
      * Environment credentials are preferred for deployment; the APPKEY file remains a local-development fallback.
      */
     public boolean credentialsConfigured() {
-        String appId = System.getenv("APP_ID");
-        String appSecret = System.getenv("APP_SECRET");
+        String appId = firstEnvironmentValue("APP_ID", "FEISHU_APP_ID", "FEISHU_APPID");
+        String appSecret = firstEnvironmentValue("APP_SECRET", "FEISHU_APP_SECRET", "FEISHU_APPSECRET");
         return (appId != null && !appId.isBlank() && appSecret != null && !appSecret.isBlank())
                 || java.nio.file.Files.isRegularFile(feishuAppkeyPath());
+    }
+
+    /** Resolves deployment aliases without ever copying secret values into Spring configuration or logs. */
+    private static String firstEnvironmentValue(String... names) {
+        for (String name : names) {
+            String value = System.getenv(name);
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
     }
 
     /**

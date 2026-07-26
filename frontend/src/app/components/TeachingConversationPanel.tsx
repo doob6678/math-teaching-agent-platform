@@ -284,7 +284,7 @@ export function TeachingConversationPanel({
                   </div>
                   <div className="teaching-upload-copy">
                     <strong>{imageDraft.originalFileName}</strong>
-                    <span>题图已上传，发送后进入识别与讲解。</span>
+                    <span>题图已上传，发送后原图直接进入 AI 上下文。</span>
                   </div>
                   <button className="teaching-upload-remove" type="button" onClick={onClearImage} aria-label="移除图片">
                     <X size={15} />
@@ -720,10 +720,12 @@ export function stageDetailText(stage: StudentExplanationStage) {
 }
 
 function imageStatusText(status?: string) {
-  if (status === "image_understood_by_vision") return "题图已识别";
   if (status === "image_direct_context") return "题图已传入 AI 上下文";
-  if (status === "image_uploaded_without_vision_analysis") return "已上传，等待识别";
-  if (status === "image_vision_failed") return "题图识别失败";
+  if (status === "image_uploaded_for_direct_context") return "已上传，提交后直接传入 AI";
+  // Old persisted statuses are presentation-only compatibility; the current pipeline never performs standalone OCR.
+  if (status === "image_uploaded_without_vision_analysis") return "已上传，提交后直接传入 AI";
+  if (status === "image_understood_by_vision") return "题图已传入 AI 上下文";
+  if (status === "image_vision_failed") return "题图已传入 AI 上下文";
   if (status === "none") return "未使用图片";
   return status || "图片已加入";
 }

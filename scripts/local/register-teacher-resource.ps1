@@ -60,44 +60,6 @@ function Invoke-Json {
     Invoke-RestMethod @parameters
 }
 
-function Get-RequestHash {
-    param([string]$Body)
-    $sha = [System.Security.Cryptography.SHA256]::Create()
-    try {
-        $bytes = [System.Text.Encoding]::UTF8.GetBytes($Body)
-        $hash = $sha.ComputeHash($bytes)
-        return "sha256:" + ([System.BitConverter]::ToString($hash).Replace("-", "").ToLowerInvariant())
-    } finally {
-        $sha.Dispose()
-    }
-}
-
-function Apply-Capability {
-    param(
-        [string]$Action,
-        [string]$Path,
-        [string]$Body,
-        [string]$IdempotencyKey,
-        [hashtable]$Headers
-    )
-    $requestHash = Get-RequestHash $Body
-    $capability = Invoke-Json `
-        -Method "Post" `
-        -Uri ($BackendUrl.TrimEnd("/") + "/api/security/capabilities") `
-        -Headers $Headers `
-        -Body @{
-            action = $Action
-            path = $Path
-            requestHash = $requestHash
-            idempotencyKey = $IdempotencyKey
-            maxCost = 1
-        }
-    return @{
-        token = $capability.token
-        requestHash = $requestHash
-    }
-}
-
 $base = $BackendUrl.TrimEnd("/")
 $login = Invoke-Json `
     -Method "Post" `
@@ -116,22 +78,10 @@ $registerBody = @{
     parseMode = $ParseMode
     feishuExportFormat = $FeishuExportFormat
 }
-$registerJson = $registerBody | ConvertTo-Json -Depth 20 -Compress
-$registerCapability = Apply-Capability `
-    -Action "teacher-resource:register" `
-    -Path "/api/teacher/resources" `
-    -Body $registerJson `
-    -IdempotencyKey ("teacher-resource-register:" + $Title + ":" + (Get-Date -Format yyyyMMddHHmmss)) `
-    -Headers $headers
-
-$registerHeaders = @{} + $headers
-$registerHeaders["X-Capability-Token"] = $registerCapability.token
-$registerHeaders["X-Request-Hash"] = $registerCapability.requestHash
-
 $document = Invoke-Json `
     -Method "Post" `
     -Uri "$base/api/teacher/resources" `
-    -Headers $registerHeaders `
+    -Headers $headers `
     -Body $registerBody `
     -TimeoutSec 120
 
@@ -149,19 +99,10 @@ $result = [ordered]@{
 
 if (-not $SkipSync) {
     $syncPath = "/api/teacher/resources/$($document.documentId)/sync-jobs"
-    $syncCapability = Apply-Capability `
-        -Action "teacher-resource:sync" `
-        -Path $syncPath `
-        -Body "" `
-        -IdempotencyKey ("teacher-resource-sync:" + $($document.documentId) + ":" + (Get-Date -Format yyyyMMddHHmmss)) `
-        -Headers $headers
-    $syncHeaders = @{} + $headers
-    $syncHeaders["X-Capability-Token"] = $syncCapability.token
-    $syncHeaders["X-Request-Hash"] = $syncCapability.requestHash
     $job = Invoke-Json `
         -Method "Post" `
         -Uri ($base + $syncPath) `
-        -Headers $syncHeaders `
+        -Headers $headers `
         -TimeoutSec 120
     $result["jobId"] = $job.jobId
     $result["jobStatus"] = $job.status
@@ -169,19 +110,10 @@ if (-not $SkipSync) {
 
     if (-not $SkipExecute) {
         $executePath = "/api/teacher/resources/$($document.documentId)/sync-jobs/$($job.jobId)/execute"
-        $executeCapability = Apply-Capability `
-            -Action "teacher-resource:sync-execute" `
-            -Path $executePath `
-            -Body "" `
-            -IdempotencyKey ("teacher-resource-sync-execute:" + $($job.jobId) + ":" + (Get-Date -Format yyyyMMddHHmmss)) `
-            -Headers $headers
-        $executeHeaders = @{} + $headers
-        $executeHeaders["X-Capability-Token"] = $executeCapability.token
-        $executeHeaders["X-Request-Hash"] = $executeCapability.requestHash
         $executed = Invoke-Json `
             -Method "Post" `
             -Uri ($base + $executePath) `
-            -Headers $executeHeaders `
+            -Headers $headers `
             -TimeoutSec 900
         $result["executeStatus"] = $executed.status
         $result["executePhase"] = $executed.phase

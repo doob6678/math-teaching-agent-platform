@@ -113,10 +113,11 @@ class EmbeddingServiceTest(unittest.TestCase):
     def test_dashscope_embedding_uses_real_http_contract(self):
         captured = {}
 
-        def opener(req, timeout):
+        def opener(req, *, timeout):
             captured["url"] = req.full_url
             captured["auth"] = req.headers["Authorization"]
             captured["body"] = json.loads(req.data.decode("utf-8"))
+            captured["timeout"] = timeout
             return FakeResponse({
                 "model": "text-embedding-v4",
                 "data": [{"embedding": [0.1, 0.2, 0.3]}],
@@ -136,6 +137,7 @@ class EmbeddingServiceTest(unittest.TestCase):
         self.assertEqual(captured["auth"], "Bearer dashscope-key")
         self.assertEqual(captured["body"]["model"], "text-embedding-v4")
         self.assertEqual(captured["body"]["dimensions"], 3)
+        self.assertEqual(captured["timeout"], 60)
         self.assertEqual(result.provider, "dashscope")
         self.assertEqual(result.vectors, [[0.1, 0.2, 0.3]])
         self.assertEqual(openai_embedding_response(result)["data"][0]["embedding"], [0.1, 0.2, 0.3])

@@ -94,6 +94,13 @@ public class TeacherResourceBlockSearchService {
             "(?m)^\\h*(\\d{1,2})[.．、]\\h*");
     /** Keep the association local: an image beyond this many source blocks is not reliably question-owned. */
     private static final int MAX_INLINE_FIGURE_LOOKAHEAD_BLOCKS = 3;
+    /**
+     * A text paragraph and its Feishu image are emitted as separate blocks.  Retrieval ranks text, so bind only a
+     * nearby image block from the same document instead of silently dropping the visual evidence from the hit.
+     */
+    private static final int MAX_NEARBY_IMAGE_BLOCK_DISTANCE = 4;
+    /** A single evidence hit should not flood MCP/model context with every decorative image in a document. */
+    private static final int MAX_IMAGE_ASSETS_PER_HIT = 2;
 
     private final TeacherResourceStore resourceStore;
     private final TeacherDocumentBlockStore blockStore;
@@ -1729,8 +1736,18 @@ public class TeacherResourceBlockSearchService {
         if (response == null || response.hits() == null || response.hits().isEmpty()) {
             return response;
         }
+        Map<String, List<TeacherDocumentBlockResponse>> blocksByDocument = response.hits().stream()
+                .filter(Objects::nonNull)
+                .map(TeacherResourceBlockSearchResponse.Hit::documentId)
+                .filter(documentId -> documentId != null && !documentId.isBlank())
+                .distinct()
+                .collect(Collectors.toMap(
+                        Function.identity(),
+                        documentId -> blockStore.listByDocument(subject.tenantId(), documentId),
+                        (left, ignored) -> left,
+                        LinkedHashMap::new));
         List<TeacherResourceBlockSearchResponse.Hit> hits = response.hits().stream()
-                .map(hit -> attachVisibleAssetRefs(hit, subject))
+                .map(hit -> attachVisibleAssetRefs(enrichNearbyImageAssets(hit, blocksByDocument), subject))
                 .toList();
         return new TeacherResourceBlockSearchResponse(
                 response.queryId(),
@@ -1739,6 +1756,44 @@ public class TeacherResourceBlockSearchService {
                 safeRetrievalMode(response.retrievalMode()),
                 hits.size(),
                 hits);
+    }
+
+    /**
+     * Adds image ids from the nearest parsed sibling block when the ranked text block itself has no image.
+     * Same-page images win for paged sources; block distance is the deterministic fallback for Feishu/DOCX content.
+     */
+    private static TeacherResourceBlockSearchResponse.Hit enrichNearbyImageAssets(
+            TeacherResourceBlockSearchResponse.Hit hit,
+            Map<String, List<TeacherDocumentBlockResponse>> blocksByDocument) {
+        if (hit == null || hit.imageAssetIds() != null && !hit.imageAssetIds().isEmpty()) {
+            return hit;
+        }
+        List<TeacherDocumentBlockResponse> blocks = blocksByDocument.getOrDefault(hit.documentId(), List.of());
+        List<String> nearbyAssetIds = blocks.stream()
+                .filter(block -> "active".equalsIgnoreCase(block.status()))
+                .filter(block -> Math.abs(block.blockOrder() - hit.blockOrder()) <= MAX_NEARBY_IMAGE_BLOCK_DISTANCE)
+                .filter(block -> !parseImageAssetIds(block.imageRefs()).isEmpty())
+                .sorted(Comparator
+                        .comparing((TeacherDocumentBlockResponse block) -> !samePage(hit.pageNo(), block.pageNo()))
+                        .thenComparingInt(block -> Math.abs(block.blockOrder() - hit.blockOrder()))
+                        .thenComparingInt(TeacherDocumentBlockResponse::blockOrder))
+                .flatMap(block -> parseImageAssetIds(block.imageRefs()).stream())
+                .distinct()
+                .limit(MAX_IMAGE_ASSETS_PER_HIT)
+                .toList();
+        if (nearbyAssetIds.isEmpty()) {
+            return hit;
+        }
+        return new TeacherResourceBlockSearchResponse.Hit(
+                hit.documentId(), hit.documentTitle(), hit.sourceType(), hit.permissionScope(), hit.blockId(),
+                hit.blockType(), hit.blockOrder(), hit.chapter(), hit.section(), hit.pageNo(), hit.sourcePath(),
+                hit.blockRole(), hit.graphTags(), hit.evidenceBlockIds(), hit.evidenceText(), hit.snippet(), hit.score(),
+                nearbyAssetIds, List.of());
+    }
+
+    /** Null page numbers mean the source is unpaged and must fall back to block distance. */
+    private static boolean samePage(Integer hitPage, Integer imagePage) {
+        return hitPage != null && hitPage.equals(imagePage);
     }
 
     private TeacherResourceBlockSearchResponse.Hit attachVisibleAssetRefs(

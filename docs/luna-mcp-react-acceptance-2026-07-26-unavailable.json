@@ -1,0 +1,10 @@
+{
+  "testedAt": "2026-07-26T03:03:54Z",
+  "requestedModel": "gpt-5.6-luna",
+  "endpoint": "configured OpenAI-compatible relay",
+  "status": "provider_model_unavailable",
+  "httpStatus": 503,
+  "providerCode": "model_not_found",
+  "message": "No available channel for gpt-5.6-luna. The live /models response exposed gpt-5.6-sol as the available 5.6 model.",
+  "credentialsPersisted": false
+}

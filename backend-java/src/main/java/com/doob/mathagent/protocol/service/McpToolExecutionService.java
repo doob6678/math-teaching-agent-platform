@@ -253,11 +253,34 @@ public class McpToolExecutionService {
         result.put("mergedHits", mergedHits);
         result.put(
                 "evidenceRefs",
-                mergedHits.stream()
-                        .map(hit -> String.valueOf(hit.get("evidenceRef")))
-                        .filter(value -> !value.isBlank())
-                        .toList());
+                evidenceRefsWithAssets(mergedHits));
         return result;
+    }
+
+    /**
+     * Carries controlled image URIs beside text anchors so the next MCP writing call cannot lose Feishu figures.
+     * The value is still an opaque evidence reference: no local storage path or provider credential is exposed.
+     */
+    private static List<String> evidenceRefsWithAssets(List<Map<String, Object>> mergedHits) {
+        List<String> refs = new ArrayList<>();
+        for (Map<String, Object> hit : mergedHits) {
+            Object evidenceRef = hit.get("evidenceRef");
+            if (evidenceRef != null && !String.valueOf(evidenceRef).isBlank()) {
+                refs.add(String.valueOf(evidenceRef));
+            }
+            Object rawAssets = hit.get("assetRefs");
+            if (!(rawAssets instanceof List<?> assets)) {
+                continue;
+            }
+            for (Object rawAsset : assets) {
+                if (rawAsset instanceof TeacherResourceBlockSearchResponse.AssetRef asset
+                        && asset.assetId() != null && !asset.assetId().isBlank()
+                        && asset.assetUri() != null && !asset.assetUri().isBlank()) {
+                    refs.add("TEACHER_IMAGE:" + asset.assetId() + ":" + asset.assetUri());
+                }
+            }
+        }
+        return refs.stream().distinct().toList();
     }
 
     /**

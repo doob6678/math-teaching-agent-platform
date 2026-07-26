@@ -360,6 +360,7 @@ describe("TeachingConversationPanel", () => {
 
     expect(html).toContain("生成讲解");
     expect(html).not.toContain("识别题图");
+    expect(html).not.toContain("等待识别");
     expect(html).not.toContain("检索教材");
     expect(html).not.toContain("规划流程");
     expect(html).toContain("配方得到");

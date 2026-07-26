@@ -84,8 +84,22 @@ public class AgentWorkerTaskConsumer {
                 publisher.publish(retry);
                 return;
             }
+            if (task.attempt() >= maximumAttempts) {
+                markWorkflowFailed(task, exception);
+            }
         }
         // Terminal failures are intentionally dead-lettered after the durable task record has been updated.
         throw new AmqpRejectAndDontRequeueException("Agent Worker task failed", exception);
+    }
+
+    /** Keeps the workflow state consistent with a terminal durable task so users can invoke resume explicitly. */
+    private void markWorkflowFailed(AgentWorkerTask task, Exception exception) {
+        try {
+            JsonNode payload = objectMapper.readTree(task.requestJson());
+            RequestSubject subject = objectMapper.treeToValue(payload.required("subject"), RequestSubject.class);
+            writingService.failDispatchedStage(task.workflowId(), subject, exception.getMessage());
+        } catch (Exception stateException) {
+            exception.addSuppressed(stateException);
+        }
     }
 }

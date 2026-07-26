@@ -1,11 +1,11 @@
-package com.doob.mathagent.student.service;
+package com.doob.mathagent.teacher.service;
 
 import com.doob.mathagent.infrastructure.ai.AiProviderProperties;
+import com.doob.mathagent.infrastructure.text.TextEncodingRepair;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -18,10 +18,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 
 /**
- * Calls a real multimodal model to read a temporary uploaded math question image.
+ * Transcribes permission-checked teacher material with a real multimodal model.
+ *
+ * <p>This service has no student-upload lookup or student explanation entry point. Interactive student images are
+ * sent directly to the main ReAct model and never pass through this independent transcription layer.</p>
  */
 @Service
-public class StudentExplanationVisionService {
+public class AuthorizedImageTranscriptionService {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     /** A complete exam page can contain five questions and options; keep enough output budget for valid JSON. */
@@ -44,16 +47,16 @@ public class StudentExplanationVisionService {
      * @param visionModel DashScope OpenAI-compatible vision model
      * @param enabled whether image understanding is enabled
      */
-    public StudentExplanationVisionService(
+    public AuthorizedImageTranscriptionService(
             AiProviderProperties properties,
-            @Value("${math-agent.student.explanation.openai-vision-model:${OPENAI_VISION_MODEL:${OPENAI_CHAT_MODEL:gpt-5.6-luna}}}")
+            @Value("${math-agent.teaching.image-transcription.openai-model:${OPENAI_VISION_MODEL:${OPENAI_CHAT_MODEL:gpt-5.6-luna}}}")
             String openaiVisionModel,
-            @Value("${math-agent.student.explanation.vision-model:${DASHSCOPE_VISION_MODEL:qwen-vl-plus-latest}}")
+            @Value("${math-agent.teaching.image-transcription.dashscope-model:${DASHSCOPE_VISION_MODEL:qwen-vl-plus-latest}}")
             String dashscopeVisionModel,
-            @Value("${math-agent.student.explanation.ark-vision-model:${ARK_VISION_MODEL:${ARK_CHAT_MODEL:doubao-seed-2-0-lite-260428}}}")
+            @Value("${math-agent.teaching.image-transcription.ark-model:${ARK_VISION_MODEL:${ARK_CHAT_MODEL:doubao-seed-2-0-lite-260428}}}")
             String arkVisionModel,
-            @Value("${math-agent.student.explanation.vision-enabled:true}") boolean enabled,
-            @Value("${math-agent.student.explanation.vision-timeout-ms:45000}") long requestTimeoutMs) {
+            @Value("${math-agent.teaching.image-transcription.enabled:true}") boolean enabled,
+            @Value("${math-agent.teaching.image-transcription.timeout-ms:45000}") long requestTimeoutMs) {
         this.openaiProvider = properties.getOpenai();
         this.dashscopeProvider = properties.getDashscope();
         this.arkProvider = properties.getArk();
@@ -62,38 +65,6 @@ public class StudentExplanationVisionService {
         this.arkVisionModel = textOrDefault(arkVisionModel, properties.getArk().getChatModel());
         this.enabled = enabled;
         this.requestTimeout = Duration.ofMillis(Math.max(1000, requestTimeoutMs));
-    }
-
-    /**
-     * Uses a real vision model to extract problem text from an uploaded image.
-     *
-     * @param imageRecord owner-validated image record
-     * @return vision analysis result
-     */
-    public VisionAnalysis analyze(StudentExplanationImageRecord imageRecord) {
-        if (!enabled) {
-            return VisionAnalysis.skipped("vision-disabled");
-        }
-        try {
-            /*
-             * Interactive explanations must not wait for every provider in sequence. The selected multimodal
-             * provider receives the original image again during answer generation, so a failed OCR pass can safely
-             * fall through to planning instead of turning one upload into several long relay timeouts.
-             */
-            return analyzeImageBytes(Files.readAllBytes(imageRecord.localPath()), imageRecord.contentType(), false);
-        } catch (IOException e) {
-            return new VisionAnalysis(
-                    true,
-                    false,
-                    "",
-                    "",
-                    "",
-                    0.0,
-                    0,
-                    0,
-                    0,
-                    e.getClass().getSimpleName());
-        }
     }
 
     /**
@@ -260,43 +231,11 @@ public class StudentExplanationVisionService {
         try {
             JsonNode node = OBJECT_MAPPER.readTree(extractJsonObject(stripCodeFence(content.strip())));
             return new ParsedVisionJson(
-                    repairMojibake(node.path("problemText").asText("")),
+                    TextEncodingRepair.repairMojibake(node.path("problemText").asText("")),
                     Math.max(0.0, Math.min(1.0, node.path("confidence").asDouble(0.0))));
         } catch (JsonProcessingException e) {
-            return new ParsedVisionJson(repairMojibake(content.strip()), 0.5);
+            return new ParsedVisionJson(TextEncodingRepair.repairMojibake(content.strip()), 0.5);
         }
-    }
-
-    /**
-     * Repairs common UTF-8 text that was accidentally interpreted as ISO-8859-1 by a provider.
-     */
-    public static String repairMojibake(String value) {
-        if (value == null || value.isBlank()) {
-            return "";
-        }
-        if (!looksLikeMojibake(value)) {
-            return value;
-        }
-        String repaired = new String(value.getBytes(StandardCharsets.ISO_8859_1), StandardCharsets.UTF_8);
-        return cjkCount(repaired) > cjkCount(value) ? repaired : value;
-    }
-
-    private static boolean looksLikeMojibake(String value) {
-        return value.indexOf('\u00e9') >= 0
-                || value.indexOf('\u00e8') >= 0
-                || value.indexOf('\u00e4') >= 0
-                || value.indexOf('\u00e5') >= 0
-                || value.indexOf('\u00e3') >= 0
-                || value.indexOf('\u00ef') >= 0
-                || value.indexOf('\u0098') >= 0
-                || value.indexOf('\u0080') >= 0
-                || value.indexOf('\u0082') >= 0;
-    }
-
-    private static long cjkCount(String value) {
-        return value.codePoints()
-                .filter(codePoint -> codePoint >= 0x4E00 && codePoint <= 0x9FFF)
-                .count();
     }
 
     /**
@@ -393,7 +332,7 @@ public class StudentExplanationVisionService {
     }
 
     /**
-     * Safe vision analysis metadata used by the student explanation workflow.
+     * Safe transcription metadata used by teacher-side ingestion and handout evidence processing.
      */
     public record VisionAnalysis(
             boolean enabled,

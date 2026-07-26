@@ -30,7 +30,9 @@ public class FeishuOAuthService {
         requireIdentity(tenantId, subjectId);
         String state=UUID.randomUUID().toString(); states.put(state,new PendingState(tenantId,subjectId,Instant.now().plusSeconds(300)));
         String appId=requireConfig("FEISHU_APP_ID"); String redirect=requireConfig("FEISHU_OAUTH_REDIRECT_URI");
-        return "https://open.feishu.cn/open-apis/authen/v1/authorize?app_id="+encode(appId)+"&redirect_uri="+encode(redirect)+"&state="+encode(state)+"&scope="+encode(environment.getProperty("FEISHU_OAUTH_SCOPES","drive:drive:readonly docx:document:readonly"));
+        // Folder metadata and file content are separate Feishu privileges. Request both read-only scopes so recursive
+        // traversal can inspect a folder without granting the application write access to the user's drive.
+        return "https://open.feishu.cn/open-apis/authen/v1/authorize?app_id="+encode(appId)+"&redirect_uri="+encode(redirect)+"&state="+encode(state)+"&scope="+encode(environment.getProperty("FEISHU_OAUTH_SCOPES","drive:drive:readonly drive:drive.metadata:readonly docx:document:readonly"));
     }
 
     /** Exchanges the provider code and atomically replaces the encrypted user credential. */
@@ -49,7 +51,14 @@ public class FeishuOAuthService {
         } catch (Exception exception) { if(exception instanceof IllegalArgumentException iae) throw iae; throw new IllegalStateException("Feishu OAuth exchange failed",exception); }
     }
     public FeishuCredential status(String tenantId,String subjectId){return credentials.findActive(tenantId,subjectId);}
+    /** Returns whether the deployment can use its tenant bot for administrator-managed shared folders. */
+    public boolean botCredentialsConfigured() {
+        return !firstConfigured("FEISHU_APP_ID", "FEISHU_APPID", "APP_ID").isBlank()
+                && !firstConfigured("FEISHU_APP_SECRET", "FEISHU_APPSECRET", "APP_SECRET").isBlank();
+    }
     public String successRedirectUri(){return environment.getProperty("FEISHU_OAUTH_SUCCESS_REDIRECT_URI","/");}
+    /** Accepts documented aliases because the downloader and OAuth client historically used different names. */
+    private String firstConfigured(String... names){for(String name:names){String value=environment.getProperty(name,"");if(value!=null&&!value.isBlank())return value.strip();}return "";}
     private String requireConfig(String key){String value=environment.getProperty(key);if(value==null||value.isBlank())throw new IllegalStateException(key+" is not configured");return value.strip();}
     private static void requireIdentity(String tenant,String subject){if(tenant==null||tenant.isBlank()||subject==null||subject.isBlank())throw new IllegalArgumentException("authenticated tenant and user are required");}
     private static String encode(String value){return URLEncoder.encode(value,StandardCharsets.UTF_8);}

@@ -5,6 +5,7 @@ import com.doob.mathagent.agent.service.AiChatRequest;
 import com.doob.mathagent.agent.service.AiChatResult;
 import com.doob.mathagent.infrastructure.ai.AiProviderCatalog;
 import com.doob.mathagent.infrastructure.text.FormulaMarkupSanitizer;
+import com.doob.mathagent.infrastructure.text.TextEncodingRepair;
 import com.doob.mathagent.student.dto.StudentExplanationRequest;
 import com.doob.mathagent.student.vo.StudentExplanationResponse;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -758,7 +759,7 @@ public class StudentExplanationAiCardService {
     }
 
     private static String sanitizeFormulaText(String value) {
-        return FormulaMarkupSanitizer.sanitizeFeishuMath(StudentExplanationVisionService.repairMojibake(safe(value)));
+        return FormulaMarkupSanitizer.sanitizeFeishuMath(TextEncodingRepair.repairMojibake(safe(value)));
     }
 
     private static StudentExplanationResponse.WorkflowStage stageFrom(

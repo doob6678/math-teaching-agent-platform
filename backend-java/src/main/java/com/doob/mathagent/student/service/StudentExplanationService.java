@@ -139,29 +139,25 @@ public class StudentExplanationService {
         List<StudentExplanationResponse.WorkflowStage> stages = new ArrayList<>();
         List<StudentExplanationResponse.ExplanationCard> cards = new ArrayList<>();
         List<StudentExplanationResponse.ExplanationSource> sources = new ArrayList<>();
-        StudentExplanationVisionService.VisionAnalysis visionAnalysis = StudentExplanationVisionService.VisionAnalysis.skipped("pending");
         StudentExplanationResponse.ImageUnderstanding imageUnderstanding = StudentExplanationResponse.ImageUnderstanding.none();
         StudentExplanationResponse.AiDraft aiDraft = StudentExplanationResponse.AiDraft.disabled("尚未开始生成讲解。");
         String conversationTitle = StudentExplanationConversationTitleSupport.resolve("", normalizedRequest.questionText(), null);
         String visibleQuestion = text(normalizedRequest.questionText());
 
         if (imageRecord != null) {
-            /* The original image is the interactive visual context; do not block a user request on separate OCR. */
-            visionAnalysis = StudentExplanationVisionService.VisionAnalysis.skipped("direct-image-context");
-            upsertStage(stages, stageFrom(System.nanoTime(), "analyze_image", "题图上下文", "completed",
-                    "原图已直接传入多模态讲解模型。"));
-            emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
+            // Upload completion is enough: the original bytes join the first model request and create no OCR stage.
+            emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord,
                     imageUnderstanding, aiDraft, conversationTitle, startedNanos, "题图已加入模型上下文。");
         }
 
-        // The original upload is the authoritative visual context. OCR is useful for a text retrieval query, but a
-        // failed transcription must not prevent the multimodal ReAct model from seeing and answering the image.
+        // The original upload is the only visual context. Image-only requests let the same multimodal ReAct turn
+        // understand the problem and decide its retrieval keywords, so there is no separate visual-provider call.
         String imageDataUrl = imageDataUrl(imageRecord);
-        String query = queryText(normalizedRequest, visionAnalysis);
+        String query = text(normalizedRequest.questionText());
         if (query.isBlank() && imageRecord != null) {
             query = "请识别上传图片中的数学内容，并生成适合资料检索的具体关键词";
         }
-        visibleQuestion = visibleQuestion(normalizedRequest, visionAnalysis);
+        visibleQuestion = visibleQuestion(normalizedRequest, imageRecord);
 
         List<StudentExplanationHistorySummary> recentHistory = List.of();
         List<String> longTermMemories = List.of();
@@ -169,11 +165,11 @@ public class StudentExplanationService {
             // Conversation and long-term memory are one user-controlled context action. Keeping both behind the same
             // switch avoids an invisible vector lookup on every fresh question and removes its avoidable latency.
             upsertStage(stages, runningStage("load_conversation_context", "读取学习记忆"));
-            emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
+            emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord,
                     imageUnderstanding, aiDraft, conversationTitle, startedNanos, "正在读取已关联的学习记忆。");
             recentHistory = loadRecentHistory(normalizedRequest, normalizedSubject, stages);
             longTermMemories = loadLongTermMemories(query, normalizedSubject, stages);
-            emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
+            emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord,
                     imageUnderstanding, aiDraft, conversationTitle, startedNanos, "学习记忆已读取。");
         }
 
@@ -181,7 +177,7 @@ public class StudentExplanationService {
         // retrieval tool is useful. Deployment configuration cannot replace it with a different fixed pipeline.
         ReactEvidence reactEvidence = executeReactTools(
                 normalizedRequest, normalizedSubject, query, stages, sources, listener, visibleQuestion, cards,
-                imageRecord, imageDataUrl, visionAnalysis, imageUnderstanding, aiDraft, conversationTitle, startedNanos);
+                imageRecord, imageDataUrl, imageUnderstanding, aiDraft, conversationTitle, startedNanos);
         List<KnowledgeGraphSpineResponse.Node> knowledgeNodes = reactEvidence.knowledgeNodes();
         List<TeacherResourceBlockSearchResponse.Hit> teacherHits = reactEvidence.teacherHits();
 
@@ -190,12 +186,12 @@ public class StudentExplanationService {
             // A retrieval plan needs one post-observation composition call. A self-contained question already carries
             // its validated cards in the first ReAct turn and must not pay for a redundant second provider request.
             upsertStage(stages, runningStage("ai_compose_cards", "生成讲解"));
-            emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
+            emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord,
                     imageUnderstanding, aiDraft, conversationTitle, startedNanos, "模型正在根据检索结果生成讲解。");
             aiCardDraft = aiCardService.generate(
                     normalizedRequest,
                     aiContextQuery(query, knowledgeNodes, teacherHits),
-                    imageStatus(normalizedRequest, imageRecord, visionAnalysis),
+                    imageStatus(imageRecord),
                     sources,
                     recentHistory,
                     longTermMemories,
@@ -210,20 +206,20 @@ public class StudentExplanationService {
                 null);
         // Preserve the live model's section count, labels, and order. Cards are a transport format, not a lesson template.
         cards.addAll(aiCardDraft.cards());
-        emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
+        emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord,
                 imageUnderstanding, aiDraft, conversationTitle, startedNanos, "讲解卡片已生成，正在整理展示。");
 
         upsertStage(stages, runningStage("assemble_cards", "整理卡片"));
-        emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
+        emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord,
                 imageUnderstanding, aiDraft, conversationTitle, startedNanos, "正在整理讲解卡片。");
         upsertStage(stages, stage("assemble_cards", "整理卡片", "completed",
                 "已使用真实模型输出并解析为讲解卡片，同时保留原题、知识点、方法和资源链接。", startedNanos));
-        emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
+        emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord,
                 imageUnderstanding, aiDraft, conversationTitle, startedNanos, "讲解卡片已整理完成。");
 
         String explanationId = UUID.randomUUID().toString();
         upsertStage(stages, runningStage("persist_history", "保存记录"));
-        emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
+        emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord,
                 imageUnderstanding, aiDraft, conversationTitle, startedNanos, "正在保存讲解记录。");
         if (historyStore.durable()) {
             upsertStage(stages, stage("persist_history", "保存记录", "completed",
@@ -240,7 +236,7 @@ public class StudentExplanationService {
                 studentId(normalizedSubject),
                 normalizedSubject.subjectType(),
                 visibleQuestion,
-                imageStatus(normalizedRequest, imageRecord, visionAnalysis),
+                imageStatus(imageRecord),
                 imageUnderstanding,
                 GENERATED_BY,
                 aiDraft,
@@ -250,7 +246,7 @@ public class StudentExplanationService {
                 elapsedMs(startedNanos));
         historyStore.save(normalizedRequest, normalizedSubject, imageRecord, response);
         indexLongTermMemory(normalizedSubject, response, stages);
-        emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
+        emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord,
                 imageUnderstanding, aiDraft, conversationTitle, startedNanos, "本轮讲解已完成。");
         listener.onCompleted(response);
         return response;
@@ -269,7 +265,6 @@ public class StudentExplanationService {
             StudentExplanationProgressListener listener, String visibleQuestion,
             List<StudentExplanationResponse.ExplanationCard> cards, StudentExplanationImageRecord imageRecord,
             String imageDataUrl,
-            StudentExplanationVisionService.VisionAnalysis visionAnalysis,
             StudentExplanationResponse.ImageUnderstanding imageUnderstanding,
             StudentExplanationResponse.AiDraft aiDraft, String conversationTitle, long startedNanos) {
         Set<String> available = availableReactTools(request, subject);
@@ -277,7 +272,7 @@ public class StudentExplanationService {
         List<TeacherResourceBlockSearchResponse.Hit> teacherHits = new ArrayList<>();
         long planStarted = System.nanoTime();
         upsertStage(stages, runningStage("react_plan", "规划讲解"));
-        emitProgress(listener, request, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
+        emitProgress(listener, request, visibleQuestion, stages, cards, sources, imageRecord,
                 imageUnderstanding, aiDraft, conversationTitle, startedNanos, "正在规划本题所需的资料与讲解。");
         // Decision：模型只看到后端按请求和身份生成的工具白名单，无法扩大自己的资料权限。
         StudentExplanationAiCardService.ReactDecision decision = aiCardService.nextReactDecision(
@@ -285,7 +280,7 @@ public class StudentExplanationService {
         if ("final".equals(decision.kind())) {
             upsertStage(stages, stageFrom(planStarted, "react_plan", "规划并生成讲解", "completed",
                     "题目信息完整，已在一次模型调用中完成规划和讲解。"));
-            emitProgress(listener, request, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
+            emitProgress(listener, request, visibleQuestion, stages, cards, sources, imageRecord,
                     imageUnderstanding, decision.finalDraft().aiDraft(), conversationTitle, startedNanos,
                     "讲解已生成，正在整理展示。");
             return new ReactEvidence(List.of(), List.of(), decision.finalDraft());
@@ -300,21 +295,21 @@ public class StudentExplanationService {
         for (String tool : decision.tools()) {
             if ("search_textbook".equals(tool)) {
                 upsertStage(stages, runningToolStage("search_textbook", "检索教材", retrievalQuery, request.maxTextbookHits()));
-                emitProgress(listener, request, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
+                emitProgress(listener, request, visibleQuestion, stages, cards, sources, imageRecord,
                         imageUnderstanding, aiDraft, conversationTitle, startedNanos, "正在执行模型选择的教材检索。");
                 List<TextbookSearchHit> hits = searchTextbooks(request, subject, retrievalQuery, stages);
                 hits.stream().map(StudentExplanationService::textbookSource).forEach(sources::add);
             } else if ("match_knowledge_graph".equals(tool)) {
                 upsertStage(stages, runningToolStage(
                         "match_knowledge_graph", "匹配知识点", retrievalQuery, MAX_KNOWLEDGE_GRAPH_MATCHES));
-                emitProgress(listener, request, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
+                emitProgress(listener, request, visibleQuestion, stages, cards, sources, imageRecord,
                         imageUnderstanding, aiDraft, conversationTitle, startedNanos, "正在执行模型选择的知识点匹配。");
                 knowledgeNodes.addAll(matchKnowledgeGraph(request, subject, retrievalQuery, stages));
                 knowledgeNodes.stream().map(StudentExplanationService::knowledgeSource).forEach(sources::add);
             } else if ("search_teacher_resources".equals(tool)) {
                 upsertStage(stages, runningToolStage(
                         "search_teacher_resources", "检索教师资料", retrievalQuery, request.maxTeacherResourceHits()));
-                emitProgress(listener, request, visibleQuestion, stages, cards, sources, imageRecord, visionAnalysis,
+                emitProgress(listener, request, visibleQuestion, stages, cards, sources, imageRecord,
                         imageUnderstanding, aiDraft, conversationTitle, startedNanos, "正在执行模型选择的教师资料检索。");
                 teacherHits.addAll(searchTeacherResources(request, subject, retrievalQuery, stages));
                 Map<String, TeacherResourceDocumentResponse> documentsById = teacherDocumentsById(subject.tenantId(), teacherHits);
@@ -708,31 +703,16 @@ public class StudentExplanationService {
     }
 
     /**
-     * Builds the retrieval query from user text plus real vision text when available.
-     */
-    private static String queryText(
-            StudentExplanationRequest request,
-            StudentExplanationVisionService.VisionAnalysis visionAnalysis) {
-        String typed = text(request.questionText());
-        String visual = text(visionAnalysis.problemText());
-        if (!typed.isBlank() && !visual.isBlank()) {
-            return typed + "\n" + visual;
-        }
-        return !typed.isBlank() ? typed : visual;
-    }
-
-    /**
      * Determines the visible problem text shown to the user and stored in history.
      */
     private static String visibleQuestion(
             StudentExplanationRequest request,
-            StudentExplanationVisionService.VisionAnalysis visionAnalysis) {
+            StudentExplanationImageRecord imageRecord) {
         String value = text(request.questionText()).strip();
         if (!value.isBlank()) {
             return value;
         }
-        String visual = text(visionAnalysis.problemText()).strip();
-        return visual.isBlank() ? "图片讲题" : visual;
+        return imageRecord == null ? "" : "图片讲题";
     }
 
     /** Materializes one owner-validated upload as ephemeral model context without exposing its server path. */
@@ -751,47 +731,8 @@ public class StudentExplanationService {
     /**
      * Returns the image handling status without over-claiming OCR.
      */
-    private static String imageStatus(
-            StudentExplanationRequest request,
-            StudentExplanationImageRecord imageRecord,
-            StudentExplanationVisionService.VisionAnalysis visionAnalysis) {
-        if ("direct-image-context".equals(visionAnalysis.message())) {
-            return "image_direct_context";
-        }
-        if (visionAnalysis.succeeded()) {
-            return "image_understood_by_vision";
-        }
-        if (visionAnalysis.enabled() && imageRecord != null) {
-            return "image_vision_failed";
-        }
-        if (imageRecord != null) {
-            return "image_uploaded_without_vision_analysis";
-        }
-        if (request.imageUploadId() == null && request.imageFileName() == null) {
-            return "none";
-        }
-        return "image_received_without_vision_analysis";
-    }
-
-    /**
-     * Converts image analysis metadata into response metadata.
-     */
-    private static StudentExplanationResponse.ImageUnderstanding imageUnderstanding(
-            StudentExplanationVisionService.VisionAnalysis analysis) {
-        if (analysis == null) {
-            return StudentExplanationResponse.ImageUnderstanding.none();
-        }
-        return new StudentExplanationResponse.ImageUnderstanding(
-                analysis.enabled(),
-                analysis.succeeded(),
-                text(analysis.providerName()),
-                text(analysis.modelCode()),
-                text(analysis.problemText()),
-                analysis.confidence(),
-                analysis.promptTokens(),
-                analysis.completionTokens(),
-                analysis.totalTokens(),
-                text(analysis.message()));
+    private static String imageStatus(StudentExplanationImageRecord imageRecord) {
+        return imageRecord == null ? "none" : "image_direct_context";
     }
 
     /**
@@ -814,7 +755,8 @@ public class StudentExplanationService {
             boolean hasImage) {
         List<String> steps = new ArrayList<>();
         if (hasImage) {
-            steps.add("先识别题图");
+            // There is deliberately no standalone OCR/vision hop: the same multimodal model sees the original image.
+            steps.add("将原题图直接加入 AI 上下文");
         }
         steps.add("理清原题");
         if (Boolean.TRUE.equals(request.searchTextbook())) {
@@ -1072,7 +1014,6 @@ public class StudentExplanationService {
             List<StudentExplanationResponse.ExplanationCard> cards,
             List<StudentExplanationResponse.ExplanationSource> sources,
             StudentExplanationImageRecord imageRecord,
-            StudentExplanationVisionService.VisionAnalysis visionAnalysis,
             StudentExplanationResponse.ImageUnderstanding imageUnderstanding,
             StudentExplanationResponse.AiDraft aiDraft,
             String conversationTitle,
@@ -1082,7 +1023,7 @@ public class StudentExplanationService {
                 request.conversationId(),
                 conversationTitle,
                 visibleQuestion,
-                imageStatus(request, imageRecord, visionAnalysis),
+                imageStatus(imageRecord),
                 imageUnderstanding,
                 aiDraft,
                 List.copyOf(stages),

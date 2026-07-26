@@ -31,18 +31,6 @@ function Invoke-Json {
     Invoke-RestMethod @parameters
 }
 
-function Get-RequestHash {
-    param([string]$Body)
-    $sha = [System.Security.Cryptography.SHA256]::Create()
-    try {
-        $bytes = [System.Text.Encoding]::UTF8.GetBytes($Body)
-        $hash = $sha.ComputeHash($bytes)
-        return "sha256:" + ([System.BitConverter]::ToString($hash).Replace("-", "").ToLowerInvariant())
-    } finally {
-        $sha.Dispose()
-    }
-}
-
 $base = $BackendUrl.TrimEnd("/")
 $login = Invoke-Json `
     -Method "Post" `
@@ -53,27 +41,10 @@ $headers = @{}
 $headers[$login.tokenName] = $login.tokenValue
 
 $path = "/api/teacher/resources/$DocumentId"
-$requestHash = Get-RequestHash ""
-$capability = Invoke-Json `
-    -Method "Post" `
-    -Uri "$base/api/security/capabilities" `
-    -Headers $headers `
-    -Body @{
-        action = "teacher-resource:archive"
-        path = $path
-        requestHash = $requestHash
-        idempotencyKey = "teacher-resource-archive:${DocumentId}:$(Get-Date -Format yyyyMMddHHmmss)"
-        maxCost = 1
-    }
-
-$archiveHeaders = @{} + $headers
-$archiveHeaders["X-Capability-Token"] = $capability.token
-$archiveHeaders["X-Request-Hash"] = $requestHash
-
 $response = Invoke-Json `
     -Method "Delete" `
     -Uri ($base + $path) `
-    -Headers $archiveHeaders `
+    -Headers $headers `
     -TimeoutSec 120
 
 $response | ConvertTo-Json -Depth 10

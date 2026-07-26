@@ -483,7 +483,6 @@ class StudentExplanationServiceTest {
                 resourceStore,
                 aiChatGateway,
                 aiProviderCatalog(),
-                null,
                 null);
     }
 

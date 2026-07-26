@@ -2951,6 +2951,8 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
                 onResume={handleResumeResourceSyncJob}
                 onImportQuestions={handleImportTeacherResourceQuestions}
                 onRebuildIndex={handleRebuildTeacherResourceIndex}
+                loadFeishuAuthStatus={api.getFeishuOAuthStatus}
+                loadFeishuAuthorizationUrl={api.getFeishuOAuthAuthorizationUrl}
               />
             </div>
           </div>

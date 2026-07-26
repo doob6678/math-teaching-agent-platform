@@ -2,15 +2,14 @@
  * Real-stack handout acceptance runner.
  *
  * The script deliberately uses the authenticated backend APIs instead of mocked
- * fixtures.  Each request receives a unique idempotency key, while capability
- * tokens are acquired for the exact request hash consumed by the protected API.
+ * fixtures. Each request uses the authenticated backend session and a unique client request id.
  * The resulting JSON, PDFs, extracted text, and page PNGs are durable evidence
  * for the acceptance document and make a later failure reproducible.
  */
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -46,11 +45,6 @@ const evidenceLimitOverride = Number(process.env.ACCEPTANCE_EVIDENCE_LIMIT ?? ""
 const aiProviderOverride = process.env.ACCEPTANCE_AI_PROVIDER?.trim() || "";
 const aiModelOverride = process.env.ACCEPTANCE_AI_MODEL?.trim() || "";
 
-/** Returns a SHA-256 request hash in the exact format expected by the backend. */
-function requestHash(body) {
-  return `sha256:${createHash("sha256").update(body, "utf8").digest("hex")}`;
-}
-
 async function jsonRequest(path, options = {}) {
   const response = await fetch(`${backend}${path}`, {
     ...options,
@@ -74,19 +68,6 @@ async function jsonRequest(path, options = {}) {
   return payload;
 }
 
-async function acquireCapability(session, action, path, body, idempotencyKey, maxCost) {
-  const hash = requestHash(body);
-  const capability = await jsonRequest("/api/security/capabilities", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      [session.tokenName]: session.tokenValue,
-    },
-    body: JSON.stringify({ action, path, requestHash: hash, idempotencyKey, maxCost }),
-  });
-  return { ...capability, requestHash: hash };
-}
-
 async function submitTask(session, scenario) {
   const clientRequestId = `acceptance-${scenario.code}-${randomUUID()}`;
   const request = {
@@ -103,22 +84,12 @@ async function submitTask(session, scenario) {
     ...(aiModelOverride ? { aiModelCode: aiModelOverride } : {}),
   };
   const body = JSON.stringify(request);
-  const capability = await acquireCapability(
-    session,
-    "teaching:submit",
-    "/api/teaching/tasks",
-    body,
-    clientRequestId,
-    request.evidenceLimit,
-  );
   const startedAt = Date.now();
   const task = await jsonRequest("/api/teaching/tasks", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       [session.tokenName]: session.tokenValue,
-      "X-Capability-Token": capability.token,
-      "X-Request-Hash": capability.requestHash,
     },
     body,
   });
@@ -128,21 +99,10 @@ async function submitTask(session, scenario) {
 async function downloadPreview(session, taskId, version, destination) {
   const path = `/api/teaching/tasks/${encodeURIComponent(taskId)}/handout/${version}/pdf/preview`;
   let response;
-  let capability;
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    capability = await acquireCapability(
-      session,
-      "teaching-handout:preview-pdf",
-      path,
-      "",
-      `acceptance-preview-${taskId}-${version}-${attempt}`,
-      2,
-    );
     response = await fetch(`${backend}${path}`, {
       headers: {
         [session.tokenName]: session.tokenValue,
-        "X-Capability-Token": capability.token,
-        "X-Request-Hash": capability.requestHash,
       },
     });
     if (response.status !== 429 || attempt === 2) break;

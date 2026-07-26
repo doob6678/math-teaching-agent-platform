@@ -30,7 +30,8 @@ public class StudentExplanationImageStoreService {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final Duration DEFAULT_TTL = Duration.ofMinutes(30);
     private static final long DEFAULT_MAX_BYTES = 8L * 1024L * 1024L;
-    private static final String IMAGE_STATUS = "image_uploaded_without_vision_analysis";
+    /** Upload only stores the original image; the explanation model receives it directly when the user submits. */
+    private static final String IMAGE_STATUS = "image_uploaded_for_direct_context";
 
     private final ProjectResourceProperties resourceProperties;
     private final Clock clock;

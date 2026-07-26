@@ -23,6 +23,8 @@ public record VectorIndexProperties(
         String embeddingApiKey,
         String embeddingModel,
         int requestTimeoutMs,
+        int embeddingBatchSize,
+        boolean teacherImageClipEnabled,
         String teacherImageCollectionName,
         int teacherImageDimension,
         int teacherImageQueryDimension) {
@@ -46,7 +48,7 @@ public record VectorIndexProperties(
         this(enabled, milvusUri, milvusToken, collectionName, studentMemoryCollectionName,
                 "math_agent_textbook_pages_bge", "math_agent_textbook_pages_clip", 512, 768, 512, dimension,
                 embeddingBaseUrl, embeddingApiKey, embeddingModel, requestTimeoutMs,
-                "math_agent_teacher_page_assets_clip", 768, 512);
+                10, false, "math_agent_teacher_page_assets_clip", 768, 512);
     }
 
     public VectorIndexProperties(
@@ -62,7 +64,7 @@ public record VectorIndexProperties(
         this(enabled, milvusUri, milvusToken, collectionName, "math_agent_student_memories_bge",
                 "math_agent_textbook_pages_bge", "math_agent_textbook_pages_clip", 512, 768, 512, dimension,
                 embeddingBaseUrl, embeddingApiKey, embeddingModel, requestTimeoutMs,
-                "math_agent_teacher_page_assets_clip", 768, 512);
+                10, false, "math_agent_teacher_page_assets_clip", 768, 512);
     }
 
     public String normalizedCollectionName() {
@@ -120,6 +122,11 @@ public record VectorIndexProperties(
 
     public int normalizedTimeoutMs() {
         return requestTimeoutMs <= 0 ? 30000 : requestTimeoutMs;
+    }
+
+    /** Provider-safe maximum number of text inputs sent in one embedding request. */
+    public int normalizedEmbeddingBatchSize() {
+        return embeddingBatchSize <= 0 ? 10 : embeddingBatchSize;
     }
 
     public boolean fullyConfigured() {

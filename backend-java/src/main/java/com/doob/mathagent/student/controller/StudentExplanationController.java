@@ -1,5 +1,6 @@
 package com.doob.mathagent.student.controller;
 
+import com.doob.mathagent.agent.service.AiProviderUnavailableException;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.infrastructure.security.RequestSubjectResolver;
 import com.doob.mathagent.student.dto.StudentExplanationRequest;
@@ -262,6 +263,26 @@ public class StudentExplanationController {
                         null,
                         null,
                         "BAD_REQUEST",
+                        traceId,
+                        null,
+                        null,
+                        List.of()));
+                emitter.complete();
+            } catch (AiProviderUnavailableException exception) {
+                String traceId = UUID.randomUUID().toString();
+                log.warn("student_explanation_model_unavailable traceId={} path={} status={} message={}",
+                        traceId,
+                        requestPath,
+                        exception.statusCode(),
+                        exception.getMessage());
+                // Keep authentication and the current conversation intact: provider capacity is recoverable and is
+                // unrelated to the user's session. The trace id links the UI failure to the bounded provider log.
+                sendEvent(emitter, "error", new StudentExplanationStreamEvent(
+                        "error",
+                        "当前讲解模型暂时没有可用通道，系统已自动重试，请稍后再次提交。",
+                        null,
+                        null,
+                        "MODEL_UNAVAILABLE",
                         traceId,
                         null,
                         null,

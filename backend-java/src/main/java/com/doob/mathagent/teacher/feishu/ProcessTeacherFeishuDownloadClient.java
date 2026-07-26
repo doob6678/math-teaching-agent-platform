@@ -44,6 +44,8 @@ public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownload
     private static final Pattern PROVIDER_CODE_PATTERN = Pattern.compile("[\\\"']code[\\\"']\\s*[:=]\\s*[\\\"']?([A-Za-z0-9_-]+)");
     private static final Pattern REQUIRED_SCOPE_PATTERN = Pattern.compile(
             "(?:required_scope|required scope|scope)\\s*[\\\"':= ]+([A-Za-z0-9_.:-]+)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern PRIVILEGE_SUBJECT_PATTERN = Pattern.compile(
+            "\\\"subject\\\"\\s*:\\s*\\\"([A-Za-z0-9_.:-]+)\\\"");
     private static final Pattern AUTHORIZATION_URL_PATTERN = Pattern.compile(
             "https?://[^\\s\\\"']+(?:authorize|authorization|permission|scope)[^\\s\\\"']*", Pattern.CASE_INSENSITIVE);
 
@@ -176,7 +178,8 @@ public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownload
             }
             return result;
         } catch (IOException exception) {
-            throw new IllegalStateException("Failed to run Feishu downloader", exception);
+            // Preserve the local process-launch reason (for example a missing Python executable) without logging tokens.
+            throw new IllegalStateException("Failed to run Feishu downloader: " + exception.getMessage(), exception);
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Feishu downloader was interrupted", exception);
@@ -277,7 +280,7 @@ public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownload
             String fileExtension,
             FeishuDownloadCheckpoint checkpoint, Path credentialFile) throws IOException {
         List<String> command = new java.util.ArrayList<>(List.of(
-                "python",
+                pythonExecutable(),
                 properties.feishuDownloaderScript().toString(),
                 "--url",
                 url,
@@ -299,6 +302,18 @@ public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownload
             command.add(checkpointPath.toString());
         }
         return command;
+    }
+
+    /**
+     * Resolves the interpreter across Windows development and Linux containers without baking a host-specific path
+     * into the sync job. Deployments can override the executable when Python lives outside PATH.
+     */
+    private static String pythonExecutable() {
+        String configured = System.getenv("MATH_AGENT_PYTHON_EXECUTABLE");
+        if (configured != null && !configured.isBlank()) {
+            return configured.strip();
+        }
+        return System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win") ? "python" : "python3";
     }
 
     /**
@@ -425,6 +440,13 @@ public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownload
         while (scopeMatcher.find()) {
             String scope = scopeMatcher.group(1);
             if (scope != null && !scope.isBlank() && !scopes.contains(scope)) {
+                scopes.add(scope);
+            }
+        }
+        Matcher privilegeMatcher = PRIVILEGE_SUBJECT_PATTERN.matcher(message);
+        while (privilegeMatcher.find()) {
+            String scope = privilegeMatcher.group(1);
+            if (!scope.isBlank() && !scopes.contains(scope)) {
                 scopes.add(scope);
             }
         }

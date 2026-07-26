@@ -1,0 +1,9 @@
+# HTTP, persistence and LangGraph runtime used by the default remote-provider Docker deployment.
+fastapi>=0.116,<1
+uvicorn[standard]>=0.35,<1
+pydantic>=2,<3
+requests>=2.32,<3
+pymysql>=1.1,<2
+pillow>=11,<13
+numpy>=2,<3
+langgraph>=0.6,<1

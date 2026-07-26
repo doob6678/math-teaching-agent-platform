@@ -884,7 +884,13 @@ def download_folder(
     started_at = time.perf_counter()
     meta = client.get_folder_meta(folder_token)
     resolved_folder_name = folder_name or str(meta.get("name", "") or folder_token)
-    root_dir = output_base / sanitize_name(resolved_folder_name)
+    checkpoint = resume_checkpoint or {}
+    checkpoint_path_parts = [part for part in re.split(r"[\\/]+", str(checkpoint.get("current_path", "") or "")) if part]
+    # A backend-owned resource title may intentionally differ from the provider folder title. Once a checkpoint has
+    # selected that local root, resume must keep using it; changing back to provider metadata makes saved_path point
+    # at a directory that does not contain the already downloaded files.
+    local_root_name = checkpoint_path_parts[0] if checkpoint_path_parts else resolved_folder_name
+    root_dir = output_base / sanitize_name(local_root_name)
     counters = stats if stats is not None else {
         "folders": 0,
         "files": 0,
@@ -896,7 +902,6 @@ def download_folder(
     }
     counters.setdefault("assets", 0)
     counters.setdefault("bytes", 0)
-    checkpoint = resume_checkpoint or {}
     visited_folder_tokens = [str(token) for token in list_field(checkpoint.get("visited_folder_tokens")) if str(token)]
     visited_set = set(visited_folder_tokens)
     downloaded_items = [item for item in list_field(checkpoint.get("downloaded_items")) if isinstance(item, dict)]

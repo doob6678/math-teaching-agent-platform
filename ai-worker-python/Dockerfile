@@ -4,8 +4,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements-runtime.txt ./
+# Compose leaves local model paths empty and uses the real remote embedding provider. Keep torch/transformers out of
+# this runtime image; model-enabled deployments install requirements.txt and mount their weights explicitly.
+RUN pip install --no-cache-dir -r requirements-runtime.txt
 COPY app ./app
 RUN mkdir -p /app/data/usage
 EXPOSE 8091

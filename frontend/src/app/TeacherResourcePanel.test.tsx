@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { TeacherResourcePanel } from "./components/TeacherResourcePanel";
+import { feishuAuthStatusText, TeacherResourcePanel } from "./components/TeacherResourcePanel";
 import { TeacherResourceDocumentResponse } from "../shared/api/textbookApi";
 
 function resource(overrides: Partial<TeacherResourceDocumentResponse> = {}): TeacherResourceDocumentResponse {
@@ -23,7 +23,7 @@ function resource(overrides: Partial<TeacherResourceDocumentResponse> = {}): Tea
   };
 }
 
-function renderPanel(value = resource()) {
+function renderPanel(value = resource(), authStatus: "AUTHORIZED" | "BOT_AUTHORIZED" | "AUTH_REQUIRED" = "AUTHORIZED") {
   return renderToStaticMarkup(
     <TeacherResourcePanel
       resources={[value]}
@@ -77,6 +77,8 @@ function renderPanel(value = resource()) {
       onResume={vi.fn()}
       onImportQuestions={vi.fn()}
       onRebuildIndex={vi.fn()}
+      loadFeishuAuthStatus={async () => ({ status: authStatus })}
+      loadFeishuAuthorizationUrl={async () => ({ authorizationUrl: "https://accounts.feishu.cn/test" })}
     />,
   );
 }
@@ -94,5 +96,10 @@ describe("TeacherResourcePanel", () => {
 
     expect(html).toContain('value="MARKDOWN_ASSETS"');
     expect(html).toContain("Markdown：下载图片到本地");
+  });
+
+  it("distinguishes a configured tenant bot from personal OAuth", async () => {
+    expect(feishuAuthStatusText("BOT_AUTHORIZED")).toBe("机器人已配置，可同步共享资料");
+    expect(feishuAuthStatusText("AUTHORIZED")).toBe("个人账号已绑定");
   });
 });

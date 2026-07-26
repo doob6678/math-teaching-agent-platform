@@ -38,7 +38,7 @@ class StudentExplanationImageStoreServiceTest {
         assertThat(response.contentType()).isEqualTo("image/png");
         assertThat(response.sizeBytes()).isEqualTo(3);
         assertThat(response.expiresAt()).isEqualTo(Instant.parse("2026-07-01T00:30:00Z"));
-        assertThat(response.imageStatus()).isEqualTo("image_uploaded_without_vision_analysis");
+        assertThat(response.imageStatus()).isEqualTo("image_uploaded_for_direct_context");
         assertThat(record.localPath()).exists();
         assertThat(record.localPath().toString()).contains("tenant-a").contains("student").contains("student-1");
     }

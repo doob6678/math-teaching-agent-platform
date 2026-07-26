@@ -1,0 +1,945 @@
+{
+  "startedAt": "2026-07-26T03:06:09.270388+00:00",
+  "model": "gpt-5.6-sol",
+  "mcp": {
+    "url": "http://127.0.0.1:8080/api/mcp",
+    "protocolVersion": "2025-11-25",
+    "keyId": "9bde9a12-c8eb-4adf-b3b2-ee25c138a650",
+    "exposedToolCount": 14,
+    "requiredToolsExposed": [
+      "export_multi_agent_writing_artifact",
+      "get_multi_agent_writing_artifact",
+      "get_multi_agent_writing_status",
+      "search_multi_source_evidence",
+      "start_multi_agent_writing"
+    ]
+  },
+  "turns": [
+    {
+      "turn": 1,
+      "modelLatencyMs": 5266,
+      "visibleText": "先检索 `teacher_resource` 中的“解三角形 向量 面积”，随后会把真实返回的证据引用传入写作流程。",
+      "toolCalls": [
+        {
+          "id": "call_v3lbKkFuhlXZLiZt6A4dYTle",
+          "name": "search_multi_source_evidence",
+          "arguments": {
+            "libraries": [
+              "teacher_resource"
+            ],
+            "query": "解三角形 向量 面积",
+            "limit": 10
+          },
+          "latencyMs": 802,
+          "result": {
+            "tool": "search_multi_source_evidence",
+            "isError": false,
+            "evidenceRefs": [
+              "TENANT_PUBLIC:2081199796528934914:2081207028050935810",
+              "TENANT_PUBLIC:2081199796528934914:2081207024708075522",
+              "TENANT_PUBLIC:2081199796528934914:2081207027870580737"
+            ],
+            "hitCount": 3,
+            "hits": [
+              {
+                "source": "teacher_resource",
+                "sourceType": "feishu",
+                "documentId": "2081199796528934914",
+                "blockId": "2081207028050935810",
+                "title": "GEcbf1b5SlQLE2dDiQuccUthnWb",
+                "evidenceRef": "TENANT_PUBLIC:2081199796528934914:2081207028050935810",
+                "imageAssetIds": [],
+                "assetRefs": []
+              },
+              {
+                "source": "teacher_resource",
+                "sourceType": "feishu",
+                "documentId": "2081199796528934914",
+                "blockId": "2081207024708075522",
+                "title": "GEcbf1b5SlQLE2dDiQuccUthnWb",
+                "evidenceRef": "TENANT_PUBLIC:2081199796528934914:2081207024708075522",
+                "imageAssetIds": [],
+                "assetRefs": []
+              },
+              {
+                "source": "teacher_resource",
+                "sourceType": "feishu",
+                "documentId": "2081199796528934914",
+                "blockId": "2081207027870580737",
+                "title": "GEcbf1b5SlQLE2dDiQuccUthnWb",
+                "evidenceRef": "TENANT_PUBLIC:2081199796528934914:2081207027870580737",
+                "imageAssetIds": [],
+                "assetRefs": []
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "turn": 2,
+      "modelLatencyMs": 15215,
+      "visibleText": "检索成功，得到 3 个 `evidenceRefs`。现在按指定 `openai / gpt-5.6-sol` 启动教师讲义多智能体写作。",
+      "toolCalls": [
+        {
+          "id": "call_Jk2E3xZCWNq6xsiYlGAY9nIm",
+          "name": "start_multi_agent_writing",
+          "arguments": {
+            "questionText": "解三角形 向量 面积",
+            "writingGoal": "教师讲义",
+            "evidenceRefs": [
+              "TENANT_PUBLIC:2081199796528934914:2081207028050935810",
+              "TENANT_PUBLIC:2081199796528934914:2081207024708075522",
+              "TENANT_PUBLIC:2081199796528934914:2081207027870580737"
+            ],
+            "preferredProviderName": "openai",
+            "preferredModelCode": "gpt-5.6-sol"
+          },
+          "latencyMs": 80,
+          "result": {
+            "tool": "start_multi_agent_writing",
+            "isError": false,
+            "status": "RUNNING",
+            "message": "Multi-agent writing workflow queued.",
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849",
+            "stageCount": 0
+          }
+        }
+      ]
+    },
+    {
+      "turn": 3,
+      "modelLatencyMs": 5244,
+      "visibleText": "工作流 `ad5b3e92-b748-4d16-885c-80adb737f849` 已进入运行状态，开始轮询直到完成。",
+      "toolCalls": [
+        {
+          "id": "call_fnjMZeYg26ZpB77BSZ7ZfBN2",
+          "name": "get_multi_agent_writing_status",
+          "arguments": {
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849"
+          },
+          "latencyMs": 45,
+          "result": {
+            "tool": "get_multi_agent_writing_status",
+            "isError": false,
+            "status": "RUNNING",
+            "message": "Multi-agent writing workflow queued.",
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849",
+            "stageCount": 0
+          }
+        }
+      ]
+    },
+    {
+      "turn": 4,
+      "modelLatencyMs": 7211,
+      "visibleText": "当前仍为 `RUNNING`，任务尚在队列中，继续查询状态。",
+      "toolCalls": [
+        {
+          "id": "call_3uXCWy2ZoasSk6lxefQ8lCay",
+          "name": "get_multi_agent_writing_status",
+          "arguments": {
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849"
+          },
+          "latencyMs": 45,
+          "result": {
+            "tool": "get_multi_agent_writing_status",
+            "isError": false,
+            "status": "RUNNING",
+            "message": "Multi-agent writing workflow queued.",
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849",
+            "stageCount": 0
+          }
+        }
+      ]
+    },
+    {
+      "turn": 5,
+      "modelLatencyMs": 5664,
+      "visibleText": "状态仍是 `RUNNING`，继续轮询。",
+      "toolCalls": [
+        {
+          "id": "call_HRucQJG2qcbyapfAECbaPJa7",
+          "name": "get_multi_agent_writing_status",
+          "arguments": {
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849"
+          },
+          "latencyMs": 37,
+          "result": {
+            "tool": "get_multi_agent_writing_status",
+            "isError": false,
+            "status": "RUNNING",
+            "message": "Multi-agent writing workflow queued.",
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849",
+            "stageCount": 0
+          }
+        }
+      ]
+    },
+    {
+      "turn": 6,
+      "modelLatencyMs": 7598,
+      "visibleText": "尚未完成，后端仍显示已排队；按验收要求继续调用状态工具。",
+      "toolCalls": [
+        {
+          "id": "call_76NomTjQ2EglcvYbHAkDvZPm",
+          "name": "get_multi_agent_writing_status",
+          "arguments": {
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849"
+          },
+          "latencyMs": 50,
+          "result": {
+            "tool": "get_multi_agent_writing_status",
+            "isError": false,
+            "status": "RUNNING",
+            "message": "Multi-agent writing workflow queued.",
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849",
+            "stageCount": 0
+          }
+        }
+      ]
+    },
+    {
+      "turn": 7,
+      "modelLatencyMs": 11747,
+      "visibleText": "当前仍为 `RUNNING`，继续等待后端调度并轮询。",
+      "toolCalls": [
+        {
+          "id": "call_J5VAvn5i63mRIp1LSCIUuPsu",
+          "name": "get_multi_agent_writing_status",
+          "arguments": {
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849"
+          },
+          "latencyMs": 52,
+          "result": {
+            "tool": "get_multi_agent_writing_status",
+            "isError": false,
+            "status": "RUNNING",
+            "message": "Multi-agent writing workflow queued.",
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849",
+            "stageCount": 0
+          }
+        }
+      ]
+    },
+    {
+      "turn": 8,
+      "modelLatencyMs": 9723,
+      "visibleText": "状态没有变化，仍处于队列运行态；继续查询，不提前读取或导出。",
+      "toolCalls": [
+        {
+          "id": "call_pw561LSfK5QWb15PXhXBRrih",
+          "name": "get_multi_agent_writing_status",
+          "arguments": {
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849"
+          },
+          "latencyMs": 32,
+          "result": {
+            "tool": "get_multi_agent_writing_status",
+            "isError": false,
+            "status": "RUNNING",
+            "message": "Multi-agent writing workflow queued.",
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849",
+            "stageCount": 0
+          }
+        }
+      ]
+    },
+    {
+      "turn": 9,
+      "modelLatencyMs": 6649,
+      "visibleText": "工作流依然为 `RUNNING`，继续轮询真实状态。",
+      "toolCalls": [
+        {
+          "id": "call_Qgx147m1OkYBAvEYK9fIK6oT",
+          "name": "get_multi_agent_writing_status",
+          "arguments": {
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849"
+          },
+          "latencyMs": 29,
+          "result": {
+            "tool": "get_multi_agent_writing_status",
+            "isError": false,
+            "status": "RUNNING",
+            "message": "Multi-agent writing workflow queued.",
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849",
+            "stageCount": 0
+          }
+        }
+      ]
+    },
+    {
+      "turn": 10,
+      "modelLatencyMs": 5042,
+      "visibleText": "后端仍未开始具体阶段，状态保持 `RUNNING`；继续按要求轮询。",
+      "toolCalls": [
+        {
+          "id": "call_GrV0qhcicogitgJugRIbn9ds",
+          "name": "get_multi_agent_writing_status",
+          "arguments": {
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849"
+          },
+          "latencyMs": 37,
+          "result": {
+            "tool": "get_multi_agent_writing_status",
+            "isError": false,
+            "status": "RUNNING",
+            "message": "Multi-agent writing workflow queued.",
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849",
+            "stageCount": 0
+          }
+        }
+      ]
+    },
+    {
+      "turn": 11,
+      "modelLatencyMs": 10393,
+      "visibleText": "仍在运行队列中，继续查询状态直到出现 `COMPLETED`。",
+      "toolCalls": [
+        {
+          "id": "call_tX3w8pEiyqMJ6oO3RVJUSPGM",
+          "name": "get_multi_agent_writing_status",
+          "arguments": {
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849"
+          },
+          "latencyMs": 37,
+          "result": {
+            "tool": "get_multi_agent_writing_status",
+            "isError": false,
+            "status": "RUNNING",
+            "message": "Multi-agent writing workflow queued.",
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849",
+            "stageCount": 0
+          }
+        }
+      ]
+    },
+    {
+      "turn": 12,
+      "modelLatencyMs": 4887,
+      "visibleText": "当前状态仍为 `RUNNING`，未生成可读取产物，继续轮询。",
+      "toolCalls": [
+        {
+          "id": "call_EFfLrRnTJxNlVYbik1RrvpO9",
+          "name": "get_multi_agent_writing_status",
+          "arguments": {
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849"
+          },
+          "latencyMs": 35,
+          "result": {
+            "tool": "get_multi_agent_writing_status",
+            "isError": false,
+            "status": "RUNNING",
+            "message": "Multi-agent writing workflow queued.",
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849",
+            "stageCount": 0
+          }
+        }
+      ]
+    },
+    {
+      "turn": 13,
+      "modelLatencyMs": 5706,
+      "visibleText": "后端更新时间尚未推进，任务仍在队列；继续调用状态工具。",
+      "toolCalls": [
+        {
+          "id": "call_kt4iR7pqpAlybHVOY9G4l27C",
+          "name": "get_multi_agent_writing_status",
+          "arguments": {
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849"
+          },
+          "latencyMs": 37,
+          "result": {
+            "tool": "get_multi_agent_writing_status",
+            "isError": false,
+            "status": "RUNNING",
+            "message": "Multi-agent writing workflow queued.",
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849",
+            "stageCount": 0
+          }
+        }
+      ]
+    },
+    {
+      "turn": 14,
+      "modelLatencyMs": 7252,
+      "visibleText": "状态仍是 `RUNNING`，继续等待工作流完成。",
+      "toolCalls": [
+        {
+          "id": "call_oP9LODwpHSQCoawZzNgIJWow",
+          "name": "get_multi_agent_writing_status",
+          "arguments": {
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849"
+          },
+          "latencyMs": 40,
+          "result": {
+            "tool": "get_multi_agent_writing_status",
+            "isError": false,
+            "status": "RUNNING",
+            "message": "Multi-agent writing workflow queued.",
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849",
+            "stageCount": 0
+          }
+        }
+      ]
+    },
+    {
+      "turn": 15,
+      "modelLatencyMs": 7251,
+      "visibleText": "任务仍显示已排队且没有阶段记录，继续轮询同一工作流。",
+      "toolCalls": [
+        {
+          "id": "call_iuP8Jh4v7rgH6QpMxdL70TA2",
+          "name": "get_multi_agent_writing_status",
+          "arguments": {
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849"
+          },
+          "latencyMs": 35,
+          "result": {
+            "tool": "get_multi_agent_writing_status",
+            "isError": false,
+            "status": "RUNNING",
+            "message": "Multi-agent writing workflow queued.",
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849",
+            "stageCount": 0
+          }
+        }
+      ]
+    },
+    {
+      "turn": 16,
+      "modelLatencyMs": 7686,
+      "visibleText": "当前仍未完成，继续查询；完成后才会依次读取 artifact 并导出 Markdown。",
+      "toolCalls": [
+        {
+          "id": "call_GDGBh1PBN48T0wl9ENQfunB9",
+          "name": "get_multi_agent_writing_status",
+          "arguments": {
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849"
+          },
+          "latencyMs": 29,
+          "result": {
+            "tool": "get_multi_agent_writing_status",
+            "isError": false,
+            "status": "RUNNING",
+            "message": "Multi-agent writing workflow queued.",
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849",
+            "stageCount": 0
+          }
+        }
+      ]
+    },
+    {
+      "turn": 17,
+      "modelLatencyMs": 6738,
+      "visibleText": "工作流保持 `RUNNING`，后端尚未分配阶段；继续按原工作流 ID 轮询。",
+      "toolCalls": [
+        {
+          "id": "call_CQrpiqGueihdtXILZ8pWNEZL",
+          "name": "get_multi_agent_writing_status",
+          "arguments": {
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849"
+          },
+          "latencyMs": 60,
+          "result": {
+            "tool": "get_multi_agent_writing_status",
+            "isError": false,
+            "status": "RUNNING",
+            "message": "Multi-agent writing workflow queued.",
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849",
+            "stageCount": 0
+          }
+        }
+      ]
+    },
+    {
+      "turn": 18,
+      "modelLatencyMs": 5991,
+      "visibleText": "状态依旧没有变化，继续轮询真实后端结果。",
+      "toolCalls": [
+        {
+          "id": "call_9fRX9SZCOBqsOKLRxxlCN5wR",
+          "name": "get_multi_agent_writing_status",
+          "arguments": {
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849"
+          },
+          "latencyMs": 29,
+          "result": {
+            "tool": "get_multi_agent_writing_status",
+            "isError": false,
+            "status": "RUNNING",
+            "message": "Multi-agent writing workflow queued.",
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849",
+            "stageCount": 0
+          }
+        }
+      ]
+    },
+    {
+      "turn": 19,
+      "modelLatencyMs": 4649,
+      "visibleText": "任务仍为 `RUNNING` 且处于 queued 状态，继续查询，不跳过完成条件。",
+      "toolCalls": [
+        {
+          "id": "call_Lkft9FVcp2OSg8tPO77EMKwX",
+          "name": "get_multi_agent_writing_status",
+          "arguments": {
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849"
+          },
+          "latencyMs": 32,
+          "result": {
+            "tool": "get_multi_agent_writing_status",
+            "isError": false,
+            "status": "RUNNING",
+            "message": "Multi-agent writing workflow queued.",
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849",
+            "stageCount": 0
+          }
+        }
+      ]
+    },
+    {
+      "turn": 20,
+      "modelLatencyMs": 9218,
+      "visibleText": "后端仍返回同一运行态，继续轮询该工作流。",
+      "toolCalls": [
+        {
+          "id": "call_TWcLSQi7qjCFhhDFd68qTg2q",
+          "name": "get_multi_agent_writing_status",
+          "arguments": {
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849"
+          },
+          "latencyMs": 56,
+          "result": {
+            "tool": "get_multi_agent_writing_status",
+            "isError": false,
+            "status": "RUNNING",
+            "message": "Multi-agent writing workflow queued.",
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849",
+            "stageCount": 0
+          }
+        }
+      ]
+    },
+    {
+      "turn": 21,
+      "modelLatencyMs": 7814,
+      "visibleText": "工作流尚未进入生成阶段，状态仍为 `RUNNING`；继续调用状态工具等待完成。",
+      "toolCalls": [
+        {
+          "id": "call_8HX70cYdhqQzvtJBBV7yosBg",
+          "name": "get_multi_agent_writing_status",
+          "arguments": {
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849"
+          },
+          "latencyMs": 34,
+          "result": {
+            "tool": "get_multi_agent_writing_status",
+            "isError": false,
+            "status": "RUNNING",
+            "message": "Multi-agent writing workflow queued.",
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849",
+            "stageCount": 0
+          }
+        }
+      ]
+    },
+    {
+      "turn": 22,
+      "modelLatencyMs": 7000,
+      "visibleText": "仍处于 queued 的 `RUNNING` 状态，尚不满足读取产物条件；继续轮询。",
+      "toolCalls": [
+        {
+          "id": "call_j04OsyHS7AFYESu8Vs6N4yQ2",
+          "name": "get_multi_agent_writing_status",
+          "arguments": {
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849"
+          },
+          "latencyMs": 39,
+          "result": {
+            "tool": "get_multi_agent_writing_status",
+            "isError": false,
+            "status": "RUNNING",
+            "message": "Multi-agent writing workflow queued.",
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849",
+            "stageCount": 0
+          }
+        }
+      ]
+    },
+    {
+      "turn": 23,
+      "modelLatencyMs": 7990,
+      "visibleText": "状态与更新时间仍未变化，后端任务保持排队运行；继续查询同一工作流直至终态。",
+      "toolCalls": [
+        {
+          "id": "call_Ih7SkBZtlQ485RIBMRLJAQpH",
+          "name": "get_multi_agent_writing_status",
+          "arguments": {
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849"
+          },
+          "latencyMs": 46,
+          "result": {
+            "tool": "get_multi_agent_writing_status",
+            "isError": false,
+            "status": "RUNNING",
+            "message": "Multi-agent writing workflow queued.",
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849",
+            "stageCount": 0
+          }
+        }
+      ]
+    },
+    {
+      "turn": 24,
+      "modelLatencyMs": 8415,
+      "visibleText": "该工作流仍返回 `RUNNING`，`stageCount=0`；继续轮询，不另起任务以免偏离指定验收链路。",
+      "toolCalls": [
+        {
+          "id": "call_iB8kd4NT2dzVs7fHbxcFprR3",
+          "name": "get_multi_agent_writing_status",
+          "arguments": {
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849"
+          },
+          "latencyMs": 64,
+          "result": {
+            "tool": "get_multi_agent_writing_status",
+            "isError": false,
+            "status": "RUNNING",
+            "message": "Multi-agent writing workflow queued.",
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849",
+            "stageCount": 0
+          }
+        }
+      ]
+    },
+    {
+      "turn": 25,
+      "modelLatencyMs": 16313,
+      "visibleText": "后端仍未调度具体阶段，继续按验收要求轮询 `ad5b3e92-b748-4d16-885c-80adb737f849`。",
+      "toolCalls": [
+        {
+          "id": "call_VepuymoDeppaVg7OH35KVNLu",
+          "name": "get_multi_agent_writing_status",
+          "arguments": {
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849"
+          },
+          "latencyMs": 56,
+          "result": {
+            "tool": "get_multi_agent_writing_status",
+            "isError": false,
+            "status": "RUNNING",
+            "message": "Multi-agent writing workflow queued.",
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849",
+            "stageCount": 0
+          }
+        }
+      ]
+    },
+    {
+      "turn": 26,
+      "modelLatencyMs": 8534,
+      "visibleText": "当前仍为 `RUNNING/queued`，没有产物可读；继续状态轮询。",
+      "toolCalls": [
+        {
+          "id": "call_2XZxwmc9umDlvylm9147o3Z0",
+          "name": "get_multi_agent_writing_status",
+          "arguments": {
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849"
+          },
+          "latencyMs": 39,
+          "result": {
+            "tool": "get_multi_agent_writing_status",
+            "isError": false,
+            "status": "RUNNING",
+            "message": "Multi-agent writing workflow queued.",
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849",
+            "stageCount": 0
+          }
+        }
+      ]
+    },
+    {
+      "turn": 27,
+      "modelLatencyMs": 8250,
+      "visibleText": "工作流状态未推进，仍是 `RUNNING` 且 `stageCount=0`。我继续查询真实后端状态，只有完成后才执行 artifact 读取和 Markdown 导出。",
+      "toolCalls": [
+        {
+          "id": "call_UXtgOoucpAdzKcHgxQ58FT1f",
+          "name": "get_multi_agent_writing_status",
+          "arguments": {
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849"
+          },
+          "latencyMs": 45,
+          "result": {
+            "tool": "get_multi_agent_writing_status",
+            "isError": false,
+            "status": "RUNNING",
+            "message": "Multi-agent writing workflow queued.",
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849",
+            "stageCount": 0
+          }
+        }
+      ]
+    },
+    {
+      "turn": 28,
+      "modelLatencyMs": 7204,
+      "visibleText": "后端持续返回已排队状态，继续轮询同一任务。",
+      "toolCalls": [
+        {
+          "id": "call_UxCppNpcSfBkXyVhVz2caWCk",
+          "name": "get_multi_agent_writing_status",
+          "arguments": {
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849"
+          },
+          "latencyMs": 38,
+          "result": {
+            "tool": "get_multi_agent_writing_status",
+            "isError": false,
+            "status": "RUNNING",
+            "message": "Multi-agent writing workflow queued.",
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849",
+            "stageCount": 0
+          }
+        }
+      ]
+    },
+    {
+      "turn": 29,
+      "modelLatencyMs": 9188,
+      "visibleText": "任务仍未完成，状态和更新时间均未变化；继续调用状态工具。",
+      "toolCalls": [
+        {
+          "id": "call_fSWxyAfbQnx5PLdskFxEx8gO",
+          "name": "get_multi_agent_writing_status",
+          "arguments": {
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849"
+          },
+          "latencyMs": 62,
+          "result": {
+            "tool": "get_multi_agent_writing_status",
+            "isError": false,
+            "status": "RUNNING",
+            "message": "Multi-agent writing workflow queued.",
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849",
+            "stageCount": 0
+          }
+        }
+      ]
+    },
+    {
+      "turn": 30,
+      "modelLatencyMs": 7317,
+      "visibleText": "当前依然是 `RUNNING/queued`，继续轮询，不编造完成结果。",
+      "toolCalls": [
+        {
+          "id": "call_u9Bd3E1E2BSEZ5AOUIWPYYyB",
+          "name": "get_multi_agent_writing_status",
+          "arguments": {
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849"
+          },
+          "latencyMs": 41,
+          "result": {
+            "tool": "get_multi_agent_writing_status",
+            "isError": false,
+            "status": "RUNNING",
+            "message": "Multi-agent writing workflow queued.",
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849",
+            "stageCount": 0
+          }
+        }
+      ]
+    },
+    {
+      "turn": 31,
+      "modelLatencyMs": 5689,
+      "visibleText": "后端仍未产生阶段或 token 使用记录，任务保持运行队列状态；继续查询。",
+      "toolCalls": [
+        {
+          "id": "call_1GD7ibwn57ecwYCOi3fDjWtb",
+          "name": "get_multi_agent_writing_status",
+          "arguments": {
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849"
+          },
+          "latencyMs": 35,
+          "result": {
+            "tool": "get_multi_agent_writing_status",
+            "isError": false,
+            "status": "RUNNING",
+            "message": "Multi-agent writing workflow queued.",
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849",
+            "stageCount": 0
+          }
+        }
+      ]
+    },
+    {
+      "turn": 32,
+      "modelLatencyMs": 7715,
+      "visibleText": "状态仍为 `RUNNING`，继续轮询完成条件。",
+      "toolCalls": [
+        {
+          "id": "call_ssrEicVcu4SSx3jE6sOrrY8E",
+          "name": "get_multi_agent_writing_status",
+          "arguments": {
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849"
+          },
+          "latencyMs": 38,
+          "result": {
+            "tool": "get_multi_agent_writing_status",
+            "isError": false,
+            "status": "RUNNING",
+            "message": "Multi-agent writing workflow queued.",
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849",
+            "stageCount": 0
+          }
+        }
+      ]
+    },
+    {
+      "turn": 33,
+      "modelLatencyMs": 20215,
+      "visibleText": "该任务仍处于后端队列，`updatedAt` 未变化。继续轮询原工作流，避免重复启动造成验收链路分叉。",
+      "toolCalls": [
+        {
+          "id": "call_2GuYLGqqvB4ciUzdim4bpyFY",
+          "name": "get_multi_agent_writing_status",
+          "arguments": {
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849"
+          },
+          "latencyMs": 49,
+          "result": {
+            "tool": "get_multi_agent_writing_status",
+            "isError": false,
+            "status": "RUNNING",
+            "message": "Multi-agent writing workflow queued.",
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849",
+            "stageCount": 0
+          }
+        }
+      ]
+    },
+    {
+      "turn": 34,
+      "modelLatencyMs": 6240,
+      "visibleText": "仍是 `RUNNING/queued`，继续调用状态接口直到后端返回完成。",
+      "toolCalls": [
+        {
+          "id": "call_kEol7BcK2OziA8ZPfcZLDCh6",
+          "name": "get_multi_agent_writing_status",
+          "arguments": {
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849"
+          },
+          "latencyMs": 42,
+          "result": {
+            "tool": "get_multi_agent_writing_status",
+            "isError": false,
+            "status": "RUNNING",
+            "message": "Multi-agent writing workflow queued.",
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849",
+            "stageCount": 0
+          }
+        }
+      ]
+    },
+    {
+      "turn": 35,
+      "modelLatencyMs": 7956,
+      "visibleText": "后端没有状态推进，任务尚不能读取 artifact；继续轮询。",
+      "toolCalls": [
+        {
+          "id": "call_K1OiZvfGw5ilVXPly2JS0p1t",
+          "name": "get_multi_agent_writing_status",
+          "arguments": {
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849"
+          },
+          "latencyMs": 43,
+          "result": {
+            "tool": "get_multi_agent_writing_status",
+            "isError": false,
+            "status": "RUNNING",
+            "message": "Multi-agent writing workflow queued.",
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849",
+            "stageCount": 0
+          }
+        }
+      ]
+    },
+    {
+      "turn": 36,
+      "modelLatencyMs": 5210,
+      "visibleText": "工作流依然为 `RUNNING`，且仍无阶段执行记录；继续查询同一 ID。",
+      "toolCalls": [
+        {
+          "id": "call_3bRs9EZBFpY3KW8vEYOeorb0",
+          "name": "get_multi_agent_writing_status",
+          "arguments": {
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849"
+          },
+          "latencyMs": 33,
+          "result": {
+            "tool": "get_multi_agent_writing_status",
+            "isError": false,
+            "status": "RUNNING",
+            "message": "Multi-agent writing workflow queued.",
+            "workflowId": "ad5b3e92-b748-4d16-885c-80adb737f849",
+            "stageCount": 0
+          }
+        }
+      ]
+    }
+  ],
+  "exports": [],
+  "completedAt": "2026-07-26T03:12:43.772572+00:00",
+  "status": "failed",
+  "calledTools": [
+    "search_multi_source_evidence",
+    "start_multi_agent_writing",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status",
+    "get_multi_agent_writing_status"
+  ],
+  "missingRequiredCalls": [
+    "export_multi_agent_writing_artifact",
+    "get_multi_agent_writing_artifact"
+  ],
+  "modelUsage": {
+    "prompt_tokens": 440669,
+    "completion_tokens": 3289,
+    "total_tokens": 443958
+  },
+  "finalVisibleText": "",
+  "loopExhausted": true
+}

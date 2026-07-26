@@ -91,7 +91,6 @@ export interface TextbookSearchResponse {
   /** 命中的教材证据列表。 */
   hits: TextbookSearchHit[];
 }
-
 /** User-visible execution state returned by the textbook RAG backend. */
 export interface TextbookRetrievalStage {
   code: string;
@@ -1622,11 +1621,11 @@ export interface StudentKnowledgeEvidenceLink {
 export interface StudentExplanationRequest {
   /** Durable conversation id returned by a previous explanation response. */
   conversationId?: string;
-  /** Question text typed by the student or produced by a real OCR/vision step. */
+  /** Optional question text typed by the student; an uploaded original image is sent directly to the AI model. */
   questionText?: string;
   /** Backend-issued temporary upload id from the real image upload endpoint. */
   imageUploadId?: string;
-  /** Optional image file name; this is metadata only unless OCR is configured on the backend. */
+  /** Optional image file name; this is display metadata only. */
   imageFileName?: string;
   /** Optional image MIME type. */
   imageContentType?: string;
@@ -1660,7 +1659,7 @@ export interface StudentExplanationImageUploadResponse {
   sizeBytes: number;
   /** Backend expiration timestamp for the temporary file. */
   expiresAt: string;
-  /** Explicit status; upload does not mean OCR has run. */
+  /** Explicit status; upload stores the original for direct multimodal context and performs no standalone OCR. */
   imageStatus: string;
 }
 
@@ -2763,22 +2762,6 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
   }
 
   /**
-   * Compatibility shim for callers that still assemble the former capability headers.
-   *
-   * Authorization now comes exclusively from the authenticated backend session. No network request is made and
-   * no credential is minted; backend endpoints independently enforce role, tenant, owner and resource visibility.
-   */
-  function applyCapability(
-    _action: string,
-    _path: string,
-    _body: string,
-    _idempotencyKey: string,
-    _maxCost = 1,
-  ): Promise<CapabilityTokenResponse> {
-    return Promise.resolve({ token: "", action: "", path: "", requestHash: "", expiresAt: "" });
-  }
-
-  /**
    * Sends one standard MCP JSON-RPC request to an absolute MCP URL without platform session headers.
    */
   async function requestMcpJsonRpc(url: string, secretKey: string, body: unknown): Promise<{
@@ -2896,20 +2879,9 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
      */
     async submitTeachingTask(request: TeachingTaskRequest): Promise<TeachingTaskResponse> {
       const body = JSON.stringify(request);
-      const capability = await applyCapability(
-        "teaching:submit",
-        "/api/teaching/tasks",
-        body,
-        request.clientRequestId,
-        Math.max(0, request.evidenceLimit),
-      );
       return requestJson<TeachingTaskResponse>("/api/teaching/tasks", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Capability-Token": capability.token,
-          "X-Request-Hash": capability.requestHash,
-        },
+        headers: { "Content-Type": "application/json" },
         body,
       });
     },
@@ -2918,23 +2890,13 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
      * 按 taskId 读取教学任务结果，用于页面恢复和轮询。
      */
     /**
-     * Stores a student memory entry after applying a capability token for the exact request body.
+     * Stores a student memory entry under the authenticated backend subject.
      */
     async rememberStudentMemory(request: StudentMemoryRequest): Promise<StudentMemoryResponse> {
       const body = JSON.stringify(request);
-      const capability = await applyCapability(
-        "student-memory:remember",
-        "/api/students/memory/remember",
-        body,
-        `student-memory-remember:${request.knowledgePointName ?? "general"}:${request.questionText}`,
-      );
       return requestJson<StudentMemoryResponse>("/api/students/memory/remember", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Capability-Token": capability.token,
-          "X-Request-Hash": capability.requestHash,
-        },
+        headers: { "Content-Type": "application/json" },
         body,
       });
     },
@@ -2946,19 +2908,7 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     /** Resumes one owned failed task without creating a new generation request. */
     async resumeTeachingTask(taskId: string): Promise<TeachingTaskResponse> {
       const path = `/api/teaching/tasks/${encodeURIComponent(taskId)}/resume`;
-      const capability = await applyCapability(
-        "teaching:resume",
-        path,
-        "",
-        `teaching-task-resume:${taskId}`,
-      );
-      return requestJson<TeachingTaskResponse>(path, {
-        method: "POST",
-        headers: {
-          "X-Capability-Token": capability.token,
-          "X-Request-Hash": capability.requestHash,
-        },
-      });
+      return requestJson<TeachingTaskResponse>(path, { method: "POST" });
     },
 
     /**
@@ -2987,19 +2937,9 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     ): Promise<TeachingTaskResponse> {
       const path = `/api/teaching/tasks/${encodeURIComponent(taskId)}/handout/${version}`;
       const body = JSON.stringify({ latex });
-      const capability = await applyCapability(
-        "teaching-handout:update",
-        path,
-        body,
-        `teaching-handout-update:${taskId}:${version}`,
-      );
       return requestJson<TeachingTaskResponse>(path, {
         method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Capability-Token": capability.token,
-          "X-Request-Hash": capability.requestHash,
-        },
+        headers: { "Content-Type": "application/json" },
         body,
       });
     },
@@ -3023,67 +2963,30 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
      * 读取学生学习画像。默认使用本地学生身份，避免学生面板误带教师权限。
      */
     /**
-     * Downloads the LaTeX handout for a teaching task after applying a one-time capability token.
+     * Downloads the LaTeX handout for an owned teaching task.
      */
     async exportTeachingTaskLatex(taskId: string, version: TeachingHandoutVersion = "teacher"): Promise<string> {
       const encodedTaskId = encodeURIComponent(taskId);
       const path = `/api/teaching/tasks/${encodedTaskId}/handout/${version}/latex`;
-      const capability = await applyCapability(
-        "teaching-handout:export-latex",
-        path,
-        "",
-        `teaching-handout-export-latex:${taskId}:${version}`,
-      );
-      return requestText(path, {
-        method: "GET",
-        headers: {
-          "X-Capability-Token": capability.token,
-          "X-Request-Hash": capability.requestHash,
-        },
-      });
+      return requestText(path, { method: "GET" });
     },
 
     /**
-     * Loads LaTeX handout source for inline frontend preview with a separate capability audit action.
+     * Loads LaTeX handout source for inline frontend preview.
      */
     async previewTeachingTaskLatex(taskId: string, version: TeachingHandoutVersion = "teacher"): Promise<string> {
       const encodedTaskId = encodeURIComponent(taskId);
       const path = `/api/teaching/tasks/${encodedTaskId}/handout/${version}/latex/preview`;
-      const capability = await applyCapability(
-        "teaching-handout:preview-latex",
-        path,
-        "",
-        `teaching-handout-preview-latex:${taskId}:${version}`,
-      );
-      return requestText(path, {
-        method: "GET",
-        headers: {
-          "X-Capability-Token": capability.token,
-          "X-Request-Hash": capability.requestHash,
-        },
-      });
+      return requestText(path, { method: "GET" });
     },
 
     /**
-     * Downloads the PDF handout for a teaching task after applying a one-time capability token.
+     * Downloads the PDF handout for an owned teaching task.
      */
     async exportTeachingTaskPdf(taskId: string, version: TeachingHandoutVersion = "teacher"): Promise<TeachingHandoutPdfResponse> {
       const encodedTaskId = encodeURIComponent(taskId);
       const path = `/api/teaching/tasks/${encodedTaskId}/handout/${version}/pdf`;
-      const capability = await applyCapability(
-        "teaching-handout:export-pdf",
-        path,
-        "",
-        `teaching-handout-export-pdf:${taskId}:${version}`,
-        2,
-      );
-      const response = await requestBytesWithHeaders(path, {
-        method: "GET",
-        headers: {
-          "X-Capability-Token": capability.token,
-          "X-Request-Hash": capability.requestHash,
-        },
-      });
+      const response = await requestBytesWithHeaders(path, { method: "GET" });
       return {
         bytes: response.bytes,
         renderer: response.headers.get("X-Handout-Renderer") ?? "",
@@ -3092,25 +2995,12 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     },
 
     /**
-     * Loads the PDF handout for inline frontend preview after applying a preview-specific capability token.
+     * Loads the PDF handout for inline frontend preview.
      */
     async previewTeachingTaskPdf(taskId: string, version: TeachingHandoutVersion = "teacher"): Promise<TeachingHandoutPdfResponse> {
       const encodedTaskId = encodeURIComponent(taskId);
       const path = `/api/teaching/tasks/${encodedTaskId}/handout/${version}/pdf/preview`;
-      const capability = await applyCapability(
-        "teaching-handout:preview-pdf",
-        path,
-        "",
-        `teaching-handout-preview-pdf:${taskId}:${version}`,
-        2,
-      );
-      const response = await requestBytesWithHeaders(path, {
-        method: "GET",
-        headers: {
-          "X-Capability-Token": capability.token,
-          "X-Request-Hash": capability.requestHash,
-        },
-      });
+      const response = await requestBytesWithHeaders(path, { method: "GET" });
       return {
         bytes: response.bytes,
         renderer: response.headers.get("X-Handout-Renderer") ?? "",
@@ -3126,50 +3016,23 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     ): Promise<TeachingHandoutBatchExportResponse> {
       const body = JSON.stringify(request);
       const path = "/api/teaching/handouts/batch/zip";
-      const idempotencyKey = `teaching-handout-batch-export-zip:${(request.folderIds ?? []).join(",")}:${(
-        request.folderPaths ?? []
-      ).join(",")}:${request.taskIds.join(",")}`;
-      const capability = await applyCapability(
-        "teaching-handout:batch-export-zip",
-        path,
-        body,
-        idempotencyKey,
-        Math.max(1, request.taskIds.length),
-      );
       return requestJson<TeachingHandoutBatchExportResponse>(path, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Capability-Token": capability.token,
-          "X-Request-Hash": capability.requestHash,
-        },
+        headers: { "Content-Type": "application/json" },
         body,
       });
     },
 
     /**
-     * Downloads a temporary handout ZIP after applying a download-specific capability token.
+     * Downloads a temporary handout ZIP.
      */
     async downloadTeachingHandoutBatchZip(batchId: string): Promise<Uint8Array> {
       const path = `/api/teaching/handouts/batch/zip/${encodeURIComponent(batchId)}/download`;
-      const capability = await applyCapability(
-        "teaching-handout:batch-download-zip",
-        path,
-        "",
-        `teaching-handout-batch-download-zip:${batchId}`,
-        2,
-      );
-      return requestBytes(path, {
-        method: "GET",
-        headers: {
-          "X-Capability-Token": capability.token,
-          "X-Request-Hash": capability.requestHash,
-        },
-      });
+      return requestBytes(path, { method: "GET" });
     },
 
     /**
-     * Submits human feedback for an owned teaching task after applying a one-time capability token.
+     * Submits human feedback for an owned teaching task.
      */
     async submitTeachingHumanFeedback(
       taskId: string,
@@ -3177,19 +3040,9 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     ): Promise<TeachingHumanFeedbackResponse> {
       const body = JSON.stringify(request);
       const path = `/api/teaching/tasks/${encodeURIComponent(taskId)}/feedback`;
-      const capability = await applyCapability(
-        "teaching-feedback:submit",
-        path,
-        body,
-        `teaching-feedback-submit:${taskId}:${request.decision}`,
-      );
       return requestJson<TeachingHumanFeedbackResponse>(path, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Capability-Token": capability.token,
-          "X-Request-Hash": capability.requestHash,
-        },
+        headers: { "Content-Type": "application/json" },
         body,
       });
     },
@@ -3236,50 +3089,27 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     },
 
     /**
-     * Executes a planned AI agent run. High-value runs first acquire a one-time capability token.
+     * Executes a planned AI agent run under the authenticated backend subject.
      */
     async executeAgentRun(request: AgentRunExecuteRequest): Promise<AgentRunExecuteResponse> {
       const body = JSON.stringify(request);
       const path = "/api/agents/execute";
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (request.plan.capabilityRequired) {
-        const capability = await applyCapability(
-          request.plan.capabilityAction || `agent-run:${request.plan.agentCode}`,
-          path,
-          body,
-          `agent-run:${request.plan.planId}`,
-          Math.max(1, Math.ceil(request.plan.estimatedCost)),
-        );
-        headers["X-Capability-Token"] = capability.token;
-        headers["X-Request-Hash"] = capability.requestHash;
-      }
       return requestJson<AgentRunExecuteResponse>(path, {
         method: "POST",
-        headers,
+        headers: { "Content-Type": "application/json" },
         body,
       });
     },
 
     /**
-     * Runs protected multi-agent writing after acquiring a one-time capability token.
+     * Runs multi-agent writing under backend RBAC and resource visibility policy.
      */
     async runMultiAgentWriting(request: MultiAgentWritingRequest): Promise<MultiAgentWritingResponse> {
       const body = JSON.stringify(request);
       const path = "/api/agents/writing";
-      const capability = await applyCapability(
-        "agent-writing:run",
-        path,
-        body,
-        `multi-agent-writing:${request.writingGoal}:${request.questionText}`,
-        3,
-      );
       return requestJson<MultiAgentWritingResponse>(path, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Capability-Token": capability.token,
-          "X-Request-Hash": capability.requestHash,
-        },
+        headers: { "Content-Type": "application/json" },
         body,
       });
     },
@@ -3290,20 +3120,9 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     async startAsyncMultiAgentWriting(request: MultiAgentWritingRequest): Promise<MultiAgentWritingResponse> {
       const body = JSON.stringify(request);
       const path = "/api/agents/writing/async";
-      const capability = await applyCapability(
-        "agent-writing:run",
-        path,
-        body,
-        `multi-agent-writing-async:${request.writingGoal}:${request.questionText}`,
-        3,
-      );
       return requestJson<MultiAgentWritingResponse>(path, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Capability-Token": capability.token,
-          "X-Request-Hash": capability.requestHash,
-        },
+        headers: { "Content-Type": "application/json" },
         body,
       });
     },
@@ -3318,20 +3137,9 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
       const encodedWorkflowId = encodeURIComponent(workflowId);
       const path = `/api/agents/writing/${encodedWorkflowId}/resume`;
       const body = JSON.stringify({ workflowId, ...request });
-      const capability = await applyCapability(
-        "agent-writing:resume",
-        path,
-        body,
-        `multi-agent-writing-resume:${workflowId}:${request.writingGoal}:${request.questionText}`,
-        3,
-      );
       return requestJson<MultiAgentWritingResponse>(path, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Capability-Token": capability.token,
-          "X-Request-Hash": capability.requestHash,
-        },
+        headers: { "Content-Type": "application/json" },
         body,
       });
     },
@@ -3573,20 +3381,9 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
 
     async submitTargetedLearningHandout(request: TargetedLearningHandoutRequest): Promise<TeachingTaskResponse> {
       const body = JSON.stringify(request);
-      const capability = await applyCapability(
-        "teaching:targeted-handout",
-        "/api/teachers/learning/handout",
-        body,
-        request.clientRequestId,
-        Math.max(1, request.evidenceLimit),
-      );
       return requestJson<TeachingTaskResponse>("/api/teachers/learning/handout", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Capability-Token": capability.token,
-          "X-Request-Hash": capability.requestHash,
-        },
+        headers: { "Content-Type": "application/json" },
         body,
       });
     },
@@ -3668,19 +3465,7 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
       }
       const suffix = params.size > 0 ? `?${params.toString()}` : "";
       const path = `/api/students/dashboard/refresh${suffix}`;
-      const capability = await applyCapability(
-        "student-dashboard:refresh",
-        "/api/students/dashboard/refresh",
-        "",
-        `student-dashboard-refresh:${studentId ?? "self"}`,
-      );
-      return requestJson<StudentDashboardResponse>(path, {
-        method: "POST",
-        headers: {
-          "X-Capability-Token": capability.token,
-          "X-Request-Hash": capability.requestHash,
-        },
-      });
+      return requestJson<StudentDashboardResponse>(path, { method: "POST" });
     },
 
     listKnowledgePoints(): Promise<KnowledgePointResponse[]> {
@@ -3697,38 +3482,18 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
 
     async createKnowledgePoint(request: KnowledgePointCreateRequest): Promise<KnowledgePointResponse> {
       const body = JSON.stringify(request);
-      const capability = await applyCapability(
-        "knowledge-point:create",
-        "/api/knowledge/points",
-        body,
-        `knowledge-point-create:${request.knowledgePointName}`,
-      );
       return requestJson<KnowledgePointResponse>("/api/knowledge/points", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Capability-Token": capability.token,
-          "X-Request-Hash": capability.requestHash,
-        },
+        headers: { "Content-Type": "application/json" },
         body,
       });
     },
 
     async createQuestionBankItem(request: QuestionBankItemCreateRequest): Promise<QuestionBankItemResponse> {
       const body = JSON.stringify(request);
-      const capability = await applyCapability(
-        "question-bank:create",
-        "/api/question-bank/items",
-        body,
-        `question-bank-create:${request.questionTitle}`,
-      );
       return requestJson<QuestionBankItemResponse>("/api/question-bank/items", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Capability-Token": capability.token,
-          "X-Request-Hash": capability.requestHash,
-        },
+        headers: { "Content-Type": "application/json" },
         body,
       });
     },
@@ -3744,20 +3509,7 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     async importTeacherResourceQuestions(documentId: string): Promise<TeacherBlockQuestionImportResponse> {
       const encodedDocumentId = encodeURIComponent(documentId);
       const path = `/api/question-bank/import/teacher-resources/${encodedDocumentId}`;
-      const capability = await applyCapability(
-        "question-bank:import-teacher-resource",
-        path,
-        "",
-        `question-bank-import-teacher-resource:${documentId}`,
-        1,
-      );
-      return requestJson<TeacherBlockQuestionImportResponse>(path, {
-        method: "POST",
-        headers: {
-          "X-Capability-Token": capability.token,
-          "X-Request-Hash": capability.requestHash,
-        },
-      });
+      return requestJson<TeacherBlockQuestionImportResponse>(path, { method: "POST" });
     },
 
     /**
@@ -3821,6 +3573,18 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
       return requestJson<TeacherFeishuDiscoveryResponse>(path);
     },
 
+    /** Reads the current backend subject's durable Feishu OAuth binding through the authenticated transport. */
+    getFeishuOAuthStatus(): Promise<{ status: "AUTHORIZED" | "BOT_AUTHORIZED" | "AUTH_REQUIRED"; expiresAt: string | null }> {
+      return requestJson<{ status: "AUTHORIZED" | "BOT_AUTHORIZED" | "AUTH_REQUIRED"; expiresAt: string | null }>(
+        "/api/feishu/oauth/status",
+      );
+    },
+
+    /** Creates a fresh OAuth URL immediately before navigation so its short-lived state cannot become stale. */
+    getFeishuOAuthAuthorizationUrl(): Promise<{ authorizationUrl: string }> {
+      return requestJson<{ authorizationUrl: string }>("/api/feishu/oauth/authorize");
+    },
+
     /**
      * 登记教师资料源，后端会返回预览和等待重建索引状态。
      */
@@ -3835,22 +3599,11 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
         ? { ...request, feishuExportFormat: request.feishuExportFormat ?? "md", parseMode: request.parseMode ?? "TEXT" }
         : { ...request, parseMode: request.parseMode ?? "TEXT" };
       const body = JSON.stringify(normalizedRequest);
-      return applyCapability(
-        "teacher-resource:register",
-        "/api/teacher/resources",
+      return requestJson<TeacherResourceDocumentResponse>("/api/teacher/resources", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body,
-        `teacher-resource-register:${normalizedRequest.sourceType}`,
-      ).then((capability) =>
-        requestJson<TeacherResourceDocumentResponse>("/api/teacher/resources", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Capability-Token": capability.token,
-            "X-Request-Hash": capability.requestHash,
-          },
-          body,
-        }),
-      );
+      });
     },
 
     /**
@@ -3864,18 +3617,6 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
         ? request.sourceType
         : "local_path";
       const normalizedParseMode = request.parseMode ?? "TEXT";
-      const capabilityPayload = JSON.stringify({
-        sourceType: normalizedSourceType,
-        permissionScope: request.permissionScope,
-        parseMode: normalizedParseMode,
-        files: request.files.map((file) => ({
-          name: file.name,
-          relativeName: file.webkitRelativePath || file.name,
-          size: file.size,
-          type: file.type,
-          lastModified: file.lastModified,
-        })),
-      });
       const formData = new FormData();
       formData.append("sourceType", normalizedSourceType);
       if (request.title?.trim()) {
@@ -3889,18 +3630,8 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
           : file.name;
         formData.append("files", file, relativeName);
       }
-      const capability = await applyCapability(
-        "teacher-resource:register",
-        "/api/teacher/resources/upload",
-        capabilityPayload,
-        `teacher-resource-upload:${normalizedSourceType}`,
-      );
       return requestFormJson<TeacherResourceDocumentResponse>("/api/teacher/resources/upload", formData, {
         method: "POST",
-        headers: {
-          "X-Capability-Token": capability.token,
-          "X-Request-Hash": capability.requestHash,
-        },
       });
     },
 
@@ -3909,19 +3640,7 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
      */
     async archiveTeacherResource(documentId: string): Promise<TeacherResourceDocumentResponse> {
       const path = `/api/teacher/resources/${encodeURIComponent(documentId)}`;
-      const capability = await applyCapability(
-        "teacher-resource:archive",
-        path,
-        "",
-        `teacher-resource-archive:${documentId}`,
-      );
-      return requestJson<TeacherResourceDocumentResponse>(path, {
-        method: "DELETE",
-        headers: {
-          "X-Capability-Token": capability.token,
-          "X-Request-Hash": capability.requestHash,
-        },
-      });
+      return requestJson<TeacherResourceDocumentResponse>(path, { method: "DELETE" });
     },
 
     listTeacherResourceSyncJobs(documentId: string): Promise<TeacherSourceSyncJobResponse[]> {
@@ -3941,19 +3660,7 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
 
     async createTeacherResourceSyncJob(documentId: string): Promise<TeacherSourceSyncJobResponse> {
       const path = `/api/teacher/resources/${encodeURIComponent(documentId)}/sync-jobs`;
-      const capability = await applyCapability(
-        "teacher-resource:sync",
-        path,
-        "",
-        `teacher-resource-sync:${documentId}`,
-      );
-      return requestJson<TeacherSourceSyncJobResponse>(path, {
-        method: "POST",
-        headers: {
-          "X-Capability-Token": capability.token,
-          "X-Request-Hash": capability.requestHash,
-        },
-      });
+      return requestJson<TeacherSourceSyncJobResponse>(path, { method: "POST" });
     },
 
     async executeTeacherResourceSyncJob(
@@ -3961,20 +3668,7 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
       jobId: string,
     ): Promise<TeacherSourceSyncJobResponse> {
       const path = `/api/teacher/resources/${encodeURIComponent(documentId)}/sync-jobs/${encodeURIComponent(jobId)}/execute`;
-      const capability = await applyCapability(
-        "teacher-resource:sync-execute",
-        path,
-        "",
-        `teacher-resource-sync-execute:${documentId}:${jobId}`,
-        2,
-      );
-      return requestJson<TeacherSourceSyncJobResponse>(path, {
-        method: "POST",
-        headers: {
-          "X-Capability-Token": capability.token,
-          "X-Request-Hash": capability.requestHash,
-        },
-      });
+      return requestJson<TeacherSourceSyncJobResponse>(path, { method: "POST" });
     },
 
     async resumeTeacherResourceSyncJob(
@@ -3982,38 +3676,12 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
       jobId: string,
     ): Promise<TeacherSourceSyncJobResponse> {
       const path = `/api/teacher/resources/${encodeURIComponent(documentId)}/sync-jobs/${encodeURIComponent(jobId)}/resume`;
-      const capability = await applyCapability(
-        "teacher-resource:sync-resume",
-        path,
-        "",
-        `teacher-resource-sync-resume:${documentId}:${jobId}`,
-        2,
-      );
-      return requestJson<TeacherSourceSyncJobResponse>(path, {
-        method: "POST",
-        headers: {
-          "X-Capability-Token": capability.token,
-          "X-Request-Hash": capability.requestHash,
-        },
-      });
+      return requestJson<TeacherSourceSyncJobResponse>(path, { method: "POST" });
     },
 
     async rebuildTeacherResourceVectorIndex(documentId: string): Promise<VectorIndexRebuildResponse> {
       const path = `/api/vector-index/teacher-resources/${encodeURIComponent(documentId)}/rebuild`;
-      const capability = await applyCapability(
-        "vector-index:rebuild",
-        path,
-        "",
-        `vector-index-rebuild:${documentId}`,
-        2,
-      );
-      return requestJson<VectorIndexRebuildResponse>(path, {
-        method: "POST",
-        headers: {
-          "X-Capability-Token": capability.token,
-          "X-Request-Hash": capability.requestHash,
-        },
-      });
+      return requestJson<VectorIndexRebuildResponse>(path, { method: "POST" });
     },
   };
 }
@@ -4028,28 +3696,4 @@ function readAuthSession(): LoginResponse | null {
   } catch {
     return null;
   }
-}
-
-/**
- * Hashes the exact request body that will consume a capability token.
- */
-async function hashRequestBody(body: string): Promise<string> {
-  const subtle = globalThis.crypto?.subtle;
-  if (subtle) {
-    const digest = await subtle.digest("SHA-256", new TextEncoder().encode(body));
-    return `sha256:${Array.from(new Uint8Array(digest), byteToHex).join("")}`;
-  }
-  let hash = 2166136261;
-  for (let index = 0; index < body.length; index += 1) {
-    hash ^= body.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return `fnv1a32:${(hash >>> 0).toString(16).padStart(8, "0")}`;
-}
-
-/**
- * Converts a digest byte into two lowercase hex characters.
- */
-function byteToHex(value: number): string {
-  return value.toString(16).padStart(2, "0");
 }

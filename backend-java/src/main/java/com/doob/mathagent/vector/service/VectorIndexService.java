@@ -27,7 +27,6 @@ public class VectorIndexService {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final Logger log = LoggerFactory.getLogger(VectorIndexService.class);
-    private static final int EMBEDDING_BATCH_SIZE = 32;
     private static final int MILVUS_UPSERT_BATCH_SIZE = 128;
     private static final int MILVUS_RATE_LIMIT_RETRY_ATTEMPTS = 4;
     private static final Duration MILVUS_RATE_LIMIT_RETRY_DELAY = Duration.ofSeconds(12);
@@ -119,7 +118,9 @@ public class VectorIndexService {
             int upserted = upsert(document, blocks, embeddings.vectors());
             flushCollection();
             loadCollection();
-            if (teacherImageClipService != null) {
+            // Image files are already persisted as owner-scoped assets and referenced from Markdown. CLIP is an
+            // optional secondary index because lightweight deployments intentionally omit its large model runtime.
+            if (properties.teacherImageClipEnabled() && teacherImageClipService != null) {
                 teacherImageClipService.indexDocument(tenantId, subjectType, subjectId, documentId);
             }
             resourceStore.save(withIndexStatus(document, "ready", "ready"));
@@ -495,8 +496,9 @@ public class VectorIndexService {
     private EmbeddingBatch embed(List<String> texts) {
         List<List<Double>> vectors = new ArrayList<>();
         int promptTokens = 0;
-        for (int start = 0; start < texts.size(); start += EMBEDDING_BATCH_SIZE) {
-            EmbeddingBatch batch = embedBatch(texts.subList(start, Math.min(start + EMBEDDING_BATCH_SIZE, texts.size())));
+        int batchSize = properties.normalizedEmbeddingBatchSize();
+        for (int start = 0; start < texts.size(); start += batchSize) {
+            EmbeddingBatch batch = embedBatch(texts.subList(start, Math.min(start + batchSize, texts.size())));
             vectors.addAll(batch.vectors());
             promptTokens += batch.promptTokens();
         }

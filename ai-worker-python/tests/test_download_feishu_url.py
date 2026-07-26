@@ -213,6 +213,27 @@ class DownloadFeishuUrlTest(unittest.TestCase):
             self.assertEqual(result["checkpoint"]["downloaded_items"][0]["relativePath"], "空间向量.md")
             self.assertEqual(result["failed_items"], [])
 
+    def test_folder_resume_keeps_checkpoint_local_root_when_provider_title_differs(self):
+        client = FakeFeishuClient()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = download_feishu_url.download_from_url(
+                client,
+                "https://my.feishu.cn/drive/folder/folderToken",
+                Path(temp_dir),
+                file_extension="md",
+                resume_checkpoint={
+                    "current_folder_token": "folderToken",
+                    "current_path": "高中数学全局共享资料",
+                    "page_token": "",
+                    "visited_folder_tokens": [],
+                    "downloaded_items": [],
+                },
+            )
+
+            saved_path = Path(result["saved_path"])
+            self.assertEqual(saved_path.name, "高中数学全局共享资料")
+            self.assertTrue((saved_path / "空间向量.md").is_file())
+
     def test_file_url_summary_reports_one_file(self):
         client = FakeFeishuClient()
         with tempfile.TemporaryDirectory() as temp_dir:

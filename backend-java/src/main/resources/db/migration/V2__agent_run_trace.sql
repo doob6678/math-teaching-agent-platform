@@ -1,0 +1,22 @@
+CREATE TABLE agent_run_trace (
+    trace_id CHAR(36) NOT NULL,
+    plan_id CHAR(36) NOT NULL,
+    created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    tenant_id VARCHAR(64) NOT NULL DEFAULT 'default',
+    subject_type VARCHAR(32) NOT NULL,
+    subject_id VARCHAR(64) NOT NULL,
+    agent_code VARCHAR(64) NOT NULL,
+    provider_name VARCHAR(64) NOT NULL,
+    model_code VARCHAR(128) NOT NULL,
+    status VARCHAR(32) NOT NULL,
+    estimated_cost DECIMAL(12,6) NULL,
+    allowed_tool_scopes_json JSON NULL,
+    allowed_data_scopes_json JSON NULL,
+    evidence_refs_json JSON NULL,
+    metadata_json JSON NULL,
+    updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (trace_id),
+    KEY idx_agent_trace_subject (tenant_id, subject_type, subject_id, created_at),
+    KEY idx_agent_trace_agent_status (tenant_id, agent_code, status, created_at),
+    KEY idx_agent_trace_plan (plan_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
