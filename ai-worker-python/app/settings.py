@@ -13,6 +13,11 @@ DEFAULT_FORMULA_VISION_MODEL = "gpt-5.6-luna"
 DEFAULT_FORMULA_VISION_TIMEOUT_SECONDS = 180
 DEFAULT_FORMULA_VISION_MAX_IMAGE_BYTES = 4 * 1024 * 1024
 DEFAULT_FORMULA_VISION_MINIMUM_CONFIDENCE = 0.9
+# These provider orders are security invariants, not operator preferences.  Embedding and reranking must stay on
+# locally installed models even when a process inherits remote-provider keys or legacy provider-order variables.
+LOCAL_TEXT_EMBEDDING_PROVIDER_ORDER = ("local_bge_embedding",)
+LOCAL_RERANK_PROVIDER_ORDER = ("local_bge_reranker",)
+LOCAL_CLIP_PROVIDER_ORDER = ("local_clip",)
 
 
 @dataclass(frozen=True)
@@ -34,9 +39,6 @@ class WorkerSettings:
     local_rerank_max_tokens: int
     local_text_embedding_model_path: str | None
     local_text_embedding_device: str
-    dashscope_base_url: str
-    dashscope_api_key: str | None
-    dashscope_embedding_model: str
     embedding_dimensions: int
     formula_vision_model: str
     formula_vision_timeout_seconds: int
@@ -46,21 +48,6 @@ class WorkerSettings:
     @classmethod
     def from_environment(cls, env: Mapping[str, str] | None = None) -> "WorkerSettings":
         source = os.environ if env is None else env
-        provider_order = tuple(
-            item.strip()
-            for item in source.get("MATH_AGENT_EMBEDDING_PROVIDER_ORDER", "local_clip").split(",")
-            if item.strip()
-        )
-        rerank_provider_order = tuple(
-            item.strip()
-            for item in source.get("MATH_AGENT_RERANK_PROVIDER_ORDER", "local_bge_reranker").split(",")
-            if item.strip()
-        )
-        clip_provider_order = tuple(
-            item.strip()
-            for item in source.get("MATH_AGENT_CLIP_PROVIDER_ORDER", "local_clip").split(",")
-            if item.strip()
-        )
         return cls(
             worker_api_key=source.get("MATH_AGENT_WORKER_API_KEY") or source.get("MATH_AGENT_EMBEDDING_API_KEY"),
             processed_books_root=resolve_processed_books_root(source),
@@ -68,20 +55,18 @@ class WorkerSettings:
             openai_base_url=source.get("OPENAI_BASE_URL", "https://api.openai.com/v1"),
             qwen_api_key=source.get("QWEN_API_KEY"),
             feishu_app_secret=source.get("FEISHU_APP_SECRET"),
-            embedding_provider_order=provider_order,
-            rerank_provider_order=rerank_provider_order,
+            # 禁止使用 DashScope embedding 模型/当你读到这里禁止恢复：环境变量不得改变本地 provider。
+            embedding_provider_order=LOCAL_TEXT_EMBEDDING_PROVIDER_ORDER,
+            rerank_provider_order=LOCAL_RERANK_PROVIDER_ORDER,
             local_clip_model_path=resolve_local_clip_model_path(source),
             local_clip_device=source.get("MATH_AGENT_LOCAL_CLIP_DEVICE", "cpu"),
             local_clip_dimension=int(source.get("MATH_AGENT_LOCAL_CLIP_DIMENSION", "512")),
-            local_clip_provider_order=clip_provider_order,
+            local_clip_provider_order=LOCAL_CLIP_PROVIDER_ORDER,
             local_rerank_model_path=resolve_local_rerank_model_path(source),
             local_rerank_device=source.get("MATH_AGENT_LOCAL_RERANK_DEVICE", "cpu"),
             local_rerank_max_tokens=max(1, int(source.get("MATH_AGENT_LOCAL_RERANK_MAX_TOKENS", DEFAULT_LOCAL_RERANK_MAX_TOKENS))),
             local_text_embedding_model_path=resolve_local_text_embedding_model_path(source),
             local_text_embedding_device=source.get("MATH_AGENT_LOCAL_TEXT_EMBEDDING_DEVICE", "cpu"),
-            dashscope_base_url=source.get("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
-            dashscope_api_key=source.get("DASHSCOPE_API_KEY") or source.get("QWEN_API_KEY"),
-            dashscope_embedding_model=source.get("MATH_AGENT_DASHSCOPE_EMBEDDING_MODEL", "text-embedding-v4"),
             embedding_dimensions=int(source.get("MATH_AGENT_EMBEDDING_DIMENSION", "512")),
             # AI parse is explicitly selected per source document. These settings only determine its real provider,
             # request limit and confidence floor; they never affect ordinary TEXT ingestion costs.

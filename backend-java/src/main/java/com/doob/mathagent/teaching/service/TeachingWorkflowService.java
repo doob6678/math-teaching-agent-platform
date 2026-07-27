@@ -396,7 +396,9 @@ public class TeachingWorkflowService {
         String ownerKey = normalizedContext.ownerKey();
         String idempotencyKey = normalizedContext.idempotencyKey(request.clientRequestId());
         TeachingTaskResponse running = runningSnapshot(failed);
-        taskStore.save(ownerKey, idempotencyKey, running);
+        // A manual resume starts a fresh worker retry budget. The MySQL store must explicitly transition the
+        // execution row from terminal FAILED to RETRYING; normal snapshot saves intentionally preserve lease state.
+        taskStore.prepareForResume(ownerKey, idempotencyKey, running);
         // Resume is now a durable state transition only. LectureTaskSubmissionService creates a new outbox event;
         // the Worker, rather than an application-local executor, performs the resumed DAG.
         if (returnCompletedWhenExecutorIsSynchronous) {
@@ -584,11 +586,14 @@ public class TeachingWorkflowService {
         // artefact and must never be generated a second time, otherwise stale acceptance jobs can occupy the sole
         // lecture consumer ahead of a newer user task.
         if (queued.status() == TeachingTaskStatus.COMPLETED
-                || queued.status() == TeachingTaskStatus.FAILED
                 || queued.status() == TeachingTaskStatus.WAITING_REVIEW
                 || queued.status() == TeachingTaskStatus.DRAFT_ONLY) {
             return;
         }
+        // A retry message is published after failQueued persists the diagnostic FAILED snapshot. The MySQL lease
+        // has already changed the execution row back to RUNNING before this method is called, so treating that
+        // snapshot as terminal would acknowledge the retry without executing it and then falsely mark it complete.
+        // Truly terminal FAILED rows cannot acquire a lease and therefore never reach this boundary.
         TeachingRequestContext context = new TeachingRequestContext(
                 queued.tenantId(), queued.subjectType(), queued.subjectId(), "lecture-worker").normalize();
         TeachingTaskRequest request = new TeachingTaskRequest(
@@ -808,7 +813,7 @@ public class TeachingWorkflowService {
         // tenant's human-review policy or publish an unresolved structural review.
         TeachingReviewPolicy reviewPolicy = TeachingReviewPolicy.fromEnvironment();
         TeachingTaskStatus publicationStatus = reviewPolicy
-                .statusAfterQualityGate("READY".equalsIgnoreCase(mergeResult.status()));
+                .statusAfterQualityGate(passedAutomaticReview(mergeResult));
         TeachingDraftSections renderSections = mergeResult.mergedSections();
         // Retrieval determines the printable lesson spine. AI may enrich explanations, but cannot merge unrelated
         // question-bank items back into a generic section or invent a knowledge-point title.
@@ -866,6 +871,21 @@ public class TeachingWorkflowService {
         }
         saveAiDraftTrace(response, context);
         return response;
+    }
+
+    /**
+     * Accepts a clean draft and a draft whose deterministic review patches were all applied.
+     *
+     * <p>{@code MERGED} means every recorded finding was resolved by the Java-owned sanitizer. Treating only
+     * {@code READY} as successful made safe student-leakage and lecture-card patches fail every otherwise valid
+     * lecture. {@code NEEDS_ATTENTION} remains blocked because at least one finding was not resolved.</p>
+     */
+    private static boolean passedAutomaticReview(TeachingDraftMergeResult mergeResult) {
+        if (mergeResult == null || mergeResult.status() == null) {
+            return false;
+        }
+        return "READY".equalsIgnoreCase(mergeResult.status())
+                || "MERGED".equalsIgnoreCase(mergeResult.status());
     }
 
     /**

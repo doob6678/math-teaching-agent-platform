@@ -34,6 +34,17 @@ public interface TeachingTaskStore {
      */
     TeachingTaskResponse save(String ownerKey, String idempotencyKey, TeachingTaskResponse task);
 
+    /**
+     * Persists the visible RUNNING snapshot and makes a terminal worker row eligible for a fresh manual attempt.
+     * In-memory stores have no independent lease columns, so their normal save operation is sufficient.
+     */
+    default TeachingTaskResponse prepareForResume(
+            String ownerKey,
+            String idempotencyKey,
+            TeachingTaskResponse runningTask) {
+        return save(ownerKey, idempotencyKey, runningTask);
+    }
+
     default TeachingTaskResponse createIfAbsent(String ownerKey, String idempotencyKey, TeachingTaskResponse task) {
         return save(ownerKey, idempotencyKey, task);
     }

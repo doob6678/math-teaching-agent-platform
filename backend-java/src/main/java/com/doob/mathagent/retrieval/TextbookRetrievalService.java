@@ -2,6 +2,7 @@ package com.doob.mathagent.retrieval;
 
 import com.doob.mathagent.resources.TextbookCatalogItem;
 import com.doob.mathagent.resources.TextbookCatalogReader;
+import com.doob.mathagent.resources.TextbookBookRootResolver;
 import com.doob.mathagent.resources.TextbookChunk;
 import com.doob.mathagent.resources.TextbookChunkReader;
 import com.doob.mathagent.resources.TextbookPageImageService;
@@ -12,7 +13,6 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
@@ -1532,10 +1532,9 @@ public class TextbookRetrievalService {
      * 根据 catalog 中的 book_root 找到优先使用的 AI chunk 文件。
      */
     private static Path chunksPath(Path processedBooksRoot, TextbookCatalogItem book) {
-        Path bookRoot = Paths.get(book.bookRoot());
-        if (!bookRoot.isAbsolute()) {
-            bookRoot = processedBooksRoot.resolve(bookRoot);
-        }
+        // Catalogs are generated on Windows but also run inside Linux containers. Resolve through the stable docId
+        // when the persisted book_root belongs to another host, while keeping every path inside the mounted root.
+        Path bookRoot = TextbookBookRootResolver.resolve(processedBooksRoot, book);
         Path aiChunks = bookRoot.resolve("jsonl_ai/chunks.jsonl");
         if (Files.exists(aiChunks)) {
             return aiChunks;

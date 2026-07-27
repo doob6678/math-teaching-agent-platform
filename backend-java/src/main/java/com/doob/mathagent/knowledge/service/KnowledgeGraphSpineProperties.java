@@ -1,5 +1,6 @@
 package com.doob.mathagent.knowledge.service;
 
+import com.doob.mathagent.infrastructure.security.RequestSubject;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
@@ -19,7 +20,7 @@ public class KnowledgeGraphSpineProperties {
     /**
      * Tenant id used for shared seed data.
      */
-    private String tenantId = "school-a";
+    private String tenantId = RequestSubject.DEFAULT_TENANT_ID;
 
     /**
      * Permission scope for the curated graph. MATH_VIP keeps it available to math teaching flows
@@ -30,7 +31,7 @@ public class KnowledgeGraphSpineProperties {
     /**
      * Maximum number of method nodes to expose in v0.1 so the frontend graph remains readable.
      */
-    private int methodNodeLimit = 50;
+    private int methodNodeLimit = 100;
 
     /**
      * Classpath Markdown source for the curated graph spine.

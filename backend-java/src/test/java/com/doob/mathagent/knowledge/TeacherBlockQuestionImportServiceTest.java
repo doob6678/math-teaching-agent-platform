@@ -18,6 +18,32 @@ import org.junit.jupiter.api.Test;
 class TeacherBlockQuestionImportServiceTest {
 
     @Test
+    void mapsTenantPublicTeacherResourceToStudentVisibleSharedQuestions() {
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        InMemoryKnowledgeQuestionBankStore questionStore = new InMemoryKnowledgeQuestionBankStore();
+        resourceStore.save(document("doc-global", "admin", "TEACHER_PRIVATE", "高中数学全局共享资料"));
+        blockStore.replaceActiveBlocks("school-a", "doc-global", List.of(block(
+                "b-global", "doc-global", 1, "解三角形", "正弦定理",
+                "例1 已知三角形ABC中，a=2，A=30度，求外接圆半径R。")));
+        TeacherBlockQuestionImportService service = service(resourceStore, blockStore, questionStore);
+
+        TeacherBlockQuestionImportResponse privateImport =
+                service.importFromTeacherResource("school-a", "admin", "admin", "doc-global");
+        assertThat(privateImport.importedQuestions().getFirst().permissionScope()).isEqualTo("TEACHER_PRIVATE");
+        resourceStore.save(document("doc-global", "admin", "TENANT_PUBLIC", "高中数学全局共享资料"));
+
+        TeacherBlockQuestionImportResponse response =
+                service.importFromTeacherResource("school-a", "admin", "admin", "doc-global");
+
+        assertThat(response.importedQuestions()).hasSize(1);
+        assertThat(response.importedQuestions().getFirst().permissionScope()).isEqualTo("MATH_VIP");
+        assertThat(service.searchQuestions("school-a", "student", "student-1", "外接圆", 10))
+                .extracting(QuestionBankItemResponse::questionId)
+                .containsExactly(response.importedQuestions().getFirst().questionId());
+    }
+
+    @Test
     void importsRealQuestionBlocksAndLinksChapterKnowledgePoint() {
         InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
         InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();

@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -65,7 +66,13 @@ def main() -> int:
 
 def vector_config(config_path: Path) -> dict[str, Any]:
     data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    values = data["math-agent"]["vector-index"]
+    # application.yml is the deployment contract and therefore contains Spring-style environment placeholders.
+    # Resolve them here as the Java process would; sending the literal ${NAME:default} string produces an invalid
+    # URL and prevents a fresh Docker Milvus volume from ever receiving the bundled textbook corpus.
+    values = {
+        key: resolve_spring_placeholder(value, os.environ)
+        for key, value in data["math-agent"]["vector-index"].items()
+    }
     required = (
         "milvus-uri", "textbook-text-collection-name", "textbook-image-collection-name",
         "textbook-text-dimension", "textbook-image-dimension", "textbook-image-query-dimension", "textbook-metric-type", "textbook-index-type",
@@ -79,6 +86,26 @@ def vector_config(config_path: Path) -> dict[str, Any]:
     if isinstance(values.get("textbook-index-params"), str):
         values["textbook-index-params"] = json.loads(values["textbook-index-params"])
     return values
+
+
+SPRING_PLACEHOLDER = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)(?::(.*))?\}$")
+
+
+def resolve_spring_placeholder(value: Any, environment: dict[str, str]) -> Any:
+    """Resolve one complete Spring placeholder while preserving non-string YAML values and nested defaults."""
+    if not isinstance(value, str):
+        return value
+    resolved = value.strip()
+    # Nested defaults such as ${A:${B:http://localhost}} are common in application.yml. Bound the loop so malformed
+    # operator input fails below as a normal URL/configuration error instead of spinning forever.
+    for _ in range(8):
+        match = SPRING_PLACEHOLDER.fullmatch(resolved)
+        if match is None:
+            return resolved
+        name, default = match.groups()
+        candidate = environment.get(name)
+        resolved = candidate.strip() if candidate is not None and candidate.strip() else (default or "").strip()
+    raise ValueError(f"Spring placeholder nesting is too deep: {value}")
 
 
 def text_entities(root: Path, corpus_version: str) -> tuple[list[dict[str, Any]], int]:

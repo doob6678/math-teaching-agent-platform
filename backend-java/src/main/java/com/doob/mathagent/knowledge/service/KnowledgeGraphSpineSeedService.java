@@ -1,5 +1,6 @@
 package com.doob.mathagent.knowledge.service;
 
+import com.doob.mathagent.infrastructure.security.RequestSubject;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -199,7 +200,7 @@ public class KnowledgeGraphSpineSeedService {
      * Writes parsed nodes first, then relations so database foreign keys remain valid.
      */
     private void write(ParsedSpine parsed) {
-        String tenantId = textOrDefault(properties.getTenantId(), "school-a");
+        String tenantId = textOrDefault(properties.getTenantId(), RequestSubject.DEFAULT_TENANT_ID);
         String scope = textOrDefault(properties.getPermissionScope(), "MATH_VIP").toUpperCase(Locale.ROOT);
         for (SeedNode node : parsed.nodes()) {
             store.saveKnowledgePoint(new KnowledgePointRecord(

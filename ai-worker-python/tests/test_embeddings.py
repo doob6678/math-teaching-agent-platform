@@ -6,6 +6,7 @@ import unittest
 from app.embeddings import (
     ClipPageSearchResult,
     ClipPageSearchHit,
+    EmbeddingConfigurationError,
     EmbeddingProviderError,
     EmbeddingService,
     LocalBertVocabTokenizer,
@@ -16,20 +17,6 @@ from app.embeddings import (
     openai_embedding_response,
 )
 from app.settings import WorkerSettings
-
-
-class FakeResponse:
-    def __init__(self, body: dict):
-        self.body = json.dumps(body).encode("utf-8")
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        return False
-
-    def read(self):
-        return self.body
 
 
 class StubLocalClipBackend:
@@ -81,20 +68,21 @@ class EmbeddingServiceTest(unittest.TestCase):
         self.assertEqual(encoded[1][:4], [2, 6, 7, 3])
         self.assertNotEqual(encoded[0], encoded[1])
 
-    def test_fails_when_no_real_provider_is_configured(self):
+    def test_fails_when_local_bge_is_not_configured(self):
         settings = WorkerSettings.from_environment(env={
-            "MATH_AGENT_EMBEDDING_PROVIDER_ORDER": "local_clip",
-            "MATH_AGENT_LOCAL_CLIP_MODEL_PATH": "Z:\\missing\\local-clip",
+            "MATH_AGENT_EMBEDDING_PROVIDER_ORDER": "dashscope",
+            "DASHSCOPE_API_KEY": "must-not-be-used",
+            "MATH_AGENT_LOCAL_TEXT_EMBEDDING_MODEL_PATH": "Z:\\missing\\local-bge",
         })
         service = EmbeddingService(settings)
 
         with self.assertRaisesRegex(
-            EmbeddingProviderError,
-            "MATH_AGENT_LOCAL_CLIP_MODEL_PATH|local CLIP model path|torch and Pillow",
+            EmbeddingConfigurationError,
+            "LOCAL_TEXT_EMBEDDING_MODEL_PATH|local text embedding model path|torch and transformers",
         ):
             service.embed("function monotonicity")
 
-    def test_status_reports_multilevel_capabilities_without_secrets(self):
+    def test_status_never_advertises_remote_embedding_provider(self):
         settings = WorkerSettings.from_environment(env={
             "MATH_AGENT_EMBEDDING_PROVIDER_ORDER": "dashscope",
             "DASHSCOPE_API_KEY": "dashscope-key",
@@ -103,62 +91,30 @@ class EmbeddingServiceTest(unittest.TestCase):
 
         status = service.status()
 
-        self.assertEqual(status["status"], "ready")
         self.assertEqual(status["levels"]["textEmbedding"]["dimension"], 512)
         self.assertEqual(status["levels"]["clipImageEmbedding"]["dimension"], 512)
-        self.assertEqual(status["levels"]["textEmbedding"]["status"], "ready")
-        self.assertTrue(status["providers"]["dashscope"]["apiKeyConfigured"])
+        self.assertEqual(status["levels"]["textEmbedding"]["providers"], ["local_bge_embedding"])
+        self.assertNotIn("dashscope", status["providers"])
         self.assertNotIn("dashscope-key", json.dumps(status))
 
-    def test_dashscope_embedding_uses_real_http_contract(self):
-        captured = {}
-
-        def opener(req, *, timeout):
-            captured["url"] = req.full_url
-            captured["auth"] = req.headers["Authorization"]
-            captured["body"] = json.loads(req.data.decode("utf-8"))
-            captured["timeout"] = timeout
-            return FakeResponse({
-                "model": "text-embedding-v4",
-                "data": [{"embedding": [0.1, 0.2, 0.3]}],
-                "usage": {"prompt_tokens": 5},
-            })
-
+    def test_remote_key_and_model_cannot_trigger_http_embedding(self):
         settings = WorkerSettings.from_environment(env={
             "MATH_AGENT_EMBEDDING_PROVIDER_ORDER": "dashscope",
             "DASHSCOPE_API_KEY": "dashscope-key",
-            "MATH_AGENT_EMBEDDING_DIMENSION": "3",
         })
-        service = EmbeddingService(settings, opener=opener)
+        calls = []
+        backend = type("LocalBgeStub", (), {
+            "embed_text": lambda self, texts, dimensions=None: calls.append((texts, dimensions)) or type(
+                "Result", (), {"provider": "local_bge_embedding", "vectors": [[1.0]], "model": "local-bge", "prompt_tokens": 1}
+            )(),
+            "status": lambda self: {"status": "ready"},
+        })()
+        service = EmbeddingService(settings, local_text_embedding_backend=backend)
 
-        result = service.embed(["function monotonicity"], model="text-embedding-v4", dimensions=3)
+        result = service.embed(["function monotonicity"], model="text-embedding-v4")
 
-        self.assertEqual(captured["url"], "https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings")
-        self.assertEqual(captured["auth"], "Bearer dashscope-key")
-        self.assertEqual(captured["body"]["model"], "text-embedding-v4")
-        self.assertEqual(captured["body"]["dimensions"], 3)
-        self.assertEqual(captured["timeout"], 60)
-        self.assertEqual(result.provider, "dashscope")
-        self.assertEqual(result.vectors, [[0.1, 0.2, 0.3]])
-        self.assertEqual(openai_embedding_response(result)["data"][0]["embedding"], [0.1, 0.2, 0.3])
-
-    def test_dashscope_dimension_mismatch_fails(self):
-        def opener(req, timeout):
-            return FakeResponse({
-                "model": "text-embedding-v4",
-                "data": [{"embedding": [0.1, 0.2]}],
-                "usage": {"prompt_tokens": 5},
-            })
-
-        settings = WorkerSettings.from_environment(env={
-            "MATH_AGENT_EMBEDDING_PROVIDER_ORDER": "dashscope",
-            "DASHSCOPE_API_KEY": "dashscope-key",
-            "MATH_AGENT_EMBEDDING_DIMENSION": "3",
-        })
-        service = EmbeddingService(settings, opener=opener)
-
-        with self.assertRaisesRegex(EmbeddingProviderError, "dimension mismatch"):
-            service.embed(["function monotonicity"])
+        self.assertEqual(result.provider, "local_bge_embedding")
+        self.assertEqual(calls, [(["function monotonicity"], None)])
 
     def test_clip_similarity_response_keeps_real_vectors(self):
         response = clip_similarity_response(type("Result", (), {

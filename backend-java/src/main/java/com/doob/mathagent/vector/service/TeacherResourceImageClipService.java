@@ -62,9 +62,16 @@ public class TeacherResourceImageClipService {
         for (int start = 0; start < assets.size(); start += UPSERT_BATCH_SIZE) {
             int end = Math.min(start + UPSERT_BATCH_SIZE, assets.size());
             List<TeacherResourceAssetResponse> batch = assets.subList(start, end);
-            List<List<Double>> vectors = new ArrayList<>();
+            List<String> imageDataUris = new ArrayList<>(batch.size());
             for (TeacherResourceAssetResponse asset : batch) {
-                vectors.addAll(embedImages(List.of(readDataUri(asset, subject))));
+                imageDataUris.add(readDataUri(asset, subject));
+            }
+            // One worker request lets CLIP tokenize and execute the whole batch together. Calling once per asset made
+            // CPU deployments reload preprocessing state and turned a small Feishu folder into minutes of overhead.
+            List<List<Double>> vectors = embedImages(imageDataUris);
+            if (vectors.size() != batch.size()) {
+                throw new IllegalStateException("CLIP image batch size mismatch: expected "
+                        + batch.size() + " but got " + vectors.size());
             }
             embedded += vectors.size();
             upserted += upsert(document, batch, vectors);

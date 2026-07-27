@@ -8,5 +8,7 @@ numpy>=2,<3
 # Local BGE/CLIP inference is part of the production worker contract. Model weights remain external read-only mounts.
 torch>=2.5,<3
 transformers>=4.48,<6
+# BGE text embeddings use the local SentenceTransformer pooling implementation; weights stay on /models.
+sentence-transformers>=3.3,<6
 # Python owns Agent orchestration; Java remains the protected tool and persistence boundary.
 langgraph>=0.6,<1

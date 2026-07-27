@@ -388,7 +388,8 @@ public class SpringAiOpenAiCompatibleGateway implements AiChatGateway {
         return Map.of(
                 "role", "user",
                 "content", List.of(
-                        Map.of("type", "image_url", "image_url", Map.of("url", imageDataUrl)),
+                        // The teaching service already supplies a bounded lossless copy; low detail fixes image tokens.
+                        Map.of("type", "image_url", "image_url", Map.of("url", imageDataUrl, "detail", "low")),
                         Map.of("type", "text", "text", userPrompt(request))));
     }
 

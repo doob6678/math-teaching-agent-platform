@@ -28,6 +28,10 @@ import org.springframework.stereotype.Service;
 @Service
 public class TeacherBlockQuestionImportService {
 
+    /** Resource-library scope used by a folder shared with every account in the current tenant. */
+    private static final String TENANT_PUBLIC_SCOPE = "TENANT_PUBLIC";
+    /** Standard question-bank scope that is visible to students, teachers, and administrators. */
+    private static final String SHARED_QUESTION_SCOPE = "MATH_VIP";
     private static final int TITLE_LIMIT = 80;
     /** A printable exercise stem longer than this is a lesson/article block, not one atomic question. */
     private static final int MAX_PRINTABLE_QUESTION_CHARS = 4000;
@@ -136,6 +140,9 @@ public class TeacherBlockQuestionImportService {
         List<QuestionBankItemResponse> imported = new ArrayList<>();
         Set<String> linkedKnowledgePointIds = new LinkedHashSet<>();
         int duplicates = candidateSet.duplicateCount();
+        // Teacher resources and the question bank use different names for tenant-wide visibility. Normalize once so
+        // both the generated point and its question retain the same permission boundary during every re-import.
+        String effectiveQuestionScope = questionBankScope(document.permissionScope());
         for (ImportCandidate candidate : candidateSet.candidates()) {
             TeacherDocumentBlockResponse block = candidate.block();
             AtomicSourcePart sourcePart = candidate.sourcePart();
@@ -151,7 +158,8 @@ public class TeacherBlockQuestionImportService {
                     questionTitle = sourceFileName + " / " + questionTitle;
                 }
                 if (existingQuestion.isPresent()) {
-                    if (equivalentImport(existingQuestion.get(), importedQuestion, questionTitle)) {
+                    if (equivalentImport(
+                            existingQuestion.get(), importedQuestion, questionTitle, effectiveQuestionScope)) {
                         duplicates++;
                         continue;
                     }
@@ -163,7 +171,7 @@ public class TeacherBlockQuestionImportService {
                         normalizedTenantId,
                         normalizedRole,
                         normalizedSubjectId,
-                        document.permissionScope(),
+                        effectiveQuestionScope,
                         knowledgePointName(block, document.title()),
                         chapterPath(block),
                         "teacher_resource_import:" + document.documentId());
@@ -171,7 +179,7 @@ public class TeacherBlockQuestionImportService {
                         normalizedTenantId,
                         normalizedRole,
                         normalizedSubjectId,
-                        document.permissionScope(),
+                        effectiveQuestionScope,
                         questionTitle,
                         importedQuestion.questionText(),
                         importedQuestion.answerJson(),
@@ -225,7 +233,16 @@ public class TeacherBlockQuestionImportService {
      * Allows import from shared teacher resources that are already exposed by the backend.
      */
     private static boolean isSharedScope(String permissionScope) {
-        return "MATH_VIP".equals(permissionScope) || "PUBLIC_TEXTBOOK".equals(permissionScope);
+        return SHARED_QUESTION_SCOPE.equals(permissionScope)
+                || "PUBLIC_TEXTBOOK".equals(permissionScope)
+                || TENANT_PUBLIC_SCOPE.equals(permissionScope);
+    }
+
+    /** Maps resource-library tenant sharing onto the shared scope supported by question visibility filters. */
+    private static String questionBankScope(String resourceScope) {
+        return TENANT_PUBLIC_SCOPE.equals(textOrDefault(resourceScope, "").toUpperCase(Locale.ROOT))
+                ? SHARED_QUESTION_SCOPE
+                : resourceScope;
     }
 
     /**
@@ -312,10 +329,12 @@ public class TeacherBlockQuestionImportService {
     private static boolean equivalentImport(
             QuestionBankItemRecord existing,
             ImportedQuestion candidate,
-            String questionTitle) {
+            String questionTitle,
+            String permissionScope) {
         return existing.questionText().equals(candidate.questionText())
                 && existing.answerJson().equals(candidate.answerJson())
-                && existing.questionTitle().equals(questionTitle);
+                && existing.questionTitle().equals(questionTitle)
+                && existing.permissionScope().equals(permissionScope);
     }
 
     /**

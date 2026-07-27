@@ -1,5 +1,6 @@
 package com.doob.mathagent.teacher.search;
 
+import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.knowledge.service.KnowledgePointRecord;
 import com.doob.mathagent.knowledge.service.KnowledgeQuestionBankStore;
 import com.doob.mathagent.knowledge.service.KnowledgeRelationRecord;
@@ -200,7 +201,7 @@ public class TeacherResourceGraphAlignmentService {
             return GraphView.EMPTY;
         }
         List<KnowledgePointRecord> points = store.listKnowledgePoints(
-                textOrDefault(tenantId, "school-a"),
+                textOrDefault(tenantId, RequestSubject.DEFAULT_TENANT_ID),
                 textOrDefault(viewerRole, "teacher").toLowerCase(Locale.ROOT),
                 textOrDefault(viewerSubjectId, ""));
         if (points.isEmpty()) {
@@ -214,7 +215,7 @@ public class TeacherResourceGraphAlignmentService {
             hierarchyNeighbors.putIfAbsent(graphPoint.id(), new LinkedHashSet<>());
         }
         for (KnowledgeRelationRecord relation : store.listKnowledgeRelations(
-                textOrDefault(tenantId, "school-a"),
+                textOrDefault(tenantId, RequestSubject.DEFAULT_TENANT_ID),
                 textOrDefault(viewerRole, "teacher").toLowerCase(Locale.ROOT),
                 textOrDefault(viewerSubjectId, ""))) {
             if (!isHierarchyRelation(relation.relationType())) {

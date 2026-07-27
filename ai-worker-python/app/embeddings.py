@@ -9,8 +9,7 @@ import math
 import os
 from pathlib import Path
 import time
-from typing import Callable, Iterable
-from urllib import request
+from typing import Iterable
 from urllib.parse import urlparse
 
 from app.settings import WorkerSettings
@@ -831,13 +830,11 @@ class EmbeddingService:
     def __init__(
         self,
         settings: WorkerSettings,
-        opener: Callable[[request.Request, int], object] | None = None,
         local_clip_backend: LocalClipBackend | None = None,
         local_rerank_backend: LocalRerankBackend | None = None,
         local_text_embedding_backend: LocalTextEmbeddingBackend | None = None,
     ):
         self.settings = settings
-        self.opener = opener or request.urlopen
         self.local_clip_backend = local_clip_backend or LocalClipBackend(settings)
         self.local_rerank_backend = local_rerank_backend or LocalRerankBackend(settings)
         self.local_text_embedding_backend = local_text_embedding_backend or LocalTextEmbeddingBackend(settings)
@@ -845,7 +842,6 @@ class EmbeddingService:
         self._page_text_index: LoadedPageTextIndex | None = None
 
     def status(self) -> dict[str, object]:
-        dashscope_status = "ready" if self.settings.dashscope_api_key else "configuration_error"
         local_clip_status = self.local_clip_backend.status()
         local_rerank_status = self.local_rerank_backend.status()
         local_text_embedding_status = self.local_text_embedding_backend.status()
@@ -858,7 +854,7 @@ class EmbeddingService:
                     "providers": list(self.settings.embedding_provider_order),
                     "dimension": self.settings.embedding_dimensions,
                     "defaultModel": self._default_text_embedding_model(),
-                    "status": self._text_embedding_status(local_text_status, local_text_embedding_status, dashscope_status),
+                    "status": local_text_embedding_status.get("status", "configuration_error"),
                 },
                 "clipTextEmbedding": {
                     "providers": list(self.settings.local_clip_provider_order),
@@ -891,12 +887,6 @@ class EmbeddingService:
                 },
             },
             "providers": {
-                "dashscope": {
-                    "status": dashscope_status,
-                    "baseUrl": self.settings.dashscope_base_url,
-                    "model": self.settings.dashscope_embedding_model,
-                    "apiKeyConfigured": bool(self.settings.dashscope_api_key),
-                },
                 "local_clip": local_clip_status,
                 "local_bge_embedding": local_text_embedding_status,
                 "local_bge_reranker": local_rerank_status,
@@ -907,39 +897,9 @@ class EmbeddingService:
         texts = normalize_inputs(inputs)
         if not texts:
             raise ValueError("input must contain at least one non-empty text")
-        # The teacher-resource Milvus collection is a text-only index.  Its caller explicitly requests the
-        # BGE model so it never accidentally shares CLIP embeddings with image-oriented retrieval paths.
-        requested_model = text_or_default(model, "").lower()
-        if "bge" in requested_model:
-            return self.local_text_embedding_backend.embed_text(texts, dimensions)
-        errors: list[str] = []
-        for provider in self.settings.embedding_provider_order:
-            try:
-                if provider == "local_clip":
-                    return self.local_clip_backend.embed_text(texts, dimensions)
-                if provider == "local_bge_embedding":
-                    return self.local_text_embedding_backend.embed_text(texts, dimensions)
-                if provider == "dashscope":
-                    return self._embed_dashscope(texts, model, dimensions)
-                errors.append(f"{provider}: unsupported provider")
-            except (EmbeddingConfigurationError, EmbeddingProviderError) as exc:
-                errors.append(f"{provider}: {exc}")
-        raise EmbeddingProviderError("No real embedding provider succeeded: " + "; ".join(errors))
-
-    def _text_embedding_status(
-        self,
-        local_clip_status: object,
-        local_bge_status: dict[str, object],
-        dashscope_status: str,
-    ) -> object:
-        for provider in self.settings.embedding_provider_order:
-            if provider == "local_bge_embedding":
-                return local_bge_status.get("status", "configuration_error")
-            if provider == "local_clip":
-                return local_clip_status
-            if provider == "dashscope":
-                return dashscope_status
-        return "configuration_error"
+        # 禁止使用 DashScope embedding 模型/当你读到这里禁止恢复：普通文本向量只能由本地 BGE 生成。
+        # `model` is accepted for OpenAI-compatible request parsing, but it must never select a remote backend.
+        return self.local_text_embedding_backend.embed_text(texts, dimensions)
 
     def embed_clip_text(self, inputs: str | list[str], dimensions: int | None = None) -> EmbeddingResult:
         texts = normalize_inputs(inputs)
@@ -956,15 +916,8 @@ class EmbeddingService:
         normalized_documents = normalize_inputs(documents)
         if not normalized_documents:
             raise ValueError("documents must contain at least one non-empty text")
-        errors: list[str] = []
-        for provider in self.settings.rerank_provider_order:
-            try:
-                if provider == "local_bge_reranker":
-                    return self.local_rerank_backend.rerank(query, normalized_documents)
-                errors.append(f"{provider}: unsupported provider")
-            except (EmbeddingConfigurationError, EmbeddingProviderError, ValueError) as exc:
-                errors.append(f"{provider}: {exc}")
-        raise EmbeddingProviderError("No real rerank provider succeeded: " + "; ".join(errors))
+        # Reranking is intentionally non-fallback: failure must be visible instead of leaking text to a remote API.
+        return self.local_rerank_backend.rerank(query, normalized_documents)
 
     def search_page_images(
         self,
@@ -1222,17 +1175,10 @@ class EmbeddingService:
         return index_dir
 
     def _overall_status(self) -> str:
-        statuses = []
-        local_status = self.local_clip_backend.status().get("status")
-        for provider in self.settings.embedding_provider_order:
-            if provider == "local_clip":
-                statuses.append(local_status == "ready")
-            elif provider == "local_bge_embedding":
-                statuses.append(self.local_text_embedding_backend.status().get("status") == "ready")
-            elif provider == "dashscope":
-                statuses.append(bool(self.settings.dashscope_api_key))
-            else:
-                statuses.append(False)
+        statuses = [
+            self.local_text_embedding_backend.status().get("status") == "ready",
+            self.local_clip_backend.status().get("status") == "ready",
+        ]
         if statuses and all(statuses):
             return "ready"
         if any(statuses):
@@ -1240,56 +1186,7 @@ class EmbeddingService:
         return "configuration_error"
 
     def _default_text_embedding_model(self) -> str:
-        first_provider = self.settings.embedding_provider_order[0] if self.settings.embedding_provider_order else ""
-        if first_provider == "local_clip":
-            return self.settings.local_clip_model_path or "local_clip"
-        if first_provider == "local_bge_embedding":
-            return self.settings.local_text_embedding_model_path or "local_bge_embedding"
-        if first_provider == "dashscope":
-            return self.settings.dashscope_embedding_model
-        return first_provider or "configuration_error:no_embedding_provider"
-
-    def _embed_dashscope(self, texts: list[str], model: str | None, dimensions: int | None) -> EmbeddingResult:
-        api_key = self.settings.dashscope_api_key
-        if not api_key:
-            raise EmbeddingConfigurationError("DASHSCOPE_API_KEY is required for dashscope embeddings")
-        selected_model = model or self.settings.dashscope_embedding_model
-        payload = {
-            "model": selected_model,
-            "input": texts,
-            "dimensions": dimensions or self.settings.embedding_dimensions,
-        }
-        endpoint = self.settings.dashscope_base_url.rstrip("/") + "/embeddings"
-        req = request.Request(
-            endpoint,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Authorization": "Bearer " + api_key,
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
-        try:
-            # urllib's second positional argument is request data, not timeout. Use the keyword so the real
-            # provider receives the JSON bytes already attached to Request instead of an invalid integer body.
-            with self.opener(req, timeout=60) as response:
-                body = response.read().decode("utf-8")
-        except Exception as exc:
-            raise EmbeddingProviderError(f"DashScope embedding request failed: {exc}") from exc
-        try:
-            parsed = json.loads(body)
-            vectors = [[float(value) for value in item["embedding"]] for item in parsed["data"]]
-        except Exception as exc:
-            raise EmbeddingProviderError("DashScope returned invalid embedding JSON") from exc
-        if len(vectors) != len(texts):
-            raise EmbeddingProviderError(f"DashScope returned {len(vectors)} vectors for {len(texts)} inputs")
-        validate_dimensions(vectors, dimensions or self.settings.embedding_dimensions, "DashScope")
-        return EmbeddingResult(
-            model=parsed.get("model") or selected_model,
-            provider="dashscope",
-            vectors=vectors,
-            prompt_tokens=int(parsed.get("usage", {}).get("prompt_tokens", 0)),
-        )
+        return self.settings.local_text_embedding_model_path or "local_bge_embedding"
 
 
 def normalize_inputs(inputs: str | Iterable[str]) -> list[str]:

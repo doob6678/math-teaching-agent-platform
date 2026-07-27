@@ -402,7 +402,9 @@ public class McpJsonRpcService {
      */
     private String knowledgeGraphSpineJson(McpClientRegistryProperties.Client client) {
         return toJson(knowledgeGraphSpineService.displaySpine(
-                stringValue(client.tenantId()).isBlank() ? "school-a" : client.tenantId(),
+                stringValue(client.tenantId()).isBlank()
+                        ? com.doob.mathagent.infrastructure.security.RequestSubject.DEFAULT_TENANT_ID
+                        : client.tenantId(),
                 stringValue(client.profile()).isBlank() ? "student" : client.profile(),
                 stringValue(client.subjectId())));
     }

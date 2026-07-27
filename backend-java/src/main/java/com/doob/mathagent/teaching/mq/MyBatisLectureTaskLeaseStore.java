@@ -17,9 +17,7 @@ public class MyBatisLectureTaskLeaseStore implements LectureTaskLeaseStore {
     public MyBatisLectureTaskLeaseStore(TeachingTaskMapper mapper) { this.mapper = mapper; }
     @Override public LectureTaskLease tryAcquire(String taskId, String workerId, Instant now, Duration duration) {
         String token = UUID.randomUUID().toString(); Instant expiry = now.plus(duration);
-        int changed = mapper.update(null, new LambdaUpdateWrapper<TeachingTaskEntity>().eq(TeachingTaskEntity::getTaskId, taskId)
-                .and(wrapper -> wrapper.eq(TeachingTaskEntity::getStatus, "CREATED").or().eq(TeachingTaskEntity::getStatus, "RETRYING").or().and(nested -> nested.eq(TeachingTaskEntity::getStatus, "RUNNING").lt(TeachingTaskEntity::getLeaseExpireAt, now)))
-                .set(TeachingTaskEntity::getStatus, "RUNNING").set(TeachingTaskEntity::getLeaseOwner, workerId).set(TeachingTaskEntity::getLeaseToken, token).set(TeachingTaskEntity::getLeaseExpireAt, expiry).set(TeachingTaskEntity::getStartedAt, now).setSql("retry_count = retry_count + 1"));
+        int changed = mapper.tryAcquireLectureTask(taskId, workerId, token, expiry, now);
         if (changed == 0) return null;
         TeachingTaskEntity claimed = mapper.selectById(taskId);
         return new LectureTaskLease(taskId, token, workerId, claimed.getRetryCount(), expiry);

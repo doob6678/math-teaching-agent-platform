@@ -12,13 +12,22 @@ import com.doob.mathagent.teaching.dto.TeachingTaskRequest;
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.awt.Graphics2D;
+import java.awt.RenderingHints;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import javax.imageio.ImageIO;
 import org.springframework.stereotype.Service;
 
 /**
@@ -28,6 +37,16 @@ import org.springframework.stereotype.Service;
 public class TeachingAiDraftService {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    /** Caps the model-only copy while retaining enough geometry for textbook diagrams and formula labels. */
+    private static final int MODEL_IMAGE_MAX_LONG_EDGE = 1536;
+    /** Rejects unexpectedly large files before decoding them into heap memory. */
+    private static final long MODEL_IMAGE_MAX_SOURCE_BYTES = 32L * 1024L * 1024L;
+    /** OpenAI-compatible low-detail image requests use one fixed 512px overview budget. */
+    private static final int LOW_DETAIL_IMAGE_TOKENS = 85;
+    private static final int HIGH_DETAIL_BASE_TOKENS = 85;
+    private static final int HIGH_DETAIL_TILE_TOKENS = 170;
+    private static final int HIGH_DETAIL_TILE_EDGE = 512;
+    private static final String MODEL_IMAGE_DETAIL = "low";
     private static final TeachingHandoutTemplateProfile DEFAULT_TEMPLATE =
             new TeachingHandoutTemplateService().resolve("default_standard");
     private static final Pattern STUDENT_FORBIDDEN_SECTION = Pattern.compile(
@@ -91,6 +110,26 @@ public class TeachingAiDraftService {
         RuntimeException lastFailure = null;
         TeachingTaskResponse.AiDraft lastUnstructuredDraft = null;
         List<TeachingTaskResponse.AiRecoveryEvent> recoveryEvents = new ArrayList<>();
+        ModelImageContext imageContext = prepareModelImageContext(evidence);
+        if (imageContext.available()) {
+            recoveryEvents.add(event(
+                    "IMAGE_CONTEXT_COMPRESSED",
+                    providers.getFirst().name(),
+                    providers.getFirst().chatModel(),
+                    0,
+                    false,
+                    false,
+                    imageContext.metricsJson()));
+        } else if (!imageContext.failureCode().isBlank()) {
+            recoveryEvents.add(event(
+                    "IMAGE_CONTEXT_SKIPPED",
+                    providers.getFirst().name(),
+                    providers.getFirst().chatModel(),
+                    0,
+                    false,
+                    false,
+                    imageContext.failureCode()));
+        }
         int totalPromptTokens = 0;
         int totalCompletionTokens = 0;
         int totalTokens = 0;
@@ -107,7 +146,8 @@ public class TeachingAiDraftService {
                             provider.chatModel(),
                             "CoursewareAgent",
                             nextPrompt,
-                            evidenceRefs(evidence)));
+                            evidenceRefs(evidence),
+                            imageContext.dataUrl()));
                     totalPromptTokens += result.promptTokens();
                     totalCompletionTokens += result.completionTokens();
                     totalTokens += result.totalTokens();
@@ -121,6 +161,16 @@ public class TeachingAiDraftService {
                             result.safeMessage()));
                     ParsedDraft parsed = parseStructuredDraft(result.generatedContent());
                     if (parsed.structured()) {
+                        if (parsed.locallyRepaired()) {
+                            recoveryEvents.add(event(
+                                    "JSON_REPAIRED_LOCALLY",
+                                    result.providerName(),
+                                    result.modelCode(),
+                                    attempt,
+                                    true,
+                                    false,
+                                    "Escaped malformed LaTeX JSON locally without another model call."));
+                        }
                         if (!appearsTopicAligned(request, parsed)) {
                             recoveryEvents.add(event(
                                     "TOPIC_ALIGNMENT_REJECTED",
@@ -353,6 +403,122 @@ public class TeachingAiDraftService {
                 structured,
                 retryable,
                 safeEventMessage(message));
+    }
+
+    /**
+     * Creates a bounded model-only copy of the first authorized evidence image. The original path remains on the
+     * evidence object for lossless handout rendering and is deliberately absent from metrics and provider traces.
+     */
+    private static ModelImageContext prepareModelImageContext(List<TeachingEvidence> evidence) {
+        if (evidence == null || evidence.isEmpty()) {
+            return ModelImageContext.empty();
+        }
+        for (TeachingEvidence item : evidence) {
+            if (item == null || item.imagePath() == null || item.imagePath().isBlank()) {
+                continue;
+            }
+            try {
+                Path source = Path.of(item.imagePath()).toAbsolutePath().normalize();
+                if (!Files.isRegularFile(source)) {
+                    return ModelImageContext.failed("authorized image is not a regular file");
+                }
+                long originalBytes = Files.size(source);
+                if (originalBytes <= 0 || originalBytes > MODEL_IMAGE_MAX_SOURCE_BYTES) {
+                    return ModelImageContext.failed("authorized image size is outside the model-context limit");
+                }
+                BufferedImage original = ImageIO.read(source.toFile());
+                if (original == null || original.getWidth() <= 0 || original.getHeight() <= 0) {
+                    return ModelImageContext.failed("authorized image format cannot be decoded");
+                }
+                BufferedImage compressed = resizeForModel(original);
+                byte[] compressedBytes = encodePng(compressed);
+                int originalTokens = estimateHighDetailTokens(original.getWidth(), original.getHeight());
+                int compressedTokens = LOW_DETAIL_IMAGE_TOKENS;
+                ImageContextMetrics metrics = new ImageContextMetrics(
+                        original.getWidth(),
+                        original.getHeight(),
+                        compressed.getWidth(),
+                        compressed.getHeight(),
+                        originalBytes,
+                        compressedBytes.length,
+                        MODEL_IMAGE_DETAIL,
+                        originalTokens,
+                        compressedTokens,
+                        Math.max(0, originalTokens - compressedTokens));
+                return new ModelImageContext(
+                        "data:image/png;base64," + Base64.getEncoder().encodeToString(compressedBytes),
+                        OBJECT_MAPPER.writeValueAsString(metrics),
+                        "");
+            } catch (IOException | RuntimeException exception) {
+                return ModelImageContext.failed(exception.getClass().getSimpleName());
+            }
+        }
+        return ModelImageContext.empty();
+    }
+
+    /** Preserves the aspect ratio and uses bicubic interpolation so thin geometry lines remain readable. */
+    private static BufferedImage resizeForModel(BufferedImage original) {
+        int longEdge = Math.max(original.getWidth(), original.getHeight());
+        if (longEdge <= MODEL_IMAGE_MAX_LONG_EDGE) {
+            return original;
+        }
+        double scale = (double) MODEL_IMAGE_MAX_LONG_EDGE / longEdge;
+        int width = Math.max(1, (int) Math.round(original.getWidth() * scale));
+        int height = Math.max(1, (int) Math.round(original.getHeight() * scale));
+        BufferedImage resized = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D graphics = resized.createGraphics();
+        try {
+            graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+            graphics.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
+            graphics.drawImage(original, 0, 0, width, height, null);
+        } finally {
+            graphics.dispose();
+        }
+        return resized;
+    }
+
+    /** PNG is intentional: textbook line art and small formula glyphs must not acquire JPEG ringing. */
+    private static byte[] encodePng(BufferedImage image) throws IOException {
+        try (ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            if (!ImageIO.write(image, "png", output)) {
+                throw new IOException("PNG encoder is unavailable");
+            }
+            return output.toByteArray();
+        }
+    }
+
+    /** Estimates the uncompressed high-detail budget using 512px tiles for an auditable before/after comparison. */
+    private static int estimateHighDetailTokens(int width, int height) {
+        int horizontalTiles = (width + HIGH_DETAIL_TILE_EDGE - 1) / HIGH_DETAIL_TILE_EDGE;
+        int verticalTiles = (height + HIGH_DETAIL_TILE_EDGE - 1) / HIGH_DETAIL_TILE_EDGE;
+        return HIGH_DETAIL_BASE_TOKENS + HIGH_DETAIL_TILE_TOKENS * horizontalTiles * verticalTiles;
+    }
+
+    private record ModelImageContext(String dataUrl, String metricsJson, String failureCode) {
+        private static ModelImageContext empty() {
+            return new ModelImageContext("", "", "");
+        }
+
+        private static ModelImageContext failed(String failureCode) {
+            return new ModelImageContext("", "", failureCode == null ? "image compression failed" : failureCode);
+        }
+
+        private boolean available() {
+            return !dataUrl.isBlank();
+        }
+    }
+
+    private record ImageContextMetrics(
+            int originalWidth,
+            int originalHeight,
+            int compressedWidth,
+            int compressedHeight,
+            long originalBytes,
+            long compressedBytes,
+            String detail,
+            int estimatedTokensBefore,
+            int estimatedTokensAfter,
+            int estimatedTokensSaved) {
     }
 
     /**
@@ -815,7 +981,8 @@ public class TeachingAiDraftService {
         if (content == null || content.isBlank()) {
             return ParsedDraft.failed("empty model content");
         }
-        String json = normalizeTeXEscapesInJson(extractJsonObject(stripCodeFence(content.strip())));
+        String extractedJson = extractJsonObject(stripCodeFence(content.strip()));
+        String json = normalizeTeXEscapesInJson(extractedJson);
         try {
             StructuredDraftJson parsed = OBJECT_MAPPER.readValue(json, StructuredDraftJson.class);
             String teacherExplanation = normalizeText(parsed.teacherExplanation());
@@ -840,7 +1007,8 @@ public class TeachingAiDraftService {
                     studentHint,
                     knowledgePoints,
                     followUpQuestions,
-                    "");
+                    "",
+                    !json.equals(extractedJson));
         } catch (JsonProcessingException | IllegalArgumentException exception) {
             return ParsedDraft.failed(exception.getClass().getSimpleName() + ": " + safeErrorMessage(exception));
         }
@@ -873,9 +1041,11 @@ public class TeachingAiDraftService {
     }
 
     /**
-     * Repairs a common OpenAI-compatible response boundary: models correctly write TeX {@code \sqrt} and
-     * {@code \frac} inside JSON strings, but omit JSON's second escape slash.  We alter only a backslash that starts
-     * a letter-based TeX command, while preserving JSON's quote, slash, unicode and control-character escapes.
+     * Repairs a common OpenAI-compatible response boundary: models correctly write TeX commands and delimiters
+     * inside JSON strings, but omit JSON's second escape slash. The scanner consumes escape pairs atomically, so an
+     * escaped quote cannot accidentally change string state. Valid JSON escapes are preserved; ambiguous control
+     * escapes such as {@code \beta} are treated as TeX when another command letter follows. This deterministic local
+     * pass avoids a paid model retry for a transport-format defect.
      */
     private static String normalizeTeXEscapesInJson(String json) {
         if (json == null || json.isBlank()) {
@@ -885,28 +1055,50 @@ public class TeachingAiDraftService {
         boolean inString = false;
         for (int index = 0; index < json.length(); index += 1) {
             char current = json.charAt(index);
-            if (current == '"' && (index == 0 || json.charAt(index - 1) != '\\')) {
+            if (current == '"') {
                 inString = !inString;
                 result.append(current);
                 continue;
             }
-            if (!inString || current != '\\' || index + 1 >= json.length()) {
+            if (!inString) {
+                result.append(current);
+                continue;
+            }
+            if (current == '\n') {
+                result.append("\\n");
+                continue;
+            }
+            if (current == '\r') {
+                result.append("\\r");
+                continue;
+            }
+            if (current == '\t') {
+                result.append("\\t");
+                continue;
+            }
+            if (current != '\\' || index + 1 >= json.length()) {
                 result.append(current);
                 continue;
             }
             char next = json.charAt(index + 1);
             char afterNext = index + 2 < json.length() ? json.charAt(index + 2) : '\0';
-            boolean teXCommand = Character.isLetter(next)
-                    && (next != 'u' || !hasFourHexDigits(json, index + 2))
-                    && (next != 'b' && next != 'f' && next != 'n' && next != 'r' && next != 't'
-                    || Character.isLetter(afterNext));
-            if (teXCommand) {
-                // Keep the original slash below and prepend exactly one JSON escape slash.
+            boolean validUnicodeEscape = next == 'u' && hasFourHexDigits(json, index + 2);
+            boolean validSimpleEscape = next == '"' || next == '\\' || next == '/'
+                    || ((next == 'b' || next == 'f' || next == 'n' || next == 'r' || next == 't')
+                    && !isAsciiLowercase(afterNext));
+            if (!validUnicodeEscape && !validSimpleEscape) {
+                // Prepend one slash; the original slash and command character are appended as one consumed pair.
                 result.append('\\');
             }
-            result.append(current);
+            result.append(current).append(next);
+            index += 1;
         }
         return result.toString();
+    }
+
+    /** TeX command continuations are lowercase; normal JSON newlines commonly precede Chinese or capitalized text. */
+    private static boolean isAsciiLowercase(char value) {
+        return value >= 'a' && value <= 'z';
     }
 
     /** Distinguishes a four-hex-digit JSON unicode escape from a TeX command beginning with a slash and u. */
@@ -1036,7 +1228,9 @@ public class TeachingAiDraftService {
             return "";
         }
         String stripped = message.strip();
-        return stripped.length() <= 180 ? stripped : stripped.substring(0, 180);
+        // Compression metrics and provider diagnostics are persisted as audit JSON, so keep the complete bounded text.
+        int maxAuditMessageLength = 2_048;
+        return stripped.length() <= maxAuditMessageLength ? stripped : stripped.substring(0, maxAuditMessageLength);
     }
 
     record ParsedDraft(
@@ -1045,10 +1239,11 @@ public class TeachingAiDraftService {
             String studentHint,
             List<String> knowledgePoints,
             List<String> followUpQuestions,
-            String parseError) {
+            String parseError,
+            boolean locallyRepaired) {
 
         static ParsedDraft failed(String parseError) {
-            return new ParsedDraft(false, "", "", List.of(), List.of(), parseError);
+            return new ParsedDraft(false, "", "", List.of(), List.of(), parseError, false);
         }
     }
 

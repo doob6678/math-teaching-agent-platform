@@ -20,13 +20,15 @@ class KnowledgeGraphSpineSeedServiceTest {
         KnowledgeGraphSpineSeedService.KnowledgeGraphSpineSeedResult result =
                 seedService.seedFromConfiguredSource();
         KnowledgeGraphSpineResponse graph = new KnowledgeGraphSpineService(store)
-                .displaySpine("school-a", "student", "student-1");
+                .displaySpine("default", "student", "student-1");
 
         assertThat(result.executed()).isTrue();
-        assertThat(result.nodeCount()).isEqualTo(84);
-        assertThat(result.relationCount()).isEqualTo(83);
-        assertThat(graph.nodeCount()).isEqualTo(84);
-        assertThat(graph.edgeCount()).isEqualTo(83);
+        assertThat(properties.getTenantId()).isEqualTo("default");
+        assertThat(properties.getMethodNodeLimit()).isEqualTo(100);
+        assertThat(result.nodeCount()).isEqualTo(141);
+        assertThat(result.relationCount()).isEqualTo(139);
+        assertThat(graph.nodeCount()).isEqualTo(141);
+        assertThat(graph.edgeCount()).isEqualTo(139);
         assertThat(graph.nodes()).extracting(KnowledgeGraphSpineResponse.Node::label)
                 .contains(
                         "\u51fd\u6570",
@@ -51,9 +53,12 @@ class KnowledgeGraphSpineSeedServiceTest {
         seedService.seedFromConfiguredSource();
         seedService.seedFromConfiguredSource();
         KnowledgeGraphSpineResponse graph = new KnowledgeGraphSpineService(store)
-                .displaySpine("school-a", "teacher", "teacher-1");
+                .displaySpine("default", "teacher", "teacher-1");
 
-        assertThat(graph.nodeCount()).isEqualTo(84);
-        assertThat(graph.edgeCount()).isEqualTo(83);
+        assertThat(graph.nodeCount()).isEqualTo(141);
+        assertThat(graph.edgeCount()).isEqualTo(139);
+        assertThat(new KnowledgeGraphSpineService(store)
+                .displaySpine("school-a", "teacher", "teacher-1")
+                .nodeCount()).isZero();
     }
 }

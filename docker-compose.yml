@@ -112,20 +112,24 @@ services:
       MATH_AGENT_DB_NAME: ${MATH_AGENT_DB_NAME:-math_agent_rag}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
-      # Teacher documents use the existing DashScope account for 512-dimensional text vectors. The runtime image
-      # intentionally omits the heavyweight local BGE stack, so the provider and dimension must be explicit here.
-      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
-      MATH_AGENT_EMBEDDING_PROVIDER_ORDER: ${MATH_AGENT_EMBEDDING_PROVIDER_ORDER:-dashscope}
-      MATH_AGENT_DASHSCOPE_EMBEDDING_MODEL: ${MATH_AGENT_DASHSCOPE_EMBEDDING_MODEL:-text-embedding-v4}
+      # 禁止恢复 DashScope embedding；教材向量、重排和图像向量必须始终留在只读挂载的本地模型中。
+      # Do not restore DashScope embeddings; text vectors, reranking, and CLIP must remain on local read-only models.
+      MATH_AGENT_EMBEDDING_PROVIDER_ORDER: local_bge_embedding
+      MATH_AGENT_RERANK_PROVIDER_ORDER: local_bge_reranker
+      MATH_AGENT_CLIP_PROVIDER_ORDER: local_clip
       MATH_AGENT_EMBEDDING_DIMENSION: ${MATH_AGENT_EMBEDDING_DIMENSION:-512}
-      MATH_AGENT_LOCAL_CLIP_MODEL_PATH: ${MATH_AGENT_CONTAINER_CLIP_MODEL_PATH:-}
-      MATH_AGENT_LOCAL_RERANK_MODEL_PATH: ${MATH_AGENT_CONTAINER_RERANK_MODEL_PATH:-}
-      MATH_AGENT_LOCAL_TEXT_EMBEDDING_MODEL_PATH: ${MATH_AGENT_CONTAINER_TEXT_MODEL_PATH:-}
+      MATH_AGENT_LOCAL_CLIP_MODEL_PATH: ${MATH_AGENT_CONTAINER_CLIP_MODEL_PATH:?set in .env}
+      MATH_AGENT_LOCAL_RERANK_MODEL_PATH: ${MATH_AGENT_CONTAINER_RERANK_MODEL_PATH:?set in .env}
+      MATH_AGENT_LOCAL_TEXT_EMBEDDING_MODEL_PATH: ${MATH_AGENT_CONTAINER_TEXT_MODEL_PATH:?set in .env}
+      MATH_AGENT_LOCAL_CLIP_DEVICE: cuda
+      MATH_AGENT_LOCAL_RERANK_DEVICE: cuda
+      MATH_AGENT_LOCAL_TEXT_EMBEDDING_DEVICE: cuda
       MATH_AGENT_USAGE_LEDGER_PATH: /app/data/usage/provider-usage.jsonl
+    gpus: all
     ports: ["${MATH_AGENT_WORKER_HOST_PORT:-8092}:8091"]
     volumes:
       - worker-data:/app/data
-      - ${MATH_AGENT_MODEL_ROOT:-./.local-models}:/models:ro
+      - ${MATH_AGENT_MODEL_ROOT:?set in .env}:/models:ro
     depends_on:
       mysql: {condition: service_healthy}
 
@@ -159,14 +163,16 @@ services:
       MATH_AGENT_AGENT_WORKER_MAX_CONCURRENCY: ${MATH_AGENT_AGENT_WORKER_MAX_CONCURRENCY:-1}
       MATH_AGENT_EMBEDDING_BASE_URL: http://ai-worker:8091/v1
       MATH_AGENT_EMBEDDING_API_KEY: ${MATH_AGENT_WORKER_API_KEY:?set in .env}
-      MATH_AGENT_EMBEDDING_MODEL: ${MATH_AGENT_EMBEDDING_MODEL:-text-embedding-v4}
+      MATH_AGENT_EMBEDDING_MODEL: local_bge_embedding
       MATH_AGENT_EMBEDDING_BATCH_SIZE: ${MATH_AGENT_EMBEDDING_BATCH_SIZE:-10}
-      MATH_AGENT_TEACHER_IMAGE_CLIP_ENABLED: ${MATH_AGENT_TEACHER_IMAGE_CLIP_ENABLED:-false}
+      MATH_AGENT_TEACHER_IMAGE_CLIP_ENABLED: "true"
       MATH_AGENT_PROCESSED_BOOKS_ROOT: /app/data/textbooks
       MATH_AGENT_VECTOR_INDEX_MILVUS_URI: http://milvus:19530
       MATH_AGENT_MILVUS_TOKEN: root:${MATH_AGENT_MILVUS_ROOT_PASSWORD:?set in .env}
       MATH_AGENT_TEACHER_SYNC_FEISHU_DOWNLOADER_SCRIPT: /app/scripts/download_feishu_url.py
       MATH_AGENT_PYTHON_EXECUTABLE: python3
+      # PDFBox fallback must embed a real CJK TTF; Helvetica silently turns every Chinese glyph into '?'.
+      MATH_AGENT_PDF_FONT_PATH: /app/fonts/cjk.ttf
       MATH_AGENT_TEACHER_SYNC_FEISHU_STAGING_ROOT: /app/data/teacher-source-imports
       MATH_AGENT_TEACHER_SYNC_ASSET_STORAGE_ROOT: /app/data/teacher-assets
       FEISHU_APP_ID: ${FEISHU_APP_ID:-${FEISHU_APPID:-}}
@@ -190,6 +196,7 @@ services:
     volumes:
       - backend-data:/app/data
       - ${MATH_AGENT_PROCESSED_BOOKS_HOST_ROOT:?set in .env}:/app/data/textbooks:ro
+      - ${MATH_AGENT_PDF_FONT_HOST_PATH:?set in .env}:/app/fonts/cjk.ttf:ro
     depends_on:
       mysql: {condition: service_healthy}
       redis: {condition: service_healthy}

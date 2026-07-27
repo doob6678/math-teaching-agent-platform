@@ -51,7 +51,7 @@ public class TextbookPageImageService {
             throw new IllegalArgumentException("Textbook catalog item not found");
         }
         Path normalizedRoot = processedBooksRoot.toAbsolutePath().normalize();
-        Path bookRoot = normalizeBookRoot(normalizedRoot, catalogItem.bookRoot());
+        Path bookRoot = TextbookBookRootResolver.resolve(normalizedRoot, catalogItem);
         Path imagePath = resolveImagePath(normalizedRoot, bookRoot, metadata);
         if (!Files.isRegularFile(imagePath)) {
             throw new IllegalArgumentException("Textbook page image file is unavailable");
@@ -120,17 +120,6 @@ public class TextbookPageImageService {
         } catch (IOException exception) {
             throw new IllegalStateException("Failed to read textbook page image manifest: " + manifestPath, exception);
         }
-    }
-
-    private static Path normalizeBookRoot(Path processedBooksRoot, String bookRoot) {
-        Path candidate = Path.of(requireText(bookRoot, "bookRoot is required"));
-        Path resolved = candidate.isAbsolute()
-                ? candidate.toAbsolutePath().normalize()
-                : processedBooksRoot.resolve(candidate).normalize();
-        if (!resolved.startsWith(processedBooksRoot)) {
-            throw new IllegalArgumentException("Textbook bookRoot escapes processed_books root");
-        }
-        return resolved;
     }
 
     private static Path resolveImagePath(Path processedBooksRoot, Path bookRoot, PageImageMetadata metadata) {

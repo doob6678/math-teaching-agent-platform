@@ -1,5 +1,6 @@
 package com.doob.mathagent.knowledge.service;
 
+import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.knowledge.vo.KnowledgeGraphSpineResponse;
 import java.util.Comparator;
 import java.util.List;
@@ -33,7 +34,7 @@ public class KnowledgeGraphSpineService {
             String tenantId,
             String viewerRole,
             String viewerSubjectId) {
-        String normalizedTenantId = textOrDefault(tenantId, "school-a");
+        String normalizedTenantId = textOrDefault(tenantId, RequestSubject.DEFAULT_TENANT_ID);
         String normalizedRole = textOrDefault(viewerRole, "student").toLowerCase();
         String normalizedSubjectId = textOrDefault(viewerSubjectId, "");
         List<KnowledgePointRecord> points = store.listKnowledgePoints(

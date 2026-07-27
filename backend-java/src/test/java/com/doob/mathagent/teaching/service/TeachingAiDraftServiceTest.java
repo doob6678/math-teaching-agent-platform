@@ -14,9 +14,72 @@ import com.doob.mathagent.teaching.vo.TeachingHandoutTemplateResponse;
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
 import java.util.ArrayList;
 import java.util.List;
+import java.awt.image.BufferedImage;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import javax.imageio.ImageIO;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 class TeachingAiDraftServiceTest {
+
+    /** Luna commonly emits mathematically correct TeX with JSON-invalid single slashes; this must cost one call. */
+    @Test
+    void repairsLatexCommandsAndDelimitersLocallyWithoutPaidRetry() {
+        String malformedLunaJson = """
+                {
+                  "teacherExplanation": "New function definition: $\\delta>0$, $A=\\{x\\,|\\,x>0\\}$ and \\\"quoted condition\\\".",
+                  "studentHint": "Substitute into $D\\left(x\\right)$, then check the condition.",
+                  "knowledgePoints": ["new function definition", "$\\beta$ classification"],
+                  "followUpQuestions": ["How to find $D\\left(0\\right)$?"]
+                }
+                """;
+        CapturingGateway gateway = new CapturingGateway(List.of(new AiChatResult(
+                "openai", "gpt-5.6-luna", 30, 20, 50, "ok", malformedLunaJson)));
+        TeachingAiDraftService service = new TeachingAiDraftService(gateway, catalog(true, false), defaultPolicy());
+
+        TeachingTaskResponse.AiDraft draft = service.draft(request(), evidence(), memory());
+
+        assertThat(gateway.requests()).hasSize(1);
+        assertThat(draft.structured()).isTrue();
+        assertThat(draft.teacherExplanation()).contains("\\delta", "\\{", "\\,", "quoted condition");
+        assertThat(draft.studentHint()).contains("\\left", "\\right");
+        assertThat(draft.recoveryEvents()).extracting(TeachingTaskResponse.AiRecoveryEvent::eventType)
+                .containsExactly("MODEL_CALL_SUCCEEDED", "JSON_REPAIRED_LOCALLY", "JSON_PARSE_SUCCEEDED");
+        assertThat(draft.retryCount()).isZero();
+        assertThat(draft.totalTokens()).isEqualTo(50);
+    }
+
+    @Test
+    void compressesAuthorizedEvidenceImageAndRecordsEstimatedTokenSavings(@TempDir Path tempDir) throws Exception {
+        Path imagePath = tempDir.resolve("large-diagram.png");
+        BufferedImage image = new BufferedImage(2400, 1600, BufferedImage.TYPE_INT_RGB);
+        var graphics = image.createGraphics();
+        graphics.fillRect(0, 0, image.getWidth(), image.getHeight());
+        graphics.dispose();
+        ImageIO.write(image, "png", imagePath.toFile());
+        long originalBytes = Files.size(imagePath);
+        CapturingGateway gateway = new CapturingGateway(List.of(new AiChatResult(
+                "openai", "gpt-5.4", 20, 4, 24, "ok", structuredJson("compressed image draft"))));
+        TeachingAiDraftService service = new TeachingAiDraftService(gateway, catalog(true, false), defaultPolicy());
+        List<TeachingEvidence> imageEvidence = List.of(new TeachingEvidence(
+                "TEACHER_RESOURCE", "解三角形图题", "block-image", 1,
+                "如图，在三角形ABC中求边长。", imagePath.toString(), ""));
+
+        TeachingTaskResponse.AiDraft draft = service.draft(request(), imageEvidence, memory());
+
+        assertThat(gateway.requests()).hasSize(1);
+        assertThat(gateway.requests().getFirst().imageDataUrl()).startsWith("data:image/png;base64,");
+        assertThat(gateway.requests().getFirst().imageDataUrl().length()).isLessThan((int) originalBytes * 2);
+        assertThat(draft.recoveryEvents()).anySatisfy(event -> {
+            assertThat(event.eventType()).isEqualTo("IMAGE_CONTEXT_COMPRESSED");
+            assertThat(event.message()).contains(
+                    "\"originalWidth\":2400",
+                    "\"compressedWidth\":1536",
+                    "\"detail\":\"low\"",
+                    "\"estimatedTokensSaved\":");
+        });
+    }
 
     @Test
     void removesTrailingSeparatorsLeftByOpaqueEvidenceIdentifiers() {

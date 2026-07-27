@@ -10,7 +10,6 @@ import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -29,9 +28,7 @@ import org.apache.pdfbox.pdmodel.PDPageContentStream.AppendMode;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.pdmodel.font.PDFont;
 import org.apache.pdfbox.pdmodel.font.PDType0Font;
-import org.apache.pdfbox.pdmodel.font.PDType1Font;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
-import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -1736,9 +1733,18 @@ public class TeachingHandoutPdfExportService {
      * Loads a local Unicode font so Chinese handouts are not converted to question marks.
      */
     private static PDFont loadReadableFont(PDDocument document) throws IOException {
-        Optional<Path> configuredFont = configuredFontPath();
-        if (configuredFont.isPresent()) {
-            return PDType0Font.load(document, configuredFont.get().toFile());
+        String configuredValue = configuredFontValue();
+        if (!configuredValue.isBlank()) {
+            Path configuredFont = Path.of(configuredValue);
+            if (!Files.isRegularFile(configuredFont)) {
+                throw new IOException("配置的中文 PDF 字体不存在或不可读：" + configuredFont);
+            }
+            try {
+                return PDType0Font.load(document, configuredFont.toFile());
+            } catch (IOException exception) {
+                // 不能退回 Helvetica：它不包含中文字形，会把整份讲义静默导出为问号。
+                throw new IOException("配置的中文 PDF 字体加载失败：" + configuredFont, exception);
+            }
         }
         for (Path path : commonFontPaths()) {
             if (Files.isRegularFile(path)) {
@@ -1749,22 +1755,19 @@ public class TeachingHandoutPdfExportService {
                 }
             }
         }
-        return new PDType1Font(Standard14Fonts.FontName.HELVETICA);
+        // PDFBox 的标准 14 字体没有中文字形。宁可明确拒绝导出，也不能生成看似成功的乱码文件。
+        throw new IOException("未找到可用的本地中文 PDF 字体；请配置 MATH_AGENT_PDF_FONT_PATH");
     }
 
     /**
      * Returns an operator-provided font path when available.
      */
-    private static Optional<Path> configuredFontPath() {
+    private static String configuredFontValue() {
         String value = System.getenv("MATH_AGENT_PDF_FONT_PATH");
         if (value == null || value.isBlank()) {
             value = System.getProperty("math.agent.pdf.font.path", "");
         }
-        if (value.isBlank()) {
-            return Optional.empty();
-        }
-        Path path = Path.of(value.strip());
-        return Files.isRegularFile(path) ? Optional.of(path) : Optional.empty();
+        return value == null ? "" : value.strip();
     }
 
     /**
@@ -1778,9 +1781,12 @@ public class TeachingHandoutPdfExportService {
                 Path.of("C:/Windows/Fonts/msyh.ttf"),
                 Path.of("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"),
                 Path.of("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
-                Path.of("/usr/share/fonts/truetype/wqy/wqy-microhei.ttc"),
-                Path.of("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"));
+                Path.of("/usr/share/fonts/truetype/wqy/wqy-microhei.ttc"));
     }
+
+    /** Removes container/layout commands that have no visible meaning in the PDFBox fallback. */
+    private static final Pattern FALLBACK_LAYOUT_COMMAND = Pattern.compile(
+            "\\\\(?:begin\\s*\\{minipage}(?:\\s*\\[[^]]*])?\\s*\\{[^}]*}|end\\s*\\{minipage}|hfill|vfill|smallskip|medskip|bigskip|par)\\s*");
 
     /**
      * Converts a small LaTeX subset into human-readable text lines.
@@ -2239,6 +2245,9 @@ public class TeachingHandoutPdfExportService {
      */
     private static String cleanText(String value) {
         String cleaned = safeText(value);
+        // \left begins with the same prefix as \le. Remove scalable delimiters first so it cannot become “≤ft”.
+        String latexSlash = String.valueOf((char) 92);
+        cleaned = cleaned.replace(latexSlash + "left", "").replace(latexSlash + "right", "");
         cleaned = cleaned
                 .replace("AI教师讲解草稿", "教师讲解稿")
                 .replace("AI 讲义草稿", "讲义内容生成")
@@ -2246,6 +2255,12 @@ public class TeachingHandoutPdfExportService {
                 .replace("\\textbackslash{}", "\\")
                 .replace("\\textbackslash", "\\")
                 .replace("\\_", "_");
+        // Model JSON snapshots can persist LaTeX with doubled backslashes. Normalize that transport escape first;
+        // otherwise the fallback sees a literal slash plus an unrecognized command and leaks raw LaTeX source.
+        cleaned = cleaned.replace("\\\\", "\\");
+        // XeLaTeX consumes these commands structurally. PDFBox must remove them before plain-text layout so
+        // minipage widths and spacing commands never appear as student-facing words.
+        cleaned = FALLBACK_LAYOUT_COMMAND.matcher(cleaned).replaceAll("");
         cleaned = MARKDOWN_IMAGE.matcher(cleaned).replaceAll("");
         cleaned = IMAGE_MARKER.matcher(cleaned).replaceAll("");
         cleaned = UNDERLINE_HSPACE_COMMAND.matcher(cleaned).replaceAll("________");
@@ -2306,6 +2321,8 @@ public class TeachingHandoutPdfExportService {
                 .replace("}", "")
                 .replaceAll("\\s+", " ")
                 .strip();
+        // Leftover backslashes are TeX line-break/control residue after all supported commands were converted.
+        cleaned = cleaned.replace(latexSlash, " ").replaceAll("\\s+", " ").strip();
         return cleaned;
     }
 
@@ -2325,54 +2342,14 @@ public class TeachingHandoutPdfExportService {
         Matcher matcher = pattern.matcher(value);
         StringBuffer buffer = new StringBuffer();
         while (matcher.find()) {
-            matcher.appendReplacement(buffer, Matcher.quoteReplacement(scriptText(matcher.group(1), superscript)));
+            String script = safeText(matcher.group(1));
+            // SimHei and several other CJK fonts omit Unicode superscript/subscript glyphs. Keep a compact
+            // ASCII notation in PDFBox output so x^2 and a_{10} remain readable instead of becoming question marks.
+            String replacement = (superscript ? "^" : "_") + (script.length() == 1 ? script : "{" + script + "}");
+            matcher.appendReplacement(buffer, Matcher.quoteReplacement(replacement));
         }
         matcher.appendTail(buffer);
         return buffer.toString();
-    }
-
-    private static String scriptText(String value, boolean superscript) {
-        StringBuilder builder = new StringBuilder();
-        safeText(value).codePoints().forEach(codePoint -> builder.append(scriptChar(codePoint, superscript)));
-        return builder.toString();
-    }
-
-    private static String scriptChar(int codePoint, boolean superscript) {
-        return switch (codePoint) {
-            case '0' -> superscript ? "⁰" : "₀";
-            case '1' -> superscript ? "¹" : "₁";
-            case '2' -> superscript ? "²" : "₂";
-            case '3' -> superscript ? "³" : "₃";
-            case '4' -> superscript ? "⁴" : "₄";
-            case '5' -> superscript ? "⁵" : "₅";
-            case '6' -> superscript ? "⁶" : "₆";
-            case '7' -> superscript ? "⁷" : "₇";
-            case '8' -> superscript ? "⁸" : "₈";
-            case '9' -> superscript ? "⁹" : "₉";
-            case '+' -> superscript ? "⁺" : "₊";
-            case '-' -> superscript ? "⁻" : "₋";
-            case '=' -> superscript ? "⁼" : "₌";
-            case '(' -> superscript ? "⁽" : "₍";
-            case ')' -> superscript ? "⁾" : "₎";
-            case 'a' -> superscript ? "ᵃ" : "ₐ";
-            case 'e' -> superscript ? "ᵉ" : "ₑ";
-            case 'h' -> superscript ? "ʰ" : "ₕ";
-            case 'i' -> superscript ? "ⁱ" : "ᵢ";
-            case 'j' -> superscript ? "ʲ" : "ⱼ";
-            case 'k' -> superscript ? "ᵏ" : "ₖ";
-            case 'l' -> superscript ? "ˡ" : "ₗ";
-            case 'm' -> superscript ? "ᵐ" : "ₘ";
-            case 'n' -> superscript ? "ⁿ" : "ₙ";
-            case 'o' -> superscript ? "ᵒ" : "ₒ";
-            case 'p' -> superscript ? "ᵖ" : "ₚ";
-            case 'r' -> superscript ? "ʳ" : "ᵣ";
-            case 's' -> superscript ? "ˢ" : "ₛ";
-            case 't' -> superscript ? "ᵗ" : "ₜ";
-            case 'u' -> superscript ? "ᵘ" : "ᵤ";
-            case 'v' -> superscript ? "ᵛ" : "ᵥ";
-            case 'x' -> superscript ? "ˣ" : "ₓ";
-            default -> Character.toString(codePoint);
-        };
     }
 
     /**

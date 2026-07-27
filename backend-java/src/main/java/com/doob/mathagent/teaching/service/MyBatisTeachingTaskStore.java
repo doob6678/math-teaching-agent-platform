@@ -105,6 +105,23 @@ public class MyBatisTeachingTaskStore implements TeachingTaskStore {
         return task;
     }
 
+    /**
+     * Resets worker-owned execution columns only for an explicit manual resume. Normal progress saves deliberately
+     * preserve these columns so an in-flight checkpoint cannot invalidate its own lease.
+     */
+    @Override
+    public TeachingTaskResponse prepareForResume(
+            String ownerKey,
+            String idempotencyKey,
+            TeachingTaskResponse runningTask) {
+        int updated = mapper.prepareLectureTaskForResume(
+                runningTask.taskId(), ownerKey.strip(), writeResponse(runningTask), Instant.now());
+        if (updated != 1) {
+            throw new IllegalStateException("Teaching task could not be prepared for resume");
+        }
+        return runningTask;
+    }
+
     private TeachingTaskEntity toEntity(String ownerKey, String idempotencyKey, TeachingTaskResponse task) {
         TeachingTaskEntity entity = new TeachingTaskEntity();
         entity.setTaskId(task.taskId());

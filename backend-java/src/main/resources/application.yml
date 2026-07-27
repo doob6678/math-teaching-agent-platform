@@ -253,9 +253,9 @@ math-agent:
   knowledge:
     graph-spine:
       seed-enabled: ${MATH_AGENT_KNOWLEDGE_GRAPH_SPINE_SEED_ENABLED:true}
-      tenant-id: ${MATH_AGENT_KNOWLEDGE_GRAPH_SPINE_TENANT_ID:school-a}
+      tenant-id: ${MATH_AGENT_KNOWLEDGE_GRAPH_SPINE_TENANT_ID:default}
       permission-scope: ${MATH_AGENT_KNOWLEDGE_GRAPH_SPINE_PERMISSION_SCOPE:MATH_VIP}
-      method-node-limit: ${MATH_AGENT_KNOWLEDGE_GRAPH_SPINE_METHOD_NODE_LIMIT:50}
+      method-node-limit: ${MATH_AGENT_KNOWLEDGE_GRAPH_SPINE_METHOD_NODE_LIMIT:100}
       source-location: ${MATH_AGENT_KNOWLEDGE_GRAPH_SPINE_SOURCE_LOCATION:classpath:knowledge/graph-spine-v0.1.md}
   resources:
     # c2 is the searchable small-heading corpus.  The original page corpus b4

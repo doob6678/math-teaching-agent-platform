@@ -80,7 +80,8 @@ class SpringAiOpenAiCompatibleGatewayTest {
 
         assertThat(message.get("role")).isEqualTo("user");
         assertThat(message.get("content")).isInstanceOf(List.class);
-        assertThat(message.get("content").toString()).contains("image_url", "data:image/png;base64,aGVsbG8=");
+        assertThat(message.get("content").toString())
+                .contains("image_url", "data:image/png;base64,aGVsbG8=", "detail=low");
     }
 
     @Test

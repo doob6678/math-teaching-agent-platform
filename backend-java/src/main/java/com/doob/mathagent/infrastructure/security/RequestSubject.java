@@ -15,13 +15,19 @@ public record RequestSubject(
         String deviceId) {
 
     /**
+     * Single-tenant deployment id shared by authentication, seeded knowledge, retrieval, and MCP.
+     * Keeping it here prevents those entry points from silently selecting different data partitions.
+     */
+    public static final String DEFAULT_TENANT_ID = "default";
+
+    /**
      * Returns a normalized subject with safe defaults.
      *
      * @return normalized subject
      */
     public RequestSubject normalize() {
         return new RequestSubject(
-                textOrDefault(tenantId, "default"),
+                textOrDefault(tenantId, DEFAULT_TENANT_ID),
                 textOrDefault(subjectType, "anonymous").toLowerCase(),
                 blankToNull(subjectId),
                 textOrDefault(deviceId, "unknown-device"));
