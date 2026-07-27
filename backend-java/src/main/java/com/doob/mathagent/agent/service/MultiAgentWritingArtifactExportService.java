@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 import org.apache.pdfbox.pdmodel.PDDocument;
@@ -45,6 +46,8 @@ public class MultiAgentWritingArtifactExportService {
     private static final float PDF_HEADING_FONT_SIZE = 12;
     private static final float PDF_LEADING = 17;
     private static final int PDF_WRAP_UNITS = 74;
+    /** Bounds XeLaTeX so malformed generated source cannot retain a PDF request forever. */
+    private static final Duration LATEX_TIMEOUT = Duration.ofSeconds(45);
 
     private final MultiAgentWritingService writingService;
     private final Clock clock;
@@ -120,7 +123,7 @@ public class MultiAgentWritingArtifactExportService {
     private static ExportPayload latexPayload(MultiAgentWritingArtifact artifact) {
         String body = latexDocument(artifact);
         return new ExportPayload(
-                safeFileStem(artifact.workflowId()) + ".tex",
+                safeFileStem(handoutTitle(artifact)) + ".tex",
                 "application/x-tex; charset=UTF-8",
                 body.getBytes(StandardCharsets.UTF_8));
     }
@@ -133,34 +136,90 @@ public class MultiAgentWritingArtifactExportService {
                 ? "# Multi-agent writing artifact\n\nNo generated content is available yet.\n"
                 : artifact.mergedMarkdown() + "\n";
         return new ExportPayload(
-                safeFileStem(artifact.workflowId()) + ".md",
+                safeFileStem(handoutTitle(artifact)) + ".md",
                 "text/markdown; charset=UTF-8",
                 body.getBytes(StandardCharsets.UTF_8));
     }
 
     /**
-     * Creates a readable PDF payload from the merged artifact body for frontend review and download.
+     * Compiles the UTF-8 LaTeX handout so fractions, roots, powers and Chinese text remain rendered notation.
+     * A compiler failure is explicit: returning a PDFBox text fallback would silently corrupt the teaching material.
      */
     private static ExportPayload pdfPayload(MultiAgentWritingArtifact artifact) {
-        try (PDDocument document = new PDDocument()) {
-            PDFont font = loadReadableFont(document);
-            PdfWriter writer = new PdfWriter(document, font);
-            writer.writeTitle("讲义协作成果");
-            writer.writeMuted("流程编号：" + safeText(artifact.workflowId()));
-            writer.writeMuted("状态：" + safeText(artifact.status()) + " / 用量：" + artifact.totalUsage().totalTokens() + " tokens");
-            writer.writeBlank();
-            for (ReadableLine line : readableMarkdownLines(artifact.mergedMarkdown())) {
-                writer.write(line);
+        Path workDir = null;
+        try {
+            Path engine = latexEnginePath().orElseThrow(() -> new IllegalStateException("未找到 XeLaTeX，拒绝生成未渲染公式的 PDF"));
+            workDir = Files.createTempDirectory("math-agent-writing-pdf-");
+            Path source = workDir.resolve("handout.tex");
+            Files.writeString(source, latexDocument(artifact), StandardCharsets.UTF_8);
+            runXeLaTeX(engine, workDir, source);
+            runXeLaTeX(engine, workDir, source);
+            Path pdf = workDir.resolve("handout.pdf");
+            if (!Files.isRegularFile(pdf)) {
+                throw new IllegalStateException("XeLaTeX 未生成讲义 PDF");
             }
-            writer.close();
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            document.save(out);
             return new ExportPayload(
-                    safeFileStem(artifact.workflowId()) + ".pdf",
+                    safeFileStem(handoutTitle(artifact)) + ".pdf",
                     "application/pdf",
-                    out.toByteArray());
+                    Files.readAllBytes(pdf));
         } catch (IOException exception) {
-            throw new IllegalStateException("Failed to create multi-agent writing PDF export", exception);
+            throw new IllegalStateException("生成公式讲义 PDF 失败", exception);
+        } finally {
+            if (workDir != null) {
+                deleteRecursively(workDir);
+            }
+        }
+    }
+
+    /** Resolves the compiler inside Docker first, then allows the local Windows development installation. */
+    private static Optional<Path> latexEnginePath() {
+        String configured = System.getenv("MATH_AGENT_XELATEX_PATH");
+        if (configured != null && !configured.isBlank() && Files.isRegularFile(Path.of(configured.strip()))) {
+            return Optional.of(Path.of(configured.strip()));
+        }
+        for (Path candidate : List.of(
+                Path.of("C:/Users/doob/AppData/Local/Programs/MiKTeX/miktex/bin/x64/xelatex.exe"),
+                Path.of("C:/Program Files/MiKTeX/miktex/bin/x64/xelatex.exe"),
+                Path.of("/usr/bin/xelatex"))) {
+            if (Files.isRegularFile(candidate)) {
+                return Optional.of(candidate);
+            }
+        }
+        return Optional.empty();
+    }
+
+    /** Runs one non-interactive compiler pass and includes its tail in the raised error for SQL/trace correlation. */
+    private static void runXeLaTeX(Path engine, Path workDir, Path source) throws IOException {
+        Path output = workDir.resolve("xelatex.out");
+        try {
+            Process process = new ProcessBuilder(engine.toString(), "-interaction=nonstopmode", "-halt-on-error", source.getFileName().toString())
+                    .directory(workDir.toFile()).redirectErrorStream(true).redirectOutput(output.toFile()).start();
+            if (!process.waitFor(LATEX_TIMEOUT.toSeconds(), TimeUnit.SECONDS)) {
+                process.destroyForcibly();
+                throw new IllegalStateException("XeLaTeX 编译超时");
+            }
+            if (process.exitValue() != 0) {
+                String detail = Files.isRegularFile(output) ? Files.readString(output, StandardCharsets.UTF_8) : "";
+                throw new IllegalStateException("XeLaTeX 编译失败：" + detail.substring(Math.max(0, detail.length() - 800)));
+            }
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("XeLaTeX 编译被中断", exception);
+        }
+    }
+
+    /** Deletes the isolated compiler directory after bytes have been copied into the export response. */
+    private static void deleteRecursively(Path root) {
+        try (var paths = Files.walk(root)) {
+            paths.sorted(java.util.Comparator.reverseOrder()).forEach(path -> {
+                try {
+                    Files.deleteIfExists(path);
+                } catch (IOException ignored) {
+                    // A temporary compiler artifact is never allowed to fail the already-created export.
+                }
+            });
+        } catch (IOException ignored) {
+            // See above: cleanup cannot hide a valid export result.
         }
     }
 
@@ -223,31 +282,63 @@ public class MultiAgentWritingArtifactExportService {
      * Converts the merged Markdown-like artifact into a conservative LaTeX document.
      */
     private static String latexDocument(MultiAgentWritingArtifact artifact) {
-        String content = artifact.mergedMarkdown().isBlank()
-                ? "No generated content is available yet."
-                : artifact.mergedMarkdown();
+        String content = finalHandoutMarkdown(artifact);
         StringBuilder latex = new StringBuilder();
         latex.append("""
                 \\documentclass[UTF8]{ctexart}
-                \\usepackage{amsmath,amssymb,geometry}
+                \\usepackage{amsmath,amssymb,geometry,fontspec}
                 \\usepackage{enumitem}
+                \\setCJKmainfont{Noto Serif CJK SC}
+                \\setCJKsansfont{Noto Sans CJK SC}
+                \\setmainfont{Noto Serif CJK SC}
                 \\geometry{a4paper,margin=2cm}
                 \\setlist{nosep,leftmargin=2em}
-                \\title{Multi-agent Writing Artifact}
+                \\title{%s}
                 \\date{}
                 \\begin{document}
                 \\maketitle
 
-                """);
-        latex.append("\\section*{Metadata}\n");
-        latex.append("\\begin{itemize}\n");
-        latex.append("\\item Workflow ID: ").append(escapeLatexText(artifact.workflowId())).append('\n');
-        latex.append("\\item Status: ").append(escapeLatexText(artifact.status())).append('\n');
-        latex.append("\\item Total tokens: ").append(artifact.totalUsage().totalTokens()).append('\n');
-        latex.append("\\end{itemize}\n\n");
+                """.formatted(escapeLatexText(handoutTitle(artifact))));
         appendMarkdownAsLatex(latex, content);
         latex.append("\n\\end{document}\n");
         return latex.toString();
+    }
+
+    /** Returns only the merge coordinator's classroom-facing result, never agent traces or review JSON. */
+    private static String finalHandoutMarkdown(MultiAgentWritingArtifact artifact) {
+        for (MultiAgentWritingArtifact.StructuredSection section : artifact.sections()) {
+            if ("final-handout".equals(section.sectionCode()) && !section.content().isBlank()) {
+                return section.content().strip();
+            }
+        }
+        String merged = safeText(artifact.mergedMarkdown());
+        int finalStart = merged.lastIndexOf("\n## 一、");
+        if (finalStart >= 0) {
+            return merged.substring(finalStart + 1).strip();
+        }
+        throw new IllegalStateException("讲义缺少最终审校正文，拒绝导出 Agent 过程日志");
+    }
+
+    /**
+     * Uses Luna's first Markdown H1 as the human-facing document identity.  This ties every export format to the
+     * actual lesson topic instead of leaking an opaque workflow UUID into a teacher's downloaded file name.
+     */
+    private static String handoutTitle(MultiAgentWritingArtifact artifact) {
+        for (String rawLine : safeText(artifact.mergedMarkdown()).replace("\r\n", "\n").split("\n")) {
+            String line = rawLine.strip();
+            if (line.startsWith("# ")) {
+                String title = line.substring(2).replaceAll("[\\p{Cntrl}\\r\\n]+", " ").strip();
+                if (!title.isBlank() && title.codePointCount(0, title.length()) <= 80) {
+                    return title;
+                }
+            }
+        }
+        for (MultiAgentWritingArtifact.StructuredSection section : artifact.sections()) {
+            if (!safeText(section.title()).isBlank()) {
+                return safeText(section.title());
+            }
+        }
+        throw new IllegalStateException("讲义缺少 AI 生成标题，拒绝导出无标题 PDF");
     }
 
     /**
@@ -255,8 +346,63 @@ public class MultiAgentWritingArtifactExportService {
      */
     private static void appendMarkdownAsLatex(StringBuilder latex, String markdown) {
         boolean inItemize = false;
+        boolean inDisplayMath = false;
+        boolean inTable = false;
         for (String rawLine : markdown.replace("\r\n", "\n").replace('\r', '\n').split("\n", -1)) {
             String line = rawLine.stripTrailing();
+            boolean tableRow = line.strip().startsWith("|") && line.strip().endsWith("|");
+            if (inTable && !tableRow) {
+                latex.append("\\hline\n\\end{tabular}\n\\end{center}\n");
+                inTable = false;
+            }
+            if (inDisplayMath) {
+                latex.append(line).append('\n');
+                if (line.strip().equals("\\]")) {
+                    inDisplayMath = false;
+                }
+                continue;
+            }
+            if (line.strip().equals("\\[")) {
+                if (inItemize) {
+                    latex.append("\\end{itemize}\n");
+                    inItemize = false;
+                }
+                latex.append("\\[\n");
+                inDisplayMath = true;
+                continue;
+            }
+            if (line.strip().startsWith("\\[") && line.strip().endsWith("\\]")) {
+                if (inItemize) {
+                    latex.append("\\end{itemize}\n");
+                    inItemize = false;
+                }
+                latex.append(line.strip()).append('\n');
+                continue;
+            }
+            if (tableRow) {
+                if (inItemize) {
+                    latex.append("\\end{itemize}\n");
+                    inItemize = false;
+                }
+                String tableLine = line.strip();
+                if (tableLine.matches("^\\|(?:\\s*:?-{3,}:?\\s*\\|)+$")) {
+                    latex.append("\\hline\n");
+                    continue;
+                }
+                if (!inTable) {
+                    latex.append("\\begin{center}\n\\begin{tabular}{|p{0.28\\linewidth}|p{0.60\\linewidth}|}\n\\hline\n");
+                    inTable = true;
+                }
+                String[] cells = tableLine.substring(1, tableLine.length() - 1).split("\\|", -1);
+                for (int index = 0; index < cells.length; index++) {
+                    if (index > 0) {
+                        latex.append(" & " );
+                    }
+                    latex.append(escapeLatexTextPreservingMath(cells[index].strip()));
+                }
+                latex.append(" \\\\ \n");
+                continue;
+            }
             if (line.isBlank()) {
                 if (inItemize) {
                     latex.append("\\end{itemize}\n");
@@ -265,7 +411,13 @@ public class MultiAgentWritingArtifactExportService {
                 latex.append('\n');
                 continue;
             }
-            if (line.startsWith("### ")) {
+            if (line.startsWith("#### ")) {
+                if (inItemize) {
+                    latex.append("\\end{itemize}\n");
+                    inItemize = false;
+                }
+                latex.append("\\paragraph{").append(escapeLatexText(line.substring(5).strip())).append("}\n");
+            } else if (line.startsWith("### ")) {
                 if (inItemize) {
                     latex.append("\\end{itemize}\n");
                     inItemize = false;
@@ -300,6 +452,12 @@ public class MultiAgentWritingArtifactExportService {
         if (inItemize) {
             latex.append("\\end{itemize}\n");
         }
+        if (inTable) {
+            latex.append("\\hline\n\\end{tabular}\n\\end{center}\n");
+        }
+        if (inDisplayMath) {
+            throw new IllegalArgumentException("讲义包含未闭合的显示公式");
+        }
     }
 
     /**
@@ -309,6 +467,9 @@ public class MultiAgentWritingArtifactExportService {
         if (value == null || value.isBlank()) {
             return "";
         }
+        // Markdown uses \( ... \) for inline math. A literal replacement is deterministic and avoids the
+        // double-escaping ambiguity of a Java regular expression around LaTeX backslashes.
+        value = value.replace("\\(", "$").replace("\\)", "$").replace("**", "");
         StringBuilder escaped = new StringBuilder();
         int index = 0;
         while (index < value.length()) {
