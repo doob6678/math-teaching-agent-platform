@@ -37,6 +37,7 @@ import java.util.Objects;
 import java.util.Optional;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.Resource;
+import org.springframework.core.env.Environment;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -81,6 +82,7 @@ public class TeacherResourceController {
     private final TeacherResourceCapabilityVerifier capabilityVerifier;
     private final FeishuCredentialService feishuCredentialService;
     private final FeishuResourceBindingService feishuResourceBindingService;
+    private final Environment environment;
 
     /**
      * Creates a teacher resource controller.
@@ -112,6 +114,7 @@ public class TeacherResourceController {
                 null,
                 subjectResolver,
                 capabilityVerifier,
+                null,
                 null,
                 null);
     }
@@ -147,6 +150,7 @@ public class TeacherResourceController {
                 subjectResolver,
                 capabilityVerifier,
                 null,
+                null,
                 null);
     }
 
@@ -166,7 +170,8 @@ public class TeacherResourceController {
             RequestSubjectResolver subjectResolver,
             TeacherResourceCapabilityVerifier capabilityVerifier,
             FeishuCredentialService feishuCredentialService,
-            FeishuResourceBindingService feishuResourceBindingService) {
+            FeishuResourceBindingService feishuResourceBindingService,
+            Environment environment) {
         this.teacherResourceService = Objects.requireNonNull(teacherResourceService, "teacherResourceService");
         this.syncJobService = Objects.requireNonNull(syncJobService, "syncJobService");
         this.syncExecutionService = Objects.requireNonNull(syncExecutionService, "syncExecutionService");
@@ -182,6 +187,7 @@ public class TeacherResourceController {
         this.capabilityVerifier = Objects.requireNonNull(capabilityVerifier, "capabilityVerifier");
         this.feishuCredentialService = feishuCredentialService;
         this.feishuResourceBindingService = feishuResourceBindingService;
+        this.environment = environment;
     }
 
     /**
@@ -198,7 +204,8 @@ public class TeacherResourceController {
         RequestSubject subject = subjectResolver.resolve(httpRequest);
         if (feishuCredentialService != null && request != null
                 && "feishu".equalsIgnoreCase(request.sourceType())
-                && feishuCredentialService.findActive(subject.normalize().tenantId(), subject.normalize().subjectId()) == null) {
+                && feishuCredentialService.findActive(subject.normalize().tenantId(), subject.normalize().subjectId()) == null
+                && !administratorBotCredentialsConfigured(subject)) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "AUTH_REQUIRED");
         }
         if (!capabilityVerifier.verify(
@@ -211,13 +218,32 @@ public class TeacherResourceController {
         }
         try {
             TeacherResourceDocumentResponse registered = teacherResourceService.register(enrich(request, subject));
-            if (feishuResourceBindingService != null && "feishu".equalsIgnoreCase(request.sourceType())) {
+            if (feishuResourceBindingService != null && "feishu".equalsIgnoreCase(request.sourceType())
+                    && feishuCredentialService.findActive(subject.normalize().tenantId(), subject.normalize().subjectId()) != null) {
                 feishuResourceBindingService.bind(subject.normalize().tenantId(), registered.documentId(), subject.normalize().subjectId());
             }
             return registered;
         } catch (IllegalArgumentException exception) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, exception.getMessage(), exception);
         }
+    }
+
+    /** Allows only administrators to use deployment bot credentials for tenant-public shared folders. */
+    private boolean administratorBotCredentialsConfigured(RequestSubject subject) {
+        RequestSubject normalized = subject.normalize();
+        return "admin".equals(normalized.subjectType())
+                && firstConfigured("FEISHU_APP_ID", "FEISHU_APPID", "APP_ID")
+                && firstConfigured("FEISHU_APP_SECRET", "FEISHU_APPSECRET", "APP_SECRET");
+    }
+
+    /** Resolves documented aliases without ever exposing the credential value. */
+    private boolean firstConfigured(String... names) {
+        if (environment == null) return false;
+        for (String name : names) {
+            String value = environment.getProperty(name, "");
+            if (value != null && !value.isBlank()) return true;
+        }
+        return false;
     }
 
     /**
