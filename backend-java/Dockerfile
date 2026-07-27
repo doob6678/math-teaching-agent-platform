@@ -8,7 +8,15 @@ RUN mvn -q -DskipTests package
 FROM eclipse-temurin:21-jre
 WORKDIR /app
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl python3 python3-requests \
+    # A PDF must never be "successfully" exported by exposing raw LaTeX commands or missing Chinese glyphs.
+    # Keep the compiler in the same Linux runtime as the backend so the production path is deterministic.
+    && apt-get install -y --no-install-recommends \
+        curl \
+        python3 \
+        python3-requests \
+        texlive-xetex \
+        texlive-lang-chinese \
+        fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /workspace/target/*.jar /app/math-agent-rag.jar
 COPY ai-worker-python/scripts/download_feishu_url.py /app/scripts/download_feishu_url.py

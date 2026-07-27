@@ -160,6 +160,12 @@ public class TeachingHandoutPdfExportService {
         if (compiled.isPresent()) {
             return new RenderedHandoutPdf(compiled.get(), "xelatex", countPages(compiled.get()));
         }
+        // In the deployed teaching workflow a raw-text fallback is worse than an explicit failure: it can turn every
+        // Chinese glyph into '?' and expose commands such as minipage as if they were handout content. Tests and
+        // offline tools may still exercise PDFBox, while production pins this flag together with the XeLaTeX binary.
+        if (requiresXeLaTeX()) {
+            throw new IllegalStateException("XeLaTeX 未能生成讲义 PDF；已阻止返回乱码或原始 LaTeX 文本");
+        }
         try (PDDocument document = new PDDocument()) {
             String title = versionTitle(version);
             String templateName = templateNameForVersion(task, version);
@@ -1107,6 +1113,11 @@ public class TeachingHandoutPdfExportService {
         }
         undelimitedMatcher.appendTail(normalized);
         return normalized.toString();
+    }
+
+    /** Returns whether this runtime forbids publishing the lossy PDFBox fallback. */
+    private static boolean requiresXeLaTeX() {
+        return Boolean.parseBoolean(System.getenv().getOrDefault("MATH_AGENT_REQUIRE_XELATEX", "false"));
     }
 
     /** Keeps only the first (question) minipage from legacy lecture pages; the second was the teacher cue column. */
