@@ -121,11 +121,12 @@ services:
       MATH_AGENT_LOCAL_CLIP_MODEL_PATH: ${MATH_AGENT_CONTAINER_CLIP_MODEL_PATH:?set in .env}
       MATH_AGENT_LOCAL_RERANK_MODEL_PATH: ${MATH_AGENT_CONTAINER_RERANK_MODEL_PATH:?set in .env}
       MATH_AGENT_LOCAL_TEXT_EMBEDDING_MODEL_PATH: ${MATH_AGENT_CONTAINER_TEXT_MODEL_PATH:?set in .env}
-      MATH_AGENT_LOCAL_CLIP_DEVICE: cuda
-      MATH_AGENT_LOCAL_RERANK_DEVICE: cuda
-      MATH_AGENT_LOCAL_TEXT_EMBEDDING_DEVICE: cuda
+      # GPU is an optional local accelerator. CPU keeps the same read-only local BGE/reranker/CLIP contract on
+      # Docker Desktop installations without NVIDIA CDI; operators can set these three values to cuda explicitly.
+      MATH_AGENT_LOCAL_CLIP_DEVICE: ${MATH_AGENT_LOCAL_CLIP_DEVICE:-cpu}
+      MATH_AGENT_LOCAL_RERANK_DEVICE: ${MATH_AGENT_LOCAL_RERANK_DEVICE:-cpu}
+      MATH_AGENT_LOCAL_TEXT_EMBEDDING_DEVICE: ${MATH_AGENT_LOCAL_TEXT_EMBEDDING_DEVICE:-cpu}
       MATH_AGENT_USAGE_LEDGER_PATH: /app/data/usage/provider-usage.jsonl
-    gpus: all
     ports: ["${MATH_AGENT_WORKER_HOST_PORT:-8092}:8091"]
     volumes:
       - worker-data:/app/data
