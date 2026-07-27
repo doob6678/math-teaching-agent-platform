@@ -13,6 +13,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
+import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
@@ -46,6 +47,7 @@ public class MultiAgentWritingArtifactExportService {
     private static final float PDF_HEADING_FONT_SIZE = 12;
     private static final float PDF_LEADING = 17;
     private static final int PDF_WRAP_UNITS = 74;
+    private static final int MAX_LAYOUT_LABEL_CODE_POINTS = 60;
     /** Bounds XeLaTeX so malformed generated source cannot retain a PDF request forever. */
     private static final Duration LATEX_TIMEOUT = Duration.ofSeconds(45);
 
@@ -94,11 +96,32 @@ public class MultiAgentWritingArtifactExportService {
             String workflowId,
             String format,
             RequestSubject subject) {
+        return export(workflowId, format, "", "", subject);
+    }
+
+    /**
+     * Exports one artifact with renderer-owned header and footer labels.
+     *
+     * <p>These labels are intentionally accepted only by the export layer. They never enter an Agent prompt, so a
+     * teacher can rebrand the same reviewed mathematical content without paying for another generation or allowing
+     * layout instructions to leak into the handout body.</p>
+     */
+    public MultiAgentWritingArtifactExportResponse export(
+            String workflowId,
+            String format,
+            String headerText,
+            String footerText,
+            RequestSubject subject) {
         MultiAgentWritingArtifact artifact = writingService.artifact(workflowId, subject);
         String normalizedFormat = normalizeFormat(format);
+        String normalizedHeader = normalizeLayoutLabel(headerText);
+        String normalizedFooter = normalizeLayoutLabel(footerText);
         ExportPayload payload = switch (normalizedFormat) {
             case "zip" -> zipPayload(artifact);
-            case "pdf" -> pdfPayload(artifact);
+            case "pdf" -> pdfPayload(artifact, HandoutVariant.FINAL, normalizedHeader, normalizedFooter);
+            case "pdf-teacher" -> pdfPayload(artifact, HandoutVariant.TEACHER, normalizedHeader, normalizedFooter);
+            case "pdf-student" -> pdfPayload(artifact, HandoutVariant.STUDENT, normalizedHeader, normalizedFooter);
+            case "pdf-lecture" -> pdfPayload(artifact, HandoutVariant.LECTURE, normalizedHeader, normalizedFooter);
             case "latex" -> latexPayload(artifact);
             case "markdown" -> markdownPayload(artifact);
             default -> throw new IllegalArgumentException("Unsupported artifact export format: " + normalizedFormat);
@@ -145,13 +168,20 @@ public class MultiAgentWritingArtifactExportService {
      * Compiles the UTF-8 LaTeX handout so fractions, roots, powers and Chinese text remain rendered notation.
      * A compiler failure is explicit: returning a PDFBox text fallback would silently corrupt the teaching material.
      */
-    private static ExportPayload pdfPayload(MultiAgentWritingArtifact artifact) {
+    private static ExportPayload pdfPayload(
+            MultiAgentWritingArtifact artifact,
+            HandoutVariant variant,
+            String headerText,
+            String footerText) {
         Path workDir = null;
         try {
+            String content = variantMarkdown(artifact, variant);
+            enforceAudienceBoundary(content, variant);
+            String title = variantTitle(artifact, content, variant);
             Path engine = latexEnginePath().orElseThrow(() -> new IllegalStateException("未找到 XeLaTeX，拒绝生成未渲染公式的 PDF"));
             workDir = Files.createTempDirectory("math-agent-writing-pdf-");
             Path source = workDir.resolve("handout.tex");
-            Files.writeString(source, latexDocument(artifact), StandardCharsets.UTF_8);
+            Files.writeString(source, latexDocument(content, title, variant, headerText, footerText), StandardCharsets.UTF_8);
             runXeLaTeX(engine, workDir, source);
             runXeLaTeX(engine, workDir, source);
             Path pdf = workDir.resolve("handout.pdf");
@@ -159,7 +189,7 @@ public class MultiAgentWritingArtifactExportService {
                 throw new IllegalStateException("XeLaTeX 未生成讲义 PDF");
             }
             return new ExportPayload(
-                    safeFileStem(handoutTitle(artifact)) + ".pdf",
+                    safeFileStem(title) + variant.fileSuffix() + ".pdf",
                     "application/pdf",
                     Files.readAllBytes(pdf));
         } catch (IOException exception) {
@@ -283,25 +313,255 @@ public class MultiAgentWritingArtifactExportService {
      */
     private static String latexDocument(MultiAgentWritingArtifact artifact) {
         String content = finalHandoutMarkdown(artifact);
+        return latexDocument(content, handoutTitle(artifact), HandoutVariant.FINAL, "", "");
+    }
+
+    /** Builds the print wrapper; mathematical content remains owned by the reviewed Agent artifact. */
+    private static String latexDocument(
+            String content,
+            String title,
+            HandoutVariant variant,
+            String headerText,
+            String footerText) {
         StringBuilder latex = new StringBuilder();
+        String geometry = variant == HandoutVariant.LECTURE
+                ? "paperwidth=12.8in,paperheight=8in,margin=0.62in,headheight=16pt"
+                : "a4paper,margin=2cm,headheight=16pt";
+        String renderedHeader = headerText.isBlank() ? title : headerText;
+        String renderedFooter = footerText.isBlank() ? variant.defaultFooter() : footerText;
         latex.append("""
                 \\documentclass[UTF8]{ctexart}
-                \\usepackage{amsmath,amssymb,geometry,fontspec}
+                \\usepackage{amsmath,amssymb,geometry,fontspec,fancyhdr,xcolor}
                 \\usepackage{enumitem}
                 \\setCJKmainfont{Noto Serif CJK SC}
                 \\setCJKsansfont{Noto Sans CJK SC}
                 \\setmainfont{Noto Serif CJK SC}
-                \\geometry{a4paper,margin=2cm}
+                \\geometry{%s}
                 \\setlist{nosep,leftmargin=2em}
+                \\pagestyle{fancy}
+                \\fancyhf{}
+                \\fancyhead[L]{\\small %s}
+                \\fancyhead[R]{\\small %s}
+                \\fancyfoot[L]{\\small %s}
+                \\fancyfoot[R]{\\small 第 \\thepage 页}
+                \\renewcommand{\\headrulewidth}{0.4pt}
+                \\renewcommand{\\footrulewidth}{0.2pt}
                 \\title{%s}
                 \\date{}
                 \\begin{document}
                 \\maketitle
 
-                """.formatted(escapeLatexText(handoutTitle(artifact))));
-        appendMarkdownAsLatex(latex, content);
+                """.formatted(
+                geometry,
+                escapeLatexText(renderedHeader),
+                escapeLatexText(variant.displayName()),
+                escapeLatexText(renderedFooter),
+                escapeLatexText(title)));
+        appendMarkdownAsLatex(latex, withoutLeadingDocumentTitle(content, title));
         latex.append("\n\\end{document}\n");
         return latex.toString();
+    }
+
+    /** Selects the audience-owned stage artifact instead of mixing teacher answers into every export. */
+    private static String variantMarkdown(MultiAgentWritingArtifact artifact, HandoutVariant variant) {
+        if (variant == HandoutVariant.FINAL) {
+            return finalHandoutMarkdown(artifact);
+        }
+        String selected = "";
+        for (MultiAgentWritingArtifact.StructuredSection section : artifact.sections()) {
+            if (variant.sectionCode().equals(section.sectionCode()) && !section.content().isBlank()) {
+                selected = section.content().strip();
+            }
+        }
+        if (!selected.isBlank()) {
+            if (variant == HandoutVariant.LECTURE) {
+                return singleQuestionLectureProjection(selected);
+            }
+            return variant.requiresAnswerFreeProjection() ? stripRestrictedSections(selected) : selected;
+        }
+        if (variant == HandoutVariant.TEACHER) {
+            return finalHandoutMarkdown(artifact);
+        }
+        throw new IllegalStateException("讲义缺少" + variant.displayName() + "正文，拒绝用教师版内容代替");
+    }
+
+    /** Uses each Agent-authored H1 as the variant identity while retaining a deterministic fallback. */
+    private static String variantTitle(MultiAgentWritingArtifact artifact, String content, HandoutVariant variant) {
+        String[] lines = content.replace("\r\n", "\n").split("\n");
+        for (int index = 0; index < lines.length; index += 1) {
+            String rawLine = lines[index];
+            String line = rawLine.strip();
+            if (line.startsWith("# ")) {
+                String title = line.substring(2).replaceAll("[\\p{Cntrl}\\r\\n]+", " ").strip();
+                // Compatibility output from older Luna workflows uses JSON field names as headings and puts the
+                // model-written title on the following line. Do not name a teacher download literally "title".
+                if (isGenericTitleLabel(title)) {
+                    for (int next = index + 1; next < lines.length; next += 1) {
+                        String candidate = lines[next].strip();
+                        if (candidate.isBlank()) continue;
+                        if (!candidate.startsWith("#") && candidate.codePointCount(0, candidate.length()) <= 80) {
+                            return candidate;
+                        }
+                        break;
+                    }
+                }
+                if (!title.isBlank() && !isGenericTitleLabel(title) && title.codePointCount(0, title.length()) <= 80) {
+                    return title;
+                }
+            }
+        }
+        return handoutTitle(artifact) + "（" + variant.displayName() + "）";
+    }
+
+    /** Prevents a reviewed teacher solution from accidentally being published as a blank student handout. */
+    private static void enforceAudienceBoundary(String content, HandoutVariant variant) {
+        if (variant != HandoutVariant.STUDENT && variant != HandoutVariant.LECTURE) {
+            return;
+        }
+        String compact = content.replaceAll("\\s+", "");
+        for (String blocked : List.of("答案：", "答案:", "最终答案", "完整解答", "完整解析", "评分点：", "评分标准：", "教师提示：",
+                "answer:", "solution:", "worked solution", "scoring rubric", "teacher note")) {
+            if (compact.contains(blocked.replaceAll("\\s+", ""))) {
+                throw new IllegalStateException(variant.displayName() + "检测到答案或教师信息，拒绝导出：" + blocked);
+            }
+        }
+    }
+
+    /**
+     * Projects a historical rich draft into an answer-free classroom view. The source remains an actual Luna output;
+     * only sections explicitly labelled as solutions/answers/rubrics are removed before the final boundary check.
+     */
+    private static String stripRestrictedSections(String markdown) {
+        StringBuilder safe = new StringBuilder();
+        int skippedHeadingDepth = 0;
+        for (String rawLine : markdown.replace("\r\n", "\n").split("\n", -1)) {
+            String line = rawLine.strip();
+            int headingDepth = markdownHeadingDepth(line);
+            if (headingDepth > 0) {
+                if (skippedHeadingDepth > 0 && headingDepth <= skippedHeadingDepth) {
+                    skippedHeadingDepth = 0;
+                }
+                String label = line.substring(headingDepth).strip().toLowerCase(Locale.ROOT);
+                if (isRestrictedAudienceLabel(label)) {
+                    skippedHeadingDepth = headingDepth;
+                    continue;
+                }
+            }
+            if (skippedHeadingDepth == 0) {
+                safe.append(rawLine).append('\n');
+            }
+        }
+        return safe.toString().strip();
+    }
+
+    /**
+     * Converts a legacy multi-card lecture into one answer-free 16:10 teaching prompt. Older Luna runs produced a
+     * whole lesson deck; selecting the first real "已知" example preserves source-grounded content while preventing
+     * worked calculations and answer cards from becoming a supposedly blank single-question projection.
+     */
+    private static String singleQuestionLectureProjection(String markdown) {
+        List<String> formulaClues = new ArrayList<>();
+        String firstProblem = "";
+        for (String rawLine : markdown.replace("\r\n", "\n").split("\n")) {
+            String line = rawLine.strip();
+            if (line.startsWith("- 已知") && firstProblem.isBlank()) {
+                firstProblem = line.substring(2).strip();
+            }
+            if (line.startsWith("- ") && formulaClues.size() < 3
+                    && (line.contains("定理") || line.contains("公式") || line.contains("cos") || line.contains("sin"))) {
+                formulaClues.add(line.substring(2).strip());
+            }
+        }
+        if (firstProblem.isBlank()) {
+            // The output remains safe even when a provider did not label an example consistently: it contains no
+            // invented answer and asks the teacher to select the verified question in the workspace.
+            firstProblem = "请从本讲已检索到的真实题目中选择一道题，写出已知条件与所求。";
+        }
+        String title = variantTitlePlaceholder(markdown);
+        StringBuilder projection = new StringBuilder("# ").append(title).append("（16:10 单题课堂引导）\n\n")
+                .append("## 题型识别\n\n").append(firstProblem).append("\n\n")
+                .append("## 先确定目标\n\n本题要求的量是什么？它需要哪一个公式或定理作桥梁？________________\n\n")
+                .append("## 再整理已知条件\n\n已知量：________________\n\n隐藏条件或角边对应关系：________________\n\n")
+                .append("## 方法选择\n\n从下列与本题匹配的知识中选择，并说明理由：\n");
+        for (String clue : formulaClues) {
+            projection.append("- ").append(clue).append("\n");
+        }
+        projection.append("\n选择理由：________________\n\n<wait>\n\n")
+                .append("## 板书推导\n\n第一步：________________\n\n第二步：________________\n\n结论先不公布，请完成检验后再讨论。\n");
+        return projection.toString();
+    }
+
+    /** Reads the model-written title from both normal Markdown and the older JSON-to-Markdown compatibility form. */
+    private static String variantTitlePlaceholder(String markdown) {
+        String[] lines = markdown.replace("\r\n", "\n").split("\n");
+        // A structured Luna response can start with a generic container heading (for example "课堂卡片")
+        // before its actual lesson title. Prefer the first explicit title value so the projection and file name
+        // remain tied to the real lesson instead of a renderer placeholder.
+        for (int index = 0; index + 1 < lines.length; index += 1) {
+            String heading = lines[index].strip();
+            String candidate = lines[index + 1].strip();
+            if (heading.equalsIgnoreCase("# title") && !candidate.isBlank() && !candidate.startsWith("#")) {
+                return candidate;
+            }
+        }
+        for (int index = 0; index < lines.length; index += 1) {
+            String line = lines[index].strip();
+            if (!line.startsWith("# ")) continue;
+            String heading = line.substring(2).strip();
+            if (!isGenericTitleLabel(heading)) {
+                return heading;
+            }
+            if (!isGenericTitleLabel(heading)) continue;
+            for (int next = index + 1; next < lines.length; next += 1) {
+                String candidate = lines[next].strip();
+                if (candidate.isBlank()) continue;
+                if (!candidate.startsWith("#")) return candidate;
+                break;
+            }
+        }
+        return "单题课堂引导";
+    }
+
+    /** The wrapper owns the title page; remove the same leading Markdown H1 to avoid a visually duplicated title. */
+    private static String withoutLeadingDocumentTitle(String content, String title) {
+        String normalized = content.replace("\r\n", "\n");
+        String trimmed = normalized.stripLeading();
+        // The LaTeX wrapper is the sole title renderer. Historical JSON compatibility content sometimes has a
+        // different first H1 than the resolved file title, so remove the first H1 rather than only an exact match.
+        if (!trimmed.startsWith("# ")) {
+            return normalized;
+        }
+        int leadingLength = normalized.length() - trimmed.length();
+        int afterHeading = normalized.indexOf('\n', leadingLength);
+        if (afterHeading < 0) return "";
+        return normalized.substring(afterHeading + 1).stripLeading();
+    }
+
+    private static int markdownHeadingDepth(String value) {
+        int depth = 0;
+        while (depth < value.length() && value.charAt(depth) == '#') depth += 1;
+        return depth > 0 && depth < value.length() && value.charAt(depth) == ' ' ? depth : 0;
+    }
+
+    private static boolean isRestrictedAudienceLabel(String label) {
+        return label.contains("答案") || label.contains("解答") || label.contains("解析") || label.contains("评分")
+                || label.contains("教师") || label.equals("answer") || label.equals("solution")
+                || label.contains("review notes") || label.contains("scoring") || label.contains("teacher note");
+    }
+
+    private static boolean isGenericTitleLabel(String value) {
+        String normalized = value == null ? "" : value.strip().toLowerCase(Locale.ROOT);
+        return normalized.equals("title") || normalized.equals("标题") || normalized.equals("document title");
+    }
+
+    /** Sanitizes short layout labels before they are escaped into the renderer-owned LaTeX wrapper. */
+    private static String normalizeLayoutLabel(String value) {
+        String normalized = safeText(value).replaceAll("[\\p{Cntrl}]", "").replaceAll("\\s+", " ").strip();
+        if (normalized.codePointCount(0, normalized.length()) <= MAX_LAYOUT_LABEL_CODE_POINTS) {
+            return normalized;
+        }
+        int end = normalized.offsetByCodePoints(0, MAX_LAYOUT_LABEL_CODE_POINTS);
+        return normalized.substring(0, end).strip();
     }
 
     /** Returns only the merge coordinator's classroom-facing result, never agent traces or review JSON. */
@@ -470,6 +730,17 @@ public class MultiAgentWritingArtifactExportService {
         // Markdown uses \( ... \) for inline math. A literal replacement is deterministic and avoids the
         // double-escaping ambiguity of a Java regular expression around LaTeX backslashes.
         value = value.replace("\\(", "$").replace("\\)", "$").replace("**", "");
+        // Rich-text providers encode a vector arrow as U+20D7 after Latin letters. Noto CJK does not provide a
+        // reliable glyph for that combining mark; turning it into real LaTeX avoids the visible square boxes in PDF.
+        value = value.replaceAll("([A-Za-z]{1,3})\\u20D7", "\\$\\\\vec{$1}\\$");
+        // Some rich-text editors place the combining arrow before rather than after the Latin identifier. Handle
+        // both canonical orders; otherwise XeLaTeX receives a standalone combining glyph and renders it as a box.
+        value = value.replaceAll("\\u20D7\\s*([A-Za-z]{1,3})", "\\$\\\\vec{$1}\\$");
+        // Unicode subscripts (x₁, y₂) are absent from the selected CJK text font. Promote them to LaTeX math
+        // identifiers before escaping so coordinate notation remains legible in every exported variant.
+        value = value.replaceAll("([A-Za-z])\\u2081", "\\$$1_1\\$");
+        value = value.replaceAll("([A-Za-z])\\u2082", "\\$$1_2\\$");
+        value = value.replace("<wait>", "");
         StringBuilder escaped = new StringBuilder();
         int index = 0;
         while (index < value.length()) {
@@ -531,6 +802,9 @@ public class MultiAgentWritingArtifactExportService {
             case "md", "markdown" -> "markdown";
             case "tex", "latex" -> "latex";
             case "pdf" -> "pdf";
+            case "pdf-teacher", "teacher-pdf" -> "pdf-teacher";
+            case "pdf-student", "student-pdf" -> "pdf-student";
+            case "pdf-lecture", "lecture-pdf", "pdf-16-10" -> "pdf-lecture";
             case "zip" -> "zip";
             default -> format.strip().toLowerCase();
         };
@@ -688,6 +962,32 @@ public class MultiAgentWritingArtifactExportService {
      * Internal export payload before it is wrapped for MCP transport.
      */
     private record ExportPayload(String fileName, String mimeType, byte[] bytes) {
+    }
+
+    /** Audience and layout metadata for one separately publishable handout. */
+    private enum HandoutVariant {
+        FINAL("final-handout", "综合审校版", "", "数学讲义"),
+        TEACHER("teacher-explanation", "教师讲义", "（教师版）", "教师备课与课堂讲评"),
+        STUDENT("student-worksheet", "学生空白讲义", "（学生空白版）", "姓名：________  班级：________"),
+        LECTURE("lecture-cards", "16:10 单题引导", "（16比10单题版）", "课堂投影 · 思考后再继续");
+
+        private final String sectionCode;
+        private final String displayName;
+        private final String fileSuffix;
+        private final String defaultFooter;
+
+        HandoutVariant(String sectionCode, String displayName, String fileSuffix, String defaultFooter) {
+            this.sectionCode = sectionCode;
+            this.displayName = displayName;
+            this.fileSuffix = fileSuffix;
+            this.defaultFooter = defaultFooter;
+        }
+
+        String sectionCode() { return sectionCode; }
+        String displayName() { return displayName; }
+        String fileSuffix() { return fileSuffix; }
+        String defaultFooter() { return defaultFooter; }
+        boolean requiresAnswerFreeProjection() { return this == STUDENT || this == LECTURE; }
     }
 
     private enum LineType {

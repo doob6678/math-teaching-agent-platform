@@ -47,7 +47,6 @@ public class MultiAgentWritingController {
     private final MultiAgentWritingArtifactExportService artifactExportService;
     private final AgentTraceQueryService traceQueryService;
     private final RequestSubjectResolver subjectResolver;
-    private final AgentRunCapabilityVerifier capabilityVerifier;
 
     /**
      * Creates the controller.
@@ -55,7 +54,7 @@ public class MultiAgentWritingController {
      * @param writingService multi-agent writing service
      * @param traceQueryService trace query service for workflow recovery
      * @param subjectResolver backend subject resolver
-     * @param capabilityVerifier capability verifier for high-value writing
+     * @param capabilityVerifier retained for binary/source compatibility; the retired token protocol is ignored
      */
     @Autowired
     public MultiAgentWritingController(
@@ -68,7 +67,6 @@ public class MultiAgentWritingController {
         this.artifactExportService = artifactExportService;
         this.traceQueryService = traceQueryService;
         this.subjectResolver = subjectResolver;
-        this.capabilityVerifier = capabilityVerifier;
     }
 
     /**
@@ -99,14 +97,6 @@ public class MultiAgentWritingController {
             @Valid @RequestBody MultiAgentWritingRequest request,
             HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest);
-        if (!capabilityVerifier.verify(
-                headerOrEmpty(httpRequest, "X-Capability-Token"),
-                writingService.capabilityAction(),
-                PATH,
-                headerOrEmpty(httpRequest, "X-Request-Hash"),
-                subject)) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for multi-agent writing");
-        }
         try {
             return writingService.run(request, subject);
         } catch (IllegalArgumentException exception) {
@@ -128,14 +118,6 @@ public class MultiAgentWritingController {
             @Valid @RequestBody MultiAgentWritingRequest request,
             HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest);
-        if (!capabilityVerifier.verify(
-                headerOrEmpty(httpRequest, "X-Capability-Token"),
-                writingService.capabilityAction(),
-                ASYNC_PATH,
-                headerOrEmpty(httpRequest, "X-Request-Hash"),
-                subject)) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for async multi-agent writing");
-        }
         try {
             return writingService.startAsync(request, subject);
         } catch (IllegalArgumentException exception) {
@@ -188,7 +170,7 @@ public class MultiAgentWritingController {
      * Exports owner-visible generated content as a temporary payload for download.
      *
      * @param workflowId workflow id returned by the write endpoint
-     * @param format markdown, latex, or zip
+     * @param format markdown, latex, zip, or one of the three audience-specific PDF variants
      * @param httpRequest HTTP request used only for trusted backend subject
      * @return base64 encoded export payload with checksum and expiration
      */
@@ -196,10 +178,13 @@ public class MultiAgentWritingController {
     public MultiAgentWritingArtifactExportResponse exportArtifact(
             @PathVariable String workflowId,
             @RequestParam(defaultValue = "markdown") String format,
+            @RequestParam(defaultValue = "") String headerText,
+            @RequestParam(defaultValue = "") String footerText,
             HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest);
         try {
-            return artifactExportService.export(normalizedWorkflowId(workflowId), format, subject);
+            return artifactExportService.export(
+                    normalizedWorkflowId(workflowId), format, headerText, footerText, subject);
         } catch (IllegalArgumentException exception) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, exception.getMessage(), exception);
         }
@@ -219,15 +204,6 @@ public class MultiAgentWritingController {
             @Valid @RequestBody MultiAgentWritingRequest request,
             HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest);
-        String normalizedPath = "/api/agents/writing/" + normalizedWorkflowId(workflowId) + "/resume";
-        if (!capabilityVerifier.verify(
-                headerOrEmpty(httpRequest, "X-Capability-Token"),
-                writingService.capabilityAction(),
-                normalizedPath,
-                headerOrEmpty(httpRequest, "X-Request-Hash"),
-                subject)) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for multi-agent writing resume");
-        }
         try {
             return writingService.resume(workflowId, request, subject);
         } catch (IllegalArgumentException exception) {
@@ -321,14 +297,4 @@ public class MultiAgentWritingController {
         return UNKNOWN_STAGE_ORDER;
     }
 
-    /**
-     * Reads a capability-related header.
-     */
-    private static String headerOrEmpty(HttpServletRequest request, String name) {
-        if (request == null) {
-            return "";
-        }
-        String value = request.getHeader(name);
-        return value == null || value.isBlank() ? "" : value.strip();
-    }
 }

@@ -1,4 +1,4 @@
-import { FormEvent } from "react";
+import { FormEvent, useState } from "react";
 import katex from "katex";
 import {
   AlertCircle,
@@ -33,6 +33,8 @@ const CONTROLLED_STAGE_CODES = [
   "merge_coordinator",
 ];
 const LEGACY_STAGE_CODES = ["draft", "review", "format"];
+type ArtifactFormat = "markdown" | "latex" | "pdf" | "pdf-teacher" | "pdf-student" | "pdf-lecture" | "zip";
+type ArtifactLayout = { headerText: string; footerText: string };
 
 export function MultiAgentWritingPanel({
   workflow,
@@ -86,9 +88,16 @@ export function MultiAgentWritingPanel({
   onResume?: () => void;
   onRefresh: () => void;
   onLoadArtifact?: () => void;
-  onPreviewPdf?: () => void;
-  onExportArtifact?: (format: "markdown" | "latex" | "pdf" | "zip") => void;
+  onPreviewPdf?: (layout: ArtifactLayout) => void;
+  onExportArtifact?: (format: ArtifactFormat, layout: ArtifactLayout) => void;
 }) {
+  const [headerText, setHeaderText] = useState("高中数学精品讲义");
+  const [footerText, setFooterText] = useState("教师备课与课堂教学");
+  // Header/footer are export-time metadata. Keeping them out of the generation request avoids prompt leakage and
+  // lets a teacher rebrand an already reviewed handout without another paid model call.
+  const layout = { headerText, footerText };
+  const previewPdf = () => onPreviewPdf(layout);
+  const exportArtifact = (format: ArtifactFormat) => onExportArtifact(format, layout);
   const stageCodes = workflow?.stages.some((stage) => CONTROLLED_STAGE_CODES.includes(stage.stageCode))
     ? CONTROLLED_STAGE_CODES
     : LEGACY_STAGE_CODES;
@@ -135,6 +144,14 @@ export function MultiAgentWritingPanel({
             onChange={(event) => onQuestionTextChange(event.target.value)}
             placeholder="可填写题目、班级水平、风格或模板偏好；不填也能生成"
           />
+        </label>
+        <label>
+          <span>PDF 页眉</span>
+          <input className="form-input" value={headerText} maxLength={60} onChange={(event) => setHeaderText(event.target.value)} />
+        </label>
+        <label>
+          <span>PDF 页脚</span>
+          <input className="form-input" value={footerText} maxLength={60} onChange={(event) => setFooterText(event.target.value)} />
         </label>
         <button className="btn btn-primary" type="submit" disabled={starting || !modelReady}>
           {starting ? <Loader2 className="spin" size={17} /> : <ShieldCheck size={17} />}
@@ -247,8 +264,8 @@ export function MultiAgentWritingPanel({
               exportingArtifactFormat={exportingArtifactFormat}
               disabled={artifactActionDisabled}
               onLoadArtifact={onLoadArtifact}
-              onPreviewPdf={onPreviewPdf}
-              onExportArtifact={onExportArtifact}
+              onPreviewPdf={previewPdf}
+              onExportArtifact={exportArtifact}
             />
           </div>
           <div className="workflow-delivery-meta">
@@ -286,8 +303,8 @@ export function MultiAgentWritingPanel({
             exportingArtifactFormat={exportingArtifactFormat}
             disabled={artifactActionDisabled}
             onLoadArtifact={onLoadArtifact}
-            onPreviewPdf={onPreviewPdf}
-            onExportArtifact={onExportArtifact}
+            onPreviewPdf={previewPdf}
+            onExportArtifact={exportArtifact}
           />
         </section>
       ) : null}
@@ -384,8 +401,8 @@ export function MultiAgentWritingPanel({
             exportingArtifactFormat={exportingArtifactFormat}
             disabled={artifactActionDisabled}
             onLoadArtifact={onLoadArtifact}
-            onPreviewPdf={onPreviewPdf}
-            onExportArtifact={onExportArtifact}
+            onPreviewPdf={previewPdf}
+            onExportArtifact={exportArtifact}
           />
         </div>
         {artifactError ? <StatusLine icon={<AlertCircle size={16} />} text={artifactError} tone="danger" /> : null}
@@ -490,7 +507,7 @@ function ArtifactActionButtons({
   disabled: boolean;
   onLoadArtifact: () => void;
   onPreviewPdf: () => void;
-  onExportArtifact: (format: "markdown" | "latex" | "pdf" | "zip") => void;
+  onExportArtifact: (format: ArtifactFormat) => void;
 }) {
   return (
     <div className="handout-actions artifact-file-actions">
@@ -502,9 +519,17 @@ function ArtifactActionButtons({
         {exportingArtifactFormat === "preview-pdf" ? <Loader2 className="spin" size={15} /> : <Eye size={15} />}
         <span>预览 PDF</span>
       </button>
-      <button className="btn btn-secondary btn-sm" type="button" disabled={disabled} onClick={() => onExportArtifact("pdf")}>
-        {exportingArtifactFormat === "pdf" ? <Loader2 className="spin" size={15} /> : <Download size={15} />}
-        <span>下载 PDF</span>
+      <button className="btn btn-secondary btn-sm" type="button" disabled={disabled} onClick={() => onExportArtifact("pdf-teacher")}>
+        {exportingArtifactFormat === "pdf-teacher" ? <Loader2 className="spin" size={15} /> : <Download size={15} />}
+        <span>教师版 PDF</span>
+      </button>
+      <button className="btn btn-secondary btn-sm" type="button" disabled={disabled} onClick={() => onExportArtifact("pdf-student")}>
+        {exportingArtifactFormat === "pdf-student" ? <Loader2 className="spin" size={15} /> : <Download size={15} />}
+        <span>学生空白版</span>
+      </button>
+      <button className="btn btn-secondary btn-sm" type="button" disabled={disabled} onClick={() => onExportArtifact("pdf-lecture")}>
+        {exportingArtifactFormat === "pdf-lecture" ? <Loader2 className="spin" size={15} /> : <Download size={15} />}
+        <span>16:10 单题版</span>
       </button>
       <button className="btn btn-secondary btn-sm" type="button" disabled={disabled} onClick={() => onExportArtifact("markdown")}>
         {exportingArtifactFormat === "markdown" ? <Loader2 className="spin" size={15} /> : <Download size={15} />}

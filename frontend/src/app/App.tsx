@@ -1965,14 +1965,14 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
       });
   }
 
-  function handlePreviewMultiAgentArtifactPdf() {
+  function handlePreviewMultiAgentArtifactPdf(layout: { headerText?: string; footerText?: string } = {}) {
     const workflowId = multiAgentWorkflow?.workflowId;
     if (!workflowId) return;
     setExportingMultiAgentArtifact("preview-pdf");
     setMultiAgentArtifactError("");
     setMultiAgentArtifactMessage("");
     api
-      .exportMultiAgentWritingArtifact(workflowId, "pdf")
+      .exportMultiAgentWritingArtifact(workflowId, "pdf", layout)
       .then((exported) => {
         const bytes = base64ToBytes(exported.base64Content);
         setMultiAgentArtifactPdfUrl((current) => {
@@ -1986,14 +1986,17 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
       .finally(() => setExportingMultiAgentArtifact(""));
   }
 
-  function handleExportMultiAgentArtifact(format: "markdown" | "latex" | "pdf" | "zip") {
+  function handleExportMultiAgentArtifact(
+    format: "markdown" | "latex" | "pdf" | "pdf-teacher" | "pdf-student" | "pdf-lecture" | "zip",
+    layout: { headerText?: string; footerText?: string } = {},
+  ) {
     const workflowId = multiAgentWorkflow?.workflowId;
     if (!workflowId) return;
     setExportingMultiAgentArtifact(format);
     setMultiAgentArtifactError("");
     setMultiAgentArtifactMessage("");
     api
-      .exportMultiAgentWritingArtifact(workflowId, format)
+      .exportMultiAgentWritingArtifact(workflowId, format, layout)
       .then((exported) => {
         downloadBytes(exported.fileName, base64ToBytes(exported.base64Content), exported.mimeType);
         setMultiAgentArtifactMessage(`${exportLabel(format)} 已下载，临时导出有效期至 ${formatDateTime(exported.expiresAt)}。`);
@@ -2604,6 +2607,35 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
                 loading={loadingAgentTraces}
                 error={agentTraceError}
                 onRefresh={refreshAgentTraces}
+              />
+            </div>
+          </div>
+          <div className="card card-full">
+            <div className="card-body">
+              <MultiAgentWritingPanel
+                workflow={multiAgentWorkflow}
+                traces={multiAgentWorkflowTraces}
+                artifact={multiAgentArtifact}
+                writingGoal={multiAgentWritingGoal}
+                questionText={multiAgentWritingQuestion}
+                providerName={agentProvider}
+                modelCode={agentModel}
+                modelReady={Boolean(agentProvider && agentModel)}
+                starting={startingMultiAgentWriting}
+                polling={pollingMultiAgentWriting}
+                loadingArtifact={loadingMultiAgentArtifact}
+                artifactError={multiAgentArtifactError}
+                artifactMessage={multiAgentArtifactMessage}
+                exportingArtifactFormat={exportingMultiAgentArtifact}
+                pdfPreviewUrl={multiAgentArtifactPdfWorkflowId === multiAgentWorkflow?.workflowId ? multiAgentArtifactPdfUrl : ""}
+                error={multiAgentWritingError}
+                onWritingGoalChange={setMultiAgentWritingGoal}
+                onQuestionTextChange={setMultiAgentWritingQuestion}
+                onSubmit={handleStartMultiAgentWriting}
+                onRefresh={() => refreshMultiAgentWritingWorkflow()}
+                onLoadArtifact={() => multiAgentWorkflow && loadMultiAgentArtifact(multiAgentWorkflow.workflowId)}
+                onPreviewPdf={handlePreviewMultiAgentArtifactPdf}
+                onExportArtifact={handleExportMultiAgentArtifact}
               />
             </div>
           </div>
@@ -3792,10 +3824,13 @@ function sourceTypeLabel(sourceType?: string | null) {
   return labels[normalized] ?? "模板";
 }
 
-function exportLabel(format: "markdown" | "latex" | "pdf" | "zip") {
+function exportLabel(format: "markdown" | "latex" | "pdf" | "pdf-teacher" | "pdf-student" | "pdf-lecture" | "zip") {
   if (format === "markdown") return "正文文件";
   if (format === "latex") return "TeX 源文件";
   if (format === "pdf") return "PDF 文件";
+  if (format === "pdf-teacher") return "教师版 PDF";
+  if (format === "pdf-student") return "学生空白版 PDF";
+  if (format === "pdf-lecture") return "16:10 单题版 PDF";
   return "ZIP 打包文件";
 }
 

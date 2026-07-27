@@ -3174,9 +3174,12 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
      */
     exportMultiAgentWritingArtifact(
       workflowId: string,
-      format: "markdown" | "latex" | "pdf" | "zip",
+      format: "markdown" | "latex" | "pdf" | "pdf-teacher" | "pdf-student" | "pdf-lecture" | "zip",
+      layout: { headerText?: string; footerText?: string } = {},
     ): Promise<MultiAgentWritingArtifactExportResponse> {
       const params = new URLSearchParams({ format });
+      if (layout.headerText?.trim()) params.set("headerText", layout.headerText.trim());
+      if (layout.footerText?.trim()) params.set("footerText", layout.footerText.trim());
       return requestJson<MultiAgentWritingArtifactExportResponse>(
         `/api/agents/writing/${encodeURIComponent(workflowId)}/artifact/export?${params}`,
       );

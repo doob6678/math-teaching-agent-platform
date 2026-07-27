@@ -1,5 +1,7 @@
 package com.doob.mathagent.teaching.service;
 
+import com.doob.mathagent.agent.service.MultiAgentHandoutPromptProfiles;
+
 import com.doob.mathagent.agent.service.AiChatGateway;
 import com.doob.mathagent.agent.service.AiChatRequest;
 import com.doob.mathagent.agent.service.AiChatResult;
@@ -611,6 +613,9 @@ public class TeachingAiDraftService {
                 你是一名高中数学教研老师。请依据下列真实题库资料生成可直接印刷的讲义内容。
                 只输出一个合法 JSON 对象，不要输出代码块、解释或任何额外文字。所有内容使用简洁中文，公式用 $...$。
 
+                核心教学标准（必须落实在教师版内容中）：
+                %s
+
                 JSON 结构必须为：
                 {
                   "teacherExplanation":"教师版。依次包含【知识定位】【题型识别】【方法步骤】【例题详解】【答案与评分点】【易错提醒】【课堂追问】；答案必须按真实题号逐题给出，禁止整卷 OCR 解析、页码、出版社或截断原文。",
@@ -628,6 +633,7 @@ public class TeachingAiDraftService {
                 已复用学习记录：%s
                 真实资料：%s
                 """.formatted(
+                MultiAgentHandoutPromptProfiles.CORE_TEACHING_PROTOCOL,
                 safeTaskText(request.learningGoal()),
                 safeTaskText(request.questionText()),
                 safeTaskText(request.supplementaryRequirements()),

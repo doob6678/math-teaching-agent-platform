@@ -37,8 +37,8 @@ public class MultiAgentWritingService {
     private static final int MAX_PARALLEL_STAGE_WORKERS = 3;
     private static final int MAX_PROMPT_GOAL_CHARS = 600;
     private static final int MAX_PROMPT_QUESTION_CHARS = 1800;
-    private static final int MAX_ARTIFACT_CHARS_PER_STAGE = 1200;
-    private static final int MAX_ARTIFACT_CONTEXT_CHARS = 4200;
+    private static final int MAX_ARTIFACT_CHARS_PER_STAGE = 2400;
+    private static final int MAX_ARTIFACT_CONTEXT_CHARS = 12000;
     /**
      * Evidence references are identifiers, not a transport for source documents. Keeping the list and each item
      * bounded prevents a large retrieval response from consuming the next agent's input budget or leaking raw files.
@@ -686,7 +686,8 @@ public class MultiAgentWritingService {
         String basePrompt = "stage=" + stage.stageCode()
                 + "; role=" + stage.roleBrief()
                 + "; goal=" + compactPromptText(request.writingGoal(), MAX_PROMPT_GOAL_CHARS)
-                + "; question=" + compactPromptText(request.questionText(), MAX_PROMPT_QUESTION_CHARS);
+                + "; question=" + compactPromptText(request.questionText(), MAX_PROMPT_QUESTION_CHARS)
+                + "\n\n" + MultiAgentHandoutPromptProfiles.instructionsFor(stage.stageCode());
         String previousArtifacts = previousStageArtifacts(completedStages, stage.allowedArtifactStages());
         if (previousArtifacts.isBlank()) {
             return basePrompt;
@@ -1008,8 +1009,138 @@ public class MultiAgentWritingService {
                     refs);
         });
         if (sections.size() == before) {
-            appendFallbackSection(sections, stage, "draft", "Draft");
+            // Luna returns rich JSON objects with domain-specific field names (for example worked_examples), while
+            // older providers use the smaller teacherExplanation/studentWorksheet contract. Preserve the real
+            // classroom content under the audience-specific section code instead of exporting raw Agent JSON.
+            String structuredMarkdown = root.map(MultiAgentWritingService::structuredJsonMarkdown).orElse("");
+            if (!structuredMarkdown.isBlank()) {
+                String sectionCode = switch (stage.stageCode()) {
+                    case "teacher_writer" -> "teacher-explanation";
+                    case "student_writer" -> "student-worksheet";
+                    case "lecture_writer" -> "lecture-cards";
+                    default -> "draft";
+                };
+                String title = switch (stage.stageCode()) {
+                    case "teacher_writer" -> "Teacher Explanation";
+                    case "student_writer" -> "Student Worksheet";
+                    case "lecture_writer" -> "Lecture Cards";
+                    default -> "Draft";
+                };
+                sections.add(new MultiAgentWritingArtifact.StructuredSection(
+                        sectionCode, title, stage.stageCode(), structuredMarkdown, List.of(), risks, refs));
+            } else {
+                appendFallbackSection(sections, stage, "draft", "Draft");
+            }
         }
+    }
+
+    /**
+     * Converts a provider-specific JSON answer to printable Markdown without exposing retrieval identifiers or
+     * operational fields. This is a compatibility bridge, not a second prompt: future providers can add teaching
+     * fields without forcing a teacher to download an unreadable JSON blob.
+     */
+    private static String structuredJsonMarkdown(JsonNode root) {
+        StringBuilder markdown = new StringBuilder();
+        appendJsonMarkdown(markdown, root, 1, "");
+        return markdown.toString().strip();
+    }
+
+    private static void appendJsonMarkdown(StringBuilder markdown, JsonNode value, int depth, String label) {
+        if (value == null || value.isNull() || depth > 5) {
+            return;
+        }
+        if (value.isTextual() || value.isNumber() || value.isBoolean()) {
+            String text = value.asText().strip();
+            if (text.isBlank()) return;
+            if (!label.isBlank()) {
+                markdown.append("#".repeat(Math.min(4, Math.max(2, depth)))).append(' ')
+                        .append(readableJsonLabel(label)).append("\n\n");
+            }
+            markdown.append(text).append("\n\n");
+            return;
+        }
+        if (value.isArray()) {
+            for (JsonNode item : value) {
+                if (item.isValueNode()) {
+                    String text = item.asText().strip();
+                    if (!text.isBlank()) markdown.append("- ").append(text).append('\n');
+                } else {
+                    appendJsonMarkdown(markdown, item, depth + 1, label);
+                }
+            }
+            markdown.append('\n');
+            return;
+        }
+        if (value.isObject()) {
+            value.fields().forEachRemaining(entry -> {
+                if (!isPrintableJsonField(entry.getKey())) return;
+                JsonNode child = entry.getValue();
+                if (child.isValueNode()) {
+                    String text = child.asText().strip();
+                    if (!text.isBlank()) {
+                        if ("title".equalsIgnoreCase(entry.getKey())) {
+                            // Provider JSON often carries the actual AI title as a field value. Promote it directly
+                            // to a Markdown heading so neither "title" nor a duplicate title reaches the PDF.
+                            markdown.append("#".repeat(Math.min(4, Math.max(1, depth)))).append(' ')
+                                    .append(text).append("\n\n");
+                        } else {
+                            markdown.append("#".repeat(Math.min(4, Math.max(1, depth)))).append(' ')
+                                    .append(readableJsonLabel(entry.getKey())).append("\n\n")
+                                    .append(text).append("\n\n");
+                        }
+                    }
+                } else {
+                    markdown.append("#".repeat(Math.min(4, Math.max(1, depth)))).append(' ')
+                            .append(readableJsonLabel(entry.getKey())).append("\n\n");
+                    appendJsonMarkdown(markdown, child, depth + 1, "");
+                }
+            });
+        }
+    }
+
+    /** Removes operational/source fields; citations stay in the protected trace and evidence panel. */
+    private static boolean isPrintableJsonField(String field) {
+        String normalized = field == null ? "" : field.toLowerCase(java.util.Locale.ROOT);
+        return !normalized.contains("evidence") && !normalized.contains("citation") && !normalized.contains("source")
+                && !normalized.contains("trace") && !normalized.contains("token") && !normalized.contains("model");
+    }
+
+    private static String readableJsonLabel(String field) {
+        if (field == null) return "";
+        return switch (field) {
+            case "name" -> "名称";
+            case "table" -> "方法选择表";
+            case "coordinate_form", "coordinate form" -> "坐标形式";
+            case "audience" -> "适用对象";
+            case "type" -> "讲义类型";
+            case "fields" -> "填写信息";
+            case "sections" -> "学习内容";
+            case "teaching_objectives" -> "教学目标";
+            case "knowledge_framework" -> "知识框架";
+            case "notation" -> "符号约定";
+            case "formulas" -> "核心公式";
+            case "reasoning" -> "推导理由";
+            case "application" -> "适用条件";
+            case "method_decision_table" -> "方法选择";
+            case "known_conditions" -> "已知条件";
+            case "preferred_method" -> "优先方法";
+            case "worked_examples" -> "例题讲解";
+            case "problem" -> "题目";
+            case "solution" -> "解题过程";
+            case "answer" -> "答案";
+            case "review_notes" -> "检验与提醒";
+            case "practice" -> "课堂练习";
+            case "common_errors" -> "易错提醒";
+            case "class_summary" -> "课堂小结";
+            case "content" -> "内容";
+            case "items" -> "要点";
+            case "prompts" -> "思考问题";
+            case "problems" -> "练习题";
+            case "checklist" -> "自查";
+            case "cards" -> "课堂卡片";
+            case "card" -> "卡片";
+            default -> field.replace('_', ' ').strip();
+        };
     }
 
     /**

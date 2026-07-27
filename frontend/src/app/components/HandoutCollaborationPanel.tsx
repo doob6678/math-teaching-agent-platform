@@ -174,7 +174,7 @@ export function HandoutCollaborationPanel({
             />
           </label>
           <label className="handout-brief-field">
-            <span>PDF 水印</span>
+            <span>页眉/页脚署名</span>
             <input
               className="handout-composer-input"
               value={watermarkText}
