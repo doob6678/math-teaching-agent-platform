@@ -329,6 +329,11 @@ public class MultiAgentWritingArtifactExportService {
                 : "a4paper,margin=2cm,headheight=16pt";
         String renderedHeader = headerText.isBlank() ? title : headerText;
         String renderedFooter = footerText.isBlank() ? variant.defaultFooter() : footerText;
+        String titleBlock = variant == HandoutVariant.LECTURE
+                // A 16:10 projection must begin with the real question, not a cover-page-sized title.  Keeping the
+                // lesson identity in the compact header leaves the first visual line available to the prompt.
+                ? "\\noindent\\textbf{\\large " + escapeLatexText(title) + "}\\par\\vspace{0.35em}\\n"
+                : "\\maketitle\\n";
         latex.append("""
                 \\documentclass[UTF8]{ctexart}
                 \\usepackage{amsmath,amssymb,geometry,fontspec,fancyhdr,xcolor}
@@ -349,14 +354,13 @@ public class MultiAgentWritingArtifactExportService {
                 \\title{%s}
                 \\date{}
                 \\begin{document}
-                \\maketitle
-
                 """.formatted(
                 geometry,
                 escapeLatexText(renderedHeader),
                 escapeLatexText(variant.displayName()),
                 escapeLatexText(renderedFooter),
                 escapeLatexText(title)));
+        latex.append(titleBlock);
         appendMarkdownAsLatex(latex, withoutLeadingDocumentTitle(content, title));
         latex.append("\n\\end{document}\n");
         return latex.toString();
