@@ -3119,7 +3119,10 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
      */
     async startAsyncMultiAgentWriting(request: MultiAgentWritingRequest): Promise<MultiAgentWritingResponse> {
       const body = JSON.stringify(request);
-      const path = "/api/agents/writing/async";
+      // Keep this path identical to the controller mapping.  The courseware segment is
+      // part of the server-side access policy, so omitting it makes a real background
+      // workflow look like an authorization/capability failure instead of starting it.
+      const path = "/api/agents/writing/courseware/async";
       return requestJson<MultiAgentWritingResponse>(path, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

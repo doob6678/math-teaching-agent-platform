@@ -409,7 +409,7 @@ public class TeacherSourceSyncExecutionService {
                         true);
                 String contentChecksum = semanticContentChecksum(blocks, downloaded.title());
                 downloaded = withSyncFingerprint(downloaded, contentChecksum);
-                if (contentChecksum.equals(document.contentChecksum())) {
+                if (contentChecksum.equals(document.contentChecksum()) && hasVerifiedVectorReadiness(document)) {
                     /*
                      * Feishu can change title/revision without changing parsed body. Persist those real provider
                      * metadata changes, but retain active block/asset/vector rows: a delete-and-rebuild here would
@@ -875,6 +875,23 @@ public class TeacherSourceSyncExecutionService {
                 downloaded.sourceIdentity());
         resourceStore.save(synced);
         return synced;
+    }
+
+    /**
+     * Returns whether the already persisted vector generation is safe to retain for an unchanged Feishu body.
+     *
+     * <p>A content checksum only proves that the parsed text has not changed. It does not prove that a prior
+     * embedding or Milvus rebuild succeeded. In particular, a transient Worker failure leaves the same checksum
+     * alongside {@code failed} statuses. Treating that state as an unchanged success permanently strands the
+     * document outside retrieval, so an unchanged re-sync must rebuild unless both persisted readiness markers are
+     * explicitly ready.</p>
+     *
+     * @param document previously persisted resource state
+     * @return true only when both embedding and index generations are verified ready
+     */
+    private static boolean hasVerifiedVectorReadiness(TeacherResourceDocumentResponse document) {
+        return "ready".equalsIgnoreCase(textOrDefault(document.embeddingStatus(), ""))
+                && "ready".equalsIgnoreCase(textOrDefault(document.indexStatus(), ""));
     }
 
     /**

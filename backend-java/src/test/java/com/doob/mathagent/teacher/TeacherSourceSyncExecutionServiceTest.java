@@ -687,6 +687,48 @@ class TeacherSourceSyncExecutionServiceTest {
     }
 
     @Test
+    void unchangedFeishuResyncRebuildsWhenThePreviousVectorGenerationFailed() throws Exception {
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherSourceSyncJobStore jobStore = new InMemoryTeacherSourceSyncJobStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        InMemoryTeacherSourceSyncCheckpointStore checkpointStore = new InMemoryTeacherSourceSyncCheckpointStore();
+        TeacherResourceService resourceService = TeacherResourceServiceFixture.service(resourceStore);
+        TeacherResourceDocumentResponse resource = resourceService.register(new TeacherResourceRegistrationCommand(
+                "school-a", "teacher", "teacher-1", "feishu", "涂色问题",
+                "https://wiki.feishu.cn/docx/coloring-problem", null, "TEACHER_PRIVATE", "md"));
+        Path savedPath = tempDir.resolve("unchanged-feishu-failed-index-document");
+        Files.createDirectories(savedPath);
+        Files.writeString(savedPath.resolve("coloring.md"), "# 涂色问题\n\n相邻区域不能使用同一种颜色。");
+        TeacherSourceSyncJobService jobService = new TeacherSourceSyncJobService(resourceStore, jobStore);
+        TeacherSourceSyncExecutionService executionService = new TeacherSourceSyncExecutionService(
+                resourceStore, jobStore, blockStore, new SuccessfulFeishuDownloadClient(savedPath),
+                testSyncProperties(), checkpointStore, TestVectorIndexService.successful(resourceStore, blockStore));
+
+        TeacherSourceSyncJobResponse firstJob = jobService.createSyncJob(
+                "school-a", "teacher", "teacher-1", resource.documentId());
+        executionService.execute("school-a", "teacher", "teacher-1", resource.documentId(), firstJob.jobId());
+        TeacherResourceDocumentResponse indexed = resourceStore.find("school-a", resource.documentId());
+        // Simulate the durable state left by an interrupted Worker/Milvus rebuild, without changing parsed content.
+        resourceStore.save(new TeacherResourceDocumentResponse(
+                indexed.documentId(), indexed.tenantId(), indexed.ownerSubjectId(), indexed.sourceType(), indexed.title(),
+                indexed.originalUrl(), indexed.localPath(), indexed.permissionScope(), indexed.syncStatus(),
+                indexed.parseStatus(), "failed", "failed", indexed.feishuExportFormat(), indexed.previewFiles(),
+                indexed.parseMode(), indexed.providerRevision(), indexed.contentChecksum(), indexed.sourceIdentity()));
+
+        TeacherSourceSyncJobResponse retryJob = jobService.createSyncJob(
+                "school-a", "teacher", "teacher-1", resource.documentId());
+        TeacherSourceSyncJobResponse retryResult = executionService.execute(
+                "school-a", "teacher", "teacher-1", resource.documentId(), retryJob.jobId());
+
+        TeacherResourceDocumentResponse recovered = resourceStore.find("school-a", resource.documentId());
+        assertThat(retryResult.status()).isEqualTo("completed");
+        assertThat(retryResult.phase()).isEqualTo("download_completed");
+        assertThat(retryResult.message()).contains("Vector index indexed");
+        assertThat(recovered.embeddingStatus()).isEqualTo("ready");
+        assertThat(recovered.indexStatus()).isEqualTo("ready");
+    }
+
+    @Test
     void resumeFeishuSyncJobPassesDurableCheckpointToDownloader() throws Exception {
         InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
         InMemoryTeacherSourceSyncJobStore jobStore = new InMemoryTeacherSourceSyncJobStore();

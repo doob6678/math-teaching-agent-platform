@@ -13,6 +13,53 @@ vi.mock("pdfjs-dist/build/pdf.worker.mjs?url", () => ({
 }));
 
 describe("MultiAgentWritingPanel", () => {
+  it("offers recovery only for a terminal failed workflow", () => {
+    const workflow: MultiAgentWritingResponse = {
+      workflowId: "workflow-failed-1",
+      tenantId: "school-a",
+      subjectType: "teacher",
+      subjectId: "teacher-1",
+      status: "FAILED",
+      stages: [{
+        stageCode: "resource_curation",
+        agentCode: "TeacherAssistantAgent",
+        traceId: "trace-resource",
+        providerName: "openai",
+        modelCode: "gpt-5.6-luna",
+        status: "COMPLETED",
+        actualUsage: { promptTokens: 100, completionTokens: 40, totalTokens: 140 },
+        message: "Evidence curation completed",
+        elapsedMs: 42,
+      }],
+      totalUsage: { promptTokens: 100, completionTokens: 40, totalTokens: 140 },
+      message: "Provider unavailable at template selection",
+    };
+
+    const html = renderToStaticMarkup(
+      <MultiAgentWritingPanel
+        workflow={workflow}
+        traces={null}
+        writingGoal="teacher handout"
+        questionText="space vector angle"
+        providerName="openai"
+        modelCode="gpt-5.6-luna"
+        modelReady={true}
+        starting={false}
+        resuming={false}
+        polling={false}
+        error=""
+        onWritingGoalChange={vi.fn()}
+        onQuestionTextChange={vi.fn()}
+        onSubmit={vi.fn()}
+        onResume={vi.fn()}
+        onRefresh={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain("从失败点恢复");
+    expect(html).toContain("只重新排队未完成阶段");
+  });
+
   it("renders requested model, actual fallback model usage, Chinese usage labels, and diagnostics", () => {
     const workflow: MultiAgentWritingResponse = {
       workflowId: "workflow-1",

@@ -322,13 +322,51 @@ public class MultiAgentWritingService {
             throw new IllegalStateException("Multi-agent writing workflow is still running");
         }
         List<MultiAgentWritingResponse.StageResult> completedStages = validCompletedStages(normalizedRecord.stages());
-        return executeWorkflow(
+        /*
+         * A browser recovery must be quick and must use the same durable Worker path as a
+         * newly-created workflow.  Calling executeWorkflow here used to hold the HTTP request
+         * open for every remaining model call, so a teacher could not tell whether recovery had
+         * started and a proxy timeout could create a second recovery attempt.  Persist RUNNING
+         * before publishing: Worker redelivery is safe because completed stage codes are retained.
+         */
+        if (distributedWorkerDispatchEnabled()) {
+            if (workerTaskStore == null || workerTaskPublisher == null) {
+                throw new IllegalStateException("Distributed Agent Worker dispatch is not configured");
+            }
+            MultiAgentWritingWorkflowRecord resumed = saveWorkflow(
+                    normalizedRecord.workflowId(),
+                    normalizedSubject,
+                    "RUNNING",
+                    normalizedRecord.createdAt(),
+                    completedStages,
+                    "Multi-agent writing workflow resumed; queued only unfinished stages.");
+            dispatchReadyStageTasks(resumed.workflowId(), normalizedSubject, normalized, completedStages);
+            return toResponse(resumed);
+        }
+        // The local development fallback still runs asynchronously so clicking recovery never blocks the UI.
+        MultiAgentWritingWorkflowRecord resumed = saveWorkflow(
                 normalizedRecord.workflowId(),
-                normalizedRecord.createdAt(),
-                normalized,
                 normalizedSubject,
+                "RUNNING",
+                normalizedRecord.createdAt(),
                 completedStages,
-                "Multi-agent writing workflow resumed.");
+                "Multi-agent writing workflow resumed; running unfinished stages.");
+        taskExecutor.execute(() -> {
+            try {
+                executeWorkflow(
+                        normalizedRecord.workflowId(),
+                        normalizedRecord.createdAt(),
+                        normalized,
+                        normalizedSubject,
+                        completedStages,
+                        "Multi-agent writing workflow resumed.");
+            } catch (RuntimeException ignored) {
+                // executeWorkflow persists a safe FAILED snapshot that can be retried from the UI.
+            }
+        });
+        // A direct executor is used by focused tests; reading back preserves its completed snapshot.
+        // A real async executor returns the just-persisted RUNNING status immediately.
+        return toResponse(workflowStore.findVisible(normalizedRecord.workflowId(), normalizedSubject).orElse(resumed));
     }
 
     /**

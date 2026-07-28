@@ -109,6 +109,9 @@ export function MultiAgentWritingPanel({
   const hasArtifact = Boolean(artifact?.mergedMarkdown?.trim());
   const canReviewArtifact = Boolean(workflow && ["COMPLETED", "FAILED", "SUCCESS"].includes(normalizedWorkflowStatus));
   const completed = normalizedWorkflowStatus === "COMPLETED" || normalizedWorkflowStatus === "SUCCESS";
+  // Recovery is deliberately limited to terminal failures: a RUNNING workflow already owns durable Worker leases,
+  // and a completed workflow has no missing stage to execute. The server repeats this ownership/status check.
+  const canResume = normalizedWorkflowStatus === "FAILED";
   const artifactActionDisabled = !canReviewArtifact || Boolean(exportingArtifactFormat);
   const completedStageCount = workflow?.stages.filter((stage) => ["COMPLETED", "SUCCESS"].includes(stage.status.toUpperCase())).length ?? 0;
   const progressPercent = workflow ? Math.round((completedStageCount / stageCodes.length) * 100) : 0;
@@ -157,10 +160,10 @@ export function MultiAgentWritingPanel({
           {starting ? <Loader2 className="spin" size={17} /> : <ShieldCheck size={17} />}
           <span>启动真实流程</span>
         </button>
-        {onResume ? (
-          <button className="btn btn-secondary" type="button" disabled={!workflow || resuming || polling} onClick={onResume}>
+        {onResume && canResume ? (
+          <button className="btn btn-secondary" type="button" disabled={resuming} onClick={onResume}>
             {resuming ? <Loader2 className="spin" size={17} /> : <Database size={17} />}
-            <span>恢复任务</span>
+            <span>从失败点恢复</span>
           </button>
         ) : null}
       </form>
@@ -374,6 +377,13 @@ export function MultiAgentWritingPanel({
         <StatusLine icon={<AlertCircle size={16} />} text="模型目录还没有加载完成，暂时不能启动写作流程。" tone="danger" />
       ) : null}
       {error ? <StatusLine icon={<AlertCircle size={16} />} text={error} tone="danger" /> : null}
+      {canResume ? (
+        <StatusLine
+          icon={<RefreshCw size={16} />}
+          text="失败任务已保留完成阶段、证据和用量。点击“从失败点恢复”只重新排队未完成阶段，不会重复已成功的模型调用。"
+          tone="danger"
+        />
+      ) : null}
       {running ? (
         <StatusLine icon={<Loader2 className="spin" size={16} />} text="这里只显示真实阶段推进。只有出现 PDF 预览和下载入口，才表示讲义已经可交付。" />
       ) : null}

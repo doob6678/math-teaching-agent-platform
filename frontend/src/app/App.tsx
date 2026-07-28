@@ -23,6 +23,7 @@ import {
   McpConnectionTestResult,
   McpConfigurationResponse,
   MultiAgentWritingArtifact,
+  MultiAgentWritingRequest,
   MultiAgentWritingResponse,
   MultiAgentWritingTraceResponse,
   QuestionBankItemResponse,
@@ -98,6 +99,9 @@ export { statusClass, statusTone } from "./components/panelShared";
 const DEFAULT_BACKEND_URL = import.meta.env.VITE_BACKEND_URL
   ?? (typeof window === "undefined" ? "" : window.location.origin);
 const MULTI_AGENT_WORKFLOW_STORAGE_KEY = "math-agent:last-multi-agent-workflow-id";
+// The server owns workflow progress; this browser copy only preserves the original input so a refresh does not turn
+// a recovery click into a different paid request.  It is scoped to one workflow id and contains no model output.
+const MULTI_AGENT_WORKFLOW_REQUEST_STORAGE_KEY = "math-agent:last-multi-agent-workflow-request";
 const TEACHING_CONVERSATION_STORAGE_KEY = "math-agent:teaching-conversation-thread";
 // These legacy keys used to restore browser-side handout state. Tasks now recover only from owner-scoped backend history.
 const LEGACY_TEACHING_TASK_STORAGE_KEY = "math-agent:last-teaching-task-id";
@@ -298,6 +302,7 @@ export function App() {
   const [planningAgent, setPlanningAgent] = useState(false);
   const [executingAgent, setExecutingAgent] = useState(false);
   const [startingMultiAgentWriting, setStartingMultiAgentWriting] = useState(false);
+  const [resumingMultiAgentWriting, setResumingMultiAgentWriting] = useState(false);
   const [pollingMultiAgentWriting, setPollingMultiAgentWriting] = useState(false);
   const [loadingAgentTraces, setLoadingAgentTraces] = useState(false);
   const [agentPlanError, setAgentPlanError] = useState("");
@@ -1931,17 +1936,59 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
       return "";
     });
     setMultiAgentArtifactPdfWorkflowId("");
+    const writingRequest: MultiAgentWritingRequest = {
+        writingGoal: multiAgentWritingGoal.trim(),
+        questionText: multiAgentWritingQuestion.trim() || multiAgentWritingGoal.trim(),
+        evidenceRefs: multiAgentEvidenceRefs(searchResult),
+        preferredProviderName: agentProvider,
+        preferredModelCode: agentModel,
+      };
     api
-      .startAsyncMultiAgentWriting({
+      .startAsyncMultiAgentWriting(writingRequest)
+      .then((workflow) => {
+        setMultiAgentWorkflow(workflow);
+        globalThis.localStorage?.setItem(MULTI_AGENT_WORKFLOW_STORAGE_KEY, workflow.workflowId);
+        globalThis.localStorage?.setItem(
+          MULTI_AGENT_WORKFLOW_REQUEST_STORAGE_KEY,
+          JSON.stringify({ workflowId: workflow.workflowId, request: writingRequest }),
+        );
+      })
+      .catch((error: Error) => setMultiAgentWritingError(toUserFacingError(error)))
+      .finally(() => setStartingMultiAgentWriting(false));
+  }
+
+  /**
+   * Restarts only the first missing workflow stage after a terminal failure.
+   *
+   * The backend preserves completed stages, their evidence, and their provider-reported usage in MySQL.  Sending
+   * the original teacher inputs back to the owner-scoped resume endpoint therefore does not repeat already completed
+   * paid calls; it makes the durable Worker release the next missing stage and restores normal status polling.
+   */
+  function handleResumeMultiAgentWriting() {
+    const workflow = multiAgentWorkflow;
+    if (!workflow || workflow.status.toUpperCase() !== "FAILED") {
+      setMultiAgentWritingError("只有已失败的讲义流程可以从失败点恢复。");
+      return;
+    }
+    setResumingMultiAgentWriting(true);
+    setMultiAgentWritingError("");
+    setMultiAgentArtifactError("");
+    setMultiAgentArtifactMessage("");
+    api
+      .resumeMultiAgentWriting(workflow.workflowId, savedMultiAgentWritingRequest(workflow.workflowId) ?? {
         writingGoal: multiAgentWritingGoal.trim(),
         questionText: multiAgentWritingQuestion.trim() || multiAgentWritingGoal.trim(),
         evidenceRefs: multiAgentEvidenceRefs(searchResult),
         preferredProviderName: agentProvider,
         preferredModelCode: agentModel,
       })
-      .then((workflow) => { setMultiAgentWorkflow(workflow); globalThis.localStorage?.setItem(MULTI_AGENT_WORKFLOW_STORAGE_KEY, workflow.workflowId); })
+      .then((resumed) => {
+        setMultiAgentWorkflow(resumed);
+        globalThis.localStorage?.setItem(MULTI_AGENT_WORKFLOW_STORAGE_KEY, resumed.workflowId);
+        setMultiAgentArtifactMessage("已从失败阶段恢复；已完成的资料、写作与审校阶段不会重复执行。");
+      })
       .catch((error: Error) => setMultiAgentWritingError(toUserFacingError(error)))
-      .finally(() => setStartingMultiAgentWriting(false));
+      .finally(() => setResumingMultiAgentWriting(false));
   }
 
   function loadMultiAgentArtifact(workflowId: string, silent = false) {
@@ -2622,6 +2669,7 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
                 modelCode={agentModel}
                 modelReady={Boolean(agentProvider && agentModel)}
                 starting={startingMultiAgentWriting}
+                resuming={resumingMultiAgentWriting}
                 polling={pollingMultiAgentWriting}
                 loadingArtifact={loadingMultiAgentArtifact}
                 artifactError={multiAgentArtifactError}
@@ -2632,6 +2680,7 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
                 onWritingGoalChange={setMultiAgentWritingGoal}
                 onQuestionTextChange={setMultiAgentWritingQuestion}
                 onSubmit={handleStartMultiAgentWriting}
+                onResume={handleResumeMultiAgentWriting}
                 onRefresh={() => refreshMultiAgentWritingWorkflow()}
                 onLoadArtifact={() => multiAgentWorkflow && loadMultiAgentArtifact(multiAgentWorkflow.workflowId)}
                 onPreviewPdf={handlePreviewMultiAgentArtifactPdf}
@@ -3069,6 +3118,38 @@ function readStoredAuthSession() {
   try {
     const value = globalThis.localStorage?.getItem("math-agent:auth-session");
     return value ? (JSON.parse(value) as LoginResponse) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Restores only the request that belongs to the failed workflow currently shown on screen.
+ *
+ * A stale or malformed local value is deliberately ignored: the backend will then validate the visible form values
+ * instead of ever submitting an unrelated workflow's evidence anchors.
+ */
+function savedMultiAgentWritingRequest(workflowId: string): MultiAgentWritingRequest | null {
+  try {
+    const value = globalThis.localStorage?.getItem(MULTI_AGENT_WORKFLOW_REQUEST_STORAGE_KEY);
+    if (!value) return null;
+    const parsed = JSON.parse(value) as { workflowId?: string; request?: Partial<MultiAgentWritingRequest> };
+    const request = parsed.request;
+    if (
+      parsed.workflowId !== workflowId
+      || !request?.writingGoal?.trim()
+      || !request.questionText?.trim()
+      || !Array.isArray(request.evidenceRefs)
+    ) {
+      return null;
+    }
+    return {
+      writingGoal: request.writingGoal.trim(),
+      questionText: request.questionText.trim(),
+      evidenceRefs: request.evidenceRefs.filter((reference): reference is string => typeof reference === "string"),
+      preferredProviderName: request.preferredProviderName?.trim() || undefined,
+      preferredModelCode: request.preferredModelCode?.trim() || undefined,
+    };
   } catch {
     return null;
   }

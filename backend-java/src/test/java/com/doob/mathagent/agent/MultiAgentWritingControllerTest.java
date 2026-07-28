@@ -1,7 +1,6 @@
 package com.doob.mathagent.agent;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.doob.mathagent.agent.controller.MultiAgentWritingController;
 import com.doob.mathagent.agent.dto.MultiAgentWritingRequest;
@@ -29,20 +28,18 @@ import org.springframework.web.server.ResponseStatusException;
 class MultiAgentWritingControllerTest {
 
     @Test
-    void rejectsWritingWithoutCapabilityToken() {
+    void runsWritingWithBackendSessionWithoutRetiredCapabilityToken() {
         MultiAgentWritingController controller = new MultiAgentWritingController(
                 writingService(new InMemoryAgentTraceStore()),
                 new AgentTraceQueryService(new InMemoryAgentTraceStore()),
                 request -> new RequestSubject("school-a", "teacher", "teacher-1", "device-1"),
                 (token, action, path, requestHash, subject) -> false);
 
-        assertThatThrownBy(() -> controller.run(request(), null))
-                .isInstanceOf(ResponseStatusException.class)
-                .hasMessageContaining("Capability token required");
+        assertThat(controller.run(request(), null).status()).isEqualTo("COMPLETED");
     }
 
     @Test
-    void runsWritingAfterCapabilityVerificationUsingBackendSubject() {
+    void runsWritingUsingBackendSubjectWithoutCapabilityVerification() {
         InMemoryAgentTraceStore traceStore = new InMemoryAgentTraceStore();
         List<String> capabilityChecks = new ArrayList<>();
         MultiAgentWritingService writingService = writingService(traceStore);
@@ -63,8 +60,7 @@ class MultiAgentWritingControllerTest {
                         "resource_curation", "template_selection", "outline_planning",
                         "teacher_writer", "student_writer", "lecture_writer",
                         "source_review", "student_safety_review", "layout_review", "merge_coordinator");
-        assertThat(capabilityChecks)
-                .containsExactly("agent-run:CoursewareAgent|/api/agents/writing/courseware|teacher-1");
+        assertThat(capabilityChecks).isEmpty();
         MultiAgentWritingResponse recovered = controller.get(response.workflowId(), null);
         assertThat(recovered.status()).isEqualTo("COMPLETED");
         assertThat(recovered.subjectId()).isEqualTo("teacher-1");
@@ -72,7 +68,7 @@ class MultiAgentWritingControllerTest {
     }
 
     @Test
-    void startsAsyncWritingWithCapabilityPathBoundToAsyncEndpoint() {
+    void startsAsyncWritingUsingBackendSessionWithoutCapabilityVerification() {
         InMemoryAgentTraceStore traceStore = new InMemoryAgentTraceStore();
         List<String> capabilityChecks = new ArrayList<>();
         MultiAgentWritingService writingService = writingService(traceStore);
@@ -91,12 +87,11 @@ class MultiAgentWritingControllerTest {
         assertThat(started.status()).isEqualTo("RUNNING");
         assertThat(started.subjectId()).isEqualTo("teacher-1");
         assertThat(recovered.status()).isEqualTo("COMPLETED");
-        assertThat(capabilityChecks)
-                .containsExactly("agent-run:CoursewareAgent|/api/agents/writing/courseware/async|teacher-1");
+        assertThat(capabilityChecks).isEmpty();
     }
 
     @Test
-    void resumesFailedWritingWithCapabilityPathBoundToWorkflowId() {
+    void resumesFailedWritingUsingBackendSessionWithoutCapabilityVerification() {
         InMemoryAgentTraceStore traceStore = new InMemoryAgentTraceStore();
         InMemoryMultiAgentWritingWorkflowStore workflowStore = new InMemoryMultiAgentWritingWorkflowStore();
         workflowStore.save(new MultiAgentWritingWorkflowRecord(
@@ -136,21 +131,18 @@ class MultiAgentWritingControllerTest {
                         "resource_curation", "template_selection", "outline_planning",
                         "teacher_writer", "student_writer", "lecture_writer",
                         "source_review", "student_safety_review", "layout_review", "merge_coordinator");
-        assertThat(capabilityChecks)
-                .containsExactly("agent-run:CoursewareAgent|/api/agents/writing/workflow-resume-abc/resume|teacher-1");
+        assertThat(capabilityChecks).isEmpty();
     }
 
     @Test
-    void rejectsAsyncWritingWithoutCapabilityToken() {
+    void startsAsyncWritingWithBackendSessionWithoutRetiredCapabilityToken() {
         MultiAgentWritingController controller = new MultiAgentWritingController(
                 writingService(new InMemoryAgentTraceStore()),
                 new AgentTraceQueryService(new InMemoryAgentTraceStore()),
                 request -> new RequestSubject("school-a", "teacher", "teacher-1", "device-1"),
                 (token, action, path, requestHash, subject) -> false);
 
-        assertThatThrownBy(() -> controller.startAsync(request(), null))
-                .isInstanceOf(ResponseStatusException.class)
-                .hasMessageContaining("Capability token required");
+        assertThat(controller.startAsync(request(), null).status()).isEqualTo("RUNNING");
     }
 
     @Test
