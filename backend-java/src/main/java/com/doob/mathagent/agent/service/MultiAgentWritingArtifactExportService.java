@@ -423,7 +423,7 @@ public class MultiAgentWritingArtifactExportService {
             return;
         }
         String compact = content.replaceAll("\\s+", "");
-        for (String blocked : List.of("答案：", "答案:", "最终答案", "完整解答", "完整解析", "评分点：", "评分标准：", "教师提示：",
+        for (String blocked : List.of("答案：", "答案:", "答案依次", "参考答案", "最终答案", "完整解答", "完整解析", "评分点：", "评分标准：", "教师提示：",
                 "answer:", "solution:", "worked solution", "scoring rubric", "teacher note")) {
             if (compact.contains(blocked.replaceAll("\\s+", ""))) {
                 throw new IllegalStateException(variant.displayName() + "检测到答案或教师信息，拒绝导出：" + blocked);

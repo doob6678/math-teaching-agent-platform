@@ -10,6 +10,8 @@ import com.doob.mathagent.agent.worker.AgentWorkerTask;
 import com.doob.mathagent.agent.worker.AgentWorkerTaskPublisher;
 import com.doob.mathagent.agent.worker.AgentWorkerTaskStore;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
+import com.doob.mathagent.teacher.search.TeacherResourceBlockSearchResponse;
+import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Instant;
@@ -45,6 +47,9 @@ public class MultiAgentWritingService {
      */
     private static final int MAX_EVIDENCE_REFS = 24;
     private static final int MAX_EVIDENCE_REF_CHARS = 240;
+    /** Writing needs source text, not opaque ids; keep this small enough to preserve room for the handout itself. */
+    private static final int WRITING_EVIDENCE_HIT_LIMIT = 4;
+    private static final int MAX_WRITING_EVIDENCE_CHARS_PER_HIT = 1_200;
 
     /*
      * Every group is a persisted barrier: later agents can consume only completed group artifacts. The middle writer
@@ -103,6 +108,7 @@ public class MultiAgentWritingService {
     private final AgentWorkerTaskStore workerTaskStore;
     private final AgentWorkerTaskPublisher workerTaskPublisher;
     private final Environment environment;
+    private final TeacherResourceBlockSearchService teacherResourceBlockSearchService;
 
     /**
      * Creates the multi-agent writing service.
@@ -119,7 +125,8 @@ public class MultiAgentWritingService {
             @Qualifier("multiAgentWritingTaskExecutor") TaskExecutor taskExecutor,
             AgentWorkerTaskStore workerTaskStore,
             AgentWorkerTaskPublisher workerTaskPublisher,
-            Environment environment) {
+            Environment environment,
+            TeacherResourceBlockSearchService teacherResourceBlockSearchService) {
         this.planService = planService;
         this.executionService = executionService;
         this.workflowStore = workflowStore;
@@ -127,12 +134,13 @@ public class MultiAgentWritingService {
         this.workerTaskStore = workerTaskStore;
         this.workerTaskPublisher = workerTaskPublisher;
         this.environment = environment;
+        this.teacherResourceBlockSearchService = teacherResourceBlockSearchService;
     }
 
     /** Compatibility constructor preserves focused tests that intentionally exercise the in-process fallback. */
     public MultiAgentWritingService(AgentRunPlanService planService, AgentRunExecutionService executionService,
             MultiAgentWritingWorkflowStore workflowStore, TaskExecutor taskExecutor) {
-        this(planService, executionService, workflowStore, taskExecutor, null, null, null);
+        this(planService, executionService, workflowStore, taskExecutor, null, null, null, null);
     }
 
     /**
@@ -658,7 +666,7 @@ public class MultiAgentWritingService {
         AgentRunExecuteResponse execution = executionService.execute(
                 new AgentRunExecuteRequest(
                         withWorkflowPlanId(plan, workflowId + ":" + stage.stageCode()),
-                        stagePrompt(stage, request, completedStages),
+                        stagePrompt(stage, request, completedStages, writingEvidenceContext(stage, request, subject)),
                         compactEvidenceRefs(request.evidenceRefs()),
                         request.dryRun()),
                 subject);
@@ -720,17 +728,70 @@ public class MultiAgentWritingService {
     private static String stagePrompt(
             WritingStageSpec stage,
             MultiAgentWritingRequest request,
-            List<MultiAgentWritingResponse.StageResult> completedStages) {
+            List<MultiAgentWritingResponse.StageResult> completedStages,
+            String writingEvidenceContext) {
         String basePrompt = "stage=" + stage.stageCode()
                 + "; role=" + stage.roleBrief()
                 + "; goal=" + compactPromptText(request.writingGoal(), MAX_PROMPT_GOAL_CHARS)
                 + "; question=" + compactPromptText(request.questionText(), MAX_PROMPT_QUESTION_CHARS)
                 + "\n\n" + MultiAgentHandoutPromptProfiles.instructionsFor(stage.stageCode());
         String previousArtifacts = previousStageArtifacts(completedStages, stage.allowedArtifactStages());
+        String promptWithEvidence = writingEvidenceContext == null || writingEvidenceContext.isBlank()
+                ? basePrompt
+                : basePrompt + "\n\nAuthorized teacher-source evidence (cite these facts; do not claim an evidence gap for text below):\n"
+                        + writingEvidenceContext;
         if (previousArtifacts.isBlank()) {
-            return basePrompt;
+            return promptWithEvidence;
         }
-        return basePrompt + "\n\nPrevious completed stages:\n" + previousArtifacts;
+        return promptWithEvidence + "\n\nPrevious completed stages:\n" + previousArtifacts;
+    }
+
+    /**
+     * Resolves real, permission-filtered teacher-source blocks before the resource curator calls the model.
+     *
+     * <p>Earlier code passed only opaque document ids.  That made the model correctly refuse to attribute methods
+     * to a source it could not read.  This adapter deliberately uses the existing audited retrieval service rather
+     * than reading files or bypassing tenant/subject visibility, and it exposes only compact evidence snippets plus
+     * backend-controlled image URIs.</p>
+     */
+    private String writingEvidenceContext(
+            WritingStageSpec stage, MultiAgentWritingRequest request, RequestSubject subject) {
+        if (!"resource_curation".equals(stage.stageCode()) || teacherResourceBlockSearchService == null) {
+            return "";
+        }
+        String query = compactPromptText(request.questionText() + " " + request.writingGoal(), MAX_PROMPT_GOAL_CHARS);
+        try {
+            TeacherResourceBlockSearchResponse response = teacherResourceBlockSearchService.search(
+                    subject.tenantId(),
+                    subject.subjectType(),
+                    subject.subjectId(),
+                    query,
+                    WRITING_EVIDENCE_HIT_LIMIT,
+                    "/internal/agents/writing/evidence");
+            return response.hits().stream()
+                    .map(hit -> writingEvidenceSnippet(hit))
+                    .filter(snippet -> !snippet.isBlank())
+                    .collect(java.util.stream.Collectors.joining("\n\n"));
+        } catch (RuntimeException exception) {
+            // Retrieval availability must not discard a teacher's workflow; the trace still records the model result.
+            return "";
+        }
+    }
+
+    /** Formats a bounded, cited evidence block that later writer stages inherit through resource_curation. */
+    private static String writingEvidenceSnippet(TeacherResourceBlockSearchResponse.Hit hit) {
+        String text = compactPromptText(hit.evidenceText(), MAX_WRITING_EVIDENCE_CHARS_PER_HIT);
+        if (text.isBlank()) {
+            return "";
+        }
+        String assets = hit.assetRefs().stream()
+                .map(TeacherResourceBlockSearchResponse.AssetRef::assetUri)
+                .filter(uri -> uri != null && !uri.isBlank())
+                .limit(2)
+                .collect(java.util.stream.Collectors.joining(", "));
+        return "[source document=" + hit.documentId() + "; block=" + hit.blockId() + "; title="
+                + compactPromptText(hit.documentTitle(), 120) + "]\n" + text
+                + (assets.isBlank() ? "" : "\nTEACHER_IMAGE: " + assets);
     }
 
     /**
