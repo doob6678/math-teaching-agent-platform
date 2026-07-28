@@ -11,6 +11,7 @@ import com.doob.mathagent.agent.worker.AgentWorkerTaskPublisher;
 import com.doob.mathagent.agent.worker.AgentWorkerTaskStore;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.teacher.search.TeacherResourceBlockSearchResponse;
+import com.doob.mathagent.teacher.search.TeacherResourceSearchFilter;
 import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -47,9 +48,10 @@ public class MultiAgentWritingService {
      */
     private static final int MAX_EVIDENCE_REFS = 24;
     private static final int MAX_EVIDENCE_REF_CHARS = 240;
-    /** Writing needs source text, not opaque ids; keep this small enough to preserve room for the handout itself. */
+    /** Each writer receives bounded evidence from both libraries, leaving output-token space for six real problems. */
     private static final int WRITING_EVIDENCE_HIT_LIMIT = 4;
     private static final int MAX_WRITING_EVIDENCE_CHARS_PER_HIT = 1_200;
+    private static final int MAX_WRITING_EVIDENCE_ASSETS_PER_HIT = 2;
 
     /*
      * Every group is a persisted barrier: later agents can consume only completed group artifacts. The middle writer
@@ -61,41 +63,16 @@ public class MultiAgentWritingService {
                     stage("resource_curation", "TeacherAssistantAgent", "resource_curation",
                             List.of("tool:search:textbook", "tool:search:private"), List.of(), false,
                             "Collect only owner-authorized evidence anchors and compact source summaries."))),
-            new WritingStageGroup("template", List.of(
-                    stage("template_selection", "HandoutFormatterAgent", "template_selection",
-                            List.of("tool:handout:format"), List.of("resource_curation"), true,
-                            "Select a classroom handout structure from compact evidence and teaching goal."))),
-            new WritingStageGroup("outline", List.of(
-                    stage("outline_planning", "CoursewareAgent", "outline_planning",
-                            List.of("tool:courseware:generate"), List.of("resource_curation", "template_selection"), true,
-                            "Produce a shared outline with evidence anchors, no full final handout."))),
             new WritingStageGroup("versions", List.of(
                     stage("teacher_writer", "CoursewareAgent", "teacher_handout_writing",
-                            List.of("tool:courseware:generate"), List.of("resource_curation", "template_selection", "outline_planning"), true,
+                            List.of("tool:courseware:generate"), List.of("resource_curation"), true,
                             "Write the teacher version with cited reasoning, answers, and review notes."),
                     stage("student_writer", "TeacherAssistantAgent", "student_handout_writing",
-                            List.of(), List.of("resource_curation", "template_selection", "outline_planning"), true,
+                            List.of(), List.of("resource_curation"), true,
                             "Write a student worksheet from the outline without answers, teacher notes, or hidden reasoning."),
                     stage("lecture_writer", "HandoutFormatterAgent", "lecture_handout_writing",
-                            List.of("tool:handout:format"), List.of("resource_curation", "template_selection", "outline_planning"), true,
-                            "Write an independent 16:10 lecture card sequence from the shared outline."))),
-            new WritingStageGroup("reviews", List.of(
-                    stage("source_review", "QualityCheckAgent", "source_review",
-                            List.of("tool:quality:check"), List.of("resource_curation", "outline_planning", "teacher_writer", "student_writer", "lecture_writer"), true,
-                            "Check every source assertion against supplied evidence anchors."),
-                    stage("student_safety_review", "TeacherAssistantAgent", "student_safety_review",
-                            List.of(), List.of("outline_planning", "student_writer"), true,
-                            "Check the student version for answer, teacher-note, prompt, and internal-reasoning leakage."),
-                    stage("layout_review", "HandoutFormatterAgent", "layout_review",
-                            List.of("tool:handout:format"), List.of("outline_planning", "teacher_writer", "student_writer", "lecture_writer"), true,
-                            "Check continuous question flow, 16:10 layout constraints, placeholders, and unsafe visible labels."))),
-            new WritingStageGroup("merge", List.of(
-                    stage("merge_coordinator", "HandoutFormatterAgent", "handout_merge",
-                            List.of("tool:handout:format"), List.of(
-                                    "resource_curation", "template_selection", "outline_planning",
-                                    "teacher_writer", "student_writer", "lecture_writer",
-                                    "source_review", "student_safety_review", "layout_review"), true,
-                            "Merge only approved patches into owner-visible final artifacts; never expose prompts or diagnostics."))));
+                            List.of("tool:handout:format"), List.of("resource_curation"), true,
+                            "Write an independent 16:10 single-question classroom projection."))));
 
     private static final List<WritingStageSpec> WRITING_STAGES = WRITING_STAGE_GROUPS.stream()
             .flatMap(group -> group.stages().stream())
@@ -243,16 +220,30 @@ public class MultiAgentWritingService {
             return toResponse(existing);
         }
         MultiAgentWritingResponse.StageResult result = runStage(workflowId, spec, request.normalize(), normalizedSubject, List.copyOf(stages));
-        mergeStageResults(stages, List.of(result));
-        boolean groupComplete = group.stages().stream().allMatch(stage -> stageCodes(stages).contains(stage.stageCode()));
-        boolean workflowComplete = WRITING_STAGES.stream().allMatch(stage -> stageCodes(stages).contains(stage.stageCode()));
-        String message = workflowComplete ? "Multi-agent writing workflow completed." : stageCompletionMessage(group.groupCode());
-        MultiAgentWritingWorkflowRecord saved = saveWorkflow(workflowId, normalizedSubject,
-                workflowComplete ? "COMPLETED" : "RUNNING", existing.createdAt(), stages, message);
-        if (groupComplete && !workflowComplete) {
-            dispatchReadyStageTasks(workflowId, normalizedSubject, request.normalize(), stages);
+        /*
+         * Fan-out writers all begin from the same durable prefix.  Refresh after the expensive provider call so a
+         * sibling that finished meanwhile is never overwritten by this task's stale snapshot.  The store merge is
+         * deliberately only around persistence, preserving parallel model execution while making stage accumulation
+         * monotonic for status, resume and export.
+         */
+        synchronized (workflowId.intern()) {
+            // Only this short read-merge-save critical section is serialized; independent provider calls remain parallel.
+            MultiAgentWritingWorkflowRecord latest = workflowStore.findVisible(workflowId, normalizedSubject)
+                    .orElseThrow(() -> new IllegalStateException("Multi-agent writing workflow disappeared during stage execution"));
+            stages = new ArrayList<>(validCompletedStages(latest.stages()));
+            mergeStageResults(stages, List.of(result));
+            List<MultiAgentWritingResponse.StageResult> persistedStages = List.copyOf(stages);
+            List<String> persistedCodes = stageCodes(persistedStages);
+            boolean groupComplete = group.stages().stream().allMatch(stage -> persistedCodes.contains(stage.stageCode()));
+            boolean workflowComplete = WRITING_STAGES.stream().allMatch(stage -> persistedCodes.contains(stage.stageCode()));
+            String message = workflowComplete ? "Multi-agent writing workflow completed." : stageCompletionMessage(group.groupCode());
+            MultiAgentWritingWorkflowRecord saved = saveWorkflow(workflowId, normalizedSubject,
+                    workflowComplete ? "COMPLETED" : "RUNNING", existing.createdAt(), persistedStages, message);
+            if (groupComplete && !workflowComplete) {
+                dispatchReadyStageTasks(workflowId, normalizedSubject, request.normalize(), persistedStages);
+            }
+            return toResponse(saved);
         }
-        return toResponse(saved);
     }
 
     /**
@@ -756,43 +747,40 @@ public class MultiAgentWritingService {
      */
     private String writingEvidenceContext(
             WritingStageSpec stage, MultiAgentWritingRequest request, RequestSubject subject) {
-        if (!"resource_curation".equals(stage.stageCode()) || teacherResourceBlockSearchService == null) {
+        if (!stage.requiresEvidenceContext() || teacherResourceBlockSearchService == null) {
             return "";
         }
         String query = compactPromptText(request.questionText() + " " + request.writingGoal(), MAX_PROMPT_GOAL_CHARS);
         try {
-            TeacherResourceBlockSearchResponse response = teacherResourceBlockSearchService.search(
+            // Two explicit queries prevent the teacher-resource endpoint's private-library default from silently
+            // omitting the textbook corpus.  Both queries still pass the same backend subject and audit endpoint.
+            TeacherResourceBlockSearchResponse teacherResponse = teacherResourceBlockSearchService.search(
                     subject.tenantId(),
                     subject.subjectType(),
                     subject.subjectId(),
                     query,
                     WRITING_EVIDENCE_HIT_LIMIT,
                     "/internal/agents/writing/evidence");
-            return response.hits().stream()
-                    .map(hit -> writingEvidenceSnippet(hit))
-                    .filter(snippet -> !snippet.isBlank())
-                    .collect(java.util.stream.Collectors.joining("\n\n"));
+            TeacherResourceBlockSearchResponse textbookResponse = teacherResourceBlockSearchService.search(
+                    subject.tenantId(),
+                    subject.subjectType(),
+                    subject.subjectId(),
+                    query,
+                    WRITING_EVIDENCE_HIT_LIMIT,
+                    "/internal/agents/writing/evidence",
+                    TeacherResourceSearchFilter.of(List.of(), List.of(), List.of("textbook"), List.of()));
+            String textbookEvidence = WritingEvidenceContextFormatter.format(
+                    textbookResponse.hits(), MAX_WRITING_EVIDENCE_CHARS_PER_HIT, MAX_WRITING_EVIDENCE_ASSETS_PER_HIT);
+            String teacherEvidence = WritingEvidenceContextFormatter.format(
+                    teacherResponse.hits(), MAX_WRITING_EVIDENCE_CHARS_PER_HIT, MAX_WRITING_EVIDENCE_ASSETS_PER_HIT);
+            return "教材证据（每题标注章节）：\n" + textbookEvidence
+                    + "\n\n教师/飞书资料证据（每题标注可读资料来源）：\n" + teacherEvidence;
         } catch (RuntimeException exception) {
             // Retrieval availability must not discard a teacher's workflow; the trace still records the model result.
             return "";
         }
     }
 
-    /** Formats a bounded, cited evidence block that later writer stages inherit through resource_curation. */
-    private static String writingEvidenceSnippet(TeacherResourceBlockSearchResponse.Hit hit) {
-        String text = compactPromptText(hit.evidenceText(), MAX_WRITING_EVIDENCE_CHARS_PER_HIT);
-        if (text.isBlank()) {
-            return "";
-        }
-        String assets = hit.assetRefs().stream()
-                .map(TeacherResourceBlockSearchResponse.AssetRef::assetUri)
-                .filter(uri -> uri != null && !uri.isBlank())
-                .limit(2)
-                .collect(java.util.stream.Collectors.joining(", "));
-        return "[source document=" + hit.documentId() + "; block=" + hit.blockId() + "; title="
-                + compactPromptText(hit.documentTitle(), 120) + "]\n" + text
-                + (assets.isBlank() ? "" : "\nTEACHER_IMAGE: " + assets);
-    }
 
     /**
      * Carries owned workflow artifacts forward so later agents review and format the actual prior draft.
@@ -1458,6 +1446,12 @@ public class MultiAgentWritingService {
             List<String> allowedArtifactStages,
             boolean requiresStructuredOutput,
             String roleBrief) {
+
+        /** Only source-aware stages receive raw evidence excerpts; student-facing variants inherit the vetted outline. */
+        private boolean requiresEvidenceContext() {
+            return List.of("resource_curation", "teacher_writer")
+                    .contains(stageCode);
+        }
     }
 
     /** Defines a durable barrier whose stages may run concurrently only when they have identical dependencies. */

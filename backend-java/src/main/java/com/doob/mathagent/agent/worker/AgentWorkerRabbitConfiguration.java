@@ -11,6 +11,7 @@ import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.Environment;
 
 /** Durable Agent Worker command topology. Roles are routing keys, so a worker never receives unsupported work. */
 @Configuration
@@ -31,5 +32,21 @@ public class AgentWorkerRabbitConfiguration {
     @Bean Binding agentWorkerDeadLetterBinding(DirectExchange agentWorkerExchange, Queue agentWorkerDeadLetterQueue){ return BindingBuilder.bind(agentWorkerDeadLetterQueue).to(agentWorkerExchange).with(ROUTING_KEY+".dead"); }
     /** Uses JSON because Worker commands are inspectable cross-process contracts, never Java serialization. */
     @Bean("agentWorkerRabbitTemplate") RabbitTemplate agentWorkerRabbitTemplate(CachingConnectionFactory connectionFactory, ObjectMapper objectMapper){ RabbitTemplate template=new RabbitTemplate(connectionFactory); template.setMessageConverter(new Jackson2JsonMessageConverter(objectMapper)); return template; }
-    @Bean("agentWorkerRabbitListenerFactory") SimpleRabbitListenerContainerFactory agentWorkerRabbitListenerFactory(CachingConnectionFactory connectionFactory, ObjectMapper objectMapper) { SimpleRabbitListenerContainerFactory factory=new SimpleRabbitListenerContainerFactory(); factory.setConnectionFactory(connectionFactory); factory.setMessageConverter(new Jackson2JsonMessageConverter(objectMapper)); factory.setDefaultRequeueRejected(false); factory.setPrefetchCount(1); return factory; }
+    /**
+     * Applies the configured bounded concurrency to the consumer itself.  Previously the
+     * workflow fanned out three independent writers but Rabbit still consumed one at a time,
+     * converting a parallel stage into three sequential provider waits.
+     */
+    @Bean("agentWorkerRabbitListenerFactory") SimpleRabbitListenerContainerFactory agentWorkerRabbitListenerFactory(
+            CachingConnectionFactory connectionFactory, ObjectMapper objectMapper, Environment environment) {
+        int concurrency = Math.max(1, environment.getProperty("math-agent.agent-worker.runtime.max-concurrency", Integer.class, 1));
+        SimpleRabbitListenerContainerFactory factory=new SimpleRabbitListenerContainerFactory();
+        factory.setConnectionFactory(connectionFactory);
+        factory.setMessageConverter(new Jackson2JsonMessageConverter(objectMapper));
+        factory.setDefaultRequeueRejected(false);
+        factory.setPrefetchCount(1);
+        factory.setConcurrentConsumers(concurrency);
+        factory.setMaxConcurrentConsumers(concurrency);
+        return factory;
+    }
 }

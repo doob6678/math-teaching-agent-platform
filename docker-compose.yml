@@ -101,6 +101,9 @@ services:
   ai-worker:
     build: ./ai-worker-python
     restart: unless-stopped
+    # WSL2 exposes the Windows NVIDIA driver through CDI; this makes the local
+    # BGE, reranker, and CLIP models use the same CUDA device inside the worker.
+    gpus: all
     environment:
       MATH_AGENT_WORKER_API_KEY: ${MATH_AGENT_WORKER_API_KEY:?set in .env}
       MATH_AGENT_TOOL_BROKER_BASE_URL: http://backend:8080
@@ -161,7 +164,11 @@ services:
       MATH_AGENT_AGENT_WORKER_DISPATCH_ENABLED: "true"
       MATH_AGENT_AGENT_WORKER_RUNTIME_ENABLED: "true"
       MATH_AGENT_AGENT_WORKER_ID: ${MATH_AGENT_AGENT_WORKER_ID:-compose-agent-worker}
-      MATH_AGENT_AGENT_WORKER_MAX_CONCURRENCY: ${MATH_AGENT_AGENT_WORKER_MAX_CONCURRENCY:-1}
+      # Three writers form one independent barrier; keep worker consumption aligned with this bounded fan-out.
+      MATH_AGENT_AGENT_WORKER_MAX_CONCURRENCY: ${MATH_AGENT_AGENT_WORKER_MAX_CONCURRENCY:-3}
+      # A provider total-timeout is a terminal observation for this workflow run.  Persist the failed stage and let
+      # the UI resume only that stage after the relay recovers; automatic repeats otherwise multiply a 180s wait.
+      MATH_AGENT_AGENT_WORKER_MAXIMUM_ATTEMPTS: ${MATH_AGENT_AGENT_WORKER_MAXIMUM_ATTEMPTS:-1}
       MATH_AGENT_EMBEDDING_BASE_URL: http://ai-worker:8091/v1
       MATH_AGENT_EMBEDDING_API_KEY: ${MATH_AGENT_WORKER_API_KEY:?set in .env}
       MATH_AGENT_EMBEDDING_MODEL: local_bge_embedding

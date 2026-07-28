@@ -11,6 +11,9 @@ import java.util.Map;
  */
 public final class MultiAgentHandoutPromptProfiles {
 
+    /** Product minimum: a teacher handout is a reusable exercise set, not an extended explanation of one question. */
+    public static final int MINIMUM_TEACHER_ORIGINAL_PROBLEMS = 6;
+
     public static final String CORE_TEACHING_PROTOCOL = """
             Core teaching protocol (mandatory):
             1. Follow 题型识别 -> 方法梳理 -> 分步推理 -> 总结回顾. Start from the goal, map the relevant high-school
@@ -18,6 +21,10 @@ public final class MultiAgentHandoutPromptProfiles {
             2. Teach the concept and the choice of method, not only an answer. Use precise terminology followed by a
                natural classroom explanation, exam cues, common traps, and a transfer question.
             3. Organize blackboard content clearly: problem, formulas, calculations, conclusion. Preserve valid LaTeX.
+            3a. Mathematical typography is a hard output contract: every formula must be enclosed in $...$ or $$...$$;
+                write every fraction as \\frac{numerator}{denominator} and every radical as \\sqrt{full radicand}.
+                Never use /, ／, or √ as a visual substitute for fraction or radical structure, and never write
+                ambiguous forms such as \\sqrt3a or √3a. The PDF exporter rejects them to protect correctness.
             4. Add short understanding checks and meaningful <wait> pauses where a teacher would let students think.
             5. Attribute knowledge points, prerequisite relations, learning stage, difficulty, and evidence anchors.
             6. Never invent a source, exercise, theorem condition, diagram fact, or numeric result. Mark an evidence gap.
@@ -39,14 +46,22 @@ public final class MultiAgentHandoutPromptProfiles {
                     """),
             Map.entry("teacher_writer", """
                     Produce teacherExplanation as a mature teacher's printable handout. It must include an AI-written H1,
+                    the configured minimum number of independently stated original problems, numbered consecutively.
+                    Each problem must be supported by retrieved evidence: print “教材依据：<chapter/section>”
+                    and “资料依据：<readable teacher/Feishu title>” directly beneath it. Do not invent missing problems;
+                    if either source cannot support the required set, return an explicit evidence gap instead of padding.
                     教学目标, 知识定位与先修关系, 题型识别, 方法选择依据, complete step-by-step derivation with reasons,
                     final answer and scoring points, blackboard sequence, exam cues, common errors, interactive checks,
-                    <wait> pauses, one transfer variation with solution, and a concise recap. Be rigorous, vivid, and useful.
+                    <wait> pauses, one transfer variation with solution, and a concise recap. When authorized evidence is
+                    supplied, cite the readable source title in the teacher handout as “资料依据：<标题>”, and ground at
+                    least one concrete explanation in its supplied text. Be rigorous, vivid, and useful.
                     """),
             Map.entry("student_writer", """
                     Produce studentWorksheet as a printable blank student handout with an AI-written H1. Keep the exact
                     problem, essential definitions/formulas, method-choice questions, staged hints, <wait> pauses,
-                    continuous exercise numbering, and generous clean writing space. Never expose a final answer,
+                    continuous exercise numbering, and generous clean writing space. For calculation, proof, and
+                    explanation tasks, create vertical blank areas rather than underscore lines; use a short underline
+                    only where the student must fill one concise missing value or term. Never expose a final answer,
                     complete derivation, scoring point, teacher note, or the teacher version's hidden reasoning.
                     """),
             Map.entry("lecture_writer", """
@@ -80,6 +95,11 @@ public final class MultiAgentHandoutPromptProfiles {
 
     /** Returns the shared benchmark plus the exact audience contract for one workflow stage. */
     static String instructionsFor(String stageCode) {
-        return CORE_TEACHING_PROTOCOL + "\n" + STAGE_CONTRACTS.getOrDefault(stageCode, "");
+        String stageContract = STAGE_CONTRACTS.getOrDefault(stageCode, "");
+        if ("teacher_writer".equals(stageCode)) {
+            stageContract += "\nRequired original-problem count: at least "
+                    + MINIMUM_TEACHER_ORIGINAL_PROBLEMS + ".";
+        }
+        return CORE_TEACHING_PROTOCOL + "\n" + stageContract;
     }
 }

@@ -11,6 +11,8 @@ import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Worker-side boundary for one distributed Agent stage.
@@ -21,6 +23,8 @@ import org.springframework.stereotype.Component;
 @Component
 @ConditionalOnProperty(prefix = "math-agent.agent-worker.runtime", name = "enabled", havingValue = "true")
 public class AgentWorkerTaskConsumer {
+
+    private static final Logger log = LoggerFactory.getLogger(AgentWorkerTaskConsumer.class);
 
     private final AgentWorkerTaskStore store;
     private final AgentWorkerTaskPublisher publisher;
@@ -46,17 +50,23 @@ public class AgentWorkerTaskConsumer {
     @RabbitListener(queues = AgentWorkerRabbitConfiguration.QUEUE, containerFactory = "agentWorkerRabbitListenerFactory")
     public void consume(AgentWorkerTaskCommand command) {
         AgentWorkerTask task = null;
+        long startedNanos = System.nanoTime();
         try {
             task = claim(command);
             if (task == null) {
+                log.info("agent_worker_task_not_claimed taskId={}", command.taskId());
                 return;
             }
+            log.info("agent_worker_stage_started taskId={} workflowId={} stageCode={} attempt={}",
+                    task.taskId(), task.workflowId(), task.stageCode(), task.attempt());
             executeStage(task);
             if (!store.complete(task.taskId(), task.leaseToken())) {
                 throw new IllegalStateException("Agent Worker task lease was lost before completion");
             }
+            log.info("agent_worker_stage_completed taskId={} workflowId={} stageCode={} latencyMs={}",
+                    task.taskId(), task.workflowId(), task.stageCode(), elapsedMillis(startedNanos));
         } catch (Exception exception) {
-            handleFailure(task, exception);
+            handleFailure(task, exception, elapsedMillis(startedNanos));
         }
     }
 
@@ -74,8 +84,13 @@ public class AgentWorkerTaskConsumer {
         writingService.executeDispatchedStage(task.workflowId(), task.stageCode(), request, subject);
     }
 
-    private void handleFailure(AgentWorkerTask task, Exception exception) {
+    private void handleFailure(AgentWorkerTask task, Exception exception, long latencyMs) {
         if (task != null) {
+            // Keep the durable task's safe failure summary and an operator-visible boundary log together.
+            // Never log prompt/source contents: workflow and stage identifiers are sufficient to correlate traces.
+            log.warn("agent_worker_stage_failed taskId={} workflowId={} stageCode={} attempt={} latencyMs={} errorType={} message={}",
+                    task.taskId(), task.workflowId(), task.stageCode(), task.attempt(),
+                    latencyMs, exception.getClass().getSimpleName(), safeMessage(exception));
             int maximumAttempts = Integer.parseInt(
                     environment.getProperty("math-agent.agent-worker.maximum-attempts", "3"));
             AgentWorkerTask retry = store.failOrRequeue(task, exception.getMessage(), maximumAttempts);
@@ -90,6 +105,18 @@ public class AgentWorkerTaskConsumer {
         }
         // Terminal failures are intentionally dead-lettered after the durable task record has been updated.
         throw new AmqpRejectAndDontRequeueException("Agent Worker task failed", exception);
+    }
+
+    /** Bounds exception text so gateway responses cannot leak source content into container logs. */
+    private static String safeMessage(Exception exception) {
+        String message = exception.getMessage();
+        if (message == null || message.isBlank()) return "no message";
+        return message.substring(0, Math.min(500, message.length())).replaceAll("[\\r\\n]+", " ");
+    }
+
+    /** Uses monotonic time for comparable worker-stage durations across Docker clock changes. */
+    private static long elapsedMillis(long startedNanos) {
+        return java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedNanos);
     }
 
     /** Keeps the workflow state consistent with a terminal durable task so users can invoke resume explicitly. */

@@ -37,6 +37,13 @@ public final class FormulaMarkupSanitizer {
     private static final Pattern SHORT_NUMERIC_FRACTION = Pattern.compile(
             "(?<![A-Za-z0-9/^_])([1-9]\\d?)\\s*/\\s*([1-9]\\d?)(?![A-Za-z0-9/])");
     private static final Pattern FRACTION_POWER = Pattern.compile("\\\\frac\\{([^{}]+)}\\{([^{}]+)}\\^([A-Za-z0-9]+)");
+    /** Model output occasionally omits the first brace in a valid TeX fraction command. */
+    private static final Pattern UNBRACED_FRACTION_NUMERATOR = Pattern.compile(
+            "\\\\frac\\s+([A-Za-z0-9])\\s*(\\{[^{}]+})");
+    /** A parenthesised or braced radical has an unambiguous radicand and can be made canonical safely. */
+    private static final Pattern UNICODE_RADICAL_GROUP = Pattern.compile("√\\s*(\\([^()]+\\)|\\{[^{}]+})");
+    /** A one-symbol radical is unambiguous; longer bare forms are rejected by the PDF export gate. */
+    private static final Pattern UNICODE_RADICAL_SINGLE_ATOM = Pattern.compile("√\\s*([0-9A-Za-z])(?![A-Za-z0-9])");
     private static final Pattern ALL_UPPERCASE_LATIN = Pattern.compile("[A-Z]{2,}");
 
     private FormulaMarkupSanitizer() {
@@ -50,6 +57,7 @@ public final class FormulaMarkupSanitizer {
             return value == null ? "" : value.strip();
         }
         String normalized = normalizeLegacyLatexEscapes(value);
+        normalized = normalizeFractionAndRadicalCommands(normalized);
         normalized = replaceEnvironment(normalized);
         normalized = replaceAll(normalized, DISPLAY_BRACKET, "$$\n%s\n$$");
         normalized = replaceAll(normalized, INLINE_PAREN, "$%s$");
@@ -59,7 +67,39 @@ public final class FormulaMarkupSanitizer {
         normalized = cleanupFractionMathDelimiters(normalized);
         normalized = wrapMatches(normalized, BARE_FRACTION_COMMAND);
         normalized = wrapMatches(normalized, BARE_VECTOR_OR_OPERATOR_COMMAND);
-        return normalized.strip();
+        // Operator wrapping can run inside an already recovered fraction denominator; clean it once more before
+        // returning the shared canonical representation to browser and XeLaTeX exporters.
+        normalized = cleanupFractionMathDelimiters(normalized);
+        // The preceding cleanup may expose a complete command that was temporarily interrupted by a nested token;
+        // wrap that recovered command so it cannot later be escaped as prose by the PDF renderer.
+        normalized = wrapMatches(normalized, BARE_FRACTION_COMMAND);
+        normalized = wrapMatches(normalized, BARE_VECTOR_OR_OPERATOR_COMMAND);
+        return cleanupFractionMathDelimiters(normalized).strip();
+    }
+
+    /**
+     * Canonicalizes only mathematically unambiguous transport forms before formula detection.  This deliberately
+     * does not consume {@code √3a}: an exporter must reject that ambiguous source rather than silently deciding
+     * whether the radicand is {@code 3} or {@code 3a}.
+     */
+    private static String normalizeFractionAndRadicalCommands(String value) {
+        Matcher fraction = UNBRACED_FRACTION_NUMERATOR.matcher(value);
+        StringBuffer fractionBuffer = new StringBuffer();
+        while (fraction.find()) {
+            fraction.appendReplacement(fractionBuffer,
+                    Matcher.quoteReplacement("\\\\frac{" + fraction.group(1) + "}" + fraction.group(2)));
+        }
+        fraction.appendTail(fractionBuffer);
+        Matcher groupedRadical = UNICODE_RADICAL_GROUP.matcher(fractionBuffer.toString());
+        StringBuffer radicalBuffer = new StringBuffer();
+        while (groupedRadical.find()) {
+            String radicand = groupedRadical.group(1);
+            groupedRadical.appendReplacement(radicalBuffer,
+                    Matcher.quoteReplacement("\\\\sqrt{" + radicand.substring(1, radicand.length() - 1) + "}"));
+        }
+        groupedRadical.appendTail(radicalBuffer);
+        return UNICODE_RADICAL_SINGLE_ATOM.matcher(radicalBuffer.toString())
+                .replaceAll("\\\\sqrt{$1}");
     }
 
     /**
@@ -311,7 +351,11 @@ public final class FormulaMarkupSanitizer {
     private static String cleanupFractionMathDelimiters(String value) {
         return value
                 .replaceAll("\\\\frac\\{\\$([^$]+)\\$}", "\\\\frac{$1}")
-                .replaceAll("}\\{\\$([^$]+)\\$}", "}{$1}");
+                .replaceAll("}\\{\\$([^$]+)\\$}", "}{$1}")
+                .replaceAll("\\{\\$(\\\\[A-Za-z]+)\\$\\s*([^}]*)}", "{$1 $2}")
+                // Formula wrapping happens before command wrapping. Remove those intermediate delimiters before
+                // the final pass, otherwise a radical could become \\sqrt{$a+b$} and render incorrectly.
+                .replaceAll("\\\\sqrt\\{\\$([^$]+)\\$}", "\\\\sqrt{$1}");
     }
 
     private static boolean looksLikeMathFraction(String left, String right) {

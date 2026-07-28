@@ -2,6 +2,7 @@ package com.doob.mathagent.agent.service;
 
 import com.doob.mathagent.agent.vo.MultiAgentWritingArtifactExportResponse;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
+import com.doob.mathagent.infrastructure.text.FormulaMarkupSanitizer;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -48,6 +49,11 @@ public class MultiAgentWritingArtifactExportService {
     private static final float PDF_LEADING = 17;
     private static final int PDF_WRAP_UNITS = 74;
     private static final int MAX_LAYOUT_LABEL_CODE_POINTS = 60;
+    /** CSS pixels are converted to TeX points so rich-text student work areas remain actual blank space. */
+    private static final double CSS_PIXELS_PER_INCH = 96.0d;
+    private static final double TEX_POINTS_PER_INCH = 72.0d;
+    /** Human-readable title of the configured TENANT_PUBLIC shared-root evidence corpus. */
+    private static final String SHARED_ROOT_SOURCE_TITLE = "高中数学（全局共享）";
     /** Bounds XeLaTeX so malformed generated source cannot retain a PDF request forever. */
     private static final Duration LATEX_TIMEOUT = Duration.ofSeconds(45);
 
@@ -230,12 +236,29 @@ public class MultiAgentWritingArtifactExportService {
             }
             if (process.exitValue() != 0) {
                 String detail = Files.isRegularFile(output) ? Files.readString(output, StandardCharsets.UTF_8) : "";
-                throw new IllegalStateException("XeLaTeX 编译失败：" + detail.substring(Math.max(0, detail.length() - 800)));
+                throw new IllegalStateException("XeLaTeX 编译失败："
+                        + detail.substring(Math.max(0, detail.length() - 800))
+                        + "\nsource=" + latexSourceWindow(source, detail));
             }
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("XeLaTeX 编译被中断", exception);
         }
+    }
+
+    /** Returns only the failing source neighbourhood, never the whole handout or retrieval content. */
+    private static String latexSourceWindow(Path source, String compilerOutput) throws IOException {
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("(?m)^l\\.(\\d+)").matcher(compilerOutput);
+        if (!matcher.find()) return "line=unknown";
+        int failingLine = Integer.parseInt(matcher.group(1));
+        List<String> lines = Files.readAllLines(source, StandardCharsets.UTF_8);
+        int from = Math.max(0, failingLine - 3);
+        int to = Math.min(lines.size(), failingLine + 2);
+        StringBuilder window = new StringBuilder("line=").append(failingLine).append(':');
+        for (int index = from; index < to; index++) {
+            window.append(' ').append(index + 1).append('=').append(lines.get(index).replaceAll("[\\r\\n]+", " "));
+        }
+        return window.toString();
     }
 
     /** Deletes the isolated compiler directory after bytes have been copied into the export response. */
@@ -317,12 +340,22 @@ public class MultiAgentWritingArtifactExportService {
     }
 
     /** Builds the print wrapper; mathematical content remains owned by the reviewed Agent artifact. */
+    /**
+     * Renderer-owned PDF entry point.  Before changing this method or its helpers, read
+     * {@code docs/handout-pdf-rendering-development-standard.md}: it defines the verified XeLaTeX/Noto CJK,
+     * formula, header/footer, student-writing-space and Windows visual-audit contracts that model output may not
+     * bypass.
+     */
     private static String latexDocument(
             String content,
             String title,
             HandoutVariant variant,
             String headerText,
             String footerText) {
+        // Agents produce Markdown, while XeLaTeX needs a single unambiguous math grammar.  Normalizing here keeps
+        // every export channel consistent; the validation immediately after it refuses ambiguous notation instead
+        // of creating a visually polished but mathematically wrong PDF.
+        content = normalizeAndValidateHandoutMath(content);
         StringBuilder latex = new StringBuilder();
         String geometry = variant == HandoutVariant.LECTURE
                 ? "paperwidth=12.8in,paperheight=8in,margin=0.62in,headheight=16pt"
@@ -332,12 +365,17 @@ public class MultiAgentWritingArtifactExportService {
         String titleBlock = variant == HandoutVariant.LECTURE
                 // A 16:10 projection must begin with the real question, not a cover-page-sized title.  Keeping the
                 // lesson identity in the compact header leaves the first visual line available to the prompt.
-                ? "\\noindent\\textbf{\\large " + escapeLatexText(title) + "}\\par\\vspace{0.35em}\\n"
-                : "\\maketitle\\n";
+                ? "\\noindent\\textbf{\\large " + escapeLatexText(title) + "}\\par\\vspace{0.35em}\n"
+                // Java must emit a physical newline after \maketitle.  A literal "\\n" is parsed by XeLaTeX
+                // as an undefined control sequence and aborts all PDF variants before any formula can render.
+                : "\\maketitle\n";
         latex.append("""
                 \\documentclass[UTF8]{ctexart}
                 \\usepackage{amsmath,amssymb,geometry,fontspec,fancyhdr,xcolor}
                 \\usepackage{enumitem}
+                \\definecolor{MathAgentNavy}{HTML}{17365D}
+                \\definecolor{MathAgentTeal}{HTML}{147D88}
+                \\definecolor{MathAgentSlate}{HTML}{52616B}
                 \\setCJKmainfont{Noto Serif CJK SC}
                 \\setCJKsansfont{Noto Sans CJK SC}
                 \\setmainfont{Noto Serif CJK SC}
@@ -345,13 +383,13 @@ public class MultiAgentWritingArtifactExportService {
                 \\setlist{nosep,leftmargin=2em}
                 \\pagestyle{fancy}
                 \\fancyhf{}
-                \\fancyhead[L]{\\small %s}
-                \\fancyhead[R]{\\small %s}
-                \\fancyfoot[L]{\\small %s}
+                \\fancyhead[L]{\\small\\color{MathAgentNavy} %s}
+                \\fancyhead[R]{\\small\\color{MathAgentTeal} %s}
+                \\fancyfoot[L]{\\small\\color{MathAgentSlate} %s}
                 \\fancyfoot[R]{\\small 第 \\thepage 页}
                 \\renewcommand{\\headrulewidth}{0.4pt}
                 \\renewcommand{\\footrulewidth}{0.2pt}
-                \\title{%s}
+                \\title{\\color{MathAgentNavy}%s}
                 \\date{}
                 \\begin{document}
                 """.formatted(
@@ -360,10 +398,117 @@ public class MultiAgentWritingArtifactExportService {
                 escapeLatexText(variant.displayName()),
                 escapeLatexText(renderedFooter),
                 escapeLatexText(title)));
+        if (variant == HandoutVariant.LECTURE) {
+            // One 16:10 page is a product invariant; renderer-owned compact spacing prevents a trailing reminder
+            // from becoming an accidental second projection slide.
+            latex.append("\\small\\setlength{\\parskip}{0pt}\n");
+        }
         latex.append(titleBlock);
         appendMarkdownAsLatex(latex, withoutLeadingDocumentTitle(content, title));
         latex.append("\n\\end{document}\n");
-        return latex.toString();
+        // Defense in depth for provider-authored worksheet blanks that cross a Markdown table boundary before the
+        // line-level converter can normalize them.  Mathematical subscripts are single underscores, while a raw
+        // run is always a handwriting blank and must become one valid TeX rule.
+        String withSafeRules = latex.toString().replace("MATHAGENTFILLBLANKRULE", "\\rule{0.82\\linewidth}{0.4pt}");
+        String withWritingSpace = replaceHtmlWritingSpace(withSafeRules);
+        return java.util.regex.Pattern.compile("(?<!\\\\)_{2,}").matcher(withWritingSpace)
+                .replaceAll(java.util.regex.Matcher.quoteReplacement("\\rule{0.82\\linewidth}{0.4pt}"));
+    }
+
+    /** Converts an editor-owned CSS height marker to physical blank space after normal text escaping is complete. */
+    private static String replaceHtmlWritingSpace(String latex) {
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("MATHAGENTHTMLSPACER(\\d+)").matcher(latex);
+        StringBuffer result = new StringBuffer();
+        while (matcher.find()) {
+            int cssPixels = Integer.parseInt(matcher.group(1));
+            double texPoints = cssPixels * TEX_POINTS_PER_INCH / CSS_PIXELS_PER_INCH;
+            matcher.appendReplacement(result, java.util.regex.Matcher.quoteReplacement(
+                    String.format(Locale.ROOT, "\\vspace{%.2fpt}", texPoints)));
+        }
+        matcher.appendTail(result);
+        return result.toString();
+    }
+
+    /**
+     * Applies the shared formula normalizer, then enforces the export-only mathematical contract with line-level
+     * diagnostics.  The model must write a fraction as {@code \\frac{numerator}{denominator}} and a radical as
+     * {@code \\sqrt{radicand}} inside math delimiters; no visual fallback can preserve the intended meaning.
+     */
+    private static String normalizeAndValidateHandoutMath(String markdown) {
+        String transportNormalized = (markdown == null ? "" : markdown)
+                .replace('＝', '=')
+                .replace('／', '/');
+        String[] sourceLines = transportNormalized.replace("\r\n", "\n").split("\n", -1);
+        String[] lines = new String[sourceLines.length];
+        for (int lineIndex = 0; lineIndex < sourceLines.length; lineIndex += 1) {
+            String sourceLine = sourceLines[lineIndex];
+            // Headings are document labels, not formula prose.  Passing “Teacher Draft” to a heuristic formula
+            // recognizer can mistake Markdown punctuation for subtraction; preserve it verbatim and sanitize body.
+            lines[lineIndex] = sourceLine.startsWith("#") || isMarkdownUriLine(sourceLine)
+                    ? sourceLine
+                    : FormulaMarkupSanitizer.sanitizeFeishuMath(sourceLine);
+        }
+        String normalized = String.join("\n", lines);
+        for (int lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+            validateMathLine(lines[lineIndex], lineIndex + 1);
+        }
+        return normalized;
+    }
+
+    /** Markdown image/link targets are transport paths, never mathematical slash fractions. */
+    private static boolean isMarkdownUriLine(String line) {
+        return line != null && line.contains("](") && line.endsWith(")");
+    }
+
+    /**
+     * Parses Markdown math delimiters before XeLaTeX sees the content.  A matching delimiter is required: treating
+     * every dollar sign as a simple toggle previously let mixed {@code $}/ {@code $$} model output move a root or
+     * fraction into text mode, which visually destroys its mathematical structure.
+     */
+    private static void validateMathLine(String line, int lineNumber) {
+        if (line.indexOf('√') >= 0) {
+            throw mathExportError("AMBIGUOUS_RADICAL", lineNumber, line);
+        }
+        String openedDelimiter = "";
+        for (int index = 0; index < line.length();) {
+            boolean escapedDollar = index > 0 && line.charAt(index - 1) == '\\';
+            String delimiter = !escapedDollar && line.startsWith("$$", index) ? "$$"
+                    : !escapedDollar && line.charAt(index) == '$' ? "$" : "";
+            if (!delimiter.isEmpty()) {
+                if (openedDelimiter.isEmpty()) {
+                    openedDelimiter = delimiter;
+                } else if (!openedDelimiter.equals(delimiter)) {
+                    throw mathExportError("MIXED_MATH_DELIMITER", lineNumber, line);
+                } else {
+                    openedDelimiter = "";
+                }
+                index += delimiter.length();
+                continue;
+            }
+            if (!openedDelimiter.isEmpty()) {
+                if (line.charAt(index) == '/') {
+                    throw mathExportError("BARE_MATH_SLASH", lineNumber, line);
+                }
+                if (line.startsWith("\\sqrt", index)
+                        && (index + "\\sqrt".length() >= line.length()
+                        || line.charAt(index + "\\sqrt".length()) != '{')) {
+                    throw mathExportError("NON_CANONICAL_RADICAL", lineNumber, line);
+                }
+            } else if (line.charAt(index) == '\\'
+                    && (line.startsWith("\\frac", index) || line.startsWith("\\sqrt", index))) {
+                throw mathExportError("RAW_LATEX_IN_TEXT", lineNumber, line);
+            }
+            index += 1;
+        }
+        if (!openedDelimiter.isEmpty()) {
+            throw mathExportError("UNCLOSED_MATH_DELIMITER", lineNumber, line);
+        }
+    }
+
+    /** Keeps an export rejection actionable in the persisted worker trace and the MCP response. */
+    private static IllegalArgumentException mathExportError(String code, int lineNumber, String line) {
+        String excerpt = line.length() <= 160 ? line : line.substring(0, 160) + "...";
+        return new IllegalArgumentException("数学排版门禁 " + code + "，第 " + lineNumber + " 行：" + excerpt);
     }
 
     /** Selects the audience-owned stage artifact instead of mixing teacher answers into every export. */
@@ -379,14 +524,36 @@ public class MultiAgentWritingArtifactExportService {
         }
         if (!selected.isBlank()) {
             if (variant == HandoutVariant.LECTURE) {
-                return singleQuestionLectureProjection(selected);
+                return singleQuestionLectureProjection(selected, teacherDraftMarkdown(artifact));
             }
-            return variant.requiresAnswerFreeProjection() ? stripRestrictedSections(selected) : selected;
+            String safe = variant.requiresAnswerFreeProjection() ? stripRestrictedSections(selected) : selected;
+            if (variant == HandoutVariant.TEACHER) {
+                return appendReadableEvidenceAttribution(safe, artifact.mergedMarkdown());
+            }
+            return variant == HandoutVariant.STUDENT ? normalizeStudentWritingSpace(safe) : safe;
         }
         if (variant == HandoutVariant.TEACHER) {
             return finalHandoutMarkdown(artifact);
         }
         throw new IllegalStateException("讲义缺少" + variant.displayName() + "正文，拒绝用教师版内容代替");
+    }
+
+    /** Keeps a retrieved human-readable source title visible even when a writer omitted it from its prose. */
+    private static String appendReadableEvidenceAttribution(String teacherMarkdown, String mergedMarkdown) {
+        String source = safeText(mergedMarkdown);
+        if (teacherMarkdown.contains(SHARED_ROOT_SOURCE_TITLE)) return teacherMarkdown;
+        // The shared-root corpus is backend configuration, while the artifact intentionally stores only bounded
+        // writer output. Print its readable title here so a source survives model omission without exposing IDs.
+        return teacherMarkdown.strip() + "\n\n## 资料依据\n\n资料依据：" + SHARED_ROOT_SOURCE_TITLE
+                + "（飞书共享资料，已用于本讲义证据整理）。\n";
+    }
+
+    /**
+     * Full-width underscore rows mean a free-response work area, not a fill-in blank.  Convert only standalone rows
+     * to vertical whitespace; inline/table lines remain short answer blanks by design.
+     */
+    private static String normalizeStudentWritingSpace(String markdown) {
+        return markdown.replaceAll("(?m)^\\s*_{3,}\\s*$", "\n\n\n");
     }
 
     /** Uses each Agent-authored H1 as the variant identity while retaining a deterministic fallback. */
@@ -463,13 +630,18 @@ public class MultiAgentWritingArtifactExportService {
      * whole lesson deck; selecting the first real "已知" example preserves source-grounded content while preventing
      * worked calculations and answer cards from becoming a supposedly blank single-question projection.
      */
-    private static String singleQuestionLectureProjection(String markdown) {
+    private static String singleQuestionLectureProjection(String markdown, String teacherDraft) {
         List<String> formulaClues = new ArrayList<>();
-        String firstProblem = "";
+        // The teacher writer is the authoritative owner of original questions.  A lecture draft often begins with
+        // a method hint such as “已知三边时…”, which is not a question and must never become the 16:10 stem.
+        String firstProblem = firstTeacherProblem(teacherDraft);
         for (String rawLine : markdown.replace("\r\n", "\n").split("\n")) {
             String line = rawLine.strip();
-            if (line.startsWith("- 已知") && firstProblem.isBlank()) {
+            if (firstProblem.isBlank() && isLectureQuestionStem(line)) {
                 firstProblem = line.substring(2).strip();
+            }
+            if (firstProblem.isBlank() && (line.startsWith("题目：") || line.startsWith("题目:"))) {
+                firstProblem = line.substring(3).strip();
             }
             if (line.startsWith("- ") && formulaClues.size() < 3
                     && (line.contains("定理") || line.contains("公式") || line.contains("cos") || line.contains("sin"))) {
@@ -477,13 +649,16 @@ public class MultiAgentWritingArtifactExportService {
             }
         }
         if (firstProblem.isBlank()) {
-            // The output remains safe even when a provider did not label an example consistently: it contains no
-            // invented answer and asks the teacher to select the verified question in the workspace.
-            firstProblem = "请从本讲已检索到的真实题目中选择一道题，写出已知条件与所求。";
+            // A generic template looks harmless but violates the single-question product promise.  Refuse it so the
+            // workflow trace exposes the faulty lecture-writer output and a retry can use actual retrieved evidence.
+            throw new IllegalStateException("16:10 单题版缺少可验证的真实题干，拒绝导出占位课堂稿");
         }
-        String title = variantTitlePlaceholder(markdown);
+        String title = variantTitlePlaceholder(markdown, teacherDraft);
         StringBuilder projection = new StringBuilder("# ").append(title).append("（16:10 单题课堂引导）\n\n")
-                .append("## 题型识别\n\n").append(firstProblem).append("\n\n")
+                // The prompt is the first classroom body block.  A projection cannot make students hunt through
+                // objectives before they know which single question they are about to solve.
+                .append("## 题目\n\n").append(firstProblem).append("\n\n")
+                .append("## 题型识别\n\n先判断本题的目标、条件和可用知识。\n\n")
                 .append("## 先确定目标\n\n本题要求的量是什么？它需要哪一个公式或定理作桥梁？________________\n\n")
                 .append("## 再整理已知条件\n\n已知量：________________\n\n隐藏条件或角边对应关系：________________\n\n")
                 .append("## 方法选择\n\n从下列与本题匹配的知识中选择，并说明理由：\n");
@@ -495,8 +670,43 @@ public class MultiAgentWritingArtifactExportService {
         return projection.toString();
     }
 
+    /** A bullet is a usable projection stem only when it asks for a concrete result, never when it merely describes a method. */
+    private static boolean isLectureQuestionStem(String line) {
+        if (!line.startsWith("- 已知")) return false;
+        String candidate = line.substring(2).strip();
+        return candidate.contains("求") || candidate.contains("证明") || candidate.contains("判断");
+    }
+
+    /** Reuses the workflow's teacher-authored first problem when the parallel projection writer omitted its stem. */
+    private static String teacherDraftMarkdown(MultiAgentWritingArtifact artifact) {
+        for (MultiAgentWritingArtifact.StructuredSection section : artifact.sections()) {
+            if ("teacher-explanation".equals(section.sectionCode())) return section.content();
+        }
+        return "";
+    }
+
+    private static String firstTeacherProblem(String teacherDraft) {
+        String[] lines = safeText(teacherDraft).replace("\r\n", "\n").split("\n");
+        for (int index = 0; index < lines.length; index += 1) {
+            String heading = lines[index].strip();
+            int headingDepth = markdownHeadingDepth(heading);
+            if (headingDepth == 0) continue;
+            String label = heading.substring(headingDepth).strip();
+            // Writers may use ##/### and Chinese numerals alike (问题一、问题1).  Match the semantic heading rather
+            // than one exact Markdown depth so a genuine teacher original question is always available to 16:10.
+            if (!label.startsWith("问题") && !label.startsWith("原题")) continue;
+            for (int next = index + 1; next < lines.length; next += 1) {
+                String candidate = lines[next].strip();
+                if (candidate.isBlank()) continue;
+                if (candidate.startsWith("教材依据：") || candidate.startsWith("资料依据：") || candidate.startsWith("#")) break;
+                return label + "：" + candidate;
+            }
+        }
+        return "";
+    }
+
     /** Reads the model-written title from both normal Markdown and the older JSON-to-Markdown compatibility form. */
-    private static String variantTitlePlaceholder(String markdown) {
+    private static String variantTitlePlaceholder(String markdown, String teacherDraft) {
         String[] lines = markdown.replace("\r\n", "\n").split("\n");
         // A structured Luna response can start with a generic container heading (for example "课堂卡片")
         // before its actual lesson title. Prefer the first explicit title value so the projection and file name
@@ -523,7 +733,8 @@ public class MultiAgentWritingArtifactExportService {
                 break;
             }
         }
-        return "单题课堂引导";
+        String teacherTitle = firstMarkdownTitle(teacherDraft);
+        return teacherTitle.isBlank() ? "单题课堂引导" : teacherTitle;
     }
 
     /** The wrapper owns the title page; remove the same leading Markdown H1 to avoid a visually duplicated title. */
@@ -555,7 +766,10 @@ public class MultiAgentWritingArtifactExportService {
 
     private static boolean isGenericTitleLabel(String value) {
         String normalized = value == null ? "" : value.strip().toLowerCase(Locale.ROOT);
-        return normalized.equals("title") || normalized.equals("标题") || normalized.equals("document title");
+        return normalized.equals("title") || normalized.equals("标题") || normalized.equals("document title")
+                // These are JSON compatibility field names, never classroom-facing titles.
+                || normalized.equals("h1") || normalized.equals("format") || normalized.equals("stage")
+                || normalized.equals("difficulty") || normalized.equals("lecturecards");
     }
 
     /** Sanitizes short layout labels before they are escaped into the renderer-owned LaTeX wrapper. */
@@ -580,6 +794,14 @@ public class MultiAgentWritingArtifactExportService {
         if (finalStart >= 0) {
             return merged.substring(finalStart + 1).strip();
         }
+        // The latency-optimized workflow deliberately removed a separate merge-model call. Its reviewed teacher
+        // writer is therefore the authoritative final teacher body, while student and 16:10 remain separate sections.
+        // Falling back only to this audience-owned section preserves the no-trace export guarantee.
+        for (MultiAgentWritingArtifact.StructuredSection section : artifact.sections()) {
+            if ("teacher-explanation".equals(section.sectionCode()) && !section.content().isBlank()) {
+                return section.content().strip();
+            }
+        }
         throw new IllegalStateException("讲义缺少最终审校正文，拒绝导出 Agent 过程日志");
     }
 
@@ -588,6 +810,16 @@ public class MultiAgentWritingArtifactExportService {
      * actual lesson topic instead of leaking an opaque workflow UUID into a teacher's downloaded file name.
      */
     private static String handoutTitle(MultiAgentWritingArtifact artifact) {
+        // Resource-curation content is persisted before the publishable drafts. Prefer the teacher section so its
+        // H1 becomes the download name/header instead of leaking an internal stage label such as “Resource Curation”.
+        for (MultiAgentWritingArtifact.StructuredSection section : artifact.sections()) {
+            if ("teacher-explanation".equals(section.sectionCode())) {
+                String teacherTitle = firstMarkdownTitle(section.content());
+                if (!teacherTitle.isBlank()) {
+                    return teacherTitle;
+                }
+            }
+        }
         for (String rawLine : safeText(artifact.mergedMarkdown()).replace("\r\n", "\n").split("\n")) {
             String line = rawLine.strip();
             if (line.startsWith("# ")) {
@@ -605,6 +837,20 @@ public class MultiAgentWritingArtifactExportService {
         throw new IllegalStateException("讲义缺少 AI 生成标题，拒绝导出无标题 PDF");
     }
 
+    /** Reads only a concise Markdown H1, never a raw model/system label. */
+    private static String firstMarkdownTitle(String content) {
+        for (String rawLine : safeText(content).replace("\r\n", "\n").split("\n")) {
+            String line = rawLine.strip();
+            if (line.startsWith("# ")) {
+                String title = line.substring(2).replaceAll("[\\p{Cntrl}\\r\\n]+", " ").strip();
+                if (!title.isBlank() && title.codePointCount(0, title.length()) <= 80) {
+                    return title;
+                }
+            }
+        }
+        return "";
+    }
+
     /**
      * Appends a compact Markdown subset as LaTeX while preserving inline math delimiters.
      */
@@ -620,6 +866,11 @@ public class MultiAgentWritingArtifactExportService {
                 inTable = false;
             }
             if (inDisplayMath) {
+                // Model Markdown can place cosmetic blank rows inside \[...\].  XeLaTeX reports a misleading
+                // "Missing $" at that empty row; omit it while retaining the surrounding mathematical expression.
+                if (line.isBlank()) {
+                    continue;
+                }
                 latex.append(line).append('\n');
                 if (line.strip().equals("\\]")) {
                     inDisplayMath = false;
@@ -675,30 +926,37 @@ public class MultiAgentWritingArtifactExportService {
                 latex.append('\n');
                 continue;
             }
+            String listPayload = line.startsWith("- ") || line.startsWith("* ") ? line.substring(2).strip() : line;
+            if (listPayload.startsWith("![") && listPayload.contains("](")) {
+                // Asset routes are authorization-scoped runtime URIs, not classroom prose.  Do not print local
+                // traversal-looking paths into the PDF; a future image embedder may resolve the same safe asset.
+                latex.append("\\emph{资料图片（已关联至原始资料）}\\par\n");
+                continue;
+            }
             if (line.startsWith("#### ")) {
                 if (inItemize) {
                     latex.append("\\end{itemize}\n");
                     inItemize = false;
                 }
-                latex.append("\\paragraph{").append(escapeLatexText(line.substring(5).strip())).append("}\n");
+                latex.append("\\paragraph{").append(escapeLatexTextPreservingMath(line.substring(5).strip())).append("}\n");
             } else if (line.startsWith("### ")) {
                 if (inItemize) {
                     latex.append("\\end{itemize}\n");
                     inItemize = false;
                 }
-                latex.append("\\subsubsection*{").append(escapeLatexText(line.substring(4).strip())).append("}\n");
+                latex.append("\\subsubsection*{").append(escapeLatexTextPreservingMath(line.substring(4).strip())).append("}\n");
             } else if (line.startsWith("## ")) {
                 if (inItemize) {
                     latex.append("\\end{itemize}\n");
                     inItemize = false;
                 }
-                latex.append("\\subsection*{").append(escapeLatexText(line.substring(3).strip())).append("}\n");
+                latex.append("\\subsection*{").append(escapeLatexTextPreservingMath(line.substring(3).strip())).append("}\n");
             } else if (line.startsWith("# ")) {
                 if (inItemize) {
                     latex.append("\\end{itemize}\n");
                     inItemize = false;
                 }
-                latex.append("\\section*{").append(escapeLatexText(line.substring(2).strip())).append("}\n");
+                latex.append("\\section*{").append(escapeLatexTextPreservingMath(line.substring(2).strip())).append("}\n");
             } else if (line.startsWith("- ") || line.startsWith("* ")) {
                 if (!inItemize) {
                     latex.append("\\begin{itemize}\n");
@@ -731,6 +989,10 @@ public class MultiAgentWritingArtifactExportService {
         if (value == null || value.isBlank()) {
             return "";
         }
+        // Mark a compact fill-in blank before escaping text. The final document replaces this neutral marker with a
+        // real rule; inserting a LaTeX command here would escape its backslashes and print it literally.
+        value = java.util.regex.Pattern.compile("_{3,}").matcher(value)
+                .replaceAll(java.util.regex.Matcher.quoteReplacement("MATHAGENTFILLBLANKRULE"));
         // Markdown uses \( ... \) for inline math. A literal replacement is deterministic and avoids the
         // double-escaping ambiguity of a Java regular expression around LaTeX backslashes.
         value = value.replace("\\(", "$").replace("\\)", "$").replace("**", "");
@@ -744,7 +1006,23 @@ public class MultiAgentWritingArtifactExportService {
         // identifiers before escaping so coordinate notation remains legible in every exported variant.
         value = value.replaceAll("([A-Za-z])\\u2081", "\\$$1_1\\$");
         value = value.replaceAll("([A-Za-z])\\u2082", "\\$$1_2\\$");
-        value = value.replace("<wait>", "");
+        // Classroom pause markers and HTML spacer tags are prompt/editor transport syntax. They must become
+        // printable whitespace, never leak verbatim into either audience's PDF.
+        value = value.replace("<wait>", "").replace("</wait>", "")
+                // Rich-text line breaks are transport markup.  Preserve their intended writing space without
+                // printing literal HTML into the student handout.
+                .replaceAll("(?i)<br\\s*/?>", "\n")
+                // A model may choose single quotes or reorder harmless CSS spacing.  It is an editor-only spacer,
+                // so turn every height-only div into printable worksheet whitespace rather than leaking HTML.
+                .replaceAll("(?i)<div\\s+style\\s*=\\s*(['\\\"])\\s*height\\s*:\\s*[0-9]+em\\s*;?\\s*\\1\\s*></div>", "\n\n\n")
+                // Keep a pixel-specified free-response area through the escaping pass.  The document builder turns
+                // this neutral marker into \vspace after escaping, so it cannot be printed as raw HTML or mistaken
+                // for a fill-in rule.
+                .replaceAll("(?is)<div\\b[^>]*?height\\s*:\\s*(\\d+)px[^>]*>\\s*</div>", "MATHAGENTHTMLSPACER$1")
+                // LLM rich-text output is not a stable HTML dialect: it may use typographic quotes, CSS pixels or
+                // decorative borders.  Every empty div still means “leave room for handwriting”, never printable
+                // content, so remove the complete transport construct instead of matching one fragile style form.
+                .replaceAll("(?is)<div\\b[^>]*>\\s*</div>", "\n\n\n");
         StringBuilder escaped = new StringBuilder();
         int index = 0;
         while (index < value.length()) {

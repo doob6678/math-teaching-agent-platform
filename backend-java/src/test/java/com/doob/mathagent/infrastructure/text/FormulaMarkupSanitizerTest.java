@@ -109,4 +109,21 @@ class FormulaMarkupSanitizerTest {
         assertThat(sanitized).contains("\\\\frac{b}{2a}", "\\\\frac{1}{2}");
         assertThat(sanitized).doesNotContain(" rac");
     }
+
+    @Test
+    void canonicalizesOnlyUnambiguousRadicalsAndFractions() {
+        String sanitized = FormulaMarkupSanitizer.sanitizeFeishuMath(
+                "面积为 √(a+b)，且 sinA=1/2，另有 \\frac a{\\sin A}。 ");
+
+        assertThat(sanitized)
+                .contains("\\sqrt{a+b}", "$sinA=\\frac{1}{2}$", "\\frac{a}{\\sin A}")
+                .doesNotContain("√(", "\\frac a");
+    }
+
+    @Test
+    void preservesAmbiguousBareRadicalForTheExportGateToReject() {
+        String sanitized = FormulaMarkupSanitizer.sanitizeFeishuMath("错误候选 √3a 必须要求模型补花括号。");
+
+        assertThat(sanitized).contains("√3a");
+    }
 }

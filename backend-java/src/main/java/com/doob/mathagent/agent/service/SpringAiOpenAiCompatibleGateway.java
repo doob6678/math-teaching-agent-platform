@@ -94,18 +94,34 @@ public class SpringAiOpenAiCompatibleGateway implements AiChatGateway {
         // A socket read timeout alone is not a total request deadline: some relays keep a connection open while
         // never completing a JSON response.  Run each blocking exchange in its own cancellable worker so a stalled
         // relay cannot leave the durable teaching task at RUNNING forever.
+        long startedNanos = System.nanoTime();
+        log.info("ai_provider_request_started provider={} model={} agent={} timeoutMs={} evidenceRefCount={}",
+                request.providerName(), request.modelCode(), request.agentCode(), requestTimeout.toMillis(),
+                request.evidenceRefs() == null ? 0 : request.evidenceRefs().size());
         ExecutorService executor = Executors.newSingleThreadExecutor();
         Future<AiChatResult> future = executor.submit(() -> callProvider(request));
         try {
-            return future.get(requestTimeout.toMillis(), TimeUnit.MILLISECONDS);
+            AiChatResult result = future.get(requestTimeout.toMillis(), TimeUnit.MILLISECONDS);
+            log.info("ai_provider_request_completed provider={} model={} agent={} latencyMs={} promptTokens={} completionTokens={}",
+                    request.providerName(), request.modelCode(), request.agentCode(), elapsedMillis(startedNanos),
+                    result.promptTokens(), result.completionTokens());
+            return result;
         } catch (TimeoutException exception) {
             future.cancel(true);
+            log.warn("ai_provider_request_timeout provider={} model={} agent={} latencyMs={} timeoutMs={}",
+                    request.providerName(), request.modelCode(), request.agentCode(), elapsedMillis(startedNanos),
+                    requestTimeout.toMillis());
             throw new IllegalStateException("AI provider request exceeded configured total timeout", exception);
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
+            log.warn("ai_provider_request_interrupted provider={} model={} agent={} latencyMs={}",
+                    request.providerName(), request.modelCode(), request.agentCode(), elapsedMillis(startedNanos));
             throw new IllegalStateException("AI provider request interrupted", exception);
         } catch (ExecutionException exception) {
             Throwable cause = exception.getCause();
+            log.warn("ai_provider_request_failed provider={} model={} agent={} latencyMs={} errorType={}",
+                    request.providerName(), request.modelCode(), request.agentCode(), elapsedMillis(startedNanos),
+                    cause == null ? "unknown" : cause.getClass().getSimpleName());
             if (cause instanceof RuntimeException runtimeException) {
                 throw runtimeException;
             }
@@ -113,6 +129,11 @@ public class SpringAiOpenAiCompatibleGateway implements AiChatGateway {
         } finally {
             executor.shutdownNow();
         }
+    }
+
+    /** Uses a monotonic clock so container wall-clock adjustments cannot corrupt latency evidence. */
+    private static long elapsedMillis(long startedNanos) {
+        return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedNanos);
     }
 
     /** Performs the actual OpenAI-compatible request; the public method owns its total-deadline boundary. */

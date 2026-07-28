@@ -19,6 +19,13 @@ import fitz  # PyMuPDF
 # A figure page must carry the same visible atomic question.  Counting embedded images alone cannot detect the
 # historic failure where question 17 ended at the bottom of one page and its geometry diagram started on the next.
 QUESTION_NUMBER = re.compile(r"(?m)^\s*(\d{1,3})[.．、]")
+LECTURE_ASPECT_RATIO = 1.6
+LECTURE_ASPECT_TOLERANCE = 0.01
+LECTURE_MAX_TEXT_CHARS = 2_400
+BASE_FORBIDDEN_MARKERS = ("<TODO>", "[PLACEHOLDER]", "system prompt", "内部提示词", "promptTokens", "model_call_")
+STUDENT_FORBIDDEN_MARKERS = ("最终答案", "教师批注", "资料依据", "trace", "workflowId")
+LECTURE_FORBIDDEN_MARKERS = ("最终答案", "完整解答", "资料依据", "教师批注", "h1（")
+HTML_TAG = re.compile(r"</?[A-Za-z][^>]*>")
 
 
 def image_pixel_digest(document: fitz.Document, xref: int) -> str:
@@ -76,6 +83,40 @@ def inspect(pdf: Path, expected_image_digests: dict[str, str]) -> dict[str, obje
     return {"pdf": str(pdf), "pages": len(pages), "page_metrics": pages}
 
 
+def validate(report: dict[str, object], profile: str, required_text: list[str]) -> list[str]:
+    """Return explicit acceptance violations instead of treating a parseable PDF as a pass."""
+    pdf_path = Path(str(report["pdf"]))
+    with fitz.open(pdf_path) as document:
+        extracted = "\n".join(page.get_text() for page in document)
+    compact = extracted.replace("\r", "")
+    violations = [f"missing required text: {value}" for value in required_text if value not in compact]
+    forbidden = list(BASE_FORBIDDEN_MARKERS)
+    if profile == "student":
+        forbidden.extend(STUDENT_FORBIDDEN_MARKERS)
+    if profile == "lecture":
+        forbidden.extend(LECTURE_FORBIDDEN_MARKERS)
+        if report["pages"] != 1:
+            violations.append(f"lecture requires exactly one page, found {report['pages']}")
+        for metric in report["page_metrics"]:
+            if abs(float(metric["aspect"]) - LECTURE_ASPECT_RATIO) > LECTURE_ASPECT_TOLERANCE:
+                violations.append(f"lecture page {metric['number']} is not 16:10: {metric['aspect']}")
+            if int(metric["text_chars"]) > LECTURE_MAX_TEXT_CHARS:
+                violations.append(f"lecture page {metric['number']} exceeds text budget: {metric['text_chars']}")
+        body_lines = [line.strip() for line in compact.splitlines() if line.strip()]
+        if not any("题目" in line or "已知" in line for line in body_lines[:6]):
+            violations.append("lecture does not place the question in the first visible content lines")
+    if profile == "teacher" and not any("资料依据：" in line for line in compact.splitlines()):
+        violations.append("teacher handout is missing readable Feishu attribution")
+    # Browser-editor transport tags are never valid classroom text.  This catches <br> and future rich-text leakage,
+    # including forms that are not already covered by the fixed marker list above.
+    if HTML_TAG.search(compact):
+        violations.append("visible HTML transport markup")
+    for marker in forbidden:
+        if marker.lower() in compact.lower():
+            violations.append(f"forbidden visible marker: {marker}")
+    return violations
+
+
 def expected_image_digests(items: list[str]) -> dict[str, str]:
     """Loads the approved local source images supplied as question-number=absolute-path pairs."""
     digests: dict[str, str] = {}
@@ -95,6 +136,8 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("pdf", nargs="+", type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--profile", choices=("teacher", "student", "lecture"), default="teacher")
+    parser.add_argument("--required-text", action="append", default=[], help="Visible text required by this handout profile.")
     parser.add_argument(
         "--expected-image",
         action="append",
@@ -104,10 +147,17 @@ def main() -> None:
     )
     arguments = parser.parse_args()
     digests = expected_image_digests(arguments.expected_image)
-    report = {"expected_image_questions": sorted(digests), "reports": [inspect(path.resolve(), digests) for path in arguments.pdf]}
+    reports = [inspect(path.resolve(), digests) for path in arguments.pdf]
+    for report in reports:
+        report["profile"] = arguments.profile
+        report["violations"] = validate(report, arguments.profile, arguments.required_text)
+        report["passed"] = not report["violations"]
+    report = {"expected_image_questions": sorted(digests), "reports": reports, "passed": all(item["passed"] for item in reports)}
     arguments.output.parent.mkdir(parents=True, exist_ok=True)
     arguments.output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(report, ensure_ascii=False, indent=2))
+    if not report["passed"]:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
