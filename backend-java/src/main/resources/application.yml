@@ -263,7 +263,7 @@ math-agent:
       version: ${MATH_AGENT_AGENT_WORKER_VERSION:0.1.0}
       # This is the single global cap for AI work, including the 2024 Luna visual ingestion runner.
       # The runner may choose a lower per-run count but must reject any value above this shared limit.
-      max-concurrency: ${MATH_AGENT_AGENT_WORKER_MAX_CONCURRENCY:4}
+      max-concurrency: ${MATH_AGENT_AGENT_WORKER_MAX_CONCURRENCY:10}
       lease-seconds: ${MATH_AGENT_AGENT_WORKER_LEASE_SECONDS:300}
       heartbeat-milliseconds: ${MATH_AGENT_AGENT_WORKER_HEARTBEAT_MILLISECONDS:15000}
     recovery-milliseconds: ${MATH_AGENT_AGENT_WORKER_RECOVERY_MILLISECONDS:30000}
