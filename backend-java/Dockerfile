@@ -14,6 +14,9 @@ RUN apt-get update \
         curl \
         python3 \
         python3-requests \
+        # DOCX is rendered in this Linux image before entering the common PDF/PNG source pipeline; do not depend on
+        # Windows Word or PowerShell for a Docker production run.
+        libreoffice-writer \
         texlive-xetex \
         texlive-lang-chinese \
         fonts-noto-cjk \

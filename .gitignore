@@ -25,6 +25,7 @@ build/
 !.env.example
 .local-secrets/
 .local-logs/
+.local-run/
 *.log
 logs/
 .local-storage/

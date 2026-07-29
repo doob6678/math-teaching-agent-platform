@@ -125,6 +125,24 @@ RabbitMQ 使用持久化 direct exchange、命令队列和死信队列。MySQL `
 
 ## 运行入口
 
+## 2024 高考数学题库：真实视觉入库链路
+
+本项目对配置文件 `config/gaokao-ingestion-2024.json` 中限定的六份 2024 北京、新课标Ⅰ、新课标Ⅱ PDF，使用唯一的真实入库命令：
+
+```powershell
+wsl.exe -d Ubuntu -- python3 /mnt/c/Users/doob/Desktop/code/dev/math_agent_rag/scripts/wsl/run_2024_luna_milvus_ingestion.py
+```
+
+该命令严格按以下顺序完成，任何一步失败都会以非零退出，不能产出“成功”结论：
+
+1. 以生产后端相同版本的 PDFBox 渲染每个真实 PDF 页，保留原始 PNG；再生成最长边 960px、JPEG quality 0.82 的初筛页图。
+2. 每页仅将压缩页图发送给 `gpt-5.6-luna`，识别题干、LaTex 公式、题号和跨页风险；原始 PNG 仍作为可复核证据。
+3. 在 `output/gaokao-evidence/2024/runs/<run-id>/` 保存每页完整的非密钥请求、响应、页图 SHA-256、HTTP 状态、耗时及 provider 返回的 token usage。Authorization 不写入文件。
+4. 仅将 Luna 返回的非空题干和公式调用本机运行的真实 embedding worker，写入统一的高考 Milvus collection `gaokao_math`。
+5. 使用刚入库题干重新生成真实查询向量并从 Milvus 召回；若查不到对应的插入主键，整次运行失败。最终报告写入 `output/gaokao-evidence/2024/<run-id>-report.json`，其中汇总 `prompt_tokens`、`completion_tokens`、`total_tokens`。
+
+页图没有线程池：为保证一张页图、一份完整请求/响应和一笔 token usage 始终一一对应，链路按页串行执行。Luna 请求从健康的 Docker worker 网络发出，单次 HTTP 默认限时 120 秒，并由父进程额外 5 秒宽限的硬超时兜底；超时会把该页的完整非密钥请求和故障原因写入 `page-*-luna-request-failure.json` 后立即失败，不能无限挂起或跳过该页。链路不会扫描配置之外的 2024 PDF，不使用文本层伪造视觉识别结果，不把模型输出当作官方答案或人工审核结论。运行前需在 `.env` 或环境变量中提供 `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`MATH_AGENT_WORKER_API_KEY`，并保持 WSL Docker 中的 MySQL、Redis、ai-worker 与 Milvus 健康。
+
 后端服务：
 
 ```powershell
