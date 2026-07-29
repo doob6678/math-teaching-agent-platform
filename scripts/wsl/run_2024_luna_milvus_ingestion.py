@@ -50,54 +50,11 @@ RETRIEVAL_LIMIT = 3
 DEFAULT_TIMEOUT_GRACE_SECONDS = 5
 LUNA_MAX_ATTEMPTS = 3
 LUNA_RETRY_DELAY_SECONDS = 2
-DEFAULT_GLOBAL_AI_CONCURRENCY = 10
-CONFIRMED_STABLE_AI_CONCURRENCY = 4
+DEFAULT_GLOBAL_AI_CONCURRENCY = 20
 GLOBAL_AI_CONCURRENCY_ENVIRONMENT_VARIABLE = "MATH_AGENT_AGENT_WORKER_MAX_CONCURRENCY"
 RENDERER_CLASS = "RenderPdfEvidencePage"
 LUNA_NETWORK_CONTAINER = "math-agent-rag-ai-worker-1"
 _renderer_ready = False
-
-
-class AdaptiveAiConcurrencyLimiter:
-    """Shares one adaptive provider limit across page workers and records every overload-driven reduction."""
-
-    def __init__(self, initial_limit: int, confirmed_stable_limit: int) -> None:
-        self._allowed = initial_limit
-        self._active = 0
-        self._confirmed_stable_limit = min(initial_limit, confirmed_stable_limit)
-        self._condition = threading.Condition()
-        self.events: list[dict[str, Any]] = []
-
-    def acquire(self) -> int:
-        """Blocks a worker until its provider attempt fits under the latest global effective limit."""
-        with self._condition:
-            while self._active >= self._allowed:
-                self._condition.wait()
-            self._active += 1
-            return self._allowed
-
-    def release(self) -> None:
-        """Releases one provider slot and wakes a waiting page worker."""
-        with self._condition:
-            self._active -= 1
-            self._condition.notify_all()
-
-    def reduce_after_upstream_limit(self, http_status: int) -> dict[str, Any]:
-        """Halves the current limit, but never goes below the observed stable four-request operating point."""
-        with self._condition:
-            previous = self._allowed
-            halved = max(1, previous // 2)
-            self._allowed = max(self._confirmed_stable_limit, halved)
-            event = {"timestampUtc": utc_now(), "reason": f"upstream_http_{http_status}", "previousLimit": previous,
-                     "halvedLimit": halved, "effectiveLimit": self._allowed, "confirmedStableLimit": self._confirmed_stable_limit}
-            self.events.append(event)
-            self._condition.notify_all()
-            return event
-
-    def effective_limit(self) -> int:
-        """Returns the current shared cap for final-run reporting."""
-        with self._condition:
-            return self._allowed
 
 
 def utc_now() -> str:
@@ -218,7 +175,7 @@ def luna_request(image: Path, paper: str, page: int) -> dict[str, Any]:
 
 
 def call_luna(request: dict[str, Any], base_url: str, api_key: str, timeout: int, grace_seconds: int,
-              limiter: AdaptiveAiConcurrencyLimiter) -> tuple[int, dict[str, Any], int, list[dict[str, Any]]]:
+              configured_page_workers: int) -> tuple[int, dict[str, Any], int, list[dict[str, Any]]]:
     """Makes one visual request from the healthy Docker network with a hard parent-process deadline.
 
     WSL's direct socket can remain blocked beyond the HTTP library deadline. The worker
@@ -240,26 +197,21 @@ print(json.dumps({'status': response.status_code, 'body': body, 'elapsedMs': rou
     attempts: list[dict[str, Any]] = []
     for attempt in range(1, LUNA_MAX_ATTEMPTS + 1):
         started_at = utc_now()
-        effective_limit = limiter.acquire()
         try:
-            try:
-                result = subprocess.run(["docker", "exec", "-i", "-e", f"LUNA_HTTP_TIMEOUT_SECONDS={timeout}", LUNA_NETWORK_CONTAINER, "python", "-c", bridge], input=json.dumps(request, ensure_ascii=False), capture_output=True, text=True, encoding="utf-8", timeout=timeout + grace_seconds, check=False)
-            finally:
-                limiter.release()
+            result = subprocess.run(["docker", "exec", "-i", "-e", f"LUNA_HTTP_TIMEOUT_SECONDS={timeout}", LUNA_NETWORK_CONTAINER, "python", "-c", bridge], input=json.dumps(request, ensure_ascii=False), capture_output=True, text=True, encoding="utf-8", timeout=timeout + grace_seconds, check=False)
             if result.returncode != 0:
                 raise RuntimeError(f"Luna Docker bridge failed: {result.stderr.strip()}")
             bridge_response = json.loads(result.stdout)
             status = int(bridge_response["status"])
             body = bridge_response["body"]
-            attempts.append({"attempt": attempt, "startedAt": started_at, "effectiveConcurrencyLimit": effective_limit, "httpStatus": status, "response": body, "elapsedMs": int(bridge_response["elapsedMs"])})
+            attempts.append({"attempt": attempt, "startedAt": started_at, "configuredPageWorkers": configured_page_workers, "httpStatus": status, "response": body, "elapsedMs": int(bridge_response["elapsedMs"])})
             if 200 <= status < 300:
                 return status, body, int(bridge_response["elapsedMs"]), attempts
             retryable = status in {429, 500, 502, 503, 504, 520}
             if not retryable:
                 raise RuntimeError(f"Luna HTTP {status}: {body}")
-            attempts[-1]["limitReduction"] = limiter.reduce_after_upstream_limit(status)
         except (subprocess.TimeoutExpired, TimeoutError, RuntimeError, json.JSONDecodeError) as error:
-            attempts.append({"attempt": attempt, "startedAt": started_at, "effectiveConcurrencyLimit": effective_limit, "errorType": type(error).__name__, "error": str(error)})
+            attempts.append({"attempt": attempt, "startedAt": started_at, "configuredPageWorkers": configured_page_workers, "errorType": type(error).__name__, "error": str(error)})
             if attempt == LUNA_MAX_ATTEMPTS:
                 raise RuntimeError(f"Luna failed after {LUNA_MAX_ATTEMPTS} attempts: {error}") from error
         if attempt < LUNA_MAX_ATTEMPTS:
@@ -333,7 +285,7 @@ def ensure_collection(uri: str, token: str, collection: str, timeout: int) -> No
 
 
 def process_page(job: tuple[int, Path, int, Path], run_id: str, settings: dict[str, Any], arguments: argparse.Namespace,
-                 source_root: Path, container_input_root: str, limiter: AdaptiveAiConcurrencyLimiter) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+                 source_root: Path, container_input_root: str, configured_page_workers: int) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Processes one page independently so bounded workers never share page assets, evidence paths, or token rows."""
     task_sequence, pdf, page, paper_root = job
     task_started_at = utc_now()
@@ -343,7 +295,7 @@ def process_page(job: tuple[int, Path, int, Path], run_id: str, settings: dict[s
     compress_for_luna(original, compressed, int(settings["pageInitialReviewMaxLongEdgePixels"]), float(settings["pageInitialReviewJpegQuality"]))
     request = luna_request(compressed, pdf.name, page)
     try:
-        status, response, elapsed_ms, attempts = call_luna(request, "", "", arguments.timeout_seconds, arguments.timeout_grace_seconds, limiter)
+        status, response, elapsed_ms, attempts = call_luna(request, "", "", arguments.timeout_seconds, arguments.timeout_grace_seconds, configured_page_workers)
     except Exception as error:
         failure = {"timestampUtc": utc_now(), "taskSequence": task_sequence, "workerThread": threading.current_thread().name, "taskStartedAt": task_started_at, "runId": run_id, "model": LUNA_MODEL, "sourceFile": pdf.name, "page": page, "request": request, "errorType": type(error).__name__, "error": str(error), "configuredHttpTimeoutSeconds": arguments.timeout_seconds, "configuredProcessGraceSeconds": arguments.timeout_grace_seconds, "credentialHandling": "Authorization was used only for transport and is omitted from evidence."}
         (paper_root / f"page-{page}-luna-request-failure.json").write_text(json.dumps(failure, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -393,9 +345,8 @@ def main() -> None:
     ensure_pdf_renderer()
     jobs = [(sequence, pdf, page, run_root / sha256_file(pdf)) for sequence, (pdf, page) in enumerate(((pdf, page) for pdf in files for page in range(1, page_count(pdf) + 1)), start=1)]
     failures: list[str] = []
-    limiter = AdaptiveAiConcurrencyLimiter(requested_page_workers, CONFIRMED_STABLE_AI_CONCURRENCY)
     with ThreadPoolExecutor(max_workers=requested_page_workers, thread_name_prefix="gaokao-luna-page") as executor:
-        futures = {executor.submit(process_page, job, run_id, settings, arguments, source_root, config["containerInputRoot"], limiter): job for job in jobs}
+        futures = {executor.submit(process_page, job, run_id, settings, arguments, source_root, config["containerInputRoot"], requested_page_workers): job for job in jobs}
         for future in as_completed(futures):
             _sequence, pdf, page, _paper_root = futures[future]
             try:
@@ -423,7 +374,7 @@ def main() -> None:
     if not hits or not any(hit.get("id") == all_questions[0]["id"] or hit.get("entity", {}).get(PRIMARY_KEY_FIELD) == all_questions[0]["id"] for hit in hits):
         raise RuntimeError("real Milvus recall did not return the inserted query question")
     totals = {name: sum(int(call["usage"].get(name, 0) or 0) for call in model_calls) for name in ("prompt_tokens", "completion_tokens", "total_tokens")}
-    report = {"timestampUtc": utc_now(), "runId": run_id, "model": LUNA_MODEL, "selectedFileCount": len(files), "lunaCallCount": len(model_calls), "questionCount": len(all_questions), "usage": totals, "concurrency": {"environmentVariable": GLOBAL_AI_CONCURRENCY_ENVIRONMENT_VARIABLE, "globalLimit": global_ai_concurrency, "initialPageWorkers": requested_page_workers, "confirmedStableLimit": CONFIRMED_STABLE_AI_CONCURRENCY, "effectivePageWorkers": limiter.effective_limit(), "limitReductionEvents": limiter.events}, "collection": arguments.collection, "realRecall": {"queryQuestionId": all_questions[0]["id"], "hitCount": len(hits), "hits": hits}, "modelCalls": model_calls, "evidenceRoot": str(run_root)}
+    report = {"timestampUtc": utc_now(), "runId": run_id, "model": LUNA_MODEL, "selectedFileCount": len(files), "lunaCallCount": len(model_calls), "questionCount": len(all_questions), "usage": totals, "concurrency": {"environmentVariable": GLOBAL_AI_CONCURRENCY_ENVIRONMENT_VARIABLE, "globalLimit": global_ai_concurrency, "effectivePageWorkers": requested_page_workers, "retryScope": "per_request_only", "maxAttemptsPerRequest": LUNA_MAX_ATTEMPTS}, "collection": arguments.collection, "realRecall": {"queryQuestionId": all_questions[0]["id"], "hitCount": len(hits), "hits": hits}, "modelCalls": model_calls, "evidenceRoot": str(run_root)}
     report_path = arguments.evidence_root / f"{run_id}-report.json"
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps({"report": str(report_path), "runId": run_id, "questionCount": len(all_questions), "usage": totals, "recallHitCount": len(hits)}, ensure_ascii=False))
