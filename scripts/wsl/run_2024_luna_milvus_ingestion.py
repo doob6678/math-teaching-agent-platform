@@ -168,7 +168,7 @@ def luna_request(image: Path, paper: str, page: int) -> dict[str, Any]:
         },
         "constraints": [
             "Read only the supplied page image.",
-            "Preserve mathematical formulas as LaTex strings in latex.",
+            "Preserve mathematical formulas as LaTex strings in latex. Every visible mathematical fraction MUST use \\frac{numerator}{denominator}; never write a fraction as a/b, 1/2, or x/y in a latex field.",
             "Do not invent an answer, solution, unshown text, or an official correctness judgement.",
             "Use an empty questions list if no question is visible."
         ],

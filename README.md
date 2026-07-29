@@ -145,6 +145,8 @@ wsl.exe -d Ubuntu -- python3 /mnt/c/Users/doob/Desktop/code/dev/math_agent_rag/s
 
 `math-agent.agent-worker.runtime.max-concurrency` 是后端配置键，`MATH_AGENT_AGENT_WORKER_MAX_CONCURRENCY` 是它的环境变量覆盖名；两者表达的是全项目同时允许执行的 AI 工作单元总数，而不是单个 PDF 的页数。未设置环境变量时使用仓库默认值 `20`；部署需要收紧或扩大额度时，只设置环境变量即可，无需改代码。例如：
 
+Luna 题目识别的公式契约要求：任何可见数学分数在 `latex` 字段中必须写成 `\\frac{分子}{分母}`；严禁使用 `1/2`、`a/b`、`x/y` 等斜杠记法代替分式。该约束同时写入 2024 页图识别提示词及后端已授权页图转写提示词，确保上传链路与批量链路一致。
+
 ```powershell
 $env:MATH_AGENT_AGENT_WORKER_MAX_CONCURRENCY = "20"
 ```

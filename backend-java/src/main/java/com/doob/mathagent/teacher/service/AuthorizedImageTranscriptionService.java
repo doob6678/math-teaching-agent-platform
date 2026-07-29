@@ -216,6 +216,8 @@ public class AuthorizedImageTranscriptionService {
                 Extract only visible problem text, formulas, options, and geometry labels from the image.
                 Do not solve the problem. Do not guess missing text. Do not invent invisible content.
                 Preserve Chinese text and math symbols exactly as visible when possible.
+                In every LaTeX formula, write every mathematical fraction strictly as \\frac{numerator}{denominator}.
+                Never represent a mathematical fraction as 1/2, a/b, x/y, or another slash expression.
                 Return exactly one valid JSON object and no Markdown:
                 {"problemText":"...","confidence":0.0}
                 """;

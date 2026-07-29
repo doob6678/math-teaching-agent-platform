@@ -1,0 +1,1450 @@
+{
+  "timestampUtc": "2026-07-29T06:17:36.966482+00:00",
+  "runId": "luna-2024-20260729T060056Z-143e268d",
+  "model": "gpt-5.6-luna",
+  "selectedFileCount": 6,
+  "lunaCallCount": 80,
+  "questionCount": 133,
+  "usage": {
+    "prompt_tokens": 79756,
+    "completion_tokens": 124441,
+    "total_tokens": 204197
+  },
+  "concurrency": {
+    "environmentVariable": "MATH_AGENT_AGENT_WORKER_MAX_CONCURRENCY",
+    "globalLimit": 20,
+    "effectivePageWorkers": 20,
+    "retryScope": "per_request_only",
+    "maxAttemptsPerRequest": 3
+  },
+  "collection": "gaokao_math",
+  "realRecall": {
+    "queryQuestionId": "90cfa660-7d12-5d0c-9e8b-e47351307e73",
+    "hitCount": 10,
+    "hits": [
+      {
+        "distance": 0.99999994,
+        "id": "1cfd137a-65c8-49c3-b36a-1fb17eeeaed3",
+        "metadata": "{\"sourceFile\": \"2024\\u5e74\\u9ad8\\u8003\\u6570\\u5b66\\u8bd5\\u5377\\uff08\\u5317\\u4eac\\uff09\\uff08\\u7a7a\\u767d\\u5377\\uff09.pdf\", \"page\": 1, \"questionNumber\": \"1\", \"latex\": [\"M=\\\\{x\\\\mid -4<x\\\\le 1\\\\}\", \"N=\\\\{x\\\\mid -1<x<3\\\\}\", \"M\\\\cup N\"], \"confidence\": 0.99, \"continuesToNextPage\": false, \"extraction\": \"LUNA_VISUAL_PAGE\"}",
+        "text": "已知集合 M={x|-4<x≤1}，N={x|-1<x<3}，则 M∪N=（ ）。A. {x|-4<x<3} B. {x|-1<x≤1} C. {0,1,2} D. {x|-1<x<4}\nM=\\{x\\mid -4<x\\le 1\\}\nN=\\{x\\mid -1<x<3\\}\nM\\cup N"
+      },
+      {
+        "distance": 0.99999994,
+        "id": "697dfcd4-e7a5-49f0-80a4-b05b166b7e9b",
+        "metadata": "{\"sourceFile\": \"2024\\u5e74\\u9ad8\\u8003\\u6570\\u5b66\\u8bd5\\u5377\\uff08\\u5317\\u4eac\\uff09\\uff08\\u7a7a\\u767d\\u5377\\uff09.pdf\", \"page\": 1, \"questionNumber\": \"1\", \"latex\": [\"M=\\\\{x\\\\mid -4<x\\\\le 1\\\\}\", \"N=\\\\{x\\\\mid -1<x<3\\\\}\", \"M\\\\cup N\"], \"confidence\": 0.99, \"continuesToNextPage\": false, \"extraction\": \"LUNA_VISUAL_PAGE\"}",
+        "text": "已知集合 M={x|-4<x≤1}，N={x|-1<x<3}，则 M∪N=（ ）。A. {x|-4<x<3} B. {x|-1<x≤1} C. {0,1,2} D. {x|-1<x<4}\nM=\\{x\\mid -4<x\\le 1\\}\nN=\\{x\\mid -1<x<3\\}\nM\\cup N"
+      },
+      {
+        "distance": 0.99999994,
+        "id": "89781b04-2c20-4fa8-bc0b-9b5bb4269ff2",
+        "metadata": "{\"sourceFile\": \"2024\\u5e74\\u9ad8\\u8003\\u6570\\u5b66\\u8bd5\\u5377\\uff08\\u5317\\u4eac\\uff09\\uff08\\u7a7a\\u767d\\u5377\\uff09.pdf\", \"page\": 1, \"questionNumber\": \"1\", \"latex\": [\"M=\\\\{x\\\\mid -4<x\\\\le 1\\\\}\", \"N=\\\\{x\\\\mid -1<x<3\\\\}\", \"M\\\\cup N\"], \"confidence\": 0.99, \"continuesToNextPage\": false, \"extraction\": \"LUNA_VISUAL_PAGE\"}",
+        "text": "已知集合 M={x|-4<x≤1}，N={x|-1<x<3}，则 M∪N=（ ）。A. {x|-4<x<3} B. {x|-1<x≤1} C. {0,1,2} D. {x|-1<x<4}\nM=\\{x\\mid -4<x\\le 1\\}\nN=\\{x\\mid -1<x<3\\}\nM\\cup N"
+      },
+      {
+        "distance": 0.99999994,
+        "id": "90cfa660-7d12-5d0c-9e8b-e47351307e73",
+        "metadata": "{\"sourceFile\": \"2024\\u5e74\\u9ad8\\u8003\\u6570\\u5b66\\u8bd5\\u5377\\uff08\\u5317\\u4eac\\uff09\\uff08\\u7a7a\\u767d\\u5377\\uff09.pdf\", \"page\": 1, \"questionNumber\": \"1\", \"latex\": [\"M=\\\\{x\\\\mid -4<x\\\\le 1\\\\}\", \"N=\\\\{x\\\\mid -1<x<3\\\\}\", \"M\\\\cup N\"], \"confidence\": 0.99, \"continuesToNextPage\": false, \"extraction\": \"LUNA_VISUAL_PAGE\"}",
+        "text": "已知集合 M={x|-4<x≤1}，N={x|-1<x<3}，则 M∪N=（ ）。A. {x|-4<x<3} B. {x|-1<x≤1} C. {0,1,2} D. {x|-1<x<4}\nM=\\{x\\mid -4<x\\le 1\\}\nN=\\{x\\mid -1<x<3\\}\nM\\cup N"
+      },
+      {
+        "distance": 0.9914851,
+        "id": "376e0eac-20ff-4bdb-9abd-90b7218567d3",
+        "metadata": "{\"sourceFile\": \"2024\\u5e74\\u9ad8\\u8003\\u6570\\u5b66\\u8bd5\\u5377\\uff08\\u5317\\u4eac\\uff09\\uff08\\u89e3\\u6790\\u5377\\uff09.pdf\", \"page\": 1, \"questionNumber\": \"1\", \"latex\": [\"M=\\\\{x\\\\mid -4<x\\\\le 1\\\\}\", \"N=\\\\{x\\\\mid -1<x<3\\\\}\", \"M\\\\cup N\"], \"confidence\": 0.99, \"continuesToNextPage\": false, \"extraction\": \"LUNA_VISUAL_PAGE\"}",
+        "text": "已知集合 M={x|-4<x≤1}，N={x|-1<x<3}，则 M∪N=（ ）。\nM=\\{x\\mid -4<x\\le 1\\}\nN=\\{x\\mid -1<x<3\\}\nM\\cup N"
+      },
+      {
+        "distance": 0.9914851,
+        "id": "89879926-7e13-597f-98bb-656135175f8b",
+        "metadata": "{\"sourceFile\": \"2024\\u5e74\\u9ad8\\u8003\\u6570\\u5b66\\u8bd5\\u5377\\uff08\\u5317\\u4eac\\uff09\\uff08\\u89e3\\u6790\\u5377\\uff09.pdf\", \"page\": 1, \"questionNumber\": \"1\", \"latex\": [\"M=\\\\{x\\\\mid -4<x\\\\le 1\\\\}\", \"N=\\\\{x\\\\mid -1<x<3\\\\}\", \"M\\\\cup N\"], \"confidence\": 0.99, \"continuesToNextPage\": false, \"extraction\": \"LUNA_VISUAL_PAGE\"}",
+        "text": "已知集合 M={x|-4<x≤1}，N={x|-1<x<3}，则 M∪N=（ ）。\nM=\\{x\\mid -4<x\\le 1\\}\nN=\\{x\\mid -1<x<3\\}\nM\\cup N"
+      },
+      {
+        "distance": 0.9914851,
+        "id": "96b4b44d-ca76-493b-afd8-7e99f9e8f149",
+        "metadata": "{\"sourceFile\": \"2024\\u5e74\\u9ad8\\u8003\\u6570\\u5b66\\u8bd5\\u5377\\uff08\\u5317\\u4eac\\uff09\\uff08\\u89e3\\u6790\\u5377\\uff09.pdf\", \"page\": 1, \"questionNumber\": \"1\", \"latex\": [\"M=\\\\{x\\\\mid -4<x\\\\le 1\\\\}\", \"N=\\\\{x\\\\mid -1<x<3\\\\}\", \"M\\\\cup N\"], \"confidence\": 0.99, \"continuesToNextPage\": false, \"extraction\": \"LUNA_VISUAL_PAGE\"}",
+        "text": "已知集合 M={x|-4<x≤1}，N={x|-1<x<3}，则 M∪N=（ ）。\nM=\\{x\\mid -4<x\\le 1\\}\nN=\\{x\\mid -1<x<3\\}\nM\\cup N"
+      },
+      {
+        "distance": 0.9914851,
+        "id": "bd75b5a6-4d08-4c4e-898d-046710154875",
+        "metadata": "{\"sourceFile\": \"2024\\u5e74\\u9ad8\\u8003\\u6570\\u5b66\\u8bd5\\u5377\\uff08\\u5317\\u4eac\\uff09\\uff08\\u89e3\\u6790\\u5377\\uff09.pdf\", \"page\": 1, \"questionNumber\": \"1\", \"latex\": [\"M=\\\\{x\\\\mid -4<x\\\\le 1\\\\}\", \"N=\\\\{x\\\\mid -1<x<3\\\\}\", \"M\\\\cup N\"], \"confidence\": 0.99, \"continuesToNextPage\": false, \"extraction\": \"LUNA_VISUAL_PAGE\"}",
+        "text": "已知集合 M={x|-4<x≤1}，N={x|-1<x<3}，则 M∪N=（ ）。\nM=\\{x\\mid -4<x\\le 1\\}\nN=\\{x\\mid -1<x<3\\}\nM\\cup N"
+      },
+      {
+        "distance": 0.93003654,
+        "id": "7cd340ae-dca8-407c-914b-8d05be41b10d",
+        "metadata": "{\"sourceFile\": \"2024\\u5e74\\u9ad8\\u8003\\u6570\\u5b66\\u8bd5\\u5377\\uff08\\u65b0\\u8bfe\\u6807\\u2160\\u5377\\uff09\\uff08\\u89e3\\u6790\\u5377\\uff09.pdf\", \"page\": 1, \"questionNumber\": \"1\", \"latex\": [\"A=\\\\{x\\\\mid -5<x^3<5\\\\}\", \"B=\\\\{-3,-1,0,2,3\\\\}\", \"A\\\\cap B\"], \"confidence\": 0.99, \"continuesToNextPage\": false, \"extraction\": \"LUNA_VISUAL_PAGE\"}",
+        "text": "已知集合 A={x|-5<x^3<5}，B={-3,-1,0,2,3}，则 A∩B=( )。 A. {-1,0}；B. {2,3}；C. {-3,-1,0}；D. {-1,0,2}。\nA=\\{x\\mid -5<x^3<5\\}\nB=\\{-3,-1,0,2,3\\}\nA\\cap B"
+      },
+      {
+        "distance": 0.93003654,
+        "id": "a6aa2667-3bb3-4653-9d9b-53a67da2ca85",
+        "metadata": "{\"sourceFile\": \"2024\\u5e74\\u9ad8\\u8003\\u6570\\u5b66\\u8bd5\\u5377\\uff08\\u65b0\\u8bfe\\u6807\\u2160\\u5377\\uff09\\uff08\\u89e3\\u6790\\u5377\\uff09.pdf\", \"page\": 1, \"questionNumber\": \"1\", \"latex\": [\"A=\\\\{x\\\\mid -5<x^3<5\\\\}\", \"B=\\\\{-3,-1,0,2,3\\\\}\", \"A\\\\cap B\"], \"confidence\": 0.99, \"continuesToNextPage\": false, \"extraction\": \"LUNA_VISUAL_PAGE\"}",
+        "text": "已知集合 A={x|-5<x^3<5}，B={-3,-1,0,2,3}，则 A∩B=( )。 A. {-1,0}；B. {2,3}；C. {-3,-1,0}；D. {-1,0,2}。\nA=\\{x\\mid -5<x^3<5\\}\nB=\\{-3,-1,0,2,3\\}\nA\\cap B"
+      }
+    ]
+  },
+  "modelCalls": [
+    {
+      "taskSequence": 1,
+      "workerThread": "gaokao-luna-page_0",
+      "sourceFile": "2024年高考数学试卷（北京）（空白卷）.pdf",
+      "page": 1,
+      "usage": {
+        "prompt_tokens": 995,
+        "completion_tokens": 2963,
+        "total_tokens": 3958,
+        "completion_tokens_details": {
+          "reasoning_tokens": 1685
+        }
+      },
+      "elapsedMs": 70876,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 2,
+      "workerThread": "gaokao-luna-page_1",
+      "sourceFile": "2024年高考数学试卷（北京）（空白卷）.pdf",
+      "page": 2,
+      "usage": {
+        "prompt_tokens": 995,
+        "completion_tokens": 3721,
+        "total_tokens": 4716,
+        "completion_tokens_details": {
+          "reasoning_tokens": 1901
+        }
+      },
+      "elapsedMs": 73775,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 3,
+      "workerThread": "gaokao-luna-page_2",
+      "sourceFile": "2024年高考数学试卷（北京）（空白卷）.pdf",
+      "page": 3,
+      "usage": {
+        "prompt_tokens": 995,
+        "completion_tokens": 2851,
+        "total_tokens": 3846,
+        "completion_tokens_details": {
+          "reasoning_tokens": 1485
+        }
+      },
+      "elapsedMs": 61649,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 4,
+      "workerThread": "gaokao-luna-page_3",
+      "sourceFile": "2024年高考数学试卷（北京）（空白卷）.pdf",
+      "page": 4,
+      "usage": {
+        "prompt_tokens": 995,
+        "completion_tokens": 2287,
+        "total_tokens": 3282,
+        "completion_tokens_details": {
+          "reasoning_tokens": 697
+        }
+      },
+      "elapsedMs": 52997,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 5,
+      "workerThread": "gaokao-luna-page_4",
+      "sourceFile": "2024年高考数学试卷（北京）（解析卷）.pdf",
+      "page": 1,
+      "usage": {
+        "prompt_tokens": 994,
+        "completion_tokens": 1105,
+        "total_tokens": 2099,
+        "completion_tokens_details": {
+          "reasoning_tokens": 516
+        }
+      },
+      "elapsedMs": 27408,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 6,
+      "workerThread": "gaokao-luna-page_5",
+      "sourceFile": "2024年高考数学试卷（北京）（解析卷）.pdf",
+      "page": 2,
+      "usage": {
+        "prompt_tokens": 994,
+        "completion_tokens": 962,
+        "total_tokens": 1956,
+        "completion_tokens_details": {
+          "reasoning_tokens": 482
+        }
+      },
+      "elapsedMs": 24577,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 7,
+      "workerThread": "gaokao-luna-page_6",
+      "sourceFile": "2024年高考数学试卷（北京）（解析卷）.pdf",
+      "page": 3,
+      "usage": {
+        "prompt_tokens": 994,
+        "completion_tokens": 1113,
+        "total_tokens": 2107,
+        "completion_tokens_details": {
+          "reasoning_tokens": 516
+        }
+      },
+      "elapsedMs": 29578,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 8,
+      "workerThread": "gaokao-luna-page_7",
+      "sourceFile": "2024年高考数学试卷（北京）（解析卷）.pdf",
+      "page": 4,
+      "usage": {
+        "prompt_tokens": 994,
+        "completion_tokens": 929,
+        "total_tokens": 1923,
+        "completion_tokens_details": {
+          "reasoning_tokens": 516
+        }
+      },
+      "elapsedMs": 27297,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 9,
+      "workerThread": "gaokao-luna-page_8",
+      "sourceFile": "2024年高考数学试卷（北京）（解析卷）.pdf",
+      "page": 5,
+      "usage": {
+        "prompt_tokens": 994,
+        "completion_tokens": 1079,
+        "total_tokens": 2073,
+        "completion_tokens_details": {
+          "reasoning_tokens": 353
+        }
+      },
+      "elapsedMs": 29534,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 10,
+      "workerThread": "gaokao-luna-page_9",
+      "sourceFile": "2024年高考数学试卷（北京）（解析卷）.pdf",
+      "page": 6,
+      "usage": {
+        "prompt_tokens": 994,
+        "completion_tokens": 1046,
+        "total_tokens": 2040,
+        "completion_tokens_details": {
+          "reasoning_tokens": 516
+        }
+      },
+      "elapsedMs": 24491,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 11,
+      "workerThread": "gaokao-luna-page_10",
+      "sourceFile": "2024年高考数学试卷（北京）（解析卷）.pdf",
+      "page": 7,
+      "usage": {
+        "prompt_tokens": 994,
+        "completion_tokens": 953,
+        "total_tokens": 1947,
+        "completion_tokens_details": {
+          "reasoning_tokens": 491
+        }
+      },
+      "elapsedMs": 22790,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 12,
+      "workerThread": "gaokao-luna-page_11",
+      "sourceFile": "2024年高考数学试卷（北京）（解析卷）.pdf",
+      "page": 8,
+      "usage": {
+        "prompt_tokens": 994,
+        "completion_tokens": 695,
+        "total_tokens": 1689,
+        "completion_tokens_details": {
+          "reasoning_tokens": 333
+        }
+      },
+      "elapsedMs": 23525,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 13,
+      "workerThread": "gaokao-luna-page_12",
+      "sourceFile": "2024年高考数学试卷（北京）（解析卷）.pdf",
+      "page": 9,
+      "usage": {
+        "prompt_tokens": 994,
+        "completion_tokens": 1468,
+        "total_tokens": 2462,
+        "completion_tokens_details": {
+          "reasoning_tokens": 988
+        }
+      },
+      "elapsedMs": 35275,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 14,
+      "workerThread": "gaokao-luna-page_13",
+      "sourceFile": "2024年高考数学试卷（北京）（解析卷）.pdf",
+      "page": 10,
+      "usage": {
+        "prompt_tokens": 994,
+        "completion_tokens": 916,
+        "total_tokens": 1910,
+        "completion_tokens_details": {
+          "reasoning_tokens": 350
+        }
+      },
+      "elapsedMs": 24940,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 15,
+      "workerThread": "gaokao-luna-page_14",
+      "sourceFile": "2024年高考数学试卷（北京）（解析卷）.pdf",
+      "page": 11,
+      "usage": {
+        "prompt_tokens": 994,
+        "completion_tokens": 747,
+        "total_tokens": 1741,
+        "completion_tokens_details": {
+          "reasoning_tokens": 348
+        }
+      },
+      "elapsedMs": 20713,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 16,
+      "workerThread": "gaokao-luna-page_15",
+      "sourceFile": "2024年高考数学试卷（北京）（解析卷）.pdf",
+      "page": 12,
+      "usage": {
+        "prompt_tokens": 994,
+        "completion_tokens": 1701,
+        "total_tokens": 2695,
+        "completion_tokens_details": {
+          "reasoning_tokens": 791
+        }
+      },
+      "elapsedMs": 40502,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 17,
+      "workerThread": "gaokao-luna-page_16",
+      "sourceFile": "2024年高考数学试卷（北京）（解析卷）.pdf",
+      "page": 13,
+      "usage": {
+        "prompt_tokens": 994,
+        "completion_tokens": 2274,
+        "total_tokens": 3268,
+        "completion_tokens_details": {
+          "reasoning_tokens": 998
+        }
+      },
+      "elapsedMs": 50988,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 18,
+      "workerThread": "gaokao-luna-page_17",
+      "sourceFile": "2024年高考数学试卷（北京）（解析卷）.pdf",
+      "page": 14,
+      "usage": {
+        "prompt_tokens": 994,
+        "completion_tokens": 1526,
+        "total_tokens": 2520,
+        "completion_tokens_details": {
+          "reasoning_tokens": 748
+        }
+      },
+      "elapsedMs": 36715,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 19,
+      "workerThread": "gaokao-luna-page_18",
+      "sourceFile": "2024年高考数学试卷（北京）（解析卷）.pdf",
+      "page": 15,
+      "usage": {
+        "prompt_tokens": 994,
+        "completion_tokens": 2475,
+        "total_tokens": 3469,
+        "completion_tokens_details": {
+          "reasoning_tokens": 1218
+        }
+      },
+      "elapsedMs": 51641,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 20,
+      "workerThread": "gaokao-luna-page_19",
+      "sourceFile": "2024年高考数学试卷（北京）（解析卷）.pdf",
+      "page": 16,
+      "usage": {
+        "prompt_tokens": 994,
+        "completion_tokens": 1045,
+        "total_tokens": 2039,
+        "completion_tokens_details": {
+          "reasoning_tokens": 271
+        }
+      },
+      "elapsedMs": 30713,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 21,
+      "workerThread": "gaokao-luna-page_14",
+      "sourceFile": "2024年高考数学试卷（北京）（解析卷）.pdf",
+      "page": 17,
+      "usage": {
+        "prompt_tokens": 994,
+        "completion_tokens": 2068,
+        "total_tokens": 3062,
+        "completion_tokens_details": {
+          "reasoning_tokens": 1034
+        }
+      },
+      "elapsedMs": 45316,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 22,
+      "workerThread": "gaokao-luna-page_10",
+      "sourceFile": "2024年高考数学试卷（北京）（解析卷）.pdf",
+      "page": 18,
+      "usage": {
+        "prompt_tokens": 994,
+        "completion_tokens": 1158,
+        "total_tokens": 2152,
+        "completion_tokens_details": {
+          "reasoning_tokens": 369
+        }
+      },
+      "elapsedMs": 26104,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 23,
+      "workerThread": "gaokao-luna-page_9",
+      "sourceFile": "2024年高考数学试卷（北京）（解析卷）.pdf",
+      "page": 19,
+      "usage": {
+        "prompt_tokens": 994,
+        "completion_tokens": 1877,
+        "total_tokens": 2871,
+        "completion_tokens_details": {
+          "reasoning_tokens": 516
+        }
+      },
+      "elapsedMs": 45308,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 24,
+      "workerThread": "gaokao-luna-page_5",
+      "sourceFile": "2024年高考数学试卷（北京）（解析卷）.pdf",
+      "page": 20,
+      "usage": {
+        "prompt_tokens": 994,
+        "completion_tokens": 1507,
+        "total_tokens": 2501,
+        "completion_tokens_details": {
+          "reasoning_tokens": 762
+        }
+      },
+      "elapsedMs": 32701,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 25,
+      "workerThread": "gaokao-luna-page_11",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅰ卷）（空白卷）.pdf",
+      "page": 1,
+      "usage": {
+        "prompt_tokens": 999,
+        "completion_tokens": 2172,
+        "total_tokens": 3171,
+        "completion_tokens_details": {
+          "reasoning_tokens": 953
+        }
+      },
+      "elapsedMs": 46015,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 26,
+      "workerThread": "gaokao-luna-page_13",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅰ卷）（空白卷）.pdf",
+      "page": 2,
+      "usage": {
+        "prompt_tokens": 999,
+        "completion_tokens": 3152,
+        "total_tokens": 4151,
+        "completion_tokens_details": {
+          "reasoning_tokens": 1444
+        }
+      },
+      "elapsedMs": 63035,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 27,
+      "workerThread": "gaokao-luna-page_4",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅰ卷）（空白卷）.pdf",
+      "page": 3,
+      "usage": {
+        "prompt_tokens": 999,
+        "completion_tokens": 2728,
+        "total_tokens": 3727,
+        "completion_tokens_details": {
+          "reasoning_tokens": 1034
+        }
+      },
+      "elapsedMs": 55510,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 28,
+      "workerThread": "gaokao-luna-page_7",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅰ卷）（空白卷）.pdf",
+      "page": 4,
+      "usage": {
+        "prompt_tokens": 999,
+        "completion_tokens": 2284,
+        "total_tokens": 3283,
+        "completion_tokens_details": {
+          "reasoning_tokens": 1003
+        }
+      },
+      "elapsedMs": 50204,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 29,
+      "workerThread": "gaokao-luna-page_6",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+      "page": 1,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 850,
+        "total_tokens": 1848,
+        "completion_tokens_details": {
+          "reasoning_tokens": 420
+        }
+      },
+      "elapsedMs": 21912,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 30,
+      "workerThread": "gaokao-luna-page_8",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+      "page": 2,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 1225,
+        "total_tokens": 2223,
+        "completion_tokens_details": {
+          "reasoning_tokens": 297
+        }
+      },
+      "elapsedMs": 28148,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 31,
+      "workerThread": "gaokao-luna-page_19",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+      "page": 3,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 1023,
+        "total_tokens": 2021,
+        "completion_tokens_details": {
+          "reasoning_tokens": 456
+        }
+      },
+      "elapsedMs": 24469,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 32,
+      "workerThread": "gaokao-luna-page_12",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+      "page": 4,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 1199,
+        "total_tokens": 2197,
+        "completion_tokens_details": {
+          "reasoning_tokens": 516
+        }
+      },
+      "elapsedMs": 31232,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 33,
+      "workerThread": "gaokao-luna-page_17",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+      "page": 5,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 2205,
+        "total_tokens": 3203,
+        "completion_tokens_details": {
+          "reasoning_tokens": 975
+        }
+      },
+      "elapsedMs": 43809,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 34,
+      "workerThread": "gaokao-luna-page_15",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+      "page": 6,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 1655,
+        "total_tokens": 2653,
+        "completion_tokens_details": {
+          "reasoning_tokens": 1231
+        }
+      },
+      "elapsedMs": 38832,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 35,
+      "workerThread": "gaokao-luna-page_16",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+      "page": 7,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 795,
+        "total_tokens": 1793,
+        "completion_tokens_details": {
+          "reasoning_tokens": 493
+        }
+      },
+      "elapsedMs": 20222,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 36,
+      "workerThread": "gaokao-luna-page_3",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+      "page": 8,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 469,
+        "total_tokens": 1467,
+        "completion_tokens_details": {
+          "reasoning_tokens": 288
+        }
+      },
+      "elapsedMs": 16272,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 37,
+      "workerThread": "gaokao-luna-page_10",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+      "page": 9,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 1068,
+        "total_tokens": 2066,
+        "completion_tokens_details": {
+          "reasoning_tokens": 515
+        }
+      },
+      "elapsedMs": 24517,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 38,
+      "workerThread": "gaokao-luna-page_18",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+      "page": 10,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 1662,
+        "total_tokens": 2660,
+        "completion_tokens_details": {
+          "reasoning_tokens": 1136
+        }
+      },
+      "elapsedMs": 34606,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 39,
+      "workerThread": "gaokao-luna-page_6",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+      "page": 11,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 1041,
+        "total_tokens": 2039,
+        "completion_tokens_details": {
+          "reasoning_tokens": 686
+        }
+      },
+      "elapsedMs": 27633,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 40,
+      "workerThread": "gaokao-luna-page_2",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+      "page": 12,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 1402,
+        "total_tokens": 2400,
+        "completion_tokens_details": {
+          "reasoning_tokens": 665
+        }
+      },
+      "elapsedMs": 31528,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 41,
+      "workerThread": "gaokao-luna-page_19",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+      "page": 13,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 1621,
+        "total_tokens": 2619,
+        "completion_tokens_details": {
+          "reasoning_tokens": 800
+        }
+      },
+      "elapsedMs": 39007,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 42,
+      "workerThread": "gaokao-luna-page_5",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+      "page": 14,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 2093,
+        "total_tokens": 3091,
+        "completion_tokens_details": {
+          "reasoning_tokens": 1034
+        }
+      },
+      "elapsedMs": 42338,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 43,
+      "workerThread": "gaokao-luna-page_8",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+      "page": 15,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 1294,
+        "total_tokens": 2292,
+        "completion_tokens_details": {
+          "reasoning_tokens": 333
+        }
+      },
+      "elapsedMs": 40688,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 44,
+      "workerThread": "gaokao-luna-page_12",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+      "page": 16,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 1848,
+        "total_tokens": 2846,
+        "completion_tokens_details": {
+          "reasoning_tokens": 866
+        }
+      },
+      "elapsedMs": 39165,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 45,
+      "workerThread": "gaokao-luna-page_14",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+      "page": 17,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 721,
+        "total_tokens": 1719,
+        "completion_tokens_details": {
+          "reasoning_tokens": 381
+        }
+      },
+      "elapsedMs": 19280,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 46,
+      "workerThread": "gaokao-luna-page_0",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+      "page": 18,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 1725,
+        "total_tokens": 2723,
+        "completion_tokens_details": {
+          "reasoning_tokens": 968
+        }
+      },
+      "elapsedMs": 35725,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 47,
+      "workerThread": "gaokao-luna-page_1",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+      "page": 19,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 1284,
+        "total_tokens": 2282,
+        "completion_tokens_details": {
+          "reasoning_tokens": 516
+        }
+      },
+      "elapsedMs": 35676,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 48,
+      "workerThread": "gaokao-luna-page_16",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+      "page": 20,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 2161,
+        "total_tokens": 3159,
+        "completion_tokens_details": {
+          "reasoning_tokens": 900
+        }
+      },
+      "elapsedMs": 44328,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 49,
+      "workerThread": "gaokao-luna-page_3",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+      "page": 21,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 1434,
+        "total_tokens": 2432,
+        "completion_tokens_details": {
+          "reasoning_tokens": 382
+        }
+      },
+      "elapsedMs": 35268,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 50,
+      "workerThread": "gaokao-luna-page_9",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+      "page": 22,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 2245,
+        "total_tokens": 3243,
+        "completion_tokens_details": {
+          "reasoning_tokens": 1034
+        }
+      },
+      "elapsedMs": 52291,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 51,
+      "workerThread": "gaokao-luna-page_11",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+      "page": 23,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 535,
+        "total_tokens": 1533,
+        "completion_tokens_details": {
+          "reasoning_tokens": 308
+        }
+      },
+      "elapsedMs": 14818,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 52,
+      "workerThread": "gaokao-luna-page_15",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（空白卷）.pdf",
+      "page": 1,
+      "usage": {
+        "prompt_tokens": 999,
+        "completion_tokens": 1750,
+        "total_tokens": 2749,
+        "completion_tokens_details": {
+          "reasoning_tokens": 516
+        }
+      },
+      "elapsedMs": 42399,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 53,
+      "workerThread": "gaokao-luna-page_10",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（空白卷）.pdf",
+      "page": 2,
+      "usage": {
+        "prompt_tokens": 999,
+        "completion_tokens": 2845,
+        "total_tokens": 3844,
+        "completion_tokens_details": {
+          "reasoning_tokens": 1034
+        }
+      },
+      "elapsedMs": 64567,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 54,
+      "workerThread": "gaokao-luna-page_17",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（空白卷）.pdf",
+      "page": 3,
+      "usage": {
+        "prompt_tokens": 999,
+        "completion_tokens": 3211,
+        "total_tokens": 4210,
+        "completion_tokens_details": {
+          "reasoning_tokens": 1433
+        }
+      },
+      "elapsedMs": 64129,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 55,
+      "workerThread": "gaokao-luna-page_7",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（空白卷）.pdf",
+      "page": 4,
+      "usage": {
+        "prompt_tokens": 999,
+        "completion_tokens": 2158,
+        "total_tokens": 3157,
+        "completion_tokens_details": {
+          "reasoning_tokens": 817
+        }
+      },
+      "elapsedMs": 43907,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 56,
+      "workerThread": "gaokao-luna-page_4",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+      "page": 1,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 872,
+        "total_tokens": 1870,
+        "completion_tokens_details": {
+          "reasoning_tokens": 451
+        }
+      },
+      "elapsedMs": 24754,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 57,
+      "workerThread": "gaokao-luna-page_6",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+      "page": 2,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 2138,
+        "total_tokens": 3136,
+        "completion_tokens_details": {
+          "reasoning_tokens": 1356
+        }
+      },
+      "elapsedMs": 49212,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 58,
+      "workerThread": "gaokao-luna-page_18",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+      "page": 3,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 1936,
+        "total_tokens": 2934,
+        "completion_tokens_details": {
+          "reasoning_tokens": 662
+        }
+      },
+      "elapsedMs": 45012,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 59,
+      "workerThread": "gaokao-luna-page_13",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+      "page": 4,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 1833,
+        "total_tokens": 2831,
+        "completion_tokens_details": {
+          "reasoning_tokens": 881
+        }
+      },
+      "elapsedMs": 40355,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 60,
+      "workerThread": "gaokao-luna-page_2",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+      "page": 5,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 877,
+        "total_tokens": 1875,
+        "completion_tokens_details": {
+          "reasoning_tokens": 591
+        }
+      },
+      "elapsedMs": 21259,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 61,
+      "workerThread": "gaokao-luna-page_14",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+      "page": 6,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 589,
+        "total_tokens": 1587,
+        "completion_tokens_details": {
+          "reasoning_tokens": 357
+        }
+      },
+      "elapsedMs": 15258,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 62,
+      "workerThread": "gaokao-luna-page_11",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+      "page": 7,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 579,
+        "total_tokens": 1577,
+        "completion_tokens_details": {
+          "reasoning_tokens": 506
+        }
+      },
+      "elapsedMs": 18708,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 63,
+      "workerThread": "gaokao-luna-page_19",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+      "page": 8,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 1604,
+        "total_tokens": 2602,
+        "completion_tokens_details": {
+          "reasoning_tokens": 516
+        }
+      },
+      "elapsedMs": 42326,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 64,
+      "workerThread": "gaokao-luna-page_5",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+      "page": 9,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 659,
+        "total_tokens": 1657,
+        "completion_tokens_details": {
+          "reasoning_tokens": 434
+        }
+      },
+      "elapsedMs": 18209,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 65,
+      "workerThread": "gaokao-luna-page_8",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+      "page": 10,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 1210,
+        "total_tokens": 2208,
+        "completion_tokens_details": {
+          "reasoning_tokens": 817
+        }
+      },
+      "elapsedMs": 27187,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 66,
+      "workerThread": "gaokao-luna-page_0",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+      "page": 11,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 1832,
+        "total_tokens": 2830,
+        "completion_tokens_details": {
+          "reasoning_tokens": 700
+        }
+      },
+      "elapsedMs": 37714,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 67,
+      "workerThread": "gaokao-luna-page_1",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+      "page": 12,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 776,
+        "total_tokens": 1774,
+        "completion_tokens_details": {
+          "reasoning_tokens": 358
+        }
+      },
+      "elapsedMs": 30246,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 68,
+      "workerThread": "gaokao-luna-page_12",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+      "page": 13,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 689,
+        "total_tokens": 1687,
+        "completion_tokens_details": {
+          "reasoning_tokens": 470
+        }
+      },
+      "elapsedMs": 19097,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 69,
+      "workerThread": "gaokao-luna-page_3",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+      "page": 14,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 827,
+        "total_tokens": 1825,
+        "completion_tokens_details": {
+          "reasoning_tokens": 516
+        }
+      },
+      "elapsedMs": 22622,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 70,
+      "workerThread": "gaokao-luna-page_14",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+      "page": 15,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 1172,
+        "total_tokens": 2170,
+        "completion_tokens_details": {
+          "reasoning_tokens": 412
+        }
+      },
+      "elapsedMs": 29783,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 71,
+      "workerThread": "gaokao-luna-page_4",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+      "page": 16,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 585,
+        "total_tokens": 1583,
+        "completion_tokens_details": {
+          "reasoning_tokens": 304
+        }
+      },
+      "elapsedMs": 15787,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 72,
+      "workerThread": "gaokao-luna-page_16",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+      "page": 17,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 1729,
+        "total_tokens": 2727,
+        "completion_tokens_details": {
+          "reasoning_tokens": 1021
+        }
+      },
+      "elapsedMs": 45736,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 73,
+      "workerThread": "gaokao-luna-page_2",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+      "page": 18,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 1609,
+        "total_tokens": 2607,
+        "completion_tokens_details": {
+          "reasoning_tokens": 751
+        }
+      },
+      "elapsedMs": 45800,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 74,
+      "workerThread": "gaokao-luna-page_11",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+      "page": 19,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 2507,
+        "total_tokens": 3505,
+        "completion_tokens_details": {
+          "reasoning_tokens": 1802
+        }
+      },
+      "elapsedMs": 56443,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 75,
+      "workerThread": "gaokao-luna-page_5",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+      "page": 20,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 1567,
+        "total_tokens": 2565,
+        "completion_tokens_details": {
+          "reasoning_tokens": 922
+        }
+      },
+      "elapsedMs": 33199,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 76,
+      "workerThread": "gaokao-luna-page_15",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+      "page": 21,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 2251,
+        "total_tokens": 3249,
+        "completion_tokens_details": {
+          "reasoning_tokens": 1302
+        }
+      },
+      "elapsedMs": 51572,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 77,
+      "workerThread": "gaokao-luna-page_9",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+      "page": 22,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 946,
+        "total_tokens": 1944,
+        "completion_tokens_details": {
+          "reasoning_tokens": 516
+        }
+      },
+      "elapsedMs": 23995,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 78,
+      "workerThread": "gaokao-luna-page_12",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+      "page": 23,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 1827,
+        "total_tokens": 2825,
+        "completion_tokens_details": {
+          "reasoning_tokens": 788
+        }
+      },
+      "elapsedMs": 40615,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 79,
+      "workerThread": "gaokao-luna-page_7",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+      "page": 24,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 1717,
+        "total_tokens": 2715,
+        "completion_tokens_details": {
+          "reasoning_tokens": 570
+        }
+      },
+      "elapsedMs": 37342,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    },
+    {
+      "taskSequence": 80,
+      "workerThread": "gaokao-luna-page_8",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+      "page": 25,
+      "usage": {
+        "prompt_tokens": 998,
+        "completion_tokens": 1789,
+        "total_tokens": 2787,
+        "completion_tokens_details": {
+          "reasoning_tokens": 1714
+        }
+      },
+      "elapsedMs": 37741,
+      "attemptCount": 1,
+      "recoveredFromEvidence": true
+    }
+  ],
+  "evidenceRoot": "/mnt/c/Users/doob/Desktop/code/dev/math_agent_rag/output/gaokao-evidence/2024/runs/luna-2024-20260729T060056Z-143e268d"
+}
