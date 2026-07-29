@@ -16,6 +16,7 @@ import hashlib
 import json
 import mimetypes
 import os
+import random
 import subprocess
 import time
 import threading
@@ -46,16 +47,24 @@ PRIMARY_KEY_FIELD = "id"
 TEXT_FIELD = "text"
 METADATA_FIELD = "metadata"
 PAGE_RENDER_DPI = 180
-RETRIEVAL_LIMIT = 3
+# A recall validation must see through stale duplicate rows from interrupted legacy
+# runs while still keeping the real nearest-neighbour request intentionally small.
+RETRIEVAL_LIMIT = 10
 EMBEDDING_BATCH_SIZE = 10
 DEFAULT_TIMEOUT_GRACE_SECONDS = 5
 LUNA_MAX_ATTEMPTS = 3
-LUNA_RETRY_DELAY_SECONDS = 2
+LUNA_RETRY_INITIAL_DELAY_SECONDS = 2
+LUNA_RETRY_MAX_DELAY_SECONDS = 16
+LUNA_RETRY_JITTER_FRACTION = 0.25
 DEFAULT_GLOBAL_AI_CONCURRENCY = 20
 GLOBAL_AI_CONCURRENCY_ENVIRONMENT_VARIABLE = "MATH_AGENT_AGENT_WORKER_MAX_CONCURRENCY"
 RENDERER_CLASS = "RenderPdfEvidencePage"
 LUNA_NETWORK_CONTAINER = "math-agent-rag-ai-worker-1"
 _renderer_ready = False
+
+
+class NonRetryableLunaError(RuntimeError):
+    """Marks a provider response that must be surfaced immediately, never retried."""
 
 
 def utc_now() -> str:
@@ -175,6 +184,14 @@ def luna_request(image: Path, paper: str, page: int) -> dict[str, Any]:
     }
 
 
+def luna_retry_delay_seconds(completed_attempt: int) -> float:
+    """Returns capped exponential backoff plus jitter so concurrent failed pages do not retry in lockstep."""
+    exponential_delay = min(LUNA_RETRY_MAX_DELAY_SECONDS, LUNA_RETRY_INITIAL_DELAY_SECONDS * (2 ** (completed_attempt - 1)))
+    jitter_low = 1 - LUNA_RETRY_JITTER_FRACTION
+    jitter_high = 1 + LUNA_RETRY_JITTER_FRACTION
+    return round(exponential_delay * random.uniform(jitter_low, jitter_high), 3)
+
+
 def call_luna(request: dict[str, Any], base_url: str, api_key: str, timeout: int, grace_seconds: int,
               configured_page_workers: int) -> tuple[int, dict[str, Any], int, list[dict[str, Any]]]:
     """Makes one visual request from the healthy Docker network with a hard parent-process deadline.
@@ -210,13 +227,17 @@ print(json.dumps({'status': response.status_code, 'body': body, 'elapsedMs': rou
                 return status, body, int(bridge_response["elapsedMs"]), attempts
             retryable = status in {429, 500, 502, 503, 504, 520}
             if not retryable:
-                raise RuntimeError(f"Luna HTTP {status}: {body}")
+                raise NonRetryableLunaError(f"Luna HTTP {status}: {body}")
+        except NonRetryableLunaError:
+            raise
         except (subprocess.TimeoutExpired, TimeoutError, RuntimeError, json.JSONDecodeError) as error:
             attempts.append({"attempt": attempt, "startedAt": started_at, "configuredPageWorkers": configured_page_workers, "errorType": type(error).__name__, "error": str(error)})
             if attempt == LUNA_MAX_ATTEMPTS:
                 raise RuntimeError(f"Luna failed after {LUNA_MAX_ATTEMPTS} attempts: {error}") from error
         if attempt < LUNA_MAX_ATTEMPTS:
-            time.sleep(LUNA_RETRY_DELAY_SECONDS * attempt)
+            retry_delay_seconds = luna_retry_delay_seconds(attempt)
+            attempts[-1]["retryDelaySeconds"] = retry_delay_seconds
+            time.sleep(retry_delay_seconds)
     raise AssertionError("unreachable Luna retry state")
 
 
@@ -238,8 +259,12 @@ def recognized_questions(response: dict[str, Any], source_name: str, page: int) 
         if not isinstance(latex, list):
             latex = []
         text = str(item["text"]).strip()
+        vector_text = text + ("\n" + "\n".join(map(str, latex)) if latex else "")
+        # The key derives only from immutable visual evidence.  A recovery run can
+        # therefore upsert the same question instead of creating a fresh duplicate.
+        stable_identity = f"{source_name}\n{page}\n{item.get('number', '')}\n{vector_text}"
         output.append({
-            "id": str(uuid.uuid4()), "text": text + ("\n" + "\n".join(map(str, latex)) if latex else ""),
+            "id": str(uuid.uuid5(uuid.NAMESPACE_URL, stable_identity)), "text": vector_text,
             "metadata": {"sourceFile": source_name, "page": page, "questionNumber": str(item.get("number", "")), "latex": latex, "confidence": item.get("confidence"), "continuesToNextPage": bool(item.get("continuesToNextPage", False)), "extraction": "LUNA_VISUAL_PAGE"},
         })
     return output
@@ -280,7 +305,13 @@ def milvus_post(uri: str, token: str, path: str, body: dict[str, Any], timeout: 
 
 
 def ensure_collection(uri: str, token: str, collection: str, timeout: int) -> None:
-    """Creates the dedicated 2024 collection once; existing records remain available for idempotent reruns."""
+    """Ensures gaokao_math has its schema and vector index before Milvus loads it.
+
+    Milvus v2 deliberately rejects loading a vector collection without an index.  The
+    index creation is therefore idempotent and runs for both a newly-created
+    collection and an older partially-created collection left by an interrupted run.
+    FLAT/COSINE is used here because the final verification is an exact recall check.
+    """
     exists = milvus_post(uri, token, "/v2/vectordb/collections/has", {"collectionName": collection}, timeout).get("data", {}).get("has", False)
     if not exists:
         schema = {"collectionName": collection, "schema": {"autoId": False, "enableDynamicField": False, "fields": [
@@ -290,6 +321,23 @@ def ensure_collection(uri: str, token: str, collection: str, timeout: int) -> No
             {"fieldName": METADATA_FIELD, "dataType": "JSON"},
         ]}}
         milvus_post(uri, token, "/v2/vectordb/collections/create", schema, timeout)
+    index = {
+        "collectionName": collection,
+        "indexParams": [{
+            "fieldName": VECTOR_FIELD,
+            "indexName": "vector_index",
+            "metricType": "COSINE",
+            "indexType": "FLAT",
+            "params": {},
+        }],
+    }
+    try:
+        milvus_post(uri, token, "/v2/vectordb/indexes/create", index, timeout)
+    except RuntimeError as error:
+        # An earlier successful run owns the same named index; its schema and metric
+        # are the stable gaokao_math contract, so it is safe to retain it.
+        if "exist" not in str(error).lower():
+            raise
     milvus_post(uri, token, "/v2/vectordb/collections/load", {"collectionName": collection}, timeout)
 
 
@@ -385,8 +433,13 @@ def main() -> None:
     milvus_token = setting("MATH_AGENT_MILVUS_TOKEN", dotenv) or ("root:" + setting("MATH_AGENT_MILVUS_ROOT_PASSWORD", dotenv) if setting("MATH_AGENT_MILVUS_ROOT_PASSWORD", dotenv) else "")
     ensure_collection(milvus_uri, milvus_token, arguments.collection, arguments.timeout_seconds)
     entities = [{PRIMARY_KEY_FIELD: item["id"], VECTOR_FIELD: vector, TEXT_FIELD: item["text"], METADATA_FIELD: item["metadata"]} for item, vector in zip(all_questions, vectors, strict=True)]
-    milvus_post(milvus_uri, milvus_token, "/v2/vectordb/entities/insert", {"collectionName": arguments.collection, "data": entities}, arguments.timeout_seconds)
-    milvus_post(milvus_uri, milvus_token, "/v2/vectordb/collections/flush", {"collectionNames": [arguments.collection]}, arguments.timeout_seconds)
+    # Upsert makes evidence recovery idempotent: a repeat never creates a second
+    # vector for the deterministic question key after an interrupted finalization.
+    milvus_post(milvus_uri, milvus_token, "/v2/vectordb/entities/upsert", {"collectionName": arguments.collection, "data": entities}, arguments.timeout_seconds)
+    # Milvus v2's REST FlushReq accepts one collectionName (unlike older SDK APIs
+    # which exposed a plural collectionNames list), so keep this payload versioned
+    # to the same v2 REST contract used by every other operation in this script.
+    milvus_post(milvus_uri, milvus_token, "/v2/vectordb/collections/flush", {"collectionName": arguments.collection}, arguments.timeout_seconds)
     query_vector = embed_all([all_questions[0]["text"]], setting("MATH_AGENT_EMBEDDING_BASE_URL", dotenv, DEFAULT_EMBEDDING_URL), worker_key, arguments.timeout_seconds)[0]
     recalled = milvus_post(milvus_uri, milvus_token, "/v2/vectordb/entities/search", {"collectionName": arguments.collection, "data": [query_vector], "annsField": VECTOR_FIELD, "limit": RETRIEVAL_LIMIT, "outputFields": [PRIMARY_KEY_FIELD, TEXT_FIELD, METADATA_FIELD]}, arguments.timeout_seconds)
     hits = recalled.get("data", [])
