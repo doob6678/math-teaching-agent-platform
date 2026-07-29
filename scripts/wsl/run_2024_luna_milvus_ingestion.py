@@ -11,12 +11,14 @@ from __future__ import annotations
 
 import argparse
 import base64
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import json
 import mimetypes
 import os
 import subprocess
 import time
+import threading
 import uuid
 import zipfile
 from datetime import datetime, timezone
@@ -46,6 +48,8 @@ METADATA_FIELD = "metadata"
 PAGE_RENDER_DPI = 180
 RETRIEVAL_LIMIT = 3
 DEFAULT_TIMEOUT_GRACE_SECONDS = 5
+DEFAULT_GLOBAL_AI_CONCURRENCY = 4
+GLOBAL_AI_CONCURRENCY_ENVIRONMENT_VARIABLE = "MATH_AGENT_AGENT_WORKER_MAX_CONCURRENCY"
 RENDERER_CLASS = "RenderPdfEvidencePage"
 LUNA_NETWORK_CONTAINER = "math-agent-rag-ai-worker-1"
 _renderer_ready = False
@@ -269,6 +273,28 @@ def ensure_collection(uri: str, token: str, collection: str, timeout: int) -> No
     milvus_post(uri, token, "/v2/vectordb/collections/load", {"collectionName": collection}, timeout)
 
 
+def process_page(job: tuple[int, Path, int, Path], run_id: str, settings: dict[str, Any], arguments: argparse.Namespace,
+                 source_root: Path, container_input_root: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Processes one page independently so bounded workers never share page assets, evidence paths, or token rows."""
+    task_sequence, pdf, page, paper_root = job
+    task_started_at = utc_now()
+    original = paper_root / f"page-{page}.png"
+    compressed = paper_root / f"page-{page}-initial-review.jpg"
+    render_page(pdf, page, original, source_root, container_input_root, arguments.evidence_root)
+    compress_for_luna(original, compressed, int(settings["pageInitialReviewMaxLongEdgePixels"]), float(settings["pageInitialReviewJpegQuality"]))
+    request = luna_request(compressed, pdf.name, page)
+    try:
+        status, response, elapsed_ms = call_luna(request, "", "", arguments.timeout_seconds, arguments.timeout_grace_seconds)
+    except Exception as error:
+        failure = {"timestampUtc": utc_now(), "taskSequence": task_sequence, "workerThread": threading.current_thread().name, "taskStartedAt": task_started_at, "runId": run_id, "model": LUNA_MODEL, "sourceFile": pdf.name, "page": page, "request": request, "errorType": type(error).__name__, "error": str(error), "configuredHttpTimeoutSeconds": arguments.timeout_seconds, "configuredProcessGraceSeconds": arguments.timeout_grace_seconds, "credentialHandling": "Authorization was used only for transport and is omitted from evidence."}
+        (paper_root / f"page-{page}-luna-request-failure.json").write_text(json.dumps(failure, ensure_ascii=False, indent=2), encoding="utf-8")
+        raise
+    usage = response.get("usage", {}) if isinstance(response, dict) else {}
+    call_evidence = {"timestampUtc": utc_now(), "taskSequence": task_sequence, "workerThread": threading.current_thread().name, "taskStartedAt": task_started_at, "taskCompletedAt": utc_now(), "runId": run_id, "model": LUNA_MODEL, "sourceFile": pdf.name, "page": page, "image": {"original": str(original), "originalSha256": sha256_file(original), "compressed": str(compressed), "compressedSha256": sha256_file(compressed)}, "request": request, "responseHttpStatus": status, "response": response, "usage": usage, "elapsedMs": elapsed_ms, "credentialHandling": "Authorization was used only for transport and is omitted from evidence."}
+    (paper_root / f"page-{page}-luna-request-response.json").write_text(json.dumps(call_evidence, ensure_ascii=False, indent=2), encoding="utf-8")
+    return recognized_questions(response, pdf.name, page), {"taskSequence": task_sequence, "workerThread": threading.current_thread().name, "sourceFile": pdf.name, "page": page, "usage": usage, "elapsedMs": elapsed_ms}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Process the configured 2024 PDFs through Luna, embeddings and Milvus")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
@@ -276,6 +302,8 @@ def main() -> None:
     parser.add_argument("--collection", default=DEFAULT_COLLECTION)
     parser.add_argument("--timeout-seconds", type=int, default=DEFAULT_TIMEOUT_SECONDS)
     parser.add_argument("--timeout-grace-seconds", type=int, default=DEFAULT_TIMEOUT_GRACE_SECONDS)
+    parser.add_argument("--page-workers", type=int,
+                        help="optional lower per-run cap; it can never exceed the global AI concurrency limit")
     arguments = parser.parse_args()
     config = json.loads(arguments.config.read_text(encoding="utf-8"))
     dotenv = load_dotenv(PROJECT_ROOT / ".env")
@@ -283,6 +311,12 @@ def main() -> None:
     base_url = setting("OPENAI_BASE_URL", dotenv)
     if not api_key or not base_url:
         raise RuntimeError("OPENAI_API_KEY and OPENAI_BASE_URL must be configured before real Luna ingestion")
+    global_ai_concurrency = int(setting(GLOBAL_AI_CONCURRENCY_ENVIRONMENT_VARIABLE, dotenv, str(DEFAULT_GLOBAL_AI_CONCURRENCY)))
+    requested_page_workers = arguments.page_workers or global_ai_concurrency
+    if global_ai_concurrency < 1 or requested_page_workers < 1:
+        raise ValueError("global AI concurrency and --page-workers must be at least one")
+    if requested_page_workers > global_ai_concurrency:
+        raise ValueError(f"--page-workers={requested_page_workers} exceeds global {GLOBAL_AI_CONCURRENCY_ENVIRONMENT_VARIABLE}={global_ai_concurrency}")
     source_root = Path(config["sourceRootWsl"])
     files = [source_root / name for name in config["selectedFileNames"]]
     missing = [str(path) for path in files if not path.is_file()]
@@ -295,25 +329,24 @@ def main() -> None:
     settings = config["lunaVisionOptimization"]
     all_questions: list[dict[str, Any]] = []
     model_calls: list[dict[str, Any]] = []
-    for pdf in files:
-        paper_root = run_root / sha256_file(pdf)
-        for page in range(1, page_count(pdf) + 1):
-            original = paper_root / f"page-{page}.png"
-            compressed = paper_root / f"page-{page}-initial-review.jpg"
-            render_page(pdf, page, original, source_root, config["containerInputRoot"], arguments.evidence_root)
-            compress_for_luna(original, compressed, int(settings["pageInitialReviewMaxLongEdgePixels"]), float(settings["pageInitialReviewJpegQuality"]))
-            request = luna_request(compressed, pdf.name, page)
+    # Compile/extract once before worker dispatch. The renderer cache is read-only afterwards, avoiding a race
+    # while the workers deliberately own different page paths and provider subprocesses.
+    ensure_pdf_renderer()
+    jobs = [(sequence, pdf, page, run_root / sha256_file(pdf)) for sequence, (pdf, page) in enumerate(((pdf, page) for pdf in files for page in range(1, page_count(pdf) + 1)), start=1)]
+    failures: list[str] = []
+    with ThreadPoolExecutor(max_workers=requested_page_workers, thread_name_prefix="gaokao-luna-page") as executor:
+        futures = {executor.submit(process_page, job, run_id, settings, arguments, source_root, config["containerInputRoot"]): job for job in jobs}
+        for future in as_completed(futures):
+            _sequence, pdf, page, _paper_root = futures[future]
             try:
-                status, response, elapsed_ms = call_luna(request, base_url, api_key, arguments.timeout_seconds, arguments.timeout_grace_seconds)
+                questions, model_call = future.result()
+                all_questions.extend(questions)
+                model_calls.append(model_call)
             except Exception as error:
-                failure = {"timestampUtc": utc_now(), "runId": run_id, "model": LUNA_MODEL, "sourceFile": pdf.name, "page": page, "request": request, "errorType": type(error).__name__, "error": str(error), "configuredHttpTimeoutSeconds": arguments.timeout_seconds, "configuredProcessGraceSeconds": arguments.timeout_grace_seconds, "credentialHandling": "Authorization was used only for transport and is omitted from evidence."}
-                (paper_root / f"page-{page}-luna-request-failure.json").write_text(json.dumps(failure, ensure_ascii=False, indent=2), encoding="utf-8")
-                raise
-            usage = response.get("usage", {}) if isinstance(response, dict) else {}
-            call_evidence = {"timestampUtc": utc_now(), "runId": run_id, "model": LUNA_MODEL, "sourceFile": pdf.name, "page": page, "image": {"original": str(original), "originalSha256": sha256_file(original), "compressed": str(compressed), "compressedSha256": sha256_file(compressed)}, "request": request, "responseHttpStatus": status, "response": response, "usage": usage, "elapsedMs": elapsed_ms, "credentialHandling": "Authorization was used only for transport and is omitted from evidence."}
-            (paper_root / f"page-{page}-luna-request-response.json").write_text(json.dumps(call_evidence, ensure_ascii=False, indent=2), encoding="utf-8")
-            model_calls.append({"sourceFile": pdf.name, "page": page, "usage": usage, "elapsedMs": elapsed_ms})
-            all_questions.extend(recognized_questions(response, pdf.name, page))
+                failures.append(f"{pdf.name} page {page}: {error}")
+    if failures:
+        raise RuntimeError("one or more page tasks failed; see page-level failure evidence: " + " | ".join(failures))
+    model_calls.sort(key=lambda call: call["taskSequence"])
     if not all_questions:
         raise RuntimeError("Luna completed but returned no non-empty questions; refusing to create an empty success report")
     worker_key = setting("MATH_AGENT_WORKER_API_KEY", dotenv)
@@ -330,7 +363,7 @@ def main() -> None:
     if not hits or not any(hit.get("id") == all_questions[0]["id"] or hit.get("entity", {}).get(PRIMARY_KEY_FIELD) == all_questions[0]["id"] for hit in hits):
         raise RuntimeError("real Milvus recall did not return the inserted query question")
     totals = {name: sum(int(call["usage"].get(name, 0) or 0) for call in model_calls) for name in ("prompt_tokens", "completion_tokens", "total_tokens")}
-    report = {"timestampUtc": utc_now(), "runId": run_id, "model": LUNA_MODEL, "selectedFileCount": len(files), "lunaCallCount": len(model_calls), "questionCount": len(all_questions), "usage": totals, "collection": arguments.collection, "realRecall": {"queryQuestionId": all_questions[0]["id"], "hitCount": len(hits), "hits": hits}, "modelCalls": model_calls, "evidenceRoot": str(run_root)}
+    report = {"timestampUtc": utc_now(), "runId": run_id, "model": LUNA_MODEL, "selectedFileCount": len(files), "lunaCallCount": len(model_calls), "questionCount": len(all_questions), "usage": totals, "concurrency": {"environmentVariable": GLOBAL_AI_CONCURRENCY_ENVIRONMENT_VARIABLE, "globalLimit": global_ai_concurrency, "effectivePageWorkers": requested_page_workers}, "collection": arguments.collection, "realRecall": {"queryQuestionId": all_questions[0]["id"], "hitCount": len(hits), "hits": hits}, "modelCalls": model_calls, "evidenceRoot": str(run_root)}
     report_path = arguments.evidence_root / f"{run_id}-report.json"
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps({"report": str(report_path), "runId": run_id, "questionCount": len(all_questions), "usage": totals, "recallHitCount": len(hits)}, ensure_ascii=False))
