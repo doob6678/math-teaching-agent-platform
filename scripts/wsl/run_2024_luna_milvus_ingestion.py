@@ -48,6 +48,8 @@ METADATA_FIELD = "metadata"
 PAGE_RENDER_DPI = 180
 RETRIEVAL_LIMIT = 3
 DEFAULT_TIMEOUT_GRACE_SECONDS = 5
+LUNA_MAX_ATTEMPTS = 3
+LUNA_RETRY_DELAY_SECONDS = 2
 DEFAULT_GLOBAL_AI_CONCURRENCY = 10
 GLOBAL_AI_CONCURRENCY_ENVIRONMENT_VARIABLE = "MATH_AGENT_AGENT_WORKER_MAX_CONCURRENCY"
 RENDERER_CLASS = "RenderPdfEvidencePage"
@@ -172,7 +174,7 @@ def luna_request(image: Path, paper: str, page: int) -> dict[str, Any]:
     }
 
 
-def call_luna(request: dict[str, Any], base_url: str, api_key: str, timeout: int, grace_seconds: int) -> tuple[int, dict[str, Any], int]:
+def call_luna(request: dict[str, Any], base_url: str, api_key: str, timeout: int, grace_seconds: int) -> tuple[int, dict[str, Any], int, list[dict[str, Any]]]:
     """Makes one visual request from the healthy Docker network with a hard parent-process deadline.
 
     WSL's direct socket can remain blocked beyond the HTTP library deadline. The worker
@@ -191,21 +193,29 @@ except ValueError:
     body = {'nonJsonBody': response.text}
 print(json.dumps({'status': response.status_code, 'body': body, 'elapsedMs': round((time.perf_counter() - started) * 1000)}, ensure_ascii=False))
 """
-    try:
-        result = subprocess.run(["docker", "exec", "-i", "-e", f"LUNA_HTTP_TIMEOUT_SECONDS={timeout}", LUNA_NETWORK_CONTAINER, "python", "-c", bridge], input=json.dumps(request, ensure_ascii=False), capture_output=True, text=True, encoding="utf-8", timeout=timeout + grace_seconds, check=False)
-    except subprocess.TimeoutExpired as error:
-        raise TimeoutError(f"Luna bridge exceeded the {timeout}s HTTP limit and {grace_seconds}s process grace period") from error
-    if result.returncode != 0:
-        raise RuntimeError(f"Luna Docker bridge failed: {result.stderr.strip()}")
-    try:
-        bridge_response = json.loads(result.stdout)
-    except json.JSONDecodeError as error:
-        raise RuntimeError(f"Luna Docker bridge emitted invalid JSON: {result.stdout[:1000]}") from error
-    status = int(bridge_response["status"])
-    body = bridge_response["body"]
-    if not 200 <= status < 300:
-        raise RuntimeError(f"Luna HTTP {status}: {body}")
-    return status, body, int(bridge_response["elapsedMs"])
+    attempts: list[dict[str, Any]] = []
+    for attempt in range(1, LUNA_MAX_ATTEMPTS + 1):
+        started_at = utc_now()
+        try:
+            result = subprocess.run(["docker", "exec", "-i", "-e", f"LUNA_HTTP_TIMEOUT_SECONDS={timeout}", LUNA_NETWORK_CONTAINER, "python", "-c", bridge], input=json.dumps(request, ensure_ascii=False), capture_output=True, text=True, encoding="utf-8", timeout=timeout + grace_seconds, check=False)
+            if result.returncode != 0:
+                raise RuntimeError(f"Luna Docker bridge failed: {result.stderr.strip()}")
+            bridge_response = json.loads(result.stdout)
+            status = int(bridge_response["status"])
+            body = bridge_response["body"]
+            attempts.append({"attempt": attempt, "startedAt": started_at, "httpStatus": status, "response": body, "elapsedMs": int(bridge_response["elapsedMs"])})
+            if 200 <= status < 300:
+                return status, body, int(bridge_response["elapsedMs"]), attempts
+            retryable = status in {429, 500, 502, 503, 504, 520}
+            if not retryable:
+                raise RuntimeError(f"Luna HTTP {status}: {body}")
+        except (subprocess.TimeoutExpired, TimeoutError, RuntimeError, json.JSONDecodeError) as error:
+            attempts.append({"attempt": attempt, "startedAt": started_at, "errorType": type(error).__name__, "error": str(error)})
+            if attempt == LUNA_MAX_ATTEMPTS:
+                raise RuntimeError(f"Luna failed after {LUNA_MAX_ATTEMPTS} attempts: {error}") from error
+        if attempt < LUNA_MAX_ATTEMPTS:
+            time.sleep(LUNA_RETRY_DELAY_SECONDS * attempt)
+    raise AssertionError("unreachable Luna retry state")
 
 
 def recognized_questions(response: dict[str, Any], source_name: str, page: int) -> list[dict[str, Any]]:
@@ -284,15 +294,15 @@ def process_page(job: tuple[int, Path, int, Path], run_id: str, settings: dict[s
     compress_for_luna(original, compressed, int(settings["pageInitialReviewMaxLongEdgePixels"]), float(settings["pageInitialReviewJpegQuality"]))
     request = luna_request(compressed, pdf.name, page)
     try:
-        status, response, elapsed_ms = call_luna(request, "", "", arguments.timeout_seconds, arguments.timeout_grace_seconds)
+        status, response, elapsed_ms, attempts = call_luna(request, "", "", arguments.timeout_seconds, arguments.timeout_grace_seconds)
     except Exception as error:
         failure = {"timestampUtc": utc_now(), "taskSequence": task_sequence, "workerThread": threading.current_thread().name, "taskStartedAt": task_started_at, "runId": run_id, "model": LUNA_MODEL, "sourceFile": pdf.name, "page": page, "request": request, "errorType": type(error).__name__, "error": str(error), "configuredHttpTimeoutSeconds": arguments.timeout_seconds, "configuredProcessGraceSeconds": arguments.timeout_grace_seconds, "credentialHandling": "Authorization was used only for transport and is omitted from evidence."}
         (paper_root / f"page-{page}-luna-request-failure.json").write_text(json.dumps(failure, ensure_ascii=False, indent=2), encoding="utf-8")
         raise
     usage = response.get("usage", {}) if isinstance(response, dict) else {}
-    call_evidence = {"timestampUtc": utc_now(), "taskSequence": task_sequence, "workerThread": threading.current_thread().name, "taskStartedAt": task_started_at, "taskCompletedAt": utc_now(), "runId": run_id, "model": LUNA_MODEL, "sourceFile": pdf.name, "page": page, "image": {"original": str(original), "originalSha256": sha256_file(original), "compressed": str(compressed), "compressedSha256": sha256_file(compressed)}, "request": request, "responseHttpStatus": status, "response": response, "usage": usage, "elapsedMs": elapsed_ms, "credentialHandling": "Authorization was used only for transport and is omitted from evidence."}
+    call_evidence = {"timestampUtc": utc_now(), "taskSequence": task_sequence, "workerThread": threading.current_thread().name, "taskStartedAt": task_started_at, "taskCompletedAt": utc_now(), "runId": run_id, "model": LUNA_MODEL, "sourceFile": pdf.name, "page": page, "image": {"original": str(original), "originalSha256": sha256_file(original), "compressed": str(compressed), "compressedSha256": sha256_file(compressed)}, "request": request, "responseHttpStatus": status, "response": response, "usage": usage, "elapsedMs": elapsed_ms, "attempts": attempts, "credentialHandling": "Authorization was used only for transport and is omitted from evidence."}
     (paper_root / f"page-{page}-luna-request-response.json").write_text(json.dumps(call_evidence, ensure_ascii=False, indent=2), encoding="utf-8")
-    return recognized_questions(response, pdf.name, page), {"taskSequence": task_sequence, "workerThread": threading.current_thread().name, "sourceFile": pdf.name, "page": page, "usage": usage, "elapsedMs": elapsed_ms}
+    return recognized_questions(response, pdf.name, page), {"taskSequence": task_sequence, "workerThread": threading.current_thread().name, "sourceFile": pdf.name, "page": page, "usage": usage, "elapsedMs": elapsed_ms, "attemptCount": len(attempts)}
 
 
 def main() -> None:
