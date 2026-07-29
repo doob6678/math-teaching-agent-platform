@@ -47,6 +47,7 @@ TEXT_FIELD = "text"
 METADATA_FIELD = "metadata"
 PAGE_RENDER_DPI = 180
 RETRIEVAL_LIMIT = 3
+EMBEDDING_BATCH_SIZE = 10
 DEFAULT_TIMEOUT_GRACE_SECONDS = 5
 LUNA_MAX_ATTEMPTS = 3
 LUNA_RETRY_DELAY_SECONDS = 2
@@ -255,6 +256,14 @@ def embed(texts: list[str], url: str, api_key: str, timeout: int) -> list[list[f
     return vectors
 
 
+def embed_all(texts: list[str], url: str, api_key: str, timeout: int) -> list[list[float]]:
+    """Batches real embedding requests to keep the worker payload bounded while preserving insertion order."""
+    vectors: list[list[float]] = []
+    for start in range(0, len(texts), EMBEDDING_BATCH_SIZE):
+        vectors.extend(embed(texts[start:start + EMBEDDING_BATCH_SIZE], url, api_key, timeout))
+    return vectors
+
+
 def milvus_post(uri: str, token: str, path: str, body: dict[str, Any], timeout: int) -> dict[str, Any]:
     """Calls Milvus REST and fails on its explicit status code rather than treating an HTTP 200 error object as success."""
     headers = {"Content-Type": "application/json"}
@@ -315,6 +324,7 @@ def main() -> None:
     parser.add_argument("--timeout-grace-seconds", type=int, default=DEFAULT_TIMEOUT_GRACE_SECONDS)
     parser.add_argument("--page-workers", type=int,
                         help="optional lower per-run cap; it can never exceed the global AI concurrency limit")
+    parser.add_argument("--finalize-run-id", help="resume only the embedding, Milvus and recall stages from durable page evidence")
     arguments = parser.parse_args()
     config = json.loads(arguments.config.read_text(encoding="utf-8"))
     dotenv = load_dotenv(PROJECT_ROOT / ".env")
@@ -333,42 +343,51 @@ def main() -> None:
     missing = [str(path) for path in files if not path.is_file()]
     if missing:
         raise RuntimeError(f"configured 2024 source PDFs are missing: {missing}")
-    run_id = f"luna-2024-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}"
+    run_id = arguments.finalize_run_id or f"luna-2024-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}"
     run_root = arguments.evidence_root / "runs" / run_id
     if arguments.evidence_root.resolve() != DEFAULT_EVIDENCE_ROOT.resolve():
         raise ValueError("--evidence-root must remain the mounted project output/gaokao-evidence/2024 directory")
     settings = config["lunaVisionOptimization"]
     all_questions: list[dict[str, Any]] = []
     model_calls: list[dict[str, Any]] = []
-    # Compile/extract once before worker dispatch. The renderer cache is read-only afterwards, avoiding a race
-    # while the workers deliberately own different page paths and provider subprocesses.
-    ensure_pdf_renderer()
-    jobs = [(sequence, pdf, page, run_root / sha256_file(pdf)) for sequence, (pdf, page) in enumerate(((pdf, page) for pdf in files for page in range(1, page_count(pdf) + 1)), start=1)]
-    failures: list[str] = []
-    with ThreadPoolExecutor(max_workers=requested_page_workers, thread_name_prefix="gaokao-luna-page") as executor:
-        futures = {executor.submit(process_page, job, run_id, settings, arguments, source_root, config["containerInputRoot"], requested_page_workers): job for job in jobs}
-        for future in as_completed(futures):
-            _sequence, pdf, page, _paper_root = futures[future]
-            try:
-                questions, model_call = future.result()
-                all_questions.extend(questions)
-                model_calls.append(model_call)
-            except Exception as error:
-                failures.append(f"{pdf.name} page {page}: {error}")
-    if failures:
-        raise RuntimeError("one or more page tasks failed; see page-level failure evidence: " + " | ".join(failures))
+    if arguments.finalize_run_id:
+        evidence_files = sorted(run_root.rglob("*-luna-request-response.json"))
+        if not evidence_files:
+            raise RuntimeError(f"no durable Luna response evidence exists for run {run_id}")
+        for evidence_file in evidence_files:
+            evidence = json.loads(evidence_file.read_text(encoding="utf-8"))
+            all_questions.extend(recognized_questions(evidence["response"], evidence["sourceFile"], int(evidence["page"])))
+            model_calls.append({"taskSequence": evidence.get("taskSequence"), "workerThread": evidence.get("workerThread"), "sourceFile": evidence["sourceFile"], "page": evidence["page"], "usage": evidence.get("usage", {}), "elapsedMs": evidence.get("elapsedMs"), "attemptCount": len(evidence.get("attempts", [])), "recoveredFromEvidence": True})
+    else:
+        # Compile/extract once before worker dispatch. The renderer cache is read-only afterwards, avoiding a race
+        # while the workers deliberately own different page paths and provider subprocesses.
+        ensure_pdf_renderer()
+        jobs = [(sequence, pdf, page, run_root / sha256_file(pdf)) for sequence, (pdf, page) in enumerate(((pdf, page) for pdf in files for page in range(1, page_count(pdf) + 1)), start=1)]
+        failures: list[str] = []
+        with ThreadPoolExecutor(max_workers=requested_page_workers, thread_name_prefix="gaokao-luna-page") as executor:
+            futures = {executor.submit(process_page, job, run_id, settings, arguments, source_root, config["containerInputRoot"], requested_page_workers): job for job in jobs}
+            for future in as_completed(futures):
+                _sequence, pdf, page, _paper_root = futures[future]
+                try:
+                    questions, model_call = future.result()
+                    all_questions.extend(questions)
+                    model_calls.append(model_call)
+                except Exception as error:
+                    failures.append(f"{pdf.name} page {page}: {error}")
+        if failures:
+            raise RuntimeError("one or more page tasks failed; see page-level failure evidence: " + " | ".join(failures))
     model_calls.sort(key=lambda call: call["taskSequence"])
     if not all_questions:
         raise RuntimeError("Luna completed but returned no non-empty questions; refusing to create an empty success report")
     worker_key = setting("MATH_AGENT_WORKER_API_KEY", dotenv)
-    vectors = embed([item["text"] for item in all_questions], setting("MATH_AGENT_EMBEDDING_BASE_URL", dotenv, DEFAULT_EMBEDDING_URL), worker_key, arguments.timeout_seconds)
+    vectors = embed_all([item["text"] for item in all_questions], setting("MATH_AGENT_EMBEDDING_BASE_URL", dotenv, DEFAULT_EMBEDDING_URL), worker_key, arguments.timeout_seconds)
     milvus_uri = setting("MATH_AGENT_VECTOR_INDEX_MILVUS_URI", dotenv, DEFAULT_MILVUS_URI)
     milvus_token = setting("MATH_AGENT_MILVUS_TOKEN", dotenv) or ("root:" + setting("MATH_AGENT_MILVUS_ROOT_PASSWORD", dotenv) if setting("MATH_AGENT_MILVUS_ROOT_PASSWORD", dotenv) else "")
     ensure_collection(milvus_uri, milvus_token, arguments.collection, arguments.timeout_seconds)
     entities = [{PRIMARY_KEY_FIELD: item["id"], VECTOR_FIELD: vector, TEXT_FIELD: item["text"], METADATA_FIELD: item["metadata"]} for item, vector in zip(all_questions, vectors, strict=True)]
     milvus_post(milvus_uri, milvus_token, "/v2/vectordb/entities/insert", {"collectionName": arguments.collection, "data": entities}, arguments.timeout_seconds)
     milvus_post(milvus_uri, milvus_token, "/v2/vectordb/collections/flush", {"collectionNames": [arguments.collection]}, arguments.timeout_seconds)
-    query_vector = embed([all_questions[0]["text"]], setting("MATH_AGENT_EMBEDDING_BASE_URL", dotenv, DEFAULT_EMBEDDING_URL), worker_key, arguments.timeout_seconds)[0]
+    query_vector = embed_all([all_questions[0]["text"]], setting("MATH_AGENT_EMBEDDING_BASE_URL", dotenv, DEFAULT_EMBEDDING_URL), worker_key, arguments.timeout_seconds)[0]
     recalled = milvus_post(milvus_uri, milvus_token, "/v2/vectordb/entities/search", {"collectionName": arguments.collection, "data": [query_vector], "annsField": VECTOR_FIELD, "limit": RETRIEVAL_LIMIT, "outputFields": [PRIMARY_KEY_FIELD, TEXT_FIELD, METADATA_FIELD]}, arguments.timeout_seconds)
     hits = recalled.get("data", [])
     if not hits or not any(hit.get("id") == all_questions[0]["id"] or hit.get("entity", {}).get(PRIMARY_KEY_FIELD) == all_questions[0]["id"] for hit in hits):
