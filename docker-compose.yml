@@ -170,14 +170,14 @@ services:
       MATH_AGENT_AGENT_WORKER_DISPATCH_ENABLED: "true"
       MATH_AGENT_AGENT_WORKER_RUNTIME_ENABLED: "true"
       MATH_AGENT_AGENT_WORKER_ID: ${MATH_AGENT_AGENT_WORKER_ID:-compose-agent-worker}
-      # Three writers form one independent barrier; keep worker consumption aligned with this bounded fan-out.
-      MATH_AGENT_AGENT_WORKER_MAX_CONCURRENCY: ${MATH_AGENT_AGENT_WORKER_MAX_CONCURRENCY:-3}
+      # Keep worker consumption aligned with the documented deployment-wide concurrency budget.
+      MATH_AGENT_AGENT_WORKER_MAX_CONCURRENCY: ${MATH_AGENT_AGENT_WORKER_MAX_CONCURRENCY:-20}
       # A provider total-timeout is a terminal observation for this workflow run.  Persist the failed stage and let
       # the UI resume only that stage after the relay recovers; automatic repeats otherwise multiply a 180s wait.
       MATH_AGENT_AGENT_WORKER_MAXIMUM_ATTEMPTS: ${MATH_AGENT_AGENT_WORKER_MAXIMUM_ATTEMPTS:-1}
       MATH_AGENT_EMBEDDING_BASE_URL: http://ai-worker:8091/v1
       MATH_AGENT_EMBEDDING_API_KEY: ${MATH_AGENT_WORKER_API_KEY:?set in .env}
-      MATH_AGENT_EMBEDDING_MODEL: local_bge_embedding
+      MATH_AGENT_EMBEDDING_MODEL: ${MATH_AGENT_EMBEDDING_MODEL:-local_bge_embedding}
       MATH_AGENT_EMBEDDING_BATCH_SIZE: ${MATH_AGENT_EMBEDDING_BATCH_SIZE:-10}
       MATH_AGENT_TEACHER_IMAGE_CLIP_ENABLED: "true"
       MATH_AGENT_PROCESSED_BOOKS_ROOT: /app/data/textbooks

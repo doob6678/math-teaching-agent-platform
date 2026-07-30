@@ -2,6 +2,8 @@ fastapi>=0.116,<1
 uvicorn[standard]>=0.35,<1
 pydantic>=2,<3
 requests>=2.32,<3
+# The audited gaokao runner reads physical PDF page counts before rendering each source page.
+pypdf>=5,<7
 pymysql>=1.1,<2
 pillow>=11,<13
 numpy>=2,<3

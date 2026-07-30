@@ -174,10 +174,10 @@ math-agent:
     textbook-timeout-ms: 120000
     textbook-corpus-version: textbook-section-c2-milvus-v1
     # The local worker proxies the configured embedding provider. Runtime images intentionally exclude the
-    # heavyweight local BGE dependency, so text-embedding-v4 is the deployable default and remains 512-dimensional.
+    # The Compose worker serves this local BGE model in the same 512-dimensional vector space as Milvus.
     embedding-base-url: ${MATH_AGENT_EMBEDDING_BASE_URL:http://127.0.0.1:8091/v1}
     embedding-api-key: ${MATH_AGENT_EMBEDDING_API_KEY:${MATH_AGENT_WORKER_API_KEY:}}
-    embedding-model: ${MATH_AGENT_EMBEDDING_MODEL:text-embedding-v4}
+    embedding-model: ${MATH_AGENT_EMBEDDING_MODEL:local_bge_embedding}
     # DashScope's compatible endpoint accepts at most ten input strings per request; keeping this configurable lets
     # another provider raise or lower the limit without changing indexing code.
     embedding-batch-size: ${MATH_AGENT_EMBEDDING_BATCH_SIZE:10}

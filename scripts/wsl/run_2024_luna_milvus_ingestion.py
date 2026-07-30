@@ -17,6 +17,7 @@ import json
 import mimetypes
 import os
 import random
+import re
 import subprocess
 import time
 import threading
@@ -37,7 +38,7 @@ DEFAULT_CONFIG = PROJECT_ROOT / "config" / "gaokao-ingestion-2024.json"
 DEFAULT_EVIDENCE_ROOT = PROJECT_ROOT / "output" / "gaokao-evidence" / "2024"
 LUNA_MODEL = "gpt-5.6-luna"
 DEFAULT_TIMEOUT_SECONDS = 120
-DEFAULT_EMBEDDING_MODEL = "text-embedding-v4"
+DEFAULT_EMBEDDING_MODEL = "local_bge_embedding"
 DEFAULT_EMBEDDING_URL = "http://127.0.0.1:8092/v1/embeddings"
 DEFAULT_MILVUS_URI = "http://127.0.0.1:19531"
 DEFAULT_COLLECTION = "gaokao_math"
@@ -59,8 +60,8 @@ LUNA_RETRY_JITTER_FRACTION = 0.25
 DEFAULT_GLOBAL_AI_CONCURRENCY = 20
 GLOBAL_AI_CONCURRENCY_ENVIRONMENT_VARIABLE = "MATH_AGENT_AGENT_WORKER_MAX_CONCURRENCY"
 RENDERER_CLASS = "RenderPdfEvidencePage"
-LUNA_NETWORK_CONTAINER = "math-agent-rag-ai-worker-1"
 _renderer_ready = False
+FRACTION_SLASH_PATTERN = re.compile(r"(?<!\\\\)\b(?:[A-Za-z0-9)}]+)\s*/\s*(?:[A-Za-z0-9({]+)\b")
 
 
 class NonRetryableLunaError(RuntimeError):
@@ -192,15 +193,15 @@ def luna_retry_delay_seconds(completed_attempt: int) -> float:
     return round(exponential_delay * random.uniform(jitter_low, jitter_high), 3)
 
 
-def call_luna(request: dict[str, Any], base_url: str, api_key: str, timeout: int, grace_seconds: int,
-              configured_page_workers: int) -> tuple[int, dict[str, Any], int, list[dict[str, Any]]]:
+def call_luna(request: dict[str, Any], timeout: int, grace_seconds: int, configured_page_workers: int,
+               bridge_container: str) -> tuple[int, dict[str, Any], int, list[dict[str, Any]]]:
     """Makes one visual request from the healthy Docker network with a hard parent-process deadline.
 
     WSL's direct socket can remain blocked beyond the HTTP library deadline. The worker
     already has the configured provider secret and Docker DNS route; this bridge gets an
     unconditional subprocess deadline. Calls remain serial, not a page worker pool.
     """
-    if timeout < 1 or grace_seconds < 0:
+    if timeout < 1 or grace_seconds < 0 or not bridge_container.strip():
         raise ValueError("provider timeout must be positive and grace seconds cannot be negative")
     bridge = """import json, os, sys, time, requests
 request = json.load(sys.stdin)
@@ -216,7 +217,9 @@ print(json.dumps({'status': response.status_code, 'body': body, 'elapsedMs': rou
     for attempt in range(1, LUNA_MAX_ATTEMPTS + 1):
         started_at = utc_now()
         try:
-            result = subprocess.run(["docker", "exec", "-i", "-e", f"LUNA_HTTP_TIMEOUT_SECONDS={timeout}", LUNA_NETWORK_CONTAINER, "python", "-c", bridge], input=json.dumps(request, ensure_ascii=False), capture_output=True, text=True, encoding="utf-8", timeout=timeout + grace_seconds, check=False)
+            # The bridge target is deployment configuration, never a Compose-generated container name. This keeps
+            # the runner usable with another project name, replicated worker, or an explicitly selected worker.
+            result = subprocess.run(["docker", "exec", "-i", "-e", f"LUNA_HTTP_TIMEOUT_SECONDS={timeout}", bridge_container, "python", "-c", bridge], input=json.dumps(request, ensure_ascii=False), capture_output=True, text=True, encoding="utf-8", timeout=timeout + grace_seconds, check=False)
             if result.returncode != 0:
                 raise RuntimeError(f"Luna Docker bridge failed: {result.stderr.strip()}")
             bridge_response = json.loads(result.stdout)
@@ -258,6 +261,10 @@ def recognized_questions(response: dict[str, Any], source_name: str, page: int) 
         latex = item.get("latex", [])
         if not isinstance(latex, list):
             latex = []
+        latex = [str(value).strip() for value in latex if str(value).strip()]
+        for formula in latex:
+            if FRACTION_SLASH_PATTERN.search(formula):
+                raise RuntimeError("Luna latex fraction must use \\frac{numerator}{denominator}, not slash notation")
         text = str(item["text"]).strip()
         vector_text = text + ("\n" + "\n".join(map(str, latex)) if latex else "")
         # The key derives only from immutable visual evidence.  A recovery run can
@@ -265,9 +272,43 @@ def recognized_questions(response: dict[str, Any], source_name: str, page: int) 
         stable_identity = f"{source_name}\n{page}\n{item.get('number', '')}\n{vector_text}"
         output.append({
             "id": str(uuid.uuid5(uuid.NAMESPACE_URL, stable_identity)), "text": vector_text,
-            "metadata": {"sourceFile": source_name, "page": page, "questionNumber": str(item.get("number", "")), "latex": latex, "confidence": item.get("confidence"), "continuesToNextPage": bool(item.get("continuesToNextPage", False)), "extraction": "LUNA_VISUAL_PAGE"},
+            "metadata": {"sourceFile": source_name, "page": page, "pageStart": page, "pageEnd": page, "questionNumber": str(item.get("number", "")).strip(), "latex": latex, "confidence": item.get("confidence"), "continuesToNextPage": bool(item.get("continuesToNextPage", False)), "extraction": "LUNA_VISUAL_PAGE"},
         })
     return output
+
+
+def merge_cross_page_questions(questions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Joins only an explicitly flagged page tail to an unnumbered next-page fragment from the same PDF.
+
+    A new printed number is authoritative evidence of a distinct question, so it is never merged even when Luna
+    incorrectly marked the previous page as continuing. The merged identity is recalculated from its full evidence.
+    """
+    ordered = sorted(questions, key=lambda item: (str(item["metadata"].get("sourceFile", "")), int(item["metadata"].get("pageStart", item["metadata"].get("page", 0))), str(item["id"])))
+    merged: list[dict[str, Any]] = []
+    for current in ordered:
+        metadata = current["metadata"]
+        if merged:
+            previous = merged[-1]
+            previous_metadata = previous["metadata"]
+            can_merge = (
+                previous_metadata.get("sourceFile") == metadata.get("sourceFile")
+                and bool(previous_metadata.get("continuesToNextPage"))
+                and not str(metadata.get("questionNumber", "")).strip()
+                and int(metadata.get("pageStart", metadata.get("page", 0))) == int(previous_metadata.get("pageEnd", previous_metadata.get("page", 0))) + 1
+            )
+            if can_merge:
+                combined_latex = list(previous_metadata.get("latex", [])) + list(metadata.get("latex", []))
+                combined_text = "\n".join(part for part in [previous["text"], current["text"], *combined_latex[len(previous_metadata.get("latex", [])):]] if part)
+                previous["text"] = combined_text
+                previous_metadata["latex"] = combined_latex
+                previous_metadata.setdefault("pageStart", previous_metadata.get("page"))
+                previous_metadata["pageEnd"] = metadata.get("pageEnd", metadata.get("page"))
+                previous_metadata["continuesToNextPage"] = bool(metadata.get("continuesToNextPage"))
+                identity = f"{previous_metadata['sourceFile']}\n{previous_metadata['pageStart']}\n{previous_metadata['pageEnd']}\n{previous_metadata.get('questionNumber', '')}\n{combined_text}"
+                previous["id"] = str(uuid.uuid5(uuid.NAMESPACE_URL, identity))
+                continue
+        merged.append({"id": current["id"], "text": current["text"], "metadata": dict(metadata)})
+    return merged
 
 
 def embed(texts: list[str], url: str, api_key: str, timeout: int) -> list[list[float]]:
@@ -352,7 +393,7 @@ def process_page(job: tuple[int, Path, int, Path], run_id: str, settings: dict[s
     compress_for_luna(original, compressed, int(settings["pageInitialReviewMaxLongEdgePixels"]), float(settings["pageInitialReviewJpegQuality"]))
     request = luna_request(compressed, pdf.name, page)
     try:
-        status, response, elapsed_ms, attempts = call_luna(request, "", "", arguments.timeout_seconds, arguments.timeout_grace_seconds, configured_page_workers)
+        status, response, elapsed_ms, attempts = call_luna(request, arguments.timeout_seconds, arguments.timeout_grace_seconds, configured_page_workers, arguments.luna_bridge_container)
     except Exception as error:
         failure = {"timestampUtc": utc_now(), "taskSequence": task_sequence, "workerThread": threading.current_thread().name, "taskStartedAt": task_started_at, "runId": run_id, "model": LUNA_MODEL, "sourceFile": pdf.name, "page": page, "request": request, "errorType": type(error).__name__, "error": str(error), "configuredHttpTimeoutSeconds": arguments.timeout_seconds, "configuredProcessGraceSeconds": arguments.timeout_grace_seconds, "credentialHandling": "Authorization was used only for transport and is omitted from evidence."}
         (paper_root / f"page-{page}-luna-request-failure.json").write_text(json.dumps(failure, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -371,7 +412,9 @@ def main() -> None:
     parser.add_argument("--timeout-seconds", type=int, default=DEFAULT_TIMEOUT_SECONDS)
     parser.add_argument("--timeout-grace-seconds", type=int, default=DEFAULT_TIMEOUT_GRACE_SECONDS)
     parser.add_argument("--page-workers", type=int,
-                        help="optional lower per-run cap; it can never exceed the global AI concurrency limit")
+                        help="optional lower per-run cap; it is local process capacity, not a distributed quota")
+    parser.add_argument("--luna-bridge-container",
+                        help="Docker container that has the provider network and credentials; defaults to MATH_AGENT_LUNA_BRIDGE_CONTAINER")
     parser.add_argument("--finalize-run-id", help="resume only the embedding, Milvus and recall stages from durable page evidence")
     arguments = parser.parse_args()
     config = json.loads(arguments.config.read_text(encoding="utf-8"))
@@ -380,6 +423,9 @@ def main() -> None:
     base_url = setting("OPENAI_BASE_URL", dotenv)
     if not api_key or not base_url:
         raise RuntimeError("OPENAI_API_KEY and OPENAI_BASE_URL must be configured before real Luna ingestion")
+    arguments.luna_bridge_container = arguments.luna_bridge_container or setting("MATH_AGENT_LUNA_BRIDGE_CONTAINER", dotenv)
+    if not arguments.luna_bridge_container:
+        raise RuntimeError("MATH_AGENT_LUNA_BRIDGE_CONTAINER or --luna-bridge-container must name the configured Docker bridge container")
     global_ai_concurrency = int(setting(GLOBAL_AI_CONCURRENCY_ENVIRONMENT_VARIABLE, dotenv, str(DEFAULT_GLOBAL_AI_CONCURRENCY)))
     requested_page_workers = arguments.page_workers or global_ai_concurrency
     if global_ai_concurrency < 1 or requested_page_workers < 1:
@@ -399,14 +445,31 @@ def main() -> None:
     all_questions: list[dict[str, Any]] = []
     model_calls: list[dict[str, Any]] = []
     if arguments.finalize_run_id:
+        manifest_path = run_root / "run-manifest.json"
+        if not manifest_path.is_file():
+            raise RuntimeError(f"run {run_id} has no source-bound manifest; refuse unsafe evidence recovery")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        expected_config_hash = hashlib.sha256(arguments.config.read_bytes()).hexdigest()
+        expected_sources = {path.name: sha256_file(path) for path in files}
+        if manifest.get("configSha256") != expected_config_hash or manifest.get("sources") != expected_sources:
+            raise RuntimeError("recovery evidence does not match the configured source PDFs and ingestion configuration")
         evidence_files = sorted(run_root.rglob("*-luna-request-response.json"))
         if not evidence_files:
             raise RuntimeError(f"no durable Luna response evidence exists for run {run_id}")
         for evidence_file in evidence_files:
             evidence = json.loads(evidence_file.read_text(encoding="utf-8"))
+            original = Path(evidence["image"]["original"])
+            compressed = Path(evidence["image"]["compressed"])
+            if (not original.is_file() or not compressed.is_file()
+                    or sha256_file(original) != evidence["image"].get("originalSha256")
+                    or sha256_file(compressed) != evidence["image"].get("compressedSha256")):
+                raise RuntimeError(f"recovery evidence image hash validation failed: {evidence_file}")
             all_questions.extend(recognized_questions(evidence["response"], evidence["sourceFile"], int(evidence["page"])))
             model_calls.append({"taskSequence": evidence.get("taskSequence"), "workerThread": evidence.get("workerThread"), "sourceFile": evidence["sourceFile"], "page": evidence["page"], "usage": evidence.get("usage", {}), "elapsedMs": evidence.get("elapsedMs"), "attemptCount": len(evidence.get("attempts", [])), "recoveredFromEvidence": True})
     else:
+        run_root.mkdir(parents=True, exist_ok=False)
+        # This immutable manifest binds later --finalize-run-id execution to the exact input PDF bytes and policy.
+        (run_root / "run-manifest.json").write_text(json.dumps({"runId": run_id, "configSha256": hashlib.sha256(arguments.config.read_bytes()).hexdigest(), "sources": {path.name: sha256_file(path) for path in files}}, ensure_ascii=False, indent=2), encoding="utf-8")
         # Compile/extract once before worker dispatch. The renderer cache is read-only afterwards, avoiding a race
         # while the workers deliberately own different page paths and provider subprocesses.
         ensure_pdf_renderer()
@@ -425,6 +488,7 @@ def main() -> None:
         if failures:
             raise RuntimeError("one or more page tasks failed; see page-level failure evidence: " + " | ".join(failures))
     model_calls.sort(key=lambda call: call["taskSequence"])
+    all_questions = merge_cross_page_questions(all_questions)
     if not all_questions:
         raise RuntimeError("Luna completed but returned no non-empty questions; refusing to create an empty success report")
     worker_key = setting("MATH_AGENT_WORKER_API_KEY", dotenv)
