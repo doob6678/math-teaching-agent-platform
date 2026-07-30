@@ -48,7 +48,7 @@ class HttpCorsFilterTest {
 
     @Test
     void defaultCorsOriginsAllowViteFallbackPort() {
-        HttpCorsProperties properties = HttpCorsProperties.fromEnvironment(java.util.Map.of());
+        HttpCorsProperties properties = HttpCorsProperties.localDefaults();
 
         assertThat(properties.allowedOrigins()).contains("http://127.0.0.1:5174", "http://localhost:5174");
     }

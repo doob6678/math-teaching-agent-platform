@@ -11,7 +11,7 @@ public class HttpCorsConfiguration implements WebMvcConfigurer {
     private final HttpCorsProperties corsProperties;
 
     public HttpCorsConfiguration() {
-        this(HttpCorsProperties.fromEnvironment(System.getenv()));
+        this(HttpCorsProperties.localDefaults());
     }
 
     HttpCorsConfiguration(HttpCorsProperties corsProperties) {

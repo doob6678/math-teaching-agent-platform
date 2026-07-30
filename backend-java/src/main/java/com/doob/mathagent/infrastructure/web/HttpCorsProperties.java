@@ -1,8 +1,6 @@
 package com.doob.mathagent.infrastructure.web;
 
-import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
 
 /**
  * HTTP CORS 配置字段。
@@ -30,15 +28,7 @@ public record HttpCorsProperties(List<String> allowedOrigins) {
             "http://localhost:5178",
             "http://localhost:5179");
 
-    public static HttpCorsProperties fromEnvironment(Map<String, String> environment) {
-        String configuredOrigins = environment.getOrDefault("MATH_AGENT_CORS_ALLOWED_ORIGINS", "");
-        if (configuredOrigins.isBlank()) {
-            return new HttpCorsProperties(DEFAULT_ALLOWED_ORIGINS);
-        }
-        List<String> origins = Arrays.stream(configuredOrigins.split(","))
-                .map(String::strip)
-                .filter(origin -> !origin.isBlank())
-                .toList();
-        return new HttpCorsProperties(origins.isEmpty() ? DEFAULT_ALLOWED_ORIGINS : origins);
+    public static HttpCorsProperties localDefaults() {
+        return new HttpCorsProperties(DEFAULT_ALLOWED_ORIGINS);
     }
 }

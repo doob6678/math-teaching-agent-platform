@@ -22,7 +22,7 @@ public class HttpCorsFilter extends OncePerRequestFilter {
     private final HttpCorsProperties corsProperties;
 
     public HttpCorsFilter() {
-        this(HttpCorsProperties.fromEnvironment(System.getenv()));
+        this(HttpCorsProperties.localDefaults());
     }
 
     HttpCorsFilter(HttpCorsProperties corsProperties) {
