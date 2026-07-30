@@ -37,7 +37,9 @@ class WorkerSettingsTest(unittest.TestCase):
         self.assertIsNone(settings.openai_api_key)
         self.assertIsNone(settings.qwen_api_key)
         self.assertIsNone(settings.feishu_app_secret)
-        self.assertIsNone(settings.worker_api_key)
+        # The internal worker credential is fixed by the checked-in local deployment contract; provider secrets
+        # remain optional so /health still starts without an external API key.
+        self.assertEqual(settings.worker_api_key, "local_worker_internal_key")
         self.assertEqual(settings.embedding_provider_order, ("local_bge_embedding",))
         self.assertEqual(settings.rerank_provider_order, ("local_bge_reranker",))
         self.assertEqual(settings.local_clip_provider_order, ("local_clip",))

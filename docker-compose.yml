@@ -111,31 +111,7 @@ services:
     # BGE, reranker, and CLIP models use the same CUDA device inside the worker.
     gpus: all
     environment:
-      MATH_AGENT_WORKER_API_KEY: local_worker_internal_key
-      MATH_AGENT_TOOL_BROKER_BASE_URL: http://backend:8080
-      MATH_AGENT_AGENT_WORKER_SHARED_KEY: local_agent_worker_shared_key
-      MATH_AGENT_DB_HOST: mysql
-      MATH_AGENT_DB_PORT: 3306
-      MATH_AGENT_DB_USERNAME: root
-      MATH_AGENT_DB_PASSWORD: local_mysql_7f9b1cc8a2d44529b6e481d5
-      MATH_AGENT_DB_NAME: math_agent_rag
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_BASE_URL: https://api.openai.com/v1
-      # 禁止恢复 DashScope embedding；教材向量、重排和图像向量必须始终留在只读挂载的本地模型中。
-      # Do not restore DashScope embeddings; text vectors, reranking, and CLIP must remain on local read-only models.
-      MATH_AGENT_EMBEDDING_PROVIDER_ORDER: local_bge_embedding
-      MATH_AGENT_RERANK_PROVIDER_ORDER: local_bge_reranker
-      MATH_AGENT_CLIP_PROVIDER_ORDER: local_clip
-      MATH_AGENT_EMBEDDING_DIMENSION: 512
-      MATH_AGENT_LOCAL_CLIP_MODEL_PATH: /models/damo/multi-modal_clip-vit-large-patch14_zh
-      MATH_AGENT_LOCAL_RERANK_MODEL_PATH: /models/BAAI/bge-reranker-v2-m3
-      MATH_AGENT_LOCAL_TEXT_EMBEDDING_MODEL_PATH: /models/BAAI/bge-small-zh-v1.5
-      # GPU is an optional local accelerator. CPU keeps the same read-only local BGE/reranker/CLIP contract on
-      # Docker Desktop installations without NVIDIA CDI; operators can set these three values to cuda explicitly.
-      MATH_AGENT_LOCAL_CLIP_DEVICE: cpu
-      MATH_AGENT_LOCAL_RERANK_DEVICE: cpu
-      MATH_AGENT_LOCAL_TEXT_EMBEDDING_DEVICE: cpu
-      MATH_AGENT_USAGE_LEDGER_PATH: /app/data/usage/provider-usage.jsonl
     ports: ["8092:8091"]
     volumes:
       - worker-data:/app/data

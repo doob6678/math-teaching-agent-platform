@@ -49,7 +49,8 @@ class WorkerSettings:
     def from_environment(cls, env: Mapping[str, str] | None = None) -> "WorkerSettings":
         source = os.environ if env is None else env
         return cls(
-            worker_api_key=source.get("MATH_AGENT_WORKER_API_KEY") or source.get("MATH_AGENT_EMBEDDING_API_KEY"),
+            # Docker and Java use this fixed internal credential; only provider API keys remain process inputs.
+            worker_api_key=source.get("MATH_AGENT_WORKER_API_KEY") or source.get("MATH_AGENT_EMBEDDING_API_KEY") or "local_worker_internal_key",
             processed_books_root=resolve_processed_books_root(source),
             openai_api_key=source.get("OPENAI_API_KEY"),
             openai_base_url=source.get("OPENAI_BASE_URL", "https://api.openai.com/v1"),
@@ -115,6 +116,7 @@ def resolve_local_clip_model_path(source: Mapping[str, str]) -> str | None:
     if configured:
         return configured
     for candidate in (
+        "/models/damo/multi-modal_clip-vit-large-patch14_zh",
         "D:\\ModelScope\\models\\damo\\multi-modal_clip-vit-large-patch14_zh",
         "D:\\ModelScope\\models\\damo\\multi-modal_clip-vit-large-patch14_336_zh",
         "D:\\project2026\\hf_cache\\hub\\models--OFA-Sys--chinese-clip-vit-large-patch14\\snapshots\\660941af70c6ff89ce658a1735404c0f3e536c38",
@@ -130,6 +132,7 @@ def resolve_local_rerank_model_path(source: Mapping[str, str]) -> str | None:
     if configured:
         return configured
     candidates = (
+        "/models/BAAI/bge-reranker-v2-m3",
         "D:\\ModelScope\\models\\BAAI\\bge-reranker-v2-m3",
         "D:\\ModelScope\\models\\BAAI\\bge-reranker-base",
         "D:\\project2026\\hf_cache\\hub\\models--BAAI--bge-reranker-v2-m3\\snapshots",
@@ -148,6 +151,7 @@ def resolve_local_text_embedding_model_path(source: Mapping[str, str]) -> str | 
         resolved = resolve_model_snapshot(Path(configured))
         return str(resolved) if resolved is not None else None
     for candidate in (
+        "/models/BAAI/bge-small-zh-v1.5",
         "D:\\ModelScope\\models\\BAAI\\bge-small-zh-v1.5",
         "D:\\ModelScope\\models\\BAAI\\bge-m3",
     ):
