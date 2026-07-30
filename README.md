@@ -141,15 +141,26 @@ wsl.exe -d Ubuntu -- python3 /mnt/c/Users/doob/Desktop/code/dev/math_agent_rag/s
 4. 仅将 Luna 返回的非空题干和公式调用本机运行的真实 embedding worker，写入统一的高考 Milvus collection `gaokao_math`。
 5. 使用刚入库题干重新生成真实查询向量并从 Milvus 召回；若查不到对应的插入主键，整次运行失败。最终报告写入 `output/gaokao-evidence/2024/<run-id>-report.json`，其中汇总 `prompt_tokens`、`completion_tokens`、`total_tokens`。
 
-高考题统一使用 `gaokao_math` collection；之后任何高考题导入不得新建按年份或模型拆分的 collection。`MATH_AGENT_AGENT_WORKER_MAX_CONCURRENCY` 的默认值在 `.env.example`、Compose 和 Spring 中统一为 20；`--page-workers` 只能降低本次脚本进程的并发，不能把脚本线程数表述为全项目额度。后端 agent 路径的分布式额度由 Redis 租约控制；若要把外部批量脚本纳入同一额度，必须经后端入库 API 申请租约，而不是并行执行多个脚本。每页审计额外记录实际 worker 数、任务序号、线程名、开始/完成时间，保证并发时仍能对一张页图、一份请求/响应和一笔 token usage 一一追溯。Luna 请求通过 `MATH_AGENT_LUNA_BRIDGE_CONTAINER` 或 `--luna-bridge-container` 指定的健康 Docker worker 网络发出，容器名不是代码常量；使用 `docker compose ps -q ai-worker` 获取当前部署的容器 ID。单次 HTTP 默认限时 120 秒，并由父进程额外 5 秒宽限的硬超时兜底；520、429 和临时 5xx 只对该页请求进行局部、有界的最多 3 次重试。每个 run 都写入 source/config 哈希 manifest，`--finalize-run-id` 会重新验证 PDF、原图和压缩图哈希后才允许写入。跨页题仅在前页明确标记续页且后页没有新题号时合并；LaTeX 分式含斜杠会被拒绝，必须为 `\\frac{分子}{分母}`。向量化固定调用本机真实 ai-worker 的 `local_bge_embedding`（512 维）；Milvus 会确保 `gaokao_math` 上存在 `COSINE`/`FLAT` 的 `vector_index` 后才加载并写入。链路不会扫描配置之外的 2024 PDF，不使用文本层伪造视觉识别结果，不把模型输出当作官方答案或人工审核结论。运行前需在 `.env` 或环境变量中提供 `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`MATH_AGENT_WORKER_API_KEY`，并保持 WSL Docker 中的 MySQL、Redis、ai-worker 与 Milvus 健康。
+高考题统一使用 `gaokao_math` collection；之后任何高考题导入不得新建按年份或模型拆分的 collection。AI 并发固定为 20；`--page-workers` 只能降低本次脚本进程的并发，不能把脚本线程数表述为全项目额度。后端 agent 路径的分布式额度由 Redis 租约控制；若要把外部批量脚本纳入同一额度，必须经后端入库 API 申请租约，而不是并行执行多个脚本。每页审计额外记录实际 worker 数、任务序号、线程名、开始/完成时间，保证并发时仍能对一张页图、一份请求/响应和一笔 token usage 一一追溯。Luna 请求通过 `--luna-bridge-container` 指定的健康 Docker worker 网络发出，容器名不是代码常量；使用 `docker compose ps -q ai-worker` 获取当前部署的容器 ID。单次 HTTP 默认限时 120 秒，并由父进程额外 5 秒宽限的硬超时兜底；520、429 和临时 5xx 只对该页请求进行局部、有界的最多 3 次重试。每个 run 都写入 source/config 哈希 manifest，`--finalize-run-id` 会重新验证 PDF、原图和压缩图哈希后才允许写入。跨页题仅在前页明确标记续页且后页没有新题号时合并；LaTeX 分式含斜杠会被拒绝，必须为 `\\frac{分子}{分母}`。向量化固定调用本机真实 ai-worker 的 `local_bge_embedding`（512 维）；Milvus 会确保 `gaokao_math` 上存在 `COSINE`/`FLAT` 的 `vector_index` 后才加载并写入。链路不会扫描配置之外的 2024 PDF，不使用文本层伪造视觉识别结果，不把模型输出当作官方答案或人工审核结论。启动只允许设置 `OPENAI_API_KEY`；其余端口、数据库、Milvus、worker、embedding 与并发配置均固定在 YAML。
 
-`math-agent.agent-worker.runtime.max-concurrency` 是后端配置键，`MATH_AGENT_AGENT_WORKER_MAX_CONCURRENCY` 是它的环境变量覆盖名；两者表达的是全项目同时允许执行的 AI 工作单元总数，而不是单个 PDF 的页数。未设置环境变量时使用仓库默认值 `20`；部署需要收紧或扩大额度时，只设置环境变量即可，无需改代码。例如：
+`math-agent.agent-worker.runtime.max-concurrency` 固定为 `20`，表示全项目同时允许执行的 AI 工作单元总数，而不是单个 PDF 的页数。该值不接受环境变量覆盖。
 
 Luna 题目识别的公式契约要求：任何可见数学分数在 `latex` 字段中必须写成 `\\frac{分子}{分母}`；严禁使用 `1/2`、`a/b`、`x/y` 等斜杠记法代替分式。该约束同时写入 2024 页图识别提示词及后端已授权页图转写提示词，确保上传链路与批量链路一致。
 
+### Final local startup contract
+
+The Compose deployment is intentionally single-configuration: do not set ports, database, Milvus, embedding,
+worker, retry, or concurrency environment variables. Their fixed values live in `docker-compose.yml` and
+`backend-java/src/main/resources/application.yml`: frontend `5173`, backend `8080`, worker `8092`, MySQL `3307`,
+Redis `6380`, Milvus `19531`, `gaokao_math`, `local_bge_embedding` (512 dimensions), and AI concurrency `20`.
+The only permitted runtime environment variable is `OPENAI_API_KEY`.
+
 ```powershell
-$env:MATH_AGENT_AGENT_WORKER_MAX_CONCURRENCY = "20"
+$env:OPENAI_API_KEY = "your-provider-key"
+wsl.exe -d Ubuntu -- bash -lc "cd /mnt/c/Users/doob/Desktop/code/dev/math_agent_rag && docker compose up -d --build"
 ```
+
+After the stack is healthy, open `http://127.0.0.1:5173`. Do not use the obsolete `5174` or `8081` ports.
 
 2024 视觉入库会读取这一个全局值并据此创建最多相同数量的页任务；其最终报告的 `concurrency.globalLimit` 与 `concurrency.effectivePageWorkers`、以及每页审计的 `taskSequence`、`workerThread`、`taskStartedAt`、`taskCompletedAt` 共同证明没有绕开全局控制。
 
@@ -168,16 +179,6 @@ npm install
 npm run dev
 ```
 
-教材资源来自外部目录，不复制进仓库，通过环境变量传入：
-
-```text
-MATH_AGENT_PROCESSED_BOOKS_ROOT
-```
-
-PowerShell 示例：
-
-```powershell
-$env:MATH_AGENT_PROCESSED_BOOKS_ROOT = "C:\Users\doob\Desktop\个人资料\高中数学\下载课本代码\tchMaterial-parser-main\tchMaterial-parser-main\processed_books_section_shadow_all_mini_b4"
-```
-
-密钥和外部资源路径只从环境变量读取，不写入仓库。
+教材资源目录由 `docker-compose.yml` 固定只读挂载到 `/app/data/textbooks`，后端配置在
+`backend-java/src/main/resources/application.yml` 固定引用该容器路径。除 `OPENAI_API_KEY` 外，启动不读取
+任何端口、数据库、Milvus、模型、并发或外部资源环境变量。

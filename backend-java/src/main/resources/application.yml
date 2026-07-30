@@ -2,11 +2,19 @@ spring:
   application:
     name: math-agent-rag-backend
   rabbitmq:
+    # The Docker deployment resolves infrastructure by Compose service name. Keeping this here prevents an
+    # environment override from silently routing a container back to its own loopback interface.
+    host: rabbitmq
+    port: 5672
     listener:
       simple:
         # RabbitMQ is optional for local HTTP development. Keep the consumers off by default when the
         # broker is not present, while allowing a deployment to opt in explicitly through the environment.
-        auto-startup: ${MATH_AGENT_RABBITMQ_LISTENER_AUTO_STARTUP:false}
+        auto-startup: false
+  data:
+    redis:
+      host: redis
+      port: 6379
   servlet:
     encoding:
       # Resource paths and titles are user-provided Chinese text. Force UTF-8 before Jackson reads requests so a
@@ -17,27 +25,27 @@ spring:
       # Teacher resource uploads legitimately include full exam PDFs and bundled lesson packages. Keep the servlet
       # envelope aligned with TeacherResourceUploadService's own 256 MB guard so requests fail for real business
       # limits instead of Spring Boot's accidental 1 MB default before controller code runs.
-      max-file-size: ${MATH_AGENT_HTTP_MULTIPART_MAX_FILE_SIZE:256MB}
-      max-request-size: ${MATH_AGENT_HTTP_MULTIPART_MAX_REQUEST_SIZE:256MB}
+      max-file-size: 256MB
+      max-request-size: 256MB
   ai:
     model:
-      chat: ${MATH_AGENT_AI_CHAT_MODEL:openai}
-      embedding: ${MATH_AGENT_AI_EMBEDDING_MODEL:local-clip-vit-large-patch14-zh}
-      image: ${MATH_AGENT_AI_IMAGE_MODEL:none}
+      chat: openai
+      embedding: local-clip-vit-large-patch14-zh
+      image: none
       audio:
-        speech: ${MATH_AGENT_AI_AUDIO_SPEECH_MODEL:none}
-        transcription: ${MATH_AGENT_AI_AUDIO_TRANSCRIPTION_MODEL:none}
-      moderation: ${MATH_AGENT_AI_MODERATION_MODEL:none}
+        speech: none
+        transcription: none
+      moderation: none
     openai:
       api-key: ${OPENAI_API_KEY:}
-      base-url: ${OPENAI_BASE_URL:https://api.openai.com}
+      base-url: https://api.openai.com
       chat:
         options:
           # Verified against the configured OpenAI-compatible /models endpoint. This model is also the default for
           # question-image understanding, so text and visual explanations remain on one multimodal route.
           # Terra is the verified low-latency production default. Luna remains selectable when explicitly configured,
           # but a cold local start must not silently choose the rate-limited model that caused 429 stalls.
-          model: ${OPENAI_CHAT_MODEL:gpt-5.6-terra}
+          model: gpt-5.6-terra
   # The project migration runner validates the deployment URL and baselines Docker's operational bootstrap tables
   # at version zero before applying V1+. Disable Boot's earlier initializer so it cannot race that policy.
   flyway:
@@ -50,59 +58,63 @@ server:
     uri-encoding: UTF-8
 
 math-agent:
+  feishu:
+    # The local Compose profile needs a stable 256-bit key so encrypted OAuth records remain readable after a
+    # container recreation. Production replaces this file with its deployment configuration, not an environment key.
+    token-encryption-key: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
   ai:
-    default-provider: ${MATH_AGENT_AI_DEFAULT_PROVIDER:openai}
+    default-provider: openai
     # A streamed student answer must begin promptly; this is per provider attempt, not an unbounded request lifetime.
     chat:
-      request-timeout-ms: ${MATH_AGENT_AI_CHAT_REQUEST_TIMEOUT_MS:30000}
-      max-output-tokens: ${MATH_AGENT_AI_CHAT_MAX_OUTPUT_TOKENS:1200}
+      request-timeout-ms: 30000
+      max-output-tokens: 1200
       # Retry only provider statuses received before the first stream delta, so a retry cannot duplicate tool work.
-      stream-max-attempts: ${MATH_AGENT_AI_CHAT_STREAM_MAX_ATTEMPTS:3}
-      retry-base-delay-ms: ${MATH_AGENT_AI_CHAT_RETRY_BASE_DELAY_MS:400}
+      stream-max-attempts: 3
+      retry-base-delay-ms: 400
     dashscope:
       name: dashscope
-      base-url: ${DASHSCOPE_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+      base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
       api-key: ${DASHSCOPE_API_KEY:}
-      chat-model: ${DASHSCOPE_CHAT_MODEL:qwen3.6-flash}
+      chat-model: qwen3.6-flash
     openai:
       name: openai
-      base-url: ${OPENAI_BASE_URL:https://api.openai.com}
+      base-url: https://api.openai.com
       api-key: ${OPENAI_API_KEY:}
-      chat-model: ${OPENAI_CHAT_MODEL:gpt-5.6-terra}
+      chat-model: gpt-5.6-terra
     deepseek:
       name: deepseek
-      base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
+      base-url: https://api.deepseek.com
       api-key: ${DEEPSEEK_API_KEY:}
-      chat-model: ${DEEPSEEK_CHAT_MODEL:deepseek-v4-flash}
+      chat-model: deepseek-v4-flash
     ark:
       name: ark
       # Volcengine Ark OpenAI-compatible online inference uses /api/v3.
       # Official guide: https://www.volcengine.com/docs/82379/1330626
       # Do not use /api/coding/v3 here; that endpoint is for Coding Plan APIs and uses different routing.
-      base-url: ${ARK_BASE_URL:https://ark.cn-beijing.volces.com/api/v3}
+      base-url: https://ark.cn-beijing.volces.com/api/v3
       api-key: ${ARK_API_KEY:}
       # This must be an Ark model ID/endpoint accepted by /api/v3/chat/completions.
-      chat-model: ${ARK_CHAT_MODEL:doubao-seed-2-0-lite-260428}
+      chat-model: doubao-seed-2-0-lite-260428
   teaching:
     ai-draft:
-      max-retries: ${MATH_AGENT_TEACHING_AI_DRAFT_MAX_RETRIES:1}
+      max-retries: 1
     # Teacher-side source transcription is independent from student uploads. Student images go directly to ReAct.
     image-transcription:
-      openai-model: ${OPENAI_VISION_MODEL:${OPENAI_CHAT_MODEL:gpt-5.6-terra}}
-      timeout-ms: ${MATH_AGENT_TEACHING_IMAGE_TRANSCRIPTION_TIMEOUT_MS:12000}
+      openai-model: gpt-5.6-terra
+      timeout-ms: 12000
   student:
     explanation:
       # Two providers preserve one recovery path while capping a failed turn at two 30-second attempts.
-      max-provider-attempts: ${MATH_AGENT_STUDENT_EXPLANATION_MAX_PROVIDER_ATTEMPTS:2}
-      conversation-context-max-chars: ${MATH_AGENT_STUDENT_EXPLANATION_CONVERSATION_CONTEXT_MAX_CHARS:100000}
-      conversation-history-fetch-limit: ${MATH_AGENT_STUDENT_EXPLANATION_CONVERSATION_HISTORY_FETCH_LIMIT:200}
-      long-term-memory-top-k: ${MATH_AGENT_STUDENT_EXPLANATION_LONG_TERM_MEMORY_TOP_K:5}
-      long-term-memory-max-chars: ${MATH_AGENT_STUDENT_EXPLANATION_LONG_TERM_MEMORY_MAX_CHARS:12000}
+      max-provider-attempts: 2
+      conversation-context-max-chars: 100000
+      conversation-history-fetch-limit: 200
+      long-term-memory-top-k: 5
+      long-term-memory-max-chars: 12000
   database:
-    enabled: ${MATH_AGENT_DB_ENABLED:true}
-    url: ${MATH_AGENT_DB_URL:}
-    username: ${MATH_AGENT_DB_USERNAME:}
-    password: ${MATH_AGENT_DB_PASSWORD:}
+    enabled: true
+    url: jdbc:mysql://mysql:3306/math_agent_rag?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true
+    username: root
+    password: local_mysql_7f9b1cc8a2d44529b6e481d5
   ingestion:
     # Real-paper paths are mounted by docker-compose.yml and written here explicitly. Do not introduce an
     # environment-variable fallback: reproducible ingestion must have one reviewable configuration source.
@@ -123,30 +135,30 @@ math-agent:
     initial-review-jpeg-quality: 0.82
   redis:
     redisson:
-      enabled: ${MATH_AGENT_REDIS_REDISSON_ENABLED:true}
-      address: ${MATH_AGENT_REDIS_REDISSON_ADDRESS:redis://127.0.0.1:6379}
+      enabled: true
+      address: redis://redis:6379
     capability-store:
-      enabled: ${MATH_AGENT_REDIS_CAPABILITY_STORE_ENABLED:true}
-      key-prefix: ${MATH_AGENT_REDIS_CAPABILITY_STORE_KEY_PREFIX:math-agent:security:capability}
+      enabled: true
+      key-prefix: math-agent:security:capability
     rate-limit:
-      enabled: ${MATH_AGENT_REDIS_RATE_LIMIT_ENABLED:true}
-      key-prefix: ${MATH_AGENT_REDIS_RATE_LIMIT_KEY_PREFIX:math-agent:api:rate-limit}
+      enabled: true
+      key-prefix: math-agent:api:rate-limit
     search-cache:
       # Teacher-source re-sync must be visible to the next retrieval immediately; operators may opt in explicitly
       # after an audited corpus build, but stale cache entries are unsafe as the local default.
-      enabled: ${MATH_AGENT_REDIS_SEARCH_CACHE_ENABLED:false}
-      key-prefix: ${MATH_AGENT_REDIS_SEARCH_CACHE_KEY_PREFIX:math-agent:retrieval:textbook-search}
-      ttl: ${MATH_AGENT_REDIS_SEARCH_CACHE_TTL:10m}
-      null-value-ttl: ${MATH_AGENT_REDIS_SEARCH_CACHE_NULL_VALUE_TTL:1m}
+      enabled: false
+      key-prefix: math-agent:retrieval:textbook-search
+      ttl: 10m
+      null-value-ttl: 1m
   vector-index:
     # Local WSL Milvus is intentionally unauthenticated. Remote deployments may override this value in a separate
     # profile, but local startup must not require a needless environment variable.
-    enabled: ${MATH_AGENT_VECTOR_INDEX_ENABLED:true}
+    enabled: true
     # Containers resolve Milvus by service name while Windows development keeps the loopback default.
-    milvus-uri: ${MATH_AGENT_VECTOR_INDEX_MILVUS_URI:http://127.0.0.1:19530}
+    milvus-uri: http://milvus:19530
     # Keep credentials outside source control. Local startup resolves the authenticated WSL container password into
     # this environment variable; deployments provide the same variable through their secret manager.
-    milvus-token: ${MATH_AGENT_MILVUS_TOKEN:}
+    milvus-token: root:local_milvus_8f2c6a4d1e9b3f7c5a0d
     collection-name: math_agent_teacher_text_blocks_bge
     student-memory-collection-name: math_agent_student_memories_bge
     textbook-text-collection-name: textbook_text_collection
@@ -159,9 +171,9 @@ math-agent:
     # previous NPY common-prefix cosine exactly without mixing CLIP with BGE.
     textbook-image-query-dimension: 512
     # Teacher PDF page images use a private collection; it must never share rows with public textbook CLIP pages.
-    teacher-image-collection-name: ${MATH_AGENT_TEACHER_IMAGE_CLIP_COLLECTION:math_agent_teacher_page_assets_clip}
-    teacher-image-dimension: ${MATH_AGENT_TEACHER_IMAGE_CLIP_DIMENSION:768}
-    teacher-image-query-dimension: ${MATH_AGENT_TEACHER_IMAGE_CLIP_QUERY_DIMENSION:512}
+    teacher-image-collection-name: math_agent_teacher_page_assets_clip
+    teacher-image-dimension: 768
+    teacher-image-query-dimension: 512
     textbook-metric-type: COSINE
     # Exact FLAT cosine search is intentional for the current 3k/1k textbook corpus: it reproduces the audited NPY
     # baseline exactly. A future corpus-size migration must benchmark an ANN replacement before changing this value.
@@ -175,115 +187,116 @@ math-agent:
     textbook-corpus-version: textbook-section-c2-milvus-v1
     # The local worker proxies the configured embedding provider. Runtime images intentionally exclude the
     # The Compose worker serves this local BGE model in the same 512-dimensional vector space as Milvus.
-    embedding-base-url: ${MATH_AGENT_EMBEDDING_BASE_URL:http://127.0.0.1:8091/v1}
-    embedding-api-key: ${MATH_AGENT_EMBEDDING_API_KEY:${MATH_AGENT_WORKER_API_KEY:}}
-    embedding-model: ${MATH_AGENT_EMBEDDING_MODEL:local_bge_embedding}
+    embedding-base-url: http://ai-worker:8091/v1
+    embedding-api-key: local_worker_internal_key
+    embedding-model: local_bge_embedding
     # DashScope's compatible endpoint accepts at most ten input strings per request; keeping this configurable lets
     # another provider raise or lower the limit without changing indexing code.
-    embedding-batch-size: ${MATH_AGENT_EMBEDDING_BATCH_SIZE:10}
-    teacher-image-clip-enabled: ${MATH_AGENT_TEACHER_IMAGE_CLIP_ENABLED:false}
+    embedding-batch-size: 10
+    teacher-image-clip-enabled: true
     # Parallel textbook/teacher retrieval can queue one cold CUDA rerank batch behind another; keep the request
     # bounded while allowing the real worker to finish instead of triggering an expensive embedding fallback.
-    request-timeout-ms: ${MATH_AGENT_VECTOR_INDEX_TIMEOUT_MS:120000}
+    request-timeout-ms: 120000
   teacher:
     sync:
       feishu:
         # Local development uses the approved research-sharing folder. Operators can override the URL in the environment.
-        default-url: ${MATH_AGENT_TEACHER_SYNC_FEISHU_DEFAULT_URL:https://my.feishu.cn/drive/folder/XVn7fXppJlQMK5dkuOkc1ePan2f}
-        process-downloader-enabled: ${MATH_AGENT_TEACHER_SYNC_FEISHU_PROCESS_DOWNLOADER_ENABLED:true}
-        downloader-script: ${MATH_AGENT_TEACHER_SYNC_FEISHU_DOWNLOADER_SCRIPT:C:/Users/doob/Desktop/code/dev/math_agent_rag/ai-worker-python/scripts/download_feishu_url.py}
-        appkey-path: ${MATH_AGENT_TEACHER_SYNC_FEISHU_APPKEY_PATH:}
-        staging-root: ${MATH_AGENT_TEACHER_SYNC_FEISHU_STAGING_ROOT:C:/Users/doob/Desktop/code/dev/math_agent_rag/.local-storage/teacher-source-imports}
-        smoke-max-files: ${MATH_AGENT_TEACHER_SYNC_FEISHU_SMOKE_MAX_FILES:20}
-        process-timeout-seconds: ${MATH_AGENT_TEACHER_SYNC_FEISHU_PROCESS_TIMEOUT_SECONDS:180}
-      asset-storage-root: ${MATH_AGENT_TEACHER_SYNC_ASSET_STORAGE_ROOT:C:/Users/doob/Desktop/code/dev/math_agent_rag/.local-storage/teacher-assets}
+        default-url: https://my.feishu.cn/drive/folder/XVn7fXppJlQMK5dkuOkc1ePan2f
+        process-downloader-enabled: true
+        downloader-script: C:/Users/doob/Desktop/code/dev/math_agent_rag/ai-worker-python/scripts/download_feishu_url.py
+        appkey-path:
+        staging-root: C:/Users/doob/Desktop/code/dev/math_agent_rag/.local-storage/teacher-source-imports
+        smoke-max-files: 20
+        process-timeout-seconds: 180
+      asset-storage-root: C:/Users/doob/Desktop/code/dev/math_agent_rag/.local-storage/teacher-assets
       rabbitmq:
         # A sync job can render PDFs, call Feishu, invoke Python vision and rebuild Milvus. Keep that work out of
         # the MCP/HTTP request thread and let the durable MySQL job remain the idempotency authority.
-        exchange: ${MATH_AGENT_RABBITMQ_SOURCE_SYNC_EXCHANGE:teacher.source-sync}
-        routing-key: ${MATH_AGENT_RABBITMQ_SOURCE_SYNC_ROUTING_KEY:teacher.source-sync.execute}
-        queue: ${MATH_AGENT_RABBITMQ_SOURCE_SYNC_QUEUE:teacher.source-sync.execute.q}
-        dead-letter-queue: ${MATH_AGENT_RABBITMQ_SOURCE_SYNC_DLQ:teacher.source-sync.execute.dlq}
-        consumer-concurrency: ${MATH_AGENT_RABBITMQ_SOURCE_SYNC_CONSUMER_CONCURRENCY:1}
-        consumer-max-concurrency: ${MATH_AGENT_RABBITMQ_SOURCE_SYNC_CONSUMER_MAX_CONCURRENCY:2}
-        prefetch: ${MATH_AGENT_RABBITMQ_SOURCE_SYNC_PREFETCH:1}
-        publisher-confirm-timeout-milliseconds: ${MATH_AGENT_RABBITMQ_SOURCE_SYNC_CONFIRM_TIMEOUT_MS:5000}
+        exchange: teacher.source-sync
+        routing-key: teacher.source-sync.execute
+        queue: teacher.source-sync.execute.q
+        dead-letter-queue: teacher.source-sync.execute.dlq
+        consumer-concurrency: 1
+        consumer-max-concurrency: 2
+        prefetch: 1
+        publisher-confirm-timeout-milliseconds: 5000
       scheduler:
         # Background sync is opt-in. Enabling it additionally requires a real administrator service identity.
-        enabled: ${MATH_AGENT_TEACHER_SYNC_SCHEDULER_ENABLED:false}
-        fixed-delay-ms: ${MATH_AGENT_TEACHER_SYNC_SCHEDULER_FIXED_DELAY_MS:300000}
-        tenant-id: ${MATH_AGENT_TEACHER_SYNC_SCHEDULER_TENANT_ID:default}
-        service-role: ${MATH_AGENT_TEACHER_SYNC_SCHEDULER_SERVICE_ROLE:admin}
-        service-subject-id: ${MATH_AGENT_TEACHER_SYNC_SCHEDULER_SERVICE_SUBJECT_ID:}
+        enabled: false
+        fixed-delay-ms: 300000
+        tenant-id: default
+        service-role: admin
+        service-subject-id:
         # A scheduler never sweeps all documents implicitly. Operators opt in each stable source id explicitly.
-        document-ids: ${MATH_AGENT_TEACHER_SYNC_SCHEDULER_DOCUMENT_IDS:}
+        document-ids:
     search:
       runtime:
         # CPU BGE reranking is quadratic in candidate count. Twelve evidence blocks preserve one candidate per
         # narrow-library document while keeping the post-warmup P95 target below five seconds on the local worker.
-        max-block-rerank-candidates: ${MATH_AGENT_TEACHER_SEARCH_RUNTIME_MAX_BLOCK_RERANK_CANDIDATES:12}
+        max-block-rerank-candidates: 12
     formula-recognition:
       # Only documents uploaded with parseMode=AI consume this budget. TEXT parsing remains local and free.
-      enabled: ${MATH_AGENT_FORMULA_VISION_ENABLED:true}
-      max-images-per-document: ${MATH_AGENT_FORMULA_VISION_MAX_IMAGES_PER_DOCUMENT:48}
+      enabled: true
+      max-images-per-document: 48
       # Two full pages keep symbols legible for the default visual model; set exactly 4 only after a quality check.
-      pages-per-request: ${MATH_AGENT_FORMULA_VISION_PAGES_PER_REQUEST:2}
+      pages-per-request: 2
   textbook:
     retrieval:
       # Transport windows for the local semantic worker. They are deliberately separate from ranking logic, so a
       # deployment can meet its latency budget without reintroducing hidden score weights into Java code.
       query-focus:
-        max-query-chars: ${MATH_AGENT_TEXTBOOK_QUERY_FOCUS_MAX_CHARS:120}
-        max-clauses: ${MATH_AGENT_TEXTBOOK_QUERY_FOCUS_MAX_CLAUSES:2}
-        max-graph-tags: ${MATH_AGENT_TEXTBOOK_QUERY_FOCUS_MAX_GRAPH_TAGS:4}
+        max-query-chars: 120
+        max-clauses: 2
+        max-graph-tags: 4
       rerank:
-        max-document-candidates: ${MATH_AGENT_TEXTBOOK_RERANK_MAX_DOCUMENT_CANDIDATES:3}
-        max-pages-per-document: ${MATH_AGENT_TEXTBOOK_RERANK_MAX_PAGES_PER_DOCUMENT:3}
+        max-document-candidates: 3
+        max-pages-per-document: 3
         # Rerank the complete bounded evidence matrix.  Response count remains
         # request-controlled; these are candidate-comparison limits only.
-        max-rerank-documents: ${MATH_AGENT_TEXTBOOK_RERANK_MAX_DOCUMENTS:3}
-        max-page-candidates: ${MATH_AGENT_TEXTBOOK_RERANK_MAX_PAGE_CANDIDATES:9}
-        page-text-chars: ${MATH_AGENT_TEXTBOOK_RERANK_PAGE_TEXT_CHARS:120}
-        formula-text-chars: ${MATH_AGENT_TEXTBOOK_RERANK_FORMULA_TEXT_CHARS:40}
-        document-text-chars: ${MATH_AGENT_TEXTBOOK_RERANK_DOCUMENT_TEXT_CHARS:320}
+        max-rerank-documents: 3
+        max-page-candidates: 9
+        page-text-chars: 120
+        formula-text-chars: 40
+        document-text-chars: 320
   protocol:
     mcp:
       registry:
         clients: []
   agent-worker:
     # Dedicated Worker authentication is intentionally separate from user capability tokens.
-    shared-key: ${MATH_AGENT_AGENT_WORKER_SHARED_KEY:}
+    shared-key: local_agent_worker_shared_key
+    capability-secret: local_agent_worker_capability_secret
     # Visual-model calls receive only a bounded, permission-checked data URL; large originals stay in Java storage.
-    asset-max-bytes: ${MATH_AGENT_AGENT_WORKER_ASSET_MAX_BYTES:4194304}
+    asset-max-bytes: 4194304
     dispatch:
-      enabled: ${MATH_AGENT_AGENT_WORKER_DISPATCH_ENABLED:true}
+      enabled: true
     runtime:
-      enabled: ${MATH_AGENT_AGENT_WORKER_RUNTIME_ENABLED:false}
-      worker-id: ${MATH_AGENT_AGENT_WORKER_ID:local-agent-worker}
-      version: ${MATH_AGENT_AGENT_WORKER_VERSION:0.1.0}
+      enabled: true
+      worker-id: compose-agent-worker
+      version: 0.1.0
       # This is the single global cap for AI work, including the 2024 Luna visual ingestion runner.
       # The runner may choose a lower per-run count but must reject any value above this shared limit.
-      max-concurrency: ${MATH_AGENT_AGENT_WORKER_MAX_CONCURRENCY:20}
-      lease-seconds: ${MATH_AGENT_AGENT_WORKER_LEASE_SECONDS:300}
-      heartbeat-milliseconds: ${MATH_AGENT_AGENT_WORKER_HEARTBEAT_MILLISECONDS:15000}
-    recovery-milliseconds: ${MATH_AGENT_AGENT_WORKER_RECOVERY_MILLISECONDS:30000}
-    liveness-check-milliseconds: ${MATH_AGENT_AGENT_WORKER_LIVENESS_CHECK_MILLISECONDS:15000}
-    heartbeat-timeout-milliseconds: ${MATH_AGENT_AGENT_WORKER_HEARTBEAT_TIMEOUT_MILLISECONDS:45000}
-    maximum-attempts: ${MATH_AGENT_AGENT_WORKER_MAXIMUM_ATTEMPTS:3}
+      max-concurrency: 20
+      lease-seconds: 300
+      heartbeat-milliseconds: 15000
+    recovery-milliseconds: 30000
+    liveness-check-milliseconds: 15000
+    heartbeat-timeout-milliseconds: 45000
+    maximum-attempts: 3
   knowledge:
     graph-spine:
-      seed-enabled: ${MATH_AGENT_KNOWLEDGE_GRAPH_SPINE_SEED_ENABLED:true}
-      tenant-id: ${MATH_AGENT_KNOWLEDGE_GRAPH_SPINE_TENANT_ID:default}
-      permission-scope: ${MATH_AGENT_KNOWLEDGE_GRAPH_SPINE_PERMISSION_SCOPE:MATH_VIP}
-      method-node-limit: ${MATH_AGENT_KNOWLEDGE_GRAPH_SPINE_METHOD_NODE_LIMIT:100}
-      source-location: ${MATH_AGENT_KNOWLEDGE_GRAPH_SPINE_SOURCE_LOCATION:classpath:knowledge/graph-spine-v0.1.md}
+      seed-enabled: true
+      tenant-id: default
+      permission-scope: MATH_VIP
+      method-node-limit: 100
+      source-location: classpath:knowledge/graph-spine-v0.1.md
   resources:
     # c2 is the searchable small-heading corpus.  The original page corpus b4
     # remains independently stored for page-level comparison and rollback; it
     # is not overwritten or merged into the section index.
-    processed-books-root: ${MATH_AGENT_PROCESSED_BOOKS_ROOT:C:/Users/doob/Desktop/个人资料/高中数学/下载课本代码/tchMaterial-parser-main/tchMaterial-parser-main/processed_books_section_shadow_all_mini_b4}
-    project-test-data-root: ${MATH_AGENT_PROJECT_TEST_DATA_ROOT:C:/Users/doob/Desktop/code/dev/math_agent_rag/文档/项目测试数据位置}
-    design-spec-root: ${MATH_AGENT_DESIGN_SPEC_ROOT:C:/Users/doob/Desktop/code/dev/math_agent_rag/文档/设计方案体系}
-    reference-handout-pdf: ${MATH_AGENT_REFERENCE_HANDOUT_PDF:C:/Users/doob/Desktop/code/dev/math_agent_rag/文档/项目测试数据位置/参考讲义数学空间向量.pdf}
-    prompt-design-pdf: ${MATH_AGENT_PROMPT_DESIGN_PDF:C:/Users/doob/Desktop/code/dev/math_agent_rag/文档/豆包爱学的提示词设计.pdf}
-    local-file-storage-root: ${MATH_AGENT_LOCAL_FILE_STORAGE_ROOT:C:/Users/doob/Desktop/code/dev/math_agent_rag/.local-storage}
+    processed-books-root: /app/data/textbooks
+    project-test-data-root: C:/Users/doob/Desktop/code/dev/math_agent_rag/文档/项目测试数据位置
+    design-spec-root: C:/Users/doob/Desktop/code/dev/math_agent_rag/文档/设计方案体系
+    reference-handout-pdf: C:/Users/doob/Desktop/code/dev/math_agent_rag/文档/项目测试数据位置/参考讲义数学空间向量.pdf
+    prompt-design-pdf: C:/Users/doob/Desktop/code/dev/math_agent_rag/文档/豆包爱学的提示词设计.pdf
+    local-file-storage-root: /app/data
