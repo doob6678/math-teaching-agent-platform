@@ -170,7 +170,7 @@ class AgentRuntime:
                 failures.append(f"{provider}:missing_key")
                 continue
             default_base_url = {
-                "openai": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+                "openai": os.getenv("OPENAI_BASE_URL", "https://api1.aisz.mom/v1"),
                 "dashscope": "https://dashscope.aliyuncs.com/compatible-mode/v1",
                 "deepseek": "https://api.deepseek.com/v1",
                 "ark": "https://ark.cn-beijing.volces.com/api/v3",

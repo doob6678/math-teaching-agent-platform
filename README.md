@@ -125,6 +125,10 @@ RabbitMQ 使用持久化 direct exchange、命令队列和死信队列。MySQL `
 
 ## 运行入口
 
+完整的后端拆分、环境变量来源、aisz provider、资源格式、端到端流程、MySQL/Milvus 实时快照和验收产物见
+[后端拆分与运行手册](docs/backend-split-operations.md)。本地 Docker 入口固定为
+`http://127.0.0.1:5173/`，后端为 `http://127.0.0.1:8080`，Python worker 为 `http://127.0.0.1:8092`。
+
 ## 2024 高考数学题库：真实视觉入库链路
 
 本项目对配置文件 `config/gaokao-ingestion-2024.json` 中限定的六份 2024 北京、新课标Ⅰ、新课标Ⅱ PDF，使用唯一的真实入库命令：

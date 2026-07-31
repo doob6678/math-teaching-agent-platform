@@ -38,14 +38,14 @@ spring:
       moderation: none
     openai:
       api-key: ${OPENAI_API_KEY:}
-      base-url: https://api.openai.com
+      # The local deployment uses the aisz OpenAI-compatible relay.  Keep the environment override so a deployed
+      # operator can change it deliberately, but never fall back to the official endpoint with the relay key.
+      base-url: ${OPENAI_BASE_URL:https://api1.aisz.mom/v1}
       chat:
         options:
-          # Verified against the configured OpenAI-compatible /models endpoint. This model is also the default for
-          # question-image understanding, so text and visual explanations remain on one multimodal route.
-          # Terra is the verified low-latency production default. Luna remains selectable when explicitly configured,
-          # but a cold local start must not silently choose the rate-limited model that caused 429 stalls.
-          model: gpt-5.6-terra
+          # Keep text and image explanations on the same operator-selected multimodal model; the value is sourced
+          # from the same environment file as the endpoint so a relay key is never sent to api.openai.com by mistake.
+          model: ${OPENAI_CHAT_MODEL:gpt-5.6-terra}
   # The project migration runner validates the deployment URL and baselines Docker's operational bootstrap tables
   # at version zero before applying V1+. Disable Boot's earlier initializer so it cannot race that policy.
   flyway:
@@ -78,9 +78,11 @@ math-agent:
       chat-model: qwen3.6-flash
     openai:
       name: openai
-      base-url: https://api.openai.com
+      # This provider is used by the ReAct student explanation and teaching workflows.  It must match the Spring AI
+      # endpoint above; otherwise one UI path works while the other silently targets a different provider.
+      base-url: ${OPENAI_BASE_URL:https://api1.aisz.mom/v1}
       api-key: ${OPENAI_API_KEY:}
-      chat-model: gpt-5.6-terra
+      chat-model: ${OPENAI_CHAT_MODEL:gpt-5.6-terra}
     deepseek:
       name: deepseek
       base-url: https://api.deepseek.com

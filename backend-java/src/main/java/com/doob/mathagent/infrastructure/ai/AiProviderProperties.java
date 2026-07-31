@@ -24,7 +24,7 @@ public class AiProviderProperties {
             "qwen3.6-flash");
 
     /** OpenAI-compatible GPT provider configuration. */
-    private Provider openai = new Provider("openai", "https://api.openai.com", "", "gpt-5.4");
+    private Provider openai = new Provider("openai", "https://api1.aisz.mom/v1", "", "gpt-5.6-luna");
 
     /** DeepSeek OpenAI-compatible provider configuration. */
     private Provider deepseek = new Provider("deepseek", "https://api.deepseek.com", "", "deepseek-v4-flash");

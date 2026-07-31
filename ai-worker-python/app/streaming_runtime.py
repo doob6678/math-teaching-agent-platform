@@ -180,7 +180,7 @@ class AgentStreamingRuntime:
     @staticmethod
     def _provider_config(provider: str) -> tuple[str | None, str, str]:
         keys = {"openai": "OPENAI_API_KEY", "dashscope": "DASHSCOPE_API_KEY", "deepseek": "DEEPSEEK_API_KEY", "ark": "ARK_API_KEY"}
-        bases = {"openai": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"), "dashscope": "https://dashscope.aliyuncs.com/compatible-mode/v1", "deepseek": "https://api.deepseek.com/v1", "ark": "https://ark.cn-beijing.volces.com/api/v3"}
+        bases = {"openai": os.getenv("OPENAI_BASE_URL", "https://api1.aisz.mom/v1"), "dashscope": "https://dashscope.aliyuncs.com/compatible-mode/v1", "deepseek": "https://api.deepseek.com/v1", "ark": "https://ark.cn-beijing.volces.com/api/v3"}
         key = os.getenv(keys.get(provider, ""))
         base = os.getenv(f"{provider.upper()}_BASE_URL", bases.get(provider, "")).rstrip("/")
         model = os.getenv(f"MATH_AGENT_AI_RUNTIME_{provider.upper()}_MODEL", os.getenv("MATH_AGENT_AI_RUNTIME_MODEL", os.getenv("OPENAI_CHAT_MODEL", "gpt-5.6-terra")))

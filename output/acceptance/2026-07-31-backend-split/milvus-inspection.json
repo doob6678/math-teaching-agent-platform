@@ -1,0 +1,288 @@
+﻿[
+  {
+    "name": "gaokao_math",
+    "num_entities": 532,
+    "fields": [
+      {
+        "name": "id",
+        "dtype": "21",
+        "is_primary": true,
+        "auto_id": false,
+        "dim": null
+      },
+      {
+        "name": "vector",
+        "dtype": "101",
+        "is_primary": false,
+        "auto_id": false,
+        "dim": 512
+      },
+      {
+        "name": "text",
+        "dtype": "21",
+        "is_primary": false,
+        "auto_id": false,
+        "dim": null
+      },
+      {
+        "name": "metadata",
+        "dtype": "23",
+        "is_primary": false,
+        "auto_id": false,
+        "dim": null
+      }
+    ],
+    "sample": [
+      {
+        "id": "0024feac-2b13-442e-958c-92cb5f823de8",
+        "text": "已知α为第一象限角，β为第二象限角，tanα+tanβ=4，tanαtanβ=√2+1，则sin(α+β)=____。\n\\alpha\\in(0,\\frac{\\pi}{2})\n\\beta\\in(\\frac{\\pi}{2},\\pi)\n\\tan\\alpha+\\tan\\beta=4\n\\tan\\alpha\\tan\\beta=\\sqrt{2}+1\n\\sin(\\alpha+\\beta)",
+        "metadata": {
+          "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（空白卷）.pdf",
+          "page": 3,
+          "questionNumber": "13",
+          "latex": [
+            "\\alpha\\in(0,\\frac{\\pi}{2})",
+            "\\beta\\in(\\frac{\\pi}{2},\\pi)",
+            "\\tan\\alpha+\\tan\\beta=4",
+            "\\tan\\alpha\\tan\\beta=\\sqrt{2}+1",
+            "\\sin(\\alpha+\\beta)"
+          ],
+          "confidence": 0.98,
+          "continuesToNextPage": false,
+          "extraction": "LUNA_VISUAL_PAGE"
+        }
+      }
+    ]
+  },
+  {
+    "name": "math_agent_teacher_page_assets_clip",
+    "num_entities": 15,
+    "fields": [
+      {
+        "name": "id",
+        "dtype": "21",
+        "is_primary": true,
+        "auto_id": false,
+        "dim": null
+      },
+      {
+        "name": "vector",
+        "dtype": "101",
+        "is_primary": false,
+        "auto_id": false,
+        "dim": 768
+      },
+      {
+        "name": "text",
+        "dtype": "21",
+        "is_primary": false,
+        "auto_id": false,
+        "dim": null
+      },
+      {
+        "name": "metadata",
+        "dtype": "23",
+        "is_primary": false,
+        "auto_id": false,
+        "dim": null
+      }
+    ],
+    "sample": [
+      {
+        "id": "2081893107562409986:75580523-5d68-4a58-8262-0efd6ed4a3da",
+        "text": "概率统计/条件概率、全概率与贝叶斯公式.md",
+        "metadata": {
+          "tenantId": "default",
+          "documentId": "2081893107562409986",
+          "assetId": "75580523-5d68-4a58-8262-0efd6ed4a3da",
+          "sourcePath": "概率统计/条件概率、全概率与贝叶斯公式.md",
+          "pageNo": 0,
+          "permissionScope": "TENANT_PUBLIC",
+          "title": "高中数学（全局共享）"
+        }
+      }
+    ]
+  },
+  {
+    "name": "math_agent_teacher_text_blocks_bge",
+    "num_entities": 343,
+    "fields": [
+      {
+        "name": "id",
+        "dtype": "21",
+        "is_primary": true,
+        "auto_id": false,
+        "dim": null
+      },
+      {
+        "name": "vector",
+        "dtype": "101",
+        "is_primary": false,
+        "auto_id": false,
+        "dim": 512
+      },
+      {
+        "name": "text",
+        "dtype": "21",
+        "is_primary": false,
+        "auto_id": false,
+        "dim": null
+      },
+      {
+        "name": "metadata",
+        "dtype": "23",
+        "is_primary": false,
+        "auto_id": false,
+        "dim": null
+      }
+    ],
+    "sample": [
+      {
+        "id": "2081199796528934914:2081207023810494465",
+        "text": "SSA求三角形解的个数问题",
+        "metadata": {
+          "tenantId": "default",
+          "documentId": "2081199796528934914",
+          "blockId": "2081207023810494465",
+          "title": "GEcbf1b5SlQLE2dDiQuccUthnWb",
+          "sourceType": "feishu",
+          "permissionScope": "TENANT_PUBLIC",
+          "chapter": "SSA求三角形解的个数问题",
+          "section": "",
+          "sourcePath": "SSA求三角形解的个数问题.md",
+          "blockRole": "reference",
+          "graphTagsJson": "[]",
+          "checksum": "659192673007bf9dd0cb6ea3f4cbec30ac5c6330d3d15e30762a2ea5079d5496"
+        }
+      }
+    ]
+  },
+  {
+    "name": "textbook_image_collection",
+    "num_entities": 1121,
+    "fields": [
+      {
+        "name": "id",
+        "dtype": "21",
+        "is_primary": true,
+        "auto_id": false,
+        "dim": null
+      },
+      {
+        "name": "vector",
+        "dtype": "101",
+        "is_primary": false,
+        "auto_id": false,
+        "dim": 768
+      },
+      {
+        "name": "text",
+        "dtype": "21",
+        "is_primary": false,
+        "auto_id": false,
+        "dim": null
+      },
+      {
+        "name": "metadata",
+        "dtype": "23",
+        "is_primary": false,
+        "auto_id": false,
+        "dim": null
+      }
+    ],
+    "sample": [
+      {
+        "text": "# p001\n\n- 书名：普通高中教科书·数学（B版）必修 第四册\n- 章节：未识别章节\n- PDF页码：1\n- 印刷页码：未识别\n- 页图：![p001](../../pages/p001.png)\n\n## 正文\n\n数学\n第四册\n必 修\n普通高中教科书\nB版",
+        "metadata": {
+          "doc_id": "math_b_bixiu_4",
+          "docId": "math_b_bixiu_4",
+          "book_name": "普通高中教科书·数学（B版）必修 第四册",
+          "bookName": "普通高中教科书·数学（B版）必修 第四册",
+          "chapter_path": "未识别章节",
+          "chapterPath": "未识别章节",
+          "section_id": "",
+          "sectionId": "",
+          "page_no": 1,
+          "pageNo": 1,
+          "source_page_image": "pages/p001.png",
+          "sourcePageImage": "pages/p001.png",
+          "corpus_version": "textbook-section-c2-milvus-v1",
+          "corpusVersion": "textbook-section-c2-milvus-v1"
+        },
+        "id": "math_b_bixiu_4:p0001:pages/p001.png"
+      }
+    ]
+  },
+  {
+    "name": "textbook_text_collection",
+    "num_entities": 1070,
+    "fields": [
+      {
+        "name": "id",
+        "dtype": "21",
+        "is_primary": true,
+        "auto_id": false,
+        "dim": null
+      },
+      {
+        "name": "vector",
+        "dtype": "101",
+        "is_primary": false,
+        "auto_id": false,
+        "dim": 512
+      },
+      {
+        "name": "text",
+        "dtype": "21",
+        "is_primary": false,
+        "auto_id": false,
+        "dim": null
+      },
+      {
+        "name": "metadata",
+        "dtype": "23",
+        "is_primary": false,
+        "auto_id": false,
+        "dim": null
+      }
+    ],
+    "sample": [
+      {
+        "id": "math_b_bixiu_4_p008_ai_001",
+        "text": "# p008\n\n- 书名：普通高中教科书·数学（B版）必修 第四册\n- 章节：第五章抛体运动 / 11.1.6 祖!原理与几何体的体积\n- PDF页码：8\n- 印刷页码：未识别\n- 页图：![p008](../../pages/p008.png)\n\n## 正文\n\nNjNj ߦ ᭧ᏦԱߦ\nͿ˷᝵ ҂ ˔ˌ᜵wᝈ\nႀ Ѽ ߲ Ϳ\nݽѿܫ ԡ ҂᭤\nԳwᝈͿ ա\nງᐏͿ\nԧဘʾ ˌ᜵\n᛫ ˧ Ϳ wԧ\nဘ༏ү\nᬝזᢿ",
+        "metadata": {
+          "chunk_id": "math_b_bixiu_4_p008_ai_001",
+          "chunkId": "math_b_bixiu_4_p008_ai_001",
+          "doc_id": "math_b_bixiu_4",
+          "docId": "math_b_bixiu_4",
+          "book_name": "普通高中教科书·数学（B版）必修 第四册",
+          "bookName": "普通高中教科书·数学（B版）必修 第四册",
+          "chapter_path": "第五章抛体运动 / 11.1.6 祖!原理与几何体的体积",
+          "chapterPath": "第五章抛体运动 / 11.1.6 祖!原理与几何体的体积",
+          "section_id": "",
+          "sectionId": "",
+          "parent_section_id": "",
+          "parentSectionId": "",
+          "page_no": 8,
+          "pageNo": 8,
+          "printed_page_no": "未识别",
+          "printedPageNo": "未识别",
+          "section_title": "11.1.6 祖!原理与几何体的体积",
+          "sectionTitle": "11.1.6 祖!原理与几何体的体积",
+          "chunk_type": "page_summary",
+          "chunkType": "page_summary",
+          "formula_text": "",
+          "formulaText": "",
+          "source_path": "source/book.pdf",
+          "sourcePath": "source/book.pdf",
+          "source_chunk_id": "",
+          "sourceChunkId": "",
+          "source_page_image": "pages/p008.png",
+          "sourcePageImage": "pages/p008.png",
+          "corpus_version": "textbook-section-c2-milvus-v1",
+          "corpusVersion": "textbook-section-c2-milvus-v1"
+        }
+      }
+    ]
+  }
+]

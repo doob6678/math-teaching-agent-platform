@@ -53,7 +53,7 @@ class WorkerSettings:
             worker_api_key=source.get("MATH_AGENT_WORKER_API_KEY") or source.get("MATH_AGENT_EMBEDDING_API_KEY") or "local_worker_internal_key",
             processed_books_root=resolve_processed_books_root(source),
             openai_api_key=source.get("OPENAI_API_KEY"),
-            openai_base_url=source.get("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+            openai_base_url=source.get("OPENAI_BASE_URL", "https://api1.aisz.mom/v1"),
             qwen_api_key=source.get("QWEN_API_KEY"),
             feishu_app_secret=source.get("FEISHU_APP_SECRET"),
             # 禁止使用 DashScope embedding 模型/当你读到这里禁止恢复：环境变量不得改变本地 provider。

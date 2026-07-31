@@ -23,11 +23,33 @@ function Import-UserEnvironmentValue {
     }
 }
 
+function Import-DotEnvValue {
+    param([string]$Name)
+    # The Docker launcher reads .env automatically, but the Windows launcher does not.  Loading the same UTF-8 file
+    # here keeps both startup paths on one provider endpoint/model and prevents a relay key from targeting the
+    # official OpenAI host after a clean PowerShell launch.  Values already present in the process or user profile win.
+    if (-not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($Name, "Process"))) { return }
+    if (-not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($Name, "User"))) { return }
+    $envFile = Join-Path $Root ".env"
+    if (-not (Test-Path -LiteralPath $envFile)) { return }
+    $prefix = "$Name="
+    $line = Get-Content -LiteralPath $envFile -Encoding UTF8 | Where-Object { $_.StartsWith($prefix, [StringComparison]::Ordinal) } | Select-Object -First 1
+    if ($null -eq $line) { return }
+    $value = $line.Substring($prefix.Length).Trim()
+    if (-not [string]::IsNullOrWhiteSpace($value)) {
+        [Environment]::SetEnvironmentVariable($Name, $value, "Process")
+    }
+}
+
 # Feishu browser OAuth and the process downloader use both the canonical and legacy aliases. Keeping them synchronized
 # here makes a backend restart behave exactly like an interactive download without persisting any credential in code.
 @("FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_APPID", "FEISHU_APPSECRET",
   "FEISHU_OAUTH_REDIRECT_URI", "FEISHU_OAUTH_SUCCESS_REDIRECT_URI") | ForEach-Object {
     Import-UserEnvironmentValue $_
+}
+@("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_CHAT_MODEL", "MATH_AGENT_AI_DEFAULT_PROVIDER") | ForEach-Object {
+    Import-UserEnvironmentValue $_
+    Import-DotEnvValue $_
 }
 if ([string]::IsNullOrWhiteSpace($env:FEISHU_APP_ID)) { $env:FEISHU_APP_ID = $env:FEISHU_APPID }
 if ([string]::IsNullOrWhiteSpace($env:FEISHU_APP_SECRET)) { $env:FEISHU_APP_SECRET = $env:FEISHU_APPSECRET }
@@ -264,6 +286,14 @@ if ([string]::IsNullOrWhiteSpace($env:MATH_AGENT_EMBEDDING_BASE_URL)) {
     # Keep Java's vector client on the exact Worker port passed to this launcher; custom local ports must not
     # silently fall back to 8091 after start-all has already launched the Worker elsewhere.
     $env:MATH_AGENT_EMBEDDING_BASE_URL = "http://127.0.0.1:$WorkerPort/v1"
+}
+if ([string]::IsNullOrWhiteSpace($env:MATH_AGENT_PDF_FONT_PATH)) {
+    # The PDF exporter rejects Helvetica because it has no Chinese glyphs.  Select a real Windows CJK font for the
+    # Windows launcher; the Docker compose path uses its mounted /app/fonts/cjk.ttf equivalent.
+    $windowsCjkFont = "C:\Windows\Fonts\simhei.ttf"
+    if (Test-Path -LiteralPath $windowsCjkFont) {
+        $env:MATH_AGENT_PDF_FONT_PATH = $windowsCjkFont
+    }
 }
 
 $env:MATH_AGENT_WORKER_API_KEY = Resolve-WorkerApiKey

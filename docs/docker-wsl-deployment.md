@@ -1,13 +1,15 @@
 # WSL Docker deployment
 
-The compose project packages the frontend/Nginx, Java backend, Python model worker, MySQL, Redis, RabbitMQ and a
-standalone Milvus stack (Milvus, etcd and MinIO). Its default host ports deliberately avoid the Windows development
-services on `5173`, `8080`, `8091`, `3306`, `6379`, `19530` and `9091`.
+The compose project packages the frontend/Nginx, Java backend, Python model worker, MySQL, Redis, RabbitMQ and the
+compose-owned Milvus stack (Milvus, etcd and MinIO). The active host ports are frontend `5173`, backend `8080`,
+worker `8092`, MySQL `3307`, Redis `6380`, RabbitMQ `5674/15674`, and Milvus `19531`. Port `19530` belongs to a
+separate legacy `milvus-standalone` container and must not be used for this project.
 
 ## Configure
 
-Run from the repository root in WSL. Keep `.env` local and replace every required placeholder; Compose rejects a
-missing database, worker, MinIO or Milvus secret before it creates a container.
+Run from the repository root in WSL. Keep `.env` local and replace every required placeholder. The canonical local
+provider is `https://api1.aisz.mom/v1` with model `gpt-5.6-luna`; both are explicit defaults and can be overridden
+only by `OPENAI_BASE_URL`/`OPENAI_CHAT_MODEL` in `.env`.
 
 ```bash
 cp .env.example .env
@@ -16,7 +18,7 @@ chmod 600 .env
 docker compose --env-file .env config -q
 ```
 
-For real generation set `OPENAI_API_KEY`, `OPENAI_BASE_URL` and `OPENAI_CHAT_MODEL`. For Feishu app/bot sync set
+For real generation set `OPENAI_API_KEY` (the endpoint/model above are already configured). For Feishu app/bot sync set
 `FEISHU_APP_ID` and `FEISHU_APP_SECRET`; user OAuth additionally requires the two redirect URLs and the token
 encryption key. The backend image contains the project downloader at `/app/scripts/download_feishu_url.py`.
 
@@ -37,16 +39,14 @@ Existing named volumes are never reformatted by `up` or `down`.
 ## Verify
 
 ```bash
-curl --fail http://127.0.0.1:5174/healthz
-curl --fail http://127.0.0.1:5174/api/system/health
-curl --fail http://127.0.0.1:8081/api/system/health
+curl --fail http://127.0.0.1:5173/healthz
+curl --fail http://127.0.0.1:8080/api/system/health
 curl --fail http://127.0.0.1:8092/health
 docker compose --env-file .env ps
 ```
 
-The browser entry point is `http://127.0.0.1:5174/`; Nginx proxies `/api/*` to the backend so sessions, SSE, resource
-assets and MCP use the same origin. External MCP clients use `http://127.0.0.1:8081/api/mcp` or the proxied
-`http://127.0.0.1:5174/api/mcp`.
+The browser entry point is `http://127.0.0.1:5173/`; Nginx proxies `/api/*` to the backend so sessions, SSE, resource
+assets and MCP use the same origin. Direct backend clients use `http://127.0.0.1:8080/api/*`.
 
 Stop without deleting durable data:
 

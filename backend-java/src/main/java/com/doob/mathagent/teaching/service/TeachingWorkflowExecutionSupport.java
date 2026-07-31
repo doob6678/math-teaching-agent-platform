@@ -1,0 +1,865 @@
+package com.doob.mathagent.teaching.service;
+
+import com.doob.mathagent.agent.service.AgentTraceRecord;
+import com.doob.mathagent.agent.service.AgentTraceStore;
+import com.doob.mathagent.agent.vo.AgentRunExecuteResponse;
+import com.doob.mathagent.infrastructure.security.RequestSubject;
+import com.doob.mathagent.knowledge.service.KnowledgeQuestionBankService;
+import com.doob.mathagent.knowledge.service.QuestionBankSearchText;
+import com.doob.mathagent.knowledge.vo.QuestionBankItemResponse;
+import com.doob.mathagent.memory.dto.StudentMemoryRequest;
+import com.doob.mathagent.memory.service.StudentMemoryCommand;
+import com.doob.mathagent.memory.service.StudentMemoryReuseService;
+import com.doob.mathagent.memory.vo.StudentMemoryResponse;
+import com.doob.mathagent.retrieval.RetrievalRequestContext;
+import com.doob.mathagent.retrieval.TextbookRetrievalService;
+import com.doob.mathagent.retrieval.TextbookSearchHit;
+import com.doob.mathagent.retrieval.TextbookSearchRequest;
+import com.doob.mathagent.retrieval.TextbookSearchResponse;
+import com.doob.mathagent.teaching.TeachingDraftSectionCollector;
+import com.doob.mathagent.teaching.TeachingDraftMergeResult;
+import com.doob.mathagent.teaching.TeachingDraftMerger;
+import com.doob.mathagent.teaching.TeachingDraftReview;
+import com.doob.mathagent.teaching.TeachingDraftReviewCollector;
+import com.doob.mathagent.teaching.TeachingDraftSections;
+import com.doob.mathagent.teaching.TeachingEvidence;
+import com.doob.mathagent.teaching.TeachingHandoutVersionCollector;
+import com.doob.mathagent.teaching.TeachingHandoutVersions;
+import com.doob.mathagent.teaching.TeachingKnowledgePointPack;
+import com.doob.mathagent.teaching.TeachingReactStep;
+import com.doob.mathagent.teaching.TeachingRequestContext;
+import com.doob.mathagent.teaching.TeachingReviewPolicy;
+import com.doob.mathagent.teaching.TeachingTaskStatus;
+import com.doob.mathagent.teaching.TeachingWorkflowEvent;
+import com.doob.mathagent.teaching.TeachingWorkflowNode;
+import com.doob.mathagent.teaching.dto.TeachingTaskRequest;
+import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
+import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService;
+import com.doob.mathagent.teacher.search.TeacherResourceBlockSearchResponse;
+import com.doob.mathagent.teacher.search.TeacherResourceSearchFilter;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.InvalidPathException;
+import java.nio.file.Path;
+import java.nio.file.Files;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Comparator;
+import java.util.LinkedHashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.core.task.TaskExecutor;
+import org.springframework.stereotype.Service;
+import com.doob.mathagent.teaching.service.TeachingWorkflowService.ProgressPhase;
+import com.doob.mathagent.teaching.service.TeachingWorkflowService.ModelExplanationUnit;
+import com.doob.mathagent.teaching.service.TeachingWorkflowService.ModelExplanationHeader;
+import com.doob.mathagent.teaching.service.TeachingWorkflowService.StageTimer;
+import com.doob.mathagent.teaching.service.TeachingWorkflowService.LabelPosition;
+import com.doob.mathagent.teaching.service.TeachingWorkflowService.LabeledDraftBlock;
+import com.doob.mathagent.teaching.service.TeachingWorkflowService.EvidencePack;
+import com.doob.mathagent.teaching.service.TeachingWorkflowService.TimedEvidence;
+import com.doob.mathagent.teaching.service.TeachingWorkflowService.QuestionAgentContext;
+import com.doob.mathagent.teaching.service.TeachingWorkflowService.QuestionAgentBranch;
+import com.doob.mathagent.teaching.service.TeachingWorkflowService.QuestionAgentTiming;
+import com.doob.mathagent.teaching.service.TeachingWorkflowService.QuestionAgentBatch;
+import static com.doob.mathagent.teaching.service.TeachingWorkflowService.*;
+
+/**
+ * Stateful execution support for the public teaching workflow facade.
+ *
+ * <p>The facade owns lifecycle/idempotency endpoints; this class owns dependency-backed execution, retrieval,
+ * and progress persistence. Keeping those responsibilities separate prevents another god class.</p>
+ */
+class TeachingWorkflowExecutionSupport {
+    protected Path processedBooksRoot;
+    protected TextbookRetrievalService retrievalService;
+    protected TeachingTaskStore taskStore;
+    protected StudentMemoryReuseService memoryReuseService;
+    protected TeachingAiDraftService aiDraftService;
+    protected AgentTraceStore agentTraceStore;
+    protected TeachingHandoutTemplateService handoutTemplateService;
+    protected KnowledgeQuestionBankService questionBankService;
+    protected TeacherResourceBlockSearchService teacherResourceBlockSearchService;
+    protected TeacherResourceVisualEvidenceService teacherResourceVisualEvidenceService;
+    protected TaskExecutor taskExecutor;
+    protected boolean returnCompletedWhenExecutorIsSynchronous;
+
+
+    /** Renders three independent publishable versions from an already approved, immutable common draft. */
+    protected TeachingTaskResponse renderApprovedHandoutVersions(
+            TeachingTaskResponse task, TeachingRequestContext reviewer) {
+        TeachingTaskRequest request = new TeachingTaskRequest(
+                task.clientRequestId(), task.questionText(), task.learningGoal(), evidenceLimitForResume(task),
+                task.selectedTemplate() == null ? null : task.selectedTemplate().templateCode(), task.watermarkText()).normalize();
+        TeachingHandoutTemplateProfile template = handoutTemplateService.resolve(request.handoutTemplateCode());
+        StudentMemoryResponse memory = task.memoryReuse() == null
+                ? new StudentMemoryResponse(false, null, "private", "", 0D,
+                        "review rendering has no memory snapshot", List.of())
+                : fromMemoryReuse(task.memoryReuse());
+        List<TeachingEvidence> questionEvidence = task.evidence().stream()
+                .filter(item -> "QUESTION_BANK".equals(item.sourceScope())).toList();
+        List<TeachingEvidence> textbookEvidence = task.evidence().stream()
+                .filter(item -> "PUBLIC_TEXTBOOK".equals(item.sourceScope())).toList();
+        List<TeachingEvidence> teacherEvidence = task.evidence().stream()
+                .filter(item -> "TEACHER_RESOURCE".equals(item.sourceScope())).toList();
+        List<TeachingKnowledgePointPack> retrievedPacks = buildKnowledgePointPacks(
+                request, textbookEvidence, teacherEvidence, questionEvidence);
+        List<TeachingKnowledgePointPack> knowledgePacks = retrievedPacks.isEmpty()
+                ? fallbackKnowledgePointPacks(request, task.evidence())
+                : retrievedPacks;
+        TeachingHandoutVersions versions = renderHandoutVersions(
+                request, task.evidence(), knowledgePacks, memory, template, task.aiDraft(), task.mergeResult().mergedSections());
+        requireQualifiedRenderedQuestionCount(template, versions.teacherHandoutLatex());
+        return task.withHandoutVersion("teacher", versions.teacherHandoutLatex())
+                .withHandoutVersion("student", versions.studentHandoutLatex())
+                .withHandoutVersion("lecture", versions.lectureHandoutLatex())
+                .withReviewStatus(TeachingTaskStatus.COMPLETED, null);
+    }
+
+
+    /**
+     * 同步执行 DAG 的兼容入口（无 taskId/owner/idempotencyKey，用于测试或非异步场景）。
+     */
+    protected TeachingTaskResponse execute(TeachingTaskRequest request, TeachingRequestContext context) {
+        return execute(request, context, UUID.randomUUID().toString(), null, null, null);
+    }
+
+
+    /**
+     * 执行固定 DAG：学习目标识别、资源复用、公开教材检索、ReAct、AI 草稿、LaTeX 讲义、交互建议。
+     * 异步路径下先持久化 RUNNING 状态，完成后更新为 COMPLETED，异常时更新为 FAILED。
+     *
+     * @param taskId 异步任务的 taskId，来自 submit() 中预生成的 UUID
+     * @param ownerKey 用于 RUNNING/COMPLETED 状态的持久化
+     * @param idempotencyKey 幂等 key，异步完成后更新已有记录
+     */
+    protected TeachingTaskResponse execute(TeachingTaskRequest request, TeachingRequestContext context, String taskId, String ownerKey, String idempotencyKey) {
+        return execute(request, context, taskId, ownerKey, idempotencyKey, null);
+    }
+
+
+    /** Executes a task while reusing durable evidence and AI draft artifacts already completed before a failure. */
+    protected TeachingTaskResponse execute(
+            TeachingTaskRequest request,
+            TeachingRequestContext context,
+            String taskId,
+            String ownerKey,
+            String idempotencyKey,
+            TeachingTaskResponse checkpoint) {
+        StageTimer timer = new StageTimer(checkpoint == null ? List.of() : checkpoint.stageTimings());
+        TeachingHandoutTemplateProfile template = handoutTemplateService.resolve(request.handoutTemplateCode());
+        StudentMemoryResponse memoryResponse = checkpoint != null && checkpoint.memoryReuse() != null
+                ? fromMemoryReuse(checkpoint.memoryReuse())
+                : memoryReuseService.reuse(memoryRequest(request, context));
+        timer.mark("memory_reuse");
+        List<TeachingEvidence> evidence;
+        List<TeachingEvidence> textbookEvidence;
+        List<TeachingEvidence> questionEvidence;
+        List<TeachingEvidence> teacherResourceEvidence;
+        saveRunningProgress(
+                request, context, taskId, ownerKey, idempotencyKey, template, memoryResponse,
+                List.of(), List.of(), List.of(), List.of(), null, timer,
+                ProgressPhase.EVIDENCE_COLLECTING);
+        if (checkpoint != null && evidenceCheckpointComplete(checkpoint) && !requiresFreshEvidence(checkpoint)) {
+            textbookEvidence = checkpoint.evidence().stream()
+                    .filter(item -> "PUBLIC_TEXTBOOK".equals(item.sourceScope()))
+                    .filter(item -> !isBenchmarkEvidence(item)).toList();
+            questionEvidence = checkpoint.evidence().stream()
+                    .filter(item -> "QUESTION_BANK".equals(item.sourceScope()))
+                    .filter(item -> !isBenchmarkEvidence(item)).toList();
+            teacherResourceEvidence = checkpoint.evidence().stream()
+                    .filter(item -> "TEACHER_RESOURCE".equals(item.sourceScope()))
+                    .filter(item -> !isBenchmarkEvidence(item)).toList();
+            evidence = checkpoint.evidence().stream()
+                    .filter(item -> !isBenchmarkEvidence(item))
+                    .toList();
+            timer.mark("evidence_resume");
+        } else if (memoryResponse.reused()) {
+            textbookEvidence = List.of();
+            questionEvidence = List.of();
+            teacherResourceEvidence = List.of();
+            evidence = List.of();
+            timer.mark("reuse_short_circuit");
+        } else {
+            EvidencePack evidencePack = retrieveEvidencePack(request, context);
+            textbookEvidence = evidencePack.textbookEvidence();
+            questionEvidence = evidencePack.questionEvidence();
+            teacherResourceEvidence = evidencePack.teacherResourceEvidence();
+            timer.record("textbook_retrieval", evidencePack.textbookElapsedMs());
+            timer.record("question_bank_retrieval", evidencePack.questionElapsedMs());
+            timer.record("teacher_resource_retrieval", evidencePack.teacherResourceElapsedMs());
+            timer.resetCheckpoint();
+            evidence = evidencePack.mergedEvidence();
+            if (evidence.isEmpty()) {
+                textbookEvidence = List.of();
+                questionEvidence = List.of();
+                teacherResourceEvidence = List.of();
+            }
+        }
+        saveRunningProgress(
+                request, context, taskId, ownerKey, idempotencyKey, template, memoryResponse,
+                evidence, textbookEvidence, questionEvidence, teacherResourceEvidence, null, timer,
+                ProgressPhase.OUTLINE_BUILDING);
+        requireQualifiedQuestionEvidence(template, questionEvidence);
+        // Fan out an immutable context per verified question before the shared draft is built. This is the
+        // orchestration boundary for question agents and keeps cross-question state out of each worker.
+        QuestionAgentBatch questionAgentBatch = prepareQuestionAgentContexts(questionEvidence);
+
+
+        timer.record("question_agents_parallel", questionAgentBatch.elapsedMs());
+        // Keep one durable timing row per isolated question branch.  The aggregate barrier alone cannot tell the
+        // progress UI which question was slow, and would make a failed branch indistinguishable from a healthy one.
+        questionAgentBatch.branchTimings().forEach(branch ->
+                timer.record("question_agent_" + branch.agentId(), branch.elapsedMs()));
+        List<TeachingReactStep> reactTrace = List.of();
+        timer.mark("react_trace");
+        saveRunningProgress(
+                request, context, taskId, ownerKey, idempotencyKey, template, memoryResponse,
+                evidence, textbookEvidence, questionEvidence, teacherResourceEvidence, null, timer,
+                ProgressPhase.CONTENT_GENERATING);
+        // Evidence may have been refreshed on an earlier recovery pass while the structured model draft already
+        // names the repaired source number. Reuse that durable draft for a renderer-only repair; otherwise every
+        // PDF gate retry would trigger another long real-model call before applying a parser/LaTeX fix.
+        // Reuse only a structurally valid draft.  A provider can return a real response that fails the JSON/quality
+        // contract; persisting that diagnostic is essential for the recovery UI, but reusing it on resume would turn
+        // every retry into the same immediate failure and make a transient relay problem impossible to recover from.
+        TeachingTaskResponse.AiDraft aiDraft = checkpoint != null && checkpoint.aiDraft() != null
+                && checkpoint.aiDraft().structured()
+                ? checkpoint.aiDraft()
+                : aiDraftService.draft(request, evidence, memoryResponse, template);
+        // Persist the real provider/result metadata before applying the strict publication gate.  Failed tasks then
+        // expose the actual retry/parse state and elapsed work in the workflow record without ever publishing an
+        // unstructured response as a handout.
+        saveRunningProgress(
+                request, context, taskId, ownerKey, idempotencyKey, template, memoryResponse,
+                evidence, textbookEvidence, questionEvidence, teacherResourceEvidence, aiDraft, timer,
+                ProgressPhase.CONTENT_GENERATING);
+
+        // The continuous real-question master promises per-question reasoning, not a deterministic fallback page.
+        // A relay timeout or malformed model response must remain a recoverable FAILED task with its evidence intact;
+        // otherwise a generic template can be mistaken for a teacher-reviewed explanation and reach PDF export.
+        requireStructuredQuestionReasoning(template, aiDraft);
+        timer.mark("ai_draft");
+        saveRunningProgress(
+                request, context, taskId, ownerKey, idempotencyKey, template, memoryResponse,
+                evidence, textbookEvidence, questionEvidence, teacherResourceEvidence, aiDraft, timer,
+                ProgressPhase.HANDOUT_RENDERING);
+        List<TeachingWorkflowNode> nodes = buildNodes(
+                request,
+                evidence,
+                questionEvidence,
+                teacherResourceEvidence,
+                memoryResponse,
+                aiDraft,
+                template,
+                canUseQuestionBank(context),
+                canUseTeacherResources(context));
+        TeachingDraftSections draftSections = collectDraftSections(request, evidence, aiDraft);
+        TeachingDraftReview draftReview = TeachingDraftReviewCollector.collect(draftSections);
+        TeachingDraftMergeResult mergeResult = TeachingDraftMerger.merge(draftSections, draftReview);
+        // Publication is a Java-owned state transition. The model may draft/review content, but cannot bypass a
+        // tenant's human-review policy or publish an unresolved structural review.
+        TeachingReviewPolicy reviewPolicy = TeachingReviewPolicy.fromEnvironment();
+        TeachingTaskStatus publicationStatus = reviewPolicy
+                .statusAfterQualityGate(passedAutomaticReview(mergeResult));
+        TeachingDraftSections renderSections = mergeResult.mergedSections();
+        // Retrieval determines the printable lesson spine. AI may enrich explanations, but cannot merge unrelated
+        // question-bank items back into a generic section or invent a knowledge-point title.
+        List<TeachingKnowledgePointPack> retrievedKnowledgePointPacks = buildKnowledgePointPacks(
+                request, textbookEvidence, teacherResourceEvidence, questionEvidence);
+        List<TeachingKnowledgePointPack> knowledgePointPacks = retrievedKnowledgePointPacks.isEmpty()
+                ? fallbackKnowledgePointPacks(request, evidence)
+                : retrievedKnowledgePointPacks;
+        // A pending human review stores only the shared, traceable draft. Rendering exportable variants before a
+        // decision would both waste work for rejected drafts and create a path to publish unreviewed material.
+        TeachingHandoutVersions handoutVersions = reviewPolicy == TeachingReviewPolicy.AUTO_PUBLISH
+                ? renderHandoutVersions(request, evidence, knowledgePointPacks, memoryResponse, template, aiDraft, renderSections)
+                : new TeachingHandoutVersions("", "", "");
+        timer.mark("handout_generation");
+        List<TeachingWorkflowEvent> workflowEvents = buildWorkflowEvents(
+                nodes,
+                evidence,
+                textbookEvidence,
+                questionEvidence,
+                teacherResourceEvidence,
+                aiDraft,
+                template);
+        if (taskId == null) {
+            taskId = UUID.randomUUID().toString();
+        }
+        TeachingTaskResponse response = new TeachingTaskResponse(
+                taskId,
+                request.clientRequestId(),
+                context.tenantId(),
+                context.subjectType(),
+                context.subjectId(),
+                template.summary(),
+                publicationStatus,
+                request.questionText(),
+                request.learningGoal(),
+                request.watermarkText(),
+                nodes,
+                workflowEvents,
+                reactTrace,
+                evidence,
+                handoutVersions.teacherHandoutLatex(),
+                handoutVersions.teacherHandoutLatex(),
+                handoutVersions.studentHandoutLatex(),
+                handoutVersions.lectureHandoutLatex(),
+                List.of("继续追问定义 D(x_0)", "生成同类练习题", "把讲义导出为 PDF"),
+                toMemoryReuse(memoryResponse),
+                timer.timings(),
+                aiDraft,
+                draftSections,
+                draftReview,
+                mergeResult,
+                null);
+        if (ownerKey != null && idempotencyKey != null) {
+            taskStore.save(ownerKey, idempotencyKey, response);
+        }
+        saveAiDraftTrace(response, context);
+        return response;
+    }
+
+
+    /**
+     * Persists the CoursewareAgent trace for real AI draft runs so WorkBuddy/MCP and the frontend can recover it.
+     */
+    protected void saveAiDraftTrace(TeachingTaskResponse response, TeachingRequestContext context) {
+        TeachingTaskResponse.AiDraft aiDraft = response.aiDraft();
+        if (aiDraft == null || !aiDraft.enabled()
+                || aiDraft.providerName() == null || aiDraft.providerName().isBlank()
+
+                || aiDraft.modelCode() == null || aiDraft.modelCode().isBlank()) {
+            return;
+        }
+        agentTraceStore.save(new AgentTraceRecord(
+                UUID.randomUUID().toString(),
+                response.taskId(),
+                Instant.now(),
+                context.tenantId(),
+                context.subjectType(),
+                context.subjectId(),
+                "CoursewareAgent",
+                aiDraft.providerName(),
+                aiDraft.modelCode(),
+                "COMPLETED",
+                0.0d,
+                List.of("tool:courseware:generate", "tool:textbook:search"),
+                List.of("data:public_textbook", "data:student_memory"),
+                response.evidence().stream().map(TeachingWorkflowService::evidenceRef).toList(),
+                response.stageTimings().stream()
+                        .map(timing -> new AgentRunExecuteResponse.StageTiming(timing.stage(), timing.elapsedMs()))
+                        .toList(),
+                new AgentRunExecuteResponse.TokenUsage(
+                        aiDraft.promptTokens(),
+                        aiDraft.completionTokens(),
+                        aiDraft.totalTokens()),
+                aiDraftTraceMessage(aiDraft),
+                aiDraft.recoveryEvents().stream()
+                        .map(event -> new AgentTraceRecord.DiagnosticEvent(
+                                event.eventType(),
+                                event.providerName(),
+                                event.modelCode(),
+                                event.attemptNo(),
+                                event.retryable(),
+                                event.message()))
+                        .toList()));
+    }
+
+
+    /**
+     * 把教材检索命中转换为教学证据，明确标注 PUBLIC_TEXTBOOK 作用域。
+     */
+    protected TeachingEvidence toEvidence(TextbookSearchHit hit) {
+        return new TeachingEvidence(
+                "PUBLIC_TEXTBOOK",
+                hit.bookName() + " / " + hit.sectionTitle(),
+                hit.chunkId(),
+                hit.pageNo(),
+                hit.textSnippet(),
+                resolvedTextbookImagePath(hit));
+    }
+
+
+    /** Resolves only a page image physically inside the configured textbook corpus; remote document URLs are rejected. */
+    protected String resolvedTextbookImagePath(TextbookSearchHit hit) {
+        if (hit == null || hit.docId() == null || hit.docId().isBlank()) {
+            return "";
+        }
+        Path corpusRoot = processedBooksRoot.toAbsolutePath().normalize();
+        Path bookRoot = corpusRoot.resolve(hit.docId().strip()).normalize();
+        if (!bookRoot.startsWith(corpusRoot)) {
+            return "";
+        }
+        List<String> candidates = new ArrayList<>();
+        if (hit.imageRelPaths() != null) {
+            candidates.addAll(hit.imageRelPaths());
+        }
+        candidates.add(hit.sourcePageImage());
+        for (String relativePath : candidates) {
+            String resolved = resolveAuthorizedTextbookImage(corpusRoot, bookRoot, relativePath);
+            if (!resolved.isBlank()) {
+                return resolved;
+            }
+        }
+        return "";
+    }
+
+
+    /**
+     * 教学任务的证据 DAG：教材与教师资料互不依赖，先并行召回；题库必须等教师资料定位到具体课程点后再检索，
+     * 避免仅凭宽泛学习目标选入无关题目。
+     */
+    protected EvidencePack retrieveEvidencePack(TeachingTaskRequest request, TeachingRequestContext context) {
+        /*
+         * Do not reuse the outer teaching task executor here: the outer worker may already be occupied by this task.
+         * A tiny per-task pool keeps textbook/question-bank/teacher-resource retrieval bounded and avoids starvation.
+         */
+        ExecutorService evidenceExecutor = Executors.newFixedThreadPool(2);
+        // 两条独立证据源并行执行，缩短讲义任务的关键路径；后续题库检索保持依赖关系，不在此并发。
+        CompletableFuture<TimedEvidence> textbookFuture = CompletableFuture.supplyAsync(
+                () -> timeEvidence(() -> alignEvidenceToTopic(request, retrieveTextbookEvidence(request, context))),
+                evidenceExecutor);
+        CompletableFuture<TimedEvidence> teacherResourceFuture = CompletableFuture.supplyAsync(
+                () -> timeEvidence(() -> alignEvidenceToTopic(request, retrieveTeacherResourceEvidence(request, context))),
+                evidenceExecutor);
+        try {
+            TimedEvidence textbook = awaitEvidence("textbook", textbookFuture);
+
+            TimedEvidence teacherResource = awaitEvidence("teacher_resource", teacherResourceFuture);
+
+            // The second retrieval is deliberately after the teacher-resource boundary.  This preserves the user's
+            // intended chain: real directory/teacher material -> concrete knowledge point -> atomic bank question.
+            TimedEvidence questionBank = timeEvidence(() -> {
+                List<TeachingEvidence> retrievedQuestions = retrieveQuestionBankEvidence(
+                        request, context, curriculumPointQueries(request, teacherResource.evidence()));
+                // retrieveQuestionBankEvidence has already selected permission-checked atomic rows for a qualified
+                // multi-topic compilation. Applying the single-topic aligner a second time collapses that pack back
+                // to the first matching subject and recreates the one-question failure that this branch prevents.
+                return requiresQualifiedQuestionCompilation(request)
+                        ? retrievedQuestions
+                        : alignEvidenceToTopic(request, retrievedQuestions);
+            });
+            return new EvidencePack(
+                    textbook.evidence(),
+                    questionBank.evidence(),
+                    teacherResource.evidence(),
+                    textbook.elapsedMs(),
+                    questionBank.elapsedMs(),
+                    teacherResource.elapsedMs());
+        } catch (RuntimeException exception) {
+            textbookFuture.cancel(true);
+            teacherResourceFuture.cancel(true);
+            throw exception;
+        } finally {
+            evidenceExecutor.shutdownNow();
+        }
+    }
+
+
+    protected List<TeachingEvidence> retrieveTextbookEvidence(TeachingTaskRequest request, TeachingRequestContext context) {
+        /*
+         * Search each compact, topic-derived branch independently.  The old implementation sent one
+         * concatenated query containing the full goal and question; semantic retrieval quite reasonably
+         * ranked the long prose, while the later topic aligner rejected those rows.  Branching keeps the
+         * retrieval contract small and lets the existing BGE/CLIP/rerank pipeline score the actual topic.
+         */
+        LinkedHashMap<String, TeachingEvidence> merged = new LinkedHashMap<>();
+        List<String> queries = alignedQueries(request);
+        if (queries.isEmpty()) {
+            String fallback = retrievalQuery(request);
+            if (!fallback.isBlank()) {
+                queries = List.of(fallback);
+            }
+        }
+        RetrievalRequestContext retrievalContext = new RetrievalRequestContext(
+                context.tenantId(),
+                context.subjectType(),
+                context.subjectId(),
+                null,
+                context.deviceId(),
+                "teaching-workflow",
+                "/api/teaching/tasks");
+        for (String query : queries) {
+            if (query == null || query.isBlank()) {
+                continue;
+            }
+
+            TextbookSearchResponse retrieval = retrievalService.search(
+                    processedBooksRoot,
+                    new TextbookSearchRequest(query, request.evidenceLimit()),
+                    retrievalContext);
+            for (TextbookSearchHit hit : retrieval.hits()) {
+                TeachingEvidence evidence = toEvidence(hit);
+                String key = evidence.sourceScope() + ":" + evidence.chunkId();
+                TeachingEvidence existing = merged.get(key);
+                if (existing == null || shouldPreferEvidence(evidence, existing)) {
+                    merged.put(key, evidence);
+                }
+            }
+        }
+        return merged.values().stream()
+                .limit(request.evidenceLimit())
+                .toList();
+    }
+
+
+    protected List<TeachingEvidence> retrieveQuestionBankEvidence(
+            TeachingTaskRequest request,
+            TeachingRequestContext context,
+            List<String> curriculumPointQueries) {
+        if (!canUseQuestionBank(context) || questionBankService == null) {
+            return List.of();
+        }
+        Map<String, QuestionBankItemResponse> matchedQuestions = new LinkedHashMap<>();
+        LinkedHashSet<String> alignedQueries = new LinkedHashSet<>();
+        if (curriculumPointQueries != null) {
+            alignedQueries.addAll(curriculumPointQueries);
+        }
+        // Request-derived queries remain a safe sparse-library fallback, but can no longer be the only route when a
+        // teacher document has already disclosed a more concrete directory point.
+        alignedQueries.addAll(alignedQueries(request));
+        try {
+
+            for (String query : alignedQueries) {
+                for (QuestionBankItemResponse question : questionBankService.searchQuestions(
+                        context.tenantId(),
+                        context.subjectType(),
+                        context.subjectId(),
+                        query,
+                        request.evidenceLimit())) {
+                    matchedQuestions.putIfAbsent(question.questionId(), question);
+                }
+            }
+            List<QuestionBankItemResponse> alignedQuestions = matchedQuestions.values().stream()
+                    // SQL LIKE is intentionally permissive so teachers can browse a sparse bank.  A handout is
+                    // different: an unrelated hit (for example, a geometry maximum-value problem for a quadratic
+                    // minimum-value lesson) is worse than no hit because it contaminates all three editions.
+                    .filter(question -> hasSpecificQuestionTopicMatch(request, question))
+                    .filter(TeachingWorkflowService::isAtomicQuestionBankItem)
+                    .sorted(Comparator.comparingInt(TeachingWorkflowService::questionDifficultyRank))
+                    .toList();
+            /*
+             * A user may explicitly ask for a directory-wide real-exam compilation. Imported exam pages can share a
+             * single source knowledge-point id even though their atomic prompts cover vectors, conics, geometry and
+             * counting; the usual two-per-point lesson cap would then incorrectly leave a qualified eleven-question
+             * source with only one printable item.  This narrow branch reads only existing visible bank rows and keeps
+             * the same atomic/source checks. It never fabricates a question or activates for an ordinary single-topic
+             * lesson.
+             */
+            if (requiresQualifiedQuestionCompilation(request)
+                    && alignedQuestions.size() < MIN_QUALIFIED_HANDOUT_QUESTION_COUNT) {
+                List<QuestionBankItemResponse> visibleAtomicQuestions = questionBankService.searchQuestions(
+                                context.tenantId(),
+                                context.subjectType(),
+                                context.subjectId(),
+                                "",
+                                compilationSearchLimit(request)).stream()
+                        .filter(TeachingWorkflowService::isAtomicQuestionBankItem)
+                        .toList();
+                /*
+                 * A qualified continuous-paper template must never mix unrelated legacy banks merely because their
+                 * loose search terms ranked first. Prefer one source document that independently contributes the
+                 * ten required atomic prompts. This makes the document/page asset lineage deterministic: every
+                 * figure gate can resolve the question back to its own synchronized source page.
+                 */
+                List<QuestionBankItemResponse> sourcePack = qualifiedSingleSourceQuestionPack(visibleAtomicQuestions);
+                if (sourcePack.size() >= MIN_QUALIFIED_HANDOUT_QUESTION_COUNT) {
+                    return sourcePack.stream()
+                            .map(question -> toQuestionEvidence(question, context))
+                            .toList();
+                }
+                LinkedHashMap<String, QuestionBankItemResponse> expanded = new LinkedHashMap<>();
+                alignedQuestions.forEach(question -> expanded.put(question.questionId(), question));
+                visibleAtomicQuestions.forEach(question -> expanded.putIfAbsent(question.questionId(), question));
+                return deduplicateAtomicQuestionRows(expanded.values()).stream()
+                        .sorted(Comparator.comparingInt(TeachingWorkflowService::questionDifficultyRank))
+                        .map(question -> toQuestionEvidence(question, context))
+                        .toList();
+            }
+            // A directory lesson can contain several concrete knowledge points. Select one example plus one
+            // variation per point before rendering, instead of letting the broad first query consume the whole list.
+            return selectQuestionsByKnowledgePoint(request, deduplicateAtomicQuestionRows(alignedQuestions)).stream()
+                    .map(question -> toQuestionEvidence(question, context))
+                    .toList();
+        } catch (IllegalArgumentException exception) {
+            return List.of();
+        }
+    }
+
+
+    protected List<TeachingEvidence> retrieveTeacherResourceEvidence(TeachingTaskRequest request, TeachingRequestContext context) {
+        if (!canUseTeacherResources(context) || teacherResourceBlockSearchService == null) {
+            return List.of();
+        }
+        Map<String, TeacherResourceBlockSearchResponse.Hit> matchedBlocks = new LinkedHashMap<>();
+        Set<String> visualRecoveryDocuments = new LinkedHashSet<>();
+        boolean visualRequest = VISUAL_EVIDENCE_REQUEST.matcher(
+                (request.questionText() == null ? "" : request.questionText()) + " "
+                        + (request.learningGoal() == null ? "" : request.learningGoal())).find();
+        List<String> alignedQueries = alignedQueries(request);
+        try {
+            for (String query : alignedQueries) {
+                TeacherResourceBlockSearchResponse response = teacherResourceBlockSearchService.search(
+                        context.tenantId(),
+                        context.subjectType(),
+                        context.subjectId(),
+                        query,
+                        6,
+                        "/api/teaching/tasks");
+                for (TeacherResourceBlockSearchResponse.Hit hit : response.hits()) {
+                    matchedBlocks.putIfAbsent(hit.documentId() + ":" + hit.blockId(), hit);
+                    if (visualRequest
+                            && (hit.assetRefs() == null || hit.assetRefs().isEmpty())
+                            && visualRecoveryDocuments.add(hit.documentId())
+                            && visualRecoveryDocuments.size() <= TEACHER_RESOURCE_IMAGE_RECOVERY_LIMIT) {
+                        // A document may rank its title/intro block first while a sibling block owns the real image
+                        // refs. Re-query that same authorized document so visual evidence is not lost to global top-N.
+                        TeacherResourceBlockSearchResponse scoped = teacherResourceBlockSearchService.search(
+                                context.tenantId(),
+                                context.subjectType(),
+                                context.subjectId(),
+                                query,
+                                6,
+                                "/api/teaching/tasks",
+                                TeacherResourceSearchFilter.of(
+                                        List.of(),
+                                        List.of(hit.documentId()),
+                                        List.of(),
+                                        List.of()));
+                        for (TeacherResourceBlockSearchResponse.Hit scopedHit : scoped.hits()) {
+                            matchedBlocks.putIfAbsent(scopedHit.documentId() + ":" + scopedHit.blockId(), scopedHit);
+                        }
+                    }
+                }
+            }
+            List<TeachingEvidence> collectedEvidence = matchedBlocks.values().stream()
+                    .filter(hit -> teacherHitRespectsColorCountConstraint(request, hit))
+                    .sorted((left, right) -> {
+                        if (visualRequest) {
+                            boolean leftHasImage = left.assetRefs() != null && !left.assetRefs().isEmpty();
+                            boolean rightHasImage = right.assetRefs() != null && !right.assetRefs().isEmpty();
+                            if (leftHasImage != rightHasImage) {
+                                return leftHasImage ? -1 : 1;
+                            }
+                        }
+                        return Comparator.comparingDouble(TeacherResourceBlockSearchResponse.Hit::score)
+                                .reversed()
+                                .thenComparing(TeacherResourceBlockSearchResponse.Hit::documentTitle)
+                                .thenComparingInt(TeacherResourceBlockSearchResponse.Hit::blockOrder)
+
+                                .compare(left, right);
+                    })
+
+                    .limit(Math.max(1, request.evidenceLimit()))
+                    .map(hit -> toTeacherResourceEvidence(hit, context))
+                    .toList();
+            // A source can be synchronized through two paths (for example a Feishu document and an image-recovery
+            // import). They are different blocks in storage but one teaching source; retain the image-bearing copy
+            // so the model and all three handout versions never repeat the same OCR paragraph.
+            return deduplicateSupportingEvidence(collectedEvidence);
+        } catch (IllegalArgumentException exception) {
+            return List.of();
+        }
+    }
+
+
+    /**
+     * Converts an atomic bank row into printable evidence and restores its same-page diagram only when required.
+     *
+     * <p>The question bank deliberately stores text and source lineage, not filesystem paths. For a {@code 如图}
+     * child row we therefore resolve {@code parentBlockId#qN -> parent page -> opaque asset -> authorized local
+     * file} at task time under the current user. Non-figure questions do not trigger image materialization or a
+     * costly visual-model call.</p>
+     */
+    protected TeachingEvidence toQuestionEvidence(QuestionBankItemResponse question, TeachingRequestContext context) {
+        String difficulty = question.difficulty() == null || question.difficulty().isBlank()
+                ? "未标难度"
+                : question.difficulty();
+        String title = question.questionTitle() + " / 难度：" + difficulty;
+        String snippet = question.questionText();
+        if (question.answerJson() != null && !question.answerJson().isBlank() && !"{}".equals(question.answerJson().strip())) {
+            String formattedAnswer = QuestionBankAnswerFormatter.format(question.answerJson());
+            if (!formattedAnswer.isBlank()) {
+                snippet = snippet + "\n答案要点：" + formattedAnswer;
+            }
+        }
+        TeacherResourceVisualEvidenceService.MaterializedImageEvidence image = null;
+        if (requiresAuthorizedFigure(question.questionText())
+                && question.sourceResourceDocumentId() != null
+                && !question.sourceResourceDocumentId().isBlank()
+                && question.sourceBlockId() != null
+                && !question.sourceBlockId().isBlank()
+                && teacherResourceBlockSearchService != null) {
+            RequestSubject subject = new RequestSubject(
+                    context.tenantId(), context.subjectType(), context.subjectId(), context.deviceId()).normalize();
+            image = teacherResourceBlockSearchService
+                    // A rendered source page is not an atomic diagram. Resolve only the original DOCX image that is
+                    // structurally adjacent to this exact numbered stem; missing proof means no figure is printed.
+                    .resolveVisibleInlineFigureForQuestion(
+                            question.sourceResourceDocumentId(), question.questionText(), subject)
+                    // Both resolvers deliberately return Optional: a missing/unauthorized page asset excludes the
+                    // figure-dependent question later in rendering instead of manufacturing a replacement diagram.
+                    .flatMap(asset -> materializeTeacherImage(asset, subject))
+                    .orElse(null);
+        }
+        return new TeachingEvidence(
+                "QUESTION_BANK",
+                title,
+                question.questionId(),
+                0,
+                snippet,
+                image == null ? "" : image.imagePath().toString(),
+                image == null ? "" : image.imageDescription(),
+                question.sourceResourceDocumentId() == null ? "" : question.sourceResourceDocumentId());
+    }
+
+
+    protected TeachingEvidence toTeacherResourceEvidence(
+            TeacherResourceBlockSearchResponse.Hit hit,
+            TeachingRequestContext context) {
+        RequestSubject subject = new RequestSubject(
+                context.tenantId(),
+                context.subjectType(),
+                context.subjectId(),
+                context.deviceId()).normalize();
+        /*
+         * A shared legacy mirror can legitimately rank in RAG while its document id is no longer expandable through
+         * the current teacher library.  Persist only the resolver's current visible reference.  When no verified
+         * same-source block exists, retain the evidence for rendering but intentionally omit sourceDocumentId so the
+         * frontend has no broken or permission-bypassing “view original” target.
+         */
+        Optional<TeacherResourceBlockSearchService.CanonicalReference> inspectionReference =
+                teacherResourceBlockSearchService == null
+                        ? Optional.empty()
+                        : teacherResourceBlockSearchService.resolveVisibleReference(
+                                context.tenantId(), context.subjectType(), context.subjectId(), hit);
+        TeacherResourceVisualEvidenceService.MaterializedImageEvidence image = hit.assetRefs() == null
+
+                ? null
+                : hit.assetRefs().stream()
+                        .filter(asset -> asset.assetId() != null && !asset.assetId().isBlank())
+                        .map(asset -> materializeTeacherImage(asset, subject))
+                        .flatMap(Optional::stream)
+                        .findFirst()
+                        .orElse(null);
+        return new TeachingEvidence(
+                "TEACHER_RESOURCE",
+                teacherResourceSourceTitle(hit),
+                inspectionReference.map(TeacherResourceBlockSearchService.CanonicalReference::blockId)
+                        .orElse(hit.blockId()),
+                hit.pageNo() == null ? 0 : hit.pageNo(),
+                /*
+                 * `evidenceText` is an expanded retrieval window and can contain a previous introduction or the
+                 * next 5/6-colour variation.  Printable question evidence must retain the exact matched atomic
+                 * block first, otherwise an authorized map loses its own colour condition after compaction.
+                 */
+                compactTeachingEvidence(hit.snippet(), hit.evidenceText()),
+                image == null ? "" : image.imagePath().toString(),
+                image == null ? "" : image.imageDescription(),
+                teacherResourceBlockSearchService == null
+                        ? hit.documentId()
+                        : inspectionReference
+                                .map(TeacherResourceBlockSearchService.CanonicalReference::documentId)
+                                .orElse(""));
+    }
+
+
+    /**
+     * Resolves the local rendering copy and optional visual facts from the same authorized teacher asset request.
+     *
+     * <p>The compatibility fallback is intentionally image-only. It preserves existing rendering when the optional
+     * vision adapter is not wired, but never fabricates a caption from a filename or from an unverified remote URL.</p>
+     */
+    protected Optional<TeacherResourceVisualEvidenceService.MaterializedImageEvidence> materializeTeacherImage(
+            TeacherResourceBlockSearchResponse.AssetRef asset,
+            RequestSubject subject) {
+        if (teacherResourceVisualEvidenceService != null) {
+
+            return teacherResourceVisualEvidenceService.materialize(asset.assetId(), asset.mimeType(), subject);
+        }
+        if (teacherResourceBlockSearchService == null) {
+            return Optional.empty();
+        }
+        return teacherResourceBlockSearchService.materializeVisibleAsset(asset.assetId(), subject)
+                .map(path -> new TeacherResourceVisualEvidenceService.MaterializedImageEvidence(path, ""));
+    }
+
+
+    /**
+     * Persists one meaningful RUNNING snapshot after each durable boundary. The same snapshot is read by REST
+     * recovery and SSE, preventing the frontend from rendering temporary zero-value placeholders.
+     */
+    protected void saveRunningProgress(
+            TeachingTaskRequest request,
+            TeachingRequestContext context,
+            String taskId,
+            String ownerKey,
+            String idempotencyKey,
+            TeachingHandoutTemplateProfile template,
+            StudentMemoryResponse memoryResponse,
+            List<TeachingEvidence> evidence,
+            List<TeachingEvidence> textbookEvidence,
+            List<TeachingEvidence> questionEvidence,
+            List<TeachingEvidence> teacherResourceEvidence,
+            TeachingTaskResponse.AiDraft aiDraft,
+            StageTimer timer,
+
+            ProgressPhase phase) {
+        if (taskId == null || ownerKey == null || idempotencyKey == null) {
+            return;
+        }
+        List<TeachingWorkflowNode> nodes = progressWorkflowNodes(
+                request,
+                memoryResponse,
+                evidence,
+                textbookEvidence,
+                questionEvidence,
+                teacherResourceEvidence,
+                aiDraft,
+                template,
+                canUseQuestionBank(context),
+                canUseTeacherResources(context),
+                phase);
+        TeachingTaskResponse snapshot = new TeachingTaskResponse(
+                taskId,
+                request.clientRequestId(),
+                context.tenantId(),
+                context.subjectType(),
+                context.subjectId(),
+                template.summary(),
+                TeachingTaskStatus.RUNNING,
+                request.questionText(),
+                request.learningGoal(),
+                request.watermarkText(),
+                nodes,
+                progressWorkflowEvents(template, textbookEvidence, questionEvidence, teacherResourceEvidence, aiDraft, phase),
+                List.of(),
+                evidence,
+                "", "", "", "",
+                List.of(),
+                toMemoryReuse(memoryResponse),
+                timer.timings(),
+                aiDraft,
+                null,
+                null,
+                null,
+                null);
+        taskStore.save(ownerKey, idempotencyKey, snapshot);
+    }
+}

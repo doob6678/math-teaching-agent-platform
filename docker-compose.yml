@@ -8,7 +8,7 @@ services:
       MYSQL_ROOT_PASSWORD: local_mysql_7f9b1cc8a2d44529b6e481d5
       MYSQL_DATABASE: math_agent_rag
     command: ["mysqld", "--character-set-server=utf8mb4", "--collation-server=utf8mb4_0900_ai_ci"]
-    ports: ["3307:3306"]
+    ports: ["${MATH_AGENT_MYSQL_HOST_PORT:-3307}:3306"]
     volumes:
       - mysql-data:/var/lib/mysql
       - ./backend-java/src/main/resources/db:/docker-entrypoint-initdb.d:ro
@@ -21,7 +21,7 @@ services:
   redis:
     image: redis:7.4-alpine
     restart: unless-stopped
-    ports: ["6380:6379"]
+    ports: ["${MATH_AGENT_REDIS_HOST_PORT:-6380}:6379"]
     volumes: ["redis-data:/data"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -33,8 +33,8 @@ services:
     image: rabbitmq:4-management
     restart: unless-stopped
     ports:
-      - "5673:5672"
-      - "15673:15672"
+      - "${MATH_AGENT_RABBITMQ_HOST_PORT:-5673}:5672"
+      - "${MATH_AGENT_RABBITMQ_MANAGEMENT_HOST_PORT:-15673}:15672"
     volumes: ["rabbitmq-data:/var/lib/rabbitmq"]
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
@@ -85,7 +85,7 @@ services:
       COMMON_SECURITY_AUTHORIZATIONENABLED: "true"
       COMMON_SECURITY_DEFAULTROOTPASSWORD: local_milvus_8f2c6a4d1e9b3f7c5a0d
     ports:
-      - "19531:19530"
+      - "${MATH_AGENT_MILVUS_HOST_PORT:-19531}:19530"
       - "9092:9091"
     volumes: ["milvus-data:/var/lib/milvus"]
     depends_on:
@@ -112,7 +112,21 @@ services:
     gpus: all
     environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-    ports: ["8092:8091"]
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api1.aisz.mom/v1}
+      OPENAI_CHAT_MODEL: ${OPENAI_CHAT_MODEL:-gpt-5.6-luna}
+      # These values are the worker's real local model contract.  Compose must pass them explicitly because a
+      # container cannot see the host .env file merely because it was used for interpolation on the host.
+      MATH_AGENT_WORKER_API_KEY: ${MATH_AGENT_WORKER_API_KEY:-local_worker_internal_key}
+      MATH_AGENT_CONTAINER_TEXT_MODEL_PATH: ${MATH_AGENT_CONTAINER_TEXT_MODEL_PATH:-/models/BAAI/bge-small-zh-v1.5}
+      MATH_AGENT_CONTAINER_RERANK_MODEL_PATH: ${MATH_AGENT_CONTAINER_RERANK_MODEL_PATH:-/models/BAAI/bge-reranker-v2-m3}
+      MATH_AGENT_CONTAINER_CLIP_MODEL_PATH: ${MATH_AGENT_CONTAINER_CLIP_MODEL_PATH:-/models/damo/multi-modal_clip-vit-large-patch14_zh}
+      MATH_AGENT_LOCAL_TEXT_EMBEDDING_MODEL_PATH: ${MATH_AGENT_LOCAL_TEXT_EMBEDDING_MODEL_PATH:-/models/BAAI/bge-small-zh-v1.5}
+      MATH_AGENT_LOCAL_RERANK_MODEL_PATH: ${MATH_AGENT_LOCAL_RERANK_MODEL_PATH:-/models/BAAI/bge-reranker-v2-m3}
+      MATH_AGENT_LOCAL_CLIP_MODEL_PATH: ${MATH_AGENT_LOCAL_CLIP_MODEL_PATH:-/models/damo/multi-modal_clip-vit-large-patch14_zh}
+      MATH_AGENT_LOCAL_TEXT_EMBEDDING_DEVICE: ${MATH_AGENT_LOCAL_TEXT_EMBEDDING_DEVICE:-cpu}
+      MATH_AGENT_LOCAL_RERANK_DEVICE: ${MATH_AGENT_LOCAL_RERANK_DEVICE:-cpu}
+      MATH_AGENT_LOCAL_CLIP_DEVICE: ${MATH_AGENT_LOCAL_CLIP_DEVICE:-cpu}
+    ports: ["${MATH_AGENT_WORKER_HOST_PORT:-8092}:8091"]
     volumes:
       - worker-data:/app/data
       - /mnt/d/ModelScope/models:/models:ro
@@ -131,7 +145,19 @@ services:
       - 1.1.1.1
     environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-    ports: ["8080:8080"]
+      # Keep the container on the same OpenAI-compatible endpoint and model as the host .env file.  The backend
+      # binds these names into both Spring AI and the ReAct provider, preventing a relay key from falling back to
+      # api.openai.com during a clean Docker start.
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api1.aisz.mom/v1}
+      OPENAI_CHAT_MODEL: ${OPENAI_CHAT_MODEL:-gpt-5.6-terra}
+      MATH_AGENT_AI_DEFAULT_PROVIDER: ${MATH_AGENT_AI_DEFAULT_PROVIDER:-openai}
+      MATH_AGENT_AI_CHAT_REQUEST_TIMEOUT_MS: ${MATH_AGENT_AI_CHAT_REQUEST_TIMEOUT_MS:-420000}
+      MATH_AGENT_WORKER_API_KEY: ${MATH_AGENT_WORKER_API_KEY:-local_worker_internal_key}
+      MATH_AGENT_VECTOR_INDEX_EMBEDDING_API_KEY: ${MATH_AGENT_WORKER_API_KEY:-local_worker_internal_key}
+      # The image mounts the Windows SimHei file below; pass its in-container path so PDFBox never guesses a
+      # Windows-only path and refuses a Chinese handout export inside Linux.
+      MATH_AGENT_PDF_FONT_PATH: ${MATH_AGENT_PDF_FONT_PATH:-/app/fonts/cjk.ttf}
+    ports: ["${MATH_AGENT_BACKEND_HOST_PORT:-8080}:8080"]
     volumes:
       - backend-data:/app/data
       # Fixed WSL source path for the real 2008–2024 paper collection. This is deliberately not an environment
@@ -150,7 +176,7 @@ services:
   frontend:
     build: ./frontend
     restart: unless-stopped
-    ports: ["5173:80"]
+    ports: ["${MATH_AGENT_FRONTEND_HOST_PORT:-5173}:80"]
     depends_on:
       backend: {condition: service_healthy}
 
