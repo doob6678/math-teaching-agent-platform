@@ -126,4 +126,13 @@ class FormulaMarkupSanitizerTest {
 
         assertThat(sanitized).contains("√3a");
     }
+
+    @Test
+    void keepsVectorCoordinateEquationAsOneMathExpression() {
+        String sanitized = FormulaMarkupSanitizer.sanitizeFeishuMath(
+                "由坐标可得 \\vec{AC_1}=(a,a,a)。");
+
+        assertThat(sanitized).contains("$\\vec{AC_1}=(a,a,a)$");
+        assertThat(sanitized).doesNotContain("$\\vec{AC_1}$=(a");
+    }
 }

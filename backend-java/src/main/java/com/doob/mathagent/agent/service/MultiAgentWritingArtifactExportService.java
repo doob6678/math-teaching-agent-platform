@@ -207,12 +207,13 @@ public class MultiAgentWritingArtifactExportService {
         }
     }
 
-    /** Resolves the compiler inside Docker first, then allows the local Windows development installation. */
+    /**
+     * Resolves XeLaTeX from the supported runtime installations.
+     *
+     * <p>The compiler is infrastructure owned, so export behavior must not change with an undocumented environment
+     * variable. Tests that need isolation should invoke the renderer through their explicit test seam instead.</p>
+     */
     private static Optional<Path> latexEnginePath() {
-        String configured = System.getenv("MATH_AGENT_XELATEX_PATH");
-        if (configured != null && !configured.isBlank() && Files.isRegularFile(Path.of(configured.strip()))) {
-            return Optional.of(Path.of(configured.strip()));
-        }
         for (Path candidate : List.of(
                 Path.of("C:/Users/doob/AppData/Local/Programs/MiKTeX/miktex/bin/x64/xelatex.exe"),
                 Path.of("C:/Program Files/MiKTeX/miktex/bin/x64/xelatex.exe"),

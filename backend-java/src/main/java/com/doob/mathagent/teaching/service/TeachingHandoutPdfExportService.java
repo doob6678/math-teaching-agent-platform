@@ -71,6 +71,16 @@ public class TeachingHandoutPdfExportService {
     /** Bare OCR variables such as x^2 must enter math mode before ordinary TeX escaping turns ^ into visible text. */
     static final Pattern BARE_MATH_ATOM = Pattern.compile(
             "(?<![$A-Za-z0-9])([A-Za-z](?:\\^\\{?[A-Za-z0-9]+\\}?|_\\{?[A-Za-z0-9]+\\}?))(?![$A-Za-z0-9])");
+    /** Repairs model output that closes math immediately after a function, e.g. {@code $\tan$ C\left(...\right)}. */
+    static final Pattern SPLIT_FUNCTION_ARGUMENT = Pattern.compile(
+            "\\$(\\\\(?:sin|cos|tan|cot|sec|csc|ln|log|exp))\\$\\s*"
+                    + "([A-Za-z](?:_\\{[^}]+}|_[A-Za-z0-9])?)\\s*"
+                    + "(\\\\left\\([^$\\n]+?\\\\right\\))");
+    /** Internal retrieval identifiers are audit metadata and must never be printed as lesson mathematics. */
+    static final Pattern INTERNAL_EVIDENCE_IDENTIFIER_CLAUSE = Pattern.compile(
+            "(?:，|；)?\\s*(?:[\\p{IsHan}]{0,8})?证据(?:编号|锚点|ID|id)(?:为|：)?\\s*"
+                    + "\\$?[A-Za-z0-9][A-Za-z0-9_-]*\\$?"
+                    + "(?:\\s*[、,，]\\s*\\$?[A-Za-z0-9][A-Za-z0-9_-]*\\$?)*\\s*[；;。]?");
     static final Pattern VSPACE_COMMAND = Pattern.compile("\\\\vspace\\{([0-9.]+)em}");
     static final Pattern UNDERLINE_HSPACE_COMMAND = Pattern.compile("\\\\underline\\{\\\\hspace\\{[0-9.]+em}}");
     static final Pattern VISIBLE_WORKSPACE_LABEL = Pattern.compile(
@@ -160,52 +170,10 @@ public class TeachingHandoutPdfExportService {
         if (compiled.isPresent()) {
             return new RenderedHandoutPdf(compiled.get(), "xelatex", countPages(compiled.get()));
         }
-        // In the deployed teaching workflow a raw-text fallback is worse than an explicit failure: it can turn every
-        // Chinese glyph into '?' and expose commands such as minipage as if they were handout content. Tests and
-        // offline tools may still exercise PDFBox, while production pins this flag together with the XeLaTeX binary.
-        if (requiresXeLaTeX()) {
-            throw new IllegalStateException("XeLaTeX 未能生成讲义 PDF；已阻止返回乱码或原始 LaTeX 文本");
-        }
-        try (PDDocument document = new PDDocument()) {
-            String title = versionTitle(version);
-            String templateName = templateNameForVersion(task, version);
-            PDFont font = loadReadableFont(document);
-            PdfStyle style = PdfStyle.forVersion(version, templateName);
-            String handoutSource = sanitizeLatexForExport(task.handoutLatexFor(version));
-            if (style.isLecture()) {
-                handoutSource = stripLectureProjectionColumns(handoutSource);
-            } else if ("学生版".equals(style.versionLabel())) {
-                handoutSource = stripStudentQuestionUnits(handoutSource);
-            } else {
-                handoutSource = stripTeacherOcrAnswerBlocks(handoutSource);
-            }
-            boolean hasStructuredBody = containsStructuredSections(handoutSource);
-            String watermark = normalizedWatermark(repairMojibake(task.watermarkText()));
-            PdfWriter writer = new PdfWriter(document, font, style, title, templateName, watermark);
-            writer.writeMuted("任务编号：" + safeText(task.taskId()));
-            writer.writeMuted(watermark);
-            writer.writeBlank();
-            if (!hasStructuredBody) {
-                writer.writeHeading("学习目标");
-                writer.writeParagraph(nonBlank(task.learningGoal(), "未填写"));
-                if (!safeText(task.questionText()).isBlank()) {
-                    writer.writeHeading("题目 / 要求");
-                    writer.writeParagraph(task.questionText());
-                }
-                writer.writeHeading("讲义内容");
-            }
-            for (ReadableLine line : readableLines(handoutSource)) {
-                writer.write(line);
-            }
-            writer.close();
-            addPageFooters(document, font, style, title, watermark, templateName);
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            document.save(out);
-            byte[] bytes = out.toByteArray();
-            return new RenderedHandoutPdf(bytes, "pdfbox_fallback", document.getNumberOfPages());
-        } catch (IOException exception) {
-            throw new IllegalStateException("Failed to render teaching handout PDF", exception);
-        }
+        // Publishing a text-drawn fallback destroys fractions, radicals, superscripts, vectors and page semantics.
+        // Formula rendering is therefore a hard product invariant, not a deployment flag: users select a visual
+        // template, while every template is compiled by a real XeLaTeX engine or the export fails explicitly.
+        throw new IllegalStateException("XeLaTeX 未能生成讲义 PDF；已阻止返回未渲染公式或错误页面");
     }
 
     /**
@@ -330,14 +298,6 @@ public class TeachingHandoutPdfExportService {
     static String insertPrintedQuestionSpacing(String body) { return TeachingHandoutPdfExportPolicyPartA.insertPrintedQuestionSpacing(body); }
     // Pure export rule delegated to TeachingHandoutPdfExportPolicyPartA; process/lifecycle state remains in the exporter facade.
     static boolean endsWithPageBreak(StringBuilder text) { return TeachingHandoutPdfExportPolicyPartA.endsWithPageBreak(text); }
-    // Pure export rule delegated to TeachingHandoutPdfExportPolicyPartA; process/lifecycle state remains in the exporter facade.
-    static String genericHeaderFooterCommands() { return TeachingHandoutPdfExportPolicyPartA.genericHeaderFooterCommands(); }
-    // Pure export rule delegated to TeachingHandoutPdfExportPolicyPartA; process/lifecycle state remains in the exporter facade.
-    static String zhaoHeaderFooterCommands(String watermark) { return TeachingHandoutPdfExportPolicyPartA.zhaoHeaderFooterCommands(watermark); }
-    // Pure export rule delegated to TeachingHandoutPdfExportPolicyPartA; process/lifecycle state remains in the exporter facade.
-    static String genericHeadingCommands() { return TeachingHandoutPdfExportPolicyPartA.genericHeadingCommands(); }
-    // Pure export rule delegated to TeachingHandoutPdfExportPolicyPartA; process/lifecycle state remains in the exporter facade.
-    static String zhaoHeadingCommands() { return TeachingHandoutPdfExportPolicyPartA.zhaoHeadingCommands(); }
 
     /**
      * Produces the canonical LaTeX body used by preview, download, ZIP export, and PDF rendering.
@@ -346,6 +306,9 @@ public class TeachingHandoutPdfExportService {
      */
     public static String sanitizeLatexForExport(String source) {
         String normalized = repairMojibake(safeText(source))
+                // JSON producers occasionally persist a literal backslash-n instead of a line break. XeLaTeX treats
+                // the resulting \n token as an undefined command, so restore transport newlines before parsing.
+                .replace("\\n", "\n")
                 // JSON producers can interpret LaTeX commands as control characters (\b, \t, \f).
                 // Repair those persisted legacy values before any line-level filtering or math normalization.
                 .replace("\u0008oldsymbol", "\\boldsymbol")
@@ -373,12 +336,19 @@ public class TeachingHandoutPdfExportService {
                 .replace("\\textbackslash{}cdot", "\\cdot")
                 .replace("\\textbackslash{}times", "\\times")
                 .replace("\\textbackslash{}to", "\\to");
+        // A function, its argument symbol, and scalable parentheses are one mathematical expression. Leaving
+        // \left outside dollar delimiters makes XeLaTeX abort with "Missing $ inserted" and previously triggered
+        // the lossy text fallback. Normalize only this unambiguous grammar; malformed or incomplete math still fails.
+        normalized = normalizeSplitFunctionArguments(normalized);
         // JSON decoders treat the `\\r` in an unescaped `\\rightarrow` as a carriage return.  After
         // newline normalization this appears as `\\item ightarrow` or `\\par ightarrow`; repair the
         // command before XeLaTeX parses the body so a valid arrow cannot trigger a PDFBox fallback.
         normalized = normalized
                 .replaceAll("\\\\item\\s*ightarrow", "\\\\rightarrow")
                 .replaceAll("\\\\par\\s*ightarrow", "\\\\rightarrow");
+        // Source ids such as math_b_bixiu_4_p014_ai_001 are useful in traces, but printing them leaks workflow
+        // internals and makes TeX interpret repeated underscores as an invalid nested subscript.
+        normalized = INTERNAL_EVIDENCE_IDENTIFIER_CLAUSE.matcher(normalized).replaceAll("");
         List<String> lines = new ArrayList<>();
         boolean inEvidenceSection = false;
         boolean skippingTextbookBody = false;
@@ -588,6 +558,17 @@ public class TeachingHandoutPdfExportService {
                 .replaceAll("(?m)^\\s*(?:-\\s*)+enumerate\\s*-\\s*", "")
                 .strip();
     }
+
+    static String normalizeSplitFunctionArguments(String value) {
+        Matcher matcher = SPLIT_FUNCTION_ARGUMENT.matcher(value == null ? "" : value);
+        StringBuffer normalized = new StringBuffer();
+        while (matcher.find()) {
+            String replacement = "$%s %s%s$".formatted(matcher.group(1), matcher.group(2), matcher.group(3));
+            matcher.appendReplacement(normalized, Matcher.quoteReplacement(replacement));
+        }
+        matcher.appendTail(normalized);
+        return normalized.toString();
+    }
     // Pure export rule delegated to TeachingHandoutPdfExportPolicyPartA; process/lifecycle state remains in the exporter facade.
     static String stripMalformedEnvironmentPrefix(String value) { return TeachingHandoutPdfExportPolicyPartA.stripMalformedEnvironmentPrefix(value); }
     // Pure export rule delegated to TeachingHandoutPdfExportPolicyPartA; process/lifecycle state remains in the exporter facade.
@@ -606,8 +587,6 @@ public class TeachingHandoutPdfExportService {
     static String normalizeCircledNumerals(String value) { return TeachingHandoutPdfExportPolicyPartA.normalizeCircledNumerals(value); }
     // Pure export rule delegated to TeachingHandoutPdfExportPolicyPartA; process/lifecycle state remains in the exporter facade.
     static String normalizeMixedMathDelimiters(String value) { return TeachingHandoutPdfExportPolicyPartA.normalizeMixedMathDelimiters(value); }
-    // Pure export rule delegated to TeachingHandoutPdfExportPolicyPartA; process/lifecycle state remains in the exporter facade.
-    static boolean requiresXeLaTeX() { return TeachingHandoutPdfExportPolicyPartA.requiresXeLaTeX(); }
     // Pure export rule delegated to TeachingHandoutPdfExportPolicyPartA; process/lifecycle state remains in the exporter facade.
     static String stripLectureProjectionColumns(String body) { return TeachingHandoutPdfExportPolicyPartA.stripLectureProjectionColumns(body); }
     // Pure export rule delegated to TeachingHandoutPdfExportPolicyPartA; process/lifecycle state remains in the exporter facade.
@@ -640,8 +619,13 @@ public class TeachingHandoutPdfExportService {
     static boolean isBlankWorkspaceLabelLine(String line) { return TeachingHandoutPdfExportPolicyPartB.isBlankWorkspaceLabelLine(line); }
     // Pure export rule delegated to TeachingHandoutPdfExportPolicyPartB; process/lifecycle state remains in the exporter facade.
     static boolean isBlankOnlyLatexLine(String line) { return TeachingHandoutPdfExportPolicyPartB.isBlankOnlyLatexLine(line); }
-    // Pure export rule delegated to TeachingHandoutPdfExportPolicyPartB; process/lifecycle state remains in the exporter facade.
-    static String renderLatexBody(String sanitizedBody) { return TeachingHandoutPdfExportPolicyPartB.renderLatexBody(sanitizedBody); }
+    /**
+     * Applies the final body normalization used immediately before XeLaTeX compilation.
+     * Public visibility keeps this compiler-boundary contract directly regression-testable without starting a PDF process.
+     */
+    public static String renderLatexBody(String sanitizedBody) {
+        return TeachingHandoutPdfExportPolicyPartB.renderLatexBody(sanitizedBody);
+    }
     // Pure export rule delegated to TeachingHandoutPdfExportPolicyPartB; process/lifecycle state remains in the exporter facade.
     static String renderLatexImageBlock(List<HandoutImage> images) { return TeachingHandoutPdfExportPolicyPartB.renderLatexImageBlock(images); }
     // Pure export rule delegated to TeachingHandoutPdfExportPolicyPartB; process/lifecycle state remains in the exporter facade.

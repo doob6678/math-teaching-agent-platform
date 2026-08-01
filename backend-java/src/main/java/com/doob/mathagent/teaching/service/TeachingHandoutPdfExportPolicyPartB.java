@@ -259,7 +259,10 @@ final class TeachingHandoutPdfExportPolicyPartB {
 
     static String renderLatexBody(String sanitizedBody) {
         StringBuilder builder = new StringBuilder();
-        String[] lines = safeText(sanitizedBody).replace("\r\n", "\n").replace('\r', '\n').split("\n");
+        // Normalize before splitting: persisted JSON may contain one or two transport slashes before "n". If this
+        // happens after the split, XeLaTeX receives an undefined \n command instead of a document line boundary.
+        String normalizedBody = normalizeLegacyLatexForExport(safeText(sanitizedBody));
+        String[] lines = normalizedBody.replace("\r\n", "\n").replace('\r', '\n').split("\n");
         for (int index = 0; index < lines.length; index += 1) {
             Optional<HandoutImage> image = parseImageMarker(lines[index].strip());
             if (image.isPresent()) {
@@ -412,6 +415,10 @@ final class TeachingHandoutPdfExportPolicyPartB {
      */
     static String normalizeLegacyLatexForExport(String value) {
         String normalized = value
+                // Some persisted JSON has two transport slashes before n; restore both one- and two-slash forms here
+                // as this is the final boundary before XeLaTeX receives the body.
+                .replace("\\\\n", "\n")
+                .replace("\\n", "\n")
                 .replace("\\textbackslash\\{\\}", "\\")
                 .replace("\\textbackslash{}", "\\")
                 .replace("\\textbackslash", "\\")

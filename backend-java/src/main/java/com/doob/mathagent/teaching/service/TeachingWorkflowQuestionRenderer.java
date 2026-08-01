@@ -542,6 +542,10 @@ final class TeachingWorkflowQuestionRenderer {
         // be repaired by the real single-document synchronizer/OCR before this row can become a mathematical task.
         return UNRESOLVED_OCR_MATH_GLYPH.matcher(normalized).find()
                 || normalized.equals("题目")
+                || normalized.toLowerCase(Locale.ROOT).contains("todo")
+                // Some imported Markdown rows contain the worked derivation after a slash but no actual stem.
+                // A solution paragraph is not a question and must not become an AI-selected example/variation.
+                || normalized.matches("^(?:化简目标表达式|利用同角三角函数关系|由已知条件推导|结合余弦定理计算结果).*")
                 || normalized.contains("题目内容待补充")
                 || normalized.contains("题目待补充")
                 || normalized.matches("^(?:暂无|无|待补充|未提供).{0,16}$");

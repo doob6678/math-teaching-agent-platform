@@ -20,7 +20,6 @@ import com.doob.mathagent.teaching.service.TeachingHandoutPdfExportService;
 import com.doob.mathagent.teaching.service.InMemoryTeachingHumanFeedbackStore;
 import com.doob.mathagent.teaching.service.InMemoryTeachingTaskStore;
 import com.doob.mathagent.teaching.service.TeachingAiDraftService;
-import com.doob.mathagent.teaching.service.TeachingCapabilityVerifier;
 import com.doob.mathagent.teaching.service.TeachingHumanFeedbackService;
 import com.doob.mathagent.teaching.service.TeachingWorkflowService;
 import com.doob.mathagent.teaching.vo.TeachingHandoutBatchExportResponse;
@@ -65,13 +64,11 @@ class TeachingTaskControllerTest {
     private static TeachingTaskController testController(
             TeachingWorkflowService workflowService,
             RequestSubjectResolver subjectResolver,
-            TeachingCapabilityVerifier capabilityVerifier,
             TeachingHandoutPdfExportService pdfExportService,
             TeachingHandoutBatchExportService batchExportService) {
         return new TeachingTaskController(
                 workflowService,
                 subjectResolver,
-                capabilityVerifier,
                 pdfExportService,
                 batchExportService,
                 new TeachingHumanFeedbackService(new InMemoryTeachingHumanFeedbackStore()));
@@ -97,7 +94,6 @@ class TeachingTaskControllerTest {
         TeachingTaskController controller = testController(
                 service,
                 teacherResolver(),
-                (token, action, path, requestHash, subject) -> true,
                 new TeachingHandoutPdfExportService(),
                 batchExportService(new TeachingHandoutPdfExportService()));
         TeachingTaskRequest request = new TeachingTaskRequest(
@@ -163,7 +159,6 @@ class TeachingTaskControllerTest {
         TeachingTaskController controller = testController(
                 service,
                 teacherResolver(),
-                (token, action, path, requestHash, subject) -> true,
                 new TeachingHandoutPdfExportService(),
                 batchExportService(new TeachingHandoutPdfExportService()));
         TeachingTaskResponse task = new TeachingTaskResponse(
@@ -227,7 +222,6 @@ class TeachingTaskControllerTest {
         TeachingTaskController controller = testController(
                 workflowService,
                 teacherResolver(),
-                (token, action, path, requestHash, subject) -> true,
                 pdfExportService,
                 batchExportService(pdfExportService));
         TeachingTaskResponse task = shortLongHandoutTask();
@@ -253,147 +247,6 @@ class TeachingTaskControllerTest {
     }
 
     @Test
-    void rejectsTeachingSubmitWithoutAcceptedCapabilityToken() throws Exception {
-        TeachingWorkflowService service = testWorkflowService(
-                createTextbookCorpus(),
-                com.doob.mathagent.retrieval.TextbookRetrievalServiceFixture.service(
-                        new TextbookCatalogReader(),
-                        new TextbookChunkReader(),
-                        new LocalTextbookBm25SearchEngine(),
-                        new NoopRetrievalAuditSink()),
-                new InMemoryTeachingTaskStore(),
-                new StudentMemoryReuseService(new InMemoryStudentMemoryStore()));
-        TeachingTaskController controller = testController(
-                service,
-                teacherResolver(),
-                (token, action, path, requestHash, subject) -> false,
-                new TeachingHandoutPdfExportService(),
-                batchExportService(new TeachingHandoutPdfExportService()));
-
-        org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.submit(
-                        new TeachingTaskRequest(
-                                "client-002",
-                                "How do I solve D(-1)?",
-                                "Understand a function-domain definition problem",
-                                3),
-                        null))
-                .isInstanceOf(ResponseStatusException.class)
-                .hasMessageContaining("Capability token");
-    }
-
-    @Test
-    void rejectsLatexExportWithoutAcceptedCapabilityToken() throws Exception {
-        TeachingWorkflowService service = testWorkflowService(
-                createTextbookCorpus(),
-                com.doob.mathagent.retrieval.TextbookRetrievalServiceFixture.service(
-                        new TextbookCatalogReader(),
-                        new TextbookChunkReader(),
-                        new LocalTextbookBm25SearchEngine(),
-                        new NoopRetrievalAuditSink()),
-                new InMemoryTeachingTaskStore(),
-                new StudentMemoryReuseService(new InMemoryStudentMemoryStore()));
-        TeachingTaskController setupController = testController(
-                service,
-                teacherResolver(),
-                (token, action, path, requestHash, subject) -> true,
-                new TeachingHandoutPdfExportService(),
-                batchExportService(new TeachingHandoutPdfExportService()));
-        TeachingTaskResponse submitted = setupController.submit(
-                new TeachingTaskRequest("client-003", "question", "goal", 3),
-                null);
-        TeachingTaskController protectedController = testController(
-                service,
-                teacherResolver(),
-                (token, action, path, requestHash, subject) -> false,
-                new TeachingHandoutPdfExportService(),
-                batchExportService(new TeachingHandoutPdfExportService()));
-
-        org.assertj.core.api.Assertions.assertThatThrownBy(() -> protectedController.exportLatex(submitted.taskId(), null))
-                .isInstanceOf(ResponseStatusException.class)
-                .hasMessageContaining("Capability token");
-    }
-
-    @Test
-    void rejectsPdfExportWithoutAcceptedCapabilityToken() throws Exception {
-        TeachingWorkflowService service = testWorkflowService(
-                createTextbookCorpus(),
-                com.doob.mathagent.retrieval.TextbookRetrievalServiceFixture.service(
-                        new TextbookCatalogReader(),
-                        new TextbookChunkReader(),
-                        new LocalTextbookBm25SearchEngine(),
-                        new NoopRetrievalAuditSink()),
-                new InMemoryTeachingTaskStore(),
-                new StudentMemoryReuseService(new InMemoryStudentMemoryStore()));
-        TeachingTaskController setupController = testController(
-                service,
-                teacherResolver(),
-                (token, action, path, requestHash, subject) -> true,
-                new TeachingHandoutPdfExportService(),
-                batchExportService(new TeachingHandoutPdfExportService()));
-        TeachingTaskResponse submitted = setupController.submit(
-                new TeachingTaskRequest("client-004", "question", "goal", 3),
-                null);
-        TeachingTaskController protectedController = testController(
-                service,
-                teacherResolver(),
-                (token, action, path, requestHash, subject) -> false,
-                new TeachingHandoutPdfExportService(),
-                batchExportService(new TeachingHandoutPdfExportService()));
-
-        org.assertj.core.api.Assertions.assertThatThrownBy(() -> protectedController.exportPdf(submitted.taskId(), null))
-                .isInstanceOf(ResponseStatusException.class)
-                .hasMessageContaining("Capability token");
-    }
-
-    @Test
-    void rejectsPreviewAndBatchZipWithoutAcceptedCapabilityToken() throws Exception {
-        TeachingWorkflowService service = testWorkflowService(
-                createTextbookCorpus(),
-                com.doob.mathagent.retrieval.TextbookRetrievalServiceFixture.service(
-                        new TextbookCatalogReader(),
-                        new TextbookChunkReader(),
-                        new LocalTextbookBm25SearchEngine(),
-                        new NoopRetrievalAuditSink()),
-                new InMemoryTeachingTaskStore(),
-                new StudentMemoryReuseService(new InMemoryStudentMemoryStore()));
-        TeachingHandoutPdfExportService pdfExportService = new TeachingHandoutPdfExportService();
-        TeachingHandoutBatchExportService batchExportService = batchExportService(pdfExportService);
-        TeachingTaskController setupController = testController(
-                service,
-                teacherResolver(),
-                (token, action, path, requestHash, subject) -> true,
-                pdfExportService,
-                batchExportService);
-        TeachingTaskResponse submitted = setupController.submit(
-                new TeachingTaskRequest("client-protected-batch", "question", "goal", 3),
-                null);
-        TeachingHandoutBatchExportResponse batch = setupController.createBatchZip(
-                new TeachingHandoutBatchExportRequest(List.of(submitted.taskId()), List.of(), List.of()),
-                null);
-        TeachingTaskController protectedController = testController(
-                service,
-                teacherResolver(),
-                (token, action, path, requestHash, subject) -> false,
-                pdfExportService,
-                batchExportService);
-
-        org.assertj.core.api.Assertions.assertThatThrownBy(() -> protectedController.previewLatex(submitted.taskId(), null))
-                .isInstanceOf(ResponseStatusException.class)
-                .hasMessageContaining("Capability token");
-        org.assertj.core.api.Assertions.assertThatThrownBy(() -> protectedController.previewPdf(submitted.taskId(), null))
-                .isInstanceOf(ResponseStatusException.class)
-                .hasMessageContaining("Capability token");
-        org.assertj.core.api.Assertions.assertThatThrownBy(() -> protectedController.createBatchZip(
-                        new TeachingHandoutBatchExportRequest(List.of(submitted.taskId()), List.of(), List.of()),
-                        null))
-                .isInstanceOf(ResponseStatusException.class)
-                .hasMessageContaining("Capability token");
-        org.assertj.core.api.Assertions.assertThatThrownBy(() -> protectedController.downloadBatchZip(batch.batchId(), null))
-                .isInstanceOf(ResponseStatusException.class)
-                .hasMessageContaining("Capability token");
-    }
-
-    @Test
     void studentCannotPreviewOrExportTeacherHandoutVersion() throws Exception {
         TeachingWorkflowService service = testWorkflowService(
                 createTextbookCorpus(),
@@ -408,7 +261,6 @@ class TeachingTaskControllerTest {
         TeachingTaskController controller = testController(
                 service,
                 studentResolver(),
-                (token, action, path, requestHash, subject) -> true,
                 pdfExportService,
                 batchExportService(pdfExportService));
         TeachingTaskResponse submitted = controller.submit(
@@ -473,7 +325,6 @@ class TeachingTaskControllerTest {
         TeachingTaskController controller = testController(
                 service,
                 teacherResolver(),
-                (token, action, path, requestHash, subject) -> true,
                 pdfExportService,
                 batchExportService(pdfExportService));
         TeachingTaskResponse first = controller.submit(
@@ -523,7 +374,6 @@ class TeachingTaskControllerTest {
         TeachingTaskController controller = testController(
                 service,
                 teacherResolver(),
-                (token, action, path, requestHash, subject) -> true,
                 pdfExportService,
                 new TeachingHandoutBatchExportService(pdfExportService, clock, Duration.ofMinutes(30)));
         TeachingTaskResponse task = controller.submit(
@@ -554,7 +404,6 @@ class TeachingTaskControllerTest {
         TeachingTaskController controller = testController(
                 service,
                 teacherResolver(),
-                (token, action, path, requestHash, subject) -> true,
                 new TeachingHandoutPdfExportService(),
                 batchExportService(new TeachingHandoutPdfExportService()));
         TeachingTaskResponse task = controller.submit(
@@ -596,7 +445,6 @@ class TeachingTaskControllerTest {
         TeachingTaskController controller = testController(
                 service,
                 teacherResolver(),
-                (token, action, path, requestHash, subject) -> true,
                 new TeachingHandoutPdfExportService(),
                 batchExportService(new TeachingHandoutPdfExportService()));
         TeachingTaskResponse task = controller.submit(
@@ -623,41 +471,6 @@ class TeachingTaskControllerTest {
 
         assertThat(visualEvidence.get("previewImageDataUrl")).isEqualTo(previewImageDataUrl);
         assertThat(((String) visualEvidence.get("previewImageDataUrl")).length()).isGreaterThan(300);
-    }
-
-    @Test
-    void rejectsHumanFeedbackWithoutAcceptedCapabilityToken() throws Exception {
-        TeachingWorkflowService service = testWorkflowService(
-                createTextbookCorpus(),
-                com.doob.mathagent.retrieval.TextbookRetrievalServiceFixture.service(
-                        new TextbookCatalogReader(),
-                        new TextbookChunkReader(),
-                        new LocalTextbookBm25SearchEngine(),
-                        new NoopRetrievalAuditSink()),
-                new InMemoryTeachingTaskStore(),
-                new StudentMemoryReuseService(new InMemoryStudentMemoryStore()));
-        TeachingTaskController setupController = testController(
-                service,
-                teacherResolver(),
-                (token, action, path, requestHash, subject) -> true,
-                new TeachingHandoutPdfExportService(),
-                batchExportService(new TeachingHandoutPdfExportService()));
-        TeachingTaskResponse task = setupController.submit(
-                new TeachingTaskRequest("client-feedback-protected", "question", "goal", 3),
-                null);
-        TeachingTaskController protectedController = testController(
-                service,
-                teacherResolver(),
-                (token, action, path, requestHash, subject) -> false,
-                new TeachingHandoutPdfExportService(),
-                batchExportService(new TeachingHandoutPdfExportService()));
-
-        org.assertj.core.api.Assertions.assertThatThrownBy(() -> protectedController.submitHumanFeedback(
-                        task.taskId(),
-                        new TeachingHumanFeedbackRequest(5, "helpful", "handout is usable"),
-                        null))
-                .isInstanceOf(ResponseStatusException.class)
-                .hasMessageContaining("Capability token");
     }
 
     private Path createTextbookCorpus() throws Exception {

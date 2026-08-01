@@ -232,14 +232,18 @@ public class TeachingHandoutTemplateService {
     }
 
     /**
-     * Resolves one template code, falling back to the standard template when absent or unknown.
+     * Resolves one persisted template code. An omitted code uses the documented default; an explicit unknown code is
+     * rejected so a user-selected visual style can never be silently replaced by another family.
      */
     public TeachingHandoutTemplateProfile resolve(String templateCode) {
         if (templateCode == null || templateCode.isBlank()) {
             return templates.get("default_standard");
         }
-        return Optional.ofNullable(templates.get(templateCode.strip()))
-                .orElseGet(() -> templates.get("default_standard"));
+        TeachingHandoutTemplateProfile selected = templates.get(templateCode.strip());
+        if (selected == null) {
+            throw new IllegalArgumentException("未知讲义模板：" + templateCode.strip());
+        }
+        return selected;
     }
 
     private static void putTemplateIfNewSource(

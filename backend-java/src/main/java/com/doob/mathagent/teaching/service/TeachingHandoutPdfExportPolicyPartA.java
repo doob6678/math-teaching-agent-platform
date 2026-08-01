@@ -1,6 +1,8 @@
 package com.doob.mathagent.teaching.service;
 
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
+import com.doob.mathagent.teaching.service.rendering.HandoutTemplateStrategies;
+import com.doob.mathagent.teaching.service.rendering.HandoutTemplateStrategy;
 import java.awt.Color;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -230,10 +232,9 @@ final class TeachingHandoutPdfExportPolicyPartA {
 
 
     static Optional<Path> latexEnginePath() {
-        String configured = System.getenv("MATH_AGENT_XELATEX_PATH");
-        if (configured == null || configured.isBlank()) {
-            configured = System.getProperty("math.agent.xelatex.path", "");
-        }
+        // The renderer is mandatory product infrastructure, not a user-selectable feature flag. Production discovers
+        // the installed binary directly. The JVM property exists only so unit tests can provide an isolated executable.
+        String configured = System.getProperty("math.agent.xelatex.path", "");
         if (!configured.isBlank() && Files.isRegularFile(Path.of(configured.strip()))) {
             return Optional.of(Path.of(configured.strip()));
         }
@@ -267,6 +268,7 @@ final class TeachingHandoutPdfExportPolicyPartA {
         String title = versionTitle(version);
         String templateName = templateNameForVersion(task, version);
         PdfStyle style = PdfStyle.forVersion(version, templateName);
+        HandoutTemplateStrategy templateStrategy = HandoutTemplateStrategies.forTemplate(templateName);
         String sanitizedBody = sanitizeLatexForExport(task.handoutLatexFor(version));
         // Old persisted snapshots may still contain the previous two-column projection or student scaffolding.
         // Apply the audience boundary at export time too, so a stale cache cannot reintroduce teacher explanations.
@@ -284,36 +286,19 @@ final class TeachingHandoutPdfExportPolicyPartA {
                 : insertPrintedQuestionSpacing(sanitizedBody));
         String headerTopic = safeHeaderTopic(repairMojibake(task.learningGoal()));
         String watermark = latexText(normalizedWatermark(repairMojibake(task.watermarkText())));
-        String documentOptions = style.isLecture() ? "10pt" : "11pt,a4paper";
-        String geometryOptions = style.isLecture()
-                ? "paperwidth=16in,paperheight=10in,top=14mm,bottom=18mm,left=18mm,right=18mm"
-                : PdfStyle.isZhaoLixianTemplate(templateName)
-                        // bp is a PDF big point (1/72in).  TeX pt is 1/72.27in and would emit a
-                        // 579.83×809.08 PDF page, which visibly drifts from the measured 582×812 master.
-                        ? "paperwidth=582bp,paperheight=812bp,top=26mm,bottom=25mm,left=72bp,right=72bp"
-                        : "a4paper,top=24mm,bottom=23mm,left=22mm,right=22mm";
-        String bodySizeCommand = style.isLecture() ? LECTURE_BODY_COMMAND
-                : PdfStyle.isZhaoLixianTemplate(templateName)
-                        // The source master is a continuous exercise handout, not a slide deck. Keep real questions
-                        // compact while TeachingWorkflowService protects each prompt-plus-diagram unit with Needspace.
-                        ? "\\setlength{\\parskip}{0.24em}\\setlist[itemize]{itemsep=0.12em,topsep=0.16em}"
-                                + "\\setlist[enumerate]{itemsep=0.12em,topsep=0.16em}"
-                        : "";
-        String headerFooterCommands = PdfStyle.isZhaoLixianTemplate(templateName)
-                ? zhaoHeaderFooterCommands(watermark)
-                : genericHeaderFooterCommands();
-        String headingCommands = PdfStyle.isZhaoLixianTemplate(templateName)
-                ? zhaoHeadingCommands()
-                : genericHeadingCommands();
-        // The reference pages start directly with an exercise/section block. A centered audience title is a
-        // generic-handout convention and conflicts with the Zhao master, so only non-Zhao templates get it.
-        String titleBlock = PdfStyle.isZhaoLixianTemplate(templateName) ? "" : """
-                \\begin{center}
-                {\\LARGE\\bfseries\\color{HandoutAccent} %s}\\\\[0.35em]
-                {\\small\\color{HandoutText} %s}
-                \\end{center}
-                \\vspace{0.6em}
-                """.formatted(latexText(title), watermark);
+        // Template families own paper geometry and page chrome through independent Strategy implementations.
+        // The shared exporter owns only mathematical content, compilation, and asset safety.
+        String documentOptions = templateStrategy.documentOptions(style.isLecture());
+        String geometryOptions = templateStrategy.geometryOptions(style.isLecture());
+        String bodySizeCommand = style.isLecture()
+                ? LECTURE_BODY_COMMAND
+                : templateStrategy.bodySizeCommand(false);
+        String headerFooterCommands = templateStrategy.headerFooterCommands(
+                watermark,
+                latexText(headerTopic),
+                watermark);
+        String headingCommands = templateStrategy.headingCommands();
+        String titleBlock = templateStrategy.titleBlock(latexText(title), watermark, style.isLecture());
         return """
                 \\documentclass[%s]{article}
                 \\usepackage[%s]{geometry}
@@ -378,7 +363,7 @@ final class TeachingHandoutPdfExportPolicyPartA {
                 hex(style.accent()),
                 hex(style.accentLight()),
                 hex(style.border()),
-                headerFooterCommands.formatted(watermark, latexText(headerTopic), watermark),
+                headerFooterCommands,
                 headingCommands,
                 titleBlock,
                 bodySizeCommand,
@@ -434,91 +419,6 @@ final class TeachingHandoutPdfExportPolicyPartA {
 
     static boolean endsWithPageBreak(StringBuilder text) {
         return text.toString().endsWith("\\clearpage\n") || text.toString().endsWith("\\newpage\n");
-    }
-
-
-    static String genericHeaderFooterCommands() {
-        return """
-                \\fancyhf{}
-                \\lhead{%s}
-                \\rhead{%s}
-                \\lfoot{%s}
-                \\rfoot{第 \\thepage 页 / 共 \\pageref{LastPage} 页}
-                \\renewcommand{\\headrulewidth}{0.4pt}
-                \\renewcommand{\\footrulewidth}{0.3pt}
-                """;
-    }
-
-
-    /**
-     * Uses the blue/orange logo language visible in the Zhao master. The source alternates the
-     * logo and badge by page, so the conditional lives inside fancyhdr and is evaluated per page.
-     */
-    static String zhaoHeaderFooterCommands(String watermark) {
-        // The reference PDF informs measurements only.  Do not embed its branded raster crop: the visible identity
-        // belongs to the current task and is drawn as vector geometry so it stays crisp at every export resolution.
-        return """
-                \\newcommand{\\zhaopagetab}{\\tikz[baseline=-0.56ex,x=2.4ex,y=2.4ex]{
-                  \\draw[HandoutText,line width=0.08ex] (0,0.22) -- (6.5,0.22);
-                  \\draw[HandoutText,line width=0.08ex,rounded corners=0.18ex] (0.25,0.22) -- (0.48,1.05) -- (2.15,1.05) -- (2.38,0.22);
-                  \\node[font=\\scriptsize,text=HandoutText] at (1.31,0.65) {\\thepage};}}
-                \\setlength{\\headheight}{39pt}
-                \\fancyhf{}
-                %%%% Vector header: task-owned display name plus a crisp blue/orange frame, never a pasted source logo.
-                \\chead{\\tikz[baseline=-0.65ex]{
-                  \\draw[HandoutText,line width=0.08ex] (0,0) -- (15.8,0);
-                  \\node[anchor=west,font=\\sffamily\\scriptsize\\bfseries,text=HandoutAccent] at (0,0.28) {%s};
-                  \\draw[HandoutAccent,line width=0.14ex] (15.1,0.10) rectangle (15.55,0.55);
-                  \\draw[ZhaoOrange,line width=0.11ex] (15.25,0.23) rectangle (15.70,0.68);}}
-                \\lfoot{\\ifodd\\value{page}\\zhaopagetab\\fi}
-                \\rfoot{\\ifodd\\value{page}\\else\\zhaopagetab\\fi}
-                \\renewcommand{\\headrulewidth}{0pt}
-                \\renewcommand{\\footrulewidth}{0pt}
-                """.formatted(watermark);
-    }
-
-
-    static String genericHeadingCommands() {
-        return """
-                \\titleformat{\\section}
-                  {\\HandoutDisplayFont\\Large\\bfseries\\color{HandoutAccent}}
-                  {}{0pt}{\\makebox[0pt][r]{\\color{HandoutAccent}\\rule{4pt}{1.15em}\\hspace{0.7em}}}
-                  [{\\vspace{0.2em}\\color{HandoutAccent!35}\\titlerule[0.5pt]}]
-                \\titleformat{\\subsection}
-                  {\\HandoutDisplayFont\\large\\bfseries\\color{HandoutAccent}}
-                  {}{0pt}{\\makebox[0pt][r]{\\color{HandoutAccent!80}\\rule{3pt}{1em}\\hspace{0.6em}}}
-                \\titleformat{\\paragraph}{\\HandoutDisplayFont\\normalsize\\bfseries\\color{HandoutText}}{}{0pt}{}
-                \\titlespacing*{\\section}{0pt}{1.45em}{0.8em}
-                \\titlespacing*{\\subsection}{0pt}{1.1em}{0.55em}
-
-                """;
-    }
-
-
-    /**
-     * Zhao pages use compact dark-blue section ink, not the generic red title with a decorative
-     * star frame. Keep the title left-aligned so a mathematical question starts on the master grid.
-     */
-
-    static String zhaoHeadingCommands() {
-        return """
-                % The Zhao master uses a compact navy title tab with white lettering for a question type.
-                % Keep the fill only behind the words so long Chinese titles never cross the fixed print grid.
-                \\newcommand{\\zhaosectiontitle}[1]{\\colorbox{HandoutAccent}{\\strut\\hspace{0.52em}\\color{white}\\HandoutDisplayFont\\bfseries #1\\hspace{0.52em}}}
-                \\titleformat{\\section}
-                  {\\HandoutDisplayFont\\large\\bfseries\\color{HandoutAccent}}
-                  {}{0pt}{\\zhaosectiontitle}
-                \\titleformat{\\subsection}
-                  {\\HandoutDisplayFont\\normalsize\\bfseries\\color{HandoutText}}
-                  {}{0pt}{}
-                \\titleformat{\\subsubsection}
-                  {\\HandoutDisplayFont\\normalsize\\bfseries\\color{HandoutText}}
-                  {}{0pt}{}
-                \\titleformat{\\paragraph}{\\HandoutDisplayFont\\normalsize\\bfseries\\color{HandoutText}}{}{0pt}{}
-                \\titlespacing*{\\section}{0pt}{1.0em}{0.55em}
-                \\titlespacing*{\\subsection}{0pt}{0.72em}{0.32em}
-                \\titlespacing*{\\subsubsection}{0pt}{0.55em}{0.25em}
-                """;
     }
 
 
@@ -649,12 +549,6 @@ final class TeachingHandoutPdfExportPolicyPartA {
         }
         undelimitedMatcher.appendTail(normalized);
         return normalized.toString();
-    }
-
-
-    /** Returns whether this runtime forbids publishing the lossy PDFBox fallback. */
-    static boolean requiresXeLaTeX() {
-        return Boolean.parseBoolean(System.getenv().getOrDefault("MATH_AGENT_REQUIRE_XELATEX", "false"));
     }
 
 

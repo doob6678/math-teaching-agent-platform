@@ -1,6 +1,7 @@
 package com.doob.mathagent.teaching.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -77,7 +78,10 @@ class TeachingHandoutTemplateServiceTest {
 
         TeachingHandoutTemplateService service = new TeachingHandoutTemplateService();
 
-        assertThat(service.resolve("missing").summary().templateCode()).isEqualTo("default_standard");
+        assertThat(service.resolve(null).summary().templateCode()).isEqualTo("default_standard");
+        assertThatThrownBy(() -> service.resolve("missing"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("未知讲义模板", "missing");
     }
 
     @Test

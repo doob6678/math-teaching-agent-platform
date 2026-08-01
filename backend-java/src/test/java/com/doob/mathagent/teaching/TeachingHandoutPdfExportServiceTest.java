@@ -170,6 +170,44 @@ class TeachingHandoutPdfExportServiceTest {
     }
 
     @Test
+    void rejoinsTrigonometricFunctionAndScalableArgumentBeforeXeLatex() {
+        String sanitized = TeachingHandoutPdfExportService.sanitizeLatexForExport(
+                "由正弦定理可得 $\\tan$ C\\left(\\frac{a}{b}\\right)=1。");
+
+        assertThat(sanitized)
+                .contains("$\\tan C\\left(\\frac{a}{b}\\right)$=1")
+                .doesNotContain("$\\tan$ C\\left");
+    }
+
+    @Test
+    void removesInternalEvidenceIdentifiersBeforeTheyCanBecomeLatexSubscripts() {
+        String sanitized = TeachingHandoutPdfExportService.sanitizeLatexForExport(
+                "教材依据明确，证据编号为 $math_b_bixiu_4_p014_ai_001$、$2081207025182031874$；"
+                        + "由正弦定理求角。正弦定理资料证据锚点 $49ff0fc4-3201-4ce1-9f2d-a699a5569ec4$。"
+                        + "教材第 $9.1$ 节，证据编号 $math_b_bixiu_4_p012_ai_001$。");
+
+        assertThat(sanitized)
+                .contains("教材依据明确", "由正弦定理求角")
+                .doesNotContain("证据编号", "证据锚点", "math_b_bixiu", "2081207025182031874", "49ff0fc4");
+    }
+
+    @Test
+    void restoresLiteralJsonNewlinesBeforeLatexCompilation() {
+        String sanitized = TeachingHandoutPdfExportService.sanitizeLatexForExport(
+                "\\section{正弦定理}\\n\\paragraph{题目}\\n已知 $a=5$。");
+        assertThat(sanitized).contains("\\section{正弦定理}\n\\paragraph{题目}")
+                .doesNotContain("}\\n\\paragraph");
+    }
+
+    @Test
+    void finalLatexEscapingAlsoRestoresDoubleTransportSlashes() {
+        String rendered = TeachingHandoutPdfExportService.renderLatexBody(
+                "\\section{正弦定理}\\\\n\\paragraph{题目}\\\\n已知 $a=5$。");
+        assertThat(rendered).contains("\\section{正弦定理}\n\\paragraph{题目}")
+                .doesNotContain("\\\\n");
+    }
+
+    @Test
     void wrapsBareSuperscriptsInMathModeWithoutTouchingExistingMath() {
         String sanitized = TeachingHandoutPdfExportService.sanitizeLatexForExport("""
                 \\section{公式检查}
@@ -971,8 +1009,10 @@ class TeachingHandoutPdfExportServiceTest {
                     "2025暑秋讲义.pdf", "D:/BaiduNetdiskDownload/2025暑秋讲义.pdf", "真实母版", 7, 3);
             String handout = """
                     \\section{二次函数}
-                    \\subsection*{第1题 例题}
+                    \\subsection*{第1题 练习}
+                    \\paragraph{题目}
                     已知 $y=x^2-2x+1$，求顶点坐标。
+                    \\vspace{8em}
                     """;
             TeachingTaskResponse task = new TeachingTaskResponse(
                     "task-zhao-code-identity", "client-zhao-code-identity", "school-a", "teacher", "teacher-001",

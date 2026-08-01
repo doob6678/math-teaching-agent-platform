@@ -21,8 +21,12 @@ public final class FormulaMarkupSanitizer {
     private static final Pattern BARE_VECTOR_OR_OPERATOR_COMMAND = Pattern.compile(
             "(?<![$\\\\A-Za-z0-9_])(\\\\(?:times|cdot|vec|overrightarrow|sin|cos|tan|ln|sqrt)"
                     + "(?:\\{[^{}]+})?)(?![$A-Za-z0-9_])");
+    /** A vector equal to a coordinate tuple must stay in one math span; splitting it makes the tuple render as prose. */
+    private static final Pattern VECTOR_COORDINATE_EQUATION = Pattern.compile(
+            "(?<![$\\\\A-Za-z0-9_])(\\\\(?:vec|overrightarrow)\\{[^{}]+}\\s*=\\s*\\([^()\\n]+\\))");
     private static final String MATH_ATOM = "(?:[+\\-]?\\s*(?:\\\\frac\\{[^{}]+}\\{[^{}]+}"
             + "|\\\\sqrt\\{[^{}]+}"
+            + "|\\\\(?:vec|overrightarrow)\\{[^{}]+}"
             + "|(?:\\\\pm\\s*)?[A-Za-z0-9]+(?:[_^]\\{?[-+]?\\d+}?)?"
             + "|\\d+(?:\\.\\d+)?))";
     private static final Pattern BARE_FORMULA = Pattern.compile(
@@ -65,6 +69,7 @@ public final class FormulaMarkupSanitizer {
         normalized = normalizeSlashFractions(normalized);
         normalized = wrapBareMathOutsideDelimiters(normalized);
         normalized = cleanupFractionMathDelimiters(normalized);
+        normalized = wrapMatches(normalized, VECTOR_COORDINATE_EQUATION);
         normalized = wrapMatches(normalized, BARE_FRACTION_COMMAND);
         normalized = wrapMatches(normalized, BARE_VECTOR_OR_OPERATOR_COMMAND);
         // Operator wrapping can run inside an already recovered fraction denominator; clean it once more before
@@ -73,6 +78,7 @@ public final class FormulaMarkupSanitizer {
         // The preceding cleanup may expose a complete command that was temporarily interrupted by a nested token;
         // wrap that recovered command so it cannot later be escaped as prose by the PDF renderer.
         normalized = wrapMatches(normalized, BARE_FRACTION_COMMAND);
+        normalized = wrapMatches(normalized, VECTOR_COORDINATE_EQUATION);
         normalized = wrapMatches(normalized, BARE_VECTOR_OR_OPERATOR_COMMAND);
         return cleanupFractionMathDelimiters(normalized).strip();
     }

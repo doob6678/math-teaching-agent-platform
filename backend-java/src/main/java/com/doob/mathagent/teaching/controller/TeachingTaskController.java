@@ -11,7 +11,6 @@ import com.doob.mathagent.teaching.dto.TeachingReviewDecisionRequest;
 import com.doob.mathagent.teaching.dto.TeachingTaskRequest;
 import com.doob.mathagent.teaching.service.TeachingHandoutBatchExportRecord;
 import com.doob.mathagent.teaching.service.TeachingHandoutBatchExportService;
-import com.doob.mathagent.teaching.service.TeachingCapabilityVerifier;
 import com.doob.mathagent.teaching.service.TeachingHumanFeedbackService;
 import com.doob.mathagent.teaching.service.TeachingReviewAuditService;
 import com.doob.mathagent.teaching.service.TeachingHandoutPdfExportService;
@@ -30,6 +29,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ContentDisposition;
@@ -54,25 +54,13 @@ import org.springframework.transaction.annotation.Transactional;
 @RestController
 public class TeachingTaskController {
 
-    private static final String TEACHING_SUBMIT_ACTION = "teaching:submit";
-    private static final String TEACHING_RESUME_ACTION = "teaching:resume";
-    private static final String TEACHING_HANDOUT_LATEX_EXPORT_ACTION = "teaching-handout:export-latex";
-    private static final String TEACHING_HANDOUT_LATEX_PREVIEW_ACTION = "teaching-handout:preview-latex";
-    private static final String TEACHING_HANDOUT_PDF_EXPORT_ACTION = "teaching-handout:export-pdf";
-    private static final String TEACHING_HANDOUT_PDF_PREVIEW_ACTION = "teaching-handout:preview-pdf";
-    private static final String TEACHING_HANDOUT_UPDATE_ACTION = "teaching-handout:update";
-    private static final String TEACHING_HANDOUT_BATCH_ZIP_EXPORT_ACTION = "teaching-handout:batch-export-zip";
-    private static final String TEACHING_HANDOUT_BATCH_ZIP_DOWNLOAD_ACTION = "teaching-handout:batch-download-zip";
-    private static final String TEACHING_FEEDBACK_SUBMIT_ACTION = "teaching-feedback:submit";
     private static final String TEACHING_TASKS_PATH = "/api/teaching/tasks";
-    private static final String TEACHING_BATCH_ZIP_PATH = "/api/teaching/handouts/batch/zip";
     private static final String HANDOUT_RENDERER_HEADER = "X-Handout-Renderer";
     private static final String HANDOUT_PAGE_COUNT_HEADER = "X-Handout-Page-Count";
 
     private final TeachingWorkflowService workflowService;
     private final LectureTaskSubmissionService lectureTaskSubmissionService;
     private final RequestSubjectResolver subjectResolver;
-    private final TeachingCapabilityVerifier capabilityVerifier;
     private final TeachingHandoutPdfExportService pdfExportService;
     private final TeachingHandoutBatchExportService batchExportService;
     private final TeachingHumanFeedbackService feedbackService;
@@ -89,7 +77,6 @@ public class TeachingTaskController {
             TeachingWorkflowService workflowService,
             LectureTaskSubmissionService lectureTaskSubmissionService,
             RequestSubjectResolver subjectResolver,
-            TeachingCapabilityVerifier capabilityVerifier,
             TeachingHandoutPdfExportService pdfExportService,
             TeachingHandoutBatchExportService batchExportService,
             TeachingHumanFeedbackService feedbackService,
@@ -100,7 +87,6 @@ public class TeachingTaskController {
         this.workflowService = workflowService;
         this.lectureTaskSubmissionService = lectureTaskSubmissionService;
         this.subjectResolver = subjectResolver;
-        this.capabilityVerifier = capabilityVerifier;
         this.pdfExportService = pdfExportService;
         this.batchExportService = batchExportService;
         this.feedbackService = feedbackService;
@@ -116,7 +102,6 @@ public class TeachingTaskController {
     public TeachingTaskController(
             TeachingWorkflowService workflowService,
             RequestSubjectResolver subjectResolver,
-            TeachingCapabilityVerifier capabilityVerifier,
             TeachingHandoutPdfExportService pdfExportService,
             TeachingHandoutBatchExportService batchExportService,
             TeachingHumanFeedbackService feedbackService) {
@@ -124,7 +109,6 @@ public class TeachingTaskController {
                 workflowService,
                 null,
                 subjectResolver,
-                capabilityVerifier,
                 pdfExportService,
                 batchExportService,
                 feedbackService,
@@ -142,14 +126,6 @@ public class TeachingTaskController {
             @Valid @RequestBody TeachingTaskRequest request,
             HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest);
-        if (!capabilityVerifier.verify(
-                headerOrNull(httpRequest, "X-Capability-Token"),
-                TEACHING_SUBMIT_ACTION,
-                TEACHING_TASKS_PATH,
-                headerOrNull(httpRequest, "X-Request-Hash"),
-                subject)) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for teaching submit");
-        }
         // The HTTP request creates only durable MySQL state. The outbox publisher later sends the opaque taskId.
         TeachingTaskResponse response = lectureTaskSubmissionService == null
                 ? workflowService.submit(request, requestContext(subject))
@@ -235,15 +211,6 @@ public class TeachingTaskController {
             @PathVariable String taskId,
             HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest);
-        String path = TEACHING_TASKS_PATH + "/" + taskId + "/resume";
-        if (!capabilityVerifier.verify(
-                headerOrNull(httpRequest, "X-Capability-Token"),
-                TEACHING_RESUME_ACTION,
-                path,
-                headerOrNull(httpRequest, "X-Request-Hash"),
-                subject)) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for teaching task resume");
-        }
         try {
             TeachingTaskResponse response = lectureTaskSubmissionService == null
                     ? workflowService.resume(taskId, requestContext(subject))
@@ -264,15 +231,6 @@ public class TeachingTaskController {
             @Valid @RequestBody TeachingReviewDecisionRequest request,
             HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest);
-        String path = TEACHING_TASKS_PATH + "/" + taskId + "/review";
-        if (!capabilityVerifier.verify(
-                headerOrNull(httpRequest, "X-Capability-Token"),
-                TEACHING_FEEDBACK_SUBMIT_ACTION,
-                path,
-                headerOrNull(httpRequest, "X-Request-Hash"),
-                subject)) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for handout review");
-        }
         try {
             TeachingRequestContext context = requestContext(subject);
             TeachingTaskResponse before = workflowService.get(taskId, context)
@@ -344,8 +302,8 @@ public class TeachingTaskController {
     }
 
     /**
-     * Saves one editable version back onto its original owned task. The route is capability-bound to the version and
-     * the workflow service re-applies generation-time safety filters before writing the durable task snapshot.
+     * Saves one editable version back onto its original owned task. The workflow service re-applies generation-time
+     * safety filters and verifies task ownership before writing the durable task snapshot.
      */
     @PutMapping("/api/teaching/tasks/{taskId}/handout/{version}")
     public TeachingTaskResponse updateHandoutVersion(
@@ -356,15 +314,6 @@ public class TeachingTaskController {
         String normalizedVersion = normalizeHandoutVersion(version);
         RequestSubject subject = subjectResolver.resolve(httpRequest);
         requireHandoutVersionAllowed(normalizedVersion, subject);
-        String path = TEACHING_TASKS_PATH + "/" + taskId + "/handout/" + normalizedVersion;
-        if (!capabilityVerifier.verify(
-                headerOrNull(httpRequest, "X-Capability-Token"),
-                TEACHING_HANDOUT_UPDATE_ACTION,
-                path,
-                headerOrNull(httpRequest, "X-Request-Hash"),
-                subject)) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for handout update");
-        }
         try {
             return workflowService.updateHandoutVersion(
                     taskId,
@@ -382,22 +331,13 @@ public class TeachingTaskController {
      * 从后端会话身份读取租户、主体和设备信息，用于任务隔离和审计。
      */
     /**
-     * Exports the LaTeX handout for an owned teaching task after consuming a one-time capability token.
+     * Exports the LaTeX handout after session identity and task ownership checks.
      */
     @GetMapping("/api/teaching/tasks/{taskId}/handout/latex")
     public ResponseEntity<String> exportLatex(
             @PathVariable String taskId,
             HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest);
-        String path = TEACHING_TASKS_PATH + "/" + taskId + "/handout/latex";
-        if (!capabilityVerifier.verify(
-                headerOrNull(httpRequest, "X-Capability-Token"),
-                TEACHING_HANDOUT_LATEX_EXPORT_ACTION,
-                path,
-                headerOrNull(httpRequest, "X-Request-Hash"),
-                subject)) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for LaTeX export");
-        }
         TeachingTaskResponse task = workflowService.get(taskId, requestContext(subject))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Teaching task not found"));
         String effectiveVersion = defaultHandoutVersion(subject);
@@ -411,7 +351,7 @@ public class TeachingTaskController {
     }
 
     /**
-     * Exports a specific LaTeX handout version after consuming a version-bound capability token.
+     * Exports a specific LaTeX handout version after role and task ownership checks.
      */
     @GetMapping("/api/teaching/tasks/{taskId}/handout/{version}/latex")
     public ResponseEntity<String> exportLatexVersion(
@@ -421,15 +361,6 @@ public class TeachingTaskController {
         String normalizedVersion = normalizeHandoutVersion(version);
         RequestSubject subject = subjectResolver.resolve(httpRequest);
         requireHandoutVersionAllowed(normalizedVersion, subject);
-        String path = TEACHING_TASKS_PATH + "/" + taskId + "/handout/" + normalizedVersion + "/latex";
-        if (!capabilityVerifier.verify(
-                headerOrNull(httpRequest, "X-Capability-Token"),
-                TEACHING_HANDOUT_LATEX_EXPORT_ACTION,
-                path,
-                headerOrNull(httpRequest, "X-Request-Hash"),
-                subject)) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for LaTeX export");
-        }
         TeachingTaskResponse task = workflowService.get(taskId, requestContext(subject))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Teaching task not found"));
         return ResponseEntity.ok()
@@ -442,22 +373,13 @@ public class TeachingTaskController {
     }
 
     /**
-     * Previews the LaTeX handout inline after consuming a one-time capability token.
+     * Previews the LaTeX handout inline after session identity and task ownership checks.
      */
     @GetMapping("/api/teaching/tasks/{taskId}/handout/latex/preview")
     public ResponseEntity<String> previewLatex(
             @PathVariable String taskId,
             HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest);
-        String path = TEACHING_TASKS_PATH + "/" + taskId + "/handout/latex/preview";
-        if (!capabilityVerifier.verify(
-                headerOrNull(httpRequest, "X-Capability-Token"),
-                TEACHING_HANDOUT_LATEX_PREVIEW_ACTION,
-                path,
-                headerOrNull(httpRequest, "X-Request-Hash"),
-                subject)) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for LaTeX preview");
-        }
         TeachingTaskResponse task = workflowService.get(taskId, requestContext(subject))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Teaching task not found"));
         String effectiveVersion = defaultHandoutVersion(subject);
@@ -471,7 +393,7 @@ public class TeachingTaskController {
     }
 
     /**
-     * Previews a specific handout version inline after consuming a version-bound capability token.
+     * Previews a specific handout version inline after role and task ownership checks.
      */
     @GetMapping("/api/teaching/tasks/{taskId}/handout/{version}/latex/preview")
     public ResponseEntity<String> previewLatexVersion(
@@ -481,15 +403,6 @@ public class TeachingTaskController {
         String normalizedVersion = normalizeHandoutVersion(version);
         RequestSubject subject = subjectResolver.resolve(httpRequest);
         requireHandoutVersionAllowed(normalizedVersion, subject);
-        String path = TEACHING_TASKS_PATH + "/" + taskId + "/handout/" + normalizedVersion + "/latex/preview";
-        if (!capabilityVerifier.verify(
-                headerOrNull(httpRequest, "X-Capability-Token"),
-                TEACHING_HANDOUT_LATEX_PREVIEW_ACTION,
-                path,
-                headerOrNull(httpRequest, "X-Request-Hash"),
-                subject)) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for LaTeX preview");
-        }
         TeachingTaskResponse task = workflowService.get(taskId, requestContext(subject))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Teaching task not found"));
         return ResponseEntity.ok()
@@ -502,31 +415,22 @@ public class TeachingTaskController {
     }
 
     /**
-     * Exports the PDF handout for an owned teaching task after consuming a one-time capability token.
+     * Exports the PDF handout after session identity and task ownership checks.
      */
     @GetMapping("/api/teaching/tasks/{taskId}/handout/pdf")
     public ResponseEntity<byte[]> exportPdf(
             @PathVariable String taskId,
             HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest);
-        String path = TEACHING_TASKS_PATH + "/" + taskId + "/handout/pdf";
-        if (!capabilityVerifier.verify(
-                headerOrNull(httpRequest, "X-Capability-Token"),
-                TEACHING_HANDOUT_PDF_EXPORT_ACTION,
-                path,
-                headerOrNull(httpRequest, "X-Request-Hash"),
-                subject)) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for PDF export");
-        }
         TeachingTaskResponse task = workflowService.get(taskId, requestContext(subject))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Teaching task not found"));
         String effectiveVersion = defaultHandoutVersion(subject);
         TeachingHandoutPdfExportService.RenderedHandoutPdf rendered = renderForPublication(task, effectiveVersion);
-        return pdfResponse(rendered, task.taskId() + ".pdf", false);
+        return pdfResponse(rendered, handoutFileName(task, effectiveVersion), false);
     }
 
     /**
-     * Exports a specific PDF handout version after capability and owner checks.
+     * Exports a specific PDF handout version after role and task ownership checks.
      */
     @GetMapping("/api/teaching/tasks/{taskId}/handout/{version}/pdf")
     public ResponseEntity<byte[]> exportPdfVersion(
@@ -536,47 +440,29 @@ public class TeachingTaskController {
         String normalizedVersion = normalizeHandoutVersion(version);
         RequestSubject subject = subjectResolver.resolve(httpRequest);
         requireHandoutVersionAllowed(normalizedVersion, subject);
-        String path = TEACHING_TASKS_PATH + "/" + taskId + "/handout/" + normalizedVersion + "/pdf";
-        if (!capabilityVerifier.verify(
-                headerOrNull(httpRequest, "X-Capability-Token"),
-                TEACHING_HANDOUT_PDF_EXPORT_ACTION,
-                path,
-                headerOrNull(httpRequest, "X-Request-Hash"),
-                subject)) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for PDF export");
-        }
         TeachingTaskResponse task = workflowService.get(taskId, requestContext(subject))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Teaching task not found"));
         TeachingHandoutPdfExportService.RenderedHandoutPdf rendered = renderForPublication(task, normalizedVersion);
-        return pdfResponse(rendered, task.taskId() + "-" + normalizedVersion + ".pdf", false);
+        return pdfResponse(rendered, handoutFileName(task, normalizedVersion), false);
     }
 
     /**
-     * Previews the default PDF handout inline after consuming a preview-specific capability token.
+     * Previews the default PDF handout inline after session identity and task ownership checks.
      */
     @GetMapping("/api/teaching/tasks/{taskId}/handout/pdf/preview")
     public ResponseEntity<byte[]> previewPdf(
             @PathVariable String taskId,
             HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest);
-        String path = TEACHING_TASKS_PATH + "/" + taskId + "/handout/pdf/preview";
-        if (!capabilityVerifier.verify(
-                headerOrNull(httpRequest, "X-Capability-Token"),
-                TEACHING_HANDOUT_PDF_PREVIEW_ACTION,
-                path,
-                headerOrNull(httpRequest, "X-Request-Hash"),
-                subject)) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for PDF preview");
-        }
         TeachingTaskResponse task = workflowService.get(taskId, requestContext(subject))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Teaching task not found"));
         String effectiveVersion = defaultHandoutVersion(subject);
         TeachingHandoutPdfExportService.RenderedHandoutPdf rendered = renderForPublication(task, effectiveVersion);
-        return pdfResponse(rendered, task.taskId() + ".pdf", true);
+        return pdfResponse(rendered, handoutFileName(task, effectiveVersion), true);
     }
 
     /**
-     * Previews a specific PDF handout version inline after capability and owner checks.
+     * Previews a specific PDF handout version inline after role and task ownership checks.
      */
     @GetMapping("/api/teaching/tasks/{taskId}/handout/{version}/pdf/preview")
     public ResponseEntity<byte[]> previewPdfVersion(
@@ -586,19 +472,10 @@ public class TeachingTaskController {
         String normalizedVersion = normalizeHandoutVersion(version);
         RequestSubject subject = subjectResolver.resolve(httpRequest);
         requireHandoutVersionAllowed(normalizedVersion, subject);
-        String path = TEACHING_TASKS_PATH + "/" + taskId + "/handout/" + normalizedVersion + "/pdf/preview";
-        if (!capabilityVerifier.verify(
-                headerOrNull(httpRequest, "X-Capability-Token"),
-                TEACHING_HANDOUT_PDF_PREVIEW_ACTION,
-                path,
-                headerOrNull(httpRequest, "X-Request-Hash"),
-                subject)) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for PDF preview");
-        }
         TeachingTaskResponse task = workflowService.get(taskId, requestContext(subject))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Teaching task not found"));
         TeachingHandoutPdfExportService.RenderedHandoutPdf rendered = renderForPublication(task, normalizedVersion);
-        return pdfResponse(rendered, task.taskId() + "-" + normalizedVersion + ".pdf", true);
+        return pdfResponse(rendered, handoutFileName(task, normalizedVersion), true);
     }
 
     /** Maps the shared publication gate to one consistent HTTP contract for preview and download routes. */
@@ -628,6 +505,30 @@ public class TeachingTaskController {
     }
 
     /**
+     * Builds a stable human-readable filename from the persisted learning goal.
+     *
+     * <p>UUID-only filenames made downloaded handouts impossible to identify and encouraged users to rename files
+     * manually.  The task id remains an internal lookup key; the export name is deliberately based on visible
+     * subject text and the requested audience version.  Removing filesystem separators and control characters keeps
+     * the value safe for both Windows and Linux download clients.</p>
+     */
+    private static String handoutFileName(TeachingTaskResponse task, String version) {
+        String topic = task.learningGoal() == null ? "数学讲义" : task.learningGoal().strip();
+        String safeTopic = topic.replaceAll("[\\p{Cntrl}\\\\/:*?\"<>|]+", " ")
+                .replaceAll("\\s+", " ")
+                .strip();
+        if (safeTopic.isBlank()) {
+            safeTopic = "数学讲义";
+        }
+        String versionLabel = switch (version == null ? "" : version.toLowerCase(Locale.ROOT)) {
+            case "student" -> "学生版";
+            case "lecture" -> "讲解版";
+            default -> "教师版";
+        };
+        return safeTopic + "（" + versionLabel + "）.pdf";
+    }
+
+    /**
      * Creates a short-lived ZIP package for owned teaching handouts.
      */
     @PostMapping("/api/teaching/handouts/batch/zip")
@@ -635,14 +536,6 @@ public class TeachingTaskController {
             @Valid @RequestBody TeachingHandoutBatchExportRequest request,
             HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest);
-        if (!capabilityVerifier.verify(
-                headerOrNull(httpRequest, "X-Capability-Token"),
-                TEACHING_HANDOUT_BATCH_ZIP_EXPORT_ACTION,
-                TEACHING_BATCH_ZIP_PATH,
-                headerOrNull(httpRequest, "X-Request-Hash"),
-                subject)) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for batch ZIP export");
-        }
         TeachingRequestContext context = requestContext(subject);
         TeachingHandoutBatchExportRequest normalized = request.normalize();
         List<TeachingTaskResponse> tasks = normalized.taskIds().stream()
@@ -671,22 +564,13 @@ public class TeachingTaskController {
     }
 
     /**
-     * Downloads a short-lived ZIP package after capability and owner checks.
+     * Downloads a short-lived ZIP package after session identity and owner checks.
      */
     @GetMapping("/api/teaching/handouts/batch/zip/{batchId}/download")
     public ResponseEntity<byte[]> downloadBatchZip(
             @PathVariable String batchId,
             HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest);
-        String path = TEACHING_BATCH_ZIP_PATH + "/" + batchId + "/download";
-        if (!capabilityVerifier.verify(
-                headerOrNull(httpRequest, "X-Capability-Token"),
-                TEACHING_HANDOUT_BATCH_ZIP_DOWNLOAD_ACTION,
-                path,
-                headerOrNull(httpRequest, "X-Request-Hash"),
-                subject)) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for batch ZIP download");
-        }
         if (batchExportService.isExpired(batchId)) {
             throw new ResponseStatusException(HttpStatus.GONE, "Temporary batch ZIP expired");
         }
@@ -702,7 +586,7 @@ public class TeachingTaskController {
     }
 
     /**
-     * Records human feedback for an owned teaching task after consuming a capability token.
+     * Records human feedback after session identity and task ownership checks.
      */
     @PostMapping("/api/teaching/tasks/{taskId}/feedback")
     public TeachingHumanFeedbackResponse submitHumanFeedback(
@@ -710,15 +594,6 @@ public class TeachingTaskController {
             @Valid @RequestBody TeachingHumanFeedbackRequest request,
             HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest);
-        String path = TEACHING_TASKS_PATH + "/" + taskId + "/feedback";
-        if (!capabilityVerifier.verify(
-                headerOrNull(httpRequest, "X-Capability-Token"),
-                TEACHING_FEEDBACK_SUBMIT_ACTION,
-                path,
-                headerOrNull(httpRequest, "X-Request-Hash"),
-                subject)) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for human feedback");
-        }
         TeachingRequestContext context = requestContext(subject);
         workflowService.get(taskId, context)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Teaching task not found"));
