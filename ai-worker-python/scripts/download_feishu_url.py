@@ -829,6 +829,49 @@ def list_field(value: Any) -> List[Any]:
     return value if isinstance(value, list) else []
 
 
+def load_incremental_manifest(manifest_path: str) -> Dict[str, Dict[str, Any]]:
+    """Loads the last remote metadata snapshot used to avoid downloading unchanged items."""
+    if not manifest_path:
+        return {}
+    path = Path(manifest_path).expanduser()
+    if not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return {}
+    items = payload.get("items", {}) if isinstance(payload, dict) else {}
+    return {str(token): value for token, value in items.items() if str(token) and isinstance(value, dict)}
+
+
+def save_incremental_manifest(manifest_path: str, items: Dict[str, Dict[str, Any]]) -> None:
+    """Atomically persists provider metadata so a process crash never leaves a half-written index."""
+    if not manifest_path:
+        return
+    path = Path(manifest_path).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_suffix(path.suffix + ".tmp")
+    temporary_path.write_text(
+        json.dumps({"version": 1, "items": items}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    temporary_path.replace(path)
+
+
+def provider_item_signature(item: Dict[str, Any]) -> str:
+    """Builds a stable metadata signature without fetching document bodies or embedded assets."""
+    fields = {
+        "type": item.get("type", item.get("docs_type", "")),
+        "token": item.get("token", item.get("docs_token", "")),
+        "name": item.get("name", item.get("title", "")),
+        "modified_time": item.get("modified_time", item.get("modifiedTime", "")),
+        "created_time": item.get("created_time", item.get("createdTime", "")),
+        "size": item.get("size", item.get("size_bytes", item.get("sizeBytes", ""))),
+        "revision": item.get("revision", item.get("revision_id", item.get("version", ""))),
+    }
+    return json.dumps(fields, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
 def write_resume_checkpoint(
     checkpoint_path: str,
     *,
@@ -880,6 +923,7 @@ def download_folder(
     file_extension: str = "md",
     resume_checkpoint: Optional[Dict[str, Any]] = None,
     checkpoint_path: str = "",
+    manifest_path: str = "",
 ) -> Dict[str, Any]:
     started_at = time.perf_counter()
     meta = client.get_folder_meta(folder_token)
@@ -899,6 +943,8 @@ def download_folder(
         "failed": 0,
         "limit_reached": 0,
         "bytes": 0,
+        "changed_files": 0,
+        "unchanged_files": 0,
     }
     counters.setdefault("assets", 0)
     counters.setdefault("bytes", 0)
@@ -906,6 +952,10 @@ def download_folder(
     visited_set = set(visited_folder_tokens)
     downloaded_items = [item for item in list_field(checkpoint.get("downloaded_items")) if isinstance(item, dict)]
     downloaded_tokens = {str(item.get("token", "")) for item in downloaded_items if str(item.get("token", ""))}
+    incremental_manifest = load_incremental_manifest(manifest_path)
+    discovered_items: List[Dict[str, Any]] = []
+    changed_items: List[Dict[str, Any]] = []
+    unchanged_items: List[Dict[str, Any]] = []
     failed_items: List[Dict[str, Any]] = []
     latest_checkpoint: Dict[str, Any] = {
         "current_folder_token": str(checkpoint.get("current_folder_token", "") or folder_token),
@@ -963,7 +1013,34 @@ def download_folder(
                         remember_checkpoint(current_token, path_text, page_token)
                         return
                     continue
-                if item_token in downloaded_tokens:
+                item_metadata = {
+                    "type": item_type,
+                    "token": item_token,
+                    "name": item_name,
+                    "path": item_path,
+                    "parentToken": current_token,
+                    "modifiedTime": str(item.get("modified_time", item.get("modifiedTime", "")) or ""),
+                    "createdTime": str(item.get("created_time", item.get("createdTime", "")) or ""),
+                    "revision": str(item.get("revision", item.get("revision_id", item.get("version", ""))) or ""),
+                    "sizeBytes": int(item.get("size", item.get("size_bytes", item.get("sizeBytes", 0))) or 0),
+                    "signature": provider_item_signature(item),
+                }
+                discovered_items.append(item_metadata)
+                previous_manifest = incremental_manifest.get(item_token, {})
+                expected_relative_path = str(previous_manifest.get("relativePath", "") or "")
+                existing_target = root_dir / expected_relative_path if expected_relative_path else None
+                unchanged = (
+                    bool(previous_manifest)
+                    and previous_manifest.get("signature") == provider_item_signature(item)
+                    and existing_target is not None
+                    and existing_target.is_file()
+                )
+                if unchanged:
+                    counters["skipped"] += 1
+                    counters["unchanged_files"] += 1
+                    unchanged_items.append(item_metadata)
+                    continue
+                if item_token in downloaded_tokens and not previous_manifest:
                     counters["skipped"] += 1
                     continue
                 try:
@@ -1013,6 +1090,11 @@ def download_folder(
                         continue
                     downloaded_tokens.add(item_token)
                     downloaded_items.append(manifest)
+                    manifest["signature"] = provider_item_signature(item)
+                    incremental_manifest[item_token] = manifest
+                    changed_items.append({**item_metadata, **manifest})
+                    counters["changed_files"] += 1
+                    save_incremental_manifest(manifest_path, incremental_manifest)
                     remember_checkpoint(current_token, path_text, page_token)
                 except Exception as exc:
                     counters["failed"] += 1
@@ -1036,14 +1118,21 @@ def download_folder(
     start_page_token = str(checkpoint.get("page_token", "") or "")
     start_dir = path_to_dir(output_base, start_path, root_dir)
     walk(start_token, start_dir, start_path, start_page_token)
+    # Keep entries for temporarily inaccessible provider items. They will be retried when their metadata changes or
+    # when an operator removes the stale manifest entry; never delete local teacher content during a background sweep.
+    save_incremental_manifest(manifest_path, incremental_manifest)
     return {
         "saved_path": str(root_dir),
         "folder_name": resolved_folder_name,
         "stats": counters,
-        "checkpoint": latest_checkpoint,
-        "failed_items": failed_items,
-        "elapsed_ms": round((time.perf_counter() - started_at) * 1000),
-    }
+            "checkpoint": latest_checkpoint,
+            "failed_items": failed_items,
+            "discovered_items": discovered_items,
+            "changed_items": changed_items,
+            "unchanged_items": unchanged_items,
+            "incremental": bool(manifest_path),
+            "elapsed_ms": round((time.perf_counter() - started_at) * 1000),
+        }
 
 
 def download_from_url(
@@ -1055,6 +1144,7 @@ def download_from_url(
     file_extension: str = "docx",
     resume_checkpoint: Optional[Dict[str, Any]] = None,
     checkpoint_path: str = "",
+    manifest_path: str = "",
 ) -> Dict[str, Any]:
     started_at = time.perf_counter()
     parsed = parse_feishu_url(resource_url)
@@ -1069,6 +1159,7 @@ def download_from_url(
             file_extension=file_extension,
             resume_checkpoint=resume_checkpoint,
             checkpoint_path=checkpoint_path,
+            manifest_path=manifest_path,
         )
         return {**parsed, **folder_result, "max_files": max_files}
     if resource_type == "docx":
@@ -1284,6 +1375,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", default="", help="Output directory. Defaults to the current user's Downloads folder.")
     parser.add_argument("--summary-path", default="", help="Optional JSON summary path.")
     parser.add_argument("--resume-checkpoint-path", default="", help="Optional UTF-8 JSON checkpoint path for resumable folder download.")
+    parser.add_argument("--manifest-path", default="", help="Optional UTF-8 JSON provider metadata manifest for incremental folder sync.")
     parser.add_argument("--file-extension", default="md", choices=["md", "docx", "pdf"], help="Feishu export format.")
     parser.add_argument("--max-files", type=int, default=0, help="Folder download limit. Use 0 for the full folder.")
     parser.add_argument("--timeout-seconds", type=int, default=DEFAULT_TIMEOUT_SECONDS, help="HTTP request timeout in seconds.")
@@ -1341,6 +1433,7 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
         file_extension=args.file_extension,
         resume_checkpoint=resume_checkpoint,
         checkpoint_path=args.resume_checkpoint_path,
+        manifest_path=args.manifest_path,
     )
     write_summary(args, result, "FEISHU_DOWNLOAD_SUMMARY=")
     return result

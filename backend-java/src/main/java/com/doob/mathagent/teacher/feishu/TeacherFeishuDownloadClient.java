@@ -121,6 +121,9 @@ public interface TeacherFeishuDownloadClient {
      * @param failedItemsJson JSON array of failed Feishu items, when the worker reports item-level failures
      * @param providerTitle actual provider display title when the URL identifies a document
      * @param providerRevision actual provider revision when Feishu exposes one
+     * @param discoveredItemsJson all remote file metadata discovered during this run
+     * @param changedItemsJson remote files whose local body changed or was missing
+     * @param unchangedItemsJson remote files confirmed unchanged and present locally
      */
     record FeishuDownloadResult(
             Path savedPath,
@@ -132,7 +135,10 @@ public interface TeacherFeishuDownloadClient {
             String downloadedItemsJson,
             String failedItemsJson,
             String providerTitle,
-            String providerRevision) {
+            String providerRevision,
+            String discoveredItemsJson,
+            String changedItemsJson,
+            String unchangedItemsJson) {
 
         /** Compatibility constructor for download clients predating remote title/revision metadata. */
         public FeishuDownloadResult(
@@ -144,7 +150,8 @@ public interface TeacherFeishuDownloadClient {
                 FeishuDownloadCheckpoint checkpoint,
                 String downloadedItemsJson,
                 String failedItemsJson) {
-            this(savedPath, files, skipped, failed, message, checkpoint, downloadedItemsJson, failedItemsJson, null, null);
+            this(savedPath, files, skipped, failed, message, checkpoint, downloadedItemsJson, failedItemsJson,
+                    null, null, "[]", "[]", "[]");
         }
 
         /**
@@ -154,6 +161,9 @@ public interface TeacherFeishuDownloadClient {
             checkpoint = checkpoint == null ? FeishuDownloadCheckpoint.empty() : checkpoint;
             downloadedItemsJson = jsonArrayOrEmpty(downloadedItemsJson);
             failedItemsJson = jsonArrayOrEmpty(failedItemsJson);
+            discoveredItemsJson = jsonArrayOrEmpty(discoveredItemsJson);
+            changedItemsJson = jsonArrayOrEmpty(changedItemsJson);
+            unchangedItemsJson = jsonArrayOrEmpty(unchangedItemsJson);
             providerTitle = blankToNull(providerTitle);
             providerRevision = blankToNull(providerRevision);
         }

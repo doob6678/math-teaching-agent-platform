@@ -211,7 +211,10 @@ public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownload
                     downloadedItemsJson,
                     failedItemsJson,
                     textOrDefault(provider.path("title").asText(""), null),
-                    textOrDefault(provider.path("revision").asText(""), null));
+                    textOrDefault(provider.path("revision").asText(""), null),
+                    jsonArray(root.path("discovered_items")),
+                    jsonArray(root.path("changed_items")),
+                    jsonArray(root.path("unchanged_items")));
         } catch (IOException exception) {
             Path savedPath = Path.of(textField(summary, SAVED_PATH_PATTERN, outputRoot.toString()));
             int files = intField(summary, FILES_PATTERN);
@@ -224,6 +227,11 @@ public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownload
                     failed,
                     "Downloaded " + files + " Feishu files; skipped " + skipped,
                     FeishuDownloadCheckpoint.empty(),
+                    "[]",
+                    "[]",
+                    null,
+                    null,
+                    "[]",
                     "[]",
                     "[]");
         }
@@ -295,6 +303,9 @@ public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownload
                 "--file-extension",
                 normalizeFileExtension(fileExtension),
                 "--quiet"));
+        command.add("--manifest-path");
+        command.add(outputRoot.resolve(".manifests").resolve(
+                com.doob.mathagent.teacher.support.TeacherResourceSourceIdentity.hash(url) + ".json").toString());
         FeishuDownloadCheckpoint normalized = checkpoint == null ? FeishuDownloadCheckpoint.empty() : checkpoint;
         if (normalized.hasCursor()) {
             Files.writeString(checkpointPath, checkpointJson(normalized), StandardCharsets.UTF_8);

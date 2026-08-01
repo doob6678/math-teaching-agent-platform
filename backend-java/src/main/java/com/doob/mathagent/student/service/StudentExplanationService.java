@@ -186,7 +186,8 @@ public class StudentExplanationService {
         // retrieval tool is useful. Deployment configuration cannot replace it with a different fixed pipeline.
         ReactEvidence reactEvidence = executeReactTools(
                 normalizedRequest, normalizedSubject, query, stages, sources, listener, visibleQuestion, cards,
-                imageRecord, imageDataUrl, imageUnderstanding, aiDraft, conversationTitle, startedNanos);
+                imageRecord, imageDataUrl, imageUnderstanding, aiDraft, conversationTitle, startedNanos,
+                recentHistory, longTermMemories);
         List<KnowledgeGraphSpineResponse.Node> knowledgeNodes = reactEvidence.knowledgeNodes();
         List<TeacherResourceBlockSearchResponse.Hit> teacherHits = reactEvidence.teacherHits();
 
@@ -262,11 +263,10 @@ public class StudentExplanationService {
     }
 
     /**
-     * Builds the read-only evidence set without a preliminary planning-model round trip.
+     * Runs one bounded ReAct decision and executes only the tools selected by that decision.
      *
-     * <p>The request toggles and backend subject already define the complete allow-list. Running those
-     * deterministic searches directly removes the 30-60 second ReAct planning wait while preserving the
-     * permission boundary; the single remaining provider call is responsible only for the learner-facing answer.</p>
+     * <p>Request flags form a permission allow-list, not an instruction to run every tool. The model supplies the
+     * concrete retrieval query; this service validates tool names and enforces tenant visibility.</p>
      */
     private ReactEvidence executeReactTools(
             StudentExplanationRequest request, RequestSubject subject, String query,
@@ -276,22 +276,52 @@ public class StudentExplanationService {
             List<StudentExplanationResponse.ExplanationCard> cards, StudentExplanationImageRecord imageRecord,
             String imageDataUrl,
             StudentExplanationResponse.ImageUnderstanding imageUnderstanding,
-            StudentExplanationResponse.AiDraft aiDraft, String conversationTitle, long startedNanos) {
+            StudentExplanationResponse.AiDraft aiDraft, String conversationTitle, long startedNanos,
+            List<StudentExplanationHistorySummary> recentHistory,
+            List<String> longTermMemories) {
         Set<String> available = availableReactTools(request, subject);
         List<KnowledgeGraphSpineResponse.Node> knowledgeNodes = new ArrayList<>();
         List<TeacherResourceBlockSearchResponse.Hit> teacherHits = new ArrayList<>();
-        long planStarted = System.nanoTime();
-        upsertStage(stages, runningStage("react_plan", "规划讲解"));
+        List<String> observations = new ArrayList<>();
+        long decisionStarted = System.nanoTime();
+        upsertStage(stages, runningStage("react_decision", "AI判断"));
         emitProgress(listener, request, visibleQuestion, stages, cards, sources, imageRecord,
                 imageUnderstanding, aiDraft, conversationTitle, startedNanos,
-                "后端已完成快速规划；将按权限执行真实检索：" + (available.isEmpty() ? "本轮不检索" : String.join("、", available))
-                        + "；query=" + compact(query));
-        // The allow-list is assembled entirely by the backend from normalized request flags and identity.
-        // No model is asked to restate it, so the first progress stage completes before network inference starts.
-        upsertStage(stages, stageFrom(planStarted, "react_plan", "规划资料检索", "completed",
-                "后端已确定性规划 " + available.size() + " 项只读资料检索：" + String.join("、", available) + "。"));
-        String retrievalQuery = query;
-        for (String tool : available) {
+                "AI正在判断这道题是否需要检索资料。" + (available.isEmpty() ? "当前没有可用检索工具。" : "可用工具：" + String.join("、", available)));
+        final boolean[] decisionTokenSeen = {false};
+        StudentExplanationAiStreamListener decisionStream = (delta, ignoredCards) -> {
+            listener.onAiDelta(delta, List.of());
+            if (!decisionTokenSeen[0] && delta != null && !text(delta.contentDelta()).isBlank()) {
+                decisionTokenSeen[0] = true;
+                emitProgress(listener, request, visibleQuestion, stages, cards, sources, imageRecord,
+                        imageUnderstanding, aiDraft, conversationTitle, startedNanos,
+                        "AI已开始判断，正在生成实际工具和检索参数。");
+            }
+        };
+        StudentExplanationAiCardService.ReactDecision decision = aiCardService.nextReactDecision(
+                reactProblemContext(visibleQuestion, recentHistory, longTermMemories),
+                sources, observations, available, imageDataUrl, decisionStream);
+        String decisionDetail;
+        if (decision.isFinal()) {
+            decisionDetail = "AI判断题目自洽，本轮不执行检索。";
+        } else if (decision.isAction()) {
+            decisionDetail = "AI选择工具：" + String.join("、", decision.tools())
+                    + (text(decision.searchQuery()).isBlank() ? "；未生成有效 query，本轮跳过检索。"
+                    : "；query=" + compact(decision.searchQuery()));
+        } else {
+            decisionDetail = "AI未选择可执行检索工具，本轮直接生成讲解。";
+        }
+        upsertStage(stages, stageFrom(decisionStarted, "react_decision", "AI判断", "completed", decisionDetail));
+        emitProgress(listener, request, visibleQuestion, stages, cards, sources, imageRecord,
+                imageUnderstanding, aiDraft, conversationTitle, startedNanos, decisionDetail);
+        if (decision.isFinal()) {
+            return new ReactEvidence(List.of(), List.of(), decision.finalDraft());
+        }
+        String retrievalQuery = text(decision.searchQuery()).strip();
+        if (retrievalQuery.isBlank()) {
+            return new ReactEvidence(List.of(), List.of(), null);
+        }
+        for (String tool : decision.tools()) {
             if ("search_textbook".equals(tool)) {
                 upsertStage(stages, runningToolStage("search_textbook", "检索教材", retrievalQuery, request.maxTextbookHits()));
                 emitProgress(listener, request, visibleQuestion, stages, cards, sources, imageRecord,
@@ -299,6 +329,7 @@ public class StudentExplanationService {
                         "正在检索教材；query=" + compact(retrievalQuery) + "；limit=" + request.maxTextbookHits() + "。");
                 List<TextbookSearchHit> hits = searchTextbooks(request, subject, retrievalQuery, stages);
                 hits.stream().map(StudentExplanationService::textbookSource).forEach(sources::add);
+                observations.add("教材检索命中 " + hits.size() + " 条证据。");
             } else if ("match_knowledge_graph".equals(tool)) {
                 upsertStage(stages, runningToolStage(
                         "match_knowledge_graph", "匹配知识点", retrievalQuery, MAX_KNOWLEDGE_GRAPH_MATCHES));
@@ -307,6 +338,7 @@ public class StudentExplanationService {
                         "正在匹配知识图谱；query=" + compact(retrievalQuery) + "；limit=" + MAX_KNOWLEDGE_GRAPH_MATCHES + "。");
                 knowledgeNodes.addAll(matchKnowledgeGraph(request, subject, retrievalQuery, stages));
                 knowledgeNodes.stream().map(StudentExplanationService::knowledgeSource).forEach(sources::add);
+                observations.add("知识图谱匹配 " + knowledgeNodes.size() + " 个知识点。");
             } else if ("search_teacher_resources".equals(tool)) {
                 upsertStage(stages, runningToolStage(
                         "search_teacher_resources", "检索教师资料", retrievalQuery, request.maxTeacherResourceHits()));
@@ -316,6 +348,7 @@ public class StudentExplanationService {
                 teacherHits.addAll(searchTeacherResources(request, subject, retrievalQuery, stages));
                 Map<String, TeacherResourceDocumentResponse> documentsById = teacherDocumentsById(subject.tenantId(), teacherHits);
                 teacherHits.stream().map(hit -> teacherSource(hit, documentsById.get(hit.documentId()))).forEach(sources::add);
+                observations.add("教师资料检索命中 " + teacherHits.size() + " 条证据。");
             }
         }
         return new ReactEvidence(List.copyOf(knowledgeNodes), List.copyOf(teacherHits), null);
@@ -595,9 +628,15 @@ public class StudentExplanationService {
     private static StudentExplanationResponse.ExplanationSource teacherSource(
             TeacherResourceBlockSearchResponse.Hit hit,
             TeacherResourceDocumentResponse document) {
+        String title = document != null && !text(document.title()).isBlank()
+                ? document.title()
+                : text(hit.documentTitle());
+        if (title.isBlank()) {
+            title = text(hit.sourcePath()).isBlank() ? "教师资料" : hit.sourcePath();
+        }
         return new StudentExplanationResponse.ExplanationSource(
                 "teacher_resource",
-                hit.documentTitle(),
+                title,
                 teacherSourceUri(hit),
                 hit.permissionScope(),
                 compact(hit.snippet()),
@@ -711,6 +750,28 @@ public class StudentExplanationService {
             return value;
         }
         return imageRecord == null ? "" : "图片讲题";
+    }
+
+    /**
+     * Carries the durable conversation context into the first ReAct call as well as the final composition call.
+     * Without this boundary a follow-up could retrieve against only its short new message and lose the original
+     * problem, even though the final answer composer had already loaded the history.
+     */
+    private static String reactProblemContext(
+            String visibleQuestion,
+            List<StudentExplanationHistorySummary> recentHistory,
+            List<String> longTermMemories) {
+        StringBuilder context = new StringBuilder(text(visibleQuestion));
+        if (recentHistory != null && !recentHistory.isEmpty()) {
+            context.append("\n关联会话历史：");
+            recentHistory.stream().limit(20).forEach(item -> context.append("\n- ")
+                    .append(compact(item.questionText())).append(" | answer=").append(compact(item.cardsJson())));
+        }
+        if (longTermMemories != null && !longTermMemories.isEmpty()) {
+            context.append("\n关联学习记忆：");
+            longTermMemories.stream().limit(20).forEach(memory -> context.append("\n- ").append(compact(memory)));
+        }
+        return context.toString();
     }
 
     /**

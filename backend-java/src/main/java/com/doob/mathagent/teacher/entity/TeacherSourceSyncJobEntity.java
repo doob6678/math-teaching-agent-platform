@@ -146,4 +146,5 @@ public class TeacherSourceSyncJobEntity {
     public void setUpdatedAt(LocalDateTime updatedAt) {
         this.updatedAt = updatedAt;
     }
+
 }

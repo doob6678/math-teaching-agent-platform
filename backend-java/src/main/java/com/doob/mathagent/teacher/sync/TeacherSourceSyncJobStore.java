@@ -2,6 +2,7 @@ package com.doob.mathagent.teacher.sync;
 
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncJobResponse;
 import java.util.List;
+import java.time.Instant;
 
 /**
  * Store abstraction for durable source synchronization jobs.
@@ -28,5 +29,10 @@ public interface TeacherSourceSyncJobStore {
     /** Finds an active queued, running, or paused job for duplicate-click and scheduler idempotency. */
     default TeacherSourceSyncJobResponse findActiveByDocument(String tenantId, String documentId) {
         return null;
+    }
+
+    /** Recovers a worker job that stayed running beyond its lease after a process or host crash. */
+    default int recoverStaleRunningJobs(Instant now, long staleAfterSeconds) {
+        return 0;
     }
 }

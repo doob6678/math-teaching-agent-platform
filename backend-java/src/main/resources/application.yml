@@ -104,15 +104,14 @@ math-agent:
     explanation:
       # Keep one bounded recovery path; provider rotation remains available when the first real call fails.
       max-provider-attempts: 2
-      # Unified token ceiling for question, history answers, and memories. Java obtains text counts from ai-worker;
-      # provider prompt_tokens remains authoritative for the complete multimodal request including the image.
-      conversation-context-max-tokens: 100000
       conversation-context-max-chars: 100000
       conversation-history-fetch-limit: 200
       long-term-memory-top-k: 5
       long-term-memory-max-chars: 12000
   database:
     enabled: true
+    migration:
+      runner-enabled: false
     url: jdbc:mysql://mysql:3306/math_agent_rag?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true
     username: root
     password: local_mysql_7f9b1cc8a2d44529b6e481d5

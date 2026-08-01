@@ -14,7 +14,8 @@ public record TeacherSourceSyncSchedulerProperties(
         String tenantId,
         String serviceRole,
         String serviceSubjectId,
-        List<String> documentIds) {
+        List<String> documentIds,
+        long workerLeaseTimeoutSeconds) {
 
     private static final long DEFAULT_FIXED_DELAY_MILLISECONDS = 300000L;
     private static final long MINIMUM_FIXED_DELAY_MILLISECONDS = 1L;
@@ -26,7 +27,8 @@ public record TeacherSourceSyncSchedulerProperties(
                 text(environment, "math-agent.teacher.sync.scheduler.tenant-id", "default"),
                 text(environment, "math-agent.teacher.sync.scheduler.service-role", "admin"),
                 text(environment, "math-agent.teacher.sync.scheduler.service-subject-id", ""),
-                commaSeparated(environment.getProperty("math-agent.teacher.sync.scheduler.document-ids", "")));
+                commaSeparated(environment.getProperty("math-agent.teacher.sync.scheduler.document-ids", "")),
+                longProperty(environment, "math-agent.teacher.sync.scheduler.worker-lease-timeout-seconds", 1800L));
     }
 
     public TeacherSourceSyncSchedulerProperties {
@@ -34,11 +36,12 @@ public record TeacherSourceSyncSchedulerProperties(
         tenantId = textValue(tenantId, "default");
         serviceRole = textValue(serviceRole, "admin").toLowerCase();
         serviceSubjectId = serviceSubjectId == null ? "" : serviceSubjectId.strip();
+        workerLeaseTimeoutSeconds = Math.max(60L, workerLeaseTimeoutSeconds);
         documentIds = documentIds == null ? List.of() : documentIds.stream()
                 .filter(value -> value != null && !value.isBlank()).map(String::strip).distinct().toList();
-        if (enabled && (!"admin".equals(serviceRole) || serviceSubjectId.isBlank() || documentIds.isEmpty())) {
+        if (enabled && (!"admin".equals(serviceRole) || serviceSubjectId.isBlank())) {
             throw new IllegalArgumentException(
-                    "Enabled Feishu scheduler requires an explicit admin service-role, service-subject-id, and document-ids allowlist");
+                    "Enabled Feishu scheduler requires an explicit admin service-role and service-subject-id");
         }
     }
 

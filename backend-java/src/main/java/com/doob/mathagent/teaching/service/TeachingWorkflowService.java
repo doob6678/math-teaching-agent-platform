@@ -342,7 +342,9 @@ public class TeachingWorkflowService extends TeachingWorkflowExecutionSupport {
                 normalizedRequest.learningGoal(),
                 normalizedRequest.watermarkText(),
                 createdNodes, List.of(), List.of(), List.of(),
-                "", "", "", "", List.of(), null, List.of(), null, null, null, null, null);
+                "", "", "", "", List.of(), null, List.of(), null, null, null, null, null)
+                .withPageChrome(normalizedRequest.headerLeft(), normalizedRequest.headerRight(),
+                        normalizedRequest.footerLeft(), normalizedRequest.footerRight());
         taskStore.save(ownerKey, idempotencyKey, created);
         // HTTP production flow is LectureTaskSubmissionService -> Outbox -> RabbitMQ. Focused legacy tests retain
         // a direct deterministic path, but no application-local executor is allowed to start a real lecture DAG.
@@ -382,7 +384,8 @@ public class TeachingWorkflowService extends TeachingWorkflowExecutionSupport {
                 failed.learningGoal(),
                 evidenceLimitForResume(failed),
                 failed.selectedTemplate() == null ? null : failed.selectedTemplate().templateCode(),
-                failed.watermarkText()).normalize();
+                failed.watermarkText(), failed.headerLeft(), failed.headerRight(), failed.footerLeft(), failed.footerRight(),
+                null, null, null).normalize();
         String ownerKey = normalizedContext.ownerKey();
         String idempotencyKey = normalizedContext.idempotencyKey(request.clientRequestId());
         TeachingTaskResponse running = runningSnapshot(failed);
@@ -479,7 +482,8 @@ public class TeachingWorkflowService extends TeachingWorkflowExecutionSupport {
         TeachingTaskRequest request = new TeachingTaskRequest(
                 queued.clientRequestId(), queued.questionText(), queued.learningGoal(), evidenceLimitForResume(queued),
 
-                queued.selectedTemplate() == null ? null : queued.selectedTemplate().templateCode(), queued.watermarkText()).normalize();
+                queued.selectedTemplate() == null ? null : queued.selectedTemplate().templateCode(), queued.watermarkText(),
+                queued.headerLeft(), queued.headerRight(), queued.footerLeft(), queued.footerRight(), null, null, null).normalize();
         TeachingTaskResponse completed = execute(request, context, queued.taskId(), context.ownerKey(),
                 context.idempotencyKey(queued.clientRequestId()), queued.status() == TeachingTaskStatus.CREATED ? null : queued);
         taskStore.save(context.ownerKey(), context.idempotencyKey(queued.clientRequestId()), completed);

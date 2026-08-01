@@ -13,6 +13,7 @@ import org.redisson.api.RedissonClient;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import java.time.Instant;
 
 /**
  * Runs configured Feishu syncs through the exact same durable job and execution services as the manual endpoint.
@@ -32,6 +33,8 @@ public class TeacherSourceSyncScheduler {
     private final TeacherSourceSyncCommandDispatcher commandDispatcher;
     private final TeacherSourceSyncSchedulerProperties properties;
     private final RedissonClient redissonClient;
+    private final TeacherSourceSyncCheckpointStore checkpointStore;
+    private final TeacherSourceSyncManifestStore manifestStore;
 
     public TeacherSourceSyncScheduler(
             TeacherResourceStore resourceStore,
@@ -39,19 +42,30 @@ public class TeacherSourceSyncScheduler {
             TeacherSourceSyncJobService jobService,
             TeacherSourceSyncCommandDispatcher commandDispatcher,
             TeacherSourceSyncSchedulerProperties properties,
-            RedissonClient redissonClient) {
+            RedissonClient redissonClient,
+            TeacherSourceSyncCheckpointStore checkpointStore,
+            TeacherSourceSyncManifestStore manifestStore) {
         this.resourceStore = resourceStore;
         this.jobStore = jobStore;
         this.jobService = jobService;
         this.commandDispatcher = commandDispatcher;
         this.properties = properties;
         this.redissonClient = redissonClient;
+        this.checkpointStore = checkpointStore;
+        this.manifestStore = manifestStore;
     }
 
-    @Scheduled(fixedDelayString = "${math-agent.teacher.sync.scheduler.fixed-delay-ms}")
+    // The initial delay lets database connectivity and dependent workers settle before the first recovery sweep.
+    // Later ticks remain fixed-delay so a long sync cannot overlap the next sweep.
+    @Scheduled(
+            initialDelayString = "${math-agent.teacher.sync.scheduler.initial-delay-ms:60000}",
+            fixedDelayString = "${math-agent.teacher.sync.scheduler.fixed-delay-ms}")
     public void synchronizeRegisteredFeishuResources() {
+        Instant now = Instant.now();
+        manifestStore.recoverExpiredLeases(now);
+        jobStore.recoverStaleRunningJobs(now, properties.workerLeaseTimeoutSeconds());
         for (TeacherResourceDocumentResponse document : resourceStore.listSchedulableFeishu(properties.tenantId())) {
-            if (!properties.documentIds().contains(document.documentId())) {
+            if (!properties.documentIds().isEmpty() && !properties.documentIds().contains(document.documentId())) {
                 continue;
             }
             String lockName = "math-agent:teacher-source-sync:" + document.tenantId() + ":" + document.documentId();
@@ -60,8 +74,24 @@ public class TeacherSourceSyncScheduler {
                 continue;
             }
             try {
+                TeacherSourceSyncJobResponse active = jobStore.findActiveByDocument(document.tenantId(), document.documentId());
+                if (active != null && "AUTH_REQUIRED".equalsIgnoreCase(active.status())) {
+                    // Permission repair is an explicit human action; repeatedly calling Feishu cannot fix it.
+                    continue;
+                }
+                if (active != null && "paused".equalsIgnoreCase(active.status())) {
+                    if (checkpointStore.findByJobId(document.tenantId(), active.jobId()).isEmpty()) {
+                        LOGGER.warn("Skipping paused Feishu sync without checkpoint document={} job={}", document.documentId(), active.jobId());
+                        continue;
+                    }
+                    commandDispatcher.dispatch(new TeacherSourceSyncCommand(
+                            TeacherSourceSyncCommand.CURRENT_SCHEMA_VERSION, TeacherSourceSyncCommand.RESUME,
+                            document.tenantId(), properties.serviceRole(), properties.serviceSubjectId(),
+                            document.documentId(), active.jobId()));
+                    continue;
+                }
                 // Do not execute a queued manual job: its capability-gated execute action remains user controlled.
-                if (jobStore.findActiveByDocument(document.tenantId(), document.documentId()) != null) {
+                if (active != null) {
                     continue;
                 }
                 TeacherSourceSyncJobResponse job = jobService.createSyncJob(

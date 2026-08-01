@@ -485,7 +485,12 @@ public class SpringAiOpenAiCompatibleGateway implements AiChatGateway {
      */
     static boolean requiresStrictJsonOutput(AiChatRequest request) {
         String agentCode = request.agentCode() == null ? "" : request.agentCode().strip();
-        if ("StudentExplanationAgent".equals(agentCode) || "CoursewareAgent".equals(agentCode)) {
+        // StudentExplanationReactAgent emits the machine-readable decision envelope that the student service
+        // validates before executing retrieval. It must share the strict JSON system prompt with the final card
+        // agent; otherwise the generic classroom wrapper can prepend prose and break ReAct parsing.
+        if ("StudentExplanationAgent".equals(agentCode)
+                || "StudentExplanationReactAgent".equals(agentCode)
+                || "CoursewareAgent".equals(agentCode)) {
             return true;
         }
         String prompt = request.userInputSummary() == null ? "" : request.userInputSummary().toLowerCase(Locale.ROOT);

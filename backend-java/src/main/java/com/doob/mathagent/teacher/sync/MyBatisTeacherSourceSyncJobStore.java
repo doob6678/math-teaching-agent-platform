@@ -9,6 +9,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.LocalDateTime;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.List;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Repository;
@@ -79,6 +81,19 @@ public class MyBatisTeacherSourceSyncJobStore implements TeacherSourceSyncJobSto
                 .orderByDesc(TeacherSourceSyncJobEntity::getCreatedAt)
                 .last("LIMIT 1"));
         return entity == null ? null : toResponse(entity);
+    }
+
+    @Override
+    public int recoverStaleRunningJobs(Instant now, long staleAfterSeconds) {
+        LocalDateTime cutoff = LocalDateTime.ofInstant(now.minusSeconds(Math.max(1L, staleAfterSeconds)), ZoneOffset.UTC);
+        return mapper.update(null, new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<TeacherSourceSyncJobEntity>()
+                .eq(TeacherSourceSyncJobEntity::getStatus, "running")
+                .lt(TeacherSourceSyncJobEntity::getUpdatedAt, cutoff)
+                .set(TeacherSourceSyncJobEntity::getStatus, "paused")
+                .set(TeacherSourceSyncJobEntity::getPhase, "recovery_pending")
+                .set(TeacherSourceSyncJobEntity::getMessage,
+                        "Worker lease expired; scheduler will resume from the durable Feishu checkpoint.")
+                .set(TeacherSourceSyncJobEntity::getUpdatedAt, LocalDateTime.ofInstant(now, ZoneOffset.UTC)));
     }
 
     private static TeacherSourceSyncJobEntity toEntity(TeacherSourceSyncJobResponse job) {

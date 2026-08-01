@@ -76,14 +76,24 @@ CREATE TABLE IF NOT EXISTS teacher_source_sync_manifest (
     provider_modified_at TIMESTAMP NULL,
     content_checksum CHAR(64) NULL,
     document_id VARCHAR(64) NULL,
-    archive_status VARCHAR(32) NOT NULL,
+    archive_status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',
+    sync_status VARCHAR(32) NOT NULL DEFAULT 'DISCOVERED',
+    attempt INT NOT NULL DEFAULT 0,
+    local_path TEXT NULL,
+    last_error TEXT NULL,
+    lease_until TIMESTAMP NULL,
+    next_retry_at TIMESTAMP NULL,
+    downloaded_at TIMESTAMP NULL,
+    parsed_at TIMESTAMP NULL,
+    indexed_at TIMESTAMP NULL,
     indexed_revision VARCHAR(256) NULL,
     discovered_at TIMESTAMP NOT NULL,
     archived_at TIMESTAMP NULL,
     updated_at TIMESTAMP NOT NULL,
     UNIQUE KEY uq_sync_manifest_item (sync_root_id, provider_item_id),
     KEY idx_sync_manifest_incremental (sync_root_id, archive_status, revision, provider_modified_at),
-    KEY idx_sync_manifest_document (tenant_id, document_id)
+    KEY idx_sync_manifest_document (tenant_id, document_id),
+    KEY idx_sync_manifest_recovery (tenant_id, sync_status, next_retry_at, lease_until, updated_at)
 );
 
 CREATE TABLE IF NOT EXISTS teaching_review_audit (

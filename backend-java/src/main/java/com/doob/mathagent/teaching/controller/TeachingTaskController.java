@@ -520,12 +520,12 @@ public class TeachingTaskController {
         if (safeTopic.isBlank()) {
             safeTopic = "数学讲义";
         }
-        String versionLabel = switch (version == null ? "" : version.toLowerCase(Locale.ROOT)) {
-            case "student" -> "学生版";
-            case "lecture" -> "讲解版";
-            default -> "教师版";
+        String versionCode = version == null ? "" : version.toLowerCase(Locale.ROOT);
+        return switch (versionCode) {
+            case "student" -> safeTopic + "（学生讲义）（学生版）.pdf";
+            case "lecture" -> safeTopic + "（讲解版）.pdf";
+            default -> safeTopic + "（教师讲义）（教师版）.pdf";
         };
-        return safeTopic + "（" + versionLabel + "）.pdf";
     }
 
     /**

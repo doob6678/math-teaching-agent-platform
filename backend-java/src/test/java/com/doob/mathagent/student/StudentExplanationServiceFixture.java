@@ -187,8 +187,10 @@ public final class StudentExplanationServiceFixture {
             if (!plannedTools.isEmpty()) {
                 String values = plannedTools.stream().map(tool -> "\"" + tool + "\"")
                         .collect(java.util.stream.Collectors.joining(","));
+                String query = extractProblem(request.userInputSummary());
                 return new AiChatResult(request.providerName(), request.modelCode(), 1, 1, 2, "react",
-                        "{\"decision\":\"action\",\"tools\":[" + values + "]}");
+                        "{\"decision\":\"action\",\"tools\":[" + values + "],\"query\":\""
+                                + query.replace("\\", "\\\\").replace("\"", "\\\"") + "\"}");
             }
             AiChatResult finalResult = finalAnswerGateway.call(request);
             String cardsJson = finalResult.generatedContent() == null ? "" : finalResult.generatedContent().strip();
@@ -205,6 +207,14 @@ public final class StudentExplanationServiceFixture {
             if (tools.contains("match_knowledge_graph")) plan.add("match_knowledge_graph");
             if (tools.contains("search_teacher_resources")) plan.add("search_teacher_resources");
             return List.copyOf(plan);
+        }
+
+        private static String extractProblem(String prompt) {
+            int start = prompt.indexOf("Problem: ");
+            if (start < 0) return "";
+            start += "Problem: ".length();
+            int end = prompt.indexOf("\n", start);
+            return (end < 0 ? prompt.substring(start) : prompt.substring(start, end)).strip();
         }
     }
 }

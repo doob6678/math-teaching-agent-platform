@@ -286,6 +286,10 @@ final class TeachingHandoutPdfExportPolicyPartA {
                 : insertPrintedQuestionSpacing(sanitizedBody));
         String headerTopic = safeHeaderTopic(repairMojibake(task.learningGoal()));
         String watermark = latexText(normalizedWatermark(repairMojibake(task.watermarkText())));
+        String headerLeft = latexText(repairMojibake(task.headerLeft()));
+        String headerRight = latexText(repairMojibake(task.headerRight()));
+        String footerLeft = latexText(repairMojibake(task.footerLeft()));
+        String footerRight = latexText(repairMojibake(task.footerRight()));
         // Template families own paper geometry and page chrome through independent Strategy implementations.
         // The shared exporter owns only mathematical content, compilation, and asset safety.
         String documentOptions = templateStrategy.documentOptions(style.isLecture());
@@ -294,9 +298,10 @@ final class TeachingHandoutPdfExportPolicyPartA {
                 ? LECTURE_BODY_COMMAND
                 : templateStrategy.bodySizeCommand(false);
         String headerFooterCommands = templateStrategy.headerFooterCommands(
-                watermark,
-                latexText(headerTopic),
-                watermark);
+                headerLeft,
+                headerRight.isBlank() ? latexText(headerTopic) : headerRight,
+                footerLeft,
+                footerRight);
         String headingCommands = templateStrategy.headingCommands();
         String titleBlock = templateStrategy.titleBlock(latexText(title), watermark, style.isLecture());
         return """

@@ -368,7 +368,8 @@ public class StudentExplanationAiCardService {
                 + "\nRelevant long-term student memories:\n" + String.join("\n", memoryLines));
         StudentExplanationTokenCounter.TokenCount counted = tokenCounter.count(candidates, model);
         // Image content is not locally tokenized. Do not invent a visual token count: the provider's prompt_tokens
-        // returned after generation is the only authoritative total for text plus image.
+        // returned after generation is the only authoritative total for text plus image. The real worker tokenizer
+        // still bounds the textual history before the request; image usage is reported by the provider response.
         int textBudget = conversationContextMaxTokens;
         if (counted.available() && counted.total() > textBudget) {
             normalizedQuery = trimByRealTokens(normalizedQuery, textBudget, model);
@@ -842,6 +843,12 @@ public class StudentExplanationAiCardService {
 
         /** Compatibility accessor for diagnostics that still display the first selected tool. */
         public String tool() { return tools.isEmpty() ? "" : tools.getFirst(); }
+
+        /** Returns true only when the model supplied a validated final card draft. */
+        public boolean isFinal() { return "final".equals(kind) && finalDraft != null; }
+
+        /** Returns true only when the model supplied at least one validated permitted tool. */
+        public boolean isAction() { return "action".equals(kind) && !tools.isEmpty(); }
     }
 
     record ParsedAiCards(

@@ -33,7 +33,7 @@ public final class ZhaoHandoutTemplateStrategy implements HandoutTemplateStrateg
     }
 
     @Override
-    public String headerFooterCommands(String watermark, String headerTopic, String footerText) {
+    public String headerFooterCommands(String headerLeft, String headerRight, String footerLeft, String footerRight) {
         return """
                 \\newcommand{\\zhaopagetab}{\\tikz[baseline=-0.56ex,x=2.4ex,y=2.4ex]{
                   \\draw[HandoutText,line width=0.08ex] (0,0.22) -- (6.5,0.22);
@@ -50,7 +50,7 @@ public final class ZhaoHandoutTemplateStrategy implements HandoutTemplateStrateg
                 \\rfoot{\\ifodd\\value{page}\\else\\zhaopagetab\\fi}
                 \\renewcommand{\\headrulewidth}{0pt}
                 \\renewcommand{\\footrulewidth}{0pt}
-                """.formatted(watermark);
+                """.formatted(headerLeft);
     }
 
     @Override

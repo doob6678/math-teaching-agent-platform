@@ -123,9 +123,9 @@ services:
       MATH_AGENT_LOCAL_TEXT_EMBEDDING_MODEL_PATH: ${MATH_AGENT_LOCAL_TEXT_EMBEDDING_MODEL_PATH:-/models/BAAI/bge-small-zh-v1.5}
       MATH_AGENT_LOCAL_RERANK_MODEL_PATH: ${MATH_AGENT_LOCAL_RERANK_MODEL_PATH:-/models/BAAI/bge-reranker-v2-m3}
       MATH_AGENT_LOCAL_CLIP_MODEL_PATH: ${MATH_AGENT_LOCAL_CLIP_MODEL_PATH:-/models/damo/multi-modal_clip-vit-large-patch14_zh}
-      MATH_AGENT_LOCAL_TEXT_EMBEDDING_DEVICE: ${MATH_AGENT_LOCAL_TEXT_EMBEDDING_DEVICE:-cpu}
-      MATH_AGENT_LOCAL_RERANK_DEVICE: ${MATH_AGENT_LOCAL_RERANK_DEVICE:-cpu}
-      MATH_AGENT_LOCAL_CLIP_DEVICE: ${MATH_AGENT_LOCAL_CLIP_DEVICE:-cpu}
+      MATH_AGENT_LOCAL_TEXT_EMBEDDING_DEVICE: ${MATH_AGENT_LOCAL_TEXT_EMBEDDING_DEVICE:-cuda}
+      MATH_AGENT_LOCAL_RERANK_DEVICE: ${MATH_AGENT_LOCAL_RERANK_DEVICE:-cuda}
+      MATH_AGENT_LOCAL_CLIP_DEVICE: ${MATH_AGENT_LOCAL_CLIP_DEVICE:-cuda}
     ports: ["${MATH_AGENT_WORKER_HOST_PORT:-8092}:8091"]
     volumes:
       - worker-data:/app/data
@@ -157,9 +157,24 @@ services:
       # The image mounts the Windows SimHei file below; pass its in-container path so PDFBox never guesses a
       # Windows-only path and refuses a Chinese handout export inside Linux.
       MATH_AGENT_PDF_FONT_PATH: ${MATH_AGENT_PDF_FONT_PATH:-/app/fonts/cjk.ttf}
+      FEISHU_APP_ID: ${FEISHU_APP_ID:-}
+      FEISHU_APP_SECRET: ${FEISHU_APP_SECRET:-}
+      FEISHU_APPID: ${FEISHU_APPID:-}
+      FEISHU_APPSECRET: ${FEISHU_APPSECRET:-}
+      MATH_AGENT_TEACHER_SYNC_DOWNLOADER_SCRIPT: /app/scripts/download_feishu_url.py
+      MATH_AGENT_TEACHER_SYNC_STAGING_ROOT: /app/data/teacher-source-imports
+      MATH_AGENT_TEACHER_SYNC_ASSET_STORAGE_ROOT: /app/data/teacher-assets
+      MATH_AGENT_TEACHER_SYNC_SCHEDULER_ENABLED: ${MATH_AGENT_TEACHER_SYNC_SCHEDULER_ENABLED:-true}
+      MATH_AGENT_TEACHER_SYNC_SCHEDULER_INITIAL_DELAY_MS: ${MATH_AGENT_TEACHER_SYNC_SCHEDULER_INITIAL_DELAY_MS:-60000}
+      MATH_AGENT_TEACHER_SYNC_SERVICE_SUBJECT_ID: ${MATH_AGENT_TEACHER_SYNC_SERVICE_SUBJECT_ID:-scheduler}
+      MATH_AGENT_TEACHER_SYNC_DOCUMENT_IDS: ${MATH_AGENT_TEACHER_SYNC_DOCUMENT_IDS:-}
     ports: ["${MATH_AGENT_BACKEND_HOST_PORT:-8080}:8080"]
     volumes:
       - backend-data:/app/data
+      # Keep Feishu source files and persisted image assets visible on the Windows host. The named backend volume
+      # remains for unrelated runtime data, while these two operator-auditable paths survive container replacement.
+      - ./.local-storage/teacher-source-imports:/app/data/teacher-source-imports
+      - ./.local-storage/teacher-assets:/app/data/teacher-assets
       # Fixed WSL source path for the real 2008–2024 paper collection. This is deliberately not an environment
       # interpolation: a run must show exactly which operator-approved source directory it mounted.
       - "/mnt/c/Users/doob/Desktop/个人资料/高考真题/数学高考真题试卷【点进去分开保存，链接长期在】/【新·PDF版】2008-2024·高考数学真题/版本3：数学（按年份分类）2008-2024:/app/data/gaokao-input:ro"

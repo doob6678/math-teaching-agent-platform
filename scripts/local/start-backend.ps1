@@ -94,10 +94,14 @@ function Ensure-Worker {
         # dependency creates a misleading healthy HTTP port while every real explanation fails in vector recall.
         $workerScript = Join-Path $Root "scripts\local\start-worker.ps1"
         Write-Host "AI Worker is not ready on 127.0.0.1:$Port; starting the real local worker."
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $workerScript -Port $Port -Background
-        if ($LASTEXITCODE -ne 0) {
-            throw "AI Worker startup script failed with exit code $LASTEXITCODE"
-        }
+        $workerOut = Join-Path $Root ".local-logs\worker.out.log"
+        $workerErr = Join-Path $Root ".local-logs\worker.err.log"
+        New-Item -ItemType Directory -Force -Path (Split-Path $workerOut) | Out-Null
+        $workerProcess = Start-Process -FilePath "powershell.exe" `
+            -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $workerScript, "-Port", "$Port", "-Background") `
+            -WorkingDirectory $Root -WindowStyle Hidden `
+            -RedirectStandardOutput $workerOut -RedirectStandardError $workerErr -PassThru
+        Write-Host "AI Worker startup requested: pid=$($workerProcess.Id)"
     }
 
     $deadline = (Get-Date).AddSeconds(120)

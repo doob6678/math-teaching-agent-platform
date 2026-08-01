@@ -104,8 +104,9 @@ class TeachingWorkflowExecutionSupport {
             TeachingTaskResponse task, TeachingRequestContext reviewer) {
         TeachingTaskRequest request = new TeachingTaskRequest(
                 task.clientRequestId(), task.questionText(), task.learningGoal(), evidenceLimitForResume(task),
-                task.selectedTemplate() == null ? null : task.selectedTemplate().templateCode(), task.watermarkText()).normalize();
-        TeachingHandoutTemplateProfile template = handoutTemplateService.resolve(request.handoutTemplateCode());
+                task.selectedTemplate() == null ? null : task.selectedTemplate().templateCode(), task.watermarkText(),
+                task.headerLeft(), task.headerRight(), task.footerLeft(), task.footerRight(), null, null, null).normalize();
+        TeachingHandoutTemplateProfile template = handoutTemplateService.resolveFor(request);
         StudentMemoryResponse memory = task.memoryReuse() == null
                 ? new StudentMemoryResponse(false, null, "private", "", 0D,
                         "review rendering has no memory snapshot", List.of())
@@ -161,7 +162,7 @@ class TeachingWorkflowExecutionSupport {
             String idempotencyKey,
             TeachingTaskResponse checkpoint) {
         StageTimer timer = new StageTimer(checkpoint == null ? List.of() : checkpoint.stageTimings());
-        TeachingHandoutTemplateProfile template = handoutTemplateService.resolve(request.handoutTemplateCode());
+        TeachingHandoutTemplateProfile template = handoutTemplateService.resolveFor(request);
         StudentMemoryResponse memoryResponse = checkpoint != null && checkpoint.memoryReuse() != null
                 ? fromMemoryReuse(checkpoint.memoryReuse())
                 : memoryReuseService.reuse(memoryRequest(request, context));
@@ -327,7 +328,8 @@ class TeachingWorkflowExecutionSupport {
                 draftSections,
                 draftReview,
                 mergeResult,
-                null);
+                null)
+                .withPageChrome(request.headerLeft(), request.headerRight(), request.footerLeft(), request.footerRight());
         if (ownerKey != null && idempotencyKey != null) {
             taskStore.save(ownerKey, idempotencyKey, response);
         }
@@ -859,7 +861,8 @@ class TeachingWorkflowExecutionSupport {
                 null,
                 null,
                 null,
-                null);
+                null)
+                .withPageChrome(request.headerLeft(), request.headerRight(), request.footerLeft(), request.footerRight());
         taskStore.save(ownerKey, idempotencyKey, snapshot);
     }
 }

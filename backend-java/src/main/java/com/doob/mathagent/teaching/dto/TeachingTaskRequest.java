@@ -13,6 +13,10 @@ import jakarta.validation.constraints.Size;
  * @param evidenceLimit 本次检索希望保留的证据数量；后端不会因旧版界面默认值而拒绝合法请求。
  * @param handoutTemplateCode optional backend-owned handout template code selected by the frontend
  * @param watermarkText PDF 页眉、页脚和首页署名。该字段只参与排版，绝不发送给模型。
+ * @param headerLeft 独立左页眉；为空时兼容旧 watermarkText。
+ * @param headerRight 独立右页眉；为空时由后端使用学习主题。
+ * @param footerLeft 独立左页脚；为空时兼容旧 watermarkText。
+ * @param footerRight 独立右页脚；为空时由后端生成页码。
  * @param aiProviderName 用户从后端允许目录中选择的 AI 提供商；空值使用系统默认。
  * @param aiModelCode 用户从该提供商允许目录中选择的模型；空值使用系统默认。
  * @param supplementaryRequirements 仅用于编排和审校的补充要求，不属于可打印题干。
@@ -24,6 +28,10 @@ public record TeachingTaskRequest(
         @Min(1) int evidenceLimit,
         @Size(max = 128) String handoutTemplateCode,
         @Size(max = 32) String watermarkText,
+        @Size(max = 128) String headerLeft,
+        @Size(max = 128) String headerRight,
+        @Size(max = 128) String footerLeft,
+        @Size(max = 128) String footerRight,
         @Size(max = 32) String aiProviderName,
         @Size(max = 96) String aiModelCode,
         @Size(max = 4000) String supplementaryRequirements) {
@@ -39,7 +47,7 @@ public record TeachingTaskRequest(
             String questionText,
             String learningGoal,
             int evidenceLimit) {
-        this(clientRequestId, questionText, learningGoal, evidenceLimit, null, null, null, null, null);
+        this(clientRequestId, questionText, learningGoal, evidenceLimit, null, null, null, null, null, null, null, null, null);
     }
 
     /** Preserves callers that still provide the backend-owned layout identifier but no watermark. */
@@ -49,7 +57,7 @@ public record TeachingTaskRequest(
             String learningGoal,
             int evidenceLimit,
             String handoutTemplateCode) {
-        this(clientRequestId, questionText, learningGoal, evidenceLimit, handoutTemplateCode, null, null, null, null);
+        this(clientRequestId, questionText, learningGoal, evidenceLimit, handoutTemplateCode, null, null, null, null, null, null, null, null);
     }
 
     /** Preserves task replays that set a watermark but leave model routing to the default provider. */
@@ -60,7 +68,7 @@ public record TeachingTaskRequest(
             int evidenceLimit,
             String handoutTemplateCode,
             String watermarkText) {
-        this(clientRequestId, questionText, learningGoal, evidenceLimit, handoutTemplateCode, watermarkText, null, null, null);
+        this(clientRequestId, questionText, learningGoal, evidenceLimit, handoutTemplateCode, watermarkText, null, null, null, null, null, null, null);
     }
 
     /**
@@ -72,12 +80,21 @@ public record TeachingTaskRequest(
             String questionText,
             String learningGoal,
             int evidenceLimit,
-            String handoutTemplateCode,
-            String watermarkText,
-            String aiProviderName,
-            String aiModelCode) {
+        String handoutTemplateCode,
+        String watermarkText,
+        String aiProviderName,
+        String aiModelCode) {
         this(clientRequestId, questionText, learningGoal, evidenceLimit, handoutTemplateCode, watermarkText,
-                aiProviderName, aiModelCode, null);
+                null, null, null, null, aiProviderName, aiModelCode, null);
+    }
+
+    /** Compatibility constructor used by learning-loop services before page chrome was exposed. */
+    public TeachingTaskRequest(
+            String clientRequestId, String questionText, String learningGoal, int evidenceLimit,
+            String handoutTemplateCode, String watermarkText, String aiProviderName,
+            String aiModelCode, String supplementaryRequirements) {
+        this(clientRequestId, questionText, learningGoal, evidenceLimit, handoutTemplateCode, watermarkText,
+                null, null, null, null, aiProviderName, aiModelCode, supplementaryRequirements);
     }
 
     /**
@@ -102,6 +119,10 @@ public record TeachingTaskRequest(
                 evidenceLimit,
                 handoutTemplateCode == null || handoutTemplateCode.isBlank() ? null : handoutTemplateCode.strip(),
                 normalizeWatermark(watermarkText),
+                normalizeChrome(headerLeft, normalizeWatermark(watermarkText)),
+                normalizeChrome(headerRight, normalizedGoal),
+                normalizeChrome(footerLeft, normalizeWatermark(watermarkText)),
+                normalizeChrome(footerRight, "第 \\thepage 页 / 共 \\pageref{LastPage} 页"),
                 optionalText(aiProviderName),
                 optionalText(aiModelCode),
                 normalizedSupplement);
@@ -132,6 +153,12 @@ public record TeachingTaskRequest(
         }
         String normalized = value.replaceAll("[\\p{Cntrl}]", "").replaceAll("\\s+", " ").strip();
         return normalized.isEmpty() ? DEFAULT_WATERMARK_TEXT : normalized;
+    }
+
+    /** Keeps page chrome printable while allowing independent labels without leaking control characters to XeLaTeX. */
+    private static String normalizeChrome(String value, String fallback) {
+        String normalized = value == null ? "" : value.replaceAll("[\\p{Cntrl}]", "").replaceAll("\\s+", " ").strip();
+        return normalized.isBlank() ? fallback : normalized;
     }
 
     /** Normalizes optional model routing without making blank controls part of the persisted request contract. */

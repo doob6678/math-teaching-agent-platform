@@ -32,7 +32,9 @@ public class LectureTaskSubmissionService {
                 normalizedContext.subjectType(), normalizedContext.subjectId(), null, TeachingTaskStatus.CREATED,
                 normalizedRequest.questionText(), normalizedRequest.learningGoal(), normalizedRequest.watermarkText(),
                 TeachingWorkflowService.initialWorkflowNodes(normalizedRequest), List.of(), List.of(), List.of(),
-                "", "", "", "", List.of(), null, List.of(), null, null, null, null, null);
+                "", "", "", "", List.of(), null, List.of(), null, null, null, null, null)
+                .withPageChrome(normalizedRequest.headerLeft(), normalizedRequest.headerRight(),
+                        normalizedRequest.footerLeft(), normalizedRequest.footerRight());
         TeachingTaskResponse durable = taskStore.createIfAbsent(ownerKey, idempotencyKey, created);
         // A concurrent duplicate returns its existing task. The unique outbox key still makes this idempotent.
         outboxStore.enqueue(durable.taskId());

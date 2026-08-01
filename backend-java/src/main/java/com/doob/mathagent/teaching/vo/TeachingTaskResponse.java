@@ -22,6 +22,10 @@ import java.util.List;
  * @param status 任务状态。
  * @param questionText 原始题目或学习问题。
  * @param learningGoal 用户学习目标。
+ * @param headerLeft 独立左页眉，兼容旧任务时回落到 watermarkText。
+ * @param headerRight 独立右页眉。
+ * @param footerLeft 独立左页脚。
+ * @param footerRight 独立右页脚。
  * @param nodes 固定 DAG 节点执行结果。
  * @param workflowEvents 可恢复工作流事件；比 nodes 更适合前端过程流和后续 event 表持久化。
  * @param reactTrace 解题 ReAct 轨迹。
@@ -58,7 +62,11 @@ public record TeachingTaskResponse(
         TeachingDraftSections draftSections,
         TeachingDraftReview draftReview,
         TeachingDraftMergeResult mergeResult,
-        String errorMessage) {
+        String errorMessage,
+        String headerLeft,
+        String headerRight,
+        String footerLeft,
+        String footerRight) {
 
     public TeachingTaskResponse {
         // Legacy snapshots used a product name as an implicit default. Treat it as an absent user choice so a
@@ -73,6 +81,29 @@ public record TeachingTaskResponse(
         mergeResult = mergeResult == null
                 ? new TeachingDraftMergeResult("READY", draftSections, List.of(), List.of(), List.of())
                 : mergeResult;
+        String normalizedWatermark = normalizeWatermarkText(watermarkText);
+        headerLeft = normalizeChrome(headerLeft, normalizedWatermark);
+        headerRight = normalizeChrome(headerRight, learningGoal);
+        footerLeft = normalizeChrome(footerLeft, normalizedWatermark);
+        footerRight = normalizeChrome(footerRight, "第 \\thepage 页 / 共 \\pageref{LastPage} 页");
+    }
+
+    /** Compatibility bridge for snapshots and services written before independent page chrome was persisted. */
+    public TeachingTaskResponse(
+            String taskId, String clientRequestId, String tenantId, String subjectType, String subjectId,
+            TeachingHandoutTemplateResponse selectedTemplate, TeachingTaskStatus status, String questionText,
+            String learningGoal, String watermarkText, List<TeachingWorkflowNode> nodes,
+            List<TeachingWorkflowEvent> workflowEvents, List<TeachingReactStep> reactTrace,
+            List<TeachingEvidence> evidence, String handoutLatex, String teacherHandoutLatex,
+            String studentHandoutLatex, String lectureHandoutLatex, List<String> interactiveSuggestions,
+            MemoryReuse memoryReuse, List<StageTiming> stageTimings, AiDraft aiDraft,
+            TeachingDraftSections draftSections, TeachingDraftReview draftReview,
+            TeachingDraftMergeResult mergeResult, String errorMessage) {
+        this(taskId, clientRequestId, tenantId, subjectType, subjectId, selectedTemplate, status, questionText,
+                learningGoal, watermarkText, nodes, workflowEvents, reactTrace, evidence, handoutLatex,
+                teacherHandoutLatex, studentHandoutLatex, lectureHandoutLatex, interactiveSuggestions,
+                memoryReuse, stageTimings, aiDraft, draftSections, draftReview, mergeResult, errorMessage,
+                watermarkText, learningGoal, watermarkText, "第 \\thepage 页 / 共 \\pageref{LastPage} 页");
     }
 
     /**
@@ -282,10 +313,26 @@ public record TeachingTaskResponse(
                 stageTimings, aiDraft, draftSections, draftReview, mergeResult, errorMessage);
     }
 
+    /** Replaces only the persisted page chrome while retaining every workflow and handout field. */
+    public TeachingTaskResponse withPageChrome(String leftHeader, String rightHeader, String leftFooter, String rightFooter) {
+        return new TeachingTaskResponse(
+                taskId, clientRequestId, tenantId, subjectType, subjectId, selectedTemplate, status,
+                questionText, learningGoal, watermarkText, nodes, workflowEvents, reactTrace, evidence,
+                handoutLatex, teacherHandoutLatex, studentHandoutLatex, lectureHandoutLatex,
+                interactiveSuggestions, memoryReuse, stageTimings, aiDraft, draftSections, draftReview,
+                mergeResult, errorMessage, leftHeader, rightHeader, leftFooter, rightFooter);
+    }
+
     /** Normalizes display-only attribution while preserving a teacher's own custom label. */
     private static String normalizeWatermarkText(String value) {
         String normalized = value == null ? "" : value.strip();
         return normalized.isBlank() || "飞猪数学".equals(normalized) ? "数学讲义" : normalized;
+    }
+
+    /** Removes control characters from user-visible page labels before they enter the LaTeX source. */
+    private static String normalizeChrome(String value, String fallback) {
+        String normalized = value == null ? "" : value.replaceAll("[\\p{Cntrl}]", "").replaceAll("\\s+", " ").strip();
+        return normalized.isBlank() ? fallback : normalized;
     }
 
     /**

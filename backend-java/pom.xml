@@ -97,7 +97,7 @@
             <artifactId>sa-token-spring-boot3-starter</artifactId>
             <version>${sa-token.version}</version>
         </dependency>
-        <!-- Flyway owns deterministic schema creation before any seed runner or MyBatis store touches MySQL. -->
+        <!-- Kept for the existing operator-controlled schema tool; web startup does not invoke it. -->
         <dependency>
             <groupId>org.flywaydb</groupId>
             <artifactId>flyway-core</artifactId>

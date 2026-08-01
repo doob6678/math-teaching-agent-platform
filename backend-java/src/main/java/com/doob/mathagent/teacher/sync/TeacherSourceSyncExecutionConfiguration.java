@@ -41,7 +41,8 @@ public class TeacherSourceSyncExecutionConfiguration {
             TeacherFormulaRecognitionProperties formulaRecognitionProperties,
             TeacherPageTranscriptionClient pageTranscriptionClient,
             FeishuCredentialService feishuCredentialService,
-            FeishuResourceBindingService feishuResourceBindingService) {
+            FeishuResourceBindingService feishuResourceBindingService,
+            TeacherSourceSyncManifestStore manifestStore) {
         return new TeacherSourceSyncExecutionService(
                 resourceStore,
                 jobStore,
@@ -56,6 +57,7 @@ public class TeacherSourceSyncExecutionConfiguration {
                 formulaRecognitionProperties,
                 pageTranscriptionClient,
                 feishuCredentialService,
-                feishuResourceBindingService);
+                feishuResourceBindingService,
+                manifestStore);
     }
 }

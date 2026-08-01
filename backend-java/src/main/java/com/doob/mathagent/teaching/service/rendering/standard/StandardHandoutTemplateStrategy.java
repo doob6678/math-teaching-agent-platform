@@ -30,16 +30,18 @@ public final class StandardHandoutTemplateStrategy implements HandoutTemplateStr
     }
 
     @Override
-    public String headerFooterCommands(String watermark, String headerTopic, String footerText) {
+    public String headerFooterCommands(String headerLeft, String headerRight, String footerLeft, String footerRight) {
         return """
                 \\fancyhf{}
-                \\lhead{%s}
-                \\rhead{%s}
-                \\lfoot{%s}
-                \\rfoot{第 \\thepage 页 / 共 \\pageref{LastPage} 页}
+                \\fancyhead[L]{%s}
+                \\fancyhead[R]{%s}
+                \\fancyfoot[L]{%s}
+                \\fancyfoot[R]{%s}
+                \\fancypagestyle{plain}{\\fancyhf{}
+                  \\renewcommand{\\headrulewidth}{0pt}\\renewcommand{\\footrulewidth}{0pt}}
                 \\renewcommand{\\headrulewidth}{0.4pt}
                 \\renewcommand{\\footrulewidth}{0.3pt}
-                """.formatted(watermark, headerTopic, footerText);
+                """.formatted(headerLeft, headerRight, footerLeft, footerRight);
     }
 
     @Override
@@ -64,6 +66,7 @@ public final class StandardHandoutTemplateStrategy implements HandoutTemplateStr
             return "";
         }
         return """
+                \\thispagestyle{plain}
                 \\begin{center}
                 {\\LARGE\\bfseries\\color{HandoutAccent} %s}\\\\[0.35em]
                 {\\small\\color{HandoutText} %s}

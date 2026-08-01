@@ -1,6 +1,7 @@
 package com.doob.mathagent.teaching.service;
 
 import com.doob.mathagent.teaching.vo.TeachingHandoutTemplateResponse;
+import com.doob.mathagent.teaching.dto.TeachingTaskRequest;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -244,6 +245,26 @@ public class TeachingHandoutTemplateService {
             throw new IllegalArgumentException("未知讲义模板：" + templateCode.strip());
         }
         return selected;
+    }
+
+    /** Selects a visual family from real task signals only when the user did not choose one explicitly. */
+    public TeachingHandoutTemplateProfile resolveFor(TeachingTaskRequest request) {
+        if (request != null && request.handoutTemplateCode() != null && !request.handoutTemplateCode().isBlank()) {
+            return resolve(request.handoutTemplateCode());
+        }
+        String signals = ((request == null ? "" : request.questionText()) + " "
+                + (request == null ? "" : request.learningGoal()) + " "
+                + (request == null ? "" : request.supplementaryRequirements())).toLowerCase(Locale.ROOT);
+        if (signals.contains("连续") || signals.contains("真题") || signals.contains("一题一页")) {
+            return resolve("zhao_lixian_2025_master_v1");
+        }
+        if (signals.contains("空间向量") || signals.contains("立体几何")) {
+            return resolve("space_vector_reference_v1");
+        }
+        if (signals.contains("学生版") || signals.contains("学生练习")) {
+            return resolve("inverse_student_pdf_v1");
+        }
+        return resolve("default_standard");
     }
 
     private static void putTemplateIfNewSource(

@@ -16,6 +16,7 @@ import com.doob.mathagent.teacher.search.TeacherResourceGraphAlignmentService;
 import com.doob.mathagent.teacher.sync.TeacherSourceSyncCheckpointStore;
 import com.doob.mathagent.teacher.sync.TeacherSourceSyncJobStore;
 import com.doob.mathagent.teacher.sync.TeacherSourceSyncProperties;
+import com.doob.mathagent.teacher.sync.TeacherSourceSyncManifestStore;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncCheckpointResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncFailureResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncJobResponse;
@@ -85,6 +86,8 @@ public class TeacherSourceSyncExecutionService {
     static final Logger LOGGER = LoggerFactory.getLogger(TeacherSourceSyncExecutionService.class);
     static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     static final int MAX_SCAN_DEPTH = 8;
+    /** File-level failures are retried by the scheduler after this delay; authorization failures stay paused. */
+    static final long FILE_RETRY_DELAY_SECONDS = 300L;
     static final int PDF_PAGE_RENDER_DPI = 144;
     static final String PDF_PAGE_RENDER_DPI_ENV = "MATH_AGENT_PDF_PAGE_RENDER_DPI";
     static final long NATIVE_PDF_RENDER_TIMEOUT_SECONDS = 30L;
@@ -123,6 +126,7 @@ public class TeacherSourceSyncExecutionService {
     private final TeacherPageTranscriptionClient pageTranscriptionClient;
     private FeishuCredentialService feishuCredentialService;
     private FeishuResourceBindingService feishuResourceBindingService;
+    private TeacherSourceSyncManifestStore manifestStore;
 
     /**
      * Creates a sync execution service.
@@ -298,6 +302,22 @@ public class TeacherSourceSyncExecutionService {
         this(resourceStore,jobStore,blockStore,feishuDownloadClient,syncProperties,checkpointStore,vectorIndexService,graphAlignmentService,
                 assetService,formulaRecognitionClient,formulaRecognitionProperties,pageTranscriptionClient,credentials);
         this.feishuResourceBindingService = bindings;
+        this.manifestStore = null;
+    }
+
+    /** Production constructor with file-level manifest persistence; older focused tests keep the null-safe overload. */
+    public TeacherSourceSyncExecutionService(
+            TeacherResourceStore resourceStore, TeacherSourceSyncJobStore jobStore, TeacherDocumentBlockStore blockStore,
+            TeacherFeishuDownloadClient feishuDownloadClient, TeacherSourceSyncProperties syncProperties,
+            TeacherSourceSyncCheckpointStore checkpointStore, VectorIndexService vectorIndexService,
+            TeacherResourceGraphAlignmentService graphAlignmentService, TeacherResourceAssetService assetService,
+            TeacherFormulaRecognitionClient formulaRecognitionClient, TeacherFormulaRecognitionProperties formulaRecognitionProperties,
+            TeacherPageTranscriptionClient pageTranscriptionClient, FeishuCredentialService credentials,
+            FeishuResourceBindingService bindings, TeacherSourceSyncManifestStore manifestStore) {
+        this(resourceStore, jobStore, blockStore, feishuDownloadClient, syncProperties, checkpointStore, vectorIndexService,
+                graphAlignmentService, assetService, formulaRecognitionClient, formulaRecognitionProperties,
+                pageTranscriptionClient, credentials, bindings);
+        this.manifestStore = manifestStore;
     }
 
     /**
@@ -347,6 +367,8 @@ public class TeacherSourceSyncExecutionService {
                 null,
                 feishuSource ? "Downloading Feishu source files" : "Parsing source files");
         jobStore.save(running);
+        String changedItemsJson = "[]";
+        String syncRootUrl = document.originalUrl();
         try {
             if (feishuSource) {
                 if (resumeCheckpoint == null) {
@@ -378,6 +400,14 @@ public class TeacherSourceSyncExecutionService {
                         syncProperties.feishuSmokeMaxFiles(),
                         textOrDefault(document.feishuExportFormat(), "md"),
                         toDownloadCheckpoint(resumeCheckpoint), usableUserCredential ? userCredential.accessToken() : null);
+                changedItemsJson = result.changedItemsJson();
+                if (manifestStore != null) {
+                    manifestStore.recordDiscovery(
+                            document.tenantId(), document.originalUrl(), document.ownerSubjectId(), document.documentId(),
+                            result.discoveredItemsJson());
+                    manifestStore.markDownloaded(
+                            document.tenantId(), document.originalUrl(), result.changedItemsJson(), Instant.now());
+                }
                 TeacherResourceDocumentResponse downloaded = new TeacherResourceDocumentResponse(
                         document.documentId(),
                         document.tenantId(),
@@ -397,12 +427,47 @@ public class TeacherSourceSyncExecutionService {
                         firstNonBlank(result.providerRevision(), document.providerRevision()),
                         null,
                         document.sourceIdentity());
+
+                /*
+                 * The downloader has already compared Feishu metadata (modified time/revision/name/size) with the
+                 * durable local manifest. An empty changed set is a successful no-op: do not retire assets, parse the
+                 * whole staging tree, or rebuild Milvus. The provider title/revision is still persisted so the local
+                 * record remains an accurate mirror of Feishu metadata.
+                 */
+                if (result.changedItemsJson().equals("[]")) {
+                    TeacherResourceDocumentResponse metadataOnly = withSyncFingerprint(
+                            new TeacherResourceDocumentResponse(
+                                    downloaded.documentId(), downloaded.tenantId(), downloaded.ownerSubjectId(),
+                                    downloaded.sourceType(), downloaded.title(), downloaded.originalUrl(),
+                                    document.localPath(), downloaded.permissionScope(), downloaded.syncStatus(),
+                                    downloaded.parseStatus(), downloaded.embeddingStatus(), downloaded.indexStatus(),
+                                    downloaded.feishuExportFormat(), downloaded.previewFiles(), downloaded.parseMode(),
+                                    downloaded.providerRevision(), document.contentChecksum(), downloaded.sourceIdentity()),
+                            document.contentChecksum());
+                    TeacherResourceDocumentResponse unchanged = markUnchangedFeishuResourceSynced(metadataOnly, document);
+                    if (manifestStore != null && !result.unchangedItemsJson().equals("[]")) {
+                        manifestStore.markIndexed(document.tenantId(), syncRootUrl, result.unchangedItemsJson(), Instant.now());
+                    }
+                    TeacherSourceSyncJobResponse completed = updateJob(
+                            running, "completed", "skipped_unchanged", result.savedPath().toString(),
+                            result.message() + "; metadata unchanged; local files and vector index retained");
+                    saveFeishuCheckpoint(
+                            unchanged, completed,
+                            result.checkpoint().hasCursor()
+                                    ? toStoredCheckpoint(unchanged, completed, result.checkpoint(), result.failedItemsJson())
+                                    : null,
+                            mergeDownloadedItemsJson(result), result.failedItemsJson(), 2);
+                    return jobStore.save(completed);
+                }
                 /*
                  * Retire the prior generation before parsing. Parsing persists and reactivates the exact assets used
                  * by the new blocks; doing this after parsing incorrectly retires those newly written rows and leaves
                  * valid imageRefs pointing at assets that the delivery endpoint refuses to serve.
                  */
                 assetService.markDocumentAssetsInactive(document.tenantId(), document.documentId());
+                if (manifestStore != null) {
+                    manifestStore.markParsing(document.tenantId(), document.originalUrl(), result.changedItemsJson(), Instant.now());
+                }
                 List<TeacherDocumentBlockResponse> blocks = parseResourceFiles(
                         normalizedTenantId,
                         normalizedRole,
@@ -440,10 +505,23 @@ public class TeacherSourceSyncExecutionService {
                 int feishuManifestAssets = ingestFeishuDownloadedAssetManifest(downloaded, result);
                 String vectorMessage = "";
 
+                if (manifestStore != null) {
+                    manifestStore.markParsed(document.tenantId(), syncRootUrl, changedItemsJson, Instant.now());
+                }
+
                 if (!blocks.isEmpty()) {
                     blockStore.replaceActiveBlocks(document.tenantId(), document.documentId(), blocks);
                     TeacherResourceDocumentResponse synced = markLocalResourceSynced(downloaded);
+                    if (manifestStore != null) {
+                        manifestStore.markEmbedding(document.tenantId(), syncRootUrl, changedItemsJson, Instant.now());
+                    }
                     vectorMessage = autoRebuildVectorIndex(synced, normalizedRole, normalizedSubjectId);
+                    if (manifestStore != null) {
+                        manifestStore.markIndexed(document.tenantId(), syncRootUrl, changedItemsJson, Instant.now());
+                    }
+                } else if (manifestStore != null) {
+                    // A changed attachment may be valid without producing searchable text blocks.
+                    manifestStore.markIndexed(document.tenantId(), syncRootUrl, changedItemsJson, Instant.now());
                 }
                 TeacherSourceSyncJobResponse completed = updateJob(
                         running,
@@ -489,7 +567,8 @@ public class TeacherSourceSyncExecutionService {
                             + vectorMessage);
             return jobStore.save(completed);
         } catch (RuntimeException exception) {
-            if (exception instanceof VectorIndexSyncException) {
+                if (exception instanceof VectorIndexSyncException) {
+                markManifestFailure(document, syncRootUrl, changedItemsJson, exception, true);
                 TeacherSourceSyncJobResponse failed = updateJob(
                         running,
                         "failed",
@@ -513,6 +592,9 @@ public class TeacherSourceSyncExecutionService {
                         : resumeCheckpoint;
                 boolean authorizationRequired = failure.authorizationUrl() != null
                         || (failure.requiredScopes() != null && !failure.requiredScopes().isEmpty());
+                if (!authorizationRequired) {
+                    markManifestFailure(document, syncRootUrl, changedItemsJson, exception, retryable);
+                }
                 TeacherSourceSyncJobResponse pausedOrFailed = updateJob(
                         running,
                         authorizationRequired ? "AUTH_REQUIRED" : (retryable ? "paused" : "failed"),
@@ -529,6 +611,7 @@ public class TeacherSourceSyncExecutionService {
                         2);
                 return jobStore.save(pausedOrFailed);
             }
+            markManifestFailure(document, syncRootUrl, changedItemsJson, exception, false);
             TeacherSourceSyncJobResponse failed = updateJob(
                     running,
                     "failed",
@@ -536,6 +619,26 @@ public class TeacherSourceSyncExecutionService {
                     null,
                     exception.getMessage());
             return jobStore.save(failed);
+        }
+    }
+
+    /** Persists file-level failure/retry state without replacing the durable folder-job status. */
+    private void markManifestFailure(
+            TeacherResourceDocumentResponse document,
+            String rootUrl,
+            String changedItemsJson,
+            RuntimeException exception,
+            boolean retryable) {
+        if (manifestStore == null) {
+            return;
+        }
+        Instant now = Instant.now();
+        Instant nextRetryAt = retryable ? now.plusSeconds(FILE_RETRY_DELAY_SECONDS) : null;
+        if (changedItemsJson == null || changedItemsJson.equals("[]")) {
+            manifestStore.markRootFailed(document.tenantId(), rootUrl, exception.getMessage(), nextRetryAt, now);
+        } else {
+            manifestStore.markFailed(
+                    document.tenantId(), rootUrl, changedItemsJson, exception.getMessage(), nextRetryAt, now);
         }
     }
 

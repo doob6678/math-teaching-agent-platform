@@ -20,7 +20,8 @@ public interface HandoutTemplateStrategy {
     String geometryOptions(boolean lecture);
 
     /** Returns renderer-owned header/footer commands; arguments are already display-safe LaTeX labels. */
-    String headerFooterCommands(String watermark, String headerTopic, String footerText);
+    /** Builds page chrome from four independent persisted labels. */
+    String headerFooterCommands(String headerLeft, String headerRight, String footerLeft, String footerRight);
 
     /** Returns title hierarchy commands. */
     String headingCommands();
