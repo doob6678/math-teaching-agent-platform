@@ -53,13 +53,13 @@ export function TeachingConversationPanel({
   imageDraft,
   uploadingImage,
   imageError,
-  conversationMemoryEnabled,
+  conversationMemoryEnabled: _conversationMemoryEnabled,
   openingConversationId,
   onValueChange,
   onSubmit,
   onImageSelect,
   onClearImage,
-  onConversationMemoryChange,
+  onConversationMemoryChange: _onConversationMemoryChange,
   onStartNewConversation,
   onOpenConversation,
 }: {
@@ -73,13 +73,15 @@ export function TeachingConversationPanel({
   imageDraft: ConversationImageDraft | null;
   uploadingImage: boolean;
   imageError: string;
-  conversationMemoryEnabled: boolean;
+  /** Deprecated compatibility props; conversation context is always enabled within one conversation. */
+  conversationMemoryEnabled?: boolean;
   openingConversationId: string;
   onValueChange: (value: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onImageSelect: (file: File | null) => void;
   onClearImage: () => void;
-  onConversationMemoryChange: (enabled: boolean) => void;
+  /** Deprecated compatibility callback; context is no longer opt-in. */
+  onConversationMemoryChange?: (enabled: boolean) => void;
   onStartNewConversation: () => void;
   onOpenConversation: (conversation: StudentExplanationConversationSummary) => void;
 }) {
@@ -304,15 +306,9 @@ export function TeachingConversationPanel({
           ) : null}
 
           <div className="teaching-composer-field">
-            <label className="teaching-memory-toggle">
-              <input
-                type="checkbox"
-                checked={conversationMemoryEnabled}
-                disabled={loading}
-                onChange={(event) => onConversationMemoryChange(event.target.checked)}
-              />
+            <div className="teaching-memory-toggle" role="status">
               <span>关联当前会话上下文</span>
-            </label>
+            </div>
             <textarea
               value={value}
               onChange={(event) => onValueChange(event.target.value)}
@@ -396,7 +392,9 @@ function LiveAssistantResponse({ entry }: { entry: Extract<TeachingConversationT
         {entry.liveContent?.trim() ? (
           <details className="teaching-live-details" open>
             <summary>AI 实时输出</summary>
-            <pre className="teaching-live-provider-output">{entry.liveContent}</pre>
+            <div className="teaching-live-provider-output">
+              <RichText text={liveTextForDisplay(entry.liveContent)} />
+            </div>
           </details>
         ) : null}
       </section>
@@ -709,6 +707,50 @@ function stageTone(status: string) {
 export function stageTitleText(_stageKey: string, title: string) {
   // Stage titles are produced by the backend orchestration that actually ran. Never replace them with a UI template.
   return safeUserFacingText(title, "实际处理步骤");
+}
+
+/**
+ * The provider uses a strict JSON transport contract, but that wire format is not a learner-facing answer.
+ * During streaming, expose only explanation fields already present in the partial object and never print braces,
+ * property names, or escaped JSON to the page. Once a complete card arrives, the normal card renderer takes over.
+ */
+function liveTextForDisplay(raw: string) {
+  const value = (raw || "").trim();
+  if (!value) return "正在整理讲解内容…";
+  // Some compatible providers stream ordinary Markdown instead of the structured card envelope.
+  // Preserve that real text verbatim so the learner sees useful progress immediately.
+  if (!/^[\[{]/.test(value)) return value;
+  const fields: string[] = [];
+  const fieldPattern = /"(?:conversationTitle|title|summary|item|items)"\s*:\s*(?:"((?:\\.|[^"\\])*)"|\[([^\]]*)\])/g;
+  for (const match of value.matchAll(fieldPattern)) {
+    if (match[1]) {
+      try {
+        const decoded = JSON.parse(`"${match[1]}"`);
+        if (typeof decoded === "string" && decoded.trim()) fields.push(decoded.trim());
+      } catch {
+        // Partial provider chunks can end inside a quoted string; skip until the next complete field arrives.
+      }
+    } else if (match[2]) {
+      for (const item of match[2].matchAll(/"((?:\\.|[^"\\])*)"/g)) {
+        try {
+          const decoded = JSON.parse(`"${item[1]}"`);
+          if (typeof decoded === "string" && decoded.trim()) fields.push(decoded.trim());
+        } catch {
+          // Ignore incomplete array members for the same reason as incomplete string fields.
+        }
+      }
+    }
+  }
+  if (fields.length) return [...new Set(fields)].join("\n");
+  // A JSON chunk commonly ends in the middle of a summary string. Showing the completed prefix is safe and useful;
+  // the parser still owns the final card and no transport punctuation is exposed.
+  const partialFieldPattern = /"(?:conversationTitle|title|summary|item|items)"\s*:\s*"((?:\\.|[^"\\])*)/g;
+  const partialFields: string[] = [];
+  for (const match of value.matchAll(partialFieldPattern)) {
+    const candidate = match[1].replace(/\\n/g, "\n").replace(/\\"/g, '"').trim();
+    if (candidate) partialFields.push(candidate);
+  }
+  return partialFields.length ? [...new Set(partialFields)].join("\n") : "正在整理讲解内容…";
 }
 
 export function stageDetailText(stage: StudentExplanationStage) {

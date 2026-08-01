@@ -236,8 +236,6 @@ export function App() {
   const [teachingConversationSummaries, setTeachingConversationSummaries] = useState<StudentExplanationConversationSummary[]>([]);
   const [teachingConversationEntries, setTeachingConversationEntries] =
     useState<TeachingConversationThreadItem[]>(() => readStoredTeachingConversation().entries);
-  // Conversation context changes model input, so it starts disabled and is never silently carried into a new chat.
-  const [teachingConversationMemoryEnabled, setTeachingConversationMemoryEnabled] = useState(false);
   const [openingTeachingConversationId, setOpeningTeachingConversationId] = useState("");
   const [teachingConversationImageDraft, setTeachingConversationImageDraft] = useState<TeachingConversationImageDraft | null>(null);
   const [uploadingTeachingConversationImage, setUploadingTeachingConversationImage] = useState(false);
@@ -993,7 +991,6 @@ export function App() {
     setTeachingConversationInput("");
     setTeachingConversationImageDraft(null);
     setTeachingConversationImageError("");
-    setTeachingConversationMemoryEnabled(false);
     setTeachingError("");
   }
 
@@ -1013,8 +1010,7 @@ export function App() {
         setTeachingConversationInput("");
         setTeachingConversationImageDraft(null);
         setTeachingConversationImageError("");
-        // Loading a past thread must never enable context reuse without a fresh user choice.
-        setTeachingConversationMemoryEnabled(false);
+        // A loaded thread is still the same conversation, so its prior turns remain available immediately.
       })
       .catch((error: Error) => setTeachingError(toUserFacingError(error)))
       .finally(() => setOpeningTeachingConversationId(""));
@@ -1079,7 +1075,8 @@ export function App() {
         searchTeacherResources: true,
         maxTextbookHits: 5,
         maxTeacherResourceHits: 3,
-        useConversationMemory: teachingConversationMemoryEnabled,
+        // A conversation is the context boundary. Every follow-up carries its durable prior turns automatically.
+        useConversationMemory: true,
       }, (_eventName: string, payload: StudentExplanationStreamEvent) => {
         if (payload.response) {
           completedResponseReceived = true;
@@ -2545,13 +2542,11 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
         imageDraft={teachingConversationImageDraft}
         uploadingImage={uploadingTeachingConversationImage}
         imageError={teachingConversationImageError}
-        conversationMemoryEnabled={teachingConversationMemoryEnabled}
         openingConversationId={openingTeachingConversationId}
         onValueChange={setTeachingConversationInput}
         onSubmit={handleTeachingConversation}
         onImageSelect={handleTeachingConversationImageUpload}
         onClearImage={clearTeachingConversationImage}
-        onConversationMemoryChange={setTeachingConversationMemoryEnabled}
         onStartNewConversation={startNewTeachingConversation}
         onOpenConversation={openTeachingConversation}
       />,
