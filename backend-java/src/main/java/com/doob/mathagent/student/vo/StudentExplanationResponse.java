@@ -149,6 +149,13 @@ public record StudentExplanationResponse(
      * @param completionTokens provider-reported completion tokens
      * @param totalTokens provider-reported total tokens
      * @param message safe status message
+     * @param originalWidth original image width in pixels
+     * @param originalHeight original image height in pixels
+     * @param sentWidth compressed image width sent to the provider
+     * @param sentHeight compressed image height sent to the provider
+     * @param originalBytes original upload size
+     * @param sentBytes compressed payload size
+     * @param estimatedImageTokens retained as zero for compatibility; provider promptTokens is the only image-inclusive count
      */
     public record ImageUnderstanding(
             boolean enabled,
@@ -160,13 +167,38 @@ public record StudentExplanationResponse(
             int promptTokens,
             int completionTokens,
             int totalTokens,
-            String message) {
+            String message,
+            int originalWidth,
+            int originalHeight,
+            int sentWidth,
+            int sentHeight,
+            long originalBytes,
+            long sentBytes,
+            int estimatedImageTokens) {
+
+        /** Keeps older persisted/API fixtures source-compatible after image accounting was added. */
+        public ImageUnderstanding(
+                boolean enabled, boolean succeeded, String providerName, String modelCode, String problemText,
+                double confidence, int promptTokens, int completionTokens, int totalTokens, String message) {
+            this(enabled, succeeded, providerName, modelCode, problemText, confidence, promptTokens,
+                    completionTokens, totalTokens, message, 0, 0, 0, 0, 0L, 0L, 0);
+        }
 
         /**
          * Empty image understanding metadata for text-only requests.
          */
         public static ImageUnderstanding none() {
-            return new ImageUnderstanding(false, false, "", "", "", 0.0, 0, 0, 0, "none");
+            return new ImageUnderstanding(false, false, "", "", "", 0.0, 0, 0, 0, "none",
+                    0, 0, 0, 0, 0L, 0L, 0);
+        }
+
+        /** Describes the compressed image sent directly to a multimodal provider. */
+        public static ImageUnderstanding directContext(
+                int originalWidth, int originalHeight, int sentWidth, int sentHeight,
+                long originalBytes, long sentBytes, int estimatedImageTokens) {
+            return new ImageUnderstanding(false, false, "", "", "", 0.0, 0, 0, 0,
+                    "image_compressed_for_model_context", originalWidth, originalHeight, sentWidth, sentHeight,
+                    originalBytes, sentBytes, estimatedImageTokens);
         }
     }
 

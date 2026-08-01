@@ -14,7 +14,7 @@ package com.doob.mathagent.student.dto;
  * @param searchTeacherResources whether the backend may search teacher resource blocks; only teacher/admin subjects can use it
  * @param maxTextbookHits maximum textbook evidence hits to use
  * @param maxTeacherResourceHits maximum teacher resource hits to use
- * @param useConversationMemory whether the model may read previous turns from this conversation
+ * @param useConversationMemory legacy client flag; an existing conversationId always loads its own history
  */
 public record StudentExplanationRequest(
         String conversationId,
@@ -30,9 +30,7 @@ public record StudentExplanationRequest(
         Integer maxTeacherResourceHits,
         Boolean useConversationMemory) {
 
-    /**
-     * Preserves existing callers while making conversation memory explicit opt-in rather than an implicit default.
-     */
+    /** Preserves existing callers; the legacy memory flag is retained only for wire compatibility. */
     public StudentExplanationRequest(
             String conversationId,
             String questionText,
@@ -62,6 +60,7 @@ public record StudentExplanationRequest(
 
     /**
      * Returns a normalized request with bounded retrieval limits and safe default toggles.
+     * Conversation history is decided by conversationId in the service, not by the legacy flag.
      */
     public StudentExplanationRequest normalize() {
         return new StudentExplanationRequest(

@@ -46,10 +46,6 @@ spring:
           # Keep text and image explanations on the same operator-selected multimodal model; the value is sourced
           # from the same environment file as the endpoint so a relay key is never sent to api.openai.com by mistake.
           model: ${OPENAI_CHAT_MODEL:gpt-5.6-terra}
-  # The project migration runner validates the deployment URL and baselines Docker's operational bootstrap tables
-  # at version zero before applying V1+. Disable Boot's earlier initializer so it cannot race that policy.
-  flyway:
-    enabled: false
 server:
   port: 8080
   tomcat:
@@ -106,8 +102,11 @@ math-agent:
       timeout-ms: 12000
   student:
     explanation:
-      # Two providers preserve one recovery path while capping a failed turn at two 30-second attempts.
+      # Keep one bounded recovery path; provider rotation remains available when the first real call fails.
       max-provider-attempts: 2
+      # Unified token ceiling for question, history answers, and memories. Java obtains text counts from ai-worker;
+      # provider prompt_tokens remains authoritative for the complete multimodal request including the image.
+      conversation-context-max-tokens: 100000
       conversation-context-max-chars: 100000
       conversation-history-fetch-limit: 200
       long-term-memory-top-k: 5
@@ -205,12 +204,12 @@ math-agent:
         # Local development uses the approved research-sharing folder. Operators can override the URL in the environment.
         default-url: https://my.feishu.cn/drive/folder/XVn7fXppJlQMK5dkuOkc1ePan2f
         process-downloader-enabled: true
-        downloader-script: C:/Users/doob/Desktop/code/dev/math_agent_rag/ai-worker-python/scripts/download_feishu_url.py
-        appkey-path:
-        staging-root: C:/Users/doob/Desktop/code/dev/math_agent_rag/.local-storage/teacher-source-imports
-        smoke-max-files: 20
+        downloader-script: ${MATH_AGENT_TEACHER_SYNC_DOWNLOADER_SCRIPT:/app/scripts/download_feishu_url.py}
+        appkey-path: ${MATH_AGENT_TEACHER_SYNC_APPKEY_PATH:}
+        staging-root: ${MATH_AGENT_TEACHER_SYNC_STAGING_ROOT:/app/data/teacher-source-imports}
+        smoke-max-files: ${MATH_AGENT_TEACHER_SYNC_MAX_FILES:0}
         process-timeout-seconds: 180
-      asset-storage-root: C:/Users/doob/Desktop/code/dev/math_agent_rag/.local-storage/teacher-assets
+      asset-storage-root: ${MATH_AGENT_TEACHER_SYNC_ASSET_STORAGE_ROOT:/app/data/teacher-assets}
       rabbitmq:
         # A sync job can render PDFs, call Feishu, invoke Python vision and rebuild Milvus. Keep that work out of
         # the MCP/HTTP request thread and let the durable MySQL job remain the idempotency authority.
@@ -224,13 +223,15 @@ math-agent:
         publisher-confirm-timeout-milliseconds: 5000
       scheduler:
         # Background sync is opt-in. Enabling it additionally requires a real administrator service identity.
-        enabled: false
-        fixed-delay-ms: 300000
+        enabled: ${MATH_AGENT_TEACHER_SYNC_SCHEDULER_ENABLED:true}
+        initial-delay-ms: ${MATH_AGENT_TEACHER_SYNC_SCHEDULER_INITIAL_DELAY_MS:60000}
+        fixed-delay-ms: ${MATH_AGENT_TEACHER_SYNC_SCHEDULER_DELAY_MS:300000}
         tenant-id: default
         service-role: admin
-        service-subject-id:
-        # A scheduler never sweeps all documents implicitly. Operators opt in each stable source id explicitly.
-        document-ids:
+        service-subject-id: ${MATH_AGENT_TEACHER_SYNC_SERVICE_SUBJECT_ID:scheduler}
+        # Empty means all registered Feishu roots; operators can restrict this with a comma-separated allowlist.
+        document-ids: ${MATH_AGENT_TEACHER_SYNC_DOCUMENT_IDS:}
+        worker-lease-timeout-seconds: ${MATH_AGENT_TEACHER_SYNC_WORKER_LEASE_TIMEOUT_SECONDS:1800}
     search:
       runtime:
         # CPU BGE reranking is quadratic in candidate count. Twelve evidence blocks preserve one candidate per

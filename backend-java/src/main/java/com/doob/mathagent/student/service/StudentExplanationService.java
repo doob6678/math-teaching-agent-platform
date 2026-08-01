@@ -16,9 +16,6 @@ import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService;
 import com.doob.mathagent.teacher.document.TeacherResourceStore;
 import com.doob.mathagent.teacher.search.TeacherResourceBlockSearchResponse;
 import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
-import java.io.IOException;
-import java.nio.file.Files;
-import java.util.Base64;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -126,6 +123,10 @@ public class StudentExplanationService {
         long startedNanos = System.nanoTime();
         StudentExplanationProgressListener listener =
                 progressListener == null ? StudentExplanationProgressListener.NOOP : progressListener;
+        // A caller-supplied conversation id is the authoritative context boundary.  The legacy
+        // useConversationMemory flag is intentionally ignored for an existing conversation so a follow-up
+        // cannot accidentally lose the original problem when an older client omits that flag.
+        boolean existingConversation = request != null && !text(request.conversationId()).isBlank();
         StudentExplanationRequest normalizedRequest = request == null
                 ? new StudentExplanationRequest(null, null, null, null, null, null, null, null, null, null, null, false).normalize()
                 : request.normalize();
@@ -152,7 +153,15 @@ public class StudentExplanationService {
 
         // The original upload is the only visual context. Image-only requests let the same multimodal ReAct turn
         // understand the problem and decide its retrieval keywords, so there is no separate visual-provider call.
-        String imageDataUrl = imageDataUrl(imageRecord);
+        StudentExplanationModelImageService.PreparedImage preparedImage =
+                StudentExplanationModelImageService.prepare(imageRecord);
+        if (preparedImage.available()) {
+            imageUnderstanding = StudentExplanationResponse.ImageUnderstanding.directContext(
+                    preparedImage.originalWidth(), preparedImage.originalHeight(), preparedImage.sentWidth(),
+                    preparedImage.sentHeight(), preparedImage.originalBytes(), preparedImage.sentBytes(),
+                    preparedImage.estimatedImageTokens());
+        }
+        String imageDataUrl = preparedImage.dataUrl();
         String query = text(normalizedRequest.questionText());
         if (query.isBlank() && imageRecord != null) {
             query = "请识别上传图片中的数学内容，并生成适合资料检索的具体关键词";
@@ -161,9 +170,9 @@ public class StudentExplanationService {
 
         List<StudentExplanationHistorySummary> recentHistory = List.of();
         List<String> longTermMemories = List.of();
-        if (Boolean.TRUE.equals(normalizedRequest.useConversationMemory())) {
-            // Conversation and long-term memory are one user-controlled context action. Keeping both behind the same
-            // switch avoids an invisible vector lookup on every fresh question and removes its avoidable latency.
+        if (existingConversation) {
+            // Only an existing conversation loads history.  A newly-created id is not loaded on its first turn;
+            // this keeps the first stage local and prevents unrelated conversations from entering the prompt.
             upsertStage(stages, runningStage("load_conversation_context", "读取学习记忆"));
             emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord,
                     imageUnderstanding, aiDraft, conversationTitle, startedNanos, "正在读取已关联的学习记忆。");
@@ -253,10 +262,11 @@ public class StudentExplanationService {
     }
 
     /**
-     * 有界 ReAct 回合：模型一次规划本题所需的全部只读工具；后端实际执行工具，
-     * 从而减少逐工具模型握手，同时始终在服务端保留身份、租户、请求开关和教师私有资料权限控制。
+     * Builds the read-only evidence set without a preliminary planning-model round trip.
      *
-     * <p>工具计划会按服务端白名单校验并去重，因此每项只读工具在单次讲解中最多调用一次。</p>
+     * <p>The request toggles and backend subject already define the complete allow-list. Running those
+     * deterministic searches directly removes the 30-60 second ReAct planning wait while preserving the
+     * permission boundary; the single remaining provider call is responsible only for the learner-facing answer.</p>
      */
     private ReactEvidence executeReactTools(
             StudentExplanationRequest request, RequestSubject subject, String query,
@@ -273,44 +283,36 @@ public class StudentExplanationService {
         long planStarted = System.nanoTime();
         upsertStage(stages, runningStage("react_plan", "规划讲解"));
         emitProgress(listener, request, visibleQuestion, stages, cards, sources, imageRecord,
-                imageUnderstanding, aiDraft, conversationTitle, startedNanos, "正在规划本题所需的资料与讲解。");
-        // Decision：模型只看到后端按请求和身份生成的工具白名单，无法扩大自己的资料权限。
-        StudentExplanationAiCardService.ReactDecision decision = aiCardService.nextReactDecision(
-                query, sources, List.of(), available, imageDataUrl, listener::onAiDelta);
-        if ("final".equals(decision.kind())) {
-            upsertStage(stages, stageFrom(planStarted, "react_plan", "规划并生成讲解", "completed",
-                    "题目信息完整，已在一次模型调用中完成规划和讲解。"));
-            emitProgress(listener, request, visibleQuestion, stages, cards, sources, imageRecord,
-                    imageUnderstanding, decision.finalDraft().aiDraft(), conversationTitle, startedNanos,
-                    "讲解已生成，正在整理展示。");
-            return new ReactEvidence(List.of(), List.of(), decision.finalDraft());
-        }
-        if (!"action".equals(decision.kind())) {
-            throw new IllegalStateException("ReAct 决策失败：" + decision.message());
-        }
+                imageUnderstanding, aiDraft, conversationTitle, startedNanos,
+                "后端已完成快速规划；将按权限执行真实检索：" + (available.isEmpty() ? "本轮不检索" : String.join("、", available))
+                        + "；query=" + compact(query));
+        // The allow-list is assembled entirely by the backend from normalized request flags and identity.
+        // No model is asked to restate it, so the first progress stage completes before network inference starts.
         upsertStage(stages, stageFrom(planStarted, "react_plan", "规划资料检索", "completed",
-                "已一次规划 " + decision.tools().size() + " 项只读资料检索：" + String.join("、", decision.tools()) + "。"));
-        String retrievalQuery = text(decision.searchQuery()).isBlank() ? query : decision.searchQuery().strip();
-        // Action：工具计划已在决策解析时按白名单校验和去重，下面只负责逐项执行真实检索。
-        for (String tool : decision.tools()) {
+                "后端已确定性规划 " + available.size() + " 项只读资料检索：" + String.join("、", available) + "。"));
+        String retrievalQuery = query;
+        for (String tool : available) {
             if ("search_textbook".equals(tool)) {
                 upsertStage(stages, runningToolStage("search_textbook", "检索教材", retrievalQuery, request.maxTextbookHits()));
                 emitProgress(listener, request, visibleQuestion, stages, cards, sources, imageRecord,
-                        imageUnderstanding, aiDraft, conversationTitle, startedNanos, "正在执行模型选择的教材检索。");
+                        imageUnderstanding, aiDraft, conversationTitle, startedNanos,
+                        "正在检索教材；query=" + compact(retrievalQuery) + "；limit=" + request.maxTextbookHits() + "。");
                 List<TextbookSearchHit> hits = searchTextbooks(request, subject, retrievalQuery, stages);
                 hits.stream().map(StudentExplanationService::textbookSource).forEach(sources::add);
             } else if ("match_knowledge_graph".equals(tool)) {
                 upsertStage(stages, runningToolStage(
                         "match_knowledge_graph", "匹配知识点", retrievalQuery, MAX_KNOWLEDGE_GRAPH_MATCHES));
                 emitProgress(listener, request, visibleQuestion, stages, cards, sources, imageRecord,
-                        imageUnderstanding, aiDraft, conversationTitle, startedNanos, "正在执行模型选择的知识点匹配。");
+                        imageUnderstanding, aiDraft, conversationTitle, startedNanos,
+                        "正在匹配知识图谱；query=" + compact(retrievalQuery) + "；limit=" + MAX_KNOWLEDGE_GRAPH_MATCHES + "。");
                 knowledgeNodes.addAll(matchKnowledgeGraph(request, subject, retrievalQuery, stages));
                 knowledgeNodes.stream().map(StudentExplanationService::knowledgeSource).forEach(sources::add);
             } else if ("search_teacher_resources".equals(tool)) {
                 upsertStage(stages, runningToolStage(
                         "search_teacher_resources", "检索教师资料", retrievalQuery, request.maxTeacherResourceHits()));
                 emitProgress(listener, request, visibleQuestion, stages, cards, sources, imageRecord,
-                        imageUnderstanding, aiDraft, conversationTitle, startedNanos, "正在执行模型选择的教师资料检索。");
+                        imageUnderstanding, aiDraft, conversationTitle, startedNanos,
+                        "正在检索教师资料；query=" + compact(retrievalQuery) + "；limit=" + request.maxTeacherResourceHits() + "。");
                 teacherHits.addAll(searchTeacherResources(request, subject, retrievalQuery, stages));
                 Map<String, TeacherResourceDocumentResponse> documentsById = teacherDocumentsById(subject.tenantId(), teacherHits);
                 teacherHits.stream().map(hit -> teacherSource(hit, documentsById.get(hit.documentId()))).forEach(sources::add);
@@ -354,13 +356,9 @@ public class StudentExplanationService {
             RequestSubject subject,
             List<StudentExplanationResponse.WorkflowStage> stages) {
         long stageStarted = System.nanoTime();
-        if (!Boolean.TRUE.equals(request.useConversationMemory())) {
-            // Fresh explanations must not silently inherit previous turns, even inside the currently open conversation.
-            upsertStage(stages, stageFrom(stageStarted, "load_conversation_context", "读取上下文", "skipped",
-                    "当前会话未启用上下文关联。"));
-            return List.of();
-        }
         try {
+            // The caller reached this method only with an existing conversation id.  Always read that
+            // conversation, regardless of the deprecated client memory switch, so follow-up turns remain coherent.
             List<StudentExplanationHistorySummary> history = historyStore.findRecent(
                     subject.tenantId(),
                     subject.subjectType(),
@@ -713,19 +711,6 @@ public class StudentExplanationService {
             return value;
         }
         return imageRecord == null ? "" : "图片讲题";
-    }
-
-    /** Materializes one owner-validated upload as ephemeral model context without exposing its server path. */
-    private static String imageDataUrl(StudentExplanationImageRecord imageRecord) {
-        if (imageRecord == null) {
-            return "";
-        }
-        try {
-            byte[] bytes = Files.readAllBytes(imageRecord.localPath());
-            return "data:" + imageRecord.contentType() + ";base64," + Base64.getEncoder().encodeToString(bytes);
-        } catch (IOException exception) {
-            throw new IllegalStateException("Uploaded image is no longer readable", exception);
-        }
     }
 
     /**

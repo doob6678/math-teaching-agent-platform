@@ -31,8 +31,10 @@ public class StudentExplanationAiCardService {
 
     private final AiChatGateway aiChatGateway;
     private final AiProviderCatalog aiProviderCatalog;
+    private final StudentExplanationTokenCounter tokenCounter;
     private final int maxProviderAttempts;
-    private final int conversationContextMaxChars;
+    /** Context ceiling in real worker-tokenizer tokens; image detail is accounted by the provider's usage. */
+    private final int conversationContextMaxTokens;
 
     /**
      * Asks the model for its next ReAct decision.  The returned action is only a request: the caller remains the
@@ -175,20 +177,32 @@ public class StudentExplanationAiCardService {
     public StudentExplanationAiCardService(
             AiChatGateway aiChatGateway,
             AiProviderCatalog aiProviderCatalog) {
-        this(aiChatGateway, aiProviderCatalog, 2, 100_000);
+        this(aiChatGateway, aiProviderCatalog, new StudentExplanationTokenCounter("", "", 1000), 2, 100_000);
     }
 
     /** Limits one student turn to a bounded provider budget instead of multiplying every timeout by every provider. */
+    public StudentExplanationAiCardService(
+            AiChatGateway aiChatGateway,
+            AiProviderCatalog aiProviderCatalog,
+            StudentExplanationTokenCounter tokenCounter,
+            int maxProviderAttempts,
+            int conversationContextMaxTokens) {
+        this.aiChatGateway = aiChatGateway;
+        this.aiProviderCatalog = aiProviderCatalog;
+        this.tokenCounter = tokenCounter == null ? new StudentExplanationTokenCounter("", "", 1000) : tokenCounter;
+        this.maxProviderAttempts = Math.max(1, maxProviderAttempts);
+        this.conversationContextMaxTokens = Math.max(1_000, Math.min(conversationContextMaxTokens, 100_000));
+    }
+
+    /** Spring production constructor uses the real worker tokenizer for context admission. */
     @Autowired
     public StudentExplanationAiCardService(
             AiChatGateway aiChatGateway,
             AiProviderCatalog aiProviderCatalog,
             @Value("${math-agent.student.explanation.max-provider-attempts:2}") int maxProviderAttempts,
-            @Value("${math-agent.student.explanation.conversation-context-max-chars:100000}") int conversationContextMaxChars) {
-        this.aiChatGateway = aiChatGateway;
-        this.aiProviderCatalog = aiProviderCatalog;
-        this.maxProviderAttempts = Math.max(1, maxProviderAttempts);
-        this.conversationContextMaxChars = Math.max(1_000, Math.min(conversationContextMaxChars, 100_000));
+            @Value("${math-agent.student.explanation.conversation-context-max-tokens:100000}") int conversationContextMaxTokens,
+            StudentExplanationTokenCounter tokenCounter) {
+        this(aiChatGateway, aiProviderCatalog, tokenCounter, maxProviderAttempts, conversationContextMaxTokens);
     }
 
     /**
@@ -257,7 +271,8 @@ public class StudentExplanationAiCardService {
         int totalTokens = 0;
         RuntimeException lastFailure = null;
         ParsedAiCards lastParseFailure = ParsedAiCards.failed("model was not called");
-        String queryForPrompt = queryWithContext(query, recentHistory, longTermMemories);
+        String queryForPrompt = queryWithContext(query, recentHistory, longTermMemories, imageDataUrl,
+                providers.getFirst().chatModel());
         int providerLimit = Math.min(providers.size(), maxProviderAttempts);
         for (int providerIndex = 0; providerIndex < providerLimit; providerIndex++) {
             AiProviderCatalog.Provider provider = providers.get(providerIndex);
@@ -342,15 +357,25 @@ public class StudentExplanationAiCardService {
     private String queryWithContext(
             String query,
             List<StudentExplanationHistorySummary> recentHistory,
-            List<String> longTermMemories) {
+            List<String> longTermMemories,
+            String imageDataUrl,
+            String model) {
         String normalizedQuery = safe(query);
-        if (normalizedQuery.length() > conversationContextMaxChars) {
-            normalizedQuery = normalizedQuery.substring(0, conversationContextMaxChars);
+        List<String> memoryLines = longTermMemoryLines(longTermMemories);
+        List<String> historyLines = historyLines(recentHistory);
+        List<String> candidates = new ArrayList<>();
+        candidates.add(normalizedQuery + "\nRecent conversation history:\n" + String.join("\n", historyLines)
+                + "\nRelevant long-term student memories:\n" + String.join("\n", memoryLines));
+        StudentExplanationTokenCounter.TokenCount counted = tokenCounter.count(candidates, model);
+        // Image content is not locally tokenized. Do not invent a visual token count: the provider's prompt_tokens
+        // returned after generation is the only authoritative total for text plus image.
+        int textBudget = conversationContextMaxTokens;
+        if (counted.available() && counted.total() > textBudget) {
+            normalizedQuery = trimByRealTokens(normalizedQuery, textBudget, model);
+            historyLines = selectByRealTokens(historyLines, Math.max(0, textBudget - realTokenCount(normalizedQuery, model)), model);
+            int used = realTokenCount(normalizedQuery, model) + realTokenCount(historyLines, model);
+            memoryLines = selectByRealTokens(memoryLines, Math.max(0, textBudget - used), model);
         }
-        int contextBudget = conversationContextMaxChars - normalizedQuery.length();
-        List<String> memoryLines = longTermMemoryLines(longTermMemories, Math.min(contextBudget, 20_000));
-        int memoryChars = memoryLines.stream().mapToInt(String::length).sum() + memoryLines.size();
-        List<String> historyLines = historyLines(recentHistory, Math.max(0, contextBudget - memoryChars));
         StringBuilder context = new StringBuilder(normalizedQuery);
         if (!historyLines.isEmpty()) {
             context.append("\nRecent conversation history:\n").append(String.join("\n", historyLines));
@@ -361,48 +386,67 @@ public class StudentExplanationAiCardService {
         return context.toString();
     }
 
-    private static List<String> longTermMemoryLines(List<String> memories, int maxChars) {
-        if (memories == null || memories.isEmpty() || maxChars <= 0) {
+    private static List<String> longTermMemoryLines(List<String> memories) {
+        if (memories == null || memories.isEmpty()) {
             return List.of();
         }
         List<String> selected = new ArrayList<>();
-        int usedChars = 0;
         for (String memory : memories) {
             String line = "- " + safe(memory).replaceAll("\\s+", " ").strip();
             if (line.isBlank()) {
                 continue;
             }
-            int available = maxChars - usedChars;
-            if (available <= 0) {
-                break;
-            }
-            if (line.length() > available) {
-                line = line.substring(0, available);
-            }
             selected.add(line);
-            usedChars += line.length() + 1;
         }
         return List.copyOf(selected);
     }
 
-    private static List<String> historyLines(List<StudentExplanationHistorySummary> recentHistory, int maxChars) {
+    private static List<String> historyLines(List<StudentExplanationHistorySummary> recentHistory) {
         if (recentHistory == null || recentHistory.isEmpty()) {
             return List.of();
         }
         List<String> selected = new ArrayList<>();
-        int usedChars = 0;
         for (StudentExplanationHistorySummary item : recentHistory) {
             String line = "- " + safe(item.questionText()).replaceAll("\\s+", " ").strip()
                     + " | image=" + safe(item.imageStatus())
+                    + " | imageText=" + safe(item.imageProblemText())
+                    + " | answer=" + compact(item.cardsJson())
                     + " | model=" + safe(item.aiProviderName()) + "/" + safe(item.aiModelCode())
                     + " | tokens=" + item.totalTokens();
-            if (line.length() > maxChars - usedChars) {
-                break;
-            }
             selected.addFirst(line);
-            usedChars += line.length() + 1;
         }
         return List.copyOf(selected);
+    }
+
+    private List<String> selectByRealTokens(List<String> lines, int budget, String model) {
+        List<String> selected = new ArrayList<>();
+        for (String line : lines) {
+            List<String> candidate = new ArrayList<>(selected);
+            candidate.add(line);
+            if (realTokenCount(candidate, model) > budget) break;
+            selected.add(line);
+        }
+        return List.copyOf(selected);
+    }
+
+    private String trimByRealTokens(String value, int budget, String model) {
+        if (realTokenCount(value, model) <= budget) return value;
+        int low = 0, high = value.length();
+        while (low < high) {
+            int mid = (low + high + 1) / 2;
+            if (realTokenCount(value.substring(0, mid), model) <= budget) low = mid;
+            else high = mid - 1;
+        }
+        return value.substring(0, low);
+    }
+
+    private int realTokenCount(String value, String model) {
+        return realTokenCount(List.of(value), model);
+    }
+
+    private int realTokenCount(List<String> values, String model) {
+        StudentExplanationTokenCounter.TokenCount counted = tokenCounter.count(values, model);
+        return counted.available() ? counted.total() : Integer.MAX_VALUE;
     }
 
     private static String aiPrompt(

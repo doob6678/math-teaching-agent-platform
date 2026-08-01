@@ -205,6 +205,7 @@ public class MyBatisStudentExplanationHistoryStore implements StudentExplanation
                 entity.getQuestionText(),
                 entity.getImageStatus(),
                 entity.getImageProblemText(),
+                entity.getCardsJson(),
                 entity.getAiProviderName(),
                 entity.getAiModelCode(),
                 entity.getTotalTokens() == null ? 0 : entity.getTotalTokens(),

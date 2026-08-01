@@ -230,9 +230,16 @@ public class StudentExplanationController {
                     public void onAiDelta(
                             com.doob.mathagent.agent.service.AiChatStreamDelta delta,
                             List<StudentExplanationResponse.ExplanationCard> cards) {
+                        // Provider transport is strict JSON for validation, but that wire format is not learner-facing
+                        // content.  Only expose validated card prose in the live stream; this prevents raw braces,
+                        // escaped LaTeX and parser fields from appearing in the explanation panel.
+                        String visibleDelta = cards == null ? "" : cards.stream()
+                                .map(StudentExplanationResponse.ExplanationCard::summary)
+                                .filter(value -> value != null && !value.isBlank())
+                                .collect(java.util.stream.Collectors.joining("\n"));
                         sendEvent(emitter, "ai_delta", new StudentExplanationStreamEvent(
                                 "ai_delta", "收到模型实时输出。", null, null, null, null,
-                                delta.contentDelta(), delta.reasoningDelta(), cards));
+                                visibleDelta, "", cards == null ? List.of() : cards));
                     }
 
                     @Override

@@ -23,6 +23,7 @@ from app.formula_recognition import FormulaRecognitionError, FormulaRecognitionS
 from app.settings import WorkerSettings
 from app.agent_runtime import AgentRunRequest, AgentRuntime
 from app.streaming_runtime import AgentStreamingRuntime
+from app.tokenizer import count_texts
 from fastapi.responses import StreamingResponse
 import json
 
@@ -68,6 +69,11 @@ class FormulaRecognitionRequest(BaseModel):
 
 class FormulaPageBatchRequest(BaseModel):
     pages: list[FormulaRecognitionRequest]
+
+
+class TokenizeRequest(BaseModel):
+    texts: list[str]
+    model: str = ""
 
 
 app = FastAPI(title="math-agent-rag-worker")
@@ -120,6 +126,16 @@ def health() -> dict[str, str]:
 @app.get("/v1/capabilities", dependencies=[Depends(require_worker_key)])
 def capabilities() -> dict:
     return embedding_service().status()
+
+
+@app.post("/v1/tokenize", dependencies=[Depends(require_worker_key)])
+def tokenize(payload: TokenizeRequest) -> dict:
+    """Returns real tokenizer id counts for context admission, separate from provider usage."""
+    try:
+        counts, encoding = count_texts(payload.texts, payload.model)
+    except (ImportError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail=f"tokenizer unavailable: {type(exc).__name__}") from exc
+    return {"object": "token.count", "model": payload.model, "encoding": encoding, "counts": counts, "total": sum(counts)}
 
 
 @app.post("/v1/agent-runs", dependencies=[Depends(require_worker_key)])

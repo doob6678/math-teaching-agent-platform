@@ -18,13 +18,15 @@ class WorkerServerAuthTest(unittest.TestCase):
         else:
             os.environ["MATH_AGENT_WORKER_API_KEY"] = self.original_key
 
-    def test_capabilities_requires_configured_worker_key(self):
+    def test_capabilities_rejects_missing_presented_key(self):
         os.environ.pop("MATH_AGENT_WORKER_API_KEY", None)
         client = TestClient(app)
 
         response = client.get("/v1/capabilities")
 
-        self.assertEqual(response.status_code, 503)
+        # Production intentionally has a non-empty local default key so a clean Docker start is usable;
+        # without the presented header the request is unauthorized, not a fake capability response.
+        self.assertEqual(response.status_code, 401)
 
     def test_capabilities_rejects_wrong_worker_key(self):
         os.environ["MATH_AGENT_WORKER_API_KEY"] = "local-key"
@@ -89,6 +91,17 @@ class WorkerServerAuthTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["object"], "rerank.result")
         self.assertEqual(response.json()["data"][0]["score"], 0.9)
+
+    def test_tokenize_returns_real_encoder_counts(self):
+        os.environ["MATH_AGENT_WORKER_API_KEY"] = "local-key"
+        response = TestClient(app).post(
+            "/v1/tokenize",
+            headers={"Authorization": "Bearer local-key"},
+            json={"texts": ["函数 $x^2$", ""], "model": "gpt-4o"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["total"], sum(response.json()["counts"]))
+        self.assertGreater(response.json()["counts"][0], 0)
 
 
 if __name__ == "__main__":
