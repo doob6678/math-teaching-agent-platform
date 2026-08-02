@@ -3332,12 +3332,11 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .handout-resource-sidebar {
-  position: sticky;
-  top: 82px;
+  position: static;
   display: grid;
   gap: 12px;
   align-self: start;
-  max-height: calc(100vh - 98px);
+  max-height: none;
 }
 
 .handout-resource-sidebar.collapsed {
@@ -3373,13 +3372,13 @@ h1, h2, h3, h4, h5, h6 {
   display: grid;
   gap: 12px;
   min-height: 0;
-  max-height: calc(100vh - 168px);
+  max-height: none;
   padding: 16px;
   border-radius: 28px;
   background: rgba(255, 255, 255, 0.82);
   backdrop-filter: blur(18px);
   box-shadow: 0 18px 42px rgba(15, 23, 42, 0.1);
-  overflow: hidden;
+  overflow: visible;
 }
 
 .handout-resource-head {
@@ -3420,12 +3419,9 @@ h1, h2, h3, h4, h5, h6 {
   display: grid;
   gap: 10px;
   min-height: 0;
-  max-height: calc(100vh - 270px);
+  max-height: none;
   padding-right: 4px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable;
-  scroll-snap-type: y mandatory;
+  overflow: visible;
 }
 
 .handout-resource-item {
@@ -3537,8 +3533,7 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .handout-preview-surface {
-  position: sticky;
-  top: 82px;
+  position: static;
 }
 
 .handout-live-shell {
@@ -3582,7 +3577,8 @@ h1, h2, h3, h4, h5, h6 {
 
 .handout-live-scroll {
   padding: 2px 2px 8px;
-  max-height: calc(100vh - 330px);
+  max-height: none;
+  overflow: visible;
 }
 
 .handout-empty-state {
@@ -3689,10 +3685,7 @@ h1, h2, h3, h4, h5, h6 {
     grid-template-columns: 1fr;
   }
 
-  .handout-preview-surface {
-    position: static;
-    top: auto;
-  }
+  .handout-preview-surface { position: static; top: auto; }
 }
 
 @media (max-width: 960px) {
@@ -4396,27 +4389,6 @@ h1, h2, h3, h4, h5, h6 {
   background: #ffffff;
   border: 1px solid rgba(226, 232, 240, 0.92);
   box-shadow: 0 4px 16px rgba(15, 23, 42, 0.04);
-}
-
-.teaching-chat-shell .teaching-memory-toggle {
-  display: inline-flex;
-  align-items: center;
-  width: fit-content;
-  gap: 7px;
-  color: #64748b;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.teaching-chat-shell .teaching-memory-toggle input {
-  width: 14px;
-  height: 14px;
-  accent-color: #2563eb;
-}
-
-.teaching-chat-shell .teaching-memory-toggle:has(input:disabled) {
-  cursor: not-allowed;
-  opacity: 0.65;
 }
 
 .teaching-chat-shell .teaching-composer-field textarea {
@@ -10139,4 +10111,21 @@ h1, h2, h3, h4, h5, h6 {
   color: var(--slate);
   font-size: 11px;
   border: 1px solid var(--slate-lightest);
+}
+.teaching-streaming-answer {
+  position: relative;
+}
+
+.teaching-streaming-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1.05em;
+  margin-left: 3px;
+  vertical-align: -0.15em;
+  background: currentColor;
+  animation: teaching-streaming-cursor-blink 0.9s steps(1, end) infinite;
+}
+
+@keyframes teaching-streaming-cursor-blink {
+  50% { opacity: 0; }
 }

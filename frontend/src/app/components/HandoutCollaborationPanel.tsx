@@ -473,16 +473,15 @@ function TaskConversationCards({
                             .finally(() => setInspectingEvidence(false));
                         }}
                       >
-                        <strong>{compactText(cleanText(item.sourceTitle || scopeLabel(item.sourceScope)), 48)}</strong>
+                        <strong>{compactText(cleanText(item.sourceTitle || scopeLabel(item.sourceScope)), 80)}</strong>
                         <span>
-                          {item.sourceScope === "TEACHER_RESOURCE" ? "教师资料命中" : scopeLabel(item.sourceScope)}
-                          {item.pageNo > 0 ? ` · 第 ${item.pageNo} 页` : ""}
-                          {item.chunkId ? ` · 定位 ${compactText(item.chunkId, 36)}` : ""}
+                          {item.sourceScope === "QUESTION_BANK" ? "题库题目" : item.sourceScope === "TEACHER_RESOURCE" ? "教师资料" : "教材资料"}
+                          {item.pageNo > 0 ? ` · 第 ${item.pageNo} 页` : " · 页码未记录"}
                         </span>
-                        <p>{evidenceDisplaySummary(item)}</p>
+                        <p>{item.snippet ? compactText(cleanText(item.snippet), 220) : evidenceDisplaySummary(item)}</p>
                         {item.sourcePath ? <small>位置：{item.sourcePath}</small> : null}
                         {item.sourceUrl ? <a href={item.sourceUrl} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>打开原文</a> : null}
-                        <em>{item.sourceDocumentId ? "点击查看已授权原始命中内容" : "点击查看题库命中内容与来源"}</em>
+                        <em>{item.sourceDocumentId ? "点击展开已授权正文" : "题库正文已直接展示，点击查看来源"}</em>
                       </button>
                     ))}
                   </div>

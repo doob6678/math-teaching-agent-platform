@@ -364,7 +364,8 @@ describe("TeachingConversationPanel", () => {
     expect(html).not.toContain("检索教材");
     expect(html).not.toContain("规划流程");
     expect(html).toContain("配方得到");
-    expect(html).toContain("AI 实时输出");
+    expect(html).toContain("teaching-streaming-answer");
+    expect(html).not.toContain("AI 实时输出");
   });
 
   it("shows real wall-clock seconds instead of a stale millisecond progress snapshot", () => {
@@ -591,7 +592,7 @@ describe("TeachingConversationPanel", () => {
     );
 
     expect(html).toContain("新建对话");
-    expect(html).toContain("关联当前会话上下文");
+    expect(html).not.toContain("关联当前会话上下文");
     expect(html).not.toContain("已启用");
   });
 });

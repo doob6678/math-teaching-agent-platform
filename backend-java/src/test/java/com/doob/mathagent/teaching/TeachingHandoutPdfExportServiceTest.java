@@ -180,6 +180,26 @@ class TeachingHandoutPdfExportServiceTest {
     }
 
     @Test
+    void repairsTripleDollarFormulaSplitBeforeXelatex() {
+        String sanitized = TeachingHandoutPdfExportService.sanitizeLatexForExport(
+                "\\section{线面角}\n1. 为什么公式使用 $$$\\sin$$\\theta$，而不是余弦？");
+
+        assertThat(sanitized)
+                .contains("公式使用 $\\sin\\theta$")
+                .doesNotContain("$$$", "$$\\sin", "\\sin$$\\theta$");
+    }
+
+    @Test
+    void keepsValidDisplayMathWhenRepairingTripleDollarFormulaSplit() {
+        String sanitized = TeachingHandoutPdfExportService.sanitizeLatexForExport(
+                "\\section{公式}\n$$x^2+y^2=1$$\n公式 $a+b=c$。");
+
+        assertThat(sanitized)
+                .contains("$$x^2+y^2=1$$", "$a+b=c$")
+                .doesNotContain("$$$" );
+    }
+
+    @Test
     void removesInternalEvidenceIdentifiersBeforeTheyCanBecomeLatexSubscripts() {
         String sanitized = TeachingHandoutPdfExportService.sanitizeLatexForExport(
                 "教材依据明确，证据编号为 $math_b_bixiu_4_p014_ai_001$、$2081207025182031874$；"

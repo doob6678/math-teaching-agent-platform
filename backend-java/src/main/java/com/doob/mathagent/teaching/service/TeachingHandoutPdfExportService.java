@@ -76,6 +76,9 @@ public class TeachingHandoutPdfExportService {
             "\\$(\\\\(?:sin|cos|tan|cot|sec|csc|ln|log|exp))\\$\\s*"
                     + "([A-Za-z](?:_\\{[^}]+}|_[A-Za-z0-9])?)\\s*"
                     + "(\\\\left\\([^$\\n]+?\\\\right\\))");
+    /** Repairs a model response that split one inline formula across three dollar-delimiter runs. */
+    static final Pattern SPLIT_TRIPLE_DOLLAR_MATH = Pattern.compile(
+            "\\$\\$\\$([^$\\n]*)\\$\\$([^$\\n]*)\\$");
     /** Internal retrieval identifiers are audit metadata and must never be printed as lesson mathematics. */
     static final Pattern INTERNAL_EVIDENCE_IDENTIFIER_CLAUSE = Pattern.compile(
             "(?:，|；)?\\s*(?:[\\p{IsHan}]{0,8})?证据(?:编号|锚点|ID|id)(?:为|：)?\\s*"
@@ -336,6 +339,11 @@ public class TeachingHandoutPdfExportService {
                 .replace("\\textbackslash{}cdot", "\\cdot")
                 .replace("\\textbackslash{}times", "\\times")
                 .replace("\\textbackslash{}to", "\\to");
+        // A structured response can accidentally serialize one inline formula as `$$$a$$b$` (for example
+        // `$$$\\sin$$\\theta$`). XeLaTeX interprets the first two dollars as display math and aborts at the next
+        // delimiter. Recover the single intended inline expression before line-level escaping; valid `$$...$$`
+        // display formulas do not match this exact split shape and remain unchanged.
+        normalized = normalizeTripleDollarMath(normalized);
         // A function, its argument symbol, and scalable parentheses are one mathematical expression. Leaving
         // \left outside dollar delimiters makes XeLaTeX abort with "Missing $ inserted" and previously triggered
         // the lossy text fallback. Normalize only this unambiguous grammar; malformed or incomplete math still fails.
@@ -587,6 +595,8 @@ public class TeachingHandoutPdfExportService {
     static String normalizeCircledNumerals(String value) { return TeachingHandoutPdfExportPolicyPartA.normalizeCircledNumerals(value); }
     // Pure export rule delegated to TeachingHandoutPdfExportPolicyPartA; process/lifecycle state remains in the exporter facade.
     static String normalizeMixedMathDelimiters(String value) { return TeachingHandoutPdfExportPolicyPartA.normalizeMixedMathDelimiters(value); }
+    // Pure export repair delegated to TeachingHandoutPdfExportPolicyPartA so preview, download, and PDF share one rule.
+    static String normalizeTripleDollarMath(String value) { return TeachingHandoutPdfExportPolicyPartA.normalizeTripleDollarMath(value); }
     // Pure export rule delegated to TeachingHandoutPdfExportPolicyPartA; process/lifecycle state remains in the exporter facade.
     static String stripLectureProjectionColumns(String body) { return TeachingHandoutPdfExportPolicyPartA.stripLectureProjectionColumns(body); }
     // Pure export rule delegated to TeachingHandoutPdfExportPolicyPartA; process/lifecycle state remains in the exporter facade.

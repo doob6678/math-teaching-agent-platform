@@ -306,9 +306,6 @@ export function TeachingConversationPanel({
           ) : null}
 
           <div className="teaching-composer-field">
-            <div className="teaching-memory-toggle" role="status">
-              <span>关联当前会话上下文</span>
-            </div>
             <textarea
               value={value}
               onChange={(event) => onValueChange(event.target.value)}
@@ -389,15 +386,15 @@ function LiveAssistantResponse({ entry }: { entry: Extract<TeachingConversationT
             <span>识别置信度 {Math.round(image.confidence * 100)}%</span>
           </details>
         ) : null}
-        {entry.liveContent?.trim() ? (
-          <details className="teaching-live-details" open>
-            <summary>AI 实时输出</summary>
-            <div className="teaching-live-provider-output">
-              <RichText text={liveTextForDisplay(entry.liveContent)} />
-            </div>
-          </details>
-        ) : null}
       </section>
+      {entry.liveContent?.trim() ? (
+        <section className="teaching-response-card agent teaching-streaming-answer" aria-label="正在生成的讲解">
+          <div className="teaching-rich-block">
+            <RichText text={liveTextForDisplay(entry.liveContent)} />
+            <span className="teaching-streaming-cursor" aria-hidden="true" />
+          </div>
+        </section>
+      ) : null}
       {visibleExplanationCards(cards).map((card, index) => (
         <ExplanationCard key={`live:${card.cardKey}:${index}`} card={card} />
       ))}

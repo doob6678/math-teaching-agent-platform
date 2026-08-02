@@ -23,6 +23,10 @@ import java.util.Comparator;
 import java.util.UUID;
 import java.util.List;
 import javax.imageio.ImageIO;
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.rendering.ImageType;
+import org.apache.pdfbox.rendering.PDFRenderer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -148,6 +152,11 @@ public class TeacherResourceAssetService {
                 checksum);
         if (existing.isPresent()) {
             TeacherResourceAssetResponse previous = existing.get();
+            // Metadata can outlive the bind-mounted asset directory when a container is recreated. Re-materialize the
+            // exact binary before returning the old opaque id so document_block.imageRefs never point at a dead file.
+            if (!storageFileExists(previous)) {
+                persistAssetBytes(previous, content);
+            }
             if (!"active".equalsIgnoreCase(textOrDefault(previous.status(), ""))) {
                 /*
                  * Feishu parser extraction runs before manifest ingestion.  The sync service intentionally marks the
@@ -209,7 +218,15 @@ public class TeacherResourceAssetService {
         }
         Path path = safeStoragePath(asset.storageKey());
         if (!Files.isRegularFile(path)) {
-            throw new IllegalArgumentException("Teacher resource asset file is unavailable");
+            // Repair legacy rows lazily. This covers assets created before the host bind mount was restored and keeps
+            // reads deterministic without inventing a public URL for a local teacher resource.
+            TeacherResourceDocumentResponse document = resourceStore.find(asset.tenantId(), asset.documentId());
+            if (document != null) {
+                restoreMissingAsset(asset, document);
+            }
+            if (!Files.isRegularFile(path)) {
+                throw new IllegalArgumentException("Teacher resource asset file is unavailable");
+            }
         }
         return new VisibleAsset(
                 asset.assetId(),
@@ -304,6 +321,86 @@ public class TeacherResourceAssetService {
             throw new IllegalArgumentException("Teacher resource asset storage key is invalid");
         }
         return resolved;
+    }
+
+    /** Checks the backend-owned binary path without following an untrusted path outside the asset root. */
+    private boolean storageFileExists(TeacherResourceAssetResponse asset) {
+        return Files.isRegularFile(safeStoragePath(asset.storageKey()));
+    }
+
+    /** Writes newly extracted bytes to an existing storage key, preserving the stable asset id and database row. */
+    private void persistAssetBytes(TeacherResourceAssetResponse asset, byte[] content) {
+        Path target = safeStoragePath(asset.storageKey());
+        try {
+            Files.createDirectories(target.getParent());
+            Files.write(target, content);
+        } catch (IOException exception) {
+            throw new IllegalStateException("Failed to restore teacher resource asset binary", exception);
+        }
+    }
+
+    /**
+     * Rebuilds a missing asset from the registered source document. PDF page assets are rendered at the same fixed DPI
+     * used by source synchronization; ordinary image attachments are copied directly from the source package.
+     */
+    private void restoreMissingAsset(
+            TeacherResourceAssetResponse asset,
+            TeacherResourceDocumentResponse document) {
+        Path source = resolveSourceFile(document, asset.sourcePath());
+        if (source == null || !Files.isRegularFile(source)) {
+            LOGGER.warn("Cannot restore teacher resource asset {}: source file unavailable", asset.assetId());
+            return;
+        }
+        try {
+            byte[] content = sourcePageBytes(source, asset.pageNo(), asset.mimeType());
+            if (content.length > 0) {
+                persistAssetBytes(asset, content);
+                LOGGER.info("Restored missing teacher resource asset {} from {} page {}",
+                        asset.assetId(), source, asset.pageNo());
+            }
+        } catch (IOException | RuntimeException exception) {
+            LOGGER.warn("Failed to restore missing teacher resource asset {} from {}", asset.assetId(), source, exception);
+        }
+    }
+
+    /** Resolves localPath plus a relative sourcePath while rejecting path traversal from database metadata. */
+    private static Path resolveSourceFile(
+            TeacherResourceDocumentResponse document,
+            String sourcePath) {
+        String configured = textOrDefault(document.localPath(), "");
+        if (configured.isBlank()) {
+            return null;
+        }
+        Path root = Path.of(configured).toAbsolutePath().normalize();
+        if (Files.isRegularFile(root)) {
+            return root;
+        }
+        if (!Files.isDirectory(root)) {
+            return null;
+        }
+        String relative = textOrDefault(sourcePath, "").replace('\\', '/');
+        if (relative.isBlank()) {
+            return null;
+        }
+        Path candidate = root.resolve(relative).normalize();
+        return candidate.startsWith(root) ? candidate : null;
+    }
+
+    /** Reads a source image or renders one PDF page to PNG for the missing asset row. */
+    private static byte[] sourcePageBytes(Path source, Integer pageNo, String mimeType) throws IOException {
+        if (pageNo == null || pageNo <= 0 || !source.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".pdf")) {
+            return Files.readAllBytes(source);
+        }
+        try (PDDocument pdf = Loader.loadPDF(source.toFile())) {
+            if (pageNo > pdf.getNumberOfPages()) {
+                return new byte[0];
+            }
+            BufferedImage image = new PDFRenderer(pdf).renderImageWithDPI(pageNo - 1, 144, ImageType.RGB);
+            java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream();
+            String format = extensionForMime(mimeType).equals(".jpg") ? "jpg" : "png";
+            ImageIO.write(image, format, output);
+            return output.toByteArray();
+        }
     }
 
     private static String safeDownloadName(TeacherResourceAssetResponse asset) {

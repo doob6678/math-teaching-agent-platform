@@ -1140,7 +1140,21 @@ export function App() {
               : entry,
           ),
         );
-        return refreshTeachingConversationSummaries(response.conversationId);
+        // The stream already delivered the authoritative response. Avoid a second history HTTP request on every
+        // completed turn; the sidebar is refreshed when opened or when the user explicitly changes conversation.
+        setTeachingConversationSummaries((current) => {
+          const next = {
+            conversationId: response.conversationId,
+            title: response.conversationTitle || "AI 讲题",
+            lastQuestionText: response.questionText,
+            viewerRole: "student",
+            totalMessages: (current.find((item) => item.conversationId === response.conversationId)?.totalMessages || 0) + 1,
+            createdAt: current.find((item) => item.conversationId === response.conversationId)?.createdAt || new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+          return [next, ...current.filter((item) => item.conversationId !== response.conversationId)].slice(0, 12);
+        });
+        return undefined;
       })
       .catch((error: Error) => {
         // Do not replace a delivered final answer when only the transport close/drain step failed afterward.

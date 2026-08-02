@@ -1,10 +1,9 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { Download, Eye, FileText, Loader2, RefreshCw, ShieldCheck } from "lucide-react";
+import { Download, FileText, Loader2, RefreshCw, ShieldCheck } from "lucide-react";
 import { TeachingHandoutPdfResponse, TeachingHumanFeedbackResponse, TeachingTaskResponse } from "../../shared/api/textbookApi";
-import { PdfCanvasPreview } from "./PdfCanvasPreview";
-import { HandoutStructuredPreview, HandoutVersion, LectureHandoutPreview } from "./TeachingTaskPanel";
+import { HandoutVersion, LectureHandoutPreview } from "./TeachingTaskPanel";
 
-type PreviewMode = "summary" | "pdf" | "review";
+type PreviewMode = "summary" | "review";
 
 export function HandoutWorkspacePreviewPanel({
   task,
@@ -26,7 +25,6 @@ export function HandoutWorkspacePreviewPanel({
   feedbackHistory,
   loadingFeedbackHistory,
   onVersionChange,
-  onPreviewPdf,
   onPreviewLatex,
   onResumeTask,
   onExportPdf,
@@ -74,7 +72,6 @@ export function HandoutWorkspacePreviewPanel({
   const latexPreviewReady = Boolean(task && previewLatex.trim() && previewTaskKey === taskKey);
   const taskCompleted = task?.status === "COMPLETED";
   const taskFailed = task?.status === "FAILED";
-  const previewRateLimited = /429|频繁|限流|过多/.test(previewError);
   const studentLeakWarning = version === "student" && /答案|解析|评分点|teacherExplanation|参考答案/.test(selectedDraft ?? "");
   const statusText = useMemo(() => statusLabel(task?.status), [task?.status]);
   const reviewSummary = useMemo(() => buildReviewSummary(task), [task]);
@@ -88,17 +85,6 @@ export function HandoutWorkspacePreviewPanel({
     setEditingVersion(false);
     setEditedLatex(selectedDraft);
   }, [task?.taskId, version, selectedDraft]);
-
-  useEffect(() => {
-    if (taskCompleted && pdfPreviewReady) {
-      setMode("pdf");
-    }
-  }, [taskCompleted, pdfPreviewReady]);
-
-  function openPdfMode() {
-    setMode("pdf");
-    if (!pdfPreviewReady) onPreviewPdf();
-  }
 
   function openReviewMode() {
     setMode("review");
@@ -132,24 +118,11 @@ export function HandoutWorkspacePreviewPanel({
           <div className="handout-workspace-metrics compact">
             <div><span>状态</span><strong>{statusText}</strong></div>
             <div><span>来源</span><strong>{task.evidence.length} 条</strong></div>
-            <div><span>预览</span><strong>{pdfPreviewReady ? "PDF 已就绪" : latexPreviewReady ? "结构已就绪" : "待加载"}</strong></div>
+            <div><span>下载</span><strong>{taskCompleted && selectedDraft ? "PDF 可下载" : "等待生成"}</strong></div>
           </div>
 
           <div className="handout-workspace-actions">
-            <div className="handout-preview-mode-switch" role="tablist" aria-label="讲义预览模式">
-              <button type="button" className={`handout-preview-mode${mode === "summary" ? " active" : ""}`} onClick={() => setMode("summary")}>概览</button>
-              <button type="button" className={`handout-preview-mode${mode === "pdf" ? " active" : ""}`} onClick={openPdfMode}>PDF</button>
-              <button type="button" className={`handout-preview-mode${mode === "review" ? " active" : ""}`} onClick={openReviewMode}>校对</button>
-            </div>
             <div className="handout-workspace-button-row">
-              <button className="handout-action-btn" type="button" onClick={openPdfMode}>
-                {action === "preview-pdf" ? <Loader2 className="spin" size={15} /> : <Eye size={15} />}
-                <span>预览 PDF</span>
-              </button>
-              <button className="handout-action-btn" type="button" onClick={openReviewMode}>
-                {action === "preview" ? <Loader2 className="spin" size={15} /> : <FileText size={15} />}
-                <span>结构校对</span>
-              </button>
               <button
                 className="handout-action-btn"
                 type="button"
@@ -250,49 +223,8 @@ export function HandoutWorkspacePreviewPanel({
               </div>
             ) : null}
 
-            {mode === "pdf" ? (
-              pdfPreviewReady && previewPdfBytes && previewPdfMeta ? (
-                <PdfCanvasPreview
-                  pdfBytes={previewPdfBytes}
-                  pdfUrl={previewPdfUrl}
-                  meta={previewPdfMeta}
-                  title={`${handoutVersionLabel(version)} PDF`}
-                  canvasLabel={`${handoutVersionLabel(version)} PDF 预览`}
-                />
-              ) : (
-                <>
-                  <PreviewPlaceholder
-                    title={taskCompleted ? "点击上方按钮加载真实 PDF" : taskFailed ? "生成失败，先继续任务或重试 PDF 加载" : "任务完成后可打开 PDF"}
-                    detail={taskCompleted ? "支持多页翻看。" : taskFailed ? "不会重新生成讲义，只重新申请当前版本的预览能力。" : "生成完成后可预览。"}
-                    loading={action === "preview-pdf"}
-                  />
-                  {previewError ? (
-                    <section className="handout-review-banner warning handout-preview-error" role="alert">
-                      <div>
-                        <strong>{previewRateLimited ? "PDF 预览被限流" : "PDF 预览失败"}</strong>
-                        <p>{previewError}</p>
-                      </div>
-                      <button className="handout-action-btn" type="button" onClick={onPreviewPdf} disabled={action === "preview-pdf"}>
-                        <RefreshCw size={15} />
-                        <span>继续加载 PDF</span>
-                      </button>
-                    </section>
-                  ) : null}
-                </>
-              )
-            ) : null}
-
             {mode === "review" ? (
               <>
-                {latexPreviewReady ? (
-                  <HandoutStructuredPreview latex={previewLatex} version={version} />
-                ) : (
-                  <PreviewPlaceholder
-                    title="点击上方按钮加载结构校对"
-                    detail="这里只显示当前版本的结构与反馈。"
-                    loading={action === "preview"}
-                  />
-                )}
                 <HandoutFeedbackReview
                   task={task}
                   version={version}
@@ -315,7 +247,7 @@ export function HandoutWorkspacePreviewPanel({
           </div>
         </>
       ) : (
-        <PreviewPlaceholder title="从历史或当前流程里选一份讲义" detail="这里会显示当前版本、PDF 和校对结果。" />
+        <PreviewPlaceholder title="从历史或当前流程里选一份讲义" detail="这里会显示当前版本、来源和下载操作。" />
       )}
     </section>
   );

@@ -557,6 +557,29 @@ final class TeachingHandoutPdfExportPolicyPartA {
     }
 
 
+    /**
+     * Rejoins an inline formula split by a JSON/model adapter into three dollar runs.
+     *
+     * <p>The repair is deliberately narrow: it only accepts the observed
+     * {@code $$$left$$right$} shape on one line, while ordinary inline and display math delimiters remain
+     * untouched. Running it at the export boundary makes persisted tasks and newly generated tasks behave identically.
+     * </p>
+     */
+    static String normalizeTripleDollarMath(String value) {
+        if (value == null || value.isBlank()) {
+            return value == null ? "" : value;
+        }
+        Matcher matcher = SPLIT_TRIPLE_DOLLAR_MATH.matcher(value);
+        StringBuffer normalized = new StringBuffer();
+        while (matcher.find()) {
+            String replacement = "$" + matcher.group(1) + matcher.group(2) + "$";
+            matcher.appendReplacement(normalized, Matcher.quoteReplacement(replacement));
+        }
+        matcher.appendTail(normalized);
+        return normalized.toString();
+    }
+
+
     /** Keeps only the first (question) minipage from legacy lecture pages; the second was the teacher cue column. */
     static String stripLectureProjectionColumns(String body) {
         if (body == null || body.isBlank()) {
