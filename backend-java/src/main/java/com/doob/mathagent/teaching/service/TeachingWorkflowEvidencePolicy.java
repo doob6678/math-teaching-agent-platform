@@ -250,7 +250,9 @@ final class TeachingWorkflowEvidencePolicy {
                 .toLowerCase(Locale.ROOT);
         List<String> candidates = QuestionBankSearchText.candidateQueries(request.learningGoal(), request.questionText()).stream()
                 .map(String::strip)
-                .filter(term -> term.length() >= 3)
+                // Keep two-character shape names (for example “椭圆”) in the strict boundary; they are
+                // deliberately excluded from the broad-term set and therefore carry real topic identity.
+                .filter(term -> term.length() >= 2)
                 .filter(term -> !TOPIC_GENERIC_TERMS.contains(term))
                 .toList();
         if (candidates.isEmpty()) {
@@ -285,7 +287,7 @@ final class TeachingWorkflowEvidencePolicy {
         List<String> explicitCandidates = explicitTopicCandidates(request, candidates);
         return (explicitCandidates.isEmpty() ? candidates.stream() : explicitCandidates.stream())
                 .map(String::strip)
-                .filter(term -> term.length() >= 3)
+                .filter(term -> term.length() >= 2)
                 .filter(term -> !TOPIC_GENERIC_TERMS.contains(term))
                 .filter(term -> searchable.contains(term.toLowerCase(Locale.ROOT)))
                 .max(Comparator.comparingInt(String::length))
@@ -322,7 +324,7 @@ final class TeachingWorkflowEvidencePolicy {
                 .toLowerCase(Locale.ROOT);
         return candidates.stream()
                 .map(String::strip)
-                .filter(term -> term.length() >= 3)
+                .filter(term -> term.length() >= 2)
                 .filter(term -> requestText.contains(term.toLowerCase(Locale.ROOT)))
                 .toList();
     }
@@ -851,7 +853,7 @@ final class TeachingWorkflowEvidencePolicy {
                 + ((request == null || request.questionText() == null) ? "" : request.questionText());
         List<String> candidates = QuestionBankSearchText.specificTopicTerms(requestText).stream()
                 .map(String::strip)
-                .filter(term -> term.length() >= 3)
+                .filter(term -> term.length() >= 2)
                 .filter(term -> !BROAD_TOPIC_TERMS.contains(term))
                 .filter(term -> !TOPIC_GENERIC_TERMS.contains(term))
                 .distinct()
@@ -864,7 +866,7 @@ final class TeachingWorkflowEvidencePolicy {
                         request == null ? "" : request.learningGoal(),
                         request == null ? "" : request.questionText()).stream()
                 .map(String::strip)
-                .filter(term -> term.length() >= 3 && term.length() <= 18)
+                .filter(term -> term.length() >= 2 && term.length() <= 18)
                 .filter(term -> !BROAD_TOPIC_TERMS.contains(term) && !TOPIC_GENERIC_TERMS.contains(term))
                 .filter(term -> requestText.replaceAll("\\s+", "").toLowerCase(Locale.ROOT)
                         .contains(term.toLowerCase(Locale.ROOT)))

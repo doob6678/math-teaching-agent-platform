@@ -73,7 +73,10 @@ public final class QuestionBankSearchText {
             return List.of();
         }
         return CORE_TERMS.stream()
-                .filter(term -> term.length() >= 3)
+                // Two-character mathematical identities such as “椭圆” and “圆锥” are concrete topics,
+                // not generic noise.  Dropping them here makes the strict teaching gate silently fall back to
+                // shared words such as “离心率”, which is exactly how a hyperbola page can enter an ellipse lesson.
+                .filter(term -> term.length() >= 2)
                 .filter(term -> normalized.contains(term.toLowerCase()))
                 .filter(term -> !Set.of("函数", "三角函数", "空间向量", "立体几何", "平面向量", "圆锥曲线", "直线", "圆", "数列", "概率", "统计", "导数").contains(term))
                 .distinct()
