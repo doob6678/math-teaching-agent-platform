@@ -2,7 +2,12 @@ package com.doob.mathagent.teaching.service;
 
 import com.doob.mathagent.agent.service.AgentTraceRecord;
 import com.doob.mathagent.agent.service.AgentTraceStore;
+import com.doob.mathagent.agent.dto.AgentRunExecuteRequest;
+import com.doob.mathagent.agent.dto.AgentRunPlanRequest;
+import com.doob.mathagent.agent.service.AgentRunExecutionService;
+import com.doob.mathagent.agent.service.AgentRunPlanService;
 import com.doob.mathagent.agent.vo.AgentRunExecuteResponse;
+import com.doob.mathagent.agent.vo.AgentRunPlanResponse;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.knowledge.service.KnowledgeQuestionBankService;
 import com.doob.mathagent.knowledge.service.QuestionBankSearchText;
@@ -99,6 +104,9 @@ class TeachingWorkflowExecutionSupport {
     protected boolean returnCompletedWhenExecutorIsSynchronous;
     /** Persists auditable parent/child node records independently from the UI task snapshot. */
     protected TeachingWorkflowTraceRecorder traceRecorder;
+    /** Shared planner/executor used by every question branch; null only in focused unit-test constructors. */
+    protected AgentRunPlanService agentRunPlanService;
+    protected AgentRunExecutionService agentRunExecutionService;
 
 
     /** Renders three independent publishable versions from an already approved, immutable common draft. */
@@ -244,14 +252,12 @@ class TeachingWorkflowExecutionSupport {
         final String traceTaskId = taskId;
         final TeachingRequestContext traceContext = context;
         final List<TeachingEvidence> traceQuestionEvidence = List.copyOf(questionEvidence);
-        questionAgentBatch.branchTimings().forEach(branch -> traceRecorder.running(
+        runQuestionAgents(
+                request,
+                context,
                 traceTaskId,
-                traceContext,
-                "QUESTION_AGENT_" + branch.agentId(),
-                "QuestionAgent-" + branch.agentId(),
-                traceQuestionEvidence.stream().filter(item -> questionAgentId(item).equals(branch.agentId())).toList(),
-                branch.elapsedMs(),
-                "已建立本题独立上下文；当前教学路径尚未执行独立题目模型调用。"));
+                traceQuestionEvidence,
+                questionAgentBatch);
         List<TeachingReactStep> reactTrace = List.of();
         timer.mark("react_trace");
         saveRunningProgress(
@@ -558,6 +564,99 @@ class TeachingWorkflowExecutionSupport {
             throw exception;
         } finally {
             evidenceExecutor.shutdownNow();
+        }
+    }
+
+    /**
+     * Executes one real agent run for every retrieved atomic question.
+     *
+     * <p>The retrieval result is immutable input to each branch. The branch receives only a short task summary and
+     * stable evidence references; the user's text is never used as a search query or persisted as an evidence row.
+     * A missing planner/executor is allowed only for legacy unit-test constructors, while the Spring production
+     * constructor always wires both services. Any production branch failure propagates to the parent DAG.</p>
+     */
+    protected void runQuestionAgents(
+            TeachingTaskRequest request,
+            TeachingRequestContext context,
+            String taskId,
+            List<TeachingEvidence> questionEvidence,
+            QuestionAgentBatch batch) {
+        if (questionEvidence == null || questionEvidence.isEmpty()) {
+            return;
+        }
+        // Focused compatibility constructors intentionally do not wire the production agent catalog. They exercise
+        // retrieval/rendering in isolation; the Spring production constructor always supplies both services and
+        // therefore cannot silently skip the real child-agent barrier.
+        if (agentRunPlanService == null || agentRunExecutionService == null) {
+            return;
+        }
+        ExecutorService executor = Executors.newFixedThreadPool(
+                Math.max(1, Math.min(questionEvidence.size(), QUESTION_AGENT_MAX_PARALLELISM)));
+        try {
+            List<CompletableFuture<Void>> runs = questionEvidence.stream()
+                    .map(evidence -> CompletableFuture.runAsync(
+                            () -> executeQuestionAgent(request, context, taskId, evidence), executor))
+                    .toList();
+            runs.forEach(CompletableFuture::join);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    /** Runs and records one isolated question-agent branch. */
+    private void executeQuestionAgent(
+            TeachingTaskRequest request,
+            TeachingRequestContext context,
+            String taskId,
+            TeachingEvidence evidence) {
+        String agentId = questionAgentId(evidence);
+        String nodeCode = "QUESTION_AGENT_" + agentId;
+        List<TeachingEvidence> branchEvidence = List.of(evidence);
+        long started = System.nanoTime();
+        traceRecorder.running(taskId, context, nodeCode, "QuestionSolvingAgent", branchEvidence, 0L,
+                "题目子智能体已分配，仅使用当前题目的检索证据。");
+        try {
+            RequestSubject subject = new RequestSubject(
+                    context.tenantId(), context.subjectType(), context.subjectId(), context.deviceId()).normalize();
+            AgentRunPlanResponse plan = agentRunPlanService.plan(
+                    new AgentRunPlanRequest(
+                            "TeacherAssistantAgent",
+                            "question_solving",
+                            "teacher",
+                            Math.max(256, safeEvidenceText(evidence.snippet()).length()),
+                            1200,
+                            evidence.imagePath() != null && !evidence.imagePath().isBlank(),
+                            true,
+                            "medium",
+                            "normal",
+                            3.0d,
+                            0,
+                            false,
+                            List.of("tool:search:textbook", "tool:search:private"),
+                            List.of(),
+                            List.of("PUBLIC_TEXTBOOK", "TEACHER_PRIVATE", "CLASS_AUTHORIZED"),
+                            false,
+                            "",
+                            ""),
+                    subject);
+            String summary = "独立解答题目：" + safeEvidenceText(evidence.sourceTitle()) + "。题目内容："
+                    + safeEvidenceText(evidence.snippet());
+            AgentRunExecuteResponse execution = agentRunExecutionService.execute(
+                    new AgentRunExecuteRequest(
+                            plan,
+                            summary,
+                            branchEvidence.stream().map(TeachingWorkflowService::evidenceRef).toList(),
+                            false),
+                    subject);
+            if (!"COMPLETED".equalsIgnoreCase(execution.status())) {
+                throw new IllegalStateException("题目子智能体返回状态：" + execution.status());
+            }
+            traceRecorder.completed(taskId, context, nodeCode, execution.agentCode(), branchEvidence,
+                    elapsedMs(started), "题目子智能体已完成真实模型调用并返回结果。");
+        } catch (Throwable failure) {
+            traceRecorder.failed(taskId, context, nodeCode, "QuestionSolvingAgent", branchEvidence,
+                    elapsedMs(started), failure);
+            throw failure instanceof RuntimeException runtime ? runtime : new IllegalStateException(failure);
         }
     }
 
@@ -918,6 +1017,17 @@ class TeachingWorkflowExecutionSupport {
     /** Converts a monotonic start timestamp into the bounded duration stored in the trace row. */
     private static long elapsedMs(long startedNanos) {
         return Math.max(0L, (System.nanoTime() - startedNanos) / 1_000_000L);
+    }
+
+    /** Keeps branch prompts bounded while preserving a source title and the beginning of its verified stem. */
+    private static String safeEvidenceText(String value) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        String normalized = value.replaceAll("\\s+", " ").strip();
+        return normalized.length() > MAX_TEACHING_EVIDENCE_CHARS
+                ? normalized.substring(0, MAX_TEACHING_EVIDENCE_CHARS).strip()
+                : normalized;
     }
 
     /** Reads one persisted stage timing without adding another synthetic timer checkpoint. */

@@ -874,17 +874,56 @@ final class TeachingWorkflowEvidencePolicy {
     }
 
 
-    /** Matches concrete curriculum evidence, including common OCR variants of quadratic notation. */
+    /**
+     * Matches concrete curriculum evidence, including common OCR variants of quadratic notation.
+     *
+     * <p>Several concrete terms can describe one request. Sibling topics may match independently, while a conic
+     * shape term is an identity boundary: an ellipse request must not be satisfied by a hyperbola page merely because
+     * both pages mention eccentricity or focal length.</p>
+     */
     static boolean matchesSpecificEvidenceTopic(TeachingEvidence evidence, List<String> terms) {
         if (evidence == null || terms == null || terms.isEmpty()) {
             return false;
         }
         String text = compactEvidenceText(evidence).replaceAll("\\s+", "");
-        // The longest request term is the primary topic. Secondary words such as “最小值” are constraints, not a
-        // license to admit every generic minimum-value page from another chapter.
-        for (String term : terms.stream().limit(1).toList()) {
-            String normalizedTerm = term.toLowerCase(Locale.ROOT);
-            if (text.contains(normalizedTerm)) {
+        List<String> normalizedTerms = terms.stream()
+                .filter(term -> term != null && !term.isBlank())
+                .map(term -> term.strip().toLowerCase(Locale.ROOT))
+                .distinct()
+                .toList();
+        if (normalizedTerms.isEmpty()) {
+            return false;
+        }
+
+        Set<String> conicTerms = Set.of("椭圆", "双曲线", "抛物线", "圆锥曲线");
+        Set<String> requestedConics = normalizedTerms.stream()
+                .filter(conicTerms::contains)
+                .collect(java.util.stream.Collectors.toSet());
+        if (!requestedConics.isEmpty()) {
+            boolean broadConicRequest = requestedConics.contains("圆锥曲线");
+            boolean matchedRequestedConic = broadConicRequest
+                    ? conicTerms.stream().anyMatch(text::contains)
+                    : requestedConics.stream().anyMatch(text::contains);
+            if (!matchedRequestedConic) {
+                return false;
+            }
+            // A neighbouring conic page must not satisfy a precise shape request through a shared property.
+            if (!broadConicRequest && conicTerms.stream()
+                    .filter(conic -> !requestedConics.contains(conic) && !"圆锥曲线".equals(conic))
+                    .anyMatch(text::contains)) {
+                return false;
+            }
+            // For “椭圆离心率”, the identity term plus one supporting term is required. For “椭圆与双曲线”,
+            // either requested shape is independently sufficient.
+            List<String> supportingTerms = normalizedTerms.stream()
+                    .filter(term -> !conicTerms.contains(term))
+                    .toList();
+            return supportingTerms.isEmpty() || supportingTerms.stream().anyMatch(text::contains);
+        }
+
+        // Non-conic requests may name multiple sibling points; any concrete term is sufficient for that source.
+        for (String term : normalizedTerms) {
+            if (text.contains(term)) {
                 return true;
             }
             if ("二次函数".equals(term)
@@ -895,7 +934,6 @@ final class TeachingWorkflowEvidencePolicy {
                     && !text.contains("抛物线")) {
                 return true;
             }
-
         }
         return false;
     }

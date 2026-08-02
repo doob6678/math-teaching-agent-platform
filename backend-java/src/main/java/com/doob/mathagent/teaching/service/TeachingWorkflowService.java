@@ -2,6 +2,8 @@ package com.doob.mathagent.teaching.service;
 
 import com.doob.mathagent.agent.service.AgentTraceRecord;
 import com.doob.mathagent.agent.service.AgentTraceStore;
+import com.doob.mathagent.agent.service.AgentRunExecutionService;
+import com.doob.mathagent.agent.service.AgentRunPlanService;
 import com.doob.mathagent.agent.vo.AgentRunExecuteResponse;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.knowledge.service.KnowledgeQuestionBankService;
@@ -225,6 +227,8 @@ public class TeachingWorkflowService extends TeachingWorkflowExecutionSupport {
             StudentMemoryReuseService memoryReuseService,
             TeachingAiDraftService aiDraftService,
             AgentTraceStore agentTraceStore,
+            AgentRunPlanService agentRunPlanService,
+            AgentRunExecutionService agentRunExecutionService,
 
             TeachingHandoutTemplateService handoutTemplateService,
             Optional<KnowledgeQuestionBankService> questionBankService,
@@ -238,6 +242,8 @@ public class TeachingWorkflowService extends TeachingWorkflowExecutionSupport {
         this.aiDraftService = aiDraftService;
         this.agentTraceStore = agentTraceStore;
         this.traceRecorder = new TeachingWorkflowTraceRecorder(agentTraceStore);
+        this.agentRunPlanService = agentRunPlanService;
+        this.agentRunExecutionService = agentRunExecutionService;
         this.handoutTemplateService = handoutTemplateService;
         this.questionBankService = questionBankService.orElse(null);
         this.teacherResourceBlockSearchService = teacherResourceBlockSearchService.orElse(null);
@@ -265,6 +271,8 @@ public class TeachingWorkflowService extends TeachingWorkflowExecutionSupport {
                 memoryReuseService,
                 aiDraftService,
                 agentTraceStore,
+                null,
+                null,
                 handoutTemplateService,
                 questionBankService,
                 teacherResourceBlockSearchService,

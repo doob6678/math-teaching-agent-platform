@@ -166,9 +166,9 @@ final class TeachingWorkflowProgressModel {
                 workflowEvent("render", "system", "HandoutRenderer", "render", "生成多版本讲义产物",
                         draftReady ? "正在渲染教师版、学生版和 16:10 讲解版。" : "等待结构化内容。",
                         draftReady ? "running" : "pending", List.of("teacher", "student", "lecture"))));
-        // The current teaching path only creates isolated contexts; it does not execute a separate model call per
-        // question. Keep the child event running instead of presenting a synthetic completed sub-agent.
-        events.addAll(questionAgentEvents(questionEvidence, "running"));
+        // Final snapshots are produced only after every question branch has returned. The progress snapshot above
+        // still reports running children; this completed snapshot reflects the real execution barrier.
+        events.addAll(questionAgentEvents(questionEvidence, "completed"));
         return List.copyOf(events);
     }
 
@@ -336,8 +336,8 @@ final class TeachingWorkflowProgressModel {
                             ? "题目独立智能体"
                             : evidence.sourceTitle().split(" / ", 2)[0];
                      return node("QUESTION_AGENT_" + id, "题目 " + title,
-                             "running",
-                             "已建立独立题目上下文；当前教学路径尚未执行独立题目模型调用。");
+                             "completed",
+                             "题目子智能体已完成独立模型调用，并仅使用本题检索证据。");
                 })
                 .sorted(Comparator.comparing(TeachingWorkflowNode::code))
                 .toList();

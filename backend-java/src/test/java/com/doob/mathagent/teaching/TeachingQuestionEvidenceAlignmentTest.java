@@ -49,6 +49,23 @@ class TeachingQuestionEvidenceAlignmentTest {
     }
 
     @Test
+    void matchesMultipleConcreteTermsButRejectsAConflictingConicSource() throws Exception {
+        Method matcher = TeachingWorkflowService.class.getDeclaredMethod(
+                "matchesSpecificEvidenceTopic", TeachingEvidence.class, List.class);
+        matcher.setAccessible(true);
+        TeachingEvidence ellipse = new TeachingEvidence(
+                "PUBLIC_TEXTBOOK", "椭圆离心率", "ellipse", 12,
+                "椭圆的离心率 e=c/a，结合焦点与长轴关系求参数。");
+        TeachingEvidence hyperbola = new TeachingEvidence(
+                "PUBLIC_TEXTBOOK", "双曲线离心率", "hyperbola", 18,
+                "双曲线的离心率 e=c/a，渐近线用于判断图像。");
+        List<String> terms = List.of("椭圆", "离心率");
+
+        assertThat((Boolean) matcher.invoke(null, ellipse, terms)).isTrue();
+        assertThat((Boolean) matcher.invoke(null, hyperbola, terms)).isFalse();
+    }
+
+    @Test
     void usesAConcreteModelAuthoredStrategyHeadingAndRejectsGenericHeading() throws Exception {
         Method heading = TeachingWorkflowService.class.getDeclaredMethod("methodHeading", String.class, String.class);
         heading.setAccessible(true);
