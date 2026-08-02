@@ -164,7 +164,7 @@ class TeachingWorkflowExecutionSupport {
             String idempotencyKey,
             TeachingTaskResponse checkpoint) {
         StageTimer timer = new StageTimer(checkpoint == null ? List.of() : checkpoint.stageTimings());
-        traceRecorder.completed(taskId, context, "WORKFLOW_ORCHESTRATOR", "TeachingOrchestrator", List.of(), 0L,
+        traceRecorder.running(taskId, context, "WORKFLOW_ORCHESTRATOR", "TeachingOrchestrator", List.of(), 0L,
                 "主智能体已接收任务并开始执行固定教学 DAG。");
         TeachingHandoutTemplateProfile template = handoutTemplateService.resolveFor(request);
         StudentMemoryResponse memoryResponse = checkpoint != null && checkpoint.memoryReuse() != null
@@ -207,6 +207,9 @@ class TeachingWorkflowExecutionSupport {
             questionEvidence = verifiedEvidence(questionEvidence);
             teacherResourceEvidence = verifiedEvidence(teacherResourceEvidence);
             if (evidence.isEmpty()) {
+                traceRecorder.failed(taskId, context, "WORKFLOW_ORCHESTRATOR", "TeachingOrchestrator", evidence,
+                        timingSum(timer, "textbook_retrieval", "question_bank_retrieval", "teacher_resource_retrieval"),
+                        new IllegalStateException("未检索到可核验证据"));
                 throw new IllegalStateException("未检索到可核验的教材、题库或教师资料证据；用户输入不能作为检索证据，已停止生成讲义。");
             }
         }
@@ -215,6 +218,9 @@ class TeachingWorkflowExecutionSupport {
         questionEvidence = verifiedEvidence(questionEvidence);
         teacherResourceEvidence = verifiedEvidence(teacherResourceEvidence);
         if (evidence.isEmpty()) {
+            traceRecorder.failed(taskId, context, "WORKFLOW_ORCHESTRATOR", "TeachingOrchestrator", evidence,
+                    timingSum(timer, "textbook_retrieval", "question_bank_retrieval", "teacher_resource_retrieval"),
+                    new IllegalStateException("讲义任务缺少可核验来源证据"));
             throw new IllegalStateException("讲义任务缺少可核验来源证据，禁止发布零证据讲义。");
         }
         traceRecorder.completed(taskId, context, "EVIDENCE_COLLECTION", "EvidenceCollector", evidence,
@@ -238,14 +244,14 @@ class TeachingWorkflowExecutionSupport {
         final String traceTaskId = taskId;
         final TeachingRequestContext traceContext = context;
         final List<TeachingEvidence> traceQuestionEvidence = List.copyOf(questionEvidence);
-        questionAgentBatch.branchTimings().forEach(branch -> traceRecorder.completed(
+        questionAgentBatch.branchTimings().forEach(branch -> traceRecorder.running(
                 traceTaskId,
                 traceContext,
                 "QUESTION_AGENT_" + branch.agentId(),
                 "QuestionAgent-" + branch.agentId(),
                 traceQuestionEvidence.stream().filter(item -> questionAgentId(item).equals(branch.agentId())).toList(),
                 branch.elapsedMs(),
-                "已完成本题独立证据对齐与上下文隔离。"));
+                "已建立本题独立上下文；当前教学路径尚未执行独立题目模型调用。"));
         List<TeachingReactStep> reactTrace = List.of();
         timer.mark("react_trace");
         saveRunningProgress(
@@ -496,26 +502,47 @@ class TeachingWorkflowExecutionSupport {
                 () -> timeEvidence(() -> alignEvidenceToTopic(request, retrieveTeacherResourceEvidence(request, context))),
                 evidenceExecutor);
         try {
-            TimedEvidence textbook = awaitEvidence("textbook", textbookFuture);
+            TimedEvidence textbook;
+            try {
+                textbook = awaitEvidence("textbook", textbookFuture);
+            } catch (RuntimeException failure) {
+                traceRecorder.failed(taskId, context, "PUBLIC_TEXTBOOK_RETRIEVAL", "TextbookRetriever", List.of(), 0L, failure);
+                traceRecorder.failed(taskId, context, "WORKFLOW_ORCHESTRATOR", "TeachingOrchestrator", List.of(), 0L, failure);
+                throw failure;
+            }
             traceRecorder.completed(taskId, context, "PUBLIC_TEXTBOOK_RETRIEVAL", "TextbookRetriever",
                     textbook.evidence(), textbook.elapsedMs(), "教材检索完成。");
 
-            TimedEvidence teacherResource = awaitEvidence("teacher_resource", teacherResourceFuture);
+            TimedEvidence teacherResource;
+            try {
+                teacherResource = awaitEvidence("teacher_resource", teacherResourceFuture);
+            } catch (RuntimeException failure) {
+                traceRecorder.failed(taskId, context, "TEACHER_RESOURCE_RETRIEVAL", "TeacherResourceRetriever", List.of(), 0L, failure);
+                traceRecorder.failed(taskId, context, "WORKFLOW_ORCHESTRATOR", "TeachingOrchestrator", List.of(), 0L, failure);
+                throw failure;
+            }
             traceRecorder.completed(taskId, context, "TEACHER_RESOURCE_RETRIEVAL", "TeacherResourceRetriever",
                     teacherResource.evidence(), teacherResource.elapsedMs(), "教师资料检索完成。");
 
             // The second retrieval is deliberately after the teacher-resource boundary.  This preserves the user's
             // intended chain: real directory/teacher material -> concrete knowledge point -> atomic bank question.
-            TimedEvidence questionBank = timeEvidence(() -> {
-                List<TeachingEvidence> retrievedQuestions = retrieveQuestionBankEvidence(
-                        request, context, curriculumPointQueries(request, teacherResource.evidence()));
-                // retrieveQuestionBankEvidence has already selected permission-checked atomic rows for a qualified
-                // multi-topic compilation. Applying the single-topic aligner a second time collapses that pack back
-                // to the first matching subject and recreates the one-question failure that this branch prevents.
-                return requiresQualifiedQuestionCompilation(request)
-                        ? retrievedQuestions
-                        : alignEvidenceToTopic(request, retrievedQuestions);
-            });
+            TimedEvidence questionBank;
+            try {
+                questionBank = timeEvidence(() -> {
+                    List<TeachingEvidence> retrievedQuestions = retrieveQuestionBankEvidence(
+                            request, context, curriculumPointQueries(request, teacherResource.evidence()));
+                    // retrieveQuestionBankEvidence has already selected permission-checked atomic rows for a qualified
+                    // multi-topic compilation. Applying the single-topic aligner a second time collapses that pack back
+                    // to the first matching subject and recreates the one-question failure that this branch prevents.
+                    return requiresQualifiedQuestionCompilation(request)
+                            ? retrievedQuestions
+                            : alignEvidenceToTopic(request, retrievedQuestions);
+                });
+            } catch (RuntimeException failure) {
+                traceRecorder.failed(taskId, context, "QUESTION_BANK_RETRIEVAL", "QuestionBankRetriever", List.of(), 0L, failure);
+                traceRecorder.failed(taskId, context, "WORKFLOW_ORCHESTRATOR", "TeachingOrchestrator", List.of(), 0L, failure);
+                throw failure;
+            }
             traceRecorder.completed(taskId, context, "QUESTION_BANK_RETRIEVAL", "QuestionBankRetriever",
                     questionBank.evidence(), questionBank.elapsedMs(), "题库检索完成。");
             return new EvidencePack(

@@ -27,6 +27,12 @@ final class TeachingWorkflowTraceRecorder {
         this.traceStore = traceStore;
     }
 
+    /** Records a node that has started but has not returned a result yet. */
+    void running(String taskId, TeachingRequestContext context, String nodeCode, String agentCode,
+            List<TeachingEvidence> evidence, long elapsedMs, String message) {
+        save(taskId, context, nodeCode, agentCode, "RUNNING", evidence, elapsedMs, message);
+    }
+
     /** Records a completed node after its implementation has actually returned. */
     void completed(String taskId, TeachingRequestContext context, String nodeCode, String agentCode,
             List<TeachingEvidence> evidence, long elapsedMs, String message) {
