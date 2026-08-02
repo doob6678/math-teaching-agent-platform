@@ -1,5 +1,7 @@
 package com.doob.mathagent.teaching;
 
+import java.util.List;
+
 /**
  * 教学任务使用的证据。
  *
@@ -11,6 +13,10 @@ package com.doob.mathagent.teaching;
  * @param imagePath 已授权的本地教材页图路径；空值表示当前证据没有可嵌入图片。
  * @param imageDescription 已核验的图像可见信息；只用于模型理解，不包含本地路径或访问令牌。
  * @param sourceDocumentId opaque teacher-resource document id; used only by the authenticated inspection endpoint.
+ * @param sourceType normalized source library, such as feishu, public_textbook, or question_bank.
+ * @param sourceUrl permission-checked original source URL when the source provides one.
+ * @param sourcePath human-readable path inside the source document or textbook corpus.
+ * @param assetIds permission-checked opaque image asset ids associated with this evidence block.
  */
 public record TeachingEvidence(
         String sourceScope,
@@ -20,7 +26,39 @@ public record TeachingEvidence(
         String snippet,
         String imagePath,
         String imageDescription,
-        String sourceDocumentId) {
+        String sourceDocumentId,
+        String sourceType,
+        String sourceUrl,
+        String sourcePath,
+        List<String> assetIds) {
+
+    public TeachingEvidence {
+        sourceScope = sourceScope == null ? "" : sourceScope;
+        sourceTitle = sourceTitle == null ? "" : sourceTitle;
+        chunkId = chunkId == null ? "" : chunkId;
+        snippet = snippet == null ? "" : snippet;
+        imagePath = imagePath == null ? "" : imagePath;
+        imageDescription = imageDescription == null ? "" : imageDescription;
+        sourceDocumentId = sourceDocumentId == null ? "" : sourceDocumentId;
+        sourceType = sourceType == null ? "" : sourceType;
+        sourceUrl = sourceUrl == null ? "" : sourceUrl;
+        sourcePath = sourcePath == null ? "" : sourcePath;
+        assetIds = assetIds == null ? List.of() : List.copyOf(assetIds);
+    }
+
+    /** Keeps the original eight-field retrieval contract source-compatible. */
+    public TeachingEvidence(
+            String sourceScope,
+            String sourceTitle,
+            String chunkId,
+            int pageNo,
+            String snippet,
+            String imagePath,
+            String imageDescription,
+            String sourceDocumentId) {
+        this(sourceScope, sourceTitle, chunkId, pageNo, snippet, imagePath, imageDescription, sourceDocumentId,
+                "", "", "", List.of());
+    }
 
     /** Preserves current renderers that do not have a teacher-resource inspection reference. */
     public TeachingEvidence(
@@ -31,7 +69,7 @@ public record TeachingEvidence(
             String snippet,
             String imagePath,
             String imageDescription) {
-        this(sourceScope, sourceTitle, chunkId, pageNo, snippet, imagePath, imageDescription, "");
+        this(sourceScope, sourceTitle, chunkId, pageNo, snippet, imagePath, imageDescription, "", "", "", "", List.of());
     }
 
     /** Preserves existing callers that have an image but no verified visual description yet. */
@@ -42,11 +80,11 @@ public record TeachingEvidence(
             int pageNo,
             String snippet,
             String imagePath) {
-        this(sourceScope, sourceTitle, chunkId, pageNo, snippet, imagePath, "", "");
+        this(sourceScope, sourceTitle, chunkId, pageNo, snippet, imagePath, "", "", "", "", "", List.of());
     }
 
     /** Preserves existing retrieval callers that have text-only evidence. */
     public TeachingEvidence(String sourceScope, String sourceTitle, String chunkId, int pageNo, String snippet) {
-        this(sourceScope, sourceTitle, chunkId, pageNo, snippet, "", "", "");
+        this(sourceScope, sourceTitle, chunkId, pageNo, snippet, "", "", "", "", "", "", List.of());
     }
 }

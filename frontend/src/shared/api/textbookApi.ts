@@ -422,6 +422,14 @@ export interface TeachingEvidence {
   imagePath?: string;
   /** Opaque teacher-resource document id used to request the full authorized block; never a local path or Feishu token. */
   sourceDocumentId?: string;
+  /** Normalized backend source type, for example feishu or public_textbook. */
+  sourceType?: string;
+  /** Original source URL when the backend has verified and stored one. */
+  sourceUrl?: string;
+  /** Human-readable path inside the source document or textbook corpus. */
+  sourcePath?: string;
+  /** Opaque image asset ids attached to this evidence block. */
+  assetIds?: string[];
 }
 
 /** One full parsed teacher-resource block returned only after the backend checks the current session owner. */

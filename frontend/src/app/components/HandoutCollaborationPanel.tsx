@@ -480,6 +480,8 @@ function TaskConversationCards({
                           {item.chunkId ? ` · 定位 ${compactText(item.chunkId, 36)}` : ""}
                         </span>
                         <p>{evidenceDisplaySummary(item)}</p>
+                        {item.sourcePath ? <small>位置：{item.sourcePath}</small> : null}
+                        {item.sourceUrl ? <a href={item.sourceUrl} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>打开原文</a> : null}
                         <em>{item.sourceDocumentId ? "点击查看已授权原始命中内容" : "点击查看题库命中内容与来源"}</em>
                       </button>
                     ))}
@@ -496,6 +498,8 @@ function TaskConversationCards({
                         <span>{inspectedBlock.chapter || "未标章节"}{inspectedBlock.pageNo ? ` · 第 ${inspectedBlock.pageNo} 页` : ""}</span>
                         <p>{inspectedBlock.rawText}</p>
                       </> : null}
+                      {!inspectingEvidence && !inspectionError && inspectedEvidence.sourcePath ? <small>来源位置：{inspectedEvidence.sourcePath}</small> : null}
+                      {!inspectingEvidence && !inspectionError && inspectedEvidence.sourceUrl ? <p><a href={inspectedEvidence.sourceUrl} target="_blank" rel="noreferrer">打开已登记原文链接</a></p> : null}
                       {!inspectingEvidence && !inspectionError && !inspectedBlock && !inspectedEvidence.sourceDocumentId ? <>
                         <span>{scopeLabel(inspectedEvidence.sourceScope)} · {inspectedEvidence.pageNo ? `第 ${inspectedEvidence.pageNo} 页` : "原子题"}</span>
                         <p>{inspectedEvidence.snippet || "该题库条目未返回可展示正文。"}</p>

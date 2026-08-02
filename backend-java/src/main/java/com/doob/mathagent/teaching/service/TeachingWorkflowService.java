@@ -71,6 +71,13 @@ import org.springframework.stereotype.Service;
 @Service
 public class TeachingWorkflowService extends TeachingWorkflowExecutionSupport {
 
+    /** Keeps the source conversion visible on the facade for diagnostics and older integration callers. */
+    protected TeachingEvidence toTeacherResourceEvidence(
+            TeacherResourceBlockSearchResponse.Hit hit,
+            TeachingRequestContext context) {
+        return super.toTeacherResourceEvidence(hit, context);
+    }
+
     static final int RESUME_EVIDENCE_LIMIT = 3;
     /** Minimum blank writing area reserved after every standalone student question. */
     static final int STUDENT_QUESTION_WORKSPACE_EM = 18;

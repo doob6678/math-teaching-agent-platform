@@ -368,14 +368,9 @@ final class TeachingWorkflowDraftRenderer {
                 .orElseGet(() -> request.learningGoal() == null || request.learningGoal().isBlank()
                         ? "本节知识"
                         : request.learningGoal().strip());
-        // A user-supplied problem is real task evidence even when the authorized bank has no matching atomic row.
-        // Keeping it as the worked example is safer than borrowing an unrelated question or asking the model to
-        // invent one; the AI may explain it, but it cannot change its statement or source scope.
-        String userQuestion = safeQuestionText(request);
-        TeachingEvidence workedExample = userQuestion.isBlank()
-                ? null
-                : new TeachingEvidence("USER_PROVIDED", "用户题目 / " + title, "user-question", 0, userQuestion);
-        return List.of(new TeachingKnowledgePointPack(title, List.copyOf(supporting), workedExample, null));
+        // The request text is context only. It is never promoted to a retrieval-evidence row or a source citation.
+        // Without an atomic bank row the pack contains only the verified supporting source and no fabricated example.
+        return List.of(new TeachingKnowledgePointPack(title, List.copyOf(supporting), null, null));
     }
 
 
@@ -572,17 +567,6 @@ final class TeachingWorkflowDraftRenderer {
         }
         TeachingEvidence workedExample = pack.workedExample();
         String workedText = workedExample == null ? "" : questionTextOnly(workedExample.snippet());
-        // Retrieval may return a placeholder OCR row. Prefer the user's exact problem as the teacher example so
-        // a failed/empty bank hit never produces a heading with no actual question beneath it.
-        if ((workedExample == null || isUnusableQuestionText(workedText))
-                && userQuestion != null && !userQuestion.isBlank()) {
-            workedExample = new TeachingEvidence(
-                    "USER_PROVIDED",
-                    "用户题目 / " + pack.title(),
-                    "user-question",
-                    0,
-                    userQuestion);
-        }
         // The asset is deliberately not printed in the method block.  A figure is an item of the question statement
         // and must travel with the title and prompt.  The selector also rejects a mixed OCR window so an original
         // map cannot be silently attached to a neighbouring colour-count variation.
@@ -609,19 +593,6 @@ final class TeachingWorkflowDraftRenderer {
         int nextQuestionNumber = appendTeacherQuestion(builder, questionNumber, "例题", workedExample, workedExampleImagePath,
                 questionScopedDraftAnswer, questionScopedDraftSteps,
                 "先指出题干对应的定义、公式或分类依据，再写出关键等式。\n");
-        if (!zhaoMaster && nextQuestionNumber == questionNumber && userQuestion != null && !userQuestion.isBlank()) {
-            // Keep a concrete user problem visible even if a legacy evidence object uses an unexpected placeholder
-            // phrase that the normal guard did not recognize.
-            nextQuestionNumber = appendTeacherQuestion(
-                    builder,
-                    questionNumber,
-                    "例题",
-                    new TeachingEvidence("USER_PROVIDED", "用户题目 / " + pack.title(), "user-question", 0, userQuestion),
-                    workedExampleImagePath,
-                    questionScopedDraftAnswer,
-                    questionScopedDraftSteps,
-                    "先指出题干对应的定义、公式或分类依据，再写出关键等式。\n");
-        }
         int variationIndex = 1;
         for (TeachingEvidence variation : pack.variations()) {
             String variationHeading = variationIndex == 1 ? "变式练习" : "拓展变式";

@@ -48,7 +48,12 @@ public record TeachingTaskProgressResponse(
                         item.pageNo(),
                         compactEvidenceSnippet(item.snippet()),
                         "",
-                        item.imageDescription()))
+                        item.imageDescription(),
+                        item.sourceDocumentId(),
+                        item.sourceType(),
+                        item.sourceUrl(),
+                        item.sourcePath(),
+                        item.assetIds()))
                 .toList();
         return new TeachingTaskProgressResponse(
                 task.taskId(),

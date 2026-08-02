@@ -283,7 +283,9 @@ final class TeachingWorkflowProgressModel {
                 ? "命中学生记忆 %s，作用域 %s，相似度 %.4f，跳过重复教材召回。"
                         .formatted(memoryResponse.memoryId(), memoryResponse.reuseScope(), memoryResponse.similarity())
                 : "未命中可复用学生记忆，原因：" + memoryResponse.reason() + "。";
-        boolean textbookRetrievalRan = !memoryResponse.reused();
+        // Memory reuse supplies context only; evidence retrieval still runs so every published handout has current,
+        // expandable sources. A reused answer must never make the DAG claim that retrieval was skipped.
+        boolean textbookRetrievalRan = true;
         long publicTextbookCount = evidence.stream()
                 .filter(item -> "PUBLIC_TEXTBOOK".equals(item.sourceScope()))
                 .count();

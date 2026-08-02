@@ -549,7 +549,16 @@ final class TeachingWorkflowEvidencePolicy {
                 unique.put(key, candidate);
             }
         }
-        return List.copyOf(unique.values());
+        return unique.values().stream()
+                .filter(TeachingWorkflowEvidencePolicy::hasReadableSourceIdentity)
+                .toList();
+    }
+
+    /** A source row without a title, chunk, or document identity cannot be expanded by a human and is not evidence. */
+    static boolean hasReadableSourceIdentity(TeachingEvidence evidence) {
+        return evidence != null
+                && !normalizedInlineText(evidence.sourceTitle()).isBlank()
+                && !normalizedInlineText(evidence.chunkId()).isBlank();
     }
 
 

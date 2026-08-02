@@ -196,7 +196,7 @@ public class TeacherResourceBlockSearchService {
                     .findFirst();
             if (exactBlock.isPresent()) {
                 return Optional.of(new CanonicalReference(
-                        directlyVisible.documentId(), exactBlock.get().blockId(), directlyVisible.title()));
+                        directlyVisible.documentId(), exactBlock.get().blockId(), directlyVisible.title(), directlyVisible.originalUrl()));
             }
         }
 
@@ -245,7 +245,7 @@ public class TeacherResourceBlockSearchService {
                         .thenComparing(candidate -> candidate.block().blockId()))
                 .findFirst()
                 .map(candidate -> new CanonicalReference(
-                        candidate.document().documentId(), candidate.block().blockId(), candidate.document().title()));
+                        candidate.document().documentId(), candidate.block().blockId(), candidate.document().title(), candidate.document().originalUrl()));
     }
     // Delegates pure search normalization/ranking logic to TeacherResourceBlockSearchPolicy.
     static int sourceAffinity(String mirrorSourceIdentity, String mirrorSourcePath, Set<String> mirrorTokens, TeacherResourceDocumentResponse candidateDocument, List<TeacherDocumentBlockResponse> candidateBlocks) { return TeacherResourceBlockSearchPolicy.sourceAffinity(mirrorSourceIdentity, mirrorSourcePath, mirrorTokens, candidateDocument, candidateBlocks); }
@@ -1902,7 +1902,10 @@ public class TeacherResourceBlockSearchService {
     }
 
     /** Opaque reference that the authenticated teacher-resource detail endpoint can safely expand. */
-    public record CanonicalReference(String documentId, String blockId, String documentTitle) {
+    public record CanonicalReference(String documentId, String blockId, String documentTitle, String originalUrl) {
+        public CanonicalReference(String documentId, String blockId, String documentTitle) {
+            this(documentId, blockId, documentTitle, "");
+        }
     }
 
     /** Internal ranked candidate; source and block scores remain separate to keep identity evidence auditable. */
@@ -1913,4 +1916,3 @@ public class TeacherResourceBlockSearchService {
             int blockScore) {
     }
 }
-

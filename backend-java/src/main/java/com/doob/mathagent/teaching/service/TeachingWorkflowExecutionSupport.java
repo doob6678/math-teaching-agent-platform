@@ -189,12 +189,6 @@ class TeachingWorkflowExecutionSupport {
                     .filter(item -> !isBenchmarkEvidence(item))
                     .toList();
             timer.mark("evidence_resume");
-        } else if (memoryResponse.reused()) {
-            textbookEvidence = List.of();
-            questionEvidence = List.of();
-            teacherResourceEvidence = List.of();
-            evidence = List.of();
-            timer.mark("reuse_short_circuit");
         } else {
             EvidencePack evidencePack = retrieveEvidencePack(request, context);
             textbookEvidence = evidencePack.textbookEvidence();
@@ -204,12 +198,20 @@ class TeachingWorkflowExecutionSupport {
             timer.record("question_bank_retrieval", evidencePack.questionElapsedMs());
             timer.record("teacher_resource_retrieval", evidencePack.teacherResourceElapsedMs());
             timer.resetCheckpoint();
-            evidence = evidencePack.mergedEvidence();
+            evidence = verifiedEvidence(evidencePack.mergedEvidence());
+            textbookEvidence = verifiedEvidence(textbookEvidence);
+            questionEvidence = verifiedEvidence(questionEvidence);
+            teacherResourceEvidence = verifiedEvidence(teacherResourceEvidence);
             if (evidence.isEmpty()) {
-                textbookEvidence = List.of();
-                questionEvidence = List.of();
-                teacherResourceEvidence = List.of();
+                throw new IllegalStateException("未检索到可核验的教材、题库或教师资料证据；用户输入不能作为检索证据，已停止生成讲义。");
             }
+        }
+        evidence = verifiedEvidence(evidence);
+        textbookEvidence = verifiedEvidence(textbookEvidence);
+        questionEvidence = verifiedEvidence(questionEvidence);
+        teacherResourceEvidence = verifiedEvidence(teacherResourceEvidence);
+        if (evidence.isEmpty()) {
+            throw new IllegalStateException("讲义任务缺少可核验来源证据，禁止发布零证据讲义。");
         }
         saveRunningProgress(
                 request, context, taskId, ownerKey, idempotencyKey, template, memoryResponse,
@@ -394,7 +396,13 @@ class TeachingWorkflowExecutionSupport {
                 hit.chunkId(),
                 hit.pageNo(),
                 hit.textSnippet(),
-                resolvedTextbookImagePath(hit));
+                resolvedTextbookImagePath(hit),
+                "",
+                "",
+                "public_textbook",
+                "",
+                "textbook://" + hit.docId() + "/page/" + hit.pageNo() + "#chunk=" + hit.chunkId(),
+                hit.imageRelPaths() == null ? List.of() : hit.imageRelPaths());
     }
 
 
@@ -728,7 +736,11 @@ class TeachingWorkflowExecutionSupport {
                 snippet,
                 image == null ? "" : image.imagePath().toString(),
                 image == null ? "" : image.imageDescription(),
-                question.sourceResourceDocumentId() == null ? "" : question.sourceResourceDocumentId());
+                question.sourceResourceDocumentId() == null ? "" : question.sourceResourceDocumentId(),
+                "question_bank",
+                "",
+                question.sourceBlockId() == null ? "" : question.sourceBlockId(),
+                List.of());
     }
 
 
@@ -778,7 +790,26 @@ class TeachingWorkflowExecutionSupport {
                         ? hit.documentId()
                         : inspectionReference
                                 .map(TeacherResourceBlockSearchService.CanonicalReference::documentId)
-                                .orElse(""));
+                                .orElse(""),
+                hit.sourceType(),
+                inspectionReference.map(TeacherResourceBlockSearchService.CanonicalReference::originalUrl).orElse(""),
+                hit.sourcePath(),
+                hit.imageAssetIds() == null ? List.of() : hit.imageAssetIds());
+    }
+
+
+    /** Keeps the task contract strictly retrieval-grounded; request text and memory are never evidence rows. */
+    protected List<TeachingEvidence> verifiedEvidence(List<TeachingEvidence> candidates) {
+        if (candidates == null || candidates.isEmpty()) {
+            return List.of();
+        }
+        return candidates.stream()
+                .filter(item -> item != null)
+                .filter(item -> Set.of("PUBLIC_TEXTBOOK", "QUESTION_BANK", "TEACHER_RESOURCE")
+                        .contains(item.sourceScope()))
+                .filter(item -> item.snippet() != null && !item.snippet().isBlank())
+                .filter(item -> item.chunkId() != null && !item.chunkId().isBlank())
+                .toList();
     }
 
 
