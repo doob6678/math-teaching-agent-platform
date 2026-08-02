@@ -106,23 +106,23 @@ final class TeachingWorkflowProgressModel {
         boolean contentGenerating = phase == ProgressPhase.CONTENT_GENERATING;
         boolean draftReady = aiDraft != null;
         boolean reused = memoryResponse.reused();
-        long publicCount = evidence.stream().filter(item -> "PUBLIC_TEXTBOOK".equals(item.sourceScope())).count();
+        long publicCount = textbookEvidence == null ? 0L : textbookEvidence.stream()
+                .filter(item -> "PUBLIC_TEXTBOOK".equals(item.sourceScope())).count();
         List<TeachingWorkflowNode> nodes = new ArrayList<>(List.of(
                 node("LEARNING_GOAL", "学习目标识别", "completed", "已确认学习目标：" + request.learningGoal()),
                 node("REUSE_RESOURCE", "历史资源复用", "completed", reused
                         ? "命中可复用学习记录，后续不重复召回同类资料。"
                         : "未命中可复用学习记录，继续收集本轮资料。"),
                 node("PUBLIC_TEXTBOOK_RETRIEVAL", "公开教材检索",
-                        reused ? "skipped" : evidenceReady ? "completed" : "running",
-                        reused ? "本轮复用学习记录，未重复检索公开教材。"
-                                : evidenceReady ? "命中公开教材证据 " + publicCount + " 条。" : "正在并行检索公开教材。"),
+                        evidenceReady ? "completed" : "running",
+                        evidenceReady ? "命中公开教材证据 " + publicCount + " 条。" : "正在并行检索公开教材。"),
                 node("QUESTION_BANK_RETRIEVAL", "题库检索",
-                        reused || !questionBankAllowed ? "skipped" : evidenceReady ? "completed" : "running",
-                        reused || !questionBankAllowed ? "当前身份或复用路径未触发题库检索。"
+                        !questionBankAllowed ? "skipped" : evidenceReady ? "completed" : "running",
+                        !questionBankAllowed ? "当前身份没有题库读取权限。"
                                 : evidenceReady ? "命中题库题目 " + questionEvidence.size() + " 条。" : "正在并行检索题库。"),
                 node("TEACHER_RESOURCE_RETRIEVAL", "教师资料检索",
-                        reused || !teacherResourceAllowed ? "skipped" : evidenceReady ? "completed" : "running",
-                        reused || !teacherResourceAllowed ? "当前身份或复用路径未触发教师资料检索。"
+                        !teacherResourceAllowed ? "skipped" : evidenceReady ? "completed" : "running",
+                        !teacherResourceAllowed ? "当前身份没有教师资料读取权限。"
                                 : evidenceReady ? "命中教师资料证据 " + teacherResourceEvidence.size() + " 条。" : "正在并行检索已同步教师资料。"),
                 node("REACT_SOLVE", "讲解大纲", outlineReady ? "completed" : evidenceReady ? "running" : "pending",
                         outlineReady ? "已按汇总证据确定讲解大纲。" : evidenceReady ? "正在把来源汇总为讲解大纲。" : "等待资料汇总。"),

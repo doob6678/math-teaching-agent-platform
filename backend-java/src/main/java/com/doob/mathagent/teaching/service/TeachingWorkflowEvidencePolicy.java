@@ -575,6 +575,11 @@ final class TeachingWorkflowEvidencePolicy {
              * diagram, later variations).  Deduplicate only a true mirror of the same block; collapsing by document
              * token alone discards the original map block and lets a neighbouring variation win by text length.
              */
+            String content = normalizedInlineText(evidence.snippet()).replaceAll("\\s+", "");
+            if (!content.isBlank()) {
+                return scope + ":feishu:" + token.group(1).toLowerCase(Locale.ROOT)
+                        + ":content:" + content.substring(0, Math.min(MAX_EVIDENCE_FINGERPRINT_CHARS, content.length()));
+            }
             return scope + ":feishu:" + token.group(1).toLowerCase(Locale.ROOT)
                     + ":block:" + normalizedInlineText(evidence.chunkId());
         }

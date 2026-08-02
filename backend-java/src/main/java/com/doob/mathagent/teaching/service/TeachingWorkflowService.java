@@ -237,6 +237,7 @@ public class TeachingWorkflowService extends TeachingWorkflowExecutionSupport {
         this.memoryReuseService = memoryReuseService;
         this.aiDraftService = aiDraftService;
         this.agentTraceStore = agentTraceStore;
+        this.traceRecorder = new TeachingWorkflowTraceRecorder(agentTraceStore);
         this.handoutTemplateService = handoutTemplateService;
         this.questionBankService = questionBankService.orElse(null);
         this.teacherResourceBlockSearchService = teacherResourceBlockSearchService.orElse(null);

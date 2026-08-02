@@ -97,6 +97,8 @@ class TeachingWorkflowExecutionSupport {
     protected TeacherResourceVisualEvidenceService teacherResourceVisualEvidenceService;
     protected TaskExecutor taskExecutor;
     protected boolean returnCompletedWhenExecutorIsSynchronous;
+    /** Persists auditable parent/child node records independently from the UI task snapshot. */
+    protected TeachingWorkflowTraceRecorder traceRecorder;
 
 
     /** Renders three independent publishable versions from an already approved, immutable common draft. */
@@ -162,6 +164,8 @@ class TeachingWorkflowExecutionSupport {
             String idempotencyKey,
             TeachingTaskResponse checkpoint) {
         StageTimer timer = new StageTimer(checkpoint == null ? List.of() : checkpoint.stageTimings());
+        traceRecorder.completed(taskId, context, "WORKFLOW_ORCHESTRATOR", "TeachingOrchestrator", List.of(), 0L,
+                "主智能体已接收任务并开始执行固定教学 DAG。");
         TeachingHandoutTemplateProfile template = handoutTemplateService.resolveFor(request);
         StudentMemoryResponse memoryResponse = checkpoint != null && checkpoint.memoryReuse() != null
                 ? fromMemoryReuse(checkpoint.memoryReuse())
@@ -190,7 +194,7 @@ class TeachingWorkflowExecutionSupport {
                     .toList();
             timer.mark("evidence_resume");
         } else {
-            EvidencePack evidencePack = retrieveEvidencePack(request, context);
+            EvidencePack evidencePack = retrieveEvidencePack(request, context, taskId);
             textbookEvidence = evidencePack.textbookEvidence();
             questionEvidence = evidencePack.questionEvidence();
             teacherResourceEvidence = evidencePack.teacherResourceEvidence();
@@ -213,6 +217,9 @@ class TeachingWorkflowExecutionSupport {
         if (evidence.isEmpty()) {
             throw new IllegalStateException("讲义任务缺少可核验来源证据，禁止发布零证据讲义。");
         }
+        traceRecorder.completed(taskId, context, "EVIDENCE_COLLECTION", "EvidenceCollector", evidence,
+                timingSum(timer, "textbook_retrieval", "question_bank_retrieval", "teacher_resource_retrieval"),
+                "已汇总教材、题库和教师资料的可核验来源。");
         saveRunningProgress(
                 request, context, taskId, ownerKey, idempotencyKey, template, memoryResponse,
                 evidence, textbookEvidence, questionEvidence, teacherResourceEvidence, null, timer,
@@ -228,6 +235,17 @@ class TeachingWorkflowExecutionSupport {
         // progress UI which question was slow, and would make a failed branch indistinguishable from a healthy one.
         questionAgentBatch.branchTimings().forEach(branch ->
                 timer.record("question_agent_" + branch.agentId(), branch.elapsedMs()));
+        final String traceTaskId = taskId;
+        final TeachingRequestContext traceContext = context;
+        final List<TeachingEvidence> traceQuestionEvidence = List.copyOf(questionEvidence);
+        questionAgentBatch.branchTimings().forEach(branch -> traceRecorder.completed(
+                traceTaskId,
+                traceContext,
+                "QUESTION_AGENT_" + branch.agentId(),
+                "QuestionAgent-" + branch.agentId(),
+                traceQuestionEvidence.stream().filter(item -> questionAgentId(item).equals(branch.agentId())).toList(),
+                branch.elapsedMs(),
+                "已完成本题独立证据对齐与上下文隔离。"));
         List<TeachingReactStep> reactTrace = List.of();
         timer.mark("react_trace");
         saveRunningProgress(
@@ -240,10 +258,19 @@ class TeachingWorkflowExecutionSupport {
         // Reuse only a structurally valid draft.  A provider can return a real response that fails the JSON/quality
         // contract; persisting that diagnostic is essential for the recovery UI, but reusing it on resume would turn
         // every retry into the same immediate failure and make a transient relay problem impossible to recover from.
-        TeachingTaskResponse.AiDraft aiDraft = checkpoint != null && checkpoint.aiDraft() != null
-                && checkpoint.aiDraft().structured()
-                ? checkpoint.aiDraft()
-                : aiDraftService.draft(request, evidence, memoryResponse, template);
+        TeachingTaskResponse.AiDraft aiDraft;
+        long draftStarted = System.nanoTime();
+        try {
+            aiDraft = checkpoint != null && checkpoint.aiDraft() != null && checkpoint.aiDraft().structured()
+                    ? checkpoint.aiDraft()
+                    : aiDraftService.draft(request, evidence, memoryResponse, template);
+            traceRecorder.completed(taskId, context, "AI_DRAFT", "CoursewareAgent", evidence,
+                    elapsedMs(draftStarted), "已收到结构化讲义草稿。");
+        } catch (Throwable failure) {
+            traceRecorder.failed(taskId, context, "AI_DRAFT", "CoursewareAgent", evidence,
+                    elapsedMs(draftStarted), failure);
+            throw failure;
+        }
         // Persist the real provider/result metadata before applying the strict publication gate.  Failed tasks then
         // expose the actual retry/parse state and elapsed work in the workflow record without ever publishing an
         // unstructured response as a handout.
@@ -287,11 +314,23 @@ class TeachingWorkflowExecutionSupport {
         List<TeachingKnowledgePointPack> knowledgePointPacks = retrievedKnowledgePointPacks.isEmpty()
                 ? fallbackKnowledgePointPacks(request, evidence)
                 : retrievedKnowledgePointPacks;
+        traceRecorder.completed(taskId, context, "REACT_SOLVE", "OutlinePlanner", evidence,
+                timingFor(timer, "react_trace"), "已按来源证据完成知识点与题目编排。");
         // A pending human review stores only the shared, traceable draft. Rendering exportable variants before a
         // decision would both waste work for rejected drafts and create a path to publish unreviewed material.
-        TeachingHandoutVersions handoutVersions = reviewPolicy == TeachingReviewPolicy.AUTO_PUBLISH
-                ? renderHandoutVersions(request, evidence, knowledgePointPacks, memoryResponse, template, aiDraft, renderSections)
-                : new TeachingHandoutVersions("", "", "");
+        TeachingHandoutVersions handoutVersions;
+        long renderStarted = System.nanoTime();
+        try {
+            handoutVersions = reviewPolicy == TeachingReviewPolicy.AUTO_PUBLISH
+                    ? renderHandoutVersions(request, evidence, knowledgePointPacks, memoryResponse, template, aiDraft, renderSections)
+                    : new TeachingHandoutVersions("", "", "");
+            traceRecorder.completed(taskId, context, "LATEX_HANDOUT", "HandoutRenderer", evidence,
+                    elapsedMs(renderStarted), "已完成教师版、学生版和讲解版渲染。");
+        } catch (Throwable failure) {
+            traceRecorder.failed(taskId, context, "LATEX_HANDOUT", "HandoutRenderer", evidence,
+                    elapsedMs(renderStarted), failure);
+            throw failure;
+        }
         timer.mark("handout_generation");
         List<TeachingWorkflowEvent> workflowEvents = buildWorkflowEvents(
                 nodes,
@@ -335,6 +374,8 @@ class TeachingWorkflowExecutionSupport {
         if (ownerKey != null && idempotencyKey != null) {
             taskStore.save(ownerKey, idempotencyKey, response);
         }
+        traceRecorder.completed(taskId, context, "WORKFLOW_ORCHESTRATOR", "TeachingOrchestrator", evidence,
+                timingSum(timer), "教学 DAG 已完成并生成可审计讲义结果。");
         saveAiDraftTrace(response, context);
         return response;
     }
@@ -436,6 +477,12 @@ class TeachingWorkflowExecutionSupport {
      * 避免仅凭宽泛学习目标选入无关题目。
      */
     protected EvidencePack retrieveEvidencePack(TeachingTaskRequest request, TeachingRequestContext context) {
+        return retrieveEvidencePack(request, context, null);
+    }
+
+    /** Runs the retrieval barrier and records each real source branch under the parent task id. */
+    protected EvidencePack retrieveEvidencePack(
+            TeachingTaskRequest request, TeachingRequestContext context, String taskId) {
         /*
          * Do not reuse the outer teaching task executor here: the outer worker may already be occupied by this task.
          * A tiny per-task pool keeps textbook/question-bank/teacher-resource retrieval bounded and avoids starvation.
@@ -450,8 +497,12 @@ class TeachingWorkflowExecutionSupport {
                 evidenceExecutor);
         try {
             TimedEvidence textbook = awaitEvidence("textbook", textbookFuture);
+            traceRecorder.completed(taskId, context, "PUBLIC_TEXTBOOK_RETRIEVAL", "TextbookRetriever",
+                    textbook.evidence(), textbook.elapsedMs(), "教材检索完成。");
 
             TimedEvidence teacherResource = awaitEvidence("teacher_resource", teacherResourceFuture);
+            traceRecorder.completed(taskId, context, "TEACHER_RESOURCE_RETRIEVAL", "TeacherResourceRetriever",
+                    teacherResource.evidence(), teacherResource.elapsedMs(), "教师资料检索完成。");
 
             // The second retrieval is deliberately after the teacher-resource boundary.  This preserves the user's
             // intended chain: real directory/teacher material -> concrete knowledge point -> atomic bank question.
@@ -465,6 +516,8 @@ class TeachingWorkflowExecutionSupport {
                         ? retrievedQuestions
                         : alignEvidenceToTopic(request, retrievedQuestions);
             });
+            traceRecorder.completed(taskId, context, "QUESTION_BANK_RETRIEVAL", "QuestionBankRetriever",
+                    questionBank.evidence(), questionBank.elapsedMs(), "题库检索完成。");
             return new EvidencePack(
                     textbook.evidence(),
                     questionBank.evidence(),
@@ -783,7 +836,9 @@ class TeachingWorkflowExecutionSupport {
                  * next 5/6-colour variation.  Printable question evidence must retain the exact matched atomic
                  * block first, otherwise an authorized map loses its own colour condition after compaction.
                  */
-                compactTeachingEvidence(hit.snippet(), hit.evidenceText()),
+                // The expanded permission-filtered window is the primary source.  Passing the search snippet first
+                // silently discarded verified answer clauses such as “24+48=72” whenever the snippet was short.
+                compactTeachingEvidence(hit.evidenceText(), hit.snippet()),
                 image == null ? "" : image.imagePath().toString(),
                 image == null ? "" : image.imageDescription(),
                 teacherResourceBlockSearchService == null
@@ -831,6 +886,29 @@ class TeachingWorkflowExecutionSupport {
         }
         return teacherResourceBlockSearchService.materializeVisibleAsset(asset.assetId(), subject)
                 .map(path -> new TeacherResourceVisualEvidenceService.MaterializedImageEvidence(path, ""));
+    }
+
+    /** Converts a monotonic start timestamp into the bounded duration stored in the trace row. */
+    private static long elapsedMs(long startedNanos) {
+        return Math.max(0L, (System.nanoTime() - startedNanos) / 1_000_000L);
+    }
+
+    /** Reads one persisted stage timing without adding another synthetic timer checkpoint. */
+    private static long timingFor(StageTimer timer, String stage) {
+        if (timer == null || stage == null) return 0L;
+        return timer.timings().stream().filter(item -> stage.equals(item.stage()))
+                .mapToLong(TeachingTaskResponse.StageTiming::elapsedMs).sum();
+    }
+
+    /** Sums all durable spans for the parent orchestrator trace. */
+    private static long timingSum(StageTimer timer, String... stages) {
+        if (stages == null || stages.length == 0) {
+            return timer == null ? 0L : timer.timings().stream()
+                    .mapToLong(TeachingTaskResponse.StageTiming::elapsedMs).sum();
+        }
+        long total = 0L;
+        for (String stage : stages) total += timingFor(timer, stage);
+        return total;
     }
 
 
