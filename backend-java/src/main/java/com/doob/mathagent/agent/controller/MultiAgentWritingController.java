@@ -2,8 +2,8 @@ package com.doob.mathagent.agent.controller;
 
 import com.doob.mathagent.agent.dto.AgentTraceQueryRequest;
 import com.doob.mathagent.agent.dto.MultiAgentWritingRequest;
-import com.doob.mathagent.agent.service.AgentRunCapabilityVerifier;
 import com.doob.mathagent.agent.service.AgentTraceQueryService;
+import com.doob.mathagent.agent.service.HandoutTaskFacade;
 import com.doob.mathagent.agent.service.MultiAgentWritingArtifact;
 import com.doob.mathagent.agent.service.MultiAgentWritingArtifactExportService;
 import com.doob.mathagent.agent.vo.AgentRunExecuteResponse;
@@ -47,6 +47,9 @@ public class MultiAgentWritingController {
     private final MultiAgentWritingArtifactExportService artifactExportService;
     private final AgentTraceQueryService traceQueryService;
     private final RequestSubjectResolver subjectResolver;
+    /** Production compatibility traffic is projected from one teaching task, never a second workflow row. */
+    @Autowired
+    private HandoutTaskFacade handoutTaskFacade;
 
     /**
      * Creates the controller.
@@ -54,15 +57,13 @@ public class MultiAgentWritingController {
      * @param writingService multi-agent writing service
      * @param traceQueryService trace query service for workflow recovery
      * @param subjectResolver backend subject resolver
-     * @param capabilityVerifier retained for binary/source compatibility; the retired token protocol is ignored
      */
     @Autowired
     public MultiAgentWritingController(
             MultiAgentWritingService writingService,
             MultiAgentWritingArtifactExportService artifactExportService,
             AgentTraceQueryService traceQueryService,
-            RequestSubjectResolver subjectResolver,
-            AgentRunCapabilityVerifier capabilityVerifier) {
+            RequestSubjectResolver subjectResolver) {
         this.writingService = writingService;
         this.artifactExportService = artifactExportService;
         this.traceQueryService = traceQueryService;
@@ -75,21 +76,19 @@ public class MultiAgentWritingController {
     public MultiAgentWritingController(
             MultiAgentWritingService writingService,
             AgentTraceQueryService traceQueryService,
-            RequestSubjectResolver subjectResolver,
-            AgentRunCapabilityVerifier capabilityVerifier) {
+            RequestSubjectResolver subjectResolver) {
         this(
                 writingService,
                 new MultiAgentWritingArtifactExportService(writingService, 30),
                 traceQueryService,
-                subjectResolver,
-                capabilityVerifier);
+                subjectResolver);
     }
 
     /**
      * Runs protected multi-agent writing through backend-owned identity.
      *
      * @param request writing request
-     * @param httpRequest HTTP request used only for trusted backend subject and capability headers
+     * @param httpRequest HTTP request used only for the backend-resolved request subject
      * @return writing workflow result
      */
     @PostMapping(PATH)
@@ -98,7 +97,9 @@ public class MultiAgentWritingController {
             HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest);
         try {
-            return writingService.run(request, subject);
+            return handoutTaskFacade == null
+                    ? writingService.run(request, subject)
+                    : handoutTaskFacade.submit(request, subject);
         } catch (IllegalArgumentException exception) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, exception.getMessage(), exception);
         } catch (IllegalStateException exception) {
@@ -110,7 +111,7 @@ public class MultiAgentWritingController {
      * Starts protected multi-agent writing in the background and returns a recoverable workflow id immediately.
      *
      * @param request writing request
-     * @param httpRequest HTTP request used only for trusted backend subject and capability headers
+     * @param httpRequest HTTP request used only for the backend-resolved request subject
      * @return initial workflow status
      */
     @PostMapping(ASYNC_PATH)
@@ -119,7 +120,9 @@ public class MultiAgentWritingController {
             HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest);
         try {
-            return writingService.startAsync(request, subject);
+            return handoutTaskFacade == null
+                    ? writingService.startAsync(request, subject)
+                    : handoutTaskFacade.startAsync(request, subject);
         } catch (IllegalArgumentException exception) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, exception.getMessage(), exception);
         } catch (IllegalStateException exception) {
@@ -140,6 +143,9 @@ public class MultiAgentWritingController {
             HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest);
         try {
+            if (handoutTaskFacade != null) {
+                return handoutTaskFacade.get(normalizedWorkflowId(workflowId), subject);
+            }
             return writingService.find(normalizedWorkflowId(workflowId), subject)
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Multi-agent writing workflow not found"));
         } catch (IllegalArgumentException exception) {
@@ -195,7 +201,7 @@ public class MultiAgentWritingController {
      *
      * @param workflowId workflow id returned by the write endpoint
      * @param request latest writing request for remaining stages
-     * @param httpRequest HTTP request used only for trusted backend subject and capability headers
+     * @param httpRequest HTTP request used only for the backend-resolved request subject
      * @return resumed workflow status
      */
     @PostMapping(RESUME_PATH)
@@ -205,7 +211,9 @@ public class MultiAgentWritingController {
             HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest);
         try {
-            return writingService.resume(workflowId, request, subject);
+            return handoutTaskFacade == null
+                    ? writingService.resume(workflowId, request, subject)
+                    : handoutTaskFacade.resume(normalizedWorkflowId(workflowId), subject);
         } catch (IllegalArgumentException exception) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, exception.getMessage(), exception);
         } catch (IllegalStateException exception) {
