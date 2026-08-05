@@ -987,6 +987,9 @@ class HandoutRuntime:
                     content = str((data.get("choices") or [])[0].get("message", {}).get("content") or "")
                     raw_usage = data.get("usage") or {}
                     prompt_tokens = int(raw_usage.get("prompt_tokens", 0) or 0)
+                    # OpenAI-compatible providers put cache hits in either prompt_tokens_details or input_tokens_details.
+                    cached_details = raw_usage.get("prompt_tokens_details") or raw_usage.get("input_tokens_details") or {}
+                    cached_prompt_tokens = int(cached_details.get("cached_tokens", 0) or 0) if isinstance(cached_details, dict) else 0
                     completion_tokens = int(raw_usage.get("completion_tokens", 0) or 0)
                     total_tokens = int(raw_usage.get("total_tokens", 0) or 0)
                     source = "provider"
@@ -994,7 +997,10 @@ class HandoutRuntime:
                         prompt_tokens, completion_tokens, total_tokens = fallback_tokens(messages, content)
                         source = "fallback"
                     price = cost_for(provider, model, prompt_tokens, completion_tokens)
-                    UsageLedger().append(UsageEvent(request.run_id, provider, model, attempt_number, "SUCCESS", prompt_tokens, completion_tokens, total_tokens, price, source))
+                    UsageLedger().append(UsageEvent(
+                        request.run_id, provider, model, attempt_number, "SUCCESS", prompt_tokens,
+                        completion_tokens, total_tokens, price, source, cached_prompt_tokens=cached_prompt_tokens,
+                    ))
                     return self._parse_json(content), {"promptTokens": prompt_tokens, "completionTokens": completion_tokens, "totalTokens": total_tokens, "estimatedCost": price}, provider, model
                 except requests.HTTPError as exc:
                     # Keep only status and a bounded provider code in diagnostics; response bodies may contain prompt text.
