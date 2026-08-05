@@ -47,6 +47,50 @@ class UsageLedger:
     def __init__(self) -> None:
         self._jsonl = os.getenv("MATH_AGENT_USAGE_JSONL_PATH", "")
 
+    @staticmethod
+    def _insert_usage(cursor: Any, event: UsageEvent, payload: dict[str, Any]) -> None:
+        """Writes the newest schema first, then preserves accounting on the deployed pre-V33 table.
+
+        The runtime never issues DDL. A running deployment can legitimately have the original immutable usage table
+        while the Java-owned schema release has not been applied; that table cannot retain cached-token metadata, but
+        it can and must still receive exactly one durable attempt row. Only MySQL's explicit unknown-column error is
+        eligible for this compatibility path, so permission and availability failures remain fail-closed.
+        """
+        extended_params = (
+            event.run_id, event.provider, event.model, event.attempt, event.status,
+            event.prompt_tokens, event.cached_prompt_tokens, event.completion_tokens, event.total_tokens,
+            None if event.estimated_cost < 0 else event.estimated_cost, event.estimated_cost >= 0,
+            event.price_version, event.usage_source, event.error_code, payload["created_at"],
+        )
+        try:
+            cursor.execute(
+                "INSERT INTO ai_usage_event "
+                "(run_id, provider, model_code, attempt_no, status, prompt_tokens, cached_prompt_tokens, "
+                "completion_tokens, total_tokens, estimated_cost, cost_known, price_version, usage_source, "
+                "error_code, created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+                "ON DUPLICATE KEY UPDATE usage_event_id=usage_event_id",
+                extended_params,
+            )
+            return
+        except Exception as error:
+            # MySQL 1054 is the precise signal for an existing pre-V33 immutable table. Do not hide any other error.
+            if getattr(error, "args", (None,))[0] != 1054:
+                raise
+
+        cursor.execute(
+            "INSERT INTO ai_usage_event "
+            "(run_id, provider, model_code, attempt_no, status, prompt_tokens, completion_tokens, total_tokens, "
+            "estimated_cost, usage_source, error_code, created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+            "ON DUPLICATE KEY UPDATE usage_event_id=usage_event_id",
+            (
+                event.run_id, event.provider, event.model, event.attempt, event.status,
+                event.prompt_tokens, event.completion_tokens, event.total_tokens,
+                # The legacy non-null DECIMAL column uses the documented unknown-cost sentinel rather than zero.
+                event.estimated_cost if event.estimated_cost >= 0 else -1.0,
+                event.usage_source, event.error_code, payload["created_at"],
+            ),
+        )
+
     def append(self, event: UsageEvent) -> None:
         payload = event.payload()
         with self._lock:
@@ -70,19 +114,8 @@ class UsageLedger:
                 )
                 try:
                     with conn.cursor() as cursor:
-                        cursor.execute(
-                            "INSERT INTO ai_usage_event "
-                            "(run_id, provider, model_code, attempt_no, status, prompt_tokens, cached_prompt_tokens, completion_tokens, total_tokens, estimated_cost, cost_known, price_version, usage_source, error_code, created_at) "
-                            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
-                            # A RabbitMQ redelivery may replay the same provider attempt. The unique key makes this
-                            # insert idempotent, so a previously durable usage row is success rather than a second
-                            # billable event; unrelated database failures still reach the fail-closed handler below.
-                            "ON DUPLICATE KEY UPDATE usage_event_id=usage_event_id",
-                            (event.run_id, event.provider, event.model, event.attempt, event.status,
-                             event.prompt_tokens, event.cached_prompt_tokens, event.completion_tokens, event.total_tokens,
-                             None if event.estimated_cost < 0 else event.estimated_cost, event.estimated_cost >= 0,
-                             event.price_version, event.usage_source, event.error_code, payload["created_at"]),
-                        )
+                        # The unique key makes a RabbitMQ redelivery of the same provider attempt idempotent.
+                        self._insert_usage(cursor, event, payload)
                 finally:
                     conn.close()
             except Exception:
