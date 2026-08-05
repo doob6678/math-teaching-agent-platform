@@ -192,6 +192,10 @@ public class MultiAgentWritingController {
             HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest);
         try {
+            if (handoutTaskFacade != null) {
+                return handoutTaskFacade.export(
+                        normalizedWorkflowId(workflowId), format, headerText, footerText, subject);
+            }
             return artifactExportService.export(
                     normalizedWorkflowId(workflowId), format, headerText, footerText, subject);
         } catch (IllegalArgumentException exception) {

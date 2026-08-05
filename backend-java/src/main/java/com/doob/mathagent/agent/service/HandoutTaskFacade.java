@@ -3,6 +3,7 @@ package com.doob.mathagent.agent.service;
 import com.doob.mathagent.agent.dto.MultiAgentWritingRequest;
 import com.doob.mathagent.agent.vo.AgentRunExecuteResponse;
 import com.doob.mathagent.agent.vo.AgentTraceResponse;
+import com.doob.mathagent.agent.vo.MultiAgentWritingArtifactExportResponse;
 import com.doob.mathagent.agent.vo.MultiAgentWritingTraceResponse;
 import com.doob.mathagent.agent.vo.MultiAgentWritingResponse;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
@@ -10,13 +11,23 @@ import com.doob.mathagent.teaching.TeachingRequestContext;
 import com.doob.mathagent.teaching.TeachingWorkflowNode;
 import com.doob.mathagent.teaching.dto.TeachingTaskRequest;
 import com.doob.mathagent.teaching.service.LectureTaskSubmissionService;
+import com.doob.mathagent.teaching.service.TeachingHandoutPdfExportService;
 import com.doob.mathagent.teaching.service.TeachingWorkflowService;
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Base64;
+import java.util.HexFormat;
 import java.util.List;
+import java.util.Locale;
+import java.util.UUID;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 import org.springframework.stereotype.Service;
 
 /**
@@ -35,18 +46,23 @@ public class HandoutTaskFacade {
     private static final int MAX_EVIDENCE_LIMIT = 24;
     private static final String CLIENT_REQUEST_PREFIX = "writing-";
     private static final String HASH_ALGORITHM = "SHA-256";
+    /** Legacy export payloads are transport-only and expire after the same bounded window as the former endpoint. */
+    private static final Duration EXPORT_TTL = Duration.ofMinutes(30);
 
     private final LectureTaskSubmissionService submissionService;
     private final TeachingWorkflowService workflowService;
+    private final TeachingHandoutPdfExportService pdfExportService;
 
     /**
      * Uses the durable submitter for create and resume so an outbox event, not the HTTP request, starts execution.
      */
     public HandoutTaskFacade(
             LectureTaskSubmissionService submissionService,
-            TeachingWorkflowService workflowService) {
+            TeachingWorkflowService workflowService,
+            TeachingHandoutPdfExportService pdfExportService) {
         this.submissionService = submissionService;
         this.workflowService = workflowService;
+        this.pdfExportService = pdfExportService;
     }
 
     /** Creates or returns the one durable teaching task represented by a legacy write request. */
@@ -109,6 +125,41 @@ public class HandoutTaskFacade {
         return new MultiAgentWritingTraceResponse(
                 task.taskId(), task.tenantId(), task.subjectType(), task.subjectId(), events.size(),
                 new AgentRunExecuteResponse.TokenUsage(0, 0, 0), events);
+    }
+
+    /**
+     * Exports only task-owned versions through the Java publication renderer. The compatibility endpoint never reads
+     * the retired workflow store and it never creates a PDFBox fallback when XeLaTeX rejects the publication gate.
+     */
+    public MultiAgentWritingArtifactExportResponse export(
+            String workflowId,
+            String format,
+            String headerText,
+            String footerText,
+            RequestSubject subject) {
+        TeachingTaskResponse task = ownedTask(workflowId, subject);
+        String normalizedFormat = normalizeExportFormat(format);
+        // Teaching task page chrome is persisted at creation time. Ignoring a later legacy header would be unsafe,
+        // so the compatibility route rejects mutation rather than silently publishing mismatched audit content.
+        if ((headerText != null && !headerText.isBlank()) || (footerText != null && !footerText.isBlank())) {
+            throw new IllegalArgumentException("Export page chrome is fixed by the teaching task");
+        }
+        ExportPayload payload = switch (normalizedFormat) {
+            case "markdown" -> new ExportPayload("handout.md", "text/markdown; charset=UTF-8",
+                    markdownFor(task, "teacher").getBytes(StandardCharsets.UTF_8));
+            case "latex" -> new ExportPayload("handout.tex", "application/x-tex; charset=UTF-8",
+                    TeachingHandoutPdfExportService.sanitizeLatexForExport(task.handoutLatexFor("teacher"))
+                            .getBytes(StandardCharsets.UTF_8));
+            case "pdf", "pdf-teacher" -> pdfPayload(task, "teacher", "handout-teacher.pdf");
+            case "pdf-student" -> pdfPayload(task, "student", "handout-student.pdf");
+            case "pdf-lecture" -> pdfPayload(task, "lecture", "handout-lecture.pdf");
+            case "zip" -> zipPayload(task);
+            default -> throw new IllegalArgumentException("Unsupported artifact export format: " + normalizedFormat);
+        };
+        byte[] bytes = payload.bytes();
+        return new MultiAgentWritingArtifactExportResponse(
+                UUID.randomUUID().toString(), task.taskId(), normalizedFormat, payload.fileName(), payload.mimeType(),
+                bytes.length, sha256Bytes(bytes), Base64.getEncoder().encodeToString(bytes), Instant.now().plus(EXPORT_TTL));
     }
 
     /**
@@ -187,6 +238,60 @@ public class HandoutTaskFacade {
             String content) {
         return new MultiAgentWritingArtifact.StructuredSection(
                 code, title, stageCode, content == null ? "" : content, List.of(), List.of(), List.of());
+    }
+
+    /** Reads the review-safe audience draft rather than converting or re-generating the published TeX body. */
+    private static String markdownFor(TeachingTaskResponse task, String version) {
+        return switch (version) {
+            case "student" -> task.draftSections().studentWorksheet();
+            case "lecture" -> String.join("\n\n", task.draftSections().lectureCards());
+            default -> task.draftSections().teacherExplanation();
+        };
+    }
+
+    /** Delegates PDF compilation and gate enforcement to the existing teaching publication service. */
+    private ExportPayload pdfPayload(TeachingTaskResponse task, String version, String filename) {
+        TeachingHandoutPdfExportService.RenderedHandoutPdf rendered = pdfExportService.renderForPublication(task, version);
+        return new ExportPayload(filename, "application/pdf", rendered.bytes());
+    }
+
+    /** Packages the three independently publication-gated PDFs; no unrendered source is substituted on failure. */
+    private ExportPayload zipPayload(TeachingTaskResponse task) {
+        try (ByteArrayOutputStream output = new ByteArrayOutputStream(); ZipOutputStream archive = new ZipOutputStream(output)) {
+            addZipEntry(archive, "teacher.pdf", pdfPayload(task, "teacher", "teacher.pdf").bytes());
+            addZipEntry(archive, "student.pdf", pdfPayload(task, "student", "student.pdf").bytes());
+            addZipEntry(archive, "lecture.pdf", pdfPayload(task, "lecture", "lecture.pdf").bytes());
+            archive.finish();
+            return new ExportPayload("handout-versions.zip", "application/zip", output.toByteArray());
+        } catch (IOException exception) {
+            throw new IllegalStateException("Could not package teaching handouts", exception);
+        }
+    }
+
+    /** Writes a bounded in-memory publication byte array as one named archive item. */
+    private static void addZipEntry(ZipOutputStream archive, String name, byte[] bytes) throws IOException {
+        archive.putNextEntry(new ZipEntry(name));
+        archive.write(bytes);
+        archive.closeEntry();
+    }
+
+    /** Normalizes supported compatibility formats without accepting a caller-controlled filename or MIME type. */
+    private static String normalizeExportFormat(String format) {
+        String normalized = format == null ? "markdown" : format.strip().toLowerCase(Locale.ROOT);
+        return normalized.isEmpty() ? "markdown" : normalized;
+    }
+
+    /** Hashes output bytes after XeLaTeX/publication gates have completed, preserving transport integrity metadata. */
+    private static String sha256Bytes(byte[] bytes) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance(HASH_ALGORITHM).digest(bytes));
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException(HASH_ALGORITHM + " is unavailable", exception);
+        }
+    }
+
+    /** Immutable transport payload used only inside the legacy response projection. */
+    private record ExportPayload(String fileName, String mimeType, byte[] bytes) {
     }
 
     /** Creates the teaching authorization context only from the server-resolved session subject. */
