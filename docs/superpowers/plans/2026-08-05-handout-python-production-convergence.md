@@ -67,8 +67,8 @@ No task may advance past a gate with a missing real artifact, a simulated provid
 
 - [ ] **Step 1: Write tests** asserting that an agent-writing request creates/returns the same `taskId` as a teaching task, `workflowId` is only a compatibility alias, and resume/history/events/export use the teaching-task store.
 - [ ] **Step 2: Run the focused Java and Vitest tests and verify failure.**
-- [ ] **Step 3: Introduce `HandoutTaskFacade`** at the Java boundary. It validates the authenticated subject, creates one teaching task and `runId`, and delegates all reads/resume/export to the teaching service.
-- [ ] **Step 4: Adapt `MultiAgentWritingController`** to call the facade. Do not copy or persist a second workflow row; keep old response fields as aliases until the canary ends.
+- [✅️] **Step 3: Introduce `HandoutTaskFacade`** at the Java boundary. It validates the authenticated subject, creates one teaching task and `runId`, and delegates all reads/resume/export to the teaching service.
+- [✅️] **Step 4: Adapt `MultiAgentWritingController`** to call the facade. Do not copy or persist a second workflow row; keep old response fields as aliases until the canary ends.
 - [ ] **Step 5: Make the teaching worker call one `/v1/handout-runs/sync` graph.** Retire the separate `/v1/teaching-drafts/sync` call for handout generation; retain that endpoint only for non-handout teaching features with an explicit contract test.
 - [ ] **Step 6: Update the frontend API/panel** to use teaching-task endpoints while displaying the existing agent trace fields from the Java projection.
 - [ ] **Step 7: Run focused tests and an authenticated HTTP contract test** for create, get, events, resume, feedback and all three artifact versions. Expected: one task row, one run ID, one terminal business state.
@@ -172,6 +172,6 @@ No task may advance past a gate with a missing real artifact, a simulated provid
 
 - [✅️] Task 1 已完成并提交：`9bfa04d test: establish non-fabricating handout acceptance baseline`。
 - [✅️] Task 2 已完成并提交：`d745bde fix: isolate ai runtime credentials and preserve host networking`。
-- [ ] Task 3 正在进行：`22f104c` 已将创建、查询、恢复映射到教学任务，`5c200b0` 已将 artifact 与 traces 读取映射到教学任务；尚未完成 export 与前端 API 的全部收敛，不能提前打钩。
+- [ ] Task 3 正在进行：`22f104c` 已将创建、查询、恢复映射到教学任务，`5c200b0` 已将 artifact 与 traces 读取映射到教学任务；export 已转入教学 publication 服务，尚未完成 Worker 与前端 API 的全部收敛，不能提前打钩。
 - [ ] Task 4 部分已完成但未达到整项验收：身份覆盖拒绝、缓存 token 账本、版本化 Python 客户端已分别提交为 `2e17dd1`、`9e3f66e`、`901d8e6`、`739fe0f`；仍缺 Java 授权重载、统一 deadline、双 worker 幂等集成验证。
 - [ ] Task 5 至 Task 8 尚未完成，后续仅在对应实现、真实验证和独立提交均完成后标记 ✅️。
