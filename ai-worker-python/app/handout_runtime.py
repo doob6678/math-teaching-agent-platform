@@ -218,7 +218,8 @@ def _deterministic_markdown_cleanup(markdown: str, stage_code: str) -> str:
 class HandoutRunRequest(BaseModel):
     """Minimal cross-language request; no tenant identity, path, SQL or secret is accepted."""
 
-    model_config = ConfigDict(populate_by_name=True)
+    # Reject identity/path overrides at the HTTP boundary instead of silently discarding a hostile field.
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     run_id: str = Field(alias="runId", min_length=8, max_length=80)
     task_id: str = Field(alias="taskId", min_length=1, max_length=100)
@@ -227,7 +228,9 @@ class HandoutRunRequest(BaseModel):
     question_text: str = Field(alias="questionText", min_length=1, max_length=16000)
     evidence_refs: list[str] = Field(default_factory=list, alias="evidenceRefs", max_length=24)
     graph_version: str = Field(default=DEFAULT_GRAPH_VERSION, alias="graphVersion", min_length=1, max_length=40)
+    idempotency_key: str = Field(default="", alias="idempotencyKey", max_length=160)
     trace_id: str | None = Field(default=None, alias="traceId", max_length=120)
+    traceparent: str | None = Field(default=None, max_length=160)
     deadline_epoch_ms: int | None = Field(default=None, alias="deadlineEpochMs", ge=0)
     resume: bool = False
 
@@ -238,6 +241,8 @@ class HandoutRunRequest(BaseModel):
             "question_text": _bounded(self.question_text, 16000),
             "evidence_refs": list(dict.fromkeys(_bounded(item, 240) for item in self.evidence_refs if item.strip()))[:24],
             "graph_version": _bounded(self.graph_version, 40) or DEFAULT_GRAPH_VERSION,
+            # Legacy callers used runId as the retry identity. Preserve that deterministic behavior during rollout.
+            "idempotency_key": _bounded(self.idempotency_key, 160) or self.run_id,
             "contract_version": _bounded(self.contract_version, 40) or DEFAULT_CONTRACT_VERSION,
         })
 
@@ -690,6 +695,15 @@ class HandoutRuntime:
         telemetry.sample_system()
         started_state: HandoutRunState = {"request": request}
         existing = self._checkpoint.load(request.run_id) if request.resume else None
+        if existing:
+            saved_request = existing[1].get("request") if isinstance(existing[1], dict) else None
+            if isinstance(saved_request, dict):
+                saved_graph_version = str(saved_request.get("graphVersion", DEFAULT_GRAPH_VERSION))
+                saved_idempotency_key = str(saved_request.get("idempotencyKey", request.run_id))
+                if saved_graph_version != request.graph_version:
+                    raise HTTPException(status_code=409, detail="GRAPH_VERSION_INCOMPATIBLE")
+                if saved_idempotency_key != request.idempotency_key:
+                    raise HTTPException(status_code=409, detail="IDEMPOTENCY_KEY_INCOMPATIBLE")
         if existing and existing[0] == "COMPLETED" and existing[1].get("package"):
             return HandoutDraftPackage.model_validate(existing[1]["package"])
         if existing and existing[1].get("evidence"):
