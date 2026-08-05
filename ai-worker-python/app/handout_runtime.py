@@ -8,7 +8,7 @@ durable boundary without replaying completed model calls.
 
 from __future__ import annotations
 
-from contextlib import closing
+from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
@@ -44,6 +44,9 @@ DEFAULT_HANDOUT_MAX_PROVIDER_CALLS = 8
 DEFAULT_EVENT_PAGE_LIMIT = 100
 MAX_EVENT_PAGE_LIMIT = 500
 MAX_EVENT_HISTORY = 10000
+# The lock covers the full graph rather than an individual checkpoint write.  A second replica waits for the
+# first replica's durable result, then returns it without opening another provider socket for the same run.
+DEFAULT_RUN_LOCK_WAIT_SECONDS = 900
 QUESTION_MARKER_PATTERN = re.compile(r"(?ms)(?:^|\n)【题目\s*(\d+)】\s*\n?(.*?)(?=\n【题目\s*\d+】|\Z)")
 QUESTION_TOKEN_PATTERN = re.compile(r"[A-Za-z]+(?:_[A-Za-z0-9]+)?(?:\([^)]*\))?|[-+]?\d+(?:\.\d+)?|[\u4e00-\u9fff]{2,}")
 GENERIC_QUESTION_TOKENS = frozenset({"已知", "函数", "求", "在", "其中", "关于", "实数", "得到", "问题", "题目"})
@@ -64,6 +67,17 @@ RUNTIME_USAGE_ATTEMPTS = {
     "structured_validation": 1005,
 }
 RUNTIME_USAGE_FALLBACK_ATTEMPT = 1099
+# Provider attempts share one unique `(run_id, provider, model, attempt)` key.  Writer nodes run in parallel, so
+# each node owns a stable block instead of restarting at attempt one and silently collapsing three billable calls.
+PROVIDER_ATTEMPT_SLOT_SIZE = 100
+PROVIDER_ATTEMPT_BASES = {
+    "teacher_writer": 0,
+    "student_writer": PROVIDER_ATTEMPT_SLOT_SIZE,
+    "lecture_writer": PROVIDER_ATTEMPT_SLOT_SIZE * 2,
+    "teacher_writer_repair": PROVIDER_ATTEMPT_SLOT_SIZE * 3,
+    "student_writer_repair": PROVIDER_ATTEMPT_SLOT_SIZE * 4,
+    "lecture_writer_repair": PROVIDER_ATTEMPT_SLOT_SIZE * 5,
+}
 
 
 def _utc_now() -> str:
@@ -505,7 +519,12 @@ class _CheckpointStore:
         # explicitly selects MySQL so a missing database cannot be hidden behind a local container file.
         backend = os.getenv("MATH_AGENT_HANDOUT_CHECKPOINT_BACKEND", "sqlite").strip().lower()
         self.backend = backend if backend in {"mysql", "sqlite"} else "sqlite"
+        # Checkpoint writes can be issued by the three parallel writer nodes, so this lock remains narrow.
         self._lock = threading.Lock()
+        # SQLite is a one-process fallback. Its per-run gates keep duplicate local submissions apart without blocking
+        # sibling writer checkpoints; production replicas use the MySQL named lock below instead.
+        self._sqlite_run_locks: dict[str, threading.Lock] = {}
+        self._sqlite_run_locks_guard = threading.Lock()
         if self.backend == "mysql":
             self._ensure_mysql_schema()
             return
@@ -588,6 +607,36 @@ class _CheckpointStore:
                     (run_id, event_encoded, now),
                 )
             conn.commit()
+
+    @contextmanager
+    def run_lock(self, run_id: str):
+        """Claims one durable graph execution for a run across all worker replicas.
+
+        A checkpoint row lock protects each state merge but is released between graph nodes.  MySQL's named lock
+        remains held through the provider calls, so a concurrent redelivery re-reads the completed checkpoint after
+        the owner releases it instead of duplicating a billable writer call.  The lock name contains only an opaque
+        run ID and is bounded by the same operator-configurable graph timeout.
+        """
+        if self.backend != "mysql":
+            with self._sqlite_run_locks_guard:
+                local_lock = self._sqlite_run_locks.setdefault(run_id, threading.Lock())
+            with local_lock:
+                yield
+            return
+        wait_seconds = max(0, int(os.getenv(
+            "MATH_AGENT_HANDOUT_RUN_LOCK_WAIT_SECONDS", str(DEFAULT_RUN_LOCK_WAIT_SECONDS))))
+        lock_name = f"math-agent:handout:{run_id}"
+        with self._mysql_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT GET_LOCK(%s,%s)", (lock_name, wait_seconds))
+                acquired = cursor.fetchone()
+            if not acquired or int(acquired[0] or 0) != 1:
+                raise HTTPException(status_code=409, detail="HANDOUT_RUN_LOCK_TIMEOUT")
+            try:
+                yield
+            finally:
+                with conn.cursor() as cursor:
+                    cursor.execute("SELECT RELEASE_LOCK(%s)", (lock_name,))
 
     def save(self, run_id: str, status: str, state: dict[str, Any], event: dict[str, Any]) -> None:
         event_encoded = json.dumps(_jsonable(event), ensure_ascii=False, separators=(",", ":"))
@@ -688,6 +737,13 @@ class HandoutRuntime:
 
     def execute(self, request: HandoutRunRequest) -> HandoutDraftPackage:
         request = request.compact()
+        # Obtain the cross-process ownership gate before reading any checkpoint.  Otherwise two replicas can both
+        # observe an empty row and independently start the three writer nodes before either checkpoint is written.
+        with self._checkpoint.run_lock(request.run_id):
+            return self._execute_locked(request)
+
+    def _execute_locked(self, request: HandoutRunRequest) -> HandoutDraftPackage:
+        """Runs one graph after the durable run-level ownership gate has been acquired."""
         self._check_deadline(request)
         telemetry = _RunTelemetry(request.run_id)
         with self._telemetry_lock:
@@ -952,7 +1008,11 @@ class HandoutRuntime:
         providers = [item.strip().lower() for item in os.getenv("MATH_AGENT_AI_RUNTIME_PROVIDER_ORDER", os.getenv("MATH_AGENT_AI_RUNTIME_PROVIDER", "openai")).split(",") if item.strip()]
         failures: list[str] = []
         provider_attempts = max(1, int(os.getenv("MATH_AGENT_HANDOUT_MODEL_ATTEMPTS", "2")))
-        attempt_number = 0
+        if provider_attempts >= PROVIDER_ATTEMPT_SLOT_SIZE:
+            raise RuntimeError("MATH_AGENT_HANDOUT_MODEL_ATTEMPTS exceeds the durable attempt slot size")
+        # The fixed node slot makes duplicate redelivery idempotent while preserving a separate immutable row for
+        # every writer and retry.  Unknown internal nodes are deliberately placed after the named writer slots.
+        attempt_number = PROVIDER_ATTEMPT_BASES.get(node, PROVIDER_ATTEMPT_SLOT_SIZE * 6)
         for provider in providers:
             key, base_url, model = self._provider_config(provider)
             if not key or not base_url:
