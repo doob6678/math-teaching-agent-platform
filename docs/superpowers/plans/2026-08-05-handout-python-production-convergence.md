@@ -167,3 +167,11 @@ No task may advance past a gate with a missing real artifact, a simulated provid
 - Never use fake providers, mocked end-to-end results, fabricated token/cost numbers or CPU fallback for local models. Mocks are allowed only for unit boundaries; every acceptance result must come from the real stack.
 - Keep Java's publication gate and business task state authoritative. A Python `COMPLETED` event is only an AI draft completion.
 - Stop and fix the failing gate before starting the next task. The final report must list successful and failed calls separately, including retries and token usage for failures.
+
+## 今日执行状态（2026-08-05）
+
+- [✅️] Task 1 已完成并提交：`9bfa04d test: establish non-fabricating handout acceptance baseline`。
+- [✅️] Task 2 已完成并提交：`d745bde fix: isolate ai runtime credentials and preserve host networking`。
+- [ ] Task 3 正在进行：已开始 `HandoutTaskFacade` 的测试先行改造；尚未完成“唯一教学任务业务流程”的全部读写、恢复、事件与导出收敛，不能提前打钩。
+- [ ] Task 4 部分已完成但未达到整项验收：身份覆盖拒绝、缓存 token 账本、版本化 Python 客户端已分别提交为 `2e17dd1`、`9e3f66e`、`901d8e6`、`739fe0f`；仍缺 Java 授权重载、统一 deadline、双 worker 幂等集成验证。
+- [ ] Task 5 至 Task 8 尚未完成，后续仅在对应实现、真实验证和独立提交均完成后标记 ✅️。
