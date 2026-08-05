@@ -32,6 +32,8 @@ class UsageEvent:
     estimated_cost: float
     usage_source: str
     error_code: str | None = None
+    cached_prompt_tokens: int = 0
+    price_version: str | None = None
 
     def payload(self) -> dict[str, Any]:
         return {**asdict(self), "created_at": datetime.now(timezone.utc).isoformat()}
@@ -70,15 +72,16 @@ class UsageLedger:
                     with conn.cursor() as cursor:
                         cursor.execute(
                             "INSERT INTO ai_usage_event "
-                            "(run_id, provider, model_code, attempt_no, status, prompt_tokens, completion_tokens, total_tokens, estimated_cost, usage_source, error_code, created_at) "
-                            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+                            "(run_id, provider, model_code, attempt_no, status, prompt_tokens, cached_prompt_tokens, completion_tokens, total_tokens, estimated_cost, cost_known, price_version, usage_source, error_code, created_at) "
+                            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
                             # A RabbitMQ redelivery may replay the same provider attempt. The unique key makes this
                             # insert idempotent, so a previously durable usage row is success rather than a second
                             # billable event; unrelated database failures still reach the fail-closed handler below.
                             "ON DUPLICATE KEY UPDATE usage_event_id=usage_event_id",
                             (event.run_id, event.provider, event.model, event.attempt, event.status,
-                             event.prompt_tokens, event.completion_tokens, event.total_tokens,
-                             event.estimated_cost, event.usage_source, event.error_code, payload["created_at"]),
+                             event.prompt_tokens, event.cached_prompt_tokens, event.completion_tokens, event.total_tokens,
+                             None if event.estimated_cost < 0 else event.estimated_cost, event.estimated_cost >= 0,
+                             event.price_version, event.usage_source, event.error_code, payload["created_at"]),
                         )
                 finally:
                     conn.close()
