@@ -1029,7 +1029,12 @@ class HandoutRuntime:
     def _check_deadline(request: HandoutRunRequest) -> None:
         """Stops work before the Java lease deadline so RabbitMQ can safely reclaim and resume the run."""
         if request.deadline_epoch_ms is not None and int(time.time() * 1000) >= request.deadline_epoch_ms:
-            raise HTTPException(status_code=504, detail="Handout graph deadline exceeded")
+            # Java maps this stable code to a terminal worker event. The textual message remains operator-readable,
+            # while the code prevents timeout accounting from being confused with provider or checkpoint failures.
+            raise HTTPException(
+                status_code=504,
+                detail={"code": "MODEL_TIMEOUT", "message": "Handout graph deadline exceeded"},
+            )
 
     @staticmethod
     def _parse_json(content: str) -> Any:

@@ -256,6 +256,7 @@ class HandoutGraphContractTest(unittest.TestCase):
                 with self.assertRaises(HTTPException) as raised:
                     runtime.execute(request)
                 self.assertEqual(raised.exception.status_code, 504)
+                self.assertEqual(raised.exception.detail["code"], "MODEL_TIMEOUT")
             finally:
                 if previous is None:
                     os.environ.pop("MATH_AGENT_HANDOUT_CHECKPOINT_DB", None)

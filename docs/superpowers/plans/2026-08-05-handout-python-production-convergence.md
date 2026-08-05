@@ -88,7 +88,7 @@ No task may advance past a gate with a missing real artifact, a simulated provid
 
 - [ ] **Step 1: Add failing contract tests** for `contractVersion`, `runId`, `taskId`, `graphVersion`, `idempotencyKey`, `traceparent`, `deadlineAt`, bounded evidence refs, and error codes. Assert requests containing `tenantId`, `subjectId`, a filesystem path or a Java identity override are rejected.
 - [ ] **Step 2: Make Java resolve all authorization from `runId`** and stop serializing `RequestSubject` into the RabbitMQ worker payload. The payload contains only an opaque task ID and a run ID; Java reloads the subject at execution time.
-- [ ] **Step 3: Enforce one deadline budget**: `min(client deadline, Python deadline, lease expiry - safety margin)`, with explicit connect/read timeouts and a terminal `MODEL_TIMEOUT` event.
+- [✅️] **Step 3: Enforce one deadline budget**: `min(client deadline, Python deadline, lease expiry - safety margin)`, with explicit connect/read timeouts and a terminal `MODEL_TIMEOUT` event.
 - [ ] **Step 4: Make checkpoint compare `graphVersion` and idempotency key** under a MySQL row lock. An old graph version returns `GRAPH_VERSION_INCOMPATIBLE`; an already completed provider attempt is resumed without another billable call.
 - [ ] **Step 5: Run Java/Python contract tests plus a two-worker same-`runId` integration test.** Expected: one completed checkpoint, one usage row per attempt, no duplicate writer call.
 - [ ] **Step 6: Commit** `feat: enforce versioned handout run contract and idempotent resume`.
