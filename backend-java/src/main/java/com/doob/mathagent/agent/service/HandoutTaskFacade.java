@@ -2,6 +2,8 @@ package com.doob.mathagent.agent.service;
 
 import com.doob.mathagent.agent.dto.MultiAgentWritingRequest;
 import com.doob.mathagent.agent.vo.AgentRunExecuteResponse;
+import com.doob.mathagent.agent.vo.AgentTraceResponse;
+import com.doob.mathagent.agent.vo.MultiAgentWritingTraceResponse;
 import com.doob.mathagent.agent.vo.MultiAgentWritingResponse;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.teaching.TeachingRequestContext;
@@ -72,6 +74,44 @@ public class HandoutTaskFacade {
     }
 
     /**
+     * Projects owner-visible teaching artifacts into the temporary legacy shape without reading the retired workflow
+     * store. The teaching task remains the only persisted source for every version and structured review section.
+     */
+    public MultiAgentWritingArtifact artifact(String workflowId, RequestSubject subject) {
+        TeachingTaskResponse task = ownedTask(workflowId, subject);
+        List<MultiAgentWritingArtifact.StageArtifact> stages = List.of(
+                artifactStage("teacher_writer", "CoursewareAgent", task.teacherHandoutLatex(), task.status().name()),
+                artifactStage("student_writer", "TeacherAssistantAgent", task.studentHandoutLatex(), task.status().name()),
+                artifactStage("lecture_writer", "HandoutFormatterAgent", task.lectureHandoutLatex(), task.status().name()));
+        List<MultiAgentWritingArtifact.StructuredSection> sections = List.of(
+                section("teacher", "教师版讲义", "teacher_writer", task.draftSections().teacherExplanation()),
+                section("student", "学生版讲义", "student_writer", task.draftSections().studentWorksheet()),
+                section("lecture", "课堂投影", "lecture_writer", String.join("\n\n", task.draftSections().lectureCards())));
+        return new MultiAgentWritingArtifact(
+                task.taskId(), task.tenantId(), task.subjectType(), task.subjectId(), task.status().name(),
+                new AgentRunExecuteResponse.TokenUsage(0, 0, 0), stages, sections, task.handoutLatex());
+    }
+
+    /**
+     * Projects durable teaching events rather than querying legacy agent traces. Unknown provider cost remains -1
+     * with {@code costKnown=false}; no task snapshot is allowed to invent provider usage or price values.
+     */
+    public MultiAgentWritingTraceResponse traces(String workflowId, RequestSubject subject) {
+        TeachingTaskResponse task = ownedTask(workflowId, subject);
+        List<AgentTraceResponse> events = task.workflowEvents().stream()
+                .map(event -> new AgentTraceResponse(
+                        event.eventId(), task.taskId() + ":" + event.eventType(), null,
+                        task.tenantId(), task.subjectType(), task.subjectId(), event.sourceName(),
+                        "teaching-task", "", event.status(), -1.0d, List.of(), List.of(), event.artifactRefs(),
+                        List.of(), new AgentRunExecuteResponse.TokenUsage(0, 0, 0), event.summary(), List.of(),
+                        -1.0d, false))
+                .toList();
+        return new MultiAgentWritingTraceResponse(
+                task.taskId(), task.tenantId(), task.subjectType(), task.subjectId(), events.size(),
+                new AgentRunExecuteResponse.TokenUsage(0, 0, 0), events);
+    }
+
+    /**
      * Maps the legacy request into the only public handout business request.
      *
      * <p>The stable digest becomes the teaching idempotency key. It includes every legacy field that can affect
@@ -121,6 +161,32 @@ public class HandoutTaskFacade {
         return new MultiAgentWritingResponse.StageResult(
                 node.code(), "teaching-task", "", "", "", node.status(),
                 new AgentRunExecuteResponse.TokenUsage(0, 0, 0), node.summary(), "", 0L);
+    }
+
+    /** Reads one task only after the teaching service has checked the backend-resolved owner context. */
+    private TeachingTaskResponse ownedTask(String workflowId, RequestSubject subject) {
+        return workflowService.get(workflowId, contextFor(subject))
+                .orElseThrow(() -> new IllegalArgumentException("Teaching task not found"));
+    }
+
+    /** Builds one compatibility stage from a task-owned rendered version, not from a model response cache. */
+    private static MultiAgentWritingArtifact.StageArtifact artifactStage(
+            String stageCode,
+            String agentCode,
+            String content,
+            String status) {
+        return new MultiAgentWritingArtifact.StageArtifact(
+                stageCode, agentCode, "", "teaching-task", "", status, content == null ? "" : content);
+    }
+
+    /** Keeps the three persisted audience artifacts visibly separate for legacy review clients. */
+    private static MultiAgentWritingArtifact.StructuredSection section(
+            String code,
+            String title,
+            String stageCode,
+            String content) {
+        return new MultiAgentWritingArtifact.StructuredSection(
+                code, title, stageCode, content == null ? "" : content, List.of(), List.of(), List.of());
     }
 
     /** Creates the teaching authorization context only from the server-resolved session subject. */

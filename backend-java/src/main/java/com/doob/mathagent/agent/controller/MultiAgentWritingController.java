@@ -166,6 +166,9 @@ public class MultiAgentWritingController {
             HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest);
         try {
+            if (handoutTaskFacade != null) {
+                return handoutTaskFacade.artifact(normalizedWorkflowId(workflowId), subject);
+            }
             return writingService.artifact(normalizedWorkflowId(workflowId), subject);
         } catch (IllegalArgumentException exception) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, exception.getMessage(), exception);
@@ -234,6 +237,9 @@ public class MultiAgentWritingController {
             HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest);
         try {
+            if (handoutTaskFacade != null) {
+                return handoutTaskFacade.traces(normalizedWorkflowId(workflowId), subject);
+            }
             return workflowTrace(workflowId, subject);
         } catch (IllegalArgumentException exception) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, exception.getMessage(), exception);
