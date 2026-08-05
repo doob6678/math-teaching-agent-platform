@@ -86,8 +86,8 @@ No task may advance past a gate with a missing real artifact, a simulated provid
 - Test: `ai-worker-python/tests/test_handout_runtime.py`
 - Test: `ai-worker-python/tests/test_server.py`
 
-- [ ] **Step 1: Add failing contract tests** for `contractVersion`, `runId`, `taskId`, `graphVersion`, `idempotencyKey`, `traceparent`, `deadlineAt`, bounded evidence refs, and error codes. Assert requests containing `tenantId`, `subjectId`, a filesystem path or a Java identity override are rejected.
-- [ ] **Step 2: Make Java resolve all authorization from `runId`** and stop serializing `RequestSubject` into the RabbitMQ worker payload. The payload contains only an opaque task ID and a run ID; Java reloads the subject at execution time.
+- [✅️] **Step 1: Add failing contract tests** for `contractVersion`, `runId`, `taskId`, `graphVersion`, `idempotencyKey`, `traceparent`, `deadlineAt`, bounded evidence refs, and error codes. Assert requests containing `tenantId`, `subjectId`, a filesystem path or a Java identity override are rejected.
+- [✅️] **Step 2: Make Java resolve all authorization from `runId`** and stop serializing `RequestSubject` into the RabbitMQ worker payload. The payload contains only an opaque task ID and a run ID; Java reloads the subject at execution time.
 - [✅️] **Step 3: Enforce one deadline budget**: `min(client deadline, Python deadline, lease expiry - safety margin)`, with explicit connect/read timeouts and a terminal `MODEL_TIMEOUT` event.
 - [ ] **Step 4: Make checkpoint compare `graphVersion` and idempotency key** under a MySQL row lock. An old graph version returns `GRAPH_VERSION_INCOMPATIBLE`; an already completed provider attempt is resumed without another billable call.
 - [ ] **Step 5: Run Java/Python contract tests plus a two-worker same-`runId` integration test.** Expected: one completed checkpoint, one usage row per attempt, no duplicate writer call.
@@ -173,5 +173,5 @@ No task may advance past a gate with a missing real artifact, a simulated provid
 - [✅️] Task 1 已完成并提交：`9bfa04d test: establish non-fabricating handout acceptance baseline`。
 - [✅️] Task 2 已完成并提交：`d745bde fix: isolate ai runtime credentials and preserve host networking`。
 - [ ] Task 3 正在进行：`22f104c` 已将创建、查询、恢复映射到教学任务，`5c200b0` 已将 artifact 与 traces 读取映射到教学任务；export 已转入教学 publication 服务，尚未完成 Worker 与前端 API 的全部收敛，不能提前打钩。
-- [ ] Task 4 部分已完成但未达到整项验收：身份覆盖拒绝、缓存 token 账本、版本化 Python 客户端已分别提交为 `2e17dd1`、`9e3f66e`、`901d8e6`、`739fe0f`；仍缺 Java 授权重载、统一 deadline、双 worker 幂等集成验证。
+- [ ] Task 4 部分已完成但未达到整项验收：Step 1 至 Step 3 已完成，其中本次已验证跨语言字段/越权拒绝、按 runId 重载 Java 主体、旧空幂等键恢复；生产 MySQL 的 `ai_usage_event` 仍缺 `cached_prompt_tokens`，因此双 worker 幂等验收与提交步骤不得提前标记。
 - [ ] Task 5 至 Task 8 尚未完成，后续仅在对应实现、真实验证和独立提交均完成后标记 ✅️。
