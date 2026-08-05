@@ -69,7 +69,7 @@ No task may advance past a gate with a missing real artifact, a simulated provid
 - [ ] **Step 2: Run the focused Java and Vitest tests and verify failure.**
 - [✅️] **Step 3: Introduce `HandoutTaskFacade`** at the Java boundary. It validates the authenticated subject, creates one teaching task and `runId`, and delegates all reads/resume/export to the teaching service.
 - [✅️] **Step 4: Adapt `MultiAgentWritingController`** to call the facade. Do not copy or persist a second workflow row; keep old response fields as aliases until the canary ends.
-- [ ] **Step 5: Make the teaching worker call one `/v1/handout-runs/sync` graph.** Retire the separate `/v1/teaching-drafts/sync` call for handout generation; retain that endpoint only for non-handout teaching features with an explicit contract test.
+- [✅️] **Step 5: Make the teaching worker call one `/v1/handout-runs/sync` graph.** Retire the separate `/v1/teaching-drafts/sync` call for handout generation; retain that endpoint only for non-handout teaching features with an explicit contract test.
 - [ ] **Step 6: Update the frontend API/panel** to use teaching-task endpoints while displaying the existing agent trace fields from the Java projection.
 - [ ] **Step 7: Run focused tests and an authenticated HTTP contract test** for create, get, events, resume, feedback and all three artifact versions. Expected: one task row, one run ID, one terminal business state.
 - [ ] **Step 8: Commit** `refactor: converge handout entry points on teaching tasks`.
