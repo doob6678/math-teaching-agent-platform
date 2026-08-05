@@ -5,8 +5,12 @@ services:
     image: mysql:8.4
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: local_mysql_7f9b1cc8a2d44529b6e481d5
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD must be set}
       MYSQL_DATABASE: math_agent_rag
+      # The restricted account is provisioned after Flyway V32 creates the three AI-runtime tables.
+      MATH_AGENT_DB_NAME: ${MATH_AGENT_DB_NAME:-math_agent_rag}
+      MATH_AGENT_AI_RUNTIME_DB_USERNAME: ${MATH_AGENT_AI_RUNTIME_DB_USERNAME:-ai_runtime}
+      MATH_AGENT_AI_RUNTIME_DB_PASSWORD: ${MATH_AGENT_AI_RUNTIME_DB_PASSWORD:?MATH_AGENT_AI_RUNTIME_DB_PASSWORD must be set}
     command: ["mysqld", "--character-set-server=utf8mb4", "--collation-server=utf8mb4_0900_ai_ci"]
     ports: ["${MATH_AGENT_MYSQL_HOST_PORT:-3307}:3306"]
     volumes:
@@ -21,10 +25,13 @@ services:
   redis:
     image: redis:7.4-alpine
     restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD must be set}"]
     ports: ["${MATH_AGENT_REDIS_HOST_PORT:-6380}:6379"]
     volumes: ["redis-data:/data"]
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -32,6 +39,9 @@ services:
   rabbitmq:
     image: rabbitmq:4-management
     restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:?RABBITMQ_DEFAULT_USER must be set}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:?RABBITMQ_DEFAULT_PASS must be set}
     ports:
       - "${MATH_AGENT_RABBITMQ_HOST_PORT:-5673}:5672"
       - "${MATH_AGENT_RABBITMQ_MANAGEMENT_HOST_PORT:-15673}:15672"
@@ -62,8 +72,8 @@ services:
     image: minio/minio:RELEASE.2024-12-18T13-15-44Z
     restart: unless-stopped
     environment:
-      MINIO_ACCESS_KEY: minioadmin
-      MINIO_SECRET_KEY: local_minio_1e3d5c7a9b2f4d6e8c0a
+      MINIO_ACCESS_KEY: ${MATH_AGENT_MINIO_ACCESS_KEY:?MATH_AGENT_MINIO_ACCESS_KEY must be set}
+      MINIO_SECRET_KEY: ${MATH_AGENT_MINIO_SECRET_KEY:?MATH_AGENT_MINIO_SECRET_KEY must be set}
     command: minio server /minio_data --console-address ":9001"
     volumes: ["milvus-minio-data:/minio_data"]
     healthcheck:
@@ -80,10 +90,10 @@ services:
     environment:
       ETCD_ENDPOINTS: milvus-etcd:2379
       MINIO_ADDRESS: milvus-minio:9000
-      MINIO_ACCESS_KEY_ID: minioadmin
-      MINIO_SECRET_ACCESS_KEY: local_minio_1e3d5c7a9b2f4d6e8c0a
+      MINIO_ACCESS_KEY_ID: ${MATH_AGENT_MINIO_ACCESS_KEY:?MATH_AGENT_MINIO_ACCESS_KEY must be set}
+      MINIO_SECRET_ACCESS_KEY: ${MATH_AGENT_MINIO_SECRET_KEY:?MATH_AGENT_MINIO_SECRET_KEY must be set}
       COMMON_SECURITY_AUTHORIZATIONENABLED: "true"
-      COMMON_SECURITY_DEFAULTROOTPASSWORD: local_milvus_8f2c6a4d1e9b3f7c5a0d
+      COMMON_SECURITY_DEFAULTROOTPASSWORD: ${MATH_AGENT_MILVUS_ROOT_PASSWORD:?MATH_AGENT_MILVUS_ROOT_PASSWORD must be set}
     ports:
       - "${MATH_AGENT_MILVUS_HOST_PORT:-19531}:19530"
       - "9092:9091"
@@ -101,12 +111,6 @@ services:
   ai-worker:
     build: ./ai-worker-python
     restart: unless-stopped
-    # Luna page recognition is executed through this worker's Docker network. Docker Desktop's inherited WSL
-    # resolver cannot resolve the configured OpenAI relay CNAME chain reliably, so use the same verified resolvers
-    # as the backend instead of allowing visual ingestion to block before the provider connection is established.
-    dns:
-      - 8.8.8.8
-      - 1.1.1.1
     # WSL2 exposes the Windows NVIDIA driver through CDI; this makes the local
     # BGE, reranker, and CLIP models use the same CUDA device inside the worker.
     gpus: all
@@ -116,7 +120,25 @@ services:
       OPENAI_CHAT_MODEL: ${OPENAI_CHAT_MODEL:-gpt-5.6-luna}
       # These values are the worker's real local model contract.  Compose must pass them explicitly because a
       # container cannot see the host .env file merely because it was used for interpolation on the host.
-      MATH_AGENT_WORKER_API_KEY: ${MATH_AGENT_WORKER_API_KEY:-local_worker_internal_key}
+      MATH_AGENT_WORKER_API_KEY: ${MATH_AGENT_WORKER_API_KEY:?MATH_AGENT_WORKER_API_KEY must be set}
+      # Python calls only this in-network Java broker route; the route resolves identity from runId in MySQL.
+      MATH_AGENT_TOOL_BROKER_BASE_URL: http://backend:8080
+      MATH_AGENT_AGENT_WORKER_SHARED_KEY: ${MATH_AGENT_AGENT_WORKER_SHARED_KEY:?MATH_AGENT_AGENT_WORKER_SHARED_KEY must be set}
+      # The AI runtime account can access only checkpoint/event/usage tables. Java keeps business-table credentials.
+      MATH_AGENT_DB_HOST: mysql
+      MATH_AGENT_DB_PORT: 3306
+      MATH_AGENT_DB_USERNAME: ${MATH_AGENT_AI_RUNTIME_DB_USERNAME:-ai_runtime}
+      MATH_AGENT_DB_PASSWORD: ${MATH_AGENT_AI_RUNTIME_DB_PASSWORD:?MATH_AGENT_AI_RUNTIME_DB_PASSWORD must be set}
+      MATH_AGENT_DB_NAME: ${MATH_AGENT_DB_NAME:-math_agent_rag}
+      # A completed Python graph is ACK-safe only after its immutable usage event is persisted; local tests can
+      # explicitly disable this fail-closed behavior, but production deployments must keep it enabled.
+      MATH_AGENT_USAGE_REQUIRED: ${MATH_AGENT_USAGE_REQUIRED:-true}
+      # Empty pricing is intentional and is reported as costKnown=false/-1, never as a fabricated currency amount.
+      MATH_AGENT_AI_PRICES_JSON: ${MATH_AGENT_AI_PRICES_JSON:-}
+      MATH_AGENT_HANDOUT_CHECKPOINT_DB: /app/data/handout-checkpoints.sqlite3
+      # Shared MySQL checkpoints are required when more than one ai-worker replica can claim a RabbitMQ task.
+      MATH_AGENT_HANDOUT_CHECKPOINT_BACKEND: ${MATH_AGENT_HANDOUT_CHECKPOINT_BACKEND:-mysql}
+      MATH_AGENT_HANDOUT_CONTEXT_LIMIT: ${MATH_AGENT_HANDOUT_CONTEXT_LIMIT:-12}
       MATH_AGENT_CONTAINER_TEXT_MODEL_PATH: ${MATH_AGENT_CONTAINER_TEXT_MODEL_PATH:-/models/BAAI/bge-small-zh-v1.5}
       MATH_AGENT_CONTAINER_RERANK_MODEL_PATH: ${MATH_AGENT_CONTAINER_RERANK_MODEL_PATH:-/models/BAAI/bge-reranker-v2-m3}
       MATH_AGENT_CONTAINER_CLIP_MODEL_PATH: ${MATH_AGENT_CONTAINER_CLIP_MODEL_PATH:-/models/damo/multi-modal_clip-vit-large-patch14_zh}
@@ -126,10 +148,16 @@ services:
       MATH_AGENT_LOCAL_TEXT_EMBEDDING_DEVICE: ${MATH_AGENT_LOCAL_TEXT_EMBEDDING_DEVICE:-cuda}
       MATH_AGENT_LOCAL_RERANK_DEVICE: ${MATH_AGENT_LOCAL_RERANK_DEVICE:-cuda}
       MATH_AGENT_LOCAL_CLIP_DEVICE: ${MATH_AGENT_LOCAL_CLIP_DEVICE:-cuda}
+      # BGE text-page retrieval reads the same immutable textbook index as Java. Without this explicit container path
+      # the worker returns 500, Java degrades it to zero semantic candidates, and production silently becomes BM25-only.
+      MATH_AGENT_PROCESSED_BOOKS_ROOT: /app/data/textbooks
     ports: ["${MATH_AGENT_WORKER_HOST_PORT:-8092}:8091"]
     volumes:
       - worker-data:/app/data
       - /mnt/d/ModelScope/models:/models:ro
+      # Production textbook retrieval is pinned to the c2 section corpus. Java and the worker must mount the same
+      # section-child metadata so parent aggregation, Milvus identities, and returned source pages cannot diverge.
+      - "${MATH_AGENT_PROCESSED_BOOKS_HOST_ROOT:-/mnt/c/Users/doob/Desktop/个人资料/高中数学/下载课本代码/tchMaterial-parser-main/tchMaterial-parser-main/processed_books_section_shadow_all_mini_c2}:/app/data/textbooks:ro"
     depends_on:
       mysql: {condition: service_healthy}
 
@@ -138,22 +166,41 @@ services:
       context: .
       dockerfile: backend-java/Dockerfile
     restart: unless-stopped
-    # Docker Desktop's inherited WSL resolver cannot resolve the configured OpenAI relay CNAME chain. Google DNS
-    # resolves it from the same host network and keeps provider calls inside the container deterministic.
-    dns:
-      - 8.8.8.8
-      - 1.1.1.1
     environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       # Keep the container on the same OpenAI-compatible endpoint and model as the host .env file.  The backend
       # binds these names into both Spring AI and the ReAct provider, preventing a relay key from falling back to
       # api.openai.com during a clean Docker start.
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api1.aisz.mom/v1}
-      OPENAI_CHAT_MODEL: ${OPENAI_CHAT_MODEL:-gpt-5.6-terra}
+      OPENAI_CHAT_MODEL: ${OPENAI_CHAT_MODEL:-gpt-5.6-luna}
+      # Spring AI's auto-configuration reads these canonical properties directly; keep them mapped to the same
+      # operator-provided relay settings used by the application's own provider catalog.
+      SPRING_AI_OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      SPRING_AI_OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api1.aisz.mom/v1}
+      SPRING_AI_OPENAI_CHAT_OPTIONS_MODEL: ${OPENAI_CHAT_MODEL:-gpt-5.6-luna}
+      # The handout pipeline has no speech/transcription stage. Spring AI 1.1.2 otherwise eagerly
+      # creates both unused audio beans and rejects a valid text-only deployment without a speech key.
+      SPRING_AUTOCONFIGURE_EXCLUDE: org.springframework.ai.model.openai.autoconfigure.OpenAiAudioSpeechAutoConfiguration,org.springframework.ai.model.openai.autoconfigure.OpenAiAudioTranscriptionAutoConfiguration
       MATH_AGENT_AI_DEFAULT_PROVIDER: ${MATH_AGENT_AI_DEFAULT_PROVIDER:-openai}
       MATH_AGENT_AI_CHAT_REQUEST_TIMEOUT_MS: ${MATH_AGENT_AI_CHAT_REQUEST_TIMEOUT_MS:-420000}
-      MATH_AGENT_WORKER_API_KEY: ${MATH_AGENT_WORKER_API_KEY:-local_worker_internal_key}
-      MATH_AGENT_VECTOR_INDEX_EMBEDDING_API_KEY: ${MATH_AGENT_WORKER_API_KEY:-local_worker_internal_key}
+      MATH_AGENT_WORKER_API_KEY: ${MATH_AGENT_WORKER_API_KEY:?MATH_AGENT_WORKER_API_KEY must be set}
+      MATH_AGENT_VECTOR_INDEX_EMBEDDING_API_KEY: ${MATH_AGENT_WORKER_API_KEY:?MATH_AGENT_WORKER_API_KEY must be set}
+      MATH_AGENT_AGENT_WORKER_SHARED_KEY: ${MATH_AGENT_AGENT_WORKER_SHARED_KEY:?MATH_AGENT_AGENT_WORKER_SHARED_KEY must be set}
+      MATH_AGENT_PYTHON_HANDOUT_ENABLED: ${MATH_AGENT_PYTHON_HANDOUT_ENABLED:-true}
+      MATH_AGENT_PYTHON_HANDOUT_BASE_URL: http://ai-worker:8091
+      MATH_AGENT_PYTHON_HANDOUT_GRAPH_VERSION: ${MATH_AGENT_PYTHON_HANDOUT_GRAPH_VERSION:-handout-v1}
+      MATH_AGENT_PYTHON_HANDOUT_TIMEOUT_MS: ${MATH_AGENT_PYTHON_HANDOUT_TIMEOUT_MS:-900000}
+      MATH_AGENT_PYTHON_HANDOUT_CONNECT_TIMEOUT_MS: ${MATH_AGENT_PYTHON_HANDOUT_CONNECT_TIMEOUT_MS:-5000}
+      MATH_AGENT_PYTHON_HANDOUT_LEASE_SAFETY_MARGIN_MS: ${MATH_AGENT_PYTHON_HANDOUT_LEASE_SAFETY_MARGIN_MS:-15000}
+      MATH_AGENT_PYTHON_TEACHING_DRAFT_ENABLED: ${MATH_AGENT_PYTHON_TEACHING_DRAFT_ENABLED:-true}
+      MATH_AGENT_PYTHON_TEACHING_DRAFT_TIMEOUT_MS: ${MATH_AGENT_PYTHON_TEACHING_DRAFT_TIMEOUT_MS:-420000}
+      MATH_AGENT_PYTHON_TEACHING_DRAFT_CONNECT_TIMEOUT_MS: ${MATH_AGENT_PYTHON_TEACHING_DRAFT_CONNECT_TIMEOUT_MS:-5000}
+      MATH_AGENT_FEISHU_TOKEN_ENCRYPTION_KEY: ${MATH_AGENT_FEISHU_TOKEN_ENCRYPTION_KEY:?MATH_AGENT_FEISHU_TOKEN_ENCRYPTION_KEY must be set}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD must be set}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:?RABBITMQ_DEFAULT_USER must be set}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:?RABBITMQ_DEFAULT_PASS must be set}
+      MATH_AGENT_MILVUS_ROOT_PASSWORD: ${MATH_AGENT_MILVUS_ROOT_PASSWORD:?MATH_AGENT_MILVUS_ROOT_PASSWORD must be set}
       # The image mounts the Windows SimHei file below; pass its in-container path so PDFBox never guesses a
       # Windows-only path and refuses a Chinese handout export inside Linux.
       MATH_AGENT_PDF_FONT_PATH: ${MATH_AGENT_PDF_FONT_PATH:-/app/fonts/cjk.ttf}
@@ -164,7 +211,14 @@ services:
       MATH_AGENT_TEACHER_SYNC_DOWNLOADER_SCRIPT: /app/scripts/download_feishu_url.py
       MATH_AGENT_TEACHER_SYNC_STAGING_ROOT: /app/data/teacher-source-imports
       MATH_AGENT_TEACHER_SYNC_ASSET_STORAGE_ROOT: /app/data/teacher-assets
-      MATH_AGENT_TEACHER_SYNC_SCHEDULER_ENABLED: ${MATH_AGENT_TEACHER_SYNC_SCHEDULER_ENABLED:-true}
+      MATH_AGENT_TEACHER_SYNC_SCHEDULER_ENABLED: ${MATH_AGENT_TEACHER_SYNC_SCHEDULER_ENABLED:-false}
+      # Production Feishu URL sync must be executable inside the backend container.  The Windows launcher sets the
+      # same flag, but Compose needs its own explicit default so a clean Docker start cannot silently disable the
+      # downloader and report a false-ready teacher retrieval service.
+      MATH_AGENT_TEACHER_SYNC_FEISHU_PROCESS_DOWNLOADER_ENABLED: ${MATH_AGENT_TEACHER_SYNC_FEISHU_PROCESS_DOWNLOADER_ENABLED:-true}
+      # Writing stages are durable RabbitMQ jobs. Keep consumers on by default so an accepted workflow cannot
+      # remain RUNNING/queued merely because the broker is healthy but no backend listener was enabled.
+      MATH_AGENT_RABBITMQ_LISTENERS_ENABLED: ${MATH_AGENT_RABBITMQ_LISTENERS_ENABLED:-true}
       MATH_AGENT_TEACHER_SYNC_SCHEDULER_INITIAL_DELAY_MS: ${MATH_AGENT_TEACHER_SYNC_SCHEDULER_INITIAL_DELAY_MS:-60000}
       MATH_AGENT_TEACHER_SYNC_SERVICE_SUBJECT_ID: ${MATH_AGENT_TEACHER_SYNC_SERVICE_SUBJECT_ID:-scheduler}
       MATH_AGENT_TEACHER_SYNC_DOCUMENT_IDS: ${MATH_AGENT_TEACHER_SYNC_DOCUMENT_IDS:-}
@@ -179,7 +233,7 @@ services:
       # interpolation: a run must show exactly which operator-approved source directory it mounted.
       - "/mnt/c/Users/doob/Desktop/个人资料/高考真题/数学高考真题试卷【点进去分开保存，链接长期在】/【新·PDF版】2008-2024·高考数学真题/版本3：数学（按年份分类）2008-2024:/app/data/gaokao-input:ro"
       - "./output/gaokao-evidence:/app/data/gaokao-evidence"
-      - /mnt/c/Users/doob/Desktop/个人资料/高中数学/下载课本代码/tchMaterial-parser-main/tchMaterial-parser-main/processed_books_section_shadow_all_mini_b4:/app/data/textbooks:ro
+      - "${MATH_AGENT_PROCESSED_BOOKS_HOST_ROOT:-/mnt/c/Users/doob/Desktop/个人资料/高中数学/下载课本代码/tchMaterial-parser-main/tchMaterial-parser-main/processed_books_section_shadow_all_mini_c2}:/app/data/textbooks:ro"
       - /mnt/c/Windows/Fonts/simhei.ttf:/app/fonts/cjk.ttf:ro
     depends_on:
       mysql: {condition: service_healthy}

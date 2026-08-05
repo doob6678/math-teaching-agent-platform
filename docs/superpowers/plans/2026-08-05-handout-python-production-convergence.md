@@ -43,13 +43,13 @@ No task may advance past a gate with a missing real artifact, a simulated provid
 - Test: `ai-worker-python/tests/test_runtime_database_permissions.py`
 - Test: `backend-java/src/test/java/com/doob/mathagent/agent/service/RuntimeConfigurationContractTest.java`
 
-- [ ] **Step 1: Write tests** asserting the worker never receives `MYSQL_ROOT_PASSWORD`, uses a dedicated `MATH_AGENT_AI_RUNTIME_DB_PASSWORD`, and the compose file contains no `dns:` override or host IP mutation.
-- [ ] **Step 2: Run the tests and verify failure.**
-- [ ] **Step 3: Add a least-privileged `ai_runtime` MySQL account** with access only to `handout_checkpoint`, `handout_event`, and `ai_usage_event`; keep Java's business credentials separate. Apply the grant after the tables exist and fail startup when the restricted account is absent.
-- [ ] **Step 4: Change Python checkpoint and usage connections** to the restricted credentials. Keep SQLite only when `MATH_AGENT_HANDOUT_CHECKPOINT_BACKEND=sqlite` is explicitly set for single-process development.
-- [ ] **Step 5: Remove compose DNS entries** and use the already configured service URLs. Verify endpoint resolution from the real WSL Compose network rather than changing DNS.
-- [ ] **Step 6: Run the tests and `docker compose config`; expected: no root DB secret in `ai-worker`, no DNS override, and production startup fails closed on missing runtime credentials.
-- [ ] **Step 7: Commit** `fix: isolate ai runtime credentials and preserve host networking`.
+- [✅️] **Step 1: Write tests** asserting the worker never receives `MYSQL_ROOT_PASSWORD`, uses a dedicated `MATH_AGENT_AI_RUNTIME_DB_PASSWORD`, and the compose file contains no `dns:` override or host IP mutation.
+- [✅️] **Step 2: Run the tests and verify failure.**
+- [✅️] **Step 3: Add a least-privileged `ai_runtime` MySQL account** with access only to `handout_checkpoint`, `handout_event`, and `ai_usage_event`; keep Java's business credentials separate. Apply the grant after the tables exist and fail startup when the restricted account is absent.
+- [✅️] **Step 4: Change Python checkpoint and usage connections** to the restricted credentials. Keep SQLite only when `MATH_AGENT_HANDOUT_CHECKPOINT_BACKEND=sqlite` is explicitly set for single-process development.
+- [✅️] **Step 5: Remove compose DNS entries** and use the already configured service URLs. Verify endpoint resolution from the real WSL Compose network rather than changing DNS.
+- [✅️] **Step 6: Run the tests and `docker compose config`; expected: no root DB secret in `ai-worker`, no DNS override, and production startup fails closed on missing runtime credentials.
+- [✅️] **Step 7: Commit** `fix: isolate ai runtime credentials and preserve host networking`.
 
 ## Task 3: Make the Teaching Task the Only Business Workflow
 
