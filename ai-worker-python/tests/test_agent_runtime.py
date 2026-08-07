@@ -33,8 +33,6 @@ class AgentRuntimeContractTest(unittest.TestCase):
             headers={"Authorization": "Bearer worker-test-key"},
             json={
                 "runId": "run-1",
-                "subject": {"tenantId": "school-a", "subjectId": "student-a", "subjectType": "student"},
-                "capabilityToken": "opaque-token",
                 "allowedTools": ["search_visible_resources"],
                 "requestedTool": "read_resource_assets",
                 "message": "请看这张图",
@@ -51,8 +49,6 @@ class AgentRuntimeContractTest(unittest.TestCase):
             headers={"Authorization": "Bearer worker-test-key"},
             json={
                 "runId": "run-2",
-                "subject": {"tenantId": "school-a", "subjectId": "student-a", "subjectType": "student"},
-                "capabilityToken": "opaque-token",
                 "allowedTools": ["search_visible_resources"],
                 "requestedTool": "search_visible_resources",
                 "message": "我想继续学习函数单调性",
@@ -64,7 +60,32 @@ class AgentRuntimeContractTest(unittest.TestCase):
         self.assertIn("event: started", response.text)
         self.assertIn("event: tool_call", response.text)
         self.assertIn('"name":"search_visible_resources"', response.text)
+        self.assertNotIn('"tenantId"', response.text)
+        self.assertNotIn('"subjectId"', response.text)
         self.assertNotIn('"path"', response.text)
+
+    def test_agent_run_rejects_identity_fields_from_the_transport_contract(self):
+        for field, value in (
+            ("subject", {"tenantId": "forbidden-tenant", "subjectId": "student-a", "subjectType": "student"}),
+            ("tenantId", "forbidden-tenant"),
+            ("subjectId", "student-a"),
+            ("subjectType", "student"),
+            ("capabilityToken", "forbidden-token"),
+        ):
+            with self.subTest(field=field):
+                response = self.client.post(
+                    "/v1/agent-runs/sync",
+                    headers={"Authorization": "Bearer worker-test-key"},
+                    json={
+                        "runId": "run-identity-reject",
+                        "allowedTools": ["search_visible_resources"],
+                        "message": "函数单调性",
+                        field: value,
+                    },
+                )
+
+                self.assertEqual(response.status_code, 422)
+                self.assertIn(field, response.text)
 
     def test_resource_asset_tool_schema_accepts_only_an_opaque_asset_id(self):
         schema = AgentRuntime._tool_parameters("read_resource_asset")

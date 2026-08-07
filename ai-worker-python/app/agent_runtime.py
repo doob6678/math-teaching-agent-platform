@@ -9,25 +9,21 @@ from typing import Any, TypedDict
 
 from fastapi import HTTPException
 from langgraph.graph import END, START, StateGraph
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 import requests
 from app.usage import UsageEvent, UsageLedger, cost_for, fallback_tokens
 
 
-class AgentSubject(BaseModel):
-    tenantId: str = Field(min_length=1)
-    subjectId: str = Field(min_length=1)
-    subjectType: str = Field(min_length=1)
-
-
 class AgentRunRequest(BaseModel):
+    """Python AI 执行协议只接收运行标识和受限输入，身份由 Java 按 runId 反查。"""
+
+    model_config = ConfigDict(extra="forbid")
+
     runId: str = Field(min_length=1)
-    subject: AgentSubject
-    capabilityToken: str = Field(min_length=1)
     allowedTools: list[str] = Field(min_length=1)
     message: str = Field(min_length=1)
     toolResult: dict[str, Any] | None = None
-    # Enabled only by the deterministic transport test. Production tool selection comes from a model tool call.
+    # 仅供确定性传输测试使用；生产环境中的工具选择必须来自模型调用。
     requestedTool: str | None = None
 
 
@@ -82,7 +78,6 @@ class AgentRuntime:
                     "name": tool_name,
                     # Only opaque run data crosses the boundary; paths, SQL, and provider secrets never do.
                     "arguments": {"query": request.message, "runId": request.runId},
-                    "capabilityToken": request.capabilityToken,
                 },
             )}
         if request.toolResult is not None:
@@ -230,11 +225,7 @@ class AgentRuntime:
                     "arguments": {
                         **normalized_arguments,
                         "runId": request.runId,
-                        "tenantId": request.subject.tenantId,
-                        "subjectType": request.subject.subjectType,
-                        "subjectId": request.subject.subjectId,
                     },
-                    "capabilityToken": request.capabilityToken,
                 },
                 actual_usage=actual,
             )
@@ -274,7 +265,6 @@ class AgentRuntime:
         if route is None:
             raise HTTPException(status_code=422, detail="No Java broker route is registered for the requested tool")
         payload = dict(tool_call.get("arguments") or {})
-        payload["capabilityToken"] = tool_call["capabilityToken"]
         try:
             response = requests.post(
                 f"{base_url}{route}",

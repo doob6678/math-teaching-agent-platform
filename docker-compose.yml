@@ -154,7 +154,7 @@ services:
     ports: ["${MATH_AGENT_WORKER_HOST_PORT:-8092}:8091"]
     volumes:
       - worker-data:/app/data
-      - /mnt/d/ModelScope/models:/models:ro
+      - "${MATH_AGENT_MODEL_ROOT:?MATH_AGENT_MODEL_ROOT must be set}:/models:ro"
       # Production textbook retrieval is pinned to the c2 section corpus. Java and the worker must mount the same
       # section-child metadata so parent aggregation, Milvus identities, and returned source pages cannot diverge.
       - "${MATH_AGENT_PROCESSED_BOOKS_HOST_ROOT:-/mnt/c/Users/doob/Desktop/个人资料/高中数学/下载课本代码/tchMaterial-parser-main/tchMaterial-parser-main/processed_books_section_shadow_all_mini_c2}:/app/data/textbooks:ro"
@@ -229,12 +229,11 @@ services:
       # remains for unrelated runtime data, while these two operator-auditable paths survive container replacement.
       - ./.local-storage/teacher-source-imports:/app/data/teacher-source-imports
       - ./.local-storage/teacher-assets:/app/data/teacher-assets
-      # Fixed WSL source path for the real 2008–2024 paper collection. This is deliberately not an environment
-      # interpolation: a run must show exactly which operator-approved source directory it mounted.
-      - "/mnt/c/Users/doob/Desktop/个人资料/高考真题/数学高考真题试卷【点进去分开保存，链接长期在】/【新·PDF版】2008-2024·高考数学真题/版本3：数学（按年份分类）2008-2024:/app/data/gaokao-input:ro"
+      # 题库输入目录由部署环境显式提供，预检脚本会校验批准范围内的 PDF 是否完整。
+      - "${MATH_AGENT_GAOKAO_INPUT_HOST_ROOT:?MATH_AGENT_GAOKAO_INPUT_HOST_ROOT must be set}:/app/data/gaokao-input:ro"
       - "./output/gaokao-evidence:/app/data/gaokao-evidence"
       - "${MATH_AGENT_PROCESSED_BOOKS_HOST_ROOT:-/mnt/c/Users/doob/Desktop/个人资料/高中数学/下载课本代码/tchMaterial-parser-main/tchMaterial-parser-main/processed_books_section_shadow_all_mini_c2}:/app/data/textbooks:ro"
-      - /mnt/c/Windows/Fonts/simhei.ttf:/app/fonts/cjk.ttf:ro
+      - "${MATH_AGENT_PDF_FONT_HOST_PATH:?MATH_AGENT_PDF_FONT_HOST_PATH must be set}:/app/fonts/cjk.ttf:ro"
     depends_on:
       mysql: {condition: service_healthy}
       redis: {condition: service_healthy}

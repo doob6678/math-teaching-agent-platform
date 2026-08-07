@@ -163,7 +163,8 @@ class AgentStreamingRuntime:
 
     @staticmethod
     def _bounded_tool_call(request: AgentRunRequest, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        return {"name": name, "arguments": {**arguments, "runId": request.runId, "tenantId": request.subject.tenantId, "subjectType": request.subject.subjectType, "subjectId": request.subject.subjectId}, "capabilityToken": request.capabilityToken}
+        # Java 根据 runId 解析持久化身份；Python 只传递模型已校验的工具参数。
+        return {"name": name, "arguments": {**arguments, "runId": request.runId}}
 
     @staticmethod
     def _initial_messages(request: AgentRunRequest) -> list[dict[str, Any]]:

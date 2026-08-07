@@ -9,12 +9,15 @@ separate legacy `milvus-standalone` container and must not be used for this proj
 
 Run from the repository root in WSL. Keep `.env` local and replace every required placeholder. The canonical local
 provider is `https://api1.aisz.mom/v1` with model `gpt-5.6-luna`; both are explicit defaults and can be overridden
-only by `OPENAI_BASE_URL`/`OPENAI_CHAT_MODEL` in `.env`.
+only by `OPENAI_BASE_URL`/`OPENAI_CHAT_MODEL` in `.env`. The host paths in `.env` are required read-only mounts:
+`MATH_AGENT_MODEL_ROOT`, `MATH_AGENT_PROCESSED_BOOKS_HOST_ROOT`, `MATH_AGENT_PDF_FONT_HOST_PATH`, and
+`MATH_AGENT_GAOKAO_INPUT_HOST_ROOT`.
 
 ```bash
 cp .env.example .env
 chmod 600 .env
 # Edit .env with deployment-owned values. Do not commit it.
+bash scripts/local/preflight-wsl.sh .env
 docker compose --env-file .env config -q
 ```
 
