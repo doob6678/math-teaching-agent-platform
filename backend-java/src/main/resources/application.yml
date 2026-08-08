@@ -1,11 +1,16 @@
 spring:
   application:
     name: math-agent-rag-backend
+  flyway:
+    validate-on-migrate: true
+    clean-disabled: true
   rabbitmq:
     # The Docker deployment resolves infrastructure by Compose service name. Keeping this here prevents an
     # environment override from silently routing a container back to its own loopback interface.
     host: rabbitmq
     port: 5672
+    username: ${RABBITMQ_DEFAULT_USER:}
+    password: ${RABBITMQ_DEFAULT_PASS:}
     listener:
       simple:
         # RabbitMQ is optional for local HTTP development. Keep the consumers off by default when the
@@ -15,6 +20,11 @@ spring:
     redis:
       host: redis
       port: 6379
+      # Redis authentication is deployment-owned; an empty value is intentionally not a usable production default.
+      password: ${REDIS_PASSWORD:}
+      # Keep the URL and the structured host/password properties identical so Lettuce cannot silently connect
+      # without authentication when a profile reads the URL form.
+      url: redis://:${REDIS_PASSWORD:}@redis:6379
   servlet:
     encoding:
       # Resource paths and titles are user-provided Chinese text. Force UTF-8 before Jackson reads requests so a
@@ -45,7 +55,17 @@ spring:
         options:
           # Keep text and image explanations on the same operator-selected multimodal model; the value is sourced
           # from the same environment file as the endpoint so a relay key is never sent to api.openai.com by mistake.
-          model: ${OPENAI_CHAT_MODEL:gpt-5.6-terra}
+          model: ${OPENAI_CHAT_MODEL:gpt-5.6-luna}
+sa-token:
+  # Browser sessions use the backend cookie; frontend JavaScript must not persist or resend the raw token.
+  is-read-header: false
+  is-read-cookie: true
+  is-write-header: false
+  cookie:
+    http-only: true
+    secure: ${MATH_AGENT_AUTH_COOKIE_SECURE:false}
+    same-site: Lax
+    path: /
 server:
   port: 8080
   tomcat:
@@ -54,16 +74,33 @@ server:
     uri-encoding: UTF-8
 
 math-agent:
+  security:
+    # Forwarded IP headers are untrusted until the deployment explicitly places a trusted reverse proxy in front.
+    trusted-proxy-headers: ${MATH_AGENT_SECURITY_TRUSTED_PROXY_HEADERS:false}
+  rabbitmq:
+    # Spring's simple listener switch does not apply to project-owned factories; all custom consumers use this gate.
+    listeners-enabled: ${MATH_AGENT_RABBITMQ_LISTENERS_ENABLED:false}
+  auth:
+    # Public students enter the local enrollment tenant; a request body must never select a tenant.
+    registration-tenant-id: ${MATH_AGENT_AUTH_REGISTRATION_TENANT_ID:default}
   feishu:
-    # The local Compose profile needs a stable 256-bit key so encrypted OAuth records remain readable after a
-    # container recreation. Production replaces this file with its deployment configuration, not an environment key.
-    token-encryption-key: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+    # Encrypted OAuth records require a deployment-owned 256-bit key; never ship a usable key in source control.
+    token-encryption-key: ${MATH_AGENT_FEISHU_TOKEN_ENCRYPTION_KEY:}
   ai:
     default-provider: openai
+    # Java only signs opaque route grants; provider keys and endpoints belong to ai-worker.
+    route-grant-secret: ${MATH_AGENT_PROVIDER_ROUTE_GRANT_SECRET:}
+    route-grant-ttl-seconds: ${MATH_AGENT_PROVIDER_ROUTE_GRANT_TTL_SECONDS:120}
+    # Prices belong to the deployment because the OpenAI-compatible relay does not expose a reliable bill in every reply.
+    # Blank keeps token ceilings active and marks monetary estimates unknown instead of fabricating a price.
+    pricing-json: ${MATH_AGENT_AI_PRICES_JSON:}
     # A streamed student answer must begin promptly; this is per provider attempt, not an unbounded request lifetime.
     chat:
       request-timeout-ms: 30000
       max-output-tokens: 1200
+      # One shared provider semaphore covers synchronous and streaming model calls so concurrent requests cannot
+      # exceed the operator's GPU/provider budget. The value is deployment configuration, not a per-request pool.
+      max-concurrency: ${MATH_AGENT_AI_CHAT_MAX_CONCURRENCY:4}
       # Retry only provider statuses received before the first stream delta, so a retry cannot duplicate tool work.
       stream-max-attempts: 3
       retry-base-delay-ms: 400
@@ -78,7 +115,7 @@ math-agent:
       # endpoint above; otherwise one UI path works while the other silently targets a different provider.
       base-url: ${OPENAI_BASE_URL:https://api1.aisz.mom/v1}
       api-key: ${OPENAI_API_KEY:}
-      chat-model: ${OPENAI_CHAT_MODEL:gpt-5.6-terra}
+      chat-model: ${OPENAI_CHAT_MODEL:gpt-5.6-luna}
     deepseek:
       name: deepseek
       base-url: https://api.deepseek.com
@@ -94,11 +131,16 @@ math-agent:
       # This must be an Ark model ID/endpoint accepted by /api/v3/chat/completions.
       chat-model: doubao-seed-2-0-lite-260428
   teaching:
+    lecture-task:
+      # The lease is longer than the configured provider timeout and is renewed while the task is active.
+      lease-seconds: ${MATH_AGENT_TEACHING_LECTURE_TASK_LEASE_SECONDS:900}
+      heartbeat-milliseconds: ${MATH_AGENT_TEACHING_LECTURE_TASK_HEARTBEAT_MILLISECONDS:15000}
     ai-draft:
       max-retries: 1
-    # Teacher-side source transcription is independent from student uploads. Student images go directly to ReAct.
+    # Teacher-side source transcription is independent from student uploads. Student images go directly to ReAct;
+    # Luna is the current default and can still be explicitly overridden through this property.
     image-transcription:
-      openai-model: gpt-5.6-terra
+      openai-model: gpt-5.6-luna
       timeout-ms: 12000
   student:
     explanation:
@@ -108,13 +150,15 @@ math-agent:
       conversation-history-fetch-limit: 200
       long-term-memory-top-k: 5
       long-term-memory-max-chars: 12000
+      # A semantic graph match must clear this cosine boundary; lower scores remain lexical-only and are observable in logs.
+      knowledge-graph-semantic-min-score: 0.45
   database:
     enabled: true
     migration:
-      runner-enabled: false
+      runner-enabled: ${MATH_AGENT_DB_MIGRATION_RUNNER_ENABLED:true}
     url: jdbc:mysql://mysql:3306/math_agent_rag?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true
     username: root
-    password: local_mysql_7f9b1cc8a2d44529b6e481d5
+    password: ${MYSQL_ROOT_PASSWORD:}
   ingestion:
     # Real-paper paths are mounted by docker-compose.yml and written here explicitly. Do not introduce an
     # environment-variable fallback: reproducible ingestion must have one reviewable configuration source.
@@ -137,28 +181,26 @@ math-agent:
     redisson:
       enabled: true
       address: redis://redis:6379
-    capability-store:
-      enabled: true
-      key-prefix: math-agent:security:capability
+      # Redisson is a separate client from Spring Data and therefore must carry the same pinned credential explicitly.
+      password: ${REDIS_PASSWORD:}
     rate-limit:
       enabled: true
       key-prefix: math-agent:api:rate-limit
     search-cache:
-      # Teacher-source re-sync must be visible to the next retrieval immediately; operators may opt in explicitly
-      # after an audited corpus build, but stale cache entries are unsafe as the local default.
-      enabled: false
+      # The c2 textbook corpus is immutable after the audited Milvus build; enable the authenticated Redis cache so
+      # the production chain exposes the same stable retrieval result while still using the c2 corpus version in keys.
+      enabled: true
       key-prefix: math-agent:retrieval:textbook-search
       ttl: 10m
       null-value-ttl: 1m
   vector-index:
-    # Local WSL Milvus is intentionally unauthenticated. Remote deployments may override this value in a separate
-    # profile, but local startup must not require a needless environment variable.
+    # Local WSL Milvus is authenticated as well; the root credential is supplied only through the environment.
     enabled: true
     # Containers resolve Milvus by service name while Windows development keeps the loopback default.
     milvus-uri: http://milvus:19530
     # Keep credentials outside source control. Local startup resolves the authenticated WSL container password into
     # this environment variable; deployments provide the same variable through their secret manager.
-    milvus-token: root:local_milvus_8f2c6a4d1e9b3f7c5a0d
+    milvus-token: root:${MATH_AGENT_MILVUS_ROOT_PASSWORD:}
     collection-name: math_agent_teacher_text_blocks_bge
     student-memory-collection-name: math_agent_student_memories_bge
     textbook-text-collection-name: textbook_text_collection
@@ -184,11 +226,15 @@ math-agent:
     # below the Windows-to-WSL proxy timeout while preserving batched ingestion throughput.
     textbook-upsert-batch-size: 16
     textbook-timeout-ms: 120000
+    # Production textbook text retrieval is backed by the c2 section-child corpus. This version is written into
+    # Milvus metadata so a stale page-level corpus cannot silently remain searchable after the runtime switch.
     textbook-corpus-version: textbook-section-c2-milvus-v1
     # The local worker proxies the configured embedding provider. Runtime images intentionally exclude the
     # The Compose worker serves this local BGE model in the same 512-dimensional vector space as Milvus.
     embedding-base-url: http://ai-worker:8091/v1
-    embedding-api-key: local_worker_internal_key
+    # Java's Milvus client and the Worker must share the same injected credential; a stale literal silently disables
+    # BGE query embedding while BM25 and the final reranker continue to appear healthy.
+    embedding-api-key: ${MATH_AGENT_WORKER_API_KEY:}
     embedding-model: local_bge_embedding
     # DashScope's compatible endpoint accepts at most ten input strings per request; keeping this configurable lets
     # another provider raise or lower the limit without changing indexing code.
@@ -198,11 +244,17 @@ math-agent:
     # bounded while allowing the real worker to finish instead of triggering an expensive embedding fallback.
     request-timeout-ms: 120000
   teacher:
+    upload:
+      # Crashed multipart requests are reclaimed only inside the backend-owned upload namespace.
+      staging-retention-hours: ${MATH_AGENT_TEACHER_UPLOAD_STAGING_RETENTION_HOURS:24}
+      staging-cleanup-interval-ms: ${MATH_AGENT_TEACHER_UPLOAD_STAGING_CLEANUP_INTERVAL_MS:3600000}
     sync:
       feishu:
         # Local development uses the approved research-sharing folder. Operators can override the URL in the environment.
         default-url: https://my.feishu.cn/drive/folder/XVn7fXppJlQMK5dkuOkc1ePan2f
-        process-downloader-enabled: true
+        # Production URL synchronization is an explicit provider capability; deployments may disable it, but a clean
+        # backend must not silently report Feishu retrieval unavailable when the configured bot credentials are valid.
+        process-downloader-enabled: ${MATH_AGENT_TEACHER_SYNC_FEISHU_PROCESS_DOWNLOADER_ENABLED:true}
         downloader-script: ${MATH_AGENT_TEACHER_SYNC_DOWNLOADER_SCRIPT:/app/scripts/download_feishu_url.py}
         appkey-path: ${MATH_AGENT_TEACHER_SYNC_APPKEY_PATH:}
         staging-root: ${MATH_AGENT_TEACHER_SYNC_STAGING_ROOT:/app/data/teacher-source-imports}
@@ -222,13 +274,13 @@ math-agent:
         publisher-confirm-timeout-milliseconds: 5000
       scheduler:
         # Background sync is opt-in. Enabling it additionally requires a real administrator service identity.
-        enabled: ${MATH_AGENT_TEACHER_SYNC_SCHEDULER_ENABLED:true}
+        enabled: ${MATH_AGENT_TEACHER_SYNC_SCHEDULER_ENABLED:false}
         initial-delay-ms: ${MATH_AGENT_TEACHER_SYNC_SCHEDULER_INITIAL_DELAY_MS:60000}
         fixed-delay-ms: ${MATH_AGENT_TEACHER_SYNC_SCHEDULER_DELAY_MS:300000}
-        tenant-id: default
-        service-role: admin
-        service-subject-id: ${MATH_AGENT_TEACHER_SYNC_SERVICE_SUBJECT_ID:scheduler}
-        # Empty means all registered Feishu roots; operators can restrict this with a comma-separated allowlist.
+        tenant-id: ${MATH_AGENT_TEACHER_SYNC_SCHEDULER_TENANT_ID:default}
+        service-role: ${MATH_AGENT_TEACHER_SYNC_SERVICE_ROLE:admin}
+        service-subject-id: ${MATH_AGENT_TEACHER_SYNC_SERVICE_SUBJECT_ID:}
+        # Empty is invalid when the scheduler is enabled; it never means all registered roots.
         document-ids: ${MATH_AGENT_TEACHER_SYNC_DOCUMENT_IDS:}
         worker-lease-timeout-seconds: ${MATH_AGENT_TEACHER_SYNC_WORKER_LEASE_TIMEOUT_SECONDS:1800}
     search:
@@ -236,6 +288,10 @@ math-agent:
         # CPU BGE reranking is quadratic in candidate count. Twelve evidence blocks preserve one candidate per
         # narrow-library document while keeping the post-warmup P95 target below five seconds on the local worker.
         max-block-rerank-candidates: 12
+        # Keep exact theorem/formula hits that BGE misses outside the global Top-N. The final Cross-Encoder still
+        # owns the visible order; this switch only controls same-document candidate admission.
+        lexical-rescue-enabled: ${MATH_AGENT_TEACHER_SEARCH_RUNTIME_LEXICAL_RESCUE_ENABLED:true}
+        max-lexical-rescue-blocks-per-document: ${MATH_AGENT_TEACHER_SEARCH_RUNTIME_MAX_LEXICAL_RESCUE_BLOCKS_PER_DOCUMENT:3}
     formula-recognition:
       # Only documents uploaded with parseMode=AI consume this budget. TEXT parsing remains local and free.
       enabled: true
@@ -250,9 +306,21 @@ math-agent:
         max-query-chars: 120
         max-clauses: 2
         max-graph-tags: 4
+        # 短术语、章节编号和公式优先保留 BM25/标题路线；长自然语言仍由 BGE 优先参与粗融合。
+        lexical-first-max-query-chars: 24
+        # 长自然语言允许少量语料标题上下文帮助 BGE 对齐正式术语；短/结构化查询只发送纯主题，避免标题回灌污染向量查询。
+        semantic-title-context-limit: 3
+        # 生产教材链路固定采用语义优先的稳定候选顺序；动态词法优先保留为可回放实验开关。
+        dynamic-route-enabled: false
+        # 生产评测使用原始 Agent 查询，避免把查询清洗变化和排序策略变化混在同一次比较中。
+        normalize-agent-wrapper-enabled: false
       rerank:
         max-document-candidates: 3
         max-pages-per-document: 3
+        # 粗召回池独立于最终重排池，先扩大候选再用 RRF 筛选，避免正确教材在重排前丢失。
+        max-coarse-document-candidates: 5
+        max-coarse-pages-per-document: 5
+        coarse-rrf-k: 60
         # Rerank the complete bounded evidence matrix.  Response count remains
         # request-controlled; these are candidate-comparison limits only.
         max-rerank-documents: 3
@@ -260,14 +328,15 @@ math-agent:
         page-text-chars: 120
         formula-text-chars: 40
         document-text-chars: 320
+        # 精确标题查询通常需要跨过目录页/相邻页才能命中真正定义页；仅扩大该路由的单书候选，不改变普通查询的资源上限。
+        lexical-dominant-pages-per-document: 5
   protocol:
     mcp:
       registry:
         clients: []
   agent-worker:
-    # Dedicated Worker authentication is intentionally separate from user capability tokens.
-    shared-key: local_agent_worker_shared_key
-    capability-secret: local_agent_worker_capability_secret
+    # Dedicated Worker authentication is intentionally separate from browser user sessions.
+    shared-key: ${MATH_AGENT_AGENT_WORKER_SHARED_KEY:}
     # Visual-model calls receive only a bounded, permission-checked data URL; large originals stay in Java storage.
     asset-max-bytes: 4194304
     dispatch:
@@ -279,12 +348,40 @@ math-agent:
       # This is the single global cap for AI work, including the 2024 Luna visual ingestion runner.
       # The runner may choose a lower per-run count but must reject any value above this shared limit.
       max-concurrency: 20
-      lease-seconds: 300
+      # The lease is renewed during model/PDF work; the value remains above the longest configured provider attempt.
+      lease-seconds: ${MATH_AGENT_AGENT_WORKER_LEASE_SECONDS:900}
       heartbeat-milliseconds: 15000
     recovery-milliseconds: 30000
     liveness-check-milliseconds: 15000
     heartbeat-timeout-milliseconds: 45000
     maximum-attempts: 3
+  python-agent:
+    # Generic Agent model execution is Python-only; Java retains policy, leases, trace and public response mapping.
+    base-url: ${MATH_AGENT_PYTHON_AGENT_BASE_URL:http://ai-worker:8091}
+    worker-key: ${MATH_AGENT_WORKER_API_KEY:}
+    timeout-ms: ${MATH_AGENT_PYTHON_AGENT_TIMEOUT_MS:120000}
+    connect-timeout-ms: ${MATH_AGENT_PYTHON_AGENT_CONNECT_TIMEOUT_MS:5000}
+    lease-safety-margin-ms: ${MATH_AGENT_PYTHON_AGENT_LEASE_SAFETY_MARGIN_MS:15000}
+  python-handout:
+    # New handouts execute only in Python; Java retains authorization, task/queue state and publication.
+    # Disabling this is an explicit operational outage/rollback action, never a silent Java-AI fallback.
+    enabled: ${MATH_AGENT_PYTHON_HANDOUT_ENABLED:true}
+    base-url: ${MATH_AGENT_PYTHON_HANDOUT_BASE_URL:http://ai-worker:8091}
+    worker-key: ${MATH_AGENT_WORKER_API_KEY:}
+    graph-version: ${MATH_AGENT_PYTHON_HANDOUT_GRAPH_VERSION:handout-v1}
+    timeout-ms: ${MATH_AGENT_PYTHON_HANDOUT_TIMEOUT_MS:900000}
+    connect-timeout-ms: ${MATH_AGENT_PYTHON_HANDOUT_CONNECT_TIMEOUT_MS:5000}
+    lease-safety-margin-ms: ${MATH_AGENT_PYTHON_HANDOUT_LEASE_SAFETY_MARGIN_MS:15000}
+  legacy-java-ai:
+    # Java may keep task/publication infrastructure, but direct provider calls are retired. Enabling this requires
+    # an operator's explicit rollback decision together with disabling the Python handout route; it is never fallback.
+    enabled: ${MATH_AGENT_LEGACY_JAVA_AI_ENABLED:false}
+  python-teaching-draft:
+    # The teaching-task AI stage is migrated independently from the larger handout graph. Disable this flag to
+    # resume an existing task through the legacy Java provider without changing the business task or PDF contract.
+    enabled: ${MATH_AGENT_PYTHON_TEACHING_DRAFT_ENABLED:false}
+    timeout-ms: ${MATH_AGENT_PYTHON_TEACHING_DRAFT_TIMEOUT_MS:420000}
+    connect-timeout-ms: ${MATH_AGENT_PYTHON_TEACHING_DRAFT_CONNECT_TIMEOUT_MS:5000}
   knowledge:
     graph-spine:
       seed-enabled: true
@@ -293,9 +390,8 @@ math-agent:
       method-node-limit: 100
       source-location: classpath:knowledge/graph-spine-v0.1.md
   resources:
-    # c2 is the searchable small-heading corpus.  The original page corpus b4
-    # remains independently stored for page-level comparison and rollback; it
-    # is not overwritten or merged into the section index.
+    # Production textbook retrieval uses the c2 section-child corpus. Each child keeps its source page while the
+    # Java service groups section_id siblings into a transient logical parent for final evidence reranking.
     processed-books-root: /app/data/textbooks
     project-test-data-root: C:/Users/doob/Desktop/code/dev/math_agent_rag/文档/项目测试数据位置
     design-spec-root: C:/Users/doob/Desktop/code/dev/math_agent_rag/文档/设计方案体系

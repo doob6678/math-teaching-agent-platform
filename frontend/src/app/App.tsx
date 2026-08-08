@@ -47,6 +47,7 @@ import {
   TeacherResourceBlockSearchAuditEvent,
   TeacherResourceBlockSearchResponse,
   TeacherResourceDocumentResponse,
+  TeacherAccountProvisionResponse,
   TeacherSourceSyncCheckpointResponse,
   TeacherSourceSyncJobResponse,
   TextbookSearchResponse,
@@ -87,6 +88,7 @@ import { TeachingConversationPanel, TeachingConversationThreadItem } from "./com
 import { SyncCheckpointView, TeacherResourcePanel } from "./components/TeacherResourcePanel";
 import { PdfCanvasPreview } from "./components/PdfCanvasPreview";
 import { KnowledgeWorkspace } from "./knowledge/KnowledgeWorkspace";
+import { canLoadTeacherResourceSyncJobs } from "./teacherResourceSyncVisibility";
 
 export { MultiAgentWritingPanel } from "./components/MultiAgentWritingPanel";
 export { StudentDashboardPanel } from "./components/StudentDashboardPanel";
@@ -108,6 +110,9 @@ const LEGACY_TEACHING_TASK_STORAGE_KEY = "math-agent:last-teaching-task-id";
 const LEGACY_HANDOUT_COLLABORATION_STORAGE_KEY = "math-agent:handout-collaboration-thread";
 // This timer is used only after an SSE transport interruption; normal task progress is event-driven.
 const TASK_RECOVERY_POLL_DELAY_MS = 5_000;
+// Keep the completed response behind the character queue so its full card never replaces unread SSE text at once.
+const STUDENT_EXPLANATION_FINAL_CARD_DELAY_PER_CHARACTER_MS = 12;
+const STUDENT_EXPLANATION_FINAL_CARD_HANDOFF_BUFFER_MS = 80;
 
 type MathSegment = {
   key: string;
@@ -355,8 +360,15 @@ export function App() {
   const [batchFolderPath, setBatchFolderPath] = useState("");
   const [loginUsername, setLoginUsername] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
-  const [authSession, setAuthSession] = useState<LoginResponse | null>(() => readStoredAuthSession());
-  const [authSessionChecked, setAuthSessionChecked] = useState(() => readStoredAuthSession() === null);
+  // Only administrators can submit this form. The backend derives tenant and fixed teacher role from its session.
+  const [teacherProvisionUsername, setTeacherProvisionUsername] = useState("");
+  const [teacherProvisionPassword, setTeacherProvisionPassword] = useState("");
+  const [teacherProvisioning, setTeacherProvisioning] = useState(false);
+  const [teacherProvisionError, setTeacherProvisionError] = useState("");
+  const [teacherProvisionResult, setTeacherProvisionResult] = useState<TeacherAccountProvisionResponse | null>(null);
+  // The backend HttpOnly cookie is the durable session. Only non-sensitive session metadata lives in React memory.
+  const [authSession, setAuthSession] = useState<LoginResponse | null>(null);
+  const [authSessionChecked, setAuthSessionChecked] = useState(false);
   const hasVerifiedSession = authSessionChecked && authSession !== null;
   const canReadRetrievalAudit = authSession?.role === "teacher" || authSession?.role === "admin";
   // Teacher-resource APIs are intentionally restricted by the backend. Keep the client-side lifecycle aligned with
@@ -399,7 +411,6 @@ export function App() {
   useEffect(() => {
     /** Avoids leaving a restarted backend's invalid token displayed as an active browser login. */
     const clearRejectedSession = () => {
-      globalThis.localStorage?.removeItem("math-agent:auth-session");
       setAuthSession(null);
       setAuthSessionChecked(true);
       setAuthError("登录态已失效，请重新登录。");
@@ -409,10 +420,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (!authSession) {
-      setAuthSessionChecked(true);
-      return;
-    }
+    // Remove tokens persisted by pre-HttpOnly builds before the first authenticated request.
     let active = true;
     setAuthSessionChecked(false);
     api
@@ -425,7 +433,6 @@ export function App() {
       })
       .catch(() => {
         if (!active) return;
-        globalThis.localStorage?.removeItem("math-agent:auth-session");
         setAuthSession(null);
         setAuthError("登录态已失效，请重新登录。");
         setAuthSessionChecked(true);
@@ -454,7 +461,7 @@ export function App() {
       return;
     }
     refreshMcpState();
-  }, [api, activePage, authSession?.tokenValue]);
+  }, [api, activePage, authSession?.userId]);
 
   function loadStudentDashboard(studentId = "") {
     setLoadingStudentDashboard(true);
@@ -518,7 +525,7 @@ export function App() {
       .catch((error: Error) => setStudentDashboardError(toUserFacingError(error)));
   }
 
-  /** Submits the high-value targeted-handout action through the backend capability-token flow. */
+  /** Submits the targeted-handout action through the authenticated user session. */
   function handleGenerateTargetedHandout() {
     const studentId = authSession?.role === "student"
       ? undefined
@@ -736,8 +743,11 @@ export function App() {
   }
 
   function loadTeacherSyncJobs(resources: TeacherResourceDocumentResponse[]) {
+    // Tenant-visible resources can be searched by another teacher, but their sync jobs stay owner-scoped. Filtering
+    // here avoids noisy authorization failures while preserving the backend ownership boundary for operational data.
+    const resourcesWithVisibleSyncJobs = resources.filter((resource) => canLoadTeacherResourceSyncJobs(resource, authSession));
     return Promise.all(
-      resources.map((resource) =>
+      resourcesWithVisibleSyncJobs.map((resource) =>
         api
           .listTeacherResourceSyncJobs(resource.documentId)
           .then((jobs) => [resource.documentId, jobs] as const),
@@ -1030,6 +1040,7 @@ export function App() {
     const pendingAssistantId = `assistant-pending:${requestId}`;
     // The completed event is authoritative even if the SSE transport needs extra time to close cleanly.
     let completedResponseReceived = false;
+    let streamedCharacterCount = 0;
     setSubmittingTeachingConversation(true);
     setTeachingError("");
     setTeachingConversationImageError("");
@@ -1063,6 +1074,7 @@ export function App() {
     api
       .streamStudentQuestion({
         conversationId: activeConversationId,
+        clientRequestId: requestId,
         questionText: submittedQuestion || undefined,
         imageUploadId: submittedImage?.uploadId,
         imageFileName: submittedImage?.originalFileName,
@@ -1082,6 +1094,7 @@ export function App() {
           completedResponseReceived = true;
           setSubmittingTeachingConversation(false);
         }
+        streamedCharacterCount += Array.from(payload.aiContentDelta || "").length;
         if (payload.progress?.conversationId) {
           setTeachingConversationId(payload.progress.conversationId);
         }
@@ -1100,8 +1113,10 @@ export function App() {
                   return {
                     ...entry,
                     progress: snapshot ? { ...snapshot, cards: mergedCards ?? [] } : undefined,
-                    response: payload.response ?? entry.response,
-                    loading: payload.response ? false : entry.loading,
+                    // The final structured response is applied after its already received characters finish entering
+                    // the same answer surface. Applying it here would make the last part jump onto the page.
+                    response: entry.response,
+                    loading: entry.loading,
                     imageStatus: payload.progress?.imageStatus || entry.imageStatus,
                     // Keep provider-originated bytes visible while strict card parsing continues in parallel. React
                     // renders this as text, so unfinished JSON cannot execute markup or scripts in the browser.
@@ -1119,7 +1134,28 @@ export function App() {
           ),
         );
       })
-      .then((response: StudentExplanationResponse) => {
+      .then(async (response: StudentExplanationResponse) => {
+        const completedAnswerText = explanationCardText(response);
+        // Some compatible providers can finish a short structured response before emitting a visible text delta.
+        // Queue that real final card body through the same character renderer instead of revealing it as one block.
+        setTeachingConversationEntries((current) => current.map((entry) =>
+          entry.role === "assistant" && entry.id === pendingAssistantId
+            ? {
+                ...entry,
+                loading: true,
+                liveContent: completedAnswerText || entry.liveContent,
+                progress: entry.progress
+                  ? { ...entry.progress, sources: response.sources ?? entry.progress.sources }
+                  : entry.progress,
+              }
+            : entry,
+        ));
+        const charactersToRender = Math.max(streamedCharacterCount, Array.from(completedAnswerText).length);
+        const finalCardDelay = charactersToRender * STUDENT_EXPLANATION_FINAL_CARD_DELAY_PER_CHARACTER_MS
+          + STUDENT_EXPLANATION_FINAL_CARD_HANDOFF_BUFFER_MS;
+        if (finalCardDelay > 0) {
+          await new Promise<void>((resolve) => globalThis.setTimeout(resolve, finalCardDelay));
+        }
         setTeachingConversationId(response.conversationId);
         setTeachingConversationTitle(response.conversationTitle || "AI 讲题");
         setTeachingConversationEntries((current) =>
@@ -1181,6 +1217,15 @@ export function App() {
       .finally(() => setSubmittingTeachingConversation(false));
   }
 
+  /** Converts only validated learner-facing card fields into the fallback character queue. */
+  function explanationCardText(response: StudentExplanationResponse) {
+    const text = (response.cards ?? [])
+      .flatMap((card) => [card.title, card.summary, ...(card.items ?? [])])
+      .filter((value): value is string => Boolean(value?.trim()))
+      .join("\n");
+    return text || response.questionText || "";
+  }
+
   function clearTeachingConversationImage() {
     setTeachingConversationImageDraft(null);
     setTeachingConversationImageError("");
@@ -1234,6 +1279,31 @@ export function App() {
       })
       .catch((error: Error) => setAuthError(error.message))
       .finally(() => setLoggingIn(false));
+  }
+
+  /**
+   * Provisions a teacher with the trusted administrator token already held by the API client. The form never sends
+   * a tenant, role, or user id, and it drops the entered password once the backend accepts the account creation.
+   */
+  function handleProvisionTeacher(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const username = teacherProvisionUsername.trim();
+    if (!username || !teacherProvisionPassword) {
+      setTeacherProvisionError("请输入教师账号和初始密码。");
+      return;
+    }
+    setTeacherProvisioning(true);
+    setTeacherProvisionError("");
+    setTeacherProvisionResult(null);
+    api
+      .provisionTeacher({ username, password: teacherProvisionPassword })
+      .then((createdTeacher) => {
+        setTeacherProvisionResult(createdTeacher);
+        setTeacherProvisionUsername("");
+        setTeacherProvisionPassword("");
+      })
+      .catch((error: Error) => setTeacherProvisionError(error.message))
+      .finally(() => setTeacherProvisioning(false));
   }
 
   /** Follows durable server-sent task snapshots; polling below is recovery-only for interrupted SSE connections. */
@@ -1913,7 +1983,7 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
         difficulty: "medium", latencyRequirement: "normal", costBudget: 2.5, previousFailureCount: 0,
         requiredJsonSchema: true, requestedToolScopes: selectedAgent.allowedToolScopes,
         disabledToolScopes, requestedDataScopes: selectedAgent.allowedDataScopes,
-        highValueOperation: selectedAgent.capabilityRequired, preferredProviderName: agentProvider, preferredModelCode: agentModel,
+        highValueOperation: true, preferredProviderName: agentProvider, preferredModelCode: agentModel,
       })
       .then(setAgentPlan)
       .catch((error: Error) => setAgentPlanError(toUserFacingError(error)))
@@ -2023,14 +2093,15 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
       });
   }
 
-  function handlePreviewMultiAgentArtifactPdf(layout: { headerText?: string; footerText?: string } = {}) {
+  /** Previews the already-audited teacher PDF; publication metadata cannot be changed after task creation. */
+  function handlePreviewMultiAgentArtifactPdf() {
     const workflowId = multiAgentWorkflow?.workflowId;
     if (!workflowId) return;
     setExportingMultiAgentArtifact("preview-pdf");
     setMultiAgentArtifactError("");
     setMultiAgentArtifactMessage("");
     api
-      .exportMultiAgentWritingArtifact(workflowId, "pdf", layout)
+      .exportMultiAgentWritingArtifact(workflowId, "pdf")
       .then((exported) => {
         const bytes = base64ToBytes(exported.base64Content);
         setMultiAgentArtifactPdfUrl((current) => {
@@ -2038,7 +2109,7 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
           return URL.createObjectURL(new Blob([bytes], { type: exported.mimeType || "application/pdf" }));
         });
         setMultiAgentArtifactPdfWorkflowId(workflowId);
-        setMultiAgentArtifactMessage(`PDF 预览已生成，临时导出有效期至 ${formatDateTime(exported.expiresAt)}。`);
+        setMultiAgentArtifactMessage(`PDF 预览已生成，${exportExpiryText(exported.expiresAt)}。`);
       })
       .catch((error: Error) => setMultiAgentArtifactError(toUserFacingError(error)))
       .finally(() => setExportingMultiAgentArtifact(""));
@@ -2046,7 +2117,6 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
 
   function handleExportMultiAgentArtifact(
     format: "markdown" | "latex" | "pdf" | "pdf-teacher" | "pdf-student" | "pdf-lecture" | "zip",
-    layout: { headerText?: string; footerText?: string } = {},
   ) {
     const workflowId = multiAgentWorkflow?.workflowId;
     if (!workflowId) return;
@@ -2054,10 +2124,10 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
     setMultiAgentArtifactError("");
     setMultiAgentArtifactMessage("");
     api
-      .exportMultiAgentWritingArtifact(workflowId, format, layout)
+      .exportMultiAgentWritingArtifact(workflowId, format)
       .then((exported) => {
         downloadBytes(exported.fileName, base64ToBytes(exported.base64Content), exported.mimeType);
-        setMultiAgentArtifactMessage(`${exportLabel(format)} 已下载，临时导出有效期至 ${formatDateTime(exported.expiresAt)}。`);
+        setMultiAgentArtifactMessage(`${exportLabel(format)} 已下载，${exportExpiryText(exported.expiresAt)}。`);
       })
       .catch((error: Error) => setMultiAgentArtifactError(toUserFacingError(error)))
       .finally(() => setExportingMultiAgentArtifact(""));
@@ -2191,12 +2261,13 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
   }
 
   function handleLogout() {
-    globalThis.localStorage?.removeItem("math-agent:auth-session");
-    setAuthSession(null);
-    setMcpKeys([]);
-    setMcpConfiguration(null);
-    setMcpLatestCreatedKey(null);
-    setDropdownOpen(false);
+    api.logout().catch(() => undefined).finally(() => {
+      setAuthSession(null);
+      setMcpKeys([]);
+      setMcpConfiguration(null);
+      setMcpLatestCreatedKey(null);
+      setDropdownOpen(false);
+    });
   }
 
   function navigate(page: PageId) {
@@ -2247,6 +2318,8 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
               key={item.id}
               className={`nav-link${activePage === item.id ? " active" : ""}`}
               onClick={() => navigate(item.id)}
+              aria-label={item.label}
+              title={item.label}
             >
               {item.icon}
               <span>{item.label}</span>
@@ -2255,7 +2328,12 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
         </div>
         <div className="nav-right">
           <div ref={dropdownRef} style={{ position: "relative" }}>
-            <button className="nav-avatar" onClick={() => setDropdownOpen((d) => !d)} title={authSession?.userId ?? "未登录"}>
+            <button
+              className="nav-avatar"
+              onClick={() => setDropdownOpen((d) => !d)}
+              aria-label={authSession?.userId ?? "未登录"}
+              title={authSession?.userId ?? "未登录"}
+            >
               {avatarLetter}
             </button>
             <div className={`nav-avatar-dropdown${dropdownOpen ? " open" : ""}`}>
@@ -2309,72 +2387,139 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
     if (!hasVerifiedSession) {
       return <LoginPrompt onLogin={() => navigate("login")} />;
     }
+    const isTeacherWorkspace = authSession?.role === "teacher" || authSession?.role === "admin";
+    // The primary route follows the user's role so the first action continues an actual teaching workflow.
+    const primaryAction = isTeacherWorkspace
+      ? { label: "开始生成讲义", page: "streaming" as const, icon: <FileText size={16} /> }
+      : { label: "开始 AI 讲题", page: "teaching" as const, icon: <BookOpen size={16} /> };
+    const workspaceActions: Array<{ page: PageId; title: string; description: string; icon: React.ReactNode; tone: string }> = [
+      {
+        page: "teaching",
+        title: "AI 讲题",
+        description: "围绕题目连续追问，保留讲解上下文",
+        icon: <BookOpen size={20} />,
+        tone: "teal",
+      },
+      {
+        page: "streaming",
+        title: "讲义生成",
+        description: "从检索、写作到审校，持续查看任务进度",
+        icon: <FileText size={20} />,
+        tone: "orange",
+      },
+      {
+        page: "search",
+        title: "教材检索",
+        description: "检索教材证据并带回可追溯的来源",
+        icon: <Search size={20} />,
+        tone: "blue",
+      },
+      {
+        page: "agents",
+        title: "AI 控制台",
+        description: "配置模型、查看运行计划与执行轨迹",
+        icon: <Bot size={20} />,
+        tone: "violet",
+      },
+    ];
     return (
-      <>
-        <div className="page-header">
-          <h1 className="page-title">工作台</h1>
-          <p className="page-subtitle">教学数据总览与快速入口</p>
-        </div>
-        <div className="card-grid">
-          <div className="card card-full">
-            <div className="card-header">
-              <h2 className="card-title"><LayoutDashboard size={16} /> 学生学习概览</h2>
-              <button className="btn btn-ghost btn-sm" onClick={handleRefreshStudentDashboard} disabled={loadingStudentDashboard}>
-                <RefreshCw size={14} className={loadingStudentDashboard ? "spin" : ""} />
+      <div className="workspace-page">
+        <section className="workspace-hero" aria-labelledby="workspace-title">
+          <div className="workspace-hero-copy">
+            <p className="workspace-eyebrow"><Sparkles size={14} /> Math Agent 工作台</p>
+            <h1 id="workspace-title">让每一项教学任务都有下一步</h1>
+            <p>从教材证据、AI 讲解到讲义交付，任务状态和入口都保留在同一个工作面。</p>
+          </div>
+          <div className="workspace-hero-actions">
+            <span className="workspace-role"><ShieldCheck size={15} /> {sessionRoleLabel(authSession?.role)}</span>
+            <button className="btn btn-primary workspace-primary-action" onClick={() => navigate(primaryAction.page)}>
+              {primaryAction.icon}
+              <span>{primaryAction.label}</span>
+              <ChevronDown className="workspace-action-chevron" size={16} />
+            </button>
+          </div>
+        </section>
+
+        <section className="workspace-section" aria-labelledby="workspace-actions-title">
+          <div className="workspace-section-heading">
+            <div>
+              <p className="eyebrow">常用工作流</p>
+              <h2 id="workspace-actions-title">从这里开始</h2>
+            </div>
+          </div>
+          <div className="workspace-command-grid">
+            {workspaceActions.map((action) => (
+              <button className={`workspace-command-card ${action.tone}`} key={action.page} onClick={() => navigate(action.page)}>
+                <span className="workspace-command-icon">{action.icon}</span>
+                <span className="workspace-command-copy">
+                  <strong>{action.title}</strong>
+                  <small>{action.description}</small>
+                </span>
+                <ChevronDown className="workspace-command-arrow" size={18} aria-hidden="true" />
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section className="workspace-overview-grid" aria-label="工作台状态">
+          <div className="workspace-resource-panel">
+            <div className="workspace-panel-heading">
+              <div>
+                <p className="eyebrow">检索基础</p>
+                <h2><Database size={18} /> 教材资源</h2>
+              </div>
+              <button className="btn btn-ghost btn-sm" onClick={() => navigate("search")}>
+                查看检索 <ChevronDown className="workspace-action-chevron" size={14} />
               </button>
             </div>
-            <div className="card-body">
-              <StudentDashboardPanel
-                dashboard={studentDashboard}
-                learningPath={studentLearningPath}
-                loading={loadingStudentDashboard}
-                error={studentDashboardError}
-                viewerRole={authSession?.role}
-                targetStudentId={dashboardStudentId}
-                onTargetStudentIdChange={setDashboardStudentId}
-                onLoad={handleLoadStudentDashboard}
-                onRefresh={handleRefreshStudentDashboard}
-                onExplainWeakPoint={authSession?.role === "student" ? handleExplainWeakPoint : undefined}
-                onGenerateHandout={authSession?.role === "teacher" || authSession?.role === "admin"
-                  ? handleGenerateTargetedHandout
-                  : undefined}
-                onGeneratePractice={authSession?.role === "student" ? handleGenerateTargetedPractice : undefined}
-              />
-            </div>
-          </div>
-          <div className="card card-full teaching-create-card">
-            <div className="card-header">
-              <h2 className="card-title"><Database size={16} /> 教材资源</h2>
-            </div>
-            <div className="card-body">
-              {loadingSummary ? (
-                <StatusLine icon={<Loader2 className="spin" size={16} />} text="读取教材目录中" />
-              ) : summaryError ? (
-                <StatusLine icon={<AlertCircle size={16} />} text={summaryError} tone="danger" />
-              ) : summary ? (
-                <div className="metric-grid">
-                  <Metric label="教材" value={summary.bookCount} />
-                  <Metric label="文本块" value={summary.totalChunkCount} />
-                  <Metric label="PDF 页" value={summary.totalPageCount} />
-                </div>
-              ) : null}
-            </div>
-          </div>
-          <div className="card">
-            <div className="card-header">
-              <h2 className="card-title"><GraduationCap size={16} /> 快捷操作</h2>
-            </div>
-            <div className="card-body">
-              <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                <button className="btn btn-secondary" onClick={() => navigate("search")}><Search size={14} /> 教材检索</button>
-                <button className="btn btn-secondary" onClick={() => navigate("teaching")}><BookOpen size={14} /> AI 讲题</button>
-                <button className="btn btn-secondary" onClick={() => navigate("agents")}><Bot size={14} /> AI 控制台</button>
-                <button className="btn btn-secondary" onClick={() => navigate("streaming")}><GitBranch size={14} /> 讲义生成</button>
+            {loadingSummary ? (
+              <StatusLine icon={<Loader2 className="spin" size={16} />} text="正在读取教材目录" />
+            ) : summaryError ? (
+              <StatusLine icon={<AlertCircle size={16} />} text={summaryError} tone="danger" />
+            ) : summary ? (
+              <div className="workspace-resource-metrics">
+                <Metric label="教材" value={summary.bookCount} />
+                <Metric label="文本块" value={summary.totalChunkCount} />
+                <Metric label="PDF 页" value={summary.totalPageCount} />
               </div>
+            ) : null}
+          </div>
+          <div className="workspace-tip-panel">
+            <Sparkles size={18} />
+            <div>
+              <strong>{isTeacherWorkspace ? "先查证据，再生成讲义" : "先发题目，再连续追问"}</strong>
+              <p>{isTeacherWorkspace ? "教材检索结果会保留来源，适合直接带入讲义生成流程。" : "同一讲题会话会保留上下文，便于针对卡点继续追问。"}</p>
             </div>
           </div>
-        </div>
-      </>
+        </section>
+
+        <section className="workspace-section workspace-learning-section" aria-labelledby="workspace-learning-title">
+          <div className="workspace-section-heading">
+            <div>
+              <p className="eyebrow">持续状态</p>
+              <h2 id="workspace-learning-title">学生学习概览</h2>
+            </div>
+            <button className="btn btn-ghost btn-sm" onClick={handleRefreshStudentDashboard} disabled={loadingStudentDashboard} aria-label="刷新学生学习概览">
+              <RefreshCw size={15} className={loadingStudentDashboard ? "spin" : ""} />
+              <span>刷新</span>
+            </button>
+          </div>
+          <StudentDashboardPanel
+            dashboard={studentDashboard}
+            learningPath={studentLearningPath}
+            loading={loadingStudentDashboard}
+            error={studentDashboardError}
+            viewerRole={authSession?.role}
+            targetStudentId={dashboardStudentId}
+            onTargetStudentIdChange={setDashboardStudentId}
+            onLoad={handleLoadStudentDashboard}
+            onRefresh={handleRefreshStudentDashboard}
+            onExplainWeakPoint={authSession?.role === "student" ? handleExplainWeakPoint : undefined}
+            onGenerateHandout={isTeacherWorkspace ? handleGenerateTargetedHandout : undefined}
+            onGeneratePractice={authSession?.role === "student" ? handleGenerateTargetedPractice : undefined}
+          />
+        </section>
+      </div>
     );
   }
 
@@ -2392,8 +2537,8 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
           <h1 className="page-title">教材检索</h1>
           <p className="page-subtitle">基于关键词与向量混合检索的教材证据搜索</p>
         </div>
-        <div className="card-grid">
-          <div className="card card-full">
+        <div className="card-grid retrieval-workspace">
+          <div className="card retrieval-control-card">
             <div className="card-header">
               <h2 className="card-title"><Search size={16} /> 检索参数</h2>
             </div>
@@ -2479,7 +2624,7 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
               </form>
             </div>
           </div>
-          <div className="card card-full">
+          <div className="card retrieval-result-card">
             <div className="card-header">
               <h2 className="card-title"><FileText size={16} /> 命中证据</h2>
               {searchResult ? (
@@ -2491,13 +2636,8 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
             </div>
             <div className="card-body">
               {searchError ? <StatusLine icon={<AlertCircle size={16} />} text={searchError} tone="danger" /> : null}
-              {loadingAudit ? (
-                <StatusLine icon={<Loader2 className="spin" size={16} />} text="读取审计详情中" />
-              ) : auditError ? (
-                <StatusLine icon={<AlertCircle size={16} />} text={auditError} tone="danger" />
-              ) : auditDetail ? (
-                <AuditDetailPanel audit={auditDetail} />
-              ) : null}
+              {loadingAudit ? <StatusLine icon={<Loader2 className="spin" size={16} />} text="读取检索审计中" /> : null}
+              {auditError ? <StatusLine icon={<AlertCircle size={16} />} text={auditError} tone="danger" /> : null}
               {!searchResult && !searchError ? (
                 <div className="empty-state">
                   <div className="empty-state-icon"><Search size={20} /></div>
@@ -2511,18 +2651,25 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
                     text={searchResult.retrievalDescription}
                     tone={searchResult.total > 0 ? "muted" : "danger"}
                   />
-                  <div className="retrieval-stage-list">
-                    {searchResult.retrievalStages.map((stage) => (
-                      <div className={`retrieval-stage ${stage.status}`} key={stage.code}>
-                        <strong>{stage.label}{typeof stage.elapsedMs === "number" && stage.elapsedMs >= 0 ? ` ${stage.elapsedMs} ms` : ""}</strong>
-                        <span>{stage.description}</span>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="audit-row">
-                    <span>审计追踪号</span>
-                    <strong>{searchResult.queryId}</strong>
-                  </div>
+                  <details className="ai-run-disclosure retrieval-run-disclosure">
+                    <summary>
+                      <span>检索运行记录</span>
+                      <span>{searchResult.retrievalStages.length} 个真实阶段</span>
+                    </summary>
+                    <div className="retrieval-stage-list">
+                      {searchResult.retrievalStages.map((stage) => (
+                        <div className={`retrieval-stage ${stage.status}`} key={stage.code}>
+                          <strong>{stage.label}{typeof stage.elapsedMs === "number" && stage.elapsedMs >= 0 ? ` ${stage.elapsedMs} ms` : ""}</strong>
+                          <span>{stage.description}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="audit-row">
+                      <span>审计追踪号</span>
+                      <strong>{searchResult.queryId}</strong>
+                    </div>
+                    {auditDetail ? <AuditDetailPanel audit={auditDetail} /> : null}
+                  </details>
                   {searchResult.hits.length === 0 ? (
                     <div className="empty-state">
                       <div className="empty-state-icon"><Library size={20} /></div>
@@ -2831,7 +2978,7 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
             </div>
             <div className="card-body">
               {hasVerifiedSession ? (
-                <KnowledgeWorkspace key={authSession.tokenValue} api={api} />
+                <KnowledgeWorkspace key={`${authSession.tenantId}:${authSession.userId}`} api={api} />
               ) : (
                 <div className="knowledge-workspace" style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: 120 }}>
                   <StatusLine
@@ -2990,6 +3137,34 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
               </div>
             </div>
           </div>
+          {authSession?.role === "admin" ? (
+            <div className="card">
+              <div className="card-header">
+                <h2 className="card-title"><User size={16} /> 开通教师账号</h2>
+              </div>
+              <div className="card-body">
+                <form className="form" onSubmit={handleProvisionTeacher}>
+                  <p className="page-subtitle">账号将继承当前管理员租户；角色由后端固定为教师。</p>
+                  <div className="form-row">
+                    <label className="form-label" htmlFor="teacher-provision-username">教师账号</label>
+                    <input id="teacher-provision-username" className="form-input" type="text" value={teacherProvisionUsername} onChange={(event) => setTeacherProvisionUsername(event.target.value)} placeholder="输入唯一教师账号" autoComplete="username" disabled={teacherProvisioning} />
+                  </div>
+                  <div className="form-row">
+                    <label className="form-label" htmlFor="teacher-provision-password">初始密码</label>
+                    <input id="teacher-provision-password" className="form-input" type="password" value={teacherProvisionPassword} onChange={(event) => setTeacherProvisionPassword(event.target.value)} placeholder="输入初始密码" autoComplete="new-password" disabled={teacherProvisioning} />
+                  </div>
+                  {teacherProvisionError ? <StatusLine icon={<AlertCircle size={16} />} text={teacherProvisionError} tone="danger" /> : null}
+                  {teacherProvisionResult ? <StatusLine icon={<Check size={16} />} text={`已开通教师 ${teacherProvisionResult.username}（${teacherProvisionResult.userId}，租户 ${teacherProvisionResult.tenantId}）。`} tone="muted" /> : null}
+                  <div className="form-actions">
+                    <button className="btn btn-primary" type="submit" disabled={teacherProvisioning}>
+                      {teacherProvisioning ? <Loader2 size={14} className="spin" /> : <User size={14} />}
+                      {teacherProvisioning ? "正在开通" : "开通教师账号"}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          ) : null}
           <div className="card card-full">
             <div className="card-header">
               <h2 className="card-title"><FolderKanban size={16} /> 教师资源管理</h2>
@@ -3121,15 +3296,6 @@ function LoginPrompt({ onLogin }: { onLogin: () => void }) {
       </div>
     </div>
   );
-}
-
-function readStoredAuthSession() {
-  try {
-    const value = globalThis.localStorage?.getItem("math-agent:auth-session");
-    return value ? (JSON.parse(value) as LoginResponse) : null;
-  } catch {
-    return null;
-  }
 }
 
 /**
@@ -3922,6 +4088,11 @@ function exportLabel(format: "markdown" | "latex" | "pdf" | "pdf-teacher" | "pdf
   if (format === "pdf-student") return "学生空白版 PDF";
   if (format === "pdf-lecture") return "16:10 单题版 PDF";
   return "ZIP 打包文件";
+}
+
+/** The export service may intentionally omit expiry for persistent artifacts; the UI must not invent a timestamp. */
+function exportExpiryText(expiresAt?: string | null) {
+  return expiresAt?.trim() ? `临时导出有效期至 ${formatDateTime(expiresAt)}` : "服务端未提供临时导出有效期";
 }
 
 function sessionRoleLabel(role?: string | null) {

@@ -28,7 +28,8 @@ public record StudentExplanationRequest(
         Boolean searchTeacherResources,
         Integer maxTextbookHits,
         Integer maxTeacherResourceHits,
-        Boolean useConversationMemory) {
+        Boolean useConversationMemory,
+        String clientRequestId) {
 
     /** Preserves existing callers; the legacy memory flag is retained only for wire compatibility. */
     public StudentExplanationRequest(
@@ -55,7 +56,38 @@ public record StudentExplanationRequest(
                 searchTeacherResources,
                 maxTextbookHits,
                 maxTeacherResourceHits,
-                false);
+                false,
+                null);
+    }
+
+    /** 保留已存在的 JSON 调用方，同时允许显式传入旧版 memory 开关。 */
+    public StudentExplanationRequest(
+            String conversationId,
+            String questionText,
+            String imageUploadId,
+            String imageFileName,
+            String imageContentType,
+            Long imageSizeBytes,
+            Boolean searchTextbook,
+            Boolean searchKnowledgeGraph,
+            Boolean searchTeacherResources,
+            Integer maxTextbookHits,
+            Integer maxTeacherResourceHits,
+            Boolean useConversationMemory) {
+        this(
+                conversationId,
+                questionText,
+                imageUploadId,
+                imageFileName,
+                imageContentType,
+                imageSizeBytes,
+                searchTextbook,
+                searchKnowledgeGraph,
+                searchTeacherResources,
+                maxTextbookHits,
+                maxTeacherResourceHits,
+                useConversationMemory,
+                null);
     }
 
     /**
@@ -75,7 +107,8 @@ public record StudentExplanationRequest(
                 searchTeacherResources != null && searchTeacherResources,
                 clamp(maxTextbookHits, 3, 1, 8),
                 clamp(maxTeacherResourceHits, 3, 1, 6),
-                Boolean.TRUE.equals(useConversationMemory));
+                Boolean.TRUE.equals(useConversationMemory),
+                normalizeClientRequestId(clientRequestId));
     }
 
     /**
@@ -104,7 +137,38 @@ public record StudentExplanationRequest(
                 searchTeacherResources,
                 maxTextbookHits,
                 maxTeacherResourceHits,
-                useConversationMemory).normalize();
+                useConversationMemory,
+                clientRequestId).normalize();
+    }
+
+    /** 返回携带稳定请求幂等键的副本，供同一轮工作流恢复使用。 */
+    public StudentExplanationRequest withClientRequestId(String nextClientRequestId) {
+        return new StudentExplanationRequest(
+                conversationId,
+                questionText,
+                imageUploadId,
+                imageFileName,
+                imageContentType,
+                imageSizeBytes,
+                searchTextbook,
+                searchKnowledgeGraph,
+                searchTeacherResources,
+                maxTextbookHits,
+                maxTeacherResourceHits,
+                useConversationMemory,
+                nextClientRequestId).normalize();
+    }
+
+    /** 将客户端幂等键限制为可审计的短文本；缺失时由服务端生成。 */
+    private static String normalizeClientRequestId(String value) {
+        String normalized = textOrNull(value);
+        if (normalized == null) {
+            return null;
+        }
+        if (normalized.length() > 128) {
+            return normalized.substring(0, 128);
+        }
+        return normalized;
     }
 
     /**

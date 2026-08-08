@@ -221,12 +221,35 @@ export interface RegisterRequest {
   username: string;
   /** Password sent to the backend over the current HTTP connection. */
   password: string;
-  /** Optional tenant id; backend defaults it when omitted. */
-  tenantId?: string;
 }
 
 /**
- * 登录响应。tokenName/tokenValue 由 Sa-Token 生成，后续请求按后端要求携带。
+ * Administrator-only teacher provisioning input. Tenant and role remain server-owned so the browser cannot assign
+ * the new account to another tenant or elevate it beyond the fixed teacher role.
+ */
+export interface TeacherAccountProvisionRequest {
+  /** Unique login name selected for the new teacher. */
+  username: string;
+  /** Initial password sent only to the backend account store over the current authenticated connection. */
+  password: string;
+}
+
+/**
+ * Password-free account metadata returned after an administrator creates a teacher account.
+ */
+export interface TeacherAccountProvisionResponse {
+  /** Stable backend subject id for the new teacher. */
+  userId: string;
+  /** Newly created teacher login name. */
+  username: string;
+  /** Backend-enforced fixed role, expected to be teacher. */
+  role: string;
+  /** Tenant inherited from the authenticated administrator session. */
+  tenantId: string;
+}
+
+/**
+ * 登录响应。原始会话凭证只存在后端设置的 HttpOnly Cookie 中，浏览器仅保留非敏感会话元数据。
  */
 export interface LoginResponse {
   /** 后端可信用户 ID。 */
@@ -237,10 +260,6 @@ export interface LoginResponse {
   role: string;
   /** 后端会话租户。 */
   tenantId: string;
-  /** Sa-Token token 名称。 */
-  tokenName: string;
-  /** Sa-Token token 值。 */
-  tokenValue: string;
 }
 
 /**
@@ -291,68 +310,6 @@ export interface TeachingHandoutPdfResponse {
 }
 
 export type TeachingHandoutVersion = "teacher" | "student" | "lecture";
-
-/**
- * One-time capability token returned before a high-value operation.
- */
-export interface CapabilityTokenResponse {
-  /** Opaque token that must be consumed by the matching high-value request. */
-  token: string;
-  /** High-value action code bound to this token. */
-  action: string;
-  /** API path bound to this token. */
-  path: string;
-  /** Stable digest of the exact request body that will consume the token. */
-  requestHash: string;
-  /** Backend expiration timestamp. */
-  expiresAt: string;
-}
-
-/**
- * Capability audit query filters. Tenant and reviewer identity are resolved by the backend session.
- */
-export interface CapabilityAuditQuery {
-  /** Optional audited subject role filter, such as student or teacher. */
-  subjectType?: string;
-  /** Optional audited subject id filter. */
-  subjectId?: string;
-  /** Optional high-value action code filter. */
-  action?: string;
-  /** Optional lifecycle decision filter, such as issued, consumed, rejected, or denied. */
-  decision?: string;
-  /** Maximum rows returned by the backend. */
-  limit?: number;
-}
-
-/**
- * Capability audit row returned to teacher/admin reviewers.
- */
-export interface CapabilityAuditLogResponse {
-  /** Stable audit event id. */
-  eventId: string;
-  /** Backend event timestamp when present. */
-  occurredAt?: string;
-  /** Tenant that owns the event. */
-  tenantId: string;
-  /** Backend resolved requester role. */
-  subjectType?: string;
-  /** Backend resolved requester id. */
-  subjectId?: string;
-  /** High-value action code. */
-  action: string;
-  /** API path bound to the capability. */
-  path: string;
-  /** Hash of the exact high-value request body. */
-  requestHash: string;
-  /** Client idempotency key. */
-  idempotencyKey: string;
-  /** SHA-256 token hash; raw capability tokens are never returned. */
-  tokenHash: string;
-  /** Lifecycle decision, such as issued, consumed, rejected, or denied. */
-  decision: string;
-  /** Human-readable decision reason. */
-  reason: string;
-}
 
 /**
  * 教学 DAG 节点执行记录。
@@ -908,10 +865,6 @@ export interface AgentRunPlanResponse {
   allowedDataScopes: string[];
   /** Data scopes rejected by policy. */
   deniedDataScopes: string[];
-  /** Whether execution requires a capability token. */
-  capabilityRequired: boolean;
-  /** Capability action to request when required. */
-  capabilityAction: string;
   /** Policy-clipped input token limit. */
   maxInputTokens: number;
   /** Policy-clipped output token limit. */
@@ -1131,7 +1084,6 @@ export interface AgentRegistryItem {
   description: string;
   allowedToolScopes: string[];
   allowedDataScopes: string[];
-  capabilityRequired: boolean;
   inputHint: string;
   outputArtifactType: string;
 }
@@ -1238,7 +1190,11 @@ export interface MultiAgentWritingArtifactExportResponse {
   byteSize: number;
   sha256: string;
   base64Content: string;
-  expiresAt: string;
+  /**
+   * Legacy temporary exports had a server-side expiry. Teaching-task exports are downloaded directly from the
+   * authoritative task, so there is no temporary object to expire.
+   */
+  expiresAt?: string;
 }
 
 /**
@@ -1651,6 +1607,8 @@ export interface StudentExplanationRequest {
   maxTeacherResourceHits?: number;
   /** Explicit opt-in for earlier turns from the current conversation. Defaults to false. */
   useConversationMemory?: boolean;
+  /** Stable client-generated idempotency key used to resume one explanation run after reconnect. */
+  clientRequestId?: string;
 }
 
 /**
@@ -2424,8 +2382,6 @@ export interface SystemRuntimeStatusResponse {
     redissonAddress: string;
     rateLimitEnabled: boolean;
     rateLimitKeyPrefix: string;
-    capabilityStoreEnabled: boolean;
-    capabilityStoreKeyPrefix: string;
     searchCacheEnabled: boolean;
     searchCacheKeyPrefix: string;
     searchCacheTtl: string;
@@ -2463,10 +2419,8 @@ type FetchLike = (
   init?: RequestInit,
 ) => Promise<Pick<Response, "ok" | "status" | "json" | "text" | "arrayBuffer" | "headers" | "body">>;
 
-const AUTH_STORAGE_KEY = "math-agent:auth-session";
-/** Broadcast when the backend rejects a persisted token whose server-side session or role has disappeared. */
+/** Broadcast when the backend rejects the HttpOnly cookie whose server-side session has disappeared. */
 export const AUTH_INVALID_EVENT = "math-agent:auth-invalid";
-const DEVICE_ID_HEADER = { "X-Device-Id": "local-browser-console" };
 /** Task data, protected artifacts, and SSE snapshots must never reuse a stale browser/proxy response. */
 const NO_STORE_HEADERS = {
   "Cache-Control": "no-store, no-cache, max-age=0",
@@ -2474,30 +2428,18 @@ const NO_STORE_HEADERS = {
 };
 /** Upper bound fetched for one real question-bank query before the UI applies visible page slicing. */
 export const QUESTION_BANK_MAX_SEARCH_ROWS = 500;
+/** Matches the Java compatibility facade so a retried legacy request resolves to the same teaching task. */
+const LEGACY_HANDOUT_CLIENT_REQUEST_PREFIX = "writing-";
+/** The teaching submission contract requires a positive, bounded evidence count. */
+const MIN_HANDOUT_EVIDENCE_LIMIT = 1;
+const MAX_HANDOUT_EVIDENCE_LIMIT = 24;
+/** Prevents a large binary conversion from exceeding browser argument limits while preserving every byte. */
+const BASE64_BINARY_CHUNK_BYTES = 0x8000;
 
 export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = fetch) {
   const normalizedBaseUrl = baseUrl.replace(/\/+$/, "");
-
   /**
-   * Removes headers from the retired one-time capability-token protocol.
-   *
-   * Authentication is provided by the server-side session. Keeping this guard at the shared transport boundary
-   * also protects older call sites and browser bundles from accidentally sending stale capability credentials.
-   */
-  function withoutLegacyCapabilityHeaders(headers?: HeadersInit): Record<string, string> {
-    const entries = headers instanceof Headers
-      ? Array.from(headers.entries())
-      : Array.isArray(headers)
-        ? headers
-        : Object.entries(headers ?? {});
-    return Object.fromEntries(entries.filter(([name]) => {
-      const normalizedName = name.toLowerCase();
-      return normalizedName !== "x-capability-token" && normalizedName !== "x-request-hash";
-    }));
-  }
-
-  /**
-   * 请求后端 JSON。身份只通过后端登录 token 传递，不能使用前端自报角色或学生 ID。
+   * 请求后端 JSON。身份只通过浏览器自动携带的 HttpOnly Cookie 解析，不能使用前端自报角色或学生 ID。
    */
     /** 生成 UUID v4，优先使用 Crypto API，回退到手动实现。用于幂等 clientRequestId。 */
   function generateUUID(): string {
@@ -2509,6 +2451,244 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
         return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
       });
     }
+  }
+
+  /**
+   * Computes the exact opaque client request id used by the Java compatibility facade. Keeping this deterministic
+   * lets a browser retry recover the same teaching task without putting the question text in persistent metadata.
+   */
+  async function legacyHandoutClientRequestId(request: MultiAgentWritingRequest): Promise<string> {
+    const canonical = [
+      request.writingGoal.trim(),
+      request.questionText.trim(),
+      request.evidenceRefs.join("\u001e"),
+      "false",
+      request.preferredProviderName?.trim() ?? "",
+      request.preferredModelCode?.trim() ?? "",
+    ].join("\u001f");
+    if (!globalThis.crypto?.subtle) {
+      throw new Error("Secure browser cryptography is required to submit a recoverable handout task");
+    }
+    const digest = new Uint8Array(await globalThis.crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(canonical),
+    ));
+    return `${LEGACY_HANDOUT_CLIENT_REQUEST_PREFIX}${bytesToBase64(digest)
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/, "")}`;
+  }
+
+  /** Converts the old browser request to the sole persisted teaching-task creation contract. */
+  async function toTeachingHandoutRequest(request: MultiAgentWritingRequest): Promise<TeachingTaskRequest> {
+    return {
+      clientRequestId: await legacyHandoutClientRequestId(request),
+      questionText: request.questionText.trim(),
+      learningGoal: request.writingGoal.trim(),
+      evidenceLimit: Math.max(
+        MIN_HANDOUT_EVIDENCE_LIMIT,
+        Math.min(MAX_HANDOUT_EVIDENCE_LIMIT, request.evidenceRefs.length),
+      ),
+      aiProviderName: request.preferredProviderName?.trim() || undefined,
+      aiModelCode: request.preferredModelCode?.trim() || undefined,
+    };
+  }
+
+  /** The task snapshot is the source of the retained panel shape; workflowId is only a display compatibility alias. */
+  function projectTeachingTaskAsWritingWorkflow(task: TeachingTaskResponse): MultiAgentWritingResponse {
+    const noLedgerUsage: AgentTokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+    return {
+      workflowId: task.taskId,
+      tenantId: task.tenantId ?? "",
+      subjectType: task.subjectType ?? "",
+      subjectId: task.subjectId ?? "",
+      status: task.status,
+      stages: task.nodes.map((node) => ({
+        stageCode: node.code,
+        agentCode: "teaching-task",
+        traceId: `${task.taskId}:${node.code}`,
+        providerName: "teaching-task",
+        modelCode: "",
+        status: node.status,
+        actualUsage: noLedgerUsage,
+        message: node.summary,
+      })),
+      // A teaching snapshot currently has task-level usage only. Per-node token fields remain zero until the durable
+      // usage ledger is projected, rather than assigning the same billable total to several writer nodes.
+      totalUsage: task.aiDraft
+        ? {
+          promptTokens: task.aiDraft.promptTokens,
+          completionTokens: task.aiDraft.completionTokens,
+          totalTokens: task.aiDraft.totalTokens,
+        }
+        : noLedgerUsage,
+      message: task.errorMessage || task.aiDraft?.message || `Teaching task ${task.status.toLowerCase()}`,
+    };
+  }
+
+  /** Reuses durable node and event data for the legacy trace panel without querying the retired trace store. */
+  function projectTeachingTaskAsWritingTraces(task: TeachingTaskResponse): MultiAgentWritingTraceResponse {
+    const noLedgerUsage: AgentTokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+    const stages = task.nodes.map((node) => ({
+      traceId: `${task.taskId}:${node.code}`,
+      planId: `${task.taskId}:${node.code}`,
+      createdAt: "",
+      tenantId: task.tenantId ?? "",
+      subjectType: task.subjectType ?? "",
+      subjectId: task.subjectId ?? "",
+      agentCode: node.code,
+      providerName: "teaching-task",
+      modelCode: "",
+      status: node.status,
+      estimatedCost: -1,
+      allowedToolScopes: [],
+      allowedDataScopes: [],
+      evidenceRefs: task.workflowEvents
+        ?.filter((event) => event.eventType === node.code)
+        .flatMap((event) => event.artifactRefs) ?? [],
+      stageTimings: [],
+      actualUsage: noLedgerUsage,
+      message: node.summary,
+      diagnosticEvents: [],
+    }));
+    return {
+      workflowId: task.taskId,
+      tenantId: task.tenantId ?? "",
+      subjectType: task.subjectType ?? "",
+      subjectId: task.subjectId ?? "",
+      stageCount: stages.length,
+      totalUsage: task.aiDraft
+        ? {
+          promptTokens: task.aiDraft.promptTokens,
+          completionTokens: task.aiDraft.completionTokens,
+          totalTokens: task.aiDraft.totalTokens,
+        }
+        : noLedgerUsage,
+      stages,
+    };
+  }
+
+  /** Projects only task-owned teacher, student, and lecture artifacts into the retained review-panel shape. */
+  function projectTeachingTaskAsWritingArtifact(task: TeachingTaskResponse): MultiAgentWritingArtifact {
+    const noLedgerUsage: AgentTokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+    const sections = task.draftSections
+      ? [
+        {
+          sectionCode: "teacher",
+          title: "教师版讲义",
+          sourceStageCode: "teacher_writer",
+          content: task.draftSections.teacherExplanation,
+          reviewNotes: [],
+          risks: task.draftSections.risks,
+          artifactRefs: task.draftSections.sourceRefs,
+        },
+        {
+          sectionCode: "student",
+          title: "学生版讲义",
+          sourceStageCode: "student_writer",
+          content: task.draftSections.studentWorksheet,
+          reviewNotes: [],
+          risks: task.draftSections.risks,
+          artifactRefs: task.draftSections.sourceRefs,
+        },
+        {
+          sectionCode: "lecture",
+          title: "课堂讲解版",
+          sourceStageCode: "lecture_writer",
+          content: task.draftSections.lectureCards.join("\n\n"),
+          reviewNotes: [],
+          risks: task.draftSections.risks,
+          artifactRefs: task.draftSections.sourceRefs,
+        },
+      ]
+      : undefined;
+    return {
+      workflowId: task.taskId,
+      tenantId: task.tenantId ?? "",
+      subjectType: task.subjectType ?? "",
+      subjectId: task.subjectId ?? "",
+      status: task.status,
+      totalUsage: task.aiDraft
+        ? {
+          promptTokens: task.aiDraft.promptTokens,
+          completionTokens: task.aiDraft.completionTokens,
+          totalTokens: task.aiDraft.totalTokens,
+        }
+        : noLedgerUsage,
+      stages: [
+        {
+          stageCode: "teacher_writer",
+          agentCode: "teaching-task",
+          traceId: `${task.taskId}:teacher_writer`,
+          providerName: "teaching-task",
+          modelCode: "",
+          status: task.status,
+          generatedContent: task.teacherHandoutLatex ?? "",
+        },
+        {
+          stageCode: "student_writer",
+          agentCode: "teaching-task",
+          traceId: `${task.taskId}:student_writer`,
+          providerName: "teaching-task",
+          modelCode: "",
+          status: task.status,
+          generatedContent: task.studentHandoutLatex ?? "",
+        },
+        {
+          stageCode: "lecture_writer",
+          agentCode: "teaching-task",
+          traceId: `${task.taskId}:lecture_writer`,
+          providerName: "teaching-task",
+          modelCode: "",
+          status: task.status,
+          generatedContent: task.lectureHandoutLatex ?? "",
+        },
+      ],
+      sections,
+      mergedMarkdown: task.aiDraft?.content || task.handoutLatex,
+    };
+  }
+
+  /** Encodes actual response bytes for the retained download caller; chunking avoids spreading an arbitrary buffer. */
+  function bytesToBase64(bytes: Uint8Array): string {
+    let binary = "";
+    for (let offset = 0; offset < bytes.length; offset += BASE64_BINARY_CHUNK_BYTES) {
+      binary += String.fromCharCode(...bytes.subarray(offset, offset + BASE64_BINARY_CHUNK_BYTES));
+    }
+    return globalThis.btoa(binary);
+  }
+
+  /** Adds integrity metadata to a direct teaching-task download without inventing a temporary server export object. */
+  async function sha256Hex(bytes: Uint8Array): Promise<string> {
+    if (!globalThis.crypto?.subtle) {
+      throw new Error("Secure browser cryptography is required to export a handout");
+    }
+    // Copy into an owned ArrayBuffer because a response view can also be backed by SharedArrayBuffer, which Web
+    // Crypto deliberately rejects even though it is safe to read for the download itself.
+    const digestInput = new Uint8Array(bytes.byteLength);
+    digestInput.set(bytes);
+    const digest = new Uint8Array(await globalThis.crypto.subtle.digest("SHA-256", digestInput.buffer));
+    return Array.from(digest, (value) => value.toString(16).padStart(2, "0")).join("");
+  }
+
+  /** Builds the old transport-only download envelope from bytes already authorized by a teaching-task endpoint. */
+  async function directTeachingExport(
+    taskId: string,
+    format: string,
+    fileName: string,
+    mimeType: string,
+    bytes: Uint8Array,
+  ): Promise<MultiAgentWritingArtifactExportResponse> {
+    return {
+      exportId: generateUUID(),
+      workflowId: taskId,
+      format,
+      fileName,
+      mimeType,
+      byteSize: bytes.byteLength,
+      sha256: await sha256Hex(bytes),
+      base64Content: bytesToBase64(bytes),
+    };
   }
 
   /**
@@ -2546,21 +2726,19 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     const expiredSession = status === 403
       && /SESSION_EXPIRED|AUTH(?:ENTICATION)?_REQUIRED|login session (?:is )?expired/i.test(body);
     if (status !== 401 && !expiredSession) return;
-    globalThis.localStorage?.removeItem(AUTH_STORAGE_KEY);
     globalThis.dispatchEvent?.(new Event(AUTH_INVALID_EVENT));
   }
 
-  async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> {
-    const auth = readAuthSession();
-    const authHeader = auth ? { [auth.tokenName]: auth.tokenValue } : {};
+  async function requestJson<T>(
+    path: string,
+    init: RequestInit = {},
+  ): Promise<T> {
     const response = await fetchImpl(`${normalizedBaseUrl}${path}`, {
       ...init,
       cache: init.cache ?? "no-store",
       credentials: init.credentials ?? "include",
       headers: {
-        ...DEVICE_ID_HEADER,
-        ...authHeader,
-        ...withoutLegacyCapabilityHeaders(init.headers),
+        ...init.headers,
         ...NO_STORE_HEADERS,
       },
     });
@@ -2586,16 +2764,12 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
   }
 
   async function requestText(path: string, init: RequestInit = {}): Promise<string> {
-    const auth = readAuthSession();
-    const authHeader = auth ? { [auth.tokenName]: auth.tokenValue } : {};
     const response = await fetchImpl(`${normalizedBaseUrl}${path}`, {
       ...init,
       cache: init.cache ?? "no-store",
       credentials: init.credentials ?? "include",
       headers: {
-        ...DEVICE_ID_HEADER,
-        ...authHeader,
-        ...withoutLegacyCapabilityHeaders(init.headers),
+        ...init.headers,
         ...NO_STORE_HEADERS,
       },
     });
@@ -2611,16 +2785,12 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
    * Requests backend binary content while preserving the same session and device headers.
    */
   async function requestBytes(path: string, init: RequestInit = {}): Promise<Uint8Array> {
-    const auth = readAuthSession();
-    const authHeader = auth ? { [auth.tokenName]: auth.tokenValue } : {};
     const response = await fetchImpl(`${normalizedBaseUrl}${path}`, {
       ...init,
       cache: init.cache ?? "no-store",
       credentials: init.credentials ?? "include",
       headers: {
-        ...DEVICE_ID_HEADER,
-        ...authHeader,
-        ...withoutLegacyCapabilityHeaders(init.headers),
+        ...init.headers,
         ...NO_STORE_HEADERS,
       },
     });
@@ -2636,16 +2806,12 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     bytes: Uint8Array;
     headers: Headers;
   }> {
-    const auth = readAuthSession();
-    const authHeader = auth ? { [auth.tokenName]: auth.tokenValue } : {};
-  const response = await fetchImpl(`${normalizedBaseUrl}${path}`, {
+    const response = await fetchImpl(`${normalizedBaseUrl}${path}`, {
       ...init,
       cache: init.cache ?? "no-store",
       credentials: init.credentials ?? "include",
       headers: {
-        ...DEVICE_ID_HEADER,
-        ...authHeader,
-        ...withoutLegacyCapabilityHeaders(init.headers),
+        ...init.headers,
         ...NO_STORE_HEADERS,
       },
     });
@@ -2663,18 +2829,18 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
   /**
    * Uploads multipart form data while preserving backend session headers and browser-generated boundaries.
    */
-  async function requestFormJson<T>(path: string, formData: FormData, init: RequestInit = {}): Promise<T> {
-    const auth = readAuthSession();
-    const authHeader = auth ? { [auth.tokenName]: auth.tokenValue } : {};
+  async function requestFormJson<T>(
+    path: string,
+    formData: FormData,
+    init: RequestInit = {},
+  ): Promise<T> {
     const response = await fetchImpl(`${normalizedBaseUrl}${path}`, {
       ...init,
       cache: init.cache ?? "no-store",
       method: init.method ?? "POST",
       credentials: init.credentials ?? "include",
       headers: {
-        ...DEVICE_ID_HEADER,
-        ...authHeader,
-        ...withoutLegacyCapabilityHeaders(init.headers),
+        ...init.headers,
         ...NO_STORE_HEADERS,
       },
       body: formData,
@@ -2695,17 +2861,13 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     init: RequestInit,
     onEvent: (eventName: string, payload: T) => void,
   ): Promise<void> {
-    const auth = readAuthSession();
-    const authHeader = auth ? { [auth.tokenName]: auth.tokenValue } : {};
     const response = await fetchImpl(`${normalizedBaseUrl}${path}`, {
       ...init,
       cache: init.cache ?? "no-store",
       credentials: init.credentials ?? "include",
       headers: {
         Accept: "text/event-stream",
-        ...DEVICE_ID_HEADER,
-        ...authHeader,
-        ...withoutLegacyCapabilityHeaders(init.headers),
+        ...init.headers,
         ...NO_STORE_HEADERS,
       },
     });
@@ -2801,30 +2963,36 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
   }
 
   return {
-    /**
-     * 登录并保存后端会话 token；后续请求只携带 token，不携带 userId/role/studentId。
-     */
+    /** 登录并接收非敏感会话元数据；后续请求自动携带 HttpOnly Cookie。 */
     async login(request: LoginRequest): Promise<LoginResponse> {
       const response = await requestJson<LoginResponse>("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(request),
       });
-      globalThis.localStorage?.setItem(AUTH_STORAGE_KEY, JSON.stringify(response));
       return response;
     },
 
-    /**
-     * Registers a student account and stores the backend-issued session token.
-     */
+    /** Registers a student account and receives non-sensitive session metadata. */
     async register(request: RegisterRequest): Promise<LoginResponse> {
       const response = await requestJson<LoginResponse>("/api/auth/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(request),
       });
-      globalThis.localStorage?.setItem(AUTH_STORAGE_KEY, JSON.stringify(response));
       return response;
+    },
+
+    /**
+     * Creates a teacher through the current administrator session without persisting or trusting browser identity,
+     * tenant, or role fields. The backend returns only password-free account metadata and keeps this admin session.
+     */
+    provisionTeacher(request: TeacherAccountProvisionRequest): Promise<TeacherAccountProvisionResponse> {
+      return requestJson<TeacherAccountProvisionResponse>("/api/auth/teachers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: request.username, password: request.password }),
+      });
     },
 
     /**
@@ -2832,8 +3000,12 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
      */
     async currentSession(): Promise<LoginResponse> {
       const response = await requestJson<LoginResponse>("/api/auth/session");
-      globalThis.localStorage?.setItem(AUTH_STORAGE_KEY, JSON.stringify(response));
       return response;
+    },
+
+    /** Invalidates the backend session cookie; no browser storage cleanup is required because tokens are not persisted. */
+    async logout(): Promise<void> {
+      await requestJson<void>("/api/auth/logout", { method: "POST" });
     },
 
     getSummary(): Promise<TextbookSummary> {
@@ -2856,30 +3028,6 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
      */
     getAudit(queryId: string): Promise<RetrievalAuditDetail> {
       return requestJson<RetrievalAuditDetail>(`/api/retrieval/audit/${encodeURIComponent(queryId)}`);
-    },
-
-    /**
-     * Reads high-value capability audit rows for teacher/admin security review.
-     */
-    listCapabilityAudits(query: CapabilityAuditQuery = {}): Promise<CapabilityAuditLogResponse[]> {
-      const params = new URLSearchParams();
-      if (query.subjectType) {
-        params.set("subjectType", query.subjectType);
-      }
-      if (query.subjectId) {
-        params.set("subjectId", query.subjectId);
-      }
-      if (query.action) {
-        params.set("action", query.action);
-      }
-      if (query.decision) {
-        params.set("decision", query.decision);
-      }
-      if (query.limit) {
-        params.set("limit", String(query.limit));
-      }
-      const suffix = params.size > 0 ? `?${params.toString()}` : "";
-      return requestJson<CapabilityAuditLogResponse[]>(`/api/security/capability-audits${suffix}`);
     },
 
     /**
@@ -3110,32 +3258,32 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     },
 
     /**
-     * Runs multi-agent writing under backend RBAC and resource visibility policy.
+     * Compatibility submitter for callers that still use the synchronous writing method.
+     *
+     * It deliberately enters the same durable teaching-task endpoint as the asynchronous panel path, so choosing a
+     * different client method cannot recreate the retired `/api/agents/writing` business workflow.
      */
     async runMultiAgentWriting(request: MultiAgentWritingRequest): Promise<MultiAgentWritingResponse> {
-      const body = JSON.stringify(request);
-      const path = "/api/agents/writing";
-      return requestJson<MultiAgentWritingResponse>(path, {
+      const teachingRequest = await toTeachingHandoutRequest(request);
+      const task = await requestJson<TeachingTaskResponse>("/api/teaching/tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body,
+        body: JSON.stringify(teachingRequest),
       });
+      return projectTeachingTaskAsWritingWorkflow(task);
     },
 
     /**
-     * Starts multi-agent writing in the background and returns a workflow id for polling.
+     * Starts the sole durable teaching-task workflow. workflowId remains a UI compatibility alias for taskId.
      */
     async startAsyncMultiAgentWriting(request: MultiAgentWritingRequest): Promise<MultiAgentWritingResponse> {
-      const body = JSON.stringify(request);
-      // Keep this path identical to the controller mapping.  The courseware segment is
-      // part of the server-side access policy, so omitting it makes a real background
-      // workflow look like an authorization/capability failure instead of starting it.
-      const path = "/api/agents/writing/courseware/async";
-      return requestJson<MultiAgentWritingResponse>(path, {
+      const teachingRequest = await toTeachingHandoutRequest(request);
+      const task = await requestJson<TeachingTaskResponse>("/api/teaching/tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body,
+        body: JSON.stringify(teachingRequest),
       });
+      return projectTeachingTaskAsWritingWorkflow(task);
     },
 
     /**
@@ -3143,57 +3291,76 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
      */
     async resumeMultiAgentWriting(
       workflowId: string,
-      request: MultiAgentWritingRequest,
+      _request: MultiAgentWritingRequest,
     ): Promise<MultiAgentWritingResponse> {
       const encodedWorkflowId = encodeURIComponent(workflowId);
-      const path = `/api/agents/writing/${encodedWorkflowId}/resume`;
-      const body = JSON.stringify({ workflowId, ...request });
-      return requestJson<MultiAgentWritingResponse>(path, {
+      const task = await requestJson<TeachingTaskResponse>(`/api/teaching/tasks/${encodedWorkflowId}/resume`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body,
       });
+      return projectTeachingTaskAsWritingWorkflow(task);
     },
 
     /**
      * Reads the latest safe multi-agent writing workflow status by workflow id.
      */
-    getMultiAgentWritingWorkflow(workflowId: string): Promise<MultiAgentWritingResponse> {
-      return requestJson<MultiAgentWritingResponse>(`/api/agents/writing/${encodeURIComponent(workflowId)}`);
+    async getMultiAgentWritingWorkflow(workflowId: string): Promise<MultiAgentWritingResponse> {
+      const task = await requestJson<TeachingTaskResponse>(`/api/teaching/tasks/${encodeURIComponent(workflowId)}`);
+      return projectTeachingTaskAsWritingWorkflow(task);
     },
 
     /**
      * Reads safe ordered traces for a multi-agent writing workflow.
      */
-    getMultiAgentWritingTraces(workflowId: string): Promise<MultiAgentWritingTraceResponse> {
-      return requestJson<MultiAgentWritingTraceResponse>(
-        `/api/agents/writing/${encodeURIComponent(workflowId)}/traces`,
-      );
+    async getMultiAgentWritingTraces(workflowId: string): Promise<MultiAgentWritingTraceResponse> {
+      const task = await requestJson<TeachingTaskResponse>(`/api/teaching/tasks/${encodeURIComponent(workflowId)}`);
+      return projectTeachingTaskAsWritingTraces(task);
     },
 
     /**
      * Reads owner-visible generated content for review and frontend preview.
      */
-    getMultiAgentWritingArtifact(workflowId: string): Promise<MultiAgentWritingArtifact> {
-      return requestJson<MultiAgentWritingArtifact>(
-        `/api/agents/writing/${encodeURIComponent(workflowId)}/artifact`,
-      );
+    async getMultiAgentWritingArtifact(workflowId: string): Promise<MultiAgentWritingArtifact> {
+      const task = await requestJson<TeachingTaskResponse>(`/api/teaching/tasks/${encodeURIComponent(workflowId)}`);
+      return projectTeachingTaskAsWritingArtifact(task);
     },
 
     /**
      * Exports generated writing content as Markdown, LaTeX, or ZIP.
      */
-    exportMultiAgentWritingArtifact(
+    async exportMultiAgentWritingArtifact(
       workflowId: string,
       format: "markdown" | "latex" | "pdf" | "pdf-teacher" | "pdf-student" | "pdf-lecture" | "zip",
       layout: { headerText?: string; footerText?: string } = {},
     ): Promise<MultiAgentWritingArtifactExportResponse> {
-      const params = new URLSearchParams({ format });
-      if (layout.headerText?.trim()) params.set("headerText", layout.headerText.trim());
-      if (layout.footerText?.trim()) params.set("footerText", layout.footerText.trim());
-      return requestJson<MultiAgentWritingArtifactExportResponse>(
-        `/api/agents/writing/${encodeURIComponent(workflowId)}/artifact/export?${params}`,
-      );
+      if (layout.headerText?.trim() || layout.footerText?.trim()) {
+        throw new Error("Teaching task page chrome is fixed when the task is created");
+      }
+      const encodedTaskId = encodeURIComponent(workflowId);
+      if (format === "zip") {
+        const batch = await requestJson<TeachingHandoutBatchExportResponse>("/api/teaching/handouts/batch/zip", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ taskIds: [workflowId] }),
+        });
+        const bytes = await requestBytes(`/api/teaching/handouts/batch/zip/${encodeURIComponent(batch.batchId)}/download`);
+        return directTeachingExport(workflowId, format, `${workflowId}-handouts.zip`, "application/zip", bytes);
+      }
+      if (format === "markdown") {
+        const task = await requestJson<TeachingTaskResponse>(`/api/teaching/tasks/${encodedTaskId}`);
+        const bytes = new TextEncoder().encode(task.aiDraft?.content || task.handoutLatex);
+        return directTeachingExport(workflowId, format, `${workflowId}-teacher.md`, "text/markdown; charset=UTF-8", bytes);
+      }
+      const version: TeachingHandoutVersion = format === "pdf-student"
+        ? "student"
+        : format === "pdf-lecture"
+          ? "lecture"
+          : "teacher";
+      if (format === "latex") {
+        const latex = await requestText(`/api/teaching/tasks/${encodedTaskId}/handout/${version}/latex`);
+        return directTeachingExport(workflowId, format, `${workflowId}-${version}.tex`, "application/x-tex; charset=UTF-8", new TextEncoder().encode(latex));
+      }
+      const bytes = await requestBytes(`/api/teaching/tasks/${encodedTaskId}/handout/${version}/pdf`);
+      return directTeachingExport(workflowId, format, `${workflowId}-${version}.pdf`, "application/pdf", bytes);
     },
 
     /**
@@ -3631,10 +3798,12 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
         ? request.sourceType
         : "local_path";
       const normalizedParseMode = request.parseMode ?? "TEXT";
+      const normalizedTitle = request.title?.trim() ?? "";
+      const uploadPath = "/api/teacher/resources/upload";
       const formData = new FormData();
       formData.append("sourceType", normalizedSourceType);
-      if (request.title?.trim()) {
-        formData.append("title", request.title.trim());
+      if (normalizedTitle) {
+        formData.append("title", normalizedTitle);
       }
       formData.append("permissionScope", request.permissionScope);
       formData.append("parseMode", normalizedParseMode);
@@ -3644,9 +3813,7 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
           : file.name;
         formData.append("files", file, relativeName);
       }
-      return requestFormJson<TeacherResourceDocumentResponse>("/api/teacher/resources/upload", formData, {
-        method: "POST",
-      });
+      return requestFormJson<TeacherResourceDocumentResponse>(uploadPath, formData, { method: "POST" });
     },
 
     /**
@@ -3698,16 +3865,4 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
       return requestJson<VectorIndexRebuildResponse>(path, { method: "POST" });
     },
   };
-}
-
-/**
- * Reads the saved Sa-Token session from localStorage.
- */
-function readAuthSession(): LoginResponse | null {
-  try {
-    const value = globalThis.localStorage?.getItem(AUTH_STORAGE_KEY);
-    return value ? (JSON.parse(value) as LoginResponse) : null;
-  } catch {
-    return null;
-  }
 }
