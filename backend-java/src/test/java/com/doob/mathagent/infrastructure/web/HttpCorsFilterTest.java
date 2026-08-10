@@ -43,7 +43,8 @@ class HttpCorsFilterTest {
         assertThat(continued).isFalse();
         assertThat(response.getStatus()).isEqualTo(204);
         assertThat(response.getHeader(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN)).isEqualTo("http://127.0.0.1:5173");
-        assertThat(response.getHeader(HttpHeaders.ACCESS_CONTROL_ALLOW_HEADERS)).contains("MCP-Protocol-Version", "satoken");
+        assertThat(response.getHeader(HttpHeaders.ACCESS_CONTROL_ALLOW_HEADERS)).contains("MCP-Protocol-Version");
+        assertThat(response.getHeader(HttpHeaders.ACCESS_CONTROL_ALLOW_HEADERS)).doesNotContain("satoken");
     }
 
     @Test

@@ -12,6 +12,7 @@ import org.springframework.stereotype.Component;
 /** Registers the standalone process and periodically proves liveness to the shared control-plane database. */
 @Component
 @ConditionalOnProperty(prefix = "math-agent.agent-worker.runtime", name = "enabled", havingValue = "true")
+@ConditionalOnProperty(name = "math-agent.rabbitmq.listeners-enabled", havingValue = "true")
 public class AgentWorkerRuntimeHeartbeat {
     private final AgentWorkerRegistryService registry; private final Environment environment;
     public AgentWorkerRuntimeHeartbeat(AgentWorkerRegistryService registry, Environment environment) { this.registry=registry; this.environment=environment; register(); }

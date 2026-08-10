@@ -45,4 +45,4 @@
 
 下午重启后端并以真实 `admin/school-a` 会话重新请求同一接口，当前库返回 429 条 active 记录。题目标题中可识别年份的记录为：2022 年 171 条、2023 年 140 条、2024 年 99 条；其余记录来自教师资料导入和其他年份。由于本次同步/去重状态与上午快照不同，页面应以接口实时返回总数为准，不再显示固定的 419。
 
-此前学生端出现 `403 Endpoint requires subject type in [teacher, admin]`，原因是只读 GET 与教师写入 POST 共用了同一条管理员访问规则。现已将 `/api/question-bank/items` 的接口层放宽到已登录学生/教师/管理员，写入仍由 capability token 和服务层教师/管理员校验保护；题库查询的 MyBatis 可见性过滤继续限制学生只能看到 `MATH_VIP`、`PUBLIC_TEXTBOOK`，教师私有题仅对所属教师可见。
+此前学生端出现 `403 Endpoint requires subject type in [teacher, admin]`，原因是只读 GET 与教师写入 POST 共用了同一条管理员访问规则。现已将 `/api/question-bank/items` 的接口层放宽到已登录学生/教师/管理员，写入仍由后端解析的角色和服务层教师/管理员校验保护；题库查询的 MyBatis 可见性过滤继续限制学生只能看到 `MATH_VIP`、`PUBLIC_TEXTBOOK`，教师私有题仅对所属教师可见。

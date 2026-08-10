@@ -1,4 +1,4 @@
-"""Compare the retired local NPY baseline with real Milvus textbook recall using identical worker query vectors."""
+"""Compare the c2 local section baseline with real production Milvus recall using identical worker query vectors."""
 from __future__ import annotations
 
 import argparse
@@ -12,6 +12,8 @@ from urllib import request
 
 import numpy as np
 import yaml
+
+from scripts.local.migrate_textbook_indexes_to_milvus import production_text_index_paths
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -72,8 +74,12 @@ def load_graph_knowledge_points(path: Path) -> list[str]:
 
 def evaluate_route(root: Path, cfg: dict[str, Any], worker_key: str, token: str, route: str, queries: tuple[str, ...]) -> dict[str, Any]:
     if route == "text":
-        metadata = read_jsonl(root / "_page_text_index/metadata.jsonl")
-        vectors = np.load(root / "_page_text_index/page_embeddings.npy").astype(np.float32)
+        # Benchmark the exact c2 section-child index used by production migration. Comparing Milvus with a page-only
+        # summary index would report a false pass because query vectors could be correct while candidate identities
+        # belonged to a different corpus contract.
+        metadata_path, vector_path, index_kind = production_text_index_paths(root)
+        metadata = read_jsonl(metadata_path)
+        vectors = np.load(vector_path).astype(np.float32)
         collection = cfg["textbook-text-collection-name"]
         dimension = int(cfg["textbook-text-dimension"])
         endpoint = "/v1/embeddings"
@@ -108,7 +114,8 @@ def evaluate_route(root: Path, cfg: dict[str, Any], worker_key: str, token: str,
                             "top1Match": bool(baseline_ids and milvus_ids and baseline_ids[0] == milvus_ids[0]),
                             "top3ContainsBaselineTop1": bool(baseline_ids and baseline_ids[0] in milvus_ids[:3]),
                             "top5ContainsBaselineTop1": bool(baseline_ids and baseline_ids[0] in milvus_ids[:5])})
-    return {"collection": collection, "dimension": dimension, "recallAt10": mean(comparisons, "recallAt10"),
+    return {"collection": collection, "dimension": dimension, "indexKind": index_kind if route == "text" else "page_images",
+            "recallAt10": mean(comparisons, "recallAt10"),
             "mrr": mean(comparisons, "reciprocalRank"), "top1": mean_bool(comparisons, "top1Match"),
             "top3": mean_bool(comparisons, "top3ContainsBaselineTop1"),
             "top5": mean_bool(comparisons, "top5ContainsBaselineTop1"),

@@ -23,6 +23,8 @@ import com.doob.mathagent.agent.vo.AgentRunExecuteResponse;
  * @param evidenceRefs evidence ids used by this run
  * @param stageTimings execution stage timings safe for monitoring
  * @param actualUsage provider-reported token usage
+ * @param actualCost actual deployment-priced cost, or -1 when no matching price is configured
+ * @param costKnown whether actualCost is backed by a configured provider/model price
  * @param message safe execution message without raw prompt or model output
  * @param diagnosticEvents safe diagnostic events, such as retries and provider fallback, without raw prompts or outputs
  */
@@ -44,7 +46,9 @@ public record AgentTraceRecord(
         List<AgentRunExecuteResponse.StageTiming> stageTimings,
         AgentRunExecuteResponse.TokenUsage actualUsage,
         String message,
-        List<DiagnosticEvent> diagnosticEvents) {
+        List<DiagnosticEvent> diagnosticEvents,
+        double actualCost,
+        boolean costKnown) {
 
     /**
      * Backward-compatible constructor for callers that do not attach diagnostic events yet.
@@ -69,7 +73,32 @@ public record AgentTraceRecord(
             String message) {
         this(traceId, planId, createdAt, tenantId, subjectType, subjectId, agentCode, providerName, modelCode, status,
                 estimatedCost, allowedToolScopes, allowedDataScopes, evidenceRefs, stageTimings, actualUsage, message,
-                List.of());
+                List.of(), -1.0d, false);
+    }
+
+    /** Backward-compatible constructor for existing trace producers with diagnostic events but no cost fields. */
+    public AgentTraceRecord(
+            String traceId,
+            String planId,
+            Instant createdAt,
+            String tenantId,
+            String subjectType,
+            String subjectId,
+            String agentCode,
+            String providerName,
+            String modelCode,
+            String status,
+            double estimatedCost,
+            List<String> allowedToolScopes,
+            List<String> allowedDataScopes,
+            List<String> evidenceRefs,
+            List<AgentRunExecuteResponse.StageTiming> stageTimings,
+            AgentRunExecuteResponse.TokenUsage actualUsage,
+            String message,
+            List<DiagnosticEvent> diagnosticEvents) {
+        this(traceId, planId, createdAt, tenantId, subjectType, subjectId, agentCode, providerName, modelCode, status,
+                estimatedCost, allowedToolScopes, allowedDataScopes, evidenceRefs, stageTimings, actualUsage, message,
+                diagnosticEvents, -1.0d, false);
     }
 
     /**

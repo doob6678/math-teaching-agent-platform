@@ -210,7 +210,14 @@ final class TeachingWorkflowLatexRenderer {
             List<String> questionScopedSteps = knowledgePointPacks.size() == 1
                     ? lectureDraftSteps(draftSections)
                     : List.of();
-            return guardHandoutLatex(lectureQuestionPages(knowledgePointPacks, questionScopedSteps), true);
+            String questionPages = lectureQuestionPages(knowledgePointPacks, questionScopedSteps);
+            // A retrieved pack can be useful for the teacher handout yet contain no publishable atomic prompt (for
+            // example, a source-only pack or a diagram question without an authorized asset). In that case the
+            // placeholder returned by lectureQuestionPages must not discard the reviewed graph's lecture cards.
+            // The fallback remains in the same teaching-task snapshot, so it never invents or re-requests content.
+            if (questionPages.contains("\\subsection*{第 ")) {
+                return guardHandoutLatex(questionPages, true);
+            }
         }
         if (draftSections != null && !draftSections.lectureCards().isEmpty()) {
             StringBuilder builder = new StringBuilder();

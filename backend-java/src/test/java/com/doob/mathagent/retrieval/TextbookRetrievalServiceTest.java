@@ -16,6 +16,7 @@ import java.nio.file.Files;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -31,6 +32,46 @@ class TextbookRetrievalServiceTest {
 
     @TempDir
     Path tempDir;
+
+    @Test
+    void expandsCoarsePoolAndUsesRankOnlyFusionBeforeFinalRerank() {
+        Map<String, List<TextbookSearchHit>> semantic = new LinkedHashMap<>();
+        semantic.put("book_semantic", List.of(hit("semantic")));
+        semantic.put("book_shared", List.of(hit("shared")));
+        Map<String, List<TextbookSearchHit>> lexical = new LinkedHashMap<>();
+        lexical.put("book_lexical", List.of(hit("lexical")));
+        lexical.put("book_shared", List.of(hit("shared")));
+        Map<String, List<TextbookSearchHit>> title = new LinkedHashMap<>();
+        title.put("book_title", List.of(hit("title")));
+        title.put("book_shared", List.of(hit("shared")));
+
+        assertThat(TextbookRetrievalService.rankCoarseDocumentsByRrf(
+                List.of(semantic, lexical, title), 3, 60))
+                .containsExactly("book_shared", "book_semantic", "book_lexical");
+        assertThat(TextbookRetrievalProperties.defaults().rerank().maxCoarseDocumentCandidates()).isEqualTo(5);
+        assertThat(TextbookRetrievalProperties.defaults().rerank().coarsePageCandidateLimit()).isEqualTo(25);
+    }
+
+    private static TextbookSearchHit hit(String chunkId) {
+        return new TextbookSearchHit(
+                chunkId,
+                chunkId,
+                1.0d,
+                "test",
+                "book",
+                "book",
+                "volume",
+                List.of(),
+                1,
+                "1",
+                "title",
+                "text",
+                "",
+                List.of(),
+                "pages/p001.png",
+                "content_page",
+                null);
+    }
 
     @Test
     void searchesChunksDeclaredByCatalogWithTwoStageRetrieval() throws Exception {
@@ -53,7 +94,7 @@ class TextbookRetrievalServiceTest {
 
         TextbookSearchResponse response = service.search(root, new TextbookSearchRequest("分段函数的定义", 5));
 
-        assertThat(response.retrievalStrategy()).isEqualTo("two_stage_doc_page_v4_title_field_parent_rerank");
+        assertThat(response.retrievalStrategy()).isEqualTo("two_stage_doc_page_v4_bounded_semantic_first_parent_rerank");
         assertThat(response.total()).isEqualTo(2);
         assertThat(response.hits())
                 .isNotEmpty()
@@ -195,7 +236,7 @@ class TextbookRetrievalServiceTest {
         assertThat(auditSink.event().queryId()).isEqualTo(response.queryId());
         assertThat(auditSink.event().tenantId()).isEqualTo("default");
         assertThat(auditSink.event().queryText()).isEqualTo("函数 对应关系");
-        assertThat(auditSink.event().retrievalStrategy()).isEqualTo("two_stage_doc_page_v4_title_field_parent_rerank");
+        assertThat(auditSink.event().retrievalStrategy()).isEqualTo("two_stage_doc_page_v4_bounded_semantic_first_parent_rerank");
         assertThat(auditSink.event().requestedLimit()).isEqualTo(5);
         assertThat(auditSink.event().hitCount()).isEqualTo(response.hits().size());
         assertThat(auditSink.event().elapsedMs()).isGreaterThanOrEqualTo(0);
@@ -259,8 +300,8 @@ class TextbookRetrievalServiceTest {
         TextbookSearchResponse first = service.search(root, new TextbookSearchRequest("分段函数", 5));
         TextbookSearchResponse second = service.search(root, new TextbookSearchRequest("分段函数", 5));
 
-        assertThat(first.retrievalStrategy()).isEqualTo("two_stage_doc_page_v4_title_field_parent_rerank");
-        assertThat(second.retrievalStrategy()).isEqualTo("redis_cache_two_stage_doc_page_v4_title_field_parent_rerank");
+        assertThat(first.retrievalStrategy()).isEqualTo("two_stage_doc_page_v4_bounded_semantic_first_parent_rerank");
+        assertThat(second.retrievalStrategy()).isEqualTo("redis_cache_two_stage_doc_page_v4_bounded_semantic_first_parent_rerank");
         assertThat(second.queryId()).isNotEqualTo(first.queryId());
         assertThat(second.hits()).extracting(TextbookSearchHit::chunkId).containsExactly("book_a_p101_text_001");
         assertThat(searchEngine.searchCount()).isEqualTo(1);
@@ -296,7 +337,7 @@ class TextbookRetrievalServiceTest {
         TextbookSearchResponse second = service.search(root, request);
 
         assertThat(first.hits()).isEmpty();
-        assertThat(second.retrievalStrategy()).isEqualTo("redis_cache_two_stage_doc_page_v4_title_field_parent_rerank");
+        assertThat(second.retrievalStrategy()).isEqualTo("redis_cache_two_stage_doc_page_v4_bounded_semantic_first_parent_rerank");
         assertThat(cache.putCount()).isEqualTo(1);
         assertThat(cache.lastTtl()).isEqualTo(nullValueTtl);
     }

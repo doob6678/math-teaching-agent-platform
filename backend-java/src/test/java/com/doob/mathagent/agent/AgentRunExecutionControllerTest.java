@@ -7,12 +7,10 @@ import com.doob.mathagent.agent.controller.AgentRunExecutionController;
 import com.doob.mathagent.agent.dto.AgentRunExecuteRequest;
 import com.doob.mathagent.agent.service.AgentConcurrencyGuard;
 import com.doob.mathagent.agent.service.AgentRunExecutionService;
-import com.doob.mathagent.agent.service.AgentRunCapabilityVerifier;
 import com.doob.mathagent.agent.service.InMemoryAgentTraceStore;
 import com.doob.mathagent.agent.vo.AgentRunExecuteResponse;
 import com.doob.mathagent.agent.vo.AgentRunPlanResponse;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
@@ -22,46 +20,15 @@ import org.springframework.web.server.ResponseStatusException;
 class AgentRunExecutionControllerTest {
 
     @Test
-    void rejectsHighValueExecutionWithoutAcceptedCapabilityToken() {
+    void executesAfterBackendSubjectVerification() {
         AgentRunExecutionController controller = new AgentRunExecutionController(
                 AgentRunExecutionServiceFixture.deterministicModelService(new InMemoryAgentTraceStore()),
-                request -> new RequestSubject("school-a", "teacher", "teacher-001", "device-1"),
-                (token, action, path, requestHash, subject) -> false);
+                request -> new RequestSubject("school-a", "teacher", "teacher-001", "device-1"));
 
-        assertThatThrownBy(() -> controller.execute(highValueRequest(), null))
-                .isInstanceOf(ResponseStatusException.class)
-                .hasMessageContaining("Capability token required");
-    }
-
-    @Test
-    void consumesCapabilityForHighValueExecutionAndRecordsTrace() {
-        List<String> actions = new ArrayList<>();
-        AgentRunCapabilityVerifier verifier = (token, action, path, requestHash, subject) -> {
-            actions.add(action + "|" + path + "|" + requestHash + "|" + subject.subjectId());
-            return true;
-        };
-        AgentRunExecutionController controller = new AgentRunExecutionController(
-                AgentRunExecutionServiceFixture.deterministicModelService(new InMemoryAgentTraceStore()),
-                request -> new RequestSubject("school-a", "teacher", "teacher-001", "device-1"),
-                verifier);
-
-        AgentRunExecuteResponse response = controller.execute(highValueRequest(), null);
+        AgentRunExecuteResponse response = controller.execute(request(), null);
 
         assertThat(response.status()).isEqualTo("COMPLETED");
-        assertThat(actions).containsExactly("agent-run:CoursewareAgent|/api/agents/execute||teacher-001");
-    }
-
-    @Test
-    void allowsNonHighValueExecutionWithoutCapability() {
-        AgentRunExecutionController controller = new AgentRunExecutionController(
-                AgentRunExecutionServiceFixture.deterministicModelService(new InMemoryAgentTraceStore()),
-                request -> new RequestSubject("school-a", "student", "student-001", "device-1"),
-                (token, action, path, requestHash, subject) -> false);
-
-        AgentRunExecuteResponse response = controller.execute(nonHighValueRequest(), null);
-
-        assertThat(response.status()).isEqualTo("COMPLETED");
-        assertThat(response.subjectId()).isEqualTo("student-001");
+        assertThat(response.subjectId()).isEqualTo("teacher-001");
     }
 
     @Test
@@ -69,63 +36,22 @@ class AgentRunExecutionControllerTest {
         AgentConcurrencyGuard deniedGuard = (keys, traceId, leaseTime) -> Optional.empty();
         AgentRunExecutionController controller = new AgentRunExecutionController(
                 AgentRunExecutionServiceFixture.deterministicModelService(new InMemoryAgentTraceStore(), deniedGuard),
-                request -> new RequestSubject("school-a", "teacher", "teacher-001", "device-1"),
-                (token, action, path, requestHash, subject) -> true);
+                request -> new RequestSubject("school-a", "teacher", "teacher-001", "device-1"));
 
-        assertThatThrownBy(() -> controller.execute(highValueRequest(), null))
+        assertThatThrownBy(() -> controller.execute(request(), null))
                 .isInstanceOfSatisfying(ResponseStatusException.class, exception ->
                         assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS));
     }
 
-    private static AgentRunExecuteRequest highValueRequest() {
-        return new AgentRunExecuteRequest(highValuePlan(), "Generate courseware", List.of("doc-1"), false);
-    }
-
-    private static AgentRunExecuteRequest nonHighValueRequest() {
-        return new AgentRunExecuteRequest(nonHighValuePlan(), "Solve a problem", List.of("textbook-1"), false);
-    }
-
-    private static AgentRunPlanResponse highValuePlan() {
-        return plan("plan-1", "teacher", "teacher-001", "CoursewareAgent", true, "agent-run:CoursewareAgent");
-    }
-
-    private static AgentRunPlanResponse nonHighValuePlan() {
-        return plan("plan-2", "student", "student-001", "StudentTutorAgent", false, "");
-    }
-
-    private static AgentRunPlanResponse plan(
-            String planId,
-            String subjectType,
-            String subjectId,
-            String agentCode,
-            boolean capabilityRequired,
-            String capabilityAction) {
-        return new AgentRunPlanResponse(
-                planId,
-                "school-a",
-                subjectType,
-                subjectId,
-                agentCode,
-                "openai",
-                "gpt-5.4",
-                "reasoning",
-                List.of("tool:search:textbook"),
-                List.of(),
+    private static AgentRunExecuteRequest request() {
+        AgentRunPlanResponse plan = new AgentRunPlanResponse(
+                "plan-1", "school-a", "teacher", "teacher-001", "CoursewareAgent", "openai", "gpt-5.4",
+                "reasoning", List.of("tool:search:textbook"), List.of(),
                 List.of(new AgentRunPlanResponse.ToolPolicyDecision(
-                        "tool:search:textbook",
-                        "ALLOWED",
-                        "Tool is allowed by agent policy and not disabled by request preference")),
-                List.of("PUBLIC_TEXTBOOK"),
-                List.of(),
-                capabilityRequired,
-                capabilityAction,
-                12000,
-                4000,
-                4600,
-                0.46,
-                true,
-                "test route",
-                List.of(new AgentRunPlanResponse.StageTiming("model_route", 1)),
-                List.of("concurrent:user:" + subjectId + ":" + agentCode));
+                        "tool:search:textbook", "ALLOWED", "backend policy")),
+                List.of("PUBLIC_TEXTBOOK"), List.of(), 12000, 4000, 4600, 0.46, true,
+                "test route", List.of(new AgentRunPlanResponse.StageTiming("model_route", 1)),
+                List.of("concurrent:user:teacher-001:CoursewareAgent"));
+        return new AgentRunExecuteRequest(plan, "Generate courseware", List.of("doc-1"), false);
     }
 }

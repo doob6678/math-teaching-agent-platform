@@ -37,6 +37,29 @@ public interface StudentExplanationHistoryStore {
             int limit);
 
     /**
+     * Returns the confirmed compact summary for one subject-authorized conversation.
+     */
+    default StudentExplanationContextSummary findContextSummary(
+            String tenantId,
+            String subjectType,
+            String subjectId,
+            String conversationId) {
+        return null;
+    }
+
+    /**
+     * Persists a new summary only when its version still follows the durable conversation state.
+     */
+    default boolean updateContextSummary(
+            String tenantId,
+            String subjectType,
+            String subjectId,
+            String conversationId,
+            StudentExplanationContextSummary summary) {
+        return false;
+    }
+
+    /**
      * Lists durable conversation shells so the frontend can render a ChatGPT-like sidebar.
      */
     List<StudentExplanationConversationSummary> listConversations(

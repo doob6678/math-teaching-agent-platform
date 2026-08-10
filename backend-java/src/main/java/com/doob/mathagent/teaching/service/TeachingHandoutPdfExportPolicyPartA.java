@@ -264,6 +264,17 @@ final class TeachingHandoutPdfExportPolicyPartA {
     }
 
 
+    /** 仅保留后端定义的页码命令，其余持久化页脚文本一律转义。 */
+    static String latexPageFooter(String value) {
+        String marker = "MATH_AGENT_LAST_PAGE";
+        return latexText(repairMojibake(value)
+                .replace("\\thepage", "MATH_AGENT_PAGE")
+                .replace("\\pageref{LastPage}", marker))
+                .replace("MATH\\_AGENT\\_PAGE", "\\thepage")
+                .replace("MATH\\_AGENT\\_LAST\\_PAGE", "\\pageref{LastPage}");
+    }
+
+
     static String fullLatexDocument(TeachingTaskResponse task, String version) {
         String title = versionTitle(version);
         String templateName = templateNameForVersion(task, version);
@@ -284,12 +295,20 @@ final class TeachingHandoutPdfExportPolicyPartA {
         String body = renderLatexBody(style.isLecture()
                 ? insertLectureQuestionBreaks(sanitizedBody)
                 : insertPrintedQuestionSpacing(sanitizedBody));
+        // The legacy Markdown renderer can emit a display formula as an item inside an itemize block. Repair at the
+        // final TeX boundary because this malformed shape is introduced after sanitizeLatexForExport has completed.
+        body = body.replace("\\item \\[\n", "\\end{itemize}\n\\[\n")
+                .replace("\\item \\]\n", "\\]\n")
+                .replace("\\]\n\\end{itemize}\n", "\\]\n");
+        // A display environment already enters math mode. Legacy content sometimes wraps its sole formula in `$...$`,
+        // which makes XeLaTeX treat the closing delimiter as an unmatched display terminator.
+        body = body.replaceAll("(?s)(\\\\\\[\\s*)\\$([^$]+)\\$(.*?\\\\])", "$1$2$3");
         String headerTopic = safeHeaderTopic(repairMojibake(task.learningGoal()));
         String watermark = latexText(normalizedWatermark(repairMojibake(task.watermarkText())));
         String headerLeft = latexText(repairMojibake(task.headerLeft()));
         String headerRight = latexText(repairMojibake(task.headerRight()));
         String footerLeft = latexText(repairMojibake(task.footerLeft()));
-        String footerRight = latexText(repairMojibake(task.footerRight()));
+        String footerRight = latexPageFooter(task.footerRight());
         // Template families own paper geometry and page chrome through independent Strategy implementations.
         // The shared exporter owns only mathematical content, compilation, and asset safety.
         String documentOptions = templateStrategy.documentOptions(style.isLecture());
@@ -719,7 +738,7 @@ final class TeachingHandoutPdfExportPolicyPartA {
                 result.append(rawLine).append('\n');
             }
         }
-        return foundQuestion ? result.toString().strip() : "";
+        return foundQuestion ? result.toString().strip() : stripStudentTeacherBlocks(body);
     }
 
 

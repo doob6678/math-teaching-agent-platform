@@ -11,10 +11,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import statistics
+import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -27,6 +30,8 @@ import requests
 DEFAULT_CASES = Path("output/benchmarks/textbook-page-section-ablation-final/section_cases.json")
 DEFAULT_OUTPUT_ROOT = Path("output/benchmarks")
 DEFAULT_BACKEND_URL = "http://127.0.0.1:8080"
+# This evaluator exercises the same c2 section-child contract used by production. It is not imported by the backend;
+# the live service receives the same c2 root through the Compose mount and application.yml.
 DEFAULT_CORPUS_ROOT = Path(os.environ.get(
     "MATH_AGENT_PROCESSED_BOOKS_ROOT",
     r"C:\Users\doob\Desktop\个人资料\高中数学\下载课本代码\tchMaterial-parser-main\tchMaterial-parser-main\processed_books_section_shadow_all_mini_c2",
@@ -34,11 +39,26 @@ DEFAULT_CORPUS_ROOT = Path(os.environ.get(
 DEFAULT_LIMIT = 10
 EXPECTED_CASE_COUNT = 46
 DEFAULT_TIMEOUT_SECONDS = 45
+# Production acceptance reports expose only the requested cutoffs. The HTTP limit may remain ten so the
+# rank calculation has enough evidence, but higher-cutoff recall is deliberately not emitted as an acceptance metric.
 METRIC_CUTOFFS = (1, 3, 5)
 TARGET_DOCUMENT_AT_1 = 0.80
 TARGET_DOCUMENT_AT_3 = 0.90
 TARGET_BLOCK_AT_1 = 0.70
 TARGET_BLOCK_AT_3 = 0.85
+DOCKER_STATS_TIMEOUT_SECONDS = 8
+GPU_STATS_TIMEOUT_SECONDS = 5
+MEMORY_UNIT_MULTIPLIERS = {
+    "b": 1,
+    "kb": 1000,
+    "kib": 1024,
+    "mb": 1000**2,
+    "mib": 1024**2,
+    "gb": 1000**3,
+    "gib": 1024**3,
+    "tb": 1000**4,
+    "tib": 1024**4,
+}
 
 
 @dataclass(frozen=True)
@@ -198,6 +218,137 @@ def at_cutoff(rank: int | None, cutoff: int) -> bool:
     return rank is not None and rank <= cutoff
 
 
+def percentile(values: list[float], fraction: float) -> float | None:
+    """Return a deterministic nearest-rank percentile for auditable small benchmark sets."""
+    if not values:
+        return None
+    ordered = sorted(values)
+    index = max(0, min(len(ordered) - 1, math.ceil(len(ordered) * fraction) - 1))
+    return round(ordered[index], 3)
+
+
+def parse_memory_quantity(value: str) -> float | None:
+    """Convert Docker's human-readable memory quantity to bytes for aggregation.
+
+    Docker may emit binary units such as MiB/GiB or decimal units such as MB/GB.
+    Keeping the original display string and adding normalized bytes makes the
+    saved report both operator-readable and numerically comparable.
+    """
+    match = re.fullmatch(r"\s*([0-9]+(?:\.[0-9]+)?)\s*([kmgt]?i?b)\s*", value, re.IGNORECASE)
+    if not match:
+        return None
+    number, unit = match.groups()
+    multiplier = MEMORY_UNIT_MULTIPLIERS.get(unit.lower())
+    return float(number) * multiplier if multiplier is not None else None
+
+
+def collect_resource_sample() -> dict[str, Any]:
+    """Capture real GPU and Docker resource state without changing service configuration."""
+    sample: dict[str, Any] = {"timestamp": datetime.now().isoformat(timespec="milliseconds"), "gpu": None, "containers": []}
+    try:
+        completed = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name,utilization.gpu,memory.used,memory.total", "--format=csv,noheader,nounits"],
+            capture_output=True,
+            text=True,
+            timeout=GPU_STATS_TIMEOUT_SECONDS,
+            check=True,
+        )
+        values = [part.strip() for part in completed.stdout.strip().splitlines()[0].split(",")]
+        if len(values) == 4:
+            sample["gpu"] = {
+                "name": values[0],
+                "utilizationPercent": float(values[1]),
+                "memoryUsedMb": float(values[2]),
+                "memoryTotalMb": float(values[3]),
+            }
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError):
+        pass
+    try:
+        completed = subprocess.run(
+            # Use a real tab delimiter so each Docker stats row can be parsed
+            # into name, CPU and memory without depending on column spacing.
+            ["docker", "stats", "--no-stream", "--format", "{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}"],
+            capture_output=True,
+            text=True,
+            timeout=DOCKER_STATS_TIMEOUT_SECONDS,
+            check=True,
+        )
+        for line in completed.stdout.splitlines():
+            parts = line.split("\t", 2)
+            if len(parts) == 3:
+                cpu = parts[1].strip().rstrip("%")
+                try:
+                    cpu_percent = float(cpu)
+                except ValueError:
+                    cpu_percent = None
+                memory_display = parts[2].strip()
+                memory_used_bytes = None
+                memory_limit_bytes = None
+                memory_parts = [part.strip() for part in memory_display.split("/", 1)]
+                if len(memory_parts) == 2:
+                    memory_used_bytes = parse_memory_quantity(memory_parts[0])
+                    memory_limit_bytes = parse_memory_quantity(memory_parts[1])
+                sample["containers"].append({
+                    "name": parts[0].strip(),
+                    "cpuPercent": cpu_percent,
+                    "memory": memory_display,
+                    "memoryUsedBytes": memory_used_bytes,
+                    "memoryLimitBytes": memory_limit_bytes,
+                })
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return sample
+
+
+def resource_sampler(stop_event: threading.Event, samples: list[dict[str, Any]], interval_seconds: float) -> None:
+    """Sample while real requests are in flight so GPU and container usage is not a post-hoc guess."""
+    while not stop_event.is_set():
+        samples.append(collect_resource_sample())
+        stop_event.wait(interval_seconds)
+
+
+def summarize_resources(samples: list[dict[str, Any]]) -> dict[str, Any]:
+    """Aggregate raw samples while retaining the complete sample stream in report.json."""
+    gpu_rows = [sample["gpu"] for sample in samples if sample.get("gpu")]
+    container_rows: dict[str, list[dict[str, Any]]] = {}
+    for sample in samples:
+        for row in sample.get("containers", []):
+            container_rows.setdefault(str(row.get("name") or ""), []).append(row)
+    return {
+        "sampleCount": len(samples),
+        "gpu": {
+            "sampleCount": len(gpu_rows),
+            "utilizationAvgPercent": round(statistics.fmean(row["utilizationPercent"] for row in gpu_rows), 2) if gpu_rows else None,
+            "utilizationMaxPercent": round(max(row["utilizationPercent"] for row in gpu_rows), 2) if gpu_rows else None,
+            "memoryUsedMaxMb": round(max(row["memoryUsedMb"] for row in gpu_rows), 2) if gpu_rows else None,
+            "memoryTotalMb": round(max(row["memoryTotalMb"] for row in gpu_rows), 2) if gpu_rows else None,
+            "name": gpu_rows[0]["name"] if gpu_rows else None,
+        },
+        "containers": {
+            name: {
+                "sampleCount": len(rows),
+                "cpuAvgPercent": round(statistics.fmean(row["cpuPercent"] for row in rows if row.get("cpuPercent") is not None), 2)
+                if any(row.get("cpuPercent") is not None for row in rows) else None,
+                "cpuMaxPercent": round(max(row["cpuPercent"] for row in rows if row.get("cpuPercent") is not None), 2)
+                if any(row.get("cpuPercent") is not None for row in rows) else None,
+                "memoryUsedAvgMb": round(
+                    statistics.fmean(row["memoryUsedBytes"] for row in rows if row.get("memoryUsedBytes") is not None) / 1024**2,
+                    2,
+                ) if any(row.get("memoryUsedBytes") is not None for row in rows) else None,
+                "memoryUsedMaxMb": round(
+                    max(row["memoryUsedBytes"] for row in rows if row.get("memoryUsedBytes") is not None) / 1024**2,
+                    2,
+                ) if any(row.get("memoryUsedBytes") is not None for row in rows) else None,
+                "memoryLimitMaxMb": round(
+                    max(row["memoryLimitBytes"] for row in rows if row.get("memoryLimitBytes") is not None) / 1024**2,
+                    2,
+                ) if any(row.get("memoryLimitBytes") is not None for row in rows) else None,
+            }
+            for name, rows in container_rows.items()
+        },
+    }
+
+
 def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Calculate all requested metrics from successful real endpoint responses only."""
     successful = [row for row in rows if row.get("status") == 200]
@@ -207,7 +358,9 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "requestErrorCount": len(rows) - len(successful),
         "latencyMs": {
             "average": round(statistics.fmean(float(row["elapsedMs"]) for row in successful), 3) if successful else None,
-            "p95": round(sorted(float(row["elapsedMs"]) for row in successful)[max(0, int(len(successful) * 0.95) - 1)], 3) if successful else None,
+            "p50": percentile([float(row["elapsedMs"]) for row in successful], 0.50),
+            "p95": percentile([float(row["elapsedMs"]) for row in successful], 0.95),
+            "p99": percentile([float(row["elapsedMs"]) for row in successful], 0.99),
         },
     }
     for metric, rank_field in (("document", "documentRank"), ("page", "pageRank"), ("block", "blockRank")):
@@ -216,6 +369,10 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 sum(1 for row in successful if at_cutoff(row.get(rank_field), cutoff)) / len(successful)
                 if successful else 0.0
             )
+        summary[f"{metric}MRR"] = (
+            sum(1.0 / int(row[rank_field]) for row in successful if row.get(rank_field)) / len(successful)
+            if successful else 0.0
+        )
     return summary
 
 
@@ -233,24 +390,46 @@ def targets_satisfied(summary: dict[str, Any]) -> bool:
 def markdown(report: dict[str, Any], path: Path) -> None:
     """Produce a concise human-readable handoff while the JSON preserves every hit."""
     summary = report["summary"]
+    latency = summary.get("latencyMs", {})
+    resource_summary = report.get("resourceSummary", {})
+
+    def display(value: Any, suffix: str = "") -> str:
+        """Render optional benchmark values without turning a measured zero into a dash."""
+        return "-" if value is None else f"{value}{suffix}"
+
     lines = [
         "# 真实后端教材检索评测（46 条）",
         "",
         f"- 端点：`{report['backend']['endpoint']}`；每条用例一次真实 POST 请求；成功 {summary['successfulRequestCount']}/{summary['requestCount']}。",
         f"- 策略：`{', '.join(report['observedStrategies']) or '无成功响应'}`。",
+        f"- 延迟：平均 {display(latency.get('average'), ' ms')}；P50 {display(latency.get('p50'), ' ms')}；P95 {display(latency.get('p95'), ' ms')}；P99 {display(latency.get('p99'), ' ms')}。",
         "- `doc@K` 按唯一 `docId`，`page@K` 按真实命中块顺序，`block@K` 要求同书且命中规范化后的可见小标题（可覆盖同一标题的连续页）。稳定 sectionId 的重复问题另列入数据审计。",
         "",
-        "| 指标 | @1 | @3 | @5 |",
-        "|---|---:|---:|---:|",
-        f"| 文档 | {summary['documentRecall@1']:.3f} | {summary['documentRecall@3']:.3f} | {summary['documentRecall@5']:.3f} |",
-        f"| 页面 | {summary['pageRecall@1']:.3f} | {summary['pageRecall@3']:.3f} | {summary['pageRecall@5']:.3f} |",
-        f"| 小标题块 | {summary['blockRecall@1']:.3f} | {summary['blockRecall@3']:.3f} | {summary['blockRecall@5']:.3f} |",
+        "| 指标 | @1 | @3 | @5 | MRR |",
+        "|---|---:|---:|---:|---:|",
+        f"| 文档 | {summary['documentRecall@1']:.3f} | {summary['documentRecall@3']:.3f} | {summary['documentRecall@5']:.3f} | {summary['documentMRR']:.3f} |",
+        f"| 页面 | {summary['pageRecall@1']:.3f} | {summary['pageRecall@3']:.3f} | {summary['pageRecall@5']:.3f} | {summary['pageMRR']:.3f} |",
+        f"| 小标题块 | {summary['blockRecall@1']:.3f} | {summary['blockRecall@3']:.3f} | {summary['blockRecall@5']:.3f} | {summary['blockMRR']:.3f} |",
+        "",
+        "## 真实运行资源",
+        "",
+        f"- GPU：{resource_summary.get('gpu', {}).get('name') or '-'}；平均利用率 {display(resource_summary.get('gpu', {}).get('utilizationAvgPercent'), '%')}；峰值利用率 {display(resource_summary.get('gpu', {}).get('utilizationMaxPercent'), '%')}；峰值显存 {display(resource_summary.get('gpu', {}).get('memoryUsedMaxMb'), ' MB')} / {display(resource_summary.get('gpu', {}).get('memoryTotalMb'), ' MB')}。",
+        "",
+        "| 容器 | CPU 平均 | CPU 峰值 | 内存平均 | 内存峰值 |",
+        "|---|---:|---:|---:|---:|",
+    ]
+    for name, values in sorted(resource_summary.get("containers", {}).items()):
+        lines.append(
+            f"| {name} | {display(values.get('cpuAvgPercent'), '%')} | {display(values.get('cpuMaxPercent'), '%')} | "
+            f"{display(values.get('memoryUsedAvgMb'), ' MB')} | {display(values.get('memoryUsedMaxMb'), ' MB')} |"
+        )
+    lines.extend([
         "",
         "## 未命中小标题块",
         "",
         "| caseId | 查询 | 目标小标题 | 文档 rank | 页 rank | 块 rank | Top-3 sectionId |",
         "|---|---|---|---:|---:|---:|---|",
-    ]
+    ])
     for row in report["rows"]:
         if at_cutoff(row.get("blockRank"), 3):
             continue
@@ -271,6 +450,7 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT)
     parser.add_argument("--timeout-seconds", type=int, default=DEFAULT_TIMEOUT_SECONDS)
     parser.add_argument("--output-dir", type=Path, default=None)
+    parser.add_argument("--resource-sample-interval-seconds", type=float, default=0.25)
     parser.add_argument("--enforce-targets", action="store_true", help="exit non-zero unless requested block@1/@3 thresholds are met")
     args = parser.parse_args()
     if args.limit < max(METRIC_CUTOFFS):
@@ -284,20 +464,29 @@ def main() -> None:
     output.mkdir(parents=True, exist_ok=True)
 
     rows: list[dict[str, Any]] = []
-    with requests.Session() as session:
-        session.headers.update({"Accept": "application/json"})
-        for case in cases:
-            try:
-                status, response, elapsed_ms, request_payload = post_search(
-                    session,
-                    endpoint,
-                    case.query,
-                    args.limit,
-                    args.timeout_seconds,
-                )
-                hits = response.get("hits") if isinstance(response.get("hits"), list) else []
-                normalized_hits = [hit for hit in hits if isinstance(hit, dict)]
-                rows.append({
+    resource_samples: list[dict[str, Any]] = []
+    stop_sampling = threading.Event()
+    sampler = threading.Thread(
+        target=resource_sampler,
+        args=(stop_sampling, resource_samples, max(0.05, args.resource_sample_interval_seconds)),
+        daemon=True,
+    )
+    sampler.start()
+    try:
+        with requests.Session() as session:
+            session.headers.update({"Accept": "application/json"})
+            for case in cases:
+                try:
+                    status, response, elapsed_ms, request_payload = post_search(
+                        session,
+                        endpoint,
+                        case.query,
+                        args.limit,
+                        args.timeout_seconds,
+                    )
+                    hits = response.get("hits") if isinstance(response.get("hits"), list) else []
+                    normalized_hits = [hit for hit in hits if isinstance(hit, dict)]
+                    rows.append({
                     "caseId": case.case_id,
                     "query": case.query,
                     "expected": {
@@ -318,9 +507,9 @@ def main() -> None:
                     "blockRank": first_block_rank(normalized_hits, case),
                     "hits": normalized_hits,
                     "response": response if status != 200 else None,
-                })
-            except requests.RequestException as exc:
-                rows.append({
+                    })
+                except requests.RequestException as exc:
+                    rows.append({
                     "caseId": case.case_id,
                     "query": case.query,
                     "expected": {"docId": case.doc_id, "pageNos": sorted(case.page_nos), "sectionId": case.section_id, "sectionTitle": case.section_title},
@@ -331,7 +520,10 @@ def main() -> None:
                     "documentRank": None,
                     "pageRank": None,
                     "blockRank": None,
-                })
+                    })
+    finally:
+        stop_sampling.set()
+        sampler.join(timeout=5)
 
     report = {
         "kind": "real_backend_textbook_46_evaluation",
@@ -346,6 +538,8 @@ def main() -> None:
         },
         "observedStrategies": sorted({str(row.get("strategy") or "") for row in rows if row.get("status") == 200 and row.get("strategy")} ),
         "summary": summarize(rows),
+        "resourceSummary": summarize_resources(resource_samples),
+        "resourceSamples": resource_samples,
         "rows": rows,
     }
     write_json(output / "report.json", report)

@@ -25,6 +25,16 @@ public interface StudentMemoryStore {
     List<StudentMemoryEntry> candidates(String tenantId, String studentId);
 
     /**
+     * Returns a bounded candidate page for similarity reuse. The default keeps lightweight test stores compatible;
+     * database-backed stores should override it so the limit is applied in SQL rather than after a full read.
+     */
+    default List<StudentMemoryEntry> candidates(String tenantId, String studentId, int limit) {
+        return candidates(tenantId, studentId).stream()
+                .limit(Math.max(1, limit))
+                .toList();
+    }
+
+    /**
      * Lists active memory entries across one tenant for teacher/admin global dashboards.
      *
      * @param tenantId tenant id

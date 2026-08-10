@@ -4,7 +4,7 @@ The benchmark has three independent evidence layers:
 
 1. The target block/page comes from a persisted textbook row, never from a fabricated answer.
 2. BM25 + local BGE + local cross-encoder produce rankings from the two real split libraries.
-3. gpt-5.6-luna generates natural queries and audits the retrieved metadata/text in batches.
+3. The default Luna model generates natural queries and audits the retrieved metadata/text in batches.
 
 The section corpus currently contains only B-version selective compulsory volume 3.  The report therefore keeps
 document correctness visible but marks that metric as non-discriminative for the section corpus instead of inflating
@@ -33,8 +33,8 @@ import requests
 DEFAULT_LIBRARY_PARENT = Path(
     r"C:\Users\doob\Desktop\个人资料\高中数学\下载课本代码\tchMaterial-parser-main\tchMaterial-parser-main"
 )
-DEFAULT_PAGE_ROOT_NAME = "processed_books_section_shadow_all_mini_b4"
-DEFAULT_SECTION_ROOT_NAME = "processed_books_section_shadow_b3"
+DEFAULT_PAGE_ROOT_NAME = "processed_books_section_shadow_all_mini_c2"
+DEFAULT_SECTION_ROOT_NAME = "processed_books_section_shadow_all_mini_c2"
 DEFAULT_SECTION_BOOK = "math_b_xuanze_bixiu_3"
 DEFAULT_BGE_MODEL = Path(r"D:\ModelScope\models\BAAI\bge-small-zh-v1.5")
 DEFAULT_RERANK_MODEL = Path(r"D:\ModelScope\models\BAAI\bge-reranker-v2-m3")

@@ -8,6 +8,5 @@ public record AgentToolBrokerAssetRequest(
         @NotBlank String tenantId,
         @NotBlank String subjectType,
         @NotBlank String subjectId,
-        @NotBlank String capabilityToken,
         @NotBlank String assetId) {
 }

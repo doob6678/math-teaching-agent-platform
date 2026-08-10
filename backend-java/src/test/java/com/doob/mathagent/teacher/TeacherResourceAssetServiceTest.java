@@ -56,7 +56,7 @@ class TeacherResourceAssetServiceTest {
     }
 
     @Test
-    void sharedAssetIsReadableBySameTenantTeacherButNotStudent() throws Exception {
+    void sharedAssetIsReadableBySameTenantTeacherAndStudent() throws Exception {
         InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
         InMemoryTeacherResourceAssetStore assetStore = new InMemoryTeacherResourceAssetStore();
         TeacherResourceAssetService service =
@@ -74,9 +74,8 @@ class TeacherResourceAssetServiceTest {
 
         assertThat(service.openVisibleAsset(asset.assetId(), subject("teacher", "teacher-2")).assetId())
                 .isEqualTo(asset.assetId());
-        assertThatThrownBy(() -> service.openVisibleAsset(asset.assetId(), subject("student", "student-1")))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("not visible");
+        assertThat(service.openVisibleAsset(asset.assetId(), subject("student", "student-1")).assetId())
+                .isEqualTo(asset.assetId());
     }
 
     @Test

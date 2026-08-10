@@ -2,7 +2,6 @@ package com.doob.mathagent.vector.controller;
 
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.infrastructure.security.RequestSubjectResolver;
-import com.doob.mathagent.teacher.support.TeacherResourceCapabilityVerifier;
 import com.doob.mathagent.vector.service.VectorIndexRebuildResponse;
 import com.doob.mathagent.vector.service.VectorIndexService;
 import com.doob.mathagent.vector.service.VectorIndexStatusResponse;
@@ -20,20 +19,14 @@ import org.springframework.web.server.ResponseStatusException;
 @RestController
 public class VectorIndexController {
 
-    private static final String REBUILD_ACTION = "vector-index:rebuild";
-    private static final String TEACHER_RESOURCE_INDEX_PATH = "/api/vector-index/teacher-resources";
-
     private final VectorIndexService service;
     private final RequestSubjectResolver subjectResolver;
-    private final TeacherResourceCapabilityVerifier capabilityVerifier;
 
     public VectorIndexController(
             VectorIndexService service,
-            RequestSubjectResolver subjectResolver,
-            TeacherResourceCapabilityVerifier capabilityVerifier) {
+            RequestSubjectResolver subjectResolver) {
         this.service = service;
         this.subjectResolver = subjectResolver;
-        this.capabilityVerifier = capabilityVerifier;
     }
 
     @GetMapping("/api/vector-index/status")
@@ -46,15 +39,6 @@ public class VectorIndexController {
             @PathVariable String documentId,
             HttpServletRequest request) {
         RequestSubject subject = subjectResolver.resolve(request).normalize();
-        String path = TEACHER_RESOURCE_INDEX_PATH + "/" + documentId + "/rebuild";
-        if (!capabilityVerifier.verify(
-                headerOrNull(request, "X-Capability-Token"),
-                REBUILD_ACTION,
-                path,
-                headerOrNull(request, "X-Request-Hash"),
-                subject)) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for vector index rebuild");
-        }
         try {
             return service.rebuildTeacherResource(
                     subject.tenantId(),
@@ -66,8 +50,4 @@ public class VectorIndexController {
         }
     }
 
-    private static String headerOrNull(HttpServletRequest request, String name) {
-        String value = request.getHeader(name);
-        return value == null || value.isBlank() ? null : value;
-    }
 }

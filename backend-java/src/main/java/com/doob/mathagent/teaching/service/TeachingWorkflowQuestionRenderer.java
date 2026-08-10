@@ -541,6 +541,11 @@ final class TeachingWorkflowQuestionRenderer {
         // Never guess whether a broken square means perpendicular, parallel, subset, or a missing glyph.  It must
         // be repaired by the real single-document synchronizer/OCR before this row can become a mathematical task.
         return UNRESOLVED_OCR_MATH_GLYPH.matcher(normalized).find()
+                // A run of replacement/question glyphs is an encoding failure, not a mathematical question. It must
+                // be dropped before projection or PDF rendering rather than shown as visible placeholder content.
+                || normalized.matches("^[?？]{3,}$")
+                || normalized.contains("锟斤拷")
+                || normalized.matches(".*�{2,}.*")
                 || normalized.equals("题目")
                 || normalized.toLowerCase(Locale.ROOT).contains("todo")
                 // Some imported Markdown rows contain the worked derivation after a slash but no actual stem.

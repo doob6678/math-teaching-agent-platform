@@ -332,7 +332,7 @@ public class McpJsonRpcService {
         Map<String, Object> annotations = new LinkedHashMap<>();
         annotations.put("title", descriptor.title());
         annotations.put("readOnlyHint", descriptor.readOnly());
-        annotations.put("destructiveHint", !descriptor.readOnly() && descriptor.requiresCapabilityToken());
+        annotations.put("destructiveHint", !descriptor.readOnly());
         annotations.put("idempotentHint", descriptor.readOnly());
         annotations.put("openWorldHint", descriptor.name().contains("feishu"));
         return annotations;

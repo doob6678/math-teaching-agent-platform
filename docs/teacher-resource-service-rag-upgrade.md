@@ -49,6 +49,138 @@
 - Storage keys remain server-relative and are never returned directly.
 - Public textbook page images are treated as controlled public resources. The URL is public, but the local file path remains backend-only and is resolved by docId/pageNo through the page-image index.
 
+## Permission-Sensitive Retrieval: Implemented Design
+
+This section describes the implemented teacher-resource retrieval boundary. It is intentionally stricter than a "retrieve Top-K, then remove unauthorized hits" design.
+
+### Security invariants
+
+1. The browser, an MCP caller, and the Python AI worker do not choose an effective tenant, role, or owner identity through retrieval arguments.
+2. MySQL remains the business source of truth for resource ownership, sharing scope, and lifecycle state. Milvus stores only a search-time projection of those facts.
+3. Every vector block of a document carries the document's access metadata at ingestion time, so a vector search can restrict its candidate set before similarity Top-K is selected.
+4. A vector hit is not by itself an authorization grant. Asset reads, workflow artifacts, and other high-value reads perform their own tenant/owner/scope checks.
+
+### 1. Trusted request subject and API admission
+
+The HTTP path first resolves a trusted subject rather than trusting request-provided identity fields:
+
+```text
+AuthService
+  -> Sa-Token session: tenantId + role + userId
+  -> SaTokenRequestSubjectResolver
+  -> ApiAccessControlFilter / ApiAccessControlService / ApiAccessPolicy
+```
+
+`SaTokenRequestSubjectResolver` deliberately ignores client-supplied `X-Subject-Id` and `X-Subject-Type` values. `ApiAccessControlFilter` applies the path-level role policy for `/api/**`; routes that are not covered by a policy are denied by default. Therefore a caller cannot turn a student request into a teacher request merely by modifying a JSON body or custom HTTP header.
+
+For MCP, the corresponding trusted subject starts from a Bearer secret that is resolved to an enabled client profile. The MCP tool path then performs its own client-enabled, tool allow-list, scope, role, and data-visibility checks before it invokes the same backend services.
+
+### 2. Permission truth at document registration
+
+Teacher resources are registered with business metadata, rather than treating a storage path as the authority:
+
+```text
+source_document
+  tenant_id
+  created_by                 (owner subject / teacher)
+  source_type
+  permission_scope
+  lifecycle / active state
+```
+
+The current visibility policy distinguishes private teacher material from shareable scopes. Representative scope values include `TEACHER_PRIVATE`, `TENANT_PUBLIC`, `PUBLIC_TEXTBOOK`, `MATH_VIP`, and `CLASS_AUTHORIZED`.
+
+`TeacherResourceVisibilityPolicy` and the MyBatis resource store evaluate the caller's normalized tenant, role, and subject against these facts. The search service first calls the equivalent of:
+
+```java
+resourceStore.listVisible(normalizedTenantId, normalizedRole, normalizedSubjectId)
+```
+
+Only ready, visible documents are eligible to become retrieval candidates. This is the authoritative business decision; it is not delegated to the vector database.
+
+### 3. Permission metadata is projected during vector ingestion
+
+When parsing and embedding a teacher document, `VectorIndexService` writes each document block as a Milvus entity. Every block contains both its embedding and access-relevant metadata:
+
+```java
+metadata.put("tenantId", document.tenantId());
+metadata.put("documentId", document.documentId());
+metadata.put("blockId", block.blockId());
+metadata.put("sourceType", text(document.sourceType()));
+metadata.put("permissionScope", text(document.permissionScope()));
+```
+
+Conceptually, a private PDF split into 100 blocks produces 100 vectors carrying the same tenant, document, source type, and permission-scope projection. The write endpoint persists an entity shaped like:
+
+```text
+id + vector + text + metadata
+```
+
+This is why permissions can participate in candidate selection rather than being applied only after the semantic search has already returned unauthorized content.
+
+### 4. Permission filter is pushed into the vector query
+
+`TeacherResourceBlockSearchService` derives the visible documents from the trusted subject and creates a `VectorSearchFilter`:
+
+```java
+new VectorSearchFilter(
+    tenantIds,
+    visibleDocumentIds,
+    permissionScopes,
+    sourceTypes
+)
+```
+
+`VectorIndexService.milvusMetadataFilter(...)` converts this into the Milvus request `filter` expression. The effective query is conceptually:
+
+```text
+metadata.tenantId == currentTenant
+AND metadata.documentId IN visibleDocumentIds
+AND metadata.permissionScope IN allowedScopes
+AND metadata.sourceType IN allowedSourceTypes
+```
+
+Milvus then selects vector candidates within that filter before similarity Top-K is returned. The code does not silently retry with a wider, unfiltered query if the permission filter is rejected. Returned hits are additionally checked against the visible document set before block-level ranking and evidence assembly.
+
+The actual pipeline is therefore:
+
+```text
+trusted login/MCP identity
+  -> MySQL visibility decision (tenant + owner + scope + ready state)
+  -> VectorSearchFilter
+  -> Milvus metadata filter + semantic candidate recall
+  -> visible-document recheck and block rerank
+  -> controlled asset/evidence URL
+```
+
+It is not:
+
+```text
+unfiltered Milvus Top-K -> Java removes unauthorized rows
+```
+
+### 5. Resource and asset reads remain independently protected
+
+A block hit returns opaque asset references, such as:
+
+```text
+/api/teacher/resources/assets/{assetId}
+```
+
+It never returns a local storage path, Feishu token, or server storage key. `TeacherResourceAssetService.openVisibleAsset(...)` repeats tenant, role, owner, and scope checks before opening the binary. Invisible assets return `404`, limiting private asset-id probing. Storage-path normalization and root-prefix validation protect the backend file boundary as well.
+
+This second check is deliberate defense in depth: vector metadata is a retrieval projection, while the resource service remains responsible for final authorization to a file or artifact.
+
+### 6. Current boundary and next performance step
+
+The implementation already has the important security property: permission attributes are persisted with vectors and included in the retrieval filter. It should not, however, be described as having fully optimized metadata indexing.
+
+Current `ensureVectorIndex()` creates the vector index using `AUTOINDEX` and `COSINE`. The source currently does not create dedicated scalar or inverted indexes for metadata paths such as `tenantId`, `permissionScope`, or `sourceType`.
+
+For a large multi-tenant deployment, the next optimization is to add supported scalar/inverted indexes or partitions for stable high-frequency conditions such as tenant and scope, and to avoid an excessively long `documentId IN (...)` filter when a principal can see a very large document set. This is a performance evolution, not a reason to fall back to post-retrieval authorization filtering.
+
+Also keep the current business boundary explicit: `CLASS_AUTHORIZED` and `MATH_VIP` are represented as sharing scopes in the reviewed code. A separate class-membership or subscription entitlement table was not found in this chain, so the project must not claim that those two scopes already have a fully implemented fine-grained secondary authorization model.
+
 ## Verified Runtime Evidence
 
 - Local service status uses real MySQL/Redis/Milvus through the WSL proxy. Database tables are managed outside application startup; no migration runner is bundled.

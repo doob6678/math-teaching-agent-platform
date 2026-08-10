@@ -4,7 +4,6 @@ import unittest
 
 from fastapi import HTTPException
 from pydantic import ValidationError
-from pydantic import ValidationError
 
 from app.handout_runtime import HandoutRunRequest, HandoutRuntime
 
@@ -55,6 +54,43 @@ class HandoutGraphContractTest(unittest.TestCase):
                 self.assertEqual(set(package.documents), {"teacher_writer", "student_writer", "lecture_writer"})
                 self.assertEqual(len(context_calls), 1)
                 self.assertGreaterEqual(len(runtime.events("run-contract-001")), 2)
+                # Metrics remain usable for a later MySQL aggregation: every graph node has bounded wall-clock
+                # correlation timestamps, and provider cache usage is represented explicitly rather than guessed.
+                self.assertTrue(all(metric.started_at and metric.finished_at for metric in package.metrics.node_metrics))
+                self.assertTrue(all(metric.cached_prompt_tokens == 0 for metric in package.metrics.node_metrics))
+            finally:
+                if previous is None:
+                    os.environ.pop("MATH_AGENT_HANDOUT_CHECKPOINT_DB", None)
+                else:
+                    os.environ["MATH_AGENT_HANDOUT_CHECKPOINT_DB"] = previous
+
+    def test_unknown_provider_pricing_remains_unknown_in_the_run_total(self):
+        """A successful unpriced provider call must not be summarized as a zero-cost accepted run."""
+        with tempfile.TemporaryDirectory() as directory:
+            previous = os.environ.get("MATH_AGENT_HANDOUT_CHECKPOINT_DB")
+            os.environ["MATH_AGENT_HANDOUT_CHECKPOINT_DB"] = os.path.join(directory, "checkpoints.sqlite3")
+            try:
+                runtime = HandoutRuntime()
+                runtime._java_context = lambda payload: {"query": payload["query"], "items": []}
+
+                def provider(request, node, prompt):
+                    return (
+                        {"stageCode": node, "title": node, "markdown": f"{request.question_text}\n{node} 给出方法和检查步骤。"},
+                        {"promptTokens": 3, "completionTokens": 2, "totalTokens": 5, "estimatedCost": -1.0},
+                        "unpriced-provider",
+                        "unpriced-model",
+                    )
+
+                runtime._invoke_json_model = provider
+                package = runtime.execute(HandoutRunRequest(
+                    runId="run-unpriced-001",
+                    taskId="task-unpriced-001",
+                    writingGoal="函数讲义",
+                    questionText="【题目 1】\n已知函数 f(x)=x^2，求最小值。",
+                ))
+
+                self.assertFalse(package.metrics.cost_known)
+                self.assertEqual(package.metrics.estimated_cost, -1.0)
             finally:
                 if previous is None:
                     os.environ.pop("MATH_AGENT_HANDOUT_CHECKPOINT_DB", None)
@@ -263,7 +299,7 @@ class HandoutGraphContractTest(unittest.TestCase):
                 else:
                     os.environ["MATH_AGENT_HANDOUT_CHECKPOINT_DB"] = previous
 
-    def test_contract_rejects_identity_and_path_overrides(self):
+    def test_contract_rejects_tenant_override(self):
         """Authorization must remain Java-owned even when a request is model-generated."""
         payload = {
             "runId": "run-contract-reject-001",
@@ -277,16 +313,26 @@ class HandoutGraphContractTest(unittest.TestCase):
 
     def test_contract_rejects_identity_and_path_overrides(self):
         """The Java-owned run authorization must not be widened by model-controlled request attributes."""
-        payload = {
+        required_payload = {
             "runId": "run-contract-reject-001",
             "taskId": "task-contract-reject-001",
+            "contractVersion": "handout-ai-v1",
             "writingGoal": "函数讲义",
             "questionText": "【题目 1】已知函数 f(x)=x^2，求最小值。",
+            "evidenceRefs": ["doc:approved-1"],
+            "graphVersion": "handout-v1",
             "idempotencyKey": "idempotency-contract-reject-001",
-            "tenantId": "forbidden-tenant",
+            "traceparent": "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+            "deadlineEpochMs": 4_102_444_800_000,
         }
-        with self.assertRaises(ValidationError):
-            HandoutRunRequest.model_validate(payload)
+        accepted = HandoutRunRequest.model_validate(required_payload)
+        self.assertEqual(accepted.contract_version, "handout-ai-v1")
+        self.assertEqual(accepted.idempotency_key, "idempotency-contract-reject-001")
+        self.assertEqual(accepted.traceparent, required_payload["traceparent"])
+        for forbidden_field in ("tenantId", "subjectId", "subjectType", "filesystemPath", "javaIdentity"):
+            with self.subTest(forbidden_field=forbidden_field):
+                with self.assertRaises(ValidationError):
+                    HandoutRunRequest.model_validate({**required_payload, forbidden_field: "forbidden"})
 
 
 if __name__ == "__main__":

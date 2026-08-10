@@ -110,6 +110,21 @@ class MyBatisMultiAgentWritingWorkflowStoreTest {
                             rows.add(entity);
                             yield 1;
                         }
+                        case "updateIfRevisionMatches" -> {
+                            MultiAgentWritingWorkflowEntity entity = (MultiAgentWritingWorkflowEntity) args[0];
+                            long expectedRevision = ((Number) args[1]).longValue();
+                            MultiAgentWritingWorkflowEntity current = rows.stream()
+                                    .filter(row -> row.getWorkflowId().equals(entity.getWorkflowId()))
+                                    .findFirst()
+                                    .orElse(null);
+                            if (current == null || (current.getRevision() == null ? 0L : current.getRevision()) != expectedRevision) {
+                                yield 0;
+                            }
+                            rows.remove(current);
+                            entity.setRevision(expectedRevision + 1L);
+                            rows.add(entity);
+                            yield 1;
+                        }
                         case "selectById" -> rows.stream()
                                 .filter(row -> row.getWorkflowId().equals(String.valueOf(args[0])))
                                 .findFirst()

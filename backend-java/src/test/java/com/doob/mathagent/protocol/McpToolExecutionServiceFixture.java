@@ -1,9 +1,7 @@
 package com.doob.mathagent.protocol;
 
 import com.doob.mathagent.agent.service.AgentRunPlanService;
-import com.doob.mathagent.agent.service.AgentRunExecutionService;
 import com.doob.mathagent.agent.service.AgentTraceQueryService;
-import com.doob.mathagent.agent.service.InMemoryAgentConcurrencyGuard;
 import com.doob.mathagent.agent.service.InMemoryAgentTraceStore;
 import com.doob.mathagent.agent.service.InMemoryMultiAgentWritingWorkflowStore;
 import com.doob.mathagent.agent.service.MultiAgentWritingArtifactExportService;
@@ -37,9 +35,7 @@ import com.doob.mathagent.vector.service.TestVectorIndexService;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.Clock;
 import java.util.List;
-import org.springframework.core.task.SyncTaskExecutor;
 
 final class McpToolExecutionServiceFixture {
 
@@ -204,7 +200,8 @@ final class McpToolExecutionServiceFixture {
                 resolvedWritingService,
                 multiAgentWritingArtifactExportService == null
                         ? new MultiAgentWritingArtifactExportService(resolvedWritingService, 30)
-                        : multiAgentWritingArtifactExportService);
+                        : multiAgentWritingArtifactExportService,
+                Runnable::run);
     }
 
     private static TextbookRetrievalService defaultTextbookRetrievalService() {
@@ -283,26 +280,21 @@ final class McpToolExecutionServiceFixture {
     }
 
     private static MultiAgentWritingService disabledWritingService() {
-        AiProviderCatalog catalog = defaultProviderCatalog();
         return new MultiAgentWritingService(
-                new AgentRunPlanService(catalog),
-                new AgentRunExecutionService(
-                        new InMemoryAgentTraceStore(),
-                        new InMemoryAgentConcurrencyGuard(),
-                        request -> {
-                            throw new IllegalStateException("Test must provide AiChatGateway before using writing tools");
-                        },
-                        catalog,
-                        Clock.systemUTC()),
                 new InMemoryMultiAgentWritingWorkflowStore(),
-                new SyncTaskExecutor());
+                null,
+                new org.springframework.mock.env.MockEnvironment()
+                        .withProperty("math-agent.python-handout.enabled", "false"),
+                null);
     }
 
     private static AiProviderCatalog defaultProviderCatalog() {
         AiProviderProperties properties = new AiProviderProperties();
         properties.setDefaultProvider("dashscope");
-        properties.getDashscope().setApiKey("dashscope-key");
+        properties.getDashscope().setEnabled(true);
         properties.getDashscope().setChatModel("qwen3.6-flash");
+        properties.getOpenai().setEnabled(true);
+        properties.getOpenai().setChatModel("gpt-5.6-luna");
         return new AiProviderCatalog(properties);
     }
 

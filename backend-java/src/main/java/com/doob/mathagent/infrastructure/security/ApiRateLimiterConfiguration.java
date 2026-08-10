@@ -28,4 +28,20 @@ public class ApiRateLimiterConfiguration {
                 new StringRedisRateLimitCounter(redisTemplate),
                 properties.keyPrefix());
     }
+
+    /**
+     * 本地开发和无 Redis 测试环境的明确兜底实现。
+     *
+     * <p>之前只声明了 Redis 分支；当配置把 Redis 限流关闭时，Spring 无法创建
+     * {@link ApiAccessControlService} 所需的 {@link ApiRateLimiter}，应用会在启动阶段因缺少 Bean 失败。
+     * 这个分支仍按用户主体执行限流，只把计数存放在当前进程，且不会改变生产环境显式启用 Redis 时的选择。</p>
+     */
+    @Bean
+    @ConditionalOnProperty(
+            name = "math-agent.redis.rate-limit.enabled",
+            havingValue = "false",
+            matchIfMissing = true)
+    public ApiRateLimiter localApiRateLimiter() {
+        return FixedWindowRateLimiter.empty();
+    }
 }

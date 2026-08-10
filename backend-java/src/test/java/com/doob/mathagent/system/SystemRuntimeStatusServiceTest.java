@@ -7,7 +7,6 @@ import com.doob.mathagent.infrastructure.database.DatabaseMigrationProperties;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.infrastructure.security.RedisRateLimitProperties;
 import com.doob.mathagent.retrieval.RedisTextbookSearchCacheProperties;
-import com.doob.mathagent.securityrisk.config.CapabilityTokenStoreProperties;
 import com.doob.mathagent.student.dto.StudentExplanationRequest;
 import com.doob.mathagent.student.service.StudentExplanationHistoryStore;
 import com.doob.mathagent.student.service.StudentExplanationHistorySummary;
@@ -47,7 +46,6 @@ class SystemRuntimeStatusServiceTest {
         SystemRuntimeStatusService service = new SystemRuntimeStatusService(
                 environment,
                 new RedisRateLimitProperties(true, "math-agent:test:rate-limit"),
-                new CapabilityTokenStoreProperties(true, "math-agent:test:capability"),
                 new RedisTextbookSearchCacheProperties(true, "math-agent:test:search", Duration.ofMinutes(3), Duration.ofMinutes(1)),
                 new VectorIndexService(
                         new VectorIndexProperties(false, "", "", "math_agent_resource_blocks", 1024, "", "", "", 10000),
@@ -64,7 +62,7 @@ class SystemRuntimeStatusServiceTest {
         assertThat(response.deployment().mode()).isEqualTo("needs_configuration");
         assertThat(response.deployment().blockingIssues()).contains("VECTOR_INDEX_DISABLED", "VECTOR_INDEX_NOT_CONFIGURED");
         assertThat(response.ai().defaultProviderName()).isEqualTo("openai");
-        assertThat(response.ai().defaultModelCode()).isEqualTo("gpt-5.4");
+        assertThat(response.ai().defaultModelCode()).isEqualTo("gpt-5.6-luna");
         assertThat(response.ai().defaultProviderConfigured()).isTrue();
         assertThat(response.ai().enabledProviderCount()).isEqualTo(1);
         assertThat(response.auth().mode()).isEqualTo("mysql_only");
@@ -75,7 +73,6 @@ class SystemRuntimeStatusServiceTest {
         assertThat(response.redis().redissonEnabled()).isTrue();
         assertThat(response.redis().redissonAddress()).isEqualTo("redis://***@127.0.0.1:6379");
         assertThat(response.redis().rateLimitEnabled()).isTrue();
-        assertThat(response.redis().capabilityStoreEnabled()).isTrue();
         assertThat(response.redis().searchCacheEnabled()).isTrue();
         assertThat(response.redis().searchCacheTtl()).isEqualTo("PT3M");
         assertThat(response.vectorIndex().status()).isEqualTo("disabled");
@@ -89,7 +86,6 @@ class SystemRuntimeStatusServiceTest {
         SystemRuntimeStatusService service = new SystemRuntimeStatusService(
                 new MockEnvironment(),
                 new RedisRateLimitProperties(false, "math-agent:test:rate-limit"),
-                new CapabilityTokenStoreProperties(false, "math-agent:test:capability"),
                 new RedisTextbookSearchCacheProperties(false, "math-agent:test:search", Duration.ofMinutes(3), Duration.ofMinutes(1)),
                 new VectorIndexService(
                         new VectorIndexProperties(false, "", "", "math_agent_resource_blocks", 1024, "", "", "", 10000),
@@ -131,12 +127,13 @@ class SystemRuntimeStatusServiceTest {
                 .withProperty("math-agent.teacher.sync.feishu.downloader-script", script.toString())
                 .withProperty("math-agent.teacher.sync.feishu.appkey-path", appkey.toString())
                 .withProperty("math-agent.teacher.sync.feishu.staging-root", staging.toString())
+                .withProperty("REDIS_PASSWORD", "redis-secret")
+                .withProperty("RABBITMQ_DEFAULT_PASS", "rabbit-secret")
                 .withProperty("math-agent.teacher.sync.feishu.smoke-max-files", "2")
                 .withProperty("math-agent.teacher.sync.feishu.process-timeout-seconds", "45");
         SystemRuntimeStatusService service = new SystemRuntimeStatusService(
                 environment,
                 new RedisRateLimitProperties(true, "math-agent:test:rate-limit"),
-                new CapabilityTokenStoreProperties(true, "math-agent:test:capability"),
                 new RedisTextbookSearchCacheProperties(true, "math-agent:test:search", Duration.ofMinutes(3), Duration.ofMinutes(1)),
                 new VectorIndexService(
                         new VectorIndexProperties(
@@ -170,10 +167,10 @@ class SystemRuntimeStatusServiceTest {
 
     private static AiProviderProperties aiProperties(String openAiKey) {
         AiProviderProperties properties = new AiProviderProperties();
-        properties.getOpenai().setApiKey(openAiKey);
-        properties.getDashscope().setApiKey("");
-        properties.getDeepseek().setApiKey("");
-        properties.getArk().setApiKey("");
+        properties.getOpenai().setEnabled(openAiKey != null && !openAiKey.isBlank());
+        properties.getDashscope().setEnabled(false);
+        properties.getDeepseek().setEnabled(false);
+        properties.getArk().setEnabled(false);
         return properties;
     }
 

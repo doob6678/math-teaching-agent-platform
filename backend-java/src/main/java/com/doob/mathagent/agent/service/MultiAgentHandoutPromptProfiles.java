@@ -1,6 +1,7 @@
 package com.doob.mathagent.agent.service;
 
 import java.util.Map;
+import java.util.regex.Pattern;
 
 /**
  * Backend-owned teaching contracts for the three publishable handout variants.
@@ -13,6 +14,9 @@ public final class MultiAgentHandoutPromptProfiles {
 
     /** Product minimum: a teacher handout is a reusable exercise set, not an extended explanation of one question. */
     public static final int MINIMUM_TEACHER_ORIGINAL_PROBLEMS = 6;
+    /** MultiQuestionTextParser owns these canonical labels, making batch detection independent of natural text spacing. */
+    private static final Pattern SUBMITTED_QUESTION_LABEL = Pattern.compile("(?m)^【题目\\s+\\d+】$");
+    private static final int MULTI_QUESTION_THRESHOLD = 2;
 
     public static final String CORE_TEACHING_PROTOCOL = """
             Core teaching protocol (mandatory):
@@ -45,8 +49,11 @@ public final class MultiAgentHandoutPromptProfiles {
                     and planned student questions/<wait> pauses. Do not collapse the outline to answer-only notes.
                     """),
             Map.entry("teacher_writer", """
-                    Produce teacherExplanation as a mature teacher's printable handout. It must include an AI-written H1,
-                    the configured minimum number of independently stated original problems, numbered consecutively.
+                    Return exactly one JSON object with the sole classroom-content key "teacherExplanation"; do not emit
+                    Markdown, commentary, or code fences outside that object. Produce teacherExplanation as a mature
+                    teacher's printable handout. It must include an AI-written H1 and, for a submitted multi-question
+                    batch, every submitted problem in its original order, numbered consecutively. For a single-question
+                    request only, use the configured minimum number of independently stated original problems.
                     Each problem must be supported by retrieved evidence: print “教材依据：<chapter/section>”
                     and “资料依据：<readable teacher/Feishu title>” directly beneath it. Do not invent missing problems;
                     if either source cannot support the required set, return an explicit evidence gap instead of padding.
@@ -57,7 +64,9 @@ public final class MultiAgentHandoutPromptProfiles {
                     least one concrete explanation in its supplied text. Be rigorous, vivid, and useful.
                     """),
             Map.entry("student_writer", """
-                    Produce studentWorksheet as a printable blank student handout with an AI-written H1. Keep the exact
+                    Return exactly one JSON object with the sole classroom-content key "studentWorksheet"; do not emit
+                    Markdown, commentary, or code fences outside that object. Produce studentWorksheet as a printable
+                    blank student handout with an AI-written H1. Keep the exact
                     problem, essential definitions/formulas, method-choice questions, staged hints, <wait> pauses,
                     continuous exercise numbering, and generous clean writing space. For calculation, proof, and
                     explanation tasks, create vertical blank areas rather than underscore lines; use a short underline
@@ -65,10 +74,19 @@ public final class MultiAgentHandoutPromptProfiles {
                     complete derivation, scoring point, teacher note, or the teacher version's hidden reasoning.
                     """),
             Map.entry("lecture_writer", """
-                    Produce lectureCards for a single-question 16:10 landscape teaching deck with an AI-written H1.
-                    Use one coherent question only. Guide students through goal, knowledge match, known conditions,
-                    method selection, and blank checkpoints with <wait> pauses. Do not reveal the final answer or complete
-                    solution; it is a teacher-led projection handout, not an answer slide.
+                    Return exactly one JSON object with the sole classroom-content key "lectureCards"; do not emit
+                    Markdown, commentary, or code fences outside that object. Produce a multi-page 16:10 landscape
+                    classroom projection for every submitted question, in the submitted order, under one coherent
+                    lesson spine. Connect the questions through one shared knowledge map and progression; do not
+                    write independent mini-essays that ignore the other questions.
+                    Include an AI-written lesson H1, the complete knowledge-point map, prerequisites, method-choice
+                    rationale, each exact question, relevant known conditions, and the mathematical checkpoints
+                    students need to work through. Keep the projection answer-free: do not include final answers,
+                    completed derivations, teacher prompts, model diagnostics, <wait>, fill-in prompts, underscores,
+                    Markdown tables, or horizontal-rule separators. After each question or calculation checkpoint,
+                    use a structured blankSpacePx number for renderer-owned pure blank space; never draw a line or put
+                    placeholder text in that space. Every card must have a non-empty type, title, and content. This is
+                    a classroom board sequence, not a one-page title card and not a student worksheet.
                     """),
             Map.entry("source_review", """
                     Reject unsupported facts and verify every theorem condition, calculation, answer, knowledge-point
@@ -95,11 +113,35 @@ public final class MultiAgentHandoutPromptProfiles {
 
     /** Returns the shared benchmark plus the exact audience contract for one workflow stage. */
     static String instructionsFor(String stageCode) {
+        return instructionsFor(stageCode, "");
+    }
+
+    /**
+     * Returns stage instructions adapted to the backend-canonicalized submitted question batch.
+     *
+     * <p>Only {@link MultiQuestionTextParser} labels identify a batch. This prevents a formula's whitespace or a
+     * natural paragraph break from changing the pedagogical contract.</p>
+     */
+    static String instructionsFor(String stageCode, String canonicalQuestionText) {
         String stageContract = STAGE_CONTRACTS.getOrDefault(stageCode, "");
         if ("teacher_writer".equals(stageCode)) {
-            stageContract += "\nRequired original-problem count: at least "
-                    + MINIMUM_TEACHER_ORIGINAL_PROBLEMS + ".";
+            if (submittedQuestionCount(canonicalQuestionText) >= MULTI_QUESTION_THRESHOLD) {
+                stageContract += "\nSubmitted batch contract: explain every submitted question separately in its"
+                        + " original order. Do not add invented replacement questions or reject the batch because"
+                        + " it has fewer than " + MINIMUM_TEACHER_ORIGINAL_PROBLEMS + " questions.";
+            } else {
+                stageContract += "\nRequired original-problem count: at least "
+                        + MINIMUM_TEACHER_ORIGINAL_PROBLEMS + ".";
+            }
         }
         return CORE_TEACHING_PROTOCOL + "\n" + stageContract;
+    }
+
+    /** Counts only parser-owned batch labels so ordinary problem wording can never opt into batch behavior. */
+    private static int submittedQuestionCount(String canonicalQuestionText) {
+        if (canonicalQuestionText == null || canonicalQuestionText.isBlank()) {
+            return 0;
+        }
+        return (int) SUBMITTED_QUESTION_LABEL.matcher(canonicalQuestionText).results().count();
     }
 }

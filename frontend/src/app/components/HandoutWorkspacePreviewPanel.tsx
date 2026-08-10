@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Download, FileText, Loader2, RefreshCw, ShieldCheck } from "lucide-react";
 import { TeachingHandoutPdfResponse, TeachingHumanFeedbackResponse, TeachingTaskResponse } from "../../shared/api/textbookApi";
 import { HandoutVersion, LectureHandoutPreview } from "./TeachingTaskPanel";
+import { PdfCanvasPreview } from "./PdfCanvasPreview";
 
 type PreviewMode = "summary" | "review";
 
@@ -25,6 +26,7 @@ export function HandoutWorkspacePreviewPanel({
   feedbackHistory,
   loadingFeedbackHistory,
   onVersionChange,
+  onPreviewPdf,
   onPreviewLatex,
   onResumeTask,
   onExportPdf,
@@ -126,6 +128,15 @@ export function HandoutWorkspacePreviewPanel({
               <button
                 className="handout-action-btn"
                 type="button"
+                onClick={onPreviewPdf}
+                disabled={!taskCompleted || !selectedDraft || action === "preview-pdf"}
+              >
+                {action === "preview-pdf" ? <Loader2 className="spin" size={15} /> : <FileText size={15} />}
+                <span>{pdfPreviewReady ? "刷新 PDF" : "预览 PDF"}</span>
+              </button>
+              <button
+                className="handout-action-btn"
+                type="button"
                 onClick={() => { setEditingVersion(true); setMode("review"); }}
                 disabled={!taskCompleted || !selectedDraft || action === "save-version"}
               >
@@ -192,6 +203,18 @@ export function HandoutWorkspacePreviewPanel({
             ) : null}
             {mode === "summary" ? (
               <div className="handout-workspace-summary">
+                {/* The canvas is deliberately version-bound: never show a stale PDF after the reader switches version. */}
+                {pdfPreviewReady ? (
+                  <section className="handout-pdf-review-surface" aria-label="当前讲义 PDF 预览">
+                    <PdfCanvasPreview
+                      pdfBytes={previewPdfBytes}
+                      pdfUrl={previewPdfUrl}
+                      meta={previewPdfMeta}
+                      title={`${handoutVersionLabel(version)}真实 PDF 预览`}
+                      canvasLabel={`${handoutVersionLabel(version)}讲义 PDF 页面预览`}
+                    />
+                  </section>
+                ) : null}
                 <div className="handout-workspace-summary-grid">
                   {workspaceSummary.map((item) => (
                     <article className={`handout-summary-card ${item.tone}`} key={item.label}>

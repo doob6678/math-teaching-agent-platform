@@ -31,20 +31,30 @@ import org.springframework.web.multipart.MultipartFile;
 public class TeacherResourceUploadService {
 
     private static final long DEFAULT_MAX_TOTAL_BYTES = 256L * 1024L * 1024L;
+    private static final long DEFAULT_MAX_SINGLE_FILE_BYTES = 64L * 1024L * 1024L;
     private static final int DEFAULT_MAX_STORED_FILES = 512;
+    private static final int DEFAULT_MAX_DIRECTORY_DEPTH = 8;
+    private static final long DEFAULT_MAX_COMPRESSION_RATIO = 100L;
 
     private final ProjectResourceProperties resourceProperties;
     private final Clock clock;
     private final long maxTotalBytes;
+    private final long maxSingleFileBytes;
     private final int maxStoredFiles;
+    private final int maxDirectoryDepth;
+    private final long maxCompressionRatio;
     private final boolean enabled;
 
     @Autowired
     public TeacherResourceUploadService(
             ProjectResourceProperties resourceProperties,
             @Value("${math-agent.teacher.upload.max-total-bytes:268435456}") long maxTotalBytes,
-            @Value("${math-agent.teacher.upload.max-stored-files:512}") int maxStoredFiles) {
-        this(resourceProperties, Clock.systemUTC(), maxTotalBytes, maxStoredFiles, true);
+            @Value("${math-agent.teacher.upload.max-single-file-bytes:67108864}") long maxSingleFileBytes,
+            @Value("${math-agent.teacher.upload.max-stored-files:512}") int maxStoredFiles,
+            @Value("${math-agent.teacher.upload.max-directory-depth:8}") int maxDirectoryDepth,
+            @Value("${math-agent.teacher.upload.max-compression-ratio:100}") long maxCompressionRatio) {
+        this(resourceProperties, Clock.systemUTC(), maxTotalBytes, maxSingleFileBytes, maxStoredFiles,
+                maxDirectoryDepth, maxCompressionRatio, true);
     }
 
     public TeacherResourceUploadService(
@@ -52,19 +62,26 @@ public class TeacherResourceUploadService {
             Clock clock,
             long maxTotalBytes,
             int maxStoredFiles) {
-        this(resourceProperties, clock, maxTotalBytes, maxStoredFiles, true);
+        this(resourceProperties, clock, maxTotalBytes, DEFAULT_MAX_SINGLE_FILE_BYTES, maxStoredFiles,
+                DEFAULT_MAX_DIRECTORY_DEPTH, DEFAULT_MAX_COMPRESSION_RATIO, true);
     }
 
     private TeacherResourceUploadService(
             ProjectResourceProperties resourceProperties,
             Clock clock,
             long maxTotalBytes,
+            long maxSingleFileBytes,
             int maxStoredFiles,
+            int maxDirectoryDepth,
+            long maxCompressionRatio,
             boolean enabled) {
         this.resourceProperties = resourceProperties;
         this.clock = clock == null ? Clock.systemUTC() : clock;
         this.maxTotalBytes = maxTotalBytes <= 0 ? DEFAULT_MAX_TOTAL_BYTES : maxTotalBytes;
+        this.maxSingleFileBytes = maxSingleFileBytes <= 0 ? DEFAULT_MAX_SINGLE_FILE_BYTES : maxSingleFileBytes;
         this.maxStoredFiles = maxStoredFiles <= 0 ? DEFAULT_MAX_STORED_FILES : maxStoredFiles;
+        this.maxDirectoryDepth = maxDirectoryDepth <= 0 ? DEFAULT_MAX_DIRECTORY_DEPTH : maxDirectoryDepth;
+        this.maxCompressionRatio = maxCompressionRatio <= 0 ? DEFAULT_MAX_COMPRESSION_RATIO : maxCompressionRatio;
         this.enabled = enabled;
     }
 
@@ -72,7 +89,9 @@ public class TeacherResourceUploadService {
      * Returns a disabled upload service for constructor paths that do not need upload support in focused tests.
      */
     public static TeacherResourceUploadService disabled() {
-        return new TeacherResourceUploadService(null, Clock.systemUTC(), DEFAULT_MAX_TOTAL_BYTES, DEFAULT_MAX_STORED_FILES, false);
+        return new TeacherResourceUploadService(null, Clock.systemUTC(), DEFAULT_MAX_TOTAL_BYTES,
+                DEFAULT_MAX_SINGLE_FILE_BYTES, DEFAULT_MAX_STORED_FILES, DEFAULT_MAX_DIRECTORY_DEPTH,
+                DEFAULT_MAX_COMPRESSION_RATIO, false);
     }
 
     /**
@@ -114,7 +133,11 @@ public class TeacherResourceUploadService {
             }
             return new StoredUpload(root, counter.storedFiles, counter.storedBytes, suggestedTitle);
         } catch (IOException exception) {
+            deleteTreeQuietly(root);
             throw new IllegalStateException("Failed to store teacher resource upload", exception);
+        } catch (RuntimeException exception) {
+            deleteTreeQuietly(root);
+            throw exception;
         }
     }
 
@@ -143,16 +166,23 @@ public class TeacherResourceUploadService {
                 if (normalizedEntry.isBlank()) {
                     continue;
                 }
+                int depth = normalizedEntry.split("/").length;
+                if (depth > maxDirectoryDepth) {
+                    throw new IllegalArgumentException("ZIP entry exceeds maximum directory depth of " + maxDirectoryDepth);
+                }
+                if (entry.getCompressedSize() > 0 && entry.getSize() > 0
+                        && entry.getSize() / entry.getCompressedSize() > maxCompressionRatio) {
+                    throw new IllegalArgumentException("ZIP entry exceeds maximum compression ratio of " + maxCompressionRatio);
+                }
                 Path target = safeResolve(zipRoot, normalizedEntry);
                 if (entry.isDirectory()) {
                     Files.createDirectories(target);
                     continue;
                 }
                 Files.createDirectories(target.getParent());
-                counter.beforeWrite();
+                counter.beginFile();
                 try (OutputStream outputStream = Files.newOutputStream(target)) {
-                    long written = zipInputStream.transferTo(outputStream);
-                    counter.afterWrite(written);
+                    copyBounded(zipInputStream, outputStream, counter);
                 }
             }
         }
@@ -161,10 +191,25 @@ public class TeacherResourceUploadService {
     private void writeFile(Path root, String relativePath, InputStream inputStream, Counter counter) throws IOException {
         Path target = safeResolve(root, relativePath);
         Files.createDirectories(target.getParent());
-        counter.beforeWrite();
+        counter.beginFile();
         try (InputStream in = inputStream; OutputStream outputStream = Files.newOutputStream(target)) {
-            long written = in.transferTo(outputStream);
-            counter.afterWrite(written);
+            copyBounded(in, outputStream, counter);
+        }
+    }
+
+    /** Copies in bounded chunks so a compressed archive cannot write beyond the configured limits before rejection. */
+    private void copyBounded(InputStream inputStream, OutputStream outputStream, Counter counter) throws IOException {
+        byte[] buffer = new byte[8192];
+        long fileBytes = 0L;
+        int read;
+        while ((read = inputStream.read(buffer)) != -1) {
+            long nextFileBytes = fileBytes + read;
+            if (nextFileBytes > maxSingleFileBytes || counter.storedBytes + read > maxTotalBytes) {
+                throw new IllegalArgumentException("Teacher resource upload exceeds configured extracted byte limits");
+            }
+            outputStream.write(buffer, 0, read);
+            fileBytes = nextFileBytes;
+            counter.storedBytes += read;
         }
     }
 
@@ -245,18 +290,33 @@ public class TeacherResourceUploadService {
         private int storedFiles;
         private long storedBytes;
 
-        private void beforeWrite() {
+        private void beginFile() {
             if (storedFiles >= maxStoredFiles) {
                 throw new IllegalArgumentException("Teacher resource upload exceeds max file count of " + maxStoredFiles);
             }
             storedFiles += 1;
         }
+    }
 
-        private void afterWrite(long writtenBytes) {
-            storedBytes += Math.max(0L, writtenBytes);
-            if (storedBytes > maxTotalBytes) {
-                throw new IllegalArgumentException("Teacher resource upload exceeds max size of " + maxTotalBytes + " bytes");
+    /** Best-effort cleanup prevents a rejected archive from leaving attacker-controlled bytes in staging. */
+    private static void deleteTreeQuietly(Path root) {
+        if (root == null) {
+            return;
+        }
+        try {
+            if (Files.exists(root)) {
+                try (java.util.stream.Stream<Path> paths = Files.walk(root)) {
+                    paths.sorted(java.util.Comparator.reverseOrder()).forEach(path -> {
+                        try {
+                            Files.deleteIfExists(path);
+                        } catch (IOException ignored) {
+                            // Cleanup is best effort; the original validation error remains authoritative.
+                        }
+                    });
+                }
             }
+        } catch (IOException ignored) {
+            // Do not hide the upload rejection with a secondary cleanup failure.
         }
     }
 }

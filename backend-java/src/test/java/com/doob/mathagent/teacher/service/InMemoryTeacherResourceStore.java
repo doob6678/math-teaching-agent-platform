@@ -41,7 +41,7 @@ public class InMemoryTeacherResourceStore implements TeacherResourceStore {
         return documents.values().stream()
                 .filter(document -> document.tenantId().equals(tenantId))
                 .filter(document -> !"archived".equals(document.syncStatus()))
-                .filter(document -> "admin".equals(viewerRole) || document.ownerSubjectId().equals(viewerSubjectId))
+                .filter(document -> canRead(document, viewerRole, viewerSubjectId))
                 .sorted(Comparator.comparing(TeacherResourceDocumentResponse::documentId))
                 .toList();
     }
@@ -106,7 +106,23 @@ public class InMemoryTeacherResourceStore implements TeacherResourceStore {
         if ("teacher".equals(viewerRole) && document.ownerSubjectId().equals(viewerSubjectId)) {
             return true;
         }
-        return "teacher".equals(viewerRole) && isSharedSearchScope(document.permissionScope());
+        return ("teacher".equals(viewerRole) || "student".equals(viewerRole))
+                && isSharedSearchScope(document.permissionScope());
+    }
+
+    /** Mirrors the production list visibility rule so tests cannot hide a shared teacher upload from students. */
+    private static boolean canRead(
+            TeacherResourceDocumentResponse document,
+            String viewerRole,
+            String viewerSubjectId) {
+        if ("admin".equals(viewerRole)) {
+            return true;
+        }
+        if ("teacher".equals(viewerRole) && document.ownerSubjectId().equals(viewerSubjectId)) {
+            return true;
+        }
+        return ("teacher".equals(viewerRole) || "student".equals(viewerRole))
+                && isSharedSearchScope(document.permissionScope());
     }
 
     /**
@@ -115,7 +131,7 @@ public class InMemoryTeacherResourceStore implements TeacherResourceStore {
     private static boolean isSharedSearchScope(String permissionScope) {
         return "MATH_VIP".equals(permissionScope)
                 || "PUBLIC_TEXTBOOK".equals(permissionScope)
-                || "CLASS_AUTHORIZED".equals(permissionScope);
+                || "CLASS_AUTHORIZED".equals(permissionScope)
+                || "TENANT_PUBLIC".equals(permissionScope);
     }
 }
-

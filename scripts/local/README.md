@@ -57,12 +57,12 @@ These scripts start only real services. They do not switch the backend into no-d
    - Supports `-DryRun` to verify login, runtime status, and target resource selection without calling local CLIP or Milvus upsert.
 
 9. `register-teacher-resource.ps1`
-   - Registers one real local teacher resource through the backend capability-token flow.
+   - Registers one real local teacher resource through the backend user-session flow.
    - By default stages one existing PDF from the workspace into `.local-storage/seed-resources/` using an ASCII path, then creates and executes a sync job.
    - Uses only backend APIs; it does not write `source_document`, `document_block`, or Milvus directly.
 
 10. `archive-teacher-resource.ps1`
-   - Archives one teacher resource through the backend capability-token flow.
+   - Archives one teacher resource through the backend user-session flow.
    - The backend now deletes that document's vectors from Milvus during archive, preventing archived resources from polluting future search.
 
 11. `reseed-knowledge-graph-spine.ps1`

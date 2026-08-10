@@ -69,6 +69,36 @@ class LectureTaskDispatchContractTest {
     }
 
     @Test
+    void expiredLeaseIsRequeuedExactlyOnceThroughTheOutbox() {
+        InMemoryLectureTaskLeaseStore leaseStore = new InMemoryLectureTaskLeaseStore();
+        InMemoryLectureTaskOutboxStore outboxStore = new InMemoryLectureTaskOutboxStore();
+        LectureTaskLeaseRecovery recovery = new LectureTaskLeaseRecovery(leaseStore, outboxStore);
+        Instant now = Instant.parse("2026-08-10T00:00:00Z");
+        leaseStore.create("lecture-task-recovery");
+        assertThat(leaseStore.tryAcquire("lecture-task-recovery", "worker-a", now, Duration.ofSeconds(1))).isNotNull();
+
+        assertThat(recovery.recoverExpired(now.plusSeconds(2), 100)).isEqualTo(1);
+        assertThat(recovery.recoverExpired(now.plusSeconds(2), 100)).isZero();
+        assertThat(leaseStore.status("lecture-task-recovery")).isEqualTo(LectureTaskLeaseStatus.RETRYING);
+        assertThat(outboxStore.pending()).extracting(LectureTaskOutboxEvent::taskId)
+                .containsExactly("lecture-task-recovery");
+    }
+
+    @Test
+    void activeLeaseIsNotRequeuedByRecovery() {
+        InMemoryLectureTaskLeaseStore leaseStore = new InMemoryLectureTaskLeaseStore();
+        InMemoryLectureTaskOutboxStore outboxStore = new InMemoryLectureTaskOutboxStore();
+        LectureTaskLeaseRecovery recovery = new LectureTaskLeaseRecovery(leaseStore, outboxStore);
+        Instant now = Instant.parse("2026-08-10T00:00:00Z");
+        leaseStore.create("lecture-task-active");
+        assertThat(leaseStore.tryAcquire("lecture-task-active", "worker-a", now, Duration.ofMinutes(5))).isNotNull();
+
+        assertThat(recovery.recoverExpired(now.plusSeconds(2), 100)).isZero();
+        assertThat(leaseStore.status("lecture-task-active")).isEqualTo(LectureTaskLeaseStatus.RUNNING);
+        assertThat(outboxStore.pending()).isEmpty();
+    }
+
+    @Test
     void thirdFailureBecomesTerminalAndRequestsDeadLettering() {
         InMemoryLectureTaskLeaseStore store = new InMemoryLectureTaskLeaseStore();
         store.create("lecture-task-5");

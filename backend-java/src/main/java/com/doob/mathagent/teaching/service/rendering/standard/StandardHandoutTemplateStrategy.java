@@ -38,10 +38,12 @@ public final class StandardHandoutTemplateStrategy implements HandoutTemplateStr
                 \\fancyfoot[L]{%s}
                 \\fancyfoot[R]{%s}
                 \\fancypagestyle{plain}{\\fancyhf{}
+                  \\fancyfoot[L]{%s}
+                  \\fancyfoot[R]{%s}
                   \\renewcommand{\\headrulewidth}{0pt}\\renewcommand{\\footrulewidth}{0pt}}
                 \\renewcommand{\\headrulewidth}{0.4pt}
                 \\renewcommand{\\footrulewidth}{0.3pt}
-                """.formatted(headerLeft, headerRight, footerLeft, footerRight);
+                """.formatted(headerLeft, headerRight, footerLeft, footerRight, footerLeft, footerRight);
     }
 
     @Override

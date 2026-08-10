@@ -44,41 +44,7 @@ class ApiAccessControlServiceTest {
     }
 
     @Test
-    void capabilityAuditQueryRequiresTeacherOrAdminSubject() {
-        ApiAccessControlService service = new ApiAccessControlService(
-                FixedWindowRateLimiter.empty(),
-                Clock.fixed(Instant.parse("2026-06-28T10:00:00Z"), ZoneOffset.UTC),
-                ApiAccessPolicy.defaultRules());
-        ApiRequestIdentity student = new ApiRequestIdentity(
-                "GET",
-                "/api/security/capability-audits",
-                "default",
-                "student",
-                "student-1",
-                "127.0.0.1",
-                "device-1",
-                "JUnit");
-        ApiRequestIdentity teacher = new ApiRequestIdentity(
-                "GET",
-                "/api/security/capability-audits",
-                "default",
-                "teacher",
-                "teacher-1",
-                "127.0.0.1",
-                "device-1",
-                "JUnit");
-
-        ApiAccessDecision denied = service.evaluate(student);
-        ApiAccessDecision allowed = service.evaluate(teacher);
-
-        assertThat(denied.allowed()).isFalse();
-        assertThat(denied.httpStatus()).isEqualTo(403);
-        assertThat(allowed.allowed()).isTrue();
-        assertThat(allowed.level()).isEqualTo(ApiAccessLevel.ADMIN);
-    }
-
-    @Test
-    void teacherResourceEndpointsStayUnlimitedByDefault() {
+    void teacherResourceEndpointsUseUserSubjectRateLimitByDefault() {
         ApiAccessControlService service = new ApiAccessControlService(
                 FixedWindowRateLimiter.empty(),
                 Clock.fixed(Instant.parse("2026-06-28T10:00:00Z"), ZoneOffset.UTC),
@@ -107,9 +73,9 @@ class ApiAccessControlServiceTest {
 
         assertThat(searchDecision.allowed()).isTrue();
         assertThat(searchDecision.level()).isEqualTo(ApiAccessLevel.ADMIN);
-        assertThat(searchDecision.limit()).isEqualTo(0);
+        assertThat(searchDecision.limit()).isEqualTo(240);
         assertThat(mutationDecision.allowed()).isTrue();
-        assertThat(mutationDecision.limit()).isEqualTo(0);
+        assertThat(mutationDecision.limit()).isEqualTo(240);
     }
 
     @Test
@@ -184,18 +150,18 @@ class ApiAccessControlServiceTest {
         assertThat(denied.httpStatus()).isEqualTo(403);
         assertThat(standardMcpAllowed.allowed()).isTrue();
         assertThat(standardMcpAllowed.level()).isEqualTo(ApiAccessLevel.GUEST);
-        assertThat(standardMcpAllowed.limit()).isEqualTo(0);
+        assertThat(standardMcpAllowed.limit()).isEqualTo(120);
         assertThat(studentAllowed.allowed()).isTrue();
         assertThat(studentAllowed.level()).isEqualTo(ApiAccessLevel.USER);
-        assertThat(studentAllowed.limit()).isEqualTo(0);
+        assertThat(studentAllowed.limit()).isEqualTo(120);
         assertThat(teacherAllowed.allowed()).isTrue();
         assertThat(teacherAllowed.level()).isEqualTo(ApiAccessLevel.USER);
-        assertThat(teacherAllowed.limit()).isEqualTo(0);
+        assertThat(teacherAllowed.limit()).isEqualTo(120);
         assertThat(studentConfigurationAllowed.allowed()).isTrue();
         assertThat(studentConfigurationAllowed.level()).isEqualTo(ApiAccessLevel.USER);
-        assertThat(studentConfigurationAllowed.limit()).isEqualTo(0);
+        assertThat(studentConfigurationAllowed.limit()).isEqualTo(120);
         assertThat(teacherConfigurationAllowed.allowed()).isTrue();
-        assertThat(teacherConfigurationAllowed.limit()).isEqualTo(0);
+        assertThat(teacherConfigurationAllowed.limit()).isEqualTo(120);
     }
 
     @Test
@@ -230,28 +196,48 @@ class ApiAccessControlServiceTest {
         assertThat(denied.httpStatus()).isEqualTo(403);
         assertThat(allowed.allowed()).isTrue();
         assertThat(allowed.level()).isEqualTo(ApiAccessLevel.USER);
-        assertThat(allowed.limit()).isEqualTo(0);
+        assertThat(allowed.limit()).isEqualTo(120);
     }
 
     @Test
-    void limitsSearchEndpointByDeviceAndEndpointWindow() {
+    void limitsSearchEndpointByUserSubjectAcrossDevices() {
         ApiAccessControlService service = new ApiAccessControlService(
                 FixedWindowRateLimiter.empty(),
                 Clock.fixed(Instant.parse("2026-06-28T10:00:00Z"), ZoneOffset.UTC),
                 ApiAccessPolicy.defaultRulesForTests(2));
-        ApiRequestIdentity identity = new ApiRequestIdentity(
+        ApiRequestIdentity firstDevice = new ApiRequestIdentity(
                 "GET",
                 "/api/retrieval/textbooks/search",
                 "default",
-                "guest",
-                "guest-1",
+                "student",
+                "student-1",
                 "127.0.0.1",
                 "device-1",
                 "JUnit");
 
-        assertThat(service.evaluate(identity).allowed()).isTrue();
-        assertThat(service.evaluate(identity).allowed()).isTrue();
-        ApiAccessDecision blocked = service.evaluate(identity);
+        ApiRequestIdentity secondDevice = new ApiRequestIdentity(
+                "GET",
+                "/api/retrieval/textbooks/search",
+                "default",
+                "student",
+                "student-1",
+                "10.0.0.20",
+                "device-2",
+                "JUnit");
+        ApiRequestIdentity differentUser = new ApiRequestIdentity(
+                "GET",
+                "/api/retrieval/textbooks/search",
+                "default",
+                "student",
+                "student-2",
+                "10.0.0.30",
+                "device-3",
+                "JUnit");
+
+        assertThat(service.evaluate(firstDevice).allowed()).isTrue();
+        assertThat(service.evaluate(secondDevice).allowed()).isTrue();
+        assertThat(service.evaluate(differentUser).allowed()).isTrue();
+        ApiAccessDecision blocked = service.evaluate(firstDevice);
 
         assertThat(blocked.allowed()).isFalse();
         assertThat(blocked.httpStatus()).isEqualTo(429);
@@ -324,7 +310,7 @@ class ApiAccessControlServiceTest {
         assertThat(denied.allowed()).isFalse();
         assertThat(denied.httpStatus()).isEqualTo(403);
         assertThat(allowed.allowed()).isTrue();
-        assertThat(allowed.limit()).isEqualTo(0);
+        assertThat(allowed.limit()).isEqualTo(120);
     }
 
     @Test
@@ -369,10 +355,10 @@ class ApiAccessControlServiceTest {
         assertThat(denied.httpStatus()).isEqualTo(403);
         assertThat(studentAllowed.allowed()).isTrue();
         assertThat(studentAllowed.level()).isEqualTo(ApiAccessLevel.USER);
-        assertThat(studentAllowed.limit()).isEqualTo(0);
+        assertThat(studentAllowed.limit()).isEqualTo(120);
         assertThat(teacherAllowed.allowed()).isTrue();
         assertThat(teacherAllowed.level()).isEqualTo(ApiAccessLevel.USER);
-        assertThat(teacherAllowed.limit()).isEqualTo(0);
+        assertThat(teacherAllowed.limit()).isEqualTo(120);
     }
 
     @Test
@@ -441,7 +427,7 @@ class ApiAccessControlServiceTest {
         assertThat(denied.httpStatus()).isEqualTo(403);
         assertThat(allowed.allowed()).isTrue();
         assertThat(allowed.level()).isEqualTo(ApiAccessLevel.ADMIN);
-        assertThat(allowed.limit()).isEqualTo(0);
+        assertThat(allowed.limit()).isEqualTo(240);
     }
 
     @Test
@@ -510,7 +496,7 @@ class ApiAccessControlServiceTest {
         assertThat(denied.httpStatus()).isEqualTo(403);
         assertThat(allowed.allowed()).isTrue();
         assertThat(allowed.level()).isEqualTo(ApiAccessLevel.USER);
-        assertThat(allowed.limit()).isEqualTo(0);
+        assertThat(allowed.limit()).isEqualTo(120);
     }
 
     @Test
@@ -648,7 +634,7 @@ class ApiAccessControlServiceTest {
         assertThat(denied.httpStatus()).isEqualTo(403);
         assertThat(allowed.allowed()).isTrue();
         assertThat(allowed.level()).isEqualTo(ApiAccessLevel.ADMIN);
-        assertThat(allowed.limit()).isEqualTo(0);
+        assertThat(allowed.limit()).isEqualTo(240);
     }
 
     @Test

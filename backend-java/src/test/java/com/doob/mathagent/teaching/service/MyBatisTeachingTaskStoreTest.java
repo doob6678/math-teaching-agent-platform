@@ -6,11 +6,12 @@ import com.doob.mathagent.teaching.TeachingTaskStatus;
 import com.doob.mathagent.teaching.mapper.TeachingTaskMapper;
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.InputStream;
 import java.lang.reflect.Proxy;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
-import org.apache.ibatis.annotations.Update;
 import org.junit.jupiter.api.Test;
 
 class MyBatisTeachingTaskStoreTest {
@@ -46,11 +47,13 @@ class MyBatisTeachingTaskStoreTest {
         assertThat(persisted.status()).isEqualTo(TeachingTaskStatus.RUNNING);
         assertThat(persisted.taskId()).isEqualTo("task-failed");
 
-        String resumeSql = String.join("\n", TeachingTaskMapper.class
-                .getMethod("prepareLectureTaskForResume", String.class, String.class, String.class, Instant.class)
-                .getAnnotation(Update.class)
-                .value());
+        String resumeSql;
+        try (InputStream mapperXml = getClass().getResourceAsStream("/mapper/TeachingTaskMapper.xml")) {
+            assertThat(mapperXml).isNotNull();
+            resumeSql = new String(mapperXml.readAllBytes(), StandardCharsets.UTF_8);
+        }
         assertThat(resumeSql).contains(
+                "<update id=\"prepareLectureTaskForResume\">",
                 "status = 'RETRYING'",
                 "retry_count = 0",
                 "lease_owner = NULL",

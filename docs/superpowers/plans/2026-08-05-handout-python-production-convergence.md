@@ -65,12 +65,12 @@ No task may advance past a gate with a missing real artifact, a simulated provid
 - Test: `backend-java/src/test/java/com/doob/mathagent/agent/MultiAgentWritingControllerTest.java`
 - Test: `frontend/src/shared/api/textbookApi.test.ts`
 
-- [ ] **Step 1: Write tests** asserting that an agent-writing request creates/returns the same `taskId` as a teaching task, `workflowId` is only a compatibility alias, and resume/history/events/export use the teaching-task store.
+- [✅️] **Step 1: Write tests** asserting that an agent-writing request creates/returns the same `taskId` as a teaching task, `workflowId` is only a compatibility alias, and resume/history/events/export use the teaching-task store.
 - [ ] **Step 2: Run the focused Java and Vitest tests and verify failure.**
 - [✅️] **Step 3: Introduce `HandoutTaskFacade`** at the Java boundary. It validates the authenticated subject, creates one teaching task and `runId`, and delegates all reads/resume/export to the teaching service.
 - [✅️] **Step 4: Adapt `MultiAgentWritingController`** to call the facade. Do not copy or persist a second workflow row; keep old response fields as aliases until the canary ends.
 - [✅️] **Step 5: Make the teaching worker call one `/v1/handout-runs/sync` graph.** Retire the separate `/v1/teaching-drafts/sync` call for handout generation; retain that endpoint only for non-handout teaching features with an explicit contract test.
-- [ ] **Step 6: Update the frontend API/panel** to use teaching-task endpoints while displaying the existing agent trace fields from the Java projection.
+- [✅️] **Step 6: Update the frontend API/panel** to use teaching-task endpoints while displaying the existing agent trace fields from the Java projection.
 - [ ] **Step 7: Run focused tests and an authenticated HTTP contract test** for create, get, events, resume, feedback and all three artifact versions. Expected: one task row, one run ID, one terminal business state.
 - [ ] **Step 8: Commit** `refactor: converge handout entry points on teaching tasks`.
 
@@ -106,9 +106,9 @@ No task may advance past a gate with a missing real artifact, a simulated provid
 - Test: `backend-java/src/test/java/com/doob/mathagent/agent/MultiAgentWritingLiveSmokeTest.java`
 - Test: `backend-java/src/test/java/com/doob/mathagent/teaching/TeachingWorkflowServiceTest.java`
 
-- [ ] **Step 1: Add a feature-flag contract test** proving old stage dispatch is unavailable for newly created handout tasks while historical rows remain readable.
-- [ ] **Step 2: Route only the top-level lecture task** through RabbitMQ. Python owns resource curation, three writers, validation and repair inside the graph; Java owns lease, ACK, DLQ and publication.
-- [ ] **Step 3: Remove production wiring for Java provider calls** after the canary flag is permanently on. Keep the classes only in a rollback branch/release, not as a second active runtime.
+- [✅️] **Step 1: Add a feature-flag contract test** proving the new handout route defaults to Python and an explicit outage flag is required before disabling it. Historical stage rows remain readable through the compatibility store.
+- [✅️] **Step 2: Route only the top-level lecture task** through RabbitMQ. The `python_handout` command owns one lease while Python owns resource curation, three writers, validation and repair; Java owns lease, ACK, DLQ and publication.
+- [✅️] **Step 3: Remove production wiring for Java provider calls** after the canary flag is permanently on. Keep the classes only in a rollback branch/release, not as a second active runtime.
 - [ ] **Step 4: Run `./mvnw -pl backend-java -DskipTests=false test` and the worker pytest suite.** Expected: no new handout path can enqueue four stage tasks and no Java model gateway is called.
 - [ ] **Step 5: Commit** `refactor: retire legacy handout stage runtime after canary`.
 
@@ -124,10 +124,10 @@ No task may advance past a gate with a missing real artifact, a simulated provid
 - Test: `ai-worker-python/tests/test_usage.py`
 - Test: `backend-java/src/test/java/com/doob/mathagent/teaching/HandoutRunMetricsTest.java`
 
-- [ ] **Step 1: Write tests** for immutable per-attempt usage, cached-token fields, unknown pricing (`costKnown=false`, never zero), and duplicate-attempt idempotency.
-- [ ] **Step 2: Persist timestamps** for submitted, enqueued, claimed, Python start, each node start/finish, provider attempt, Java context request, publication gate, XeLaTeX, completed/failed, and ACK. Include queue wait, lease wait, ACK latency, PDF time, request/response bytes, retry count, DLQ count, CPU/RSS/GPU samples and trace ID.
-- [ ] **Step 3: Add percentile aggregation** for P50/P95/P99 by workflow, provider/model and result status. Do not aggregate missing data as zero.
-- [ ] **Step 4: Run the summary script against a real completed run and assert it prints success count, provider call count, tokens, costs, load samples and every missing field.**
+- [✅️] **Step 1: Write tests** for immutable per-attempt usage, cached-token fields, unknown pricing (`costKnown=false`, never zero), and duplicate-attempt idempotency. Python and Java metric-boundary tests pass.
+- [✅️] **Step 2: Persist timestamps** for submitted, enqueued, claimed, Python start, each node start/finish, provider attempt, Java context request, publication gate, XeLaTeX, completed/failed, and ACK. Include queue wait, lease wait, ACK latency, PDF time, request/response bytes, retry count, DLQ count, CPU/RSS/GPU samples and trace ID.
+- [✅️] **Step 3: Add percentile aggregation** for P50/P95/P99 by workflow, provider/model and result status. Do not aggregate missing data as zero.
+- [✅️] **Step 4: Run the summary script against a real completed run and assert it prints success count, provider call count, tokens, costs, load samples and every missing field.**
 - [ ] **Step 5: Commit** `feat: persist end-to-end handout run metrics and cost fields`.
 
 ## Task 7: Add Independent Safety and Publication Gates
@@ -172,6 +172,8 @@ No task may advance past a gate with a missing real artifact, a simulated provid
 
 - [✅️] Task 1 已完成并提交：`9bfa04d test: establish non-fabricating handout acceptance baseline`。
 - [✅️] Task 2 已完成并提交：`d745bde fix: isolate ai runtime credentials and preserve host networking`。
-- [ ] Task 3 正在进行：`22f104c` 已将创建、查询、恢复映射到教学任务，`5c200b0` 已将 artifact 与 traces 读取映射到教学任务；export 已转入教学 publication 服务，尚未完成 Worker 与前端 API 的全部收敛，不能提前打钩。
+- [ ] Task 3 正在进行：`22f104c` 已将创建、查询、恢复映射到教学任务，`5c200b0` 已将 artifact 与 traces 读取映射到教学任务；前端 API/面板已完成教学任务端点收敛，且去除了会被 publication 服务拒绝的旧页眉页脚导出参数。Worker、认证 HTTP 合同与聚焦 Java 测试仍未全部通过，不能提前打钩。
 - [✅️] Task 4 已完成并提交：版本化跨语言字段/越权拒绝、按 runId 重载 Java 主体、旧空幂等键恢复、MySQL 图版本/行锁拒绝，以及真实双 worker 同 runId 验收均已通过。生产 MySQL 的旧 `ai_usage_event` 缺少 `cached_prompt_tokens` 时，运行时保留兼容账本写入且未知成本不伪造为零。
-- [ ] Task 5 至 Task 8 尚未完成，后续仅在对应实现、真实验证和独立提交均完成后标记 ✅️。
+- [ ] Task 5 正在进行：新 handout 默认 Python 单路由，Worker 只对 `python_handout` 执行一次 Python 图；Python 客户端缺失时明确失败关闭。默认 Java AI Gateway 已失败关闭，真实 Java Provider 仅可通过显式 legacy 回滚开关注册；全量 Maven 仍有 35 失败、15 错误，不能勾选 Step 4/5。
+- [ ] Task 6 正在进行：入队、认领、租约等待、重试、死信、Python 图、节点、发布门禁、XeLaTeX、完成/失败和 ACK 指标均已实现；真实 MySQL 已运行汇总并保留旧 schema 缺失字段。稳定 Compose 端到端样本与独立提交仍缺失，不能标记任务完成。
+- [ ] Task 7 至 Task 8 尚未完成，后续仅在对应实现、真实验证和独立提交均完成后标记 ✅️。

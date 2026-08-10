@@ -45,17 +45,21 @@ class ProviderRoute(BaseModel):
         values = [(item.name, item.model) for item in [self.primary, *self.fallbacks]]
         if len(set(values)) != len(values):
             raise ValueError("provider route contains a duplicate provider/model route")
-        if os.getenv("MATH_AGENT_REQUIRE_ROUTE_GRANT", "false").lower() == "true":
-            if not self.routeGrant:
-                raise ValueError("provider route grant is required")
-            granted = verify_route_grant(self.routeGrant)
-            expected = values
-            if granted != expected:
-                raise ValueError("provider route grant does not match route")
         return self
 
+    def verify_for(self, run_id: str, workload: str) -> None:
+        """验证当前请求绑定的短期 route grant，避免跨运行或跨 workload 复用。"""
+        if os.getenv("MATH_AGENT_REQUIRE_ROUTE_GRANT", "false").lower() != "true":
+            return
+        if not self.routeGrant:
+            raise ValueError("provider route grant is required")
+        granted = verify_route_grant(self.routeGrant, run_id, workload)
+        expected = [(item.name, item.model) for item in [self.primary, *self.fallbacks]]
+        if granted != expected:
+            raise ValueError("provider route grant does not match route")
 
-def verify_route_grant(value: str) -> list[tuple[str, str]]:
+
+def verify_route_grant(value: str, run_id: str, workload: str) -> list[tuple[str, str]]:
     """验证 Java HMAC-SHA-256 route grant，并只返回 worker allow-list 中的 route。"""
     try:
         encoded_payload, encoded_signature = value.split(".", 1)
@@ -67,6 +71,10 @@ def verify_route_grant(value: str) -> list[tuple[str, str]]:
         if not hmac.compare_digest(signature, expected_signature):
             raise ValueError("route grant signature is invalid")
         payload = json.loads(base64.urlsafe_b64decode(encoded_payload + "=" * (-len(encoded_payload) % 4)))
+        if str(payload.get("runId") or "") != run_id:
+            raise ValueError("route grant run is invalid")
+        if str(payload.get("workload") or "") != workload:
+            raise ValueError("route grant workload is invalid")
         if int(payload.get("expiresAt", 0)) < int(time.time()):
             raise ValueError("route grant is expired")
         routes = payload.get("routes")
@@ -126,6 +134,7 @@ class AiRunRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_safe_input(self) -> "AiRunRequest":
+        self.providerRoute.verify_for(self.runId, self.workload)
         if set(self.input) != {"message"}:
             raise ValueError("generic_agent input must contain only message")
         message = self.input.get("message")

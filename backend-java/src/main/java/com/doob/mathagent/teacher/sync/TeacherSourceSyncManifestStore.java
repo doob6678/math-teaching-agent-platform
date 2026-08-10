@@ -12,6 +12,11 @@ import java.util.List;
  */
 public interface TeacherSourceSyncManifestStore {
 
+    /** Resolves the stable provider file identity for one persisted source path. */
+    default String providerItemId(String tenantId, String documentId, String sourcePath) {
+        return "";
+    }
+
     /** Records the latest provider metadata snapshot without downloading file bodies. */
     void recordDiscovery(String tenantId, String rootUrl, String createdBy, String documentId, String discoveredItemsJson);
 

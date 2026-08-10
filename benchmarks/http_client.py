@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import time
 from dataclasses import dataclass
@@ -28,17 +27,13 @@ class MathAgentClient:
         self.timeout = timeout
         self.max_retries = max_retries
         self.session = requests.Session()
-        self.token_name = ""
-        self.token_value = ""
 
     def login(self, username: str, password: str) -> dict[str, Any]:
         response = self.post("/api/auth/login", {"username": username, "password": password})
         if response.status != 200 or not isinstance(response.body, dict):
             raise RuntimeError(f"login failed for {username}: HTTP {response.status} {response.body}")
-        self.token_name = str(response.body.get("tokenName") or "satoken")
-        self.token_value = str(response.body.get("tokenValue") or "")
-        if not self.token_value:
-            raise RuntimeError("login response did not include tokenValue")
+        # requests.Session stores the backend's HttpOnly Set-Cookie automatically. The response body contains
+        # identity metadata only; no raw session token is copied into benchmark state or request headers.
         return response.body
 
     def get(
@@ -69,9 +64,6 @@ class MathAgentClient:
             body: dict[str, Any] | list[Any] | None = None,
             headers: dict[str, str] | None = None) -> HttpAttempt:
         request_headers = dict(headers or {})
-        if self.token_value:
-            request_headers[self.token_name] = self.token_value
-            request_headers["Authorization"] = f"Bearer {self.token_value}"
         last_error: Exception | None = None
         response = None
         start = time.perf_counter()
@@ -108,9 +100,3 @@ class MathAgentClient:
         except ValueError:
             parsed = response.text
         return HttpAttempt(response.status_code, elapsed_ms, response.ok, parsed)
-
-
-def stable_request_hash(body: dict[str, Any] | list[Any]) -> str:
-    """Hash the exact compact JSON body used for capability binding."""
-    payload = json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()

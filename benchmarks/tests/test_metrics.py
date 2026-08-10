@@ -100,17 +100,16 @@ class MetricsTest(unittest.TestCase):
     def test_summarize_security_results_reports_rejection_rates(self):
         summary = summarize_security_results(
             {
-                "capabilityReplay": [{"status": 200}, {"status": 403}, {"status": 403}],
-                "requestHashMismatch": [{"status": 403}],
+                "authenticatedExecution": [{"status": 200}],
+                "duplicateSubmission": [{"status": 200}, {"status": 403}, {"status": 403}],
                 "rateLimit": [{"status": 200}, {"status": 429}, {"status": 429}],
                 "agentConcurrency": [{"status": 200}, {"status": 429}],
             }
         )
 
-        self.assertEqual(summary["capabilityReplay"]["attemptCount"], 3)
-        self.assertEqual(summary["capabilityReplay"]["successCount"], 1)
-        self.assertAlmostEqual(summary["capabilityReplay"]["rejectionRate"], 2 / 3)
-        self.assertEqual(summary["requestHashMismatch"]["blockedCount"], 1)
+        self.assertEqual(summary["duplicateSubmission"]["attemptCount"], 3)
+        self.assertEqual(summary["duplicateSubmission"]["successCount"], 1)
+        self.assertAlmostEqual(summary["duplicateSubmission"]["rejectionRate"], 2 / 3)
         self.assertEqual(summary["rateLimit"]["rateLimitedCount"], 2)
         self.assertEqual(summary["agentConcurrency"]["rejectedCount"], 1)
 

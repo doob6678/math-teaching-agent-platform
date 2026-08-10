@@ -1,8 +1,10 @@
-"""Perform the real, idempotent textbook BGE/CLIP migration into Milvus.
+"""Perform the real, idempotent c2 textbook BGE/CLIP migration into Milvus.
 
-The legacy NPY matrices are read only by this offline migration and recall-comparison command.  Online Java retrieval
-uses the two Milvus collections exclusively.  All non-secret endpoints, collection names, dimensions and batch limits
-come from backend-java/src/main/resources/application.yml; the optional Milvus token is the sole environment input.
+The c2 section index is the production text source: its child rows retain section_id/source_chunk_id identities so
+Java can aggregate them into logical parents while returning the child page that earned recall. The page-image index is
+kept page-level because images are returned as source-page evidence. Online Java retrieval uses the two Milvus
+collections exclusively. All non-secret endpoints, collection names, dimensions and batch limits come from
+backend-java/src/main/resources/application.yml; the optional Milvus token is the sole environment input.
 """
 
 from __future__ import annotations
@@ -38,7 +40,7 @@ def main() -> int:
     config = vector_config(args.config)
     token = os.environ.get("MATH_AGENT_MILVUS_TOKEN", "").strip()
     corpus_version = str(config["textbook-corpus-version"])
-    text_rows, raw_text_row_count = text_entities(root, corpus_version)
+    text_rows, raw_text_row_count, text_index_kind = text_entities(root, corpus_version)
     image_rows = image_entities(root, corpus_version, int(config["textbook-image-dimension"]), int(config["textbook-image-query-dimension"]))
     assert_dimension(text_rows, config["textbook-text-dimension"], "BGE text")
     assert_dimension(image_rows, config["textbook-image-dimension"], "CLIP image")
@@ -55,6 +57,7 @@ def main() -> int:
         "textSourceRows": raw_text_row_count,
         "textVectorsSucceeded": len(text_rows),
         "textVectorsFailed": 0,
+        "textIndexKind": text_index_kind,
         "imageVectorsSucceeded": len(image_rows),
         "imageVectorsFailed": 0,
         "collections": summaries,
@@ -73,6 +76,12 @@ def vector_config(config_path: Path) -> dict[str, Any]:
         key: resolve_spring_placeholder(value, os.environ)
         for key, value in data["math-agent"]["vector-index"].items()
     }
+    # Local Windows verification reaches the WSL Milvus proxy, while Compose reaches the same service by DNS name.
+    # Prefer the namespaced environment override when present so one migration command can target either real route
+    # without editing the deployment contract or accidentally writing to a different collection.
+    configured_uri = os.environ.get("MATH_AGENT_VECTOR_INDEX_MILVUS_URI", "").strip()
+    if configured_uri:
+        values["milvus-uri"] = configured_uri
     required = (
         "milvus-uri", "textbook-text-collection-name", "textbook-image-collection-name",
         "textbook-text-dimension", "textbook-image-dimension", "textbook-image-query-dimension", "textbook-metric-type", "textbook-index-type",
@@ -108,9 +117,10 @@ def resolve_spring_placeholder(value: Any, environment: dict[str, str]) -> Any:
     raise ValueError(f"Spring placeholder nesting is too deep: {value}")
 
 
-def text_entities(root: Path, corpus_version: str) -> tuple[list[dict[str, Any]], int]:
-    metadata_rows = read_jsonl(root / "_page_text_index" / "metadata.jsonl")
-    vectors = np.load(root / "_page_text_index" / "page_embeddings.npy")
+def text_entities(root: Path, corpus_version: str) -> tuple[list[dict[str, Any]], int, str]:
+    metadata_path, vector_path, index_kind = production_text_index_paths(root)
+    metadata_rows = read_jsonl(metadata_path)
+    vectors = np.load(vector_path)
     chunks = chunks_by_id(root)
     if len(metadata_rows) != len(vectors):
         raise ValueError("text NPY row count does not match text metadata row count")
@@ -131,7 +141,31 @@ def text_entities(root: Path, corpus_version: str) -> tuple[list[dict[str, Any]]
         prior = entities_by_id.get(chunk_id)
         if prior is None or len(entity["text"]) > len(prior["text"]):
             entities_by_id[chunk_id] = entity
-    return list(entities_by_id.values()), len(metadata_rows)
+    return list(entities_by_id.values()), len(metadata_rows), index_kind
+
+
+def production_text_index_paths(root: Path) -> tuple[Path, Path, str]:
+    """Resolve the only valid production text index and reject silent page-only fallback.
+
+    The c2 section index is the authoritative retrieval corpus because its rows carry the section-child identity
+    required by the Java logical parent index. A page-only index would make the Milvus collection disagree with the
+    loaded corpus even when both point at the same source PDF pages, so the migration fails instead of reverting to
+    page summaries by accident.
+    """
+    section_manifest_path = root / "_section_bge_index" / "manifest.json"
+    if not section_manifest_path.is_file():
+        raise FileNotFoundError(f"c2 section index manifest does not exist: {section_manifest_path}")
+    manifest = json.loads(section_manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("kind") != "bge_section_chunk_library":
+        raise ValueError(
+            "Production textbook migration requires the c2 bge_section_chunk_library index; "
+            f"found {manifest.get('kind')!r} at {section_manifest_path}"
+        )
+    metadata_path = root / "_section_bge_index" / str(manifest.get("metadata") or "metadata.jsonl")
+    vector_path = root / "_section_bge_index" / str(manifest.get("vectors") or "embeddings.npy")
+    if not metadata_path.is_file() or not vector_path.is_file():
+        raise FileNotFoundError(f"c2 section index files are incomplete: {metadata_path}, {vector_path}")
+    return metadata_path, vector_path, "c2_section_chunks"
 
 
 def image_entities(root: Path, corpus_version: str, stored_dimension: int, query_dimension: int) -> list[dict[str, Any]]:

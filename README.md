@@ -4,6 +4,14 @@
 
 平台以 Java 后端为核心，基于 Spring Boot 3.5、Java 21、Spring AI、MyBatis-Plus、MySQL 和 Redis 搭建 Agent/RAG 服务分层。工程结构按 controller、service、dto、vo、mapper 拆分，业务模块之间保持清晰边界，同时为前端控制台、外部 MCP/A2A 集成和后台资料处理提供统一接口。
 
+---
+
+## ⚠️ 必读：[TODO.md](TODO.md) — 已知问题与修复清单
+
+**任何人对本项目做开发、测试、验收、面试准备之前，必须先阅读 [TODO.md](TODO.md)。** 该文件列出全线源码审查发现的已知问题（P0/P1/P2），含精准源码位置、影响评估和修复建议。其中 P0 级问题影响核心功能正确性，不得以"功能已上线"绕过。
+
+---
+
 ## 核心对标：成熟高中数学教师式讲解
 
 项目把“豆包爱学”截图中的教学态度作为讲义与单题讲解的质量基线，而不是把“模型返回了文字”当作完成：
@@ -14,7 +22,7 @@
 4. 通过知识图谱说明知识点归属、先修关系、关联方法、学习阶段和难度；处理顺序是“扫描题目 → 匹配图谱 → 按知识点与思想方法组织”。
 5. 推理遵循“目标 → 相关知识 → 已知条件 → 逻辑推导”，并受真实证据约束，禁止虚构题目、来源、定理条件、图形关系和数值答案。
 
-多 Agent 流程分别生成并审校教师讲义、无答案学生空白讲义、无最终答案的 16:10 单题课堂引导稿。页眉、页脚、页码、字体和纸张比例由 PDF 渲染器控制，不写入模型正文；提示词档案与样例见 [讲义提示词档案与样式验收](docs/handout-prompt-profiles-and-style-acceptance.md)。
+多 Agent 流程当前固定为四个实际模型阶段：资源整理完成后，并行生成教师讲义、无答案学生空白讲义和无最终答案的 16:10 单题课堂引导稿，以控制 token、延迟和调用成本。模板选择、共享大纲、来源/学生安全/版式审查、合并协调等六个扩展提示词契约暂未接入执行链，不会额外产生模型调用；页眉、页脚、页码、字体和纸张比例由 PDF 渲染器控制，不写入模型正文。提示词档案与样例见 [讲义提示词档案与样式验收](docs/handout-prompt-profiles-and-style-acceptance.md)。
 
 ## 讲义与 PDF 不可违反的硬性要求
 
@@ -52,12 +60,21 @@
 | `teaching` | 可恢复教学任务 DAG/ReAct 编排、人工反馈、讲义导出、阶段耗时统计和**异步执行（CREATED/RUNNING/COMPLETED/FAILED 状态机）**。 |
 | `agent` | Agent 执行计划、模型调用、Trace 持久化、恢复查询和多 Agent 写作 workflow。 |
 | `protocol` | MCP 工具发现、MCP 工具执行和 A2A Agent Card 元数据。 |
-| `securityrisk` / `infrastructure.security` | Capability Token、请求哈希、角色/API 分级、Redis 限流、防重放和审计。 |
+| `infrastructure.security` | 后端用户主体、角色/API 分级、Redis 限流、并发控制和审计。 |
 | `infrastructure.ai` | 模型 provider/model 目录、健康检查、fallback 策略和密钥脱敏。 |
 
 ## 教材与 RAG 检索
 
-教材检索链路采用 BM25-first 方案，从外部教材目录读取 `catalog.jsonl` 和分块内容。检索服务会保留教材、章节、页码、片段、公式和图片引用，并结合页面质量标签对低价值页面降权。每次检索生成 `queryId`，写入审计事件，支持按 `queryId` 查询命中详情，为 RAG 回答提供可追溯的教材证据。
+教材检索链路固定使用 c2 section-child corpus，不允许回退到只有 `page_summary` 的页级语料。c2 的子块保留 `section_id`、`source_chunk_id` 和原始页码；Java 先对正文 BM25、小标题 BM25、BGE 文本向量和 CLIP 页面图像做候选召回，再按 section 子块聚合为临时逻辑父块，最后使用本地 BGE reranker 排序，并返回实际命中的子块页图。
+
+生产数据契约如下：
+
+- 文本 Milvus 必须来自 c2 `_section_bge_index`，迁移脚本会拒绝 `bge_page_chunk_library` 等页级 manifest。
+- 页面图片仍按原始页索引保存，用于 CLIP 召回和最终页面证据；图片记录不是文本子块数量。
+- Java 在加载真实教材目录时校验 `_section_bge_index/manifest.json`，发现非 c2 section-child corpus 直接失败，禁止错误语料静默降级为 BM25-only。
+- 当前生产版本为 `textbook-section-c2-milvus-v1`；任何重建都必须同步更新 Milvus metadata 和 benchmark 记录。
+
+每次检索生成 `queryId`，写入审计事件，支持按 `queryId` 查询命中详情，为 RAG 回答提供可追溯的教材证据。
 
 教师资料检索与教材检索保持一致的证据结构。飞书同步支持 checkpoint/resume，本地 md、txt、docx、pdf 等资料解析后按 block、checksum、citation 入库，后续可以从教师资源块中识别数学题、去重并绑定知识点，沉淀为教师侧题库资产。
 
@@ -83,11 +100,11 @@
 
 模型治理层维护 provider/model allow-list、fallback 顺序、真实连通性探测和密钥脱敏，前端只读取后端暴露的模型目录与健康状态，不接触 API Key。
 
-高价值 AI 接口使用 Capability Token、`X-Request-Hash`、角色/API 分级、Redis 固定窗口限流、一次性令牌消费与审计记录保护，降低高成本接口被盗刷、重放和越权调用的风险。MCP/A2A 暴露也遵循只读优先、范围可控、密钥不回显的原则。
+高价值 AI 接口使用后端解析的用户主体、角色/API 分级、Redis 固定窗口限流、并发控制与审计记录保护，降低高成本接口被盗刷和越权调用的风险。MCP/A2A 暴露也遵循只读优先、范围可控、密钥不回显的原则。
 
 ## 教师资料同步 MQ
 
-教师资料同步是当前最适合消息化的业务：一次操作可能下载飞书资料、解析 DOCX/PDF、调用 Python 视觉 Worker，并重建 Milvus 索引。接口先完成 Capability Token 校验，再仅把 `jobId`、`documentId` 与后端解析出的主体身份发布到 RabbitMQ；令牌、API Key 和请求哈希不会进入消息。
+教师资料同步是当前最适合消息化的业务：一次操作可能下载飞书资料、解析 DOCX/PDF、调用 Python 视觉 Worker，并重建 Milvus 索引。接口先完成用户主体、租户和资源所有权校验，再仅把 `jobId`、`documentId` 与后端解析出的主体身份发布到 RabbitMQ；用户凭据、API Key 和原始提示词不会进入消息。
 
 RabbitMQ 使用持久化 direct exchange、命令队列和死信队列。MySQL `source_sync_job` 仍是状态机和幂等锚点：消费者只执行 `queued`（或恢复时 `paused`）任务，重复投递不会重复解析同一资料；业务/提供方失败继续使用已有 checkpoint/pause 机制，只有格式或基础设施异常进入 DLQ。默认并发为 1、预取为 1，避免单机预占过多 CUDA/解析任务；这些值固定在 `application.yml`，启动时不接受环境变量覆盖。
 
@@ -133,6 +150,32 @@ RabbitMQ 使用持久化 direct exchange、命令队列和死信队列。MySQL `
 
 ## 2024 高考数学题库：真实视觉入库链路
 
+### 数学 PDF 题目资产接入
+
+高考数学真题和数学模拟卷统一遵循[数学 PDF 题目资产接入改造方案](docs/math-pdf-question-assets-integration-plan.md)：先由 WSL GPU 的本地版面/OCR模型生成题图 PNG、`question-assets.jsonl`、`assets.md` 和源文件哈希报告，再将完整页图交给默认 Luna（或显式 Terra）转写。题图不作为单题视觉输入；其来源、页码、bbox、哈希和绑定规则会写入题目 `metadata.questionAssets`，并与向量入库和讲义资产共用。
+
+辽宁名校联盟 2026 年 5 月数学模拟卷的白名单配置是 `config/math-paper-ingestion-liaoning-2026-05.json`；运行命令、跨页约束、Terra/Luna 切换和验收门禁均在改造方案中定义。物理卷与答案卷不在配置白名单，不会被处理。
+
+### 本地 PaddleOCR GPU 模型
+
+数学 PDF 题图资产提取固定使用 WSL Ubuntu 的专用 GPU 环境：
+`/mnt/c/Users/doob/Desktop/code/dev/math_agent_rag/.local-models/paddleocr-gpu/.venv`。该环境安装
+`paddlepaddle-gpu==3.3.1`（官方 CUDA 12.9 wheel）和 `paddleocr==3.3.1`；不得使用 Windows Conda 中的 CPU 版
+`paddlepaddle`，也不得回退到 CPU。
+
+已下载的本地 GPU 推理模型位于 Windows `D:\ModelScope\models\PaddlePaddle`，在 WSL 中映射为
+`/mnt/d/ModelScope/models/PaddlePaddle`：
+
+- `PP-DocLayout-L`
+- `PP-OCRv5_mobile_det`
+- `PP-OCRv5_mobile_rec`
+
+安装或迁移环境后，先执行以下检查。只有 CUDA 编译、可见 GPU 和实际 GPU tensor 运算全部通过，才可运行资产提取。
+
+```powershell
+wsl.exe -d Ubuntu -- bash -lc "export LD_LIBRARY_PATH=/usr/lib/wsl/lib; export PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True; /mnt/c/Users/doob/Desktop/code/dev/math_agent_rag/.local-models/paddleocr-gpu/.venv/bin/python -c \"import paddle; assert paddle.is_compiled_with_cuda(); assert paddle.device.cuda.device_count() >= 1; paddle.set_device('gpu:0'); result = paddle.to_tensor([1.0], place='gpu:0') + paddle.to_tensor([1.0], place='gpu:0'); assert 'gpu' in str(result.place).lower() and float(result.numpy()[0]) == 2.0; print(paddle.__version__, paddle.device.cuda.get_device_name())\""
+```
+
 本项目对配置文件 `config/gaokao-ingestion-2024.json` 中限定的六份 2024 北京、新课标Ⅰ、新课标Ⅱ PDF，使用唯一的真实入库命令：
 
 ```powershell
@@ -142,12 +185,12 @@ wsl.exe -d Ubuntu -- python3 /mnt/c/Users/doob/Desktop/code/dev/math_agent_rag/s
 该命令严格按以下顺序完成，任何一步失败都会以非零退出，不能产出“成功”结论：
 
 1. 以生产后端相同版本的 PDFBox 渲染每个真实 PDF 页，保留原始 PNG；再生成最长边 960px、JPEG quality 0.82 的初筛页图。
-2. 每页仅将压缩页图发送给 `gpt-5.6-luna`，识别题干、LaTex 公式、题号和跨页风险；原始 PNG 仍作为可复核证据。
+2. 每页仅将压缩页图发送给默认的 `gpt-5.6-luna`（Terra 可通过 `--vision-provider terra` 显式切换），识别题干、LaTex 公式、题号和跨页风险；原始 PNG 仍作为可复核证据。
 3. 在 `output/gaokao-evidence/2024/runs/<run-id>/` 保存每页完整的非密钥请求、响应、页图 SHA-256、HTTP 状态、耗时及 provider 返回的 token usage。Authorization 不写入文件。
-4. 仅将 Luna 返回的非空题干和公式调用本机运行的真实 embedding worker，写入统一的高考 Milvus collection `gaokao_math`。
+4. 仅将视觉 provider 返回的非空题干和公式调用本机运行的真实 embedding worker，写入统一的高考 Milvus collection `gaokao_math`。
 5. 使用刚入库题干重新生成真实查询向量并从 Milvus 召回；若查不到对应的插入主键，整次运行失败。最终报告写入 `output/gaokao-evidence/2024/<run-id>-report.json`，其中汇总 `prompt_tokens`、`completion_tokens`、`total_tokens`。
 
-高考题统一使用 `gaokao_math` collection；之后任何高考题导入不得新建按年份或模型拆分的 collection。AI 并发固定为 20；`--page-workers` 只能降低本次脚本进程的并发，不能把脚本线程数表述为全项目额度。后端 agent 路径的分布式额度由 Redis 租约控制；若要把外部批量脚本纳入同一额度，必须经后端入库 API 申请租约，而不是并行执行多个脚本。每页审计额外记录实际 worker 数、任务序号、线程名、开始/完成时间，保证并发时仍能对一张页图、一份请求/响应和一笔 token usage 一一追溯。Luna 请求通过 `--luna-bridge-container` 指定的健康 Docker worker 网络发出，容器名不是代码常量；使用 `docker compose ps -q ai-worker` 获取当前部署的容器 ID。单次 HTTP 默认限时 120 秒，并由父进程额外 5 秒宽限的硬超时兜底；520、429 和临时 5xx 只对该页请求进行局部、有界的最多 3 次重试。每个 run 都写入 source/config 哈希 manifest，`--finalize-run-id` 会重新验证 PDF、原图和压缩图哈希后才允许写入。跨页题仅在前页明确标记续页且后页没有新题号时合并；LaTeX 分式含斜杠会被拒绝，必须为 `\\frac{分子}{分母}`。向量化固定调用本机真实 ai-worker 的 `local_bge_embedding`（512 维）；Milvus 会确保 `gaokao_math` 上存在 `COSINE`/`FLAT` 的 `vector_index` 后才加载并写入。链路不会扫描配置之外的 2024 PDF，不使用文本层伪造视觉识别结果，不把模型输出当作官方答案或人工审核结论。启动只允许设置 `OPENAI_API_KEY`；其余端口、数据库、Milvus、worker、embedding 与并发配置均固定在 YAML。
+高考题统一使用 `gaokao_math` collection；之后任何高考题导入不得新建按年份或模型拆分的 collection。AI 并发固定为 20；`--page-workers` 只能降低本次脚本进程的并发，不能把脚本线程数表述为全项目额度。后端 agent 路径的分布式额度由 Redis 租约控制；若要把外部批量脚本纳入同一额度，必须经后端入库 API 申请租约，而不是并行执行多个脚本。每页审计额外记录实际 worker 数、任务序号、线程名、开始/完成时间，保证并发时仍能对一张页图、一份请求/响应和一笔 token usage 一一追溯。Luna 请求通过 `--luna-bridge-container` 指定的健康 Docker worker 网络发出，容器名不是代码常量；使用 `docker compose ps -q ai-worker` 获取当前部署的容器 ID。单次 HTTP 默认限时 120 秒，并由父进程额外 5 秒宽限的硬超时兜底；520、429 和临时 5xx 只对该页请求进行局部、有界的最多 3 次重试。每个 run 都写入 source/config 哈希 manifest，`--finalize-run-id` 会重新验证 PDF、原图和压缩图哈希后才允许写入。跨页题仅在前页明确标记续页且后页没有新题号时合并；LaTeX 分式含斜杠会被拒绝，必须为 `\\frac{分子}{分母}`。向量化固定调用本机真实 ai-worker 的 `local_bge_embedding`（512 维）；Milvus 会确保 `gaokao_math` 上存在 `COSINE`/`FLAT` 的 `vector_index` 后才加载并写入。链路不会扫描配置之外的 2024 PDF，不使用文本层伪造视觉识别结果，不把模型输出当作官方答案或人工审核结论。provider 凭据和 endpoint 只注入 `ai-worker`；Java 仅使用 route metadata 签发受 `runId` 约束的 Python grant。
 
 `math-agent.agent-worker.runtime.max-concurrency` 固定为 `20`，表示全项目同时允许执行的 AI 工作单元总数，而不是单个 PDF 的页数。该值不接受环境变量覆盖。
 
@@ -159,7 +202,7 @@ The Compose deployment is intentionally single-configuration: do not set ports, 
 worker, retry, or concurrency environment variables. Their fixed values live in `docker-compose.yml` and
 `backend-java/src/main/resources/application.yml`: frontend `5173`, backend `8080`, worker `8092`, MySQL `3307`,
 Redis `6380`, Milvus `19531`, `gaokao_math`, `local_bge_embedding` (512 dimensions), and AI concurrency `20`.
-The only permitted runtime environment variable is `OPENAI_API_KEY`.
+The AI worker owns provider credentials and endpoints. The backend receives only route metadata and signs scoped grants; set `MATH_AGENT_PROVIDER_ROUTE_GRANT_SECRET` and the provider enable flags in the deployment environment.
 
 ```powershell
 $env:OPENAI_API_KEY = "your-provider-key"
@@ -185,6 +228,8 @@ npm install
 npm run dev
 ```
 
-教材资源目录由 `docker-compose.yml` 固定只读挂载到 `/app/data/textbooks`，后端配置在
-`backend-java/src/main/resources/application.yml` 固定引用该容器路径。除 `OPENAI_API_KEY` 外，启动不读取
-任何端口、数据库、Milvus、模型、并发或外部资源环境变量。
+后端服务不持有 provider 密钥；provider 凭据、endpoint 和模型环境变量仅注入 `ai-worker`。Java 后端通过 `MATH_AGENT_PROVIDER_ROUTE_GRANT_SECRET` 签发受限 route grant，启动前必须配置该密钥。
+# Python AI 解耦审查
+
+讲义 AI 从 Java 迁移到 Python LangGraph 的边界、通信优化、共享 checkpoint、灰度与上线清单见：
+[`docs/python-ai-separation-architecture-review-2026-08-04.md`](docs/python-ai-separation-architecture-review-2026-08-04.md)。

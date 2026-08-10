@@ -2,7 +2,10 @@
   "sourceRootWsl": "/mnt/c/Users/doob/Desktop/个人资料/高考真题/数学高考真题试卷【点进去分开保存，链接长期在】/【新·PDF版】2008-2024·高考数学真题/版本3：数学（按年份分类）2008-2024/2024·高考数学真题",
   "containerInputRoot": "/app/data/gaokao-input",
   "evidenceRoot": "output/gaokao-evidence/2024",
+  "questionAssetRoot": "output/math-paper-assets/gaokao-2024",
+  "assetOutputRoot": "output/math-paper-assets/gaokao-2024",
   "paperType": "GAOKAO",
+  "subject": "MATHEMATICS",
   "selectedFileNames": [
     "2024年高考数学试卷（北京）（空白卷）.pdf",
     "2024年高考数学试卷（北京）（解析卷）.pdf",
@@ -16,10 +19,22 @@
     "regions-new1-blank.jsonl": {"expectedQuestionNumbers": ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19"]},
     "regions-new2-blank.jsonl": {"expectedQuestionNumbers": ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19"]}
   },
-  "lunaVisionOptimization": {
+  "visionOptimization": {
     "pageInitialReviewMaxLongEdgePixels": 960,
     "pageInitialReviewJpegQuality": 0.82,
     "policy": "The 960px/0.82 setting is the lowest same-page configuration that preserved the tested question-number and cross-page-risk result. Use higher-resolution original-page or question-region images for diagrams, formulas, cross-page continuations, and low-confidence cases; do not use the 768px/0.78 configuration because it lost a tested cross-page risk."
+  },
+  "localGpuModels": {
+    "layoutModelDir": "/mnt/d/ModelScope/models/PaddlePaddle/PP-DocLayout-L",
+    "ocrDetectionModelDir": "/mnt/d/ModelScope/models/PaddlePaddle/PP-OCRv5_mobile_det",
+    "ocrRecognitionModelDir": "/mnt/d/ModelScope/models/PaddlePaddle/PP-OCRv5_mobile_rec",
+    "device": "gpu:0"
+  },
+  "figureExtraction": {
+    "renderDpi": 160,
+    "minimumLayoutScore": 0.6,
+    "paddingPixels": 8,
+    "policy": "Generate question figure assets before full-page visual transcription. Export only local GPU chart/image regions; never use text or formula layout boxes as figure crops."
   },
   "excludedScopeExplanation": "2024 directory has no filenames labelled 全国一卷 or 全国二卷. 全国甲卷、上海卷、天津卷 are intentionally excluded from this run because they are outside the requested scope."
 }

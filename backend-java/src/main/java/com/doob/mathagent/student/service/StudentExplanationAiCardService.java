@@ -31,6 +31,29 @@ public class StudentExplanationAiCardService {
         this.workloadClient = workloadClient;
     }
 
+    /** Prepares a token-bounded conversation window before the existing V1 ReAct execution. */
+    public PythonMigratedWorkloadClient.ConversationContextPreparation prepareConversationContext(
+            String runId,
+            String problem,
+            List<StudentExplanationConversationContextMessage> messages,
+            StudentExplanationContextSummary summary,
+            int maxInputTokens,
+            int reservedOutputTokens,
+            int summaryTriggerTokens) {
+        List<PythonMigratedWorkloadClient.ConversationContextMessage> context = messages == null ? List.of() : messages.stream()
+                .map(message -> new PythonMigratedWorkloadClient.ConversationContextMessage(
+                        safe(message.explanationId()), safe(message.questionText()), safe(message.answerText()),
+                        message.createdAt() == null ? "" : message.createdAt().toString()))
+                .toList();
+        PythonMigratedWorkloadClient.ConversationContextSummary persistedSummary = summary == null ? null
+                : new PythonMigratedWorkloadClient.ConversationContextSummary(
+                        safe(summary.fromMessageId()), safe(summary.toMessageId()), summary.version(),
+                        safe(summary.contentHash()), safe(summary.content()));
+        return workloadClient.prepareStudentExplanationContext(
+                safe(runId), safe(problem), context, persistedSummary,
+                maxInputTokens, reservedOutputTokens, summaryTriggerTokens);
+    }
+
     /** 兼容不含图片或流监听器的调用方。 */
     public ReactDecision nextReactDecision(
             String problem,
@@ -144,11 +167,37 @@ public class StudentExplanationAiCardService {
             List<StudentExplanationResponse.WorkflowStage> stages,
             String imageDataUrl,
             StudentExplanationAiStreamListener streamListener) {
-        PythonMigratedWorkloadClient.ExplanationResult result = workloadClient.composeStudentExplanation(
-                composeRunId(request, query, imageDataUrl),
-                composeProblem(request, query),
+        return generate(request, query, "", imageStatus, sources, recentHistory, longTermMemories, stages,
+                imageDataUrl, streamListener);
+    }
+
+    /** Uses a prepared bounded conversation context without changing the V1 evidence and citation boundary. */
+    public AiCardDraft generate(
+            StudentExplanationRequest request,
+            String query,
+            String conversationContext,
+            String imageStatus,
+            List<StudentExplanationResponse.ExplanationSource> sources,
+            List<StudentExplanationHistorySummary> recentHistory,
+            List<String> longTermMemories,
+            List<StudentExplanationResponse.WorkflowStage> stages,
+            String imageDataUrl,
+            StudentExplanationAiStreamListener streamListener) {
+        String problem = composeProblem(request, query, conversationContext);
+        PythonMigratedWorkloadClient.ExplanationResult result = workloadClient.streamStudentExplanation(
+                composeRunId(request, problem, imageDataUrl),
+                problem,
                 evidence(sources),
-                safe(imageDataUrl));
+                safe(imageDataUrl),
+                event -> {
+                    if (!"delta".equals(event.eventName()) || safe(event.content()).isBlank()) {
+                        return;
+                    }
+                    StudentExplanationAiStreamListener listener = streamListener == null
+                            ? StudentExplanationAiStreamListener.NOOP : streamListener;
+                    listener.onDelta(new AiChatStreamDelta(
+                            event.providerName(), event.modelCode(), event.content(), "", 0, 0, 0), List.of());
+                });
         List<StudentExplanationResponse.ExplanationCard> cards = normalizeCards(result.cards(), sources);
         if (cards.isEmpty()) {
             throw new IllegalStateException("Python student explanation returned no valid cards");
@@ -239,9 +288,15 @@ public class StudentExplanationAiCardService {
     }
 
     private static String composeProblem(StudentExplanationRequest request, String query) {
+        return composeProblem(request, query, "");
+    }
+
+    private static String composeProblem(StudentExplanationRequest request, String query, String conversationContext) {
         String problem = request == null ? "" : safe(request.questionText());
         String context = safe(query);
-        return problem.isBlank() ? context : problem + (context.isBlank() ? "" : "\n\n检索上下文：" + context);
+        String conversation = safe(conversationContext);
+        String base = problem.isBlank() ? context : problem + (context.isBlank() ? "" : "\n\n检索上下文：" + context);
+        return conversation.isBlank() ? base : conversation + (base.isBlank() ? "" : "\n\n本轮检索提示：" + base);
     }
 
     private static String composeRunId(StudentExplanationRequest request, String query, String imageDataUrl) {

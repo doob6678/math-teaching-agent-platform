@@ -205,4 +205,4 @@ Milvus 连接参数为 `127.0.0.1:19531`、token `root:<项目 .env 中的密码
 - `agent-trace.tsv`：provider/model、阶段耗时、token 统计和诊断事件。
 - `milvus-inspection.json`：5 个 collection 的字段、行数和标量样例。
 
-禁止把 API key、Milvus password、Capability token 写入日志、JSON、截图或讲义；文档只写变量名和脱敏占位符。
+禁止把 API key、Milvus password、用户会话凭据写入日志、JSON、截图或讲义；文档只写变量名和脱敏占位符。

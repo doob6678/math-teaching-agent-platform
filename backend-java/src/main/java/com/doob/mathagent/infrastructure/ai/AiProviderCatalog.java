@@ -9,8 +9,8 @@ import org.springframework.stereotype.Component;
 /**
  * 已配置的 AI 提供商目录。
  *
- * <p>该目录特意与 Spring AI 模型 Bean 分离。它允许工作流记录任务可使用的提供商，向前端提供安全的模型目录，
- * 并防止 API 密钥缺失的提供商被静默选中。</p>
+ * <p>该目录只保存 Java 用于签发 Python route grant 的元数据，与 Python worker 中实际的 provider endpoint 和 credential
+ * 分离。</p>
  */
 @Component
 public class AiProviderCatalog {
@@ -34,7 +34,7 @@ public class AiProviderCatalog {
     public List<Provider> enabledProviders() {
         return configuredProviders()
                 .stream()
-                .filter(AiProviderCatalog::hasUsableCredentials)
+                .filter(AiProviderCatalog::isGrantableRoute)
                 .map(AiProviderCatalog::toProvider)
                 .sorted((left, right) -> Integer.compare(
                         providerOrder(properties.getDefaultProvider(), left.name()),
@@ -88,12 +88,26 @@ public class AiProviderCatalog {
      */
     public Optional<Provider> preferredProvider(String providerName, String modelCode) {
         String normalizedModel = safeText(modelCode);
+        String requestedModel = normalizedModel;
         if (normalizedModel.isBlank()) {
             return Optional.empty();
         }
         return provider(providerName)
-                .filter(provider -> allowedModels(provider.name()).contains(normalizedModel))
-                .map(provider -> new Provider(provider.name(), provider.baseUrl(), normalizedModel));
+                .filter(provider -> allowedModels(provider.name()).contains(requestedModel))
+                .map(provider -> new Provider(provider.name(), requestedModel));
+    }
+
+    /**
+     * Returns the default provider/model route for generated teaching and handout prose.
+     *
+     * <p>Callers may explicitly select another allow-listed model, while the default remains Luna for compatibility.
+     * Other providers may still serve non-writing capabilities.</p>
+     */
+    public Provider lunaWritingProvider() {
+        return provider("openai")
+                .map(provider -> new Provider(provider.name(), "gpt-5.6-luna"))
+                .orElseThrow(() -> new IllegalStateException(
+                        "Luna writing route is not enabled; enable the openai Python route"));
     }
 
     /**
@@ -119,15 +133,14 @@ public class AiProviderCatalog {
     }
 
     /**
-     * 检查提供商配置是否完整到足以使用。
+     * Checks whether a Java-owned provider/model route may be granted to Python.
      *
-     * @param provider 提供商配置
-     * @return 名称、基础地址、API 密钥和聊天模型均存在时返回 true
+     * @param provider provider route metadata
+     * @return true when the route is enabled and complete
      */
-    private static boolean hasUsableCredentials(AiProviderProperties.Provider provider) {
-        return hasText(provider.getName())
-                && hasText(provider.getBaseUrl())
-                && hasText(provider.getApiKey())
+    private static boolean isGrantableRoute(AiProviderProperties.Provider provider) {
+        return provider.isEnabled()
+                && hasText(provider.getName())
                 && hasText(provider.getChatModel());
     }
 
@@ -140,7 +153,6 @@ public class AiProviderCatalog {
     private static Provider toProvider(AiProviderProperties.Provider provider) {
         return new Provider(
                 normalize(provider.getName()),
-                provider.getBaseUrl().strip(),
                 provider.getChatModel().strip());
     }
 
@@ -162,9 +174,12 @@ public class AiProviderCatalog {
      */
     private static List<String> allowedModels(String providerName) {
         return switch (normalize(providerName)) {
-            // Terra is the verified low-latency default; Luna remains an explicit opt-in model in the allow-list.
-            
-            case "openai" -> List.of("gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano");
+            // Terra is retained because it is an operator-verified OpenAI-compatible route, while Luna remains the
+            // deployment default. Keep previously supported OpenAI-compatible choices so this fix does not narrow
+            // existing clients; explicit model choice remains auditable and reversible.
+            case "openai" -> List.of(
+                    "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra",
+                    "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano");
             case "dashscope" -> List.of("qwen3.6-flash", "qwen3.7-plus", "qwen3.7-max");
             case "deepseek" -> List.of("deepseek-v4-flash", "deepseek-v4-pro");
             case "ark" -> List.of("doubao-seed-2-0-lite-260428", "doubao-seed-2.0-mini");
@@ -244,11 +259,10 @@ public class AiProviderCatalog {
     /**
      * 用于运行时的提供商视图，可安全用于日志记录和审计。
      *
-     * @param name 提供商名称
-     * @param baseUrl 兼容 OpenAI 接口的基础地址
-     * @param chatModel 聊天模型名称
+     * @param name provider name
+     * @param chatModel chat model name
      */
-    public record Provider(String name, String baseUrl, String chatModel) {
+    public record Provider(String name, String chatModel) {
     }
 
     /**

@@ -39,6 +39,8 @@ MCP_PROTOCOL_VERSION = "2025-11-25"
 APPLICATION_USER_AGENT = "math-agent-rag-luna-react/1.0"
 TERMINAL_STATUSES = {"completed", "failed", "cancelled", "canceled"}
 SENSITIVE_ARGUMENT_NAMES = {"authorization", "api_key", "apikey", "password", "secret", "secretkey", "token"}
+COOKIE_JAR = urllib.request.HTTPCookieProcessor()
+HTTP_OPENER = urllib.request.build_opener(COOKIE_JAR)
 
 
 def utc_now() -> str:
@@ -93,7 +95,7 @@ def json_http(
     started = time.perf_counter()
     method = "POST" if data is not None else "GET"
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with HTTP_OPENER.open(request, timeout=timeout) as response:
             body = response.read().decode("utf-8-sig")
             headers = {key.lower(): value for key, value in response.headers.items()}
             headers["x-acceptance-http-status"] = str(response.status)
@@ -224,7 +226,7 @@ def create_admin_mcp_key(backend_url: str, timeout: int) -> tuple[str, str]:
     key, _ = json_http(
         f"{backend_url.rstrip('/')}/api/mcp/keys",
         {},
-        {str(login["tokenName"]): str(login["tokenValue"])},
+        {},
         timeout,
     )
     return str(key["secretKey"]), str(key["keyId"])

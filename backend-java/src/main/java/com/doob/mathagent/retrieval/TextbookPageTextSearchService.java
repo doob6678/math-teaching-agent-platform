@@ -12,6 +12,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 /**
@@ -25,6 +27,7 @@ import org.springframework.stereotype.Service;
 public class TextbookPageTextSearchService {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final Logger log = LoggerFactory.getLogger(TextbookPageTextSearchService.class);
     private final VectorIndexProperties vectorIndexProperties;
     private final VectorHttpTransport transport;
     private final TextbookPageImageService pageImageService;
@@ -57,7 +60,13 @@ public class TextbookPageTextSearchService {
             String docId = metadata.path("doc_id").asText("");
             int pageNo = metadata.path("page_no").asInt(0);
             if (!docId.isBlank() && pageNo > 0) {
-                String sectionId = metadata.path("section_id").asText(metadata.path("chunk_id").asText(""));
+                // Milvus metadata keeps section_id for schema compatibility, but legacy page rows store it as an
+                // explicit empty string. Jackson only uses asText(default) when the field is absent, so normalize
+                // the empty value explicitly or every valid BGE page would be discarded before Java mapping.
+                String sectionId = metadata.path("section_id").asText("");
+                if (sectionId.isBlank()) {
+                    sectionId = metadata.path("chunk_id").asText("");
+                }
                 if (sectionId.isBlank() || !seenSections.add(docId + "#" + sectionId)) {
                     continue;
                 }
@@ -76,6 +85,8 @@ public class TextbookPageTextSearchService {
                         pageImageService.pageImageUri(docId, pageNo)));
             }
         }
+        log.debug("textbook_page_text_search queryChars={} milvusHits={} mappedHits={} limit={}",
+                normalized.query().length(), milvusHits.size(), hits.size(), normalized.limit());
         return new TextbookPageTextSearchResponse(
                 normalized.query(), normalized.limit(), "milvus", vectorIndexProperties.embeddingModel(), hits.size(), List.copyOf(hits));
     }

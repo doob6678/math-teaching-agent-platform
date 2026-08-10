@@ -9,7 +9,6 @@ import com.doob.mathagent.infrastructure.security.SaTokenSubjectResolver;
 import com.doob.mathagent.teaching.entity.TeachingTaskEntity;
 import com.doob.mathagent.teaching.mapper.TeachingTaskMapper;
 import com.doob.mathagent.teaching.service.RedissonTeachingTaskLockService;
-import com.doob.mathagent.teaching.service.SpringAiHandoutDraftService;
 import java.lang.reflect.Proxy;
 import java.time.Duration;
 import java.util.concurrent.TimeUnit;
@@ -18,14 +17,8 @@ import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.Test;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
-import org.springframework.ai.chat.client.ChatClient;
 
 class FrameworkIntegrationUsageTest {
-
-    @Test
-    void springAiHandoutServiceUsesOfficialChatClientBuilder() throws Exception {
-        assertThat(SpringAiHandoutDraftService.class.getConstructor(ChatClient.Builder.class)).isNotNull();
-    }
 
     @Test
     void teachingTaskMapperUsesMyBatisPlusBaseMapperAndEntityAnnotations() throws Exception {

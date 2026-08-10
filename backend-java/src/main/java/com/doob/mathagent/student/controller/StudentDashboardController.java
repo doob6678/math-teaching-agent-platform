@@ -4,7 +4,6 @@ import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.infrastructure.security.RequestSubjectResolver;
 import com.doob.mathagent.student.dto.StudentDashboardQuery;
 import com.doob.mathagent.student.service.StudentDashboardService;
-import com.doob.mathagent.student.service.StudentLearningSnapshotCapabilityVerifier;
 import com.doob.mathagent.student.service.StudentLearningSnapshotRefreshService;
 import com.doob.mathagent.student.vo.StudentDashboardResponse;
 import jakarta.servlet.http.HttpServletRequest;
@@ -21,13 +20,9 @@ import org.springframework.web.server.ResponseStatusException;
 @RestController
 public class StudentDashboardController {
 
-    private static final String REFRESH_ACTION = "student-dashboard:refresh";
-    private static final String REFRESH_PATH = "/api/students/dashboard/refresh";
-
     private final StudentDashboardService dashboardService;
     private final StudentLearningSnapshotRefreshService refreshService;
     private final RequestSubjectResolver subjectResolver;
-    private final StudentLearningSnapshotCapabilityVerifier capabilityVerifier;
 
     /**
      * Injects the student dashboard service.
@@ -35,17 +30,14 @@ public class StudentDashboardController {
      * @param dashboardService dashboard service
      * @param refreshService snapshot refresh service
      * @param subjectResolver backend subject resolver
-     * @param capabilityVerifier high-value refresh verifier
      */
     public StudentDashboardController(
             StudentDashboardService dashboardService,
             StudentLearningSnapshotRefreshService refreshService,
-            RequestSubjectResolver subjectResolver,
-            StudentLearningSnapshotCapabilityVerifier capabilityVerifier) {
+            RequestSubjectResolver subjectResolver) {
         this.dashboardService = dashboardService;
         this.refreshService = refreshService;
         this.subjectResolver = subjectResolver;
-        this.capabilityVerifier = capabilityVerifier;
     }
 
     /**
@@ -70,7 +62,7 @@ public class StudentDashboardController {
      * Refreshes and persists a dashboard snapshot from backend-owned learning signals.
      *
      * @param studentId optional requested student id for admin or teacher views
-     * @param httpRequest HTTP request containing tenant, subject, and capability headers
+     * @param httpRequest HTTP request containing tenant and subject session
      * @return refreshed student dashboard response
      */
     @PostMapping("/api/students/dashboard/refresh")
@@ -78,14 +70,6 @@ public class StudentDashboardController {
             @RequestParam(required = false) String studentId,
             HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest);
-        if (!capabilityVerifier.verify(
-                headerOrNull(httpRequest, "X-Capability-Token"),
-                REFRESH_ACTION,
-                REFRESH_PATH,
-                headerOrNull(httpRequest, "X-Request-Hash"),
-                subject)) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for dashboard refresh");
-        }
         try {
             return refreshService.refresh(query(studentId, subject));
         } catch (IllegalArgumentException exception) {
@@ -109,18 +93,4 @@ public class StudentDashboardController {
                 studentId);
     }
 
-    /**
-     * Reads a non-authoritative request header used for capability token verification.
-     *
-     * @param request HTTP request
-     * @param name header name
-     * @return stripped header value or null
-     */
-    private static String headerOrNull(HttpServletRequest request, String name) {
-        if (request == null) {
-            return null;
-        }
-        String value = request.getHeader(name);
-        return value == null || value.isBlank() ? null : value.strip();
-    }
 }

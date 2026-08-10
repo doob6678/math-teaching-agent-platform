@@ -1,6 +1,6 @@
-"""Build an independent, auditable textbook retrieval set from the real c2 corpus.
+"""Build an independent, auditable evaluation set from the historical c2 corpus.
 
-The builder never changes textbook data and never emits target document/page fields
+This builder is offline-only; production uses the c2 section-child corpus. It never changes textbook data and never emits target document/page fields
 into a retrieval request. Positive labels are derived from current corpus rows and
 kept only in the case oracle. Negative cases are verified absent from the complete
 corpus before they are written.

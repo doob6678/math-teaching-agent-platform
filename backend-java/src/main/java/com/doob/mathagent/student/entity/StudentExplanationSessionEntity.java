@@ -21,6 +21,11 @@ public class StudentExplanationSessionEntity {
     private String lastExplanationId;
     private String lastQuestionText;
     private Integer totalMessages;
+    private String contextSummaryFromMessageId;
+    private String contextSummaryToMessageId;
+    private Integer contextSummaryVersion;
+    private String contextSummaryHash;
+    private String contextSummaryText;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
@@ -102,6 +107,46 @@ public class StudentExplanationSessionEntity {
 
     public void setTotalMessages(Integer totalMessages) {
         this.totalMessages = totalMessages;
+    }
+
+    public String getContextSummaryFromMessageId() {
+        return contextSummaryFromMessageId;
+    }
+
+    public void setContextSummaryFromMessageId(String contextSummaryFromMessageId) {
+        this.contextSummaryFromMessageId = contextSummaryFromMessageId;
+    }
+
+    public String getContextSummaryToMessageId() {
+        return contextSummaryToMessageId;
+    }
+
+    public void setContextSummaryToMessageId(String contextSummaryToMessageId) {
+        this.contextSummaryToMessageId = contextSummaryToMessageId;
+    }
+
+    public Integer getContextSummaryVersion() {
+        return contextSummaryVersion;
+    }
+
+    public void setContextSummaryVersion(Integer contextSummaryVersion) {
+        this.contextSummaryVersion = contextSummaryVersion;
+    }
+
+    public String getContextSummaryHash() {
+        return contextSummaryHash;
+    }
+
+    public void setContextSummaryHash(String contextSummaryHash) {
+        this.contextSummaryHash = contextSummaryHash;
+    }
+
+    public String getContextSummaryText() {
+        return contextSummaryText;
+    }
+
+    public void setContextSummaryText(String contextSummaryText) {
+        this.contextSummaryText = contextSummaryText;
     }
 
     public LocalDateTime getCreatedAt() {

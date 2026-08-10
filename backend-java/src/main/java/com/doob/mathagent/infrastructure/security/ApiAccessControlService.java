@@ -10,6 +10,12 @@ import org.springframework.stereotype.Service;
 @Service
 public class ApiAccessControlService {
 
+    /** Default buckets ensure every matched endpoint is rate-limited, including ordinary reads. */
+    private static final int PUBLIC_DEFAULT_LIMIT = 60;
+    private static final int GUEST_DEFAULT_LIMIT = 120;
+    private static final int USER_DEFAULT_LIMIT = 120;
+    private static final int ADMIN_DEFAULT_LIMIT = 240;
+
     private final ApiRateLimiter rateLimiter;
     private final Clock clock;
     private final ApiAccessPolicy policy;
@@ -58,16 +64,10 @@ public class ApiAccessControlService {
                     0,
                     "Endpoint requires subject type in " + rule.allowedSubjectTypes());
         }
-        /*
-         * Normal CRUD/search/configuration endpoints should not share the fixed-window limiter. A non-positive limit is
-         * treated as "unlimited" so the policy table can reserve throttling only for real AI/model execution paths.
-         */
-        if (rule.limit() <= 0) {
-            return ApiAccessDecision.allow(rule.level(), 0, 0);
-        }
+        int effectiveLimit = rule.limit() > 0 ? rule.limit() : defaultLimit(rule.level());
         RateLimitUsage usage = rateLimiter.check(
                 rule.rateLimitKey(identity),
-                rule.limit(),
+                effectiveLimit,
                 rule.window(),
                 clock.instant());
         if (usage.exceeded()) {
@@ -79,5 +79,15 @@ public class ApiAccessControlService {
                     "Rate limit exceeded");
         }
         return ApiAccessDecision.allow(rule.level(), usage.limit(), usage.used());
+    }
+
+    /** Maps an intentionally omitted policy limit to a safe bucket without allowing unlimited traffic. */
+    private static int defaultLimit(ApiAccessLevel level) {
+        return switch (level) {
+            case PUBLIC -> PUBLIC_DEFAULT_LIMIT;
+            case GUEST -> GUEST_DEFAULT_LIMIT;
+            case USER -> USER_DEFAULT_LIMIT;
+            case ADMIN -> ADMIN_DEFAULT_LIMIT;
+        };
     }
 }

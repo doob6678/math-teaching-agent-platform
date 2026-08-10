@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.doob.mathagent.student.mapper.StudentExplanationSessionMapper">
+    <update id="appendMessage">
+        UPDATE student_explanation_session
+        SET last_explanation_id = #{explanationId},
+            last_question_text = #{questionText},
+            title = #{title},
+            total_messages = total_messages + 1
+        WHERE conversation_id = #{conversationId}
+    </update>
+
+    <update id="updateContextSummary">
+        UPDATE student_explanation_session
+        SET context_summary_from_message_id = #{fromMessageId},
+            context_summary_to_message_id = #{toMessageId},
+            context_summary_version = #{nextVersion},
+            context_summary_hash = #{contentHash},
+            context_summary_text = #{content}
+        WHERE conversation_id = #{conversationId}
+          AND context_summary_version = #{expectedVersion}
+    </update>
+</mapper>

@@ -68,7 +68,7 @@ export function KnowledgeQuestionBankPanel({
   const visibleQuestions = questions.slice((safeQuestionPage - 1) * normalizedPageSize, safeQuestionPage * normalizedPageSize);
 
   return (
-    <section className="agent-plan-panel">
+    <section className="knowledge-bank-workspace">
       <div className="result-header">
         <div>
           <p className="eyebrow">知识库与题库</p>
@@ -81,7 +81,8 @@ export function KnowledgeQuestionBankPanel({
 
       {error ? <StatusLine icon={<AlertCircle size={16} />} text={error} tone="danger" /> : null}
 
-      <div className="agent-plan-grid">
+      <div className="knowledge-bank-layout">
+        <div className="knowledge-bank-controls">
         <form className="search-form" onSubmit={onCreateKnowledgePoint}>
           <label>
             <span>知识点名称</span>
@@ -143,7 +144,9 @@ export function KnowledgeQuestionBankPanel({
             <span>{query.trim() ? "检索" : "浏览题库"}</span>
           </button>
         </form>
+        </div>
 
+        <div className="knowledge-bank-content">
         <div className="tool-decision-list compact">
           {displayedKnowledgePoints.map((point) => (
             <div className="tool-decision allowed" key={point.knowledgePointId}>
@@ -224,6 +227,7 @@ export function KnowledgeQuestionBankPanel({
               </div>
             </div>
           ) : null}
+        </div>
         </div>
       </div>
     </section>

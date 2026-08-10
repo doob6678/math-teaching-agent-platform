@@ -1,17 +1,40 @@
 package com.doob.mathagent.agent;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.doob.mathagent.agent.dto.AgentRunPlanRequest;
 import com.doob.mathagent.agent.service.AgentRunPlanService;
 import com.doob.mathagent.agent.vo.AgentRunPlanResponse;
 import com.doob.mathagent.infrastructure.ai.AiProviderCatalog;
+import com.doob.mathagent.infrastructure.ai.AiModelPriceCatalog;
 import com.doob.mathagent.infrastructure.ai.AiProviderProperties;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class AgentRunPlanServiceTest {
+
+    @Test
+    void usesConfiguredProviderModelPricesAndRejectsRawTokenOverflow() {
+        AgentRunPlanService service = new AgentRunPlanService(
+                providerCatalog(),
+                new AiModelPriceCatalog("{\"dashscope/qwen3.6-flash\":{\"inputPerMillion\":1.0,\"outputPerMillion\":3.0}}"));
+                AgentRunPlanResponse priced = service.plan(new AgentRunPlanRequest(
+                        "CoursewareAgent", "courseware_generation", "teacher", 3000, 1600, false, true,
+                        "medium", "normal", 0.01, 0, true, List.of(), List.of(), List.of("TEACHER_PRIVATE"), true,
+                        "dashscope", "qwen3.6-flash"),
+                new RequestSubject("school-a", "teacher", "teacher-001", "device-1"));
+
+        assertThat(priced.estimatedCost()).isEqualTo(0.0078d);
+        assertThat(priced.withinBudget()).isTrue();
+
+        AgentRunPlanResponse overflow = service.plan(new AgentRunPlanRequest(
+                        "CoursewareAgent", "courseware_generation", "teacher", 12001, 1600, false, true,
+                        "medium", "normal", 3.0, 0, true, List.of(), List.of(), List.of("TEACHER_PRIVATE"), true),
+                new RequestSubject("school-a", "teacher", "teacher-001", "device-1"));
+        assertThat(overflow.withinBudget()).isFalse();
+    }
 
     @Test
     void plansStudentTutorWithOnlyStudentSafeToolsAndDataScopes() {
@@ -47,7 +70,6 @@ class AgentRunPlanServiceTest {
         assertThat(plan.deniedDataScopes()).containsExactly("TEACHER_PRIVATE");
         assertThat(plan.maxInputTokens()).isEqualTo(2400);
         assertThat(plan.maxOutputTokens()).isEqualTo(900);
-        assertThat(plan.capabilityRequired()).isFalse();
         assertThat(plan.stageTimings()).extracting(AgentRunPlanResponse.StageTiming::stage)
                 .containsExactly("agent_policy", "model_route", "budget_guard");
         assertThat(plan.concurrencyKeys()).contains(
@@ -57,7 +79,7 @@ class AgentRunPlanServiceTest {
     }
 
     @Test
-    void teacherCoursewareAgentRequiresCapabilityAndRejectsStudentWriteTool() {
+    void teacherCoursewareAgentUsesBackendPolicyAndRejectsStudentWriteTool() {
         AgentRunPlanService service = new AgentRunPlanService(providerCatalog());
         AgentRunPlanRequest request = new AgentRunPlanRequest(
                 "CoursewareAgent",
@@ -82,12 +104,11 @@ class AgentRunPlanServiceTest {
                 new RequestSubject("school-a", "teacher", "teacher-001", "device-1"));
 
         assertThat(plan.agentCode()).isEqualTo("CoursewareAgent");
-        assertThat(plan.capabilityRequired()).isTrue();
-        assertThat(plan.capabilityAction()).isEqualTo("agent-run:CoursewareAgent");
         assertThat(plan.allowedToolScopes()).containsExactly("tool:courseware:generate", "tool:search:private");
         assertThat(plan.deniedToolScopes()).containsExactly("tool:student:progress:write");
         assertThat(plan.allowedDataScopes()).containsExactly("TEACHER_PRIVATE", "CLASS_AUTHORIZED");
         assertThat(plan.deniedDataScopes()).containsExactly("STUDENT_PRIVATE");
+        assertThat(plan.maxOutputTokens()).isEqualTo(8000);
         assertThat(plan.withinBudget()).isTrue();
     }
 
@@ -190,7 +211,7 @@ class AgentRunPlanServiceTest {
     }
 
     @Test
-    void ignoresUnknownPreferredModelAndKeepsDefaultProvider() {
+    void rejectsUnknownExplicitWritingModelInsteadOfSilentlyChangingRoute() {
         AgentRunPlanService service = new AgentRunPlanService(providerCatalog());
         AgentRunPlanRequest request = new AgentRunPlanRequest(
                 "CoursewareAgent",
@@ -212,25 +233,23 @@ class AgentRunPlanServiceTest {
                 "openai",
                 "drop table agent_trace");
 
-        AgentRunPlanResponse plan = service.plan(
+        assertThatThrownBy(() -> service.plan(
                 request,
-                new RequestSubject("school-a", "teacher", "teacher-001", "device-1"));
-
-        assertThat(plan.providerName()).isEqualTo("dashscope");
-        assertThat(plan.modelCode()).isEqualTo("qwen3.6-flash");
-        assertThat(plan.routeReason()).contains("ignored preferred model");
+                new RequestSubject("school-a", "teacher", "teacher-001", "device-1")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("not enabled or allow-listed");
     }
 
     private static AiProviderCatalog providerCatalog() {
         AiProviderProperties properties = new AiProviderProperties();
         properties.setDefaultProvider("dashscope");
-        properties.getDashscope().setApiKey("dashscope-key");
+        properties.getDashscope().setEnabled(true);
         properties.getDashscope().setChatModel("qwen3.6-flash");
-        properties.getOpenai().setApiKey("openai-key");
+        properties.getOpenai().setEnabled(true);
         properties.getOpenai().setChatModel("gpt-5.4");
-        properties.getDeepseek().setApiKey("deepseek-key");
+        properties.getDeepseek().setEnabled(true);
         properties.getDeepseek().setChatModel("deepseek-v4-flash");
-        properties.getArk().setApiKey("ark-key");
+        properties.getArk().setEnabled(true);
         properties.getArk().setChatModel("doubao-seed-2-0-lite-260428");
         return new AiProviderCatalog(properties);
     }

@@ -10,6 +10,7 @@ import com.doob.mathagent.knowledge.mapper.KnowledgePointMapper;
 import com.doob.mathagent.knowledge.mapper.KnowledgeRelationMapper;
 import com.doob.mathagent.knowledge.mapper.QuestionBankItemMapper;
 import com.doob.mathagent.knowledge.mapper.QuestionKnowledgeLinkMapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -88,7 +89,7 @@ public class MyBatisKnowledgeQuestionBankStore implements KnowledgeQuestionBankS
                 .eq(KnowledgePointEntity::getKnowledgePointName, knowledgePointName)
                 .eq(KnowledgePointEntity::getChapterPath, chapterPath)
                 .eq(KnowledgePointEntity::getStatus, "active");
-        return knowledgePointMapper.selectList(query).stream()
+        return knowledgePointMapper.selectPage(Page.of(1, 1), query).getRecords().stream()
                 .findFirst()
                 .map(MyBatisKnowledgeQuestionBankStore::toRecord);
     }
@@ -128,7 +129,7 @@ public class MyBatisKnowledgeQuestionBankStore implements KnowledgeQuestionBankS
                 .eq(QuestionBankItemEntity::getSourceBlockId, sourceBlockId)
                 .eq(QuestionBankItemEntity::getSourceChecksum, sourceChecksum)
                 .eq(QuestionBankItemEntity::getStatus, "active");
-        return questionMapper.selectList(query).stream()
+        return questionMapper.selectPage(Page.of(1, 1), query).getRecords().stream()
                 .findFirst()
                 .map(entity -> toRecord(entity, links(tenantId, entity.getQuestionId())));
     }
@@ -245,10 +246,11 @@ public class MyBatisKnowledgeQuestionBankStore implements KnowledgeQuestionBankS
             });
         }
         wrapper.orderByAsc(QuestionBankItemEntity::getQuestionTitle);
-        return questionMapper.selectList(wrapper).stream()
+        int boundedLimit = Math.max(1, Math.min(KnowledgeQuestionBankService.MAX_SEARCH_ROWS, limit));
+        return questionMapper.selectPage(Page.of(1, boundedLimit), wrapper).getRecords().stream()
                 // Keep enough rows for the frontend's explicit page controls; the service applies strict topic
-                // filtering and BGE reranking before the UI slices the result set.
-                .limit(Math.max(1, Math.min(KnowledgeQuestionBankService.MAX_SEARCH_ROWS, limit)))
+                // filtering and BGE reranking before the UI slices the result set. Pagination happens in SQL so a
+                // large tenant question bank is never fully materialized just to discard rows in the JVM.
                 .map(entity -> toRecord(entity, links(tenantId, entity.getQuestionId())))
                 .toList();
     }
@@ -269,11 +271,12 @@ public class MyBatisKnowledgeQuestionBankStore implements KnowledgeQuestionBankS
         if (normalizedTenant.isBlank() || normalizedPoint.isBlank()) {
             return List.of();
         }
-        List<String> questionIds = linkMapper.selectList(new LambdaQueryWrapper<QuestionKnowledgeLinkEntity>()
+        int boundedLimit = Math.max(1, Math.min(KnowledgeQuestionBankService.MAX_SEARCH_ROWS, limit));
+        List<String> questionIds = linkMapper.selectPage(Page.of(1, boundedLimit), new LambdaQueryWrapper<QuestionKnowledgeLinkEntity>()
                         .eq(QuestionKnowledgeLinkEntity::getTenantId, normalizedTenant)
                         .eq(QuestionKnowledgeLinkEntity::getKnowledgePointId, normalizedPoint)
                         .eq(QuestionKnowledgeLinkEntity::getStatus, "active"))
-                .stream()
+                .getRecords().stream()
                 .map(QuestionKnowledgeLinkEntity::getQuestionId)
                 .filter(value -> value != null && !value.isBlank())
                 .distinct()
@@ -286,8 +289,7 @@ public class MyBatisKnowledgeQuestionBankStore implements KnowledgeQuestionBankS
                 .eq(QuestionBankItemEntity::getStatus, "active")
                 .in(QuestionBankItemEntity::getQuestionId, questionIds);
         applyQuestionVisibility(wrapper, viewerRole == null ? "student" : viewerRole.strip().toLowerCase(), viewerSubjectId);
-        return questionMapper.selectList(wrapper).stream()
-                .limit(Math.max(1, Math.min(KnowledgeQuestionBankService.MAX_SEARCH_ROWS, limit)))
+        return questionMapper.selectPage(Page.of(1, boundedLimit), wrapper).getRecords().stream()
                 .map(entity -> toRecord(entity, links(normalizedTenant, entity.getQuestionId())))
                 .toList();
     }

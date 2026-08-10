@@ -22,7 +22,9 @@ DEFAULT_CASES = Path("output/benchmarks/textbook-ablation-body-business-v4/cases
 DEFAULT_PAGE_RESULTS = Path("output/benchmarks/textbook-ablation-body-business-v4/results.json")
 DEFAULT_PAGE_AUDITS = Path("output/benchmarks/textbook-ablation-body-business-v4/luna_audits.json")
 DEFAULT_OUTPUT = Path("output/benchmarks/textbook-page-section-ablation-final")
-DEFAULT_SECTION_ROOT_NAME = "processed_books_section_shadow_all_mini_c2"
+# The production comparison uses the same c2 root for page evidence and section-child evidence. Keep the explicit name
+# here so the benchmark cannot silently select another textbook snapshot.
+LEGACY_SECTION_ROOT_NAME = "processed_books_section_shadow_all_mini_c2"
 # The Java-shaped hybrid path is the fixed production control.  Every alternate
 # route is compared with it using recall values only; no weighted score can hide
 # a regression in a secondary cutoff such as document@3.
@@ -304,7 +306,7 @@ def markdown(report: dict[str, Any], cases: list[dict[str, Any]], output: Path) 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Compare page and all-book section textbook retrieval")
     parser.add_argument("--library-parent", type=Path, default=ablation.DEFAULT_LIBRARY_PARENT)
-    parser.add_argument("--section-root-name", default=DEFAULT_SECTION_ROOT_NAME)
+    parser.add_argument("--section-root-name", default=LEGACY_SECTION_ROOT_NAME)
     parser.add_argument("--cases", type=Path, default=DEFAULT_CASES)
     parser.add_argument("--page-results", type=Path, default=DEFAULT_PAGE_RESULTS)
     parser.add_argument("--page-audits", type=Path, default=DEFAULT_PAGE_AUDITS)

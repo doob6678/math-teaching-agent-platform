@@ -34,7 +34,7 @@ public record TeacherSourceSyncSchedulerProperties(
     public TeacherSourceSyncSchedulerProperties {
         fixedDelayMilliseconds = Math.max(MINIMUM_FIXED_DELAY_MILLISECONDS, fixedDelayMilliseconds);
         tenantId = textValue(tenantId, "default");
-        serviceRole = textValue(serviceRole, "admin").toLowerCase();
+        serviceRole = textValue(serviceRole, "admin").toLowerCase(java.util.Locale.ROOT);
         serviceSubjectId = serviceSubjectId == null ? "" : serviceSubjectId.strip();
         workerLeaseTimeoutSeconds = Math.max(60L, workerLeaseTimeoutSeconds);
         documentIds = documentIds == null ? List.of() : documentIds.stream()
@@ -42,6 +42,10 @@ public record TeacherSourceSyncSchedulerProperties(
         if (enabled && (!"admin".equals(serviceRole) || serviceSubjectId.isBlank())) {
             throw new IllegalArgumentException(
                     "Enabled Feishu scheduler requires an explicit admin service-role and service-subject-id");
+        }
+        if (enabled && documentIds.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "Enabled Feishu scheduler requires an explicit document-ids allowlist; empty means no work");
         }
     }
 

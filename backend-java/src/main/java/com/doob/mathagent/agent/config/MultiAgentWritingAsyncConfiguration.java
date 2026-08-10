@@ -26,6 +26,12 @@ public class MultiAgentWritingAsyncConfiguration {
         return boundedExecutor("teaching-evidence-", 4, 4, 64);
     }
 
+    /** Shared bounded executor for student retrieval fan-out and SSE orchestration. */
+    @Bean("studentExplanationTaskExecutor")
+    public TaskExecutor studentExplanationTaskExecutor() {
+        return boundedExecutor("student-explanation-", 4, 8, 64);
+    }
+
     private static TaskExecutor boundedExecutor(String threadNamePrefix, int corePoolSize, int maxPoolSize, int queueCapacity) {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         executor.setThreadNamePrefix(threadNamePrefix);

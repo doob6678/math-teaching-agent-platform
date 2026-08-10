@@ -1,7 +1,7 @@
-"""Run the audited 2024 PDF ingestion path against real Luna, embeddings and Milvus.
+"""Run the audited mathematics-PDF ingestion path against real vision, embeddings and Milvus.
 
 This is deliberately a single command: every selected PDF page is rendered to an
-original PNG, compressed to a bounded JPEG for Luna, transcribed by Luna, and
+original PNG, compressed to a bounded JPEG for the configured vision provider, and
 stored with its complete non-secret request/response.  Every returned question
 is then embedded by the real local worker and inserted into Milvus.  A final
 vector search uses one of the inserted question texts, so success cannot be
@@ -30,13 +30,14 @@ from urllib.parse import urljoin
 
 import requests
 from PIL import Image
-from pypdf import PdfReader
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = PROJECT_ROOT / "config" / "gaokao-ingestion-2024.json"
 DEFAULT_EVIDENCE_ROOT = PROJECT_ROOT / "output" / "gaokao-evidence" / "2024"
-LUNA_MODEL = "gpt-5.6-luna"
+ALLOWED_EVIDENCE_OUTPUT_ROOT = PROJECT_ROOT / "output"
+DEFAULT_TERRA_VISION_MODEL = "gpt-5.6-terra"
+DEFAULT_LUNA_VISION_MODEL = "gpt-5.6-luna"
 DEFAULT_TIMEOUT_SECONDS = 120
 DEFAULT_EMBEDDING_MODEL = "local_bge_embedding"
 DEFAULT_EMBEDDING_URL = "http://127.0.0.1:8092/v1/embeddings"
@@ -57,6 +58,7 @@ LUNA_MAX_ATTEMPTS = 3
 LUNA_RETRY_INITIAL_DELAY_SECONDS = 2
 LUNA_RETRY_MAX_DELAY_SECONDS = 16
 LUNA_RETRY_JITTER_FRACTION = 0.25
+MILVUS_MAX_ATTEMPTS = 3
 DEFAULT_GLOBAL_AI_CONCURRENCY = 20
 GLOBAL_AI_CONCURRENCY_ENVIRONMENT_VARIABLE = "MATH_AGENT_AGENT_WORKER_MAX_CONCURRENCY"
 RENDERER_CLASS = "RenderPdfEvidencePage"
@@ -150,11 +152,13 @@ def compress_for_luna(original: Path, target: Path, maximum_edge: int, jpeg_qual
 
 def page_count(pdf: Path) -> int:
     """Reads physical page count only; the recognition truth remains the subsequently rendered page image."""
+    from pypdf import PdfReader
+
     return len(PdfReader(str(pdf)).pages)
 
 
-def luna_request(image: Path, paper: str, page: int) -> dict[str, Any]:
-    """Builds the full persisted Luna request; its image data is required for replayable visual evidence."""
+def vision_request(image: Path, paper: str, page: int, model: str) -> dict[str, Any]:
+    """Build a provider-neutral visual request while retaining its source image for replayable evidence."""
     mime = mimetypes.guess_type(image.name)[0] or "image/jpeg"
     data_url = f"data:{mime};base64,{base64.b64encode(image.read_bytes()).decode('ascii')}"
     prompt = {
@@ -175,7 +179,7 @@ def luna_request(image: Path, paper: str, page: int) -> dict[str, Any]:
         ],
     }
     return {
-        "model": LUNA_MODEL,
+        "model": model,
         "temperature": 0,
         "response_format": {"type": "json_object"},
         "messages": [
@@ -195,7 +199,7 @@ def luna_retry_delay_seconds(completed_attempt: int) -> float:
 
 def call_luna(request: dict[str, Any], timeout: int, grace_seconds: int, configured_page_workers: int,
                bridge_container: str) -> tuple[int, dict[str, Any], int, list[dict[str, Any]]]:
-    """Makes one visual request from the healthy Docker network with a hard parent-process deadline.
+    """Make one visual request from the healthy Docker network with a hard parent-process deadline.
 
     WSL's direct socket can remain blocked beyond the HTTP library deadline. The worker
     already has the configured provider secret and Docker DNS route; this bridge gets an
@@ -244,16 +248,17 @@ print(json.dumps({'status': response.status_code, 'body': body, 'elapsedMs': rou
     raise AssertionError("unreachable Luna retry state")
 
 
-def recognized_questions(response: dict[str, Any], source_name: str, page: int) -> list[dict[str, Any]]:
-    """Accepts only Luna's structured JSON response and creates immutable source-backed vector payloads."""
+def recognized_questions(response: dict[str, Any], source_name: str, page: int, provider: str,
+                         question_assets: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    """Accept only structured visual output and create immutable source-backed vector payloads."""
     try:
         content = response["choices"][0]["message"]["content"]
         parsed = json.loads(content) if isinstance(content, str) else content
     except (KeyError, IndexError, TypeError, json.JSONDecodeError) as error:
-        raise RuntimeError(f"Luna did not return a parseable JSON transcription: {error}") from error
+        raise RuntimeError(f"{provider} did not return a parseable JSON transcription: {error}") from error
     questions = parsed.get("questions")
     if not isinstance(questions, list):
-        raise RuntimeError("Luna transcription has no questions array")
+        raise RuntimeError(f"{provider} transcription has no questions array")
     output: list[dict[str, Any]] = []
     for item in questions:
         if not isinstance(item, dict) or not str(item.get("text", "")).strip():
@@ -264,15 +269,16 @@ def recognized_questions(response: dict[str, Any], source_name: str, page: int) 
         latex = [str(value).strip() for value in latex if str(value).strip()]
         for formula in latex:
             if FRACTION_SLASH_PATTERN.search(formula):
-                raise RuntimeError("Luna latex fraction must use \\frac{numerator}{denominator}, not slash notation")
+                raise RuntimeError(f"{provider} latex fraction must use \\frac{{numerator}}{{denominator}}, not slash notation")
         text = str(item["text"]).strip()
         vector_text = text + ("\n" + "\n".join(map(str, latex)) if latex else "")
         # The key derives only from immutable visual evidence.  A recovery run can
         # therefore upsert the same question instead of creating a fresh duplicate.
         stable_identity = f"{source_name}\n{page}\n{item.get('number', '')}\n{vector_text}"
+        question_number = str(item.get("number", "")).strip()
         output.append({
             "id": str(uuid.uuid5(uuid.NAMESPACE_URL, stable_identity)), "text": vector_text,
-            "metadata": {"sourceFile": source_name, "page": page, "pageStart": page, "pageEnd": page, "questionNumber": str(item.get("number", "")).strip(), "latex": latex, "confidence": item.get("confidence"), "continuesToNextPage": bool(item.get("continuesToNextPage", False)), "extraction": "LUNA_VISUAL_PAGE"},
+            "metadata": {"sourceFile": source_name, "page": page, "pageStart": page, "pageEnd": page, "questionNumber": question_number, "latex": latex, "confidence": item.get("confidence"), "continuesToNextPage": bool(item.get("continuesToNextPage", False)), "extraction": f"{provider.upper()}_VISUAL_PAGE", "questionAssets": question_assets.get(question_number, [])},
         })
     return output
 
@@ -304,11 +310,43 @@ def merge_cross_page_questions(questions: list[dict[str, Any]]) -> list[dict[str
                 previous_metadata.setdefault("pageStart", previous_metadata.get("page"))
                 previous_metadata["pageEnd"] = metadata.get("pageEnd", metadata.get("page"))
                 previous_metadata["continuesToNextPage"] = bool(metadata.get("continuesToNextPage"))
+                previous_metadata["questionAssets"] = list(previous_metadata.get("questionAssets", [])) + list(metadata.get("questionAssets", []))
                 identity = f"{previous_metadata['sourceFile']}\n{previous_metadata['pageStart']}\n{previous_metadata['pageEnd']}\n{previous_metadata.get('questionNumber', '')}\n{combined_text}"
                 previous["id"] = str(uuid.uuid5(uuid.NAMESPACE_URL, identity))
                 continue
         merged.append({"id": current["id"], "text": current["text"], "metadata": dict(metadata)})
     return merged
+
+
+def load_question_assets(asset_root: Path, source_file: Path) -> dict[str, list[dict[str, Any]]]:
+    """Load source-hash-verified crop references so visual transcription and downstream rendering share one asset contract."""
+    report_path = asset_root / "asset-report.json"
+    manifest_path = asset_root / "question-assets.jsonl"
+    if not report_path.is_file() or not manifest_path.is_file():
+        raise FileNotFoundError(f"question assets are required before visual ingestion: {asset_root}")
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    if report.get("sourceSha256") != sha256_file(source_file):
+        raise RuntimeError(f"question asset source hash does not match selected PDF: {source_file.name}")
+    assets: dict[str, list[dict[str, Any]]] = {}
+    for line in manifest_path.read_text(encoding="utf-8").splitlines():
+        item = json.loads(line)
+        relative_path = str(item.get("relativeAssetPath", ""))
+        asset_path = asset_root / relative_path
+        if not relative_path or not asset_path.is_file():
+            raise RuntimeError(f"question asset manifest has no readable figure: {asset_path}")
+        if item.get("sourceSha256") != report["sourceSha256"]:
+            raise RuntimeError(f"question asset source hash is missing or invalid: {asset_path}")
+        actual_asset_sha256 = sha256_file(asset_path)
+        if item.get("assetSha256") != actual_asset_sha256:
+            raise RuntimeError(f"question asset hash is missing or invalid: {asset_path}")
+        assets.setdefault(str(item["questionNumber"]), []).append({
+            "path": str(asset_path.relative_to(PROJECT_ROOT)),
+            "sha256": actual_asset_sha256,
+            "pageNumber": item["pageNumber"],
+            "bboxPixels": item["bboxPixels"],
+            "bindingMethod": item["bindingMethod"],
+        })
+    return assets
 
 
 def embed(texts: list[str], url: str, api_key: str, timeout: int) -> list[list[float]]:
@@ -331,18 +369,58 @@ def embed_all(texts: list[str], url: str, api_key: str, timeout: int) -> list[li
 
 
 def milvus_post(uri: str, token: str, path: str, body: dict[str, Any], timeout: int) -> dict[str, Any]:
-    """Calls Milvus REST and fails on its explicit status code rather than treating an HTTP 200 error object as success."""
+    """Call Milvus REST with bounded retry for transient transport/server failures.
+
+    Upsert, index creation and collection load are idempotent for this runner's
+    deterministic records.  A connection reset must therefore be retried rather
+    than turning an otherwise valid evidence recovery into a false failure.
+    """
     headers = {"Content-Type": "application/json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    response = requests.post(urljoin(uri.rstrip("/") + "/", path.lstrip("/")), headers=headers, json=body, timeout=timeout)
-    try:
-        payload = response.json()
-    except ValueError as error:
-        raise RuntimeError(f"Milvus {path} returned non-JSON HTTP {response.status_code}: {response.text[:1000]}") from error
-    if not response.ok or payload.get("code", 0) != 0:
-        raise RuntimeError(f"Milvus {path} failed: {payload}")
-    return payload
+    endpoint = urljoin(uri.rstrip("/") + "/", path.lstrip("/"))
+    last_error: Exception | None = None
+    for attempt in range(1, MILVUS_MAX_ATTEMPTS + 1):
+        try:
+            response = requests.post(endpoint, headers=headers, json=body, timeout=timeout)
+            if response.status_code in {429, 500, 502, 503, 504}:
+                raise RuntimeError(f"Milvus transient HTTP {response.status_code}: {response.text[:1000]}")
+            try:
+                payload = response.json()
+            except ValueError as error:
+                raise RuntimeError(f"Milvus {path} returned non-JSON HTTP {response.status_code}: {response.text[:1000]}") from error
+            if not response.ok or payload.get("code", 0) != 0:
+                raise RuntimeError(f"Milvus {path} failed: {payload}")
+            return payload
+        except (requests.RequestException, RuntimeError) as error:
+            last_error = error
+            if attempt == MILVUS_MAX_ATTEMPTS:
+                break
+            time.sleep(luna_retry_delay_seconds(attempt))
+    raise RuntimeError(f"Milvus {path} failed after {MILVUS_MAX_ATTEMPTS} attempts: {last_error}") from last_error
+
+
+def search_hits(response: dict[str, Any]) -> list[dict[str, Any]]:
+    """Normalize Milvus v2's one-query nested rows before checking the deterministic inserted ID.
+
+    Some deployed v2 REST gateways return ``data`` as a single list of hits,
+    while others retain one list per query vector.  Both describe the same real
+    search response, so flatten only list envelopes and preserve each hit object.
+    """
+    raw_hits = response.get("data", [])
+    if not isinstance(raw_hits, list):
+        raise RuntimeError("Milvus search response has no list data field")
+    normalized: list[dict[str, Any]] = []
+    pending: list[Any] = list(raw_hits)
+    while pending:
+        current = pending.pop(0)
+        if isinstance(current, list):
+            pending[0:0] = current
+        elif isinstance(current, dict):
+            normalized.append(current)
+        else:
+            raise RuntimeError("Milvus search response contains a non-object hit")
+    return normalized
 
 
 def ensure_collection(uri: str, token: str, collection: str, timeout: int) -> None:
@@ -383,7 +461,8 @@ def ensure_collection(uri: str, token: str, collection: str, timeout: int) -> No
 
 
 def process_page(job: tuple[int, Path, int, Path], run_id: str, settings: dict[str, Any], arguments: argparse.Namespace,
-                 source_root: Path, container_input_root: str, configured_page_workers: int) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+                source_root: Path, container_input_root: str, configured_page_workers: int,
+                question_assets: dict[str, list[dict[str, Any]]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Processes one page independently so bounded workers never share page assets, evidence paths, or token rows."""
     task_sequence, pdf, page, paper_root = job
     task_started_at = utc_now()
@@ -391,41 +470,64 @@ def process_page(job: tuple[int, Path, int, Path], run_id: str, settings: dict[s
     compressed = paper_root / f"page-{page}-initial-review.jpg"
     render_page(pdf, page, original, source_root, container_input_root, arguments.evidence_root)
     compress_for_luna(original, compressed, int(settings["pageInitialReviewMaxLongEdgePixels"]), float(settings["pageInitialReviewJpegQuality"]))
-    request = luna_request(compressed, pdf.name, page)
+    request = vision_request(compressed, pdf.name, page, arguments.vision_model)
     try:
-        status, response, elapsed_ms, attempts = call_luna(request, arguments.timeout_seconds, arguments.timeout_grace_seconds, configured_page_workers, arguments.luna_bridge_container)
+        status, response, elapsed_ms, attempts = call_luna(request, arguments.timeout_seconds, arguments.timeout_grace_seconds, configured_page_workers, arguments.vision_bridge_container)
     except Exception as error:
-        failure = {"timestampUtc": utc_now(), "taskSequence": task_sequence, "workerThread": threading.current_thread().name, "taskStartedAt": task_started_at, "runId": run_id, "model": LUNA_MODEL, "sourceFile": pdf.name, "page": page, "request": request, "errorType": type(error).__name__, "error": str(error), "configuredHttpTimeoutSeconds": arguments.timeout_seconds, "configuredProcessGraceSeconds": arguments.timeout_grace_seconds, "credentialHandling": "Authorization was used only for transport and is omitted from evidence."}
-        (paper_root / f"page-{page}-luna-request-failure.json").write_text(json.dumps(failure, ensure_ascii=False, indent=2), encoding="utf-8")
+        failure = {"timestampUtc": utc_now(), "taskSequence": task_sequence, "workerThread": threading.current_thread().name, "taskStartedAt": task_started_at, "runId": run_id, "provider": arguments.vision_provider, "model": arguments.vision_model, "sourceFile": pdf.name, "page": page, "request": request, "errorType": type(error).__name__, "error": str(error), "configuredHttpTimeoutSeconds": arguments.timeout_seconds, "configuredProcessGraceSeconds": arguments.timeout_grace_seconds, "credentialHandling": "Authorization was used only for transport and is omitted from evidence."}
+        (paper_root / f"page-{page}-{arguments.vision_provider}-request-failure.json").write_text(json.dumps(failure, ensure_ascii=False, indent=2), encoding="utf-8")
         raise
     usage = response.get("usage", {}) if isinstance(response, dict) else {}
-    call_evidence = {"timestampUtc": utc_now(), "taskSequence": task_sequence, "workerThread": threading.current_thread().name, "taskStartedAt": task_started_at, "taskCompletedAt": utc_now(), "runId": run_id, "model": LUNA_MODEL, "sourceFile": pdf.name, "page": page, "image": {"original": str(original), "originalSha256": sha256_file(original), "compressed": str(compressed), "compressedSha256": sha256_file(compressed)}, "request": request, "responseHttpStatus": status, "response": response, "usage": usage, "elapsedMs": elapsed_ms, "attempts": attempts, "credentialHandling": "Authorization was used only for transport and is omitted from evidence."}
-    (paper_root / f"page-{page}-luna-request-response.json").write_text(json.dumps(call_evidence, ensure_ascii=False, indent=2), encoding="utf-8")
-    return recognized_questions(response, pdf.name, page), {"taskSequence": task_sequence, "workerThread": threading.current_thread().name, "sourceFile": pdf.name, "page": page, "usage": usage, "elapsedMs": elapsed_ms, "attemptCount": len(attempts)}
+    call_evidence = {"timestampUtc": utc_now(), "taskSequence": task_sequence, "workerThread": threading.current_thread().name, "taskStartedAt": task_started_at, "taskCompletedAt": utc_now(), "runId": run_id, "provider": arguments.vision_provider, "model": arguments.vision_model, "sourceFile": pdf.name, "page": page, "image": {"original": str(original), "originalSha256": sha256_file(original), "compressed": str(compressed), "compressedSha256": sha256_file(compressed)}, "request": request, "responseHttpStatus": status, "response": response, "usage": usage, "elapsedMs": elapsed_ms, "attempts": attempts, "credentialHandling": "Authorization was used only for transport and is omitted from evidence."}
+    (paper_root / f"page-{page}-{arguments.vision_provider}-request-response.json").write_text(json.dumps(call_evidence, ensure_ascii=False, indent=2), encoding="utf-8")
+    return recognized_questions(response, pdf.name, page, arguments.vision_provider, question_assets), {"taskSequence": task_sequence, "workerThread": threading.current_thread().name, "sourceFile": pdf.name, "page": page, "usage": usage, "elapsedMs": elapsed_ms, "attemptCount": len(attempts)}
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Process the configured 2024 PDFs through Luna, embeddings and Milvus")
+    parser = argparse.ArgumentParser(description="Process configured mathematics PDFs through vision, embeddings and Milvus")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
-    parser.add_argument("--evidence-root", type=Path, default=DEFAULT_EVIDENCE_ROOT)
+    parser.add_argument("--evidence-root", type=Path,
+                        help="Project output subdirectory for immutable page evidence; defaults to config evidenceRoot.")
     parser.add_argument("--collection", default=DEFAULT_COLLECTION)
     parser.add_argument("--timeout-seconds", type=int, default=DEFAULT_TIMEOUT_SECONDS)
     parser.add_argument("--timeout-grace-seconds", type=int, default=DEFAULT_TIMEOUT_GRACE_SECONDS)
     parser.add_argument("--page-workers", type=int,
                         help="optional lower per-run cap; it is local process capacity, not a distributed quota")
+    parser.add_argument("--vision-provider", choices=("terra", "luna"), default="luna",
+                        help="OpenAI-compatible visual model provider; Luna is the production default.")
+    parser.add_argument("--vision-model", help="Optional provider-model override; defaults match the selected provider.")
+    parser.add_argument("--vision-bridge-container",
+                        help="Docker container with the configured provider network and credentials.")
     parser.add_argument("--luna-bridge-container",
-                        help="Docker container that has the provider network and credentials; defaults to MATH_AGENT_LUNA_BRIDGE_CONTAINER")
+                        help="Deprecated alias for --vision-bridge-container.")
     parser.add_argument("--finalize-run-id", help="resume only the embedding, Milvus and recall stages from durable page evidence")
     arguments = parser.parse_args()
     config = json.loads(arguments.config.read_text(encoding="utf-8"))
+    if config.get("subject") != "MATHEMATICS":
+        raise ValueError("only MATHEMATICS ingestion configurations are accepted")
+    config_evidence_root = (PROJECT_ROOT / config.get("evidenceRoot", str(DEFAULT_EVIDENCE_ROOT))).resolve()
+    evidence_root = (arguments.evidence_root or config_evidence_root).resolve()
+    if evidence_root != ALLOWED_EVIDENCE_OUTPUT_ROOT and ALLOWED_EVIDENCE_OUTPUT_ROOT not in evidence_root.parents:
+        raise ValueError("--evidence-root must remain under this project's output directory")
     dotenv = load_dotenv(PROJECT_ROOT / ".env")
-    api_key = setting("OPENAI_API_KEY", dotenv)
-    base_url = setting("OPENAI_BASE_URL", dotenv)
-    if not api_key or not base_url:
-        raise RuntimeError("OPENAI_API_KEY and OPENAI_BASE_URL must be configured before real Luna ingestion")
-    arguments.luna_bridge_container = arguments.luna_bridge_container or setting("MATH_AGENT_LUNA_BRIDGE_CONTAINER", dotenv)
-    if not arguments.luna_bridge_container:
-        raise RuntimeError("MATH_AGENT_LUNA_BRIDGE_CONTAINER or --luna-bridge-container must name the configured Docker bridge container")
+    provider_models = {"terra": DEFAULT_TERRA_VISION_MODEL, "luna": DEFAULT_LUNA_VISION_MODEL}
+    arguments.vision_model = arguments.vision_model or provider_models[arguments.vision_provider]
+    if not arguments.finalize_run_id:
+        # Only a new visual run needs provider credentials and a Docker bridge.
+        # Evidence finalization instead verifies stored response/image hashes, then
+        # invokes the real local embedding worker and Milvus for safe recovery.
+        api_key = setting("OPENAI_API_KEY", dotenv)
+        base_url = setting("OPENAI_BASE_URL", dotenv)
+        if not api_key or not base_url:
+            raise RuntimeError("OPENAI_API_KEY and OPENAI_BASE_URL must be configured before real visual ingestion")
+        arguments.vision_bridge_container = (
+            arguments.vision_bridge_container
+            or arguments.luna_bridge_container
+            or setting("MATH_AGENT_VISION_BRIDGE_CONTAINER", dotenv)
+            or setting("MATH_AGENT_LUNA_BRIDGE_CONTAINER", dotenv)
+        )
+        if not arguments.vision_bridge_container:
+            raise RuntimeError("MATH_AGENT_VISION_BRIDGE_CONTAINER or --vision-bridge-container must name the configured Docker bridge container")
     global_ai_concurrency = int(setting(GLOBAL_AI_CONCURRENCY_ENVIRONMENT_VARIABLE, dotenv, str(DEFAULT_GLOBAL_AI_CONCURRENCY)))
     requested_page_workers = arguments.page_workers or global_ai_concurrency
     if global_ai_concurrency < 1 or requested_page_workers < 1:
@@ -437,11 +539,23 @@ def main() -> None:
     missing = [str(path) for path in files if not path.is_file()]
     if missing:
         raise RuntimeError(f"configured 2024 source PDFs are missing: {missing}")
-    run_id = arguments.finalize_run_id or f"luna-2024-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}"
-    run_root = arguments.evidence_root / "runs" / run_id
-    if arguments.evidence_root.resolve() != DEFAULT_EVIDENCE_ROOT.resolve():
-        raise ValueError("--evidence-root must remain the mounted project output/gaokao-evidence/2024 directory")
-    settings = config["lunaVisionOptimization"]
+    configured_asset_root = (PROJECT_ROOT / config["questionAssetRoot"]).resolve()
+    # A one-paper simulation may name its exact asset directory, whereas a
+    # Gaokao batch names the parent directory containing one subdirectory per
+    # PDF.  Detect the immutable report rather than relying on filename shape.
+    asset_root_by_file = {
+        pdf.name: configured_asset_root if (configured_asset_root / "asset-report.json").is_file()
+        else configured_asset_root / pdf.stem
+        for pdf in files
+    }
+    question_assets_by_file = {
+        pdf.name: load_question_assets(asset_root_by_file[pdf.name], pdf)
+        for pdf in files
+    }
+    paper_type = str(config["paperType"]).lower()
+    run_id = arguments.finalize_run_id or f"{arguments.vision_provider}-{paper_type}-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}"
+    run_root = evidence_root / "runs" / run_id
+    settings = config["visionOptimization"]
     all_questions: list[dict[str, Any]] = []
     model_calls: list[dict[str, Any]] = []
     if arguments.finalize_run_id:
@@ -453,9 +567,9 @@ def main() -> None:
         expected_sources = {path.name: sha256_file(path) for path in files}
         if manifest.get("configSha256") != expected_config_hash or manifest.get("sources") != expected_sources:
             raise RuntimeError("recovery evidence does not match the configured source PDFs and ingestion configuration")
-        evidence_files = sorted(run_root.rglob("*-luna-request-response.json"))
+        evidence_files = sorted(run_root.rglob(f"*-{arguments.vision_provider}-request-response.json"))
         if not evidence_files:
-            raise RuntimeError(f"no durable Luna response evidence exists for run {run_id}")
+            raise RuntimeError(f"no durable {arguments.vision_provider} response evidence exists for run {run_id}")
         for evidence_file in evidence_files:
             evidence = json.loads(evidence_file.read_text(encoding="utf-8"))
             original = Path(evidence["image"]["original"])
@@ -464,19 +578,21 @@ def main() -> None:
                     or sha256_file(original) != evidence["image"].get("originalSha256")
                     or sha256_file(compressed) != evidence["image"].get("compressedSha256")):
                 raise RuntimeError(f"recovery evidence image hash validation failed: {evidence_file}")
-            all_questions.extend(recognized_questions(evidence["response"], evidence["sourceFile"], int(evidence["page"])))
+            if evidence.get("provider") != arguments.vision_provider or evidence.get("model") != arguments.vision_model:
+                raise RuntimeError("recovery evidence provider/model does not match this finalization request")
+            all_questions.extend(recognized_questions(evidence["response"], evidence["sourceFile"], int(evidence["page"]), arguments.vision_provider, question_assets_by_file[evidence["sourceFile"]]))
             model_calls.append({"taskSequence": evidence.get("taskSequence"), "workerThread": evidence.get("workerThread"), "sourceFile": evidence["sourceFile"], "page": evidence["page"], "usage": evidence.get("usage", {}), "elapsedMs": evidence.get("elapsedMs"), "attemptCount": len(evidence.get("attempts", [])), "recoveredFromEvidence": True})
     else:
         run_root.mkdir(parents=True, exist_ok=False)
         # This immutable manifest binds later --finalize-run-id execution to the exact input PDF bytes and policy.
-        (run_root / "run-manifest.json").write_text(json.dumps({"runId": run_id, "configSha256": hashlib.sha256(arguments.config.read_bytes()).hexdigest(), "sources": {path.name: sha256_file(path) for path in files}}, ensure_ascii=False, indent=2), encoding="utf-8")
+        (run_root / "run-manifest.json").write_text(json.dumps({"runId": run_id, "paperType": config["paperType"], "subject": config["subject"], "configSha256": hashlib.sha256(arguments.config.read_bytes()).hexdigest(), "sources": {path.name: sha256_file(path) for path in files}}, ensure_ascii=False, indent=2), encoding="utf-8")
         # Compile/extract once before worker dispatch. The renderer cache is read-only afterwards, avoiding a race
         # while the workers deliberately own different page paths and provider subprocesses.
         ensure_pdf_renderer()
         jobs = [(sequence, pdf, page, run_root / sha256_file(pdf)) for sequence, (pdf, page) in enumerate(((pdf, page) for pdf in files for page in range(1, page_count(pdf) + 1)), start=1)]
         failures: list[str] = []
-        with ThreadPoolExecutor(max_workers=requested_page_workers, thread_name_prefix="gaokao-luna-page") as executor:
-            futures = {executor.submit(process_page, job, run_id, settings, arguments, source_root, config["containerInputRoot"], requested_page_workers): job for job in jobs}
+        with ThreadPoolExecutor(max_workers=requested_page_workers, thread_name_prefix=f"gaokao-{arguments.vision_provider}-page") as executor:
+            futures = {executor.submit(process_page, job, run_id, settings, arguments, source_root, config.get("containerInputRoot", ""), requested_page_workers, question_assets_by_file[job[1].name]): job for job in jobs}
             for future in as_completed(futures):
                 _sequence, pdf, page, _paper_root = futures[future]
                 try:
@@ -490,7 +606,7 @@ def main() -> None:
     model_calls.sort(key=lambda call: call["taskSequence"])
     all_questions = merge_cross_page_questions(all_questions)
     if not all_questions:
-        raise RuntimeError("Luna completed but returned no non-empty questions; refusing to create an empty success report")
+        raise RuntimeError(f"{arguments.vision_provider} completed but returned no non-empty questions; refusing to create an empty success report")
     worker_key = setting("MATH_AGENT_WORKER_API_KEY", dotenv)
     vectors = embed_all([item["text"] for item in all_questions], setting("MATH_AGENT_EMBEDDING_BASE_URL", dotenv, DEFAULT_EMBEDDING_URL), worker_key, arguments.timeout_seconds)
     milvus_uri = setting("MATH_AGENT_VECTOR_INDEX_MILVUS_URI", dotenv, DEFAULT_MILVUS_URI)
@@ -506,12 +622,12 @@ def main() -> None:
     milvus_post(milvus_uri, milvus_token, "/v2/vectordb/collections/flush", {"collectionName": arguments.collection}, arguments.timeout_seconds)
     query_vector = embed_all([all_questions[0]["text"]], setting("MATH_AGENT_EMBEDDING_BASE_URL", dotenv, DEFAULT_EMBEDDING_URL), worker_key, arguments.timeout_seconds)[0]
     recalled = milvus_post(milvus_uri, milvus_token, "/v2/vectordb/entities/search", {"collectionName": arguments.collection, "data": [query_vector], "annsField": VECTOR_FIELD, "limit": RETRIEVAL_LIMIT, "outputFields": [PRIMARY_KEY_FIELD, TEXT_FIELD, METADATA_FIELD]}, arguments.timeout_seconds)
-    hits = recalled.get("data", [])
+    hits = search_hits(recalled)
     if not hits or not any(hit.get("id") == all_questions[0]["id"] or hit.get("entity", {}).get(PRIMARY_KEY_FIELD) == all_questions[0]["id"] for hit in hits):
         raise RuntimeError("real Milvus recall did not return the inserted query question")
     totals = {name: sum(int(call["usage"].get(name, 0) or 0) for call in model_calls) for name in ("prompt_tokens", "completion_tokens", "total_tokens")}
-    report = {"timestampUtc": utc_now(), "runId": run_id, "model": LUNA_MODEL, "selectedFileCount": len(files), "lunaCallCount": len(model_calls), "questionCount": len(all_questions), "usage": totals, "concurrency": {"environmentVariable": GLOBAL_AI_CONCURRENCY_ENVIRONMENT_VARIABLE, "globalLimit": global_ai_concurrency, "effectivePageWorkers": requested_page_workers, "retryScope": "per_request_only", "maxAttemptsPerRequest": LUNA_MAX_ATTEMPTS}, "collection": arguments.collection, "realRecall": {"queryQuestionId": all_questions[0]["id"], "hitCount": len(hits), "hits": hits}, "modelCalls": model_calls, "evidenceRoot": str(run_root)}
-    report_path = arguments.evidence_root / f"{run_id}-report.json"
+    report = {"timestampUtc": utc_now(), "runId": run_id, "provider": arguments.vision_provider, "model": arguments.vision_model, "selectedFileCount": len(files), "visionCallCount": len(model_calls), "questionCount": len(all_questions), "usage": totals, "concurrency": {"environmentVariable": GLOBAL_AI_CONCURRENCY_ENVIRONMENT_VARIABLE, "globalLimit": global_ai_concurrency, "effectivePageWorkers": requested_page_workers, "retryScope": "per_request_only", "maxAttemptsPerRequest": LUNA_MAX_ATTEMPTS}, "collection": arguments.collection, "realRecall": {"queryQuestionId": all_questions[0]["id"], "hitCount": len(hits), "hits": hits}, "modelCalls": model_calls, "evidenceRoot": str(run_root)}
+    report_path = evidence_root / f"{run_id}-report.json"
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps({"report": str(report_path), "runId": run_id, "questionCount": len(all_questions), "usage": totals, "recallHitCount": len(hits)}, ensure_ascii=False))
 

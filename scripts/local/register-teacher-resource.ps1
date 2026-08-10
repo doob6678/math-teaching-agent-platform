@@ -7,7 +7,8 @@ param(
     [string]$OriginalUrl = "",
     [string]$LocalPath = "",
     [string]$PermissionScope = "MATH_VIP",
-    [ValidateSet("TEXT", "AI")][string]$ParseMode = "TEXT",
+    # Markdown exports can carry local image files; preserve those assets during the same deterministic sync.
+    [ValidateSet("TEXT", "MARKDOWN_ASSETS", "AI")][string]$ParseMode = "TEXT",
     [string]$FeishuExportFormat = "md",
     [switch]$SkipSync,
     [switch]$SkipExecute
@@ -15,6 +16,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..\..")
+$script:WebSession = New-Object Microsoft.PowerShell.Commands.WebRequestSession
 
 function Resolve-DefaultLocalPath {
     $pdf = Get-ChildItem -LiteralPath $Root -Recurse -File -Filter *.pdf |
@@ -41,13 +43,15 @@ function Invoke-Json {
         [string]$Uri,
         [hashtable]$Headers = @{},
         [object]$Body = $null,
-        [int]$TimeoutSec = 60
+        [int]$TimeoutSec = 60,
+        [object]$WebSession = $script:WebSession
     )
     $parameters = @{
         Method = $Method
         Uri = $Uri
         Headers = $Headers
         TimeoutSec = $TimeoutSec
+        WebSession = $WebSession
     }
     if ($null -ne $Body) {
         # Windows PowerShell otherwise serializes a String request body with the active code page. Resource paths and
@@ -66,9 +70,6 @@ $login = Invoke-Json `
     -Uri "$base/api/auth/login" `
     -Body @{ username = $Username; password = $Password }
 
-$headers = @{}
-$headers[$login.tokenName] = $login.tokenValue
-
 $registerBody = @{
     sourceType = $SourceType
     title = $Title
@@ -81,7 +82,6 @@ $registerBody = @{
 $document = Invoke-Json `
     -Method "Post" `
     -Uri "$base/api/teacher/resources" `
-    -Headers $headers `
     -Body $registerBody `
     -TimeoutSec 120
 
@@ -102,7 +102,6 @@ if (-not $SkipSync) {
     $job = Invoke-Json `
         -Method "Post" `
         -Uri ($base + $syncPath) `
-        -Headers $headers `
         -TimeoutSec 120
     $result["jobId"] = $job.jobId
     $result["jobStatus"] = $job.status
@@ -113,7 +112,6 @@ if (-not $SkipSync) {
         $executed = Invoke-Json `
             -Method "Post" `
             -Uri ($base + $executePath) `
-            -Headers $headers `
             -TimeoutSec 900
         $result["executeStatus"] = $executed.status
         $result["executePhase"] = $executed.phase

@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.doob.mathagent.agent.entity.AgentWorkerTaskEntity;
 import com.doob.mathagent.agent.mapper.AgentWorkerTaskMapper;
+import com.doob.mathagent.agent.service.HandoutRunMetricsStore;
 import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
@@ -26,10 +27,17 @@ public class AgentWorkerTaskStore {
     private static final String FAILED = "FAILED";
 
     private final AgentWorkerTaskMapper mapper;
+    private HandoutRunMetricsStore handoutMetricsStore;
 
     /** Creates the task store backed by the shared control-plane MySQL database. */
     public AgentWorkerTaskStore(AgentWorkerTaskMapper mapper) {
         this.mapper = mapper;
+    }
+
+    /** Optional metrics wiring keeps generic Worker tests independent while recording only handout commands. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void configureHandoutMetricsStore(HandoutRunMetricsStore store) {
+        this.handoutMetricsStore = store;
     }
 
     /**
@@ -45,11 +53,16 @@ public class AgentWorkerTaskStore {
         entity.setStageCode(stageCode);
         entity.setStatus(QUEUED);
         entity.setAttempt(0);
+        entity.setDispatchVersion(1);
         entity.setRequestJson(requestJson);
         entity.setCreatedAt(Instant.now());
         entity.setUpdatedAt(Instant.now());
         mapper.insert(entity);
-        return toTask(entity);
+        AgentWorkerTask task = toTask(entity);
+        if (handoutMetricsStore != null && "python_handout".equals(stageCode)) {
+            handoutMetricsStore.recordEnqueued(workflowId, task.taskId(), task.createdAt());
+        }
+        return task;
     }
 
     /**
@@ -80,6 +93,15 @@ public class AgentWorkerTaskStore {
                 .set(AgentWorkerTaskEntity::getLeaseExpiresAt, null)) > 0;
     }
 
+    /** Extends a live lease without allowing a reclaimed Worker to renew it. */
+    public boolean renew(AgentWorkerTask task, Instant expiresAt) {
+        return mapper.update(null, new LambdaUpdateWrapper<AgentWorkerTaskEntity>()
+                .eq(AgentWorkerTaskEntity::getTaskId, task.taskId())
+                .eq(AgentWorkerTaskEntity::getLeaseToken, task.leaseToken())
+                .eq(AgentWorkerTaskEntity::getStatus, RUNNING)
+                .set(AgentWorkerTaskEntity::getLeaseExpiresAt, expiresAt)) > 0;
+    }
+
     /**
      * Stores the safe failure summary and either releases the task for another attempt or makes it terminal.
      */
@@ -92,8 +114,15 @@ public class AgentWorkerTaskStore {
                 .set(AgentWorkerTaskEntity::getStatus, retry ? QUEUED : FAILED)
                 .set(AgentWorkerTaskEntity::getLeaseToken, null)
                 .set(AgentWorkerTaskEntity::getLeaseExpiresAt, null)
-                .set(AgentWorkerTaskEntity::getErrorSummary, safeError(errorSummary)));
+                .set(AgentWorkerTaskEntity::getErrorSummary, safeError(errorSummary))
+                .setSql(retry ? "dispatch_version = dispatch_version + 1" : "dispatch_version = dispatch_version"));
         return updated == 1 && retry ? toTask(mapper.selectById(task.taskId())) : null;
+    }
+
+    /** Returns true only after a lease owner has durably made this task terminal. */
+    public boolean isFailed(String taskId) {
+        AgentWorkerTaskEntity entity = mapper.selectById(taskId);
+        return entity != null && FAILED.equals(entity.getStatus());
     }
 
     /** Reclaims only abandoned leases; live Workers keep their running task untouched. */
@@ -112,7 +141,8 @@ public class AgentWorkerTaskStore {
                 .set(AgentWorkerTaskEntity::getStatus, QUEUED)
                 .set(AgentWorkerTaskEntity::getWorkerId, null)
                 .set(AgentWorkerTaskEntity::getLeaseToken, null)
-                .set(AgentWorkerTaskEntity::getLeaseExpiresAt, null));
+                .set(AgentWorkerTaskEntity::getLeaseExpiresAt, null)
+                .setSql("dispatch_version = dispatch_version + 1"));
         return updated == 1 ? toTask(mapper.selectById(entity.getTaskId())) : null;
     }
 
@@ -126,7 +156,8 @@ public class AgentWorkerTaskStore {
     private static AgentWorkerTask toTask(AgentWorkerTaskEntity entity) {
         return new AgentWorkerTask(
                 entity.getTaskId(), entity.getWorkflowId(), entity.getTenantId(), entity.getAgentCode(),
-                entity.getStageCode(), entity.getStatus(), entity.getAttempt(), entity.getLeaseToken(),
-                entity.getLeaseExpiresAt(), entity.getWorkerId(), entity.getRequestJson(), entity.getErrorSummary());
+                entity.getStageCode(), entity.getStatus(), entity.getAttempt(), entity.getDispatchVersion(), entity.getLeaseToken(),
+                entity.getLeaseExpiresAt(), entity.getWorkerId(), entity.getRequestJson(), entity.getErrorSummary(),
+                entity.getCreatedAt(), entity.getUpdatedAt());
     }
 }

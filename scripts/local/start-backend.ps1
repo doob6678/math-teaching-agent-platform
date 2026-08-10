@@ -1,7 +1,7 @@
 param(
     [string]$DbUrl = "jdbc:mysql://127.0.0.1:3306/math_agent?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false",
     [string]$DbUser = "math_agent",
-    [string]$DbPassword = "123456",
+    [string]$DbPassword = "",
     [string]$RedisAddress = "redis://127.0.0.1:6379",
     [string]$RabbitMqAddresses = "amqp://127.0.0.1:5672",
     [int]$WorkerPort = 8091,
@@ -47,7 +47,10 @@ function Import-DotEnvValue {
   "FEISHU_OAUTH_REDIRECT_URI", "FEISHU_OAUTH_SUCCESS_REDIRECT_URI") | ForEach-Object {
     Import-UserEnvironmentValue $_
 }
-@("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_CHAT_MODEL", "MATH_AGENT_AI_DEFAULT_PROVIDER") | ForEach-Object {
+@("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_CHAT_MODEL", "MATH_AGENT_AI_DEFAULT_PROVIDER",
+  "MYSQL_ROOT_PASSWORD", "MATH_AGENT_DB_PASSWORD", "REDIS_PASSWORD", "RABBITMQ_DEFAULT_USER",
+  "RABBITMQ_DEFAULT_PASS", "MATH_AGENT_MILVUS_ROOT_PASSWORD", "MATH_AGENT_WORKER_API_KEY",
+  "MATH_AGENT_AGENT_WORKER_SHARED_KEY") | ForEach-Object {
     Import-UserEnvironmentValue $_
     Import-DotEnvValue $_
 }
@@ -55,6 +58,16 @@ if ([string]::IsNullOrWhiteSpace($env:FEISHU_APP_ID)) { $env:FEISHU_APP_ID = $en
 if ([string]::IsNullOrWhiteSpace($env:FEISHU_APP_SECRET)) { $env:FEISHU_APP_SECRET = $env:FEISHU_APPSECRET }
 if ([string]::IsNullOrWhiteSpace($env:APP_ID)) { $env:APP_ID = $env:FEISHU_APP_ID }
 if ([string]::IsNullOrWhiteSpace($env:APP_SECRET)) { $env:APP_SECRET = $env:FEISHU_APP_SECRET }
+if ([string]::IsNullOrWhiteSpace($DbPassword)) {
+    $DbPassword = if (-not [string]::IsNullOrWhiteSpace($env:MATH_AGENT_DB_PASSWORD)) {
+        $env:MATH_AGENT_DB_PASSWORD
+    } else {
+        $env:MYSQL_ROOT_PASSWORD
+    }
+}
+if ([string]::IsNullOrWhiteSpace($DbPassword)) {
+    throw "Database password is missing. Configure MATH_AGENT_DB_PASSWORD or MYSQL_ROOT_PASSWORD in the environment/.env."
+}
 
 function Test-TcpPort {
     param(
@@ -249,11 +262,14 @@ $env:MATH_AGENT_REDIS_REDISSON_ENABLED = "true"
 $env:MATH_AGENT_REDIS_REDISSON_ADDRESS = $RedisAddress
 $env:SPRING_DATA_REDIS_URL = $RedisAddress
 $env:SPRING_REDIS_URL = $RedisAddress
-# The broker command contains only backend-resolved identity and durable job IDs; API keys, capability tokens and
+# The broker command contains only backend-resolved identity and durable job IDs; API keys and browser credentials are
 # request hashes stay at the HTTP boundary. Keeping this setting here ensures the Windows JVM uses the WSL broker.
 $env:SPRING_RABBITMQ_ADDRESSES = $RabbitMqAddresses
 $env:MATH_AGENT_REDIS_RATE_LIMIT_ENABLED = "true"
-$env:MATH_AGENT_REDIS_CAPABILITY_STORE_ENABLED = "true"
+# Background Feishu scheduling remains opt-in; an operator must supply an explicit service subject and document list.
+if ([string]::IsNullOrWhiteSpace($env:MATH_AGENT_TEACHER_SYNC_SCHEDULER_ENABLED)) {
+    $env:MATH_AGENT_TEACHER_SYNC_SCHEDULER_ENABLED = "false"
+}
 # Source re-sync and single-document imports must be visible to the next teacher retrieval.  Caching may be enabled
 # only by an explicit operator setting after an audited corpus build; it is never the local launch default.
 if ([string]::IsNullOrWhiteSpace($env:MATH_AGENT_REDIS_SEARCH_CACHE_ENABLED)) {
@@ -310,7 +326,7 @@ if ([string]::IsNullOrWhiteSpace($env:MATH_AGENT_EMBEDDING_MODEL)) {
 }
 if ([string]::IsNullOrWhiteSpace($env:MATH_AGENT_AI_DEFAULT_PROVIDER) -and -not [string]::IsNullOrWhiteSpace($env:OPENAI_API_KEY)) {
     # Student explanation requires a verified multimodal route. Prefer the configured OpenAI-compatible provider so
-    # text generation and uploaded-question vision use the same gpt-5.6-luna capability unless an operator overrides it.
+    # Text generation and uploaded-question vision use the same Luna capability unless an operator overrides it.
     $env:MATH_AGENT_AI_DEFAULT_PROVIDER = "openai"
 }
 if ([string]::IsNullOrWhiteSpace($env:OPENAI_CHAT_MODEL) -and -not [string]::IsNullOrWhiteSpace($env:OPENAI_API_KEY)) {
@@ -331,7 +347,7 @@ if ([string]::IsNullOrWhiteSpace($env:MATH_AGENT_AI_CHAT_REQUEST_TIMEOUT_MS)) {
 }
 if ([string]::IsNullOrWhiteSpace($env:MATH_AGENT_STUDENT_EXPLANATION_VISION_TIMEOUT_MS)) {
     # Page-level teacher OCR uses the same permission-checked vision client as student uploads; keep its relay
-    # budget aligned with the configured gpt-5.6-luna worker budget.
+    # Budget aligned with the configured Luna worker budget.
     $env:MATH_AGENT_STUDENT_EXPLANATION_VISION_TIMEOUT_MS = "420000"
 }
 # A real high-school exam DOCX can legitimately include one image/equation package entry per formula. Keep a bounded

@@ -1,10 +1,9 @@
 package com.doob.mathagent.teacher.sync.mq;
 
 /**
- * Versioned, non-secret command sent after the HTTP layer has already authorized a high-value source sync action.
+ * Versioned, non-secret command sent after the HTTP layer has authorized the authenticated user's source-sync action.
  *
- * <p>Capability tokens and request hashes deliberately never enter RabbitMQ. The consumer receives only the stable
- * identifiers and the backend-resolved identity required by the existing domain authorization checks.</p>
+ * <p>The consumer receives only stable identifiers and the backend-resolved identity required by domain checks.</p>
  */
 public record TeacherSourceSyncCommand(
         int schemaVersion,

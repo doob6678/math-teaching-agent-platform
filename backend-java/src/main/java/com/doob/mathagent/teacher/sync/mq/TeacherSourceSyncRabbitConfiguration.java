@@ -12,6 +12,7 @@ import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.Environment;
 
 /** Declares the durable command/DLQ topology and uses bounded listener work to protect CPU and vector workers. */
 @Configuration
@@ -79,7 +80,8 @@ public class TeacherSourceSyncRabbitConfiguration {
     SimpleRabbitListenerContainerFactory teacherSourceSyncRabbitListenerContainerFactory(
             CachingConnectionFactory connectionFactory,
             Jackson2JsonMessageConverter teacherSourceSyncMessageConverter,
-            TeacherSourceSyncRabbitProperties properties) {
+            TeacherSourceSyncRabbitProperties properties,
+            Environment environment) {
         SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
         factory.setConnectionFactory(connectionFactory);
         factory.setMessageConverter(teacherSourceSyncMessageConverter);
@@ -87,6 +89,8 @@ public class TeacherSourceSyncRabbitConfiguration {
         factory.setMaxConcurrentConsumers(properties.consumerMaxConcurrency());
         factory.setPrefetchCount(properties.prefetch());
         factory.setDefaultRequeueRejected(false);
+        // Keep external Feishu sync opt-in even when RabbitMQ is running in the local Compose stack.
+        factory.setAutoStartup(environment.getProperty("math-agent.rabbitmq.listeners-enabled", Boolean.class, false));
         return factory;
     }
 }

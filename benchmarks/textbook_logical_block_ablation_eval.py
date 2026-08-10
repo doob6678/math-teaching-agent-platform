@@ -1,6 +1,6 @@
-"""Real c2 Parent Document Retriever ablation for the immutable 46-case contract.
+"""Historical c2 Parent Document Retriever ablation for the immutable 46-case contract.
 
-This is deliberately separate from the legacy c2 table.  That table ranks raw
+This is deliberately separate from production. The legacy c2 table ranks raw
 children against a source-page label.  Here all 3317 immutable c2 children are
 still the only BM25/BGE corpus, while an optional reference-only logical-heading
 identity removes siblings before document admission.  Parent text is joined

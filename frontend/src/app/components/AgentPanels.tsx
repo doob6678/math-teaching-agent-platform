@@ -42,7 +42,7 @@ export function AgentPlanPanel({
           <div className="profile-strip">
             <InfoCell label="服务商" value={providerLabel(plan.providerName)} />
             <InfoCell label="模型" value={plan.modelCode} />
-            <InfoCell label="授权" value={plan.capabilityRequired ? "需要一次性授权" : "无需额外授权"} />
+            <InfoCell label="权限" value="已按当前用户会话验证" />
             <InfoCell label="预计用量" value={plan.estimatedTotalTokens.toLocaleString("zh-CN")} />
           </div>
 
@@ -62,7 +62,7 @@ export function AgentPlanPanel({
             {execution ? (
               <div className="execution-trace">
                 <p>{compactText(traceMessage(execution.message), 140)}</p>
-                <details className="review-details">
+                <details className="review-details ai-run-disclosure">
                   <summary>查看阶段耗时</summary>
                   <div className="tool-decision-list compact">
                     {execution.stageTimings.map((timing) => (
@@ -77,7 +77,7 @@ export function AgentPlanPanel({
             ) : null}
           </div>
 
-          <details className="review-details">
+          <details className="review-details ai-run-disclosure">
             <summary>工具和数据范围</summary>
             <div className="tool-decision-list">
               {plan.toolPolicyDecisions.map((decision) => (
@@ -200,7 +200,7 @@ export function AgentTracePanel({
       ) : null}
 
       {diagnosticSummary ? (
-        <details className="review-details">
+        <details className="review-details ai-run-disclosure">
           <summary>重试、解析和模型切换统计</summary>
           <div className="agent-usage-summary">
             <TraceBadgeRow
@@ -243,7 +243,7 @@ export function AgentTracePanel({
                 </div>
                 <div className="agent-process-list">
                   {timelineEvents(trace).map((event) => (
-                    <details className={`agent-process-block ${event.tone}`} key={`${trace.traceId}:${event.eventId}`}>
+                    <details className={`agent-process-block ai-run-disclosure ${event.tone}`} key={`${trace.traceId}:${event.eventId}`}>
                       <summary>
                         <span>{event.title}</span>
                         <em>{event.summary}</em>
@@ -523,7 +523,7 @@ function stageLabel(stage: string) {
   const labels: Record<string, string> = {
     model_call: "模型调用",
     capability_check: "授权校验",
-    capability_guard: "授权校验",
+    subject_policy_guard: "用户权限校验",
     concurrency_guard: "并发控制",
     trace_start: "开始记录",
     trace_finish: "完成记录",

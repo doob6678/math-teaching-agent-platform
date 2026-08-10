@@ -5,6 +5,8 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
@@ -16,6 +18,7 @@ public class ApiAccessControlFilter extends OncePerRequestFilter {
 
     private final ApiAccessControlService accessControlService;
     private final RequestSubjectResolver subjectResolver;
+    private final boolean trustedProxyHeaders;
 
     /**
      * 注入访问控制服务。
@@ -23,8 +26,18 @@ public class ApiAccessControlFilter extends OncePerRequestFilter {
     public ApiAccessControlFilter(
             ApiAccessControlService accessControlService,
             RequestSubjectResolver subjectResolver) {
+        this(accessControlService, subjectResolver, false);
+    }
+
+    /** Production constructor; forwarded headers are accepted only when an operator explicitly trusts a proxy. */
+    @Autowired
+    public ApiAccessControlFilter(
+            ApiAccessControlService accessControlService,
+            RequestSubjectResolver subjectResolver,
+            @Value("${math-agent.security.trusted-proxy-headers:false}") boolean trustedProxyHeaders) {
         this.accessControlService = accessControlService;
         this.subjectResolver = subjectResolver;
+        this.trustedProxyHeaders = trustedProxyHeaders;
     }
 
     /**
@@ -47,7 +60,8 @@ public class ApiAccessControlFilter extends OncePerRequestFilter {
             filterChain.doFilter(request, response);
             return;
         }
-        ApiAccessDecision decision = accessControlService.evaluate(identityFrom(request, subjectResolver.resolve(request)));
+        ApiAccessDecision decision = accessControlService.evaluate(
+                identityFrom(request, subjectResolver.resolve(request), trustedProxyHeaders));
         response.setHeader("X-Api-Access-Level", decision.level().name());
         response.setHeader("X-RateLimit-Limit", String.valueOf(decision.limit()));
         response.setHeader("X-RateLimit-Used", String.valueOf(decision.used()));
@@ -61,7 +75,8 @@ public class ApiAccessControlFilter extends OncePerRequestFilter {
     /**
      * 从 HTTP 请求头和连接信息中提取调用身份。
      */
-    private static ApiRequestIdentity identityFrom(HttpServletRequest request, RequestSubject subject) {
+    private static ApiRequestIdentity identityFrom(
+            HttpServletRequest request, RequestSubject subject, boolean trustedProxyHeaders) {
         RequestSubject normalized = subject.normalize();
         return new ApiRequestIdentity(
                 request.getMethod(),
@@ -69,7 +84,7 @@ public class ApiAccessControlFilter extends OncePerRequestFilter {
                 normalized.tenantId(),
                 normalized.subjectType(),
                 normalized.subjectId(),
-                clientIp(request),
+                clientIp(request, trustedProxyHeaders),
                 normalized.deviceId(),
                 request.getHeader("User-Agent"));
     }
@@ -86,11 +101,11 @@ public class ApiAccessControlFilter extends OncePerRequestFilter {
     }
 
     /**
-     * 提取客户端 IP，优先使用反向代理传入的 X-Forwarded-For 第一段。
+     * 提取客户端 IP；只有明确配置可信代理时才读取 X-Forwarded-For，否则使用真实 TCP 对端地址。
      */
-    private static String clientIp(HttpServletRequest request) {
+    private static String clientIp(HttpServletRequest request, boolean trustedProxyHeaders) {
         String forwardedFor = headerOrNull(request, "X-Forwarded-For");
-        if (forwardedFor != null) {
+        if (trustedProxyHeaders && forwardedFor != null) {
             return forwardedFor.split(",")[0].strip();
         }
         return request.getRemoteAddr();

@@ -44,12 +44,29 @@ const evidenceLimitOverride = Number(process.env.ACCEPTANCE_EVIDENCE_LIMIT ?? ""
 // to the frontend while preventing a stalled provider fallback chain from hiding a PDF-layout regression.
 const aiProviderOverride = process.env.ACCEPTANCE_AI_PROVIDER?.trim() || "";
 const aiModelOverride = process.env.ACCEPTANCE_AI_MODEL?.trim() || "";
+let sessionCookie = "";
+
+/** Preserve only cookie name/value pairs so Node requests reuse the HttpOnly login session without exposing it. */
+function captureSessionCookie(response) {
+  const setCookies = typeof response.headers.getSetCookie === "function"
+    ? response.headers.getSetCookie()
+    : [response.headers.get("set-cookie")].filter(Boolean);
+  const pairs = setCookies.flatMap((value) => String(value).split(/,(?=[^;=]+=[^;]+)/))
+    .map((value) => value.split(";", 1)[0].trim())
+    .filter(Boolean);
+  if (pairs.length > 0) sessionCookie = pairs.join("; ");
+}
 
 async function jsonRequest(path, options = {}) {
   const response = await fetch(`${backend}${path}`, {
     ...options,
-    headers: { ...(options.headers ?? {}), Accept: "application/json" },
+    headers: {
+      ...(options.headers ?? {}),
+      ...(sessionCookie ? { Cookie: sessionCookie } : {}),
+      Accept: "application/json",
+    },
   });
+  captureSessionCookie(response);
   const text = await response.text();
   let payload = {};
   if (text) {
@@ -89,7 +106,6 @@ async function submitTask(session, scenario) {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      [session.tokenName]: session.tokenValue,
     },
     body,
   });
@@ -101,9 +117,7 @@ async function downloadPreview(session, taskId, version, destination) {
   let response;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     response = await fetch(`${backend}${path}`, {
-      headers: {
-        [session.tokenName]: session.tokenValue,
-      },
+      headers: sessionCookie ? { Cookie: sessionCookie } : {},
     });
     if (response.status !== 429 || attempt === 2) break;
     await new Promise((resolveDelay) => setTimeout(resolveDelay, retryDelayMs));
@@ -148,7 +162,8 @@ async function main() {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ username, password }),
   });
-  const session = { tokenName: login.tokenName, tokenValue: login.tokenValue };
+  if (!sessionCookie) throw new Error("Login did not establish the backend HttpOnly session cookie");
+  const session = {};
   const scenarios = [
     { code: "01-topic-only", learningGoal: "二次函数顶点与对称轴", questionText: "", templateCode: "default_standard" },
     { code: "02-question", learningGoal: "解含参数的一元二次函数最值题", questionText: "已知 f(x)=x^2-2ax+1 在区间 [0,2] 上的最小值，讨论 a 的取值。", templateCode: "gaokao_topic_drill_v1" },
@@ -217,7 +232,6 @@ async function main() {
       let task;
       try {
         task = await jsonRequest(`/api/teaching/tasks/${encodeURIComponent(record.taskId)}`, {
-          headers: { [session.tokenName]: session.tokenValue },
         });
       } catch (error) {
         if (error.status !== 429) throw error;

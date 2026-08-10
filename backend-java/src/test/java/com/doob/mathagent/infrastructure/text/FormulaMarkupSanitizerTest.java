@@ -16,6 +16,20 @@ class FormulaMarkupSanitizerTest {
     }
 
     @Test
+    void removesOnlyAnEmptyTrailingDisplayMathPair() {
+        String sanitized = FormulaMarkupSanitizer.sanitizeFeishuMath("$$a=2.$$$$");
+
+        assertThat(sanitized).isEqualTo("$$a=2.$$");
+    }
+
+    @Test
+    void keepsAValidDisplayFormulaWithContentUntouched() {
+        String sanitized = FormulaMarkupSanitizer.sanitizeFeishuMath("$$a=2$$$$b=3$$");
+
+        assertThat(sanitized).isEqualTo("$$a=2$$$$b=3$$");
+    }
+
+    @Test
     void convertsAlignEnvironmentToDisplayMathWithoutAlignWrapper() {
         String sanitized = FormulaMarkupSanitizer.sanitizeFeishuMath(
                 "Solve: \\begin{align} f(x)&=x^2-4x+3\\\\&=(x-1)(x-3) \\end{align}");
@@ -99,6 +113,16 @@ class FormulaMarkupSanitizerTest {
         assertThat(sanitized)
                 .contains("CC1$\\perp$平面 ABC", "$A\\perp B$", "l$\\parallel$m")
                 .doesNotContain("⊥", "∥");
+    }
+
+    @Test
+    void wrapsCjkGeometryLabelsInsideMathForXeLatex() {
+        String sanitized = FormulaMarkupSanitizer.sanitizeFeishuMath(
+                "$$AC_1\\perp平面A_1BD.$$ ");
+
+        assertThat(sanitized).contains("\\text{平面}");
+        assertThat(sanitized).doesNotContain("\\\\text{平面}");
+        assertThat(sanitized).doesNotContain("\\perp平面");
     }
 
     @Test

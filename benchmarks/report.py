@@ -64,9 +64,9 @@ def _resume_markdown(metrics: dict[str, Any]) -> str:
         "## 安全工程",
         "",
         (
-            f"- Capability 重放拦截率 "
-            f"{_percent((security.get('capabilityReplay') or {}).get('rejectionRate', 0))}，"
-            f"重复提交拦截率 {_percent((security.get('duplicateSubmission') or {}).get('blockRate', 0))}。"
+            f"- 重复提交拒绝率 "
+            f"{_percent((security.get('duplicateSubmission') or {}).get('rejectionRate', 0))}，"
+            f"已认证执行成功 {_percent((security.get('authenticatedExecution') or {}).get('successCount', 0) / max(1, (security.get('authenticatedExecution') or {}).get('attemptCount', 0)))}。"
         ),
         (
             f"- Redis 限流触发 {(security.get('rateLimit') or {}).get('rateLimitedCount', 0)} 次，"

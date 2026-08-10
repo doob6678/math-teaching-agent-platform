@@ -109,7 +109,13 @@ public record TeacherResourceSearchProperties(
                                 defaultRuntime.maxBlockRerankCandidates()),
                         integerOrDefault(
                                 environment.getProperty("math-agent.teacher.search.runtime.max-blocks-per-document-for-stage-two"),
-                                defaultRuntime.maxBlocksPerDocumentForStageTwo())));
+                                defaultRuntime.maxBlocksPerDocumentForStageTwo()),
+                        booleanOrDefault(
+                                environment.getProperty("math-agent.teacher.search.runtime.lexical-rescue-enabled"),
+                                defaultRuntime.lexicalRescueEnabled()),
+                        integerOrDefault(
+                                environment.getProperty("math-agent.teacher.search.runtime.max-lexical-rescue-blocks-per-document"),
+                                defaultRuntime.maxLexicalRescueBlocksPerDocument())));
     }
 
     public TeacherResourceSearchProperties {
@@ -161,7 +167,9 @@ public record TeacherResourceSearchProperties(
             int maxDocumentRerankCandidates,
             int maxVectorCandidates,
             int maxBlockRerankCandidates,
-            int maxBlocksPerDocumentForStageTwo) {
+            int maxBlocksPerDocumentForStageTwo,
+            boolean lexicalRescueEnabled,
+            int maxLexicalRescueBlocksPerDocument) {
 
         public static SearchRuntimeBudget defaults() {
             return new SearchRuntimeBudget(
@@ -183,6 +191,8 @@ public record TeacherResourceSearchProperties(
                     12,
                     96,
                     36,
+                    3,
+                    false,
                     3);
         }
 
@@ -206,6 +216,7 @@ public record TeacherResourceSearchProperties(
             maxVectorCandidates = Math.max(1, maxVectorCandidates);
             maxBlockRerankCandidates = Math.max(1, maxBlockRerankCandidates);
             maxBlocksPerDocumentForStageTwo = Math.max(1, maxBlocksPerDocumentForStageTwo);
+            maxLexicalRescueBlocksPerDocument = Math.max(1, maxLexicalRescueBlocksPerDocument);
         }
 
         public int vectorCandidateLimit(int requestedLimit, int candidateDocumentCount) {
@@ -233,5 +244,19 @@ public record TeacherResourceSearchProperties(
         } catch (NumberFormatException exception) {
             return defaultValue;
         }
+    }
+
+    /** Reads a boolean environment override while retaining the safe default on malformed operator input. */
+    private static boolean booleanOrDefault(String value, boolean defaultValue) {
+        if (value == null || value.isBlank()) {
+            return defaultValue;
+        }
+        if ("true".equalsIgnoreCase(value.strip())) {
+            return true;
+        }
+        if ("false".equalsIgnoreCase(value.strip())) {
+            return false;
+        }
+        return defaultValue;
     }
 }

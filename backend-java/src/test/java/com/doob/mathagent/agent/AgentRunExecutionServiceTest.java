@@ -7,9 +7,7 @@ import com.doob.mathagent.agent.dto.AgentRunExecuteRequest;
 import com.doob.mathagent.agent.dto.AgentRunPlanRequest;
 import com.doob.mathagent.agent.service.AgentConcurrencyGuard;
 import com.doob.mathagent.agent.service.AgentConcurrencyLease;
-import com.doob.mathagent.agent.service.AiChatGateway;
-import com.doob.mathagent.agent.service.AiChatRequest;
-import com.doob.mathagent.agent.service.AiChatResult;
+import com.doob.mathagent.agent.service.AgentRunClient;
 import com.doob.mathagent.agent.service.AgentRunExecutionService;
 import com.doob.mathagent.agent.service.AgentRunPlanService;
 import com.doob.mathagent.agent.service.InMemoryAgentConcurrencyGuard;
@@ -29,201 +27,83 @@ import org.junit.jupiter.api.Test;
 class AgentRunExecutionServiceTest {
 
     @Test
-    void recordsBaselineTraceWithoutRawModelOutput() {
-        AgentRunExecutionService service = AgentRunExecutionServiceFixture.deterministicModelService(
-                new InMemoryAgentTraceStore(),
-                new InMemoryAgentConcurrencyGuard());
+    void projectsPythonFacadeResultIntoSafeTraceAndPublicResponse() {
+        InMemoryAgentTraceStore traceStore = new InMemoryAgentTraceStore();
+        CapturingPythonClient client = new CapturingPythonClient(result(11, 7, 18, -1.0d, false));
+        AgentRunExecutionService service = service(traceStore, new InMemoryAgentConcurrencyGuard(), client);
         AgentRunPlanResponse plan = coursewarePlan();
-        AgentRunExecuteRequest request = new AgentRunExecuteRequest(
-                plan,
-                "Generate teacher handout for space vectors",
-                List.of("textbook:chapter-1"), false);
 
         AgentRunExecuteResponse response = service.execute(
-                request,
-                new RequestSubject("school-a", "teacher", "teacher-001", "device-1"));
+                new AgentRunExecuteRequest(plan, "Generate teacher handout for space vectors", List.of("textbook:chapter-1"), false),
+                subject());
 
+        assertThat(client.calls()).isEqualTo(1);
+        assertThat(client.lastRequest().evidenceRefs()).containsExactly("textbook:chapter-1");
         assertThat(response.traceId()).isNotBlank();
         assertThat(response.status()).isEqualTo("COMPLETED");
-        assertThat(response.message()).contains("deterministic test model response");
-        assertThat(response.planId()).isEqualTo(plan.planId());
-        assertThat(response.agentCode()).isEqualTo("CoursewareAgent");
-        assertThat(response.providerName()).isEqualTo("dashscope");
-        assertThat(response.modelCode()).isEqualTo("qwen3.6-flash");
-        assertThat(response.allowedToolScopes()).containsExactlyElementsOf(plan.allowedToolScopes());
-        assertThat(response.allowedDataScopes()).containsExactlyElementsOf(plan.allowedDataScopes());
-        assertThat(response.concurrencyKeys()).containsExactlyElementsOf(plan.concurrencyKeys());
-        assertThat(response.estimatedCost()).isEqualTo(plan.estimatedCost());
-        assertThat(response.actualUsage().totalTokens()).isEqualTo(8);
+        assertThat(response.providerName()).isEqualTo("openai");
+        assertThat(response.modelCode()).isEqualTo("gpt-5.6-luna");
+        assertThat(response.actualUsage().totalTokens()).isEqualTo(18);
+        assertThat(response.actualCost()).isEqualTo(-1.0d);
+        assertThat(response.costKnown()).isFalse();
+        assertThat(response.message()).isEqualTo("Python AI run completed.");
+        assertThat(response.generatedContent()).contains("teacherExplanation");
         assertThat(response.stageTimings()).extracting(AgentRunExecuteResponse.StageTiming::stage)
-                .containsExactly("capability_guard", "concurrency_guard", "trace_start", "model_call", "trace_finish");
+                .containsExactly("subject_policy_guard", "concurrency_guard", "trace_start", "python_ai_run", "trace_finish");
+        assertThat(traceStore.find(response.traceId()).orElseThrow().diagnosticEvents())
+                .extracting(event -> event.eventType())
+                .containsExactly("PYTHON_AI_RUN_SUCCEEDED");
     }
 
     @Test
-    void rejectsExecutionWhenBackendSubjectDoesNotOwnPlan() {
-        AgentRunExecutionService service = AgentRunExecutionServiceFixture.deterministicModelService(
-                new InMemoryAgentTraceStore(),
-                new InMemoryAgentConcurrencyGuard());
-        AgentRunExecuteRequest request = new AgentRunExecuteRequest(
-                coursewarePlan(),
-                "Generate teacher handout for space vectors",
-                List.of(), false);
+    void rejectsExecutionWhenBackendSubjectDoesNotOwnPlanBeforePythonCall() {
+        CapturingPythonClient client = new CapturingPythonClient(result(5, 3, 8, -1.0d, false));
+        AgentRunExecutionService service = service(new InMemoryAgentTraceStore(), new InMemoryAgentConcurrencyGuard(), client);
 
         assertThatThrownBy(() -> service.execute(
-                request,
+                new AgentRunExecuteRequest(coursewarePlan(), "Generate handout", List.of(), false),
                 new RequestSubject("school-a", "teacher", "teacher-002", "device-1")))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Agent plan subject mismatch");
+        assertThat(client.calls()).isZero();
     }
 
     @Test
-    void rejectsExecutionWhenPlanContainsToolScopeOutsideServerPolicy() {
-        AgentRunExecutionService service = AgentRunExecutionServiceFixture.deterministicModelService(
-                new InMemoryAgentTraceStore(),
-                new InMemoryAgentConcurrencyGuard());
+    void rejectsOverBudgetPlanBeforePythonCall() {
+        CapturingPythonClient client = new CapturingPythonClient(result(5, 3, 8, -1.0d, false));
+        AgentRunExecutionService service = service(new InMemoryAgentTraceStore(), new InMemoryAgentConcurrencyGuard(), client);
         AgentRunPlanResponse plan = coursewarePlan();
-        AgentRunPlanResponse tampered = new AgentRunPlanResponse(
-                plan.planId(),
-                plan.tenantId(),
-                plan.subjectType(),
-                plan.subjectId(),
-                plan.agentCode(),
-                plan.providerName(),
-                plan.modelCode(),
-                plan.modelLevel(),
-                List.of("tool:courseware:generate", "tool:student:progress:write"),
-                plan.deniedToolScopes(),
-                plan.toolPolicyDecisions(),
-                plan.allowedDataScopes(),
-                plan.deniedDataScopes(),
-                plan.capabilityRequired(),
-                plan.capabilityAction(),
-                plan.maxInputTokens(),
-                plan.maxOutputTokens(),
-                plan.estimatedTotalTokens(),
-                plan.estimatedCost(),
-                plan.withinBudget(),
-                plan.routeReason(),
-                plan.stageTimings(),
-                plan.concurrencyKeys());
+        AgentRunPlanResponse overBudget = new AgentRunPlanResponse(
+                plan.planId(), plan.tenantId(), plan.subjectType(), plan.subjectId(), plan.agentCode(),
+                plan.providerName(), plan.modelCode(), plan.modelLevel(), plan.allowedToolScopes(), plan.deniedToolScopes(),
+                plan.toolPolicyDecisions(), plan.allowedDataScopes(), plan.deniedDataScopes(), plan.maxInputTokens(),
+                plan.maxOutputTokens(), plan.estimatedTotalTokens(), plan.estimatedCost(), false, plan.routeReason(),
+                plan.stageTimings(), plan.concurrencyKeys());
 
         assertThatThrownBy(() -> service.execute(
-                new AgentRunExecuteRequest(tampered, "tampered", List.of(), false),
-                new RequestSubject("school-a", "teacher", "teacher-001", "device-1")))
+                new AgentRunExecuteRequest(overBudget, "over budget", List.of(), false), subject()))
+                .isInstanceOf(com.doob.mathagent.agent.service.AgentBudgetExceededException.class);
+        assertThat(client.calls()).isZero();
+    }
+
+    @Test
+    void rejectsTamperedScopesBeforePythonCall() {
+        CapturingPythonClient client = new CapturingPythonClient(result(5, 3, 8, -1.0d, false));
+        AgentRunExecutionService service = service(new InMemoryAgentTraceStore(), new InMemoryAgentConcurrencyGuard(), client);
+        AgentRunPlanResponse plan = coursewarePlan();
+        AgentRunPlanResponse tampered = new AgentRunPlanResponse(
+                plan.planId(), plan.tenantId(), plan.subjectType(), plan.subjectId(), plan.agentCode(),
+                plan.providerName(), plan.modelCode(), plan.modelLevel(),
+                List.of("tool:courseware:generate", "tool:student:progress:write"), plan.deniedToolScopes(),
+                plan.toolPolicyDecisions(), plan.allowedDataScopes(), plan.deniedDataScopes(), plan.maxInputTokens(),
+                plan.maxOutputTokens(), plan.estimatedTotalTokens(), plan.estimatedCost(), plan.withinBudget(),
+                plan.routeReason(), plan.stageTimings(), plan.concurrencyKeys());
+
+        assertThatThrownBy(() -> service.execute(
+                new AgentRunExecuteRequest(tampered, "tampered", List.of(), false), subject()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Agent plan tool scope not allowed");
-    }
-
-    @Test
-    void rejectsExecutionWhenPlanRoleIsNotAllowedForAgent() {
-        AgentRunExecutionService service = AgentRunExecutionServiceFixture.deterministicModelService(
-                new InMemoryAgentTraceStore(),
-                new InMemoryAgentConcurrencyGuard());
-        AgentRunPlanResponse plan = coursewarePlan();
-        AgentRunPlanResponse tampered = new AgentRunPlanResponse(
-                plan.planId(),
-                plan.tenantId(),
-                "student",
-                "student-001",
-                plan.agentCode(),
-                plan.providerName(),
-                plan.modelCode(),
-                plan.modelLevel(),
-                plan.allowedToolScopes(),
-                plan.deniedToolScopes(),
-                plan.toolPolicyDecisions(),
-                plan.allowedDataScopes(),
-                plan.deniedDataScopes(),
-                plan.capabilityRequired(),
-                plan.capabilityAction(),
-                plan.maxInputTokens(),
-                plan.maxOutputTokens(),
-                plan.estimatedTotalTokens(),
-                plan.estimatedCost(),
-                plan.withinBudget(),
-                plan.routeReason(),
-                plan.stageTimings(),
-                plan.concurrencyKeys());
-
-        assertThatThrownBy(() -> service.execute(
-                new AgentRunExecuteRequest(tampered, "tampered", List.of(), false),
-                new RequestSubject("school-a", "student", "student-001", "device-1")))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("Agent subject not allowed");
-    }
-
-    @Test
-    void requiresCapabilityFromServerSideAgentPolicyEvenWhenPlanIsTampered() {
-        AgentRunExecutionService service = AgentRunExecutionServiceFixture.deterministicModelService(
-                new InMemoryAgentTraceStore(),
-                new InMemoryAgentConcurrencyGuard());
-        AgentRunPlanResponse plan = coursewarePlan();
-        AgentRunPlanResponse tampered = new AgentRunPlanResponse(
-                plan.planId(),
-                plan.tenantId(),
-                plan.subjectType(),
-                plan.subjectId(),
-                plan.agentCode(),
-                plan.providerName(),
-                plan.modelCode(),
-                plan.modelLevel(),
-                plan.allowedToolScopes(),
-                plan.deniedToolScopes(),
-                plan.toolPolicyDecisions(),
-                plan.allowedDataScopes(),
-                plan.deniedDataScopes(),
-                false,
-                "",
-                plan.maxInputTokens(),
-                plan.maxOutputTokens(),
-                plan.estimatedTotalTokens(),
-                plan.estimatedCost(),
-                plan.withinBudget(),
-                plan.routeReason(),
-                plan.stageTimings(),
-                plan.concurrencyKeys());
-
-        assertThat(service.requiresCapability(new AgentRunExecuteRequest(tampered, "tampered", List.of(), false)))
-                .isTrue();
-        assertThat(service.capabilityAction(tampered)).isEqualTo("agent-run:CoursewareAgent");
-    }
-
-    @Test
-    void rejectsExecutionWhenFrontendReAddsUserDisabledTool() {
-        AgentRunExecutionService service = AgentRunExecutionServiceFixture.deterministicModelService(
-                new InMemoryAgentTraceStore(),
-                new InMemoryAgentConcurrencyGuard());
-        AgentRunPlanResponse plan = disabledPrivateSearchPlan();
-        AgentRunPlanResponse tampered = new AgentRunPlanResponse(
-                plan.planId(),
-                plan.tenantId(),
-                plan.subjectType(),
-                plan.subjectId(),
-                plan.agentCode(),
-                plan.providerName(),
-                plan.modelCode(),
-                plan.modelLevel(),
-                List.of("tool:courseware:generate", "tool:search:private"),
-                plan.deniedToolScopes(),
-                plan.toolPolicyDecisions(),
-                plan.allowedDataScopes(),
-                plan.deniedDataScopes(),
-                plan.capabilityRequired(),
-                plan.capabilityAction(),
-                plan.maxInputTokens(),
-                plan.maxOutputTokens(),
-                plan.estimatedTotalTokens(),
-                plan.estimatedCost(),
-                plan.withinBudget(),
-                plan.routeReason(),
-                plan.stageTimings(),
-                plan.concurrencyKeys());
-
-        assertThatThrownBy(() -> service.execute(
-                new AgentRunExecuteRequest(tampered, "tampered", List.of(), false),
-                new RequestSubject("school-a", "teacher", "teacher-001", "device-1")))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("Agent plan tool scope disabled by user");
+        assertThat(client.calls()).isZero();
     }
 
     @Test
@@ -231,194 +111,71 @@ class AgentRunExecutionServiceTest {
         InMemoryAgentConcurrencyGuard guard = new InMemoryAgentConcurrencyGuard();
         AgentRunPlanResponse plan = coursewarePlan();
         guard.tryAcquire(plan.concurrencyKeys(), "trace-active", Duration.ofSeconds(30)).orElseThrow();
-        AgentRunExecutionService service = AgentRunExecutionServiceFixture.deterministicModelService(new InMemoryAgentTraceStore(), guard);
+        CapturingPythonClient client = new CapturingPythonClient(result(5, 3, 8, -1.0d, false));
+        AgentRunExecutionService service = service(new InMemoryAgentTraceStore(), guard, client);
 
         assertThatThrownBy(() -> service.execute(
-                new AgentRunExecuteRequest(plan, "Generate handout", List.of(), false),
-                new RequestSubject("school-a", "teacher", "teacher-001", "device-1")))
+                new AgentRunExecuteRequest(plan, "Generate handout", List.of(), false), subject()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("Agent concurrency limit exceeded");
+        assertThat(client.calls()).isZero();
     }
 
     @Test
-    void releasesConcurrencyLeaseAfterBaselineExecution() {
+    void releasesConcurrencyLeaseAfterPythonFacadeExecution() {
         TrackingConcurrencyGuard guard = new TrackingConcurrencyGuard();
         AgentRunPlanResponse plan = coursewarePlan();
-        AgentRunExecutionService service = AgentRunExecutionServiceFixture.deterministicModelService(new InMemoryAgentTraceStore(), guard);
+        AgentRunExecutionService service = service(
+                new InMemoryAgentTraceStore(), guard, new CapturingPythonClient(result(5, 3, 8, -1.0d, false)));
 
-        service.execute(
-                new AgentRunExecuteRequest(plan, "Generate handout", List.of(), false),
-                new RequestSubject("school-a", "teacher", "teacher-001", "device-1"));
+        service.execute(new AgentRunExecuteRequest(plan, "Generate handout", List.of(), false), subject());
 
         assertThat(guard.requestedKeys).containsExactlyElementsOf(plan.concurrencyKeys());
         assertThat(guard.released).isTrue();
     }
 
     @Test
-    void callsModelGatewayForNonDryRunAndReturnsActualUsage() {
-        CapturingAiChatGateway gateway = new CapturingAiChatGateway(List.of(new AiChatResult(
-                "dashscope",
-                "qwen3.6-flash",
-                11,
-                7,
-                18,
-                "model response recorded",
-                validJson("draft"))));
-        InMemoryAgentTraceStore traceStore = new InMemoryAgentTraceStore();
-        AgentRunExecutionService service = AgentRunExecutionServiceFixture.modelService(
-                traceStore,
-                new InMemoryAgentConcurrencyGuard(),
-                gateway);
+    void rejectsPythonUsageThatExceedsTheSignedBudget() {
         AgentRunPlanResponse plan = coursewarePlan();
+        CapturingPythonClient client = new CapturingPythonClient(result(plan.maxInputTokens() + 1, 1, plan.maxInputTokens() + 2, -1.0d, false));
+        AgentRunExecutionService service = service(new InMemoryAgentTraceStore(), new InMemoryAgentConcurrencyGuard(), client);
 
-        AgentRunExecuteResponse response = service.execute(
-                new AgentRunExecuteRequest(plan, "Generate handout", List.of("doc-1"), false),
-                new RequestSubject("school-a", "teacher", "teacher-001", "device-1"));
-
-        assertThat(gateway.requests).hasSize(1);
-        assertThat(gateway.requests.getFirst().providerName()).isEqualTo("dashscope");
-        assertThat(response.providerName()).isEqualTo("dashscope");
-        assertThat(response.modelCode()).isEqualTo("qwen3.6-flash");
-        assertThat(response.actualUsage().promptTokens()).isEqualTo(11);
-        assertThat(response.actualUsage().completionTokens()).isEqualTo(7);
-        assertThat(response.actualUsage().totalTokens()).isEqualTo(18);
-        assertThat(response.stageTimings()).extracting(AgentRunExecuteResponse.StageTiming::stage)
-                .contains("model_call");
-        assertThat(response.message()).contains("model response recorded");
-        assertThat(traceStore.find(response.traceId()).orElseThrow().actualUsage().totalTokens()).isEqualTo(18);
-        assertThat(traceStore.find(response.traceId()).orElseThrow().stageTimings())
-                .extracting(AgentRunExecuteResponse.StageTiming::stage)
-                .contains("model_call");
-        assertThat(traceStore.find(response.traceId()).orElseThrow().diagnosticEvents())
-                .extracting(com.doob.mathagent.agent.service.AgentTraceRecord.DiagnosticEvent::eventType)
-                .containsExactly("MODEL_CALL_SUCCEEDED", "JSON_PARSE_SUCCEEDED");
+        assertThatThrownBy(() -> service.execute(
+                new AgentRunExecuteRequest(plan, "Generate handout", List.of(), false), subject()))
+                .isInstanceOf(com.doob.mathagent.agent.service.AgentBudgetExceededException.class)
+                .hasMessageContaining("Python usage exceeded");
     }
 
-    @Test
-    void rotatesToFallbackModelWhenPrimaryModelCallFails() {
-        CapturingAiChatGateway gateway = new CapturingAiChatGateway(List.of(
-                new IllegalStateException("primary unavailable"),
-                new IllegalStateException("primary still unavailable"),
-                new IllegalStateException("primary exhausted"),
-                new AiChatResult("openai", "gpt-5.4", 9, 6, 15, "fallback response recorded", validJson("fallback"))));
-        InMemoryAgentTraceStore traceStore = new InMemoryAgentTraceStore();
-        AgentRunExecutionService service = AgentRunExecutionServiceFixture.modelService(
-                traceStore,
-                new InMemoryAgentConcurrencyGuard(),
-                gateway);
-        AgentRunPlanResponse plan = coursewarePlan();
-
-        AgentRunExecuteResponse response = service.execute(
-                new AgentRunExecuteRequest(plan, "Generate handout", List.of("doc-1"), false),
-                new RequestSubject("school-a", "teacher", "teacher-001", "device-1"));
-
-        assertThat(gateway.requests).hasSize(4);
-        assertThat(gateway.requests.get(0).providerName()).isEqualTo("dashscope");
-        assertThat(gateway.requests.get(1).providerName()).isEqualTo("dashscope");
-        assertThat(gateway.requests.get(2).providerName()).isEqualTo("dashscope");
-        assertThat(gateway.requests.get(3).providerName()).isEqualTo("openai");
-        assertThat(response.providerName()).isEqualTo("openai");
-        assertThat(response.modelCode()).isEqualTo("gpt-5.4");
-        assertThat(response.actualUsage().totalTokens()).isEqualTo(15);
-        assertThat(response.message()).contains("fallback response recorded");
-        assertThat(traceStore.find(response.traceId()).orElseThrow().diagnosticEvents())
-                .extracting(com.doob.mathagent.agent.service.AgentTraceRecord.DiagnosticEvent::eventType)
-                .containsExactly(
-                        "MODEL_CALL_FAILED",
-                        "RETRY_SCHEDULED",
-                        "MODEL_CALL_FAILED",
-                        "RETRY_SCHEDULED",
-                        "MODEL_CALL_FAILED",
-                        "PROVIDER_ROTATED",
-                        "MODEL_CALL_SUCCEEDED",
-                        "JSON_PARSE_SUCCEEDED");
-        assertThat(traceStore.find(response.traceId()).orElseThrow().diagnosticEvents().getFirst().retryable()).isTrue();
+    private static AgentRunExecutionService service(
+            InMemoryAgentTraceStore traceStore, AgentConcurrencyGuard guard, AgentRunClient client) {
+        return new AgentRunExecutionService(traceStore, guard, client, providerCatalog());
     }
 
-    @Test
-    void retriesJsonRepairWhenRequiredSchemaOutputCannotBeParsed() {
-        CapturingAiChatGateway gateway = new CapturingAiChatGateway(List.of(
-                new AiChatResult("dashscope", "qwen3.6-flash", 5, 2, 7, "bad json", "not json"),
-                new AiChatResult("dashscope", "qwen3.6-flash", 8, 4, 12, "repaired json", validJson("repaired"))));
-        InMemoryAgentTraceStore traceStore = new InMemoryAgentTraceStore();
-        AgentRunExecutionService service = AgentRunExecutionServiceFixture.modelService(
-                traceStore,
-                new InMemoryAgentConcurrencyGuard(),
-                gateway);
-        AgentRunPlanResponse plan = coursewarePlan();
-
-        AgentRunExecuteResponse response = service.execute(
-                new AgentRunExecuteRequest(plan, "Generate structured handout", List.of("doc-1"), false),
-                new RequestSubject("school-a", "teacher", "teacher-001", "device-1"));
-
-        assertThat(gateway.requests).hasSize(2);
-        assertThat(gateway.requests.get(1).userInputSummary()).contains("failed backend JSON validation");
-        assertThat(response.generatedContent()).contains("repaired");
-        assertThat(response.actualUsage().totalTokens()).isEqualTo(19);
-        assertThat(traceStore.find(response.traceId()).orElseThrow().diagnosticEvents())
-                .extracting(com.doob.mathagent.agent.service.AgentTraceRecord.DiagnosticEvent::eventType)
-                .containsExactly(
-                        "MODEL_CALL_SUCCEEDED",
-                        "JSON_PARSE_FAILED",
-                        "RETRY_SCHEDULED",
-                        "MODEL_CALL_SUCCEEDED",
-                        "JSON_PARSE_SUCCEEDED");
+    private static AgentRunClient.Result result(int prompt, int completion, int total, double cost, boolean costKnown) {
+        return new AgentRunClient.Result(
+                "openai", "gpt-5.6-luna", new AgentRunExecuteResponse.TokenUsage(prompt, completion, total),
+                "Python AI run completed.", "{\"teacherExplanation\":\"Python facade draft\"}", cost, costKnown);
     }
 
     private static AgentRunPlanResponse coursewarePlan() {
         return new AgentRunPlanService(providerCatalog()).plan(new AgentRunPlanRequest(
-                        "CoursewareAgent",
-                        "courseware_generation",
-                        "teacher",
-                        3000,
-                        1600,
-                        false,
-                        true,
-                        "medium",
-                        "normal",
-                        2.5,
-                        0,
-                        true,
-                        List.of("tool:courseware:generate", "tool:search:private"),
-                        List.of(),
+                        "CoursewareAgent", "courseware_generation", "teacher", 3000, 1600, false, true,
+                        "medium", "normal", 2.5, 0, true,
+                        List.of("tool:courseware:generate", "tool:search:private"), List.of(),
                         List.of("TEACHER_PRIVATE", "CLASS_AUTHORIZED"), false),
-                new RequestSubject("school-a", "teacher", "teacher-001", "device-1"));
-    }
-
-    private static AgentRunPlanResponse disabledPrivateSearchPlan() {
-        return new AgentRunPlanService(providerCatalog()).plan(new AgentRunPlanRequest(
-                        "CoursewareAgent",
-                        "courseware_generation",
-                        "teacher",
-                        3000,
-                        1600,
-                        false,
-                        true,
-                        "medium",
-                        "normal",
-                        2.5,
-                        0,
-                        true,
-                        List.of("tool:courseware:generate", "tool:search:private"),
-                        List.of("tool:search:private"),
-                        List.of("TEACHER_PRIVATE", "CLASS_AUTHORIZED"),
-                        true),
-                new RequestSubject("school-a", "teacher", "teacher-001", "device-1"));
+                subject());
     }
 
     private static AiProviderCatalog providerCatalog() {
         AiProviderProperties properties = new AiProviderProperties();
-        properties.setDefaultProvider("dashscope");
-        properties.getDashscope().setApiKey("dashscope-key");
-        properties.getDashscope().setChatModel("qwen3.6-flash");
-        properties.getOpenai().setApiKey("openai-key");
-        properties.getOpenai().setChatModel("gpt-5.4");
+        properties.setDefaultProvider("openai");
+        properties.getOpenai().setEnabled(true);
+        properties.getOpenai().setChatModel("gpt-5.6-luna");
         return new AiProviderCatalog(properties);
     }
 
-    private static String validJson(String marker) {
-        return "{\"teacherExplanation\":\"" + marker + "\",\"studentHint\":\"hint\",\"knowledgePoints\":[\"kp\"],"
-                + "\"followUpQuestions\":[\"q\"]}";
+    private static RequestSubject subject() {
+        return new RequestSubject("school-a", "teacher", "teacher-001", "device-1");
     }
 
     private static final class TrackingConcurrencyGuard implements AgentConcurrencyGuard {
@@ -432,23 +189,28 @@ class AgentRunExecutionServiceTest {
         }
     }
 
-    private static final class CapturingAiChatGateway implements AiChatGateway {
-        private final List<Object> outcomes;
+    private static final class CapturingPythonClient implements AgentRunClient {
+        private final AgentRunClient.Result response;
         private final AtomicInteger calls = new AtomicInteger();
-        private final List<AiChatRequest> requests = new java.util.ArrayList<>();
+        private AgentRunExecuteRequest lastRequest;
 
-        private CapturingAiChatGateway(List<Object> outcomes) {
-            this.outcomes = outcomes;
+        private CapturingPythonClient(AgentRunClient.Result response) {
+            this.response = response;
         }
 
         @Override
-        public AiChatResult call(AiChatRequest request) {
-            requests.add(request);
-            Object outcome = outcomes.get(calls.getAndIncrement());
-            if (outcome instanceof RuntimeException exception) {
-                throw exception;
-            }
-            return (AiChatResult) outcome;
+        public AgentRunClient.Result execute(String traceId, AgentRunExecuteRequest request, AgentRunPlanResponse plan) {
+            lastRequest = request;
+            calls.incrementAndGet();
+            return response;
+        }
+
+        private int calls() {
+            return calls.get();
+        }
+
+        private AgentRunExecuteRequest lastRequest() {
+            return lastRequest;
         }
     }
 }

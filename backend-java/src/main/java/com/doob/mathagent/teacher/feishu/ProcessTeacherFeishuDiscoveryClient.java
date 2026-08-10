@@ -14,14 +14,12 @@ import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 /**
  * Feishu discovery client backed by the verified Python URL downloader script in discovery-only mode.
  */
 @Component
-@ConditionalOnProperty(prefix = "math-agent.teacher.sync.feishu", name = "process-downloader-enabled", havingValue = "true")
 public class ProcessTeacherFeishuDiscoveryClient implements TeacherFeishuDiscoveryClient {
 
     private static final int MAX_ATTEMPTS = 3;
@@ -108,10 +106,15 @@ public class ProcessTeacherFeishuDiscoveryClient implements TeacherFeishuDiscove
      */
     private List<String> command(TeacherFeishuDiscoveryQuery query, Path summaryPath) {
         List<String> command = new ArrayList<>();
-        command.add("python");
+        command.add(PythonExecutableResolver.resolve());
         command.add(properties.feishuDownloaderScript().toString());
-        command.add("--appkey-path");
-        command.add(properties.feishuAppkeyPath().toString());
+        // An empty appkey setting normalizes to the container working directory.  Do not pass that directory to the
+        // Python downloader: production containers authenticate from APP_ID/APP_SECRET environment variables, while
+        // local development may still use a real APPKEY file.
+        if (Files.isRegularFile(properties.feishuAppkeyPath())) {
+            command.add("--appkey-path");
+            command.add(properties.feishuAppkeyPath().toString());
+        }
         command.add("--summary-path");
         command.add(summaryPath.toString());
         command.add("--quiet");

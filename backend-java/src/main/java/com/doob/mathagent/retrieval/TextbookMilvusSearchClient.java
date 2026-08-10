@@ -13,6 +13,8 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Performs online textbook coarse recall exclusively through Milvus.
@@ -23,6 +25,7 @@ import java.util.Map;
 final class TextbookMilvusSearchClient {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final int MAX_SEARCH_LIMIT = 50;
+    private static final Logger log = LoggerFactory.getLogger(TextbookMilvusSearchClient.class);
     private final VectorIndexProperties properties;
     private final VectorHttpTransport transport;
 
@@ -64,7 +67,10 @@ final class TextbookMilvusSearchClient {
             body.put("limit", candidateLimit);
             body.put("outputFields", List.of("id", "text", "metadata"));
             body.put("searchParams", Map.of("metricType", "COSINE", "params", Map.of()));
-            JsonNode root = responseJson("Milvus textbook search", milvusPost("/v2/vectordb/entities/search", body));
+            var response = milvusPost("/v2/vectordb/entities/search", body);
+            JsonNode root = responseJson("Milvus textbook search", response);
+            log.debug("textbook_milvus_search collection={} requested={} responseStatus={} rawHits={}",
+                    collectionName, requested, response.statusCode(), root.path("data").isArray() ? root.path("data").size() : -1);
             for (JsonNode item : root.path("data")) {
                 JsonNode metadata = metadata(item.path("metadata").asText("{}"));
                 if (!matchesDocumentFilter(metadata, docIds)) {

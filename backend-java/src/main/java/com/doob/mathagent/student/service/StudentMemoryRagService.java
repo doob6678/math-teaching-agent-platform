@@ -7,12 +7,15 @@ import com.doob.mathagent.vector.service.VectorIndexService;
 import java.util.ArrayList;
 import java.util.List;
 import org.springframework.beans.factory.annotation.Value;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 @Service
 public class StudentMemoryRagService {
 
     private static final int HARD_MAX_MEMORY_CHARS = 20_000;
+    private static final Logger LOGGER = LoggerFactory.getLogger(StudentMemoryRagService.class);
 
     private final VectorIndexService vectorIndexService;
     private final int topK;
@@ -52,7 +55,8 @@ public class StudentMemoryRagService {
                 usedChars += content.length() + 1;
             }
             return List.copyOf(selected);
-        } catch (RuntimeException ignored) {
+        } catch (RuntimeException exception) {
+            LOGGER.warn("student_memory_retrieval_failed tenantId={} studentId={}", subject.tenantId(), studentId, exception);
             return List.of();
         }
     }
@@ -68,7 +72,9 @@ public class StudentMemoryRagService {
         }
         try {
             vectorIndexService.indexStudentMemory(subject.tenantId(), studentId, response.explanationId(), content);
-        } catch (RuntimeException ignored) {
+        } catch (RuntimeException exception) {
+            LOGGER.warn("student_memory_index_failed tenantId={} studentId={} explanationId={}",
+                    subject.tenantId(), studentId, response.explanationId(), exception);
         }
     }
 

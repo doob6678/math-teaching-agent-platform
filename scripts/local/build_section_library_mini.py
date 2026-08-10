@@ -1,4 +1,4 @@
-"""Build a resumable chapter/section textbook library with gpt-5.4-mini.
+"""Build a resumable chapter/section textbook library with gpt-5.6-luna.
 
 The source page library is immutable.  Each page is structurally annotated into
 small titled sections, then only explicit cross-page continuations are joined.  A
@@ -30,7 +30,7 @@ DEFAULT_SOURCE_ROOT = Path(
 )
 DEFAULT_TARGET_ROOT = DEFAULT_SOURCE_ROOT.parent / "processed_books_section_shadow_all_mini_c1"
 DEFAULT_REUSE_BOOK_ROOT = DEFAULT_SOURCE_ROOT.parent / "processed_books_section_shadow_b3"
-DEFAULT_MODEL = "gpt-5.4-mini"
+DEFAULT_MODEL = "gpt-5.6-luna"
 DEFAULT_WORKERS = 4
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 180
 DEFAULT_RETRY_COUNT = 3
@@ -301,7 +301,7 @@ def reuse_existing_book(source_root: Path, target_root: Path, doc_id: str) -> li
     rows, _ = searchable_page_rows(read_jsonl(source))
     manifest = source_root / doc_id / "manifest.json"
     manifest_model = str(read_json(manifest).get("model") or "") if manifest.exists() else ""
-    row_model = any(str(row.get("section_extractor_model") or "").startswith("gpt-5.4") for row in rows)
+    row_model = any(str(row.get("section_extractor_model") or "") == DEFAULT_MODEL for row in rows)
     if not rows or not (row_model or manifest_model == DEFAULT_MODEL):
         return None
     target_book = target_root / doc_id
@@ -352,10 +352,10 @@ def build_book(book_id: str, source_book: Path, target_root: Path, args: argpars
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build all-book chapter/section textbook chunks with gpt-5.4-mini")
+    parser = argparse.ArgumentParser(description="Build all-book chapter/section textbook chunks with gpt-5.6-luna")
     parser.add_argument("--source-root", type=Path, default=DEFAULT_SOURCE_ROOT)
     parser.add_argument("--target-root", type=Path, default=DEFAULT_TARGET_ROOT)
-    parser.add_argument("--model", default=DEFAULT_MODEL, choices=["gpt-5.4-mini"])
+    parser.add_argument("--model", default=DEFAULT_MODEL, choices=[DEFAULT_MODEL])
     parser.add_argument("--workers", type=int, default=DEFAULT_WORKERS)
     parser.add_argument("--timeout-seconds", type=int, default=DEFAULT_REQUEST_TIMEOUT_SECONDS)
     parser.add_argument("--retry-count", type=int, default=DEFAULT_RETRY_COUNT)

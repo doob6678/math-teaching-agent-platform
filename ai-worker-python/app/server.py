@@ -42,6 +42,11 @@ from app.workload_runtime import (
     StudentExplanationRunRequest,
 )
 from app.student_explanation_runtime import DurableStudentExplanationRuntime
+from app.student_explanation_graph import (
+    StudentExplanationContextGraph,
+    StudentExplanationGraphRequest,
+    as_v1_compose_request,
+)
 from app.streaming_runtime import AgentStreamingRuntime
 from app.tokenizer import count_texts
 from fastapi.responses import StreamingResponse
@@ -158,10 +163,18 @@ def migrated_workload_runtime() -> MigratedWorkloadRuntime:
 
 
 @lru_cache(maxsize=1)
+def student_explanation_context_graph() -> StudentExplanationContextGraph:
+    """Keeps the compiled deterministic context graph available for v2 requests."""
+    return StudentExplanationContextGraph()
+
+
+@lru_cache(maxsize=1)
 def durable_student_explanation_runtime() -> DurableStudentExplanationRuntime:
     """为学生讲解提供运行级幂等、终态缓存和有限事件重放。"""
-    runtime = migrated_workload_runtime()
-    return DurableStudentExplanationRuntime(runtime.explain_student_problem)
+    return DurableStudentExplanationRuntime(
+        migrated_workload_runtime().explain_student_problem,
+        migrated_workload_runtime().stream_student_explanation,
+    )
 
 
 def require_worker_key(
@@ -240,10 +253,85 @@ def learning_intent_sync(payload: IntentRunRequest) -> dict:
     return migrated_workload_runtime().recognize_intent(payload)
 
 
+@app.post("/v2/student-explanations/prepare", dependencies=[Depends(require_worker_key)])
+def student_explanation_prepare(payload: StudentExplanationGraphRequest) -> dict:
+    """Prepares a token-bounded summary/window without exposing durable student identity to Python."""
+    return student_explanation_context_graph().prepare(payload)
+
+
+@app.post("/v2/student-explanations/sync", dependencies=[Depends(require_worker_key)])
+def student_explanation_v2_sync(payload: StudentExplanationGraphRequest) -> dict:
+    """Compatibility v2 execution: LangGraph packs context before the existing validated compose runtime runs."""
+    prepared = student_explanation_context_graph().prepare(payload)
+    response = durable_student_explanation_runtime().execute(as_v1_compose_request(payload, prepared))
+    return {"contractVersion": payload.contractVersion, "context": prepared, "response": response}
+
+
+@app.post("/v2/student-explanations/stream", dependencies=[Depends(require_worker_key)])
+def student_explanation_v2_stream(
+    payload: StudentExplanationGraphRequest,
+    last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+) -> StreamingResponse:
+    """在一次 durable worker stream 中完成上下文预算准备和已校验的讲解生成。"""
+    try:
+        after_id = max(0, int(last_event_id or "0"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid Last-Event-ID")
+
+    def encoded_events():
+        prepared = student_explanation_context_graph().prepare(payload)
+        yield "event: context_prepared\ndata: " + json.dumps(
+            {"runId": payload.runId, **prepared}, ensure_ascii=False, separators=(",", ":")
+        ) + "\n\n"
+        request = as_v1_compose_request(payload, prepared)
+        for event_id, item in durable_student_explanation_runtime().stream_events(request, after_id):
+            event_name = str(item.get("event", "progress"))
+            data = item.get("data", {})
+            yield (
+                f"id: {event_id}\n"
+                f"event: {event_name}\n"
+                f"data: {json.dumps(data, ensure_ascii=False, separators=(',', ':'))}\n\n"
+            )
+
+    return StreamingResponse(
+        encoded_events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.post("/v1/student-explanations/sync", dependencies=[Depends(require_worker_key)])
 def student_explanation_sync(payload: StudentExplanationRunRequest) -> dict:
     """执行学生解释卡片生成，引用只能来自 Java 已授权证据。"""
     return durable_student_explanation_runtime().execute(payload)
+
+
+@app.post("/v1/student-explanations/stream", dependencies=[Depends(require_worker_key)])
+def student_explanation_stream(
+    payload: StudentExplanationRunRequest,
+    last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+) -> StreamingResponse:
+    """按 durable run 事件游标流式返回；断线重连不会再次调用 provider。"""
+    try:
+        after_id = max(0, int(last_event_id or "0"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid Last-Event-ID")
+
+    def encoded_events():
+        for event_id, item in durable_student_explanation_runtime().stream_events(payload, after_id):
+            event_name = str(item.get("event", "progress"))
+            data = item.get("data", {})
+            yield (
+                f"id: {event_id}\n"
+                f"event: {event_name}\n"
+                f"data: {json.dumps(data, ensure_ascii=False, separators=(',', ':'))}\n\n"
+            )
+
+    return StreamingResponse(
+        encoded_events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/v1/student-explanations/{run_id}/events", dependencies=[Depends(require_worker_key)])

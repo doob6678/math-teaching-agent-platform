@@ -44,10 +44,24 @@ public class TextbookRetrievalService {
      */
     /** 为保持审计与 API 兼容而保留的稳定公开策略标识。 */
     // 候选准入规则变化时必须变更缓存身份，否则 Redis 会静默返回小标题 BM25 加入前生成的旧响应。
-    private static final String SEARCH_PIPELINE_VERSION = "two_stage_doc_page_v5_semantic_first_title_field_parent_rerank";
+    private static final String SEARCH_PIPELINE_VERSION = "two_stage_doc_page_v4_bounded_semantic_first_parent_rerank";
     /** 候选准入或校验语义变化时同步变更缓存结构版本。 */
     private static final String SEARCH_CACHE_SCHEMA_VERSION = "two_stage_section_block_reference_index";
     private static final Pattern QUERY_CLAUSE_SPLITTER = Pattern.compile("[\\r\\n,，。；;：:！？!?()（）\\[\\]【】]+");
+    /** Agent 常见的教材检索包装句只表达操作意图，不应进入 BM25/BGE 的主题词空间。 */
+    private static final Pattern TEXTBOOK_QUERY_PREFIX = Pattern.compile(
+            "^(?:(?:请|麻烦|帮我|请帮我)\\s*)?(?:查找|搜索|检索|查询|定位|寻找)(?:一下)?(?:教材|课本)(?:中|里|内)?(?:关于|有关|涉及|相关)?");
+    /** 只剥离明确的“相关内容/资料”尾巴，保留“函数定义”“双曲线定义”等真实主题词。 */
+    private static final Pattern TEXTBOOK_QUERY_SUFFIX = Pattern.compile(
+            "(?:的)?(?:相关|有关)(?:的)?(?:内容|资料|章节|知识点|信息|部分)?$");
+    private static final int MIN_INFERRED_TITLE_QUERY_CHARS = 2;
+    private static final int MIN_INFERRED_TITLE_OVERLAP = 2;
+    private static final int MAX_INFERRED_TITLE_CHARS = 48;
+    private static final double INFERRED_TITLE_OVERLAP_RATIO = 0.5d;
+    /** 公式、编号和函数名是短查询中最可靠的词法信号，命中后先保障 BM25 候选进入粗融合。 */
+    private static final Pattern LEXICAL_QUERY_SIGNAL = Pattern.compile(
+            "(?:=|\\^|_|\\{|\\}|√|π|∫|≤|≥|\\b(?:sin|cos|tan|log|ln)\\b|\\d+\\.\\d+|第[一二三四五六七八九十百千万0-9]+[章节])",
+            Pattern.CASE_INSENSITIVE);
     private final TextbookCatalogReader catalogReader;
     private final TextbookChunkReader chunkReader;
     private final LocalTextbookBm25SearchEngine searchEngine;
@@ -206,7 +220,9 @@ public class TextbookRetrievalService {
     private String focusedTextbookQuery(
             String rawQuery,
             TeacherResourceGraphAlignmentService.QueryGraphContext queryGraph) {
-        String normalized = normalizeQueryText(rawQuery);
+        String normalized = retrievalProperties.queryFocus().normalizeAgentWrapperEnabled()
+                ? normalizeTextbookQuery(rawQuery)
+                : normalizeQueryText(rawQuery);
         if (normalized.isBlank()) {
             return normalized;
         }
@@ -231,6 +247,20 @@ public class TextbookRetrievalService {
                     .forEach(focusedParts::add);
         }
         String focused = truncateForRerank(String.join(" ", focusedParts), retrievalProperties.queryFocus().maxQueryChars());
+        return focused.isBlank() ? normalized : focused;
+    }
+
+    /**
+     * Removes only generic agent routing prose before retrieval.  The public response still keeps the original query,
+     * while all three retrieval routes receive the same compact subject intent and therefore remain comparable.
+     */
+    static String normalizeTextbookQuery(String rawQuery) {
+        String normalized = normalizeQueryText(rawQuery);
+        if (normalized.isBlank()) {
+            return normalized;
+        }
+        String focused = TEXTBOOK_QUERY_PREFIX.matcher(normalized).replaceFirst("").strip();
+        focused = TEXTBOOK_QUERY_SUFFIX.matcher(focused).replaceFirst("").strip();
         return focused.isBlank() ? normalized : focused;
     }
 
@@ -363,7 +393,7 @@ public class TextbookRetrievalService {
         Map<String, List<TextbookSearchHit>> lexicalCandidates = groupByDocument(coarseHits);
         // Fielded title BM25 remains a separate candidate route. It prevents body
         // OCR frequency from suppressing an exact visible small heading, without
-        // copying c2 body text or adding incomparable route scores together.
+        // copying page-library body text or adding incomparable route scores together.
         List<TextbookSearchHit> titleHits = collapseLogicalBlockCandidates(
                 searchEngine.searchSectionTitles(query, chunks, chunks.size()), blockIndex);
         Map<String, List<TextbookSearchHit>> titleCandidates = groupByDocument(titleHits);
@@ -384,8 +414,8 @@ public class TextbookRetrievalService {
                 blockIndex,
                 request,
                 executionStages);
-        Map<String, List<TextbookSearchHit>> topLexicalCandidates = topLexicalDocumentCandidates(lexicalCandidates, safeLimit);
-        Map<String, List<TextbookSearchHit>> topTitleCandidates = topLexicalDocumentCandidates(titleCandidates, safeLimit);
+        Map<String, List<TextbookSearchHit>> topLexicalCandidates = topLexicalDocumentCandidates(lexicalCandidates);
+        Map<String, List<TextbookSearchHit>> topTitleCandidates = topLexicalDocumentCandidates(titleCandidates);
         Map<String, List<TextbookSearchHit>> coarseDocumentCandidates = mergeDocumentCandidates(
                 topLexicalCandidates,
                 topTitleCandidates,
@@ -393,11 +423,16 @@ public class TextbookRetrievalService {
         if (coarseDocumentCandidates.isEmpty()) {
             return List.of();
         }
+        List<Map<String, List<TextbookSearchHit>>> orderedRoutes = orderedCandidateRoutes(
+                query,
+                semanticCandidates,
+                topLexicalCandidates,
+                topTitleCandidates);
+        boolean lexicalDominantQuery = isLexicalDominantQuery(query);
         Map<String, List<TextbookSearchHit>> supportHitsByDocId = cappedSupportHitsByDocId(
                 coarseDocumentCandidates,
-                semanticCandidates,
-                topTitleCandidates,
-                topLexicalCandidates);
+                orderedRoutes,
+                retrievalProperties.rerank().pagesPerDocument(lexicalDominantQuery));
         /*
          * This is deliberately not a second cross-encoder pass. Stage one is document-level coarse recall: the BGE
          * page index contributes semantic document order and BM25 contributes independent lexical admission. Applying
@@ -409,11 +444,10 @@ public class TextbookRetrievalService {
          * cannot recover a semantic document that was excluded by the global document cap. Lexical routes remain
          * available as complementary evidence and fill the remaining slots.
          */
-        List<String> rankedDocIds = interleaveDocumentIds(List.of(
-                new ArrayList<>(semanticCandidates.keySet()),
-                new ArrayList<>(topLexicalCandidates.keySet()),
-                new ArrayList<>(topTitleCandidates.keySet())),
-                retrievalProperties.rerank().maxRerankDocuments());
+        List<String> rankedDocIds = rankCoarseDocumentsByRrf(
+                orderedRoutes,
+                retrievalProperties.rerank().maxRerankDocuments(),
+                retrievalProperties.rerank().coarseRrfK());
         List<TextbookSearchHit> pageCandidates = pageCandidates(rankedDocIds, supportHitsByDocId, safeLimit);
         String semanticQuery = semanticRecallQuery(query, titleHits);
         Map<String, String> pageTexts = pageCandidateTexts(semanticQuery, pageCandidates, blockIndex);
@@ -421,7 +455,7 @@ public class TextbookRetrievalService {
         return pageCandidates.stream()
                 .map(hit -> new TextbookPageCandidate(
                         hit,
-                        pageSemanticScores.getOrDefault(hit.chunkId(), hit.score())))
+                        pageSemanticScores.getOrDefault(supportEvidenceKey(hit), hit.score())))
                 // Cross-encoder logits are used only to order admitted evidence. They are model-dependent and this
                 // service has no calibrated relevance threshold, so the response must not claim negative filtering.
                 .sorted(Comparator.<TextbookPageCandidate>comparingDouble(TextbookPageCandidate::pageSemanticScore).reversed()
@@ -429,7 +463,9 @@ public class TextbookRetrievalService {
                         .thenComparing(candidate -> candidate.hit().docId())
                         .thenComparingInt(candidate -> candidate.hit().pageNo()))
                 .limit(safeLimit)
-                .map(candidate -> withScore(candidate.hit(), candidate.pageSemanticScore()))
+                .map(candidate -> withInferredSectionTitle(
+                        withScore(candidate.hit(), candidate.pageSemanticScore()),
+                        semanticQuery))
                 .toList();
     }
 
@@ -450,9 +486,7 @@ public class TextbookRetrievalService {
         if (blockIndex == null || blockIndex.membersByBlockKey().isEmpty()) {
             return Map.of();
         }
-        int semanticPageLimit = Math.multiplyExact(
-                retrievalProperties.rerank().maxDocumentCandidates(),
-                retrievalProperties.rerank().maxPagesPerDocument());
+        int semanticPageLimit = retrievalProperties.rerank().coarsePageCandidateLimit();
         Map<String, List<TextbookSearchHit>> mergedCandidates = new LinkedHashMap<>();
         TextbookRetrievalMode mode = request.mode();
         if (mode.usesTextPageIndex() && pageTextSearchService != null && !query.isBlank()) {
@@ -528,7 +562,14 @@ public class TextbookRetrievalService {
         if (query != null && !query.isBlank()) {
             parts.add(query.strip());
         }
-        int titleLimit = retrievalProperties.rerank().maxPageCandidates();
+        // Exact headings and formulas already have their strongest lexical signal. Sending BM25 title hits back into
+        // BGE for those queries makes duplicate editions reinforce whichever source happened to rank first, while the
+        // pure subject query is the better semantic tie-break. Long natural-language queries still receive a small,
+        // bounded title vocabulary bridge.
+        if (isLexicalDominantQuery(query)) {
+            return truncateForRerank(String.join(" ", parts), retrievalProperties.queryFocus().maxQueryChars());
+        }
+        int titleLimit = retrievalProperties.queryFocus().semanticTitleContextLimit();
         if (titleHits != null && titleLimit > 0) {
             titleHits.stream()
                     .map(TextbookSearchHit::sectionTitle)
@@ -889,14 +930,83 @@ public class TextbookRetrievalService {
     }
 
     /**
+     * 按查询形态调整粗召回路线顺序：短术语、章节编号和公式优先保留词法证据，长自然语言优先保留语义证据。
+     * 这里只调整 RRF 的并列决策与候选页的路线多样性，不把 BM25 分数和向量分数直接相加。
+     */
+    private List<Map<String, List<TextbookSearchHit>>> orderedCandidateRoutes(
+            String query,
+            Map<String, List<TextbookSearchHit>> semanticCandidates,
+            Map<String, List<TextbookSearchHit>> lexicalCandidates,
+            Map<String, List<TextbookSearchHit>> titleCandidates) {
+        if (retrievalProperties.queryFocus().dynamicRouteEnabled() && isLexicalDominantQuery(query)) {
+            // Exact headings should expose title evidence first, then body evidence; semantic rescue is retained as
+            // the third route but cannot consume the first two page slots of a short/structured query.
+            return List.of(titleCandidates, lexicalCandidates, semanticCandidates);
+        }
+        return List.of(semanticCandidates, lexicalCandidates, titleCandidates);
+    }
+
+    /** 判断查询是否包含短术语、章节编号或公式等 BM25 更擅长的离散信号。 */
+    private boolean isLexicalDominantQuery(String query) {
+        if (!retrievalProperties.queryFocus().dynamicRouteEnabled()) {
+            return false;
+        }
+        String normalized = normalizeQueryText(query);
+        String compact = normalized.replaceAll("\\s+", "");
+        return compact.length() <= retrievalProperties.queryFocus().lexicalFirstMaxQueryChars()
+                || LEXICAL_QUERY_SIGNAL.matcher(normalized).find();
+    }
+
+    /**
+     * 对各路线内部排名做等权 Reciprocal Rank Fusion，先扩大粗召回，再筛出真正进入 Cross-Encoder 的教材。
+     * RRF 只使用路线内 rank，不比较 BM25、余弦和 CLIP 的原始分值，因此不存在跨模型分数归一化问题。
+     */
+    static List<String> rankCoarseDocumentsByRrf(
+            List<Map<String, List<TextbookSearchHit>>> routes,
+            int limit,
+            int rrfK) {
+        int safeLimit = Math.max(0, limit);
+        if (safeLimit == 0 || routes == null || routes.isEmpty()) {
+            return List.of();
+        }
+        Map<String, Double> fusedRanks = new LinkedHashMap<>();
+        Map<String, Integer> bestRank = new LinkedHashMap<>();
+        Map<String, Integer> firstRoute = new LinkedHashMap<>();
+        int safeRrfK = Math.max(1, rrfK);
+        for (int routeIndex = 0; routeIndex < routes.size(); routeIndex += 1) {
+            Map<String, List<TextbookSearchHit>> route = routes.get(routeIndex);
+            if (route == null || route.isEmpty()) {
+                continue;
+            }
+            int rank = 0;
+            for (Map.Entry<String, List<TextbookSearchHit>> entry : route.entrySet()) {
+                if (entry.getKey() == null || entry.getKey().isBlank() || entry.getValue() == null || entry.getValue().isEmpty()) {
+                    continue;
+                }
+                rank += 1;
+                String docId = entry.getKey();
+                fusedRanks.merge(docId, 1.0d / (safeRrfK + rank), Double::sum);
+                bestRank.merge(docId, rank, Math::min);
+                firstRoute.putIfAbsent(docId, routeIndex);
+            }
+        }
+        return fusedRanks.keySet().stream()
+                .sorted(Comparator.<String>comparingDouble(fusedRanks::get).reversed()
+                        .thenComparingInt(docId -> bestRank.getOrDefault(docId, Integer.MAX_VALUE))
+                        .thenComparingInt(docId -> firstRoute.getOrDefault(docId, Integer.MAX_VALUE))
+                        .thenComparing(String::compareTo))
+                .limit(safeLimit)
+                .toList();
+    }
+
+    /**
      * Document-level coarse retrieval already produced a global lexical ordering. Keep only the strongest few book
      * buckets before the final page rerank; otherwise one top-5 page query drags many irrelevant books into the slow
      * cross-encoder stage even though only a handful can contribute final winners.
      */
     private Map<String, List<TextbookSearchHit>> topLexicalDocumentCandidates(
-            Map<String, List<TextbookSearchHit>> hitsByDocId,
-            int safeLimit) {
-        int docLimit = Math.max(1, Math.min(retrievalProperties.rerank().maxDocumentCandidates(), safeLimit));
+            Map<String, List<TextbookSearchHit>> hitsByDocId) {
+        int docLimit = retrievalProperties.rerank().maxCoarseDocumentCandidates();
         Map<String, List<TextbookSearchHit>> candidates = new LinkedHashMap<>();
         hitsByDocId.entrySet().stream()
                 .sorted(Comparator.<Map.Entry<String, List<TextbookSearchHit>>>comparingDouble(
@@ -914,30 +1024,48 @@ public class TextbookRetrievalService {
      */
     private Map<String, List<TextbookSearchHit>> cappedSupportHitsByDocId(
             Map<String, List<TextbookSearchHit>> hitsByDocId,
-            Map<String, List<TextbookSearchHit>>... candidateRoutes) {
+            List<Map<String, List<TextbookSearchHit>>> candidateRoutes,
+            int maxPagesPerDocument) {
         Map<String, List<TextbookSearchHit>> capped = new LinkedHashMap<>();
         for (Map.Entry<String, List<TextbookSearchHit>> entry : hitsByDocId.entrySet()) {
-            int limit = retrievalProperties.rerank().maxPagesPerDocument();
+            int limit = Math.max(1, maxPagesPerDocument);
             LinkedHashMap<String, TextbookSearchHit> selected = new LinkedHashMap<>();
-            // Route order is semantic first because the final reranker cannot recover a page that was excluded here.
-            // BM25 and title routes remain in the same bounded window as lexical rescue evidence, but they must not
-            // consume every slot with sibling chunks from one visible page before BGE can contribute another page.
-            for (Map<String, List<TextbookSearchHit>> route : candidateRoutes) {
-                List<TextbookSearchHit> candidates = route == null
-                        ? List.of()
-                        : route.getOrDefault(entry.getKey(), List.of());
-                appendSupportCandidates(selected, candidates.stream().limit(1).toList(), limit);
-            }
-            for (Map<String, List<TextbookSearchHit>> route : candidateRoutes) {
-                List<TextbookSearchHit> candidates = route == null
-                        ? List.of()
-                        : route.getOrDefault(entry.getKey(), List.of());
-                appendSupportCandidates(selected, candidates, limit);
+            /*
+             * Take one rank from every independent route before taking its next rank.  This preserves lexical exact
+             * matches, semantic rescue and title evidence in the same bounded page window; iterating a whole route
+             * first is what previously hid BGE's fourth page behind three sibling BM25 pages.
+             */
+            int routeDepth = maxRouteDepth(candidateRoutes, entry.getKey());
+            for (int offset = 0; offset < routeDepth && selected.size() < limit; offset += 1) {
+                for (Map<String, List<TextbookSearchHit>> route : candidateRoutes) {
+                    List<TextbookSearchHit> candidates = route == null
+                            ? List.of()
+                            : route.getOrDefault(entry.getKey(), List.of());
+                    if (offset < candidates.size()) {
+                        appendSupportCandidates(selected, List.of(candidates.get(offset)), limit);
+                    }
+                    if (selected.size() >= limit) {
+                        break;
+                    }
+                }
             }
             appendSupportCandidates(selected, entry.getValue(), limit);
             capped.put(entry.getKey(), List.copyOf(selected.values()));
         }
         return capped;
+    }
+
+    /** Finds the deepest route rank available for one document without copying candidate lists. */
+    private static int maxRouteDepth(
+            List<Map<String, List<TextbookSearchHit>>> candidateRoutes,
+            String docId) {
+        int depth = 0;
+        for (Map<String, List<TextbookSearchHit>> route : candidateRoutes == null ? List.<Map<String, List<TextbookSearchHit>>>of() : candidateRoutes) {
+            if (route != null) {
+                depth = Math.max(depth, route.getOrDefault(docId, List.of()).size());
+            }
+        }
+        return depth;
     }
 
     /**
@@ -957,11 +1085,52 @@ public class TextbookRetrievalService {
             if (candidate == null || supportEvidenceKey(candidate).isBlank()) {
                 continue;
             }
-            selected.putIfAbsent(supportEvidenceKey(candidate), candidate);
+            // 同一页同一逻辑块可能同时由标题 BM25 命中短标题、正文 BM25 命中正文、BGE 命中真实 child。
+            // 这些命中共享一个排序槽，但不能因为先到的短标题占位而丢掉更有解释力的正文证据。
+            selected.merge(
+                    supportEvidenceKey(candidate),
+                    candidate,
+                    TextbookRetrievalService::strongerSupportHit);
             if (selected.size() >= limit) {
                 return;
             }
         }
+    }
+
+    /** 在同一页同一逻辑块的候选中保留正文证据更完整的真实 child。 */
+    private static TextbookSearchHit strongerSupportHit(
+            TextbookSearchHit current,
+            TextbookSearchHit candidate) {
+        int currentEvidenceLength = supportEvidenceLength(current);
+        int candidateEvidenceLength = supportEvidenceLength(candidate);
+        if (candidateEvidenceLength != currentEvidenceLength) {
+            return candidateEvidenceLength > currentEvidenceLength ? candidate : current;
+        }
+        // 长度相同仍优先保留 BGE/CLIP 明确返回的真实语义 child，再以路线名和 chunkId 保证确定性。
+        int currentSemanticPriority = semanticRoutePriority(current);
+        int candidateSemanticPriority = semanticRoutePriority(candidate);
+        if (candidateSemanticPriority != currentSemanticPriority) {
+            return candidateSemanticPriority > currentSemanticPriority ? candidate : current;
+        }
+        return textOrBlank(candidate.chunkId()).compareTo(textOrBlank(current.chunkId())) < 0
+                ? candidate
+                : current;
+    }
+
+    /** 计算候选实际携带的正文和公式长度，不使用跨模型分数做隐式加权。 */
+    private static int supportEvidenceLength(TextbookSearchHit hit) {
+        if (hit == null) {
+            return 0;
+        }
+        return textOrBlank(hit.textSnippet()).length() + textOrBlank(hit.formulaText()).length();
+    }
+
+    /** 仅用于同槽位的结构性 tie-break，BGE/CLIP 不是与 BM25 的数值融合。 */
+    private static int semanticRoutePriority(TextbookSearchHit hit) {
+        if (hit == null || hit.retrievalStrategy() == null) {
+            return 0;
+        }
+        return hit.retrievalStrategy().startsWith("bge_") || hit.retrievalStrategy().startsWith("clip_") ? 1 : 0;
     }
 
     /**
@@ -1131,7 +1300,8 @@ public class TextbookRetrievalService {
             LogicalBlockIndex blockIndex) {
         Map<String, String> texts = new LinkedHashMap<>();
         for (TextbookSearchHit hit : hits) {
-            texts.put(hit.chunkId(), semanticLogicalBlockText(query, hit, blockIndex));
+            // 用实际排序单元做键，避免同一页的兼容 chunkId 或 legacy sectionId 在候选映射时互相覆盖。
+            texts.put(supportEvidenceKey(hit), semanticLogicalBlockText(query, hit, blockIndex));
         }
         return texts;
     }
@@ -1139,7 +1309,7 @@ public class TextbookRetrievalService {
     /**
      * Builds a rerank payload only after the bounded final candidate window is known.
      *
-     * <p>The corpus snapshot keeps one copy of every c2 chunk.  This method is the only place sibling text is joined,
+     * <p>The page-library snapshot keeps one copy of every page chunk. This method is the only place sibling text is joined,
      * so at most the configured rerank window allocates a transient block string for one request.</p>
      */
     private String semanticLogicalBlockText(
@@ -1296,6 +1466,70 @@ public class TextbookRetrievalService {
     }
 
     /**
+     * Page-summary chunks from older textbook builds may expose only the chapter as sectionTitle even though their
+     * body contains a visible small heading. Recovering that heading from the already returned source text keeps the
+     * response explainable and lets the block metric distinguish a real subheading from its parent chapter.
+     */
+    private static TextbookSearchHit withInferredSectionTitle(TextbookSearchHit hit, String query) {
+        if (hit == null || !isGenericSectionTitle(hit)) {
+            return hit;
+        }
+        String inferred = inferredSectionTitle(query, hit.textSnippet());
+        return inferred.isBlank() ? hit : hit.withSectionTitle(inferred);
+    }
+
+    /** A chapter-only title is a fallback label, not a visible small-heading identity. */
+    private static boolean isGenericSectionTitle(TextbookSearchHit hit) {
+        String title = visibleSectionTitle(hit.sectionTitle());
+        if (title.isBlank()) {
+            return true;
+        }
+        return hit.chapterPath() != null && hit.chapterPath().stream()
+                .map(TextbookRetrievalService::visibleSectionTitle)
+                .anyMatch(title::equals);
+    }
+
+    /**
+     * Selects a short source-text line with the strongest character overlap with the focused query. This is metadata
+     * recovery only: it never changes candidate admission or model scores, and it requires enough overlap to avoid
+     * inventing a title from generic OCR prose.
+     */
+    private static String inferredSectionTitle(String query, String content) {
+        String compactQuery = compact(query);
+        if (compactQuery.length() < MIN_INFERRED_TITLE_QUERY_CHARS || content == null || content.isBlank()) {
+            return "";
+        }
+        List<Integer> queryCharacters = compactQuery.codePoints().distinct().boxed().toList();
+        int minimumOverlap = Math.max(
+                MIN_INFERRED_TITLE_OVERLAP,
+                (int) Math.ceil(queryCharacters.size() * INFERRED_TITLE_OVERLAP_RATIO));
+        String best = "";
+        int bestScore = 0;
+        for (String rawLine : content.split("\\R")) {
+            String line = rawLine.replaceAll("^[#>*_`\\-\\s]+", "").strip();
+            String compactLine = compact(line);
+            if (compactLine.length() < MIN_INFERRED_TITLE_QUERY_CHARS
+                    || compactLine.length() > MAX_INFERRED_TITLE_CHARS
+                    || line.contains("://")
+                    || line.contains("书名")
+                    || line.contains("章节")
+                    || line.contains("PDF页码")
+                    || line.contains("印刷页码")) {
+                continue;
+            }
+            int score = (int) queryCharacters.stream()
+                    .filter(character -> compactLine.codePoints().anyMatch(value -> value == character))
+                    .count();
+            boolean exact = compactLine.contains(compactQuery);
+            if (score > bestScore || (score == bestScore && exact && !compact(best).contains(compactQuery))) {
+                best = line;
+                bestScore = score;
+            }
+        }
+        return bestScore >= minimumOverlap ? best : "";
+    }
+
+    /**
      * 教材原始 chunk 只保存相对图片路径；真正返回给前端和 AI 的必须是后端受控 URI，避免调用方拼接本地路径。
      */
     private List<TextbookSearchHit> attachControlledPageImageUris(List<TextbookSearchHit> hits) {
@@ -1324,7 +1558,7 @@ public class TextbookRetrievalService {
     }
 
     /**
-     * Creates only a reference index over the already-loaded c2 small-heading records.
+     * Creates only a reference index over the already-loaded page-library records.
      *
      * <p>Each list stores references to the original {@link TextbookChunk}, never a copied text field. A visible
      * heading remains part of the key because old section identities can be shared by different headings. Cross-page
@@ -1402,6 +1636,7 @@ public class TextbookRetrievalService {
      */
     private CachedTextbookCorpus loadCorpusOrThrow(Path processedBooksRoot) {
         rejectDuringFailureCooldown(processedBooksRoot);
+        requireProductionSectionCorpus(processedBooksRoot);
         List<TextbookCatalogItem> books = catalogReader.read(processedBooksRoot.resolve("catalog.jsonl"));
         List<Path> chunkPaths = books.stream()
                 .map(book -> chunksPath(processedBooksRoot, book))
@@ -1506,11 +1741,35 @@ public class TextbookRetrievalService {
     /** Returns only present worker manifests so lexical retrieval still works while an optional index is rebuilt. */
     private static List<Path> retrievalIndexManifestPaths(Path processedBooksRoot) {
         return List.of(
+                        processedBooksRoot.resolve("_section_bge_index/manifest.json"),
                         processedBooksRoot.resolve("_page_text_index/manifest.json"),
                         processedBooksRoot.resolve("_page_image_index/manifest.json"))
                 .stream()
                 .filter(Files::isRegularFile)
                 .toList();
+    }
+
+    /**
+     * Rejects a page-only textbook root before BM25 can make a misconfigured deployment look healthy.
+     *
+     * The production service must load c2 section children because the parent aggregation key depends on their
+     * section_id/source_chunk_id contract. Test fixtures may omit the offline manifest, but any mounted real corpus
+     * must explicitly identify itself as a section-child library.
+     */
+    private static void requireProductionSectionCorpus(Path processedBooksRoot) {
+        Path manifest = processedBooksRoot.resolve("_section_bge_index/manifest.json");
+        if (!Files.isRegularFile(manifest)) {
+            return;
+        }
+        try {
+            String content = Files.readString(manifest, StandardCharsets.UTF_8);
+            if (!content.contains("\"kind\": \"bge_section_chunk_library\"")) {
+                throw new IllegalStateException(
+                        "Production textbook retrieval requires the c2 section-child corpus: " + manifest);
+            }
+        } catch (IOException exception) {
+            throw new IllegalStateException("Failed to validate production textbook corpus manifest: " + manifest, exception);
+        }
     }
 
     /**

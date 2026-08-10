@@ -30,7 +30,7 @@ class ReportTest(unittest.TestCase):
                 "latency": {"avgMs": 1500, "p95Ms": 1800},
             },
             "security": {
-                "capabilityReplay": {"rejectionRate": 0.95},
+                "duplicateSubmission": {"rejectionRate": 0.95},
                 "rateLimit": {"rateLimitedCount": 7},
                 "agentConcurrency": {"rejectedCount": 2},
             },
@@ -50,7 +50,7 @@ class ReportTest(unittest.TestCase):
             self.assertIn("Recall@5=50.0%", resume_text)
             self.assertIn("平均检索延迟 46ms", resume_text)
             self.assertIn("教师资料 block 数 256", resume_text)
-            self.assertIn("Capability 重放拦截率 95.0%", resume_text)
+            self.assertIn("重复提交拒绝率 95.0%", resume_text)
 
 
 if __name__ == "__main__":

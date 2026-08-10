@@ -22,6 +22,8 @@ import java.util.List;
  * @param evidenceRefs evidence references used by this run
  * @param stageTimings persisted stage timings for task recovery
  * @param actualUsage provider-reported token usage for recovered runs
+ * @param actualCost actual deployment-priced cost, or -1 when no matching price is configured
+ * @param costKnown whether actualCost is backed by a configured provider/model price
  * @param message safe execution message without raw prompt or model output
  * @param diagnosticEvents safe retry/fallback/parse events for trace monitoring
  */
@@ -43,7 +45,9 @@ public record AgentTraceResponse(
         List<AgentRunExecuteResponse.StageTiming> stageTimings,
         AgentRunExecuteResponse.TokenUsage actualUsage,
         String message,
-        List<DiagnosticEvent> diagnosticEvents) {
+        List<DiagnosticEvent> diagnosticEvents,
+        double actualCost,
+        boolean costKnown) {
 
     /**
      * Backward-compatible constructor for older tests and trace sources.
@@ -68,7 +72,32 @@ public record AgentTraceResponse(
             String message) {
         this(traceId, planId, createdAt, tenantId, subjectType, subjectId, agentCode, providerName, modelCode, status,
                 estimatedCost, allowedToolScopes, allowedDataScopes, evidenceRefs, stageTimings, actualUsage, message,
-                List.of());
+                List.of(), -1.0d, false);
+    }
+
+    /** Backward-compatible constructor for existing trace query callers with diagnostic events only. */
+    public AgentTraceResponse(
+            String traceId,
+            String planId,
+            Instant createdAt,
+            String tenantId,
+            String subjectType,
+            String subjectId,
+            String agentCode,
+            String providerName,
+            String modelCode,
+            String status,
+            double estimatedCost,
+            List<String> allowedToolScopes,
+            List<String> allowedDataScopes,
+            List<String> evidenceRefs,
+            List<AgentRunExecuteResponse.StageTiming> stageTimings,
+            AgentRunExecuteResponse.TokenUsage actualUsage,
+            String message,
+            List<DiagnosticEvent> diagnosticEvents) {
+        this(traceId, planId, createdAt, tenantId, subjectType, subjectId, agentCode, providerName, modelCode, status,
+                estimatedCost, allowedToolScopes, allowedDataScopes, evidenceRefs, stageTimings, actualUsage, message,
+                diagnosticEvents, -1.0d, false);
     }
 
     /**

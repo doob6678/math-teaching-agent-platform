@@ -179,7 +179,8 @@ final class TeachingHandoutPdfExportPolicyPartB {
                 next += 1;
             }
             String body = renderNonEmptyTitleRange(lines, index + 1, next).strip();
-            if (hasRealLatexContent(body)) {
+            if (hasRealLatexContent(body)
+                    || "来源索引".equals(cleanText(heading.group(2)))) {
                 // Workspace-only headings stay hidden, while a real prompt beneath them remains printable.
                 if (isBlankWorkspaceHeading(heading.group(2))) {
                     builder.append(body).append("\n\n");
@@ -414,11 +415,9 @@ final class TeachingHandoutPdfExportPolicyPartB {
      * unchanged, while the recovered forms are made into one well-scoped inline expression.</p>
      */
     static String normalizeLegacyLatexForExport(String value) {
-        String normalized = value
-                // Some persisted JSON has two transport slashes before n; restore both one- and two-slash forms here
-                // as this is the final boundary before XeLaTeX receives the body.
-                .replace("\\\\n", "\n")
-                .replace("\\n", "\n")
+        // The body renderer is reached by preview, download, and PDF export. Reuse the facade's control-word-aware
+        // transport repair here so this later legacy pass cannot turn \node or \neq into a newline plus prose.
+        String normalized = TeachingHandoutPdfExportService.restoreTransportNewlines(value)
                 .replace("\\textbackslash\\{\\}", "\\")
                 .replace("\\textbackslash{}", "\\")
                 .replace("\\textbackslash", "\\")

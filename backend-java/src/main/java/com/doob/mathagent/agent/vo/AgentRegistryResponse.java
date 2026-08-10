@@ -16,7 +16,6 @@ public record AgentRegistryResponse(List<Item> agents) {
             String description,
             List<String> allowedToolScopes,
             List<String> allowedDataScopes,
-            boolean capabilityRequired,
             String inputHint,
             String outputArtifactType) {
     }

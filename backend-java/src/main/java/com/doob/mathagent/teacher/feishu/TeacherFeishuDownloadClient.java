@@ -151,7 +151,16 @@ public interface TeacherFeishuDownloadClient {
                 String downloadedItemsJson,
                 String failedItemsJson) {
             this(savedPath, files, skipped, failed, message, checkpoint, downloadedItemsJson, failedItemsJson,
-                    null, null, "[]", "[]", "[]");
+                    null, null, "[]", legacyChangedItems(files), "[]");
+        }
+
+        /**
+         * Legacy adapters do not provide provider metadata, so a non-empty download must be treated as changed.
+         * Otherwise the sync executor could skip parsing and vector rebuild on the first run merely because an old
+         * adapter returned the compatibility constructor instead of the incremental manifest fields.
+         */
+        private static String legacyChangedItems(int files) {
+            return files > 0 ? "[{\"legacy\":true}]" : "[]";
         }
 
         /**

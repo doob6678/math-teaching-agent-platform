@@ -4,6 +4,7 @@ import com.doob.mathagent.teacher.block.TeacherDocumentBlockStore;
 import com.doob.mathagent.teacher.document.TeacherResourceStore;
 import com.doob.mathagent.teacher.block.TeacherDocumentBlockResponse;
 import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
+import com.doob.mathagent.teacher.sync.TeacherSourceSyncManifestStore;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
@@ -37,6 +38,7 @@ public class VectorIndexService {
     private final TeacherResourceStore resourceStore;
     private final TeacherDocumentBlockStore blockStore;
     private TeacherResourceImageClipService teacherImageClipService;
+    private TeacherSourceSyncManifestStore manifestStore;
 
     public VectorIndexService(
             VectorIndexProperties properties,
@@ -53,6 +55,12 @@ public class VectorIndexService {
     @Autowired(required = false)
     public void setTeacherImageClipService(TeacherResourceImageClipService teacherImageClipService) {
         this.teacherImageClipService = teacherImageClipService;
+    }
+
+    /** Optional in focused tests; production resolves provider file identity from the existing sync manifest. */
+    @Autowired(required = false)
+    public void setManifestStore(TeacherSourceSyncManifestStore manifestStore) {
+        this.manifestStore = manifestStore;
     }
 
     public VectorIndexStatusResponse status() {
@@ -329,24 +337,10 @@ public class VectorIndexService {
         loadCollection();
         Map<String, Object> body = searchBody(embedding.vectors().getFirst(), limit, filter);
         VectorHttpResponse response = milvusPost("/v2/vectordb/entities/search", body);
-        JsonNode root;
-        try {
-            root = readJson("Milvus search", response);
-        } catch (RuntimeException exception) {
-            if (filter == null || filter.empty()) {
-                throw exception;
-            }
-            // Filter parsing errors may be returned as non-JSON by older Milvus gateways.
-            response = milvusPost("/v2/vectordb/entities/search", searchBody(embedding.vectors().getFirst(), limit, VectorSearchFilter.EMPTY));
-            root = readJson("Milvus search", response);
-        }
-        if (milvusSearchFailed(response, root) && filter != null && !filter.empty()) {
-            // Some Milvus deployments differ in JSON filter support. Fall back to unfiltered vector
-            // search and let the caller's visibility/post-filters enforce boundaries.
-            response = milvusPost("/v2/vectordb/entities/search", searchBody(embedding.vectors().getFirst(), limit, VectorSearchFilter.EMPTY));
-            root = readJson("Milvus search", response);
-        }
+        JsonNode root = readJson("Milvus search", response);
         if (!response.success2xx() || root.path("code").asInt(-1) != 0) {
+            log.error("teacher_resource_milvus_filter_failed filter={} httpStatus={} code={} body={}",
+                    filterSummary(filter), response.statusCode(), root.path("code").asInt(-1), abbreviate(response.body(), 300));
             throw new IllegalStateException("Milvus search failed: HTTP " + response.statusCode()
                     + " body=" + abbreviate(response.body(), 300));
         }
@@ -359,6 +353,8 @@ public class VectorIndexService {
                 hits.add(new VectorSearchHit(
                         documentId,
                         blockId,
+                        metadata.path("sourcePath").asText(""),
+                        metadata.path("providerItemId").asText(""),
                         item.path("text").asText(""),
                         item.path("distance").asDouble(0.0)));
             }
@@ -483,6 +479,11 @@ public class VectorIndexService {
                 .toList();
         deleteExistingDocumentVectors(document);
         flushCollection();
+        // Text and image retrieval share the same archive lifecycle.  Delete the private CLIP rows before the
+        // caller purges asset metadata, otherwise image-search can still return an archived Feishu source.
+        if (properties.teacherImageClipEnabled() && teacherImageClipService != null) {
+            teacherImageClipService.deleteDocumentVectors(tenantId, documentId);
+        }
         return blocks.size();
     }
 
@@ -744,10 +745,15 @@ public class VectorIndexService {
         }
     }
 
-    private static Map<String, Object> toMilvusEntity(
+    private Map<String, Object> toMilvusEntity(
             TeacherResourceDocumentResponse document,
             TeacherDocumentBlockResponse block,
             List<Double> vector) {
+        String sourcePath = text(block.sourcePath());
+        String providerItemId = manifestStore == null
+                ? ""
+                : text(manifestStore.providerItemId(document.tenantId(), document.documentId(), sourcePath));
+        String parentKey = fileParentKey(document.documentId(), providerItemId, sourcePath, block.blockId());
         Map<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("tenantId", document.tenantId());
         metadata.put("documentId", document.documentId());
@@ -757,7 +763,9 @@ public class VectorIndexService {
         metadata.put("permissionScope", text(document.permissionScope()));
         metadata.put("chapter", text(block.chapter()));
         metadata.put("section", text(block.section()));
-        metadata.put("sourcePath", text(block.sourcePath()));
+        metadata.put("sourcePath", sourcePath);
+        metadata.put("providerItemId", providerItemId);
+        metadata.put("parentKey", parentKey);
         metadata.put("blockRole", text(block.blockRole()));
         metadata.put("graphTagsJson", text(block.graphTagNamesJson()));
         metadata.put("checksum", text(block.checksum()));
@@ -915,12 +923,22 @@ public class VectorIndexService {
             return "";
         }
         List<String> parts = new ArrayList<>();
+        if (!filter.tenantIds().isEmpty()) {
+            parts.add("metadata[\"tenantId\"] in ["
+                    + filter.tenantIds().stream().map(VectorIndexService::milvusStringLiteral)
+                    .collect(java.util.stream.Collectors.joining(",")) + "]");
+        }
         if (!filter.documentIds().isEmpty()) {
             parts.add("metadata[\"documentId\"] in ["
                     + filter.documentIds().stream()
                             .map(VectorIndexService::milvusStringLiteral)
                             .collect(java.util.stream.Collectors.joining(","))
                     + "]");
+        }
+        if (!filter.sourceTypes().isEmpty()) {
+            parts.add("metadata[\"sourceType\"] in ["
+                    + filter.sourceTypes().stream().map(VectorIndexService::milvusStringLiteral)
+                    .collect(java.util.stream.Collectors.joining(",")) + "]");
         }
         if (!filter.permissionScopes().isEmpty()) {
             parts.add("metadata[\"permissionScope\"] in ["
@@ -930,6 +948,22 @@ public class VectorIndexService {
                     + "]");
         }
         return String.join(" and ", parts);
+    }
+
+    /** Uses stable provider identity first and isolates legacy blocks with no file identity. */
+    private static String fileParentKey(String documentId, String providerItemId, String sourcePath, String blockId) {
+        String identity = text(providerItemId);
+        if (identity.isBlank()) identity = text(sourcePath);
+        if (identity.isBlank()) identity = "missing-source-path:" + text(blockId);
+        return text(documentId) + "::" + identity;
+    }
+
+    private static String filterSummary(VectorSearchFilter filter) {
+        if (filter == null) return "null";
+        return "tenantIds=" + filter.tenantIds().size()
+                + ",documentIds=" + filter.documentIds().size()
+                + ",permissionScopes=" + filter.permissionScopes().size()
+                + ",sourceTypes=" + filter.sourceTypes().size();
     }
 
     private record EmbeddingBatch(List<List<Double>> vectors, int promptTokens) {

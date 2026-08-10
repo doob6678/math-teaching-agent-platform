@@ -3,6 +3,7 @@ package com.doob.mathagent.student.controller;
 import com.doob.mathagent.agent.service.AiProviderUnavailableException;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.infrastructure.security.RequestSubjectResolver;
+import com.doob.mathagent.infrastructure.text.TextEncodingRepair;
 import com.doob.mathagent.student.dto.StudentExplanationRequest;
 import com.doob.mathagent.student.service.StudentExplanationHistoryStore;
 import com.doob.mathagent.student.service.StudentExplanationHistorySummary;
@@ -11,6 +12,7 @@ import com.doob.mathagent.student.service.StudentExplanationConversationSummary;
 import com.doob.mathagent.student.service.StudentExplanationImageStoreService;
 import com.doob.mathagent.student.service.StudentExplanationProgressListener;
 import com.doob.mathagent.student.service.StudentExplanationService;
+import com.doob.mathagent.student.service.StudentExplanationWorkflowStore;
 import com.doob.mathagent.student.vo.StudentExplanationConversationListResponse;
 import com.doob.mathagent.student.vo.StudentExplanationConversationResponse;
 import com.doob.mathagent.student.vo.StudentExplanationHistoryResponse;
@@ -23,9 +25,14 @@ import jakarta.servlet.http.HttpServletRequest;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.concurrent.CancellationException;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.slf4j.Logger;
@@ -37,11 +44,14 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.core.task.TaskExecutor;
 
 /**
  * Student question explanation API with backend-owned identity and resource visibility.
@@ -63,6 +73,8 @@ public class StudentExplanationController {
     private final StudentExplanationImageStoreService imageStoreService;
     private final StudentExplanationHistoryStore historyStore;
     private final RequestSubjectResolver subjectResolver;
+    private final StudentExplanationWorkflowStore workflowStore;
+    private final Executor streamExecutor;
 
     /**
      * Creates the controller.
@@ -74,11 +86,15 @@ public class StudentExplanationController {
             StudentExplanationService explanationService,
             StudentExplanationImageStoreService imageStoreService,
             StudentExplanationHistoryStore historyStore,
-            RequestSubjectResolver subjectResolver) {
+            RequestSubjectResolver subjectResolver,
+            StudentExplanationWorkflowStore workflowStore,
+            @Qualifier("studentExplanationTaskExecutor") TaskExecutor streamExecutor) {
         this.explanationService = explanationService;
         this.imageStoreService = imageStoreService;
         this.historyStore = historyStore;
         this.subjectResolver = subjectResolver;
+        this.workflowStore = workflowStore;
+        this.streamExecutor = streamExecutor;
     }
 
     /**
@@ -143,7 +159,7 @@ public class StudentExplanationController {
     @GetMapping("/api/students/explanations/conversations/{conversationId}")
     public StudentExplanationConversationResponse conversation(
             @PathVariable String conversationId,
-            @RequestParam(value = "limit", defaultValue = "20") int limit,
+            @RequestParam(value = "limit", defaultValue = "500") int limit,
             HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest);
         StudentExplanationConversationDetail detail = historyStore.loadConversation(
@@ -215,139 +231,185 @@ public class StudentExplanationController {
     /**
      * Streams real student explanation progress so the frontend can render real stages immediately.
      */
-    @PostMapping(value = "/api/students/explanations/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    @PostMapping(value = "/api/students/explanations/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE + ";charset=UTF-8")
     public SseEmitter explainStream(
             @RequestBody StudentExplanationRequest request,
+            @RequestHeader(value = "Last-Event-ID", required = false) String lastEventId,
             HttpServletRequest httpRequest) {
-        RequestSubject subject = subjectResolver.resolve(httpRequest);
+        RequestSubject subject = subjectResolver.resolve(httpRequest).normalize();
         String requestPath = httpRequest.getRequestURI();
+        StudentExplanationRequest normalizedRequest = request.normalize();
+        if (normalizedRequest.clientRequestId() == null) {
+            normalizedRequest = normalizedRequest.withClientRequestId(UUID.randomUUID().toString());
+        }
+        StudentExplanationWorkflowStore.WorkflowRun run = workflowStore.createOrLoad(subject, normalizedRequest);
+        StudentExplanationRequest durableRequest = normalizedRequest;
+        long cursor = parseCursor(lastEventId);
         SseEmitter emitter = new SseEmitter(TimeUnit.MINUTES.toMillis(5));
+        AtomicBoolean disconnected = new AtomicBoolean(false);
+        String errorTraceId = UUID.randomUUID().toString();
+        emitter.onCompletion(() -> disconnected.set(true));
+        emitter.onTimeout(() -> disconnected.set(true));
+        emitter.onError(ignored -> disconnected.set(true));
+
         CompletableFuture.runAsync(() -> {
             try {
-                StringBuilder streamedProviderContent = new StringBuilder();
-                String[] sentVisibleContent = {""};
-                explanationService.explain(request, subject, new StudentExplanationProgressListener() {
-                    @Override
-                    public void onProgress(StudentExplanationStreamProgress progress, String message) {
-                        sendEvent(emitter, "progress", new StudentExplanationStreamEvent(
-                                "progress",
-                                message,
-                                progress,
-                                null,
-                                null,
-                                null,
-                                null,
-                                null,
-                                List.of()));
+                if ("RUNNING".equals(run.status()) && run.created()) {
+                    runExplanation(run.runId(), durableRequest, subject, emitter, disconnected);
+                    if (!disconnected.get()) {
+                        emitter.complete();
                     }
-
-                    @Override
-                    public void onAiDelta(
-                            com.doob.mathagent.agent.service.AiChatStreamDelta delta,
-                            List<StudentExplanationResponse.ExplanationCard> cards) {
-                        // Providers return a strict JSON envelope for validation. Extract only learner-facing title,
-                        // summary, and item text before putting anything into SSE; braces and property names never
-                        // cross the API boundary. Complete cards remain in the structured cards field below.
-                        String streamedDelta = delta == null ? "" : delta.contentDelta();
-                        String visibleDelta = visibleProviderDelta(
-                                streamedProviderContent, sentVisibleContent, streamedDelta);
-                        List<StudentExplanationResponse.ExplanationCard> safeCards = cards == null
-                                ? List.of() : List.copyOf(cards);
-                        if (visibleDelta.isBlank() && safeCards.isEmpty()) {
-                            return;
-                        }
-                        sendEvent(emitter, "ai_delta", new StudentExplanationStreamEvent(
-                                "ai_delta", "收到模型实时输出。", null, null, null, null,
-                                visibleDelta, "", safeCards));
-                    }
-
-                    @Override
-                    public void onCompleted(StudentExplanationResponse response) {
-                        sendEvent(emitter, "completed", new StudentExplanationStreamEvent(
-                                "completed",
-                                "讲解已完成。",
-                                null,
-                                response,
-                                null,
-                                null,
-                                null,
-                                null,
-                                List.of()));
-                    }
-                });
-                emitter.complete();
+                } else {
+                    replayUntilTerminal(run.runId(), cursor, emitter, disconnected);
+                }
             } catch (IllegalArgumentException exception) {
-                String traceId = UUID.randomUUID().toString();
-                log.warn("student_explanation_stream_bad_request traceId={} path={} message={}",
-                        traceId,
-                        requestPath,
-                        exception.getMessage(),
-                        exception);
-                sendEvent(emitter, "error", new StudentExplanationStreamEvent(
-                        "error",
-                        exception.getMessage(),
-                        null,
-                        null,
-                        "BAD_REQUEST",
-                        traceId,
-                        null,
-                        null,
-                        List.of()));
-                emitter.complete();
+                log.warn("student_explanation_bad_request traceId={} runId={} clientRequestId={} path={} type={}",
+                        errorTraceId, run.runId(), durableRequest.clientRequestId(), requestPath,
+                        exception.getClass().getSimpleName());
+                publishTerminal(run.runId(), emitter, disconnected, "error", new StudentExplanationStreamEvent(
+                        "error", exception.getMessage(), null, null, "BAD_REQUEST", errorTraceId, null, null, List.of()));
             } catch (AiProviderUnavailableException exception) {
-                String traceId = UUID.randomUUID().toString();
-                log.warn("student_explanation_model_unavailable traceId={} path={} status={} message={}",
-                        traceId,
-                        requestPath,
-                        exception.statusCode(),
-                        exception.getMessage());
-                // Keep authentication and the current conversation intact: provider capacity is recoverable and is
-                // unrelated to the user's session. The trace id links the UI failure to the bounded provider log.
-                sendEvent(emitter, "error", new StudentExplanationStreamEvent(
-                        "error",
-                        "当前讲解模型暂时没有可用通道，系统已自动重试，请稍后再次提交。",
-                        null,
-                        null,
-                        "MODEL_UNAVAILABLE",
-                        traceId,
-                        null,
-                        null,
-                        List.of()));
-                emitter.complete();
+                log.warn("student_explanation_model_unavailable traceId={} runId={} clientRequestId={} path={} status={}",
+                        errorTraceId, run.runId(), durableRequest.clientRequestId(), requestPath, exception.statusCode());
+                publishTerminal(run.runId(), emitter, disconnected, "error", new StudentExplanationStreamEvent(
+                        "error", "当前讲解模型暂时没有可用通道，系统已自动重试，请稍后再次提交。", null, null,
+                        "MODEL_UNAVAILABLE", errorTraceId, null, null, List.of()));
             } catch (RuntimeException exception) {
-                String traceId = UUID.randomUUID().toString();
-                log.error("student_explanation_stream_failed traceId={} path={} type={} message={}",
-                        traceId,
-                        requestPath,
-                        exception.getClass().getSimpleName(),
-                        exception.getMessage(),
-                        exception);
-                sendEvent(emitter, "error", new StudentExplanationStreamEvent(
-                        "error",
-                        "讲解过程中出现错误，请稍后重试。",
-                        null,
-                        null,
-                        "STREAM_FAILED",
-                        traceId,
-                        null,
-                        null,
-                        List.of()));
-                emitter.complete();
+                if (isDisconnectedTransport(exception)) {
+                    disconnected.set(true);
+                    log.info("student_explanation_stream_disconnected traceId={} runId={} clientRequestId={} path={} type={}",
+                            errorTraceId, run.runId(), durableRequest.clientRequestId(), requestPath,
+                            exception.getClass().getSimpleName());
+                    return;
+                }
+                log.error("student_explanation_stream_failed traceId={} runId={} clientRequestId={} path={} type={}",
+                        errorTraceId, run.runId(), durableRequest.clientRequestId(), requestPath,
+                        exception.getClass().getSimpleName(), exception);
+                publishTerminal(run.runId(), emitter, disconnected, "error", new StudentExplanationStreamEvent(
+                        "error", "讲解过程中出现错误，请稍后重试。", null, null,
+                        "STREAM_FAILED", errorTraceId, null, null, List.of()));
             }
-        });
+        }, streamExecutor);
         return emitter;
     }
 
-    /**
-     * Sends one SSE event and converts IO failures into controller-level runtime exceptions.
-     */
-    private static void sendEvent(SseEmitter emitter, String eventName, StudentExplanationStreamEvent event) {
+    private void runExplanation(
+            String runId,
+            StudentExplanationRequest request,
+            RequestSubject subject,
+            SseEmitter emitter,
+            AtomicBoolean disconnected) {
+        StringBuilder streamedProviderContent = new StringBuilder();
+        String[] sentVisibleContent = {""};
+        explanationService.explain(request, subject, new StudentExplanationProgressListener() {
+            @Override
+            public boolean isCancelled() {
+                return false;
+            }
+
+            @Override
+            public void onProgress(StudentExplanationStreamProgress progress, String message) {
+                publish(runId, emitter, disconnected, "progress", new StudentExplanationStreamEvent(
+                        "progress", message, progress, null, null, null, null, null, List.of()));
+            }
+
+            @Override
+            public void onAiDelta(com.doob.mathagent.agent.service.AiChatStreamDelta delta,
+                    List<StudentExplanationResponse.ExplanationCard> cards) {
+                String visibleDelta = visibleProviderDelta(streamedProviderContent, sentVisibleContent,
+                        delta == null ? "" : delta.contentDelta());
+                List<StudentExplanationResponse.ExplanationCard> safeCards = cards == null ? List.of() : List.copyOf(cards);
+                if (visibleDelta.isBlank() && safeCards.isEmpty()) return;
+                publish(runId, emitter, disconnected, "ai_delta", new StudentExplanationStreamEvent(
+                        "ai_delta", "", null, null, null, null, visibleDelta, "", safeCards));
+            }
+
+            @Override
+            public void onCompleted(StudentExplanationResponse response) {
+                workflowStore.complete(runId, response);
+                publish(runId, emitter, disconnected, "completed", new StudentExplanationStreamEvent(
+                        "completed", "讲解已完成。", null, response, null, null, null, null, List.of()));
+            }
+        });
+    }
+
+    private long replayUntilTerminal(String runId, long cursor, SseEmitter emitter, AtomicBoolean disconnected) {
+        long nextCursor = cursor;
+        long deadline = System.nanoTime() + TimeUnit.MINUTES.toNanos(5);
+        while (!disconnected.get() && System.nanoTime() < deadline) {
+            List<StudentExplanationWorkflowStore.WorkflowEvent> events = workflowStore.eventsAfter(runId, nextCursor, 100);
+            if (events.isEmpty()) {
+                try { Thread.sleep(100L); } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                    return nextCursor;
+                }
+                continue;
+            }
+            for (StudentExplanationWorkflowStore.WorkflowEvent event : events) {
+                nextCursor = event.eventId();
+                sendEvent(emitter, event.eventId(), event.eventName(), event.event());
+                if ("completed".equals(event.eventName()) || "error".equals(event.eventName())) return nextCursor;
+            }
+        }
+        return nextCursor;
+    }
+
+    private void publish(String runId, SseEmitter emitter, AtomicBoolean disconnected,
+            String eventName, StudentExplanationStreamEvent event) {
+        StudentExplanationWorkflowStore.WorkflowEvent persisted = workflowStore.append(runId, eventName, event);
+        if (!disconnected.get()) {
+            try {
+                sendEvent(emitter, persisted.eventId(), eventName, event);
+            } catch (RuntimeException exception) {
+                if (isDisconnectedTransport(exception)) {
+                    disconnected.set(true);
+                    return;
+                }
+                throw exception;
+            }
+        }
+    }
+
+    private void publishTerminal(String runId, SseEmitter emitter, AtomicBoolean disconnected,
+            String eventName, StudentExplanationStreamEvent event) {
+        workflowStore.fail(runId, event.errorCode(), event.message());
+        publish(runId, emitter, disconnected, eventName, event);
+        if (!disconnected.get()) emitter.complete();
+    }
+
+    /** A send-side disconnect is recoverable through the durable workflow event stream, not a failed explanation. */
+    private static boolean isDisconnectedTransport(Throwable exception) {
+        Throwable current = exception;
+        while (current != null) {
+            String type = current.getClass().getName();
+            String message = current.getMessage() == null ? "" : current.getMessage().toLowerCase(java.util.Locale.ROOT);
+            if (type.contains("AsyncRequestNotUsableException")
+                    || type.contains("ClientAbortException")
+                    || current instanceof java.io.IOException
+                    || message.contains("connection reset")
+                    || message.contains("broken pipe")) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
+    }
+
+    private static long parseCursor(String value) {
+        try { return value == null ? 0L : Math.max(0L, Long.parseLong(value.trim())); }
+        catch (NumberFormatException ignored) { return 0L; }
+    }
+
+    /** Sends one durable public event; event IDs belong to Java, never to the worker. */
+    private static void sendEvent(SseEmitter emitter, long eventId, String eventName, StudentExplanationStreamEvent event) {
         try {
-            emitter.send(SseEmitter.event().name(eventName).data(event));
+            emitter.send(SseEmitter.event().id(Long.toString(eventId)).name(eventName).data(event));
         } catch (Exception exception) {
             throw new IllegalStateException("Failed to send student explanation stream event", exception);
         }
     }
+
+
 
     /**
      * Converts one cumulative provider JSON stream into a text-only incremental update for learners.
@@ -370,7 +432,7 @@ public class StudentExplanationController {
         }
         cumulativeProviderContent.append(contentDelta);
         String cumulative = cumulativeProviderContent.toString();
-        String candidate = extractVisibleProviderText(cumulative);
+        String candidate = TextEncodingRepair.repairMojibake(extractVisibleProviderText(cumulative));
         if (candidate.isBlank()) {
             return "";
         }

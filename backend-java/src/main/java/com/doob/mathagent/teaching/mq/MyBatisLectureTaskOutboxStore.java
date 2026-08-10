@@ -2,6 +2,7 @@ package com.doob.mathagent.teaching.mq;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.doob.mathagent.teaching.entity.LectureTaskOutboxEventEntity;
 import com.doob.mathagent.teaching.mapper.LectureTaskOutboxEventMapper;
 import java.time.Instant;
@@ -39,7 +40,15 @@ public class MyBatisLectureTaskOutboxStore implements LectureTaskOutboxStore {
             }
         }
     }
-    @Override public List<LectureTaskOutboxEvent> findPending(int limit) { return mapper.selectList(new LambdaQueryWrapper<LectureTaskOutboxEventEntity>().eq(LectureTaskOutboxEventEntity::getStatus, PENDING).orderByAsc(LectureTaskOutboxEventEntity::getCreatedAt).last("LIMIT " + Math.max(1, limit))).stream().map(row -> new LectureTaskOutboxEvent(row.getEventId(), row.getTaskId(), row.getCreatedAt())).toList(); }
+    @Override public List<LectureTaskOutboxEvent> findPending(int limit) {
+        int safeLimit = Math.max(1, limit);
+        return mapper.selectPage(Page.of(1, safeLimit), new LambdaQueryWrapper<LectureTaskOutboxEventEntity>()
+                        .eq(LectureTaskOutboxEventEntity::getStatus, PENDING)
+                        .orderByAsc(LectureTaskOutboxEventEntity::getCreatedAt))
+                .getRecords().stream()
+                .map(row -> new LectureTaskOutboxEvent(row.getEventId(), row.getTaskId(), row.getCreatedAt()))
+                .toList();
+    }
     @Override public void markPublished(String eventId) { mapper.update(null, new LambdaUpdateWrapper<LectureTaskOutboxEventEntity>().eq(LectureTaskOutboxEventEntity::getEventId, eventId).eq(LectureTaskOutboxEventEntity::getStatus, PENDING).set(LectureTaskOutboxEventEntity::getStatus, "PUBLISHED").set(LectureTaskOutboxEventEntity::getPublishedAt, Instant.now())); }
 
     /** Uses one stable create-event key while every retry/resume remains an independently publishable fact. */

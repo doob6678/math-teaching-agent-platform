@@ -20,7 +20,7 @@ class AgentRunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     runId: str = Field(min_length=1)
-    allowedTools: list[str] = Field(min_length=1)
+    allowedTools: list[str] = Field(default_factory=list)
     message: str = Field(min_length=1)
     toolResult: dict[str, Any] | None = None
     # 仅供确定性传输测试使用；生产环境中的工具选择必须来自模型调用。
@@ -32,6 +32,8 @@ class AgentRunResult:
     status: str
     message: str | None = None
     tool_call: dict[str, Any] | None = None
+    provider_name: str | None = None
+    model_code: str | None = None
     actual_usage: dict[str, int | float] | None = None
 
     def as_response(self) -> dict[str, Any]:
@@ -54,6 +56,10 @@ class SupervisorState(TypedDict):
 
 class AgentRuntime:
     """Executes only model decisions and asks Java to handle all protected data access."""
+
+    def __init__(self, provider_route: list[tuple[str, str]] | None = None, max_provider_calls: int = 4) -> None:
+        self._provider_route = provider_route
+        self._max_provider_calls = max(1, max_provider_calls)
 
     def execute(self, request: AgentRunRequest) -> AgentRunResult:
         return self._graph().invoke({"request": request})["result"]
@@ -100,7 +106,14 @@ class AgentRuntime:
             return second
         keys = ("promptTokens", "completionTokens", "totalTokens", "estimatedCost")
         usage = {key: first.actual_usage.get(key, 0) + second.actual_usage.get(key, 0) for key in keys}
-        return AgentRunResult(status=second.status, message=second.message, tool_call=second.tool_call, actual_usage=usage)
+        return AgentRunResult(
+            status=second.status,
+            message=second.message,
+            tool_call=second.tool_call,
+            provider_name=second.provider_name or first.provider_name,
+            model_code=second.model_code or first.model_code,
+            actual_usage=usage,
+        )
 
     def _complete_with_observation(
             self,
@@ -140,13 +153,21 @@ class AgentRuntime:
         enabled = os.getenv("MATH_AGENT_AI_RUNTIME_ALLOW_TEST_TOOL_REQUEST", "false").lower() == "true"
         return request.requestedTool if enabled else None
 
-    @staticmethod
     def _call_live_model(
+            self,
             request: AgentRunRequest,
             messages: list[dict[str, Any]] | None = None,
             allow_tools: bool = True) -> AgentRunResult:
         """Uses a real OpenAI-compatible tool-call endpoint; no local heuristic infers the user's intent."""
-        providers = [item.strip().lower() for item in os.getenv("MATH_AGENT_AI_RUNTIME_PROVIDER_ORDER", os.getenv("MATH_AGENT_AI_RUNTIME_PROVIDER", "openai")).split(",") if item.strip()]
+        configured_route = self._provider_route or [
+            (item.strip().lower(), "")
+            for item in os.getenv(
+                "MATH_AGENT_AI_RUNTIME_PROVIDER_ORDER",
+                os.getenv("MATH_AGENT_AI_RUNTIME_PROVIDER", "openai"),
+            ).split(",")
+            if item.strip()
+        ]
+        providers = configured_route[:self._max_provider_calls]
         tools = [{"type": "function", "function": {
             "name": name,
             "description": "Request Java to execute an authorized tool.",
@@ -158,7 +179,7 @@ class AgentRuntime:
         ]
         ledger = UsageLedger()
         failures: list[str] = []
-        for attempt, provider in enumerate(providers, 1):
+        for attempt, (provider, routed_model) in enumerate(providers, 1):
             key_name = {"openai": "OPENAI_API_KEY", "dashscope": "DASHSCOPE_API_KEY", "deepseek": "DEEPSEEK_API_KEY", "ark": "ARK_API_KEY"}.get(provider, "")
             api_key = os.getenv(key_name) if key_name else None
             if not api_key:
@@ -171,7 +192,7 @@ class AgentRuntime:
                 "ark": "https://ark.cn-beijing.volces.com/api/v3",
             }.get(provider, "")
             base_url = os.getenv(f"{provider.upper()}_BASE_URL", default_base_url).rstrip("/")
-            model = os.getenv(f"MATH_AGENT_AI_RUNTIME_{provider.upper()}_MODEL", os.getenv("MATH_AGENT_AI_RUNTIME_MODEL", os.getenv("OPENAI_CHAT_MODEL", "gpt-5.6-terra")))
+            model = routed_model or os.getenv(f"MATH_AGENT_AI_RUNTIME_{provider.upper()}_MODEL", os.getenv("MATH_AGENT_AI_RUNTIME_MODEL", os.getenv("OPENAI_CHAT_MODEL", "gpt-5.6-luna")))
             payload: dict[str, Any] = {"model": model, "messages": request_messages}
             if allow_tools:
                 payload["tools"] = tools
@@ -227,9 +248,17 @@ class AgentRuntime:
                         "runId": request.runId,
                     },
                 },
+                provider_name=provider,
+                model_code=model,
                 actual_usage=actual,
             )
-        return AgentRunResult(status="COMPLETED", message=str(message.get("content") or ""), actual_usage=actual)
+        return AgentRunResult(
+            status="COMPLETED",
+            message=str(message.get("content") or ""),
+            provider_name=provider,
+            model_code=model,
+            actual_usage=actual,
+        )
 
     @staticmethod
     def _tool_parameters(name: str) -> dict[str, Any]:

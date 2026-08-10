@@ -28,14 +28,17 @@ public class ApiAccessPolicy {
     public static ApiAccessPolicy defaultRules() {
         return new ApiAccessPolicy(List.of(
                 /*
-                 * Keep throttling only on endpoints that actually trigger model or inference work. Ordinary business
-                 * APIs such as capability preparation, resource CRUD, search, and dashboard reads stay unlimited here;
-                 * upstream gateway or login-specific abuse controls can be handled separately if needed.
+                 * A non-positive value uses the access-level default in ApiAccessControlService. This keeps the policy
+                 * readable while ensuring every matched request is rate-limited by the backend-resolved subject.
                  */
                 new ApiAccessRule("/api/system/health", ApiAccessLevel.PUBLIC, Set.of("*"), 0, Duration.ofMinutes(1)),
+                new ApiAccessRule("/api/system/liveness", ApiAccessLevel.PUBLIC, Set.of("*"), 0, Duration.ofMinutes(1)),
+                new ApiAccessRule("/api/system/readiness", ApiAccessLevel.PUBLIC, Set.of("*"), 0, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/system/runtime", ApiAccessLevel.ADMIN, Set.of("teacher", "admin"), 0, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/auth/register", ApiAccessLevel.PUBLIC, Set.of("*"), 0, Duration.ofMinutes(1)),
+                new ApiAccessRule("/api/auth/teachers", ApiAccessLevel.ADMIN, Set.of("admin"), 0, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/auth/session", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 0, Duration.ofMinutes(1)),
+                new ApiAccessRule("/api/auth/logout", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 0, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/auth/login", ApiAccessLevel.PUBLIC, Set.of("*"), 0, Duration.ofMinutes(1)),
                 /*
                  * Only teachers and administrators may start or inspect a Feishu binding. The provider callback is
@@ -52,7 +55,6 @@ public class ApiAccessPolicy {
                 new ApiAccessRule("/api/mcp/tools/", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 0, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/mcp/tools", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 0, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/mcp", ApiAccessLevel.GUEST, Set.of("anonymous", "guest", "student", "teacher", "admin"), 0, Duration.ofMinutes(1)),
-                new ApiAccessRule("/api/security/capability-audits", ApiAccessLevel.ADMIN, Set.of("teacher", "admin"), 0, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/knowledge/graph/spine", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 0, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/knowledge/points", ApiAccessLevel.ADMIN, Set.of("teacher", "admin"), 0, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/knowledge/relations", ApiAccessLevel.ADMIN, Set.of("teacher", "admin"), 0, Duration.ofMinutes(1)),
@@ -62,8 +64,8 @@ public class ApiAccessPolicy {
                 new ApiAccessRule("/api/question-bank/import/teacher-resources", ApiAccessLevel.ADMIN, Set.of("teacher", "admin"), 0, Duration.ofMinutes(1)),
                 /*
                  * The collection endpoint serves both the teacher management UI and the student's read-only
-                 * question browser.  POST writes remain protected by the controller capability token and service
-                 * role checks, while GET visibility is narrowed by the tenant-aware store query.
+                 * question browser. POST writes remain protected by backend subject and service role checks, while GET
+                 * visibility is narrowed by the tenant-aware store query.
                  */
                 new ApiAccessRule("/api/question-bank/items", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 0, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/agents/model-catalog", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 0, Duration.ofMinutes(1)),

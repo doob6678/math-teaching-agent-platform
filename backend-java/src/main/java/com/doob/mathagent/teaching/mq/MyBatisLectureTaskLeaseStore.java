@@ -23,6 +23,18 @@ public class MyBatisLectureTaskLeaseStore implements LectureTaskLeaseStore {
         return new LectureTaskLease(taskId, token, workerId, claimed.getRetryCount(), expiry);
     }
     @Override public boolean complete(LectureTaskLease lease) { return mapper.update(null, owned(lease).set(TeachingTaskEntity::getStatus, "COMPLETED").set(TeachingTaskEntity::getLeaseToken, null).set(TeachingTaskEntity::getLeaseExpireAt, null).set(TeachingTaskEntity::getFinishedAt, Instant.now())) == 1; }
+    @Override public java.util.List<String> reclaimExpired(Instant now, int limit) {
+        if (limit < 1) return java.util.List.of();
+        java.util.List<String> reclaimed = new java.util.ArrayList<>();
+        for (TeachingTaskEntity candidate : mapper.findExpiredLectureLeases(now, limit)) {
+            if (candidate.getLeaseToken() != null
+                    && mapper.reclaimExpiredLectureTask(candidate.getTaskId(), candidate.getLeaseToken(), now) == 1) {
+                reclaimed.add(candidate.getTaskId());
+            }
+        }
+        return java.util.List.copyOf(reclaimed);
+    }
+    @Override public boolean renew(LectureTaskLease lease, Instant expiresAt) { return mapper.update(null, owned(lease).set(TeachingTaskEntity::getLeaseExpireAt, expiresAt)) == 1; }
     @Override public boolean failOrRetry(LectureTaskLease lease, String error, int maximumAttempts) {
         boolean retry = lease.retryCount() < maximumAttempts;
         return mapper.update(null, owned(lease).set(TeachingTaskEntity::getStatus, retry ? "RETRYING" : "FAILED").set(TeachingTaskEntity::getLastError, safe(error)).set(TeachingTaskEntity::getLeaseToken, null).set(TeachingTaskEntity::getLeaseExpireAt, null).set(TeachingTaskEntity::getFinishedAt, retry ? null : Instant.now())) == 1 && retry;

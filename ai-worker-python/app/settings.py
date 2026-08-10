@@ -60,14 +60,14 @@ class WorkerSettings:
             embedding_provider_order=LOCAL_TEXT_EMBEDDING_PROVIDER_ORDER,
             rerank_provider_order=LOCAL_RERANK_PROVIDER_ORDER,
             local_clip_model_path=resolve_local_clip_model_path(source),
-            local_clip_device=source.get("MATH_AGENT_LOCAL_CLIP_DEVICE", "cpu"),
+            local_clip_device=source.get("MATH_AGENT_LOCAL_CLIP_DEVICE", "cuda"),
             local_clip_dimension=int(source.get("MATH_AGENT_LOCAL_CLIP_DIMENSION", "512")),
             local_clip_provider_order=LOCAL_CLIP_PROVIDER_ORDER,
             local_rerank_model_path=resolve_local_rerank_model_path(source),
-            local_rerank_device=source.get("MATH_AGENT_LOCAL_RERANK_DEVICE", "cpu"),
+            local_rerank_device=source.get("MATH_AGENT_LOCAL_RERANK_DEVICE", "cuda"),
             local_rerank_max_tokens=max(1, int(source.get("MATH_AGENT_LOCAL_RERANK_MAX_TOKENS", DEFAULT_LOCAL_RERANK_MAX_TOKENS))),
             local_text_embedding_model_path=resolve_local_text_embedding_model_path(source),
-            local_text_embedding_device=source.get("MATH_AGENT_LOCAL_TEXT_EMBEDDING_DEVICE", "cpu"),
+            local_text_embedding_device=source.get("MATH_AGENT_LOCAL_TEXT_EMBEDDING_DEVICE", "cuda"),
             embedding_dimensions=int(source.get("MATH_AGENT_EMBEDDING_DIMENSION", "512")),
             # AI parse is explicitly selected per source document. These settings only determine its real provider,
             # request limit and confidence floor; they never affect ordinary TEXT ingestion costs.
@@ -98,10 +98,9 @@ def resolve_processed_books_root(source: Mapping[str, str]) -> str | None:
     if configured:
         return configured
     for candidate in (
-        # Must match application.yml: c2 carries the searchable small-heading
-        # chunks while retaining page images through its shared page index.
+        # The worker must resolve the same c2 section-child library mounted for Java. It retains page-image indexes
+        # while giving text retrieval stable section_id/source_chunk_id identities for parent aggregation.
         "C:\\Users\\doob\\Desktop\\个人资料\\高中数学\\下载课本代码\\tchMaterial-parser-main\\tchMaterial-parser-main\\processed_books_section_shadow_all_mini_c2",
-        "C:\\Users\\doob\\Desktop\\个人资料\\高中数学\\下载课本代码\\tchMaterial-parser-main\\tchMaterial-parser-main\\processed_books_section_shadow_all_mini_b4",
         "C:\\Users\\doob\\Desktop\\个人资料\\高中数学\\下载课本代码\\tchMaterial-parser-main\\tchMaterial-parser-main\\processed_books",
         "C:\\Users\\doob\\Desktop\\code\\dev\\math_agent_rag\\processed_books",
     ):

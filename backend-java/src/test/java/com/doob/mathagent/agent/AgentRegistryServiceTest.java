@@ -29,8 +29,7 @@ class AgentRegistryServiceTest {
 
         assertThat(response.agents()).extracting(AgentRegistryResponse.Item::code)
                 .contains("SupervisorAgent", "KnowledgeRetrievalAgent", "DocumentWriterAgent");
-        assertThat(response.agents()).filteredOn(AgentRegistryResponse.Item::capabilityRequired)
-                .extracting(AgentRegistryResponse.Item::code)
+        assertThat(response.agents()).extracting(AgentRegistryResponse.Item::code)
                 .contains("SupervisorAgent", "DocumentWriterAgent");
     }
 }

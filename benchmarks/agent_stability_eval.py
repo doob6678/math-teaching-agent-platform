@@ -10,7 +10,7 @@ from typing import Any
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from benchmarks.http_client import MathAgentClient, stable_request_hash
+from benchmarks.http_client import MathAgentClient
 from benchmarks.metrics import count_agent_diagnostics
 
 
@@ -30,24 +30,7 @@ def run_agent_stability_eval(client: MathAgentClient, config: dict[str, Any], ru
             "evidenceRefs": [],
             "dryRun": False,
         }
-        headers = {}
-        if bool(plan.body.get("capabilityRequired")):
-            request_hash = stable_request_hash(execute_body)
-            capability = client.post("/api/security/capabilities", {
-                "action": plan.body.get("capabilityAction") or f"agent-run:{plan.body.get('agentCode')}",
-                "path": "/api/agents/execute",
-                "requestHash": request_hash,
-                "idempotencyKey": f"agent-stability-{int(time.time() * 1000)}-{index}",
-                "maxCost": plan.body.get("estimatedCost", 0),
-            })
-            if capability.status != 200 or not isinstance(capability.body, dict):
-                runs.append(_failed_run(index, capability, started, "capability_failed", plan.body))
-                continue
-            headers = {
-                "X-Capability-Token": str(capability.body.get("token", "")),
-                "X-Request-Hash": request_hash,
-            }
-        execution = client.post("/api/agents/execute", execute_body, headers=headers)
+        execution = client.post("/api/agents/execute", execute_body)
         elapsed_ms = int(round((time.perf_counter() - started) * 1000))
         if execution.status != 200 or not isinstance(execution.body, dict):
             runs.append(_failed_run(index, execution, started, "execute_failed", plan.body))

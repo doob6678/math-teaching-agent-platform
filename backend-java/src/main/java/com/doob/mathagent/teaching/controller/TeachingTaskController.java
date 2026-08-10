@@ -57,6 +57,8 @@ public class TeachingTaskController {
     private static final String TEACHING_TASKS_PATH = "/api/teaching/tasks";
     private static final String HANDOUT_RENDERER_HEADER = "X-Handout-Renderer";
     private static final String HANDOUT_PAGE_COUNT_HEADER = "X-Handout-Page-Count";
+    private static final String HANDOUT_SHA256_HEADER = "X-Handout-SHA256";
+    private static final String HANDOUT_CONTENT_LENGTH_HEADER = "X-Handout-Content-Length";
 
     private final TeachingWorkflowService workflowService;
     private final LectureTaskSubmissionService lectureTaskSubmissionService;
@@ -347,7 +349,7 @@ public class TeachingTaskController {
                         .filename(task.taskId() + ".tex", StandardCharsets.UTF_8)
                         .build()
                         .toString())
-                .body(TeachingHandoutPdfExportService.sanitizeLatexForExport(task.handoutLatexFor(effectiveVersion)));
+                .body(TeachingHandoutPdfExportService.sanitizeLatexForUserSource(task.handoutLatexFor(effectiveVersion)));
     }
 
     /**
@@ -369,7 +371,7 @@ public class TeachingTaskController {
                         .filename(task.taskId() + "-" + normalizedVersion + ".tex", StandardCharsets.UTF_8)
                         .build()
                         .toString())
-                .body(TeachingHandoutPdfExportService.sanitizeLatexForExport(task.handoutLatexFor(normalizedVersion)));
+                .body(TeachingHandoutPdfExportService.sanitizeLatexForUserSource(task.handoutLatexFor(normalizedVersion)));
     }
 
     /**
@@ -389,7 +391,7 @@ public class TeachingTaskController {
                         .filename(task.taskId() + ".tex", StandardCharsets.UTF_8)
                         .build()
                         .toString())
-                .body(TeachingHandoutPdfExportService.sanitizeLatexForExport(task.handoutLatexFor(effectiveVersion)));
+                .body(TeachingHandoutPdfExportService.sanitizeLatexForUserSource(task.handoutLatexFor(effectiveVersion)));
     }
 
     /**
@@ -411,7 +413,7 @@ public class TeachingTaskController {
                         .filename(task.taskId() + "-" + normalizedVersion + ".tex", StandardCharsets.UTF_8)
                         .build()
                         .toString())
-                .body(TeachingHandoutPdfExportService.sanitizeLatexForExport(task.handoutLatexFor(normalizedVersion)));
+                .body(TeachingHandoutPdfExportService.sanitizeLatexForUserSource(task.handoutLatexFor(normalizedVersion)));
     }
 
     /**
@@ -498,10 +500,23 @@ public class TeachingTaskController {
                 : ContentDisposition.attachment().filename(fileName, StandardCharsets.UTF_8).build();
         return ResponseEntity.ok()
                 .contentType(MediaType.APPLICATION_PDF)
+                .contentLength(rendered.bytes().length)
                 .header(HttpHeaders.CONTENT_DISPOSITION, disposition.toString())
                 .header(HANDOUT_RENDERER_HEADER, rendered.renderer())
                 .header(HANDOUT_PAGE_COUNT_HEADER, Integer.toString(rendered.pageCount()))
+                .header(HANDOUT_CONTENT_LENGTH_HEADER, Integer.toString(rendered.bytes().length))
+                .header(HANDOUT_SHA256_HEADER, sha256(rendered.bytes()))
                 .body(rendered.bytes());
+    }
+
+    /** Hashes exported bytes so a recipient can verify the downloaded PDF without trusting a filename alone. */
+    private static String sha256(byte[] value) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(value == null ? new byte[0] : value);
+            return java.util.HexFormat.of().formatHex(digest);
+        } catch (java.security.NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 is unavailable", exception);
+        }
     }
 
     /**
@@ -668,17 +683,6 @@ public class TeachingTaskController {
     private static boolean canUseTeacherHandout(RequestSubject subject) {
         RequestSubject normalized = subject.normalize();
         return "teacher".equals(normalized.subjectType()) || "admin".equals(normalized.subjectType());
-    }
-
-    /**
-     * Reads a non-authoritative request header used for capability token verification.
-     */
-    private static String headerOrNull(HttpServletRequest request, String name) {
-        if (request == null) {
-            return null;
-        }
-        String value = request.getHeader(name);
-        return value == null || value.isBlank() ? null : value.strip();
     }
 
     /**

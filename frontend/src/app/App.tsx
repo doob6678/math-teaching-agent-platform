@@ -277,7 +277,7 @@ export function App() {
   const [teachingHistory, setTeachingHistory] = useState<TeachingTaskResponse[]>([]);
   const [loadingTeachingHistory, setLoadingTeachingHistory] = useState(false);
   const [openingTeachingHistoryTaskId, setOpeningTeachingHistoryTaskId] = useState("");
-  const [handoutHistoryOpen, setHandoutHistoryOpen] = useState(true);
+  const [handoutHistoryOpen, setHandoutHistoryOpen] = useState(false);
   const [handoutVersion, setHandoutVersion] = useState<TeachingHandoutVersion>("teacher");
   const [handoutAction, setHandoutAction] = useState("");
   const [handoutExportMessage, setHandoutExportMessage] = useState("");
@@ -1012,7 +1012,7 @@ export function App() {
     setOpeningTeachingConversationId(summary.conversationId);
     setTeachingError("");
     api
-      .getStudentExplanationConversation(summary.conversationId, 50)
+      .getStudentExplanationConversation(summary.conversationId)
       .then((conversation) => {
         setTeachingConversationId(conversation.conversationId);
         setTeachingConversationTitle(conversation.title || "AI 讲题");
@@ -1813,7 +1813,7 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
     api
       .exportTeachingTaskPdf(task.taskId, resolvedVersion)
       .then((pdf) => {
-        downloadBytes(`${task.taskId}-${resolvedVersion}.pdf`, pdf.bytes, "application/pdf");
+        downloadBytes(pdf.fileName || `${task.taskId}-${resolvedVersion}.pdf`, pdf.bytes, "application/pdf");
         setHandoutExportMessage(
           pdf.renderer === "xelatex"
             ? "PDF 已下载，当前使用 XeLaTeX 渲染。"
@@ -1844,7 +1844,7 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
     api
       .exportTeachingTaskPdf(teachingTask.taskId, handoutVersion)
       .then((pdf) => {
-        downloadBytes(`${teachingTask.taskId}-${handoutVersion}.pdf`, pdf.bytes, "application/pdf");
+        downloadBytes(pdf.fileName || `${teachingTask.taskId}-${handoutVersion}.pdf`, pdf.bytes, "application/pdf");
         setHandoutExportMessage(`PDF 讲义已下载。${pdf.renderer === "xelatex" ? "已使用 XeLaTeX 编译。" : "当前使用后备排版。"}`);
       })
       .catch((error: Error) => setTeachingError(toUserFacingError(error)))

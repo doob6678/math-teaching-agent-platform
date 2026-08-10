@@ -7,6 +7,8 @@ import java.util.Set;
 public enum ImportRunState {
     CREATED,
     PARSING_ALL_FILES,
+    /** Parsing succeeded and durable candidates await the independent visual/Golden review pipeline. */
+    PARSED_AWAITING_REVIEW,
     PAIRING_AND_DEDUPLICATING,
     INDEXING,
     COMPLETED,
@@ -17,7 +19,8 @@ public enum ImportRunState {
     public ImportRunState transitionTo(ImportRunState next) {
         Set<ImportRunState> allowed = switch (this) {
             case CREATED -> EnumSet.of(PARSING_ALL_FILES, FAILED);
-            case PARSING_ALL_FILES -> EnumSet.of(PAIRING_AND_DEDUPLICATING, PARTIALLY_FAILED, FAILED);
+            case PARSING_ALL_FILES -> EnumSet.of(PARSED_AWAITING_REVIEW, PAIRING_AND_DEDUPLICATING, PARTIALLY_FAILED, FAILED);
+            case PARSED_AWAITING_REVIEW -> EnumSet.of(PAIRING_AND_DEDUPLICATING, FAILED);
             case PAIRING_AND_DEDUPLICATING -> EnumSet.of(INDEXING, PARTIALLY_FAILED, FAILED);
             case INDEXING -> EnumSet.of(COMPLETED, PARTIALLY_FAILED, FAILED);
             case PARTIALLY_FAILED -> EnumSet.of(PARSING_ALL_FILES, PAIRING_AND_DEDUPLICATING, INDEXING, FAILED);

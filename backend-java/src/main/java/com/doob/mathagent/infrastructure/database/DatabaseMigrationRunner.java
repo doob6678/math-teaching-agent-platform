@@ -11,8 +11,8 @@ import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 
 /**
- * Optional operator-controlled schema tool. It is deliberately disabled by default so a normal backend restart
- * never mutates MySQL; schema ownership stays with the deployment/bootstrap process.
+ * Startup schema gate. The backend must validate and apply the versioned schema before serving requests so a stale
+ * application binary cannot silently run against a newer or incompatible database.
  */
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE)
@@ -25,7 +25,7 @@ public class DatabaseMigrationRunner implements ApplicationRunner {
         this.environment = environment;
     }
 
-    /** Runs only when an operator explicitly opts in with the migration runner property. */
+    /** Validates and applies migrations before the rest of the application is considered ready. */
     @Override
     public void run(ApplicationArguments args) {
         DatabaseMigrationProperties properties = DatabaseMigrationProperties.from(environment);
@@ -35,6 +35,8 @@ public class DatabaseMigrationRunner implements ApplicationRunner {
                 .locations("classpath:db/migration")
                 .baselineOnMigrate(true)
                 .baselineVersion(MigrationVersion.fromVersion("0"))
+                .validateOnMigrate(true)
+                .cleanDisabled(true)
                 .load()
                 .migrate();
     }

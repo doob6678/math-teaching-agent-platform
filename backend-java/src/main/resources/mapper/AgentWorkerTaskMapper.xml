@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.doob.mathagent.agent.mapper.AgentWorkerTaskMapper">
+    <!-- Reconciliation selects only a queued task generation without a matching durable dispatch event. -->
+    <select id="selectQueuedWithoutCurrentOutbox" resultType="com.doob.mathagent.agent.entity.AgentWorkerTaskEntity">
+        SELECT task.*
+        FROM agent_worker_task task
+        WHERE task.status = 'QUEUED'
+          AND task.updated_at &lt; #{olderThan}
+          AND NOT EXISTS (
+              SELECT 1
+              FROM agent_worker_task_outbox_event event
+              WHERE event.task_id = task.task_id
+                AND event.dispatch_version = task.dispatch_version
+          )
+        ORDER BY task.updated_at ASC
+        LIMIT #{limit}
+    </select>
+</mapper>

@@ -23,6 +23,25 @@ public class InMemoryLectureTaskLeaseStore implements LectureTaskLeaseStore {
         Entry entry = validRunning(lease); if (entry == null) return false;
         entry.status = LectureTaskLeaseStatus.COMPLETED; entry.token = null; entry.expiresAt = null; return true;
     }
+    @Override public synchronized java.util.List<String> reclaimExpired(Instant now, int limit) {
+        java.util.List<String> reclaimed = new java.util.ArrayList<>();
+        for (Map.Entry<String, Entry> candidate : entries.entrySet()) {
+            if (reclaimed.size() >= limit) break;
+            Entry entry = candidate.getValue();
+            if (entry.status == LectureTaskLeaseStatus.RUNNING && entry.expiresAt.isBefore(now)) {
+                entry.status = LectureTaskLeaseStatus.RETRYING;
+                entry.workerId = null;
+                entry.token = null;
+                entry.expiresAt = null;
+                reclaimed.add(candidate.getKey());
+            }
+        }
+        return java.util.List.copyOf(reclaimed);
+    }
+    @Override public synchronized boolean renew(LectureTaskLease lease, Instant expiresAt) {
+        Entry entry = validRunning(lease); if (entry == null) return false;
+        entry.expiresAt = expiresAt; return true;
+    }
     @Override public synchronized boolean failOrRetry(LectureTaskLease lease, String error, int maximumAttempts) {
         Entry entry = validRunning(lease); if (entry == null) return false;
         entry.lastError = error; entry.token = null; entry.expiresAt = null;

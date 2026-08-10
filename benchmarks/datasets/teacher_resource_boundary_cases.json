@@ -1,0 +1,12 @@
+{
+  "datasetVersion": "teacher-resource-boundary-v1",
+  "cases": [
+    {"caseId":"F-CORRECT-001","caseType":"feishu_correct_file","authProfile":"owner","query":"SSA 已知两边及其中一边对角时三角形有几个解","expected":{"outcome":"hits","sourceType":"feishu","sourcePath":"SSA求三角形解的个数问题.md"}},
+    {"caseId":"F-WRONG-001","caseType":"feishu_wrong_file","authProfile":"owner","query":"SSA 已知两边及其中一边对角时三角形有几个解","expected":{"outcome":"hits","sourceType":"feishu","forbiddenPaths":["三角形常用定理/正弦定理.md"]}},
+    {"caseId":"MIXED-001","caseType":"mixed_source_type","authProfile":"owner","query":"2008上海高考抛物线焦点弦长","expected":{"outcome":"hits","sourceType":"gaokao","sourcePath":"2008年高考数学试卷（文）（上海）（空白卷）.pdf","forbiddenSourceTypes":["feishu","mock_exam"]}},
+    {"caseId":"UNRELATED-001","caseType":"unrelated","authProfile":"owner","query":"量子色动力学重整化群 beta 函数","expected":{"outcome":"empty","sourceType":"feishu"}},
+    {"caseId":"EMPTY-001","caseType":"empty_result","authProfile":"owner","query":"this-corpus-has-no-such-resource-3f8e72f5","expected":{"outcome":"empty","sourceType":"teacher_resource"}},
+    {"caseId":"CROSS-TENANT-001","caseType":"cross_tenant","authProfile":"otherTenant","query":"SSA 已知两边及其中一边对角时三角形有几个解","expected":{"outcome":"empty","sourceType":"feishu"}},
+    {"caseId":"NO-PERMISSION-001","caseType":"no_permission","authProfile":"owner","query":"SSA 已知两边及其中一边对角时三角形有几个解","expected":{"outcome":"denied","statusCodes":[401,403]}}
+  ]
+}

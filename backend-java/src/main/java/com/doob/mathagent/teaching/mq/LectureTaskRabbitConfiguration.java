@@ -12,6 +12,7 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.Environment;
 
 /** Dedicated durable topology for top-level lecture tasks, isolated from stage-level Agent Worker queues. */
 @Configuration
@@ -30,5 +31,15 @@ public class LectureTaskRabbitConfiguration {
     @Bean Binding lectureTaskRetryBinding(DirectExchange lectureTaskExchange, Queue lectureTaskRetryQueue) { return BindingBuilder.bind(lectureTaskRetryQueue).to(lectureTaskExchange).with(ROUTING_KEY + ".retry"); }
     @Bean Binding lectureTaskDeadLetterBinding(DirectExchange lectureTaskExchange, Queue lectureTaskDeadLetterQueue) { return BindingBuilder.bind(lectureTaskDeadLetterQueue).to(lectureTaskExchange).with(DEAD_ROUTING_KEY); }
     @Bean("lectureTaskRabbitTemplate") RabbitTemplate lectureTaskRabbitTemplate(CachingConnectionFactory connectionFactory, ObjectMapper objectMapper) { RabbitTemplate template = new RabbitTemplate(connectionFactory); template.setMessageConverter(new Jackson2JsonMessageConverter(objectMapper)); return template; }
-    @Bean("lectureTaskRabbitListenerFactory") SimpleRabbitListenerContainerFactory lectureTaskRabbitListenerFactory(CachingConnectionFactory connectionFactory, ObjectMapper objectMapper) { SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory(); factory.setConnectionFactory(connectionFactory); factory.setMessageConverter(new Jackson2JsonMessageConverter(objectMapper)); factory.setDefaultRequeueRejected(false); factory.setPrefetchCount(1); return factory; }
+    @Bean("lectureTaskRabbitListenerFactory") SimpleRabbitListenerContainerFactory lectureTaskRabbitListenerFactory(
+            CachingConnectionFactory connectionFactory, ObjectMapper objectMapper, Environment environment) {
+        SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
+        factory.setConnectionFactory(connectionFactory);
+        factory.setMessageConverter(new Jackson2JsonMessageConverter(objectMapper));
+        factory.setDefaultRequeueRejected(false);
+        factory.setPrefetchCount(1);
+        // Custom factories must repeat the global switch explicitly; otherwise lecture tasks start unexpectedly.
+        factory.setAutoStartup(environment.getProperty("math-agent.rabbitmq.listeners-enabled", Boolean.class, false));
+        return factory;
+    }
 }

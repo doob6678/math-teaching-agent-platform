@@ -118,6 +118,8 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api1.aisz.mom/v1}
       OPENAI_CHAT_MODEL: ${OPENAI_CHAT_MODEL:-gpt-5.6-luna}
+      MATH_AGENT_REQUIRE_ROUTE_GRANT: ${MATH_AGENT_REQUIRE_ROUTE_GRANT:-true}
+      MATH_AGENT_PROVIDER_ROUTE_GRANT_SECRET: ${MATH_AGENT_PROVIDER_ROUTE_GRANT_SECRET:?MATH_AGENT_PROVIDER_ROUTE_GRANT_SECRET must be set}
       # These values are the worker's real local model contract.  Compose must pass them explicitly because a
       # container cannot see the host .env file merely because it was used for interpolation on the host.
       MATH_AGENT_WORKER_API_KEY: ${MATH_AGENT_WORKER_API_KEY:?MATH_AGENT_WORKER_API_KEY must be set}
@@ -133,11 +135,15 @@ services:
       # A completed Python graph is ACK-safe only after its immutable usage event is persisted; local tests can
       # explicitly disable this fail-closed behavior, but production deployments must keep it enabled.
       MATH_AGENT_USAGE_REQUIRED: ${MATH_AGENT_USAGE_REQUIRED:-true}
+      # A completed graph must retain timing/load evidence too; otherwise it cannot be accepted as production proof.
+      MATH_AGENT_METRICS_REQUIRED: ${MATH_AGENT_METRICS_REQUIRED:-true}
       # Empty pricing is intentional and is reported as costKnown=false/-1, never as a fabricated currency amount.
       MATH_AGENT_AI_PRICES_JSON: ${MATH_AGENT_AI_PRICES_JSON:-}
       MATH_AGENT_HANDOUT_CHECKPOINT_DB: /app/data/handout-checkpoints.sqlite3
       # Shared MySQL checkpoints are required when more than one ai-worker replica can claim a RabbitMQ task.
       MATH_AGENT_HANDOUT_CHECKPOINT_BACKEND: ${MATH_AGENT_HANDOUT_CHECKPOINT_BACKEND:-mysql}
+      MATH_AGENT_STUDENT_EXPLANATION_CHECKPOINT_DB: /app/data/student-explanation-checkpoints.sqlite3
+      MATH_AGENT_STUDENT_EXPLANATION_CHECKPOINT_BACKEND: ${MATH_AGENT_STUDENT_EXPLANATION_CHECKPOINT_BACKEND:-mysql}
       MATH_AGENT_HANDOUT_CONTEXT_LIMIT: ${MATH_AGENT_HANDOUT_CONTEXT_LIMIT:-12}
       MATH_AGENT_CONTAINER_TEXT_MODEL_PATH: ${MATH_AGENT_CONTAINER_TEXT_MODEL_PATH:-/models/BAAI/bge-small-zh-v1.5}
       MATH_AGENT_CONTAINER_RERANK_MODEL_PATH: ${MATH_AGENT_CONTAINER_RERANK_MODEL_PATH:-/models/BAAI/bge-reranker-v2-m3}
@@ -160,6 +166,12 @@ services:
       - "${MATH_AGENT_PROCESSED_BOOKS_HOST_ROOT:-/mnt/c/Users/doob/Desktop/个人资料/高中数学/下载课本代码/tchMaterial-parser-main/tchMaterial-parser-main/processed_books_section_shadow_all_mini_c2}:/app/data/textbooks:ro"
     depends_on:
       mysql: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8091/health', timeout=5).read()"]
+      interval: 15s
+      timeout: 10s
+      start_period: 60s
+      retries: 20
 
   backend:
     build:
@@ -167,40 +179,36 @@ services:
       dockerfile: backend-java/Dockerfile
     restart: unless-stopped
     environment:
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      # Keep the container on the same OpenAI-compatible endpoint and model as the host .env file.  The backend
-      # binds these names into both Spring AI and the ReAct provider, preventing a relay key from falling back to
-      # api.openai.com during a clean Docker start.
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api1.aisz.mom/v1}
-      OPENAI_CHAT_MODEL: ${OPENAI_CHAT_MODEL:-gpt-5.6-luna}
-      # Spring AI's auto-configuration reads these canonical properties directly; keep them mapped to the same
-      # operator-provided relay settings used by the application's own provider catalog.
-      SPRING_AI_OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      SPRING_AI_OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api1.aisz.mom/v1}
-      SPRING_AI_OPENAI_CHAT_OPTIONS_MODEL: ${OPENAI_CHAT_MODEL:-gpt-5.6-luna}
-      # The handout pipeline has no speech/transcription stage. Spring AI 1.1.2 otherwise eagerly
-      # creates both unused audio beans and rejects a valid text-only deployment without a speech key.
-      SPRING_AUTOCONFIGURE_EXCLUDE: org.springframework.ai.model.openai.autoconfigure.OpenAiAudioSpeechAutoConfiguration,org.springframework.ai.model.openai.autoconfigure.OpenAiAudioTranscriptionAutoConfiguration
-      MATH_AGENT_AI_DEFAULT_PROVIDER: ${MATH_AGENT_AI_DEFAULT_PROVIDER:-openai}
-      MATH_AGENT_AI_CHAT_REQUEST_TIMEOUT_MS: ${MATH_AGENT_AI_CHAT_REQUEST_TIMEOUT_MS:-420000}
       MATH_AGENT_WORKER_API_KEY: ${MATH_AGENT_WORKER_API_KEY:?MATH_AGENT_WORKER_API_KEY must be set}
       MATH_AGENT_VECTOR_INDEX_EMBEDDING_API_KEY: ${MATH_AGENT_WORKER_API_KEY:?MATH_AGENT_WORKER_API_KEY must be set}
       MATH_AGENT_AGENT_WORKER_SHARED_KEY: ${MATH_AGENT_AGENT_WORKER_SHARED_KEY:?MATH_AGENT_AGENT_WORKER_SHARED_KEY must be set}
+      # Java signs route grants but never receives provider API keys; the worker remains their only container owner.
+      MATH_AGENT_PROVIDER_ROUTE_GRANT_SECRET: ${MATH_AGENT_PROVIDER_ROUTE_GRANT_SECRET:?MATH_AGENT_PROVIDER_ROUTE_GRANT_SECRET must be set}
+      MATH_AGENT_PROVIDER_ROUTE_GRANT_TTL_SECONDS: ${MATH_AGENT_PROVIDER_ROUTE_GRANT_TTL_SECONDS:-120}
+      MATH_AGENT_PROVIDER_OPENAI_ENABLED: ${MATH_AGENT_PROVIDER_OPENAI_ENABLED:-true}
+      MATH_AGENT_PROVIDER_DASHSCOPE_ENABLED: ${MATH_AGENT_PROVIDER_DASHSCOPE_ENABLED:-false}
+      MATH_AGENT_PROVIDER_DEEPSEEK_ENABLED: ${MATH_AGENT_PROVIDER_DEEPSEEK_ENABLED:-false}
+      MATH_AGENT_PROVIDER_ARK_ENABLED: ${MATH_AGENT_PROVIDER_ARK_ENABLED:-false}
+      # Route metadata must match the worker model, while its endpoint and API key stay worker-only.
+      OPENAI_CHAT_MODEL: ${OPENAI_CHAT_MODEL:-gpt-5.6-luna}
       MATH_AGENT_PYTHON_HANDOUT_ENABLED: ${MATH_AGENT_PYTHON_HANDOUT_ENABLED:-true}
       MATH_AGENT_PYTHON_HANDOUT_BASE_URL: http://ai-worker:8091
       MATH_AGENT_PYTHON_HANDOUT_GRAPH_VERSION: ${MATH_AGENT_PYTHON_HANDOUT_GRAPH_VERSION:-handout-v1}
       MATH_AGENT_PYTHON_HANDOUT_TIMEOUT_MS: ${MATH_AGENT_PYTHON_HANDOUT_TIMEOUT_MS:-900000}
       MATH_AGENT_PYTHON_HANDOUT_CONNECT_TIMEOUT_MS: ${MATH_AGENT_PYTHON_HANDOUT_CONNECT_TIMEOUT_MS:-5000}
       MATH_AGENT_PYTHON_HANDOUT_LEASE_SAFETY_MARGIN_MS: ${MATH_AGENT_PYTHON_HANDOUT_LEASE_SAFETY_MARGIN_MS:-15000}
-      MATH_AGENT_PYTHON_TEACHING_DRAFT_ENABLED: ${MATH_AGENT_PYTHON_TEACHING_DRAFT_ENABLED:-true}
-      MATH_AGENT_PYTHON_TEACHING_DRAFT_TIMEOUT_MS: ${MATH_AGENT_PYTHON_TEACHING_DRAFT_TIMEOUT_MS:-420000}
-      MATH_AGENT_PYTHON_TEACHING_DRAFT_CONNECT_TIMEOUT_MS: ${MATH_AGENT_PYTHON_TEACHING_DRAFT_CONNECT_TIMEOUT_MS:-5000}
       MATH_AGENT_FEISHU_TOKEN_ENCRYPTION_KEY: ${MATH_AGENT_FEISHU_TOKEN_ENCRYPTION_KEY:?MATH_AGENT_FEISHU_TOKEN_ENCRYPTION_KEY must be set}
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD must be set}
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:?RABBITMQ_DEFAULT_USER must be set}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:?RABBITMQ_DEFAULT_PASS must be set}
       MATH_AGENT_MILVUS_ROOT_PASSWORD: ${MATH_AGENT_MILVUS_ROOT_PASSWORD:?MATH_AGENT_MILVUS_ROOT_PASSWORD must be set}
+      # This dedicated local-only account makes browser acceptance reproducible without changing real users.
+      MATH_AGENT_LOCAL_ACCEPTANCE_ACCOUNT_ENABLED: ${MATH_AGENT_LOCAL_ACCEPTANCE_ACCOUNT_ENABLED:-true}
+      MATH_AGENT_LOCAL_ACCEPTANCE_ACCOUNT_USERNAME: ${MATH_AGENT_LOCAL_ACCEPTANCE_ACCOUNT_USERNAME:?MATH_AGENT_LOCAL_ACCEPTANCE_ACCOUNT_USERNAME must be set}
+      MATH_AGENT_LOCAL_ACCEPTANCE_ACCOUNT_PASSWORD: ${MATH_AGENT_LOCAL_ACCEPTANCE_ACCOUNT_PASSWORD:?MATH_AGENT_LOCAL_ACCEPTANCE_ACCOUNT_PASSWORD must be set}
+      MATH_AGENT_LOCAL_ACCEPTANCE_ACCOUNT_ROLE: ${MATH_AGENT_LOCAL_ACCEPTANCE_ACCOUNT_ROLE:-admin}
+      MATH_AGENT_LOCAL_ACCEPTANCE_ACCOUNT_TENANT_ID: ${MATH_AGENT_LOCAL_ACCEPTANCE_ACCOUNT_TENANT_ID:-default}
       # The image mounts the Windows SimHei file below; pass its in-container path so PDFBox never guesses a
       # Windows-only path and refuses a Chinese handout export inside Linux.
       MATH_AGENT_PDF_FONT_PATH: ${MATH_AGENT_PDF_FONT_PATH:-/app/fonts/cjk.ttf}
@@ -240,6 +248,12 @@ services:
       rabbitmq: {condition: service_healthy}
       milvus: {condition: service_healthy}
       ai-worker: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/actuator/health/readiness >/dev/null || wget -qO- http://127.0.0.1:8080/actuator/health >/dev/null"]
+      interval: 15s
+      timeout: 10s
+      start_period: 90s
+      retries: 20
 
   frontend:
     build: ./frontend

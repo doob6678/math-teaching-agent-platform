@@ -50,6 +50,22 @@ class MyBatisLocalAccountStoreTest {
     }
 
     @Test
+    void createsTeacherAccountWithTeacherRole() {
+        CapturingMapper mapper = new CapturingMapper();
+        MyBatisLocalAccountStore store = new MyBatisLocalAccountStore(mapper.proxy());
+
+        LocalAccount account = store.createTeacher(" MathTeacher ", "pbkdf2_hash", "school-a");
+
+        assertThat(account.role()).isEqualTo("teacher");
+        assertThat(account.tenantId()).isEqualTo("school-a");
+        assertThat(mapper.inserted).singleElement().satisfies(inserted -> {
+            assertThat(inserted.getUserId()).startsWith("teacher-");
+            assertThat(inserted.getRole()).isEqualTo("teacher");
+            assertThat(inserted.getUsernameNormalized()).isEqualTo("mathteacher");
+        });
+    }
+
+    @Test
     void convertsDuplicateUsernameToBusinessError() {
         CapturingMapper mapper = new CapturingMapper();
         mapper.duplicateOnInsert = true;

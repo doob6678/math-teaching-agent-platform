@@ -12,6 +12,7 @@ class ImportRunStateTest {
     void acceptsThePlannedTwoPhaseLifecycle() {
         ImportRunState state = ImportRunState.CREATED;
         state = state.transitionTo(ImportRunState.PARSING_ALL_FILES);
+        state = state.transitionTo(ImportRunState.PARSED_AWAITING_REVIEW);
         state = state.transitionTo(ImportRunState.PAIRING_AND_DEDUPLICATING);
         state = state.transitionTo(ImportRunState.INDEXING);
 

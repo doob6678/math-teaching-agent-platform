@@ -157,6 +157,16 @@ class TeachingHandoutPdfExportServiceTest {
     }
 
     @Test
+    void restoresOnlyTransportNewlinesWithoutCorruptingTexCommandsBeginningWithN() {
+        String sanitized = TeachingHandoutPdfExportService.sanitizeLatexForExport(
+                "\\begin{tikzpicture}\\n\\node at (0,0) {$x$};\\n$x\\neq0$\\nEnglish paragraph\\n下一段");
+
+        assertThat(sanitized)
+                .contains("\\begin{tikzpicture}", "\\node at (0,0)", "$x\\neq0$", "English paragraph", "下一段")
+                .doesNotContain("\node", "\neq");
+    }
+
+    @Test
     void restoresPersistedQuadraticOptionsWithoutRewrappingLatexMath() {
         String sanitized = TeachingHandoutPdfExportService.sanitizeLatexForExport("""
                 \\section{轨迹方程}
@@ -197,6 +207,50 @@ class TeachingHandoutPdfExportServiceTest {
         assertThat(sanitized)
                 .contains("$$x^2+y^2=1$$", "$a+b=c$")
                 .doesNotContain("$$$" );
+    }
+
+    @Test
+    void removesUnmatchedMarkdownDisplayDelimiterBeforeXeLatexCompilation() throws Exception {
+        String source = """
+                \\section{二次函数：图像与最值}
+                \\begin{itemize}
+                \\item \\# 配方法与二次函数最小值
+                \\item \\#\\# 题目
+                \\item 求解函数
+                $
+                \\item f(x)=$x\\textasciicircum{}2-4x+3$,
+                \\item 并用顶点式说明其最小值。
+                \\end{itemize}
+                """;
+        String sanitized = TeachingHandoutPdfExportService.sanitizeLatexForExport(source);
+
+        assertThat(sanitized).doesNotContain("\n$\n", "\\item $\n");
+        Path engine = firstExistingPath(
+                "C:/Users/doob/AppData/Local/Programs/MiKTeX/miktex/bin/x64/xelatex.exe",
+                "C:/Program Files/MiKTeX/miktex/bin/x64/xelatex.exe",
+                "/usr/bin/xelatex",
+                "/usr/local/bin/xelatex");
+        Assumptions.assumeTrue(engine != null, "XeLaTeX is not installed on this machine");
+        String previous = System.getProperty("math.agent.xelatex.path");
+        System.setProperty("math.agent.xelatex.path", engine.toString());
+        try {
+            TeachingTaskResponse task = new TeachingTaskResponse(
+                    "task-unmatched-display-dollar", "client-unmatched-display-dollar", "school-a", "teacher",
+                    "teacher-001", null, TeachingTaskStatus.COMPLETED, "二次函数", "配方法与二次函数最小值",
+                    List.of(), List.of(), List.of(), source, source, source, source, List.of(), null, List.of(), null,
+                    null);
+
+            TeachingHandoutPdfExportService.RenderedHandoutPdf rendered =
+                    new TeachingHandoutPdfExportService().renderDetailed(task, "teacher");
+            assertThat(rendered.renderer()).isEqualTo("xelatex");
+            assertThat(rendered.bytes()).startsWith("%PDF-".getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+        } finally {
+            if (previous == null) {
+                System.clearProperty("math.agent.xelatex.path");
+            } else {
+                System.setProperty("math.agent.xelatex.path", previous);
+            }
+        }
     }
 
     @Test
@@ -362,56 +416,6 @@ class TeachingHandoutPdfExportServiceTest {
                     .doesNotContain("- itemize -", "\\\\includegraphics", "HANDOUTIMAGETOKEN");
         } finally {
             Files.deleteIfExists(image);
-        }
-    }
-
-    @Test
-    void rendersLegacyDirectIncludegraphicsAsPdfImageInsteadOfVisibleMarker() throws Exception {
-        Path image = createSolidImage("direct-image-render");
-        Path fakeEngine = Files.createTempFile("fake-xelatex", ".exe");
-        String previous = System.getProperty("math.agent.xelatex.path");
-        System.setProperty("math.agent.xelatex.path", fakeEngine.toString());
-        try {
-            String imagePath = image.toAbsolutePath().toString().replace("\\", "/");
-            TeachingTaskResponse task = new TeachingTaskResponse(
-                    "task-direct-image-render",
-                    "client-direct-image-render",
-                    "school-a",
-                    "teacher",
-                    "teacher-001",
-                    null,
-                    TeachingTaskStatus.COMPLETED,
-                    "图片证据",
-                    "检查图片证据不应暴露内部标记",
-                    List.of(),
-                    List.of(),
-                    List.of(),
-                    "",
-                    "\\section{来源索引}\n- itemize - 先列出相邻关系。\n\\includegraphics[width=0.72\\linewidth,height=0.28\\textheight,keepaspectratio]{\\detokenize{" + imagePath + "}}",
-                    "\\section{学生版}\n完成题目。",
-                    List.of(),
-                    null,
-                    List.of(),
-                    null,
-                    null);
-
-            TeachingHandoutPdfExportService.RenderedHandoutPdf rendered =
-                    new TeachingHandoutPdfExportService().renderDetailed(task, "teacher");
-
-            assertThat(rendered.renderer()).isEqualTo("pdfbox_fallback");
-            try (PDDocument document = Loader.loadPDF(rendered.bytes())) {
-                String text = new PDFTextStripper().getText(document);
-                assertThat(countPdfImages(document)).isGreaterThanOrEqualTo(1);
-                assertThat(text).doesNotContain("HANDOUTIMAGE", "- itemize -");
-            }
-        } finally {
-            Files.deleteIfExists(image);
-            Files.deleteIfExists(fakeEngine);
-            if (previous == null) {
-                System.clearProperty("math.agent.xelatex.path");
-            } else {
-                System.setProperty("math.agent.xelatex.path", previous);
-            }
         }
     }
 
@@ -643,68 +647,6 @@ class TeachingHandoutPdfExportServiceTest {
     }
 
     @Test
-    void rendersLectureVersionAsSixteenToTenLandscapeWithoutHandwritingLabels() throws Exception {
-        Path fakeEngine = Files.createTempFile("fake-xelatex", ".exe");
-        String previous = System.getProperty("math.agent.xelatex.path");
-        System.setProperty("math.agent.xelatex.path", fakeEngine.toString());
-        try {
-            TeachingTaskResponse task = new TeachingTaskResponse(
-                    "task-lecture-pdf",
-                    "client-lecture-pdf",
-                    "school-a",
-                    "teacher",
-                    "teacher-001",
-                    null,
-                    TeachingTaskStatus.COMPLETED,
-                    "学会双曲线定义与标准方程",
-                    "横版投屏讲解双曲线",
-                    List.of(),
-                    List.of(),
-                    List.of(),
-                    "",
-                    "\\section{教师版}\n教师讲解：$c^2=a^2+b^2$。",
-                    "\\section{学生版}\n完成练习。\n\\vspace{8em}",
-                    """
-                    \\section{16:10 横版讲解卡}
-                    \\paragraph{课堂投屏}
-                    双曲线核心公式 $c^2=a^2+b^2$。
-                    \\begin{itemize}
-                    \\item 先判断焦点在 x 轴还是 y 轴。
-                    \\item 再根据 $2a$、$2c$ 求参数。
-                    \\end{itemize}
-                    \\vspace{10em}
-                    """,
-                    List.of(),
-                    null,
-                    List.of(),
-                    null,
-                    null);
-
-            TeachingHandoutPdfExportService.RenderedHandoutPdf rendered =
-                    new TeachingHandoutPdfExportService().renderDetailed(task, "lecture");
-
-            assertThat(rendered.renderer()).isEqualTo("pdfbox_fallback");
-            try (PDDocument document = Loader.loadPDF(rendered.bytes())) {
-                var mediaBox = document.getPage(0).getMediaBox();
-                assertThat(mediaBox.getWidth()).isGreaterThan(mediaBox.getHeight());
-                assertThat(mediaBox.getWidth() / mediaBox.getHeight()).isBetween(1.58f, 1.62f);
-                String text = new PDFTextStripper().getText(document);
-                assertThat(text)
-                        .contains("横版讲解稿")
-                        .doesNotContain("16:10 横版讲解卡", "课堂投屏", "双曲线核心公式",
-                                "题型定位", "推导路径", "结论核对", "教师手写区", "手写区", "板书留白");
-            }
-        } finally {
-            Files.deleteIfExists(fakeEngine);
-            if (previous == null) {
-                System.clearProperty("math.agent.xelatex.path");
-            } else {
-                System.setProperty("math.agent.xelatex.path", previous);
-            }
-        }
-    }
-
-    @Test
     void doesNotExposeTeacherTemplateNameInStudentPdf() throws Exception {
         TeachingHandoutTemplateResponse teacherTemplate = new TeachingHandoutTemplateResponse(
                 "teacher_solution_v1",
@@ -747,68 +689,6 @@ class TeachingHandoutPdfExportServiceTest {
             String text = new PDFTextStripper().getText(document);
             assertThat(text).contains("学生版讲义", "数学讲义").doesNotContain("飞猪数学");
             assertThat(text).doesNotContain("模板：", "教师详解版", "教师详解版 版本");
-        }
-    }
-
-    @Test
-    void keepsEachLectureCardOnItsOwnFallbackPage() throws Exception {
-        Path fakeEngine = Files.createTempFile("fake-xelatex", ".exe");
-        String previous = System.getProperty("math.agent.xelatex.path");
-        System.setProperty("math.agent.xelatex.path", fakeEngine.toString());
-        try {
-            TeachingTaskResponse task = new TeachingTaskResponse(
-                    "task-lecture-pages",
-                    "client-lecture-pages",
-                    "school-a",
-                    "teacher",
-                    "teacher-001",
-                    null,
-                    TeachingTaskStatus.COMPLETED,
-                    "两道投屏题",
-                    "横版分页验收",
-                    List.of(),
-                    List.of(),
-                    List.of(),
-                    "",
-                    "",
-                    "",
-                    """
-                    \\section{16:10 横版讲解卡}
-                    \\subsection*{第 1 题 / 讲解单元}
-                    第一题只讲定义入口。
-                    \\vspace{14em}
-                    \\clearpage
-                    \\subsection*{第 2 题 / 讲解单元}
-                    第二题只讲参数回收。
-                    \\vspace{14em}
-                    """,
-                    List.of(),
-                    null,
-                    List.of(),
-                    null,
-                    null);
-
-            TeachingHandoutPdfExportService.RenderedHandoutPdf rendered =
-                    new TeachingHandoutPdfExportService().renderDetailed(task, "lecture");
-
-            assertThat(rendered.renderer()).isEqualTo("pdfbox_fallback");
-            try (PDDocument document = Loader.loadPDF(rendered.bytes())) {
-                assertThat(document.getNumberOfPages()).isEqualTo(2);
-                PDFTextStripper stripper = new PDFTextStripper();
-                stripper.setStartPage(1);
-                stripper.setEndPage(1);
-                assertThat(stripper.getText(document)).contains("第 1 题", "第一题").doesNotContain("第二题");
-                stripper.setStartPage(2);
-                stripper.setEndPage(2);
-                assertThat(stripper.getText(document)).contains("第 2 题", "第二题").doesNotContain("第一题");
-            }
-        } finally {
-            Files.deleteIfExists(fakeEngine);
-            if (previous == null) {
-                System.clearProperty("math.agent.xelatex.path");
-            } else {
-                System.setProperty("math.agent.xelatex.path", previous);
-            }
         }
     }
 
@@ -1080,11 +960,28 @@ class TeachingHandoutPdfExportServiceTest {
         System.setProperty("math.agent.xelatex.path", engine.toString());
         try {
             String imagePath = image.toAbsolutePath().toString().replace("\\", "/");
-            String sharedHandout = """
+            String teacherHandout = """
                     \\section{图像证据}
+                    \\subsection*{第1题 例题}
+                    \\paragraph{题目}
                     如图，根据相邻关系完成判断。
                     \\includegraphics[width=0.72\\linewidth,height=0.28\\textheight,keepaspectratio]{\\detokenize{%s}}
+                    \\paragraph{答案与评分点}
+                    请结合图像说明你的判断依据。
+                    """.formatted(imagePath);
+            String studentHandout = """
+                    \\section{图像证据}
                     \\subsection*{第1题 例题}
+                    \\paragraph{题目}
+                    如图，根据相邻关系完成判断。
+                    \\includegraphics[width=0.72\\linewidth,height=0.28\\textheight,keepaspectratio]{\\detokenize{%s}}
+                    请结合图像说明你的判断依据。
+                    """.formatted(imagePath);
+            String lectureHandout = """
+                    \\subsection*{第1题 例题}
+                    \\paragraph{题目}
+                    如图，根据相邻关系完成判断。
+                    \\includegraphics[width=0.72\\linewidth,height=0.28\\textheight,keepaspectratio]{\\detokenize{%s}}
                     请结合图像说明你的判断依据。
                     """.formatted(imagePath);
             TeachingTaskResponse task = new TeachingTaskResponse(
@@ -1101,9 +998,9 @@ class TeachingHandoutPdfExportServiceTest {
                     List.of(),
                     List.of(),
                     "",
-                    sharedHandout,
-                    sharedHandout,
-                    sharedHandout,
+                    teacherHandout,
+                    studentHandout,
+                    lectureHandout,
                     List.of(),
                     null,
                     List.of(),
@@ -1122,175 +1019,6 @@ class TeachingHandoutPdfExportServiceTest {
             }
         } finally {
             Files.deleteIfExists(image);
-            if (previous == null) {
-                System.clearProperty("math.agent.xelatex.path");
-            } else {
-                System.setProperty("math.agent.xelatex.path", previous);
-            }
-        }
-    }
-
-    @Test
-    void pdfboxFallbackKeepsStudentBlanksReadableWithoutLeakingLatexCommands() throws Exception {
-        Path fakeEngine = Files.createTempFile("fake-xelatex", ".exe");
-        String previous = System.getProperty("math.agent.xelatex.path");
-        System.setProperty("math.agent.xelatex.path", fakeEngine.toString());
-        try {
-            TeachingTaskResponse task = new TeachingTaskResponse(
-                    "task-fallback-student-blanks",
-                    "client-fallback-student-blanks",
-                    "school-a",
-                    "student",
-                    "student-001",
-                    TeachingTaskStatus.COMPLETED,
-                    "反比例函数留白练习",
-                    "学生版检查公式和留白",
-                    List.of(),
-                    List.of(),
-                    List.of(),
-                    "",
-                    "\\section{教师版}\n教师答案：$y=\\frac{k}{x}$。",
-                    """
-                    \\section{学生版}
-                    \\subsection*{第 1 题}
-                    \\paragraph{题目}
-                    反比例函数可写为 $y=\\frac{k}{x}$，其中 $k\\ne 0$。
-                    \\vspace{8em}
-                    """,
-                    List.of(),
-                    null,
-                    List.of(),
-                    null,
-                    null);
-
-            byte[] pdf = new TeachingHandoutPdfExportService().render(task, "student");
-
-            try (PDDocument document = Loader.loadPDF(pdf)) {
-                String text = new PDFTextStripper().getText(document);
-                assertThat(text).contains("学生版讲义", "第 1 题", "题目");
-                assertThat(text).contains("y=(k)/(x)", "k", "0");
-                assertThat(text).doesNotContain("知识速记", "练习任务", "作答提示", "作答区", "手写区", "留白区",
-                        "\\underline", "\\hspace", "\\begin", "\\item", "\\frac", "4em", "5em");
-            }
-        } finally {
-            Files.deleteIfExists(fakeEngine);
-            if (previous == null) {
-                System.clearProperty("math.agent.xelatex.path");
-            } else {
-                System.setProperty("math.agent.xelatex.path", previous);
-            }
-        }
-    }
-
-    @Test
-    void pdfboxFallbackEmbedsQuestionImagesAndCaptions() throws Exception {
-        Path firstImage = createSolidImage("handout-geometry-1");
-        Path secondImage = createSolidImage("handout-geometry-2");
-        Path fakeEngine = Files.createTempFile("fake-xelatex", ".exe");
-        String previous = System.getProperty("math.agent.xelatex.path");
-        System.setProperty("math.agent.xelatex.path", fakeEngine.toString());
-        try {
-            TeachingTaskResponse task = new TeachingTaskResponse(
-                    "task-image-fallback",
-                    "client-image-fallback",
-                    "school-a",
-                    "teacher",
-                    "teacher-001",
-                    TeachingTaskStatus.COMPLETED,
-                    "image handout export",
-                    "verify multi-image export under a question",
-                    List.of(),
-                    List.of(),
-                    List.of(),
-                    "",
-                    """
-                    \\section{Question}
-                    Inspect the solid geometry figure below.
-                    ![FigureOne](%s)
-                    ![FigureTwo](%s)
-                    \\section{Review}
-                    Read the outer edges before the hidden edges.
-                    """.formatted(firstImage.toString().replace("\\", "/"), secondImage.toString().replace("\\", "/")),
-                    "\\section{Student}\nFinish the question from the figures.",
-                    List.of(),
-                    null,
-                    List.of(),
-                    null,
-                    null);
-
-            TeachingHandoutPdfExportService.RenderedHandoutPdf rendered =
-                    new TeachingHandoutPdfExportService().renderDetailed(task, "teacher");
-
-            assertThat(rendered.renderer()).isEqualTo("pdfbox_fallback");
-            try (PDDocument document = Loader.loadPDF(rendered.bytes())) {
-                String text = new PDFTextStripper().getText(document);
-                long imageCount = countPdfImages(document);
-                assertThat(imageCount).isGreaterThanOrEqualTo(2);
-                assertThat(text).contains("Question", "FigureOne", "FigureTwo", "Read the outer edges before the hidden edges.");
-                assertThat(text).doesNotContain("![FigureOne]", "![FigureTwo]");
-            }
-        } finally {
-            Files.deleteIfExists(firstImage);
-            Files.deleteIfExists(secondImage);
-            Files.deleteIfExists(fakeEngine);
-            if (previous == null) {
-                System.clearProperty("math.agent.xelatex.path");
-            } else {
-                System.setProperty("math.agent.xelatex.path", previous);
-            }
-        }
-    }
-
-    @Test
-    void pdfboxFallbackKeepsLongCaptionsAndIsolatesUnreadableImages() throws Exception {
-        Path image = createSolidImage("handout-long-caption");
-        Path unreadable = Files.createTempFile("handout-unreadable-image", ".png");
-        Files.writeString(unreadable, "not-a-png");
-        Path fakeEngine = Files.createTempFile("fake-xelatex", ".exe");
-        String previous = System.getProperty("math.agent.xelatex.path");
-        System.setProperty("math.agent.xelatex.path", fakeEngine.toString());
-        String longCaption = "Projection diagram caption retains every detail for hidden edges, correspondence, and final verification.";
-        try {
-            TeachingTaskResponse task = new TeachingTaskResponse(
-                    "task-image-layout",
-                    "client-image-layout",
-                    "school-a",
-                    "teacher",
-                    "teacher-001",
-                    TeachingTaskStatus.COMPLETED,
-                    "image layout",
-                    "verify long captions and unreadable images",
-                    List.of(),
-                    List.of(),
-                    List.of(),
-                    "",
-                    """
-                    \section{Question}
-                    ![%s](%s)
-                    ![UnreadableDiagram](%s)
-                    \section{Review}
-                    The body continues after the image block.
-                    """.formatted(longCaption, image.toString().replace("\\", "/"), unreadable.toString().replace("\\", "/")),
-                    "\section{Student}\nFinish the exercise.",
-                    List.of(),
-                    null,
-                    List.of(),
-                    null,
-                    null);
-
-            TeachingHandoutPdfExportService.RenderedHandoutPdf rendered =
-                    new TeachingHandoutPdfExportService().renderDetailed(task, "teacher");
-
-            assertThat(rendered.renderer()).isEqualTo("pdfbox_fallback");
-            try (PDDocument document = Loader.loadPDF(rendered.bytes())) {
-                String text = new PDFTextStripper().getText(document);
-                assertThat(countPdfImages(document)).isGreaterThanOrEqualTo(1);
-                assertThat(text).contains("caption retai", "ns every detail", "final veri", "fication.", "UnreadableDiagram", "The body continues after the image block.");
-            }
-        } finally {
-            Files.deleteIfExists(image);
-            Files.deleteIfExists(unreadable);
-            Files.deleteIfExists(fakeEngine);
             if (previous == null) {
                 System.clearProperty("math.agent.xelatex.path");
             } else {

@@ -42,7 +42,8 @@ class TeacherResourceServiceTest {
 
         assertThat(response.tenantId()).isEqualTo("default");
         assertThat(response.ownerSubjectId()).isEqualTo("teacher-001");
-        assertThat(response.sourceType()).isEqualTo("local_path");
+        assertThat(response.permissionScope()).isEqualTo("MATH_VIP");
+        assertThat(response.sourceType()).isEqualTo("teacher_resource");
         assertThat(response.syncStatus()).isEqualTo("registered");
         assertThat(response.parseStatus()).isEqualTo("pending");
         assertThat(response.embeddingStatus()).isEqualTo("pending");
@@ -71,7 +72,20 @@ class TeacherResourceServiceTest {
     }
 
     @Test
-    void invalidLocalPathFailsBeforePersistingResource() {
+    void teacherUploadDefaultsToTenantSharedWhenPermissionIsBlank() throws Exception {
+        Path file = tempDir.resolve("shared-notes.md");
+        Files.writeString(file, "# Shared notes");
+        TeacherResourceService service = TeacherResourceServiceFixture.service(new InMemoryTeacherResourceStore());
+
+        TeacherResourceDocumentResponse response = service.register(new TeacherResourceRegistrationCommand(
+                "default", "teacher", "teacher-001", "local_path", "Shared notes", null,
+                file.toString(), "", null));
+
+        assertThat(response.permissionScope()).isEqualTo("TENANT_PUBLIC");
+    }
+
+    @Test
+    void localPathIsPreservedForLocalDevelopmentWithoutPathConvergence() {
         TeacherResourceService service = TeacherResourceServiceFixture.service(new InMemoryTeacherResourceStore());
         TeacherResourceRegistrationCommand request = new TeacherResourceRegistrationCommand(
                 "default",
@@ -84,11 +98,12 @@ class TeacherResourceServiceTest {
                 "TEACHER_PRIVATE",
                 null);
 
-        assertThatThrownBy(() -> service.register(request))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("Local resource path is invalid");
+        TeacherResourceDocumentResponse response = service.register(request);
 
-        assertThat(service.list("default", "teacher", "teacher-001")).isEmpty();
+        assertThat(response.localPath()).isEqualTo("C:\\workspace\\??\\resource");
+        assertThat(service.list("default", "teacher", "teacher-001"))
+                .extracting(TeacherResourceDocumentResponse::localPath)
+                .containsExactly("C:\\workspace\\??\\resource");
     }
 
     @Test
@@ -162,7 +177,7 @@ class TeacherResourceServiceTest {
                 "teacher-001",
                 "feishu",
                 "Feishu question bank",
-                "https://example.feishu.cn/docs/doc1",
+                "https://example.feishu.cn/docx/doc1",
                 null,
                 "TEACHER_PRIVATE",
                 "md"));

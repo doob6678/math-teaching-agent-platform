@@ -103,6 +103,28 @@ class WorkerServerAuthTest(unittest.TestCase):
         self.assertEqual(response.json()["total"], sum(response.json()["counts"]))
         self.assertGreater(response.json()["counts"][0], 0)
 
+    def test_teaching_draft_endpoint_rejects_the_handout_graph_contract(self):
+        """Handout tasks must use `/v1/handout-runs/sync`, never the retained non-handout draft endpoint."""
+        os.environ["MATH_AGENT_WORKER_API_KEY"] = "local-key"
+        response = TestClient(app).post(
+            "/v1/teaching-drafts/sync",
+            headers={"Authorization": "Bearer local-key"},
+            json={
+                "contractVersion": "handout-ai-v1",
+                "runId": "run-handout-contract-001",
+                "taskId": "task-handout-contract-001",
+                "writingGoal": "函数讲义",
+                "questionText": "【题目 1】已知函数 f(x)=x^2，求最小值。",
+                "evidenceRefs": ["PUBLIC_TEXTBOOK:doc-1"],
+                "graphVersion": "handout-v1",
+                "idempotencyKey": "handout:run-handout-contract-001",
+                "traceparent": "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+                "deadlineEpochMs": 4_102_444_800_000,
+            },
+        )
+
+        self.assertEqual(response.status_code, 422)
+
 
 if __name__ == "__main__":
     unittest.main()

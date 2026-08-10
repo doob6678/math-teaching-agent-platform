@@ -32,4 +32,16 @@ public interface LocalAccountStore {
      * @return created account
      */
     LocalAccount createStudent(String username, String encodedPassword, String tenantId);
+
+    /**
+     * Creates a teacher account after an administrator has authorized the role assignment.
+     *
+     * @param username unique login username
+     * @param encodedPassword encoded password
+     * @param tenantId tenant selected from the trusted administrator session
+     * @return created teacher account
+     */
+    default LocalAccount createTeacher(String username, String encodedPassword, String tenantId) {
+        throw new UnsupportedOperationException("Teacher account provisioning is not available in this account store");
+    }
 }

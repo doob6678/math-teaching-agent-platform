@@ -8,6 +8,7 @@ import com.doob.mathagent.agent.service.AgentTraceQueryService;
 import com.doob.mathagent.agent.service.MultiAgentWritingArtifact;
 import com.doob.mathagent.agent.service.MultiAgentWritingArtifactExportService;
 import com.doob.mathagent.agent.service.MultiAgentWritingService;
+import com.doob.mathagent.agent.service.MultiQuestionTextParser;
 import com.doob.mathagent.agent.vo.AgentRunExecuteResponse;
 import com.doob.mathagent.agent.vo.AgentRunPlanResponse;
 import com.doob.mathagent.agent.vo.AgentTraceDiagnosticSummaryResponse;
@@ -44,6 +45,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.core.task.TaskExecutor;
 import org.springframework.stereotype.Service;
 
 /**
@@ -83,6 +86,7 @@ public class McpToolExecutionService {
     private final KnowledgeQuestionBankService questionBankService;
     private final MultiAgentWritingService multiAgentWritingService;
     private final MultiAgentWritingArtifactExportService multiAgentWritingArtifactExportService;
+    private final TaskExecutor toolExecutor;
 
     /**
      * Creates an MCP execution service.
@@ -105,7 +109,8 @@ public class McpToolExecutionService {
             TeacherSourceSyncExecutionService teacherSourceSyncExecutionService,
             KnowledgeQuestionBankService questionBankService,
             MultiAgentWritingService multiAgentWritingService,
-            MultiAgentWritingArtifactExportService multiAgentWritingArtifactExportService) {
+            MultiAgentWritingArtifactExportService multiAgentWritingArtifactExportService,
+            @Qualifier("studentExplanationTaskExecutor") TaskExecutor toolExecutor) {
         this.clientResolver = Objects.requireNonNull(clientResolver, "clientResolver is required");
         this.textbookRetrievalService = Objects.requireNonNull(textbookRetrievalService, "textbookRetrievalService is required");
         this.textbookResourceProperties = Objects.requireNonNull(textbookResourceProperties, "textbookResourceProperties is required");
@@ -125,6 +130,7 @@ public class McpToolExecutionService {
                 multiAgentWritingService, "multiAgentWritingService is required");
         this.multiAgentWritingArtifactExportService = Objects.requireNonNull(
                 multiAgentWritingArtifactExportService, "multiAgentWritingArtifactExportService is required");
+        this.toolExecutor = Objects.requireNonNull(toolExecutor, "toolExecutor is required");
     }
 
     /**
@@ -143,6 +149,7 @@ public class McpToolExecutionService {
         String normalizedToolName = normalizeToolName(toolName);
         requireToolAllowed(client, normalizedToolName);
         requireToolScope(client, normalizedToolName);
+        requireRoleForTool(client, normalizedToolName);
         Object result = switch (normalizedToolName) {
             case MULTI_SOURCE_EVIDENCE_TOOL -> searchMultiSourceEvidence(client, request);
             case TEXTBOOK_EVIDENCE_TOOL -> searchTextbookEvidence(client, request);
@@ -233,7 +240,8 @@ public class McpToolExecutionService {
         }
         SourceSelection selection = sourceSelection(arguments);
         List<CompletableFuture<LibraryEvidence>> pending = selection.libraries().stream()
-                .map(library -> CompletableFuture.supplyAsync(() -> searchOneLibrary(client, query, limit, arguments, library)))
+                .map(library -> CompletableFuture.supplyAsync(
+                        () -> searchOneLibrary(client, query, limit, arguments, library), toolExecutor))
                 .toList();
         List<LibraryEvidence> libraryEvidence = pending.stream().map(CompletableFuture::join).toList();
         List<TextbookSearchHit> textbookHits = libraryEvidence.stream()
@@ -335,7 +343,12 @@ public class McpToolExecutionService {
         List<String> librarySelectors = mergeDistinct(
                 flexibleStringListArgument(arguments, "libraries", "library"),
                 flexibleStringListArgument(arguments, "sourceTypes", "sourceType"));
-        requireLibrarySelectors(librarySelectors, TEACHER_RESOURCE_EVIDENCE_TOOL);
+        /*
+         * This tool already names the only corpus it may search.  Requiring an additional library selector made
+         * standard MCP clients fail when they supplied the documented required query alone.  An omitted selector
+         * therefore means every resource visible to the key owner; an explicit selector still narrows that same
+         * owner-scoped corpus.
+         */
         if (librarySelectors.stream().anyMatch(McpToolExecutionService::isTextbookLibrary)) {
             throw new IllegalArgumentException("search_teacher_resource_evidence only accepts teacher-resource libraries");
         }
@@ -567,10 +580,18 @@ public class McpToolExecutionService {
     private Object startMultiAgentWriting(
             McpClientRegistryProperties.Client client,
             McpToolCallRequest request) {
+        MultiAgentWritingRequest writingRequest = multiAgentWritingRequest(request);
         MultiAgentWritingResponse response = multiAgentWritingService.startAsync(
-                multiAgentWritingRequest(request),
+                writingRequest,
                 requestSubject(client));
-        return multiAgentWritingResult(response);
+        Map<String, Object> result = multiAgentWritingResult(response);
+        /*
+         * Surface only deterministic parser metadata, never the submitted problem text. This lets an MCP client
+         * verify that the backend accepted a multi-question batch before it spends tokens on Luna, rather than
+         * guessing from a later model response whether whitespace or a delimiter changed the batch boundaries.
+         */
+        result.put("batchInput", multiQuestionInputSummary(request));
+        return result;
     }
 
     /**
@@ -656,16 +677,36 @@ public class McpToolExecutionService {
                 arguments,
                 "questionText",
                 stringArgumentOrDefault(arguments, "question", stringArgument(arguments, "topic")));
-        if (questionText.isBlank()) {
-            throw new IllegalArgumentException("questionText is required for multi-agent writing");
+        String canonicalQuestionText = MultiQuestionTextParser.canonicalizeForWorkflow(
+                stringListArgument(arguments, "questions"), questionText);
+        if (canonicalQuestionText.isBlank()) {
+            throw new IllegalArgumentException("questions or questionText is required for multi-agent writing");
         }
         return new MultiAgentWritingRequest(
                 stringArgumentOrDefault(arguments, "writingGoal", stringArgumentOrDefault(arguments, "goal", "teacher handout")),
-                questionText,
+                canonicalQuestionText,
                 stringListArgument(arguments, "evidenceRefs"),
                 false,
                 normalizedProviderName(stringArgument(arguments, "preferredProviderName")),
                 stringArgument(arguments, "preferredModelCode"));
+    }
+
+    /**
+     * Returns safe batch parsing facts for the MCP start response without storing or echoing problem content.
+     */
+    private static Map<String, Object> multiQuestionInputSummary(McpToolCallRequest request) {
+        Map<String, Object> arguments = request == null ? Map.of() : request.arguments();
+        List<String> structuredQuestions = stringListArgument(arguments, "questions");
+        String fallbackText = stringArgumentOrDefault(
+                arguments,
+                "questionText",
+                stringArgumentOrDefault(arguments, "question", stringArgument(arguments, "topic")));
+        boolean structuredInput = !structuredQuestions.isEmpty();
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("questionCount", MultiQuestionTextParser.parse(structuredQuestions, fallbackText).size());
+        result.put("splitMode", structuredInput ? "questions_array" : "question_text_explicit_markers");
+        result.put("whitespaceSplitsQuestions", false);
+        return result;
     }
 
     /**
@@ -732,8 +773,6 @@ public class McpToolExecutionService {
         result.put("toolPolicyDecisions", plan.toolPolicyDecisions());
         result.put("allowedDataScopes", plan.allowedDataScopes());
         result.put("deniedDataScopes", plan.deniedDataScopes());
-        result.put("capabilityRequired", plan.capabilityRequired());
-        result.put("capabilityAction", plan.capabilityAction());
         result.put("maxInputTokens", plan.maxInputTokens());
         result.put("maxOutputTokens", plan.maxOutputTokens());
         result.put("estimatedTotalTokens", plan.estimatedTotalTokens());
@@ -771,12 +810,12 @@ public class McpToolExecutionService {
                         "internal_reasoning",
                         true,
                         "Reasoning is internal to the calling agent and does not grant extra backend permissions.")),
-                "Only execute high-value generation after platform capability verification."));
+                "Execute generation only after the authenticated platform subject and rate limits pass."));
         return new McpReactToolPlan(
                 "ReAct",
                 !parallelEvidenceActions.isEmpty(),
                 List.copyOf(groups),
-                "Return a plan first; do not execute high-value tools from MCP without a capability-protected platform call.");
+                "Return a plan first; execute tools only through the authenticated platform subject.");
     }
 
     /**
@@ -1021,6 +1060,41 @@ public class McpToolExecutionService {
             throw new IllegalArgumentException(
                     "MCP scope is not allowed for client " + client.clientId() + ": " + requiredScope);
         }
+    }
+
+    /**
+     * Enforces role ownership independently of the registry allow-list.
+     *
+     * <p>Client configuration can be edited incorrectly. Teacher-resource and writing tools must never become
+     * callable by a student merely because an operator accidentally grants a matching tool name and scope.</p>
+     */
+    private static void requireRoleForTool(McpClientRegistryProperties.Client client, String toolName) {
+        if (!requiresTeacherRole(toolName)) {
+            return;
+        }
+        String profile = normalizedProfile(client.profile());
+        if (!"teacher".equals(profile) && !"admin".equals(profile)) {
+            throw new IllegalArgumentException("MCP tool requires teacher or admin role: " + toolName);
+        }
+    }
+
+    /** Returns whether a tool reads teacher-owned data or starts teacher-owned workflow state. */
+    private static boolean requiresTeacherRole(String toolName) {
+        return switch (toolName) {
+            case MULTI_SOURCE_EVIDENCE_TOOL,
+                    TEACHER_RESOURCE_EVIDENCE_TOOL,
+                    LIST_TEACHER_RESOURCES_TOOL,
+                    READ_TEACHER_RESOURCE_BLOCKS_TOOL,
+                    DISCOVER_FEISHU_RESOURCES_TOOL,
+                    DOWNLOAD_FEISHU_RESOURCE_TOOL,
+                    START_MULTI_AGENT_WRITING_TOOL,
+                    GET_MULTI_AGENT_WRITING_STATUS_TOOL,
+                    GET_MULTI_AGENT_WRITING_ARTIFACT_TOOL,
+                    EXPORT_MULTI_AGENT_WRITING_ARTIFACT_TOOL,
+                    RESUME_MULTI_AGENT_WRITING_TOOL,
+                    MULTI_AGENT_WRITING_TRACE_TOOL -> true;
+            default -> false;
+        };
     }
 
     private static void requireAllScopes(McpClientRegistryProperties.Client client, List<String> requiredScopes) {

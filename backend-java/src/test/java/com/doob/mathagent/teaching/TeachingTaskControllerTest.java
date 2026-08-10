@@ -19,7 +19,6 @@ import com.doob.mathagent.teaching.service.TeachingHandoutBatchExportService;
 import com.doob.mathagent.teaching.service.TeachingHandoutPdfExportService;
 import com.doob.mathagent.teaching.service.InMemoryTeachingHumanFeedbackStore;
 import com.doob.mathagent.teaching.service.InMemoryTeachingTaskStore;
-import com.doob.mathagent.teaching.service.TeachingAiDraftService;
 import com.doob.mathagent.teaching.service.TeachingHumanFeedbackService;
 import com.doob.mathagent.teaching.service.TeachingWorkflowService;
 import com.doob.mathagent.teaching.vo.TeachingHandoutBatchExportResponse;
@@ -52,13 +51,15 @@ class TeachingTaskControllerTest {
             TextbookRetrievalService retrievalService,
             InMemoryTeachingTaskStore taskStore,
             StudentMemoryReuseService memoryReuseService) {
-        return new TeachingWorkflowService(
+        TeachingWorkflowService service = new TeachingWorkflowService(
                 processedBooksRoot,
                 retrievalService,
                 taskStore,
                 memoryReuseService,
-                TeachingAiDraftServiceFixture.disabled(),
+                null,
                 new InMemoryAgentTraceStore());
+        service.setTeachingHandoutAiClientForTesting(TeachingHandoutAiClientFixture.completed());
+        return service;
     }
 
     private static TeachingTaskController testController(
@@ -117,11 +118,11 @@ class TeachingTaskControllerTest {
         assertThat(loaded.status()).isEqualTo(TeachingTaskStatus.COMPLETED);
         assertThat(exported.getBody()).contains("\\section");
         assertThat(preview.getBody()).contains("\\section");
-        assertThat(studentPreview.getBody()).contains("\\section", "\\vspace");
+        assertThat(studentPreview.getBody()).contains("\\paragraph{知识速记}").doesNotContain("教师版");
         assertThat(lecturePreview.getBody())
                 // Projection output must start directly at the atomic question. A generic title card consumes a
                 // 16:10 page and is exactly the layout regression this contract protects against.
-                .contains("第 1 题：例题", "\\vfill")
+                .contains("第 1 题 / 讲解单元", "\\vfill")
                 .doesNotContain("16:10 横版讲解卡", "教师手写区", "手写区", "板书留白");
         assertThat(preview.getHeaders().getContentDisposition().isInline()).isTrue();
         assertThat(exported.getHeaders().getContentDisposition().getFilename()).isEqualTo(submitted.taskId() + ".tex");
@@ -130,15 +131,17 @@ class TeachingTaskControllerTest {
         assertThat(teacherPdfPreview.getBody()).startsWith(new byte[] {'%', 'P', 'D', 'F'});
         assertThat(lecturePdfPreview.getBody()).startsWith(new byte[] {'%', 'P', 'D', 'F'});
         assertThat(teacherPdfPreview.getHeaders().getContentDisposition().isInline()).isTrue();
-        assertThat(lecturePdfPreview.getHeaders().getContentDisposition().getFilename()).isEqualTo(submitted.taskId() + "-lecture.pdf");
-        assertThat(exportedPdf.getHeaders().getContentDisposition().getFilename()).isEqualTo(submitted.taskId() + ".pdf");
+        assertThat(lecturePdfPreview.getHeaders().getContentDisposition().getFilename())
+                .isEqualTo("Understand a function-domain definition problem（讲解版）.pdf");
+        assertThat(exportedPdf.getHeaders().getContentDisposition().getFilename())
+                .isEqualTo("Understand a function-domain definition problem（教师讲义）（教师版）.pdf");
         assertThat(exportedPdf.getHeaders().getFirst("X-Handout-Renderer")).isNotBlank();
         assertThat(Integer.parseInt(exportedPdf.getHeaders().getFirst("X-Handout-Page-Count"))).isPositive();
         assertThat(teacherPdf.getHeaders().getFirst("X-Handout-Renderer")).isNotBlank();
         assertThat(lecturePdfPreview.getHeaders().getFirst("X-Handout-Renderer")).isNotBlank();
         assertThat(loaded.handoutLatex()).contains("\\section");
         assertThat(loaded.lectureHandoutLatex())
-                .contains("第 1 题：例题")
+                .contains("第 1 题 / 讲解单元")
                 .doesNotContain("16:10 横版讲解卡");
     }
 
@@ -264,7 +267,7 @@ class TeachingTaskControllerTest {
                 pdfExportService,
                 batchExportService(pdfExportService));
         TeachingTaskResponse submitted = controller.submit(
-                new TeachingTaskRequest("client-student-version", "question", "goal", 3),
+                new TeachingTaskRequest("client-student-version", "function concept D(x_0)", "function concept", 3),
                 null);
 
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.previewLatexVersion(
@@ -304,7 +307,7 @@ class TeachingTaskControllerTest {
                 .isInstanceOfSatisfying(ResponseStatusException.class, exception ->
                         assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
         assertThat(controller.previewLatexVersion(submitted.taskId(), "student", null).getBody())
-                .contains("\\section", "\\vspace")
+                .contains("\\paragraph{知识速记}")
                 .doesNotContain("Teacher");
         assertThat(controller.previewPdfVersion(submitted.taskId(), "student", null).getBody())
                 .startsWith(new byte[] {'%', 'P', 'D', 'F'});
@@ -328,10 +331,10 @@ class TeachingTaskControllerTest {
                 pdfExportService,
                 batchExportService(pdfExportService));
         TeachingTaskResponse first = controller.submit(
-                new TeachingTaskRequest("client-batch-1", "question 1", "goal 1", 3),
+                new TeachingTaskRequest("client-batch-1", "function concept D(x_0)", "function concept", 3),
                 null);
         TeachingTaskResponse second = controller.submit(
-                new TeachingTaskRequest("client-batch-2", "question 2", "goal 2", 3),
+                new TeachingTaskRequest("client-batch-2", "piecewise function f(-1)", "piecewise function", 3),
                 null);
 
         TeachingHandoutBatchExportResponse batch = controller.createBatchZip(
@@ -377,7 +380,7 @@ class TeachingTaskControllerTest {
                 pdfExportService,
                 new TeachingHandoutBatchExportService(pdfExportService, clock, Duration.ofMinutes(30)));
         TeachingTaskResponse task = controller.submit(
-                new TeachingTaskRequest("client-expired", "question", "goal", 3),
+                new TeachingTaskRequest("client-expired", "function concept D(x_0)", "function concept", 3),
                 null);
         TeachingHandoutBatchExportResponse batch = controller.createBatchZip(
                 new TeachingHandoutBatchExportRequest(List.of(task.taskId()), List.of(), List.of()),

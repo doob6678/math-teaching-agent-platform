@@ -65,10 +65,9 @@ public class ProtocolDiscoveryService {
                         "Queries one or more explicitly selected libraries in parallel. The agent must always supply library or libraries; no implicit corpus expansion is allowed.",
                         true,
                         true,
-                        TEACHING_ROLES,
+                        TEACHER_ROLES,
                         "PUBLIC_TEXTBOOK + TENANT_PUBLIC teacher-resource:read",
                         "low",
-                        false,
                         true,
                         schema(
                                 fields(
@@ -84,7 +83,7 @@ public class ProtocolDiscoveryService {
                                         fieldArray("documentIds", "Optional teacher-resource document ids to search."),
                                         fieldArray("sourceTypes", "Optional teacher-resource source types such as feishu, qq_bundle, gaokao, or mock_exam."),
                                         fieldArray("tags", "Optional teacher-resource tags used as retrieval hints.")),
-                                "query", "libraries")),
+                                "query")),
                 new McpToolDescriptor(
                         "search_textbook_evidence",
                         "Search textbook evidence",
@@ -94,7 +93,6 @@ public class ProtocolDiscoveryService {
                         TEACHING_ROLES,
                         "PUBLIC_TEXTBOOK",
                         "low",
-                        false,
                         true,
                         schema(
                                 fields(
@@ -108,10 +106,9 @@ public class ProtocolDiscoveryService {
                         "Search parsed teacher-resource blocks in explicitly selected libraries. The agent must supply library or libraries for every request.",
                         true,
                         true,
-                        TEACHING_ROLES,
-                        "TENANT_PUBLIC teacher-resource:read",
+                        TEACHER_ROLES,
+                        "teacher-resource:read",
                         "low",
-                        false,
                         true,
                         schema(
                                 fields(
@@ -127,23 +124,23 @@ public class ProtocolDiscoveryService {
                                         fieldArray("documentIds", "Optional teacher-resource document ids to search."),
                                         fieldArray("sourceTypes", "Optional teacher-resource source types such as feishu, qq_bundle, gaokao, or mock_exam."),
                                         fieldArray("tags", "Optional teacher-resource tags used as retrieval hints.")),
-                                "query", "libraries")),
+                                "query")),
                 new McpToolDescriptor(
                         "list_teacher_resources",
                         "List visible teacher resources",
                         "Lists files visible to the authenticated MCP subject. Storage paths are not exposed.",
-                        true, true, TEACHING_ROLES, "TENANT_PUBLIC teacher-resource:read", "low", false, true, schema(fields())),
+                        true, true, TEACHER_ROLES, "teacher-resource:read", "low", true, schema(fields())),
                 new McpToolDescriptor(
                         "read_teacher_resource_blocks",
                         "Read original teacher resource blocks",
                         "Reads parsed original blocks from one already-visible teacher resource after tenant and owner checks.",
-                        true, true, TEACHING_ROLES, "TENANT_PUBLIC teacher-resource:read", "low", false, true,
+                        true, true, TEACHER_ROLES, "teacher-resource:read", "low", true,
                         schema(fields(field("documentId", "string", "Visible teacher resource document id.")), "documentId")),
                 new McpToolDescriptor(
                         "search_question_bank_items",
                         "Search readable question-bank items",
                         "Returns visible question stems and stored answers for source-grounded AI verification.",
-                        true, true, TEACHER_ROLES, "question-bank:read", "low", false, true,
+                        true, true, TEACHER_ROLES, "question-bank:read", "low", true,
                         schema(fields(field("query", "string", "Optional question or topic text; empty browses visible items."),
                                 field("limit", "integer", "Maximum visible questions to return.")))),
                 new McpToolDescriptor(
@@ -155,7 +152,6 @@ public class ProtocolDiscoveryService {
                         TEACHING_ROLES,
                         "agent-trace:read",
                         "low",
-                        false,
                         true,
                         schema(fields(field("taskId", "string", "Owned teaching task id linked as trace planId.")), "taskId")),
                 new McpToolDescriptor(
@@ -167,7 +163,6 @@ public class ProtocolDiscoveryService {
                         TEACHING_ROLES,
                         "agent-trace:read",
                         "low",
-                        false,
                         true,
                         schema(
                                 fields(
@@ -183,7 +178,6 @@ public class ProtocolDiscoveryService {
                         TEACHER_ROLES,
                         "agent-trace:read",
                         "low",
-                        false,
                         true,
                         schema(fields(field("workflowId", "string", "Workflow id returned by multi-agent writing.")), "workflowId")),
                 new McpToolDescriptor(
@@ -195,7 +189,6 @@ public class ProtocolDiscoveryService {
                         TEACHING_ROLES,
                         "agent:plan",
                         "medium",
-                        false,
                         true,
                         schema(
                                 fields(
@@ -216,23 +209,22 @@ public class ProtocolDiscoveryService {
                 new McpToolDescriptor(
                         "start_multi_agent_writing",
                         "Start multi-agent writing",
-                        "Start a resumable teacher handout writing workflow through real backend execution.",
+                        "Start a resumable teacher handout writing workflow through real backend execution. Supply at least one of questions, questionText, or question; use questions for multiple questions, and spaces and blank lines never split a math question.",
                         false,
                         true,
                         TEACHER_ROLES,
                         "agent-writing:execute",
                         "high",
                         true,
-                        true,
                         schema(
                                 fields(
                                         field("writingGoal", "string", "Writing goal, for example teacher handout or student blank handout."),
-                                        field("questionText", "string", "Math topic, question, or teaching objective to write around."),
+                                        field("questionText", "string", "One question, or several questions separated only by a standalone ---, ###, or <<<QUESTION>>> line."),
+                                        fieldArray("questions", "Preferred ordered question array for a batch; it takes precedence over questionText."),
                                         field("question", "string", "Alias for questionText when used by external agents."),
                                         fieldArray("evidenceRefs", "Evidence references returned by textbook or teacher-resource search."),
                                         field("preferredProviderName", "string", "Optional provider preference such as dashscope, openai, deepseek, or ark."),
-                                        field("preferredModelCode", "string", "Optional backend model code.")),
-                                "questionText")),
+                                        field("preferredModelCode", "string", "Optional backend model code.")))),
                 new McpToolDescriptor(
                         "get_multi_agent_writing_status",
                         "Get multi-agent writing status",
@@ -242,7 +234,6 @@ public class ProtocolDiscoveryService {
                         TEACHER_ROLES,
                         "agent-writing:read",
                         "low",
-                        false,
                         true,
                         schema(fields(field("workflowId", "string", "Workflow id returned by start_multi_agent_writing.")), "workflowId")),
                 new McpToolDescriptor(
@@ -254,7 +245,6 @@ public class ProtocolDiscoveryService {
                         TEACHER_ROLES,
                         "agent-writing:read",
                         "low",
-                        false,
                         true,
                         schema(fields(field("workflowId", "string", "Workflow id returned by start_multi_agent_writing.")), "workflowId")),
                 new McpToolDescriptor(
@@ -266,7 +256,6 @@ public class ProtocolDiscoveryService {
                         TEACHER_ROLES,
                         "agent-writing:export",
                         "medium",
-                        false,
                         true,
                         schema(
                                 fields(
@@ -282,7 +271,6 @@ public class ProtocolDiscoveryService {
                         TEACHER_ROLES,
                         "agent-writing:execute",
                         "high",
-                        true,
                         true,
                         schema(
                                 fields(
@@ -303,7 +291,6 @@ public class ProtocolDiscoveryService {
                         TEACHER_ROLES,
                         "teacher-resource:read",
                         "low",
-                        false,
                         true,
                         schema(
                                 fields(
@@ -321,7 +308,6 @@ public class ProtocolDiscoveryService {
                         TEACHER_ROLES,
                         "teacher-resource:sync-execute",
                         "high",
-                        true,
                         true,
                         schema(
                                 fields(
@@ -435,9 +421,9 @@ public class ProtocolDiscoveryService {
                                 "session",
                                 "Authenticated platform users are resolved by backend Sa-Token session state."),
                         new A2aAgentCardResponse.SecurityScheme(
-                                "capability-token",
-                                "one-time-token",
-                                "High-value operations require request-hash-bound one-time capability tokens and audit.")));
+                                "user-session",
+                                "session",
+                                "Operations require the authenticated user session and backend rate limits.")));
     }
 
     /**

@@ -4,7 +4,6 @@ import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.infrastructure.security.RequestSubjectResolver;
 import com.doob.mathagent.knowledge.dto.KnowledgePointCreateRequest;
 import com.doob.mathagent.knowledge.dto.QuestionBankItemCreateRequest;
-import com.doob.mathagent.knowledge.service.KnowledgeQuestionBankCapabilityVerifier;
 import com.doob.mathagent.knowledge.service.KnowledgeQuestionBankService;
 import com.doob.mathagent.knowledge.service.TeacherBlockQuestionImportService;
 import com.doob.mathagent.knowledge.vo.KnowledgePointResponse;
@@ -30,18 +29,9 @@ import org.springframework.web.server.ResponseStatusException;
 @RestController
 public class KnowledgeQuestionBankController {
 
-    private static final String KNOWLEDGE_POINT_CREATE_ACTION = "knowledge-point:create";
-    private static final String QUESTION_BANK_CREATE_ACTION = "question-bank:create";
-    private static final String QUESTION_BANK_IMPORT_TEACHER_RESOURCE_ACTION = "question-bank:import-teacher-resource";
-    private static final String KNOWLEDGE_POINTS_PATH = "/api/knowledge/points";
-    private static final String QUESTION_BANK_PATH = "/api/question-bank/items";
-    private static final String QUESTION_BANK_IMPORT_TEACHER_RESOURCE_PATH_PREFIX =
-            "/api/question-bank/import/teacher-resources/";
-
     private final KnowledgeQuestionBankService service;
     private final TeacherBlockQuestionImportService teacherBlockQuestionImportService;
     private final RequestSubjectResolver subjectResolver;
-    private final KnowledgeQuestionBankCapabilityVerifier capabilityVerifier;
 
     /**
      * Creates a controller.
@@ -49,31 +39,27 @@ public class KnowledgeQuestionBankController {
      * @param service knowledge/question bank service
      * @param teacherBlockQuestionImportService teacher resource import service
      * @param subjectResolver backend subject resolver
-     * @param capabilityVerifier high-value write verifier
      */
     @Autowired
     public KnowledgeQuestionBankController(
             KnowledgeQuestionBankService service,
             TeacherBlockQuestionImportService teacherBlockQuestionImportService,
-            RequestSubjectResolver subjectResolver,
-            KnowledgeQuestionBankCapabilityVerifier capabilityVerifier) {
+            RequestSubjectResolver subjectResolver) {
         this.service = Objects.requireNonNull(service, "service");
         this.teacherBlockQuestionImportService = Objects.requireNonNull(
                 teacherBlockQuestionImportService,
                 "teacherBlockQuestionImportService");
         this.subjectResolver = Objects.requireNonNull(subjectResolver, "subjectResolver");
-        this.capabilityVerifier = Objects.requireNonNull(capabilityVerifier, "capabilityVerifier");
     }
 
     /**
-     * Creates a knowledge point after capability and backend-role checks.
+     * Creates a knowledge point after backend-role checks.
      */
     @PostMapping("/api/knowledge/points")
     public KnowledgePointResponse createKnowledgePoint(
             @RequestBody KnowledgePointCreateRequest request,
             HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest).normalize();
-        verifyCapability(KNOWLEDGE_POINT_CREATE_ACTION, KNOWLEDGE_POINTS_PATH, subject, httpRequest);
         try {
             return service.createKnowledgePoint(
                     subject.tenantId(),
@@ -112,14 +98,13 @@ public class KnowledgeQuestionBankController {
     }
 
     /**
-     * Creates a question item after capability and backend-role checks.
+     * Creates a question item after backend-role checks.
      */
     @PostMapping("/api/question-bank/items")
     public QuestionBankItemResponse createQuestion(
             @RequestBody QuestionBankItemCreateRequest request,
             HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest).normalize();
-        verifyCapability(QUESTION_BANK_CREATE_ACTION, QUESTION_BANK_PATH, subject, httpRequest);
         try {
             return service.createQuestion(
                     subject.tenantId(),
@@ -139,8 +124,6 @@ public class KnowledgeQuestionBankController {
             @PathVariable String documentId,
             HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest).normalize();
-        String path = QUESTION_BANK_IMPORT_TEACHER_RESOURCE_PATH_PREFIX + documentId;
-        verifyCapability(QUESTION_BANK_IMPORT_TEACHER_RESOURCE_ACTION, path, subject, httpRequest);
         try {
             return teacherBlockQuestionImportService.importFromTeacherResource(
                     subject.tenantId(),
@@ -173,32 +156,4 @@ public class KnowledgeQuestionBankController {
         }
     }
 
-    /**
-     * Verifies one-time capability tokens for write operations.
-     */
-    private void verifyCapability(
-            String action,
-            String path,
-            RequestSubject subject,
-            HttpServletRequest httpRequest) {
-        if (!capabilityVerifier.verify(
-                headerOrNull(httpRequest, "X-Capability-Token"),
-                action,
-                path,
-                headerOrNull(httpRequest, "X-Request-Hash"),
-                subject)) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for knowledge question bank write");
-        }
-    }
-
-    /**
-     * Reads a non-authoritative header used for capability token verification.
-     */
-    private static String headerOrNull(HttpServletRequest request, String name) {
-        if (request == null) {
-            return null;
-        }
-        String value = request.getHeader(name);
-        return value == null || value.isBlank() ? null : value.strip();
-    }
 }

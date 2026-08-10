@@ -1,5 +1,6 @@
 package com.doob.mathagent.teaching.service;
 
+import com.doob.mathagent.agent.service.HandoutRunMetricsStore;
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
 import java.awt.Color;
 import java.io.ByteArrayOutputStream;
@@ -11,6 +12,7 @@ import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashSet;
@@ -38,6 +40,21 @@ import org.springframework.stereotype.Service;
  */
 @Service
 public class TeachingHandoutPdfExportService {
+
+    private final HandoutPublicationGate publicationGate;
+    /** Optional because isolated renderer tests do not provision the telemetry schema. */
+    private HandoutRunMetricsStore handoutMetricsStore;
+
+    /** Keeps direct unit construction deterministic while the Spring bean uses the same independent gate. */
+    public TeachingHandoutPdfExportService() {
+        this.publicationGate = new HandoutPublicationGate();
+    }
+
+    /** Adds lifecycle telemetry without making rendering availability depend on the reporting table. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void configureHandoutMetricsStore(HandoutRunMetricsStore store) {
+        this.handoutMetricsStore = store;
+    }
 
     public record RenderedHandoutPdf(byte[] bytes, String renderer, int pageCount) {
     }
@@ -185,8 +202,18 @@ public class TeachingHandoutPdfExportService {
      * but every HTTP download, preview, and ZIP path must use this boundary.
      */
     public RenderedHandoutPdf renderForPublication(TeachingTaskResponse task, String version) {
+        Instant gateStartedAt = Instant.now();
+        recordPublicationGate(task, gateStartedAt);
+        publicationGate.validate(task, version);
         validatePublicationSource(task, version);
-        RenderedHandoutPdf rendered = renderDetailed(task, version);
+        Instant xelatexStartedAt = Instant.now();
+        long xelatexStartedNanos = System.nanoTime();
+        RenderedHandoutPdf rendered;
+        try {
+            rendered = renderDetailed(task, version);
+        } finally {
+            recordPdfElapsed(task, xelatexStartedAt, xelatexStartedNanos);
+        }
         int minimumPages = minimumQualifiedPages(task, version);
         if (minimumPages > 0 && rendered.pageCount() < minimumPages) {
             throw new IllegalStateException(version + " 版仅 " + rendered.pageCount() + " 页；合格讲义至少需要 "
@@ -200,6 +227,21 @@ public class TeachingHandoutPdfExportService {
             }
         }
         return rendered;
+    }
+
+    /** Uses the task id as the handout run id on the teaching-task path, where both identifiers are authoritative. */
+    private void recordPublicationGate(TeachingTaskResponse task, Instant gateStartedAt) {
+        if (handoutMetricsStore != null && task != null && task.taskId() != null && !task.taskId().isBlank()) {
+            handoutMetricsStore.recordPublicationGate(task.taskId(), task.taskId(), gateStartedAt);
+        }
+    }
+
+    /** Captures real XeLaTeX wall-clock duration even when compilation fails and publication is rejected. */
+    private void recordPdfElapsed(TeachingTaskResponse task, Instant xelatexStartedAt, long xelatexStartedNanos) {
+        if (handoutMetricsStore != null && task != null && task.taskId() != null && !task.taskId().isBlank()) {
+            long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - xelatexStartedNanos);
+            handoutMetricsStore.recordPdf(task.taskId(), task.taskId(), xelatexStartedAt, Instant.now(), elapsedMs);
+        }
     }
     // Pure export rule delegated to TeachingHandoutPdfExportPolicyPartA; process/lifecycle state remains in the exporter facade.
     static void validatePublicationSource(TeachingTaskResponse task, String version) { TeachingHandoutPdfExportPolicyPartA.validatePublicationSource(task, version); }
@@ -308,10 +350,7 @@ public class TeachingHandoutPdfExportService {
      * instructions, OCR page fragments, or provider diagnostics while preserving real handout images.
      */
     public static String sanitizeLatexForExport(String source) {
-        String normalized = repairMojibake(safeText(source))
-                // JSON producers occasionally persist a literal backslash-n instead of a line break. XeLaTeX treats
-                // the resulting \n token as an undefined command, so restore transport newlines before parsing.
-                .replace("\\n", "\n")
+        String normalized = restoreTransportNewlines(repairMojibake(safeText(source)))
                 // JSON producers can interpret LaTeX commands as control characters (\b, \t, \f).
                 // Repair those persisted legacy values before any line-level filtering or math normalization.
                 .replace("\u0008oldsymbol", "\\boldsymbol")
@@ -344,6 +383,10 @@ public class TeachingHandoutPdfExportService {
         // delimiter. Recover the single intended inline expression before line-level escaping; valid `$$...$$`
         // display formulas do not match this exact split shape and remain unchanged.
         normalized = normalizeTripleDollarMath(normalized);
+        // A bare dollar on its own line is an invalid Markdown display-math delimiter. It can leave every following
+        // list item in TeX math mode when a model omits the matching line. Drop only this transport marker: the
+        // surrounding formula remains available to the normal inline/bare-math repair below.
+        normalized = normalized.replaceAll("(?m)^\\s*\\$\\s*$", "");
         // A function, its argument symbol, and scalable parentheses are one mathematical expression. Leaving
         // \left outside dollar delimiters makes XeLaTeX abort with "Missing $ inserted" and previously triggered
         // the lossy text fallback. Normalize only this unambiguous grammar; malformed or incomplete math still fails.
@@ -354,6 +397,12 @@ public class TeachingHandoutPdfExportService {
         normalized = normalized
                 .replaceAll("\\\\item\\s*ightarrow", "\\\\rightarrow")
                 .replaceAll("\\\\par\\s*ightarrow", "\\\\rightarrow");
+        // A legacy Markdown-to-LaTeX adapter occasionally wrapped a display formula in list items.  TeX forbids
+        // \item in math mode, so close only this explicit malformed itemize fragment before normal line filtering.
+        normalized = normalized
+                .replaceAll("(?m)^\\\\item\\s+\\\\\\[$", "\\\\end{itemize}\\n\\\\[")
+                .replaceAll("(?m)^\\\\item\\s+(?=\\$)", "")
+                .replaceAll("(?m)^\\\\item\\s+\\\\\\]$", "\\\\]");
         // Source ids such as math_b_bixiu_4_p014_ai_001 are useful in traces, but printing them leaks workflow
         // internals and makes TeX interpret repeated underscores as an invalid nested subscript.
         normalized = INTERNAL_EVIDENCE_IDENTIFIER_CLAUSE.matcher(normalized).replaceAll("");
@@ -362,10 +411,44 @@ public class TeachingHandoutPdfExportService {
         boolean skippingTextbookBody = false;
         boolean skippingLegacyMetadataSection = false;
         boolean skippingBlankWorkspaceSection = false;
+        boolean repairingDisplayMathInsideItemize = false;
         int evidenceLineCount = 0;
         for (String rawLine : normalized.replace("\r\n", "\n").replace('\r', '\n').split("\n")) {
+            String rawTrimmed = rawLine.strip();
+            // Replacement glyph runs are broken transport/OCR output, never a printable exercise or formula. Dropping
+            // the entire line preserves neighbouring valid content and makes an all-corrupt draft fail publication.
+            if (isUnreadablePlaceholderLine(rawTrimmed)) {
+                continue;
+            }
+            if (rawTrimmed.startsWith("\\item") && rawTrimmed.endsWith("\\[")) {
+                lines.add("\\end{itemize}");
+                lines.add("\\[");
+                repairingDisplayMathInsideItemize = true;
+                continue;
+            }
+            if (repairingDisplayMathInsideItemize && rawTrimmed.startsWith("\\item") && rawTrimmed.endsWith("\\]")) {
+                lines.add("\\]");
+                repairingDisplayMathInsideItemize = false;
+                continue;
+            }
             String line = normalizeMixedMathDelimiters(
                     normalizeBareMathFragments(normalizeCircledNumerals(rawLine.strip())));
+            if (line.startsWith("\\item") && line.endsWith("\\[")) {
+                lines.add("\\end{itemize}");
+                lines.add("\\[");
+                repairingDisplayMathInsideItemize = true;
+                continue;
+            }
+            if (repairingDisplayMathInsideItemize) {
+                if (line.startsWith("\\item") && line.endsWith("\\]")) {
+                    lines.add("\\]");
+                    repairingDisplayMathInsideItemize = false;
+                    continue;
+                }
+                if (line.startsWith("\\item ")) {
+                    line = line.substring("\\item ".length());
+                }
+            }
             // Some model/Markdown adapters serialize an environment boundary as visible text, for example
             // "- itemize - 内容".  It is layout syntax, not lesson content, so strip only the leading
             // environment label while preserving the actual evidence sentence that follows it.
@@ -565,6 +648,52 @@ public class TeachingHandoutPdfExportService {
                 .replaceAll("(?m)^\\s*(?:-\\s*)+itemize\\s*-\\s*", "")
                 .replaceAll("(?m)^\\s*(?:-\\s*)+enumerate\\s*-\\s*", "")
                 .strip();
+    }
+
+    /** Removes the internal evidence appendix from the public editable LaTeX source while preserving the PDF/ZIP form. */
+    public static String sanitizeLatexForUserSource(String source) {
+        return sanitizeLatexForExport(source)
+                .replaceAll("(?s)\\\\section\\{来源索引\\}\\s*", "")
+                .strip();
+    }
+
+    /**
+     * Restores only a JSON transport {@code \n} marker without damaging a TeX control word such as
+     * {@code \node} or {@code \neq}. A character scan is deliberately used here because regular-expression
+     * escaping makes this distinction too easy to reverse and can leave XeLaTeX with an empty document.
+     */
+    static String restoreTransportNewlines(String source) {
+        String value = source == null ? "" : source;
+        StringBuilder restored = new StringBuilder(value.length());
+        for (int index = 0; index < value.length(); index += 1) {
+            char current = value.charAt(index);
+            boolean doubleEscapedNewlineMarker = current == '\\'
+                    && index + 2 < value.length()
+                    && value.charAt(index + 1) == '\\'
+                    && value.charAt(index + 2) == 'n';
+            if (doubleEscapedNewlineMarker) {
+                restored.append('\n');
+                index += 2;
+                continue;
+            }
+            boolean escapedBackslash = index > 0 && value.charAt(index - 1) == '\\';
+            boolean newlineMarker = current == '\\' && index + 1 < value.length() && value.charAt(index + 1) == 'n';
+            // TeX control words are ASCII-letter sequences.  Chinese text after a JSON marker is still a real
+            // line boundary even though Character.isLetter would otherwise classify it as a letter.
+            boolean texControlWord = newlineMarker && index + 2 < value.length()
+                    && isAsciiLetter(value.charAt(index + 2));
+            if (newlineMarker && !escapedBackslash && !texControlWord) {
+                restored.append('\n');
+                index += 1;
+            } else {
+                restored.append(current);
+            }
+        }
+        return restored.toString();
+    }
+
+    private static boolean isAsciiLetter(char value) {
+        return (value >= 'A' && value <= 'Z') || (value >= 'a' && value <= 'z');
     }
 
     static String normalizeSplitFunctionArguments(String value) {

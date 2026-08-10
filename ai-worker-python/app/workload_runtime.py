@@ -3,22 +3,38 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
+import logging
 import os
+import re
 import time
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 import requests
 from fastapi import HTTPException
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.ai_run_runtime import ProviderRoute
+from app.sse import iter_sse_data_events
 from app.usage import UsageEvent, UsageLedger, cost_for, fallback_tokens
 
 
 MAX_SOURCE_COUNT = 24
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
+MAX_SSE_FRAME_PREFIX_LENGTH = 96
+logger = logging.getLogger(__name__)
+
+
+def redacted_sse_frame_prefix(value: str) -> str:
+    normalized = " ".join(value.split())
+    normalized = re.sub(r"(?i)(bearer\s+)[^\s,;]+", r"\1<redacted>", normalized)
+    normalized = re.sub(
+        r"(?i)((?:api[_-]?key|apikey|token|authorization|password|secret|signature)\s*[=:]\s*)[^\s,;&]+",
+        r"\1<redacted>", normalized,
+    )
+    return normalized[:MAX_SSE_FRAME_PREFIX_LENGTH]
 
 
 class AuthorizedKnowledgePoint(BaseModel):
@@ -39,6 +55,11 @@ class IntentRunRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4_000)
     knowledgePoints: list[AuthorizedKnowledgePoint] = Field(default_factory=list, max_length=MAX_SOURCE_COUNT)
     providerRoute: ProviderRoute
+
+    @model_validator(mode="after")
+    def validate_route_grant(self) -> "IntentRunRequest":
+        self.providerRoute.verify_for(self.runId, "learning_intent")
+        return self
 
 
 class ExplanationEvidence(BaseModel):
@@ -73,6 +94,11 @@ class StudentExplanationRunRequest(BaseModel):
     def normalize_observations(cls, value: list[str]) -> list[str]:
         return [item.strip()[:800] for item in value if item and item.strip()]
 
+    @model_validator(mode="after")
+    def validate_route_grant(self) -> "StudentExplanationRunRequest":
+        self.providerRoute.verify_for(self.runId, "student_explanation")
+        return self
+
 
 class ImageTranscriptionRunRequest(BaseModel):
     """授权图片转写合同，不接受文件路径或远程 URL。"""
@@ -98,6 +124,11 @@ class ImageTranscriptionRunRequest(BaseModel):
             raise ValueError("imageDataUrl exceeds the image byte limit")
         return value
 
+    @model_validator(mode="after")
+    def validate_route_grant(self) -> "ImageTranscriptionRunRequest":
+        self.providerRoute.verify_for(self.runId, "image_transcription")
+        return self
+
 
 class ProviderHealthRunRequest(BaseModel):
     """只返回脱敏 provider 可达性，不暴露端点、密钥或原始错误体。"""
@@ -106,6 +137,11 @@ class ProviderHealthRunRequest(BaseModel):
 
     runId: str = Field(min_length=1, max_length=128)
     providerRoute: ProviderRoute
+
+    @model_validator(mode="after")
+    def validate_route_grant(self) -> "ProviderHealthRunRequest":
+        self.providerRoute.verify_for(self.runId, "provider_health")
+        return self
 
 
 @dataclass(frozen=True)
@@ -179,6 +215,209 @@ class MigratedWorkloadRuntime:
             return self._react_student_explanation(request)
         return self._compose_student_explanation(request)
 
+    def stream_student_explanation(self, request: StudentExplanationRunRequest):
+        """流式返回 ReAct provider delta；完整 JSON 仍在末尾经过同一张卡片校验。"""
+        if request.mode == "compose":
+            messages: list[dict[str, Any]] = [
+                {"role": "system", "content": (
+                    "你是高中数学教师。只返回 JSON："
+                    "{\"conversationTitle\":\"不超过15个中文字符\",\"cards\":[{\"cardKey\":\"stable_snake_case\","
+                    "\"title\":\"\",\"summary\":\"简明中文讲解\",\"items\":[],\"sourceUris\":[],"
+                    "\"renderMode\":\"text|formula|source_list\"}]}。"
+                    "sourceUris 只能来自 evidence；不要输出 Markdown 或推理过程。"
+                )},
+                {"role": "user", "content": json.dumps({
+                    "problem": request.problem,
+                    "evidence": [item.model_dump() for item in request.evidence],
+                }, ensure_ascii=False)},
+            ]
+        else:
+            messages = [
+                {"role": "system", "content": (
+                    "你是高中数学讲解的受限 ReAct 规划器。只返回 JSON："
+                    "{\"decision\":\"action|final\",\"tools\":[],\"queries\":[],"
+                    "\"conversationTitle\":\"\",\"cards\":[]}。"
+                    "final 必须同时返回 cards，引用只能来自 evidence。不要输出推理过程或 Markdown。"
+                )},
+                {"role": "user", "content": json.dumps({
+                    "problem": request.problem,
+                    "availableTools": list(dict.fromkeys(request.availableTools)),
+                    "observations": request.observations,
+                    "evidence": [item.model_dump() for item in request.evidence],
+                }, ensure_ascii=False)},
+            ]
+        if request.imageDataUrl:
+            messages[-1] = {"role": "user", "content": [
+                {"type": "text", "text": messages[-1]["content"]},
+                {"type": "image_url", "image_url": {"url": request.imageDataUrl}},
+            ]}
+        yield {"event": "started", "data": {"runId": request.runId}}
+        content_parts: list[str] = []
+        usage: dict[str, Any] = {}
+        provider = ""
+        model = ""
+        provider_attempt = 1
+        try:
+            try:
+                for item in self._stream_call_json(
+                        request.runId, request.providerRoute, messages, require_json_object=request.mode == "compose",
+                        emit_visible_content=request.mode != "compose"):
+                    provider = item.get("provider", provider)
+                    model = item.get("model", model)
+                    provider_attempt = int(item.get("attempt", provider_attempt))
+                    if item.get("content"):
+                        content_parts.append(str(item["content"]))
+                        if request.mode != "compose":
+                            yield {"event": "delta", "data": {
+                                "runId": request.runId,
+                                "content": str(item["content"]),
+                                "providerName": provider,
+                                "modelCode": model,
+                            }}
+                    usage = item.get("usage") or usage
+            except HTTPException as exc:
+                raw = "".join(content_parts)
+                if not str(exc.detail).startswith("provider stream interrupted after visible output:"):
+                    raise
+                # Relays occasionally omit the terminal [DONE] after a complete JSON payload. Reuse it only when
+                # the existing JSON and card/citation validators can still establish a complete safe result.
+                self._json_object(raw)
+            raw = "".join(content_parts)
+            parsed = self._json_object(raw)
+            result = self._result_from_stream(request.runId, provider, model, usage, messages, raw, provider_attempt)
+            decision = "final" if request.mode == "compose" else str(parsed.get("decision") or "final").strip().lower()
+            if decision == "final":
+                response = {"status": "COMPLETED", "decision": "final", "tools": [], "queries": [],
+                            **self._normalize_explanation_cards(parsed, request.evidence),
+                            "usage": result.usage(), "providerName": provider, "modelCode": model}
+            else:
+                allowed = list(dict.fromkeys(request.availableTools))
+                tools = [str(value) for value in parsed.get("tools", []) if str(value) in allowed][:3]
+                queries = list(dict.fromkeys([str(value).strip()[:80] for value in parsed.get("queries", []) if str(value).strip()]))[:6]
+                response = {"status": "COMPLETED", "decision": "action" if tools else "final",
+                            "tools": tools, "queries": queries, "usage": result.usage(),
+                            "providerName": provider, "modelCode": model}
+            yield {"event": "completed", "data": {"runId": request.runId, **response}}
+        except HTTPException as exc:
+            yield {"event": "error", "data": {"runId": request.runId, "status": exc.status_code, "message": str(exc.detail)}}
+
+    def _stream_call_json(
+            self, run_id: str, route: ProviderRoute, messages: list[dict[str, Any]], require_json_object: bool = False,
+            emit_visible_content: bool = True):
+        failures = []
+        provider_attempts = max(1, int(os.getenv("MATH_AGENT_STUDENT_EXPLANATION_MODEL_ATTEMPTS", "2")))
+        retry_backoff_seconds = max(0.0, float(os.getenv("MATH_AGENT_STUDENT_EXPLANATION_RETRY_BACKOFF_SECONDS", "1.0")))
+        for provider_index, selection in enumerate([route.primary, *route.fallbacks]):
+            key_name = {"openai": "OPENAI_API_KEY", "dashscope": "DASHSCOPE_API_KEY", "deepseek": "DEEPSEEK_API_KEY", "ark": "ARK_API_KEY"}[selection.name]
+            api_key = os.getenv(key_name)
+            if not api_key:
+                failures.append(selection.name + ":configuration")
+                continue
+            bases = {"openai": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"), "dashscope": "https://dashscope.aliyuncs.com/compatible-mode/v1", "deepseek": "https://api.deepseek.com/v1", "ark": "https://ark.cn-beijing.volces.com/api/v3"}
+            payload = {
+                "model": selection.model,
+                "messages": messages,
+                "temperature": 0,
+                "stream": True,
+                "stream_options": {"include_usage": True},
+            }
+            if require_json_object:
+                payload["response_format"] = {"type": "json_object"}
+            for provider_try in range(provider_attempts):
+                attempt = provider_index * provider_attempts + provider_try + 1
+                visible_output = False
+                content_parts: list[str] = []
+                try:
+                    with self._session.post(
+                        bases[selection.name].rstrip() + "/chat/completions",
+                        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                        json=payload,
+                        stream=True, timeout=float(os.getenv("MATH_AGENT_MIGRATED_RUNTIME_TIMEOUT_SECONDS", "45")),
+                    ) as response:
+                        response.raise_for_status()
+                        completed = False
+                        for value in iter_sse_data_events(response):
+                            if value == "[DONE]":
+                                completed = True
+                                break
+                            try:
+                                decoded = json.loads(value)
+                            except json.JSONDecodeError as exc:
+                                if value.lower() in {"ping", "keep-alive"}:
+                                    continue
+                                logger.warning(json.dumps({
+                                    "event": "provider_sse_non_json_frame",
+                                    "runId": run_id,
+                                    "phase": "student_explanation_stream",
+                                    "provider": selection.name,
+                                    "model": selection.model,
+                                    "attempt": attempt,
+                                    "httpStatus": getattr(response, "status_code", 0),
+                                    "contentType": getattr(response, "headers", {}).get("Content-Type", ""),
+                                    "requestId": getattr(response, "headers", {}).get("X-Request-ID", getattr(response, "headers", {}).get("Request-ID", "")),
+                                    "frameLength": len(value),
+                                    "jsonError": exc.msg,
+                                    "jsonErrorPosition": exc.pos,
+                                    "frameSha256": hashlib.sha256(value.encode("utf-8")).hexdigest(),
+                                    "framePrefix": redacted_sse_frame_prefix(value),
+                                }, ensure_ascii=False, sort_keys=True))
+                                raise
+                            usage = decoded.get("usage") or {}
+                            if usage:
+                                yield {"provider": selection.name, "model": selection.model, "attempt": attempt, "usage": usage}
+                            for choice in decoded.get("choices") or []:
+                                delta = (choice.get("delta") or {}).get("content")
+                                if delta:
+                                    content_parts.append(str(delta))
+                                    if require_json_object and not "".join(content_parts).lstrip().startswith("{"):
+                                        raise ValueError("provider response does not start with a JSON object")
+                                    if emit_visible_content:
+                                        visible_output = True
+                                    yield {"provider": selection.name, "model": selection.model, "attempt": attempt, "content": str(delta)}
+                        if require_json_object:
+                            try:
+                                self._json_object("".join(content_parts))
+                            except HTTPException as exc:
+                                raise ValueError("provider response is not a JSON object") from exc
+                            # Compatible relays occasionally omit [DONE] after a complete structured payload.
+                            return
+                        if not completed:
+                            raise requests.RequestException("provider stream ended before [DONE]")
+                        return
+                except requests.HTTPError as exc:
+                    status = exc.response.status_code if exc.response is not None else 0
+                    error = f"HTTP_{status}"
+                    retryable = status == 429 or status >= 500
+                except (requests.RequestException, ValueError, KeyError, json.JSONDecodeError) as exc:
+                    error = type(exc).__name__
+                    retryable = True
+                if visible_output:
+                    raise HTTPException(
+                        status_code=503,
+                        detail="provider stream interrupted after visible output: " + selection.name,
+                    )
+                failures.append(selection.name + ":" + error)
+                self._ledger.append(UsageEvent(
+                    run_id, selection.name, selection.model, attempt, "FAILED", 0, 0, 0, -1.0,
+                    "unavailable", error,
+                ))
+                if not retryable or provider_try + 1 >= provider_attempts:
+                    break
+                time.sleep(retry_backoff_seconds * (provider_try + 1))
+        raise HTTPException(status_code=503, detail="all configured providers failed: " + ",".join(failures))
+
+    def _result_from_stream(
+            self, run_id: str, provider: str, model: str, raw_usage: dict[str, Any], messages: list[dict[str, Any]],
+            content: str, attempt: int = 1) -> ProviderResult:
+        prompt = int(raw_usage.get("prompt_tokens", 0) or 0)
+        completion = int(raw_usage.get("completion_tokens", 0) or 0)
+        total = int(raw_usage.get("total_tokens", 0) or 0)
+        if total <= 0:
+            prompt, completion, total = fallback_tokens(messages, content)
+        cost = cost_for(provider, model, prompt, completion)
+        self._ledger.append(UsageEvent(run_id, provider, model, attempt, "SUCCESS", prompt, completion, total, cost, "provider" if raw_usage else "fallback"))
+        return ProviderResult(provider, model, content, prompt, completion, total, cost)
+
     def _react_student_explanation(self, request: StudentExplanationRunRequest) -> dict[str, Any]:
         available_tools = list(dict.fromkeys(request.availableTools))
         messages: list[dict[str, Any]] = [
@@ -217,7 +456,11 @@ class MigratedWorkloadRuntime:
             if len(safe_queries) == 6:
                 break
         if decision == "final":
-            final_payload = self._normalize_explanation_cards(parsed, request.evidence)
+            try:
+                final_payload = self._normalize_explanation_cards(parsed, request.evidence)
+            except HTTPException:
+                # A planner-only final lets Java continue through its validated compose fallback.
+                final_payload = {"conversationTitle": "", "cards": []}
             return {
                 "status": "COMPLETED",
                 "decision": "final",

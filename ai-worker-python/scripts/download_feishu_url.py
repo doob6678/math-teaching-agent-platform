@@ -139,7 +139,10 @@ def find_default_appkey_path(explicit_path: str = "") -> Optional[Path]:
     candidates.extend(parent / "APPKEY.md" for parent in script_path.parents)
     for candidate in candidates:
         resolved = candidate if candidate.is_absolute() else (Path.cwd() / candidate)
-        if resolved.exists():
+        # An empty Java appkey-path can resolve to the container working directory (for example /app).
+        # Only a regular file is a valid credential source; accepting a directory turns a missing
+        # environment credential into a misleading IsADirectoryError before the URL sync starts.
+        if resolved.is_file():
             return resolved
     return None
 
@@ -164,8 +167,14 @@ def resolve_credentials(args: argparse.Namespace) -> Tuple[str, str, str]:
         return args.app_id.strip(), args.app_secret.strip(), ""
 
     if not args.no_env:
-        env_app_id = os.getenv("APP_ID", "").strip()
-        env_app_secret = os.getenv("APP_SECRET", "").strip()
+        # The backend Compose contract historically exposed FEISHU_APP_ID/FEISHU_APP_SECRET,
+        # while the standalone downloader contract uses APP_ID/APP_SECRET.  Accept both aliases
+        # so the exact same Feishu URL workflow works in Docker and in local verification without
+        # copying credentials into command arguments, manifests, reports, or logs.
+        env_app_id = (os.getenv("APP_ID", "") or os.getenv("FEISHU_APP_ID", "")
+                      or os.getenv("FEISHU_APPID", "")).strip()
+        env_app_secret = (os.getenv("APP_SECRET", "") or os.getenv("FEISHU_APP_SECRET", "")
+                          or os.getenv("FEISHU_APPSECRET", "")).strip()
         if env_app_id and env_app_secret:
             return env_app_id, env_app_secret, ""
 
@@ -363,7 +372,25 @@ class FeishuClient:
 
     def get_folder_meta(self, folder_token: str) -> Dict[str, Any]:
         url = f"https://open.feishu.cn/open-apis/drive/explorer/v2/folder/{urllib.parse.quote(folder_token)}/meta"
-        return self.api_json("GET", url)
+        try:
+            return self.api_json("GET", url)
+        except Exception as metadata_error:
+            # Some tenant bots can enumerate a shared folder through the official Drive files API while the older
+            # explorer metadata endpoint still demands user-only Drive privileges.  The folder listing is the
+            # authoritative source for recursive URL sync, so retain the provider token and continue through that
+            # API instead of failing a production sync before the first document is inspected.  A provider title is
+            # optional here; the checkpoint or backend-owned staging root preserves the stable local folder name.
+            try:
+                data = self.api_json(
+                    "GET",
+                    "https://open.feishu.cn/open-apis/drive/v1/files",
+                    params={"folder_token": folder_token, "page_size": 1},
+                )
+                if isinstance(data, dict) and ("files" in data or "items" in data):
+                    return {"name": folder_token, "metadata_endpoint": "drive/v1/files", "metadata_fallback": True}
+            except Exception:
+                pass
+            raise metadata_error
 
     def list_folder_items(self, folder_token: str) -> List[Dict[str, Any]]:
         items: List[Dict[str, Any]] = []
@@ -957,6 +984,7 @@ def download_folder(
     changed_items: List[Dict[str, Any]] = []
     unchanged_items: List[Dict[str, Any]] = []
     failed_items: List[Dict[str, Any]] = []
+    item_timings: List[Dict[str, Any]] = []
     latest_checkpoint: Dict[str, Any] = {
         "current_folder_token": str(checkpoint.get("current_folder_token", "") or folder_token),
         "page_token": str(checkpoint.get("page_token", "") or ""),
@@ -981,6 +1009,16 @@ def download_folder(
             visited_folder_tokens=visited_folder_tokens,
             downloaded_items=downloaded_items,
         )
+
+    def remember_item_timing(item_metadata: Dict[str, Any], status: str, started_at: float) -> None:
+        """Persist one real provider item timing so global sync cost can be separated from per-document cost."""
+        item_timings.append({
+            "type": item_metadata.get("type", ""),
+            "token": item_metadata.get("token", ""),
+            "path": item_metadata.get("path", ""),
+            "status": status,
+            "elapsed_ms": round((time.perf_counter() - started_at) * 1000, 3),
+        })
 
     def walk(current_token: str, current_dir: Path, path_text: str, start_page_token: str = "") -> None:
         if current_token not in visited_set:
@@ -1025,6 +1063,7 @@ def download_folder(
                     "sizeBytes": int(item.get("size", item.get("size_bytes", item.get("sizeBytes", 0))) or 0),
                     "signature": provider_item_signature(item),
                 }
+                item_started_at = time.perf_counter()
                 discovered_items.append(item_metadata)
                 previous_manifest = incremental_manifest.get(item_token, {})
                 expected_relative_path = str(previous_manifest.get("relativePath", "") or "")
@@ -1039,9 +1078,11 @@ def download_folder(
                     counters["skipped"] += 1
                     counters["unchanged_files"] += 1
                     unchanged_items.append(item_metadata)
+                    remember_item_timing(item_metadata, "unchanged", item_started_at)
                     continue
                 if item_token in downloaded_tokens and not previous_manifest:
                     counters["skipped"] += 1
+                    remember_item_timing(item_metadata, "skipped", item_started_at)
                     continue
                 try:
                     if item_type in EXPORTABLE_TYPES:
@@ -1087,6 +1128,7 @@ def download_folder(
                             asset_kind=asset_kind)
                     else:
                         counters["skipped"] += 1
+                        remember_item_timing(item_metadata, "skipped", item_started_at)
                         continue
                     downloaded_tokens.add(item_token)
                     downloaded_items.append(manifest)
@@ -1094,6 +1136,7 @@ def download_folder(
                     incremental_manifest[item_token] = manifest
                     changed_items.append({**item_metadata, **manifest})
                     counters["changed_files"] += 1
+                    remember_item_timing(item_metadata, "changed", item_started_at)
                     save_incremental_manifest(manifest_path, incremental_manifest)
                     remember_checkpoint(current_token, path_text, page_token)
                 except Exception as exc:
@@ -1105,6 +1148,7 @@ def download_folder(
                         "path": item_path,
                         "message": str(exc),
                     })
+                    remember_item_timing(item_metadata, "failed", item_started_at)
                     remember_checkpoint(current_token, path_text, page_token)
                     client.log(f"FAILED {item_type}: {item_name}, token={item_token}, error={exc}")
             if not has_more or not next_page_token:
@@ -1130,6 +1174,7 @@ def download_folder(
             "discovered_items": discovered_items,
             "changed_items": changed_items,
             "unchanged_items": unchanged_items,
+            "item_timings": item_timings,
             "incremental": bool(manifest_path),
             "elapsed_ms": round((time.perf_counter() - started_at) * 1000),
         }

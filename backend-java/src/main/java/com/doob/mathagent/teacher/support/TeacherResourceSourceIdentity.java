@@ -2,6 +2,7 @@ package com.doob.mathagent.teacher.support;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -47,13 +48,19 @@ public final class TeacherResourceSourceIdentity {
             return "feishu:" + pathKind + ":" + matcher.group(1);
         }
         if (localPath != null && !localPath.isBlank()) {
-            Path normalized = Path.of(localPath.strip()).toAbsolutePath().normalize();
+            String sourcePath = localPath.strip();
             try {
-                normalized = normalized.toRealPath();
-            } catch (IOException ignored) {
-                // Registration keeps the normalized target even when a removable local volume is temporarily offline.
+                Path normalized = Path.of(sourcePath).toAbsolutePath().normalize();
+                try {
+                    normalized = normalized.toRealPath();
+                } catch (IOException ignored) {
+                    // Registration keeps the normalized target even when a removable local volume is temporarily offline.
+                }
+                return "local:" + normalized.toString().replace('\\', '/').toLowerCase(Locale.ROOT);
+            } catch (InvalidPathException ignored) {
+                // Historical cross-platform paths remain auditable even when the current host cannot parse them.
+                return "local:" + sourcePath.replace('\\', '/').toLowerCase(Locale.ROOT);
             }
-            return "local:" + normalized.toString().replace('\\', '/').toLowerCase(Locale.ROOT);
         }
         return "url:" + requireText(originalUrl, "originalUrl is required");
     }

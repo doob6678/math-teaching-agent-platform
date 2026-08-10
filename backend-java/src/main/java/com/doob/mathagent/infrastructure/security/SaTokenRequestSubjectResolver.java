@@ -120,11 +120,11 @@ public class SaTokenRequestSubjectResolver implements RequestSubjectResolver {
     }
 
     /**
-     * Reads a non-authoritative device id for rate-limit and audit grouping only.
+     * Returns a server-owned marker. Client supplied device identifiers are deliberately ignored: they are not
+     * authentication data and must not influence request limits or resource permissions.
      */
     private static String deviceId(HttpServletRequest request) {
-        String value = request.getHeader("X-Device-Id");
-        return value == null || value.isBlank() ? "unknown-device" : value.strip();
+        return "server-observed";
     }
 
     /**

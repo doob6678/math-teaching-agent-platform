@@ -37,14 +37,17 @@ public record ApiRequestIdentity(
     }
 
     /**
-     * 返回限流主体，优先使用明确主体 ID，否则回退到设备和 IP。
+     * 返回限流主体，登录请求只按后端解析出的用户主体聚合。
+     *
+     * <p>匿名请求没有可验证的用户主体，只能退回到服务端看到的连接地址；绝不能把客户端自报的设备
+     * 标识当成第二个认证因子，否则攻击者可以为每次请求生成新值来拆散限流窗口。</p>
      */
     public String rateLimitSubject() {
         ApiRequestIdentity normalized = normalize();
         if (normalized.subjectId() != null) {
             return normalized.subjectType() + ":" + normalized.subjectId();
         }
-        return normalized.subjectType() + ":" + normalized.deviceId() + ":" + normalized.ip();
+        return normalized.subjectType() + ":" + normalized.ip();
     }
 
     /**

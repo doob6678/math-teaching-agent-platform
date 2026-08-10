@@ -214,7 +214,9 @@ public class AgentTraceQueryService {
                                 event.attemptNo(),
                                 event.retryable(),
                                 event.message()))
-                        .toList());
+                        .toList(),
+                trace.actualCost(),
+                trace.costKnown());
     }
 
     /**

@@ -17,7 +17,7 @@ import requests
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from benchmarks.http_client import MathAgentClient, stable_request_hash
+from benchmarks.http_client import MathAgentClient
 from benchmarks.metrics import compute_latency_summary
 
 
@@ -33,7 +33,7 @@ BENCHMARK_LLM_API_URL = (
     + "/chat/completions"
 )
 BENCHMARK_LLM_MODEL = (
-    os.environ.get("OPENAI_CHAT_MODEL", "gpt-5.4")
+    os.environ.get("OPENAI_CHAT_MODEL", "gpt-5.6-luna")
     if BENCHMARK_LLM_PROVIDER == "openai"
     else os.environ.get("DEEPSEEK_CHAT_MODEL", "deepseek-v4-flash")
 )
@@ -306,6 +306,17 @@ def _runtime_topic_tags(base: dict[str, Any]) -> list[str]:
     return _unique_runtime_tags([*structural_tags, *semantic_tags])[:8]
 
 
+def _is_runtime_benchmark_resource(title: str, local_path: str) -> bool:
+    """Recognize only resources created by this benchmark's runtime upload stage."""
+    normalized_title = str(title or "").strip().lower()
+    normalized_path = str(local_path or "").replace("\\", "/").lower()
+    return (
+        normalized_title.startswith("runtime-")
+        and "output/benchmarks/" in normalized_path
+        and "runtime-authored/" in normalized_path
+    )
+
+
 def _worked_solution_steps(base: dict[str, Any], randomizer: random.Random) -> list[str]:
     return [
         f"先把题意翻译成'{base['knowledge_label']}'下的判断问题，不急着套公式。",
@@ -343,23 +354,13 @@ def _register_topic_resource(client: MathAgentClient, topic: dict[str, Any]) -> 
         "permissionScope": topic["scope"],
         "feishuExportFormat": "md",
     }
-    register = _capability_post(client, "teacher-resource:register", "/api/teacher/resources", body, 1)
+    register = client.post("/api/teacher/resources", body)
     register_body = register.body if isinstance(register.body, dict) else {}
     document_id = str(register_body.get("documentId") or "")
-    create_job = _capability_post(
-        client,
-        "teacher-resource:sync",
-        f"/api/teacher/resources/{document_id}/sync-jobs",
-        {},
-        1,
-    ) if document_id else None
+    create_job = client.post(f"/api/teacher/resources/{document_id}/sync-jobs", {}) if document_id else None
     job_id = str((create_job.body or {}).get("jobId") or "") if create_job and isinstance(create_job.body, dict) else ""
-    execute_job = _capability_post(
-        client,
-        "teacher-resource:sync-execute",
-        f"/api/teacher/resources/{document_id}/sync-jobs/{job_id}/execute",
-        {},
-        1,
+    execute_job = client.post(
+        f"/api/teacher/resources/{document_id}/sync-jobs/{job_id}/execute", {}
     ) if document_id and job_id else None
     final_job = _wait_for_sync_job(client, document_id, job_id) if document_id and job_id else {}
     return {
@@ -383,8 +384,7 @@ def _cleanup_documents(client: MathAgentClient, resource_rows: list[dict[str, An
         if not document_id:
             continue
         path = f"/api/teacher/resources/{document_id}"
-        token = _capability(client, "teacher-resource:archive", path, [], 1)
-        archived = client.delete(path, {"X-Capability-Token": token, "X-Request-Hash": stable_request_hash([])})
+        archived = client.delete(path)
         rows.append({
             "documentId": document_id,
             "title": "",
@@ -600,12 +600,7 @@ def _run_handout_tasks(client: MathAgentClient, queries: list[dict[str, Any]]) -
             "handoutTemplateCode": preferred_template,
         }
         started = time.perf_counter()
-        token = _capability(client, "teaching:submit", "/api/teaching/tasks", body, 1.5)
-        attempt = client.post(
-            "/api/teaching/tasks",
-            body,
-            {"X-Capability-Token": token, "X-Request-Hash": stable_request_hash(body)},
-        )
+        attempt = client.post("/api/teaching/tasks", body)
         submitted = attempt.body if isinstance(attempt.body, dict) else {}
         response = _wait_for_teaching_task(client, str(submitted.get("taskId") or ""), submitted)
         elapsed_ms = int(round((time.perf_counter() - started) * 1000))
@@ -1158,14 +1153,12 @@ def _run_security_checks(client: MathAgentClient) -> dict[str, Any]:
     body = {
         "clientRequestId": f"deepseek-react-{int(time.time() * 1000)}",
         "questionText": "只做安全探针，不做题目生成",
-        "learningGoal": "验证 capability replay 和 hash mismatch",
+        "learningGoal": "验证同一用户的重复提交和限流",
         "evidenceLimit": 1,
         "handoutTemplateCode": None,
     }
-    token = _capability(client, "teaching:submit", "/api/teaching/tasks", body, 1)
-    headers = {"X-Capability-Token": token, "X-Request-Hash": stable_request_hash(body)}
-    first = client.post("/api/teaching/tasks", body, headers)
-    second = client.post("/api/teaching/tasks", body, headers)
+    first = client.post("/api/teaching/tasks", body)
+    second = client.post("/api/teaching/tasks", body)
     return {
         "replayFirstStatus": first.status,
         "replaySecondStatus": second.status,
@@ -1368,24 +1361,6 @@ def _wait_for_sync_job(client: MathAgentClient, document_id: str, job_id: str, t
                 return latest
         time.sleep(2)
     return latest
-
-
-def _capability_post(client: MathAgentClient, action: str, path: str, body: dict[str, Any] | list[Any], max_cost: float):
-    token = _capability(client, action, path, body, max_cost)
-    return client.post(path, body, {"X-Capability-Token": token, "X-Request-Hash": stable_request_hash(body)})
-
-
-def _capability(client: MathAgentClient, action: str, path: str, body: dict[str, Any] | list[Any], max_cost: float) -> str:
-    response = client.post("/api/security/capabilities", {
-        "action": action,
-        "path": path,
-        "requestHash": stable_request_hash(body),
-        "idempotencyKey": f"deepseek-react-{action}-{int(time.time() * 1000000)}",
-        "maxCost": max_cost,
-    })
-    if response.status != 200 or not isinstance(response.body, dict):
-        raise RuntimeError(f"capability failed: {action} {path} HTTP {response.status} {response.body}")
-    return str(response.body.get("token", ""))
 
 
 def _extract_first_json_object(text: str) -> dict[str, Any] | None:

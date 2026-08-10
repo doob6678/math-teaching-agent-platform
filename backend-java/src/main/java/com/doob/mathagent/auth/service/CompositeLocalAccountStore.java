@@ -31,4 +31,9 @@ public class CompositeLocalAccountStore implements LocalAccountStore {
     public LocalAccount createStudent(String username, String encodedPassword, String tenantId) {
         return persistentStore.createStudent(username, encodedPassword, tenantId);
     }
+
+    @Override
+    public LocalAccount createTeacher(String username, String encodedPassword, String tenantId) {
+        return persistentStore.createTeacher(username, encodedPassword, tenantId);
+    }
 }

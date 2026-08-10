@@ -2,14 +2,29 @@ package com.doob.mathagent.teaching;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
 /**
  * Collects independent handout versions with explicit dependencies.
  */
 public final class TeachingHandoutVersionCollector {
+
+    private static final int VERSION_PARALLELISM = 3;
+    private static final int VERSION_QUEUE_CAPACITY = 48;
+    /** Shared bounded pool prevents every request from allocating three new worker threads. */
+    private static final ExecutorService VERSION_EXECUTOR = new ThreadPoolExecutor(
+            VERSION_PARALLELISM,
+            VERSION_PARALLELISM,
+            0L,
+            TimeUnit.MILLISECONDS,
+            new ArrayBlockingQueue<>(VERSION_QUEUE_CAPACITY),
+            Executors.defaultThreadFactory(),
+            new ThreadPoolExecutor.CallerRunsPolicy());
 
     private TeachingHandoutVersionCollector() {
     }
@@ -24,10 +39,9 @@ public final class TeachingHandoutVersionCollector {
             Supplier<String> teacherHandoutSupplier,
             Supplier<String> studentHandoutSupplier,
             Supplier<String> lectureHandoutSupplier) {
-        ExecutorService versionExecutor = Executors.newFixedThreadPool(3);
-        CompletableFuture<String> teacherFuture = CompletableFuture.supplyAsync(teacherHandoutSupplier, versionExecutor);
-        CompletableFuture<String> studentFuture = CompletableFuture.supplyAsync(studentHandoutSupplier, versionExecutor);
-        CompletableFuture<String> lectureFuture = CompletableFuture.supplyAsync(lectureHandoutSupplier, versionExecutor);
+        CompletableFuture<String> teacherFuture = CompletableFuture.supplyAsync(teacherHandoutSupplier, VERSION_EXECUTOR);
+        CompletableFuture<String> studentFuture = CompletableFuture.supplyAsync(studentHandoutSupplier, VERSION_EXECUTOR);
+        CompletableFuture<String> lectureFuture = CompletableFuture.supplyAsync(lectureHandoutSupplier, VERSION_EXECUTOR);
         try {
             String teacherHandoutLatex = await("teacher handout", teacherFuture);
             String studentHandoutLatex = await("student handout", studentFuture);
@@ -38,8 +52,6 @@ public final class TeachingHandoutVersionCollector {
             studentFuture.cancel(true);
             lectureFuture.cancel(true);
             throw exception;
-        } finally {
-            versionExecutor.shutdownNow();
         }
     }
 

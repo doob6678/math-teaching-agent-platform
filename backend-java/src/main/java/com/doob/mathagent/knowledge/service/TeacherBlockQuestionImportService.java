@@ -235,7 +235,8 @@ public class TeacherBlockQuestionImportService {
     private static boolean isSharedScope(String permissionScope) {
         return SHARED_QUESTION_SCOPE.equals(permissionScope)
                 || "PUBLIC_TEXTBOOK".equals(permissionScope)
-                || TENANT_PUBLIC_SCOPE.equals(permissionScope);
+                || TENANT_PUBLIC_SCOPE.equals(permissionScope)
+                || "CLASS_AUTHORIZED".equals(permissionScope);
     }
 
     /** Maps resource-library tenant sharing onto the shared scope supported by question visibility filters. */

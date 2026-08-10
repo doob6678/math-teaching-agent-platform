@@ -134,11 +134,9 @@ if ([string]::IsNullOrWhiteSpace($env:KMP_DUPLICATE_LIB_OK)) {
 }
 if ([string]::IsNullOrWhiteSpace($env:MATH_AGENT_PROCESSED_BOOKS_ROOT)) {
     $processedBookRoots = @(
-        # Keep the worker's BGE and CLIP page indexes aligned with the Java
-        # textbook service.  b4 remains available as an explicit rollback
-        # corpus, but c2 is the default searchable small-heading corpus.
+        # Keep the worker's BGE/CLIP indexes aligned with Java. c2 is the only production textbook corpus because its
+        # section children preserve parent identity while retaining the original source page for evidence.
         "C:\Users\doob\Desktop\个人资料\高中数学\下载课本代码\tchMaterial-parser-main\tchMaterial-parser-main\processed_books_section_shadow_all_mini_c2",
-        "C:\Users\doob\Desktop\个人资料\高中数学\下载课本代码\tchMaterial-parser-main\tchMaterial-parser-main\processed_books_section_shadow_all_mini_b4",
         "C:\Users\doob\Desktop\个人资料\高中数学\下载课本代码\tchMaterial-parser-main\tchMaterial-parser-main\processed_books",
         (Join-Path $Root "processed_books")
     )

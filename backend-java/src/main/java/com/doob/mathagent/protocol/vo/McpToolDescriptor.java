@@ -13,7 +13,6 @@ import java.util.List;
  * @param requiredRoles backend roles allowed to use the underlying capability
  * @param requiredScope logical scope external clients must request before execution is enabled
  * @param costLevel low/medium/high cost classification for future quota control
- * @param requiresCapabilityToken whether execution would require one-time capability token
  * @param auditRequired whether execution must be written to audit logs
  * @param inputSchema JSON schema for future MCP tool arguments
  */
@@ -26,7 +25,6 @@ public record McpToolDescriptor(
         List<String> requiredRoles,
         String requiredScope,
         String costLevel,
-        boolean requiresCapabilityToken,
         boolean auditRequired,
         McpToolInputSchema inputSchema) {
 }

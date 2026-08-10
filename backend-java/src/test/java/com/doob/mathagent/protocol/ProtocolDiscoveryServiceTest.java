@@ -60,9 +60,6 @@ class ProtocolDiscoveryServiceTest {
                         "resume_multi_agent_writing",
                         "discover_feishu_resources",
                         "download_feishu_resource");
-        assertThat(tools).filteredOn(tool -> tool.requiresCapabilityToken())
-                .extracting(McpToolDescriptor::name)
-                .contains("start_multi_agent_writing", "resume_multi_agent_writing", "download_feishu_resource");
         assertThat(tools).filteredOn(tool -> tool.name().equals("search_textbook_evidence"))
                 .singleElement()
                 .satisfies(tool -> {
@@ -75,7 +72,7 @@ class ProtocolDiscoveryServiceTest {
                 .satisfies(tool -> {
                     assertThat(tool.readOnly()).isTrue();
                     assertThat(tool.requiredRoles()).containsExactly("teacher", "admin");
-                    assertThat(tool.inputSchema().required()).contains("query");
+                    assertThat(tool.inputSchema().required()).containsExactly("query");
                     assertThat(tool.inputSchema().properties()).containsKeys("library", "libraries");
                     assertThat(tool.inputSchema().properties().get("library"))
                             .containsEntry("type", "string")
@@ -98,6 +95,7 @@ class ProtocolDiscoveryServiceTest {
                     assertThat(tool.readOnly()).isTrue();
                     assertThat(tool.requiredRoles()).containsExactly("teacher", "admin");
                     assertThat(tool.requiredScope()).isEqualTo("teacher-resource:read");
+                    assertThat(tool.inputSchema().required()).containsExactly("query");
                     assertThat(tool.inputSchema().properties()).containsKeys("library", "libraries", "sourceTypes");
                     assertThat(tool.inputSchema().properties().get("libraries"))
                             .containsEntry("type", "array")
@@ -137,7 +135,6 @@ class ProtocolDiscoveryServiceTest {
                 .singleElement()
                 .satisfies(tool -> {
                     assertThat(tool.readOnly()).isFalse();
-                    assertThat(tool.requiresCapabilityToken()).isTrue();
                     assertThat(tool.requiredRoles()).containsExactly("teacher", "admin");
                     assertThat(tool.requiredScope()).isEqualTo("teacher-resource:sync-execute");
                     assertThat(tool.inputSchema().required()).containsExactly("url");
@@ -149,7 +146,8 @@ class ProtocolDiscoveryServiceTest {
                     assertThat(tool.executionEndpointEnabled()).isTrue();
                     assertThat(tool.requiredRoles()).containsExactly("teacher", "admin");
                     assertThat(tool.requiredScope()).isEqualTo("agent-writing:execute");
-                    assertThat(tool.inputSchema().required()).containsExactly("questionText");
+                    assertThat(tool.inputSchema().required()).isEmpty();
+                    assertThat(tool.inputSchema().properties()).containsKeys("questionText", "questions");
                 });
         assertThat(tools).filteredOn(tool -> tool.name().equals("get_multi_agent_writing_status"))
                 .singleElement()
@@ -193,7 +191,7 @@ class ProtocolDiscoveryServiceTest {
                         "teacher_student_handout_generation",
                         "agent_run_planning");
         assertThat(card.securitySchemes()).extracting(A2aAgentCardResponse.SecurityScheme::id)
-                .contains("sa-token-session", "capability-token");
+                .contains("sa-token-session", "user-session");
         assertNoSecretsOrLocalPaths(objectMapper.writeValueAsString(card));
     }
 

@@ -38,8 +38,12 @@ public class RedissonClientConfiguration {
      */
     @Bean(destroyMethod = "shutdown")
     RedissonClient redissonClient(RedissonClientProperties properties) {
+        if (properties.getPassword() == null || properties.getPassword().isBlank()) {
+            throw new IllegalStateException("REDIS_PASSWORD must be configured when Redisson is enabled");
+        }
         Config config = new Config();
-        config.useSingleServer().setAddress(properties.getAddress());
+        var server = config.useSingleServer().setAddress(properties.getAddress());
+        server.setPassword(properties.getPassword());
         return Redisson.create(config);
     }
 }

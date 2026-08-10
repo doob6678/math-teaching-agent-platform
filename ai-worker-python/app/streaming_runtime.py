@@ -9,6 +9,7 @@ from fastapi import HTTPException
 import requests
 
 from app.agent_runtime import AgentRunRequest, AgentRuntime
+from app.sse import iter_sse_data_events
 from app.usage import UsageEvent, UsageLedger, cost_for, fallback_tokens
 
 
@@ -108,10 +109,7 @@ class AgentStreamingRuntime:
 
     @staticmethod
     def _sse_json(response: requests.Response) -> Iterator[dict[str, Any]]:
-        for line in response.iter_lines(decode_unicode=True):
-            if not line or not line.startswith("data:"):
-                continue
-            value = line[5:].strip()
+        for value in iter_sse_data_events(response):
             if value == "[DONE]":
                 continue
             decoded = json.loads(value)
@@ -184,7 +182,7 @@ class AgentStreamingRuntime:
         bases = {"openai": os.getenv("OPENAI_BASE_URL", "https://api1.aisz.mom/v1"), "dashscope": "https://dashscope.aliyuncs.com/compatible-mode/v1", "deepseek": "https://api.deepseek.com/v1", "ark": "https://ark.cn-beijing.volces.com/api/v3"}
         key = os.getenv(keys.get(provider, ""))
         base = os.getenv(f"{provider.upper()}_BASE_URL", bases.get(provider, "")).rstrip("/")
-        model = os.getenv(f"MATH_AGENT_AI_RUNTIME_{provider.upper()}_MODEL", os.getenv("MATH_AGENT_AI_RUNTIME_MODEL", os.getenv("OPENAI_CHAT_MODEL", "gpt-5.6-terra")))
+        model = os.getenv(f"MATH_AGENT_AI_RUNTIME_{provider.upper()}_MODEL", os.getenv("MATH_AGENT_AI_RUNTIME_MODEL", os.getenv("OPENAI_CHAT_MODEL", "gpt-5.6-luna")))
         return key, base, model
 
     @staticmethod

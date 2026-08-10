@@ -24,7 +24,6 @@ import numpy as np
 DEFAULT_PARENT = Path(
     r"C:\Users\doob\Desktop\个人资料\高中数学\下载课本代码\tchMaterial-parser-main\tchMaterial-parser-main"
 )
-DEFAULT_ROOT_NAME = "processed_books_section_shadow_all_mini_c2"
 DEFAULT_MODEL = Path(r"D:\ModelScope\models\BAAI\bge-small-zh-v1.5")
 DEFAULT_BATCH_SIZE = 16
 MAX_EMBED_TEXT = 1600
@@ -157,7 +156,11 @@ def main() -> None:
     ensure_embedding_runtime()
     parser = argparse.ArgumentParser(description="Build BM25 and BGE indexes for the all-book section library")
     parser.add_argument("--library-parent", type=Path, default=DEFAULT_PARENT)
-    parser.add_argument("--root-name", default=DEFAULT_ROOT_NAME)
+    parser.add_argument(
+        "--root-name",
+        required=True,
+        help="Explicit c2 section-library directory name used by production retrieval and its parent-child index.",
+    )
     parser.add_argument("--model", type=Path, default=DEFAULT_MODEL)
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument("--device", default=os.environ.get("MATH_AGENT_REBUILD_BGE_DEVICE", "cuda"))

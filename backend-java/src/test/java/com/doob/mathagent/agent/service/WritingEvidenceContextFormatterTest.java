@@ -9,36 +9,24 @@ import org.junit.jupiter.api.Test;
 class WritingEvidenceContextFormatterTest {
 
     @Test
-    void keepsReadableFeishuCitationTextAndAuthorizedImageUriInWriterContext() {
+    void excludesPageBackedVisualUploadsFromWritingPrompt() {
         TeacherResourceBlockSearchResponse.Hit hit = new TeacherResourceBlockSearchResponse.Hit(
-                "shared-root-document",
-                "高中数学全局共享资料",
-                "feishu",
-                "TENANT_PUBLIC",
-                "block-vector-area",
-                "text",
-                7,
-                "解三角形",
-                "向量面积",
-                null,
-                "shared/triangle.md",
-                "reference",
-                List.of("向量", "面积"),
-                List.of("block-vector-area"),
-                "向量面积公式可由叉积与正弦关系统一理解。",
-                "向量面积公式",
-                0.98,
-                List.of("asset-1"),
-                List.of(new TeacherResourceBlockSearchResponse.AssetRef(
-                        "asset-1", "/api/teacher-assets/asset-1", "image/png", "triangle.png", "shared/triangle.png", 2)));
+                "doc-1", "函数专题", "feishu", "TEACHER_PRIVATE", "block-1", "question", 1,
+                "函数", "定义域", 8, "source.pdf", "question", List.of(), List.of("block-1"),
+                "题目：求函数定义域。", "求函数定义域", 0.95,
+                List.of("page-asset", "figure-asset"),
+                List.of(
+                        new TeacherResourceBlockSearchResponse.AssetRef(
+                                "page-asset", "/api/teacher/resources/assets/page-asset", "image/png",
+                                "page-8.png", "source.pdf", 8),
+                        new TeacherResourceBlockSearchResponse.AssetRef(
+                                "figure-asset", "/api/teacher/resources/assets/figure-asset", "image/png",
+                                "figure.png", "question/figure.png", null)));
 
-        String context = WritingEvidenceContextFormatter.format(List.of(hit), 1_200, 2);
+        String promptEvidence = WritingEvidenceContextFormatter.format(List.of(hit), 400, 4);
 
-        assertThat(context).contains(
-                "资料来源：高中数学全局共享资料",
-                "文档=shared-root-document",
-                "块=block-vector-area",
-                "向量面积公式可由叉积与正弦关系统一理解。",
-                "TEACHER_IMAGE: /api/teacher-assets/asset-1");
+        assertThat(promptEvidence)
+                .doesNotContain("page-asset")
+                .contains("figure-asset");
     }
 }

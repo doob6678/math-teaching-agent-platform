@@ -32,6 +32,9 @@ public class MultiAgentWritingWorkflowEntity {
     /** JSON metadata containing safe stage results and provider token usage. */
     private String metadataJson;
 
+    /** Monotonic optimistic-lock revision used by parallel Workers when merging snapshots. */
+    private Long revision;
+
     /** Workflow creation time. */
     private Instant createdAt;
 
@@ -134,6 +137,16 @@ public class MultiAgentWritingWorkflowEntity {
      */
     public void setMetadataJson(String metadataJson) {
         this.metadataJson = metadataJson;
+    }
+
+    /** Returns the optimistic-lock revision. */
+    public Long getRevision() {
+        return revision;
+    }
+
+    /** Sets the optimistic-lock revision. */
+    public void setRevision(Long revision) {
+        this.revision = revision;
     }
 
     /**

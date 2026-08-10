@@ -37,25 +37,6 @@ spring:
       # limits instead of Spring Boot's accidental 1 MB default before controller code runs.
       max-file-size: 256MB
       max-request-size: 256MB
-  ai:
-    model:
-      chat: openai
-      embedding: local-clip-vit-large-patch14-zh
-      image: none
-      audio:
-        speech: none
-        transcription: none
-      moderation: none
-    openai:
-      api-key: ${OPENAI_API_KEY:}
-      # The local deployment uses the aisz OpenAI-compatible relay.  Keep the environment override so a deployed
-      # operator can change it deliberately, but never fall back to the official endpoint with the relay key.
-      base-url: ${OPENAI_BASE_URL:https://api1.aisz.mom/v1}
-      chat:
-        options:
-          # Keep text and image explanations on the same operator-selected multimodal model; the value is sourced
-          # from the same environment file as the endpoint so a relay key is never sent to api.openai.com by mistake.
-          model: ${OPENAI_CHAT_MODEL:gpt-5.6-luna}
 sa-token:
   # Browser sessions use the backend cookie; frontend JavaScript must not persist or resend the raw token.
   is-read-header: false
@@ -94,51 +75,32 @@ math-agent:
     # Prices belong to the deployment because the OpenAI-compatible relay does not expose a reliable bill in every reply.
     # Blank keeps token ceilings active and marks monetary estimates unknown instead of fabricating a price.
     pricing-json: ${MATH_AGENT_AI_PRICES_JSON:}
-    # A streamed student answer must begin promptly; this is per provider attempt, not an unbounded request lifetime.
-    chat:
-      request-timeout-ms: 30000
-      max-output-tokens: 1200
-      # One shared provider semaphore covers synchronous and streaming model calls so concurrent requests cannot
-      # exceed the operator's GPU/provider budget. The value is deployment configuration, not a per-request pool.
-      max-concurrency: ${MATH_AGENT_AI_CHAT_MAX_CONCURRENCY:4}
-      # Retry only provider statuses received before the first stream delta, so a retry cannot duplicate tool work.
-      stream-max-attempts: 3
-      retry-base-delay-ms: 400
     dashscope:
       name: dashscope
-      base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
-      api-key: ${DASHSCOPE_API_KEY:}
+      enabled: ${MATH_AGENT_PROVIDER_DASHSCOPE_ENABLED:false}
       chat-model: qwen3.6-flash
     openai:
       name: openai
-      # This provider is used by the ReAct student explanation and teaching workflows.  It must match the Spring AI
-      # endpoint above; otherwise one UI path works while the other silently targets a different provider.
-      base-url: ${OPENAI_BASE_URL:https://api1.aisz.mom/v1}
-      api-key: ${OPENAI_API_KEY:}
+      enabled: ${MATH_AGENT_PROVIDER_OPENAI_ENABLED:false}
+      # The signed route must match the model configured in ai-worker; this metadata is not a credential.
       chat-model: ${OPENAI_CHAT_MODEL:gpt-5.6-luna}
     deepseek:
       name: deepseek
-      base-url: https://api.deepseek.com
-      api-key: ${DEEPSEEK_API_KEY:}
+      enabled: ${MATH_AGENT_PROVIDER_DEEPSEEK_ENABLED:false}
       chat-model: deepseek-v4-flash
     ark:
       name: ark
-      # Volcengine Ark OpenAI-compatible online inference uses /api/v3.
-      # Official guide: https://www.volcengine.com/docs/82379/1330626
-      # Do not use /api/coding/v3 here; that endpoint is for Coding Plan APIs and uses different routing.
-      base-url: https://ark.cn-beijing.volces.com/api/v3
-      api-key: ${ARK_API_KEY:}
-      # This must be an Ark model ID/endpoint accepted by /api/v3/chat/completions.
+      enabled: ${MATH_AGENT_PROVIDER_ARK_ENABLED:false}
       chat-model: doubao-seed-2-0-lite-260428
   teaching:
     lecture-task:
       # The lease is longer than the configured provider timeout and is renewed while the task is active.
       lease-seconds: ${MATH_AGENT_TEACHING_LECTURE_TASK_LEASE_SECONDS:900}
       heartbeat-milliseconds: ${MATH_AGENT_TEACHING_LECTURE_TASK_HEARTBEAT_MILLISECONDS:15000}
-    ai-draft:
-      max-retries: 1
-    # Teacher-side source transcription is independent from student uploads. Student images go directly to ReAct;
-    # Luna is the current default and can still be explicitly overridden through this property.
+    # The retrieval barrier must expire before the lecture-worker lease so a stalled vector/model call is retried
+    # through the durable task path rather than retaining a RUNNING snapshot indefinitely.
+    evidence-timeout-ms: ${MATH_AGENT_TEACHING_EVIDENCE_TIMEOUT_MS:240000}
+    # Teacher-side source transcription is independent from student uploads. Student images go directly to the Python runtime.
     image-transcription:
       openai-model: gpt-5.6-luna
       timeout-ms: 12000
@@ -148,10 +110,21 @@ math-agent:
       max-provider-attempts: 2
       conversation-context-max-chars: 100000
       conversation-history-fetch-limit: 200
+      # The deterministic context graph preserves a compact summary and the newest useful turns before model calls.
+      context-max-input-tokens: ${MATH_AGENT_STUDENT_CONTEXT_MAX_INPUT_TOKENS:8000}
+      context-reserved-output-tokens: ${MATH_AGENT_STUDENT_CONTEXT_RESERVED_OUTPUT_TOKENS:1500}
+      context-summary-trigger-tokens: ${MATH_AGENT_STUDENT_CONTEXT_SUMMARY_TRIGGER_TOKENS:4000}
+      # Cross-conversation learner profiling is intentionally outside the normal conversation context path.
+      long-term-memory-enabled: false
       long-term-memory-top-k: 5
       long-term-memory-max-chars: 12000
       # A semantic graph match must clear this cosine boundary; lower scores remain lexical-only and are observable in logs.
       knowledge-graph-semantic-min-score: 0.45
+    memory:
+      # Shadow BGE scores before enabling semantic reuse; lexical behavior remains the default until evaluation passes.
+      semantic-reuse-enabled: ${MATH_AGENT_STUDENT_MEMORY_SEMANTIC_REUSE_ENABLED:false}
+      semantic-reuse-shadow: ${MATH_AGENT_STUDENT_MEMORY_SEMANTIC_REUSE_SHADOW:true}
+      semantic-reuse-threshold: ${MATH_AGENT_STUDENT_MEMORY_SEMANTIC_REUSE_THRESHOLD:0.78}
   database:
     enabled: true
     migration:
@@ -192,7 +165,10 @@ math-agent:
       enabled: true
       key-prefix: math-agent:retrieval:textbook-search
       ttl: 10m
-      null-value-ttl: 1m
+    student-explanation-context-cache:
+      enabled: ${MATH_AGENT_STUDENT_EXPLANATION_CONTEXT_CACHE_ENABLED:true}
+      key-prefix: math-agent:student:conversation-context:v1
+      ttl: 30m
   vector-index:
     # Local WSL Milvus is authenticated as well; the root credential is supplied only through the environment.
     enabled: true
@@ -341,6 +317,13 @@ math-agent:
     asset-max-bytes: 4194304
     dispatch:
       enabled: true
+    outbox:
+      fixed-delay-ms: ${MATH_AGENT_AGENT_WORKER_OUTBOX_FIXED_DELAY_MS:1000}
+      batch-size: ${MATH_AGENT_AGENT_WORKER_OUTBOX_BATCH_SIZE:100}
+      publish-lease-seconds: ${MATH_AGENT_AGENT_WORKER_OUTBOX_PUBLISH_LEASE_SECONDS:30}
+      reconciliation-grace-seconds: ${MATH_AGENT_AGENT_WORKER_OUTBOX_RECONCILIATION_GRACE_SECONDS:30}
+      reconciliation-limit: ${MATH_AGENT_AGENT_WORKER_OUTBOX_RECONCILIATION_LIMIT:100}
+      publisher-id: ${MATH_AGENT_AGENT_WORKER_OUTBOX_PUBLISHER_ID:agent-worker-outbox}
     runtime:
       enabled: true
       worker-id: compose-agent-worker
@@ -372,16 +355,6 @@ math-agent:
     timeout-ms: ${MATH_AGENT_PYTHON_HANDOUT_TIMEOUT_MS:900000}
     connect-timeout-ms: ${MATH_AGENT_PYTHON_HANDOUT_CONNECT_TIMEOUT_MS:5000}
     lease-safety-margin-ms: ${MATH_AGENT_PYTHON_HANDOUT_LEASE_SAFETY_MARGIN_MS:15000}
-  legacy-java-ai:
-    # Java may keep task/publication infrastructure, but direct provider calls are retired. Enabling this requires
-    # an operator's explicit rollback decision together with disabling the Python handout route; it is never fallback.
-    enabled: ${MATH_AGENT_LEGACY_JAVA_AI_ENABLED:false}
-  python-teaching-draft:
-    # The teaching-task AI stage is migrated independently from the larger handout graph. Disable this flag to
-    # resume an existing task through the legacy Java provider without changing the business task or PDF contract.
-    enabled: ${MATH_AGENT_PYTHON_TEACHING_DRAFT_ENABLED:false}
-    timeout-ms: ${MATH_AGENT_PYTHON_TEACHING_DRAFT_TIMEOUT_MS:420000}
-    connect-timeout-ms: ${MATH_AGENT_PYTHON_TEACHING_DRAFT_CONNECT_TIMEOUT_MS:5000}
   knowledge:
     graph-spine:
       seed-enabled: true

@@ -133,6 +133,25 @@ class DownloadFeishuUrlTest(unittest.TestCase):
         self.assertIn("/docs_ai/v1/documents/doc-token/fetch", calls[0][1])
         self.assertEqual(calls[0][2]["format"], "xml")
 
+    def test_folder_metadata_falls_back_to_drive_files_for_bot_scope(self):
+        client = download_feishu_url.FeishuClient.__new__(download_feishu_url.FeishuClient)
+        calls = []
+
+        def api_json(_self, method, url, *, params=None, json_body=None):
+            calls.append((method, url, params))
+            if "/drive/explorer/v2/folder/" in url:
+                raise RuntimeError("Feishu HTTP 400: required drive:drive.metadata:readonly")
+            self.assertIn("/drive/v1/files", url)
+            self.assertEqual(params["folder_token"], "folder-token")
+            return {"files": [{"type": "folder", "token": "child-token"}]}
+
+        client.api_json = MethodType(api_json, client)
+        metadata = client.get_folder_meta("folder-token")
+
+        self.assertEqual(metadata["name"], "folder-token")
+        self.assertTrue(metadata["metadata_fallback"])
+        self.assertEqual(len(calls), 2)
+
     def test_docs_ai_xml_is_normalized_into_parser_lines_without_dropping_images(self):
         normalized = download_feishu_url.normalize_feishu_document_markup(
             '<h2>涂色问题</h2><p>如图：</p><img href="https://stream.test/map.jpg"/>\n'

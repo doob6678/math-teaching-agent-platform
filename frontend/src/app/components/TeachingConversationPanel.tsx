@@ -34,7 +34,7 @@ export type TeachingConversationThreadItem =
       progress?: StudentExplanationStreamProgress;
       /** Text delta received from the live model stream. */
       liveContent?: string;
-      /** Provider-sent reasoning delta, rendered in a collapsible panel. */
+      /** Compatibility-only provider reasoning field. Raw reasoning is intentionally never rendered to the learner. */
       liveThinking?: string;
     };
 
@@ -344,9 +344,10 @@ export function TeachingConversationPanel({
 function LiveAssistantResponse({ entry }: { entry: Extract<TeachingConversationThreadItem, { role: "assistant" }> }) {
   const progress = entry.progress;
   const stages = visibleWorkflowStages(progress?.workflowStages ?? []);
-  const cards = progress?.cards ?? [];
+  const sources = progress?.sources ?? [];
   const image = progress?.imageUnderstanding;
   const [liveElapsedMs, setLiveElapsedMs] = useState(() => liveElapsedSince(entry.createdAt, progress?.totalElapsedMs));
+  const liveAnswer = useCharacterRenderedText(liveTextForDisplay(entry.liveContent ?? "", sources));
 
   useEffect(() => {
     if (entry.response || entry.error) return;
@@ -387,19 +388,46 @@ function LiveAssistantResponse({ entry }: { entry: Extract<TeachingConversationT
           </details>
         ) : null}
       </section>
-      {entry.liveContent?.trim() ? (
-        <section className="teaching-response-card agent teaching-streaming-answer" aria-label="正在生成的讲解">
+      {sources.length ? (
+        <section className="teaching-live-sources" aria-label="已找到的资料">
+          <div className="teaching-live-sources-head">
+            <strong>已找到的资料</strong>
+            <span>{sources.length} 条</span>
+          </div>
+          <EvidenceSourceList sources={sources} />
+        </section>
+      ) : null}
+      {liveAnswer ? (
+        <section className="teaching-response-card agent teaching-live-answer" aria-label="讲解内容">
           <div className="teaching-rich-block">
-            <RichText text={liveTextForDisplay(entry.liveContent)} />
-            <span className="teaching-streaming-cursor" aria-hidden="true" />
+            <RichText text={liveAnswer} />
           </div>
         </section>
       ) : null}
-      {visibleExplanationCards(cards).map((card, index) => (
-        <ExplanationCard key={`live:${card.cardKey}:${index}`} card={card} />
-      ))}
     </>
   );
+}
+
+/** Adds each received character to the same answer card so network-sized SSE frames never appear all at once. */
+function useCharacterRenderedText(source: string) {
+  // The initial source is rendered for server/static output only. During an actual conversation the pending card
+  // starts empty, then every later SSE update enters through the character queue below.
+  const [rendered, setRendered] = useState(source);
+
+  useEffect(() => {
+    setRendered((current) => source.startsWith(current) ? current : "");
+  }, [source]);
+
+  useEffect(() => {
+    if (!source || rendered.length >= source.length || !source.startsWith(rendered)) return;
+    const timer = globalThis.setTimeout(
+      () => setRendered(source.slice(0, rendered.length + 1)),
+      CHARACTER_RENDER_INTERVAL_MS,
+    );
+    return () => globalThis.clearTimeout(timer);
+  }, [rendered, source]);
+
+  return rendered;
 }
 
 function AssistantResponse({ response }: { response: StudentExplanationResponse }) {
@@ -411,7 +439,7 @@ function AssistantResponse({ response }: { response: StudentExplanationResponse 
     <div className="teaching-answer-layout">
       <div className="teaching-answer-content">
         {cards.length ? cards.map((card, index) => (
-          <ExplanationCard key={`${response.explanationId}:${card.cardKey}:${index}`} card={card} />
+          <ExplanationCard key={`${response.explanationId}:${card.cardKey}:${index}`} card={card} sources={sources} />
         )) : (
           <section className="teaching-response-card primary core">
             <div className="teaching-response-head">
@@ -447,7 +475,7 @@ function EvidenceInspector({
   const unassignedSources = sources.filter((source) => !assignedSourceTypes.has(source.sourceType));
   return (
     <aside className="teaching-evidence-inspector" aria-label="本轮检索与执行记录">
-      <details>
+      <details className="ai-run-disclosure teaching-evidence-disclosure">
         <summary>
           <span>执行与证据</span>
           <span className="teaching-evidence-summary">{stages.length ? `${stages.length} 个实际步骤` : sourceSummary}</span>
@@ -503,7 +531,7 @@ function WorkflowStageEvidence({
   const stageContent = <WorkflowStageSummary stage={stage} index={index} />;
   if (sources === null) return stageContent;
   return (
-    <details className={`teaching-retrieval-stage ${stageTone(stage.status)}`} data-retrieval-stage={stage.stageKey}>
+    <details className={`ai-run-disclosure teaching-retrieval-stage ${stageTone(stage.status)}`} data-retrieval-stage={stage.stageKey}>
       <summary>{stageContent}</summary>
       <div className="teaching-retrieval-evidence">
         {sources.length ? <EvidenceSourceList sources={sources} /> : (
@@ -536,6 +564,12 @@ function EvidenceSourceList({ sources }: { sources: StudentExplanationResponse["
           <strong>{safeUserFacingText(source.title, "命中资料")}</strong>
           <span>{source.score.toFixed(2)}</span>
           <p>{compactText(source.snippet, 72)}</p>
+          {source.sourcePath?.trim() ? (
+            <div className="teaching-source-path" title={source.sourcePath}>
+              <span>资料路径</span>
+              <code>{safeUserFacingText(source.sourcePath, "")}</code>
+            </div>
+          ) : null}
           {isSafeSourceUrl(source.openUrl) ? (
             <a className="teaching-source-open-link" href={source.openUrl} target="_blank" rel="noreferrer">
               <span>查看原文</span>
@@ -610,12 +644,18 @@ export function visibleWorkflowStages(stages: StudentExplanationStage[]) {
 }
 
 /** Renders one backend-produced section without inferring a template role from its title or position. */
-function ExplanationCard({ card }: { card: StudentExplanationResponse["cards"][number] }) {
+function ExplanationCard({
+  card,
+  sources,
+}: {
+  card: StudentExplanationResponse["cards"][number];
+  sources: StudentExplanationResponse["sources"];
+}) {
   // An absent title is intentional for a continuous agent answer; the UI must not inject a template heading.
-  const safeTitle = safeUserFacingText(card.title, "");
-  const safeSummary = safeUserFacingText(card.summary, "");
+  const safeTitle = safeUserFacingText(replaceVisibleSourceReferences(card.title, sources), "");
+  const safeSummary = safeUserFacingText(replaceVisibleSourceReferences(card.summary, sources), "");
   const safeItems = (card.items ?? [])
-    .map((item) => safeUserFacingText(item, ""))
+    .map((item) => safeUserFacingText(replaceVisibleSourceReferences(item, sources), ""))
     .filter((item) => item.trim().length > 0);
   return (
     <section className="teaching-response-card agent">
@@ -640,15 +680,19 @@ function RichText({ text }: { text: string }) {
           <span className="teaching-rich-line" key={`line-${lineIndex}`}>
             {splitMathText(line).map((segment) => {
               if (!segment.math) return <span key={segment.key}>{segment.text}</span>;
-              const expression = normalizeLatex(segment.text);
-              if (hasUnbalancedBraces(expression)) return null;
-              const html = katex.renderToString(expression, {
-                displayMode: segment.display,
-                throwOnError: false,
-                strict: false,
-                trust: false,
-              });
-              return <span className={`math-render ${segment.display ? "display" : "inline"}`} dangerouslySetInnerHTML={{ __html: html }} key={segment.key} />;
+              const expression = segment.text;
+              if (hasUnbalancedBraces(expression)) return <span key={segment.key}>{segment.raw}</span>;
+              try {
+                const html = katex.renderToString(expression, {
+                  displayMode: segment.display,
+                  throwOnError: true,
+                  strict: false,
+                  trust: false,
+                });
+                return <span className={`math-render ${segment.display ? "display" : "inline"}`} dangerouslySetInnerHTML={{ __html: html }} key={segment.key} />;
+              } catch {
+                return <span key={segment.key}>{segment.raw}</span>;
+              }
             })}
           </span>
         ))}
@@ -657,32 +701,27 @@ function RichText({ text }: { text: string }) {
 }
 
 function splitMathText(text: string) {
-  const segments: Array<{ key: string; text: string; math: boolean; display: boolean }> = [];
+  const segments: Array<{ key: string; text: string; raw: string; math: boolean; display: boolean }> = [];
   let index = 0;
   let key = 0;
-  const pattern = /(\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\$[^$]+?\$|\\\([^)]+?\\\)|[A-Za-z0-9|()[\]{}_^+\-=<>.,\s]*\\(?:frac|sqrt|cdot|times|div|leq?|geq?|neq|pm|mp|sin|cos|tan|theta|alpha|beta|gamma|Delta|pi|angle|overline|vec|left|right|infty|circ)[A-Za-z0-9|()[\]{}_^+\-=<>.,\\\s]*|[A-Za-z0-9][A-Za-z0-9(){}_^+\-*/\\\s]*[\/^][A-Za-z0-9(){}_^+\-*/\\\s]*=[A-Za-z0-9(){}_^+\-*/\\\s]+)/g;
+  const pattern = /(\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\$[^$\n]+?\$|\\\([\s\S]+?\\\))/g;
   for (const match of text.matchAll(pattern)) {
     const start = match.index ?? 0;
-    if (start > index) segments.push({ key: `text-${key++}`, text: text.slice(index, start), math: false, display: false });
+    if (start > index) {
+      const plainText = text.slice(index, start);
+      segments.push({ key: `text-${key++}`, text: plainText, raw: plainText, math: false, display: false });
+    }
     const raw = match[0];
     const display = raw.startsWith("$$") || raw.startsWith("\\[");
     const expression = raw.replace(/^\$\$|\$\$$/g, "").replace(/^\\\[|\\\]$/g, "").replace(/^\$|\$$/g, "").replace(/^\\\(|\\\)$/g, "").trim();
-    if (expression) segments.push({ key: `math-${key++}`, text: expression, math: true, display });
+    if (expression) segments.push({ key: `math-${key++}`, text: expression, raw, math: true, display });
     index = start + raw.length;
   }
-  if (index < text.length) segments.push({ key: `text-${key++}`, text: text.slice(index), math: false, display: false });
-  return segments.length ? segments : [{ key: "text-0", text, math: false, display: false }];
-}
-
-function normalizeLatex(value: string) {
-  return normalizeAsciiFractions(value.replace(/\\\\(?=[A-Za-z])/g, "\\"));
-}
-
-function normalizeAsciiFractions(value: string) {
-  return value.replace(
-    /([A-Za-z](?:\^\{?\d+\}?)?|\d+(?:\.\d+)?)\s*\/\s*([A-Za-z](?:\^\{?\d+\}?)?|\d+(?:\.\d+)?)/g,
-    "\\frac{$1}{$2}",
-  );
+  if (index < text.length) {
+    const plainText = text.slice(index);
+    segments.push({ key: `text-${key++}`, text: plainText, raw: plainText, math: false, display: false });
+  }
+  return segments.length ? segments : [{ key: "text-0", text, raw: text, math: false, display: false }];
 }
 
 function hasUnbalancedBraces(value: string) {
@@ -711,12 +750,12 @@ export function stageTitleText(_stageKey: string, title: string) {
  * During streaming, expose only explanation fields already present in the partial object and never print braces,
  * property names, or escaped JSON to the page. Once a complete card arrives, the normal card renderer takes over.
  */
-function liveTextForDisplay(raw: string) {
+function liveTextForDisplay(raw: string, sources: StudentExplanationResponse["sources"] = []) {
   const value = (raw || "").trim();
-  if (!value) return "正在整理讲解内容…";
+  if (!value) return "";
   // Some compatible providers stream ordinary Markdown instead of the structured card envelope.
   // Preserve that real text verbatim so the learner sees useful progress immediately.
-  if (!/^[\[{]/.test(value)) return value;
+  if (!/^[\[{]/.test(value)) return replaceVisibleSourceReferences(value, sources);
   const fields: string[] = [];
   const fieldPattern = /"(?:conversationTitle|title|summary|item|items)"\s*:\s*(?:"((?:\\.|[^"\\])*)"|\[([^\]]*)\])/g;
   for (const match of value.matchAll(fieldPattern)) {
@@ -738,7 +777,7 @@ function liveTextForDisplay(raw: string) {
       }
     }
   }
-  if (fields.length) return [...new Set(fields)].join("\n");
+  if (fields.length) return replaceVisibleSourceReferences([...new Set(fields)].join("\n"), sources);
   // A JSON chunk commonly ends in the middle of a summary string. Showing the completed prefix is safe and useful;
   // the parser still owns the final card and no transport punctuation is exposed.
   const partialFieldPattern = /"(?:conversationTitle|title|summary|item|items)"\s*:\s*"((?:\\.|[^"\\])*)/g;
@@ -747,7 +786,24 @@ function liveTextForDisplay(raw: string) {
     const candidate = match[1].replace(/\\n/g, "\n").replace(/\\"/g, '"').trim();
     if (candidate) partialFields.push(candidate);
   }
-  return partialFields.length ? [...new Set(partialFields)].join("\n") : "正在整理讲解内容…";
+  return partialFields.length
+    ? replaceVisibleSourceReferences([...new Set(partialFields)].join("\n"), sources)
+    : "";
+}
+
+/** Replaces opaque backend citation URIs with the real source title before rich-text parsing. */
+function replaceVisibleSourceReferences(
+  value: string | undefined,
+  sources: StudentExplanationResponse["sources"],
+) {
+  let result = value ?? "";
+  const orderedSources = [...sources]
+    .filter((source) => source.sourceUri && source.title)
+    .sort((left, right) => right.sourceUri.length - left.sourceUri.length);
+  for (const source of orderedSources) {
+    result = result.split(source.sourceUri).join(`《${safeUserFacingText(source.title, "相关资料")}》`);
+  }
+  return result;
 }
 
 export function stageDetailText(stage: StudentExplanationStage) {
@@ -776,6 +832,7 @@ function formatShortTime(value: string) {
 }
 
 const LIVE_ELAPSED_REFRESH_MS = 250;
+const CHARACTER_RENDER_INTERVAL_MS = 12;
 
 function liveElapsedSince(createdAt: string, backendElapsedMs?: number) {
   const createdAtMs = Date.parse(createdAt);

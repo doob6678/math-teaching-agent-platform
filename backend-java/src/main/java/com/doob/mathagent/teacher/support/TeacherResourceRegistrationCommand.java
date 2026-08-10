@@ -100,7 +100,9 @@ public record TeacherResourceRegistrationCommand(
                         normalizedLocalPath),
                 normalizedOriginalUrl,
                 normalizedLocalPath,
-                textOrDefault(permissionScope, "TEACHER_PRIVATE"),
+                // Teacher uploads are tenant-shared by default so students can read them immediately; an explicit
+                // TEACHER_PRIVATE choice still remains available for owner-only material.
+                textOrDefault(permissionScope, "TENANT_PUBLIC"),
                 normalizeFeishuExportFormat(normalizedSourceType, feishuExportFormat),
                 normalizeParseMode(parseMode));
     }

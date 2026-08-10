@@ -3,6 +3,7 @@ package com.doob.mathagent.teacher.sync;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.doob.mathagent.teacher.sync.mapper.TeacherSourceSyncManifestMapper;
@@ -27,6 +28,27 @@ public class MyBatisTeacherSourceSyncManifestStore implements TeacherSourceSyncM
 
     public MyBatisTeacherSourceSyncManifestStore(TeacherSourceSyncManifestMapper mapper) {
         this.mapper = mapper;
+    }
+
+    /** Reads provider identity from the existing manifest without changing source data. */
+    @Override
+    public String providerItemId(String tenantId, String documentId, String sourcePath) {
+        String normalizedPath = sourcePath == null ? "" : sourcePath.replace('\\', '/').strip();
+        if (tenantId == null || tenantId.isBlank() || documentId == null || documentId.isBlank()
+                || normalizedPath.isBlank()) {
+            return "";
+        }
+        return mapper.selectPage(Page.of(1, 1), new LambdaQueryWrapper<TeacherSourceSyncManifestEntity>()
+                        .eq(TeacherSourceSyncManifestEntity::getTenantId, tenantId)
+                        .eq(TeacherSourceSyncManifestEntity::getDocumentId, documentId)
+                        .eq(TeacherSourceSyncManifestEntity::getLogicalPath, normalizedPath)
+                        .eq(TeacherSourceSyncManifestEntity::getItemType, "file")
+                        .orderByAsc(TeacherSourceSyncManifestEntity::getProviderItemId))
+                .getRecords().stream()
+                .map(TeacherSourceSyncManifestEntity::getProviderItemId)
+                .filter(value -> value != null && !value.isBlank())
+                .findFirst()
+                .orElse("");
     }
 
     @Override
@@ -155,10 +177,10 @@ public class MyBatisTeacherSourceSyncManifestStore implements TeacherSourceSyncM
     }
 
     private TeacherSourceSyncManifestEntity find(String rootId, String providerId) {
-        return mapper.selectOne(new LambdaQueryWrapper<TeacherSourceSyncManifestEntity>()
+        return mapper.selectPage(Page.of(1, 1), new LambdaQueryWrapper<TeacherSourceSyncManifestEntity>()
                 .eq(TeacherSourceSyncManifestEntity::getSyncRootId, rootId)
-                .eq(TeacherSourceSyncManifestEntity::getProviderItemId, providerId)
-                .last("LIMIT 1"));
+                .eq(TeacherSourceSyncManifestEntity::getProviderItemId, providerId))
+                .getRecords().stream().findFirst().orElse(null);
     }
 
     private static List<String> ids(String json) {

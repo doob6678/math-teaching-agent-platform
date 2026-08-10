@@ -1,4 +1,4 @@
-import { FormEvent, useState } from "react";
+import { FormEvent } from "react";
 import katex from "katex";
 import {
   AlertCircle,
@@ -34,7 +34,6 @@ const CONTROLLED_STAGE_CODES = [
 ];
 const LEGACY_STAGE_CODES = ["draft", "review", "format"];
 type ArtifactFormat = "markdown" | "latex" | "pdf" | "pdf-teacher" | "pdf-student" | "pdf-lecture" | "zip";
-type ArtifactLayout = { headerText: string; footerText: string };
 
 export function MultiAgentWritingPanel({
   workflow,
@@ -88,16 +87,13 @@ export function MultiAgentWritingPanel({
   onResume?: () => void;
   onRefresh: () => void;
   onLoadArtifact?: () => void;
-  onPreviewPdf?: (layout: ArtifactLayout) => void;
-  onExportArtifact?: (format: ArtifactFormat, layout: ArtifactLayout) => void;
+  onPreviewPdf?: () => void;
+  onExportArtifact?: (format: ArtifactFormat) => void;
 }) {
-  const [headerText, setHeaderText] = useState("高中数学精品讲义");
-  const [footerText, setFooterText] = useState("教师备课与课堂教学");
-  // Header/footer are export-time metadata. Keeping them out of the generation request avoids prompt leakage and
-  // lets a teacher rebrand an already reviewed handout without another paid model call.
-  const layout = { headerText, footerText };
-  const previewPdf = () => onPreviewPdf(layout);
-  const exportArtifact = (format: ArtifactFormat) => onExportArtifact(format, layout);
+  // Publication metadata is fixed at task creation and part of the audited artifact. Sending compatibility
+  // header/footer values at export time makes Java correctly reject the mutation, which would look like a broken UI.
+  const previewPdf = () => onPreviewPdf();
+  const exportArtifact = (format: ArtifactFormat) => onExportArtifact(format);
   const stageCodes = workflow?.stages.some((stage) => CONTROLLED_STAGE_CODES.includes(stage.stageCode))
     ? CONTROLLED_STAGE_CODES
     : LEGACY_STAGE_CODES;
@@ -147,14 +143,6 @@ export function MultiAgentWritingPanel({
             onChange={(event) => onQuestionTextChange(event.target.value)}
             placeholder="可填写题目、班级水平、风格或模板偏好；不填也能生成"
           />
-        </label>
-        <label>
-          <span>PDF 页眉</span>
-          <input className="form-input" value={headerText} maxLength={60} onChange={(event) => setHeaderText(event.target.value)} />
-        </label>
-        <label>
-          <span>PDF 页脚</span>
-          <input className="form-input" value={footerText} maxLength={60} onChange={(event) => setFooterText(event.target.value)} />
         </label>
         <button className="btn btn-primary" type="submit" disabled={starting || !modelReady}>
           {starting ? <Loader2 className="spin" size={17} /> : <ShieldCheck size={17} />}
@@ -393,7 +381,7 @@ export function MultiAgentWritingPanel({
       ) : null}
 
       {completed ? (
-        <details className="workflow-process-details">
+        <details className="workflow-process-details ai-run-disclosure">
           <summary>查看流程明细、模型切换和官方用量</summary>
           {workflowStatusPanel}
         </details>
@@ -447,7 +435,7 @@ export function MultiAgentWritingPanel({
       </div>
 
       {artifact?.stages?.length ? (
-        <details className="review-details trace-review">
+        <details className="review-details trace-review ai-run-disclosure">
           <summary>分阶段成果 {artifact.stages.length} 段</summary>
           <div className="agent-trace-list compact">
             {artifact.stages.map((stage) => (
@@ -467,7 +455,7 @@ export function MultiAgentWritingPanel({
       ) : null}
 
       {traces ? (
-        <details className="review-details trace-review">
+        <details className="review-details trace-review ai-run-disclosure">
           <summary>执行追踪 {traces.stages.length} 条</summary>
           <div className="agent-trace-list compact">
             {traces.stages.map((trace) => (

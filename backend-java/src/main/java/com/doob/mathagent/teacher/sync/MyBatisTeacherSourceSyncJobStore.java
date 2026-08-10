@@ -1,6 +1,7 @@
 package com.doob.mathagent.teacher.sync;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.doob.mathagent.teacher.entity.TeacherSourceSyncJobEntity;
 import com.doob.mathagent.teacher.mapper.TeacherSourceSyncJobMapper;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncJobResponse;
@@ -72,14 +73,15 @@ public class MyBatisTeacherSourceSyncJobStore implements TeacherSourceSyncJobSto
         if (sourceDocumentId == null) {
             return null;
         }
-        TeacherSourceSyncJobEntity entity = mapper.selectOne(new LambdaQueryWrapper<TeacherSourceSyncJobEntity>()
+        List<TeacherSourceSyncJobEntity> entities = mapper.selectPage(Page.of(1, 1), new LambdaQueryWrapper<TeacherSourceSyncJobEntity>()
                 .eq(TeacherSourceSyncJobEntity::getTenantId, tenantId)
                 .eq(TeacherSourceSyncJobEntity::getSourceDocumentId, sourceDocumentId)
                 // Authorization recovery is a durable pause, not a terminal failure.  Treat it as active so a
                 // scheduler tick or duplicate browser click cannot create a competing traversal from the root.
                 .in(TeacherSourceSyncJobEntity::getStatus, List.of("queued", "running", "paused", "AUTH_REQUIRED"))
-                .orderByDesc(TeacherSourceSyncJobEntity::getCreatedAt)
-                .last("LIMIT 1"));
+                .orderByDesc(TeacherSourceSyncJobEntity::getCreatedAt))
+                .getRecords();
+        TeacherSourceSyncJobEntity entity = entities.stream().findFirst().orElse(null);
         return entity == null ? null : toResponse(entity);
     }
 

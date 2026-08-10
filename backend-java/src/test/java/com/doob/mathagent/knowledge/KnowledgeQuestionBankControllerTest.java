@@ -25,9 +25,8 @@ class KnowledgeQuestionBankControllerTest {
     @Test
     void teacherCreatesPrivateKnowledgePointFromBackendSubject() {
         KnowledgeQuestionBankController controller = controller(
-                request -> new RequestSubject("school-a", "teacher", "teacher-1", "device-1"),
-                (token, action, path, requestHash, subject) -> true);
-        MockHttpServletRequest request = requestWithCapability("token-ok", "hash-create");
+                request -> new RequestSubject("school-a", "teacher", "teacher-1", "device-1"));
+        MockHttpServletRequest request = new MockHttpServletRequest();
         request.addHeader("X-Subject-Id", "teacher-spoofed");
 
         KnowledgePointResponse response = controller.createKnowledgePoint(new KnowledgePointCreateRequest(
@@ -47,9 +46,8 @@ class KnowledgeQuestionBankControllerTest {
     @Test
     void adminCreatesSharedQuestionLinkedToKnowledgePoint() {
         KnowledgeQuestionBankController controller = controller(
-                request -> new RequestSubject("school-a", "admin", "admin-1", "device-1"),
-                (token, action, path, requestHash, subject) -> true);
-        MockHttpServletRequest request = requestWithCapability("token-ok", "hash-create");
+                request -> new RequestSubject("school-a", "admin", "admin-1", "device-1"));
+        MockHttpServletRequest request = new MockHttpServletRequest();
         KnowledgePointResponse point = controller.createKnowledgePoint(new KnowledgePointCreateRequest(
                 "空间向量数量积",
                 "选择性必修/空间向量",
@@ -77,9 +75,8 @@ class KnowledgeQuestionBankControllerTest {
     @Test
     void replacesSeparatorOnlyImportedQuestionTitleForDisplay() {
         KnowledgeQuestionBankController controller = controller(
-                request -> new RequestSubject("school-a", "admin", "admin-1", "device-1"),
-                (token, action, path, requestHash, subject) -> true);
-        MockHttpServletRequest request = requestWithCapability("token-ok", "hash-noisy-title");
+                request -> new RequestSubject("school-a", "admin", "admin-1", "device-1"));
+        MockHttpServletRequest request = new MockHttpServletRequest();
 
         QuestionBankItemResponse question = controller.createQuestion(new QuestionBankItemCreateRequest(
                 "赵礼显数学 ************************************************",
@@ -93,52 +90,36 @@ class KnowledgeQuestionBankControllerTest {
     }
 
     @Test
-    void rejectsStudentCreateAndMissingCapabilityToken() {
+    void rejectsStudentCreateByBackendRole() {
         KnowledgeQuestionBankController studentController = controller(
-                request -> new RequestSubject("school-a", "student", "student-1", "device-1"),
-                (token, action, path, requestHash, subject) -> true);
+                request -> new RequestSubject("school-a", "student", "student-1", "device-1"));
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> studentController.createKnowledgePoint(
                         new KnowledgePointCreateRequest("函数定义域", "函数/基础", "TEACHER_PRIVATE", "manual"),
-                        requestWithCapability("token-ok", "hash-create")))
+                        new MockHttpServletRequest()))
                 .isInstanceOf(ResponseStatusException.class)
                 .hasMessageContaining("teacher or admin");
 
-        KnowledgeQuestionBankController protectedController = controller(
-                request -> new RequestSubject("school-a", "teacher", "teacher-1", "device-1"),
-                (token, action, path, requestHash, subject) -> false);
-        org.assertj.core.api.Assertions.assertThatThrownBy(() -> protectedController.createQuestion(
-                        new QuestionBankItemCreateRequest(
-                                "函数定义域求解",
-                                "求函数定义域。",
-                                "{}",
-                                "easy",
-                                "TEACHER_PRIVATE",
-                                List.of()),
-                        requestWithCapability("bad-token", "hash-create")))
-                .isInstanceOf(ResponseStatusException.class)
-                .hasMessageContaining("Capability token");
     }
 
     @Test
-    void listsKnowledgeRelationsFromBackendSubjectWithoutCapabilityToken() {
+    void listsKnowledgeRelationsFromBackendSubject() {
         InMemoryKnowledgeQuestionBankStore store = new InMemoryKnowledgeQuestionBankStore();
         KnowledgeQuestionBankService service = new KnowledgeQuestionBankService(store);
         KnowledgeQuestionBankController controller = new KnowledgeQuestionBankController(
                 service,
                 importService(service, store),
-                request -> new RequestSubject("school-a", "teacher", "teacher-1", "device-1"),
-                (token, action, path, requestHash, subject) -> true);
+                request -> new RequestSubject("school-a", "teacher", "teacher-1", "device-1"));
         MockHttpServletRequest request = new MockHttpServletRequest();
         KnowledgePointResponse source = controller.createKnowledgePoint(new KnowledgePointCreateRequest(
                 "Space vector basis",
                 "space vector",
                 "TEACHER_PRIVATE",
-                "manual"), requestWithCapability("token-ok", "hash-create-source"));
+                "manual"), new MockHttpServletRequest());
         KnowledgePointResponse target = controller.createKnowledgePoint(new KnowledgePointCreateRequest(
                 "Vector angle",
                 "space vector",
                 "TEACHER_PRIVATE",
-                "manual"), requestWithCapability("token-ok", "hash-create-target"));
+                "manual"), new MockHttpServletRequest());
         store.saveKnowledgeRelation(new KnowledgeRelationRecord(
                 "rel-controller-visible",
                 "school-a",
@@ -159,15 +140,13 @@ class KnowledgeQuestionBankControllerTest {
      * Builds a controller with isolated in-memory storage.
      */
     private static KnowledgeQuestionBankController controller(
-            com.doob.mathagent.infrastructure.security.RequestSubjectResolver resolver,
-            com.doob.mathagent.knowledge.service.KnowledgeQuestionBankCapabilityVerifier verifier) {
+            com.doob.mathagent.infrastructure.security.RequestSubjectResolver resolver) {
         InMemoryKnowledgeQuestionBankStore store = new InMemoryKnowledgeQuestionBankStore();
         KnowledgeQuestionBankService service = new KnowledgeQuestionBankService(store);
         return new KnowledgeQuestionBankController(
                 service,
                 importService(service, store),
-                resolver,
-                verifier);
+                resolver);
     }
 
     private static TeacherBlockQuestionImportService importService(
@@ -180,13 +159,4 @@ class KnowledgeQuestionBankControllerTest {
                 store);
     }
 
-    /**
-     * Builds request headers for capability-protected writes.
-     */
-    private static MockHttpServletRequest requestWithCapability(String token, String requestHash) {
-        MockHttpServletRequest request = new MockHttpServletRequest();
-        request.addHeader("X-Capability-Token", token);
-        request.addHeader("X-Request-Hash", requestHash);
-        return request;
-    }
 }

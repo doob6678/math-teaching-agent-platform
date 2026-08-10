@@ -1,20 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createTextbookApiClient } from "./textbookApi";
 
 describe("textbookApi", () => {
-  const storage = new Map<string, string>();
 
-  beforeEach(() => {
-    storage.clear();
-    vi.stubGlobal("localStorage", {
-      getItem: (key: string) => storage.get(key) ?? null,
-      setItem: (key: string, value: string) => storage.set(key, value),
-      removeItem: (key: string) => storage.delete(key),
-      clear: () => storage.clear(),
-    });
-  });
-
-  it("logs in and stores backend issued token", async () => {
+  it("logs in while leaving the backend session in the HttpOnly cookie", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -22,8 +11,6 @@ describe("textbookApi", () => {
         username: "student",
         role: "student",
         tenantId: "default",
-        tokenName: "satoken",
-        tokenValue: "token-1",
       }),
     });
     const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
@@ -36,16 +23,19 @@ describe("textbookApi", () => {
         method: "POST",
         headers: expect.objectContaining({
           "Content-Type": "application/json",
-          "X-Device-Id": "local-browser-console",
         }),
         body: JSON.stringify({ username: "student", password: "student-123456" }),
       }),
     );
-    expect(response.tokenName).toBe("satoken");
-    expect(globalThis.localStorage.getItem("math-agent:auth-session")).toContain("token-1");
+    expect(response).toEqual({
+      userId: "local-student",
+      username: "student",
+      role: "student",
+      tenantId: "default",
+    });
   });
 
-  it("registers a student account and stores backend issued token", async () => {
+  it("registers a student account without persisting the backend session token", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -53,8 +43,6 @@ describe("textbookApi", () => {
         username: "new-student",
         role: "student",
         tenantId: "default",
-        tokenName: "satoken",
-        tokenValue: "token-new",
       }),
     });
     const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
@@ -62,7 +50,6 @@ describe("textbookApi", () => {
     const response = await client.register({
       username: "new-student",
       password: "student-123456",
-      tenantId: "default",
     });
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -71,27 +58,40 @@ describe("textbookApi", () => {
         method: "POST",
         headers: expect.objectContaining({
           "Content-Type": "application/json",
-          "X-Device-Id": "local-browser-console",
         }),
-        body: JSON.stringify({ username: "new-student", password: "student-123456", tenantId: "default" }),
+        body: JSON.stringify({ username: "new-student", password: "student-123456" }),
       }),
     );
     expect(response.role).toBe("student");
-    expect(globalThis.localStorage.getItem("math-agent:auth-session")).toContain("token-new");
+  });
+
+  it("provisions a teacher through the authenticated administrator session without sending tenant or identity fields", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        userId: "teacher-1",
+        username: "new-teacher",
+        role: "teacher",
+        tenantId: "default",
+      }),
+    });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const response = await client.provisionTeacher({ username: "new-teacher", password: "teacher-123456" });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8080/api/auth/teachers",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ username: "new-teacher", password: "teacher-123456" }),
+      }),
+    );
+    expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Id");
+    expect(response).toEqual({ userId: "teacher-1", username: "new-teacher", role: "teacher", tenantId: "default" });
+    expect(JSON.stringify(response)).not.toContain("password");
   });
 
   it("uses saved backend token instead of client supplied identity headers", async () => {
-    globalThis.localStorage.setItem(
-      "math-agent:auth-session",
-      JSON.stringify({
-        userId: "local-student",
-        username: "student",
-        role: "student",
-        tenantId: "default",
-        tokenName: "satoken",
-        tokenValue: "token-1",
-      }),
-    );
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ tenantId: "default", studentId: "local-student", knowledgeProgress: [] }),
@@ -104,8 +104,6 @@ describe("textbookApi", () => {
       "http://127.0.0.1:8080/api/students/dashboard",
       expect.objectContaining({
         headers: expect.objectContaining({
-          satoken: "token-1",
-          "X-Device-Id": "local-browser-console",
         }),
       }),
     );
@@ -113,17 +111,6 @@ describe("textbookApi", () => {
   });
 
   it("keeps the browser session when backend returns a non-authentication policy 403", async () => {
-    globalThis.localStorage.setItem(
-      "math-agent:auth-session",
-      JSON.stringify({
-        userId: "local-student",
-        username: "student",
-        role: "student",
-        tenantId: "default",
-        tokenName: "satoken",
-        tokenValue: "stale-token",
-      }),
-    );
     const dispatchEvent = vi.fn();
     vi.stubGlobal("dispatchEvent", dispatchEvent);
     const fetchMock = vi.fn().mockResolvedValue({
@@ -138,22 +125,10 @@ describe("textbookApi", () => {
 
     await expect(client.getStudentDashboard()).rejects.toThrow("Endpoint requires subject type");
 
-    expect(globalThis.localStorage.getItem("math-agent:auth-session")).toContain("stale-token");
     expect(dispatchEvent).not.toHaveBeenCalled();
   });
 
-  it("sends authenticated business mutations directly without legacy capability requests or headers", async () => {
-    globalThis.localStorage.setItem(
-      "math-agent:auth-session",
-      JSON.stringify({
-        userId: "teacher-1",
-        username: "teacher",
-        role: "teacher",
-        tenantId: "default",
-        tokenName: "satoken",
-        tokenValue: "teacher-token",
-      }),
-    );
+  it("sends authenticated business mutations directly with the backend session", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ taskId: "task-1", status: "queued" }),
@@ -169,10 +144,71 @@ describe("textbookApi", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0][0]).toBe("http://127.0.0.1:8080/api/teaching/tasks");
-    expect(fetchMock.mock.calls[0][0]).not.toContain("/api/security/capabilities");
-    expect(fetchMock.mock.calls[0][1]?.headers).toEqual(expect.objectContaining({ satoken: "teacher-token" }));
-    expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Capability-Token");
-    expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Request-Hash");
+  });
+
+  it("creates legacy handout writing as the same durable teaching task id", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        taskId: "task-compat-1",
+        clientRequestId: "writing-client-1",
+        tenantId: "school-a",
+        subjectType: "teacher",
+        subjectId: "teacher-1",
+        status: "CREATED",
+        nodes: [],
+        reactTrace: [],
+        evidence: [],
+        handoutLatex: "",
+        interactiveSuggestions: [],
+      }),
+    });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const workflow = await client.startAsyncMultiAgentWriting({
+      writingGoal: "生成三角函数讲义",
+      questionText: "正弦定理",
+      evidenceRefs: ["textbook:chapter-1"],
+      preferredProviderName: "openai",
+      preferredModelCode: "gpt-5.6-terra",
+    });
+
+    expect(fetchMock.mock.calls[0][0]).toBe("http://127.0.0.1:8080/api/teaching/tasks");
+    const submittedRequest = fetchMock.mock.calls[0][1];
+    expect(submittedRequest?.method).toBe("POST");
+    expect(JSON.parse(String(submittedRequest?.body)).clientRequestId).toMatch(/^writing-/);
+    expect(fetchMock.mock.calls[0][0]).not.toContain("/api/agents/writing/");
+    expect(workflow.workflowId).toBe("task-compat-1");
+  });
+
+  it("routes the synchronous legacy writing method through the teaching task too", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        taskId: "task-compat-sync-1",
+        clientRequestId: "writing-client-sync-1",
+        tenantId: "school-a",
+        subjectType: "teacher",
+        subjectId: "teacher-1",
+        status: "CREATED",
+        nodes: [],
+        reactTrace: [],
+        evidence: [],
+        handoutLatex: "",
+        interactiveSuggestions: [],
+      }),
+    });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+
+    const workflow = await client.runMultiAgentWriting({
+      writingGoal: "生成函数讲义",
+      questionText: "二次函数",
+      evidenceRefs: [],
+    });
+
+    expect(fetchMock.mock.calls[0][0]).toBe("http://127.0.0.1:8080/api/teaching/tasks");
+    expect(fetchMock.mock.calls[0][0]).not.toContain("/api/agents/writing");
+    expect(workflow.workflowId).toBe("task-compat-sync-1");
   });
 
   it("loads textbook summary from backend", async () => {
@@ -268,7 +304,6 @@ describe("textbookApi", () => {
       "http://127.0.0.1:8080/api/retrieval/audit/audit-query-1",
       expect.objectContaining({
         headers: expect.objectContaining({
-          "X-Device-Id": "local-browser-console",
         }),
       }),
     );
@@ -293,7 +328,6 @@ describe("textbookApi", () => {
       "http://127.0.0.1:8080/api/students/learning/path",
       expect.objectContaining({
         credentials: "include",
-        headers: expect.objectContaining({ "X-Device-Id": "local-browser-console" }),
       }),
     );
     expect(response.steps[0].relationToNext).toBe("PREREQUISITE_FOR");
@@ -324,48 +358,6 @@ describe("textbookApi", () => {
     expect(response.intentCode).toBe("LEARNING_PATH");
   });
 
-  it("loads capability audits without client supplied identity", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ([{
-        eventId: "event-1",
-        tenantId: "school-a",
-        subjectType: "student",
-        subjectId: "student-1",
-        action: "teaching:submit",
-        path: "/api/teaching/tasks",
-        requestHash: "hash-1",
-        idempotencyKey: "client-1",
-        tokenHash: "token-hash-1",
-        decision: "issued",
-        reason: "Capability token issued",
-      }]),
-    });
-    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
-
-    const audits = await client.listCapabilityAudits({
-      subjectType: "student",
-      subjectId: "student-1",
-      action: "teaching:submit",
-      decision: "issued",
-      limit: 25,
-    });
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:8080/api/security/capability-audits?subjectType=student&subjectId=student-1&action=teaching%3Asubmit&decision=issued&limit=25",
-      expect.objectContaining({
-        headers: expect.not.objectContaining({
-          "X-Subject-Type": expect.any(String),
-          "X-Subject-Id": expect.any(String),
-        }),
-      }),
-    );
-    expect(audits[0].tokenHash).toBe("token-hash-1");
-    expect(audits[0]).not.toHaveProperty("token");
-  });
-
-
-
   it("loads teaching task by task id for page resume", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
@@ -387,7 +379,6 @@ describe("textbookApi", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "http://127.0.0.1:8080/api/teaching/tasks/task-1",
       expect.objectContaining({
-        headers: expect.objectContaining({ "X-Device-Id": "local-browser-console" }),
       }),
     );
     expect(task.nodes[0].code).toBe("LEARNING_GOAL");
@@ -468,7 +459,6 @@ describe("textbookApi", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "http://127.0.0.1:8080/api/teaching/tasks/task-1/feedback",
       expect.objectContaining({
-        headers: expect.objectContaining({ "X-Device-Id": "local-browser-console" }),
       }),
     );
     expect(feedback).toHaveLength(1);
@@ -477,17 +467,6 @@ describe("textbookApi", () => {
 
 
   it("plans agent run with backend session identity and no client supplied user identity", async () => {
-    globalThis.localStorage.setItem(
-      "math-agent:auth-session",
-      JSON.stringify({
-        userId: "teacher-1",
-        username: "teacher",
-        role: "teacher",
-        tenantId: "school-a",
-        tokenName: "satoken",
-        tokenValue: "token-teacher",
-      }),
-    );
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -515,8 +494,6 @@ describe("textbookApi", () => {
         ],
         allowedDataScopes: ["TEACHER_PRIVATE"],
         deniedDataScopes: [],
-        capabilityRequired: true,
-        capabilityAction: "agent-run:CoursewareAgent",
         maxInputTokens: 12000,
         maxOutputTokens: 4000,
         estimatedTotalTokens: 4600,
@@ -557,15 +534,12 @@ describe("textbookApi", () => {
         method: "POST",
         headers: expect.objectContaining({
           "Content-Type": "application/json",
-          satoken: "token-teacher",
-          "X-Device-Id": "local-browser-console",
         }),
         body: JSON.stringify(request),
       }),
     );
     expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Id");
     expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Type");
-    expect(plan.capabilityRequired).toBe(true);
     expect(plan.allowedToolScopes).toContain("tool:courseware:generate");
     expect(plan.deniedToolScopes).toContain("tool:search:private");
     expect(plan.toolPolicyDecisions[1]).toMatchObject({
@@ -575,17 +549,6 @@ describe("textbookApi", () => {
   });
 
   it("loads agent model catalog from backend session without exposing identity headers", async () => {
-    globalThis.localStorage.setItem(
-      "math-agent:auth-session",
-      JSON.stringify({
-        userId: "teacher-1",
-        username: "teacher",
-        role: "teacher",
-        tenantId: "school-a",
-        tokenName: "satoken",
-        tokenValue: "token-teacher",
-      }),
-    );
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -613,8 +576,6 @@ describe("textbookApi", () => {
       "http://127.0.0.1:8080/api/agents/model-catalog",
       expect.objectContaining({
         headers: expect.objectContaining({
-          satoken: "token-teacher",
-          "X-Device-Id": "local-browser-console",
         }),
       }),
     );
@@ -625,17 +586,6 @@ describe("textbookApi", () => {
   });
 
   it("loads agent model health from backend session without exposing identity headers", async () => {
-    globalThis.localStorage.setItem(
-      "math-agent:auth-session",
-      JSON.stringify({
-        userId: "teacher-1",
-        username: "teacher",
-        role: "teacher",
-        tenantId: "school-a",
-        tokenName: "satoken",
-        tokenValue: "token-teacher",
-      }),
-    );
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -660,8 +610,6 @@ describe("textbookApi", () => {
       "http://127.0.0.1:8080/api/agents/model-health",
       expect.objectContaining({
         headers: expect.objectContaining({
-          satoken: "token-teacher",
-          "X-Device-Id": "local-browser-console",
         }),
       }),
     );
@@ -677,17 +625,6 @@ describe("textbookApi", () => {
 
 
   it("lists agent traces with backend session identity and no client supplied user identity", async () => {
-    globalThis.localStorage.setItem(
-      "math-agent:auth-session",
-      JSON.stringify({
-        userId: "teacher-1",
-        username: "teacher",
-        role: "teacher",
-        tenantId: "school-a",
-        tokenName: "satoken",
-        tokenValue: "token-teacher",
-      }),
-    );
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ([{
@@ -727,8 +664,6 @@ describe("textbookApi", () => {
       "http://127.0.0.1:8080/api/agents/traces?agentCode=CoursewareAgent&status=COMPLETED&planId=task-1&limit=20",
       expect.objectContaining({
         headers: expect.objectContaining({
-          satoken: "token-teacher",
-          "X-Device-Id": "local-browser-console",
         }),
       }),
     );
@@ -740,101 +675,129 @@ describe("textbookApi", () => {
   });
 
 
-  it("recovers multi-agent writing workflow and traces by workflow id", async () => {
-    globalThis.localStorage.setItem(
-      "math-agent:auth-session",
-      JSON.stringify({
-        userId: "teacher-1",
-        username: "teacher",
-        role: "teacher",
-        tenantId: "school-a",
-        tokenName: "satoken",
-        tokenValue: "token-teacher",
-      }),
-    );
+  it("projects legacy handout controls onto one teaching task without calling retired writing endpoints", async () => {
+    const teachingTask = {
+      taskId: "task-1",
+      clientRequestId: "writing-client-1",
+      tenantId: "school-a",
+      subjectType: "teacher",
+      subjectId: "teacher-1",
+      status: "COMPLETED",
+      nodes: [{ code: "teacher_writer", name: "教师版", status: "COMPLETED", summary: "teacher handout ready" }],
+      workflowEvents: [{
+        eventId: "event-1",
+        sourceType: "agent",
+        sourceName: "teacher_writer",
+        eventType: "teacher_writer",
+        status: "COMPLETED",
+        title: "教师版",
+        summary: "teacher handout ready",
+        artifactRefs: ["teacher"],
+      }],
+      reactTrace: [],
+      evidence: [],
+      handoutLatex: "\\\\section{Handout}",
+      teacherHandoutLatex: "\\\\section{Teacher}",
+      studentHandoutLatex: "\\\\section{Student}",
+      lectureHandoutLatex: "\\\\section{Lecture}",
+      interactiveSuggestions: [],
+      aiDraft: {
+        enabled: true,
+        providerName: "openai",
+        modelCode: "gpt-5.6-terra",
+        promptTokens: 10,
+        completionTokens: 5,
+        totalTokens: 15,
+        content: "# Handout",
+        message: "ready",
+        structured: true,
+        teacherExplanation: "teacher",
+        studentHint: "student",
+        knowledgePoints: [],
+        followUpQuestions: [],
+        parseError: "",
+        retryCount: 0,
+        maxRetries: 0,
+        recoveredAfterRetry: false,
+        recoveryEvents: [],
+      },
+    };
     const fetchMock = vi.fn()
       .mockResolvedValueOnce({
         ok: true,
-        json: async () => ({
-          workflowId: "workflow-1",
-          tenantId: "school-a",
-          subjectType: "teacher",
-          subjectId: "teacher-1",
-          status: "COMPLETED",
-          stages: [],
-          totalUsage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
-        }),
+        json: async () => teachingTask,
       })
       .mockResolvedValueOnce({
         ok: true,
-        json: async () => ({
-          workflowId: "workflow-1",
-          tenantId: "school-a",
-          subjectType: "teacher",
-          subjectId: "teacher-1",
-          stageCount: 1,
-          totalUsage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
-          stages: [{
-            traceId: "trace-1",
-            planId: "workflow-1:draft",
-            createdAt: "2026-06-30T00:00:00Z",
-            tenantId: "school-a",
-            subjectType: "teacher",
-            subjectId: "teacher-1",
-            agentCode: "CoursewareAgent",
-            providerName: "dashscope",
-            modelCode: "qwen3.6-flash",
-            status: "COMPLETED",
-            estimatedCost: 0,
-            allowedToolScopes: [],
-            allowedDataScopes: [],
-            evidenceRefs: [],
-            stageTimings: [],
-            actualUsage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
-            message: "safe trace",
-            diagnosticEvents: [],
-          }],
-        }),
+        json: async () => teachingTask,
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => teachingTask,
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => teachingTask,
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: new Headers(),
+        arrayBuffer: async () => new Uint8Array([37, 80, 68, 70]).buffer,
       });
     const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
 
-    const workflow = await client.getMultiAgentWritingWorkflow("workflow-1");
-    const traces = await client.getMultiAgentWritingTraces("workflow-1");
+    const workflow = await client.getMultiAgentWritingWorkflow("task-1");
+    const traces = await client.getMultiAgentWritingTraces("task-1");
+    const artifact = await client.getMultiAgentWritingArtifact("task-1");
+    const resumed = await client.resumeMultiAgentWriting("task-1", {
+      writingGoal: "生成讲义",
+      questionText: "题目",
+      evidenceRefs: [],
+    });
+    const exported = await client.exportMultiAgentWritingArtifact("task-1", "pdf");
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
-      "http://127.0.0.1:8080/api/agents/writing/workflow-1",
+      "http://127.0.0.1:8080/api/teaching/tasks/task-1",
       expect.objectContaining({
-        headers: expect.objectContaining({ satoken: "token-teacher" }),
       }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
-      "http://127.0.0.1:8080/api/agents/writing/workflow-1/traces",
+      "http://127.0.0.1:8080/api/teaching/tasks/task-1",
       expect.objectContaining({
-        headers: expect.objectContaining({ satoken: "token-teacher" }),
       }),
     );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "http://127.0.0.1:8080/api/teaching/tasks/task-1",
+      expect.objectContaining({}),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      "http://127.0.0.1:8080/api/teaching/tasks/task-1/resume",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      5,
+      "http://127.0.0.1:8080/api/teaching/tasks/task-1/handout/teacher/pdf",
+      expect.objectContaining({ credentials: "include" }),
+    );
+    expect(fetchMock.mock.calls.map(([url]) => url)).not.toContain(expect.stringContaining("/api/agents/writing/"));
     expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Id");
     expect(fetchMock.mock.calls[1][1]?.headers).not.toHaveProperty("X-Subject-Type");
     expect(workflow.status).toBe("COMPLETED");
-    expect(traces.stages[0].planId).toBe("workflow-1:draft");
+    expect(workflow.workflowId).toBe("task-1");
+    expect(traces.stages[0].planId).toBe("task-1:teacher_writer");
+    expect(artifact.stages).toHaveLength(3);
+    expect(resumed.workflowId).toBe("task-1");
+    expect(exported.sha256).toHaveLength(64);
+    expect(exported.base64Content).toBe("JVBERg==");
   });
 
 
 
   it("summarizes visible agent trace usage with backend session identity only", async () => {
-    globalThis.localStorage.setItem(
-      "math-agent:auth-session",
-      JSON.stringify({
-        userId: "teacher-1",
-        username: "teacher",
-        role: "teacher",
-        tenantId: "school-a",
-        tokenName: "satoken",
-        tokenValue: "token-teacher",
-      }),
-    );
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -873,8 +836,6 @@ describe("textbookApi", () => {
       "http://127.0.0.1:8080/api/agents/traces/usage-summary?agentCode=CoursewareAgent&status=COMPLETED&limit=20",
       expect.objectContaining({
         headers: expect.objectContaining({
-          satoken: "token-teacher",
-          "X-Device-Id": "local-browser-console",
         }),
       }),
     );
@@ -885,17 +846,6 @@ describe("textbookApi", () => {
   });
 
   it("summarizes visible agent trace diagnostics with backend session identity only", async () => {
-    globalThis.localStorage.setItem(
-      "math-agent:auth-session",
-      JSON.stringify({
-        userId: "teacher-1",
-        username: "teacher",
-        role: "teacher",
-        tenantId: "school-a",
-        tokenName: "satoken",
-        tokenValue: "token-teacher",
-      }),
-    );
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -939,8 +889,6 @@ describe("textbookApi", () => {
       "http://127.0.0.1:8080/api/agents/traces/diagnostic-summary?agentCode=CoursewareAgent&status=COMPLETED&limit=20",
       expect.objectContaining({
         headers: expect.objectContaining({
-          satoken: "token-teacher",
-          "X-Device-Id": "local-browser-console",
         }),
       }),
     );
@@ -972,7 +920,6 @@ describe("textbookApi", () => {
       "http://127.0.0.1:8080/api/mcp/keys",
       expect.objectContaining({
         headers: expect.objectContaining({
-          "X-Device-Id": "local-browser-console",
         }),
       }),
     );
@@ -1018,7 +965,6 @@ describe("textbookApi", () => {
       expect.objectContaining({
         method: "POST",
         headers: expect.objectContaining({
-          "X-Device-Id": "local-browser-console",
         }),
       }),
     );
@@ -1053,7 +999,6 @@ describe("textbookApi", () => {
       "http://127.0.0.1:8080/api/mcp/configuration/me",
       expect.objectContaining({
         headers: expect.objectContaining({
-          "X-Device-Id": "local-browser-console",
         }),
       }),
     );
@@ -1081,7 +1026,6 @@ describe("textbookApi", () => {
       expect.objectContaining({
         method: "POST",
         headers: expect.objectContaining({
-          "X-Device-Id": "local-browser-console",
         }),
       }),
     );
@@ -1089,17 +1033,6 @@ describe("textbookApi", () => {
   });
 
   it("tests standard MCP connection through initialize and tools/list without platform session headers", async () => {
-    globalThis.localStorage.setItem(
-      "math-agent:auth-session",
-      JSON.stringify({
-        userId: "teacher-1",
-        username: "teacher",
-        role: "teacher",
-        tenantId: "default",
-        tokenName: "satoken",
-        tokenValue: "token-teacher",
-      }),
-    );
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce({
@@ -1157,7 +1090,6 @@ describe("textbookApi", () => {
       expect.objectContaining({
         method: "POST",
         headers: expect.not.objectContaining({
-          satoken: "token-teacher",
           "X-Subject-Id": expect.any(String),
           "X-Subject-Type": expect.any(String),
         }),
@@ -1218,7 +1150,6 @@ describe("textbookApi", () => {
       "http://127.0.0.1:8080/api/students/dashboard",
       expect.objectContaining({
         headers: expect.objectContaining({
-          "X-Device-Id": "local-browser-console",
         }),
       }),
     );
@@ -1287,7 +1218,6 @@ describe("textbookApi", () => {
         method: "POST",
         headers: expect.objectContaining({
           "Content-Type": "application/json",
-          "X-Device-Id": "local-browser-console",
         }),
       }),
     );
@@ -1346,24 +1276,12 @@ describe("textbookApi", () => {
       2,
       "http://127.0.0.1:8080/api/students/learning/practice/practice-task-1",
       expect.objectContaining({
-        headers: expect.objectContaining({ "X-Device-Id": "local-browser-console" }),
       }),
     );
     expect(completed.studentHandoutLatex).toContain("专项练习");
   });
 
   it("loads student explanation history without client supplied identity headers", async () => {
-    globalThis.localStorage.setItem(
-      "math-agent:auth-session",
-      JSON.stringify({
-        userId: "local-student",
-        username: "student",
-        role: "student",
-        tenantId: "default",
-        tokenName: "satoken",
-        tokenValue: "token-student",
-      }),
-    );
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -1391,8 +1309,6 @@ describe("textbookApi", () => {
       "http://127.0.0.1:8080/api/students/explanations/history?conversationId=conversation-1&limit=5",
       expect.objectContaining({
         headers: expect.objectContaining({
-          satoken: "token-student",
-          "X-Device-Id": "local-browser-console",
         }),
       }),
     );
@@ -1403,17 +1319,6 @@ describe("textbookApi", () => {
   });
 
   it("uploads student explanation image as multipart without client supplied identity headers", async () => {
-    globalThis.localStorage.setItem(
-      "math-agent:auth-session",
-      JSON.stringify({
-        userId: "local-student",
-        username: "student",
-        role: "student",
-        tenantId: "default",
-        tokenName: "satoken",
-        tokenValue: "token-student",
-      }),
-    );
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -1435,8 +1340,6 @@ describe("textbookApi", () => {
       expect.objectContaining({
         method: "POST",
         headers: expect.objectContaining({
-          satoken: "token-student",
-          "X-Device-Id": "local-browser-console",
         }),
         body: expect.any(FormData),
       }),
@@ -1510,7 +1413,6 @@ describe("textbookApi", () => {
       "http://127.0.0.1:8080/api/knowledge/graph/spine",
       expect.objectContaining({
         headers: expect.objectContaining({
-          "X-Device-Id": "local-browser-console",
         }),
       }),
     );
@@ -1530,17 +1432,6 @@ describe("textbookApi", () => {
 
 
   it("loads teacher resource sync checkpoint without client supplied identity headers", async () => {
-    globalThis.localStorage.setItem(
-      "math-agent:auth-session",
-      JSON.stringify({
-        userId: "teacher-1",
-        username: "teacher",
-        role: "teacher",
-        tenantId: "school-a",
-        tokenName: "satoken",
-        tokenValue: "token-teacher",
-      }),
-    );
     const fetchMock = vi.fn().mockResolvedValueOnce({
       ok: true,
       json: async () => ({
@@ -1566,14 +1457,11 @@ describe("textbookApi", () => {
       "http://127.0.0.1:8080/api/teacher/resources/doc-1/sync-jobs/job-2/checkpoint",
       expect.objectContaining({
         headers: expect.objectContaining({
-          satoken: "token-teacher",
-          "X-Device-Id": "local-browser-console",
         }),
       }),
     );
     expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Id");
     expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Subject-Type");
-    expect(fetchMock.mock.calls[0][1]?.headers).not.toHaveProperty("X-Capability-Token");
     expect(checkpoint?.currentPath).toBe("高中数学/空间向量");
     expect(checkpoint?.downloadedItemsJson).toContain("docx-1");
   });
@@ -1612,7 +1500,6 @@ describe("textbookApi", () => {
       "http://127.0.0.1:8080/api/teacher/resources/search?query=vector%20theorem&limit=8",
       expect.objectContaining({
         headers: expect.objectContaining({
-          "X-Device-Id": "local-browser-console",
         }),
       }),
     );
@@ -1657,7 +1544,6 @@ describe("textbookApi", () => {
       "http://127.0.0.1:8080/api/teacher/resources/search/audit/query-1",
       expect.objectContaining({
         headers: expect.objectContaining({
-          "X-Device-Id": "local-browser-console",
         }),
       }),
     );
@@ -1705,7 +1591,6 @@ describe("textbookApi", () => {
       "http://127.0.0.1:8080/api/teacher/resources/feishu/discovery?mode=search&query=%E7%A9%BA%E9%97%B4%E5%90%91%E9%87%8F&rootUrl=https%3A%2F%2Fmy.feishu.cn%2Fdrive%2Ffolder%2Froot-token&listDepth=1&maxDepth=5",
       expect.objectContaining({
         headers: expect.objectContaining({
-          "X-Device-Id": "local-browser-console",
         }),
       }),
     );
@@ -1717,17 +1602,6 @@ describe("textbookApi", () => {
   });
 
   it("loads runtime status without client supplied identity headers", async () => {
-    globalThis.localStorage.setItem(
-      "math-agent:auth-session",
-      JSON.stringify({
-        userId: "teacher-1",
-        username: "teacher",
-        role: "teacher",
-        tenantId: "school-a",
-        tokenName: "satoken",
-        tokenValue: "token-teacher",
-      }),
-    );
     const fetchMock = vi.fn().mockResolvedValueOnce({
       ok: true,
       json: async () => ({
@@ -1770,8 +1644,6 @@ describe("textbookApi", () => {
           redissonAddress: "redis://127.0.0.1:6379",
           rateLimitEnabled: true,
           rateLimitKeyPrefix: "math-agent:rate-limit:",
-          capabilityStoreEnabled: true,
-          capabilityStoreKeyPrefix: "math-agent:capability:",
           searchCacheEnabled: true,
           searchCacheKeyPrefix: "math-agent:search:",
           searchCacheTtl: "PT10M",
@@ -1808,8 +1680,6 @@ describe("textbookApi", () => {
       "http://127.0.0.1:8080/api/system/runtime",
       expect.objectContaining({
         headers: expect.objectContaining({
-          satoken: "token-teacher",
-          "X-Device-Id": "local-browser-console",
         }),
       }),
     );

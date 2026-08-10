@@ -10,6 +10,12 @@ target/
 # Python
 .venv/
 venv/
+# A root-level virtual environment can be created by Linux tooling. Its
+# interpreter shims and installed packages are machine-specific, not source.
+/bin/
+/lib/
+/lib64/
+/pyvenv.cfg
 __pycache__/
 .pytest_cache/
 *.py[cod]
@@ -33,6 +39,15 @@ output/
 tmp/
 .playwright-cli/
 docs/superpowers/plans/
+
+# Local agent planning state and interrupted Maven output must not enter
+# project history; the generated files can be recreated from tracked source.
+.zcode/
+/backend-java/target-incomplete-*/
+
+# Windows reserves this device name, so it cannot be represented safely in a
+# cross-platform Git checkout.
+/NUL
 
 # Local work folders and generated previews
 .resume_work/

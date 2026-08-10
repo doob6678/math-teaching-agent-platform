@@ -6,7 +6,7 @@
 
 ## 数据流
 
-1. 用户调用多 Agent 写作异步接口，控制面校验 Capability Token 并持久化 workflow。
+1. 用户调用多 Agent 写作异步接口，控制面校验后端用户主体、租户和角色并持久化 workflow。
 2. 控制面只为当前依赖已满足的阶段创建 `agent_worker_task`，再向 `agent.worker` direct exchange 发送任务引用。
 3. Worker 按 Agent 角色路由领取消息，并使用 MySQL compare-and-set 将任务从 `QUEUED` 租约化为 `RUNNING`。
 4. Worker 读取受控任务载荷、执行一个阶段、写回 Trace/工作流快照；当前阶段组全部完成时，控制面释放下一阶段组。
@@ -14,8 +14,8 @@
 
 ## 安全边界
 
-- RabbitMQ 消息只包含任务、工作流、阶段和租约引用；不携带 API Key、Capability Token 或用户原始提示词。
-- Worker 注册 API 使用 `X-Agent-Worker-Key`；它和面向用户的 Capability Token 完全独立。
+- RabbitMQ 消息只包含任务、工作流、阶段和租约引用；不携带 API Key、浏览器凭据或用户原始提示词。
+- Worker 注册 API 使用 `X-Agent-Worker-Key`；它和面向用户的用户会话认证完全独立。
 - 任务载荷仅保存在 MySQL，由成功领取租约的 Worker 读取。
 
 ## 运行

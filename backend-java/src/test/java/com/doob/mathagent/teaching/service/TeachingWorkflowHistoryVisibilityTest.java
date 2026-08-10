@@ -49,6 +49,7 @@ class TeachingWorkflowHistoryVisibilityTest {
                         true,
                         "教师草稿内容很长，但不能作为历史讲义入口。",
                         "学生草稿内容很长，但不能作为历史讲义入口。",
+                        "",
                         List.of(),
                         List.of(),
                         "",

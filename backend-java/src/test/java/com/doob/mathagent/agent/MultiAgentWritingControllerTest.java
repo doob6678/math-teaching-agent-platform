@@ -4,36 +4,34 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.doob.mathagent.agent.controller.MultiAgentWritingController;
 import com.doob.mathagent.agent.dto.MultiAgentWritingRequest;
-import com.doob.mathagent.agent.service.AgentRunExecutionService;
-import com.doob.mathagent.agent.service.AgentRunPlanService;
 import com.doob.mathagent.agent.service.AgentTraceQueryService;
 import com.doob.mathagent.agent.service.AgentTraceRecord;
-import com.doob.mathagent.agent.service.InMemoryAgentConcurrencyGuard;
 import com.doob.mathagent.agent.service.InMemoryAgentTraceStore;
 import com.doob.mathagent.agent.service.InMemoryMultiAgentWritingWorkflowStore;
 import com.doob.mathagent.agent.service.MultiAgentWritingService;
 import com.doob.mathagent.agent.service.MultiAgentWritingWorkflowRecord;
+import com.doob.mathagent.agent.service.PythonHandoutClient;
+import com.doob.mathagent.agent.worker.AgentWorkerTask;
+import com.doob.mathagent.agent.worker.AgentWorkerTaskDispatchService;
+import com.doob.mathagent.agent.worker.AgentWorkerTaskStore;
 import com.doob.mathagent.agent.vo.AgentRunExecuteResponse;
 import com.doob.mathagent.agent.vo.MultiAgentWritingResponse;
 import com.doob.mathagent.agent.vo.MultiAgentWritingTraceResponse;
-import com.doob.mathagent.infrastructure.ai.AiProviderCatalog;
-import com.doob.mathagent.infrastructure.ai.AiProviderProperties;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
-import org.springframework.web.server.ResponseStatusException;
+import org.springframework.mock.env.MockEnvironment;
 
 class MultiAgentWritingControllerTest {
 
     @Test
-    void runsWritingWithBackendSessionWithoutRetiredCapabilityToken() {
+    void runsWritingWithBackendSession() {
         MultiAgentWritingController controller = new MultiAgentWritingController(
                 writingService(new InMemoryAgentTraceStore()),
                 new AgentTraceQueryService(new InMemoryAgentTraceStore()),
-                request -> new RequestSubject("school-a", "teacher", "teacher-1", "device-1"),
-                (token, action, path, requestHash, subject) -> false);
+                request -> new RequestSubject("school-a", "teacher", "teacher-1", "device-1"));
 
         assertThat(controller.run(request(), null).status()).isEqualTo("COMPLETED");
     }
@@ -41,26 +39,17 @@ class MultiAgentWritingControllerTest {
     @Test
     void runsWritingUsingBackendSubjectWithoutCapabilityVerification() {
         InMemoryAgentTraceStore traceStore = new InMemoryAgentTraceStore();
-        List<String> capabilityChecks = new ArrayList<>();
         MultiAgentWritingService writingService = writingService(traceStore);
         MultiAgentWritingController controller = new MultiAgentWritingController(
                 writingService,
                 new AgentTraceQueryService(traceStore),
-                request -> new RequestSubject("school-a", "teacher", "teacher-1", "device-1"),
-                (token, action, path, requestHash, subject) -> {
-                    capabilityChecks.add(action + "|" + path + "|" + subject.subjectId());
-                    return true;
-                });
+                request -> new RequestSubject("school-a", "teacher", "teacher-1", "device-1"));
 
         MultiAgentWritingResponse response = controller.run(request(), null);
 
         assertThat(response.subjectId()).isEqualTo("teacher-1");
         assertThat(response.stages()).extracting(MultiAgentWritingResponse.StageResult::stageCode)
-                .containsExactly(
-                        "resource_curation", "template_selection", "outline_planning",
-                        "teacher_writer", "student_writer", "lecture_writer",
-                        "source_review", "student_safety_review", "layout_review", "merge_coordinator");
-        assertThat(capabilityChecks).isEmpty();
+                .containsExactly("resource_curation", "teacher_writer", "student_writer", "lecture_writer");
         MultiAgentWritingResponse recovered = controller.get(response.workflowId(), null);
         assertThat(recovered.status()).isEqualTo("COMPLETED");
         assertThat(recovered.subjectId()).isEqualTo("teacher-1");
@@ -70,24 +59,20 @@ class MultiAgentWritingControllerTest {
     @Test
     void startsAsyncWritingUsingBackendSessionWithoutCapabilityVerification() {
         InMemoryAgentTraceStore traceStore = new InMemoryAgentTraceStore();
-        List<String> capabilityChecks = new ArrayList<>();
         MultiAgentWritingService writingService = writingService(traceStore);
         MultiAgentWritingController controller = new MultiAgentWritingController(
                 writingService,
                 new AgentTraceQueryService(traceStore),
-                request -> new RequestSubject("school-a", "teacher", "teacher-1", "device-1"),
-                (token, action, path, requestHash, subject) -> {
-                    capabilityChecks.add(action + "|" + path + "|" + subject.subjectId());
-                    return true;
-                });
+                request -> new RequestSubject("school-a", "teacher", "teacher-1", "device-1"));
 
         MultiAgentWritingResponse started = controller.startAsync(request(), null);
+        writingService.executeDispatchedPython(
+                started.workflowId(), request(), new RequestSubject("school-a", "teacher", "teacher-1", "agent-worker"));
         MultiAgentWritingResponse recovered = controller.get(started.workflowId(), null);
 
         assertThat(started.status()).isEqualTo("RUNNING");
         assertThat(started.subjectId()).isEqualTo("teacher-1");
         assertThat(recovered.status()).isEqualTo("COMPLETED");
-        assertThat(capabilityChecks).isEmpty();
     }
 
     @Test
@@ -113,34 +98,29 @@ class MultiAgentWritingControllerTest {
                         "draft recorded")),
                 new AgentRunExecuteResponse.TokenUsage(11, 7, 18),
                 "failed after draft"));
-        List<String> capabilityChecks = new ArrayList<>();
+        MultiAgentWritingService writingService = writingService(traceStore, workflowStore);
         MultiAgentWritingController controller = new MultiAgentWritingController(
-                writingService(traceStore, workflowStore),
+                writingService,
                 new AgentTraceQueryService(traceStore),
-                request -> new RequestSubject("school-a", "teacher", "teacher-1", "device-1"),
-                (token, action, path, requestHash, subject) -> {
-                    capabilityChecks.add(action + "|" + path + "|" + subject.subjectId());
-                    return true;
-                });
+                request -> new RequestSubject("school-a", "teacher", "teacher-1", "device-1"));
 
         MultiAgentWritingResponse response = controller.resume("workflow-resume-abc", request(), null);
+        writingService.executeDispatchedPython(
+                response.workflowId(), request(), new RequestSubject("school-a", "teacher", "teacher-1", "agent-worker"));
 
-        assertThat(response.status()).isEqualTo("COMPLETED");
-        assertThat(response.stages()).extracting(MultiAgentWritingResponse.StageResult::stageCode)
-                .containsExactly(
-                        "resource_curation", "template_selection", "outline_planning",
-                        "teacher_writer", "student_writer", "lecture_writer",
-                        "source_review", "student_safety_review", "layout_review", "merge_coordinator");
-        assertThat(capabilityChecks).isEmpty();
+        MultiAgentWritingResponse recovered = controller.get(response.workflowId(), null);
+        assertThat(response.status()).isEqualTo("RUNNING");
+        assertThat(recovered.status()).isEqualTo("COMPLETED");
+        assertThat(recovered.stages()).extracting(MultiAgentWritingResponse.StageResult::stageCode)
+                .containsExactly("resource_curation", "teacher_writer", "student_writer", "lecture_writer");
     }
 
     @Test
-    void startsAsyncWritingWithBackendSessionWithoutRetiredCapabilityToken() {
+    void startsAsyncWritingWithBackendSession() {
         MultiAgentWritingController controller = new MultiAgentWritingController(
                 writingService(new InMemoryAgentTraceStore()),
                 new AgentTraceQueryService(new InMemoryAgentTraceStore()),
-                request -> new RequestSubject("school-a", "teacher", "teacher-1", "device-1"),
-                (token, action, path, requestHash, subject) -> false);
+                request -> new RequestSubject("school-a", "teacher", "teacher-1", "device-1"));
 
         assertThat(controller.startAsync(request(), null).status()).isEqualTo("RUNNING");
     }
@@ -155,8 +135,7 @@ class MultiAgentWritingControllerTest {
         MultiAgentWritingController controller = new MultiAgentWritingController(
                 writingService(traceStore),
                 new AgentTraceQueryService(traceStore),
-                request -> new RequestSubject("school-a", "teacher", "teacher-1", "device-1"),
-                (token, action, path, requestHash, subject) -> true);
+                request -> new RequestSubject("school-a", "teacher", "teacher-1", "device-1"));
 
         MultiAgentWritingTraceResponse response = controller.traces("workflow-123", null);
 
@@ -168,47 +147,80 @@ class MultiAgentWritingControllerTest {
         assertThat(response.toString()).doesNotContain("teacher-2");
     }
 
-    /**
-     * Builds the controller request.
-     */
     private static MultiAgentWritingRequest request() {
         return new MultiAgentWritingRequest(
                 "teacher handout",
                 "space vector angle",
                 List.of("PUBLIC_TEXTBOOK:space-vector:angle"),
                 false,
-                "dashscope",
-                "qwen3.6-flash");
+                "openai",
+                "gpt-5.6-luna");
     }
 
-    /**
-     * Builds a writing service with real planning and deterministic test model execution.
-     */
     private static MultiAgentWritingService writingService(InMemoryAgentTraceStore traceStore) {
         return writingService(traceStore, new InMemoryMultiAgentWritingWorkflowStore());
     }
 
-    /**
-     * Builds a writing service with an explicit workflow store for recovery tests.
-     */
     private static MultiAgentWritingService writingService(
             InMemoryAgentTraceStore traceStore,
             InMemoryMultiAgentWritingWorkflowStore workflowStore) {
-        AiProviderProperties properties = new AiProviderProperties();
-        properties.setDefaultProvider("dashscope");
-        properties.getDashscope().setApiKey("dashscope-key");
-        properties.getDashscope().setChatModel("qwen3.6-flash");
-        AiProviderCatalog catalog = new AiProviderCatalog(properties);
+        MockEnvironment environment = new MockEnvironment()
+                .withProperty("math-agent.python-handout.enabled", "true");
         return new MultiAgentWritingService(
-                new AgentRunPlanService(catalog),
-                AgentRunExecutionServiceFixture.deterministicModelService(traceStore, new InMemoryAgentConcurrencyGuard()),
                 workflowStore,
-                new org.springframework.core.task.SyncTaskExecutor());
+                new AgentWorkerTaskDispatchService(workflowStore, new TestWorkerTaskStore(), new TestOutboxStore()),
+                environment,
+                new CompletedPythonHandoutClient(environment));
     }
 
-    /**
-     * Builds a safe trace row linked to one writing workflow stage.
-     */
+    private static final class CompletedPythonHandoutClient extends PythonHandoutClient {
+        private CompletedPythonHandoutClient(MockEnvironment environment) {
+            super(environment, new ObjectMapper());
+        }
+
+        @Override
+        public PythonHandoutResult execute(
+                String workflowId, MultiAgentWritingRequest request, String traceId, boolean resume) {
+            AgentRunExecuteResponse.TokenUsage usage = new AgentRunExecuteResponse.TokenUsage(8, 4, 12);
+            return new PythonHandoutResult("COMPLETED", List.of(
+                    stage("resource_curation", "TeacherAssistantAgent", workflowId, usage),
+                    stage("teacher_writer", "CoursewareAgent", workflowId, usage),
+                    stage("student_writer", "TeacherAssistantAgent", workflowId, usage),
+                    stage("lecture_writer", "HandoutFormatterAgent", workflowId, usage)), usage, "handout-v1", "");
+        }
+
+        private static MultiAgentWritingResponse.StageResult stage(
+                String stageCode, String agentCode, String workflowId, AgentRunExecuteResponse.TokenUsage usage) {
+            return new MultiAgentWritingResponse.StageResult(
+                    stageCode, agentCode, workflowId + ":" + stageCode, "python-langgraph", "test-model",
+                    "COMPLETED", usage, "Python LangGraph node completed.", "{}", 1L);
+        }
+    }
+
+    private static final class TestWorkerTaskStore extends AgentWorkerTaskStore {
+        private TestWorkerTaskStore() {
+            super(null);
+        }
+
+        @Override
+        public AgentWorkerTask create(String workflowId, String tenantId, String agentCode, String stageCode, String requestJson) {
+            return new AgentWorkerTask(
+                    workflowId + ":task", workflowId, tenantId, agentCode, stageCode, "QUEUED", 0, 1,
+                    null, null, null, requestJson, null, Instant.now(), Instant.now());
+        }
+    }
+
+    private static final class TestOutboxStore implements com.doob.mathagent.agent.worker.AgentWorkerTaskOutboxStore {
+        @Override public void enqueue(AgentWorkerTask task) { }
+        @Override public java.util.List<com.doob.mathagent.agent.worker.AgentWorkerTaskOutboxEvent> claimReady(String publisherId, Instant now, java.time.Duration leaseDuration, int limit) { return List.of(); }
+        @Override public boolean markPublished(com.doob.mathagent.agent.worker.AgentWorkerTaskOutboxEvent event, Instant publishedAt) { return true; }
+        @Override public void releaseForRetry(com.doob.mathagent.agent.worker.AgentWorkerTaskOutboxEvent event, Instant nextAttemptAt, String errorSummary) { }
+        @Override public int recoverExpiredPublishing(Instant now) { return 0; }
+        @Override public java.util.List<AgentWorkerTask> findOrphanQueued(Instant olderThan, int limit) { return List.of(); }
+        @Override public long pendingCount() { return 0; }
+        @Override public Instant oldestPendingCreatedAt() { return null; }
+    }
+
     private static AgentTraceRecord trace(
             String traceId,
             String planId,

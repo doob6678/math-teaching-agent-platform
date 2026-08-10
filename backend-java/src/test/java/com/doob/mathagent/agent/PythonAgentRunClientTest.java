@@ -12,9 +12,13 @@ import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
+import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.env.MockEnvironment;
@@ -22,6 +26,18 @@ import org.springframework.mock.env.MockEnvironment;
 class PythonAgentRunClientTest {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+
+    @Test
+    void signsRouteGrantsFromDeploymentAiConfiguration() {
+        MockEnvironment environment = new MockEnvironment()
+                .withProperty("math-agent.ai.route-grant-secret", "deployment-route-grant-key")
+                .withProperty("math-agent.ai.route-grant-ttl-seconds", "120");
+
+        String grant = new ProviderRouteGrantSigner(environment).sign(
+                "run-001", "student_explanation", List.of(new ProviderRouteGrantSigner.ProviderRoute("openai", "model-a")));
+
+        assertThat(grant).contains(".");
+    }
 
     @Test
     void projectsVersionedPythonUsageAndUnknownCost() throws Exception {
@@ -65,9 +81,12 @@ class PythonAgentRunClientTest {
         server.start();
         try {
             AiProviderCatalog catalog = providerCatalog();
-            PythonAgentRunClient client = new PythonAgentRunClient(new MockEnvironment()
+            MockEnvironment environment = new MockEnvironment()
                     .withProperty("math-agent.python-agent.base-url", "http://127.0.0.1:" + server.getAddress().getPort())
-                    .withProperty("math-agent.python-agent.worker-key", "worker-contract-key"), catalog);
+                    .withProperty("math-agent.python-agent.worker-key", "worker-contract-key")
+                    .withProperty("math-agent.python-agent.route-grant-secret", "route-grant-test-key");
+            PythonAgentRunClient client = new PythonAgentRunClient(
+                    environment, catalog, new ProviderRouteGrantSigner(environment));
 
             AgentRunPlanResponse plan = coursewarePlan(catalog);
             AgentRunClient.Result result = client.execute(
@@ -99,9 +118,12 @@ class PythonAgentRunClientTest {
         server.start();
         try {
             AiProviderCatalog catalog = providerCatalog();
-            PythonAgentRunClient client = new PythonAgentRunClient(new MockEnvironment()
+            MockEnvironment environment = new MockEnvironment()
                     .withProperty("math-agent.python-agent.base-url", "http://127.0.0.1:" + server.getAddress().getPort())
-                    .withProperty("math-agent.python-agent.worker-key", "worker-contract-key"), catalog);
+                    .withProperty("math-agent.python-agent.worker-key", "worker-contract-key")
+                    .withProperty("math-agent.python-agent.route-grant-secret", "route-grant-test-key");
+            PythonAgentRunClient client = new PythonAgentRunClient(
+                    environment, catalog, new ProviderRouteGrantSigner(environment));
 
             AgentRunPlanResponse plan = coursewarePlan(catalog);
             assertThatThrownBy(() -> client.execute(
@@ -110,6 +132,107 @@ class PythonAgentRunClientTest {
                             plan))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessage("Python agent request failed");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void mapsWorkerErrorFramesToProviderUnavailable() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/student-explanations/stream", exchange -> {
+            exchange.getResponseHeaders().set("Content-Type", "text/event-stream; charset=utf-8");
+            exchange.sendResponseHeaders(200, 0);
+            try (OutputStream stream = exchange.getResponseBody()) {
+                stream.write(("id: 1\n"
+                        + "event: error\n"
+                        + "data: {\"runId\":\"stream-run-error\",\"status\":503,"
+                        + "\"message\":\"all configured providers failed: openai:ValueError\"}\n\n")
+                        .getBytes(StandardCharsets.UTF_8));
+            }
+        });
+        server.start();
+        try {
+            AiProviderCatalog catalog = providerCatalog();
+            MockEnvironment environment = new MockEnvironment()
+                    .withProperty("math-agent.python-agent.base-url", "http://127.0.0.1:" + server.getAddress().getPort())
+                    .withProperty("math-agent.python-agent.worker-key", "worker-contract-key")
+                    .withProperty("math-agent.python-agent.route-grant-secret", "route-grant-test-key");
+            PythonMigratedWorkloadClient client = new PythonMigratedWorkloadClient(
+                    environment, catalog, new ProviderRouteGrantSigner(environment));
+
+            assertThatThrownBy(() -> client.streamStudentExplanation(
+                            "stream-run-error", "求函数定义域", List.of(), "", event -> { }))
+                    .isInstanceOf(AiProviderUnavailableException.class)
+                    .hasMessage("all configured providers failed: openai:ValueError");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void streamsWorkerDeltasBeforeTheCompletedFrame() throws Exception {
+        CountDownLatch deltaObserved = new CountDownLatch(1);
+        AtomicBoolean completedWasWrittenBeforeDelta = new AtomicBoolean(false);
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/student-explanations/stream", exchange -> {
+            exchange.getResponseHeaders().set("Content-Type", "text/event-stream; charset=utf-8");
+            exchange.sendResponseHeaders(200, 0);
+            try (OutputStream stream = exchange.getResponseBody()) {
+                stream.write(("id: 1\n"
+                        + "event: started\n"
+                        + "data: {\"runId\":\"stream-run-1\"}\n\n"
+                        + "id: 2\n"
+                        + "event: delta\n"
+                        + "data: {\"runId\":\"stream-run-1\",\"content\":\"第一段\","
+                        + "\"providerName\":\"openai\",\"modelCode\":\"gpt-5.6-luna\"}\n\n")
+                        .getBytes(StandardCharsets.UTF_8));
+                stream.flush();
+                try {
+                    if (!deltaObserved.await(2, TimeUnit.SECONDS)) {
+                        completedWasWrittenBeforeDelta.set(true);
+                        return;
+                    }
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                    throw new java.io.IOException("Interrupted while waiting for streamed delta", exception);
+                }
+                stream.write(("id: 3\n"
+                        + "event: completed\n"
+                        + "data: {\"runId\":\"stream-run-1\",\"conversationTitle\":\"定义域\","
+                        + "\"cards\":[{\"cardKey\":\"domain\",\"title\":\"\",\"summary\":\"先看分母。\","
+                        + "\"items\":[],\"sourceUris\":[],\"renderMode\":\"text\"}],"
+                        + "\"usage\":{\"promptTokens\":2,\"completionTokens\":3,\"totalTokens\":5},"
+                        + "\"providerName\":\"openai\",\"modelCode\":\"gpt-5.6-luna\"}\n\n")
+                        .getBytes(StandardCharsets.UTF_8));
+            }
+        });
+        server.start();
+        try {
+            AiProviderCatalog catalog = providerCatalog();
+            MockEnvironment environment = new MockEnvironment()
+                    .withProperty("math-agent.python-agent.base-url", "http://127.0.0.1:" + server.getAddress().getPort())
+                    .withProperty("math-agent.python-agent.worker-key", "worker-contract-key")
+                    .withProperty("math-agent.python-agent.route-grant-secret", "route-grant-test-key")
+                    .withProperty("math-agent.python-agent.timeout-ms", "5000");
+            PythonMigratedWorkloadClient client = new PythonMigratedWorkloadClient(
+                    environment, catalog, new ProviderRouteGrantSigner(environment));
+            AtomicReference<String> delta = new AtomicReference<>();
+
+            PythonMigratedWorkloadClient.ExplanationResult result = client.streamStudentExplanation(
+                    "stream-run-1", "求函数定义域", List.of(), "", event -> {
+                        if ("delta".equals(event.eventName())) {
+                            delta.set(event.content());
+                            deltaObserved.countDown();
+                        }
+                    });
+
+            assertThat(completedWasWrittenBeforeDelta).isFalse();
+            assertThat(delta.get()).isEqualTo("第一段");
+            assertThat(result.conversationTitle()).isEqualTo("定义域");
+            assertThat(result.cards()).singleElement().extracting(
+                    PythonMigratedWorkloadClient.ExplanationCard::summary).isEqualTo("先看分母。");
+            assertThat(result.usage().totalTokens()).isEqualTo(5);
         } finally {
             server.stop(0);
         }
@@ -127,8 +250,7 @@ class PythonAgentRunClientTest {
     private static AiProviderCatalog providerCatalog() {
         AiProviderProperties properties = new AiProviderProperties();
         properties.setDefaultProvider("openai");
-        properties.getOpenai().setApiKey("openai-key");
-        properties.getOpenai().setBaseUrl("https://openai.example.test/v1");
+        properties.getOpenai().setEnabled(true);
         properties.getOpenai().setChatModel("gpt-5.6-luna");
         return new AiProviderCatalog(properties);
     }

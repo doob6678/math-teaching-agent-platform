@@ -11,6 +11,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Locale;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -226,28 +227,32 @@ public class StudentExplanationImageStoreService {
             return 0;
         }
         int[] removed = {0};
+        List<Path> metadataPaths;
         try (Stream<Path> stream = Files.walk(root, 6)) {
-            stream
+            // Snapshot paths before deleting payloads. Deleting a sibling while Files.walk is lazy can make its
+            // iterator observe a missing file and throw NoSuchFileException during the next traversal step.
+            metadataPaths = stream
                     .filter(Files::isRegularFile)
                     .filter(path -> path.getFileName().toString().endsWith(".json"))
-                    .forEach(path -> {
-                        try {
-                            ImageMetadata metadata = OBJECT_MAPPER.readValue(path.toFile(), ImageMetadata.class);
-                            StudentExplanationImageRecord record = metadata.toRecord();
-                            if (expired(record)) {
-                                deleteQuietly(record.localPath());
-                                deleteQuietly(path);
-                                records.remove(record.uploadId());
-                                removed[0] += 1;
-                            }
-                        } catch (IOException e) {
-                            deleteQuietly(path);
-                            removed[0] += 1;
-                        }
-                    });
+                    .toList();
         } catch (IOException e) {
-            throw new IllegalStateException("Failed to cleanup student explanation image metadata", e);
+            throw new IllegalStateException("Failed to enumerate student explanation image metadata", e);
         }
+        metadataPaths.forEach(path -> {
+            try {
+                ImageMetadata metadata = OBJECT_MAPPER.readValue(path.toFile(), ImageMetadata.class);
+                StudentExplanationImageRecord record = metadata.toRecord();
+                if (expired(record)) {
+                    deleteQuietly(record.localPath());
+                    deleteQuietly(path);
+                    records.remove(record.uploadId());
+                    removed[0] += 1;
+                }
+            } catch (IOException e) {
+                deleteQuietly(path);
+                removed[0] += 1;
+            }
+        });
         return removed[0];
     }
 

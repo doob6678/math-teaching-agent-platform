@@ -24,7 +24,12 @@ LECTURE_ASPECT_TOLERANCE = 0.01
 LECTURE_MAX_TEXT_CHARS = 2_400
 BASE_FORBIDDEN_MARKERS = ("<TODO>", "[PLACEHOLDER]", "system prompt", "内部提示词", "promptTokens", "model_call_")
 STUDENT_FORBIDDEN_MARKERS = ("最终答案", "教师批注", "资料依据", "trace", "workflowId")
-LECTURE_FORBIDDEN_MARKERS = ("最终答案", "完整解答", "资料依据", "教师批注", "h1（")
+# The projection is a multi-page classroom sequence.  It intentionally keeps the submitted problem stems and
+# knowledge spine, but must never become a worksheet or expose the model/editor transport protocol.
+LECTURE_FORBIDDEN_MARKERS = (
+    "最终答案", "完整解答", "资料依据", "教师批注", "h1（", "<wait>", "teacherPrompt",
+    "MATHAGENTHTMLSPACER", "MATHAGENTFILLBLANKRULE", "---", "___", "____",
+)
 HTML_TAG = re.compile(r"</?[A-Za-z][^>]*>")
 
 
@@ -95,16 +100,16 @@ def validate(report: dict[str, object], profile: str, required_text: list[str]) 
         forbidden.extend(STUDENT_FORBIDDEN_MARKERS)
     if profile == "lecture":
         forbidden.extend(LECTURE_FORBIDDEN_MARKERS)
-        if report["pages"] != 1:
-            violations.append(f"lecture requires exactly one page, found {report['pages']}")
+        # The previous one-page contract caused four submitted questions to collapse into unrelated fragments or to
+        # be clipped.  A classroom projection is allowed to span pages; the invariant is readability per page and
+        # retention of every required problem, which the caller supplies through --required-text.
+        if report["pages"] < 1:
+            violations.append("lecture export contains no pages")
         for metric in report["page_metrics"]:
             if abs(float(metric["aspect"]) - LECTURE_ASPECT_RATIO) > LECTURE_ASPECT_TOLERANCE:
                 violations.append(f"lecture page {metric['number']} is not 16:10: {metric['aspect']}")
             if int(metric["text_chars"]) > LECTURE_MAX_TEXT_CHARS:
                 violations.append(f"lecture page {metric['number']} exceeds text budget: {metric['text_chars']}")
-        body_lines = [line.strip() for line in compact.splitlines() if line.strip()]
-        if not any("题目" in line or "已知" in line for line in body_lines[:6]):
-            violations.append("lecture does not place the question in the first visible content lines")
     if profile == "teacher" and not any("资料依据：" in line for line in compact.splitlines()):
         violations.append("teacher handout is missing readable Feishu attribution")
     # Browser-editor transport tags are never valid classroom text.  This catches <br> and future rich-text leakage,

@@ -6,11 +6,12 @@ import java.util.Locale;
 /**
  * One visibility policy shared by document list, Agent search, and asset reads.
  *
- * <p>Legacy {@code MATH_VIP} rows remain readable as tenant-public material until an explicit migration rewrites
- * them. Class-only rows are deliberately excluded for students until a class-membership relation is available.</p>
+ * <p>Every non-private scope is intentionally shared with students. Teacher uploads are therefore visible to
+ * students immediately after the teacher marks them shared; only {@code TEACHER_PRIVATE} remains owner-only.</p>
  */
 public final class TeacherResourceVisibilityPolicy {
-    public static final List<String> STUDENT_SHARED_SCOPES = List.of("TENANT_PUBLIC", "PUBLIC_TEXTBOOK", "MATH_VIP");
+    public static final List<String> STUDENT_SHARED_SCOPES = List.of(
+            "TENANT_PUBLIC", "PUBLIC_TEXTBOOK", "MATH_VIP", "CLASS_AUTHORIZED");
     public static final List<String> TEACHER_SHARED_SCOPES = List.of(
             "TENANT_PUBLIC", "PUBLIC_TEXTBOOK", "MATH_VIP", "CLASS_AUTHORIZED");
 

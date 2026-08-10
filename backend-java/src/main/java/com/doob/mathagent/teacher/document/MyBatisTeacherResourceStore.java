@@ -1,11 +1,14 @@
 package com.doob.mathagent.teacher.document;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.doob.mathagent.teacher.document.entity.TeacherSourceDocumentEntity;
 import com.doob.mathagent.teacher.document.mapper.TeacherSourceDocumentMapper;
 import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
 import com.doob.mathagent.teacher.support.TeacherResourceSourceIdentity;
 import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Repository;
 
@@ -134,24 +137,42 @@ public class MyBatisTeacherResourceStore implements TeacherResourceStore {
     @Override
     public TeacherResourceDocumentResponse findBySourceIdentity(
             String tenantId, String ownerSubjectId, String sourceType, String sourceIdentity, String feishuExportFormat) {
-        TeacherSourceDocumentEntity entity = mapper.selectOne(new LambdaQueryWrapper<TeacherSourceDocumentEntity>()
+        List<TeacherSourceDocumentEntity> entities = mapper.selectPage(Page.of(1, 1), new LambdaQueryWrapper<TeacherSourceDocumentEntity>()
                 .eq(TeacherSourceDocumentEntity::getTenantId, tenantId)
                 .eq(TeacherSourceDocumentEntity::getCreatedBy, ownerSubjectId)
                 .eq(TeacherSourceDocumentEntity::getSourceType, sourceType)
                 .eq(TeacherSourceDocumentEntity::getSourceIdentityHash, TeacherResourceSourceIdentity.hash(sourceIdentity))
-                .eq(TeacherSourceDocumentEntity::getFeishuExportFormat, normalizedFormat(feishuExportFormat))
-                .last("LIMIT 1"));
+                .eq(TeacherSourceDocumentEntity::getFeishuExportFormat, normalizedFormat(feishuExportFormat)))
+                .getRecords();
+        TeacherSourceDocumentEntity entity = entities.stream().findFirst().orElse(null);
         return entity == null ? null : toResponse(entity);
     }
 
     @Override
     public List<TeacherResourceDocumentResponse> listSchedulableFeishu(String tenantId) {
-        return mapper.selectList(new LambdaQueryWrapper<TeacherSourceDocumentEntity>()
+        List<TeacherResourceDocumentResponse> documents = mapper.selectList(new LambdaQueryWrapper<TeacherSourceDocumentEntity>()
                         .eq(TeacherSourceDocumentEntity::getTenantId, tenantId)
                         .eq(TeacherSourceDocumentEntity::getSourceType, "feishu")
                         .ne(TeacherSourceDocumentEntity::getSyncStatus, "archived")
                         .orderByAsc(TeacherSourceDocumentEntity::getId))
                 .stream().map(MyBatisTeacherResourceStore::toResponse).toList();
+        /*
+         * A Feishu folder is identified by its canonical source identity, not by the display title or
+         * the operator who registered it.  Older registrations can therefore leave two rows for one
+         * URL when they were created by different service subjects.  Scheduling both rows downloads
+         * the same remote tree twice and races block/asset replacement.  Keep the first row because
+         * the query is ordered by numeric id, making the winner deterministic and preserving the
+         * already verified canonical mirror.
+         */
+        Map<String, TeacherResourceDocumentResponse> uniqueBySource = new LinkedHashMap<>();
+        for (TeacherResourceDocumentResponse document : documents) {
+            String identity = document.sourceIdentity();
+            String key = identity == null || identity.isBlank()
+                    ? "document:" + document.documentId()
+                    : identity.strip();
+            uniqueBySource.putIfAbsent(key, document);
+        }
+        return List.copyOf(uniqueBySource.values());
     }
 
     /**

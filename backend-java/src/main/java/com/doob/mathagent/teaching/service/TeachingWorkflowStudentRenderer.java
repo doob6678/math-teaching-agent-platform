@@ -252,6 +252,9 @@ final class TeachingWorkflowStudentRenderer {
             List<String> aiRecognitionSignals,
             List<String> aiPracticeTasks) {
         int workspace = Math.max(STUDENT_QUESTION_WORKSPACE_EM, configuredWorkspaceEm);
+        List<String> safeKnowledgeNotes = guardDraftItems(aiKnowledgeNotes, false);
+        List<String> safeRecognitionSignals = guardDraftItems(aiRecognitionSignals, false);
+        List<String> safePracticeTasks = guardDraftItems(aiPracticeTasks, false);
         StringBuilder builder = new StringBuilder("\\section{")
                 .append(escapeLatex(lectureTitle))
                 .append("}\n");
@@ -275,9 +278,15 @@ final class TeachingWorkflowStudentRenderer {
             // so each student question has exactly one nearby diagram instead of a detached duplicate on a prior page.
             // Student worksheets may reuse an authorized diagram, but never print source snippets or source-derived
             // results: that would both expose OCR noise and leak the teacher's answer into the student's task page.
-            // 学生页不展示知识速记、识别信号或自检提示，避免把教师编排内容混入题目区。
-            // Self-check prompts belong inside the real question unit. Rendering them as their own preceding block
-            // allowed normal TeX page flow to strand two short lines on a nearly empty page before the question.
+            // 学生稿内容已由 Python 图独立生成。Java 仅在通过学生版泄漏过滤后，将其附在对应知识点题目旁。
+            if (!safeKnowledgeNotes.isEmpty()) {
+                builder.append("\\paragraph{知识速记}\n")
+                        .append(latexItemize(safeKnowledgeNotes)).append("\n");
+            }
+            if (!safeRecognitionSignals.isEmpty()) {
+                builder.append("\\paragraph{识别信号}\n")
+                        .append(latexItemize(safeRecognitionSignals)).append("\n");
+            }
             TeachingEvidence workedExample = pack.workedExample();
             String workedExampleText = workedExample == null ? "" : questionTextOnly(workedExample.snippet());
             String workedExampleImagePath = requiresAuthorizedFigure(workedExampleText)
@@ -288,7 +297,7 @@ final class TeachingWorkflowStudentRenderer {
                         questionTextOnly(workedExample.snippet()), pack.supportingEvidence());
             }
             appendStudentQuestion(builder, "例题", workedExample, workspace, workedExampleImagePath,
-                    List.of(), !firstPrintableQuestion);
+                    safePracticeTasks, !firstPrintableQuestion);
             if (workedExample != null && !isUnusableQuestionText(questionTextOnly(workedExample.snippet()))) {
                 firstPrintableQuestion = false;
             }
@@ -390,7 +399,10 @@ final class TeachingWorkflowStudentRenderer {
         if (authorizedImagePath != null && !authorizedImagePath.isBlank()) {
             builder.append(authorizedImageLatex(authorizedImagePath)).append("\n");
         }
-        // 学生版只保留题目、同题原图和作答空间；提示、自检和答案属于教师编排信息。
+        if (selfCheckTasks != null && !selfCheckTasks.isEmpty()) {
+            builder.append("\\paragraph{自检任务}\n")
+                    .append(latexItemize(selfCheckTasks)).append("\n");
+        }
         builder.append("\n\\vspace{").append(workspace).append("em}\n");
     }
 
@@ -1227,8 +1239,11 @@ final class TeachingWorkflowStudentRenderer {
         String questionSection = safeQuestionText(request).isBlank()
                 ? "围绕学习目标设计例题、变式题和课堂追问。"
                 : safeQuestionText(request);
-        String teacherExplanation = aiDraft == null ? "" : guardDraftText(aiDraft.teacherExplanation(), true);
-        String studentWorksheet = aiDraft == null ? "" : guardDraftText(aiDraft.studentHint(), false);
+        // Python 图输出与检索证据使用同一公式规范化入口，避免模型草稿绕过斜杠分式转换。
+        String teacherExplanation = aiDraft == null ? "" : guardDraftText(
+                com.doob.mathagent.infrastructure.text.FormulaMarkupSanitizer.sanitizeFeishuMath(aiDraft.teacherExplanation()), true);
+        String studentWorksheet = aiDraft == null ? "" : guardDraftText(
+                com.doob.mathagent.infrastructure.text.FormulaMarkupSanitizer.sanitizeFeishuMath(aiDraft.studentHint()), false);
         String questionType = draftBlockContent(teacherExplanation, teacherDraftLabels(), "题型识别");
         String methodSteps = draftBlockContent(teacherExplanation, teacherDraftLabels(), "方法步骤");
         String answerPoints = draftBlockContent(teacherExplanation, teacherDraftLabels(), "答案与评分点");
@@ -1250,15 +1265,20 @@ final class TeachingWorkflowStudentRenderer {
         if (evidence.isEmpty()) {
             risks.add("source_grounding_missing");
         }
-        List<String> lectureCards = teacherWideSlides(
-                questionSection,
-                questionType,
-                methodSteps,
-                answerPoints,
-                draftPitfalls,
-                draftFollowUps);
+        List<String> lectureCards = aiDraft == null || aiDraft.lectureContent() == null || aiDraft.lectureContent().isBlank()
+                ? teacherWideSlides(
+                        questionSection,
+                        questionType,
+                        methodSteps,
+                        answerPoints,
+                        draftPitfalls,
+                        draftFollowUps)
+                : List.of(guardDraftText(
+                        com.doob.mathagent.infrastructure.text.FormulaMarkupSanitizer.sanitizeFeishuMath(aiDraft.lectureContent()), false));
         if (!lectureCards.isEmpty()) {
-            risks.add("lecture_cards_derived_from_teacher_outline");
+            risks.add(aiDraft != null && aiDraft.lectureContent() != null && !aiDraft.lectureContent().isBlank()
+                    ? "lecture_cards_from_python_handout"
+                    : "lecture_cards_derived_from_teacher_outline");
         }
         return TeachingDraftSectionCollector.collect(
                 teacherExplanation,

@@ -1,10 +1,17 @@
+import base64
+import hashlib
+import hmac
+import json
 import os
+import time
 import unittest
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 from app.server import app
 from app.agent_runtime import AgentRuntime
+from app.ai_run_runtime import AiRunResult, AiRunRuntime
 
 
 class AgentRuntimeContractTest(unittest.TestCase):
@@ -93,6 +100,126 @@ class AgentRuntimeContractTest(unittest.TestCase):
         self.assertEqual(schema["required"], ["assetId"])
         self.assertEqual(set(schema["properties"]), {"assetId"})
         self.assertFalse(schema["additionalProperties"])
+    def test_ai_run_v1_rejects_identity_and_provider_secret_fields(self):
+        payload = self._ai_run_payload()
+        for field, value in (
+            ("tenantId", "school-a"),
+            ("subjectId", "teacher-001"),
+            ("apiKey", "forbidden"),
+            ("providerUrl", "https://forbidden.example"),
+            ("path", "/etc/passwd"),
+            ("sql", "select * from users"),
+        ):
+            with self.subTest(field=field):
+                response = self.client.post(
+                    "/v1/ai-runs/sync",
+                    headers={"Authorization": "Bearer worker-test-key"},
+                    json={**payload, field: value},
+                )
+
+                self.assertEqual(response.status_code, 422)
+                self.assertIn(field, response.text)
+
+    def test_route_grant_rejects_cross_run_and_cross_workload_reuse(self):
+        payload = self._ai_run_payload()
+        secret = "route-grant-test-secret"
+        payload["providerRoute"]["routeGrant"] = self._route_grant(
+            secret,
+            payload["runId"],
+            payload["workload"],
+            [
+                {"name": "openai", "model": "gpt-5.6-luna"},
+                {"name": "dashscope", "model": "qwen3.6-flash"},
+            ],
+        )
+        with patch.dict(os.environ, {
+            "MATH_AGENT_REQUIRE_ROUTE_GRANT": "true",
+            "MATH_AGENT_PROVIDER_ROUTE_GRANT_SECRET": secret,
+        }, clear=False):
+            for changed in (
+                {"runId": "another-run"},
+                {"providerRoute": {
+                    **payload["providerRoute"],
+                    "primary": {"name": "openai", "model": "ungranted-model"},
+                }},
+            ):
+                with self.subTest(changed=changed):
+                    response = self.client.post(
+                        "/v1/ai-runs/sync",
+                        headers={"Authorization": "Bearer worker-test-key"},
+                        json={**payload, **changed},
+                    )
+                    self.assertEqual(response.status_code, 422)
+                    self.assertIn("route grant", response.text)
+            explanation = self.client.post(
+                "/v1/student-explanations/sync",
+                headers={"Authorization": "Bearer worker-test-key"},
+                json={
+                    "runId": payload["runId"],
+                    "problem": "求函数定义域",
+                    "providerRoute": payload["providerRoute"],
+                },
+            )
+            self.assertEqual(explanation.status_code, 422)
+            self.assertIn("route grant", explanation.text)
+
+    def test_ai_run_v1_projects_python_usage_without_identity_fields(self):
+        class CompletedRuntime:
+            def execute(self, request):
+                return type("Result", (), {
+                    "status": "COMPLETED",
+                    "message": "受限答案",
+                    "actual_usage": {
+                        "promptTokens": 11,
+                        "completionTokens": 7,
+                        "totalTokens": 18,
+                        "estimatedCost": -1.0,
+                    },
+                })()
+
+        from app.ai_run_runtime import AiRunRequest
+
+        result = AiRunRuntime(CompletedRuntime()).execute(AiRunRequest.model_validate(self._ai_run_payload()))
+
+        self.assertIsInstance(result, AiRunResult)
+        response = result.as_response()
+        self.assertEqual(response["actualUsage"]["totalTokens"], 18)
+        self.assertFalse(response["costKnown"])
+        self.assertNotIn("tenantId", response)
+        self.assertNotIn("subjectId", response)
+
+    @staticmethod
+    def _ai_run_payload():
+        return {
+            "contractVersion": "ai-run-v1",
+            "runId": "run-ai-v1",
+            "workload": "generic_agent",
+            "idempotencyKey": "agent:run-ai-v1",
+            "traceparent": "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+            "deadlineEpochMs": 2_000_000_000_000,
+            "providerRoute": {
+                "primary": {"name": "openai", "model": "gpt-5.6-luna"},
+                "fallbacks": [{"name": "dashscope", "model": "qwen3.6-flash"}],
+            },
+            "limits": {"maxProviderCalls": 2, "maxTotalTokens": 1000, "maxOutputChars": 1000},
+            "input": {"message": "解释空间向量"},
+            "evidenceRefs": ["textbook:vector-1"],
+            "allowedTools": [],
+        }
+
+    @staticmethod
+    def _route_grant(secret: str, run_id: str, workload: str, routes: list[dict[str, str]]) -> str:
+        body = {
+            "runId": run_id,
+            "workload": workload,
+            "expiresAt": int(time.time()) + 60,
+            "routes": routes,
+        }
+        encoded = base64.urlsafe_b64encode(
+            json.dumps(body, separators=(",", ":")).encode("utf-8")
+        ).rstrip(b"=").decode("ascii")
+        signature = hmac.new(secret.encode("utf-8"), encoded.encode("ascii"), hashlib.sha256).digest()
+        return encoded + "." + base64.urlsafe_b64encode(signature).rstrip(b"=").decode("ascii")
 
 
 if __name__ == "__main__":

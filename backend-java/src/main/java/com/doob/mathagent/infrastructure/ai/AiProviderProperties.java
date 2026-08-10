@@ -6,8 +6,8 @@ import org.springframework.stereotype.Component;
 /**
  * Environment-backed AI provider configuration.
  *
- * <p>Secrets are never hard-coded. Each provider reads api-key, base-url, and model from application.yml placeholders,
- * which in turn read environment variables.</p>
+ * <p>Java stores only provider route metadata used to issue scoped grants. Provider endpoints and credentials remain
+ * exclusively in the Python worker.</p>
  */
 @Component
 @ConfigurationProperties("math-agent.ai")
@@ -16,21 +16,17 @@ public class AiProviderProperties {
     /** Default provider name used when a workflow does not specify a provider. */
     private String defaultProvider = "openai";
 
-    /** Alibaba Cloud Model Studio Qwen provider configuration. */
-    private Provider dashscope = new Provider(
-            "dashscope",
-            "https://dashscope.aliyuncs.com/compatible-mode/v1",
-            "",
-            "qwen3.6-flash");
+    /** Java-owned route metadata for Qwen provider/model selection. */
+    private Provider dashscope = new Provider("dashscope", false, "qwen3.6-flash");
 
-    /** OpenAI-compatible GPT provider configuration. */
-    private Provider openai = new Provider("openai", "https://api1.aisz.mom/v1", "", "gpt-5.6-luna");
+    /** Java-owned route metadata for OpenAI-compatible provider/model selection. */
+    private Provider openai = new Provider("openai", false, "gpt-5.6-luna");
 
-    /** DeepSeek OpenAI-compatible provider configuration. */
-    private Provider deepseek = new Provider("deepseek", "https://api.deepseek.com", "", "deepseek-v4-flash");
+    /** Java-owned route metadata for DeepSeek provider/model selection. */
+    private Provider deepseek = new Provider("deepseek", false, "deepseek-v4-flash");
 
-    /** Volcengine Ark/Doubao OpenAI-compatible provider configuration. */
-    private Provider ark = new Provider("ark", "https://ark.cn-beijing.volces.com/api/v3", "", "doubao-seed-2-0-lite-260428");
+    /** Java-owned route metadata for Ark provider/model selection. */
+    private Provider ark = new Provider("ark", false, "doubao-seed-2-0-lite-260428");
 
     /**
      * Returns the default provider name.
@@ -130,13 +126,10 @@ public class AiProviderProperties {
         /** Stable provider name used by task configuration and audit records. */
         private String name;
 
-        /** OpenAI-compatible API base URL. */
-        private String baseUrl;
+        /** Whether Java may include this provider/model route in a signed Python grant. */
+        private boolean enabled;
 
-        /** API key read from an environment variable. */
-        private String apiKey;
-
-        /** Chat model name sent to the provider. */
+        /** Chat model name authorized for the provider route. */
         private String chatModel;
 
         /**
@@ -149,14 +142,12 @@ public class AiProviderProperties {
          * Creates provider settings.
          *
          * @param name provider name
-         * @param baseUrl API base URL
-         * @param apiKey API key
-         * @param chatModel chat model
+         * @param enabled whether Java may grant this Python provider route
+         * @param chatModel default chat model
          */
-        public Provider(String name, String baseUrl, String apiKey, String chatModel) {
+        public Provider(String name, boolean enabled, String chatModel) {
             this.name = name;
-            this.baseUrl = baseUrl;
-            this.apiKey = apiKey;
+            this.enabled = enabled;
             this.chatModel = chatModel;
         }
 
@@ -179,39 +170,21 @@ public class AiProviderProperties {
         }
 
         /**
-         * Returns the API base URL.
+         * Returns whether Java may issue a Python route grant for this provider.
          *
-         * @return API base URL
+         * @return true when the provider route is enabled
          */
-        public String getBaseUrl() {
-            return baseUrl;
+        public boolean isEnabled() {
+            return enabled;
         }
 
         /**
-         * Sets the API base URL.
+         * Enables or disables this provider route without accepting provider credentials.
          *
-         * @param baseUrl API base URL
+         * @param enabled whether the route is allowed
          */
-        public void setBaseUrl(String baseUrl) {
-            this.baseUrl = baseUrl;
-        }
-
-        /**
-         * Returns the API key.
-         *
-         * @return API key
-         */
-        public String getApiKey() {
-            return apiKey;
-        }
-
-        /**
-         * Sets the API key.
-         *
-         * @param apiKey API key
-         */
-        public void setApiKey(String apiKey) {
-            this.apiKey = apiKey;
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
         }
 
         /**

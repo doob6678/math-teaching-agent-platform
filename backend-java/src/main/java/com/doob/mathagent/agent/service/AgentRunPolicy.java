@@ -15,54 +15,46 @@ public final class AgentRunPolicy {
                     "StudentTutorAgent",
                     Set.of("student"),
                     Set.of("tool:search:textbook", "tool:student:progress:read"),
-                    Set.of("PUBLIC_TEXTBOOK", "STUDENT_PRIVATE", "MATH_VIP"),
-                    false),
+                    Set.of("PUBLIC_TEXTBOOK", "STUDENT_PRIVATE", "MATH_VIP")),
             // Marketplace-facing retrieval specialist. It receives only read scopes; a later workflow executor
-            // resolves those scopes to concrete search tools after the normal plan/capability checks.
+            // resolves those scopes to concrete search tools after normal subject and role checks.
             new AgentDefinition(
                     "KnowledgeRetrievalAgent",
                     Set.of("student", "teacher", "admin"),
                     Set.of("tool:search:textbook", "tool:search:private"),
-                    Set.of("PUBLIC_TEXTBOOK", "TEACHER_PRIVATE", "STUDENT_PRIVATE"),
-                    false),
+                    Set.of("PUBLIC_TEXTBOOK", "TEACHER_PRIVATE", "STUDENT_PRIVATE")),
             // Writing consumes task-scoped evidence references rather than accessing the source corpus itself.
             new AgentDefinition(
                     "DocumentWriterAgent",
                     Set.of("teacher", "admin"),
                     Set.of("tool:courseware:generate"),
-                    Set.of("PUBLIC_TEXTBOOK", "TEACHER_PRIVATE", "CLASS_AUTHORIZED"),
-                    true),
+                    Set.of("PUBLIC_TEXTBOOK", "TEACHER_PRIVATE", "CLASS_AUTHORIZED")),
             // The supervisor can propose a task graph but never receives an implicit tool/data super-set.
             new AgentDefinition(
                     "SupervisorAgent",
                     Set.of("teacher", "admin"),
                     Set.of(),
-                    Set.of("PUBLIC_TEXTBOOK", "TEACHER_PRIVATE", "CLASS_AUTHORIZED"),
-                    true),
+                    Set.of("PUBLIC_TEXTBOOK", "TEACHER_PRIVATE", "CLASS_AUTHORIZED")),
             new AgentDefinition(
                     "TeacherAssistantAgent",
                     Set.of("teacher", "admin"),
                     Set.of("tool:search:textbook", "tool:search:private", "tool:student:progress:read"),
-                    Set.of("PUBLIC_TEXTBOOK", "TEACHER_PRIVATE", "CLASS_AUTHORIZED"),
-                    false),
+                    Set.of("PUBLIC_TEXTBOOK", "TEACHER_PRIVATE", "CLASS_AUTHORIZED")),
             new AgentDefinition(
                     "CoursewareAgent",
                     Set.of("teacher", "admin"),
                     Set.of("tool:courseware:generate", "tool:search:private", "tool:search:textbook"),
-                    Set.of("PUBLIC_TEXTBOOK", "TEACHER_PRIVATE", "CLASS_AUTHORIZED"),
-                    true),
+                    Set.of("PUBLIC_TEXTBOOK", "TEACHER_PRIVATE", "CLASS_AUTHORIZED")),
             new AgentDefinition(
                     "QualityCheckAgent",
                     Set.of("teacher", "admin"),
                     Set.of("tool:quality:check"),
-                    Set.of("PUBLIC_TEXTBOOK", "TEACHER_PRIVATE", "CLASS_AUTHORIZED"),
-                    false),
+                    Set.of("PUBLIC_TEXTBOOK", "TEACHER_PRIVATE", "CLASS_AUTHORIZED")),
             new AgentDefinition(
                     "HandoutFormatterAgent",
                     Set.of("teacher", "admin"),
                     Set.of("tool:handout:format"),
-                    Set.of("PUBLIC_TEXTBOOK", "TEACHER_PRIVATE", "CLASS_AUTHORIZED"),
-                    false));
+                    Set.of("PUBLIC_TEXTBOOK", "TEACHER_PRIVATE", "CLASS_AUTHORIZED")));
 
     private AgentRunPolicy() {
     }
@@ -111,13 +103,11 @@ public final class AgentRunPolicy {
      * @param allowedRoles backend roles allowed to execute the agent
      * @param allowedToolScopes tool scopes this agent may call
      * @param allowedDataScopes data scopes this agent may read
-     * @param highValueRequired whether execution always requires capability protection
      */
     public record AgentDefinition(
             String code,
             Set<String> allowedRoles,
             Set<String> allowedToolScopes,
-            Set<String> allowedDataScopes,
-            boolean highValueRequired) {
+            Set<String> allowedDataScopes) {
     }
 }

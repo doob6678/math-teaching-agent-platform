@@ -34,7 +34,7 @@
 | 页面动作 | 接口 |
 |---|---|
 | 读取画像 | `GET /api/students/dashboard?studentId=` |
-| 刷新画像 | `POST /api/students/dashboard/refresh?studentId=`，需要 capability token 和 request hash |
+| 刷新画像 | `POST /api/students/dashboard/refresh?studentId=`，后端按登录用户主体校验并限流 |
 | 写入学习记忆 | `POST /api/students/memory/remember` |
 | 复用历史记忆 | `POST /api/students/memory/reuse` |
 
@@ -103,7 +103,7 @@
 
 展示后端连接状态、运行时、向量索引状态、MCP 工具清单、MCP key 管理、当前会话和 capability 审计。secret 只在创建成功时显示一次，列表页不得回显。
 
-接口：`GET /api/mcp/tools`、`POST /api/mcp/tools/{toolName}/call`、`GET /api/mcp/keys`、`POST /api/mcp/keys`、`POST /api/mcp/keys/{keyId}/revoke`、`GET /api/mcp/configuration/me`、`GET /api/a2a/.well-known/agent-card.json`、`GET /api/vector-index/status`、运行时状态接口、`GET /api/security/capability-audits`。
+接口：`GET /api/mcp/tools`、`POST /api/mcp/tools/{toolName}/call`、`GET /api/mcp/keys`、`POST /api/mcp/keys`、`POST /api/mcp/keys/{keyId}/revoke`、`GET /api/mcp/configuration/me`、`GET /api/a2a/.well-known/agent-card.json`、`GET /api/vector-index/status`、运行时状态接口。
 
 ## 四、设计方案中存在但当前缺少对应后端接口的页面
 

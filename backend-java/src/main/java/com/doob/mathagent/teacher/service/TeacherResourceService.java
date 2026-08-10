@@ -5,6 +5,7 @@ import com.doob.mathagent.teacher.document.TeacherResourceStore;
 import com.doob.mathagent.teacher.support.TeacherResourceRegistrationCommand;
 import com.doob.mathagent.teacher.support.TeacherResourceSourceIdentity;
 import com.doob.mathagent.teacher.sync.TeacherSourceSyncProperties;
+import com.doob.mathagent.resources.ProjectResourceProperties;
 import com.doob.mathagent.vector.service.VectorIndexService;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -29,6 +30,7 @@ public class TeacherResourceService {
     private final VectorIndexService vectorIndexService;
     private final TeacherResourceAssetService assetService;
     private final TeacherSourceSyncProperties syncProperties;
+    private final ProjectResourceProperties resourceProperties;
 
     /**
      * Creates a teacher resource service.
@@ -40,11 +42,13 @@ public class TeacherResourceService {
             TeacherResourceStore store,
             VectorIndexService vectorIndexService,
             TeacherResourceAssetService assetService,
-            TeacherSourceSyncProperties syncProperties) {
+            TeacherSourceSyncProperties syncProperties,
+            ProjectResourceProperties resourceProperties) {
         this.store = store;
         this.vectorIndexService = vectorIndexService;
         this.assetService = assetService;
         this.syncProperties = syncProperties;
+        this.resourceProperties = resourceProperties;
     }
 
     /** Compatibility constructor for narrow parser tests that intentionally do not provision asset storage. */
@@ -53,6 +57,7 @@ public class TeacherResourceService {
         this.vectorIndexService = vectorIndexService;
         this.assetService = TeacherResourceAssetService.disabled();
         this.syncProperties = null;
+        this.resourceProperties = null;
     }
 
     /**
@@ -67,9 +72,23 @@ public class TeacherResourceService {
         requireSourceLocation(normalized);
         String sourceIdentity = TeacherResourceSourceIdentity.resolve(
                 normalized.sourceType(), normalized.originalUrl(), normalized.localPath());
+        String permissionScope = normalizePermissionScope(normalized.permissionScope(), normalized.viewerRole());
         TeacherResourceDocumentResponse existing = store.findBySourceIdentity(
                 normalized.tenantId(), normalized.viewerSubjectId(), normalized.sourceType(), sourceIdentity,
                 normalized.feishuExportFormat());
+        if (existing == null && "feishu".equals(normalized.sourceType()) && isSharedScope(permissionScope)) {
+            /*
+             * Shared Feishu roots are tenant resources, not owner-private uploads.  A scheduler identity and an
+             * admin click can therefore legitimately use different created_by values; consult the already visible
+             * shared set so the same provider token cannot create a second production corpus.
+             */
+            existing = store.listVisible(normalized.tenantId(), normalized.viewerRole(), normalized.viewerSubjectId()).stream()
+                    .filter(candidate -> "feishu".equals(candidate.sourceType()))
+                    .filter(candidate -> sourceIdentity.equals(candidate.sourceIdentity()))
+                    .filter(candidate -> isSharedScope(candidate.permissionScope()))
+                    .findFirst()
+                    .orElse(null);
+        }
         if (existing != null) {
             if (!"archived".equalsIgnoreCase(existing.syncStatus())) {
                 // Re-registration is deliberately a read operation: no duplicate source rows and no surprise resync.
@@ -82,7 +101,7 @@ public class TeacherResourceService {
             return store.save(new TeacherResourceDocumentResponse(
                     existing.documentId(), existing.tenantId(), existing.ownerSubjectId(), existing.sourceType(),
                     normalized.title(), normalized.originalUrl(), normalized.localPath(),
-                    normalizePermissionScope(normalized.permissionScope(), normalized.viewerRole()),
+                    permissionScope,
                     "registered", "pending", "pending", "waiting_rebuild", normalized.feishuExportFormat(),
                     previewFiles(normalized.localPath()), normalized.parseMode(), null, null, sourceIdentity));
         }
@@ -94,7 +113,7 @@ public class TeacherResourceService {
                 normalized.title(),
                 normalized.originalUrl(),
                 normalized.localPath(),
-                normalizePermissionScope(normalized.permissionScope(), normalized.viewerRole()),
+                permissionScope,
                 "registered",
                 "pending",
                 "pending",
@@ -187,6 +206,7 @@ public class TeacherResourceService {
         vectorIndexService.purgeTeacherResourceContent(normalizedTenantId, documentId);
         assetService.purgeDocumentAssets(normalizedTenantId, documentId);
         purgeFeishuStagingContent(document);
+        purgeManagedUploadContent(document);
         TeacherResourceDocumentResponse archived = new TeacherResourceDocumentResponse(
                 document.documentId(),
                 document.tenantId(),
@@ -232,8 +252,11 @@ public class TeacherResourceService {
     }
 
     /**
-     * Normalizes publication choices for new resources. Tenant-public is the product default so synchronized Feishu
-     * material is available to authorized students; class membership is enforced by the later reader policy.
+     * Normalizes publication choices for new resources.
+     *
+     * <p>The permission field remains editable for both teachers and administrators. A blank value defaults to
+     * tenant-shared visibility, so a teacher-uploaded resource is immediately readable by students; choosing
+     * {@code TEACHER_PRIVATE} keeps it owner-only.</p>
      *
      * @param permissionScope requested permission scope
      * @param viewerRole backend resolved viewer role
@@ -251,6 +274,13 @@ public class TeacherResourceService {
         return "TENANT_PUBLIC";
     }
 
+    /** Shared scopes may safely reuse one Feishu source row across registration identities. */
+    private static boolean isSharedScope(String permissionScope) {
+        return "TENANT_PUBLIC".equalsIgnoreCase(textOrDefault(permissionScope, ""))
+                || "CLASS_AUTHORIZED".equalsIgnoreCase(textOrDefault(permissionScope, ""))
+                || "MATH_VIP".equalsIgnoreCase(textOrDefault(permissionScope, ""));
+    }
+
     /**
      * Builds a small local file preview for a registered path.
      *
@@ -265,7 +295,7 @@ public class TeacherResourceService {
         try {
             root = Path.of(localPath);
         } catch (InvalidPathException exception) {
-            throw new IllegalArgumentException("Local resource path is invalid: " + exception.getInput(), exception);
+            return List.of();
         }
         if (!Files.exists(root)) {
             return List.of();
@@ -319,6 +349,49 @@ public class TeacherResourceService {
             }
         } catch (IOException exception) {
             throw new IllegalStateException("Failed to scan archived Feishu staging content", exception);
+        }
+    }
+
+    /**
+     * Removes only files created by the multipart upload service. Arbitrary developer-supplied localPath values remain
+     * untouched by design, while managed upload staging cannot grow forever after a resource is archived.
+     */
+    private void purgeManagedUploadContent(TeacherResourceDocumentResponse document) {
+        if (resourceProperties == null || document.localPath() == null || document.localPath().isBlank()) {
+            return;
+        }
+        Path root = resourceProperties.localFileStorageRoot()
+                .resolve("teacher-resource-uploads").toAbsolutePath().normalize();
+        Path candidate;
+        try {
+            candidate = Path.of(document.localPath()).toAbsolutePath().normalize();
+        } catch (InvalidPathException exception) {
+            throw new IllegalArgumentException("Managed upload path is invalid", exception);
+        }
+        if (!candidate.startsWith(root) || candidate.equals(root)) {
+            return;
+        }
+        deleteTree(candidate, "managed teacher upload");
+    }
+
+    /** Deletes one backend-owned tree and preserves the original archive failure when cleanup cannot complete. */
+    private static void deleteTree(Path candidate, String description) {
+        try {
+            if (Files.isDirectory(candidate)) {
+                try (Stream<Path> paths = Files.walk(candidate)) {
+                    paths.sorted(Comparator.reverseOrder()).forEach(path -> {
+                        try {
+                            Files.deleteIfExists(path);
+                        } catch (IOException exception) {
+                            throw new IllegalStateException("Failed to remove " + description, exception);
+                        }
+                    });
+                }
+            } else {
+                Files.deleteIfExists(candidate);
+            }
+        } catch (IOException exception) {
+            throw new IllegalStateException("Failed to remove " + description, exception);
         }
     }
 

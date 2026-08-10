@@ -70,6 +70,17 @@ import static com.doob.mathagent.teacher.service.TeacherResourceBlockSearchServi
  * Query normalization, candidate scoring, and evidence shaping are stateless and independently testable here.
  */
 final class TeacherResourceBlockSearchPolicy {
+    private static final int NEGATION_WINDOW_CHARS = 18;
+    private static final Map<String, List<String>> ROLE_CUES = Map.of(
+            "analysis", List.of("解析", "分析", "solution", "analysis"),
+            "lesson", List.of("专题讲解", "专题讲评", "讲评课", "整体讲法", "lesson", "course", "课堂"),
+            "question", List.of("题面", "原题", "真题", "单题", "question", "prompt", "stem"),
+            "boardwork", List.of("板书", "boardwork", "blackboard"),
+            "method", List.of("方法", "method", "approach"));
+    private static final Set<String> QUERY_STOP_WORDS = Set.of(
+            "a", "an", "and", "about", "are", "as", "at", "by", "for", "from", "how", "in", "is", "it",
+            "need", "not", "of", "on", "or", "reference", "the", "this", "to", "with", "teacher", "student");
+
     private TeacherResourceBlockSearchPolicy() {
         // Stateless policy component.
     }
@@ -319,10 +330,69 @@ final class TeacherResourceBlockSearchPolicy {
      * while lexical and graph signals only break ties.
      */
     static Comparator<BlockCandidate> blockCandidateComparator() {
-        Comparator<BlockCandidate> comparator = Comparator.comparingDouble(BlockCandidate::rerankScore).reversed();
+        Comparator<BlockCandidate> comparator = Comparator.comparingInt(BlockCandidate::roleIntentScore).reversed();
+        comparator = comparator.thenComparing(Comparator.comparingDouble(BlockCandidate::rerankScore).reversed());
         comparator = comparator.thenComparing(Comparator.comparingDouble(BlockCandidate::documentCoarseScore).reversed());
         comparator = comparator.thenComparing(Comparator.comparingDouble(BlockCandidate::vectorSemanticScore).reversed());
         return comparator.thenComparing(Comparator.comparingInt(BlockCandidate::lexicalMatches).reversed());
+    }
+
+    /**
+     * Extracts a bounded role preference from the user's routing language. Explicit exclusions are hard ordering
+     * signals, while an absent role cue leaves the semantic reranker fully in charge.
+     */
+    static int roleIntentScore(String query, BlockContext block) {
+        String normalizedQuery = normalizeText(textOrDefault(query, ""));
+        String candidateRole = normalizeText(String.join(
+                " ",
+                textOrDefault(block.blockRole(), ""),
+                textOrDefault(block.block().chapter(), ""),
+                textOrDefault(block.block().section(), ""),
+                textOrDefault(block.sourcePath(), "")));
+        int score = 0;
+        for (Map.Entry<String, List<String>> entry : ROLE_CUES.entrySet()) {
+            boolean candidateHasRole = entry.getValue().stream().anyMatch(candidateRole::contains);
+            if (!candidateHasRole) {
+                continue;
+            }
+            boolean positiveCue = entry.getValue().stream()
+                    .anyMatch(cue -> normalizedQuery.contains(cue) && !isNegatedCue(normalizedQuery, cue));
+            boolean negativeCue = entry.getValue().stream().anyMatch(cue -> isNegatedCue(normalizedQuery, cue));
+            if (positiveCue) {
+                score += 1;
+            }
+            if (negativeCue) {
+                score -= 2;
+            }
+        }
+        return score;
+    }
+
+    /** Detects Chinese and English exclusion wording immediately before one role cue. */
+    private static boolean isNegatedCue(String query, String cue) {
+        int cueStart = query.indexOf(cue);
+        while (cueStart >= 0) {
+            int start = Math.max(0, cueStart - NEGATION_WINDOW_CHARS);
+            String prefix = query.substring(start, cueStart);
+            int end = Math.min(query.length(), cueStart + cue.length() + NEGATION_WINDOW_CHARS);
+            String suffix = query.substring(cueStart + cue.length(), end);
+            if (containsAny(prefix, "不要", "不能", "不是", "而不是", "排除", "拒绝", "not", "don't", "without", "instead of")
+                    || startsWithAny(suffix.strip(), "不要", "不能", "也不要", "也不能", "排除", "拒绝", "not ", "don't ", "without ")) {
+                return true;
+            }
+            cueStart = query.indexOf(cue, cueStart + cue.length());
+        }
+        return false;
+    }
+
+    /** Accepts only a negation immediately following a cue, avoiding a later clause negating an earlier positive cue. */
+    private static boolean startsWithAny(String value, String... prefixes) {
+        for (String prefix : prefixes) {
+            if (value.startsWith(prefix)) {
+                return true;
+            }
+        }
+        return false;
     }
 
 
@@ -535,12 +605,11 @@ final class TeacherResourceBlockSearchPolicy {
     }
 
 
-    /**
-     * Ensures only teacher/admin backend subjects can use this teacher resource endpoint.
-     */
+    /** Ensures only authenticated resource readers can use this backend-mediated search endpoint. */
     static void requireReaderRole(String viewerRole) {
-        if (!TeacherResourceVisibilityPolicy.isReaderRole(viewerRole)) {
-            throw new IllegalArgumentException("Teacher resource block search requires an authenticated reader role");
+        String normalizedRole = textOrDefault(viewerRole, "").toLowerCase(Locale.ROOT);
+        if (!TeacherResourceVisibilityPolicy.isReaderRole(normalizedRole)) {
+            throw new IllegalArgumentException("Teacher resource block search requires student, teacher, or admin role");
         }
     }
 
@@ -796,6 +865,9 @@ final class TeacherResourceBlockSearchPolicy {
     static void addSearchTerm(LinkedHashSet<String> terms, String candidate) {
         String normalizedCandidate = normalizeText(textOrDefault(candidate, ""));
         if (normalizedCandidate.isBlank()) {
+            return;
+        }
+        if (QUERY_STOP_WORDS.contains(normalizedCandidate)) {
             return;
         }
         if (normalizedCandidate.length() == 1 && isAsciiWordChar(normalizedCandidate.charAt(0))) {

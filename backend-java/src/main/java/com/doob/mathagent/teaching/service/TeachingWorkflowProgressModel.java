@@ -54,10 +54,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -365,32 +362,21 @@ final class TeachingWorkflowProgressModel {
             return new QuestionAgentBatch(0, 0L, List.of());
         }
         long started = System.nanoTime();
-        int poolSize = Math.max(1, Math.min(questionEvidence.size(), QUESTION_AGENT_MAX_PARALLELISM));
-        ExecutorService executor = Executors.newFixedThreadPool(poolSize);
-        try {
-            List<CompletableFuture<QuestionAgentBranch>> futures = questionEvidence.stream()
-                    .map(evidence -> CompletableFuture.supplyAsync(
-                            () -> {
-                                long branchStarted = System.nanoTime();
-                                QuestionAgentContext context = new QuestionAgentContext(
-                                        questionAgentId(evidence), evidence.sourceTitle(), List.of(evidence));
-                                return new QuestionAgentBranch(
-                                        context,
-                                        Math.max(0L, (System.nanoTime() - branchStarted) / 1_000_000L));
-                            },
-                            executor))
-                    .toList();
-            List<QuestionAgentBranch> branches = futures.stream()
-                    .map(CompletableFuture::join)
-                    .sorted(Comparator.comparing(branch -> branch.context().agentId()))
-                    .toList();
-            return new QuestionAgentBatch(futures.size(), Math.max(0L,
-                    (System.nanoTime() - started) / 1_000_000L),
-                    branches.stream().map(branch -> new QuestionAgentTiming(
-                            branch.context().agentId(), branch.elapsedMs())).toList());
-        } finally {
-            executor.shutdownNow();
-        }
+        // Context construction is pure allocation and does not perform model or I/O work. Creating a private pool
+        // here only to map a few records multiplied thread count per request; real question-agent calls are fanned
+        // out later through the bounded workflow executor in TeachingWorkflowExecutionSupport.
+        List<QuestionAgentBranch> branches = questionEvidence.stream()
+                .map(evidence -> {
+                    QuestionAgentContext context = new QuestionAgentContext(
+                            questionAgentId(evidence), evidence.sourceTitle(), List.of(evidence));
+                    return new QuestionAgentBranch(context, 0L);
+                })
+                .sorted(Comparator.comparing(branch -> branch.context().agentId()))
+                .toList();
+        return new QuestionAgentBatch(branches.size(), Math.max(0L,
+                (System.nanoTime() - started) / 1_000_000L),
+                branches.stream().map(branch -> new QuestionAgentTiming(
+                        branch.context().agentId(), branch.elapsedMs())).toList());
     }
 
 

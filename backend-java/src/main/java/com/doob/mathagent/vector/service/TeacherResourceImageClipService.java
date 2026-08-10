@@ -82,6 +82,34 @@ public class TeacherResourceImageClipService {
                 properties.normalizedTeacherImageCollectionName());
     }
 
+    /**
+     * Removes every private CLIP row belonging to one archived resource.
+     *
+     * <p>Text-vector deletion already happens in {@code VectorIndexService}; keeping this operation beside the
+     * CLIP collection contract prevents an archived Feishu resource from remaining discoverable through image
+     * search after its MySQL assets and text blocks have been purged.</p>
+     *
+     * @param tenantId tenant owning the resource
+     * @param documentId source-document id whose image rows must be removed
+     * @return number of active image assets that were the deletion target
+     */
+    public int deleteDocumentVectors(String tenantId, String documentId) {
+        if (!properties.teacherImageClipEnabled()) {
+            return 0;
+        }
+        TeacherResourceDocumentResponse document = resourceStore.find(tenantId, documentId);
+        if (document == null) {
+            return 0;
+        }
+        int targetCount = assetService.listActiveImageAssets(tenantId, documentId).size();
+        ensureCollection();
+        ensureIndex();
+        loadCollection();
+        deleteDocument(document);
+        flushCollection();
+        return targetCount;
+    }
+
     /** Searches teacher page images with text or an image query and enforces visibility after Milvus recall. */
     public TeacherResourceImageClipSearchResponse search(
             String tenantId,

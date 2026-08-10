@@ -50,7 +50,10 @@ CASE_COUNT = 40
 CASES_PER_BOOK = 5
 RECALL_CUTOFFS = (1, 3, 5)
 WORKER_BASE_URL = os.environ.get("MATH_AGENT_EMBEDDING_BASE_URL", "http://127.0.0.1:8091/v1").rstrip("/")
-WORKER_KEY_FILE = Path(".local-secrets/worker-api-key.txt")
+# Docker Compose injects the active worker key through the environment.  The file remains a fallback for older local
+# runs, but a rotated production key must win so the benchmark tests the real GPU worker instead of stale credentials.
+WORKER_API_KEY = os.environ.get("MATH_AGENT_WORKER_API_KEY", "").strip()
+WORKER_KEY_FILE = Path(os.environ.get("MATH_AGENT_WORKER_API_KEY_FILE", ".local-secrets/worker-api-key.txt"))
 TOP_HITS = 10
 # One query per Luna call keeps the 9-config before/after evidence payload below the model context limit and makes
 # the audit genuinely per-case rather than an aggregate approximation. Four independent calls reduce wall time while
@@ -449,7 +452,7 @@ def append_business_cases(cases: list[dict[str, Any]], page_rows: list[dict[str,
 class ProductionWorker:
     def __init__(self, base_url: str, key_file: Path) -> None:
         self.base_url = base_url.rstrip("/")
-        self.key = key_file.read_text(encoding="utf-8").strip()
+        self.key = WORKER_API_KEY or key_file.read_text(encoding="utf-8").strip()
         if not self.key:
             raise RuntimeError(f"worker key is empty: {key_file}")
         self.session = requests.Session()

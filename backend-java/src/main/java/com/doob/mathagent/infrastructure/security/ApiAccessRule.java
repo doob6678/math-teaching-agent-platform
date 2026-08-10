@@ -33,7 +33,7 @@ public record ApiAccessRule(
     }
 
     /**
-     * 构造稳定的限流 key，按租户、endpoint、主体、设备和 IP 聚合。
+     * 构造稳定的限流 key，按租户、endpoint 和后端解析的主体聚合。
      */
     public String rateLimitKey(ApiRequestIdentity identity) {
         ApiRequestIdentity normalized = identity.normalize();

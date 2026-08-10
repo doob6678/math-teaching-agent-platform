@@ -58,7 +58,10 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.Executors;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -225,7 +228,6 @@ public class TeachingWorkflowService extends TeachingWorkflowExecutionSupport {
             TextbookRetrievalService retrievalService,
             TeachingTaskStore taskStore,
             StudentMemoryReuseService memoryReuseService,
-            TeachingAiDraftService aiDraftService,
             AgentTraceStore agentTraceStore,
             AgentRunPlanService agentRunPlanService,
             AgentRunExecutionService agentRunExecutionService,
@@ -239,7 +241,6 @@ public class TeachingWorkflowService extends TeachingWorkflowExecutionSupport {
         this.retrievalService = retrievalService;
         this.taskStore = taskStore;
         this.memoryReuseService = memoryReuseService;
-        this.aiDraftService = aiDraftService;
         this.agentTraceStore = agentTraceStore;
         this.traceRecorder = new TeachingWorkflowTraceRecorder(agentTraceStore);
         this.agentRunPlanService = agentRunPlanService;
@@ -252,13 +253,23 @@ public class TeachingWorkflowService extends TeachingWorkflowExecutionSupport {
         this.returnCompletedWhenExecutorIsSynchronous = false;
     }
 
+    /**
+     * Wires the separate nested-work executor after construction. Keeping it as a setter preserves the focused
+     * compatibility constructors while production avoids deadlocking the outer workflow pool during fan-out.
+     */
+    @Autowired
+    void configureEvidenceTaskExecutor(
+            @Qualifier("teachingEvidenceTaskExecutor") TaskExecutor evidenceTaskExecutor) {
+        this.evidenceTaskExecutor = evidenceTaskExecutor;
+    }
+
     /** Keeps existing focused tests and compatibility constructors independent of the optional vision adapter. */
     public TeachingWorkflowService(
             Path processedBooksRoot,
             TextbookRetrievalService retrievalService,
             TeachingTaskStore taskStore,
             StudentMemoryReuseService memoryReuseService,
-            TeachingAiDraftService aiDraftService,
+            Object legacyTeachingDraftService,
             AgentTraceStore agentTraceStore,
             TeachingHandoutTemplateService handoutTemplateService,
             Optional<KnowledgeQuestionBankService> questionBankService,
@@ -269,7 +280,6 @@ public class TeachingWorkflowService extends TeachingWorkflowExecutionSupport {
                 retrievalService,
                 taskStore,
                 memoryReuseService,
-                aiDraftService,
                 agentTraceStore,
                 null,
                 null,
@@ -285,7 +295,7 @@ public class TeachingWorkflowService extends TeachingWorkflowExecutionSupport {
             TextbookRetrievalService retrievalService,
             TeachingTaskStore taskStore,
             StudentMemoryReuseService memoryReuseService,
-            TeachingAiDraftService aiDraftService,
+            Object legacyTeachingDraftService,
             AgentTraceStore agentTraceStore,
             TeachingHandoutTemplateService handoutTemplateService,
             Optional<KnowledgeQuestionBankService> questionBankService,
@@ -295,10 +305,12 @@ public class TeachingWorkflowService extends TeachingWorkflowExecutionSupport {
                 retrievalService,
                 taskStore,
                 memoryReuseService,
-                aiDraftService,
                 agentTraceStore,
+                null,
+                null,
                 handoutTemplateService,
                 questionBankService,
+                Optional.empty(),
                 Optional.empty(),
                 taskExecutor);
     }
@@ -312,14 +324,14 @@ public class TeachingWorkflowService extends TeachingWorkflowExecutionSupport {
             TextbookRetrievalService retrievalService,
             TeachingTaskStore taskStore,
             StudentMemoryReuseService memoryReuseService,
-            TeachingAiDraftService aiDraftService,
+            Object legacyTeachingDraftService,
             AgentTraceStore agentTraceStore) {
         this(
                 processedBooksRoot,
                 retrievalService,
                 taskStore,
                 memoryReuseService,
-                aiDraftService,
+                legacyTeachingDraftService,
                 agentTraceStore,
                 new TeachingHandoutTemplateService(),
                 Optional.empty(),
@@ -732,10 +744,20 @@ public class TeachingWorkflowService extends TeachingWorkflowExecutionSupport {
 
     static TimedEvidence awaitEvidence(
             String source,
-            CompletableFuture<TimedEvidence> future) {
+            CompletableFuture<TimedEvidence> future,
+            long timeoutMs) {
+        if (timeoutMs < 1L) {
+            throw new IllegalArgumentException("Evidence timeout must be positive");
+        }
         try {
-            return future.join();
-        } catch (CompletionException exception) {
+            return future.get(timeoutMs, TimeUnit.MILLISECONDS);
+        } catch (TimeoutException exception) {
+            throw new IllegalStateException(
+                    "Timed out collecting " + source + " evidence after " + timeoutMs + " ms", exception);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while collecting " + source + " evidence", exception);
+        } catch (ExecutionException exception) {
             Throwable cause = exception.getCause();
             if (cause instanceof RuntimeException runtimeException) {
                 throw runtimeException;

@@ -19,7 +19,7 @@ from typing import Any
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from benchmarks.deepseek_react_rag_eval import _capability_post, _wait_for_sync_job
+from benchmarks.deepseek_react_rag_eval import _wait_for_sync_job
 from benchmarks.http_client import MathAgentClient
 from benchmarks.metrics import compute_latency_summary
 
@@ -102,11 +102,11 @@ def register_new_library_documents(client: MathAgentClient, output_dir: Path, ru
             "feishuExportFormat": "md",
         }
         started = time.perf_counter()
-        register = _capability_post(client, "teacher-resource:register", "/api/teacher/resources", body, 1)
+        register = client.post("/api/teacher/resources", body)
         document_id = str((register.body or {}).get("documentId") or "") if isinstance(register.body, dict) else ""
-        create = _capability_post(client, "teacher-resource:sync", f"/api/teacher/resources/{document_id}/sync-jobs", {}, 1)
+        create = client.post(f"/api/teacher/resources/{document_id}/sync-jobs", {})
         job_id = str((create.body or {}).get("jobId") or "") if isinstance(create.body, dict) else ""
-        _capability_post(client, "teacher-resource:sync-execute", f"/api/teacher/resources/{document_id}/sync-jobs/{job_id}/execute", {}, 1)
+        client.post(f"/api/teacher/resources/{document_id}/sync-jobs/{job_id}/execute", {})
         final = _wait_for_sync_job(client, document_id, job_id, timeout_seconds=180)
         row = {"library": library, "documentId": document_id, "jobId": job_id, "status": final.get("status"),
                "phase": final.get("phase"), "elapsedMs": int(round((time.perf_counter() - started) * 1000))}

@@ -1,6 +1,7 @@
 package com.doob.mathagent.teaching.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.doob.mathagent.teaching.entity.TeachingTaskEntity;
 import com.doob.mathagent.teaching.mapper.TeachingTaskMapper;
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
@@ -61,10 +62,10 @@ public class MyBatisTeachingTaskStore implements TeachingTaskStore {
             return List.of();
         }
         int safeLimit = Math.max(1, Math.min(50, limit));
-        return mapper.selectList(new LambdaQueryWrapper<TeachingTaskEntity>()
+        return mapper.selectPage(Page.of(1, safeLimit), new LambdaQueryWrapper<TeachingTaskEntity>()
                 .eq(TeachingTaskEntity::getOwnerKey, ownerKey.strip())
-                .orderByDesc(TeachingTaskEntity::getUpdatedAt)
-                .last("LIMIT " + safeLimit))
+                .orderByDesc(TeachingTaskEntity::getUpdatedAt))
+                .getRecords()
                 .stream()
                 .map(this::readResponse)
                 .toList();

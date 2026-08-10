@@ -10,7 +10,21 @@ public record SystemRuntimeStatusResponse(
         DatabaseStatus database,
         RedisStatus redis,
         VectorStatus vectorIndex,
-        FeishuStatus feishu) {
+        FeishuStatus feishu,
+        DependencyStatus dependencies) {
+
+    /** Compatibility constructor for focused unit tests that do not create real dependency clients. */
+    public SystemRuntimeStatusResponse(
+            DeploymentStatus deployment,
+            AiStatus ai,
+            AuthStatus auth,
+            DatabaseStatus database,
+            RedisStatus redis,
+            VectorStatus vectorIndex,
+            FeishuStatus feishu) {
+        this(deployment, ai, auth, database, redis, vectorIndex, feishu,
+                new DependencyStatus(false, true, true, true, true, true));
+    }
 
     /**
      * Deploy readiness summary computed by the backend from durable integration switches.
@@ -69,13 +83,11 @@ public record SystemRuntimeStatusResponse(
      * Redis feature switches and cache settings without credentials.
      */
     public record RedisStatus(
-            boolean redissonEnabled,
-            String redissonAddress,
-            boolean rateLimitEnabled,
-            String rateLimitKeyPrefix,
-            boolean capabilityStoreEnabled,
-            String capabilityStoreKeyPrefix,
-            boolean searchCacheEnabled,
+        boolean redissonEnabled,
+        String redissonAddress,
+        boolean rateLimitEnabled,
+        String rateLimitKeyPrefix,
+        boolean searchCacheEnabled,
             String searchCacheKeyPrefix,
             String searchCacheTtl) {
     }
@@ -112,5 +124,15 @@ public record SystemRuntimeStatusResponse(
             int smokeMaxFiles,
             int processTimeoutSeconds,
             String mode) {
+    }
+
+    /** Real dependency checks from the latest readiness probe; values are never inferred from configuration alone. */
+    public record DependencyStatus(
+            boolean probed,
+            boolean mysql,
+            boolean redis,
+            boolean rabbitmq,
+            boolean worker,
+            boolean flyway) {
     }
 }

@@ -35,4 +35,19 @@ public interface StudentExplanationProgressListener {
      */
     default void onCompleted(StudentExplanationResponse response) {
     }
+
+    /**
+     * Reports whether the downstream caller has gone away. Long-running retrieval/model stages use this hook to
+     * stop before starting another expensive operation after an SSE disconnect.
+     */
+    default boolean isCancelled() {
+        return false;
+    }
+
+    /** Fails fast at an orchestration boundary when the client no longer owns a live stream. */
+    default void throwIfCancelled() {
+        if (isCancelled()) {
+            throw new java.util.concurrent.CancellationException("Student explanation stream was cancelled");
+        }
+    }
 }

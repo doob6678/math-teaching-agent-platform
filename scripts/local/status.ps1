@@ -8,6 +8,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..\..")
+$script:WebSession = New-Object Microsoft.PowerShell.Commands.WebRequestSession
 
 function Test-TcpPort {
     param(
@@ -35,13 +36,15 @@ function Invoke-Json {
         [string]$Uri,
         [hashtable]$Headers = @{},
         [object]$Body = $null,
-        [int]$TimeoutSec = 10
+        [int]$TimeoutSec = 10,
+        [object]$WebSession = $script:WebSession
     )
     $parameters = @{
         Method = $Method
         Uri = $Uri
         Headers = $Headers
         TimeoutSec = $TimeoutSec
+        WebSession = $WebSession
     }
     if ($null -ne $Body) {
         $parameters["ContentType"] = "application/json"
@@ -130,9 +133,7 @@ if ($portStatus.backend -and -not [string]::IsNullOrWhiteSpace($Username) -and -
             -Method "Post" `
             -Uri "$base/api/auth/login" `
             -Body @{ username = $Username; password = $Password }
-        $headers = @{}
-        $headers[$login.tokenName] = $login.tokenValue
-        $runtimeStatus = Invoke-Json -Method "Get" -Uri "$base/api/system/runtime" -Headers $headers
+        $runtimeStatus = Invoke-Json -Method "Get" -Uri "$base/api/system/runtime"
     } catch {
         $runtimeStatus = @{ status = "error"; message = $_.Exception.Message }
     }

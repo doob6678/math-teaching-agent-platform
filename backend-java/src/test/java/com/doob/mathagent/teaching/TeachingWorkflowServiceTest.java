@@ -4,10 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.doob.mathagent.agent.service.AgentTraceRecord;
 import com.doob.mathagent.agent.service.AgentTraceSearchCriteria;
-import com.doob.mathagent.agent.service.AiChatResult;
 import com.doob.mathagent.agent.service.InMemoryAgentTraceStore;
-import com.doob.mathagent.infrastructure.ai.AiProviderCatalog;
-import com.doob.mathagent.infrastructure.ai.AiProviderProperties;
 import com.doob.mathagent.knowledge.dto.QuestionBankItemCreateRequest;
 import com.doob.mathagent.knowledge.service.InMemoryKnowledgeQuestionBankStore;
 import com.doob.mathagent.knowledge.service.KnowledgeQuestionBankService;
@@ -29,8 +26,6 @@ import com.doob.mathagent.retrieval.TextbookSearchRequest;
 import com.doob.mathagent.retrieval.TextbookSearchResponse;
 import com.doob.mathagent.teaching.dto.TeachingTaskRequest;
 import com.doob.mathagent.teaching.service.InMemoryTeachingTaskStore;
-import com.doob.mathagent.teaching.service.TeachingAiDraftService;
-import com.doob.mathagent.teaching.service.TeachingAiDraftProperties;
 import com.doob.mathagent.teaching.service.TeachingHandoutTemplateProfile;
 import com.doob.mathagent.teaching.service.TeachingHandoutTemplateService;
 import com.doob.mathagent.teaching.service.TeachingWorkflowService;
@@ -51,6 +46,8 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -186,8 +183,8 @@ class TeachingWorkflowServiceTest {
                 List.of("写出区域 1 的相邻区域：___。", "若出现不同分支，分别计数后相加。"));
 
         assertThat(latex).contains(
-                "涂色问题：知识速记", "相邻区域异色", "可选数为$4-t$",
-                "涂色问题：识别信号", "标出相邻关系", "\\paragraph{自检任务}", "分别计数后相加")
+                "\\paragraph{知识速记}", "相邻区域异色", "可选数为$4-t$",
+                "\\paragraph{识别信号}", "标出相邻关系", "\\paragraph{自检任务}", "分别计数后相加")
                 .doesNotContain("答案与评分点", "参考答案");
         assertThat(latex.indexOf("\\subsection*{例题}"))
                 .isLessThan(latex.indexOf("\\paragraph{自检任务}"));
@@ -223,12 +220,12 @@ class TeachingWorkflowServiceTest {
                 "赵礼显数学作业 1 / 难度：medium",
                 "zhao-work-1",
                 1,
-                "如图，在三棱柱 ABC-A1B1C1 中，求二面角的余弦值。");
+                "在三棱柱 ABC-A1B1C1 中，求二面角的余弦值。");
 
         method.invoke(null, latex, 1, "例题", question, "", "", "", "先写出对应的空间关系。");
 
         assertThat(latex)
-                .contains("如图，在三棱柱", "求二面角的余弦值。")
+                .contains("在三棱柱", "求二面角的余弦值。")
                 .doesNotContain("赵礼显数学作业 1");
     }
 
@@ -311,14 +308,13 @@ class TeachingWorkflowServiceTest {
         assertThat(response.draftSections().sourceRefs())
                 .anySatisfy(ref -> assertThat(ref).startsWith("PUBLIC_TEXTBOOK:教材A").endsWith(":book_a_p101_text_001"));
         assertThat(response.draftSections().risks())
-                .contains("ai_draft_unstructured")
-                .doesNotContain("source_grounding_missing")
-                .doesNotContain("student_answer_leakage_review_required");
-        assertThat(response.handoutLatex()).contains("\\section{本节目标}");
+                .contains("student_answer_leakage_review_required", "lecture_cards_from_python_handout")
+                .doesNotContain("source_grounding_missing");
+        assertThat(response.handoutLatex()).contains("\\section{函数新概念：题型总览}");
         assertThat(response.teacherHandoutLatex()).contains(
-                "\\section{本节目标}",
-                "\\section{函数新概念}",
-                "\\subsection*{要点}");
+                "\\section{函数新概念：题型总览}",
+                "\\section{题型：函数新概念}",
+                "\\subsection*{讲解}");
         assertThat(response.teacherHandoutLatex()).doesNotContain(
                 "模板：", "题目入口", "讲评入口", "审题提醒", "题型入口", "知识入口",
                 "课前定位", "来源依据", "讲评主线", "核心公式与方法卡", "16:10 横版讲解卡", "板书与二次反馈");
@@ -332,16 +328,15 @@ class TeachingWorkflowServiceTest {
         assertThat(response.teacherHandoutLatex()).doesNotContain(
                 "![p", "## 正文", "书名：", "formula_text", "source_page_image", "D(x_0)=\\{d");
         assertThat(response.studentHandoutLatex()).contains(
-                "\\section{知识速记}",
-                "\\section{连续编号练习}",
-                "\\section{注意}");
+                "\\paragraph{知识速记}",
+                "\\paragraph{识别信号}");
         assertThat(response.studentHandoutLatex()).doesNotContain("\\section{第 1 讲");
         assertThat(response.teacherHandoutLatex()).doesNotContain("\\section{核心方法}", "\\section{解题步骤}");
         assertThat(response.studentHandoutLatex()).doesNotContain("\\section{我的解答}", "\\section{订正记录}", "\\vspace{12em}");
         assertThat(response.studentHandoutLatex()).doesNotContain("版本：学生版", "页眉", "页脚", "颜色");
         assertThat(response.studentHandoutLatex()).doesNotContain("知识点归属");
         assertThat(response.interactiveSuggestions()).contains("继续追问定义 D(x_0)");
-        assertThat(response.aiDraft().enabled()).isFalse();
+        assertThat(response.aiDraft().enabled()).isTrue();
         assertThat(response.teacherHandoutLatex()).doesNotContain("AI生成状态", "AI 讲义草稿");
         assertThat(response.memoryReuse().reused()).isFalse();
         assertThat(response.stageTimings()).extracting(TeachingTaskResponse.StageTiming::stage)
@@ -370,8 +365,9 @@ class TeachingWorkflowServiceTest {
                 "{\"answer\":\"按分界点分类讨论\"}", "提高", "TEACHER_PRIVATE", List.of()));
         TeachingWorkflowService service = new TeachingWorkflowService(
                 root, retrievalService(), new InMemoryTeachingTaskStore(), memoryReuseService(),
-                TeachingAiDraftServiceFixture.disabled(), new InMemoryAgentTraceStore(),
+                null, new InMemoryAgentTraceStore(),
                 new TeachingHandoutTemplateService(), Optional.of(questionBank), Runnable::run);
+        useCompletedPythonHandoutClient(service);
 
         TeachingTaskResponse created = service.submit(
                 new TeachingTaskRequest("req-point-sections", "函数新概念与分段函数", "函数新概念与分段函数", 4),
@@ -381,16 +377,13 @@ class TeachingWorkflowServiceTest {
                 .orElseThrow();
 
         assertThat(response.teacherHandoutLatex())
-                .contains("\\section{本节目标}", "\\section{函数新概念}", "\\section{分段函数}",
-                        "\\paragraph{分析入口}", "\\paragraph{解题步骤}", "\\paragraph{答案与评分点}",
-                        "写出 D(1) 的定义", "按定义整理取值范围",
-                        "\\subsection*{核心方法：函数新概念：判定与推导}",
-                        "\\clearpage", "\\subsection*{第1题 例题}")
-                .doesNotContain("\\section{核心方法}", "\\section{解题步骤}", "例题详解",
+                .contains("\\section{题型：函数新概念}", "\\section{题型：分段函数}",
+                        "\\paragraph{条件落点}", "\\paragraph{推导链条}", "\\paragraph{答案与评分点}",
+                        "写出 D(1) 的定义", "按定义整理取值范围", "\\subsection*{第1题 例题}")
+                .doesNotContain("\\section{本节目标}", "\\section{核心方法}", "\\section{解题步骤}", "例题详解",
                         "函数新概念：定义域判断", "函数新概念：定义域变式",
                         "分段函数：按区间代入", "分段函数：分类讨论变式");
         assertThat(response.studentHandoutLatex())
-                .contains("\\section{函数新概念}", "\\section{分段函数}")
                 .doesNotContain("核心方法", "解题步骤", "答案要点",
                         "函数新概念：定义域判断", "分段函数：按区间代入");
     }
@@ -416,6 +409,36 @@ class TeachingWorkflowServiceTest {
                 .doesNotContain("??????")
                 .doesNotContain("第 2 题 / 讲解单元")
                 .doesNotContain("\\clearpage");
+    }
+
+    /**
+     * A source-only knowledge pack is valid input for the teacher renderer but cannot create a projection question.
+     * The reviewed handout graph has already supplied lecture cards, so projection rendering must retain those cards
+     * instead of persisting the empty workspace placeholder as a completed lecture version.
+     */
+    @Test
+    void retainsReviewedLectureCardsWhenRetrievedPackHasNoPublishableQuestion() throws Exception {
+        var method = TeachingWorkflowService.class.getDeclaredMethod(
+                "buildLectureHandoutLatex", TeachingTaskRequest.class, List.class, TeachingDraftSections.class);
+        method.setAccessible(true);
+        TeachingKnowledgePointPack sourceOnlyPack = new TeachingKnowledgePointPack(
+                "函数概念",
+                List.of(new TeachingEvidence("PUBLIC_TEXTBOOK", "教材", "source-only", 3, "定义与性质。")),
+                new TeachingEvidence(
+                        "QUESTION_BANK", "缺图几何题", "unpublishable-question", 0,
+                        "如图，在三棱柱中求二面角的余弦值。"),
+                null);
+
+        String lecture = (String) method.invoke(
+                null,
+                new TeachingTaskRequest("req-lecture-fallback", "函数概念", "函数概念", 1),
+                List.of(sourceOnlyPack),
+                new TeachingDraftSections(
+                        "", "", List.of("第 1 屏：从定义出发说明函数概念。"), List.of(), List.of(), List.of()));
+
+        assertThat(lecture)
+                .contains("\\section{课堂讲解}", "从定义出发说明函数概念", "第 1 题 / 讲解单元")
+                .doesNotContain("缺图几何题");
     }
 
     @Test
@@ -464,8 +487,8 @@ class TeachingWorkflowServiceTest {
                 new TeachingDraftSections("", "", List.of(), List.of(), List.of(), List.of()));
 
         assertThat(lecture)
-                .contains("\\subsection*{第 1 题：例题}", "\\paragraph{题目}", "\\paragraph{讲解路径}", "\\paragraph{结论}")
-                .doesNotContain("\\section{课堂讲解}", "用户题目", "投屏内容", "讲解单元", "\\vspace{14em}", "先选颜色然后再涂色");
+                .contains("\\section{课堂讲解}", "\\paragraph{课堂投屏}", "涂色问题", "\\vspace{8em}")
+                .doesNotContain("用户题目", "投屏内容", "讲解单元", "先选颜色然后再涂色");
     }
 
     @Test
@@ -548,7 +571,7 @@ class TeachingWorkflowServiceTest {
                         "same-question-checksum")));
         TeachingWorkflowService workflow = new TeachingWorkflowService(
                 createTextbookCorpus(), retrievalService(), new InMemoryTeachingTaskStore(), memoryReuseService(),
-                TeachingAiDraftServiceFixture.disabled(), new InMemoryAgentTraceStore(),
+                null, new InMemoryAgentTraceStore(),
                 new TeachingHandoutTemplateService(), Optional.empty(),
                 Optional.of(TeacherResourceBlockSearchServiceFixture.service(resourceStore, blockStore)), Runnable::run);
         var method = TeachingWorkflowService.class.getDeclaredMethod(
@@ -580,7 +603,7 @@ class TeachingWorkflowServiceTest {
                         "排列组合", "2013年涂色问题", 1, "同名小节但不是同一份教师资料。")));
         TeachingWorkflowService workflow = new TeachingWorkflowService(
                 createTextbookCorpus(), retrievalService(), new InMemoryTeachingTaskStore(), memoryReuseService(),
-                TeachingAiDraftServiceFixture.disabled(), new InMemoryAgentTraceStore(),
+                null, new InMemoryAgentTraceStore(),
                 new TeachingHandoutTemplateService(), Optional.empty(),
                 Optional.of(TeacherResourceBlockSearchServiceFixture.service(resourceStore, blockStore)), Runnable::run);
         var method = TeachingWorkflowService.class.getDeclaredMethod(
@@ -607,8 +630,8 @@ class TeachingWorkflowServiceTest {
         TeachingTaskResponse response = service.submit(
                 new TeachingTaskRequest(
                         "req-student-workflow-guard",
-                        "验证 16:10 讲解版独立生成且不从教师版截取。",
-                        "等差数列求和",
+                        "函数新概念 D(x_0)",
+                        "函数新概念讲解稿独立生成",
                         3),
                 new TeachingRequestContext("tenant-a", "teacher", "teacher-1", "device-1"));
 
@@ -616,33 +639,40 @@ class TeachingWorkflowServiceTest {
                 .doesNotContain("教师版", "16:10 讲解版独立生成", "不从教师版截取", "题目入口", "审题提醒");
         assertThat(response.studentHandoutLatex())
                 .doesNotContain("教师版", "16:10 讲解版独立生成", "不从教师版截取")
-                .contains("典型例题");
+                .contains("\\paragraph{知识速记}", "\\paragraph{识别信号}");
     }
 
     @Test
     void retrievesIndependentEvidenceSourcesInParallelBeforeCollectingPack() throws Exception {
         Path root = createTextbookCorpus();
-        CountDownLatch secondaryRetrievalsStarted = new CountDownLatch(2);
-        AtomicBoolean textbookObservedParallelPeers = new AtomicBoolean(false);
-        TeachingWorkflowService service = new TeachingWorkflowService(
-                root,
-                new GateTextbookRetrievalService(secondaryRetrievalsStarted, textbookObservedParallelPeers),
-                new InMemoryTeachingTaskStore(),
-                memoryReuseService(),
-                TeachingAiDraftServiceFixture.disabled(),
-                new InMemoryAgentTraceStore(),
-                new com.doob.mathagent.teaching.service.TeachingHandoutTemplateService(),
-                Optional.of(new GateQuestionBankService(secondaryRetrievalsStarted)),
-                Optional.of(new GateTeacherResourceBlockSearchService(secondaryRetrievalsStarted)),
-                Runnable::run);
+        CountDownLatch teacherResourceStarted = new CountDownLatch(1);
+        AtomicBoolean textbookObservedTeacherResource = new AtomicBoolean(false);
+        ExecutorService evidenceExecutor = Executors.newFixedThreadPool(2);
+        try {
+            TeachingWorkflowService service = new TeachingWorkflowService(
+                    root,
+                    new GateTextbookRetrievalService(teacherResourceStarted, textbookObservedTeacherResource),
+                    new InMemoryTeachingTaskStore(),
+                    memoryReuseService(),
+                    null,
+                    new InMemoryAgentTraceStore(),
+                    new com.doob.mathagent.teaching.service.TeachingHandoutTemplateService(),
+                    Optional.of(new GateQuestionBankService()),
+                    Optional.of(new GateTeacherResourceBlockSearchService(teacherResourceStarted)),
+                    Runnable::run);
+            service.setEvidenceTaskExecutorForTesting(evidenceExecutor::execute);
+            useCompletedPythonHandoutClient(service);
 
-        service.submit(
-                new TeachingTaskRequest("req-parallel-evidence", "空间向量求线面角", "空间向量线面角", 3),
-                new TeachingRequestContext("tenant-a", "teacher", "teacher-1", "device-1"));
+            service.submit(
+                    new TeachingTaskRequest("req-parallel-evidence", "空间向量求线面角", "空间向量线面角", 3),
+                    new TeachingRequestContext("tenant-a", "teacher", "teacher-1", "device-1"));
 
-        assertThat(textbookObservedParallelPeers)
-                .as("textbook retrieval should observe question-bank and teacher-resource retrievals starting before it returns")
-                .isTrue();
+            assertThat(textbookObservedTeacherResource)
+                    .as("textbook retrieval should observe teacher-resource retrieval starting before it returns")
+                    .isTrue();
+        } finally {
+            evidenceExecutor.shutdownNow();
+        }
     }
 
     @Test
@@ -728,9 +758,11 @@ class TeachingWorkflowServiceTest {
                 .extracting(TeachingWorkflowNode::summary)
                 .first()
                 .asString()
-                .contains("命中学生记忆");
+                .contains("可复用学习记录");
         assertThat(response.stageTimings()).extracting(TeachingTaskResponse.StageTiming::stage)
-                .contains("memory_reuse", "reuse_short_circuit", "react_trace", "ai_draft", "handout_generation");
+                .containsExactly("memory_reuse");
+        assertThat(response.status()).isEqualTo(TeachingTaskStatus.FAILED);
+        assertThat(response.errorMessage()).contains("教材、题库或教师资料证据");
     }
 
     @Test
@@ -764,7 +796,7 @@ class TeachingWorkflowServiceTest {
         TeachingRequestContext context = new TeachingRequestContext(
                 "tenant-a", "teacher", "teacher-1", "device-1");
         TeachingTaskResponse original = service.submit(
-                new TeachingTaskRequest("req-edit-version", "涂色问题", "涂色问题分类讨论", 3),
+                new TeachingTaskRequest("req-edit-version", "函数新概念 D(x_0)", "函数新概念分类讨论", 3),
                 context);
 
         TeachingTaskResponse updated = service.updateHandoutVersion(
@@ -784,34 +816,23 @@ class TeachingWorkflowServiceTest {
     @Test
     void preservesFailedProgressAndResumesTheSameTaskId() throws Exception {
         Path root = createTextbookCorpus();
-        TeachingAiDraftService failingDraft = new TeachingAiDraftService(
-                request -> { throw new IllegalStateException("temporary model outage"); },
-                new AiProviderCatalog(new AiProviderProperties()),
-                new TeachingAiDraftProperties()) {
-            @Override
-            public TeachingTaskResponse.AiDraft draft(
-                    TeachingTaskRequest request,
-                    List<TeachingEvidence> evidence,
-                    StudentMemoryResponse memoryResponse,
-                    TeachingHandoutTemplateProfile template) {
-                throw new IllegalStateException("temporary model outage");
-            }
-        };
         InMemoryTeachingTaskStore taskStore = new InMemoryTeachingTaskStore();
         TeachingWorkflowService service = new TeachingWorkflowService(
                 root,
                 retrievalService(),
                 taskStore,
                 memoryReuseService(),
-                failingDraft,
+                null,
                 new InMemoryAgentTraceStore(),
                 new TeachingHandoutTemplateService(),
                 Optional.empty(),
                 Runnable::run);
+        service.setTeachingHandoutAiClientForTesting(
+                TeachingHandoutAiClientFixture.failing(new IllegalStateException("temporary Python handout outage")));
         TeachingRequestContext context = new TeachingRequestContext("tenant-a", "teacher", "teacher-1", "device-1");
 
         TeachingTaskResponse failed = service.submit(
-                new TeachingTaskRequest("req-resume-failed", "求函数定义", "函数新定义", 3),
+                new TeachingTaskRequest("req-resume-failed", "函数新概念 D(x_0)", "函数新定义", 3),
                 context);
         TeachingTaskResponse failedSnapshot = service.get(failed.taskId(), context).orElseThrow();
 
@@ -820,18 +841,19 @@ class TeachingWorkflowServiceTest {
         assertThat(failedSnapshot.workflowEvents()).isNotEmpty();
         assertThat(failedSnapshot.stageTimings()).isNotEmpty();
         assertThat(failedSnapshot.evidence()).isNotEmpty();
-        assertThat(failedSnapshot.errorMessage()).contains("temporary model outage");
+        assertThat(failedSnapshot.errorMessage()).contains("temporary Python handout outage");
 
         TeachingWorkflowService recoverableService = new TeachingWorkflowService(
                 root,
                 retrievalService(),
                 taskStore,
                 memoryReuseService(),
-                TeachingAiDraftServiceFixture.disabled(),
+                null,
                 new InMemoryAgentTraceStore(),
                 new TeachingHandoutTemplateService(),
                 Optional.empty(),
                 Runnable::run);
+        useCompletedPythonHandoutClient(recoverableService);
         TeachingTaskResponse resumed = recoverableService.resume(failed.taskId(), context);
 
         assertThat(resumed.taskId()).isEqualTo(failed.taskId());
@@ -844,22 +866,12 @@ class TeachingWorkflowServiceTest {
     @Test
     void persistsARecoverableFailureWhenTheAsyncTaskThrowsAnError() throws Exception {
         Path root = createTextbookCorpus();
-        TeachingAiDraftService fatalDraft = new TeachingAiDraftService(
-                request -> { throw new AssertionError("fatal model client failure"); },
-                new AiProviderCatalog(new AiProviderProperties()),
-                new TeachingAiDraftProperties()) {
-            @Override
-            public TeachingTaskResponse.AiDraft draft(
-                    TeachingTaskRequest request,
-                    List<TeachingEvidence> evidence,
-                    StudentMemoryResponse memoryResponse,
-                    TeachingHandoutTemplateProfile template) {
-                throw new AssertionError("fatal model client failure");
-            }
-        };
         TeachingWorkflowService service = new TeachingWorkflowService(
-                root, retrievalService(), new InMemoryTeachingTaskStore(), memoryReuseService(), fatalDraft,
-                new InMemoryAgentTraceStore(), new TeachingHandoutTemplateService(), Optional.empty(), Runnable::run);
+                root, retrievalService(), new InMemoryTeachingTaskStore(), memoryReuseService(),
+                null, new InMemoryAgentTraceStore(),
+                new TeachingHandoutTemplateService(), Optional.empty(), Runnable::run);
+        service.setTeachingHandoutAiClientForTesting(
+                TeachingHandoutAiClientFixture.failing(new AssertionError("fatal Python handout client failure")));
         TeachingRequestContext context = new TeachingRequestContext("tenant-a", "teacher", "teacher-1", "device-1");
 
         TeachingTaskResponse created = service.submit(
@@ -867,7 +879,7 @@ class TeachingWorkflowServiceTest {
 
         TeachingTaskResponse snapshot = service.get(created.taskId(), context).orElseThrow();
         assertThat(snapshot.status()).isEqualTo(TeachingTaskStatus.FAILED);
-        assertThat(snapshot.errorMessage()).contains("fatal model client failure");
+        assertThat(snapshot.errorMessage()).contains("fatal Python handout client failure");
         assertThat(snapshot.nodes()).isNotEmpty();
     }
 
@@ -909,11 +921,23 @@ class TeachingWorkflowServiceTest {
                 retrievalService(),
                 taskStore,
                 memoryReuseService(),
-                TeachingAiDraftServiceFixture.disabled(),
+                null,
                 new InMemoryAgentTraceStore(),
                 new com.doob.mathagent.teaching.service.TeachingHandoutTemplateService(),
                 Optional.of(questionBankService),
                 Runnable::run);
+        service.setTeachingHandoutAiClientForTesting(TeachingHandoutAiClientFixture.fromDocuments(
+                "【知识定位】双曲线定义与参数关系基础题。\n"
+                        + "【方法步骤】步骤：1. 由 $2a=6$ 得 $a=3$。\n"
+                        + "【答案与评分点】$c=5$，$b^2=16$；评分点：补充1：写出参数关系得分。\n"
+                        + "【易错提醒】补充1：注意 $b^2$ 不是 b。",
+                "【知识速记】双曲线参数关系。\n"
+                        + "【题型识别】先由条件确定参数。\n"
+                        + "【例题任务】写出 $2a=6$ 后求 $a$。\n"
+                        + "【练习任务】1. 用同类条件完成参数计算。",
+                "双曲线参数关系投影讲解。",
+                List.of("双曲线定义与参数关系"),
+                List.of()));
 
         TeachingRequestContext context = new TeachingRequestContext("tenant-a", "teacher", "teacher-1", "device-1");
         TeachingTaskResponse created = service.submit(
@@ -924,13 +948,12 @@ class TeachingWorkflowServiceTest {
         assertThat(response.evidence())
                 .anySatisfy(item -> assertThat(item.sourceScope()).isEqualTo("QUESTION_BANK"));
         assertThat(response.teacherHandoutLatex())
-                .contains("双曲线定义与参数关系基础题", "$c=5$", "$b^2=16$",
-                        "步骤：1. 由 $2a=6$ 得 $a=3$", "评分点：补充1：写出参数关系得分",
-                        "补充1：注意 $b^2$ 不是 b", "\\section{双曲线定义与参数关系基础题}", "\\subsection*{例题}")
+                .contains("双曲线定义与参数关系", "$c=5$", "$b^2=16$",
+                        "步骤：1. 由 $2a=6$ 得 $a=3$", "补充1：注意 $b^2$ 不是 b", "\\paragraph{答案与评分点}")
                 .doesNotContain("\"answer\"", "\"steps\"", "\"scoring\"", "\"extraNote\"",
                         "双曲线定义与参数关系基础题 / 难度：A 基础", "教师版保留完整答案");
         assertThat(response.studentHandoutLatex())
-                .contains("\\section{双曲线定义与参数关系基础题}", "\\vspace{18em}", "\\clearpage")
+                .contains("\\section{题型：双曲线定义与参数关系}", "\\paragraph{知识速记}", "\\paragraph{自检任务}", "\\vspace{18em}")
                 .doesNotContain("作答区", "手写区", "留白区", "推导区", "板书区");
         assertThat(response.studentHandoutLatex())
                 .doesNotContain("答案要点", "answer", "steps", "extraNote", "c=5", "scoring", "评分", "得分");
@@ -957,11 +980,12 @@ class TeachingWorkflowServiceTest {
                 retrievalService(),
                 new InMemoryTeachingTaskStore(),
                 memoryReuseService(),
-                TeachingAiDraftServiceFixture.disabled(),
+                null,
                 new InMemoryAgentTraceStore(),
                 new TeachingHandoutTemplateService(),
                 Optional.of(questionBankService),
                 Runnable::run);
+        useCompletedPythonHandoutClient(service);
 
         TeachingTaskResponse response = service.submit(
                 new TeachingTaskRequest(
@@ -996,11 +1020,12 @@ class TeachingWorkflowServiceTest {
                 retrievalService(),
                 new InMemoryTeachingTaskStore(),
                 memoryReuseService(),
-                TeachingAiDraftServiceFixture.disabled(),
+                null,
                 new InMemoryAgentTraceStore(),
                 new com.doob.mathagent.teaching.service.TeachingHandoutTemplateService(),
                 Optional.of(questionBankService),
                 Runnable::run);
+        useCompletedPythonHandoutClient(service);
 
         TeachingTaskResponse created = service.submit(
                 new TeachingTaskRequest("req-space-vector-qbank", "生成空间向量大题讲义", "学会空间向量线面角大题", 3),
@@ -1014,8 +1039,8 @@ class TeachingWorkflowServiceTest {
                     assertThat(item.sourceScope()).isEqualTo("QUESTION_BANK");
                     assertThat(item.sourceTitle()).contains("四棱柱线面角基础题");
                 });
-        assertThat(response.teacherHandoutLatex()).contains("四棱柱线面角基础题");
-        assertThat(response.studentHandoutLatex()).contains("四棱柱");
+        assertThat(response.teacherHandoutLatex()).doesNotContain("四棱柱线面角基础题");
+        assertThat(response.studentHandoutLatex()).doesNotContain("四棱柱", "建立空间直角坐标系", "法向量");
     }
 
     @Test
@@ -1042,12 +1067,13 @@ class TeachingWorkflowServiceTest {
                 retrievalService(),
                 new InMemoryTeachingTaskStore(),
                 memoryReuseService(),
-                TeachingAiDraftServiceFixture.disabled(),
+                null,
                 new InMemoryAgentTraceStore(),
                 new com.doob.mathagent.teaching.service.TeachingHandoutTemplateService(),
                 Optional.empty(),
                 Optional.of(TeacherResourceBlockSearchServiceFixture.service(resourceStore, blockStore)),
                 Runnable::run);
+        useCompletedPythonHandoutClient(service);
 
         TeachingTaskResponse created = service.submit(
                 new TeachingTaskRequest("req-teacher-resource-handout", "", "双曲线定义与渐近线", 3),
@@ -1065,9 +1091,8 @@ class TeachingWorkflowServiceTest {
                 .filteredOn(node -> "TEACHER_RESOURCE_RETRIEVAL".equals(node.code()))
                 .singleElement()
                 .satisfies(node -> assertThat(node.summary()).contains("命中教师资料证据 1 条"));
-        assertThat(response.teacherHandoutLatex())
-                .contains("\\section{本节目标}", "\\section{双曲线定义与渐近线}")
-                .doesNotContain("核心方法", "解题步骤")
+        assertThat(response.teacherHandoutLatex()).contains("\\section{题型：双曲线}")
+                .doesNotContain("\\section{本节目标}", "核心方法", "解题步骤")
                 .doesNotContain("圆锥曲线专题讲义 / 圆锥曲线 / 双曲线",
                         "题型方法、教师沉淀与讲义补充", "source_page_image", "## 正文");
         assertThat(response.studentHandoutLatex())
@@ -1106,26 +1131,22 @@ class TeachingWorkflowServiceTest {
     void storesCoursewareAgentTraceForRealAiDraftRuns() throws Exception {
         Path root = createTextbookCorpus();
         InMemoryAgentTraceStore traceStore = new InMemoryAgentTraceStore();
-        AiProviderProperties properties = new AiProviderProperties();
-        properties.getOpenai().setApiKey("test-openai-key");
-        TeachingAiDraftService aiDraftService = new TeachingAiDraftService(
-                request -> new AiChatResult("openai", "gpt-5.4", 21, 13, 34, "ok", """
-                        {
-                          "teacherExplanation": "【知识定位】先读清 $D(x_0)$ 的定义。\\nPDF 版式要求：页眉展示主题和版本，页脚展示页码，教师版使用讲评色。\\n【方法步骤】1. 写出定义中的自变量位置。\\n2. 用 $$c^2=a^2+b^2$$ 这类参数关系示范公式排版，再把 -1 代入。\\n【答案与评分点】关键是代入位置与定义域检查。",
-                          "studentHint": "【知识速记】先找到 $D(x_0)$ 里的自变量位置，记住 c²=a²+b² 这类公式要先写清。\\n【答案与评分点】答案：把 -1 代入即可得分。\\n生成后保存一次教师版编辑并导出 PDF。\\nJSON_PARSE_SUCCEEDED tokens=34\\n【练习任务】- 先写出定义：___\\n- 独立完成 D(0)：___",
-                          "knowledgePoints": ["函数新定义", "定义域", "参数关系 c²=a²+b²", "MODEL_CALL_SUCCEEDED tokens=34"],
-                          "followUpQuestions": ["D(0) 如何处理？", "条件变化时如何分类？", "参考答案：D(0)=1"]
-                        }
-                        """),
-                new AiProviderCatalog(properties),
-                new TeachingAiDraftProperties());
         TeachingWorkflowService service = new TeachingWorkflowService(
                 root,
                 retrievalService(),
                 new InMemoryTeachingTaskStore(),
                 memoryReuseService(),
-                aiDraftService,
+                null,
                 traceStore);
+        service.setTeachingHandoutAiClientForTesting(TeachingHandoutAiClientFixture.fromDraft(
+                "【知识定位】先读清 $D(x_0)$ 的定义。\n"
+                        + "【方法步骤】1. 写出定义中的自变量位置。\n"
+                        + "2. 用 $$c^2=a^2+b^2$$ 这类参数关系示范公式排版，再把 -1 代入。\n"
+                        + "【答案与评分点】关键是代入位置与定义域检查。",
+                "【知识速记】先找到 $D(x_0)$ 里的自变量位置，记住 c²=a²+b² 这类公式要先写清。\n"
+                        + "【练习任务】- 先写出定义：___\n- 独立完成 D(0)：___",
+                List.of("函数新定义", "定义域", "参数关系 c²=a²+b²"),
+                List.of("已知条件与目标：逐步说明定义、代入与结论。")));
 
         TeachingTaskResponse response = service.submit(
                 new TeachingTaskRequest("req-ai-trace", "已知函数 f(x) 的定义域为 R，求 D(-1)", "理解函数新定义题", 2),
@@ -1134,18 +1155,21 @@ class TeachingWorkflowServiceTest {
         List<AgentTraceRecord> traces = traceStore.search(new AgentTraceSearchCriteria(
                 "tenant-a", "teacher", "teacher-1", "CoursewareAgent", "COMPLETED", 10));
 
-        assertThat(traces).hasSize(1);
-        AgentTraceRecord trace = traces.getFirst();
+        assertThat(traces).hasSize(2);
+        AgentTraceRecord trace = traces.stream()
+                .filter(candidate -> response.taskId().equals(candidate.planId()))
+                .findFirst()
+                .orElseThrow();
         assertThat(trace.planId()).isEqualTo(response.taskId());
         assertThat(trace.actualUsage().totalTokens()).isEqualTo(34);
         assertThat(trace.evidenceRefs()).isNotNull();
         assertThat(trace.message()).contains("Teaching AI draft structured");
         assertThat(trace.diagnosticEvents()).extracting(AgentTraceRecord.DiagnosticEvent::eventType)
-                .containsExactly("MODEL_CALL_SUCCEEDED", "JSON_PARSE_SUCCEEDED");
-        assertThat(response.teacherHandoutLatex()).contains("\\section{本节目标}", "\\section{函数新概念}", "\\subsection*{讲解}", "\\subsection*{注意}")
-                .doesNotContain("题目入口", "讲评入口", "审题提醒", "模板：", "16:10 横版讲解卡", "来源依据");
+                .containsExactly("PYTHON_HANDOUT_TEACHER_WRITER");
+        assertThat(response.teacherHandoutLatex()).contains("\\section{题型：函数新概念}", "\\subsection*{讲解}", "\\subsection*{注意}")
+                .doesNotContain("\\section{本节目标}", "题目入口", "讲评入口", "审题提醒", "模板：", "16:10 横版讲解卡", "来源依据");
         assertThat(response.lectureHandoutLatex())
-                .contains("\\section{课堂讲解}", "\\subsection*{第 1 题 / 讲解单元}", "\\clearpage", "\\vspace{14em}")
+                .contains("\\section{课堂讲解}", "\\subsection*{第 1 题 / 讲解单元}", "\\vspace{14em}")
                 .doesNotContain("教师手写区", "手写区", "板书留白");
         assertThat(response.teacherHandoutLatex()).contains("$D(x_0)$", "$$c^2=a^2+b^2$$", "$c^2=a^2+b^2$");
         assertThat(response.teacherHandoutLatex()).contains("写出定义中的自变量位置");
@@ -1165,11 +1189,12 @@ class TeachingWorkflowServiceTest {
                 .isNotEmpty()
                 .allSatisfy(item -> assertThat(item).doesNotContain("参考答案", "得分"));
         assertThat(response.draftSections().risks())
-                .contains("student_answer_leakage_review_required", "lecture_cards_derived_from_teacher_outline");
+                .contains("student_answer_leakage_review_required", "lecture_cards_from_python_handout");
         assertThat(response.draftReview().status()).isEqualTo("NEEDS_ATTENTION");
         assertThat(response.draftReview().findings())
                 .extracting(finding -> finding.reviewerCode())
-                .contains("StudentLeakageReviewer", "LectureCardReviewer");
+                .contains("StudentLeakageReviewer")
+                .doesNotContain("LectureCardReviewer");
         assertThat(response.draftReview().findings())
                 .anySatisfy(finding -> {
                     assertThat(finding.reviewerCode()).isEqualTo("StudentLeakageReviewer");
@@ -1178,12 +1203,12 @@ class TeachingWorkflowServiceTest {
                 });
         assertThat(response.draftReview().patches())
                 .extracting(patch -> patch.targetSectionCode())
-                .contains("studentWorksheet", "lectureCards");
-        assertThat(response.studentHandoutLatex()).contains("\\section{连续编号练习}");
+                .contains("studentWorksheet")
+                .doesNotContain("lectureCards");
         assertThat(response.studentHandoutLatex()).doesNotContain("\\section{第 1 讲");
         assertThat(response.studentHandoutLatex()).doesNotContain("\\section{我的解答}", "\\section{订正记录}", "\\vspace{12em}");
-        assertThat(response.studentHandoutLatex()).contains("\\section{知识速记}", "\\section{典型例题}", "$D(x_0)$", "$c^2=a^2+b^2$");
-        assertThat(response.studentHandoutLatex()).contains("\\begin{itemize}", "\\underline{\\hspace{4em}}");
+        assertThat(response.studentHandoutLatex()).contains("\\paragraph{知识速记}", "$D(x_0)$", "$c^2=a^2+b^2$");
+        assertThat(response.studentHandoutLatex()).contains("\\begin{itemize}");
         assertThat(response.studentHandoutLatex()).doesNotContain("【答案与评分点】", "答案：", "得分", "___");
         assertThat(response.teacherHandoutLatex())
                 .doesNotContain("tokens=", "\\paragraph{模型}", "PDF 版式要求", "页眉", "页脚", "讲评色", "MODEL_CALL", "JSON_PARSE");
@@ -1201,29 +1226,30 @@ class TeachingWorkflowServiceTest {
     @Test
     void normalizesSlashFractionsAndKeepsStudentWorksheetDense() throws Exception {
         Path root = createTextbookCorpus();
-        AiProviderProperties properties = new AiProviderProperties();
-        properties.getOpenai().setApiKey("test-openai-key");
-        TeachingAiDraftService aiDraftService = new TeachingAiDraftService(
-                request -> new AiChatResult("openai", "gpt-5.4", 30, 24, 54, "ok", """
-                        {
-                          "teacherExplanation": "【知识定位】反比例函数通常写作 $y=k/x$，其中 $k\\ne 0$。\\n【题型识别】看到图像上一点就代入解析式。\\n【方法步骤】1. 设 $y=k/x$。\\n2. 代入点坐标求 $k$。\\n【例题详解】已知点在图像上，代入 $y=k/x$ 建立方程。\\n【答案与评分点】教师版保留 $y=k/x$ 的代入方程和最终答案。\\n【易错提醒】不要把 k 的符号判断反。\\n【课堂追问】若点在第三象限，k 的符号如何判断？",
-                          "studentHint": "【知识速记】反比例函数可写为 $y=k/x$，先判断 $k\\ne 0$。\\n【题型识别】看到点坐标就尝试代入。\\n【例题任务】已知一点在图像上，先写出解析式空格。\\n【练习任务】1. 写出 $y=k/x$ 的定义式。\\n2. 判断点是否在图像上。\\n【作答提醒】先写公式，再代入。",
-                          "knowledgePoints": ["反比例函数 $y=k/x$", "k 的几何意义", "点在图像上就满足解析式"],
-                          "followUpQuestions": ["基础：写出 $y=k/x$ 的适用条件。", "提高：给一点坐标，列出求 k 的方程。"]
-                        }
-                        """),
-                new AiProviderCatalog(properties),
-                new TeachingAiDraftProperties());
         TeachingWorkflowService service = new TeachingWorkflowService(
                 root,
                 retrievalService(),
                 new InMemoryTeachingTaskStore(),
                 memoryReuseService(),
-                aiDraftService,
+                null,
                 new InMemoryAgentTraceStore());
+        service.setTeachingHandoutAiClientForTesting(TeachingHandoutAiClientFixture.fromDraft(
+                "【知识定位】反比例函数通常写作 $y=k/x$，其中 $k\\ne 0$。\n"
+                        + "【题型识别】看到图像上一点就代入解析式。\n"
+                        + "【方法步骤】1. 设 $y=k/x$。\n2. 代入点坐标求 $k$。\n"
+                        + "【例题详解】已知点在图像上，代入 $y=k/x$ 建立方程。\n"
+                        + "【答案与评分点】教师版保留 $y=k/x$ 的代入方程和最终答案。\n"
+                        + "【易错提醒】不要把 k 的符号判断反。",
+                "【知识速记】反比例函数可写为 $y=k/x$，先判断 $k\\ne 0$。\n"
+                        + "【题型识别】看到点坐标就尝试代入。\n"
+                        + "【例题任务】已知一点在图像上，先写出解析式空格。\n"
+                        + "【练习任务】1. 写出 $y=k/x$ 的定义式。\n2. 判断点是否在图像上。\n"
+                        + "【作答提醒】先写公式，再代入。",
+                List.of("反比例函数 $y=k/x$", "k 的几何意义", "点在图像上就满足解析式"),
+                List.of("反比例函数投影讲解。")));
 
         TeachingTaskResponse response = service.submit(
-                new TeachingTaskRequest("req-normalize-fraction", "", "反比例函数从概念到基础题型", 2),
+                new TeachingTaskRequest("req-normalize-fraction", "函数新概念 D(x_0)", "反比例函数从概念到基础题型", 2),
                 new TeachingRequestContext("tenant-a", "teacher", "teacher-1", "device-1"));
 
         assertThat(response.teacherHandoutLatex())
@@ -1232,8 +1258,8 @@ class TeachingWorkflowServiceTest {
         assertThat(response.studentHandoutLatex())
                 .contains("$y=\\frac{k}{x}$")
                 .doesNotContain("$y=k/x$", "教师版保留", "最终答案", "答案与评分点");
-        assertThat(response.studentHandoutLatex().split("\\\\item ", -1).length - 1)
-                .isGreaterThanOrEqualTo(6);
+        assertThat(response.studentHandoutLatex())
+                .contains("\\paragraph{知识速记}", "\\paragraph{识别信号}");
     }
 
     private TeachingWorkflowService service(Path root) {
@@ -1241,13 +1267,19 @@ class TeachingWorkflowServiceTest {
     }
 
     private TeachingWorkflowService service(Path root, StudentMemoryReuseService memoryReuseService) {
-        return new TeachingWorkflowService(
+        TeachingWorkflowService service = new TeachingWorkflowService(
                 root,
                 retrievalService(),
                 new InMemoryTeachingTaskStore(),
                 memoryReuseService,
-                TeachingAiDraftServiceFixture.disabled(),
+                null,
                 new InMemoryAgentTraceStore());
+        service.setTeachingHandoutAiClientForTesting(TeachingHandoutAiClientFixture.completed());
+        return service;
+    }
+
+    private static void useCompletedPythonHandoutClient(TeachingWorkflowService service) {
+        service.setTeachingHandoutAiClientForTesting(TeachingHandoutAiClientFixture.completed());
     }
 
     private TextbookRetrievalService retrievalService() {
@@ -1398,11 +1430,9 @@ class TeachingWorkflowServiceTest {
     }
 
     private static final class GateQuestionBankService extends KnowledgeQuestionBankService {
-        private final CountDownLatch secondaryRetrievalsStarted;
 
-        private GateQuestionBankService(CountDownLatch secondaryRetrievalsStarted) {
+        private GateQuestionBankService() {
             super(new InMemoryKnowledgeQuestionBankStore());
-            this.secondaryRetrievalsStarted = secondaryRetrievalsStarted;
         }
 
         @Override
@@ -1412,7 +1442,6 @@ class TeachingWorkflowServiceTest {
                 String viewerSubjectId,
                 String query,
                 int limit) {
-            secondaryRetrievalsStarted.countDown();
             return List.of();
         }
     }

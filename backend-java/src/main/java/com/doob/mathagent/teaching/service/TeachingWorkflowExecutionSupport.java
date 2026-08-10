@@ -61,12 +61,11 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.stereotype.Service;
 import com.doob.mathagent.teaching.service.TeachingWorkflowService.ProgressPhase;
@@ -94,20 +93,49 @@ class TeachingWorkflowExecutionSupport {
     protected TextbookRetrievalService retrievalService;
     protected TeachingTaskStore taskStore;
     protected StudentMemoryReuseService memoryReuseService;
-    protected TeachingAiDraftService aiDraftService;
+    /** Compatibility placeholder retained only for source-compatible focused constructors; AI execution is Python-owned. */
+    protected Object legacyTeachingDraftService;
+    /** The handout task path owns exactly one Python LangGraph invocation for all three audience documents. */
+    protected TeachingHandoutAiClient pythonTeachingHandoutClient;
+    /** The handout graph switch is distinct because teaching-drafts remains available only to non-handout features. */
+    @Value("${math-agent.python-handout.enabled:true}")
+    protected boolean pythonTeachingHandoutEnabledFlag;
     protected AgentTraceStore agentTraceStore;
     protected TeachingHandoutTemplateService handoutTemplateService;
     protected KnowledgeQuestionBankService questionBankService;
     protected TeacherResourceBlockSearchService teacherResourceBlockSearchService;
     protected TeacherResourceVisualEvidenceService teacherResourceVisualEvidenceService;
     protected TaskExecutor taskExecutor;
+    /** Separate bounded pool for nested retrieval/agent fan-out so an outer workflow worker cannot self-starve. */
+    protected TaskExecutor evidenceTaskExecutor;
     protected boolean returnCompletedWhenExecutorIsSynchronous;
     /** Persists auditable parent/child node records independently from the UI task snapshot. */
     protected TeachingWorkflowTraceRecorder traceRecorder;
+    /** A task-level barrier prevents nested retrieval calls from retaining a worker lease indefinitely. */
+    @Value("${math-agent.teaching.evidence-timeout-ms:240000}")
+    protected long evidenceTimeoutMs = 240000L;
     /** Shared planner/executor used by every question branch; null only in focused unit-test constructors. */
     protected AgentRunPlanService agentRunPlanService;
     protected AgentRunExecutionService agentRunExecutionService;
 
+    /** Wires the sole Python graph used by durable teaching-handout tasks. */
+    @Autowired
+    void configurePythonTeachingHandoutClient(PythonTeachingHandoutClient client) {
+        this.pythonTeachingHandoutClient = client;
+    }
+
+    /** 仅供组合测试注入 Python 图的确定性替身，不提供 Java 模型降级。 */
+    public void setTeachingHandoutAiClientForTesting(TeachingHandoutAiClient client) {
+        this.pythonTeachingHandoutClient = client;
+        this.pythonTeachingHandoutEnabledFlag = true;
+        this.returnCompletedWhenExecutorIsSynchronous = true;
+    }
+
+
+    /** 仅供组合测试注入独立证据执行器，验证嵌套检索不会受同步任务执行器串行化。 */
+    public void setEvidenceTaskExecutorForTesting(TaskExecutor executor) {
+        this.evidenceTaskExecutor = executor;
+    }
 
     /** Renders three independent publishable versions from an already approved, immutable common draft. */
     protected TeachingTaskResponse renderApprovedHandoutVersions(
@@ -275,7 +303,7 @@ class TeachingWorkflowExecutionSupport {
         try {
             aiDraft = checkpoint != null && checkpoint.aiDraft() != null && checkpoint.aiDraft().structured()
                     ? checkpoint.aiDraft()
-                    : aiDraftService.draft(request, evidence, memoryResponse, template);
+                    : draftWithConfiguredAiRuntime(taskId, request, evidence, memoryResponse, template);
             traceRecorder.completed(taskId, context, "AI_DRAFT", "CoursewareAgent", evidence,
                     elapsedMs(draftStarted), "已收到结构化讲义草稿。");
         } catch (Throwable failure) {
@@ -392,6 +420,33 @@ class TeachingWorkflowExecutionSupport {
         return response;
     }
 
+    private long remainingEvidenceTimeoutMs(long evidenceStartedNanos) {
+        long elapsedMs = Math.max(0L, (System.nanoTime() - evidenceStartedNanos) / 1_000_000L);
+        return Math.max(1L, evidenceTimeoutMs - elapsedMs);
+    }
+
+    /**
+     * Runs every new handout through the sole Python graph. Automatic Java fallback is prohibited: switching a
+     * failed Python call into a Java provider would create a second billable execution plane and break the run audit.
+     */
+    protected TeachingTaskResponse.AiDraft draftWithConfiguredAiRuntime(
+            String taskId,
+            TeachingTaskRequest request,
+            List<TeachingEvidence> evidence,
+            StudentMemoryResponse memoryResponse,
+            TeachingHandoutTemplateProfile template) {
+        if (!pythonTeachingHandoutEnabled()) {
+            throw new IllegalStateException(
+                    "Python handout runtime is unavailable or disabled; Java AI fallback is prohibited for handout tasks");
+        }
+        return pythonTeachingHandoutClient.execute(taskId, request, evidence);
+    }
+
+    /** New handouts fail closed when their sole Python execution plane is unavailable. */
+    protected boolean pythonTeachingHandoutEnabled() {
+        return pythonTeachingHandoutClient != null && pythonTeachingHandoutEnabledFlag;
+    }
+
 
     /**
      * Persists the CoursewareAgent trace for real AI draft runs so WorkBuddy/MCP and the frontend can recover it.
@@ -497,20 +552,26 @@ class TeachingWorkflowExecutionSupport {
             TeachingTaskRequest request, TeachingRequestContext context, String taskId) {
         /*
          * Do not reuse the outer teaching task executor here: the outer worker may already be occupied by this task.
-         * A tiny per-task pool keeps textbook/question-bank/teacher-resource retrieval bounded and avoids starvation.
+         * The Spring production wiring supplies a separate bounded executor; focused synchronous constructors fall
+         * back to their caller-owned executor without creating a request-level pool.
          */
-        ExecutorService evidenceExecutor = Executors.newFixedThreadPool(2);
+        TaskExecutor evidenceExecutor = evidenceTaskExecutor != null ? evidenceTaskExecutor : taskExecutor;
+        if (evidenceExecutor == null) {
+            throw new IllegalStateException("Teaching evidence executor is not configured");
+        }
         // 两条独立证据源并行执行，缩短讲义任务的关键路径；后续题库检索保持依赖关系，不在此并发。
+        long evidenceStartedNanos = System.nanoTime();
         CompletableFuture<TimedEvidence> textbookFuture = CompletableFuture.supplyAsync(
                 () -> timeEvidence(() -> alignEvidenceToTopic(request, retrieveTextbookEvidence(request, context))),
                 evidenceExecutor);
         CompletableFuture<TimedEvidence> teacherResourceFuture = CompletableFuture.supplyAsync(
                 () -> timeEvidence(() -> alignEvidenceToTopic(request, retrieveTeacherResourceEvidence(request, context))),
                 evidenceExecutor);
+        CompletableFuture<TimedEvidence> questionBankFuture = null;
         try {
             TimedEvidence textbook;
             try {
-                textbook = awaitEvidence("textbook", textbookFuture);
+                textbook = awaitEvidence("textbook", textbookFuture, evidenceTimeoutMs);
             } catch (RuntimeException failure) {
                 traceRecorder.failed(taskId, context, "PUBLIC_TEXTBOOK_RETRIEVAL", "TextbookRetriever", List.of(), 0L, failure);
                 traceRecorder.failed(taskId, context, "WORKFLOW_ORCHESTRATOR", "TeachingOrchestrator", List.of(), 0L, failure);
@@ -521,7 +582,8 @@ class TeachingWorkflowExecutionSupport {
 
             TimedEvidence teacherResource;
             try {
-                teacherResource = awaitEvidence("teacher_resource", teacherResourceFuture);
+                teacherResource = awaitEvidence(
+                        "teacher_resource", teacherResourceFuture, remainingEvidenceTimeoutMs(evidenceStartedNanos));
             } catch (RuntimeException failure) {
                 traceRecorder.failed(taskId, context, "TEACHER_RESOURCE_RETRIEVAL", "TeacherResourceRetriever", List.of(), 0L, failure);
                 traceRecorder.failed(taskId, context, "WORKFLOW_ORCHESTRATOR", "TeachingOrchestrator", List.of(), 0L, failure);
@@ -534,16 +596,19 @@ class TeachingWorkflowExecutionSupport {
             // intended chain: real directory/teacher material -> concrete knowledge point -> atomic bank question.
             TimedEvidence questionBank;
             try {
-                questionBank = timeEvidence(() -> {
-                    List<TeachingEvidence> retrievedQuestions = retrieveQuestionBankEvidence(
-                            request, context, curriculumPointQueries(request, teacherResource.evidence()));
-                    // retrieveQuestionBankEvidence has already selected permission-checked atomic rows for a qualified
-                    // multi-topic compilation. Applying the single-topic aligner a second time collapses that pack back
-                    // to the first matching subject and recreates the one-question failure that this branch prevents.
-                    return requiresQualifiedQuestionCompilation(request)
-                            ? retrievedQuestions
-                            : alignEvidenceToTopic(request, retrievedQuestions);
-                });
+                questionBankFuture = CompletableFuture.supplyAsync(
+                        () -> timeEvidence(() -> {
+                            List<TeachingEvidence> retrievedQuestions = retrieveQuestionBankEvidence(
+                                    request, context, curriculumPointQueries(request, teacherResource.evidence()));
+                            // retrieveQuestionBankEvidence has already selected permission-checked atomic rows for a qualified
+                            // multi-topic compilation. Applying the single-topic aligner a second time collapses that pack back
+                            // to the first matching subject and recreates the one-question failure that this branch prevents.
+                            return requiresQualifiedQuestionCompilation(request)
+                                    ? retrievedQuestions
+                                    : alignEvidenceToTopic(request, retrievedQuestions);
+                        }), evidenceExecutor);
+                questionBank = awaitEvidence(
+                        "question_bank", questionBankFuture, remainingEvidenceTimeoutMs(evidenceStartedNanos));
             } catch (RuntimeException failure) {
                 traceRecorder.failed(taskId, context, "QUESTION_BANK_RETRIEVAL", "QuestionBankRetriever", List.of(), 0L, failure);
                 traceRecorder.failed(taskId, context, "WORKFLOW_ORCHESTRATOR", "TeachingOrchestrator", List.of(), 0L, failure);
@@ -561,9 +626,10 @@ class TeachingWorkflowExecutionSupport {
         } catch (RuntimeException exception) {
             textbookFuture.cancel(true);
             teacherResourceFuture.cancel(true);
+            if (questionBankFuture != null) {
+                questionBankFuture.cancel(true);
+            }
             throw exception;
-        } finally {
-            evidenceExecutor.shutdownNow();
         }
     }
 
@@ -590,17 +656,15 @@ class TeachingWorkflowExecutionSupport {
         if (agentRunPlanService == null || agentRunExecutionService == null) {
             return;
         }
-        ExecutorService executor = Executors.newFixedThreadPool(
-                Math.max(1, Math.min(questionEvidence.size(), QUESTION_AGENT_MAX_PARALLELISM)));
-        try {
-            List<CompletableFuture<Void>> runs = questionEvidence.stream()
-                    .map(evidence -> CompletableFuture.runAsync(
-                            () -> executeQuestionAgent(request, context, taskId, evidence), executor))
-                    .toList();
-            runs.forEach(CompletableFuture::join);
-        } finally {
-            executor.shutdownNow();
+        TaskExecutor executor = evidenceTaskExecutor != null ? evidenceTaskExecutor : taskExecutor;
+        if (executor == null) {
+            throw new IllegalStateException("Teaching question-agent executor is not configured");
         }
+        List<CompletableFuture<Void>> runs = questionEvidence.stream()
+                .map(evidence -> CompletableFuture.runAsync(
+                        () -> executeQuestionAgent(request, context, taskId, evidence), executor))
+                .toList();
+        runs.forEach(CompletableFuture::join);
     }
 
     /** Runs and records one isolated question-agent branch. */
@@ -904,7 +968,7 @@ class TeachingWorkflowExecutionSupport {
                             question.sourceResourceDocumentId(), question.questionText(), subject)
                     // Both resolvers deliberately return Optional: a missing/unauthorized page asset excludes the
                     // figure-dependent question later in rendering instead of manufacturing a replacement diagram.
-                    .flatMap(asset -> materializeTeacherImage(asset, subject))
+                    .flatMap(asset -> materializeTeacherImage(asset, subject, question.questionText()))
                     .orElse(null);
         }
         return new TeachingEvidence(
@@ -947,7 +1011,7 @@ class TeachingWorkflowExecutionSupport {
                 ? null
                 : hit.assetRefs().stream()
                         .filter(asset -> asset.assetId() != null && !asset.assetId().isBlank())
-                        .map(asset -> materializeTeacherImage(asset, subject))
+                        .map(asset -> materializeTeacherImage(asset, subject, hit.evidenceText()))
                         .flatMap(Optional::stream)
                         .findFirst()
                         .orElse(null);
@@ -1003,15 +1067,24 @@ class TeachingWorkflowExecutionSupport {
     protected Optional<TeacherResourceVisualEvidenceService.MaterializedImageEvidence> materializeTeacherImage(
             TeacherResourceBlockSearchResponse.AssetRef asset,
             RequestSubject subject) {
-        if (teacherResourceVisualEvidenceService != null) {
+        return materializeTeacherImage(asset, subject, "");
+    }
 
-            return teacherResourceVisualEvidenceService.materialize(asset.assetId(), asset.mimeType(), subject);
+    /** Carries source-adjacent text into the visual evidence contract; paths and filenames are not captions. */
+    protected Optional<TeacherResourceVisualEvidenceService.MaterializedImageEvidence> materializeTeacherImage(
+            TeacherResourceBlockSearchResponse.AssetRef asset,
+            RequestSubject subject,
+            String verifiedAdjacentText) {
+        if (teacherResourceVisualEvidenceService != null) {
+            return teacherResourceVisualEvidenceService.materialize(
+                    asset.assetId(), asset.mimeType(), subject, verifiedAdjacentText);
         }
         if (teacherResourceBlockSearchService == null) {
             return Optional.empty();
         }
         return teacherResourceBlockSearchService.materializeVisibleAsset(asset.assetId(), subject)
-                .map(path -> new TeacherResourceVisualEvidenceService.MaterializedImageEvidence(path, ""));
+                .map(path -> new TeacherResourceVisualEvidenceService.MaterializedImageEvidence(
+                        path, safeEvidenceText(verifiedAdjacentText)));
     }
 
     /** Converts a monotonic start timestamp into the bounded duration stored in the trace row. */

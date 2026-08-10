@@ -65,11 +65,11 @@ export function McpIdentityBoundaryCard({
           <strong>{tenantId || "-"}</strong>
         </div>
       </div>
-      <details className="mcp-policy-note">
+      <details className="mcp-policy-note ai-run-disclosure">
         <summary>权限说明</summary>
         <p>外部客户端只能拿到后端根据当前登录态生成的 MCP 配置。角色、租户、主体和工具白名单都由后端解析，前端不传身份参数。</p>
       </details>
-      <details className="mcp-policy-note mcp-sandbox-note">
+      <details className="mcp-policy-note mcp-sandbox-note ai-run-disclosure">
         <summary>隔离与审计</summary>
         <div className="mcp-sandbox-grid" aria-label="MCP 隔离策略">
           <span>

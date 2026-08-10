@@ -81,4 +81,26 @@ public record TextbookSearchHit(
                 pageQualityLabel,
                 resolvedPageImageUri);
     }
+
+    /** Allows the retrieval service to restore a visible heading inferred from a page-summary text record. */
+    public TextbookSearchHit withSectionTitle(String resolvedSectionTitle) {
+        return new TextbookSearchHit(
+                chunkId,
+                sectionId,
+                score,
+                retrievalStrategy,
+                docId,
+                bookName,
+                volume,
+                chapterPath,
+                pageNo,
+                printedPageNo,
+                resolvedSectionTitle,
+                textSnippet,
+                formulaText,
+                imageRelPaths,
+                sourcePageImage,
+                pageQualityLabel,
+                pageImageUri);
+    }
 }

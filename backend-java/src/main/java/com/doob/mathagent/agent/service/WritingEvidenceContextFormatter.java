@@ -39,7 +39,17 @@ final class WritingEvidenceContextFormatter {
         if (text.isBlank()) {
             return "";
         }
+        /*
+         * A page render is evidence for retrieval, not a publishable teaching figure.  The sync pipeline marks
+         * extracted attachments/diagrams without a page number; page-backed visual uploads carry pageNo and must stay
+         * out of the writing prompt so the model cannot echo a full source page into the lecture.  Question-bound
+         * figures can still be attached later by the deterministic renderer after the question/source relation is
+         * proven.  This is deliberately a code boundary, not a prompt instruction.
+         */
         String assets = hit.assetRefs().stream()
+                .filter(asset -> asset.pageNo() == null)
+                .filter(asset -> asset.mimeType() != null && asset.mimeType().toLowerCase(java.util.Locale.ROOT)
+                        .startsWith("image/"))
                 .map(TeacherResourceBlockSearchResponse.AssetRef::assetUri)
                 .filter(uri -> uri != null && !uri.isBlank())
                 .limit(maxAssets)

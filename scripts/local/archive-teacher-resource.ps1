@@ -7,6 +7,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$script:WebSession = New-Object Microsoft.PowerShell.Commands.WebRequestSession
 
 function Invoke-Json {
     param(
@@ -14,13 +15,15 @@ function Invoke-Json {
         [string]$Uri,
         [hashtable]$Headers = @{},
         [object]$Body = $null,
-        [int]$TimeoutSec = 60
+        [int]$TimeoutSec = 60,
+        [object]$WebSession = $script:WebSession
     )
     $parameters = @{
         Method = $Method
         Uri = $Uri
         Headers = $Headers
         TimeoutSec = $TimeoutSec
+        WebSession = $WebSession
     }
     if ($null -ne $Body) {
         # Preserve UTF-8 for resource metadata on Windows PowerShell.
@@ -37,14 +40,10 @@ $login = Invoke-Json `
     -Uri "$base/api/auth/login" `
     -Body @{ username = $Username; password = $Password }
 
-$headers = @{}
-$headers[$login.tokenName] = $login.tokenValue
-
 $path = "/api/teacher/resources/$DocumentId"
 $response = Invoke-Json `
     -Method "Delete" `
     -Uri ($base + $path) `
-    -Headers $headers `
     -TimeoutSec 120
 
 $response | ConvertTo-Json -Depth 10

@@ -31,13 +31,18 @@ public record MultiAgentWritingRequest(
         if (normalizedQuestion.isBlank()) {
             normalizedQuestion = normalizedGoal;
         }
+        String normalizedProvider = safeText(preferredProviderName).toLowerCase(java.util.Locale.ROOT);
+        String normalizedModel = safeText(preferredModelCode);
+        // Preserve an explicit model selection so the planner can audit and execute the exact route the caller chose.
+        // Provider policy remains the authority: unknown or disabled models are rejected by preferredProvider rather
+        // than silently changing the user's request into a different model.
         return new MultiAgentWritingRequest(
                 normalizedGoal,
                 normalizedQuestion,
                 evidenceRefs == null ? List.of() : evidenceRefs.stream().map(MultiAgentWritingRequest::safeText).toList(),
                 dryRun,
-                safeText(preferredProviderName).toLowerCase(java.util.Locale.ROOT),
-                safeText(preferredModelCode));
+                normalizedProvider,
+                normalizedModel);
     }
 
     /**

@@ -9,6 +9,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..\..")
+$script:WebSession = New-Object Microsoft.PowerShell.Commands.WebRequestSession
 $BackendScript = Join-Path $Root "scripts\local\start-backend.ps1"
 $SeedTag = "display_spine_v0.1%"
 
@@ -53,12 +54,11 @@ function Wait-BackendReady {
                 -Uri "http://127.0.0.1:8080/api/auth/login" `
                 -ContentType "application/json" `
                 -Body $loginBody `
+                -WebSession $script:WebSession `
                 -TimeoutSec 5
-            $headers = @{}
-            $headers[$login.tokenName] = $login.tokenValue
             $spine = Invoke-RestMethod -Method Get `
                 -Uri "http://127.0.0.1:8080/api/knowledge/graph/spine" `
-                -Headers $headers `
+                -WebSession $script:WebSession `
                 -TimeoutSec 15
             $nodeCount = @($spine.nodes).Count
             $edgeCount = @($spine.edges).Count

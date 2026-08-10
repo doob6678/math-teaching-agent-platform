@@ -428,6 +428,7 @@ public record TeachingTaskResponse(
             boolean structured,
             String teacherExplanation,
             String studentHint,
+            String lectureContent,
             List<String> knowledgePoints,
             List<String> followUpQuestions,
             String parseError,
@@ -449,7 +450,7 @@ public record TeachingTaskResponse(
                 String content,
                 String message) {
             this(enabled, providerName, modelCode, promptTokens, completionTokens, totalTokens, content, message,
-                    false, "", "", List.of(), List.of(), "", 0, 0, false, List.of());
+                    false, "", "", "", List.of(), List.of(), "", 0, 0, false, List.of());
         }
     }
 

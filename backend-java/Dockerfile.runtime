@@ -1,0 +1,33 @@
+# Runtime-only image used after the verified JDK 21 host build.  Keeping this image separate from the
+# source-matched Dockerfile lets operators restart the already-built application without re-downloading
+# Maven dependencies or accidentally rebuilding the Python CUDA worker at the same time.
+FROM eclipse-temurin:21-jre
+
+WORKDIR /app
+
+# These tools are part of the real teacher-source production path: Feishu exports may be DOCX/PDF and
+# the parser must render them in the same Linux runtime as the backend rather than depending on Windows.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        curl \
+        python3 \
+        python3-requests \
+        libreoffice-writer \
+        texlive-xetex \
+        texlive-lang-chinese \
+        fonts-noto-cjk \
+    && rm -rf /var/lib/apt/lists/*
+
+# The artifact was produced by the explicit JDK 21 Maven build in backend-java/target.
+# Copying only this artifact guarantees the running container contains the exact tested code.
+COPY backend-java/target/math-agent-rag-backend-0.1.0-SNAPSHOT.jar /app/math-agent-rag.jar
+COPY ai-worker-python/scripts/download_feishu_url.py /app/scripts/download_feishu_url.py
+
+RUN mkdir -p /app/data/teacher-source-imports /app/data/teacher-assets
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=12 \
+    CMD curl --fail --silent http://127.0.0.1:8080/api/system/health || exit 1
+
+ENTRYPOINT ["java", "-jar", "/app/math-agent-rag.jar"]

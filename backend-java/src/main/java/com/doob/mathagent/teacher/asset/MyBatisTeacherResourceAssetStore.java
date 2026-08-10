@@ -2,6 +2,7 @@ package com.doob.mathagent.teacher.asset;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.doob.mathagent.teacher.entity.TeacherResourceAssetEntity;
 import com.doob.mathagent.teacher.mapper.TeacherResourceAssetMapper;
 import com.doob.mathagent.teacher.vo.TeacherResourceAssetResponse;
@@ -54,13 +55,13 @@ public class MyBatisTeacherResourceAssetStore implements TeacherResourceAssetSto
         if (numericDocumentId == null) {
             return Optional.empty();
         }
-        return mapper.selectList(new LambdaQueryWrapper<TeacherResourceAssetEntity>()
+        return mapper.selectPage(Page.of(1, 1), new LambdaQueryWrapper<TeacherResourceAssetEntity>()
                         .eq(TeacherResourceAssetEntity::getTenantId, tenantId)
                         .eq(TeacherResourceAssetEntity::getDocumentId, numericDocumentId)
                         .eq(TeacherResourceAssetEntity::getProviderAssetId, providerAssetId)
                         .eq(TeacherResourceAssetEntity::getChecksum, checksum)
-                        .eq(TeacherResourceAssetEntity::getStatus, "active")
-                        .last("LIMIT 1"))
+                        .eq(TeacherResourceAssetEntity::getStatus, "active"))
+                .getRecords()
                 .stream()
                 .findFirst()
                 .map(MyBatisTeacherResourceAssetStore::toResponse);
@@ -76,12 +77,13 @@ public class MyBatisTeacherResourceAssetStore implements TeacherResourceAssetSto
         if (numericDocumentId == null) {
             return Optional.empty();
         }
-        return mapper.selectList(new LambdaQueryWrapper<TeacherResourceAssetEntity>()
+        return mapper.selectPage(Page.of(1, 1), new LambdaQueryWrapper<TeacherResourceAssetEntity>()
                         .eq(TeacherResourceAssetEntity::getTenantId, tenantId)
                         .eq(TeacherResourceAssetEntity::getDocumentId, numericDocumentId)
                         .eq(TeacherResourceAssetEntity::getProviderAssetId, providerAssetId)
                         .eq(TeacherResourceAssetEntity::getChecksum, checksum)
-                        .last("ORDER BY updated_at DESC LIMIT 1"))
+                        .orderByDesc(TeacherResourceAssetEntity::getUpdatedAt))
+                .getRecords()
                 .stream()
                 .findFirst()
                 .map(MyBatisTeacherResourceAssetStore::toResponse);

@@ -159,8 +159,10 @@ def main() -> None:
     sys.path.insert(0, str(parent))
     import OCR测试方案.search_core as search_core
 
-    page_root = parent / "processed_books_section_shadow_all_mini_b4"
-    section_root = parent / "processed_books_section_shadow_b3"
+    # Compare the c2 page-evidence projection with its c2 section-child projection. Both are derived from the same
+    # source pages, so a score difference measures chunk granularity rather than a hidden corpus-version change.
+    page_root = parent / "processed_books_section_shadow_all_mini_c2"
+    section_root = parent / "processed_books_section_shadow_all_mini_c2"
     page_rows = []
     for book_root in sorted(path for path in page_root.iterdir() if path.is_dir() and (path / "jsonl_ai" / "chunks.jsonl").exists()):
         page_rows.extend(read_jsonl(book_root / "jsonl_ai" / "chunks.jsonl"))

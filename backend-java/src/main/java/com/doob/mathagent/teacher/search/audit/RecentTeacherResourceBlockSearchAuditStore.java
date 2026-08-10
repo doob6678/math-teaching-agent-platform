@@ -9,7 +9,7 @@ import java.util.Optional;
  * In-memory recent audit store for teacher resource block searches.
  *
  * <p>This is a bounded diagnostic store for UI/MCP queryId lookup. It does not replace
- * persistent capability audit tables and intentionally stores no raw MCP secrets or local paths.
+ * persistent search-audit tables and intentionally stores no raw MCP secrets or local paths.
  */
 public class RecentTeacherResourceBlockSearchAuditStore
         implements TeacherResourceBlockSearchAuditSink, TeacherResourceBlockSearchAuditLookup {

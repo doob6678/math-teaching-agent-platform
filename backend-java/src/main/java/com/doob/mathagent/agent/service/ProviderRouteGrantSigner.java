@@ -21,12 +21,12 @@ public class ProviderRouteGrantSigner {
     }
 
     public String sign(String runId, String workload, List<ProviderRoute> routes) {
-        String secret = environment.getProperty("math-agent.python-agent.route-grant-secret", "");
+        String secret = configuredValue("route-grant-secret", "");
         if (secret.isBlank()) {
             throw new IllegalStateException("Python provider route grant secret is not configured");
         }
         long expiresAt = System.currentTimeMillis() / 1000L
-                + environment.getProperty("math-agent.python-agent.route-grant-ttl-seconds", Long.class, 120L);
+                + configuredLongValue("route-grant-ttl-seconds", 120L);
         Map<String, Object> payload = Map.of(
                 "runId", bounded(runId, 128),
                 "workload", bounded(workload, 64),
@@ -49,6 +49,20 @@ public class ProviderRouteGrantSigner {
         javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
         mac.init(new javax.crypto.spec.SecretKeySpec(secret, "HmacSHA256"));
         return mac.doFinal(value);
+    }
+
+    /** Uses deployment-owned AI settings while retaining the original worker prefix for existing callers. */
+    private String configuredValue(String suffix, String fallback) {
+        return environment.getProperty(
+                "math-agent.ai." + suffix,
+                environment.getProperty("math-agent.python-agent." + suffix, fallback));
+    }
+
+    private long configuredLongValue(String suffix, long fallback) {
+        return environment.getProperty(
+                "math-agent.ai." + suffix,
+                Long.class,
+                environment.getProperty("math-agent.python-agent." + suffix, Long.class, fallback));
     }
 
     private static String bounded(String value, int limit) {

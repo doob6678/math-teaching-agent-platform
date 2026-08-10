@@ -43,9 +43,10 @@ class WorkerSettingsTest(unittest.TestCase):
         self.assertEqual(settings.embedding_provider_order, ("local_bge_embedding",))
         self.assertEqual(settings.rerank_provider_order, ("local_bge_reranker",))
         self.assertEqual(settings.local_clip_provider_order, ("local_clip",))
-        self.assertEqual(settings.local_clip_device, "cpu")
+        # Local model defaults are GPU-first; production must never silently run an AI model on CPU.
+        self.assertEqual(settings.local_clip_device, "cuda")
         self.assertEqual(settings.local_clip_dimension, 512)
-        self.assertEqual(settings.local_rerank_device, "cpu")
+        self.assertEqual(settings.local_rerank_device, "cuda")
         self.assertEqual(settings.embedding_dimensions, 512)
 
     def test_remote_embedding_environment_cannot_override_local_providers(self):

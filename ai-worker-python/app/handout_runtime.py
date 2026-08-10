@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
@@ -27,7 +27,7 @@ from fastapi import HTTPException
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from app.usage import UsageEvent, UsageLedger, cost_for, fallback_tokens
+from app.usage import HandoutMetricsLedger, UsageEvent, UsageLedger, cost_for, fallback_tokens
 
 
 DEFAULT_GRAPH_VERSION = "handout-v1"
@@ -311,6 +311,10 @@ class NodeMetric(BaseModel):
 
     node: str
     status: str
+    # Node timestamps are recorded separately from duration so DB aggregations can correlate graph work with
+    # Java queue/lease and PDF timings without relying on container clocks for elapsed-time calculations.
+    started_at: str | None = Field(default=None, alias="startedAt")
+    finished_at: str | None = Field(default=None, alias="finishedAt")
     provider: str = ""
     model: str = ""
     elapsed_ms: int = Field(alias="elapsedMs")
@@ -318,9 +322,11 @@ class NodeMetric(BaseModel):
     java_requests: int = Field(default=0, alias="javaRequests")
     payload_bytes: int = Field(default=0, alias="payloadBytes")
     prompt_tokens: int = Field(default=0, alias="promptTokens")
+    cached_prompt_tokens: int = Field(default=0, alias="cachedPromptTokens")
     completion_tokens: int = Field(default=0, alias="completionTokens")
     total_tokens: int = Field(default=0, alias="totalTokens")
-    estimated_cost: float = Field(default=0.0, alias="estimatedCost")
+    # Negative one is the cross-language unknown-price sentinel. A zero is a real configured free price.
+    estimated_cost: float = Field(default=-1.0, alias="estimatedCost")
     error: str | None = None
 
 
@@ -340,8 +346,9 @@ class HandoutMetrics(BaseModel):
     prompt_tokens: int = Field(default=0, alias="promptTokens")
     completion_tokens: int = Field(default=0, alias="completionTokens")
     total_tokens: int = Field(default=0, alias="totalTokens")
-    estimated_cost: float = Field(default=0.0, alias="estimatedCost")
-    cost_known: bool = Field(default=True, alias="costKnown")
+    # Do not claim a cost until at least one billable provider attempt supplies a known price.
+    estimated_cost: float = Field(default=-1.0, alias="estimatedCost")
+    cost_known: bool = Field(default=False, alias="costKnown")
     system_load: list[dict[str, Any]] = Field(default_factory=list, alias="systemLoad")
 
 
@@ -382,6 +389,8 @@ class _RunTelemetry:
         self._reserved_tokens = 0
         self._last_process_cpu_seconds: float | None = None
         self._last_cpu_sample_at: float | None = None
+        # Runtime-only nodes have no provider price. Keep their status telemetry out of the billable-cost decision.
+        self._has_unknown_provider_cost = False
 
     @staticmethod
     def _budget_int(name: str, default: int) -> int:
@@ -493,11 +502,18 @@ class _RunTelemetry:
             self.metrics.prompt_tokens += metric.prompt_tokens
             self.metrics.completion_tokens += metric.completion_tokens
             self.metrics.total_tokens += metric.total_tokens
-            # -1 is the explicit unknown-cost sentinel. Never add it as if it were a real currency amount.
-            if metric.estimated_cost < 0:
-                self.metrics.cost_known = False
-            elif self.metrics.cost_known:
-                self.metrics.estimated_cost += metric.estimated_cost
+            # Only an actual provider attempt is billable. Java-context, validation and checkpoint nodes contribute
+            # latency but must not turn a fully priced model run into an "unknown cost" report.
+            if metric.provider_calls > 0:
+                if metric.estimated_cost < 0:
+                    self._has_unknown_provider_cost = True
+                    self.metrics.cost_known = False
+                    self.metrics.estimated_cost = -1.0
+                elif not self._has_unknown_provider_cost:
+                    if not self.metrics.cost_known:
+                        self.metrics.estimated_cost = 0.0
+                    self.metrics.cost_known = True
+                    self.metrics.estimated_cost += metric.estimated_cost
 
     def finish(self) -> HandoutMetrics:
         with self._lock:
@@ -755,7 +771,9 @@ class HandoutRuntime:
             saved_request = existing[1].get("request") if isinstance(existing[1], dict) else None
             if isinstance(saved_request, dict):
                 saved_graph_version = str(saved_request.get("graphVersion", DEFAULT_GRAPH_VERSION))
-                saved_idempotency_key = str(saved_request.get("idempotencyKey", request.run_id))
+                # Older checkpoints serialized the optional key as an empty string. Treat that legacy form as the
+                # deterministic run-id key so a valid retry is resumed instead of triggering another provider call.
+                saved_idempotency_key = str(saved_request.get("idempotencyKey") or request.run_id)
                 if saved_graph_version != request.graph_version:
                     raise HTTPException(status_code=409, detail="GRAPH_VERSION_INCOMPATIBLE")
                 if saved_idempotency_key != request.idempotency_key:
@@ -774,17 +792,20 @@ class HandoutRuntime:
             package = state["package"]
             telemetry.sample_system()
             package = package.model_copy(update={"metrics": telemetry.finish()})
+            HandoutMetricsLedger().append(request, package.metrics, package.status)
             final_state = dict(state)
             final_state["package"] = package
             self._checkpoint.save(request.run_id, package.status, final_state, {"event": "completed", "status": package.status})
             return package
         except HTTPException:
             telemetry.sample_system()
+            HandoutMetricsLedger().append(request, telemetry.finish(), "FAILED")
             latest = self._checkpoint.load(request.run_id)
             self._checkpoint.save(request.run_id, "FAILED", latest[1] if latest else started_state, {"event": "failed", "error": "http_error"})
             raise
         except Exception as exc:
             telemetry.sample_system()
+            HandoutMetricsLedger().append(request, telemetry.finish(), "FAILED")
             latest = self._checkpoint.load(request.run_id)
             self._checkpoint.save(request.run_id, "FAILED", latest[1] if latest else started_state, {"event": "failed", "error": type(exc).__name__})
             raise HTTPException(status_code=503, detail="Handout graph failed") from exc
@@ -1073,12 +1094,14 @@ class HandoutRuntime:
                             provider_code = ""
                     error_code = f"HTTP_{status}" + (f"_{provider_code}" if provider_code else "")
                     failures.append(f"{provider}:{error_code}")
-                    UsageLedger().append(UsageEvent(request.run_id, provider, model, attempt_number, "FAILED", 0, 0, 0, 0.0, "unavailable", error_code))
+                    # A failed response has no authoritative provider price. Persist the unknown sentinel rather
+                    # than reporting zero, which would look like a verified free model call in cost reporting.
+                    UsageLedger().append(UsageEvent(request.run_id, provider, model, attempt_number, "FAILED", 0, 0, 0, -1.0, "unavailable", error_code))
                     if status < 500 or provider_try + 1 >= provider_attempts:
                         break
                 except (requests.RequestException, ValueError, KeyError, IndexError, json.JSONDecodeError) as exc:
                     failures.append(f"{provider}:{type(exc).__name__}")
-                    UsageLedger().append(UsageEvent(request.run_id, provider, model, attempt_number, "FAILED", 0, 0, 0, 0.0, "unavailable", type(exc).__name__))
+                    UsageLedger().append(UsageEvent(request.run_id, provider, model, attempt_number, "FAILED", 0, 0, 0, -1.0, "unavailable", type(exc).__name__))
                     if provider_try + 1 < provider_attempts:
                         time.sleep(float(os.getenv("MATH_AGENT_HANDOUT_RETRY_BACKOFF_SECONDS", "1.0")) * (provider_try + 1))
                     else:
@@ -1151,13 +1174,20 @@ class HandoutRuntime:
 
     def _record_node(self, request: HandoutRunRequest, node: str, started: float, status: str, provider_calls: int = 0, java_requests: int = 0, payload_bytes: int = 0, usage: dict[str, int | float] | None = None, error: str | None = None, provider: str = "", model: str = "") -> None:
         """Node records are emitted through the event sink while preserving bounded operational metadata."""
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        finished_at = datetime.now(timezone.utc)
+        # The monotonic duration is authoritative. Deriving the start wall-clock timestamp from it avoids a clock
+        # adjustment producing negative node timing while still allowing cross-service incident correlation.
+        started_at = finished_at - timedelta(milliseconds=elapsed_ms)
         metric = NodeMetric(node=node, status=status, provider=provider, model=model,
-                            elapsed_ms=int((time.monotonic() - started) * 1000), provider_calls=provider_calls,
+                            started_at=started_at.isoformat(), finished_at=finished_at.isoformat(),
+                            elapsed_ms=elapsed_ms, provider_calls=provider_calls,
                             java_requests=java_requests, payload_bytes=payload_bytes,
                             prompt_tokens=int((usage or {}).get("promptTokens", 0)),
+                            cached_prompt_tokens=int((usage or {}).get("cachedPromptTokens", 0)),
                             completion_tokens=int((usage or {}).get("completionTokens", 0)),
                             total_tokens=int((usage or {}).get("totalTokens", 0)),
-                            estimated_cost=float((usage or {}).get("estimatedCost", 0.0)), error=error)
+                            estimated_cost=float((usage or {}).get("estimatedCost", -1.0)), error=error)
         with self._telemetry_lock:
             telemetry = self._telemetry_by_run.get(request.run_id)
         if telemetry is not None:

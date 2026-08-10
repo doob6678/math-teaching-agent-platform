@@ -34,6 +34,7 @@ public final class QuestionBankSearchText {
         Set<String> candidates = new LinkedHashSet<>();
         String combined = normalize(String.join(" ", values == null ? new String[0] : values));
         addIfUseful(candidates, combined);
+        addEnglishMathConcepts(candidates, combined);
         for (String term : CORE_TERMS) {
             if ("圆锥".equals(term) && combined.contains("圆锥曲线")) {
                 continue;
@@ -72,15 +73,24 @@ public final class QuestionBankSearchText {
         if (normalized.isBlank()) {
             return List.of();
         }
-        return CORE_TERMS.stream()
+        List<String> explicitTerms = new ArrayList<>();
+        if (normalized.contains("quadratic")
+                || normalized.contains("vertex form")
+                || normalized.contains("completing the square")) {
+            explicitTerms.add("二次函数");
+        }
+        if (normalized.contains("minimum") || normalized.contains("maximum")) {
+            explicitTerms.add("最值");
+        }
+        explicitTerms.addAll(CORE_TERMS.stream()
                 // Two-character mathematical identities such as “椭圆” and “圆锥” are concrete topics,
                 // not generic noise.  Dropping them here makes the strict teaching gate silently fall back to
                 // shared words such as “离心率”, which is exactly how a hyperbola page can enter an ellipse lesson.
                 .filter(term -> term.length() >= 2)
                 .filter(term -> normalized.contains(term.toLowerCase()))
                 .filter(term -> !Set.of("函数", "三角函数", "空间向量", "立体几何", "平面向量", "圆锥曲线", "直线", "圆", "数列", "概率", "统计", "导数").contains(term))
-                .distinct()
-                .toList();
+                .toList());
+        return explicitTerms.stream().distinct().toList();
     }
 
     /**
@@ -88,6 +98,18 @@ public final class QuestionBankSearchText {
      */
     public static String normalize(String value) {
         return value == null ? "" : value.replaceAll("\\s+", " ").strip().toLowerCase();
+    }
+
+    /** Adds a small deterministic bilingual bridge before Chinese corpus lookup and strict evidence validation. */
+    private static void addEnglishMathConcepts(Set<String> candidates, String normalizedQuery) {
+        if (normalizedQuery.contains("quadratic")
+                || normalizedQuery.contains("vertex form")
+                || normalizedQuery.contains("completing the square")) {
+            addIfUseful(candidates, "二次函数");
+        }
+        if (normalizedQuery.contains("minimum") || normalizedQuery.contains("maximum")) {
+            addIfUseful(candidates, "最值");
+        }
     }
 
     private static void expandDomainTerm(Set<String> candidates, String term) {

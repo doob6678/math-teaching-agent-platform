@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.doob.mathagent.agent.mapper.HandoutRunMetricsMapper">
+    <!-- Metrics SQL stays in XML to satisfy the repository SQL-boundary contract. -->
+    <insert id="recordEnqueued">
+        INSERT INTO handout_run_metrics
+          (run_id, task_id, workflow_code, result_status, submitted_at, enqueued_at, updated_at)
+        VALUES (#{runId}, #{taskId}, 'handout', 'QUEUED', #{submittedAt}, #{enqueuedAt}, #{enqueuedAt})
+        ON DUPLICATE KEY UPDATE submitted_at=COALESCE(submitted_at, VALUES(submitted_at)),
+          enqueued_at=COALESCE(enqueued_at, VALUES(enqueued_at)), updated_at=VALUES(updated_at)
+    </insert>
+    <insert id="recordClaim">
+        INSERT INTO handout_run_metrics
+          (run_id, task_id, workflow_code, result_status, claimed_at, queue_wait_ms, retry_count, updated_at)
+        VALUES (#{runId}, #{taskId}, 'handout', #{status}, #{claimedAt}, #{queueWaitMs}, #{retryCount}, #{updatedAt})
+        ON DUPLICATE KEY UPDATE result_status=VALUES(result_status), claimed_at=VALUES(claimed_at),
+          queue_wait_ms=VALUES(queue_wait_ms), retry_count=GREATEST(COALESCE(retry_count, 0), VALUES(retry_count)),
+          updated_at=VALUES(updated_at)
+    </insert>
+    <update id="recordTerminal">
+        UPDATE handout_run_metrics
+           SET result_status=#{status}, completed_at=#{completedAt}, failed_at=#{failedAt},
+               acknowledged_at=#{acknowledgedAt}, ack_latency_ms=#{ackLatencyMs}, updated_at=#{updatedAt}
+         WHERE run_id=#{runId}
+    </update>
+    <update id="recordLeaseWait">
+        UPDATE handout_run_metrics
+           SET lease_wait_ms=#{elapsedMs}
+         WHERE run_id=#{runId}
+    </update>
+    <update id="recordDeadLetter">
+        UPDATE handout_run_metrics
+           SET dlq_count=COALESCE(dlq_count, 0) + 1, updated_at=UTC_TIMESTAMP(6)
+         WHERE run_id=#{runId}
+    </update>
+    <update id="recordPublicationGate">
+        UPDATE handout_run_metrics
+           SET publication_gate_at=#{publicationGateAt}, updated_at=#{publicationGateAt}
+         WHERE run_id=#{runId}
+    </update>
+    <update id="recordPdf">
+        UPDATE handout_run_metrics
+           SET xelatex_started_at=#{xelatexStartedAt}, pdf_elapsed_ms=#{elapsedMs},
+               updated_at=COALESCE(#{xelatexStartedAt}, updated_at)
+         WHERE run_id=#{runId}
+    </update>
+</mapper>

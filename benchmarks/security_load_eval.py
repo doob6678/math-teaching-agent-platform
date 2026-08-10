@@ -11,12 +11,12 @@ from typing import Any, Callable
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from benchmarks.http_client import MathAgentClient, stable_request_hash
+from benchmarks.http_client import MathAgentClient
 from benchmarks.metrics import summarize_security_results
 
 
 def run_security_load_eval(client: MathAgentClient, config: dict[str, Any], concurrency: int) -> dict[str, Any]:
-    """Run real security checks against capability, Redis rate-limit, and Agent concurrency paths."""
+    """Run real security checks against authenticated subject, rate-limit, and Agent concurrency paths."""
     timings: dict[str, int] = {}
 
     def timed(name: str, fn: Callable[[], list[dict[str, Any]]]) -> list[dict[str, Any]]:
@@ -26,12 +26,12 @@ def run_security_load_eval(client: MathAgentClient, config: dict[str, Any], conc
         return rows
 
     results = {
-        "requestHashMismatch": timed("requestHashMismatch", lambda: _request_hash_mismatch(client)),
+        "authenticatedExecution": timed("authenticatedExecution", lambda: _authenticated_execution(client)),
         "agentConcurrency": timed(
             "agentConcurrency",
             lambda: _agent_concurrency_probe(client, min(3, max(1, concurrency))),
         ),
-        "capabilityReplay": timed("capabilityReplay", lambda: _capability_replay(client, concurrency)),
+        "duplicateSubmission": timed("duplicateSubmission", lambda: _duplicate_submission(client, concurrency)),
         "rateLimit": timed("rateLimit", lambda: _rate_limit_probe(client)),
     }
     summary = summarize_security_results(results)
@@ -41,41 +41,30 @@ def run_security_load_eval(client: MathAgentClient, config: dict[str, Any], conc
             attempts = int(bucket.get("attemptCount", 0) or 0)
             bucket["elapsedMs"] = elapsed_ms
             bucket["qps"] = round(attempts / (elapsed_ms / 1000), 3) if elapsed_ms > 0 else 0
-    replay = summary.get("capabilityReplay") or {}
-    summary["duplicateSubmission"] = {
-        "attemptCount": replay.get("attemptCount", 0),
-        "blockedCount": replay.get("rejectedCount", 0),
-        "blockRate": replay.get("rejectionRate", 0),
-        "qps": replay.get("qps", 0),
-    }
     summary["rawAttempts"] = results
     return summary
 
 
-def _capability_replay(client: MathAgentClient, concurrency: int) -> list[dict[str, Any]]:
-    _, execute_body, capability = _prepared_agent_execution(client)
-    if capability.status != 200 or not isinstance(capability.body, dict):
-        return [_attempt_row(capability)]
-    token = str(capability.body.get("token", ""))
-    request_hash = stable_request_hash(execute_body)
-    headers = {"X-Capability-Token": token, "X-Request-Hash": request_hash}
+def _duplicate_submission(client: MathAgentClient, concurrency: int) -> list[dict[str, Any]]:
+    _, execute_body, plan = _prepared_agent_execution(client)
+    if plan.status != 200:
+        return [_attempt_row(plan)]
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(concurrency, 20)) as executor:
-        futures = [executor.submit(client.post, "/api/agents/execute", execute_body, headers) for _ in range(concurrency)]
+        futures = [executor.submit(client.post, "/api/agents/execute", execute_body) for _ in range(concurrency)]
         return [_attempt_row(future.result()) for future in concurrent.futures.as_completed(futures)]
 
 
-def _request_hash_mismatch(client: MathAgentClient) -> list[dict[str, Any]]:
-    _, execute_body, capability = _prepared_agent_execution(client)
-    if capability.status != 200 or not isinstance(capability.body, dict):
-        return [_attempt_row(capability)]
-    headers = {"X-Capability-Token": str(capability.body.get("token", "")), "X-Request-Hash": "bad-hash"}
-    return [_attempt_row(client.post("/api/agents/execute", execute_body, headers))]
+def _authenticated_execution(client: MathAgentClient) -> list[dict[str, Any]]:
+    _, execute_body, plan = _prepared_agent_execution(client)
+    if plan.status != 200:
+        return [_attempt_row(plan)]
+    return [_attempt_row(client.post("/api/agents/execute", execute_body))]
 
 
 def _rate_limit_probe(client: MathAgentClient) -> list[dict[str, Any]]:
     attempts = []
-    # /api/security/capabilities has a default 20/minute policy; exceeding it proves Redis-backed limiter behavior.
-    for index in range(25):
+    # The run-plan endpoint has a 30/minute policy; all attempts share the logged-in user subject.
+    for index in range(35):
         body = {
             "action": "agent-run:CoursewareAgent",
             "path": "/api/agents/execute",
@@ -83,7 +72,7 @@ def _rate_limit_probe(client: MathAgentClient) -> list[dict[str, Any]]:
             "idempotencyKey": f"rate-limit-probe-{int(time.time() * 1000)}-{index}",
             "maxCost": 0.01,
         }
-        attempts.append(_attempt_row(client.post("/api/security/capabilities", body)))
+        attempts.append(_attempt_row(client.post("/api/agents/run-plan", body)))
     return attempts
 
 
@@ -91,17 +80,10 @@ def _agent_concurrency_probe(client: MathAgentClient, concurrency: int) -> list[
     prepared = [_prepared_agent_execution(client) for _ in range(concurrency)]
 
     def execute(item):
-        _, execute_body, capability = item
-        if capability.status != 200 or not isinstance(capability.body, dict):
-            return capability
-        return client.post(
-            "/api/agents/execute",
-            execute_body,
-            {
-                "X-Capability-Token": str(capability.body.get("token", "")),
-                "X-Request-Hash": stable_request_hash(execute_body),
-            },
-        )
+        _, execute_body, plan = item
+        if plan.status != 200:
+            return plan
+        return client.post("/api/agents/execute", execute_body)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
         futures = [executor.submit(execute, item) for item in prepared]
@@ -139,14 +121,7 @@ def _prepared_agent_execution(client: MathAgentClient):
         "evidenceRefs": [],
         "dryRun": False,
     }
-    capability = client.post("/api/security/capabilities", {
-        "action": plan.body.get("capabilityAction") or "agent-run:CoursewareAgent",
-        "path": "/api/agents/execute",
-        "requestHash": stable_request_hash(execute_body),
-        "idempotencyKey": f"security-probe-{int(time.time() * 1000)}",
-        "maxCost": plan.body.get("estimatedCost", 0),
-    })
-    return plan_body, execute_body, capability
+    return plan_body, execute_body, plan
 
 
 def _attempt_row(attempt) -> dict[str, Any]:

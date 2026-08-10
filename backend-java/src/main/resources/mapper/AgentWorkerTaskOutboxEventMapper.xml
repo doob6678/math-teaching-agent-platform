@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.doob.mathagent.agent.mapper.AgentWorkerTaskOutboxEventMapper">
+    <select id="selectReadyPending" resultType="com.doob.mathagent.agent.entity.AgentWorkerTaskOutboxEventEntity">
+        SELECT *
+        FROM agent_worker_task_outbox_event
+        WHERE status = 'PENDING'
+          AND next_attempt_at &lt;= #{now}
+        ORDER BY created_at ASC
+        LIMIT #{limit}
+    </select>
+
+    <select id="selectOldestUnpublished" resultType="com.doob.mathagent.agent.entity.AgentWorkerTaskOutboxEventEntity">
+        SELECT *
+        FROM agent_worker_task_outbox_event
+        WHERE status IN ('PENDING', 'PUBLISHING')
+        ORDER BY created_at ASC
+        LIMIT 1
+    </select>
+</mapper>

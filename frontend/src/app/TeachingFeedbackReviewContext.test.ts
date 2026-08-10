@@ -70,7 +70,7 @@ describe("buildTeachingFeedbackReviewContext", () => {
       reviewTask(),
       "teacher",
       latex,
-      { bytes: new Uint8Array([37, 80, 68, 70]), renderer: "xelatex", pageCount: 4 },
+      { bytes: new Uint8Array([37, 80, 68, 70]), renderer: "xelatex", pageCount: 4, contentLength: 4, sha256: "", fileName: "handout.pdf" },
       "task-review-1:teacher",
       {
         artifactType: "browser_pdf_canvas",
@@ -167,7 +167,7 @@ describe("buildTeachingFeedbackReviewContext", () => {
       }),
       "teacher",
       "\\section{课前定位}\\section{例题详解}\\paragraph{答案与评分点}答案完整。",
-      { bytes: new Uint8Array([37, 80, 68, 70]), renderer: "xelatex", pageCount: 2 },
+      { bytes: new Uint8Array([37, 80, 68, 70]), renderer: "xelatex", pageCount: 2, contentLength: 4, sha256: "", fileName: "handout.pdf" },
       "task-review-no-image:teacher",
       {
         artifactType: "browser_pdf_canvas",
@@ -197,7 +197,7 @@ describe("buildTeachingFeedbackReviewContext", () => {
       reviewTask(),
       "student",
       "\\section{学习主题}\\section{知识点}\\section{题型}\\section{思路提示}\\section{课堂练习}",
-      { bytes: new Uint8Array([37, 80, 68, 70]), renderer: "xelatex", pageCount: 3 },
+      { bytes: new Uint8Array([37, 80, 68, 70]), renderer: "xelatex", pageCount: 3, contentLength: 4, sha256: "", fileName: "handout.pdf" },
       "task-review-1:student",
       {
         artifactType: "browser_pdf_canvas",
@@ -230,7 +230,7 @@ describe("buildTeachingFeedbackReviewContext", () => {
       reviewTask(),
       "lecture",
       "\\section{横版讲解卡}\\section{核心公式}\\section{课堂引导}",
-      { bytes: new Uint8Array([37, 80, 68, 70]), renderer: "xelatex", pageCount: 1 },
+      { bytes: new Uint8Array([37, 80, 68, 70]), renderer: "xelatex", pageCount: 1, contentLength: 4, sha256: "", fileName: "handout.pdf" },
       "task-review-1:lecture",
     );
 

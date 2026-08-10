@@ -73,9 +73,9 @@ public final class IngestionBatchRunner implements ApplicationRunner {
                 for (DiscoveredSourceFile source : preflight.files()) {
                     parseSource(connection, runId, source);
                 }
-                // A real rule pass has completed, but Golden and visual review have not.  Calling this success would
-                // bypass the independent verification state machine, so it is recorded as a recoverable partial run.
-                updateRun(connection, runId, ImportRunState.PARTIALLY_FAILED.name(), ImportVerificationState.VERIFICATION_FAILED.name(),
+                // Parsing completed successfully. Review is pending, not failed: keep operational run status and
+                // independent verification status semantically distinct so operators can schedule the next gate.
+                updateRun(connection, runId, ImportRunState.PARSED_AWAITING_REVIEW.name(), ImportVerificationState.NOT_STARTED.name(),
                         "PDF text candidates persisted; visual regions, Golden comparison and human approval remain required.");
                 connection.commit();
             } catch (Exception exception) {

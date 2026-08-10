@@ -38,7 +38,16 @@ public class MyBatisStudentMemoryStore implements StudentMemoryStore {
 
     @Override
     public List<StudentMemoryEntry> candidates(String tenantId, String studentId) {
-        return mapper.selectList(new LambdaQueryWrapper<StudentMemoryEntryEntity>()
+        return candidates(tenantId, studentId, MAX_REUSE_CANDIDATES);
+    }
+
+    /** Maximum recent rows inspected by lexical reuse; SQL applies the bound before materializing entities. */
+    private static final int MAX_REUSE_CANDIDATES = 500;
+
+    @Override
+    public List<StudentMemoryEntry> candidates(String tenantId, String studentId, int limit) {
+        int normalizedLimit = Math.max(1, Math.min(MAX_REUSE_CANDIDATES, limit));
+        return mapper.selectPage(Page.of(1, normalizedLimit), new LambdaQueryWrapper<StudentMemoryEntryEntity>()
                         .eq(StudentMemoryEntryEntity::getTenantId, tenantId)
                         .eq(StudentMemoryEntryEntity::getStatus, "active")
                         .and(wrapper -> wrapper
@@ -47,7 +56,7 @@ public class MyBatisStudentMemoryStore implements StudentMemoryStore {
                                 .eq(StudentMemoryEntryEntity::getStudentId, studentId))
                         .orderByDesc(StudentMemoryEntryEntity::getCreatedAt)
                         .orderByDesc(StudentMemoryEntryEntity::getMemoryId))
-                .stream()
+                .getRecords().stream()
                 .map(MyBatisStudentMemoryStore::toRecord)
                 .toList();
     }

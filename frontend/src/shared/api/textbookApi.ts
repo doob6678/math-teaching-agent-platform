@@ -307,6 +307,9 @@ export interface TeachingHandoutPdfResponse {
   bytes: Uint8Array;
   renderer: string;
   pageCount: number;
+  contentLength: number;
+  sha256: string;
+  fileName: string;
 }
 
 export type TeachingHandoutVersion = "teacher" | "student" | "lecture";
@@ -2781,6 +2784,19 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     return response.text();
   }
 
+  function parseContentDispositionFileName(value: string | null): string {
+    if (!value) return "";
+    const encoded = value.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+    if (encoded) {
+      try {
+        return decodeURIComponent(encoded.replace(/^"|"$/g, ""));
+      } catch {
+        return encoded.replace(/^"|"$/g, "");
+      }
+    }
+    return value.match(/filename="?([^";]+)"?/i)?.[1]?.trim() ?? "";
+  }
+
   /**
    * Requests backend binary content while preserving the same session and device headers.
    */
@@ -2859,7 +2875,7 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
   async function requestEventStream<T>(
     path: string,
     init: RequestInit,
-    onEvent: (eventName: string, payload: T) => void,
+    onEvent: (eventName: string, payload: T, eventId?: string) => void,
   ): Promise<void> {
     const response = await fetchImpl(`${normalizedBaseUrl}${path}`, {
       ...init,
@@ -2891,7 +2907,7 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
         buffer = buffer.slice(separatorIndex + 2);
         const parsed = parseServerSentEvent<T>(rawEvent);
         if (parsed) {
-          onEvent(parsed.eventName, parsed.payload);
+          onEvent(parsed.eventName, parsed.payload, parsed.eventId);
         }
         separatorIndex = buffer.indexOf("\n\n");
       }
@@ -2900,7 +2916,7 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
         if (trailing) {
           const parsed = parseServerSentEvent<T>(trailing);
           if (parsed) {
-            onEvent(parsed.eventName, parsed.payload);
+            onEvent(parsed.eventName, parsed.payload, parsed.eventId);
           }
         }
         return;
@@ -2911,7 +2927,7 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
   /**
    * Parses one SSE block into an event name and JSON payload.
    */
-  function parseServerSentEvent<T>(rawEvent: string): { eventName: string; payload: T } | null {
+  function parseServerSentEvent<T>(rawEvent: string): { eventName: string; eventId?: string; payload: T } | null {
     const lines = rawEvent.split(/\r?\n/);
     let eventName = "message";
     const dataLines: string[] = [];
@@ -2925,8 +2941,10 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
     if (!dataLines.length) {
       return null;
     }
+    const eventId = lines.find((line) => line.startsWith("id:"))?.slice(3).trim();
     return {
       eventName,
+      eventId: eventId || undefined,
       payload: JSON.parse(dataLines.join("\n")) as T,
     };
   }
@@ -3147,6 +3165,9 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
         bytes: response.bytes,
         renderer: response.headers.get("X-Handout-Renderer") ?? "",
         pageCount: Number(response.headers.get("X-Handout-Page-Count") ?? "0") || 0,
+        contentLength: Number(response.headers.get("X-Handout-Content-Length") ?? response.bytes.byteLength) || response.bytes.byteLength,
+        sha256: response.headers.get("X-Handout-SHA256") ?? "",
+        fileName: parseContentDispositionFileName(response.headers.get("Content-Disposition")) || `${taskId}-${version}.pdf`,
       };
     },
 
@@ -3161,6 +3182,9 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
         bytes: response.bytes,
         renderer: response.headers.get("X-Handout-Renderer") ?? "",
         pageCount: Number(response.headers.get("X-Handout-Page-Count") ?? "0") || 0,
+        contentLength: Number(response.headers.get("X-Handout-Content-Length") ?? response.bytes.byteLength) || response.bytes.byteLength,
+        sha256: response.headers.get("X-Handout-SHA256") ?? "",
+        fileName: parseContentDispositionFileName(response.headers.get("Content-Disposition")) || `${taskId}-${version}.pdf`,
       };
     },
 
@@ -3585,27 +3609,53 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
 
     async streamStudentQuestion(
       request: StudentExplanationRequest,
-      onEvent: (eventName: string, payload: StudentExplanationStreamEvent) => void,
+      onEvent: (eventName: string, payload: StudentExplanationStreamEvent, eventId?: string) => void,
     ): Promise<StudentExplanationResponse> {
       let finalResponse: StudentExplanationResponse | null = null;
-      await requestEventStream<StudentExplanationStreamEvent>(
-        "/api/students/explanations/stream",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(request),
-        },
-        (eventName, payload) => {
-          onEvent(eventName, payload);
-          if (payload.response) {
-            finalResponse = payload.response;
+      const cursorKey = request.clientRequestId ? `student-explanation-cursor:${request.clientRequestId}` : "";
+      let lastEventId = cursorKey && typeof sessionStorage !== "undefined"
+        ? sessionStorage.getItem(cursorKey) || undefined
+        : undefined;
+      const transientStreamFailure = (error: unknown): boolean => {
+        const message = error instanceof Error ? error.message : String(error || "");
+        return /(?:502|503|504|ECONNRESET|network|failed to fetch|stream.*ended)/i.test(message);
+      };
+      for (let attempt = 0; attempt < 2 && !finalResponse; attempt += 1) {
+        try {
+          await requestEventStream<StudentExplanationStreamEvent>(
+            "/api/students/explanations/stream",
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                ...(lastEventId ? { "Last-Event-ID": lastEventId } : {}),
+              },
+              body: JSON.stringify(request),
+            },
+            (eventName, payload, eventId) => {
+              if (eventId) {
+                lastEventId = eventId;
+                if (cursorKey && typeof sessionStorage !== "undefined") sessionStorage.setItem(cursorKey, eventId);
+              }
+              onEvent(eventName, payload, eventId);
+
+              if (payload.response) {
+                finalResponse = payload.response;
+                if (cursorKey && typeof sessionStorage !== "undefined") sessionStorage.removeItem(cursorKey);
+              }
+              if (payload.eventType === "error") {
+                const suffix = payload.errorTraceId ? `（traceId: ${payload.errorTraceId}）` : "";
+                throw new Error((payload.message || "流式讲解失败。") + suffix);
+              }
+            },
+          );
+        } catch (error) {
+          if (attempt === 0 && transientStreamFailure(error)) {
+            continue;
           }
-          if (payload.eventType === "error") {
-            const suffix = payload.errorTraceId ? `（traceId: ${payload.errorTraceId}）` : "";
-            throw new Error((payload.message || "流式讲解失败。") + suffix);
-          }
-        },
-      );
+          throw error;
+        }
+      }
       if (!finalResponse) {
         throw new Error("流式讲解已结束，但没有收到最终结果。");
       }
@@ -3633,7 +3683,7 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
       );
     },
 
-    getStudentExplanationConversation(conversationId: string, limit = 30): Promise<StudentExplanationConversationResponse> {
+    getStudentExplanationConversation(conversationId: string, limit = 500): Promise<StudentExplanationConversationResponse> {
       return requestJson<StudentExplanationConversationResponse>(
         `/api/students/explanations/conversations/${encodeURIComponent(conversationId)}?limit=${encodeURIComponent(String(limit))}`,
       );

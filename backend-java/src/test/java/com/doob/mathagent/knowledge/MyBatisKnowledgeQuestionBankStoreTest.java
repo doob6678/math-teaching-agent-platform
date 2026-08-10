@@ -13,6 +13,7 @@ import com.doob.mathagent.knowledge.mapper.QuestionKnowledgeLinkMapper;
 import com.doob.mathagent.knowledge.service.KnowledgePointRecord;
 import com.doob.mathagent.knowledge.service.MyBatisKnowledgeQuestionBankStore;
 import com.doob.mathagent.knowledge.service.QuestionBankItemRecord;
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.List;
@@ -181,6 +182,13 @@ class MyBatisKnowledgeQuestionBankStoreTest {
                             yield 1;
                         }
                         case "selectList" -> rows;
+                        case "selectPage" -> {
+                            @SuppressWarnings("unchecked")
+                            IPage<QuestionBankItemEntity> page = (IPage<QuestionBankItemEntity>) args[0];
+                            page.setRecords(rows);
+                            page.setTotal(rows.size());
+                            yield page;
+                        }
                         default -> throw new UnsupportedOperationException(method.getName());
                     });
         }

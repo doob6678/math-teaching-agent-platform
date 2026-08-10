@@ -20,6 +20,8 @@ import java.util.List;
  * @param concurrencyKeys concurrency keys acquired for this execution
  * @param stageTimings execution stage timing rows
  * @param actualUsage provider-reported token usage; zero values mean no live call was made or provider omitted usage
+ * @param actualCost actual deployment-priced cost, or -1 when no matching price is configured
+ * @param costKnown whether actualCost is backed by a configured provider/model price
  * @param message safe status message; raw prompt and raw model output are intentionally omitted
  * @param generatedContent model-generated content returned only to the immediate owner-facing caller
  */
@@ -40,7 +42,33 @@ public record AgentRunExecuteResponse(
         List<StageTiming> stageTimings,
         TokenUsage actualUsage,
         String message,
-        String generatedContent) {
+        String generatedContent,
+        double actualCost,
+        boolean costKnown) {
+
+    /** Backward-compatible constructor for callers that predate actual cost accounting. */
+    public AgentRunExecuteResponse(
+            String traceId,
+            String planId,
+            String tenantId,
+            String subjectType,
+            String subjectId,
+            String agentCode,
+            String providerName,
+            String modelCode,
+            String status,
+            double estimatedCost,
+            List<String> allowedToolScopes,
+            List<String> allowedDataScopes,
+            List<String> concurrencyKeys,
+            List<StageTiming> stageTimings,
+            TokenUsage actualUsage,
+            String message,
+            String generatedContent) {
+        this(traceId, planId, tenantId, subjectType, subjectId, agentCode, providerName, modelCode, status,
+                estimatedCost, allowedToolScopes, allowedDataScopes, concurrencyKeys, stageTimings, actualUsage,
+                message, generatedContent, -1.0d, false);
+    }
 
     /**
      * Execution stage timing for monitoring dashboards.

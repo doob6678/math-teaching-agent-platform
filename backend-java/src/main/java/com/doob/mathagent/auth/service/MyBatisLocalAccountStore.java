@@ -53,18 +53,30 @@ public class MyBatisLocalAccountStore implements LocalAccountStore {
 
     @Override
     public LocalAccount createStudent(String username, String encodedPassword, String tenantId) {
+        return createAccount(username, encodedPassword, tenantId, "student");
+    }
+
+    @Override
+    public LocalAccount createTeacher(String username, String encodedPassword, String tenantId) {
+        return createAccount(username, encodedPassword, tenantId, "teacher");
+    }
+
+    /**
+     * Persists an account with a backend-selected role; public request payloads never reach this method with a role.
+     */
+    private LocalAccount createAccount(String username, String encodedPassword, String tenantId, String role) {
         String normalizedUsername = normalizeUsername(username);
         if (normalizedUsername.isBlank()) {
             throw new IllegalArgumentException("Username is required");
         }
         AuthAccountEntity entity = new AuthAccountEntity();
         entity.setAccountId(UUID.randomUUID().toString());
-        entity.setUserId("student-" + UUID.randomUUID());
+        entity.setUserId(role + "-" + UUID.randomUUID());
         entity.setTenantId(textOrDefault(tenantId, "default"));
         entity.setUsername(username.strip());
         entity.setUsernameNormalized(normalizedUsername);
         entity.setPasswordHash(encodedPassword);
-        entity.setRole("student");
+        entity.setRole(role);
         entity.setStatus(ACTIVE);
         try {
             mapper.insert(entity);

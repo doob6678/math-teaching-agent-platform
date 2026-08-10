@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.doob.mathagent.teaching.mapper.TeachingTaskMapper">
+    <!-- Lease acquisition remains one atomic SQL statement so duplicate deliveries cannot execute twice. -->
+    <update id="tryAcquireLectureTask">
+        UPDATE teaching_task
+        SET status = 'RUNNING',
+            lease_owner = #{workerId},
+            lease_token = #{leaseToken},
+            lease_expire_at = #{leaseExpireAt},
+            started_at = #{startedAt},
+            finished_at = NULL,
+            last_error = NULL,
+            retry_count = retry_count + 1
+        WHERE task_id = #{taskId}
+          AND (
+                status IN ('CREATED', 'RETRYING')
+                OR (status = 'RUNNING' AND lease_expire_at &lt; #{startedAt})
+          )
+    </update>
+
+    <!-- Reads bounded candidates; the following CAS update decides whether a concurrent owner may be reclaimed. -->
+    <select id="findExpiredLectureLeases" resultType="com.doob.mathagent.teaching.entity.TeachingTaskEntity">
+        SELECT *
+        FROM teaching_task
+        WHERE status = 'RUNNING'
+          AND lease_expire_at &lt; #{now}
+        ORDER BY lease_expire_at ASC
+        LIMIT #{limit}
+    </select>
+
+    <!-- Clears exactly the lease token observed by the recovery scan, never a renewed or replaced lease. -->
+    <update id="reclaimExpiredLectureTask">
+        UPDATE teaching_task
+        SET status = 'RETRYING',
+            lease_owner = NULL,
+            lease_token = NULL,
+            lease_expire_at = NULL,
+            last_error = 'lecture task lease expired',
+            updated_at = #{now}
+        WHERE task_id = #{taskId}
+          AND status = 'RUNNING'
+          AND lease_token = #{leaseToken}
+          AND lease_expire_at &lt; #{now}
+    </update>
+
+    <!-- Resume clears the old lease and snapshot only for the owner and a recoverable status. -->
+    <update id="prepareLectureTaskForResume">
+        UPDATE teaching_task
+        SET status = 'RETRYING',
+            response_json = #{responseJson},
+            retry_count = 0,
+            lease_owner = NULL,
+            lease_token = NULL,
+            lease_expire_at = NULL,
+            current_stage = NULL,
+            last_error = NULL,
+            started_at = NULL,
+            finished_at = NULL,
+            updated_at = #{updatedAt}
+        WHERE task_id = #{taskId}
+          AND owner_key = #{ownerKey}
+          AND status IN ('FAILED', 'RUNNING', 'COMPLETED')
+    </update>
+</mapper>

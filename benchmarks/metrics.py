@@ -67,22 +67,22 @@ def count_agent_diagnostics(runs: Sequence[Mapping]) -> dict:
 
 def summarize_security_results(results: Mapping[str, Sequence[Mapping]]) -> dict:
     """Summarize security benchmark HTTP attempts by scenario."""
-    replay = list(results.get("capabilityReplay") or [])
-    mismatch = list(results.get("requestHashMismatch") or [])
+    authenticated = list(results.get("authenticatedExecution") or [])
+    duplicate = list(results.get("duplicateSubmission") or [])
     rate_limit = list(results.get("rateLimit") or [])
     concurrency = list(results.get("agentConcurrency") or [])
-    replay_success = _count_status(replay, 200)
-    replay_rejected = len(replay) - replay_success
+    duplicate_success = _count_status(duplicate, 200)
+    duplicate_rejected = len(duplicate) - duplicate_success
     return {
-        "capabilityReplay": {
-            "attemptCount": len(replay),
-            "successCount": replay_success,
-            "rejectedCount": replay_rejected,
-            "rejectionRate": replay_rejected / len(replay) if replay else 0.0,
+        "authenticatedExecution": {
+            "attemptCount": len(authenticated),
+            "successCount": _count_status(authenticated, 200),
         },
-        "requestHashMismatch": {
-            "attemptCount": len(mismatch),
-            "blockedCount": sum(1 for row in mismatch if int(row.get("status", 0) or 0) in {400, 403}),
+        "duplicateSubmission": {
+            "attemptCount": len(duplicate),
+            "successCount": duplicate_success,
+            "rejectedCount": duplicate_rejected,
+            "rejectionRate": duplicate_rejected / len(duplicate) if duplicate else 0.0,
         },
         "rateLimit": {
             "attemptCount": len(rate_limit),

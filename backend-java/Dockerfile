@@ -1,9 +1,11 @@
 FROM maven:3.9-eclipse-temurin-21 AS build
 WORKDIR /workspace
-COPY backend-java/pom.xml ./
-RUN mvn -q -DskipTests dependency:go-offline
-COPY backend-java/src ./src
-RUN mvn -q -DskipTests package
+# Resolve the Maven graph in the image build so the runtime JAR always corresponds to the source in this context.
+# The dependency layer remains cacheable while a clean build prevents a stale host target directory from being used.
+COPY backend-java/pom.xml ./backend-java/pom.xml
+RUN mvn -q -f backend-java/pom.xml -DskipTests dependency:go-offline
+COPY backend-java/src ./backend-java/src
+RUN mvn -q -f backend-java/pom.xml -DskipTests package
 
 FROM eclipse-temurin:21-jre
 WORKDIR /app
@@ -21,7 +23,8 @@ RUN apt-get update \
         texlive-lang-chinese \
         fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
-COPY --from=build /workspace/target/*.jar /app/math-agent-rag.jar
+# Copy only the artifact produced by the source-matched build stage; host target contents cannot make the image stale.
+COPY --from=build /workspace/backend-java/target/math-agent-rag-backend-0.1.0-SNAPSHOT.jar /app/math-agent-rag.jar
 COPY ai-worker-python/scripts/download_feishu_url.py /app/scripts/download_feishu_url.py
 RUN mkdir -p /app/data/teacher-source-imports /app/data/teacher-assets
 EXPOSE 8080

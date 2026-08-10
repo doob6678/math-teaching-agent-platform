@@ -18,8 +18,6 @@ import java.util.List;
  * @param toolPolicyDecisions per-tool decision rows explaining dynamic injection filtering
  * @param allowedDataScopes requested data scopes accepted by agent policy
  * @param deniedDataScopes requested data scopes rejected by agent policy
- * @param capabilityRequired whether the caller must acquire a high-value capability token before execution
- * @param capabilityAction capability action to use when capabilityRequired is true
  * @param maxInputTokens policy-clipped input token limit
  * @param maxOutputTokens policy-clipped output token limit
  * @param estimatedTotalTokens estimated tokens after policy clipping
@@ -44,8 +42,6 @@ public record AgentRunPlanResponse(
         List<ToolPolicyDecision> toolPolicyDecisions,
         List<String> allowedDataScopes,
         List<String> deniedDataScopes,
-        boolean capabilityRequired,
-        String capabilityAction,
         int maxInputTokens,
         int maxOutputTokens,
         long estimatedTotalTokens,
@@ -73,8 +69,6 @@ public record AgentRunPlanResponse(
             List<ToolPolicyDecision> toolPolicyDecisions,
             List<String> allowedDataScopes,
             List<String> deniedDataScopes,
-            boolean capabilityRequired,
-            String capabilityAction,
             int maxInputTokens,
             int maxOutputTokens,
             long estimatedTotalTokens,
@@ -97,8 +91,6 @@ public record AgentRunPlanResponse(
                 toolPolicyDecisions,
                 allowedDataScopes,
                 deniedDataScopes,
-                capabilityRequired,
-                capabilityAction,
                 maxInputTokens,
                 maxOutputTokens,
                 estimatedTotalTokens,

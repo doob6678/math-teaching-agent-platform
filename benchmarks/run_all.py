@@ -65,7 +65,7 @@ def main() -> None:
         "outputDir": str(output_dir),
         "ragSamples": metrics["rag"].get("sampleCount"),
         "agentRuns": metrics["agent"].get("runCount"),
-        "capabilityReplayRejectionRate": metrics["security"].get("capabilityReplay", {}).get("rejectionRate"),
+        "duplicateSubmissionRejectionRate": metrics["security"].get("duplicateSubmission", {}).get("rejectionRate"),
     }, ensure_ascii=False, indent=2))
 
 

@@ -28,7 +28,7 @@ public class AgentRegistryService {
         return new AgentRegistryResponse.Item(
                 definition.code(), presentation.name(), presentation.category(), presentation.description(),
                 definition.allowedToolScopes().stream().sorted().toList(),
-                definition.allowedDataScopes().stream().sorted().toList(), definition.highValueRequired(),
+                definition.allowedDataScopes().stream().sorted().toList(),
                 presentation.inputHint(), presentation.outputArtifactType());
     }
 

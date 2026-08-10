@@ -33,6 +33,7 @@ public record TeacherResourceBlockSearchResponse(
      * @param chapter inferred chapter heading
      * @param section inferred section heading
      * @param pageNo extracted source page number
+     * @param fileName actual file name derived from sourcePath, never the Feishu root display name
      * @param sourcePath relative source path inside the document package or staging folder
      * @param blockRole coarse semantic role used by stage-two rerank
      * @param graphTags normalized graph tag names aligned to the block
@@ -54,6 +55,7 @@ public record TeacherResourceBlockSearchResponse(
             String chapter,
             String section,
             Integer pageNo,
+            String fileName,
             String sourcePath,
             String blockRole,
             List<String> graphTags,
@@ -63,6 +65,32 @@ public record TeacherResourceBlockSearchResponse(
             double score,
             List<String> imageAssetIds,
             List<AssetRef> assetRefs) {
+
+        /** Compatibility constructor for callers that predate the explicit fileName response field. */
+        public Hit(
+                String documentId,
+                String documentTitle,
+                String sourceType,
+                String permissionScope,
+                String blockId,
+                String blockType,
+                int blockOrder,
+                String chapter,
+                String section,
+                Integer pageNo,
+                String sourcePath,
+                String blockRole,
+                List<String> graphTags,
+                List<String> evidenceBlockIds,
+                String evidenceText,
+                String snippet,
+                double score,
+                List<String> imageAssetIds,
+                List<AssetRef> assetRefs) {
+            this(documentId, documentTitle, sourceType, permissionScope, blockId, blockType, blockOrder, chapter,
+                    section, pageNo, fileNameFromPath(sourcePath), sourcePath, blockRole, graphTags, evidenceBlockIds,
+                    evidenceText, snippet, score, imageAssetIds, assetRefs);
+        }
 
         /**
          * Backward-compatible constructor for older callers that only return the original hit fields.
@@ -91,6 +119,7 @@ public record TeacherResourceBlockSearchResponse(
                     section,
                     pageNo,
                     "",
+                    "",
                     "reference",
                     List.of(),
                     List.of(blockId),
@@ -113,6 +142,7 @@ public record TeacherResourceBlockSearchResponse(
                     chapter,
                     section,
                     pageNo,
+                    fileName,
                     sourcePath,
                     blockRole,
                     graphTags,
@@ -122,6 +152,13 @@ public record TeacherResourceBlockSearchResponse(
                     score,
                     imageAssetIds,
                     visibleAssetRefs == null ? List.of() : List.copyOf(visibleAssetRefs));
+        }
+
+        private static String fileNameFromPath(String sourcePath) {
+            if (sourcePath == null || sourcePath.isBlank()) return "";
+            String normalized = sourcePath.replace('\\', '/');
+            int slash = normalized.lastIndexOf('/');
+            return slash < 0 ? normalized : normalized.substring(slash + 1);
         }
     }
 

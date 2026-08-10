@@ -35,6 +35,15 @@ public class InMemoryMultiAgentWritingWorkflowStore implements MultiAgentWriting
                 .filter(record -> canView(record, normalizedSubject));
     }
 
+    /** Mirrors the Worker-only durable lookup without applying browser visibility rules twice. */
+    @Override
+    public Optional<MultiAgentWritingWorkflowRecord> findByIdInternal(String workflowId) {
+        if (workflowId == null || workflowId.isBlank()) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(records.get(workflowId.strip()));
+    }
+
     /**
      * Checks tenant and owner visibility for a workflow.
      */

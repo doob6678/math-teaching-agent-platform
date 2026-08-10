@@ -3,7 +3,6 @@ package com.doob.mathagent.teacher.controller;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.infrastructure.security.RequestSubjectResolver;
 import com.doob.mathagent.teacher.dto.TeacherResourceRegistrationRequest;
-import com.doob.mathagent.teacher.support.TeacherResourceCapabilityVerifier;
 import com.doob.mathagent.teacher.search.audit.TeacherResourceBlockSearchAuditEvent;
 import com.doob.mathagent.teacher.search.audit.TeacherResourceBlockSearchAuditLookup;
 import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService;
@@ -26,6 +25,7 @@ import com.doob.mathagent.teacher.search.TeacherResourceBlockSearchResponse;
 import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncCheckpointResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncJobResponse;
+import com.doob.mathagent.teacher.vo.TeacherResourceAssetResponse;
 import com.doob.mathagent.vector.service.TeacherResourceImageClipSearchRequest;
 import com.doob.mathagent.vector.service.TeacherResourceImageClipSearchResponse;
 import com.doob.mathagent.vector.service.TeacherResourceImageClipService;
@@ -59,11 +59,6 @@ import org.springframework.web.server.ResponseStatusException;
 @RestController
 public class TeacherResourceController {
 
-    private static final String REGISTER_ACTION = "teacher-resource:register";
-    private static final String ARCHIVE_ACTION = "teacher-resource:archive";
-    private static final String SYNC_ACTION = "teacher-resource:sync";
-    private static final String SYNC_EXECUTE_ACTION = "teacher-resource:sync-execute";
-    private static final String SYNC_RESUME_ACTION = "teacher-resource:sync-resume";
     private static final String RESOURCES_PATH = "/api/teacher/resources";
     private static final String RESOURCES_UPLOAD_PATH = "/api/teacher/resources/upload";
 
@@ -79,7 +74,6 @@ public class TeacherResourceController {
     private final TeacherResourceUploadService uploadService;
     private final TeacherResourceImageClipService imageClipService;
     private final RequestSubjectResolver subjectResolver;
-    private final TeacherResourceCapabilityVerifier capabilityVerifier;
     private final FeishuCredentialService feishuCredentialService;
     private final FeishuResourceBindingService feishuResourceBindingService;
     private final Environment environment;
@@ -98,8 +92,7 @@ public class TeacherResourceController {
             TeacherResourceBlockSearchAuditLookup blockSearchAuditLookup,
             TeacherSourceSyncCheckpointQueryService checkpointQueryService,
             TeacherDocumentBlockStore blockStore,
-            RequestSubjectResolver subjectResolver,
-            TeacherResourceCapabilityVerifier capabilityVerifier) {
+            RequestSubjectResolver subjectResolver) {
         this(
                 teacherResourceService,
                 syncJobService,
@@ -113,7 +106,6 @@ public class TeacherResourceController {
                 TeacherResourceUploadService.disabled(),
                 null,
                 subjectResolver,
-                capabilityVerifier,
                 null,
                 null,
                 null);
@@ -133,8 +125,7 @@ public class TeacherResourceController {
             TeacherDocumentBlockStore blockStore,
             TeacherResourceAssetService assetService,
             TeacherResourceUploadService uploadService,
-            RequestSubjectResolver subjectResolver,
-            TeacherResourceCapabilityVerifier capabilityVerifier) {
+            RequestSubjectResolver subjectResolver) {
         this(
                 teacherResourceService,
                 syncJobService,
@@ -148,7 +139,6 @@ public class TeacherResourceController {
                 uploadService,
                 null,
                 subjectResolver,
-                capabilityVerifier,
                 null,
                 null,
                 null);
@@ -168,7 +158,6 @@ public class TeacherResourceController {
             TeacherResourceUploadService uploadService,
             TeacherResourceImageClipService imageClipService,
             RequestSubjectResolver subjectResolver,
-            TeacherResourceCapabilityVerifier capabilityVerifier,
             FeishuCredentialService feishuCredentialService,
             FeishuResourceBindingService feishuResourceBindingService,
             Environment environment) {
@@ -184,7 +173,6 @@ public class TeacherResourceController {
         this.uploadService = Objects.requireNonNull(uploadService, "uploadService");
         this.imageClipService = imageClipService;
         this.subjectResolver = Objects.requireNonNull(subjectResolver, "subjectResolver");
-        this.capabilityVerifier = Objects.requireNonNull(capabilityVerifier, "capabilityVerifier");
         this.feishuCredentialService = feishuCredentialService;
         this.feishuResourceBindingService = feishuResourceBindingService;
         this.environment = environment;
@@ -207,14 +195,6 @@ public class TeacherResourceController {
                 && feishuCredentialService.findActive(subject.normalize().tenantId(), subject.normalize().subjectId()) == null
                 && !administratorBotCredentialsConfigured(subject)) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "AUTH_REQUIRED");
-        }
-        if (!capabilityVerifier.verify(
-                headerOrNull(httpRequest, "X-Capability-Token"),
-                REGISTER_ACTION,
-                RESOURCES_PATH,
-                headerOrNull(httpRequest, "X-Request-Hash"),
-                subject)) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for teacher resource register");
         }
         try {
             TeacherResourceDocumentResponse registered = teacherResourceService.register(enrich(request, subject));
@@ -259,17 +239,11 @@ public class TeacherResourceController {
             @RequestParam(value = "parseMode", required = false) String parseMode,
             HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest);
-        if (!capabilityVerifier.verify(
-                headerOrNull(httpRequest, "X-Capability-Token"),
-                REGISTER_ACTION,
-                RESOURCES_UPLOAD_PATH,
-                headerOrNull(httpRequest, "X-Request-Hash"),
-                subject)) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for teacher resource upload");
-        }
         try {
             RequestSubject normalized = subject.normalize();
-            String normalizedSourceType = TeacherResourceSourceTypePolicy.normalizeForRegistration(sourceType);
+            // Browser files are teacher uploads regardless of a form field supplied by an older client.  Keeping this
+            // assignment at the HTTP boundary makes a later filename change incapable of changing the library.
+            String normalizedSourceType = "teacher_resource";
             if ("feishu".equalsIgnoreCase(normalizedSourceType)) {
                 throw new IllegalArgumentException("Upload endpoint does not accept feishu sourceType; use register with originalUrl instead");
             }
@@ -332,6 +306,7 @@ public class TeacherResourceController {
             @RequestParam(value = "tag", required = false) List<String> tags,
             HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest).normalize();
+        requireTeacherOrAdmin(subject);
         try {
             return blockSearchService.search(
                     subject.tenantId(),
@@ -412,6 +387,27 @@ public class TeacherResourceController {
     }
 
     /**
+     * Lists image metadata for one visible resource so inventory and UI callers can audit real asset ingestion.
+     *
+     * <p>Only metadata is returned here.  The image bytes remain behind the existing opaque asset-id endpoint,
+     * keeping storage keys and provider tokens out of the response while using the same visibility boundary as blocks.</p>
+     */
+    @GetMapping("/api/teacher/resources/{documentId}/assets")
+    public List<TeacherResourceAssetResponse> listAssets(
+            @PathVariable String documentId,
+            HttpServletRequest httpRequest) {
+        RequestSubject subject = subjectResolver.resolve(httpRequest).normalize();
+        boolean visible = teacherResourceService
+                .list(subject.tenantId(), subject.subjectType(), subject.subjectId())
+                .stream()
+                .anyMatch(resource -> resource.documentId().equals(documentId));
+        if (!visible) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Teacher resource not found");
+        }
+        return assetService.listActiveImageAssets(subject.tenantId(), documentId);
+    }
+
+    /**
      * Streams an extracted PDF/DOCX/Feishu image through backend authorization.
      *
      * The response deliberately exposes only an opaque asset id and a file stream. Do not replace this with static
@@ -472,15 +468,6 @@ public class TeacherResourceController {
             @PathVariable String documentId,
             HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest).normalize();
-        String path = RESOURCES_PATH + "/" + documentId;
-        if (!capabilityVerifier.verify(
-                headerOrNull(httpRequest, "X-Capability-Token"),
-                ARCHIVE_ACTION,
-                path,
-                headerOrNull(httpRequest, "X-Request-Hash"),
-                subject)) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for teacher resource archive");
-        }
         return teacherResourceService.archive(
                 subject.tenantId(),
                 subject.subjectType(),
@@ -492,7 +479,7 @@ public class TeacherResourceController {
      * Queues a source synchronization job. The worker may later download, parse, embed and reindex the source.
      *
      * @param documentId resource document id
-     * @param httpRequest HTTP request containing capability headers
+     * @param httpRequest HTTP request containing the authenticated session
      * @return queued sync job
      */
     @PostMapping("/api/teacher/resources/{documentId}/sync-jobs")
@@ -500,15 +487,6 @@ public class TeacherResourceController {
             @PathVariable String documentId,
             HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest).normalize();
-        String path = RESOURCES_PATH + "/" + documentId + "/sync-jobs";
-        if (!capabilityVerifier.verify(
-                headerOrNull(httpRequest, "X-Capability-Token"),
-                SYNC_ACTION,
-                path,
-                headerOrNull(httpRequest, "X-Request-Hash"),
-                subject)) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for teacher resource sync");
-        }
         return syncJobService.createSyncJob(
                 subject.tenantId(),
                 subject.subjectType(),
@@ -517,11 +495,11 @@ public class TeacherResourceController {
     }
 
     /**
-     * Executes a queued source synchronization job after a separate high-value capability check.
+     * Executes a queued source synchronization job for the authenticated teacher/admin.
      *
      * @param documentId resource document id
      * @param jobId sync job id
-     * @param httpRequest HTTP request containing capability headers
+     * @param httpRequest HTTP request containing the authenticated session
      * @return completed, running, or failed sync job state
      */
     @PostMapping("/api/teacher/resources/{documentId}/sync-jobs/{jobId}/execute")
@@ -530,15 +508,6 @@ public class TeacherResourceController {
             @PathVariable String jobId,
             HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest).normalize();
-        String path = RESOURCES_PATH + "/" + documentId + "/sync-jobs/" + jobId + "/execute";
-        if (!capabilityVerifier.verify(
-                headerOrNull(httpRequest, "X-Capability-Token"),
-                SYNC_EXECUTE_ACTION,
-                path,
-                headerOrNull(httpRequest, "X-Request-Hash"),
-                subject)) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for teacher resource sync execution");
-        }
         syncCommandDispatcher.dispatch(command(TeacherSourceSyncCommand.EXECUTE, subject, documentId, jobId));
         return syncJobService.findVisibleJob(subject.tenantId(), subject.subjectType(), subject.subjectId(), documentId, jobId);
     }
@@ -548,7 +517,7 @@ public class TeacherResourceController {
      *
      * @param documentId resource document id
      * @param jobId sync job id
-     * @param httpRequest HTTP request containing capability headers
+     * @param httpRequest HTTP request containing the authenticated session
      * @return resumed sync job state
      */
     @PostMapping("/api/teacher/resources/{documentId}/sync-jobs/{jobId}/resume")
@@ -557,15 +526,6 @@ public class TeacherResourceController {
             @PathVariable String jobId,
             HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest).normalize();
-        String path = RESOURCES_PATH + "/" + documentId + "/sync-jobs/" + jobId + "/resume";
-        if (!capabilityVerifier.verify(
-                headerOrNull(httpRequest, "X-Capability-Token"),
-                SYNC_RESUME_ACTION,
-                path,
-                headerOrNull(httpRequest, "X-Request-Hash"),
-                subject)) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Capability token required for teacher resource sync resume");
-        }
         syncCommandDispatcher.dispatch(command(TeacherSourceSyncCommand.RESUME, subject, documentId, jobId));
         return syncJobService.findVisibleJob(subject.tenantId(), subject.subjectType(), subject.subjectId(), documentId, jobId);
     }
@@ -615,7 +575,7 @@ public class TeacherResourceController {
         }
     }
 
-    /** Builds the token-free command after the controller has performed the relevant capability verification. */
+    /** Builds the command with the backend-resolved user and tenant identity. */
     private static TeacherSourceSyncCommand command(
             String action,
             RequestSubject subject,
@@ -648,21 +608,6 @@ public class TeacherResourceController {
                 normalized.subjectType(),
                 normalized.subjectId(),
                 request);
-    }
-
-    /**
-     * Reads a non-authoritative request header used for capability token verification.
-     *
-     * @param request HTTP request
-     * @param name header name
-     * @return stripped header value or null
-     */
-    private static String headerOrNull(HttpServletRequest request, String name) {
-        if (request == null) {
-            return null;
-        }
-        String value = request.getHeader(name);
-        return value == null || value.isBlank() ? null : value.strip();
     }
 
     /**

@@ -21,7 +21,6 @@ import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletRequest;
-import org.springframework.web.server.ResponseStatusException;
 
 class StudentDashboardControllerTest {
 
@@ -30,8 +29,7 @@ class StudentDashboardControllerTest {
         StudentDashboardController controller = new StudentDashboardController(
                 dashboardService(),
                 refreshService(),
-                request -> new RequestSubject("school-a", "student", "local-student", "device-1"),
-                (token, action, path, requestHash, subject) -> true);
+                request -> new RequestSubject("school-a", "student", "local-student", "device-1"));
 
         StudentDashboardResponse response = controller.getDashboard(null, new MockHttpServletRequest());
 
@@ -47,8 +45,7 @@ class StudentDashboardControllerTest {
         StudentDashboardController controller = new StudentDashboardController(
                 dashboardService(),
                 refreshService(),
-                request -> new RequestSubject("school-a", "admin", "admin-local", "device-1"),
-                (token, action, path, requestHash, subject) -> true);
+                request -> new RequestSubject("school-a", "admin", "admin-local", "device-1"));
 
         StudentDashboardResponse response = controller.getDashboard("student-100", new MockHttpServletRequest());
 
@@ -62,8 +59,7 @@ class StudentDashboardControllerTest {
         StudentDashboardController controller = new StudentDashboardController(
                 dashboardService(),
                 refreshService(),
-                request -> new RequestSubject("school-a", "student", "student-real", "device-1"),
-                (token, action, path, requestHash, subject) -> true);
+                request -> new RequestSubject("school-a", "student", "student-real", "device-1"));
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.addHeader("X-Subject-Type", "admin");
         request.addHeader("X-Subject-Id", "student-spoofed");
@@ -75,20 +71,6 @@ class StudentDashboardControllerTest {
         assertThat(response.viewerRole()).isEqualTo("student");
         assertThat(response.viewerSubjectId()).isEqualTo("student-real");
         assertThat(response.isAdminView()).isFalse();
-    }
-
-    @Test
-    void refreshRequiresCapabilityToken() {
-        StudentDashboardController controller = new StudentDashboardController(
-                dashboardService(),
-                refreshService(),
-                request -> new RequestSubject("school-a", "student", "student-real", "device-1"),
-                (token, action, path, requestHash, subject) -> false);
-
-        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
-                        controller.refreshDashboard(null, new MockHttpServletRequest()))
-                .isInstanceOf(ResponseStatusException.class)
-                .hasMessageContaining("403 FORBIDDEN");
     }
 
     @Test
@@ -117,15 +99,8 @@ class StudentDashboardControllerTest {
                                 new StudentDashboardResponse.KnowledgeGraph(List.of(), List.of(), "test"));
                     }
                 },
-                request -> new RequestSubject("school-a", "student", "student-real", "device-1"),
-                (token, action, path, requestHash, subject) ->
-                        "student-dashboard:refresh".equals(action)
-                                && "/api/students/dashboard/refresh".equals(path)
-                                && "hash-refresh".equals(requestHash)
-                                && "token-ok".equals(token));
+                request -> new RequestSubject("school-a", "student", "student-real", "device-1"));
         MockHttpServletRequest request = new MockHttpServletRequest();
-        request.addHeader("X-Capability-Token", "token-ok");
-        request.addHeader("X-Request-Hash", "hash-refresh");
 
         StudentDashboardResponse response = controller.refreshDashboard("student-victim", request);
 

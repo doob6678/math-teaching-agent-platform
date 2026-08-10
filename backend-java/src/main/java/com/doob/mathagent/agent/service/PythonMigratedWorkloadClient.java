@@ -2,11 +2,17 @@ package com.doob.mathagent.agent.service;
 
 import com.doob.mathagent.infrastructure.ai.AiProviderCatalog;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.net.http.HttpClient;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 import org.springframework.core.env.Environment;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
@@ -30,6 +36,7 @@ public class PythonMigratedWorkloadClient {
     private final RestClient client;
     private final AiProviderCatalog providerCatalog;
     private final ProviderRouteGrantSigner routeGrantSigner;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     public PythonMigratedWorkloadClient(
             Environment environment,
@@ -127,6 +134,225 @@ public class PythonMigratedWorkloadClient {
                 bounded(root.path("modelCode").asText(), 160));
     }
 
+    /** 调用 Python 流式卡片 endpoint；每个 delta 到达后立即交给 Java 公共 SSE 投影层。 */
+    public ExplanationResult streamStudentExplanation(
+            String runId,
+            String problem,
+            List<ExplanationEvidence> evidence,
+            String imageDataUrl,
+            Consumer<ExplanationStreamEvent> listener) {
+        String workerKey = environment.getProperty(
+                "math-agent.python-agent.worker-key", environment.getProperty("math-agent.worker-api-key", ""));
+        if (workerKey == null || workerKey.isBlank()) {
+            throw new IllegalStateException("Python agent worker key is not configured");
+        }
+        Map<String, Object> payload = Map.of(
+                "runId", bounded(runId, 128),
+                "mode", "compose",
+                "problem", bounded(problem, 8_000),
+                "evidence", explanationEvidence(evidence),
+                "availableTools", List.of(),
+                "observations", List.of(),
+                "imageDataUrl", imageDataUrl == null ? "" : imageDataUrl,
+                "providerRoute", providerRoute(runId, "student_explanation"));
+        try {
+            return client.post()
+                    .uri("/v1/student-explanations/stream")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .accept(MediaType.TEXT_EVENT_STREAM)
+                    .header("Authorization", "Bearer " + workerKey)
+                    .header("X-Trace-Id", bounded(runId, 128))
+                    .body(payload)
+                    .exchange((request, response) -> readExplanationStream(response, listener));
+        } catch (RestClientException exception) {
+            throw new IllegalStateException("Python worker streaming request failed", exception);
+        }
+    }
+
+    private ExplanationResult readExplanationStream(
+            org.springframework.http.client.ClientHttpResponse response,
+            Consumer<ExplanationStreamEvent> listener) throws java.io.IOException {
+        if (!response.getStatusCode().is2xxSuccessful()) {
+            throw new IllegalStateException("Python worker streaming request returned " + response.getStatusCode().value());
+        }
+        String eventName = "";
+        StringBuilder data = new StringBuilder();
+        ExplanationResult completed = null;
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(response.getBody(), StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (line.isEmpty()) {
+                    if (!data.isEmpty()) {
+                        JsonNode payload = objectMapper.readTree(data.toString());
+                        if (!payload.isObject()) {
+                            throw new IllegalStateException("Python worker stream payload is not a JSON object");
+                        }
+                        ExplanationStreamEvent event = streamEvent(eventName, payload);
+                        if (event != null) {
+                            if (listener != null) listener.accept(event);
+                            if ("completed".equals(event.eventName())) completed = event.result();
+                            if ("error".equals(event.eventName())) {
+                                throw new AiProviderUnavailableException(503, bounded(event.message(), 240));
+                            }
+                        }
+                    }
+                    eventName = "";
+                    data.setLength(0);
+                } else if (line.startsWith("event:")) {
+                    eventName = line.substring(6).trim();
+                } else if (line.startsWith("data:")) {
+                    if (!data.isEmpty()) data.append('\n');
+                    data.append(line.substring(5).stripLeading());
+                }
+            }
+        }
+        if (completed == null) {
+            throw new IllegalStateException("Python worker stream ended without a completed result");
+        }
+        return completed;
+    }
+
+    private ExplanationStreamEvent streamEvent(String eventName, JsonNode payload) {
+        String normalized = bounded(eventName, 32);
+        if ("delta".equals(normalized)) {
+            return new ExplanationStreamEvent(normalized, payload.path("content").asText(""), null,
+                    bounded(payload.path("providerName").asText(), 64),
+                    bounded(payload.path("modelCode").asText(), 160), "");
+        }
+        if ("completed".equals(normalized)) {
+            return new ExplanationStreamEvent(normalized, "", explanationResult(payload),
+                    bounded(payload.path("providerName").asText(), 64),
+                    bounded(payload.path("modelCode").asText(), 160), "");
+        }
+        if ("error".equals(normalized)) {
+            return new ExplanationStreamEvent(normalized, "", null, "", "", payload.path("message").asText("Python worker stream failed"));
+        }
+        return null;
+    }
+
+    private ExplanationResult explanationResult(JsonNode root) {
+        List<ExplanationCard> cards = new ArrayList<>();
+        for (JsonNode item : root.path("cards")) {
+            cards.add(new ExplanationCard(
+                    bounded(item.path("cardKey").asText(), 80), bounded(item.path("title").asText(), 160),
+                    bounded(item.path("summary").asText(), 8_000), stringArray(item.path("items"), 16, 800),
+                    stringArray(item.path("sourceUris"), 24, 320), bounded(item.path("renderMode").asText("text"), 32)));
+        }
+        return new ExplanationResult(bounded(root.path("conversationTitle").asText(), 80), List.copyOf(cards),
+                usage(root), bounded(root.path("providerName").asText(), 64), bounded(root.path("modelCode").asText(), 160));
+    }
+
+    /**
+     * Invokes only the V2 deterministic context graph. The existing V1 ReAct/evidence pipeline still owns generation.
+     */
+    public ConversationContextPreparation prepareStudentExplanationContext(
+            String runId,
+            String problem,
+            List<ConversationContextMessage> context,
+            ConversationContextSummary summary,
+            int maxInputTokens,
+            int reservedOutputTokens,
+            int summaryTriggerTokens) {
+        Map<String, Object> contextPayload = new LinkedHashMap<>();
+        contextPayload.put("schemaVersion", "student-conversation-context-v1");
+        contextPayload.put("revision", bounded(runId, 160));
+        contextPayload.put("messages", context == null ? List.of() : context.stream().limit(200).map(item -> Map.of(
+                "messageId", bounded(item.messageId(), 160),
+                "questionText", bounded(item.questionText(), 8_000),
+                "answerText", bounded(item.answerText(), 8_000),
+                "createdAt", bounded(item.createdAt(), 64))).toList());
+        if (summary != null && !bounded(summary.content(), 16_000).isBlank()) {
+            contextPayload.put("summary", Map.of(
+                    "summaryFromMessageId", bounded(summary.fromMessageId(), 160),
+                    "summaryToMessageId", bounded(summary.toMessageId(), 160),
+                    "summaryVersion", Math.max(1, summary.version()),
+                    "contentHash", bounded(summary.contentHash(), 128),
+                    "content", bounded(summary.content(), 16_000)));
+        }
+        JsonNode root = post("/v2/student-explanations/prepare", runId, Map.of(
+                "contractVersion", "student-explanation-ai-v2",
+                "runId", bounded(runId, 128),
+                "deadlineEpochMs", System.currentTimeMillis() + environment.getProperty(
+                        "math-agent.python-agent.timeout-ms", Long.class, DEFAULT_TIMEOUT_MS),
+                "problem", bounded(problem, 8_000),
+                "imageDataUrl", "",
+                "context", contextPayload,
+                "limits", Map.of(
+                        "maxInputTokens", Math.max(512, Math.min(maxInputTokens, 120_000)),
+                        "reservedOutputTokens", Math.max(128, Math.min(reservedOutputTokens, 32_000)),
+                        "summaryTriggerTokens", Math.max(256, Math.min(summaryTriggerTokens, 100_000)),
+                        "maxProviderCalls", 1),
+                "providerRoute", providerRoute(runId, "student_explanation")));
+        List<String> selected = stringArray(root.path("selectedMessageIds"), 200, 160);
+        JsonNode update = root.path("memoryUpdate");
+        ConversationContextSummary memoryUpdate = update.isObject()
+                ? new ConversationContextSummary(
+                        bounded(update.path("summaryFromMessageId").asText(), 160),
+                        bounded(update.path("summaryToMessageId").asText(), 160),
+                        Math.max(1, update.path("summaryVersion").asInt(1)),
+                        bounded(update.path("contentHash").asText(), 128),
+                        bounded(update.path("content").asText(), 16_000))
+                : null;
+        return new ConversationContextPreparation(
+                bounded(root.path("packedContext").asText(), 32_000),
+                Math.max(0, root.path("inputTokens").asInt(0)),
+                selected,
+                memoryUpdate);
+    }
+
+    /**
+     * 灰度调用一次 v2 student graph stream；Python 在同一 durable run 中完成上下文预算与卡片生成。
+     */
+    public ExplanationResult streamStudentExplanationV2(
+            String runId,
+            String problem,
+            List<ConversationContextMessage> context,
+            String imageDataUrl,
+            int maxInputTokens,
+            int reservedOutputTokens,
+            int summaryTriggerTokens,
+            Consumer<ExplanationStreamEvent> listener) {
+        String workerKey = environment.getProperty(
+                "math-agent.python-agent.worker-key", environment.getProperty("math-agent.worker-api-key", ""));
+        if (workerKey == null || workerKey.isBlank()) {
+            throw new IllegalStateException("Python agent worker key is not configured");
+        }
+        Map<String, Object> payload = Map.of(
+                "contractVersion", "student-explanation-ai-v2",
+                "runId", bounded(runId, 128),
+                "deadlineEpochMs", System.currentTimeMillis() + environment.getProperty(
+                        "math-agent.python-agent.timeout-ms", Long.class, DEFAULT_TIMEOUT_MS),
+                "problem", bounded(problem, 8_000),
+                "imageDataUrl", imageDataUrl == null ? "" : imageDataUrl,
+                "context", Map.of(
+                        "schemaVersion", "student-conversation-context-v1",
+                        "revision", bounded(runId, 160),
+                        "messages", context == null ? List.of() : context.stream().limit(200).map(item -> Map.of(
+                                "messageId", bounded(item.messageId(), 160),
+                                "questionText", bounded(item.questionText(), 8_000),
+                                "answerText", bounded(item.answerText(), 8_000),
+                                "createdAt", bounded(item.createdAt(), 64))).toList()),
+                "limits", Map.of(
+                        "maxInputTokens", Math.max(512, Math.min(maxInputTokens, 120_000)),
+                        "reservedOutputTokens", Math.max(128, Math.min(reservedOutputTokens, 32_000)),
+                        "summaryTriggerTokens", Math.max(256, Math.min(summaryTriggerTokens, 100_000)),
+                        "maxProviderCalls", 1),
+                "providerRoute", providerRoute(runId, "student_explanation"));
+        try {
+            return client.post()
+                    .uri("/v2/student-explanations/stream")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .accept(MediaType.TEXT_EVENT_STREAM)
+                    .header("Authorization", "Bearer " + workerKey)
+                    .header("X-Trace-Id", bounded(runId, 128))
+                    .body(payload)
+                    .exchange((request, response) -> readExplanationStream(response, listener));
+        } catch (RestClientException exception) {
+            throw new IllegalStateException("Python v2 student explanation streaming request failed", exception);
+        }
+    }
+
     /** 调用 Python 最终卡片生成，并保留 Java 对卡片内容和引用的最终校验权。 */
     public ExplanationResult composeStudentExplanation(
             String runId,
@@ -141,22 +367,7 @@ public class PythonMigratedWorkloadClient {
                 "imageDataUrl", imageDataUrl == null ? "" : imageDataUrl,
                 "providerRoute", providerRoute(runId, "student_explanation")));
         requireCompleted(root, "student explanation");
-        List<ExplanationCard> cards = new ArrayList<>();
-        for (JsonNode item : root.path("cards")) {
-            cards.add(new ExplanationCard(
-                    bounded(item.path("cardKey").asText(), 80),
-                    bounded(item.path("title").asText(), 160),
-                    bounded(item.path("summary").asText(), 8_000),
-                    stringArray(item.path("items"), 16, 800),
-                    stringArray(item.path("sourceUris"), 24, 320),
-                    bounded(item.path("renderMode").asText("text"), 32)));
-        }
-        return new ExplanationResult(
-                bounded(root.path("conversationTitle").asText(), 80),
-                List.copyOf(cards),
-                usage(root),
-                bounded(root.path("providerName").asText(), 64),
-                bounded(root.path("modelCode").asText(), 160));
+        return explanationResult(root);
     }
 
     /** 调用 Python provider probe，并只投影脱敏的公开健康字段。 */
@@ -208,7 +419,7 @@ public class PythonMigratedWorkloadClient {
             return List.of();
         }
         return evidence.stream()
-                .map(item -> Map.of(
+                .map(item -> Map.<String, String>of(
                         "sourceUri", bounded(item.sourceUri(), 320),
                         "title", bounded(item.title(), 400),
                         "snippet", bounded(item.snippet(), 1_600)))
@@ -289,6 +500,24 @@ public class PythonMigratedWorkloadClient {
     public record ExplanationEvidence(String sourceUri, String title, String snippet) {
     }
 
+    public record ConversationContextMessage(String messageId, String questionText, String answerText, String createdAt) {
+    }
+
+    public record ConversationContextSummary(
+            String fromMessageId,
+            String toMessageId,
+            int version,
+            String contentHash,
+            String content) {
+    }
+
+    public record ConversationContextPreparation(
+            String packedContext,
+            int inputTokens,
+            List<String> selectedMessageIds,
+            ConversationContextSummary memoryUpdate) {
+    }
+
     public record ExplanationDecision(
             String decision,
             List<String> tools,
@@ -307,6 +536,15 @@ public class PythonMigratedWorkloadClient {
             List<String> items,
             List<String> sourceUris,
             String renderMode) {
+    }
+
+    public record ExplanationStreamEvent(
+            String eventName,
+            String content,
+            ExplanationResult result,
+            String providerName,
+            String modelCode,
+            String message) {
     }
 
     public record ExplanationResult(

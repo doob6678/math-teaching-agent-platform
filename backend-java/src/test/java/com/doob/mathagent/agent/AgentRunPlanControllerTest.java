@@ -17,7 +17,7 @@ class AgentRunPlanControllerTest {
     @Test
     void resolvesBackendSubjectInsteadOfRequestBodyIdentity() {
         AiProviderProperties properties = new AiProviderProperties();
-        properties.getOpenai().setApiKey("openai-key");
+        properties.getOpenai().setEnabled(true);
         AgentRunPlanController controller = new AgentRunPlanController(
                 new AgentRunPlanService(new AiProviderCatalog(properties)),
                 request -> new RequestSubject("school-a", "teacher", "teacher-001", "device-1"));

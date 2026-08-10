@@ -6,18 +6,21 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$script:WebSession = New-Object Microsoft.PowerShell.Commands.WebRequestSession
 
 function Invoke-Json {
     param(
         [string]$Method,
         [string]$Uri,
         [hashtable]$Headers = @{},
-        [object]$Body = $null
+        [object]$Body = $null,
+        [object]$WebSession = $script:WebSession
     )
     $parameters = @{
         Method = $Method
         Uri = $Uri
         Headers = $Headers
+        WebSession = $WebSession
     }
     if ($null -ne $Body) {
         # Keep JSON payloads UTF-8 on Windows so non-ASCII resource titles and paths parse identically.
@@ -34,10 +37,7 @@ $login = Invoke-Json `
     -Uri "$base/api/auth/login" `
     -Body @{ username = $Username; password = $Password }
 
-$headers = @{}
-$headers[$login.tokenName] = $login.tokenValue
-
-$runtime = Invoke-Json -Method "Get" -Uri "$base/api/system/runtime" -Headers $headers
+$runtime = Invoke-Json -Method "Get" -Uri "$base/api/system/runtime"
 if (-not $runtime.vectorIndex.enabled -or -not $runtime.vectorIndex.configured) {
     throw "Vector index is not configured. Refusing to start rebuild."
 }
@@ -45,7 +45,7 @@ if ($runtime.vectorIndex.dimension -ne 512) {
     throw "Vector index dimension is $($runtime.vectorIndex.dimension), expected 512."
 }
 
-$resources = Invoke-Json -Method "Get" -Uri "$base/api/teacher/resources" -Headers $headers
+$resources = Invoke-Json -Method "Get" -Uri "$base/api/teacher/resources"
 $targets = @($resources | Where-Object {
         $_.parseStatus -eq "parsed" -and $_.syncStatus -eq "synced"
     })
@@ -68,8 +68,7 @@ foreach ($resource in $targets) {
     $rebuildPath = "/api/vector-index/teacher-resources/$([Uri]::EscapeDataString($resource.documentId))/rebuild"
     $response = Invoke-Json `
         -Method "Post" `
-        -Uri ($base + $rebuildPath) `
-        -Headers $headers
+        -Uri ($base + $rebuildPath)
     $results += [pscustomobject]@{
         documentId = $resource.documentId
         title = $resource.title

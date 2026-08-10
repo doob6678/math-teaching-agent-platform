@@ -33,6 +33,18 @@ public class TeacherResourceVisualEvidenceService {
      * @return no value when the asset is not visible or cannot be materialized
      */
     public Optional<MaterializedImageEvidence> materialize(String assetId, String mimeType, RequestSubject subject) {
+        return materialize(assetId, mimeType, subject, "");
+    }
+
+    /**
+     * Materializes an image together with text extracted from the same authorized source block.
+     * This is source text, not a model-invented visual caption; the handout model can inspect the pixels itself.
+     */
+    public Optional<MaterializedImageEvidence> materialize(
+            String assetId,
+            String mimeType,
+            RequestSubject subject,
+            String verifiedAdjacentText) {
         if (teacherResourceBlockSearchService == null || assetId == null || assetId.isBlank() || subject == null) {
             return Optional.empty();
         }
@@ -40,7 +52,15 @@ public class TeacherResourceVisualEvidenceService {
         if (path.isEmpty()) {
             return Optional.empty();
         }
-        return Optional.of(new MaterializedImageEvidence(path.get(), ""));
+        return Optional.of(new MaterializedImageEvidence(path.get(), normalizeAdjacentText(verifiedAdjacentText)));
+    }
+
+    private static String normalizeAdjacentText(String value) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        String normalized = value.replaceAll("\\s+", " ").strip();
+        return normalized.length() <= 800 ? normalized : normalized.substring(0, 800).strip();
     }
 
     /** A renderer-local path and prompt-only verified visible facts for the same already-authorized asset. */

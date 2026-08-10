@@ -105,7 +105,9 @@ public class MyBatisAgentTraceStore implements AgentTraceStore {
                 record.stageTimings(),
                 record.actualUsage(),
                 safeText(record.message()),
-                safeDiagnosticEvents(record.diagnosticEvents()))));
+                safeDiagnosticEvents(record.diagnosticEvents()),
+                record.actualCost(),
+                record.costKnown())));
         return entity;
     }
 
@@ -132,7 +134,9 @@ public class MyBatisAgentTraceStore implements AgentTraceStore {
                 metadata.stageTimings(),
                 metadata.actualUsage(),
                 metadata.message(),
-                metadata.diagnosticEvents());
+                metadata.diagnosticEvents(),
+                metadata.actualCost(),
+                metadata.costKnown());
     }
 
     /**
@@ -225,13 +229,16 @@ public class MyBatisAgentTraceStore implements AgentTraceStore {
             List<AgentRunExecuteResponse.StageTiming> stageTimings,
             AgentRunExecuteResponse.TokenUsage actualUsage,
             String message,
-            List<AgentTraceRecord.DiagnosticEvent> diagnosticEvents) {
+            List<AgentTraceRecord.DiagnosticEvent> diagnosticEvents,
+            double actualCost,
+            boolean costKnown) {
 
         /**
          * Returns metadata defaults for old rows and failed metadata parsing.
          */
         private static TraceMetadata empty() {
-            return new TraceMetadata(List.of(), new AgentRunExecuteResponse.TokenUsage(0, 0, 0), "", List.of());
+            return new TraceMetadata(
+                    List.of(), new AgentRunExecuteResponse.TokenUsage(0, 0, 0), "", List.of(), -1.0d, false);
         }
 
         /**
@@ -242,7 +249,9 @@ public class MyBatisAgentTraceStore implements AgentTraceStore {
                     stageTimings == null ? List.of() : List.copyOf(stageTimings),
                     actualUsage == null ? new AgentRunExecuteResponse.TokenUsage(0, 0, 0) : actualUsage,
                     safeText(message),
-                    safeDiagnosticEvents(diagnosticEvents));
+                    safeDiagnosticEvents(diagnosticEvents),
+                    actualCost,
+                    costKnown);
         }
     }
 }

@@ -12,6 +12,7 @@ import com.doob.mathagent.vector.service.VectorHttpTransport;
 import com.doob.mathagent.vector.service.VectorIndexProperties;
 import com.doob.mathagent.vector.service.VectorIndexRebuildResponse;
 import com.doob.mathagent.vector.service.VectorIndexService;
+import com.doob.mathagent.vector.service.VectorSearchFilter;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
@@ -174,6 +175,55 @@ class VectorIndexServiceTest {
                 .containsExactly(10, 10, 5);
     }
 
+    @Test
+    void teacherSearchSendsTenantDocumentScopeAndCategoryToMilvus() {
+        CapturingTransport transport = new CapturingTransport();
+        VectorIndexService service = new VectorIndexService(
+                new VectorIndexProperties(true, "http://milvus.local:19530", "token", "math_agent_resource_blocks", 3,
+                        "https://embedding.local/v1", "embedding-key", "text-embedding-v4", 10000),
+                transport,
+                new InMemoryTeacherResourceStore(),
+                new InMemoryTeacherDocumentBlockStore());
+
+        service.searchTeacherResourceBlocks("triangle sine rule", 3,
+                new VectorSearchFilter(List.of("tenant-a"), List.of("document-a"),
+                        List.of("TEACHER_PRIVATE"), List.of("feishu")));
+
+        String body = transport.requests.stream()
+                .filter(request -> request.uri().toString().endsWith("/entities/search"))
+                .findFirst()
+                .orElseThrow()
+                .body();
+        assertThat(body)
+                .contains("tenantId", "tenant-a", "documentId", "document-a", "permissionScope", "TEACHER_PRIVATE",
+                        "sourceType", "feishu");
+    }
+
+    @Test
+    void teacherSearchDoesNotRetryOrWidenWhenMilvusRejectsTheFilter() {
+        CapturingTransport transport = new CapturingTransport(true);
+        VectorIndexService service = new VectorIndexService(
+                new VectorIndexProperties(true, "http://milvus.local:19530", "token", "math_agent_resource_blocks", 3,
+                        "https://embedding.local/v1", "embedding-key", "text-embedding-v4", 10000),
+                transport,
+                new InMemoryTeacherResourceStore(),
+                new InMemoryTeacherDocumentBlockStore());
+
+        assertThatThrownBy(() -> service.searchTeacherResourceBlocks("triangle sine rule", 3,
+                new VectorSearchFilter(List.of("tenant-a"), List.of("document-a"),
+                        List.of("TEACHER_PRIVATE"), List.of("feishu"))))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Milvus search failed: HTTP 400");
+
+        assertThat(transport.requests.stream()
+                .filter(request -> request.uri().toString().endsWith("/entities/search")))
+                .hasSize(1);
+        assertThat(transport.requests.stream()
+                .filter(request -> request.uri().toString().endsWith("/entities/search"))
+                .findFirst().orElseThrow().body())
+                .contains("tenant-a", "document-a", "TEACHER_PRIVATE", "feishu");
+    }
+
     private static TeacherResourceDocumentResponse document(
             String documentId,
             String embeddingStatus,
@@ -219,9 +269,18 @@ class VectorIndexServiceTest {
                 "active");
     }
 
-    private static final class CapturingTransport implements VectorHttpTransport {
+    private static class CapturingTransport implements VectorHttpTransport {
         private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
         private final List<Request> requests = new ArrayList<>();
+        private final boolean failTeacherSearch;
+
+        private CapturingTransport() {
+            this(false);
+        }
+
+        private CapturingTransport(boolean failTeacherSearch) {
+            this.failTeacherSearch = failTeacherSearch;
+        }
 
         @Override
         public VectorHttpResponse postJson(
@@ -256,6 +315,11 @@ class VectorIndexServiceTest {
             }
             if (uri.toString().endsWith("/entities/query")) {
                 return new VectorHttpResponse(200, "{\"code\":0,\"data\":[{\"count(*)\":925}]}");
+            }
+            if (uri.toString().endsWith("/entities/search")) {
+                return failTeacherSearch
+                        ? new VectorHttpResponse(400, "{\"code\":1100,\"message\":\"invalid filter\"}")
+                        : new VectorHttpResponse(200, "{\"code\":0,\"data\":[]}");
             }
             if (uri.toString().endsWith("/entities/delete")) {
                 return new VectorHttpResponse(200, "{\"code\":0,\"data\":{\"deleteCount\":1}}");

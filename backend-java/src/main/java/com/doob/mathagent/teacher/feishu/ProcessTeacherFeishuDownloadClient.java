@@ -16,14 +16,12 @@ import java.util.ArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 /**
  * Feishu downloader backed by the verified Python URL downloader script.
  */
 @Component
-@ConditionalOnProperty(prefix = "math-agent.teacher.sync.feishu", name = "process-downloader-enabled", havingValue = "true")
 public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownloadClient {
 
     private static final int MAX_ATTEMPTS = 3;
@@ -292,8 +290,6 @@ public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownload
                 properties.feishuDownloaderScript().toString(),
                 "--url",
                 url,
-                "--appkey-path",
-                credentialFile == null ? properties.feishuAppkeyPath().toString() : credentialFile.toString(),
                 "--output-dir",
                 outputRoot.toString(),
                 "--summary-path",
@@ -303,6 +299,13 @@ public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownload
                 "--file-extension",
                 normalizeFileExtension(fileExtension),
                 "--quiet"));
+        // Prefer a request-scoped credential file when one exists.  Otherwise omit the appkey flag entirely when the
+        // deployment is configured through environment credentials; passing an empty path would make Python read /app.
+        Path configuredAppkey = credentialFile != null ? credentialFile : properties.feishuAppkeyPath();
+        if (Files.isRegularFile(configuredAppkey)) {
+            command.add("--appkey-path");
+            command.add(configuredAppkey.toString());
+        }
         command.add("--manifest-path");
         command.add(outputRoot.resolve(".manifests").resolve(
                 com.doob.mathagent.teacher.support.TeacherResourceSourceIdentity.hash(url) + ".json").toString());
@@ -320,11 +323,7 @@ public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownload
      * into the sync job. Deployments can override the executable when Python lives outside PATH.
      */
     private static String pythonExecutable() {
-        String configured = System.getenv("MATH_AGENT_PYTHON_EXECUTABLE");
-        if (configured != null && !configured.isBlank()) {
-            return configured.strip();
-        }
-        return System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win") ? "python" : "python3";
+        return PythonExecutableResolver.resolve();
     }
 
     /**

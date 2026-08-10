@@ -17,6 +17,9 @@ import com.doob.mathagent.teacher.document.TeacherResourceStore;
 import com.doob.mathagent.teacher.search.TeacherResourceBlockSearchResponse;
 import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
 import com.doob.mathagent.vector.service.VectorIndexService;
+import com.doob.mathagent.agent.service.PythonMigratedWorkloadClient;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -59,6 +62,7 @@ public class StudentExplanationService {
     // 此版本号用于区分新版 Agent 结果与历史模板结果，无需重写既有会话记录。
     private static final String GENERATED_BY = "student_explanation_react_agent_v1";
     private static final Logger log = LoggerFactory.getLogger(StudentExplanationService.class);
+    private static final ObjectMapper HISTORY_OBJECT_MAPPER = new ObjectMapper();
 
     private final TextbookResourceProperties textbookResourceProperties;
     private final TextbookRetrievalService textbookRetrievalService;
@@ -68,10 +72,13 @@ public class StudentExplanationService {
     private final StudentExplanationAiCardService aiCardService;
     private final StudentExplanationImageStoreService imageStoreService;
     private final StudentExplanationHistoryStore historyStore;
-    private final StudentMemoryRagService studentMemoryRagService;
+    private final StudentExplanationConversationContextCache conversationContextCache;
     private final VectorIndexService vectorIndexService;
     private final double knowledgeGraphSemanticMinScore;
     private final int conversationHistoryFetchLimit;
+    private final int contextMaxInputTokens;
+    private final int contextReservedOutputTokens;
+    private final int contextSummaryTriggerTokens;
     private final Executor retrievalExecutor;
 
     public StudentExplanationService(
@@ -85,7 +92,8 @@ public class StudentExplanationService {
             StudentExplanationHistoryStore historyStore) {
         this(textbookResourceProperties, textbookRetrievalService, knowledgeGraphSpineService,
                 teacherResourceBlockSearchService, teacherResourceStore, aiCardService, imageStoreService,
-                historyStore, null, null, Runnable::run, DEFAULT_KNOWLEDGE_GRAPH_SEMANTIC_MIN_SCORE, 200);
+                historyStore, new NoOpStudentExplanationConversationContextCache(), null, null, Runnable::run,
+                DEFAULT_KNOWLEDGE_GRAPH_SEMANTIC_MIN_SCORE, 200, 8_000, 1_500, 4_000);
     }
 
     /** Compatibility constructor for focused semantic-retrieval tests and controlled adapters. */
@@ -101,7 +109,8 @@ public class StudentExplanationService {
             VectorIndexService vectorIndexService) {
         this(textbookResourceProperties, textbookRetrievalService, knowledgeGraphSpineService,
                 teacherResourceBlockSearchService, teacherResourceStore, aiCardService, imageStoreService,
-                historyStore, null, vectorIndexService, Runnable::run, DEFAULT_KNOWLEDGE_GRAPH_SEMANTIC_MIN_SCORE, 200);
+                historyStore, new NoOpStudentExplanationConversationContextCache(), null, vectorIndexService,
+                Runnable::run, DEFAULT_KNOWLEDGE_GRAPH_SEMANTIC_MIN_SCORE, 200, 8_000, 1_500, 4_000);
     }
 
     @Autowired
@@ -114,12 +123,16 @@ public class StudentExplanationService {
             StudentExplanationAiCardService aiCardService,
             StudentExplanationImageStoreService imageStoreService,
             StudentExplanationHistoryStore historyStore,
+            StudentExplanationConversationContextCache conversationContextCache,
             StudentMemoryRagService studentMemoryRagService,
             VectorIndexService vectorIndexService,
             @Qualifier("studentExplanationTaskExecutor") TaskExecutor retrievalExecutor,
             @Value("${math-agent.student.explanation.knowledge-graph-semantic-min-score:0.45}")
                     double knowledgeGraphSemanticMinScore,
-            @Value("${math-agent.student.explanation.conversation-history-fetch-limit:200}") int conversationHistoryFetchLimit) {
+            @Value("${math-agent.student.explanation.conversation-history-fetch-limit:200}") int conversationHistoryFetchLimit,
+            @Value("${math-agent.student.explanation.context-max-input-tokens:8000}") int contextMaxInputTokens,
+            @Value("${math-agent.student.explanation.context-reserved-output-tokens:1500}") int contextReservedOutputTokens,
+            @Value("${math-agent.student.explanation.context-summary-trigger-tokens:4000}") int contextSummaryTriggerTokens) {
         this.textbookResourceProperties = Objects.requireNonNull(
                 textbookResourceProperties, "textbookResourceProperties is required");
         this.textbookRetrievalService = Objects.requireNonNull(
@@ -133,13 +146,18 @@ public class StudentExplanationService {
         this.aiCardService = Objects.requireNonNull(aiCardService, "aiCardService is required");
         this.imageStoreService = Objects.requireNonNull(imageStoreService, "imageStoreService is required");
         this.historyStore = Objects.requireNonNull(historyStore, "historyStore is required");
-        this.studentMemoryRagService = studentMemoryRagService;
+        this.conversationContextCache = Objects.requireNonNull(
+                conversationContextCache, "conversationContextCache is required");
         this.vectorIndexService = vectorIndexService;
         this.retrievalExecutor = Objects.requireNonNull(retrievalExecutor, "retrievalExecutor is required");
         this.knowledgeGraphSemanticMinScore = knowledgeGraphSemanticMinScore > 0.0d && knowledgeGraphSemanticMinScore <= 1.0d
                 ? knowledgeGraphSemanticMinScore
                 : DEFAULT_KNOWLEDGE_GRAPH_SEMANTIC_MIN_SCORE;
-        this.conversationHistoryFetchLimit = Math.max(1, Math.min(conversationHistoryFetchLimit, 500));
+        this.conversationHistoryFetchLimit = Math.max(1, Math.min(conversationHistoryFetchLimit, 200));
+        this.contextMaxInputTokens = Math.max(512, Math.min(contextMaxInputTokens, 120_000));
+        this.contextReservedOutputTokens = Math.max(128, Math.min(contextReservedOutputTokens,
+                this.contextMaxInputTokens - 1));
+        this.contextSummaryTriggerTokens = Math.max(256, Math.min(contextSummaryTriggerTokens, 100_000));
     }
 
     /**
@@ -208,17 +226,18 @@ public class StudentExplanationService {
         visibleQuestion = visibleQuestion(normalizedRequest, imageRecord);
 
         List<StudentExplanationHistorySummary> recentHistory = List.of();
-        List<String> longTermMemories = List.of();
+        String packedConversationContext = "";
         if (existingConversation) {
-            // Only an existing conversation loads history.  A newly-created id is not loaded on its first turn;
-            // this keeps the first stage local and prevents unrelated conversations from entering the prompt.
-            upsertStage(stages, runningStage("load_conversation_context", "读取学习记忆"));
+            // Only an existing conversation loads history. A newly-created id is not loaded on its first turn.
+            upsertStage(stages, runningStage("load_conversation_context", "读取对话上下文"));
             emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord,
-                    imageUnderstanding, aiDraft, conversationTitle, startedNanos, "正在读取已关联的学习记忆。");
-            recentHistory = loadRecentHistory(normalizedRequest, normalizedSubject, stages);
-            longTermMemories = loadLongTermMemories(query, normalizedSubject, stages);
+                    imageUnderstanding, aiDraft, conversationTitle, startedNanos, "正在读取最近对话。" );
+            ConversationContextState context = loadConversationContext(normalizedRequest, normalizedSubject, stages);
+            recentHistory = context.history();
+            packedConversationContext = prepareConversationContext(
+                    normalizedRequest, normalizedSubject, visibleQuestion, context, stages);
             emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord,
-                    imageUnderstanding, aiDraft, conversationTitle, startedNanos, "学习记忆已读取。");
+                    imageUnderstanding, aiDraft, conversationTitle, startedNanos, "最近对话已按预算压缩。" );
         }
 
         // Student explanations have one stable orchestration contract: the model decides whether a permitted
@@ -226,7 +245,7 @@ public class StudentExplanationService {
         ReactEvidence reactEvidence = executeReactTools(
                 normalizedRequest, normalizedSubject, query, stages, sources, listener, visibleQuestion, cards,
                 imageRecord, imageDataUrl, imageUnderstanding, aiDraft, conversationTitle, startedNanos,
-                recentHistory, longTermMemories);
+                packedConversationContext);
         List<KnowledgeGraphSpineResponse.Node> knowledgeNodes = reactEvidence.knowledgeNodes();
         List<TeacherResourceBlockSearchResponse.Hit> teacherHits = reactEvidence.teacherHits();
 
@@ -240,10 +259,11 @@ public class StudentExplanationService {
             aiCardDraft = aiCardService.generate(
                     normalizedRequest,
                     aiContextQuery(query, knowledgeNodes, teacherHits),
+                    packedConversationContext,
                     imageStatus(imageRecord),
                     sources,
                     recentHistory,
-                    longTermMemories,
+                    List.of(),
                     stages,
                     imageDataUrl,
                     listener::onAiDelta);
@@ -294,7 +314,7 @@ public class StudentExplanationService {
                 List.copyOf(sources),
                 elapsedMs(startedNanos));
         historyStore.save(normalizedRequest, normalizedSubject, imageRecord, response);
-        indexLongTermMemory(normalizedSubject, response, stages);
+        refreshConversationContextCache(normalizedRequest, normalizedSubject, response);
         emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord,
                 imageUnderstanding, aiDraft, conversationTitle, startedNanos, "本轮讲解已完成。");
         listener.onCompleted(response);
@@ -316,8 +336,7 @@ public class StudentExplanationService {
             String imageDataUrl,
             StudentExplanationResponse.ImageUnderstanding imageUnderstanding,
             StudentExplanationResponse.AiDraft aiDraft, String conversationTitle, long startedNanos,
-            List<StudentExplanationHistorySummary> recentHistory,
-            List<String> longTermMemories) {
+            String packedConversationContext) {
         listener.throwIfCancelled();
         Set<String> available = availableReactTools(request, subject);
         List<KnowledgeGraphSpineResponse.Node> knowledgeNodes = new ArrayList<>();
@@ -340,7 +359,7 @@ public class StudentExplanationService {
             }
         };
         StudentExplanationAiCardService.ReactDecision decision = aiCardService.nextReactDecision(
-                reactProblemContext(visibleQuestion, recentHistory, longTermMemories),
+                reactProblemContext(visibleQuestion, packedConversationContext),
                 sources, observations, available, imageDataUrl, decisionStream,
                 request.clientRequestId() + ":react");
         String decisionDetail;
@@ -509,56 +528,130 @@ public class StudentExplanationService {
     }
 
     /**
-     * Loads recent durable conversation context scoped by backend identity.
+     * Loads the model-safe context from Redis first and falls back to the complete MySQL history projection.
      */
-    private List<StudentExplanationHistorySummary> loadRecentHistory(
+    private ConversationContextState loadConversationContext(
             StudentExplanationRequest request,
             RequestSubject subject,
             List<StudentExplanationResponse.WorkflowStage> stages) {
         long stageStarted = System.nanoTime();
         try {
-            // The caller reached this method only with an existing conversation id.  Always read that
-            // conversation, regardless of the deprecated client memory switch, so follow-up turns remain coherent.
+            StudentExplanationConversationContext cached = conversationContextCache.find(
+                    subject.tenantId(), subject.subjectType(), subject.subjectId(), request.conversationId())
+                    .orElse(null);
+            if (cached != null) {
+                List<StudentExplanationHistorySummary> history = cached.messages().stream()
+                        .map(StudentExplanationService::historySummary)
+                        .toList();
+                upsertStage(stages, stageFrom(stageStarted, "load_conversation_context", "读取对话上下文", "completed",
+                        "已从会话缓存读取 " + history.size() + " 条最近记录。"));
+                return new ConversationContextState(history, cached.messages(), cached.summary());
+            }
             List<StudentExplanationHistorySummary> history = historyStore.findRecent(
                     subject.tenantId(),
                     subject.subjectType(),
                     subject.subjectId(),
                     request.conversationId(),
                     conversationHistoryFetchLimit);
-            upsertStage(stages, stageFrom(stageStarted, "load_conversation_context", "读取上下文", "completed",
-                    "已读取 " + history.size() + " 条最近会话。"));
-            return history;
+            List<StudentExplanationConversationContextMessage> messages = history.stream()
+                    .sorted(Comparator.comparing(StudentExplanationHistorySummary::createdAt,
+                            Comparator.nullsLast(Comparator.naturalOrder()))
+                            .thenComparing(StudentExplanationHistorySummary::explanationId,
+                                    Comparator.nullsLast(String::compareTo)))
+                    .map(StudentExplanationService::contextMessage)
+                    .toList();
+            StudentExplanationContextSummary summary = historyStore.findContextSummary(
+                    subject.tenantId(), subject.subjectType(), subject.subjectId(), request.conversationId());
+            StudentExplanationConversationContext context = new StudentExplanationConversationContext(messages, summary);
+            conversationContextCache.put(subject.tenantId(), subject.subjectType(), subject.subjectId(),
+                    request.conversationId(), context);
+            upsertStage(stages, stageFrom(stageStarted, "load_conversation_context", "读取对话上下文", "completed",
+                    "已从 MySQL 恢复 " + messages.size() + " 条最近记录。"));
+            return new ConversationContextState(history, messages, summary);
         } catch (RuntimeException e) {
-            upsertStage(stages, stageFrom(stageStarted, "load_conversation_context", "读取上下文", "failed",
+            upsertStage(stages, stageFrom(stageStarted, "load_conversation_context", "读取对话上下文", "failed",
                     e.getClass().getSimpleName()));
             throw e;
         }
     }
 
-    private List<String> loadLongTermMemories(
-            String query,
+    /**
+     * Runs the deterministic V2 LangGraph context packer without changing the existing evidence-backed generator.
+     */
+    private String prepareConversationContext(
+            StudentExplanationRequest request,
             RequestSubject subject,
+            String visibleQuestion,
+            ConversationContextState context,
             List<StudentExplanationResponse.WorkflowStage> stages) {
-        long stageStarted = System.nanoTime();
-        if (studentMemoryRagService == null || studentId(subject) == null) {
-            upsertStage(stages, stageFrom(stageStarted, "retrieve_long_term_memory", "检索长期记忆", "skipped",
-                    "当前身份不使用学生长期记忆。"));
-            return List.of();
+        if (context.messages().isEmpty() && context.summary() == null) {
+            return "";
         }
-        List<String> memories = studentMemoryRagService.retrieve(subject, query);
-        upsertStage(stages, stageFrom(stageStarted, "retrieve_long_term_memory", "检索长期记忆", "completed",
-                memories.isEmpty() ? "未检索到相关长期记忆。" : "已检索 " + memories.size() + " 条相关长期记忆。"));
-        return memories;
+        long stageStarted = System.nanoTime();
+        try {
+            PythonMigratedWorkloadClient.ConversationContextPreparation prepared = aiCardService.prepareConversationContext(
+                    request.clientRequestId() + ":context",
+                    visibleQuestion,
+                    context.messages(),
+                    context.summary(),
+                    contextMaxInputTokens,
+                    contextReservedOutputTokens,
+                    contextSummaryTriggerTokens);
+            PythonMigratedWorkloadClient.ConversationContextSummary update = prepared.memoryUpdate();
+            if (update != null) {
+                StudentExplanationContextSummary summary = new StudentExplanationContextSummary(
+                        update.fromMessageId(), update.toMessageId(), update.version(), update.contentHash(),
+                        update.content(), null);
+                if (historyStore.updateContextSummary(
+                        subject.tenantId(), subject.subjectType(), subject.subjectId(), request.conversationId(), summary)) {
+                    conversationContextCache.put(subject.tenantId(), subject.subjectType(), subject.subjectId(),
+                            request.conversationId(), new StudentExplanationConversationContext(context.messages(), summary));
+                }
+            }
+            upsertStage(stages, stageFrom(stageStarted, "prepare_conversation_context", "压缩对话上下文", "completed",
+                    "已按 " + prepared.inputTokens() + " token 预算选择 "
+                            + prepared.selectedMessageIds().size() + " 条最近记录。"));
+            return prepared.packedContext();
+        } catch (RuntimeException exception) {
+            upsertStage(stages, stageFrom(stageStarted, "prepare_conversation_context", "压缩对话上下文", "degraded",
+                    "上下文压缩暂不可用，已继续使用当前题目。"));
+            log.warn("student_explanation_context_prepare_failed conversationId={}", request.conversationId(), exception);
+            return "";
+        }
     }
 
-    private void indexLongTermMemory(
+    /**
+     * Updates the Redis projection after the MySQL transaction has stored the complete response.
+     */
+    private void refreshConversationContextCache(
+            StudentExplanationRequest request,
             RequestSubject subject,
-            StudentExplanationResponse response,
-            List<StudentExplanationResponse.WorkflowStage> stages) {
-        if (studentMemoryRagService == null || studentId(subject) == null) {
-            return;
+            StudentExplanationResponse response) {
+        try {
+            List<StudentExplanationHistorySummary> history = historyStore.findRecent(
+                    subject.tenantId(), subject.subjectType(), subject.subjectId(), request.conversationId(),
+                    conversationHistoryFetchLimit);
+            List<StudentExplanationConversationContextMessage> messages = history.stream()
+                    .sorted(Comparator.comparing(StudentExplanationHistorySummary::createdAt,
+                            Comparator.nullsLast(Comparator.naturalOrder()))
+                            .thenComparing(StudentExplanationHistorySummary::explanationId,
+                                    Comparator.nullsLast(String::compareTo)))
+                    .map(StudentExplanationService::contextMessage)
+                    .toList();
+            StudentExplanationContextSummary summary = historyStore.findContextSummary(
+                    subject.tenantId(), subject.subjectType(), subject.subjectId(), request.conversationId());
+            conversationContextCache.put(subject.tenantId(), subject.subjectType(), subject.subjectId(),
+                    request.conversationId(), new StudentExplanationConversationContext(messages, summary));
+        } catch (RuntimeException exception) {
+            log.warn("student_explanation_context_cache_refresh_failed conversationId={} explanationId={}",
+                    request.conversationId(), response.explanationId(), exception);
         }
-        studentMemoryRagService.index(subject, response);
+    }
+
+    private record ConversationContextState(
+            List<StudentExplanationHistorySummary> history,
+            List<StudentExplanationConversationContextMessage> messages,
+            StudentExplanationContextSummary summary) {
     }
 
     /**
@@ -938,26 +1031,43 @@ public class StudentExplanationService {
         return imageRecord == null ? "" : "图片讲题";
     }
 
+    private static StudentExplanationConversationContextMessage contextMessage(StudentExplanationHistorySummary summary) {
+        String answer = text(summary.cardsJson());
+        try {
+            JsonNode cards = HISTORY_OBJECT_MAPPER.readTree(answer);
+            List<String> fragments = new ArrayList<>();
+            if (cards != null && cards.isArray()) {
+                for (JsonNode card : cards) {
+                    String cardSummary = text(card.path("summary").asText(""));
+                    if (!cardSummary.isBlank()) fragments.add(cardSummary);
+                    if (fragments.size() >= 4) break;
+                }
+            }
+            answer = String.join(" ", fragments);
+        } catch (Exception ignored) {
+            answer = "";
+        }
+        return new StudentExplanationConversationContextMessage(
+                text(summary.explanationId()), compact(summary.questionText()), compact(answer), summary.createdAt());
+    }
+
+    private static StudentExplanationHistorySummary historySummary(StudentExplanationConversationContextMessage message) {
+        return new StudentExplanationHistorySummary(
+                text(message.explanationId()), "", "", "", "", "", "", "", text(message.questionText()),
+                "", "", text(message.answerText()), "", "", 0, 0L, message.createdAt());
+    }
+
     /**
      * Carries the durable conversation context into the first ReAct call as well as the final composition call.
      * Without this boundary a follow-up could retrieve against only its short new message and lose the original
      * problem, even though the final answer composer had already loaded the history.
      */
-    private static String reactProblemContext(
-            String visibleQuestion,
-            List<StudentExplanationHistorySummary> recentHistory,
-            List<String> longTermMemories) {
-        StringBuilder context = new StringBuilder(text(visibleQuestion));
-        if (recentHistory != null && !recentHistory.isEmpty()) {
-            context.append("\n关联会话历史：");
-            recentHistory.stream().limit(20).forEach(item -> context.append("\n- ")
-                    .append(compact(item.questionText())).append(" | answer=").append(compact(item.cardsJson())));
+    private static String reactProblemContext(String visibleQuestion, String packedConversationContext) {
+        String context = text(packedConversationContext).strip();
+        if (context.isBlank()) {
+            return text(visibleQuestion);
         }
-        if (longTermMemories != null && !longTermMemories.isEmpty()) {
-            context.append("\n关联学习记忆：");
-            longTermMemories.stream().limit(20).forEach(memory -> context.append("\n- ").append(compact(memory)));
-        }
-        return context.toString();
+        return context;
     }
 
     /**

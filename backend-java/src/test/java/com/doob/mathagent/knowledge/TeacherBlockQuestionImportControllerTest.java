@@ -21,7 +21,7 @@ import org.springframework.web.server.ResponseStatusException;
 class TeacherBlockQuestionImportControllerTest {
 
     @Test
-    void importsTeacherResourceBlocksWithCapabilityAndBackendSubject() {
+    void importsTeacherResourceBlocksWithBackendSubject() {
         InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
         InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
         InMemoryKnowledgeQuestionBankStore questionStore = new InMemoryKnowledgeQuestionBankStore();
@@ -32,14 +32,8 @@ class TeacherBlockQuestionImportControllerTest {
                 resourceStore,
                 blockStore,
                 questionStore,
-                request -> new RequestSubject("school-a", "teacher", "teacher-1", "device-1"),
-                (token, action, path, requestHash, subject) ->
-                        "token-ok".equals(token)
-                                && "question-bank:import-teacher-resource".equals(action)
-                                && "/api/question-bank/import/teacher-resources/doc-vector".equals(path)
-                                && "hash-ok".equals(requestHash)
-                                && "teacher-1".equals(subject.subjectId()));
-        MockHttpServletRequest request = requestWithCapability("token-ok", "hash-ok");
+                request -> new RequestSubject("school-a", "teacher", "teacher-1", "device-1"));
+        MockHttpServletRequest request = new MockHttpServletRequest();
         request.addHeader("X-Subject-Id", "teacher-spoofed");
 
         TeacherBlockQuestionImportResponse response =
@@ -50,30 +44,16 @@ class TeacherBlockQuestionImportControllerTest {
     }
 
     @Test
-    void rejectsImportWithoutCapabilityAndRejectsStudentSubject() {
-        KnowledgeQuestionBankController protectedController = controller(
-                new InMemoryTeacherResourceStore(),
-                new InMemoryTeacherDocumentBlockStore(),
-                new InMemoryKnowledgeQuestionBankStore(),
-                request -> new RequestSubject("school-a", "teacher", "teacher-1", "device-1"),
-                (token, action, path, requestHash, subject) -> false);
-
-        assertThatThrownBy(() -> protectedController.importTeacherResourceQuestions(
-                        "doc-vector",
-                        requestWithCapability("bad-token", "hash-bad")))
-                .isInstanceOf(ResponseStatusException.class)
-                .hasMessageContaining("Capability token");
-
+    void rejectsStudentImportByBackendRole() {
         KnowledgeQuestionBankController studentController = controller(
                 new InMemoryTeacherResourceStore(),
                 new InMemoryTeacherDocumentBlockStore(),
                 new InMemoryKnowledgeQuestionBankStore(),
-                request -> new RequestSubject("school-a", "student", "student-1", "device-1"),
-                (token, action, path, requestHash, subject) -> true);
+                request -> new RequestSubject("school-a", "student", "student-1", "device-1"));
 
         assertThatThrownBy(() -> studentController.importTeacherResourceQuestions(
                         "doc-vector",
-                        requestWithCapability("token-ok", "hash-ok")))
+                        new MockHttpServletRequest()))
                 .isInstanceOf(ResponseStatusException.class)
                 .hasMessageContaining("teacher or admin");
     }
@@ -82,22 +62,14 @@ class TeacherBlockQuestionImportControllerTest {
             InMemoryTeacherResourceStore resourceStore,
             InMemoryTeacherDocumentBlockStore blockStore,
             InMemoryKnowledgeQuestionBankStore questionStore,
-            com.doob.mathagent.infrastructure.security.RequestSubjectResolver resolver,
-            com.doob.mathagent.knowledge.service.KnowledgeQuestionBankCapabilityVerifier verifier) {
+            com.doob.mathagent.infrastructure.security.RequestSubjectResolver resolver) {
         KnowledgeQuestionBankService service = new KnowledgeQuestionBankService(questionStore);
         TeacherBlockQuestionImportService importService = new TeacherBlockQuestionImportService(
                 resourceStore,
                 blockStore,
                 service,
                 questionStore);
-        return new KnowledgeQuestionBankController(service, importService, resolver, verifier);
-    }
-
-    private static MockHttpServletRequest requestWithCapability(String token, String requestHash) {
-        MockHttpServletRequest request = new MockHttpServletRequest();
-        request.addHeader("X-Capability-Token", token);
-        request.addHeader("X-Request-Hash", requestHash);
-        return request;
+        return new KnowledgeQuestionBankController(service, importService, resolver);
     }
 
     private static TeacherResourceDocumentResponse document(String documentId, String ownerSubjectId) {

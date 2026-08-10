@@ -106,6 +106,33 @@ class TeacherResourceBlockSearchServiceTest {
     }
 
     @Test
+    void studentCanSearchEverySharedTeacherResourceScopeButNotPrivateBlocks() {
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        List<String> sharedScopes = List.of("TENANT_PUBLIC", "PUBLIC_TEXTBOOK", "MATH_VIP", "CLASS_AUTHORIZED");
+        for (int index = 0; index < sharedScopes.size(); index += 1) {
+            String documentId = "doc-shared-" + index;
+            resourceStore.save(document(documentId, "teacher-1", sharedScopes.get(index), "Shared " + index));
+            blockStore.replaceActiveBlocks("school-a", documentId, List.of(block(
+                    "block-shared-" + index,
+                    documentId,
+                    1,
+                    "shared vector method " + index)));
+        }
+        resourceStore.save(document("doc-private", "teacher-1", "TEACHER_PRIVATE", "Private notes"));
+        blockStore.replaceActiveBlocks("school-a", "doc-private", List.of(block(
+                "block-private", "doc-private", 1, "shared vector method private")));
+        TeacherResourceBlockSearchService service = com.doob.mathagent.teacher.TeacherResourceBlockSearchServiceFixture.service(resourceStore, blockStore);
+
+        TeacherResourceBlockSearchResponse response = service.search(
+                "school-a", "student", "student-1", "shared vector method", 20);
+
+        assertThat(response.hits()).extracting(TeacherResourceBlockSearchResponse.Hit::blockId)
+                .containsExactlyInAnyOrder("block-shared-0", "block-shared-1", "block-shared-2", "block-shared-3")
+                .doesNotContain("block-private");
+    }
+
+    @Test
     void excludesRegisteredFeishuDocumentUntilItsOwnerScopedSyncAndParseFinish() {
         InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
         InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
@@ -187,7 +214,7 @@ class TeacherResourceBlockSearchServiceTest {
                 "public_textbook",
                 "Old imported textbook derivative",
                 null,
-                "C:/workspace/runtime-authored/public-textbook-derivative",
+                "C:/workspace/teacher-materials/public-textbook-derivative",
                 "PUBLIC_TEXTBOOK",
                 "synced",
                 "parsed",
@@ -257,7 +284,7 @@ class TeacherResourceBlockSearchServiceTest {
                 "public_textbook",
                 "Old imported textbook derivative",
                 null,
-                "C:/workspace/runtime-authored/public-textbook-derivative",
+                "C:/workspace/teacher-materials/public-textbook-derivative",
                 "PUBLIC_TEXTBOOK",
                 "synced",
                 "parsed",
@@ -271,7 +298,7 @@ class TeacherResourceBlockSearchServiceTest {
                 "feishu",
                 "概率讲法模板",
                 null,
-                "C:/workspace/runtime-authored/03-feishu-method-probability",
+                "C:/workspace/teacher-materials/03-feishu-method-probability",
                 "TEACHER_PRIVATE",
                 "synced",
                 "parsed",
@@ -345,7 +372,7 @@ class TeacherResourceBlockSearchServiceTest {
                 "feishu",
                 "导数讲法模板",
                 null,
-                "C:/workspace/runtime-authored/03-feishu-derivative",
+                "C:/workspace/teacher-materials/03-feishu-derivative",
                 "TEACHER_PRIVATE",
                 "synced",
                 "parsed",
@@ -598,12 +625,10 @@ class TeacherResourceBlockSearchServiceTest {
         assertThat(response.hits().getFirst().blockId()).isEqualTo("b-analysis");
         assertThat(response.hits().getFirst().blockRole()).isEqualTo("analysis");
         assertThat(response.hits().getFirst().sourcePath()).contains("analysis.md");
-        assertThat(response.hits().getFirst().evidenceBlockIds())
-                .contains("b-question", "b-analysis", "b-lesson");
-        assertThat(response.hits().getFirst().evidenceText())
-                .contains("included angle")
-                .contains("dot product")
-                .contains("method");
+        // File-level parents must not merge neighboring blocks from three different source files.  The returned
+        // evidence therefore stays inside analysis.md; cross-file matches remain independent candidates.
+        assertThat(response.hits().getFirst().evidenceBlockIds()).containsExactly("b-analysis");
+        assertThat(response.hits().getFirst().evidenceText()).contains("dot product");
     }
 
     @Test
@@ -615,9 +640,9 @@ class TeacherResourceBlockSearchServiceTest {
                 "school-a",
                 "admin-1",
                 "local_path",
-                "runtime-public-textbook-derivative",
+                "Teacher public-textbook derivative",
                 null,
-                "C:/workspace/runtime-authored/01-public-textbook-derivative",
+                "C:/workspace/teacher-materials/01-public-textbook-derivative",
                 "PUBLIC_TEXTBOOK",
                 "synced",
                 "parsed",
@@ -629,9 +654,9 @@ class TeacherResourceBlockSearchServiceTest {
                 "school-a",
                 "teacher-1",
                 "local_path",
-                "runtime-feishu-method-probability",
+                "Teacher Feishu probability method",
                 null,
-                "C:/workspace/runtime-authored/03-feishu-method-probability",
+                "C:/workspace/teacher-materials/03-feishu-method-probability",
                 "TEACHER_PRIVATE",
                 "synced",
                 "parsed",
@@ -680,9 +705,9 @@ class TeacherResourceBlockSearchServiceTest {
                 "school-a",
                 "teacher-1",
                 "local_path",
-                "runtime-gaokao-conic",
+                "Teacher gaokao conic analysis",
                 null,
-                "C:/workspace/runtime-authored/04-gaokao-conic",
+                "C:/workspace/teacher-materials/04-gaokao-conic",
                 "MATH_VIP",
                 "synced",
                 "parsed",
@@ -929,7 +954,7 @@ class TeacherResourceBlockSearchServiceTest {
                 "local_path",
                 "Runtime QQ bundle package",
                 null,
-                "C:/workspace/runtime-authored/02-qq-bundle-vector",
+                "C:/workspace/teacher-materials/02-qq-bundle-vector",
                 "MATH_VIP",
                 "synced",
                 "parsed",
@@ -943,7 +968,7 @@ class TeacherResourceBlockSearchServiceTest {
                 "local_path",
                 "Runtime mock package",
                 null,
-                "C:/workspace/runtime-authored/05-mock-sequence",
+                "C:/workspace/teacher-materials/05-mock-sequence",
                 "TEACHER_PRIVATE",
                 "synced",
                 "parsed",
@@ -995,7 +1020,7 @@ class TeacherResourceBlockSearchServiceTest {
                 "qq_bundle",
                 "Runtime QQ bundle original question pack",
                 null,
-                "C:/workspace/runtime-authored/qq-question-pack",
+                "C:/workspace/teacher-materials/qq-question-pack",
                 "MATH_VIP",
                 "synced",
                 "parsed",
@@ -1058,7 +1083,7 @@ class TeacherResourceBlockSearchServiceTest {
                 "qq_bundle",
                 "Runtime QQ bundle lesson pack",
                 null,
-                "C:/workspace/runtime-authored/qq-lesson-pack",
+                "C:/workspace/teacher-materials/qq-lesson-pack",
                 "MATH_VIP",
                 "synced",
                 "parsed",
@@ -1111,7 +1136,7 @@ class TeacherResourceBlockSearchServiceTest {
                 "qq_bundle",
                 "Runtime QQ commentary lesson pack",
                 null,
-                "C:/workspace/runtime-authored/qq-commentary-course-pack",
+                "C:/workspace/teacher-materials/qq-commentary-course-pack",
                 "MATH_VIP",
                 "synced",
                 "parsed",
@@ -1164,7 +1189,7 @@ class TeacherResourceBlockSearchServiceTest {
                 "gaokao",
                 "Runtime gaokao analysis pack",
                 null,
-                "C:/workspace/runtime-authored/gaokao-analysis-pack",
+                "C:/workspace/teacher-materials/gaokao-analysis-pack",
                 "MATH_VIP",
                 "synced",
                 "parsed",
@@ -1217,7 +1242,7 @@ class TeacherResourceBlockSearchServiceTest {
                 "feishu",
                 "Teacher method notes",
                 null,
-                "C:/workspace/runtime-authored/feishu-generic-pack",
+                "C:/workspace/teacher-materials/feishu-generic-pack",
                 "TEACHER_PRIVATE",
                 "synced",
                 "parsed",
@@ -1268,7 +1293,7 @@ class TeacherResourceBlockSearchServiceTest {
                 "feishu",
                 "Probability boardwork flow",
                 null,
-                "C:/workspace/runtime-authored/feishu-boardwork-pack",
+                "C:/workspace/teacher-materials/feishu-boardwork-pack",
                 "TEACHER_PRIVATE",
                 "synced",
                 "parsed",
@@ -1311,14 +1336,12 @@ class TeacherResourceBlockSearchServiceTest {
     }
 
     @Test
-    void studentCannotSearchTeacherResourceBlocks() {
+    void studentCanUseSearchEndpointButReceivesOnlyVisibleResources() {
         TeacherResourceBlockSearchService service = TeacherResourceBlockSearchServiceFixture.service(
                 new InMemoryTeacherResourceStore(),
                 new InMemoryTeacherDocumentBlockStore());
 
-        assertThatThrownBy(() -> service.search("school-a", "student", "student-1", "vector", 10))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("teacher or admin");
+        assertThat(service.search("school-a", "student", "student-1", "vector", 10).hits()).isEmpty();
     }
 
     private static TeacherResourceDocumentResponse document(
@@ -1482,4 +1505,3 @@ class TeacherResourceBlockSearchServiceTest {
         }
     }
 }
-

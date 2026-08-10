@@ -10,7 +10,6 @@ public record AgentToolBrokerSearchRequest(
         @NotBlank String tenantId,
         @NotBlank String subjectType,
         @NotBlank String subjectId,
-        @NotBlank String capabilityToken,
         @NotBlank String query,
         @Min(1) @Max(20) int limit) {
 }

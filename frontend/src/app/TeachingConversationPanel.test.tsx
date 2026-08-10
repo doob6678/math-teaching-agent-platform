@@ -179,6 +179,57 @@ describe("TeachingConversationPanel", () => {
     expect(html).toContain("查看原文");
   });
 
+  it("renders a real source title instead of exposing the opaque teacher-resource URI in answer prose", () => {
+    const response = buildResponse({
+      cards: [{
+        cardKey: "source-name",
+        title: "补集法",
+        summary: "参考 teacher-resource://teacher-doc-1/block/block-1 中的补集法讲解。",
+        items: [],
+        sourceUris: ["teacher-resource://teacher-doc-1/block/block-1"],
+        renderMode: "text",
+      }],
+      sources: [{
+        sourceType: "teacher_resource",
+        title: "高中数学排列组合专题讲义",
+        sourceUri: "teacher-resource://teacher-doc-1/block/block-1",
+        permissionScope: "PUBLIC",
+        snippet: "补集法讲解",
+        score: 0.99,
+        sourcePath: "排列组合 / 补集法",
+        openUrl: "",
+      }],
+    });
+    const html = renderToStaticMarkup(
+      <TeachingConversationPanel
+        conversationTitle="补集法"
+        value=""
+        entries={[{ id: "assistant-source-title", role: "assistant", createdAt: "2026-07-13T00:00:00Z", response }]}
+        recentConversations={[]}
+        loading={false}
+        loadingHistory={false}
+        error=""
+        imageDraft={null}
+        uploadingImage={false}
+        imageError=""
+        conversationMemoryEnabled={false}
+        openingConversationId=""
+        onValueChange={vi.fn()}
+        onSubmit={vi.fn()}
+        onImageSelect={vi.fn()}
+        onClearImage={vi.fn()}
+        onConversationMemoryChange={vi.fn()}
+        onStartNewConversation={vi.fn()}
+        onOpenConversation={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain("高中数学排列组合专题讲义");
+    expect(html).toContain("资料路径");
+    expect(html).toContain("排列组合 / 补集法");
+    expect(html).not.toContain("teacher-resource://teacher-doc-1/block/block-1");
+  });
+
   it("groups real evidence under the retrieval stage that produced it", () => {
     const response = buildResponse({
       workflowStages: [
@@ -269,7 +320,16 @@ describe("TeachingConversationPanel", () => {
             sourceUris: [],
             renderMode: "text",
           }],
-          sources: [],
+          sources: [{
+            sourceType: "textbook",
+            title: "排列组合：正难则反",
+            sourceUri: "textbook://complement-method",
+            permissionScope: "PUBLIC_TEXTBOOK",
+            snippet: "补集法先求总数，再减去不符合条件的情形。",
+            score: 0.98,
+            sourcePath: "排列组合 / 补集法",
+            openUrl: "",
+          }],
           totalElapsedMs: 620,
         },
       },
@@ -300,9 +360,10 @@ describe("TeachingConversationPanel", () => {
     );
 
     expect(html).toContain("正在讲解");
-    // A streamed card is model output, so its title must not be removed because it resembles an older layout.
-    expect(html).toContain("题意理解");
     expect(html).toContain("先把等式左边因式分解");
+    expect(html).toContain("已找到的资料");
+    expect(html).toContain("排列组合：正难则反");
+    expect(html).toContain("补集法先求总数");
     expect(html).toContain("query=一元二次方程求根");
     expect(html).not.toContain("模型思考");
     expect(html).not.toContain("读取问题");
@@ -364,8 +425,9 @@ describe("TeachingConversationPanel", () => {
     expect(html).not.toContain("检索教材");
     expect(html).not.toContain("规划流程");
     expect(html).toContain("配方得到");
-    expect(html).toContain("teaching-streaming-answer");
+    expect(html).toContain("teaching-live-answer");
     expect(html).not.toContain("AI 实时输出");
+    expect(html).not.toContain("正在生成的讲解");
   });
 
   it("shows real wall-clock seconds instead of a stale millisecond progress snapshot", () => {

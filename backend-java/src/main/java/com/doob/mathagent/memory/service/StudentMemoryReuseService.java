@@ -1,6 +1,7 @@
 package com.doob.mathagent.memory.service;
 
 import com.doob.mathagent.memory.vo.StudentMemoryResponse;
+import com.doob.mathagent.vector.service.VectorIndexService;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -9,6 +10,9 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 /**
@@ -18,19 +22,64 @@ import org.springframework.stereotype.Service;
 public class StudentMemoryReuseService {
 
     private static final double REUSE_THRESHOLD = 0.42;
+    /** Keeps similarity work bounded while retaining the newest public and private memories. */
+    private static final int MAX_REUSE_CANDIDATES = 500;
+    private static final int MAX_SEMANTIC_CANDIDATES = 20;
+    private static final Logger log = LoggerFactory.getLogger(StudentMemoryReuseService.class);
 
     private final StudentMemoryStore store;
     private final Clock clock;
+    private final VectorIndexService vectorIndexService;
+    private final boolean semanticReuseEnabled;
+    private final boolean semanticReuseShadow;
+    private final double semanticReuseThreshold;
+
+    @Autowired
+    public StudentMemoryReuseService(
+            StudentMemoryStore store,
+            VectorIndexService vectorIndexService,
+            @Value("${math-agent.student.memory.semantic-reuse-enabled:false}") boolean semanticReuseEnabled,
+            @Value("${math-agent.student.memory.semantic-reuse-shadow:true}") boolean semanticReuseShadow,
+            @Value("${math-agent.student.memory.semantic-reuse-threshold:0.78}") double semanticReuseThreshold) {
+        this(store, Clock.systemUTC(), vectorIndexService, semanticReuseEnabled, semanticReuseShadow, semanticReuseThreshold);
+    }
+
+    public StudentMemoryReuseService(StudentMemoryStore store) {
+        this(store, Clock.systemUTC(), null, false, true, 0.78d);
+    }
+
+    public StudentMemoryReuseService(StudentMemoryStore store, Clock clock) {
+        this(store, clock, null, false, true, 0.78d);
+    }
+
+    public StudentMemoryReuseService(
+            StudentMemoryStore store,
+            Clock clock,
+            VectorIndexService vectorIndexService,
+            boolean semanticReuseEnabled,
+            boolean semanticReuseShadow,
+            double semanticReuseThreshold) {
+        this.store = store;
+        this.clock = clock;
+        this.vectorIndexService = vectorIndexService;
+        this.semanticReuseEnabled = semanticReuseEnabled;
+        this.semanticReuseShadow = semanticReuseShadow;
+        this.semanticReuseThreshold = Double.isFinite(semanticReuseThreshold)
+                ? Math.max(0.0d, Math.min(1.0d, semanticReuseThreshold)) : 0.78d;
+    }
 
     /**
      * Creates a production memory service.
      *
      * @param store memory store
      */
+    /* legacy constructor retained above */
+    /*
     @Autowired
     public StudentMemoryReuseService(StudentMemoryStore store) {
         this(store, Clock.systemUTC());
     }
+    */
 
     /**
      * Creates a testable memory service.
@@ -38,10 +87,13 @@ public class StudentMemoryReuseService {
      * @param store memory store
      * @param clock clock used for memory timestamps
      */
+    /* legacy constructor retained above */
+    /*
     public StudentMemoryReuseService(StudentMemoryStore store, Clock clock) {
         this.store = store;
         this.clock = clock;
     }
+    */
 
     /**
      * Remembers a generated answer for future private or public reuse.
@@ -104,17 +156,42 @@ public class StudentMemoryReuseService {
                     "Reuse bypass requested",
                     timer.finish("reuse_decision"));
         }
+        List<StudentMemoryEntry> candidates = store.candidates(
+                normalized.tenantId(), normalized.studentId(), MAX_REUSE_CANDIDATES);
+        List<StudentMemoryEntry> semanticCandidates = candidates.stream()
+                .sorted(java.util.Comparator.comparingDouble((StudentMemoryEntry candidate) -> similarity(normalized, candidate)).reversed())
+                .limit(MAX_SEMANTIC_CANDIDATES)
+                .toList();
+        List<Double> semanticScores = semanticScores(normalized, semanticCandidates);
+        java.util.Map<String, Double> semanticScoreByMemoryId = new java.util.HashMap<>();
+        for (int index = 0; index < semanticCandidates.size(); index += 1) {
+            semanticScoreByMemoryId.put(semanticCandidates.get(index).memoryId(), semanticScores.get(index));
+        }
         StudentMemoryEntry best = null;
         double bestScore = 0.0;
-        for (StudentMemoryEntry candidate : store.candidates(normalized.tenantId(), normalized.studentId())) {
-            double score = similarity(normalized, candidate);
+        for (StudentMemoryEntry candidate : candidates) {
+            double lexicalScore = similarity(normalized, candidate);
+            double semanticScore = semanticScoreByMemoryId.getOrDefault(candidate.memoryId(), 0.0d);
+            double score = semanticReuseEnabled && semanticScore > 0.0d ? semanticScore : lexicalScore;
+            if (!mathSafetyGate(normalized.questionText(), candidate.questionText())) {
+                if (semanticScore > 0.0d) {
+                    log.info("student_memory_semantic_reuse_rejected memoryId={} lexicalScore={} semanticScore={} reason=math_parameter_conflict",
+                            candidate.memoryId(), lexicalScore, semanticScore);
+                }
+                continue;
+            }
+            if (semanticReuseShadow && semanticScore > 0.0d) {
+                log.info("student_memory_semantic_reuse_shadow memoryId={} lexicalScore={} semanticScore={} enabled={}",
+                        candidate.memoryId(), lexicalScore, semanticScore, semanticReuseEnabled);
+            }
             if (score > bestScore) {
                 best = candidate;
                 bestScore = score;
             }
         }
         timer.mark("similarity_match");
-        if (best != null && bestScore >= REUSE_THRESHOLD) {
+        double threshold = semanticReuseEnabled ? semanticReuseThreshold : REUSE_THRESHOLD;
+        if (best != null && bestScore >= threshold) {
             return new StudentMemoryResponse(
                     true,
                     best.memoryId(),
@@ -132,6 +209,47 @@ public class StudentMemoryReuseService {
                 bestScore,
                 "No reusable memory matched",
                 timer.finish("reuse_decision"));
+    }
+
+    private List<Double> semanticScores(StudentMemoryCommand request, List<StudentMemoryEntry> candidates) {
+        if (vectorIndexService == null || candidates.isEmpty() || (!semanticReuseEnabled && !semanticReuseShadow)) {
+            return java.util.Collections.nCopies(candidates.size(), 0.0d);
+        }
+        try {
+            List<Double> scores = vectorIndexService.semanticSimilarity(
+                    request.questionText(), candidates.stream().map(StudentMemoryEntry::questionText).toList());
+            return scores.size() == candidates.size() ? scores : java.util.Collections.nCopies(candidates.size(), 0.0d);
+        } catch (RuntimeException ignored) {
+            return java.util.Collections.nCopies(candidates.size(), 0.0d);
+        }
+    }
+
+    /** Rejects obvious parameter/formula mismatches before a semantic score can authorize reuse. */
+    private static boolean mathSafetyGate(String question, String candidate) {
+        Set<String> leftNumbers = numbers(question);
+        Set<String> rightNumbers = numbers(candidate);
+        if (!leftNumbers.isEmpty() && !rightNumbers.isEmpty() && !leftNumbers.equals(rightNumbers)) {
+            return false;
+        }
+        boolean leftQuadratic = containsAny(question, "x^2", "x²", "二次函数", "二次方程");
+        boolean rightQuadratic = containsAny(candidate, "x^2", "x²", "二次函数", "二次方程");
+        boolean leftCubic = containsAny(question, "x^3", "x³", "三次函数", "三次方程");
+        boolean rightCubic = containsAny(candidate, "x^3", "x³", "三次函数", "三次方程");
+        return !(leftQuadratic && rightCubic) && !(leftCubic && rightQuadratic);
+    }
+
+    private static Set<String> numbers(String value) {
+        Set<String> values = new HashSet<>();
+        if (value == null) return values;
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("[-+]?\\d+(?:\\.\\d+)?").matcher(value);
+        while (matcher.find()) values.add(matcher.group());
+        return values;
+    }
+
+    private static boolean containsAny(String value, String... terms) {
+        String normalized = value == null ? "" : value.toLowerCase();
+        for (String term : terms) if (normalized.contains(term.toLowerCase())) return true;
+        return false;
     }
 
     /**

@@ -18,9 +18,39 @@ public class SystemHealthController {
 
     @GetMapping("/api/system/health")
     public Map<String, String> health() {
-        return Map.of(
-                "status", "UP",
-                "service", "math-agent-rag-backend");
+        try {
+            SystemRuntimeStatusResponse runtime = runtimeStatusService.status();
+            SystemRuntimeStatusResponse.DeploymentStatus deployment = runtime.deployment();
+            return Map.of(
+                    "status", deployment.ready() ? "UP" : "DOWN",
+                    "service", "math-agent-rag-backend",
+                    "mode", deployment.mode(),
+                    "blockingIssues", String.join(",", deployment.blockingIssues()),
+                    "mysql", Boolean.toString(runtime.dependencies().mysql()),
+                    "redis", Boolean.toString(runtime.dependencies().redis()),
+                    "rabbitmq", Boolean.toString(runtime.dependencies().rabbitmq()),
+                    "aiWorker", Boolean.toString(runtime.dependencies().worker()),
+                    "flyway", Boolean.toString(runtime.dependencies().flyway()));
+        } catch (RuntimeException exception) {
+            // A dependency probe must fail closed: a probe exception is not evidence that the service is healthy.
+            return Map.of(
+                    "status", "DOWN",
+                    "service", "math-agent-rag-backend",
+                    "mode", "probe_failed",
+                    "blockingIssues", "HEALTH_PROBE_FAILED");
+        }
+    }
+
+    /** Liveness intentionally has no dependency checks; orchestration can distinguish a live process from readiness. */
+    @GetMapping("/api/system/liveness")
+    public Map<String, String> liveness() {
+        return Map.of("status", "UP", "service", "math-agent-rag-backend", "mode", "liveness");
+    }
+
+    /** Readiness is the dependency-aware health response. */
+    @GetMapping("/api/system/readiness")
+    public Map<String, String> readiness() {
+        return health();
     }
 
     @GetMapping("/api/system/runtime")

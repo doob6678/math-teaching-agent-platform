@@ -3,7 +3,6 @@ package com.doob.mathagent.agent.service;
 import com.doob.mathagent.agent.dto.MultiAgentWritingRequest;
 import com.doob.mathagent.agent.vo.AgentRunExecuteResponse;
 import com.doob.mathagent.agent.vo.MultiAgentWritingResponse;
-import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.ArrayList;
@@ -71,24 +70,9 @@ public class PythonHandoutClient {
     public PythonHandoutResult execute(
             String workflowId,
             MultiAgentWritingRequest request,
-            RequestSubject subject,
             String traceId,
             boolean resume) {
-        Map<String, Object> payload = Map.of(
-                "runId", workflowId,
-                "taskId", workflowId,
-                "contractVersion", HANDOUT_CONTRACT_VERSION,
-                "writingGoal", request.writingGoal(),
-                "questionText", request.questionText(),
-                "evidenceRefs", request.evidenceRefs(),
-                "graphVersion", environment.getProperty("math-agent.python-handout.graph-version", "handout-v1"),
-                "traceId", traceId == null ? workflowId : traceId,
-                "traceparent", traceparent(traceId == null ? workflowId : traceId),
-                // Reusing this key on lease redelivery lets Python return its durable package without another model call.
-                "idempotencyKey", "handout:" + workflowId,
-                // The same run id lets Python reuse durable node checkpoints after a queue retry.
-                "resume", resume,
-                "deadlineEpochMs", System.currentTimeMillis() + requestTimeoutMs);
+        Map<String, Object> payload = requestPayload(workflowId, request, traceId, resume, requestTimeoutMs, environment);
         String workerKey = environment.getProperty(
                 "math-agent.python-handout.worker-key",
                 environment.getProperty("math-agent.worker-api-key", ""));
@@ -106,11 +90,41 @@ public class PythonHandoutClient {
         if (root == null || root.isNull()) {
             throw new IllegalStateException("Python handout returned an empty response");
         }
-        return parse(root, workflowId, subject);
+        return parse(root, workflowId);
+    }
+
+    /**
+     * Builds the bounded Python contract without serializing Java authentication state.
+     *
+     * <p>Python authenticates its broker call using the opaque run id; tenant and subject data remain in Java's
+     * workflow store so a model-controlled request cannot broaden authorization.</p>
+     */
+    static Map<String, Object> requestPayload(
+            String workflowId,
+            MultiAgentWritingRequest request,
+            String traceId,
+            boolean resume,
+            long timeoutMs,
+            Environment environment) {
+        return Map.ofEntries(
+                Map.entry("runId", workflowId),
+                Map.entry("taskId", workflowId),
+                Map.entry("contractVersion", HANDOUT_CONTRACT_VERSION),
+                Map.entry("writingGoal", request.writingGoal()),
+                Map.entry("questionText", request.questionText()),
+                Map.entry("evidenceRefs", request.evidenceRefs()),
+                Map.entry("graphVersion", environment.getProperty("math-agent.python-handout.graph-version", "handout-v1")),
+                Map.entry("traceId", traceId == null ? workflowId : traceId),
+                Map.entry("traceparent", traceparent(traceId == null ? workflowId : traceId)),
+                // Reusing this key on lease redelivery lets Python return its durable package without another model call.
+                Map.entry("idempotencyKey", "handout:" + workflowId),
+                // The same run id lets Python reuse durable node checkpoints after a queue retry.
+                Map.entry("resume", resume),
+                Map.entry("deadlineEpochMs", System.currentTimeMillis() + timeoutMs));
     }
 
     /** Maps one Python document to the existing stage result without copying raw prompt data. */
-    private PythonHandoutResult parse(JsonNode root, String workflowId, RequestSubject subject) {
+    private PythonHandoutResult parse(JsonNode root, String workflowId) {
         String status = text(root, "status", "FAILED");
         JsonNode metrics = root.path("metrics");
         JsonNode documents = root.path("documents");

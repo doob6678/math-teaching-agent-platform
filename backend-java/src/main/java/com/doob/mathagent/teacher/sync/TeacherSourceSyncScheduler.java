@@ -90,7 +90,7 @@ public class TeacherSourceSyncScheduler {
                             document.documentId(), active.jobId()));
                     continue;
                 }
-                // Do not execute a queued manual job: its capability-gated execute action remains user controlled.
+                // Do not execute a queued manual job: its execute action remains user controlled.
                 if (active != null) {
                     continue;
                 }

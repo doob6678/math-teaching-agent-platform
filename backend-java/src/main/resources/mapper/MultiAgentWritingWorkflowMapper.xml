@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.doob.mathagent.agent.mapper.MultiAgentWritingWorkflowMapper">
+    <!-- The revision predicate makes workflow snapshots a compare-and-swap update. -->
+    <update id="updateIfRevisionMatches">
+        UPDATE multi_agent_writing_workflow
+        SET tenant_id = #{entity.tenantId},
+            subject_type = #{entity.subjectType},
+            subject_id = #{entity.subjectId},
+            status = #{entity.status},
+            message = #{entity.message},
+            metadata_json = #{entity.metadataJson},
+            updated_at = #{entity.updatedAt},
+            revision = revision + 1
+        WHERE workflow_id = #{entity.workflowId}
+          AND revision = #{expectedRevision}
+    </update>
+</mapper>

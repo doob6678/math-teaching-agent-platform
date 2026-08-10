@@ -49,6 +49,15 @@ public final class FormulaMarkupSanitizer {
     /** A one-symbol radical is unambiguous; longer bare forms are rejected by the PDF export gate. */
     private static final Pattern UNICODE_RADICAL_SINGLE_ATOM = Pattern.compile("√\\s*([0-9A-Za-z])(?![A-Za-z0-9])");
     private static final Pattern ALL_UPPERCASE_LATIN = Pattern.compile("[A-Z]{2,}");
+    /**
+     * Some model/JSON adapters append an empty display-math pair to an otherwise complete line, for example
+     * {@code $$a=2.$$$$}.  Only a trailing empty pair is removed; adjacent non-empty formulas and mixed delimiters
+     * remain untouched so the export validator can still reject genuinely ambiguous markup.
+     */
+    private static final Pattern TRAILING_EMPTY_DISPLAY_PAIR = Pattern.compile(
+            "(?m)(?<!\\\\)(\\$\\$[^$\\r\\n]*?\\$\\$)(?:\\$\\$)+\\s*$");
+    /** CJK words are valid prose, but raw CJK inside TeX math is an undefined control/input in XeLaTeX. */
+    private static final Pattern CJK_TEXT_RUN = Pattern.compile("[\\u3400-\\u4DBF\\u4E00-\\u9FFF\\uF900-\\uFAFF]+");
 
     private FormulaMarkupSanitizer() {
     }
@@ -61,6 +70,7 @@ public final class FormulaMarkupSanitizer {
             return value == null ? "" : value.strip();
         }
         String normalized = normalizeLegacyLatexEscapes(value);
+        normalized = normalizeTrailingEmptyDisplayPair(normalized);
         normalized = normalizeFractionAndRadicalCommands(normalized);
         normalized = replaceEnvironment(normalized);
         normalized = replaceAll(normalized, DISPLAY_BRACKET, "$$\n%s\n$$");
@@ -81,6 +91,20 @@ public final class FormulaMarkupSanitizer {
         normalized = wrapMatches(normalized, VECTOR_COORDINATE_EQUATION);
         normalized = wrapMatches(normalized, BARE_VECTOR_OR_OPERATOR_COMMAND);
         return cleanupFractionMathDelimiters(normalized).strip();
+    }
+
+    /**
+     * Repairs only the observed empty trailing display block.  This is deterministic transport cleanup, not a
+     * semantic formula rewrite: the completed expression inside the first pair is retained byte-for-byte.
+     */
+    private static String normalizeTrailingEmptyDisplayPair(String value) {
+        Matcher matcher = TRAILING_EMPTY_DISPLAY_PAIR.matcher(value);
+        StringBuffer buffer = new StringBuffer();
+        while (matcher.find()) {
+            matcher.appendReplacement(buffer, Matcher.quoteReplacement(matcher.group(1)));
+        }
+        matcher.appendTail(buffer);
+        return buffer.toString();
     }
 
     /**
@@ -168,7 +192,7 @@ public final class FormulaMarkupSanitizer {
     }
 
     private static String normalizeUnicodeMathSymbols(String value) {
-        return normalizeGeometryRelations(value)
+        return normalizeCjkTextInsideMath(normalizeGeometryRelations(value))
                 .replace("⁰", "^0")
                 .replace("¹", "^1")
                 .replace("²", "^2")
@@ -192,6 +216,52 @@ public final class FormulaMarkupSanitizer {
                 .replace("±", "\\pm ")
                 .replace("×", "\\times ")
                 .replace("÷", "/");
+    }
+
+    /**
+     * Keeps model-authored Chinese labels such as “平面” in the mathematical expression without asking XeLaTeX to
+     * interpret them as control sequences.  This matters for geometry: the model often writes
+     * {@code $$AC_1\\perp平面A_1BD.$$}, which otherwise makes a real PDF compile fail even though the formula is
+     * understandable to a teacher.  Wrapping only CJK runs preserves the surrounding Latin/TeX expression and is
+     * deterministic, so it does not spend another model call or alter the mathematical relation.
+     */
+    private static String normalizeCjkTextInsideMath(String value) {
+        StringBuilder builder = new StringBuilder(value.length());
+        StringBuilder mathSegment = new StringBuilder();
+        boolean math = false;
+        for (int index = 0; index < value.length(); index += 1) {
+            if (value.startsWith("$$", index)) {
+                builder.append(math ? wrapCjkTextRuns(mathSegment.toString()) : mathSegment);
+                mathSegment.setLength(0);
+                builder.append("$$");
+                math = !math;
+                index += 1;
+                continue;
+            }
+            char character = value.charAt(index);
+            if (character == '$') {
+                builder.append(math ? wrapCjkTextRuns(mathSegment.toString()) : mathSegment);
+                mathSegment.setLength(0);
+                builder.append('$');
+                math = !math;
+                continue;
+            }
+            mathSegment.append(character);
+        }
+        builder.append(math ? wrapCjkTextRuns(mathSegment.toString()) : mathSegment);
+        return builder.toString();
+    }
+
+    private static String wrapCjkTextRuns(String value) {
+        Matcher matcher = CJK_TEXT_RUN.matcher(value);
+        StringBuffer buffer = new StringBuffer();
+        while (matcher.find()) {
+            // The Java literal below emits one TeX backslash. Two backslashes would mean a line break followed by
+            // literal `text`, which compiled successfully but visibly corrupted labels such as “结构识别”.
+            matcher.appendReplacement(buffer, Matcher.quoteReplacement("\\text{" + matcher.group() + "}"));
+        }
+        matcher.appendTail(buffer);
+        return buffer.toString();
     }
 
     /**

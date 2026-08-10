@@ -3,6 +3,7 @@ package com.doob.mathagent.agent.service;
 import com.doob.mathagent.agent.dto.AgentRunPlanRequest;
 import com.doob.mathagent.agent.vo.AgentRunPlanResponse;
 import com.doob.mathagent.infrastructure.ai.AiProviderCatalog;
+import com.doob.mathagent.infrastructure.ai.AiModelPriceCatalog;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -17,7 +18,15 @@ import org.springframework.stereotype.Service;
 @Service
 public class AgentRunPlanService {
 
+    /** Free-tier output cap keeps interactive tutoring bounded. */
+    private static final int FREE_MAX_OUTPUT_TOKENS = 900;
+    /** Default paid output cap for short answers and student/projection variants. */
+    private static final int DEFAULT_MAX_OUTPUT_TOKENS = 4000;
+    /** A four-question teacher handout needs a larger but still signed and auditable completion budget. */
+    private static final int TEACHER_HANDOUT_MAX_OUTPUT_TOKENS = 8000;
+
     private final AiProviderCatalog providerCatalog;
+    private final AiModelPriceCatalog priceCatalog;
 
     /**
      * Creates an agent run planner.
@@ -25,7 +34,14 @@ public class AgentRunPlanService {
      * @param providerCatalog configured provider catalog
      */
     public AgentRunPlanService(AiProviderCatalog providerCatalog) {
+        this(providerCatalog, AiModelPriceCatalog.empty());
+    }
+
+    /** Creates a planner with deployment-owned model pricing. */
+    @org.springframework.beans.factory.annotation.Autowired
+    public AgentRunPlanService(AiProviderCatalog providerCatalog, AiModelPriceCatalog priceCatalog) {
         this.providerCatalog = providerCatalog;
+        this.priceCatalog = priceCatalog;
     }
 
     /**
@@ -58,10 +74,9 @@ public class AgentRunPlanService {
         RouteDecision route = route(normalized);
         timer.mark("model_route");
 
-        TokenBudget budget = budget(normalized);
+        TokenBudget budget = budget(normalized, route.provider());
         timer.mark("budget_guard");
 
-        boolean capabilityRequired = normalized.highValueOperation() || agent.highValueRequired();
         return new AgentRunPlanResponse(
                 UUID.randomUUID().toString(),
                 normalizedSubject.tenantId(),
@@ -76,8 +91,6 @@ public class AgentRunPlanService {
                 toolDecisions,
                 allowedData,
                 deniedData,
-                capabilityRequired,
-                capabilityRequired ? "agent-run:" + agent.code() : "",
                 budget.maxInputTokens(),
                 budget.maxOutputTokens(),
                 budget.estimatedTotalTokens(),
@@ -97,10 +110,12 @@ public class AgentRunPlanService {
         if (providers.isEmpty()) {
             throw new IllegalStateException("No AI provider is enabled by environment variables");
         }
-        AiProviderCatalog.Provider primary = providerCatalog
-                .preferredProvider(request.preferredProviderName(), request.preferredModelCode())
-                .orElseGet(providerCatalog::defaultProvider);
-        AiProviderCatalog.Provider provider = request.previousFailureCount() >= 2 && providers.size() > 1
+        boolean writing = isWritingRequest(request);
+        AiProviderCatalog.Provider primary = writing
+                ? writingProvider(request)
+                : providerCatalog.preferredProvider(request.preferredProviderName(), request.preferredModelCode())
+                        .orElseGet(providerCatalog::defaultProvider);
+        AiProviderCatalog.Provider provider = !writing && request.previousFailureCount() >= 2 && providers.size() > 1
                 ? fallbackAfter(primary, providers)
                 : primary;
         String level;
@@ -115,6 +130,34 @@ public class AgentRunPlanService {
         }
         String reason = routeReason(request, providers, level, provider);
         return new RouteDecision(provider, level, reason);
+    }
+
+    /** Identifies document-generation routes that use the default writing route unless explicitly overridden. */
+    private static boolean isWritingRequest(AgentRunPlanRequest request) {
+        String taskType = request.taskType() == null ? "" : request.taskType().toLowerCase(java.util.Locale.ROOT);
+        String agentCode = request.agentCode() == null ? "" : request.agentCode();
+        return taskType.contains("writing")
+                || taskType.contains("handout")
+                || "CoursewareAgent".equals(agentCode)
+                || "HandoutFormatterAgent".equals(agentCode);
+    }
+
+    /**
+     * Keeps every writing stage on one validated route for the whole workflow. An explicit model is honored only
+     * after the provider catalog allow-list accepts it; an unknown explicit choice fails closed instead of silently
+     * changing cost, quality, or reproducibility. The deployment Luna route remains the default when no preference
+     * was supplied.
+     *
+     * @param request normalized agent plan request
+     * @return the approved writing provider
+     */
+    private AiProviderCatalog.Provider writingProvider(AgentRunPlanRequest request) {
+        if (!request.preferredProviderName().isBlank() || !request.preferredModelCode().isBlank()) {
+            return providerCatalog.preferredProvider(request.preferredProviderName(), request.preferredModelCode())
+                    .orElseThrow(() -> new IllegalArgumentException(
+                            "Requested writing provider/model is not enabled or allow-listed"));
+        }
+        return providerCatalog.lunaWritingProvider();
     }
 
     /**
@@ -160,14 +203,36 @@ public class AgentRunPlanService {
     /**
      * Applies token ceilings and cost estimation before execution.
      */
-    private static TokenBudget budget(AgentRunPlanRequest request) {
+    private TokenBudget budget(AgentRunPlanRequest request, AiProviderCatalog.Provider provider) {
         int maxInput = "free".equals(request.userVipLevel()) ? 2400 : 12000;
-        int maxOutput = "free".equals(request.userVipLevel()) ? 900 : 4000;
+        int maxOutput = "free".equals(request.userVipLevel())
+                ? FREE_MAX_OUTPUT_TOKENS
+                : isTeacherHandoutRequest(request) ? TEACHER_HANDOUT_MAX_OUTPUT_TOKENS : DEFAULT_MAX_OUTPUT_TOKENS;
+        boolean inputWithinLimit = request.estimatedInputTokens() <= maxInput;
+        boolean outputWithinLimit = request.estimatedOutputTokens() <= maxOutput;
         long clippedInput = Math.min(request.estimatedInputTokens(), maxInput);
         long clippedOutput = Math.min(request.estimatedOutputTokens(), maxOutput);
         long total = clippedInput + clippedOutput;
-        double cost = Math.round((total / 10000.0d) * 10000.0d) / 10000.0d;
-        return new TokenBudget(maxInput, maxOutput, total, cost, cost <= request.costBudget());
+        double cost = priceCatalog.estimate(
+                provider.name(), provider.chatModel(), (int) clippedInput, (int) clippedOutput);
+        // Unknown relay pricing never disables token protection, but it also never masquerades as a real currency cost.
+        boolean costWithinLimit = cost < 0.0d || cost <= request.costBudget();
+        return new TokenBudget(
+                maxInput,
+                maxOutput,
+                total,
+                cost,
+                inputWithinLimit && outputWithinLimit && costWithinLimit);
+    }
+
+    /**
+     * Identifies the only writing branch allowed to use the expanded output ceiling.
+     * Student and lecture variants remain on the normal paid cap so a malformed prompt cannot multiply spend.
+     */
+    private static boolean isTeacherHandoutRequest(AgentRunPlanRequest request) {
+        return isWritingRequest(request)
+                && "CoursewareAgent".equals(request.agentCode())
+                && "teacher".equals(request.userVipLevel());
     }
 
     /**

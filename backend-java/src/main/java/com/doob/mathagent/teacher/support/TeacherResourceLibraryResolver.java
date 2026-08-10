@@ -43,6 +43,14 @@ public final class TeacherResourceLibraryResolver {
         if ("PUBLIC_TEXTBOOK".equalsIgnoreCase(text(document.permissionScope()))) {
             return "public_textbook";
         }
+        /*
+         * New registrations persist a canonical category at creation time.  Do not inspect a title, path, or URL for
+         * those records: a user rename must be incapable of moving a source between Feishu, gaokao, and mock_exam.
+         * Only old blank/local_path rows retain heuristic compatibility until their next real synchronization.
+         */
+        if (!normalizedSourceType.isBlank() && !"local_path".equals(normalizedSourceType)) {
+            return normalizedSourceType;
+        }
         String haystack = metadataHaystack(document);
         /*
          * Live runtime-authored eval documents may be created under output/benchmarks/... during real ingestion. Those
@@ -106,10 +114,7 @@ public final class TeacherResourceLibraryResolver {
         if (containsAny(haystack, "mock_exam", "mock-exam", "mock exam", "mock", "模拟")) {
             return "mock_exam";
         }
-        if ("local_path".equals(normalizedSourceType) || normalizedSourceType.isBlank()) {
-            return "teacher_resource";
-        }
-        return normalizedSourceType;
+        return "teacher_resource";
     }
 
     /**

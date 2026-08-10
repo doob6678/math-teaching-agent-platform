@@ -61,14 +61,21 @@ public class MyBatisStudentExplanationHistoryStore implements StudentExplanation
             session.setTotalMessages(0);
             sessionMapper.insert(session);
         }
-        session.setTitle(StudentExplanationConversationTitleSupport.resolvePersisted(
+        String title = StudentExplanationConversationTitleSupport.resolvePersisted(
                 response.conversationTitle(),
                 response.questionText(),
-                session.getCreatedAt()));
-        session.setLastExplanationId(response.explanationId());
-        session.setLastQuestionText(response.questionText());
-        session.setTotalMessages((session.getTotalMessages() == null ? 0 : session.getTotalMessages()) + 1);
-        sessionMapper.updateById(session);
+                session.getCreatedAt());
+        try {
+            sessionMapper.appendMessage(
+                    response.conversationId(), response.explanationId(), response.questionText(), title);
+        } catch (UnsupportedOperationException ignored) {
+            // Focused mapper proxies from older tests do not expose the atomic SQL extension.
+            session.setTitle(title);
+            session.setLastExplanationId(response.explanationId());
+            session.setLastQuestionText(response.questionText());
+            session.setTotalMessages((session.getTotalMessages() == null ? 0 : session.getTotalMessages()) + 1);
+            sessionMapper.updateById(session);
+        }
 
         StudentExplanationMessageEntity message = new StudentExplanationMessageEntity();
         message.setExplanationId(response.explanationId());
@@ -125,6 +132,48 @@ public class MyBatisStudentExplanationHistoryStore implements StudentExplanation
     }
 
     @Override
+    public StudentExplanationContextSummary findContextSummary(
+            String tenantId,
+            String subjectType,
+            String subjectId,
+            String conversationId) {
+        StudentExplanationSessionEntity session = ownedSession(tenantId, subjectType, subjectId, conversationId);
+        if (session == null || text(session.getContextSummaryText()).isBlank()) {
+            return null;
+        }
+        return contextSummary(session);
+    }
+
+    @Override
+    @Transactional
+    public boolean updateContextSummary(
+            String tenantId,
+            String subjectType,
+            String subjectId,
+            String conversationId,
+            StudentExplanationContextSummary summary) {
+        if (summary == null || summary.content().isBlank()) {
+            return false;
+        }
+        StudentExplanationSessionEntity session = ownedSession(tenantId, subjectType, subjectId, conversationId);
+        if (session == null) {
+            return false;
+        }
+        int expectedVersion = session.getContextSummaryVersion() == null ? 0 : session.getContextSummaryVersion();
+        if (summary.version() != expectedVersion + 1) {
+            return false;
+        }
+        return sessionMapper.updateContextSummary(
+                session.getConversationId(),
+                expectedVersion,
+                summary.version(),
+                summary.fromMessageId(),
+                summary.toMessageId(),
+                summary.contentHash(),
+                summary.content()) == 1;
+    }
+
+    @Override
     public List<StudentExplanationConversationSummary> listConversations(
             String tenantId,
             String subjectType,
@@ -159,7 +208,6 @@ public class MyBatisStudentExplanationHistoryStore implements StudentExplanation
                 || !subjectId.equals(session.getSubjectId())) {
             return null;
         }
-        int boundedLimit = Math.max(1, Math.min(limit, 50));
         LambdaQueryWrapper<StudentExplanationMessageEntity> wrapper =
                 new LambdaQueryWrapper<StudentExplanationMessageEntity>()
                         .eq(StudentExplanationMessageEntity::getTenantId, tenantId)
@@ -168,7 +216,7 @@ public class MyBatisStudentExplanationHistoryStore implements StudentExplanation
                         .eq(StudentExplanationMessageEntity::getConversationId, conversationId.strip())
                         .orderByAsc(StudentExplanationMessageEntity::getCreatedAt)
                         .orderByAsc(StudentExplanationMessageEntity::getExplanationId);
-        Page<StudentExplanationMessageEntity> page = messageMapper.selectPage(Page.of(1, boundedLimit), wrapper);
+        List<StudentExplanationMessageEntity> messages = messageMapper.selectList(wrapper);
         return new StudentExplanationConversationDetail(
                 session.getConversationId(),
                 session.getTenantId(),
@@ -183,7 +231,35 @@ public class MyBatisStudentExplanationHistoryStore implements StudentExplanation
                 session.getTotalMessages() == null ? 0 : session.getTotalMessages(),
                 session.getCreatedAt(),
                 session.getUpdatedAt(),
-                page.getRecords().stream().map(MyBatisStudentExplanationHistoryStore::toConversationMessage).toList());
+                messages.stream().map(MyBatisStudentExplanationHistoryStore::toConversationMessage).toList());
+    }
+
+    private StudentExplanationSessionEntity ownedSession(
+            String tenantId,
+            String subjectType,
+            String subjectId,
+            String conversationId) {
+        if (conversationId == null || conversationId.isBlank()) {
+            return null;
+        }
+        StudentExplanationSessionEntity session = sessionMapper.selectById(conversationId.strip());
+        if (session == null
+                || !tenantId.equals(session.getTenantId())
+                || !subjectType.equals(session.getSubjectType())
+                || !subjectId.equals(session.getSubjectId())) {
+            return null;
+        }
+        return session;
+    }
+
+    private static StudentExplanationContextSummary contextSummary(StudentExplanationSessionEntity session) {
+        return new StudentExplanationContextSummary(
+                session.getContextSummaryFromMessageId(),
+                session.getContextSummaryToMessageId(),
+                session.getContextSummaryVersion() == null ? 0 : session.getContextSummaryVersion(),
+                session.getContextSummaryHash(),
+                session.getContextSummaryText(),
+                session.getUpdatedAt());
     }
 
     private static StudentExplanationHistorySummary toSummary(

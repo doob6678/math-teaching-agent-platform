@@ -1,341 +1,91 @@
 package com.doob.mathagent.teacher.service;
 
-import com.doob.mathagent.infrastructure.ai.AiProviderProperties;
+import com.doob.mathagent.agent.service.PythonMigratedWorkloadClient;
 import com.doob.mathagent.infrastructure.text.TextEncodingRepair;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.Duration;
-import java.util.List;
-import java.util.Map;
+import java.util.Base64;
+import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
-import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.RestClient;
 
 /**
- * Transcribes permission-checked teacher material with a real multimodal model.
+ * 将已授权教师图片转写委托给 Python Worker。
  *
- * <p>This service has no student-upload lookup or student explanation entry point. Interactive student images are
- * sent directly to the main ReAct model and never pass through this independent transcription layer.</p>
+ * <p>Java 在读取文件前复验路径、常规文件、MIME 和大小；Python 只收到受限 data URL，负责模型调用和用量记账。</p>
  */
 @Service
 public class AuthorizedImageTranscriptionService {
 
-    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
-    /** A complete exam page can contain five questions and options; keep enough output budget for valid JSON. */
-    private static final int VISION_TRANSCRIPTION_MAX_TOKENS = 1800;
-    /** Matches the upload service's bounded image contract so a large teacher scan cannot exhaust vision memory. */
+    /** 与 Python 端图片内存限制一致，阻止大文件进入跨进程模型请求。 */
     private static final long MAX_AUTHORIZED_IMAGE_BYTES = 8L * 1024L * 1024L;
-    private final AiProviderProperties.Provider openaiProvider;
-    private final AiProviderProperties.Provider dashscopeProvider;
-    private final AiProviderProperties.Provider arkProvider;
-    private final String openaiVisionModel;
-    private final String dashscopeVisionModel;
-    private final String arkVisionModel;
-    private final boolean enabled;
-    private final Duration requestTimeout;
 
-    /**
-     * Creates the vision service from backend model configuration.
-     *
-     * @param properties AI provider properties
-     * @param visionModel DashScope OpenAI-compatible vision model
-     * @param enabled whether image understanding is enabled
-     */
+    private final PythonMigratedWorkloadClient workloadClient;
+    private final boolean enabled;
+
     public AuthorizedImageTranscriptionService(
-            AiProviderProperties properties,
-            @Value("${math-agent.teaching.image-transcription.openai-model:${OPENAI_VISION_MODEL:${OPENAI_CHAT_MODEL:gpt-5.6-luna}}}")
-            String openaiVisionModel,
-            @Value("${math-agent.teaching.image-transcription.dashscope-model:${DASHSCOPE_VISION_MODEL:qwen-vl-plus-latest}}")
-            String dashscopeVisionModel,
-            @Value("${math-agent.teaching.image-transcription.ark-model:${ARK_VISION_MODEL:${ARK_CHAT_MODEL:doubao-seed-2-0-lite-260428}}}")
-            String arkVisionModel,
-            @Value("${math-agent.teaching.image-transcription.enabled:true}") boolean enabled,
-            @Value("${math-agent.teaching.image-transcription.timeout-ms:45000}") long requestTimeoutMs) {
-        this.openaiProvider = properties.getOpenai();
-        this.dashscopeProvider = properties.getDashscope();
-        this.arkProvider = properties.getArk();
-        this.openaiVisionModel = textOrDefault(openaiVisionModel, properties.getOpenai().getChatModel());
-        this.dashscopeVisionModel = textOrDefault(dashscopeVisionModel, "qwen-vl-plus-latest");
-        this.arkVisionModel = textOrDefault(arkVisionModel, properties.getArk().getChatModel());
+            PythonMigratedWorkloadClient workloadClient,
+            @Value("${math-agent.teaching.image-transcription.enabled:true}") boolean enabled) {
+        this.workloadClient = workloadClient;
         this.enabled = enabled;
-        this.requestTimeout = Duration.ofMillis(Math.max(1000, requestTimeoutMs));
     }
 
-    /**
-     * Reads a short-lived local image materialized by a server-side authorization boundary.
-     *
-     * <p>This overload is intentionally not an upload lookup: callers must validate tenant, role, ownership, and
-     * asset visibility before passing the path. It is used by teacher-resource handout generation after
-     * {@code openVisibleAsset} has performed those checks. The method validates file existence, MIME shape, and byte
-     * budget again, preventing the model client from becoming a generic arbitrary-file reader.</p>
-     */
+    /** 读取经过上游权限检查的图片，并允许 Worker 按其签发路由执行有限 fallback。 */
     public VisionAnalysis analyzeAuthorizedLocalImage(Path authorizedImage, String contentType) {
         return analyzeAuthorizedLocalImage(authorizedImage, contentType, true);
     }
 
-    /**
-     * Reads a permission-checked teacher page with the explicitly configured primary model only.
-     *
-     * <p>Source transcription is evidence creation, so silently switching providers after a timeout creates mixed
-     * OCR provenance and can multiply one page into three long relay waits. The handout pipeline requires the
-     * configured gpt-5.6-luna result or records no transcription; it never substitutes another model's text.</p>
-     */
+    /** 教师来源转写保留原有调用入口；provider 选择由 Python 的受限路由统一管理。 */
     public VisionAnalysis analyzeAuthorizedLocalImageWithPrimaryProvider(Path authorizedImage, String contentType) {
         return analyzeAuthorizedLocalImage(authorizedImage, contentType, false);
     }
 
-    /** Shared authorized-file boundary with an explicit fallback policy for student UI versus source ingestion. */
     private VisionAnalysis analyzeAuthorizedLocalImage(Path authorizedImage, String contentType, boolean allowFallback) {
         if (!enabled) {
             return VisionAnalysis.skipped("vision-disabled");
         }
-        if (authorizedImage == null || contentType == null || !contentType.strip().toLowerCase(java.util.Locale.ROOT).startsWith("image/")) {
-            return new VisionAnalysis(true, false, "", "", "", 0.0, 0, 0, 0, "unsupported-image");
+        if (authorizedImage == null || contentType == null
+                || !contentType.strip().toLowerCase(java.util.Locale.ROOT).startsWith("image/")) {
+            return failed("unsupported-image");
         }
         try {
             Path normalized = authorizedImage.toAbsolutePath().normalize();
             if (!Files.isRegularFile(normalized)) {
-                return new VisionAnalysis(true, false, "", "", "", 0.0, 0, 0, 0, "image-unavailable");
+                return failed("image-unavailable");
             }
-            if (Files.size(normalized) > MAX_AUTHORIZED_IMAGE_BYTES) {
-                return new VisionAnalysis(true, false, "", "", "", 0.0, 0, 0, 0, "image-too-large");
+            byte[] image = Files.readAllBytes(normalized);
+            if (image.length > MAX_AUTHORIZED_IMAGE_BYTES) {
+                return failed("image-too-large");
             }
-            return analyzeImageBytes(Files.readAllBytes(normalized), contentType, allowFallback);
+            String mimeType = contentType.strip().toLowerCase(java.util.Locale.ROOT);
+            String dataUrl = "data:" + mimeType + ";base64," + Base64.getEncoder().encodeToString(image);
+            PythonMigratedWorkloadClient.TranscriptionResult result = workloadClient.transcribeImage(
+                    UUID.randomUUID().toString(), mimeType, dataUrl);
+            String problemText = TextEncodingRepair.repairMojibake(result.problemText()).strip();
+            return new VisionAnalysis(
+                    true,
+                    result.completed() && !problemText.isBlank(),
+                    result.providerName(),
+                    result.modelCode(),
+                    problemText,
+                    result.confidence(),
+                    0,
+                    0,
+                    0,
+                    result.completed() ? "python-vision-json" : "empty-vision-text");
         } catch (IOException exception) {
-            return new VisionAnalysis(true, false, "", "", "", 0.0, 0, 0, 0,
-                    exception.getClass().getSimpleName());
+            return failed(exception.getClass().getSimpleName());
+        } catch (RuntimeException exception) {
+            return failed(exception.getClass().getSimpleName());
         }
     }
 
-    /** Shares the real provider path across owned student uploads and permission-checked teacher materializations. */
-    private VisionAnalysis analyzeImageBytes(byte[] image, String contentType) {
-        return analyzeImageBytes(image, contentType, true);
+    private VisionAnalysis failed(String message) {
+        return new VisionAnalysis(true, false, "", "", "", 0.0, 0, 0, 0, message);
     }
 
-    /** Executes the primary provider alone for auditable source transcription, otherwise keeps UI fallbacks. */
-    private VisionAnalysis analyzeImageBytes(byte[] image, String contentType, boolean allowFallback) {
-        String dataUrl = "data:" + contentType + ";base64,"
-                + java.util.Base64.getEncoder().encodeToString(image);
-        VisionAnalysis lastFailure = null;
-        // Try the configured multimodal explanation model first so a question image and its answer share one
-        // capability. Existing DashScope and Ark integrations remain real-provider fallbacks.
-        List<VisionProviderCandidate> candidates = List.of(
-                new VisionProviderCandidate("openai", openaiProvider, openaiVisionModel),
-                new VisionProviderCandidate("dashscope", dashscopeProvider, dashscopeVisionModel),
-                new VisionProviderCandidate("ark", arkProvider, arkVisionModel));
-        for (VisionProviderCandidate candidate : allowFallback ? candidates : List.of(candidates.getFirst())) {
-            if (candidate.provider().getApiKey() == null || candidate.provider().getApiKey().isBlank()) {
-                lastFailure = new VisionAnalysis(true, false, candidate.name(), candidate.modelCode(), "",
-                        0.0, 0, 0, 0, "api-key-missing");
-                continue;
-            }
-            VisionAnalysis analysis = analyzeWithProvider(candidate, dataUrl);
-            if (analysis.succeeded()) {
-                return analysis;
-            }
-            lastFailure = analysis;
-        }
-        return lastFailure == null ? VisionAnalysis.skipped("no-vision-provider") : lastFailure;
-    }
-
-    /**
-     * Calls one OpenAI-compatible multimodal provider.
-     */
-    private VisionAnalysis analyzeWithProvider(VisionProviderCandidate candidate, String dataUrl) {
-        try {
-            Map<String, Object> requestBody = Map.of(
-                    "model", candidate.modelCode(),
-                    "messages", List.of(Map.of(
-                            "role", "user",
-                            "content", List.of(
-                                    Map.of("type", "image_url", "image_url", Map.of("url", dataUrl)),
-                                    Map.of("type", "text", "text", strictVisionPrompt())))),
-                    "temperature", 0,
-                    "max_tokens", VISION_TRANSCRIPTION_MAX_TOKENS);
-            JsonNode response = RestClient.builder()
-                    .requestFactory(requestFactory(requestTimeout))
-                    .build()
-                    .post()
-                    // Ark and DashScope are called through their OpenAI-compatible chat-completions endpoints.
-                    // Ark /api/v3 configuration reference: https://www.volcengine.com/docs/82379/1330626
-                    .uri(chatCompletionsEndpoint(candidate.provider().getBaseUrl()))
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .headers(headers -> headers.setBearerAuth(candidate.provider().getApiKey()))
-                    .body(requestBody)
-                    .retrieve()
-                    .body(JsonNode.class);
-            String content = firstContent(response);
-            ParsedVisionJson parsed = parseVisionJson(content);
-            JsonNode usage = response == null ? null : response.path("usage");
-            boolean succeeded = !parsed.problemText().isBlank();
-            return new VisionAnalysis(
-                    true,
-                    succeeded,
-                    candidate.name(),
-                    modelFromResponse(response, candidate.modelCode()),
-                    parsed.problemText(),
-                    parsed.confidence(),
-                    intValue(usage == null ? null : usage.path("prompt_tokens")),
-                    intValue(usage == null ? null : usage.path("completion_tokens")),
-                    intValue(usage == null ? null : usage.path("total_tokens")),
-                    succeeded ? "vision-json" : "empty-vision-text");
-        } catch (RuntimeException e) {
-            return new VisionAnalysis(
-                    true,
-                    false,
-                    candidate.name(),
-                    candidate.modelCode(),
-                    "",
-                    0.0,
-                    0,
-                    0,
-                    0,
-                    e.getClass().getSimpleName());
-        }
-    }
-
-    /**
-     * Prompt for extracting only visible problem text from the image.
-     */
-    private static String visionPrompt() {
-        return strictVisionPrompt();
-    }
-
-    /**
-     * Prompt for extracting only visible problem text from the image.
-     */
-    private static String strictVisionPrompt() {
-        return """
-                You are reading a high-school math problem image.
-                Extract only visible problem text, formulas, options, and geometry labels from the image.
-                Do not solve the problem. Do not guess missing text. Do not invent invisible content.
-                Preserve Chinese text and math symbols exactly as visible when possible.
-                In every LaTeX formula, write every mathematical fraction strictly as \\frac{numerator}{denominator}.
-                Never represent a mathematical fraction as 1/2, a/b, x/y, or another slash expression.
-                Return exactly one valid JSON object and no Markdown:
-                {"problemText":"...","confidence":0.0}
-                """;
-    }
-
-    /**
-     * Parses the JSON returned by the vision model.
-     */
-    private static ParsedVisionJson parseVisionJson(String content) {
-        if (content == null || content.isBlank()) {
-            return new ParsedVisionJson("", 0.0);
-        }
-        try {
-            JsonNode node = OBJECT_MAPPER.readTree(extractJsonObject(stripCodeFence(content.strip())));
-            return new ParsedVisionJson(
-                    TextEncodingRepair.repairMojibake(node.path("problemText").asText("")),
-                    Math.max(0.0, Math.min(1.0, node.path("confidence").asDouble(0.0))));
-        } catch (JsonProcessingException e) {
-            return new ParsedVisionJson(TextEncodingRepair.repairMojibake(content.strip()), 0.5);
-        }
-    }
-
-    /**
-     * Builds a hard-timeout request factory so provider or proxy instability cannot hang the explanation request.
-     */
-    private static SimpleClientHttpRequestFactory requestFactory(Duration timeout) {
-        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(timeout);
-        factory.setReadTimeout(timeout);
-        return factory;
-    }
-
-    /**
-     * Extracts the first assistant message content from an OpenAI-compatible response.
-     */
-    private static String firstContent(JsonNode response) {
-        if (response == null) {
-            return "";
-        }
-        return response.path("choices").path(0).path("message").path("content").asText("");
-    }
-
-    /**
-     * Returns model code from provider response or a configured fallback.
-     */
-    private static String modelFromResponse(JsonNode response, String fallbackModel) {
-        String model = response == null ? "" : response.path("model").asText("");
-        return model.isBlank() ? fallbackModel : model;
-    }
-
-    /**
-     * Builds a chat completions endpoint from a provider base URL.
-     */
-    private static String chatCompletionsEndpoint(String baseUrl) {
-        String normalized = baseUrl == null || baseUrl.isBlank()
-                ? "https://dashscope.aliyuncs.com/compatible-mode/v1"
-                : baseUrl.strip();
-        return normalized.endsWith("/chat/completions")
-                ? normalized
-                : normalized.replaceAll("/+$", "") + "/chat/completions";
-    }
-
-    /**
-     * Removes Markdown fences around JSON.
-     */
-    private static String stripCodeFence(String content) {
-        if (!content.startsWith("```")) {
-            return content;
-        }
-        int firstLineEnd = content.indexOf('\n');
-        int lastFenceStart = content.lastIndexOf("```");
-        if (firstLineEnd >= 0 && lastFenceStart > firstLineEnd) {
-            return content.substring(firstLineEnd + 1, lastFenceStart).strip();
-        }
-        return content;
-    }
-
-    /**
-     * Extracts the first JSON object envelope.
-     */
-    private static String extractJsonObject(String content) {
-        int start = content.indexOf('{');
-        int end = content.lastIndexOf('}');
-        return start >= 0 && end > start ? content.substring(start, end + 1) : content;
-    }
-
-    /**
-     * Reads a JSON integer node.
-     */
-    private static int intValue(JsonNode node) {
-        return node == null || !node.isNumber() ? 0 : Math.max(0, node.asInt());
-    }
-
-    /**
-     * Returns fallback when text is blank.
-     */
-    private static String textOrDefault(String value, String fallback) {
-        return value == null || value.isBlank() ? fallback : value.strip();
-    }
-
-    /**
-     * Parsed vision JSON payload.
-     */
-    private record ParsedVisionJson(String problemText, double confidence) {
-    }
-
-    /**
-     * One provider/model candidate for image understanding.
-     */
-    private record VisionProviderCandidate(
-            String name,
-            AiProviderProperties.Provider provider,
-            String modelCode) {
-    }
-
-    /**
-     * Safe transcription metadata used by teacher-side ingestion and handout evidence processing.
-     */
+    /** 教师侧安全转写元数据；真实 provider usage 由 Python usage ledger 持久化。 */
     public record VisionAnalysis(
             boolean enabled,
             boolean succeeded,
@@ -348,9 +98,6 @@ public class AuthorizedImageTranscriptionService {
             int totalTokens,
             String message) {
 
-        /**
-         * Builds a skipped result.
-         */
         public static VisionAnalysis skipped(String message) {
             return new VisionAnalysis(false, false, "", "", "", 0.0, 0, 0, 0, message);
         }

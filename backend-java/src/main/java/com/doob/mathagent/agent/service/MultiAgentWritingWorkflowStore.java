@@ -9,6 +9,14 @@ import java.util.Optional;
 public interface MultiAgentWritingWorkflowStore {
 
     /**
+     * Reads a workflow by opaque id for the authenticated internal Worker boundary.
+     * Browser callers must continue using {@link #findVisible(String, RequestSubject)}.
+     */
+    default Optional<MultiAgentWritingWorkflowRecord> findByIdInternal(String workflowId) {
+        return Optional.empty();
+    }
+
+    /**
      * Saves or replaces one workflow status snapshot.
      *
      * @param record workflow status snapshot

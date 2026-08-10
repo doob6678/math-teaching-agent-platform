@@ -5,7 +5,6 @@ import com.doob.mathagent.infrastructure.ai.AiProviderProperties;
 import com.doob.mathagent.infrastructure.security.RedisRateLimitProperties;
 import com.doob.mathagent.infrastructure.security.config.RedissonClientProperties;
 import com.doob.mathagent.retrieval.RedisTextbookSearchCacheProperties;
-import com.doob.mathagent.securityrisk.config.CapabilityTokenStoreProperties;
 import com.doob.mathagent.student.service.StudentExplanationHistoryStore;
 import com.doob.mathagent.teacher.sync.TeacherSourceSyncProperties;
 import com.doob.mathagent.vector.service.VectorIndexService;
@@ -26,30 +25,44 @@ public class SystemRuntimeStatusService {
 
     private final Environment environment;
     private final RedisRateLimitProperties rateLimitProperties;
-    private final CapabilityTokenStoreProperties capabilityTokenStoreProperties;
     private final RedisTextbookSearchCacheProperties searchCacheProperties;
     private final VectorIndexService vectorIndexService;
     private final DatabaseMigrationProperties databaseProperties;
     private final StudentExplanationHistoryStore studentExplanationHistoryStore;
     private final AiProviderProperties aiProviderProperties;
+    private final InfrastructureDependencyProbe dependencyProbe;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public SystemRuntimeStatusService(
             Environment environment,
             RedisRateLimitProperties rateLimitProperties,
-            CapabilityTokenStoreProperties capabilityTokenStoreProperties,
             RedisTextbookSearchCacheProperties searchCacheProperties,
             VectorIndexService vectorIndexService,
             DatabaseMigrationProperties databaseProperties,
             StudentExplanationHistoryStore studentExplanationHistoryStore,
-            AiProviderProperties aiProviderProperties) {
+            AiProviderProperties aiProviderProperties,
+            InfrastructureDependencyProbe dependencyProbe) {
         this.environment = environment;
         this.rateLimitProperties = rateLimitProperties;
-        this.capabilityTokenStoreProperties = capabilityTokenStoreProperties;
         this.searchCacheProperties = searchCacheProperties;
         this.vectorIndexService = vectorIndexService;
         this.databaseProperties = databaseProperties;
         this.studentExplanationHistoryStore = studentExplanationHistoryStore;
         this.aiProviderProperties = aiProviderProperties;
+        this.dependencyProbe = dependencyProbe;
+    }
+
+    /** Compatibility constructor for focused unit tests without live infrastructure. */
+    public SystemRuntimeStatusService(
+            Environment environment,
+            RedisRateLimitProperties rateLimitProperties,
+            RedisTextbookSearchCacheProperties searchCacheProperties,
+            VectorIndexService vectorIndexService,
+            DatabaseMigrationProperties databaseProperties,
+            StudentExplanationHistoryStore studentExplanationHistoryStore,
+            AiProviderProperties aiProviderProperties) {
+        this(environment, rateLimitProperties, searchCacheProperties, vectorIndexService, databaseProperties,
+                studentExplanationHistoryStore, aiProviderProperties, InfrastructureDependencyProbe.disabled());
     }
 
     public SystemRuntimeStatusResponse status() {
@@ -63,8 +76,6 @@ public class SystemRuntimeStatusService {
                 sanitizeRedisAddress(redisson.getAddress()),
                 rateLimitProperties.enabled(),
                 safe(rateLimitProperties.keyPrefix()),
-                capabilityTokenStoreProperties.enabled(),
-                safe(capabilityTokenStoreProperties.keyPrefix()),
                 searchCacheProperties.enabled(),
                 searchCacheProperties.normalizedKeyPrefix(),
                 searchCacheProperties.normalizedTtl().toString());
@@ -81,14 +92,21 @@ public class SystemRuntimeStatusService {
                 vector.rowCount(),
                 vector.status());
         SystemRuntimeStatusResponse.FeishuStatus feishu = feishuStatus();
+        InfrastructureDependencyProbe.Result dependencyResult = dependencyProbe == null
+                ? InfrastructureDependencyProbe.Result.unprobed()
+                : dependencyProbe.probe();
+        SystemRuntimeStatusResponse.DependencyStatus dependencies = new SystemRuntimeStatusResponse.DependencyStatus(
+                dependencyResult.probed(), dependencyResult.mysql(), dependencyResult.redis(),
+                dependencyResult.rabbitmq(), dependencyResult.worker(), dependencyResult.flyway());
         return new SystemRuntimeStatusResponse(
-                deploymentStatus(ai, auth, database, redis, vectorStatus, feishu),
+                deploymentStatus(ai, auth, database, redis, vectorStatus, feishu, dependencies),
                 ai,
                 auth,
                 database,
                 redis,
                 vectorStatus,
-                feishu);
+                feishu,
+                dependencies);
     }
 
     private SystemRuntimeStatusResponse.AiStatus aiStatus() {
@@ -114,15 +132,14 @@ public class SystemRuntimeStatusService {
         if (provider == null) {
             return new SystemRuntimeStatusResponse.AiProviderStatus("", "", false, false, false, false);
         }
-        boolean baseUrlConfigured = !safe(provider.getBaseUrl()).isBlank();
-        boolean apiKeyConfigured = !safe(provider.getApiKey()).isBlank();
+        boolean routeEnabled = provider.isEnabled();
         boolean modelConfigured = !safe(provider.getChatModel()).isBlank();
         return new SystemRuntimeStatusResponse.AiProviderStatus(
                 safe(provider.getName()).strip().toLowerCase(),
                 safe(provider.getChatModel()).strip(),
-                !safe(provider.getName()).isBlank() && baseUrlConfigured && apiKeyConfigured && modelConfigured,
-                baseUrlConfigured,
-                apiKeyConfigured,
+                !safe(provider.getName()).isBlank() && routeEnabled && modelConfigured,
+                routeEnabled,
+                false,
                 modelConfigured);
     }
 
@@ -150,7 +167,8 @@ public class SystemRuntimeStatusService {
             SystemRuntimeStatusResponse.DatabaseStatus database,
             SystemRuntimeStatusResponse.RedisStatus redis,
             SystemRuntimeStatusResponse.VectorStatus vector,
-            SystemRuntimeStatusResponse.FeishuStatus feishu) {
+            SystemRuntimeStatusResponse.FeishuStatus feishu,
+            SystemRuntimeStatusResponse.DependencyStatus dependencies) {
         List<String> blockingIssues = new ArrayList<>();
         List<String> warnings = new ArrayList<>();
         if (ai.enabledProviderCount() == 0) {
@@ -168,14 +186,26 @@ public class SystemRuntimeStatusService {
         if (!database.studentExplanationHistoryDurable()) {
             blockingIssues.add("STUDENT_EXPLANATION_HISTORY_NOT_DURABLE");
         }
+        if (dependencies.probed() && database.enabled() && (!dependencies.mysql() || !dependencies.flyway())) {
+            blockingIssues.add("DATABASE_DEPENDENCY_NOT_READY");
+        }
+        if (dependencies.probed() && (redis.redissonEnabled() || redis.rateLimitEnabled() || redis.searchCacheEnabled())
+                && !dependencies.redis()) {
+            blockingIssues.add("REDIS_DEPENDENCY_NOT_READY");
+        }
+        if (dependencies.probed()
+                && booleanProperty("math-agent.rabbitmq.listeners-enabled")
+                && !dependencies.rabbitmq()) {
+            blockingIssues.add("RABBITMQ_DEPENDENCY_NOT_READY");
+        }
+        if (dependencies.probed() && vector.enabled() && !dependencies.worker()) {
+            blockingIssues.add("AI_WORKER_DEPENDENCY_NOT_READY");
+        }
         if (!redis.redissonEnabled()) {
             blockingIssues.add("REDIS_REDISSON_DISABLED");
         }
         if (!redis.rateLimitEnabled()) {
             blockingIssues.add("REDIS_RATE_LIMIT_DISABLED");
-        }
-        if (!redis.capabilityStoreEnabled()) {
-            blockingIssues.add("REDIS_CAPABILITY_STORE_DISABLED");
         }
         if (!redis.searchCacheEnabled()) {
             blockingIssues.add("REDIS_SEARCH_CACHE_DISABLED");
@@ -185,6 +215,15 @@ public class SystemRuntimeStatusService {
         }
         if (!vector.configured()) {
             blockingIssues.add("VECTOR_INDEX_NOT_CONFIGURED");
+        }
+        if ("milvus_status_error".equalsIgnoreCase(vector.status())) {
+            blockingIssues.add("VECTOR_INDEX_DEPENDENCY_UNAVAILABLE");
+        }
+        if (safe(environment.getProperty("REDIS_PASSWORD")).isBlank()) {
+            blockingIssues.add("REDIS_AUTH_NOT_CONFIGURED");
+        }
+        if (safe(environment.getProperty("RABBITMQ_DEFAULT_PASS")).isBlank()) {
+            blockingIssues.add("RABBITMQ_AUTH_NOT_CONFIGURED");
         }
         if (!feishu.processDownloaderEnabled()) {
             blockingIssues.add("FEISHU_PROCESS_DOWNLOADER_DISABLED");
