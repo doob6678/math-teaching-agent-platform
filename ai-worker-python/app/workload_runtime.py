@@ -24,6 +24,15 @@ from app.usage import UsageEvent, UsageLedger, cost_for, fallback_tokens
 MAX_SOURCE_COUNT = 24
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_SSE_FRAME_PREFIX_LENGTH = 96
+# All three explanation entry points share this visible-content contract.  Keeping it in the model instruction
+# rather than adding another post-processing normalizer lets the model retain the intended mathematical structure.
+MATH_MARKUP_OUTPUT_CONTRACT = (
+    "数学排版是硬性输出合同：conversationTitle、每张卡片的 title、summary 与 items 中，只要出现变量、"
+    "函数、集合、区间、方程、不等式、分式、根式、角度或运算式，就必须将完整表达式放入 $...$；"
+    "例如标题写“函数 $f(x)$ 的定义域”，不得写“函数 f(x) 的定义域”。"
+    "分式一律写 $\\frac{分子}{分母}$，根式一律写 $\\sqrt{被开方整体}$；不得用 /、√、^、上标字符"
+    "或裸露数学符号代替 LaTeX 结构。不要在数学公式定界符外拆开一个表达式。"
+)
 logger = logging.getLogger(__name__)
 
 
@@ -224,7 +233,7 @@ class MigratedWorkloadRuntime:
                     "{\"conversationTitle\":\"不超过15个中文字符\",\"cards\":[{\"cardKey\":\"stable_snake_case\","
                     "\"title\":\"\",\"summary\":\"简明中文讲解\",\"items\":[],\"sourceUris\":[],"
                     "\"renderMode\":\"text|formula|source_list\"}]}。"
-                    "sourceUris 只能来自 evidence；不要输出 Markdown 或推理过程。"
+                    "sourceUris 只能来自 evidence；不要输出 Markdown 或推理过程。" + MATH_MARKUP_OUTPUT_CONTRACT
                 )},
                 {"role": "user", "content": json.dumps({
                     "problem": request.problem,
@@ -238,6 +247,7 @@ class MigratedWorkloadRuntime:
                     "{\"decision\":\"action|final\",\"tools\":[],\"queries\":[],"
                     "\"conversationTitle\":\"\",\"cards\":[]}。"
                     "final 必须同时返回 cards，引用只能来自 evidence。不要输出推理过程或 Markdown。"
+                    + MATH_MARKUP_OUTPUT_CONTRACT
                 )},
                 {"role": "user", "content": json.dumps({
                     "problem": request.problem,
@@ -429,6 +439,7 @@ class MigratedWorkloadRuntime:
                 "若题目自洽则返回 final，且 tools 与 queries 为空，并同时返回 "
                 "conversationTitle 和 cards。cards 使用与 compose 相同的字段，sourceUris 只能来自 evidence。"
                 "不要输出推理过程或 Markdown。"
+                + MATH_MARKUP_OUTPUT_CONTRACT
             )},
             {"role": "user", "content": json.dumps({
                 "problem": request.problem,
@@ -499,7 +510,7 @@ class MigratedWorkloadRuntime:
                 "{\"conversationTitle\":\"不超过15个中文字符\",\"cards\":[{\"cardKey\":\"stable_snake_case\","
                 "\"title\":\"\",\"summary\":\"简明中文讲解\",\"items\":[],\"sourceUris\":[],"
                 "\"renderMode\":\"text|formula|source_list\"}]}。"
-                "只能引用输入 evidence 的 sourceUri，不得暴露推理过程；数学使用 $...$ 或 $$...$$。"
+                "只能引用输入 evidence 的 sourceUri，不得暴露推理过程。" + MATH_MARKUP_OUTPUT_CONTRACT
             )},
             {"role": "user", "content": json.dumps({"problem": request.problem, "evidence": sources}, ensure_ascii=False)},
         ]

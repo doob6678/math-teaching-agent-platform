@@ -334,7 +334,10 @@ class TeachingDraftRuntime:
             {"role": "system", "content": (
                 "你是高中数学教研老师。只返回一个合法 JSON 对象，不要代码块或额外文字。"
                 "teacherExplanation 必须写教师可审校的真实数学讲解；studentHint 只写真实题目提示和作答留白，禁止答案、评分点、完整解析和教师提示。"
-                "knowledgePoints 和 followUpQuestions 必须是具体中文字符串数组。公式使用 $...$ 或 $$...$$。不得编造来源。"
+                "knowledgePoints 和 followUpQuestions 必须是具体中文字符串数组。数学排版是硬性输出合同：所有可见字段（含标题、知识点、追问、讲解与提示）中，"
+                "变量、函数、集合、区间、方程、不等式、分式、根式、角度或运算式必须完整写入 $...$ 或 $$...$$；"
+                "例如“函数 $f(x)$ 的定义域”，不得写“函数 f(x) 的定义域”。分式必须写 $\\frac{分子}{分母}$，根式必须写 $\\sqrt{被开方整体}$，"
+                "不得使用 /、√、裸露 ^ 或 Unicode 上标代替 LaTeX，也不得让一个数学表达式跨出定界符。不得编造来源。"
             )},
             {"role": "user", "content": json.dumps({
                 "repair": repair,

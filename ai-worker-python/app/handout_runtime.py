@@ -44,6 +44,15 @@ DEFAULT_HANDOUT_MAX_PROVIDER_CALLS = 8
 DEFAULT_EVENT_PAGE_LIMIT = 100
 MAX_EVENT_PAGE_LIMIT = 500
 MAX_EVENT_HISTORY = 10000
+# Writer nodes produce all reader-visible handout text, including headings.  This belongs in the generation contract
+# so a valid formula is emitted once instead of relying on an ever-growing list of renderer-specific repairs.
+HANDOUT_MATH_MARKUP_CONTRACT = {
+    "allVisibleFields": ["title", "markdown", "lectureCards[].title", "lectureCards[].content"],
+    "rule": "任何变量、函数、集合、区间、方程、不等式、分式、根式、角度或运算式必须完整放入 $...$ 或 $$...$$。标题同样适用，例如“函数 $f(x)$ 的定义域”，不得出现裸露 f(x)。",
+    "fraction": "分式必须写作 \\frac{分子}{分母}，不得使用 / 或 ／替代。",
+    "radical": "根式必须写作 \\sqrt{被开方整体}，不得使用 √ 或省略花括号。",
+    "integrity": "一个数学表达式不得跨出其 LaTeX 定界符；不得用裸露 ^、Unicode 上标或数学符号替代 LaTeX 结构。",
+}
 # The lock covers the full graph rather than an individual checkpoint write.  A second replica waits for the
 # first replica's durable result, then returns it without opening another provider socket for the same run.
 DEFAULT_RUN_LOCK_WAIT_SECONDS = 900
@@ -1164,13 +1173,14 @@ class HandoutRuntime:
         }
         return json.dumps({"stageCode": stage, "audience": audience, "instruction": instruction,
                            "writingGoal": request.writing_goal, "questionText": request.question_text,
+                           "mathematicsFormatting": HANDOUT_MATH_MARKUP_CONTRACT,
                            "evidence": evidence.prompt_text(), "projectionRules": projection_rules,
                            "outputContract": {"stageCode": stage, "title": "string", "markdown": "完整中文讲义内容",
                                                "citations": ["evidence ref"], "warnings": []}}, ensure_ascii=False)
 
     @staticmethod
     def _repair_prompt(request: HandoutRunRequest, stage_code: str, errors: list[str]) -> str:
-        return json.dumps({"instruction": "修复当前讲义节点的结构或语义问题，只输出一个 WriterDocument JSON，不要数组。", "stageCode": stage_code, "errors": errors, "questionText": request.question_text, "outputContract": {"stageCode": stage_code, "title": "string", "markdown": "non-empty", "citations": [], "warnings": []}}, ensure_ascii=False)
+        return json.dumps({"instruction": "修复当前讲义节点的结构或语义问题，只输出一个 WriterDocument JSON，不要数组；保留数学排版合同，尤其标题中的公式必须使用 $...$。", "stageCode": stage_code, "errors": errors, "questionText": request.question_text, "mathematicsFormatting": HANDOUT_MATH_MARKUP_CONTRACT, "outputContract": {"stageCode": stage_code, "title": "string", "markdown": "non-empty", "citations": [], "warnings": []}}, ensure_ascii=False)
 
     def _record_node(self, request: HandoutRunRequest, node: str, started: float, status: str, provider_calls: int = 0, java_requests: int = 0, payload_bytes: int = 0, usage: dict[str, int | float] | None = None, error: str | None = None, provider: str = "", model: str = "") -> None:
         """Node records are emitted through the event sink while preserving bounded operational metadata."""
