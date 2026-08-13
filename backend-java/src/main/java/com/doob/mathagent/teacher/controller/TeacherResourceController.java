@@ -59,6 +59,10 @@ import org.springframework.web.server.ResponseStatusException;
 @RestController
 public class TeacherResourceController {
 
+    /** Resource cards need only their newest sync job; later pages remain available through explicit query values. */
+    private static final String FIRST_SYNC_JOB_PAGE = "1";
+    private static final String RESOURCE_CARD_SYNC_JOB_PAGE_SIZE = "1";
+
     private static final String RESOURCES_PATH = "/api/teacher/resources";
     private static final String RESOURCES_UPLOAD_PATH = "/api/teacher/resources/upload";
 
@@ -540,13 +544,25 @@ public class TeacherResourceController {
     @GetMapping("/api/teacher/resources/{documentId}/sync-jobs")
     public List<TeacherSourceSyncJobResponse> listSyncJobs(
             @PathVariable String documentId,
+            @RequestParam(defaultValue = FIRST_SYNC_JOB_PAGE) int page,
+            @RequestParam(defaultValue = RESOURCE_CARD_SYNC_JOB_PAGE_SIZE) int pageSize,
             HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest).normalize();
         return syncJobService.listSyncJobs(
                 subject.tenantId(),
                 subject.subjectType(),
                 subject.subjectId(),
-                documentId);
+                documentId,
+                page,
+                pageSize);
+    }
+
+    /** Keeps controller-level callers/tests on the card-safe first page while HTTP clients use explicit pagination. */
+    public List<TeacherSourceSyncJobResponse> listSyncJobs(
+            String documentId,
+            HttpServletRequest httpRequest) {
+        return listSyncJobs(documentId, Integer.parseInt(FIRST_SYNC_JOB_PAGE),
+                Integer.parseInt(RESOURCE_CARD_SYNC_JOB_PAGE_SIZE), httpRequest);
     }
 
     /**

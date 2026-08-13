@@ -96,6 +96,12 @@ public class TeachingHandoutPdfExportService {
     /** Repairs a model response that split one inline formula across three dollar-delimiter runs. */
     static final Pattern SPLIT_TRIPLE_DOLLAR_MATH = Pattern.compile(
             "\\$\\$\\$([^$\\n]*)\\$\\$([^$\\n]*)\\$");
+    /**
+     * Rejoins a function/operand expression split into separate inline ranges, for example
+     * {@code $\\sin$\\theta=$\\frac{1}{2}$}. A bridge starts with TeX or an arithmetic connector, never prose.
+     */
+    static final Pattern SPLIT_ADJACENT_INLINE_MATH = Pattern.compile(
+            "\\$([^$\\r\\n]+)\\$((?:\\\\[A-Za-z]+|\\s*[=+\\-*/]\\s*)(?:\\\\[A-Za-z]+|[A-Za-z0-9{}_^=+\\-*/|,.\\\\\\s])*)\\$([^$\\r\\n]+)\\$");
     /** Internal retrieval identifiers are audit metadata and must never be printed as lesson mathematics. */
     static final Pattern INTERNAL_EVIDENCE_IDENTIFIER_CLAUSE = Pattern.compile(
             "(?:，|；)?\\s*(?:[\\p{IsHan}]{0,8})?证据(?:编号|锚点|ID|id)(?:为|：)?\\s*"
@@ -117,8 +123,13 @@ public class TeachingHandoutPdfExportService {
     static final Pattern LEGACY_BRAND_REFERENCE = Pattern.compile("(?:赵礼显数学|飞猪数学)");
     /** OCR squares and replacement characters are unknown mathematical relations, never printable question blanks. */
     static final Pattern UNRESOLVED_OCR_MATH_GLYPH = Pattern.compile("[□�]");
-    /** A prompt that refers to a figure is incomplete until an authorized local figure marker survives sanitization. */
-    static final Pattern FIGURE_DEPENDENT_PROMPT = Pattern.compile("(?:如图|见图|下图|上图|图中)");
+    /**
+     * A prompt that refers to a figure is incomplete until an authorized local figure marker survives sanitization.
+     * “平面图中” is retained as ordinary explanatory prose: it describes a solving projection rather than an
+     * external diagram required to understand the prompt. The negative lookbehind keeps every standalone “图中”
+     * reference subject to the same-source asset gate.
+     */
+    static final Pattern FIGURE_DEPENDENT_PROMPT = Pattern.compile("(?:如图|见图|下图|上图|(?<!平面)图中)");
     /** Accept standard and URL-safe base64 so persisted markers remain structural across older workers. */
     static final Pattern IMAGE_MARKER = Pattern.compile("\\[\\[HANDOUTIMAGE:([^:\\]]+):([^\\]]+)]]");
     /** Every numbered question is a publication unit: visual evidence and duplicate checks must never cross it. */
@@ -383,10 +394,25 @@ public class TeachingHandoutPdfExportService {
         // delimiter. Recover the single intended inline expression before line-level escaping; valid `$$...$$`
         // display formulas do not match this exact split shape and remain unchanged.
         normalized = normalizeTripleDollarMath(normalized);
+        // A provider can also leave a TeX control word or arithmetic connector outside two inline ranges, for
+        // example `$\\sin$\\theta=$\\frac{1}{2}$`. Rejoin only this mathematical bridge before compilation.
+        normalized = normalizeSplitAdjacentInlineMath(normalized);
+        // Structured drafts can emit a styled one-letter vector as loose text (`\\mathbf a`). Normalize it only
+        // outside existing dollar ranges, otherwise XeLaTeX rejects the command before any page is produced.
+        normalized = normalizeBareStyledMathSymbols(normalized);
+        // Some provider payloads split a vector between two inline delimiters, for example
+        // `$\\vec$ a`. XeLaTeX correctly rejects the bare `\\vec`, so repair this one unambiguous
+        // transport shape before the document reaches the compiler. The replacement preserves the original
+        // inline-math boundary as `$\\vec{a}$`; it does not invent a vector where the source has none.
+        normalized = normalizeSplitVectorCommands(normalized);
         // A bare dollar on its own line is an invalid Markdown display-math delimiter. It can leave every following
         // list item in TeX math mode when a model omits the matching line. Drop only this transport marker: the
         // surrounding formula remains available to the normal inline/bare-math repair below.
         normalized = normalized.replaceAll("(?m)^\\s*\\$\\s*$", "");
+        // A graph payload can serialize an abandoned display-math opener as a list item (`\\item $$`). It has no
+        // mathematical body or closing delimiter, and leaving it toggles TeX into display mode for the next real
+        // inline vector formula. Remove only this empty transport artifact; complete `$$ ... $$` expressions remain.
+        normalized = normalized.replaceAll("(?m)^\\s*\\\\item\\s+\\$\\$\\s*$", "");
         // A function, its argument symbol, and scalable parentheses are one mathematical expression. Leaving
         // \left outside dollar delimiters makes XeLaTeX abort with "Missing $ inserted" and previously triggered
         // the lossy text fallback. Normalize only this unambiguous grammar; malformed or incomplete math still fails.
@@ -726,6 +752,12 @@ public class TeachingHandoutPdfExportService {
     static String normalizeMixedMathDelimiters(String value) { return TeachingHandoutPdfExportPolicyPartA.normalizeMixedMathDelimiters(value); }
     // Pure export repair delegated to TeachingHandoutPdfExportPolicyPartA so preview, download, and PDF share one rule.
     static String normalizeTripleDollarMath(String value) { return TeachingHandoutPdfExportPolicyPartA.normalizeTripleDollarMath(value); }
+    // Pure export repair delegated to the policy component so split function/control-word formulas remain in math mode.
+    static String normalizeSplitAdjacentInlineMath(String value) { return TeachingHandoutPdfExportPolicyPartA.normalizeSplitAdjacentInlineMath(value); }
+    // Pure export repair delegated to the policy component so unwrapped one-letter vector symbols regain math mode.
+    static String normalizeBareStyledMathSymbols(String value) { return TeachingHandoutPdfExportPolicyPartA.normalizeBareStyledMathSymbols(value); }
+    // Pure export repair delegated to the policy component so every preview and download shares the same formula fix.
+    static String normalizeSplitVectorCommands(String value) { return TeachingHandoutPdfExportPolicyPartA.normalizeSplitVectorCommands(value); }
     // Pure export rule delegated to TeachingHandoutPdfExportPolicyPartA; process/lifecycle state remains in the exporter facade.
     static String stripLectureProjectionColumns(String body) { return TeachingHandoutPdfExportPolicyPartA.stripLectureProjectionColumns(body); }
     // Pure export rule delegated to TeachingHandoutPdfExportPolicyPartA; process/lifecycle state remains in the exporter facade.

@@ -159,7 +159,7 @@ export function TeachingConversationPanel({
             <Sparkles size={16} />
           </button>
           <div className="teaching-live-brand-copy">
-            <strong>{conversationTitle}</strong>
+            <strong><InlineMathText text={safeUserFacingText(conversationTitle, "AI 讲题")} /></strong>
           </div>
         </div>
         <div className="teaching-live-toolbar">
@@ -176,11 +176,11 @@ export function TeachingConversationPanel({
                   type="button"
                   className="teaching-history-chip"
                   key={item.conversationId}
-                  title={item.title}
+                  title={titleTooltip(item.title)}
                   disabled={loading || openingConversationId === item.conversationId}
                   onClick={() => onOpenConversation(item)}
                 >
-                  {safeUserFacingText(item.title, "最近讲题")}
+                  <InlineMathText text={safeUserFacingText(item.title, "最近讲题")} />
                 </button>
               ))}
             </div>
@@ -206,14 +206,14 @@ export function TeachingConversationPanel({
               type="button"
               className="teaching-chat-drawer-item"
               key={item.conversationId}
-              title={item.title}
+              title={titleTooltip(item.title)}
               disabled={loading || openingConversationId === item.conversationId}
               onClick={() => {
                 setDrawerOpen(false);
                 onOpenConversation(item);
               }}
             >
-              <strong>{safeUserFacingText(item.title, "最近讲题")}</strong>
+              <strong><InlineMathText text={safeUserFacingText(item.title, "最近讲题")} /></strong>
               <span>{openingConversationId === item.conversationId ? "正在加载" : `${item.totalMessages} 轮`}</span>
             </button>
           )) : (
@@ -659,7 +659,8 @@ function ExplanationCard({
     .filter((item) => item.trim().length > 0);
   return (
     <section className="teaching-response-card agent">
-      {safeTitle ? <div className="teaching-response-head"><strong>{safeTitle}</strong></div> : null}
+      {/* Card titles come from the same AI response as the body. Render their TeX too so raw delimiters never leak into the answer heading. */}
+      {safeTitle ? <div className="teaching-response-head"><strong><InlineMathText text={safeTitle} /></strong></div> : null}
       {safeSummary ? <div className="teaching-rich-block"><RichText text={safeSummary} /></div> : null}
       {safeItems.length ? (
         <ul className="teaching-response-list">
@@ -698,6 +699,42 @@ function RichText({ text }: { text: string }) {
         ))}
     </>
   );
+}
+
+/**
+ * Renders formula delimiters in compact conversation chrome without turning a title into a multi-line text block.
+ * The same parser as answer cards is used so a stored title such as “解方程 $x^2-5x+6=0$” never exposes raw LaTeX.
+ */
+function InlineMathText({ text }: { text: string }) {
+  return (
+    <span className="teaching-title-math">
+      {splitMathText(text).map((segment) => {
+        if (!segment.math) return <span key={segment.key}>{segment.text}</span>;
+        if (hasUnbalancedBraces(segment.text)) return <span key={segment.key}>{segment.raw}</span>;
+        try {
+          const html = katex.renderToString(segment.text, {
+            // A header must remain one compact row even if a provider accidentally uses a display delimiter.
+            displayMode: false,
+            throwOnError: true,
+            strict: false,
+            trust: false,
+          });
+          return <span className="math-render inline" dangerouslySetInnerHTML={{ __html: html }} key={segment.key} />;
+        } catch {
+          return <span key={segment.key}>{segment.raw}</span>;
+        }
+      })}
+    </span>
+  );
+}
+
+/** Keeps native hover text readable without exposing the TeX delimiter syntax that the visual title already renders. */
+function titleTooltip(value: string) {
+  return safeUserFacingText(value, "最近讲题")
+    .replace(/\$\$([\s\S]+?)\$\$|\$([^$\n]+?)\$/g, (_whole, display, inline) => display ?? inline ?? "")
+    .replace(/\\\[([\s\S]+?)\\\]|\\\(([^\n]+?)\\\)/g, (_whole, display, inline) => display ?? inline ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function splitMathText(text: string) {

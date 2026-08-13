@@ -113,6 +113,35 @@ class AgentRunPlanServiceTest {
     }
 
     @Test
+    void teacherQuestionBranchReservesReasoningAllowanceWithoutExpandingStudentLimits() {
+        AgentRunPlanService service = new AgentRunPlanService(providerCatalog());
+        AgentRunPlanRequest request = new AgentRunPlanRequest(
+                "TeacherAssistantAgent",
+                "question_solving",
+                "teacher",
+                1200,
+                320,
+                false,
+                true,
+                "medium",
+                "normal",
+                3.0,
+                0,
+                false,
+                List.of(),
+                List.of(),
+                List.of("PUBLIC_TEXTBOOK", "TEACHER_PRIVATE"),
+                false);
+
+        AgentRunPlanResponse plan = service.plan(
+                request,
+                new RequestSubject("school-a", "teacher", "teacher-001", "device-1"));
+
+        assertThat(plan.maxOutputTokens()).isEqualTo(6000);
+        assertThat(plan.withinBudget()).isTrue();
+    }
+
+    @Test
     void removesUserDisabledToolsFromDynamicInjectionPlan() {
         AgentRunPlanService service = new AgentRunPlanService(providerCatalog());
         AgentRunPlanRequest request = new AgentRunPlanRequest(

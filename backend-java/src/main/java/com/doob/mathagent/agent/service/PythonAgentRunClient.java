@@ -34,6 +34,9 @@ public class PythonAgentRunClient implements AgentRunClient {
     private static final long DEFAULT_CONNECT_TIMEOUT_MS = 5_000L;
     private static final int MAX_EVIDENCE_REFS = 24;
     private static final int MAX_PROVIDER_CALLS = 4;
+    /** A parent lecture task retries its child branch durably, so one selected provider avoids stacking timeouts. */
+    private static final int QUESTION_AGENT_MAX_PROVIDER_CALLS = 1;
+    private static final String TEACHER_ASSISTANT_AGENT = "TeacherAssistantAgent";
     private static final int MAX_OUTPUT_CHARS = 64_000;
     private static final int TRACE_ID_HEX_LENGTH = 32;
     private static final int SPAN_ID_HEX_LENGTH = 16;
@@ -99,8 +102,11 @@ public class PythonAgentRunClient implements AgentRunClient {
                             Map.entry("deadlineEpochMs", System.currentTimeMillis() + timeoutMs),
                             Map.entry("providerRoute", providerRoute(plan, traceId)),
                             Map.entry("limits", Map.of(
-                                    "maxProviderCalls", MAX_PROVIDER_CALLS,
+                                    "maxProviderCalls", maximumProviderCalls(plan),
                                     "maxTotalTokens", Math.max(1, plan.maxInputTokens() + plan.maxOutputTokens()),
+                                    // The Worker maps this signed completion cap to the provider's max_tokens;
+                                    // maxTotalTokens alone cannot prevent one short task from producing a long reply.
+                                    "maxOutputTokens", Math.max(1, plan.maxOutputTokens()),
                                     "maxOutputChars", MAX_OUTPUT_CHARS)),
                             Map.entry("input", Map.of("message", bounded(request.userInputSummary(), 16_000))),
                             Map.entry("evidenceRefs", evidenceRefs(request.evidenceRefs())),
@@ -156,8 +162,9 @@ public class PythonAgentRunClient implements AgentRunClient {
         AiProviderCatalog.Provider primary = providerCatalog.preferredProvider(plan.providerName(), plan.modelCode())
                 .orElseThrow(() -> new IllegalArgumentException("Agent plan provider/model is not enabled"));
         List<Map<String, String>> fallbacks = new ArrayList<>();
+        int maximumCalls = maximumProviderCalls(plan);
         for (AiProviderCatalog.Provider provider : providerCatalog.enabledProviders()) {
-            if (!provider.name().equals(primary.name()) && fallbacks.size() < MAX_PROVIDER_CALLS - 1) {
+            if (!provider.name().equals(primary.name()) && fallbacks.size() < maximumCalls - 1) {
                 fallbacks.add(Map.of("name", provider.name(), "model", provider.chatModel()));
             }
         }
@@ -170,6 +177,13 @@ public class PythonAgentRunClient implements AgentRunClient {
                 "primary", Map.of("name", primary.name(), "model", primary.chatModel()),
                 "fallbacks", List.copyOf(fallbacks),
                 "routeGrant", routeGrantSigner.sign(runId, "generic_agent", routes));
+    }
+
+    /** Keeps bounded child explanations within the parent lecture lease instead of multiplying provider timeouts. */
+    private static int maximumProviderCalls(AgentRunPlanResponse plan) {
+        return TEACHER_ASSISTANT_AGENT.equals(plan.agentCode())
+                ? QUESTION_AGENT_MAX_PROVIDER_CALLS
+                : MAX_PROVIDER_CALLS;
     }
 
     private static List<String> evidenceRefs(List<String> values) {

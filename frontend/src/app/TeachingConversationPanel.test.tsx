@@ -83,6 +83,56 @@ function buildResponse(overrides: Partial<StudentExplanationResponse> = {}): Stu
 }
 
 describe("TeachingConversationPanel", () => {
+  it("renders inline title formulas in the conversation header and history", () => {
+    const html = renderToStaticMarkup(
+      <TeachingConversationPanel
+        conversationTitle="解方程 $x^2-5x+6=0$ 及判别式原理"
+        value=""
+        entries={[{
+          id: "formula-answer-title",
+          role: "assistant",
+          createdAt: "2026-08-11T00:00:01Z",
+          response: buildResponse({
+            cards: [{
+              cardKey: "formula-answer-title",
+              title: "解方程$x^2-5x+6=0$及判别式原理",
+              summary: "方程可因式分解。",
+              items: [],
+              sourceUris: [],
+              renderMode: "standard",
+            }],
+          }),
+        }]}
+        recentConversations={[{
+          conversationId: "formula-title",
+          title: "解方程 $x^2-5x+6=0$",
+          lastQuestionText: "解方程",
+          viewerRole: "student",
+          totalMessages: 1,
+          createdAt: "2026-08-11T00:00:00Z",
+          updatedAt: "2026-08-11T00:00:00Z",
+        }]}
+        loading={false}
+        loadingHistory={false}
+        error=""
+        imageDraft={null}
+        uploadingImage={false}
+        imageError=""
+        openingConversationId=""
+        onValueChange={vi.fn()}
+        onSubmit={vi.fn()}
+        onImageSelect={vi.fn()}
+        onClearImage={vi.fn()}
+        onStartNewConversation={vi.fn()}
+        onOpenConversation={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain('class="teaching-title-math"');
+    expect(html).toContain("katex");
+    expect(html).not.toContain("$x^2-5x+6=0$");
+  });
+
   it("renders AI question chat as formula cards without exposing internal model events", () => {
     const entries: TeachingConversationThreadItem[] = [
       {

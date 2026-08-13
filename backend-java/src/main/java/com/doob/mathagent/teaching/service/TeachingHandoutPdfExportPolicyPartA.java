@@ -598,6 +598,103 @@ final class TeachingHandoutPdfExportPolicyPartA {
         return normalized.toString();
     }
 
+    /**
+     * Rejoins a mathematical control-word or operator bridge left outside two adjacent inline formulas.
+     *
+     * <p>The bridge must begin with TeX or an arithmetic connector. Consequently {@code $x$ and $y$} remains
+     * prose-separated, while {@code $\sin$\theta=$\frac{1}{2}$} becomes one compiler-safe inline expression.</p>
+     */
+    static String normalizeSplitAdjacentInlineMath(String value) {
+        if (value == null || value.isBlank()) {
+            return value == null ? "" : value;
+        }
+        Matcher matcher = SPLIT_ADJACENT_INLINE_MATH.matcher(value);
+        StringBuffer normalized = new StringBuffer();
+        while (matcher.find()) {
+            String replacement = "$" + matcher.group(1) + matcher.group(2) + matcher.group(3) + "$";
+            matcher.appendReplacement(normalized, Matcher.quoteReplacement(replacement));
+        }
+        matcher.appendTail(normalized);
+        return normalized.toString();
+    }
+
+    /**
+     * Places a bare one-letter styled math symbol back into an inline math range without modifying existing formulas.
+     *
+     * <p>Provider text can contain {@code \mathbf a} after a Chinese phrase while its surrounding dollar delimiters
+     * were lost in transport. The scanner tracks both inline and display dollar ranges, so a valid fragment such as
+     * {@code $x=\mathbf a$} is preserved exactly rather than being nested inside a second math environment.</p>
+     */
+    static String normalizeBareStyledMathSymbols(String value) {
+        String source = value == null ? "" : value;
+        StringBuilder normalized = new StringBuilder(source.length());
+        boolean inMath = false;
+        for (int index = 0; index < source.length();) {
+            if (source.startsWith("$$", index)) {
+                inMath = !inMath;
+                normalized.append("$$");
+                index += 2;
+                continue;
+            }
+            char character = source.charAt(index);
+            if (character == '$') {
+                inMath = !inMath;
+                normalized.append(character);
+                index += 1;
+                continue;
+            }
+            if (!inMath && character == '\\') {
+                String style = bareStyledMathCommandAt(source, index);
+                int commandEnd = style == null ? index : index + style.length() + 1;
+                int operandStart = commandEnd;
+                while (operandStart < source.length() && Character.isWhitespace(source.charAt(operandStart))) {
+                    operandStart += 1;
+                }
+                if (style != null && operandStart < source.length() && isAsciiLetter(source.charAt(operandStart))
+                        && (operandStart + 1 == source.length() || !isAsciiLetter(source.charAt(operandStart + 1)))) {
+                    normalized.append("$\\").append(style).append('{').append(source.charAt(operandStart)).append("}$");
+                    index = operandStart + 1;
+                    continue;
+                }
+            }
+            normalized.append(character);
+            index += 1;
+        }
+        return normalized.toString();
+    }
+
+    /** Lists the small, explicitly mathematical set that can safely be repaired when the operand is one letter. */
+    private static String bareStyledMathCommandAt(String source, int index) {
+        for (String style : List.of("mathbf", "mathrm", "mathit", "boldsymbol", "vec")) {
+            String command = "\\" + style;
+            if (source.startsWith(command, index)) {
+                return style;
+            }
+        }
+        return null;
+    }
+
+    /** Keeps the one-letter repair restricted to the Latin mathematical symbols accepted by the prompt contract. */
+    private static boolean isAsciiLetter(char value) {
+        return (value >= 'A' && value <= 'Z') || (value >= 'a' && value <= 'z');
+    }
+
+
+    /**
+     * Repairs the only vector-delimiter split emitted by the structured handout transport.
+     *
+     * <p>The opening dollar remains before {@code \\vec}; this matcher consumes the erroneous closing dollar and
+     * its one-letter operand, then restores a complete {@code $\\vec{v}$} atom. Restricting the operand to a single
+     * Latin vector symbol prevents prose or a complete vector expression from being rewritten.</p>
+     */
+    static String normalizeSplitVectorCommands(String value) {
+        if (value == null || value.isBlank()) {
+            return value == null ? "" : value;
+        }
+        // In a Java regex replacement `$` starts a capture-group reference, so escape the restored closing delimiter.
+        return value.replaceAll("\\\\vec\\$\\s*([A-Za-z])", "\\\\vec{$1}\\$");
+    }
+
 
     /** Keeps only the first (question) minipage from legacy lecture pages; the second was the teacher cue column. */
     static String stripLectureProjectionColumns(String body) {

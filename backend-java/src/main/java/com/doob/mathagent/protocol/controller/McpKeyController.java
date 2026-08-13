@@ -9,6 +9,8 @@ import com.doob.mathagent.protocol.vo.McpClientKeyRevocationResponse;
 import com.doob.mathagent.protocol.vo.McpConfigurationResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.List;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -25,10 +27,25 @@ public class McpKeyController {
 
     private final McpClientKeyService keyService;
     private final RequestSubjectResolver subjectResolver;
+    /**
+     * Deployment-owned public base URL for external MCP clients. This cannot be inferred reliably when the browser
+     * reaches the API through a development proxy or a reverse proxy that intentionally rewrites the Host header.
+     */
+    private final String configuredMcpPublicUrl;
 
+    /** Compatibility constructor for focused controller tests without a deployment public MCP endpoint. */
     public McpKeyController(McpClientKeyService keyService, RequestSubjectResolver subjectResolver) {
+        this(keyService, subjectResolver, "");
+    }
+
+    @Autowired
+    public McpKeyController(
+            McpClientKeyService keyService,
+            RequestSubjectResolver subjectResolver,
+            @Value("${math-agent.mcp.public-url:}") String configuredMcpPublicUrl) {
         this.keyService = keyService;
         this.subjectResolver = subjectResolver;
+        this.configuredMcpPublicUrl = normalizePublicMcpUrl(configuredMcpPublicUrl);
     }
 
     /**
@@ -87,11 +104,43 @@ public class McpKeyController {
         return subject.normalize();
     }
 
-    private static String currentMcpUrl(HttpServletRequest request) {
+    /**
+     * Resolves the URL placed in an external MCP configuration. A configured public URL wins because the incoming
+     * request may arrive through a proxy whose rewritten host is not reachable by the MCP client.
+     */
+    private String currentMcpUrl(HttpServletRequest request) {
+        return currentMcpUrl(request, configuredMcpPublicUrl);
+    }
+
+    private static String currentMcpUrl(HttpServletRequest request, String configuredPublicMcpUrl) {
+        if (!configuredPublicMcpUrl.isBlank()) {
+            return configuredPublicMcpUrl;
+        }
         return ServletUriComponentsBuilder.fromRequestUri(request)
                 .replacePath(request.getContextPath() + "/api/mcp")
                 .replaceQuery(null)
                 .build()
                 .toUriString();
+    }
+
+    /** Validates the deployment value once so malformed URLs never become a copyable external-client configuration. */
+    private static String normalizePublicMcpUrl(String value) {
+        String normalized = value == null ? "" : value.strip();
+        if (normalized.isBlank()) {
+            return "";
+        }
+        try {
+            java.net.URI uri = java.net.URI.create(normalized);
+            if (!uri.isAbsolute() || !("http".equalsIgnoreCase(uri.getScheme()) || "https".equalsIgnoreCase(uri.getScheme()))) {
+                throw new IllegalArgumentException("math-agent.mcp.public-url must be an absolute HTTP(S) URL");
+            }
+            return ServletUriComponentsBuilder.fromUri(uri)
+                    .replacePath("/api/mcp")
+                    .replaceQuery(null)
+                    .build()
+                    .toUriString();
+        } catch (IllegalArgumentException exception) {
+            throw new IllegalStateException("Invalid MATH_AGENT_MCP_PUBLIC_URL", exception);
+        }
     }
 }

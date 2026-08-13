@@ -118,6 +118,12 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api1.aisz.mom/v1}
       OPENAI_CHAT_MODEL: ${OPENAI_CHAT_MODEL:-gpt-5.6-luna}
+      # Keep generation credentials inside the worker. DashScope is a real fallback for a temporarily unavailable
+      # OpenAI-compatible relay; it is never used for the local GPU embedding/reranking models.
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
+      # A real remote generation can legitimately outlast the concise interactive-answer budget. The generic
+      # TeacherAssistant child is route-limited to one provider, so this remains below Java's 120-second boundary.
+      MATH_AGENT_AI_RUNTIME_TIMEOUT_SECONDS: ${MATH_AGENT_AI_RUNTIME_TIMEOUT_SECONDS:-90}
       MATH_AGENT_REQUIRE_ROUTE_GRANT: ${MATH_AGENT_REQUIRE_ROUTE_GRANT:-true}
       MATH_AGENT_PROVIDER_ROUTE_GRANT_SECRET: ${MATH_AGENT_PROVIDER_ROUTE_GRANT_SECRET:?MATH_AGENT_PROVIDER_ROUTE_GRANT_SECRET must be set}
       # These values are the worker's real local model contract.  Compose must pass them explicitly because a
@@ -180,11 +186,19 @@ services:
     restart: unless-stopped
     environment:
       MATH_AGENT_WORKER_API_KEY: ${MATH_AGENT_WORKER_API_KEY:?MATH_AGENT_WORKER_API_KEY must be set}
+      # This URL is emitted into external MCP client configuration. It must target the Windows-reachable backend port,
+      # not the Docker service name or a proxy-rewritten Host header.
+      MATH_AGENT_MCP_PUBLIC_URL: ${MATH_AGENT_MCP_PUBLIC_URL:-http://127.0.0.1:8080/api/mcp}
       MATH_AGENT_VECTOR_INDEX_EMBEDDING_API_KEY: ${MATH_AGENT_WORKER_API_KEY:?MATH_AGENT_WORKER_API_KEY must be set}
+      # Retrieval can score thousands of locally indexed source chunks. Batch enough BGE inputs to keep a teaching
+      # task bounded while leaving headroom for the Windows GPU used by the real ai-worker model.
+      MATH_AGENT_VECTOR_INDEX_EMBEDDING_BATCH_SIZE: ${MATH_AGENT_VECTOR_INDEX_EMBEDDING_BATCH_SIZE:-64}
       MATH_AGENT_AGENT_WORKER_SHARED_KEY: ${MATH_AGENT_AGENT_WORKER_SHARED_KEY:?MATH_AGENT_AGENT_WORKER_SHARED_KEY must be set}
       # Java signs route grants but never receives provider API keys; the worker remains their only container owner.
       MATH_AGENT_PROVIDER_ROUTE_GRANT_SECRET: ${MATH_AGENT_PROVIDER_ROUTE_GRANT_SECRET:?MATH_AGENT_PROVIDER_ROUTE_GRANT_SECRET must be set}
       MATH_AGENT_PROVIDER_ROUTE_GRANT_TTL_SECONDS: ${MATH_AGENT_PROVIDER_ROUTE_GRANT_TTL_SECONDS:-120}
+      # The selected provider is route metadata only; credentials remain confined to ai-worker.
+      MATH_AGENT_AI_DEFAULT_PROVIDER: ${MATH_AGENT_AI_DEFAULT_PROVIDER:-openai}
       MATH_AGENT_PROVIDER_OPENAI_ENABLED: ${MATH_AGENT_PROVIDER_OPENAI_ENABLED:-true}
       MATH_AGENT_PROVIDER_DASHSCOPE_ENABLED: ${MATH_AGENT_PROVIDER_DASHSCOPE_ENABLED:-false}
       MATH_AGENT_PROVIDER_DEEPSEEK_ENABLED: ${MATH_AGENT_PROVIDER_DEEPSEEK_ENABLED:-false}

@@ -201,7 +201,7 @@ class AgentRuntimeContractTest(unittest.TestCase):
                 "primary": {"name": "openai", "model": "gpt-5.6-luna"},
                 "fallbacks": [{"name": "dashscope", "model": "qwen3.6-flash"}],
             },
-            "limits": {"maxProviderCalls": 2, "maxTotalTokens": 1000, "maxOutputChars": 1000},
+            "limits": {"maxProviderCalls": 2, "maxTotalTokens": 1000, "maxOutputTokens": 300, "maxOutputChars": 1000},
             "input": {"message": "解释空间向量"},
             "evidenceRefs": ["textbook:vector-1"],
             "allowedTools": [],

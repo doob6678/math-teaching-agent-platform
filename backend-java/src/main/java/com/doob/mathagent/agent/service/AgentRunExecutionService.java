@@ -25,6 +25,7 @@ import org.springframework.stereotype.Service;
 public class AgentRunExecutionService {
 
     private static final String COMPLETED = "COMPLETED";
+    private static final String RUNNING = "RUNNING";
     private static final Duration CONCURRENCY_LEASE_TIME = Duration.ofMinutes(10);
 
     private final AgentTraceStore traceStore;
@@ -80,6 +81,9 @@ public class AgentRunExecutionService {
         timer.mark("concurrency_guard");
         try {
             timer.mark("trace_start");
+            // Persist authorization before the Worker may request a protected Java tool.  The broker resolves the
+            // subject from this opaque trace id, so neither the model nor the Worker needs tenant/user fields.
+            traceStore.save(runningTrace(traceId, plan, normalizedSubject, normalized, concurrencyKeys));
             if (normalized.dryRun()) {
                 throw new IllegalArgumentException("Agent dryRun is disabled in production");
             }
@@ -139,6 +143,42 @@ public class AgentRunExecutionService {
         } finally {
             lease.close();
         }
+    }
+
+    /** Creates the short-lived durable authorization record consumed by the internal Java tool broker. */
+    private AgentTraceRecord runningTrace(
+            String traceId,
+            AgentRunPlanResponse plan,
+            RequestSubject subject,
+            AgentRunExecuteRequest request,
+            List<String> concurrencyKeys) {
+        return new AgentTraceRecord(
+                traceId,
+                safeText(plan.planId()),
+                Instant.now(clock),
+                subject.tenantId(),
+                subject.subjectType(),
+                subject.subjectId(),
+                safeText(plan.agentCode()),
+                safeText(plan.providerName()),
+                safeText(plan.modelCode()),
+                RUNNING,
+                plan.estimatedCost(),
+                safeList(plan.allowedToolScopes()),
+                safeList(plan.allowedDataScopes()),
+                safeList(request.evidenceRefs()),
+                List.of(),
+                new AgentRunExecuteResponse.TokenUsage(0, 0, 0),
+                "Agent run is authorized and awaiting the Python Worker.",
+                List.of(new AgentTraceRecord.DiagnosticEvent(
+                        "PYTHON_AI_RUN_STARTED",
+                        safeText(plan.providerName()),
+                        safeText(plan.modelCode()),
+                        0,
+                        false,
+                        "The backend persisted the subject authorization before any Worker tool call.")),
+                -1.0d,
+                false);
     }
 
     /** Python 返回的实际 usage 仍受 Java 已签发 token 限额约束。 */

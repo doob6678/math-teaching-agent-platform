@@ -20,6 +20,9 @@ import org.springframework.stereotype.Repository;
 @ConditionalOnProperty(prefix = "math-agent.database", name = "enabled", havingValue = "true")
 public class MyBatisAgentTraceStore implements AgentTraceStore {
 
+    /** Matches V10's persisted plan_id width; task-local runtime IDs can contain longer diagnostic suffixes. */
+    private static final int PLAN_ID_MAX_LENGTH = 96;
+
     private static final TypeReference<List<String>> STRING_LIST = new TypeReference<>() {
     };
     private static final TypeReference<TraceMetadata> TRACE_METADATA = new TypeReference<>() {
@@ -44,7 +47,14 @@ public class MyBatisAgentTraceStore implements AgentTraceStore {
      */
     @Override
     public AgentTraceRecord save(AgentTraceRecord record) {
-        mapper.insert(toEntity(record));
+        AgentRunTraceEntity entity = toEntity(record);
+        // A run is first saved as RUNNING for tool authorization and then replaced by its terminal audit record.
+        // Updating by trace id keeps that two-stage protocol idempotent across a Worker retry.
+        if (mapper.selectById(record.traceId()) == null) {
+            mapper.insert(entity);
+        } else {
+            mapper.updateById(entity);
+        }
         return record;
     }
 
@@ -88,7 +98,7 @@ public class MyBatisAgentTraceStore implements AgentTraceStore {
     private AgentRunTraceEntity toEntity(AgentTraceRecord record) {
         AgentRunTraceEntity entity = new AgentRunTraceEntity();
         entity.setTraceId(record.traceId());
-        entity.setPlanId(record.planId());
+        entity.setPlanId(databasePlanId(record.planId()));
         entity.setCreatedAt(record.createdAt());
         entity.setTenantId(record.tenantId());
         entity.setSubjectType(record.subjectType());
@@ -109,6 +119,17 @@ public class MyBatisAgentTraceStore implements AgentTraceStore {
                 record.actualCost(),
                 record.costKnown())));
         return entity;
+    }
+
+    /**
+     * Keeps the stable task prefix in a database trace without allowing an internal diagnostic suffix to abort a
+     * completed teaching workflow. The full task identity remains in the owning teaching-task record.
+     */
+    private static String databasePlanId(String planId) {
+        if (planId == null || planId.length() <= PLAN_ID_MAX_LENGTH) {
+            return planId;
+        }
+        return planId.substring(0, PLAN_ID_MAX_LENGTH);
     }
 
     /**

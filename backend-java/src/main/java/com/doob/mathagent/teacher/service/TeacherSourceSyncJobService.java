@@ -16,6 +16,12 @@ import org.springframework.dao.DataIntegrityViolationException;
 @Service
 public class TeacherSourceSyncJobService {
 
+    /** First page and smallest valid size keep list cards bounded without hiding the newest durable job. */
+    private static final int FIRST_SYNC_JOB_PAGE = 1;
+    private static final int MINIMUM_SYNC_JOB_PAGE_SIZE = 1;
+    /** Protects the operational endpoint from callers attempting to recreate an unbounded history response. */
+    private static final int MAXIMUM_SYNC_JOB_PAGE_SIZE = 25;
+
     private final TeacherResourceStore resourceStore;
     private final TeacherSourceSyncJobStore jobStore;
 
@@ -111,6 +117,43 @@ public class TeacherSourceSyncJobService {
                 normalizedSubjectId,
                 documentId);
         return jobStore.listByDocument(document.tenantId(), document.documentId());
+    }
+
+    /**
+     * Lists one bounded newest-first page of visible sync jobs.
+     *
+     * <p>Teacher-resource cards use this method with a one-item page because they render only the latest job. The
+     * backend validates the boundary so a client cannot turn the paged endpoint back into an unbounded read.</p>
+     *
+     * @param tenantId tenant id
+     * @param viewerRole backend-resolved viewer role
+     * @param viewerSubjectId backend-resolved viewer subject id
+     * @param documentId source document id
+     * @param pageNumber one-based requested page
+     * @param pageSize requested rows per page
+     * @return bounded newest-first job page
+     */
+    public List<TeacherSourceSyncJobResponse> listSyncJobs(
+            String tenantId,
+            String viewerRole,
+            String viewerSubjectId,
+            String documentId,
+            int pageNumber,
+            int pageSize) {
+        String normalizedTenantId = requireText(tenantId, "tenantId is required");
+        String normalizedRole = requireText(viewerRole, "viewerRole is required").toLowerCase();
+        String normalizedSubjectId = requireText(viewerSubjectId, "viewerSubjectId is required");
+        requireTeacherOrAdmin(normalizedRole);
+        if (pageNumber < FIRST_SYNC_JOB_PAGE) {
+            throw new IllegalArgumentException("pageNumber must be at least " + FIRST_SYNC_JOB_PAGE);
+        }
+        if (pageSize < MINIMUM_SYNC_JOB_PAGE_SIZE || pageSize > MAXIMUM_SYNC_JOB_PAGE_SIZE) {
+            throw new IllegalArgumentException("pageSize must be between " + MINIMUM_SYNC_JOB_PAGE_SIZE
+                    + " and " + MAXIMUM_SYNC_JOB_PAGE_SIZE);
+        }
+        TeacherResourceDocumentResponse document = requireVisibleDocument(
+                normalizedTenantId, normalizedRole, normalizedSubjectId, documentId);
+        return jobStore.listPageByDocument(document.tenantId(), document.documentId(), pageNumber, pageSize);
     }
 
     /**

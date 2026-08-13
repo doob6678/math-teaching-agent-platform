@@ -247,6 +247,8 @@ class MigratedWorkloadRuntime:
                     "{\"decision\":\"action|final\",\"tools\":[],\"queries\":[],"
                     "\"conversationTitle\":\"\",\"cards\":[]}。"
                     "final 必须同时返回 cards，引用只能来自 evidence。不要输出推理过程或 Markdown。"
+                    "题干已经给出全部条件且可通过代数、几何或定义直接完成的题目，必须选择 final，"
+                    "不得为了复述通用概念而检索；只有缺少题目所必需的外部事实时才能选择 action。"
                     + MATH_MARKUP_OUTPUT_CONTRACT
                 )},
                 {"role": "user", "content": json.dumps({
@@ -438,7 +440,8 @@ class MigratedWorkloadRuntime:
                 "只有在确实需要已授权资料时才选 action；tools 只能来自 availableTools，queries 最多 6 个。"
                 "若题目自洽则返回 final，且 tools 与 queries 为空，并同时返回 "
                 "conversationTitle 和 cards。cards 使用与 compose 相同的字段，sourceUris 只能来自 evidence。"
-                "不要输出推理过程或 Markdown。"
+                "不要输出推理过程或 Markdown。题干已提供全部条件且可用代数、几何或定义直接完成时，"
+                "必须返回 final；不得仅为讲解通用概念而调用检索。"
                 + MATH_MARKUP_OUTPUT_CONTRACT
             )},
             {"role": "user", "content": json.dumps({
@@ -627,7 +630,15 @@ class MigratedWorkloadRuntime:
             response = self._session.post(
                 defaults[provider].rstrip("/") + "/chat/completions",
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json={"model": model, "messages": messages, "temperature": 0},
+                # Compose is consumed by a strict card schema below.  Ask every compatible provider for a
+                # JSON object here as well as in the streaming route, otherwise a valid prose answer would
+                # be rejected only after the paid model call has completed.
+                json={
+                    "model": model,
+                    "messages": messages,
+                    "temperature": 0,
+                    "response_format": {"type": "json_object"},
+                },
                 timeout=float(os.getenv("MATH_AGENT_MIGRATED_RUNTIME_TIMEOUT_SECONDS", "45")),
             )
             response.raise_for_status()

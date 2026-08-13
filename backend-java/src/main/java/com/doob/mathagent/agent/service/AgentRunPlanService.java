@@ -24,6 +24,12 @@ public class AgentRunPlanService {
     private static final int DEFAULT_MAX_OUTPUT_TOKENS = 4000;
     /** A four-question teacher handout needs a larger but still signed and auditable completion budget. */
     private static final int TEACHER_HANDOUT_MAX_OUTPUT_TOKENS = 8000;
+    /**
+     * A concise teacher question branch can still report provider-side reasoning tokens in addition to its short
+     * visible answer. This allowance is deliberately below the full handout cap, but above the standard interactive
+     * cap so an audited Terra response is not discarded solely because the relay counts those reasoning tokens.
+     */
+    private static final int TEACHER_QUESTION_REASONING_MAX_OUTPUT_TOKENS = 6000;
 
     private final AiProviderCatalog providerCatalog;
     private final AiModelPriceCatalog priceCatalog;
@@ -207,7 +213,9 @@ public class AgentRunPlanService {
         int maxInput = "free".equals(request.userVipLevel()) ? 2400 : 12000;
         int maxOutput = "free".equals(request.userVipLevel())
                 ? FREE_MAX_OUTPUT_TOKENS
-                : isTeacherHandoutRequest(request) ? TEACHER_HANDOUT_MAX_OUTPUT_TOKENS : DEFAULT_MAX_OUTPUT_TOKENS;
+                : isTeacherHandoutRequest(request) ? TEACHER_HANDOUT_MAX_OUTPUT_TOKENS
+                : isTeacherQuestionSolvingRequest(request) ? TEACHER_QUESTION_REASONING_MAX_OUTPUT_TOKENS
+                : DEFAULT_MAX_OUTPUT_TOKENS;
         boolean inputWithinLimit = request.estimatedInputTokens() <= maxInput;
         boolean outputWithinLimit = request.estimatedOutputTokens() <= maxOutput;
         long clippedInput = Math.min(request.estimatedInputTokens(), maxInput);
@@ -232,6 +240,16 @@ public class AgentRunPlanService {
     private static boolean isTeacherHandoutRequest(AgentRunPlanRequest request) {
         return isWritingRequest(request)
                 && "CoursewareAgent".equals(request.agentCode())
+                && "teacher".equals(request.userVipLevel());
+    }
+
+    /**
+     * Keeps the extra budget scoped to one evidence-isolated teacher branch rather than expanding every paid
+     * question-answering request. The Java signature remains the Worker provider limit and the post-run audit gate.
+     */
+    private static boolean isTeacherQuestionSolvingRequest(AgentRunPlanRequest request) {
+        return "question_solving".equals(request.taskType())
+                && "TeacherAssistantAgent".equals(request.agentCode())
                 && "teacher".equals(request.userVipLevel());
     }
 

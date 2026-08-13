@@ -53,6 +53,18 @@ class McpKeyControllerTest {
         assertThat(keys.getFirst().ownerUserId()).isEqualTo("teacher-001");
     }
 
+    @Test
+    void usesConfiguredPublicUrlWhenAPIPassesThroughAHostRewritingProxy() {
+        McpKeyController controller = new McpKeyController(
+                new McpClientKeyService(new InMemoryMcpClientKeyStore(), new ProtocolDiscoveryService()),
+                fixedSubject("school-a", "teacher", "teacher-001"),
+                "http://127.0.0.1:8080/proxy-path");
+
+        var created = controller.createKey(request("http", "proxy-host", 80, "/api/mcp/keys"));
+
+        assertThat(created.configuration().url()).isEqualTo("http://127.0.0.1:8080/api/mcp");
+    }
+
     private static RequestSubjectResolver fixedSubject(String tenantId, String role, String userId) {
         return request -> new RequestSubject(tenantId, role, userId, "device-fixed");
     }

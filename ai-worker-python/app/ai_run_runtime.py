@@ -101,6 +101,7 @@ class RunLimits(BaseModel):
 
     maxProviderCalls: int = Field(ge=1, le=4)
     maxTotalTokens: int = Field(ge=1, le=128_000)
+    maxOutputTokens: int = Field(ge=1, le=32_000)
     maxOutputChars: int = Field(ge=1, le=64_000)
 
 
@@ -147,6 +148,7 @@ class AiRunRequest(BaseModel):
             runId=self.runId,
             allowedTools=list(self.allowedTools),
             message=str(self.input["message"]).strip(),
+            maxOutputTokens=self.limits.maxOutputTokens,
         )
 
 

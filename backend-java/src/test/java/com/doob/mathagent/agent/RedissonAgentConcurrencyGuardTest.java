@@ -17,7 +17,7 @@ import org.redisson.api.RedissonClient;
 class RedissonAgentConcurrencyGuardTest {
 
     @Test
-    void acquiresWatchdogLocksAndReleasesThem() {
+    void acquiresBoundedLeaseLocksAndReleasesThem() {
         FakeRedisson redisson = new FakeRedisson(true);
         RedissonAgentConcurrencyGuard guard =
                 new RedissonAgentConcurrencyGuard(redisson.client(), "math-agent:test:agent-concurrency");
@@ -31,7 +31,7 @@ class RedissonAgentConcurrencyGuardTest {
         assertThat(redisson.lockNames()).containsExactly(
                 "math-agent:test:agent-concurrency:concurrent:user:teacher-1:CoursewareAgent",
                 "math-agent:test:agent-concurrency:concurrent:model:gpt-5.4");
-        assertThat(redisson.watchdogLockCount()).isEqualTo(2);
+        assertThat(redisson.boundedLeaseLockCount()).isEqualTo(2);
 
         lease.get().close();
 
@@ -81,10 +81,11 @@ class RedissonAgentConcurrencyGuardTest {
                     RLock.class.getClassLoader(),
                     new Class<?>[] {RLock.class},
                     (proxy, method, args) -> {
-                        if ("tryLock".equals(method.getName()) && args.length == 2) {
+                        if ("tryLock".equals(method.getName()) && args.length == 3) {
                             tryLockCalls += 1;
                             assertThat(args[0]).isEqualTo(0L);
-                            assertThat(args[1]).isEqualTo(TimeUnit.MILLISECONDS);
+                            assertThat(args[1]).isEqualTo(45_000L);
+                            assertThat(args[2]).isEqualTo(TimeUnit.MILLISECONDS);
                             return allLocksAllowed || tryLockCalls == 1;
                         }
                         if ("isHeldByCurrentThread".equals(method.getName())) {
@@ -102,7 +103,7 @@ class RedissonAgentConcurrencyGuardTest {
             return lockNames;
         }
 
-        int watchdogLockCount() {
+        int boundedLeaseLockCount() {
             return tryLockCalls;
         }
 

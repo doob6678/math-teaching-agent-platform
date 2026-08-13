@@ -128,6 +128,22 @@ class HandoutGraphContractTest(unittest.TestCase):
                 questions,
             )
 
+    def test_normalizer_preserves_nested_student_document_from_provider_wrapper(self):
+        """A provider wrapper must not turn an already generated student worksheet into an empty repair request."""
+        questions = "【题目 1】\n已知函数 f(x)=x^2，求最小值。"
+        document = HandoutRuntime._normalize_writer_payload(
+            {
+                "stageCode": "student_writer",
+                "title": "学生练习",
+                "data": {"studentHandout": {"sections": [{"content": "题目 1：已知函数 f(x)=x^2，求最小值。\n提示：先观察抛物线的开口方向和顶点。"}]}},
+            },
+            "student_writer",
+            questions,
+        )
+
+        self.assertIn("题目 1", document.markdown)
+        self.assertIn("抛物线", document.markdown)
+
     def test_projection_artifacts_are_removed_before_model_repair(self):
         questions = (
             "【题目 1】\n已知函数 f(x)=sqrt(x+1)/(x-2)，求定义域。\n"

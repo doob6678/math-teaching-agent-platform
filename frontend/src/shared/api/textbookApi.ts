@@ -3874,9 +3874,12 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
       return requestJson<TeacherResourceDocumentResponse>(path, { method: "DELETE" });
     },
 
-    listTeacherResourceSyncJobs(documentId: string): Promise<TeacherSourceSyncJobResponse[]> {
+    listTeacherResourceSyncJobs(documentId: string, page = 1, pageSize = 1): Promise<TeacherSourceSyncJobResponse[]> {
+      // Resource cards display only the latest job. Keep history paged so a long-lived document cannot trigger an
+      // unbounded response or fan out checkpoint reads during ordinary workspace loading.
+      const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
       return requestJson<TeacherSourceSyncJobResponse[]>(
-        `/api/teacher/resources/${encodeURIComponent(documentId)}/sync-jobs`,
+        `/api/teacher/resources/${encodeURIComponent(documentId)}/sync-jobs?${params.toString()}`,
       );
     },
 

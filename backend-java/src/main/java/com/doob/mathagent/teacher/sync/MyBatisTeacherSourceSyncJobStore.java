@@ -67,6 +67,30 @@ public class MyBatisTeacherSourceSyncJobStore implements TeacherSourceSyncJobSto
                 .toList();
     }
 
+    /**
+     * Applies the history page in MySQL so a resource card never transfers every past sync run to the browser.
+     */
+    @Override
+    public List<TeacherSourceSyncJobResponse> listPageByDocument(
+            String tenantId, String documentId, int pageNumber, int pageSize) {
+        Long sourceDocumentId = parseId(documentId);
+        if (sourceDocumentId == null) {
+            return List.of();
+        }
+        LambdaQueryWrapper<TeacherSourceSyncJobEntity> query = new LambdaQueryWrapper<TeacherSourceSyncJobEntity>()
+                .eq(TeacherSourceSyncJobEntity::getTenantId, tenantId)
+                .eq(TeacherSourceSyncJobEntity::getSourceDocumentId, sourceDocumentId)
+                .orderByDesc(TeacherSourceSyncJobEntity::getCreatedAt)
+                .orderByDesc(TeacherSourceSyncJobEntity::getId);
+        // The service validates both values before this store is called. Applying LIMIT/OFFSET in this query keeps
+        // historical jobs in MySQL instead of materializing them all and trying to page after the fact in React.
+        long offset = Math.multiplyExact((long) pageNumber - 1L, (long) pageSize);
+        query.last("LIMIT " + pageSize + " OFFSET " + offset);
+        return mapper.selectList(query).stream()
+                .map(MyBatisTeacherSourceSyncJobStore::toResponse)
+                .toList();
+    }
+
     @Override
     public TeacherSourceSyncJobResponse findActiveByDocument(String tenantId, String documentId) {
         Long sourceDocumentId = parseId(documentId);

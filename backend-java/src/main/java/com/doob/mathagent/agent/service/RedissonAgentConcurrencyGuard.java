@@ -45,7 +45,11 @@ public class RedissonAgentConcurrencyGuard implements AgentConcurrencyGuard {
     }
 
     /**
-     * Tries to lock every concurrency key with zero wait and Redisson watchdog renewal.
+     * Tries to lock every concurrency key with zero wait and the caller's explicit lease duration.
+     *
+     * <p>An explicit Redis expiry is essential here: the execution service promises a bounded lease, while
+     * Redisson's watchdog mode would keep renewing a lock for a live-but-stuck request and could block every
+     * later handout run for that user/model indefinitely.</p>
      */
     @Override
     public Optional<AgentConcurrencyLease> tryAcquire(List<String> keys, String traceId, Duration leaseTime) {
@@ -53,7 +57,8 @@ public class RedissonAgentConcurrencyGuard implements AgentConcurrencyGuard {
         for (String key : normalizeKeys(keys)) {
             RLock lock = redissonClient.getLock(keyPrefix + ":" + key);
             try {
-                boolean locked = lock.tryLock(0L, TimeUnit.MILLISECONDS);
+                long leaseMilliseconds = Math.max(1L, leaseTime == null ? 1L : leaseTime.toMillis());
+                boolean locked = lock.tryLock(0L, leaseMilliseconds, TimeUnit.MILLISECONDS);
                 if (!locked) {
                     unlockAll(acquired);
                     return Optional.empty();

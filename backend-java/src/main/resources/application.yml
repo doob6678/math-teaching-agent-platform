@@ -55,6 +55,10 @@ server:
     uri-encoding: UTF-8
 
 math-agent:
+  mcp:
+    # External MCP clients cannot use a proxy-rewritten Host header. Deployments set this explicit public endpoint;
+    # the controller falls back to the incoming request URL only when a deployment has no separate public address.
+    public-url: ${MATH_AGENT_MCP_PUBLIC_URL:}
   security:
     # Forwarded IP headers are untrusted until the deployment explicitly places a trusted reverse proxy in front.
     trusted-proxy-headers: ${MATH_AGENT_SECURITY_TRUSTED_PROXY_HEADERS:false}

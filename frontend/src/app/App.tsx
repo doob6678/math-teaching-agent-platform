@@ -760,19 +760,30 @@ export function App() {
   }
 
   function loadTeacherSyncCheckpoints(jobsByDocument: Record<string, TeacherSourceSyncJobResponse[]>) {
-    const requests = Object.entries(jobsByDocument).flatMap(([documentId, jobs]) =>
-      jobs.map((job) =>
-        api
-          .getTeacherResourceSyncCheckpoint(documentId, job.jobId)
-          .then((checkpoint) => [job.jobId, checkpoint] as const)
-          .catch(() => [job.jobId, null] as const),
-      ),
-    );
-    return Promise.all(requests).then((entries) => {
-      const checkpoints: Record<string, TeacherSourceSyncCheckpointResponse> = {};
-      for (const [jobId, checkpoint] of entries) {
-        if (checkpoint) checkpoints[jobId] = checkpoint;
-      }
+    // The resource list renders only its newest job. Fetching every historical checkpoint therefore creates a
+    // request burst with no UI value and can exhaust the backend's per-session read budget before a teacher acts.
+    // A completed sync is already represented by its durable job status/message; an unfinished latest job alone
+    // needs the checkpoint payload for recovery details in the resource card.
+    const recoverableLatestJobs = Object.entries(jobsByDocument).flatMap(([documentId, jobs]) => {
+      const latestJob = jobs[0];
+      return latestJob && !isCompletedTeacherResourceSync(latestJob.status)
+        ? [[documentId, latestJob] as const]
+        : [];
+    });
+
+    // Keep checkpoint reads serial. They are auxiliary operator details rather than page-critical data, and the
+    // backend deliberately rate-limits this endpoint to protect its persisted synchronization state.
+    return recoverableLatestJobs.reduce(
+      (chain, [documentId, job]) => chain.then((checkpoints) => api
+        .getTeacherResourceSyncCheckpoint(documentId, job.jobId)
+        .then((checkpoint) => {
+          if (checkpoint) checkpoints[job.jobId] = checkpoint;
+          return checkpoints;
+        })
+        // A missing/expired checkpoint must not hide the resource list or discard checkpoints already confirmed.
+        .catch(() => checkpoints)),
+      Promise.resolve({} as Record<string, TeacherSourceSyncCheckpointResponse>),
+    ).then((checkpoints) => {
       setTeacherSyncCheckpoints(checkpoints);
     });
   }

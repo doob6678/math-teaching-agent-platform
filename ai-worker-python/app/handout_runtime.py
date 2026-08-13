@@ -34,7 +34,9 @@ DEFAULT_GRAPH_VERSION = "handout-v1"
 DEFAULT_CONTRACT_VERSION = "handout-ai-v1"
 DEFAULT_CONTEXT_LIMIT = 12
 DEFAULT_NODE_TIMEOUT_SECONDS = 420.0
-DEFAULT_REPAIR_ATTEMPTS = 1
+# A relay can return a valid JSON envelope whose visible lesson field is incomplete.  Two bounded repairs retain
+# the real model-only authoring contract while keeping the three-writer graph inside its provider-call budget.
+DEFAULT_REPAIR_ATTEMPTS = 2
 DEFAULT_MAX_EVIDENCE_CHARS = 16000
 DEFAULT_MAX_OUTPUT_CHARS = 24000
 DEFAULT_MIN_DOCUMENT_CHARS = 32
@@ -184,6 +186,34 @@ def _markdown_from_cards(value: Any) -> str:
     return "\n\n".join(parts).strip()
 
 
+def _nested_document_text(value: Any) -> str:
+    """Recovers visible document text from provider-specific JSON wrappers without accepting metadata as lesson text.
+
+    Providers occasionally wrap the contract's ``markdown`` field in a named audience/document object.  The writer
+    nodes must preserve that real model output instead of discarding it and asking the model to write the same lesson
+    again.  This intentionally follows only content-bearing names, never arbitrary object values such as ids, usage,
+    tool records, or internal reasoning fields.
+    """
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, list):
+        return "\n".join(item for entry in value if (item := _nested_document_text(entry))).strip()
+    if not isinstance(value, dict):
+        return ""
+    content_fields = (
+        "markdown", "content", "body", "text", "result", "document", "data", "output", "response", "handout",
+        "teacherExplanation", "studentWorksheet", "studentHandout", "studentContent", "worksheet",
+        "sections", "blocks", "paragraphs", "items",
+    )
+    for field in content_fields:
+        if field not in value:
+            continue
+        content = _nested_document_text(value[field])
+        if content:
+            return content
+    return ""
+
+
 def _structured_content(payload: dict[str, Any], stage_code: str) -> str:
     """Extracts the audience field deterministically before any model repair is considered."""
     if stage_code == "teacher_writer":
@@ -198,12 +228,16 @@ def _structured_content(payload: dict[str, Any], stage_code: str) -> str:
         value = payload[field]
         if stage_code == "lecture_writer" and isinstance(value, (dict, list)):
             content = _markdown_from_cards(value)
-        elif isinstance(value, list):
-            content = "\n".join(_text(item) for item in value if _text(item))
         else:
-            content = _text(value)
+            content = _nested_document_text(value)
         if content.strip():
             return content.strip()
+    # Some OpenAI-compatible relays place the entire WriterDocument under `data` or `document` instead of the
+    # advertised audience field.  Reuse the allow-listed recursive extractor so the visible lesson survives while
+    # stage, usage, and other metadata still cannot become printable content.
+    wrapped_content = _nested_document_text(payload)
+    if wrapped_content:
+        return wrapped_content
     # Rich provider objects sometimes omit the audience wrapper but still expose card-like fields.
     if stage_code == "lecture_writer" and ("cards" in payload or isinstance(payload.get("items"), list)):
         return _markdown_from_cards(payload.get("cards", payload.get("items")))
@@ -889,16 +923,28 @@ class HandoutRuntime:
                     raise
                 # The model is a last resort only for a semantically invalid response. The repair prompt contains the
                 # failed fields and the submitted questions, not the full evidence bundle, so repair cost stays bounded.
-                repaired_raw, repair_usage, repair_provider, repair_model = self._invoke_json_model(
-                    request,
-                    f"{stage_code}_repair",
-                    self._repair_prompt(request, stage_code, [repair_reason]),
-                )
-                provider_calls += 1
-                document = self._normalize_writer_payload(repaired_raw, stage_code, request.question_text)
-                usage = _sum_usage(usage, repair_usage)
-                provider = repair_provider
-                model = repair_model
+                repair_errors = [repair_reason]
+                repaired = False
+                for repair_index in range(DEFAULT_REPAIR_ATTEMPTS):
+                    repaired_raw, repair_usage, repair_provider, repair_model = self._invoke_json_model(
+                        request,
+                        f"{stage_code}_repair",
+                        self._repair_prompt(request, stage_code, repair_errors),
+                    )
+                    provider_calls += 1
+                    # Usage is cumulative even when a repair response is rejected, so the accepted run never hides
+                    # billable provider work behind the final valid WriterDocument.
+                    usage = _sum_usage(usage, repair_usage)
+                    provider = repair_provider
+                    model = repair_model
+                    try:
+                        document = self._normalize_writer_payload(repaired_raw, stage_code, request.question_text)
+                        repaired = True
+                        break
+                    except (ValidationError, ValueError) as repair_error:
+                        repair_errors.append(str(repair_error))
+                if not repaired:
+                    raise ValueError(f"{stage_code}: repair exhausted: {'; '.join(repair_errors)}")
             self._record_node(request, stage_code, started, "SUCCESS", provider_calls=provider_calls, usage=usage,
                               provider=provider, model=model)
             self._checkpoint.save(request.run_id, "RUNNING", {**state, "writers": [document]}, {"event": "node_completed", "node": stage_code, "provider": provider, "model": model, "deterministicRepair": bool(repair_reason)})
@@ -1173,8 +1219,8 @@ class HandoutRuntime:
         }
         return json.dumps({"stageCode": stage, "audience": audience, "instruction": instruction,
                            "writingGoal": request.writing_goal, "questionText": request.question_text,
-                           "mathematicsFormatting": HANDOUT_MATH_MARKUP_CONTRACT,
                            "evidence": evidence.prompt_text(), "projectionRules": projection_rules,
+                           "mathematicsFormatting": HANDOUT_MATH_MARKUP_CONTRACT,
                            "outputContract": {"stageCode": stage, "title": "string", "markdown": "完整中文讲义内容",
                                                "citations": ["evidence ref"], "warnings": []}}, ensure_ascii=False)
 

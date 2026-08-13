@@ -6,6 +6,8 @@ import com.doob.mathagent.agent.dto.AgentToolBrokerSearchRequest;
 import com.doob.mathagent.agent.dto.HandoutContextRequest;
 import com.doob.mathagent.agent.service.MultiAgentWritingWorkflowRecord;
 import com.doob.mathagent.agent.service.MultiAgentWritingWorkflowStore;
+import com.doob.mathagent.agent.service.AgentTraceRecord;
+import com.doob.mathagent.agent.service.AgentTraceStore;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.teaching.service.TeachingTaskStore;
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
@@ -48,6 +50,7 @@ public class AgentToolBrokerController {
     private final Environment environment;
     private final MultiAgentWritingWorkflowStore workflowStore;
     private final TeachingTaskStore teachingTaskStore;
+    private final AgentTraceStore agentTraceStore;
 
     @Autowired
     public AgentToolBrokerController(
@@ -55,12 +58,14 @@ public class AgentToolBrokerController {
             TeacherResourceAssetService assetService,
             Environment environment,
             MultiAgentWritingWorkflowStore workflowStore,
-            TeachingTaskStore teachingTaskStore) {
+            TeachingTaskStore teachingTaskStore,
+            AgentTraceStore agentTraceStore) {
         this.resourceSearchService = resourceSearchService;
         this.assetService = assetService;
         this.environment = environment;
         this.workflowStore = workflowStore;
         this.teachingTaskStore = teachingTaskStore;
+        this.agentTraceStore = agentTraceStore;
     }
 
     /** Keeps older direct tests source-compatible while production injects both durable run stores. */
@@ -69,7 +74,7 @@ public class AgentToolBrokerController {
             TeacherResourceAssetService assetService,
             Environment environment,
             MultiAgentWritingWorkflowStore workflowStore) {
-        this(resourceSearchService, assetService, environment, workflowStore, null);
+        this(resourceSearchService, assetService, environment, workflowStore, null, null);
     }
 
     /** Compatibility constructor for focused broker tests that do not load workflow persistence. */
@@ -77,7 +82,7 @@ public class AgentToolBrokerController {
             TeacherResourceBlockSearchService resourceSearchService,
             TeacherResourceAssetService assetService,
             Environment environment) {
-        this(resourceSearchService, assetService, environment, null, null);
+        this(resourceSearchService, assetService, environment, null, null, null);
     }
 
     /**
@@ -229,6 +234,14 @@ public class AgentToolBrokerController {
      * tests that intentionally bypass Spring persistence wiring.
      */
     private RequestSubject subjectForRun(String runId, String suppliedTenantId, String suppliedSubjectType, String suppliedSubjectId) {
+        if (agentTraceStore != null) {
+            AgentTraceRecord trace = agentTraceStore.find(runId == null ? "" : runId.strip())
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Agent run authorization not found"));
+            RequestSubject persisted = new RequestSubject(
+                    trace.tenantId(), trace.subjectType(), trace.subjectId(), "agent-worker").normalize();
+            requireMatchingSuppliedIdentity(persisted, suppliedTenantId, suppliedSubjectType, suppliedSubjectId);
+            return persisted;
+        }
         if (workflowStore == null) {
             return new RequestSubject(suppliedTenantId, suppliedSubjectType, suppliedSubjectId, "agent-worker").normalize();
         }
@@ -236,12 +249,19 @@ public class AgentToolBrokerController {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Agent run authorization not found"));
         RequestSubject persisted = new RequestSubject(
                 workflow.tenantId(), workflow.subjectType(), workflow.subjectId(), "agent-worker").normalize();
-        if (!persisted.tenantId().equals(suppliedTenantId == null ? "" : suppliedTenantId.strip())
-                || !persisted.subjectType().equals(suppliedSubjectType == null ? "" : suppliedSubjectType.strip())
-                || !persisted.subjectId().equals(suppliedSubjectId == null ? "" : suppliedSubjectId.strip())) {
+        requireMatchingSuppliedIdentity(persisted, suppliedTenantId, suppliedSubjectType, suppliedSubjectId);
+        return persisted;
+    }
+
+    /** Allows absent legacy wire fields while rejecting any supplied identity that differs from the durable run. */
+    private static void requireMatchingSuppliedIdentity(
+            RequestSubject persisted, String tenantId, String subjectType, String subjectId) {
+        boolean supplied = tenantId != null || subjectType != null || subjectId != null;
+        if (supplied && (!persisted.tenantId().equals(tenantId == null ? "" : tenantId.strip())
+                || !persisted.subjectType().equals(subjectType == null ? "" : subjectType.strip())
+                || !persisted.subjectId().equals(subjectId == null ? "" : subjectId.strip()))) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Agent run identity does not match its durable authorization");
         }
-        return persisted;
     }
 
 }

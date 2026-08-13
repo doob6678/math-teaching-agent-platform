@@ -4561,6 +4561,16 @@ h1, h2, h3, h4, h5, h6 {
   line-height: 1.25;
 }
 
+/* Conversation titles are compact UI chrome; keep their KaTeX baseline and width aligned with surrounding text. */
+.teaching-title-math .math-render.inline {
+  display: inline;
+  vertical-align: -0.1em;
+}
+
+.teaching-title-math .katex {
+  white-space: nowrap;
+}
+
 .teaching-chat-shell .teaching-live-brand-copy span,
 .teaching-chat-shell .teaching-live-date {
   color: #64748b;

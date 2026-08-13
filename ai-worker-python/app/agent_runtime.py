@@ -13,6 +13,8 @@ from pydantic import BaseModel, ConfigDict, Field
 import requests
 from app.usage import UsageEvent, UsageLedger, cost_for, fallback_tokens
 
+DEFAULT_MAX_OUTPUT_TOKENS = 512
+
 
 class AgentRunRequest(BaseModel):
     """Python AI 执行协议只接收运行标识和受限输入，身份由 Java 按 runId 反查。"""
@@ -22,6 +24,8 @@ class AgentRunRequest(BaseModel):
     runId: str = Field(min_length=1)
     allowedTools: list[str] = Field(default_factory=list)
     message: str = Field(min_length=1)
+    # Legacy streaming contract callers do not carry Java's signed limit; retain their bounded compatibility cap.
+    maxOutputTokens: int = Field(default=DEFAULT_MAX_OUTPUT_TOKENS, ge=1, le=32_000)
     toolResult: dict[str, Any] | None = None
     # 仅供确定性传输测试使用；生产环境中的工具选择必须来自模型调用。
     requestedTool: str | None = None
@@ -56,6 +60,9 @@ class SupervisorState(TypedDict):
 
 class AgentRuntime:
     """Executes only model decisions and asks Java to handle all protected data access."""
+
+    # Matches the Java broker's bounded search contract and prevents an unbounded model-triggered retrieval.
+    DEFAULT_RESOURCE_SEARCH_LIMIT = 8
 
     def __init__(self, provider_route: list[tuple[str, str]] | None = None, max_provider_calls: int = 4) -> None:
         self._provider_route = provider_route
@@ -125,7 +132,8 @@ class AgentRuntime:
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": (
                 "Answer only from the authorized tool observation when citing resources. "
-                "Give concise Chinese teaching guidance and cite documentId/blockId or assetId present in it."
+                "Give concise Chinese teaching guidance and cite documentId/blockId or assetId present in it. "
+                "The authorized observation is complete: return the final answer now and do not call any tool."
             )},
             {"role": "user", "content": request.message},
         ]
@@ -193,15 +201,18 @@ class AgentRuntime:
             }.get(provider, "")
             base_url = os.getenv(f"{provider.upper()}_BASE_URL", default_base_url).rstrip("/")
             model = routed_model or os.getenv(f"MATH_AGENT_AI_RUNTIME_{provider.upper()}_MODEL", os.getenv("MATH_AGENT_AI_RUNTIME_MODEL", os.getenv("OPENAI_CHAT_MODEL", "gpt-5.6-luna")))
-            payload: dict[str, Any] = {"model": model, "messages": request_messages}
+            # Java signs this limit before the Worker sees the request, so a concise branch cannot consume an
+            # unbounded provider generation window or delay the surrounding lecture lease.
+            payload: dict[str, Any] = {
+                "model": model,
+                "messages": request_messages,
+                "max_tokens": request.maxOutputTokens,
+            }
             if allow_tools:
                 payload["tools"] = tools
             else:
                 # A bounded final turn prevents unbounded model/tool loops and keeps model cost predictable.
                 payload["tool_choice"] = "none"
-                # Some Responses-to-Chat relays reject a null tools field even for tool_choice=none.
-                if "api.openai.com" not in base_url:
-                    payload["tools"] = [{"type": "function", "function": {"name": "__no_tool__", "description": "internal compatibility schema", "parameters": {"type": "object", "properties": {}}}}]
             try:
                 response = requests.post(f"{base_url}/chat/completions", headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, json=payload, timeout=float(os.getenv("MATH_AGENT_AI_RUNTIME_TIMEOUT_SECONDS", "30")))
                 response.raise_for_status()
@@ -294,6 +305,10 @@ class AgentRuntime:
         if route is None:
             raise HTTPException(status_code=422, detail="No Java broker route is registered for the requested tool")
         payload = dict(tool_call.get("arguments") or {})
+        if tool_call.get("name") == "search_visible_resources":
+            # Model schema intentionally exposes only the semantic query. Run identity is injected by the runtime,
+            # while this fixed broker limit prevents the model from requesting an oversized private-resource result.
+            payload["limit"] = AgentRuntime.DEFAULT_RESOURCE_SEARCH_LIMIT
         try:
             response = requests.post(
                 f"{base_url}{route}",

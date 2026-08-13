@@ -68,6 +68,8 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.stereotype.Service;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import com.doob.mathagent.teaching.service.TeachingWorkflowService.ProgressPhase;
 import com.doob.mathagent.teaching.service.TeachingWorkflowService.ModelExplanationUnit;
 import com.doob.mathagent.teaching.service.TeachingWorkflowService.ModelExplanationHeader;
@@ -89,6 +91,10 @@ import static com.doob.mathagent.teaching.service.TeachingWorkflowService.*;
  * and progress persistence. Keeping those responsibilities separate prevents another god class.</p>
  */
 class TeachingWorkflowExecutionSupport {
+    /** Records per-question degradation without hiding a failed provider branch from operational acceptance. */
+    private static final Logger log = LoggerFactory.getLogger(TeachingWorkflowExecutionSupport.class);
+    /** A question branch is an audit-grade concise explanation; the full pedagogical draft is generated later. */
+    private static final int QUESTION_AGENT_MAX_OUTPUT_TOKENS = 320;
     protected Path processedBooksRoot;
     protected TextbookRetrievalService retrievalService;
     protected TeachingTaskStore taskStore;
@@ -638,8 +644,11 @@ class TeachingWorkflowExecutionSupport {
      *
      * <p>The retrieval result is immutable input to each branch. The branch receives only a short task summary and
      * stable evidence references; the user's text is never used as a search query or persisted as an evidence row.
-     * A missing planner/executor is allowed only for legacy unit-test constructors, while the Spring production
-     * constructor always wires both services. Any production branch failure propagates to the parent DAG.</p>
+     * Branches run in source order because every {@code TeacherAssistantAgent} run deliberately shares the same
+     * user, tenant, and model concurrency keys. Dispatching them in parallel makes the distributed guard reject
+     * otherwise valid sibling work. A missing planner/executor is allowed only for legacy unit-test constructors,
+     * while the Spring production constructor always wires both services. Any production branch failure propagates
+     * to the parent DAG.</p>
      */
     protected void runQuestionAgents(
             TeachingTaskRequest request,
@@ -656,15 +665,27 @@ class TeachingWorkflowExecutionSupport {
         if (agentRunPlanService == null || agentRunExecutionService == null) {
             return;
         }
-        TaskExecutor executor = evidenceTaskExecutor != null ? evidenceTaskExecutor : taskExecutor;
-        if (executor == null) {
-            throw new IllegalStateException("Teaching question-agent executor is not configured");
+        int completedBranches = 0;
+        RuntimeException lastFailure = null;
+        for (TeachingEvidence evidence : questionEvidence) {
+            try {
+                executeQuestionAgent(request, context, taskId, evidence);
+                completedBranches += 1;
+            } catch (RuntimeException failure) {
+                /*
+                 * A child branch is an independently auditable cross-check.  Its failure is already persisted by
+                 * executeQuestionAgent(), while the same authorized stem remains available to the CoursewareAgent.
+                 * Continue with other questions so one transient provider timeout cannot discard their real work.
+                 */
+                lastFailure = failure;
+                log.warn("Question-agent branch failed; retaining its verified evidence for the main handout: {}",
+                        evidence.chunkId(), failure);
+            }
         }
-        List<CompletableFuture<Void>> runs = questionEvidence.stream()
-                .map(evidence -> CompletableFuture.runAsync(
-                        () -> executeQuestionAgent(request, context, taskId, evidence), executor))
-                .toList();
-        runs.forEach(CompletableFuture::join);
+        if (completedBranches == 0 && lastFailure != null) {
+            // No independent solution succeeded, so do not make the main writer appear agent-verified.
+            throw new IllegalStateException("所有题目子智能体均未完成，不能继续生成教师讲义", lastFailure);
+        }
     }
 
     /** Runs and records one isolated question-agent branch. */
@@ -688,7 +709,7 @@ class TeachingWorkflowExecutionSupport {
                             "question_solving",
                             "teacher",
                             Math.max(256, safeEvidenceText(evidence.snippet()).length()),
-                            1200,
+                            QUESTION_AGENT_MAX_OUTPUT_TOKENS,
                             evidence.imagePath() != null && !evidence.imagePath().isBlank(),
                             true,
                             "medium",
@@ -696,7 +717,10 @@ class TeachingWorkflowExecutionSupport {
                             3.0d,
                             0,
                             false,
-                            List.of("tool:search:textbook", "tool:search:private"),
+                            // The branch already receives one authorization-scoped, retrieved question snippet.
+                            // Re-opening global retrieval here adds a second model/tool turn without adding evidence
+                            // to this isolated solution, and can make a valid question explanation exceed its lease.
+                            List.of(),
                             List.of(),
                             List.of("PUBLIC_TEXTBOOK", "TEACHER_PRIVATE", "CLASS_AUTHORIZED"),
                             false,
@@ -919,8 +943,12 @@ class TeachingWorkflowExecutionSupport {
                                 .compare(left, right);
                     })
 
-                    .limit(Math.max(1, request.evidenceLimit()))
                     .map(hit -> toTeacherResourceEvidence(hit, context))
+                    // A retrieved teacher block can itself be a question stem.  Keep a figure-dependent stem only
+                    // when the permission-checked materialization above produced a readable local original; this
+                    // prevents an unrelated text-only hit containing “如图” from making a later PDF unsafe.
+                    .filter(this::isPublishableTeacherEvidence)
+                    .limit(Math.max(1, request.evidenceLimit()))
                     .toList();
             // A source can be synchronized through two paths (for example a Feishu document and an image-recovery
             // import). They are different blocks in storage but one teaching source; retain the image-bearing copy
@@ -928,6 +956,22 @@ class TeachingWorkflowExecutionSupport {
             return deduplicateSupportingEvidence(collectedEvidence);
         } catch (IllegalArgumentException exception) {
             return List.of();
+        }
+    }
+
+    /** Applies the same source-image requirement before a retrieved teacher block reaches the printable handout. */
+    private boolean isPublishableTeacherEvidence(TeachingEvidence evidence) {
+        if (evidence == null || !requiresAuthorizedFigure(evidence.snippet())) {
+            return evidence != null;
+        }
+        String imagePath = evidence.imagePath();
+        if (imagePath == null || imagePath.isBlank()) {
+            return false;
+        }
+        try {
+            return Files.isRegularFile(Path.of(imagePath));
+        } catch (InvalidPathException exception) {
+            return false;
         }
     }
 
@@ -962,10 +1006,14 @@ class TeachingWorkflowExecutionSupport {
             RequestSubject subject = new RequestSubject(
                     context.tenantId(), context.subjectType(), context.subjectId(), context.deviceId()).normalize();
             image = teacherResourceBlockSearchService
-                    // A rendered source page is not an atomic diagram. Resolve only the original DOCX image that is
-                    // structurally adjacent to this exact numbered stem; missing proof means no figure is printed.
+                    // DOCX keeps an atomic image block next to its numbered stem, so it is the most precise source.
                     .resolveVisibleInlineFigureForQuestion(
                             question.sourceResourceDocumentId(), question.questionText(), subject)
+                    // PDF imports intentionally retain the authorized rendered page on the parent block while their
+                    // atomic question rows use "parentBlockId#qN".  Falling back through that documented lineage
+                    // restores the original same-source page without inventing a diagram or bypassing visibility.
+                    .or(() -> teacherResourceBlockSearchService.resolveVisiblePageImageForQuestion(
+                            question.sourceResourceDocumentId(), question.sourceBlockId(), subject))
                     // Both resolvers deliberately return Optional: a missing/unauthorized page asset excludes the
                     // figure-dependent question later in rendering instead of manufacturing a replacement diagram.
                     .flatMap(asset -> materializeTeacherImage(asset, subject, question.questionText()))

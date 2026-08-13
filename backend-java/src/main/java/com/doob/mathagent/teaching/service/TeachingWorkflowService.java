@@ -134,8 +134,15 @@ public class TeachingWorkflowService extends TeachingWorkflowExecutionSupport {
             "六", 6, "七", 7, "八", 8, "九", 9, "十", 10);
     static final Pattern VISUAL_EVIDENCE_REQUEST = Pattern.compile(
             "(?:图|图片|如图|地图|image|figure)", Pattern.CASE_INSENSITIVE);
-    /** A stem that points at a diagram is incomplete until the same authorized diagram is synchronized. */
-    static final Pattern FIGURE_DEPENDENT_QUESTION = Pattern.compile("(?:如图|见图|下图|上图|图中)");
+    /**
+     * A stem that points at a diagram is incomplete until the same authorized diagram is synchronized.
+     *
+     * <p>“平面图中” is an explanation of the solving method, not a reference to a separately supplied source
+     * figure. Keeping it out of the gate prevents a real, self-contained question from being rejected merely
+     * because its AI explanation advises the reader to first reason in a planar drawing. “图中” on its own remains
+     * guarded, so prompts that actually depend on a supplied diagram still require their authorized original.</p>
+     */
+    static final Pattern FIGURE_DEPENDENT_QUESTION = Pattern.compile("(?:如图|见图|下图|上图|(?<!平面)图中)");
     /** An OCR square in a mathematical stem is an unresolved relation, not a printable answer blank. */
     static final Pattern UNRESOLVED_OCR_MATH_GLYPH = Pattern.compile("[□�]");
     /** Importers sometimes put a display label between a shortened OCR preview and the full question stem. */
