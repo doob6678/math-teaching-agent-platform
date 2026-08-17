@@ -83,6 +83,46 @@ function buildResponse(overrides: Partial<StudentExplanationResponse> = {}): Stu
 }
 
 describe("TeachingConversationPanel", () => {
+  it("renders Chinese and escaped LaTex formulas without replacement or ext corruption", () => {
+    const response = buildResponse({
+      cards: [{
+        cardKey: "coordinate-distance",
+        title: "解析几何中的点 $P(x,y)$",
+        summary: "两点距离为 $\\sqrt{(x_1-x_2)^2+(y_1-y_2)^2}$，并且 $\\text{距离}>0$。",
+        items: [],
+        sourceUris: [],
+        renderMode: "formula",
+      }],
+    });
+    const html = renderToStaticMarkup(
+      <TeachingConversationPanel
+        conversationTitle="解析几何讲解"
+        value=""
+        entries={[{ id: "formula-utf8", role: "assistant", createdAt: "2026-08-17T00:00:00Z", response }]}
+        recentConversations={[]}
+        loading={false}
+        loadingHistory={false}
+        error=""
+        imageDraft={null}
+        uploadingImage={false}
+        imageError=""
+        openingConversationId=""
+        onValueChange={vi.fn()}
+        onSubmit={vi.fn()}
+        onImageSelect={vi.fn()}
+        onClearImage={vi.fn()}
+        onStartNewConversation={vi.fn()}
+        onOpenConversation={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain("解析几何中的点");
+    expect(html).toContain("sqrt");
+    expect(html).toContain("text");
+    expect(html).not.toContain("�");
+    expect(html).not.toContain("&gt;0$。ext");
+  });
+
   it("renders inline title formulas in the conversation header and history", () => {
     const html = renderToStaticMarkup(
       <TeachingConversationPanel

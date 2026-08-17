@@ -57,6 +57,10 @@ public class StudentExplanationService {
     private static final String ENDPOINT = "/api/students/explanations";
     /** The curated graph is a compact concept hint, not a long evidence list. */
     private static final int MAX_KNOWLEDGE_GRAPH_MATCHES = 5;
+    /** A short follow-up window is cheaper and clearer when it fits without model-side preparation. */
+    private static final int RAW_RECENT_CONTEXT_MAX_RECORDS = 4;
+    /** Conservative character estimate; CJK-heavy conversation text consumes more tokens than ASCII prose. */
+    private static final int RAW_RECENT_CONTEXT_MAX_ESTIMATED_TOKENS = 512;
     /** Cosine scores below this boundary are too weak to replace an explicit graph label match. */
     private static final double DEFAULT_KNOWLEDGE_GRAPH_SEMANTIC_MIN_SCORE = 0.45d;
     /** Explicit user intents which benefit from the authorized RAG tool-selection turn. */
@@ -240,7 +244,7 @@ public class StudentExplanationService {
             packedConversationContext = prepareConversationContext(
                     normalizedRequest, normalizedSubject, visibleQuestion, context, stages);
             emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord,
-                    imageUnderstanding, aiDraft, conversationTitle, startedNanos, "最近对话已按预算压缩。" );
+                    imageUnderstanding, aiDraft, conversationTitle, startedNanos, "最近对话上下文已准备完成。" );
         }
 
         // Student explanations have one stable orchestration contract: the model decides whether a permitted
@@ -259,17 +263,26 @@ public class StudentExplanationService {
             upsertStage(stages, runningStage("ai_compose_cards", "生成讲解"));
             emitProgress(listener, normalizedRequest, visibleQuestion, stages, cards, sources, imageRecord,
                     imageUnderstanding, aiDraft, conversationTitle, startedNanos, "模型正在根据检索结果生成讲解。");
-            aiCardDraft = aiCardService.generate(
-                    normalizedRequest,
-                    aiContextQuery(query, knowledgeNodes, teacherHits),
-                    packedConversationContext,
-                    imageStatus(imageRecord),
-                    sources,
-                    recentHistory,
-                    List.of(),
-                    stages,
-                    imageDataUrl,
-                    listener::onAiDelta);
+            long composeStarted = System.nanoTime();
+            try {
+                aiCardDraft = aiCardService.generate(
+                        normalizedRequest,
+                        aiContextQuery(query, knowledgeNodes, teacherHits),
+                        packedConversationContext,
+                        imageStatus(imageRecord),
+                        sources,
+                        recentHistory,
+                        List.of(),
+                        stages,
+                        imageDataUrl,
+                        listener::onAiDelta);
+                upsertStage(stages, stageFrom(composeStarted, "ai_compose_cards", "生成讲解", "completed",
+                        "模型已返回并通过结构化卡片校验。"));
+            } catch (RuntimeException exception) {
+                upsertStage(stages, stageFrom(composeStarted, "ai_compose_cards", "生成讲解", "failed",
+                        "模型生成未完成：" + exception.getClass().getSimpleName()));
+                throw exception;
+            }
         }
         aiDraft = aiCardDraft.aiDraft();
         conversationTitle = StudentExplanationConversationTitleSupport.resolve(
@@ -610,6 +623,15 @@ public class StudentExplanationService {
         if (context.messages().isEmpty() && context.summary() == null) {
             return "";
         }
+        if (canUseRawRecentContext(context.messages(), context.summary())) {
+            long stageStarted = System.nanoTime();
+            String rawContext = packRawRecentContext(visibleQuestion, context.messages());
+            upsertStage(stages, stageFrom(stageStarted, "prepare_conversation_context", "使用最近对话上下文", "completed",
+                    "最近 " + context.messages().size() + " 条记录约 " + estimateContextTokens(context.messages())
+                            + " token，低于 " + RAW_RECENT_CONTEXT_MAX_RECORDS + " 条/"
+                            + RAW_RECENT_CONTEXT_MAX_ESTIMATED_TOKENS + " token 安全阈值；未调用上下文压缩服务。"));
+            return rawContext;
+        }
         long stageStarted = System.nanoTime();
         try {
             PythonMigratedWorkloadClient.ConversationContextPreparation prepared = aiCardService.prepareConversationContext(
@@ -641,6 +663,35 @@ public class StudentExplanationService {
             log.warn("student_explanation_context_prepare_failed conversationId={}", request.conversationId(), exception);
             return "";
         }
+    }
+
+    /** Uses a bounded verbatim window only while no persisted summary or budget pressure exists. */
+    static boolean canUseRawRecentContext(
+            List<StudentExplanationConversationContextMessage> messages,
+            StudentExplanationContextSummary summary) {
+        return summary == null && messages.size() <= RAW_RECENT_CONTEXT_MAX_RECORDS
+                && estimateContextTokens(messages) <= RAW_RECENT_CONTEXT_MAX_ESTIMATED_TOKENS;
+    }
+
+    /** Mirrors the worker's message shape without a remote context-preparation call. */
+    static String packRawRecentContext(
+            String visibleQuestion,
+            List<StudentExplanationConversationContextMessage> messages) {
+        List<String> turns = messages.stream().map(message -> {
+            String question = text(message.questionText()).strip();
+            String answer = text(message.answerText()).strip();
+            return (question.isBlank() ? "" : "用户：" + question)
+                    + (question.isBlank() || answer.isBlank() ? "" : "\n")
+                    + (answer.isBlank() ? "" : "助手：" + answer);
+        }).filter(turn -> !turn.isBlank()).toList();
+        String recent = turns.isEmpty() ? "" : "最近会话：\n" + String.join("\n\n", turns) + "\n\n";
+        return recent + "当前题目：\n" + text(visibleQuestion).strip();
+    }
+
+    private static int estimateContextTokens(List<StudentExplanationConversationContextMessage> messages) {
+        int characters = messages.stream().mapToInt(message -> text(message.questionText()).length()
+                + text(message.answerText()).length() + 8).sum();
+        return (characters + 1) / 2;
     }
 
     /**

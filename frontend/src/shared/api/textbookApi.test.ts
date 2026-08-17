@@ -385,6 +385,30 @@ describe("textbookApi", () => {
   });
 
 
+  it("preserves split UTF-8 Chinese SSE payloads without replacement characters", async () => {
+    const encoded = new TextEncoder().encode("event: progress\ndata: {\"taskId\":\"task-utf8\",\"status\":\"RUNNING\",\"nodes\":[{\"code\":\"OUTLINE\",\"name\":\"解析几何\",\"status\":\"running\",\"summary\":\"正在整理\"}],\"workflowEvents\":[],\"evidence\":[],\"stageTimings\":[],\"versions\":{\"teacherReady\":false,\"studentReady\":false,\"lectureReady\":false}}\n\n");
+    const splitAt = encoded.indexOf(0xe8) + 1;
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoded.slice(0, splitAt));
+          controller.enqueue(encoded.slice(splitAt));
+          controller.close();
+        },
+      }),
+    });
+    const client = createTextbookApiClient("http://127.0.0.1:8080", fetchMock);
+    const events: Array<{ name: string; progress: { nodes: Array<{ name: string }> } }> = [];
+
+    await client.streamTeachingTask("task-utf8", (name, progress) => events.push({ name, progress }));
+
+    expect(events).toHaveLength(1);
+    expect(events[0].name).toBe("progress");
+    expect(events[0].progress.nodes[0].name).toBe("解析几何");
+    expect(JSON.stringify(events)).not.toContain("�");
+  });
+
   it("streams durable teaching progress instead of timer-generated placeholder stages", async () => {
     const encoder = new TextEncoder();
     const fetchMock = vi.fn().mockResolvedValue({

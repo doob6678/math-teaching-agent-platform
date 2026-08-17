@@ -487,8 +487,9 @@ public class StudentExplanationController {
         try {
             decoded = JSON.readValue("\"" + encoded + "\"", String.class);
         } catch (Exception ignored) {
-            decoded = encoded.replace("\\n", "\n").replace("\\r", "\r").replace("\\t", "\t")
-                    .replace("\\\"", "\"").replace("\\\\", "\\");
+            // An incomplete JSON string may end inside a TeX command such as \\text. Decoding \t here turned it
+            // into a tab plus literal "ext"; preserve incomplete transport bytes until Jackson can decode the field.
+            decoded = encoded;
         }
         if (!decoded.isBlank()) {
             values.add(decoded.strip());

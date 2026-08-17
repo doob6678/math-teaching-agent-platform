@@ -2896,7 +2896,7 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
       throw new Error("浏览器未返回可读取的流式响应。");
     }
     const reader = response.body.getReader();
-    const decoder = new TextDecoder();
+    const decoder = new TextDecoder("utf-8", { fatal: true });
     let buffer = "";
     while (true) {
       const { done, value } = await reader.read();
@@ -2912,6 +2912,7 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
         separatorIndex = buffer.indexOf("\n\n");
       }
       if (done) {
+        buffer += decoder.decode();
         const trailing = buffer.trim();
         if (trailing) {
           const parsed = parseServerSentEvent<T>(trailing);

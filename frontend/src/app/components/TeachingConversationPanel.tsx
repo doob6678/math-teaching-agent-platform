@@ -338,8 +338,8 @@ export function TeachingConversationPanel({
 }
 
 /**
- * Shows only stages and text that have arrived from the backend SSE stream. The elapsed clock is measured locally
- * from the real request start because backend snapshots do not advance while the provider is producing deltas.
+ * Shows only stages and text that have arrived from the backend SSE stream. The elapsed clock measures the user's
+ * real request wait, while each completed stage keeps its backend-measured duration.
  */
 function LiveAssistantResponse({ entry }: { entry: Extract<TeachingConversationThreadItem, { role: "assistant" }> }) {
   const progress = entry.progress;
