@@ -106,6 +106,30 @@ class TeacherResourceBlockSearchServiceTest {
     }
 
     @Test
+    void differentTeacherCanSearchTenantSharedFeishuButStudentAndOtherTenantCannot() {
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        resourceStore.save(document("doc-feishu-shared", "teacher-1", "TEACHER_SHARED", "Shared Feishu vector bank"));
+        resourceStore.save(new TeacherResourceDocumentResponse(
+                "doc-other-tenant", "school-b", "teacher-2", "feishu", "Other tenant Feishu vector bank",
+                "https://example.feishu.cn/docx/other", null, "TEACHER_SHARED", "synced", "parsed", "embedded",
+                "ready", "md", List.of(), "TEXT", "revision", "checksum", "feishu:docx:other"));
+        blockStore.replaceActiveBlocks("school-a", "doc-feishu-shared", List.of(block(
+                "block-feishu-shared", "doc-feishu-shared", 1, "Shared Feishu vector method for handout retrieval.")));
+        blockStore.replaceActiveBlocks("school-b", "doc-other-tenant", List.of(block(
+                "block-other-tenant", "doc-other-tenant", 1, "Other tenant Feishu vector method.")));
+        TeacherResourceBlockSearchService service = com.doob.mathagent.teacher.TeacherResourceBlockSearchServiceFixture.service(resourceStore, blockStore);
+
+        assertThat(service.search("school-a", "teacher", "teacher-9", "vector method", 10).hits())
+                .extracting(TeacherResourceBlockSearchResponse.Hit::blockId)
+                .containsExactly("block-feishu-shared");
+        assertThat(service.search("school-a", "student", "student-1", "vector method", 10).hits()).isEmpty();
+        assertThat(service.search("school-b", "admin", "admin-2", "vector method", 10).hits())
+                .extracting(TeacherResourceBlockSearchResponse.Hit::blockId)
+                .containsExactly("block-other-tenant");
+    }
+
+    @Test
     void studentCanSearchEverySharedTeacherResourceScopeButNotPrivateBlocks() {
         InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
         InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();

@@ -92,6 +92,7 @@ export function TeachingTaskPanel({
     : "";
   const busy = Boolean(action);
   const completed = task?.status === "COMPLETED";
+  const terminalNonCompleted = task?.status === "FAILED" || task?.status === "WAITING_REVIEW" || task?.status === "DRAFT_ONLY";
 
   return (
     <section className="teaching-task">
@@ -105,7 +106,11 @@ export function TeachingTaskPanel({
 
       {loading ? <StatusLine icon={<Loader2 className="spin" size={16} />} text="正在恢复上次教学任务。" /> : null}
       {error ? <StatusLine icon={<AlertCircle size={16} />} text={error} tone="danger" /> : null}
-      {task && !completed ? <StatusLine icon={<Loader2 className="spin" size={16} />} text="讲义仍在生成中，完成后可打开 PDF 或结构审查。" /> : null}
+      {task && !completed && !terminalNonCompleted ? <StatusLine icon={<Loader2 className="spin" size={16} />} text="讲义仍在生成中，完成后可打开 PDF 或结构审查。" /> : null}
+      {task?.status === "RETRYING" ? <StatusLine icon={<Loader2 className="spin" size={16} />} text="任务正在重试，已完成阶段不会重复执行。" /> : null}
+      {task?.status === "WAITING_REVIEW" ? <StatusLine icon={<AlertCircle size={16} />} text="讲义已通过自动检查，等待教师审校。" tone="warning" /> : null}
+      {task?.status === "DRAFT_ONLY" ? <StatusLine icon={<AlertCircle size={16} />} text="讲义已保留为草稿，尚未进入发布流程。" tone="warning" /> : null}
+      {task?.status === "FAILED" ? <StatusLine icon={<AlertCircle size={16} />} text="讲义任务失败，可从当前任务恢复。" tone="danger" /> : null}
       {completed ? <StatusLine icon={<Check size={16} />} text="讲义已生成。教师版可下载 PDF，学生版用于留白练习。" /> : null}
 
       <HistoryPanel history={history} currentTaskId={task?.taskId} loading={loadingHistory} loadingTaskId={loadingHistoryTaskId} onSelectHistory={onSelectHistory} />
@@ -796,6 +801,9 @@ function statusLabel(status: string) {
     COMPLETED: "已完成",
     RUNNING: "生成中",
     FAILED: "失败",
+    RETRYING: "重试中",
+    WAITING_REVIEW: "待审校",
+    DRAFT_ONLY: "草稿",
     PENDING: "等待中",
     CREATED: "已创建",
     completed: "已完成",
@@ -820,8 +828,8 @@ function nodeStatusLabel(status?: string) {
 
 function nodeStatusTone(status?: string) {
   const normalized = (status ?? "").toUpperCase();
-  if (normalized === "FAILED") return "failed";
-  if (normalized === "RUNNING") return "running";
+  if (normalized === "FAILED" || normalized === "DEGRADED") return "failed";
+  if (normalized === "RUNNING" || normalized === "RETRYING") return "running";
   if (normalized === "PENDING" || normalized === "CREATED") return "pending";
   return "completed";
 }

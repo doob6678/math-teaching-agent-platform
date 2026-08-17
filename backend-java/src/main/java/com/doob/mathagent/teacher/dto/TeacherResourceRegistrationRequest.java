@@ -51,9 +51,9 @@ public record TeacherResourceRegistrationRequest(
                         normalizedLocalPath),
                 normalizedOriginalUrl,
                 normalizedLocalPath,
-                // New uploads participate in the tenant knowledge base by default; callers may still explicitly
-                // select private or class publication and Java applies the final visibility validation.
-                textOrDefault(permissionScope, "TENANT_PUBLIC"),
+                // Feishu is a tenant teacher library by default. Other uploads retain their existing student-share
+                // default; callers may always choose an explicit publication scope.
+                textOrDefault(permissionScope, "feishu".equals(normalizedSourceType) ? "TEACHER_SHARED" : "TENANT_PUBLIC"),
                 normalizeFeishuExportFormat(normalizedSourceType, feishuExportFormat),
                 normalizeParseMode(parseMode));
     }

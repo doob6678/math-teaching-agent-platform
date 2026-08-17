@@ -457,7 +457,14 @@ public class TeachingWorkflowService extends TeachingWorkflowExecutionSupport {
      * 按 taskId 查询当前主体拥有的教学任务。
      */
     public Optional<TeachingTaskResponse> get(String taskId, TeachingRequestContext context) {
-        return taskStore.findByTaskIdAndOwnerKey(taskId, context.normalize().ownerKey());
+        TeachingRequestContext normalized = context.normalize();
+        // Administrators may recover any task within their authenticated tenant. This remains read-only; resume and
+        // update operations retain owner-key checks below, and cross-tenant IDs always remain invisible.
+        if ("admin".equals(normalized.subjectType())) {
+            return taskStore.findByTaskId(taskId)
+                    .filter(task -> normalized.tenantId().equals(task.tenantId()));
+        }
+        return taskStore.findByTaskIdAndOwnerKey(taskId, normalized.ownerKey());
     }
 
     /**
@@ -576,7 +583,11 @@ public class TeachingWorkflowService extends TeachingWorkflowExecutionSupport {
      */
     public List<TeachingTaskResponse> listRecent(TeachingRequestContext context, int limit) {
         // 历史区只展示可继续审查/预览的任务。旧脏数据会把前端历史和讲义预览直接污染掉。
-        return taskStore.listRecentByOwnerKey(context.normalize().ownerKey(), Math.max(limit * 3, limit)).stream()
+        TeachingRequestContext normalized = context.normalize();
+        List<TeachingTaskResponse> recent = "admin".equals(normalized.subjectType())
+                ? taskStore.listRecentByTenant(normalized.tenantId(), Math.max(limit * 3, limit))
+                : taskStore.listRecentByOwnerKey(normalized.ownerKey(), Math.max(limit * 3, limit));
+        return recent.stream()
                 .filter(TeachingWorkflowService::isFrontendDisplayableTask)
                 .limit(limit)
                 .toList();

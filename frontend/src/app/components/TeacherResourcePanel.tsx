@@ -247,6 +247,7 @@ export function TeacherResourcePanel({
         <label>
           <span>资源范围</span>
           <select className="form-select" value={scope} onChange={(event) => onScopeChange(event.target.value)}>
+            <option value="TEACHER_SHARED">教师共享（默认飞书）</option>
             <option value="TENANT_PUBLIC">租户公开（默认）</option>
             <option value="TEACHER_PRIVATE">教师私有</option>
             <option value="CLASS_AUTHORIZED">班级授权</option>

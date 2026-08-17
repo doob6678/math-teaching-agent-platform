@@ -265,6 +265,7 @@ public class TeacherResourceService {
     private static String normalizePermissionScope(String permissionScope, String viewerRole) {
         String normalizedScope = textOrDefault(permissionScope, "TENANT_PUBLIC").toUpperCase();
         if ("TEACHER_PRIVATE".equals(normalizedScope)
+                || "TEACHER_SHARED".equals(normalizedScope)
                 || "CLASS_AUTHORIZED".equals(normalizedScope)
                 || "TENANT_PUBLIC".equals(normalizedScope)
                 || "PUBLIC_TEXTBOOK".equals(normalizedScope)
@@ -276,7 +277,8 @@ public class TeacherResourceService {
 
     /** Shared scopes may safely reuse one Feishu source row across registration identities. */
     private static boolean isSharedScope(String permissionScope) {
-        return "TENANT_PUBLIC".equalsIgnoreCase(textOrDefault(permissionScope, ""))
+        return "TEACHER_SHARED".equalsIgnoreCase(textOrDefault(permissionScope, ""))
+                || "TENANT_PUBLIC".equalsIgnoreCase(textOrDefault(permissionScope, ""))
                 || "CLASS_AUTHORIZED".equalsIgnoreCase(textOrDefault(permissionScope, ""))
                 || "MATH_VIP".equalsIgnoreCase(textOrDefault(permissionScope, ""));
     }

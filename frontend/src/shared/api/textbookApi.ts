@@ -660,7 +660,7 @@ export interface TeachingTaskResponse {
   /** Selected backend-owned handout template. */
   selectedTemplate?: TeachingHandoutTemplateResponse;
   /** 任务状态。 */
-  status: "CREATED" | "RUNNING" | "COMPLETED" | "FAILED";
+  status: "CREATED" | "RUNNING" | "RETRYING" | "WAITING_REVIEW" | "DRAFT_ONLY" | "COMPLETED" | "FAILED";
   /** 用户题目。 */
   questionText?: string;
   /** 学习目标。 */

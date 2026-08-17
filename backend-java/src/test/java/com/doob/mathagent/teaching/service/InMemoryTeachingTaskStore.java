@@ -51,6 +51,16 @@ public class InMemoryTeachingTaskStore implements TeachingTaskStore {
                 .toList();
     }
 
+    @Override
+    public List<TeachingTaskResponse> listRecentByTenant(String tenantId, int limit) {
+        int safeLimit = Math.max(1, Math.min(50, limit));
+        return tasksById.values().stream()
+                .filter(task -> tenantId.equals(task.tenantId()))
+                .sorted(Comparator.comparing(TeachingTaskResponse::taskId).reversed())
+                .limit(safeLimit)
+                .toList();
+    }
+
     /**
      * 保存任务及索引。
      */

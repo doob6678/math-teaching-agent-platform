@@ -898,6 +898,25 @@ class TeachingWorkflowServiceTest {
     }
 
     @Test
+    void sameTenantAdminCanRecoverCrossOwnerTaskButOtherTenantAdminCannot() throws Exception {
+        Path root = createTextbookCorpus();
+        TeachingWorkflowService service = service(root);
+        TeachingRequestContext owner = new TeachingRequestContext("tenant-a", "teacher", "teacher-1", "device-1");
+        TeachingTaskResponse created = service.submit(
+                new TeachingTaskRequest("req-admin-visibility", "函数定义", "函数复习", 2), owner);
+
+        TeachingRequestContext sameTenantAdmin = new TeachingRequestContext("tenant-a", "admin", "admin-2", "device-2");
+        TeachingRequestContext otherTenantAdmin = new TeachingRequestContext("tenant-b", "admin", "admin-3", "device-3");
+
+        assertThat(service.get(created.taskId(), sameTenantAdmin)).isPresent();
+        assertThat(service.listRecent(sameTenantAdmin, 10)).extracting(TeachingTaskResponse::taskId)
+                .contains(created.taskId());
+        assertThat(service.get(created.taskId(), otherTenantAdmin)).isEmpty();
+        assertThat(service.listRecent(otherTenantAdmin, 10)).extracting(TeachingTaskResponse::taskId)
+                .doesNotContain(created.taskId());
+    }
+
+    @Test
     void teacherQuestionBankEvidenceCreatesStudentSafePracticeAndTeacherAnswers() throws Exception {
         Path root = createTextbookCorpus();
         KnowledgeQuestionBankService questionBankService = new KnowledgeQuestionBankService(new InMemoryKnowledgeQuestionBankStore());

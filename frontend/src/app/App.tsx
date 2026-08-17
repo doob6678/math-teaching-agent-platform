@@ -75,6 +75,12 @@ import { HandoutHistorySidebar, replaceHistoryTaskInPlace } from "./components/H
 import { HandoutWorkspacePreviewPanel } from "./components/HandoutWorkspacePreviewPanel";
 import { beginCurrentHandoutRun, replaceCurrentHandoutTask } from "./handoutWorkspaceState";
 import {
+  clearRecoverableHandoutTask,
+  isTerminalHandoutTaskStatus,
+  persistRecoverableHandoutTask,
+  readRecoverableHandoutTaskId,
+} from "./handoutTaskRecovery";
+import {
   compactText,
   formatDateTime,
   Metric,
@@ -105,7 +111,8 @@ const MULTI_AGENT_WORKFLOW_STORAGE_KEY = "math-agent:last-multi-agent-workflow-i
 // a recovery click into a different paid request.  It is scoped to one workflow id and contains no model output.
 const MULTI_AGENT_WORKFLOW_REQUEST_STORAGE_KEY = "math-agent:last-multi-agent-workflow-request";
 const TEACHING_CONVERSATION_STORAGE_KEY = "math-agent:teaching-conversation-thread";
-// These legacy keys used to restore browser-side handout state. Tasks now recover only from owner-scoped backend history.
+const TEACHING_TASK_RECOVERY_STORAGE_KEY = "math-agent:teaching-task-recovery";
+// These legacy keys used to restore browser-side handout state. The current key contains only a session-scoped task ID.
 const LEGACY_TEACHING_TASK_STORAGE_KEY = "math-agent:last-teaching-task-id";
 const LEGACY_HANDOUT_COLLABORATION_STORAGE_KEY = "math-agent:handout-collaboration-thread";
 // This timer is used only after an SSE transport interruption; normal task progress is event-driven.
@@ -689,10 +696,40 @@ export function App() {
   }, [teachingConversationEntries, teachingConversationId]);
 
   useEffect(() => {
-    // Remove both previous handout caches once so a browser upgrade cannot resurrect a stale task beside the current run.
+    // Remove obsolete payload caches once. The replacement stores only an opaque task ID and reloads its state through
+    // the current authenticated session, preventing a refresh from either duplicating work or restoring a stale card.
     globalThis.localStorage?.removeItem(LEGACY_TEACHING_TASK_STORAGE_KEY);
     globalThis.localStorage?.removeItem(LEGACY_HANDOUT_COLLABORATION_STORAGE_KEY);
   }, []);
+
+  useEffect(() => {
+    const taskId = readRecoverableHandoutTaskId(
+      globalThis.localStorage,
+      TEACHING_TASK_RECOVERY_STORAGE_KEY,
+      authSession,
+    );
+    if (!hasVerifiedSession || !taskId) return;
+    let active = true;
+    setLoadingTeachingTask(true);
+    api.getTeachingTask(taskId)
+      .then((task) => {
+        if (!active) return;
+        focusTeachingTask(task);
+        if (isTerminalHandoutTaskStatus(task.status)) {
+          clearRecoverableHandoutTask(globalThis.localStorage, TEACHING_TASK_RECOVERY_STORAGE_KEY);
+        } else {
+          followTeachingTask(task.taskId);
+        }
+      })
+      .catch((error: Error) => {
+        if (!active) return;
+        // A missing task or denied task ID must not be retried from browser storage under another session.
+        clearRecoverableHandoutTask(globalThis.localStorage, TEACHING_TASK_RECOVERY_STORAGE_KEY);
+        if (!isBackendNotFound(error)) setTeachingError(toUserFacingError(error));
+      })
+      .finally(() => { if (active) setLoadingTeachingTask(false); });
+    return () => { active = false; };
+  }, [api, hasVerifiedSession, authSession?.userId, authSession?.role, authSession?.tenantId]);
 
   useEffect(() => {
     if (!hasVerifiedSession) return;
@@ -1331,7 +1368,8 @@ export function App() {
         syncSelectedTeachingTemplate(task);
         setTeachingTask(task);
         upsertHandoutCollaborationTask(task);
-        if (task.status === "COMPLETED" || task.status === "FAILED") {
+        if (isTerminalHandoutTaskStatus(task.status)) {
+          clearRecoverableHandoutTask(globalThis.localStorage, TEACHING_TASK_RECOVERY_STORAGE_KEY);
           activeTeachingStreamTaskIdRef.current = "";
           refreshTeachingHistory();
         }
@@ -1355,7 +1393,8 @@ export function App() {
       syncSelectedTeachingTemplate(task);
       setTeachingTask(task);
       upsertHandoutCollaborationTask(task);
-      if (task.status === "COMPLETED" || task.status === "FAILED") {
+      if (isTerminalHandoutTaskStatus(task.status)) {
+        clearRecoverableHandoutTask(globalThis.localStorage, TEACHING_TASK_RECOVERY_STORAGE_KEY);
         activeTeachingStreamTaskIdRef.current = "";
         refreshTeachingHistory();
         return;
@@ -1459,6 +1498,7 @@ export function App() {
     setResourceSourceType(value);
     setTeacherResourceError("");
     if (value === "feishu") {
+      setResourceScope("TEACHER_SHARED");
       // Feishu Markdown exports contain authenticated image blocks.  Make asset materialization the safe default
       // whenever the source changes to Feishu, so a user cannot accidentally register a text-only copy that the
       // later sync/index/handout path cannot cite with its local images.
@@ -1757,6 +1797,11 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
   }
 
   function focusTeachingTask(task: TeachingTaskResponse) {
+    if (isTerminalHandoutTaskStatus(task.status)) {
+      clearRecoverableHandoutTask(globalThis.localStorage, TEACHING_TASK_RECOVERY_STORAGE_KEY);
+    } else {
+      persistRecoverableHandoutTask(globalThis.localStorage, TEACHING_TASK_RECOVERY_STORAGE_KEY, authSession, task);
+    }
     syncSelectedTeachingTemplate(task);
     setLearningGoal(task.learningGoal ?? "");
     setTeachingQuestion(task.questionText ?? "");
@@ -1767,6 +1812,7 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
 
   function clearFocusedTeachingTask() {
     activeTeachingStreamTaskIdRef.current = "";
+    clearRecoverableHandoutTask(globalThis.localStorage, TEACHING_TASK_RECOVERY_STORAGE_KEY);
     setTeachingTask(null);
     setFeedbackHistory([]);
     setFeedbackMessage("");
@@ -1911,7 +1957,7 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
         focusTeachingTask(latestTask);
         // Keep the server-provided history order stable while replacing only the refreshed task payload.
         setTeachingHistory((current) => replaceHistoryTaskInPlace(current, latestTask));
-        if (latestTask.status === "CREATED" || latestTask.status === "RUNNING") {
+        if (!isTerminalHandoutTaskStatus(latestTask.status)) {
           followTeachingTask(latestTask.taskId);
         } else if (latestTask.status === "COMPLETED") {
           const resolvedVersion = resolvePreviewHandoutVersion(latestTask, handoutVersion);

@@ -106,8 +106,9 @@ public class InMemoryTeacherResourceStore implements TeacherResourceStore {
         if ("teacher".equals(viewerRole) && document.ownerSubjectId().equals(viewerSubjectId)) {
             return true;
         }
-        return ("teacher".equals(viewerRole) || "student".equals(viewerRole))
-                && isSharedSearchScope(document.permissionScope());
+        return "teacher".equals(viewerRole)
+                ? isSharedSearchScope(document.permissionScope())
+                : "student".equals(viewerRole) && isStudentSharedScope(document.permissionScope());
     }
 
     /** Mirrors the production list visibility rule so tests cannot hide a shared teacher upload from students. */
@@ -121,14 +122,24 @@ public class InMemoryTeacherResourceStore implements TeacherResourceStore {
         if ("teacher".equals(viewerRole) && document.ownerSubjectId().equals(viewerSubjectId)) {
             return true;
         }
-        return ("teacher".equals(viewerRole) || "student".equals(viewerRole))
-                && isSharedSearchScope(document.permissionScope());
+        return "teacher".equals(viewerRole)
+                ? isSharedSearchScope(document.permissionScope())
+                : "student".equals(viewerRole) && isStudentSharedScope(document.permissionScope());
     }
 
     /**
      * Returns true for scopes intended to be searched beyond a single private owner.
      */
     private static boolean isSharedSearchScope(String permissionScope) {
+        return "TEACHER_SHARED".equals(permissionScope)
+                || "MATH_VIP".equals(permissionScope)
+                || "PUBLIC_TEXTBOOK".equals(permissionScope)
+                || "CLASS_AUTHORIZED".equals(permissionScope)
+                || "TENANT_PUBLIC".equals(permissionScope);
+    }
+
+    /** Student publication deliberately excludes the tenant-wide teacher-library scope. */
+    private static boolean isStudentSharedScope(String permissionScope) {
         return "MATH_VIP".equals(permissionScope)
                 || "PUBLIC_TEXTBOOK".equals(permissionScope)
                 || "CLASS_AUTHORIZED".equals(permissionScope)

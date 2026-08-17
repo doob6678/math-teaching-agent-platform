@@ -30,6 +30,13 @@ public interface TeachingTaskStore {
     List<TeachingTaskResponse> listRecentByOwnerKey(String ownerKey, int limit);
 
     /**
+     * Lists recent tasks in one tenant for an authenticated administrator. Owner filters must not be applied.
+     */
+    default List<TeachingTaskResponse> listRecentByTenant(String tenantId, int limit) {
+        return List.of();
+    }
+
+    /**
      * 保存任务结果及其归属关系。
      */
     TeachingTaskResponse save(String ownerKey, String idempotencyKey, TeachingTaskResponse task);

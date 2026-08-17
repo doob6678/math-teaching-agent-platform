@@ -100,9 +100,9 @@ public record TeacherResourceRegistrationCommand(
                         normalizedLocalPath),
                 normalizedOriginalUrl,
                 normalizedLocalPath,
-                // Teacher uploads are tenant-shared by default so students can read them immediately; an explicit
-                // TEACHER_PRIVATE choice still remains available for owner-only material.
-                textOrDefault(permissionScope, "TENANT_PUBLIC"),
+                // Synced Feishu roots are a tenant teacher library by default. General uploads retain their
+                // student-share default, while callers can select an explicit scope for either source type.
+                textOrDefault(permissionScope, "feishu".equals(normalizedSourceType) ? "TEACHER_SHARED" : "TENANT_PUBLIC"),
                 normalizeFeishuExportFormat(normalizedSourceType, feishuExportFormat),
                 normalizeParseMode(parseMode));
     }

@@ -72,6 +72,21 @@ public class MyBatisTeachingTaskStore implements TeachingTaskStore {
     }
 
     @Override
+    public List<TeachingTaskResponse> listRecentByTenant(String tenantId, int limit) {
+        if (tenantId == null || tenantId.isBlank()) {
+            return List.of();
+        }
+        int safeLimit = Math.max(1, Math.min(50, limit));
+        return mapper.selectPage(Page.of(1, safeLimit), new LambdaQueryWrapper<TeachingTaskEntity>()
+                .eq(TeachingTaskEntity::getTenantId, tenantId.strip())
+                .orderByDesc(TeachingTaskEntity::getUpdatedAt))
+                .getRecords()
+                .stream()
+                .map(this::readResponse)
+                .toList();
+    }
+
+    @Override
     public TeachingTaskResponse createIfAbsent(String ownerKey, String idempotencyKey, TeachingTaskResponse task) {
         TeachingTaskEntity entity = toEntity(ownerKey, idempotencyKey, task);
         try {
