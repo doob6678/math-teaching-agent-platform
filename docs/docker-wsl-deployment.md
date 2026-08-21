@@ -2,7 +2,7 @@
 
 The compose project packages the frontend/Nginx, Java backend, Python model worker, MySQL, Redis, RabbitMQ and the
 compose-owned Milvus stack (Milvus, etcd and MinIO). The active host ports are frontend `5173`, backend `8080`,
-worker `8092`, MySQL `3307`, Redis `6380`, RabbitMQ `5674/15674`, and Milvus `19531`. Port `19530` belongs to a
+worker `8092`, MySQL `3307`, Redis `6380`, RabbitMQ `5673/15673`, and Milvus `19531`. Port `19530` belongs to a
 separate legacy `milvus-standalone` container and must not be used for this project.
 
 ## Configure
@@ -11,7 +11,9 @@ Run from the repository root in WSL. Keep `.env` local and replace every require
 provider is `https://api1.aisz.mom/v1` with model `gpt-5.6-luna`; both are explicit defaults and can be overridden
 only by `OPENAI_BASE_URL`/`OPENAI_CHAT_MODEL` in `.env`. The host paths in `.env` are required read-only mounts:
 `MATH_AGENT_MODEL_ROOT`, `MATH_AGENT_PROCESSED_BOOKS_HOST_ROOT`, `MATH_AGENT_PDF_FONT_HOST_PATH`, and
-`MATH_AGENT_GAOKAO_INPUT_HOST_ROOT`.
+`MATH_AGENT_GAOKAO_INPUT_HOST_ROOT`. `MATH_AGENT_LOCAL_TEACHER_RESOURCES_HOST_ROOT` is an optional backend-only,
+read-only teacher corpus mount; its stable in-container destination is configured by
+`MATH_AGENT_LOCAL_TEACHER_RESOURCES_ROOT`.
 
 ```bash
 cp .env.example .env
@@ -38,6 +40,12 @@ docker compose --env-file .env ps
 
 MySQL initializes all SQL files under `backend-java/src/main/resources/db` only when its named volume is empty.
 Existing named volumes are never reformatted by `up` or `down`.
+
+Teacher source durability is intentionally more specific than the generic backend volume. Browser uploads persist in
+`./.local-storage/teacher-resource-uploads`, downloaded source files and their catalog persist in
+`./.local-storage/teacher-source-imports`, and extracted assets persist in `./.local-storage/teacher-assets`. Do not
+delete or replace one of these directories independently: the source catalog, MySQL source metadata and the actual
+source tree must remain available at the same container paths for authorized handout document reads.
 
 ## Verify
 

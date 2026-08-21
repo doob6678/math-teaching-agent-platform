@@ -200,6 +200,34 @@ class VectorIndexServiceTest {
     }
 
     @Test
+    void warmTeacherSearchSkipsRedundantMilvusReadinessCalls() {
+        CapturingTransport transport = new CapturingTransport();
+        VectorIndexService service = teacherSearchService(transport);
+
+        service.searchTeacherResourceBlocks("triangle sine rule", 3);
+        service.searchTeacherResourceBlocks("cosine rule", 3);
+
+        assertThat(requestCount(transport, "/collections/create")).isEqualTo(1);
+        assertThat(requestCount(transport, "/indexes/create")).isEqualTo(1);
+        assertThat(requestCount(transport, "/collections/load")).isEqualTo(1);
+        assertThat(requestCount(transport, "/entities/search")).isEqualTo(2);
+    }
+
+    @Test
+    void failedTeacherSearchInvalidatesReadinessBeforeRetry() {
+        CapturingTransport transport = new CapturingTransport(false, 2);
+        VectorIndexService service = teacherSearchService(transport);
+
+        service.searchTeacherResourceBlocks("triangle sine rule", 3);
+        service.searchTeacherResourceBlocks("cosine rule", 3);
+
+        assertThat(requestCount(transport, "/collections/create")).isEqualTo(2);
+        assertThat(requestCount(transport, "/indexes/create")).isEqualTo(2);
+        assertThat(requestCount(transport, "/collections/load")).isEqualTo(2);
+        assertThat(requestCount(transport, "/entities/search")).isEqualTo(3);
+    }
+
+    @Test
     void teacherSearchDoesNotRetryOrWidenWhenMilvusRejectsTheFilter() {
         CapturingTransport transport = new CapturingTransport(true);
         VectorIndexService service = new VectorIndexService(
@@ -222,6 +250,21 @@ class VectorIndexServiceTest {
                 .filter(request -> request.uri().toString().endsWith("/entities/search"))
                 .findFirst().orElseThrow().body())
                 .contains("tenant-a", "document-a", "TEACHER_PRIVATE", "feishu");
+    }
+
+    private static VectorIndexService teacherSearchService(CapturingTransport transport) {
+        return new VectorIndexService(
+                new VectorIndexProperties(true, "http://milvus.local:19530", "token", "math_agent_resource_blocks", 3,
+                        "https://embedding.local/v1", "embedding-key", "text-embedding-v4", 10000),
+                transport,
+                new InMemoryTeacherResourceStore(),
+                new InMemoryTeacherDocumentBlockStore());
+    }
+
+    private static long requestCount(CapturingTransport transport, String pathSuffix) {
+        return transport.requests.stream()
+                .filter(request -> request.uri().getPath().endsWith(pathSuffix))
+                .count();
     }
 
     private static TeacherResourceDocumentResponse document(
@@ -273,13 +316,20 @@ class VectorIndexServiceTest {
         private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
         private final List<Request> requests = new ArrayList<>();
         private final boolean failTeacherSearch;
+        private final int transientTeacherSearchFailureAt;
+        private int teacherSearchRequests;
 
         private CapturingTransport() {
-            this(false);
+            this(false, -1);
         }
 
         private CapturingTransport(boolean failTeacherSearch) {
+            this(failTeacherSearch, -1);
+        }
+
+        private CapturingTransport(boolean failTeacherSearch, int transientTeacherSearchFailureAt) {
             this.failTeacherSearch = failTeacherSearch;
+            this.transientTeacherSearchFailureAt = transientTeacherSearchFailureAt;
         }
 
         @Override
@@ -317,6 +367,10 @@ class VectorIndexServiceTest {
                 return new VectorHttpResponse(200, "{\"code\":0,\"data\":[{\"count(*)\":925}]}");
             }
             if (uri.toString().endsWith("/entities/search")) {
+                teacherSearchRequests += 1;
+                if (teacherSearchRequests == transientTeacherSearchFailureAt) {
+                    return new VectorHttpResponse(503, "{\"code\":1,\"message\":\"temporarily unavailable\"}");
+                }
                 return failTeacherSearch
                         ? new VectorHttpResponse(400, "{\"code\":1100,\"message\":\"invalid filter\"}")
                         : new VectorHttpResponse(200, "{\"code\":0,\"data\":[]}");

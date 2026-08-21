@@ -381,6 +381,18 @@ class TeachingHandoutPdfExportServiceTest {
     }
 
     @Test
+    void normalizesEscapedMarkdownHeadingInsteadOfDroppingItsLessonText() {
+        String sanitized = TeachingHandoutPdfExportService.sanitizeLatexForExport("""
+                \\## 解题过程
+                步骤 1：先整理已知条件。
+                """);
+
+        assertThat(sanitized)
+                .contains("\\subsection*{解题过程}", "步骤 1")
+                .doesNotContain("\\#\\#");
+    }
+
+    @Test
     void omitsTransportCaptionForAnAuthorizedInlineQuestionFigure() throws Exception {
         Path image = Files.createTempFile("authorized-question-figure-", ".png");
         try {

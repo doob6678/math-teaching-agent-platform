@@ -17,9 +17,12 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 const root = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const outputRoot = resolve(process.env.ACCEPTANCE_OUTPUT_DIR ?? join(root, "output", "acceptance", "2026-07-13-agent-acceptance_matrix"));
-const backend = process.env.ACCEPTANCE_BACKEND_URL ?? "http://127.0.0.1:8080";
+const backend = process.env.MATH_AGENT_ACCEPTANCE_BASE_URL?.trim() || process.env.ACCEPTANCE_BACKEND_URL?.trim() || "http://127.0.0.1:8080";
 const username = process.env.ACCEPTANCE_USERNAME ?? "teacher";
 const password = process.env.ACCEPTANCE_PASSWORD ?? "teacher-123456";
+const acceptanceStabilityMs = Number(process.env.ACCEPTANCE_STABILITY_WINDOW_MS ?? "30000");
+const serviceProbeIntervalMs = Number(process.env.ACCEPTANCE_SERVICE_PROBE_INTERVAL_MS ?? "5000");
+const composeProjectDirectory = root;
 const pollIntervalMs = Number(process.env.ACCEPTANCE_POLL_INTERVAL_MS ?? "5000");
 const maxPollMs = Number(process.env.ACCEPTANCE_MAX_POLL_MS ?? "1800000");
 const resumeSubmitted = process.env.ACCEPTANCE_RESUME_SUBMITTED === "true";
@@ -57,6 +60,76 @@ function captureSessionCookie(response) {
   if (pairs.length > 0) sessionCookie = pairs.join("; ");
 }
 
+async function composeServiceSnapshot() {
+  const { stdout } = await execFileAsync("docker", ["compose", "ps", "-a", "--format", "json", "backend", "ai-worker"], {
+    cwd: composeProjectDirectory,
+    windowsHide: true,
+  });
+  const services = stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => JSON.parse(line));
+  const snapshot = {};
+  for (const service of services) {
+    const id = service.ID || service.Id || service.ContainerID;
+    if (!id) continue;
+    const { stdout: inspectText } = await execFileAsync("docker", ["inspect", "--format", "{{json .}}", id], { windowsHide: true });
+    const inspect = JSON.parse(inspectText.trim());
+    snapshot[service.Service || service.Name?.replace(/^.*-/, "") || id] = {
+      id,
+      state: service.State,
+      health: service.Health || inspect.State?.Health?.Status || "",
+      restartCount: Number(inspect.RestartCount ?? 0),
+    };
+  }
+  return snapshot;
+}
+
+async function backendReady() {
+  try {
+    const response = await fetch(`${backend}/actuator/health/readiness`, { signal: AbortSignal.timeout(5000) });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+function stableSnapshot(snapshot) {
+  return ["backend", "ai-worker"].every((service) => {
+    const item = snapshot[service];
+    return item && item.state === "running" && item.health === "healthy" && item.restartCount === 0;
+  });
+}
+
+async function waitForStableServices(phase) {
+  const deadline = Date.now() + Number(process.env.ACCEPTANCE_SERVICE_WAIT_MS ?? "900000");
+  let baseline = null;
+  let baselineAt = 0;
+  while (Date.now() < deadline) {
+    let snapshot;
+    try {
+      snapshot = await composeServiceSnapshot();
+    } catch (error) {
+      console.warn(`[acceptance] ${phase}: cannot inspect Compose services; waiting (${error.message})`);
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, serviceProbeIntervalMs));
+      continue;
+    }
+    const sameIdentity = baseline && ["backend", "ai-worker"].every((service) => snapshot[service]?.id === baseline[service]?.id);
+    if (!stableSnapshot(snapshot) || !sameIdentity || !(await backendReady())) {
+      baseline = snapshot;
+      baselineAt = 0;
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, serviceProbeIntervalMs));
+      continue;
+    }
+    if (!baselineAt) {
+      baseline = snapshot;
+      baselineAt = Date.now();
+    }
+    if (Date.now() - baselineAt >= acceptanceStabilityMs) {
+      return snapshot;
+    }
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, serviceProbeIntervalMs));
+  }
+  throw new Error(`[acceptance] ${phase}: backend/ai-worker did not remain healthy with stable IDs for ${acceptanceStabilityMs}ms`);
+}
+
 async function jsonRequest(path, options = {}) {
   const response = await fetch(`${backend}${path}`, {
     ...options,
@@ -86,6 +159,7 @@ async function jsonRequest(path, options = {}) {
 }
 
 async function submitTask(session, scenario) {
+  await waitForStableServices(`before submit ${scenario.code}`);
   const clientRequestId = `acceptance-${scenario.code}-${randomUUID()}`;
   const request = {
     clientRequestId,
@@ -113,14 +187,22 @@ async function submitTask(session, scenario) {
 }
 
 async function downloadPreview(session, taskId, version, destination) {
+  await waitForStableServices(`before export ${taskId}/${version}`);
   const path = `/api/teaching/tasks/${encodeURIComponent(taskId)}/handout/${version}/pdf/preview`;
   let response;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    response = await fetch(`${backend}${path}`, {
-      headers: sessionCookie ? { Cookie: sessionCookie } : {},
-    });
-    if (response.status !== 429 || attempt === 2) break;
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, retryDelayMs));
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      response = await fetch(`${backend}${path}`, {
+        headers: sessionCookie ? { Cookie: sessionCookie } : {},
+        signal: AbortSignal.timeout(30000),
+      });
+    } catch (error) {
+      if (attempt === 4) throw error;
+      await waitForStableServices(`retry export ${taskId}/${version}`);
+      continue;
+    }
+    if (![429, 502, 503, 504].includes(response.status) || attempt === 4) break;
+    await waitForStableServices(`retry export ${taskId}/${version}`);
   }
   const bytes = Buffer.from(await response.arrayBuffer());
   if (!response.ok) {
@@ -157,6 +239,7 @@ async function inspectPdf(pdfPath, pageDir) {
 
 async function main() {
   await mkdir(outputRoot, { recursive: true });
+  await waitForStableServices("before login");
   const login = await jsonRequest("/api/auth/login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -231,12 +314,15 @@ async function main() {
     for (const record of [...records.values()]) {
       let task;
       try {
+        await waitForStableServices(`before poll ${record.taskId}`);
         task = await jsonRequest(`/api/teaching/tasks/${encodeURIComponent(record.taskId)}`, {
         });
       } catch (error) {
-        if (error.status !== 429) throw error;
-        await new Promise((resolveDelay) => setTimeout(resolveDelay, Math.max(pollIntervalMs, 30000)));
-        continue;
+        if ([429, 502, 503, 504].includes(error.status) || error.cause?.code === "ECONNREFUSED") {
+          await waitForStableServices(`retry poll ${record.taskId}`);
+          continue;
+        }
+        throw error;
       }
       record.task = task;
       record.snapshots.push({

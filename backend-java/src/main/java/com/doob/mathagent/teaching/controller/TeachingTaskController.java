@@ -487,7 +487,7 @@ public class TeachingTaskController {
         try {
             return pdfExportService.renderForPublication(task, version);
         } catch (IllegalStateException exception) {
-            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, exception.getMessage(), exception);
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, exception.getMessage(), exception);
         }
     }
 
@@ -563,7 +563,7 @@ public class TeachingTaskController {
         } catch (IllegalArgumentException exception) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, exception.getMessage(), exception);
         } catch (IllegalStateException exception) {
-            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, exception.getMessage(), exception);
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, exception.getMessage(), exception);
         }
     }
 

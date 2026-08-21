@@ -113,9 +113,39 @@ public record TeachingTaskResponse(
     public TeachingTaskResponse studentSafe() {
         return new TeachingTaskResponse(
                 taskId, clientRequestId, tenantId, subjectType, subjectId, selectedTemplate, status,
-                questionText, learningGoal, watermarkText, nodes, workflowEvents, List.of(), List.of(),
-                "", "", studentHandoutLatex, "", interactiveSuggestions, memoryReuse, stageTimings,
-                null, null, null, null, errorMessage);
+                questionText, learningGoal, watermarkText, studentSafeNodes(nodes), studentSafeEvents(workflowEvents),
+                List.of(), List.of(), "", "", studentHandoutLatex, "", interactiveSuggestions, memoryReuse,
+                studentSafeTimings(stageTimings), null, null, null, null, "");
+    }
+
+    /**
+     * Retains only execution state for student task polling. Workflow event summaries can contain source titles,
+     * evidence excerpts, model metadata, or teacher-only diagnostics and must never cross the student boundary.
+     */
+    private static List<TeachingWorkflowEvent> studentSafeEvents(List<TeachingWorkflowEvent> events) {
+        if (events == null || events.isEmpty()) {
+            return List.of();
+        }
+        return events.stream()
+                .map(event -> new TeachingWorkflowEvent(
+                        "", "", "system", "", "stage", event.status(), "", "", List.of()))
+                .toList();
+    }
+
+    /** Nodes keep only their stable code and state because names and summaries can reveal source-bound work. */
+    private static List<TeachingWorkflowNode> studentSafeNodes(List<TeachingWorkflowNode> nodes) {
+        if (nodes == null || nodes.isEmpty()) {
+            return List.of();
+        }
+        return nodes.stream().map(node -> new TeachingWorkflowNode(node.code(), "", node.status(), "")).toList();
+    }
+
+    /** Stage names can identify retrieval, rendering, or model work, so retain timing shape without its label. */
+    private static List<StageTiming> studentSafeTimings(List<StageTiming> timings) {
+        if (timings == null || timings.isEmpty()) {
+            return List.of();
+        }
+        return timings.stream().map(timing -> new StageTiming("", timing.elapsedMs())).toList();
     }
 
     /** Creates a durable review transition without discarding the verified draft, evidence, or sibling versions. */
@@ -125,6 +155,24 @@ public record TeachingTaskResponse(
                 questionText, learningGoal, watermarkText, nodes, workflowEvents, reactTrace, evidence,
                 handoutLatex, teacherHandoutLatex, studentHandoutLatex, lectureHandoutLatex, interactiveSuggestions,
                 memoryReuse, stageTimings, aiDraft, draftSections, draftReview, mergeResult, nextErrorMessage);
+    }
+
+    /**
+     * Replaces the run-authorized evidence snapshot without altering ownership, execution state, or generated text.
+     *
+     * <p>The internal handout broker uses this narrow copy after a Python-selected teacher-resource query has passed
+     * the same subject visibility check as the initial Java retrieval. Persisting that result makes its opaque
+     * document reference available to a later bounded read and prevents the final task projection from reverting to
+     * a pre-query zero-hit snapshot.</p>
+     */
+    public TeachingTaskResponse withEvidence(List<TeachingEvidence> nextEvidence) {
+        return new TeachingTaskResponse(
+                taskId, clientRequestId, tenantId, subjectType, subjectId, selectedTemplate, status,
+                questionText, learningGoal, watermarkText, nodes, workflowEvents, reactTrace,
+                nextEvidence == null ? List.of() : List.copyOf(nextEvidence), handoutLatex, teacherHandoutLatex,
+                studentHandoutLatex, lectureHandoutLatex, interactiveSuggestions, memoryReuse, stageTimings,
+                aiDraft, draftSections, draftReview, mergeResult, errorMessage,
+                headerLeft, headerRight, footerLeft, footerRight);
     }
 
     /**
@@ -435,7 +483,34 @@ public record TeachingTaskResponse(
             int retryCount,
             int maxRetries,
             boolean recoveredAfterRetry,
-            List<AiRecoveryEvent> recoveryEvents) {
+            List<AiRecoveryEvent> recoveryEvents,
+            List<AssetPlacement> assetPlacements) {
+
+        /** Compatibility constructor for existing durable drafts created before asset placement metadata existed. */
+        public AiDraft(
+                boolean enabled,
+                String providerName,
+                String modelCode,
+                int promptTokens,
+                int completionTokens,
+                int totalTokens,
+                String content,
+                String message,
+                boolean structured,
+                String teacherExplanation,
+                String studentHint,
+                String lectureContent,
+                List<String> knowledgePoints,
+                List<String> followUpQuestions,
+                String parseError,
+                int retryCount,
+                int maxRetries,
+                boolean recoveredAfterRetry,
+                List<AiRecoveryEvent> recoveryEvents) {
+            this(enabled, providerName, modelCode, promptTokens, completionTokens, totalTokens, content, message,
+                    structured, teacherExplanation, studentHint, lectureContent, knowledgePoints, followUpQuestions,
+                    parseError, retryCount, maxRetries, recoveredAfterRetry, recoveryEvents, List.of());
+        }
 
         /**
          * Backward-compatible constructor for disabled and provider-failure responses.
@@ -450,8 +525,21 @@ public record TeachingTaskResponse(
                 String content,
                 String message) {
             this(enabled, providerName, modelCode, promptTokens, completionTokens, totalTokens, content, message,
-                    false, "", "", "", List.of(), List.of(), "", 0, 0, false, List.of());
+                    false, "", "", "", List.of(), List.of(), "", 0, 0, false, List.of(), List.of());
         }
+    }
+
+    /**
+     * AI-authored image placement contract. Asset identifiers remain opaque until Java revalidates task, subject and
+     * variant ownership before controlled materialization for the renderer.
+     */
+    public record AssetPlacement(
+            int questionNumber,
+            List<String> assetIds,
+            String anchor,
+            String layout,
+            List<String> variants,
+            String caption) {
     }
 
     /**

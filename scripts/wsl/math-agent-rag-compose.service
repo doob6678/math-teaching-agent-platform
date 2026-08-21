@@ -1,0 +1,13 @@
+[Unit]
+Description=Math Agent RAG Compose owner in WSL user session
+After=default.target
+
+[Service]
+Type=simple
+WorkingDirectory=@REPOSITORY_ROOT@
+# 先幂等启动 Compose，再由同一 systemd 进程持续等待，避免无终端时 WSL user session 被回收。
+ExecStart=/usr/bin/bash -lc '/usr/bin/timeout 180 /usr/bin/docker compose --env-file .env up -d --no-recreate && exec /usr/bin/sleep infinity'
+# 不设置 ExecStop：停止 user unit 只释放 Compose owner，不停止 Docker 或任何容器。
+
+[Install]
+WantedBy=default.target

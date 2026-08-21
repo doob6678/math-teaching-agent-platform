@@ -5,7 +5,11 @@ import com.doob.mathagent.teaching.vo.TeachingTaskProgressResponse;
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
 import jakarta.annotation.PreDestroy;
 import java.time.Duration;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -33,7 +37,42 @@ public class TeachingTaskEventStreamService {
      */
     private static final Duration STREAM_TIMEOUT = Duration.ofMillis(readStreamTimeoutMillis());
 
+    private static final Set<String> PYTHON_EVENT_ALLOWLIST = Set.of(
+            "event", "status", "node", "phase", "revisionRound", "turn", "provider", "model", "deterministicRepair");
+
     private final ExecutorService streamExecutor;
+
+    /** Projects worker events to scalar operational fields and drops checkpoint/document content. */
+    static Map<String, Object> projectPythonEvent(Map<String, Object> event) {
+        if (event == null || event.get("event") == null) {
+            return Map.of();
+        }
+        Map<String, Object> projected = new LinkedHashMap<>();
+        for (String field : PYTHON_EVENT_ALLOWLIST) {
+            Object value = event.get(field);
+            if (value instanceof String || value instanceof Number || value instanceof Boolean) {
+                projected.put(field, value);
+            }
+        }
+        return Map.copyOf(projected);
+    }
+
+    /** Removes duplicate or out-of-order worker event ids before a projection is published. */
+    static List<PythonEvent> deduplicatePythonEvents(List<PythonEvent> events, long afterId) {
+        if (events == null || events.isEmpty()) return List.of();
+        long cursor = Math.max(0, afterId);
+        java.util.ArrayList<PythonEvent> result = new java.util.ArrayList<>();
+        for (PythonEvent event : events) {
+            if (event == null || event.eventId() <= cursor) continue;
+            Map<String, Object> safe = projectPythonEvent(event.data());
+            if (safe.isEmpty()) continue;
+            result.add(new PythonEvent(event.eventId(), safe));
+            cursor = event.eventId();
+        }
+        return List.copyOf(result);
+    }
+
+    record PythonEvent(long eventId, Map<String, Object> data) {}
 
     /** Creates the production event executor on Java 21 virtual threads. */
     public TeachingTaskEventStreamService() {
@@ -131,7 +170,7 @@ public class TeachingTaskEventStreamService {
             case COMPLETED -> "completed";
             case WAITING_REVIEW -> "waiting_review";
             case DRAFT_ONLY -> "draft_only";
-            case FAILED, CREATED, RUNNING -> "failed";
+            case FAILED, CREATED, RUNNING, RETRYING -> "failed";
         };
     }
 

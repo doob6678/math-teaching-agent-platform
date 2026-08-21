@@ -13,6 +13,68 @@ vi.mock("pdfjs-dist/build/pdf.worker.mjs?url", () => ({
 }));
 
 describe("TeachingTaskPanel", () => {
+  it("does not render teacher handout content when the student handout is unavailable", () => {
+    const task: TeachingTaskResponse = {
+      taskId: "task-student-unavailable",
+      clientRequestId: "req-student-unavailable",
+      tenantId: "school-a",
+      subjectType: "teacher",
+      subjectId: "teacher-1",
+      status: "COMPLETED",
+      questionText: "完成参数计算。",
+      learningGoal: "掌握双曲线参数关系",
+      nodes: [],
+      reactTrace: [],
+      evidence: [],
+      handoutLatex: "\\section{例题与答案}\\paragraph{答案与评分点}答案为 $b^2=16$。",
+      teacherHandoutLatex: "\\section{例题与答案}\\paragraph{答案与评分点}答案为 $b^2=16$。",
+      studentHandoutLatex: undefined,
+      interactiveSuggestions: [],
+    };
+
+    const html = renderToStaticMarkup(
+      <TeachingTaskPanel
+        task={task}
+        loading={false}
+        error=""
+        history={[]}
+        loadingHistory={false}
+        loadingHistoryTaskId=""
+        version="student"
+        previewLatex=""
+        previewPdfUrl=""
+        previewPdfBytes={null}
+        previewPdfMeta={null}
+        action=""
+        exportMessage=""
+        feedbackRating={4}
+        feedbackDecision="helpful"
+        feedbackComment=""
+        submittingFeedback={false}
+        feedbackMessage=""
+        feedbackHistory={[]}
+        loadingFeedbackHistory={false}
+        batchFolderPath="handouts/task-student-unavailable"
+        onVersionChange={vi.fn()}
+        onBatchFolderPathChange={vi.fn()}
+        onPreviewLatex={vi.fn()}
+        onPreviewPdf={vi.fn()}
+        onExportLatex={vi.fn()}
+        onExportPdf={vi.fn()}
+        onExportBatchZip={vi.fn()}
+        onSelectHistory={vi.fn()}
+        onFeedbackRatingChange={vi.fn()}
+        onFeedbackDecisionChange={vi.fn()}
+        onFeedbackCommentChange={vi.fn()}
+        onSubmitFeedback={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain("当前版本暂无讲义内容");
+    expect(html).not.toContain("答案为");
+    expect(html).not.toContain("答案与评分点");
+  });
+
   it("renders handout workflow, review entries, and math without leaking prompts", () => {
     const task: TeachingTaskResponse = {
       taskId: "task-teaching-1",

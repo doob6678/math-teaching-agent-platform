@@ -1,5 +1,7 @@
 package com.doob.mathagent.teaching.service;
 
+import com.doob.mathagent.teaching.mq.LectureTaskLease;
+import com.doob.mathagent.teaching.mq.LectureTaskLeaseStore;
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
 import java.util.List;
 import java.util.Optional;
@@ -54,5 +56,32 @@ public interface TeachingTaskStore {
 
     default TeachingTaskResponse createIfAbsent(String ownerKey, String idempotencyKey, TeachingTaskResponse task) {
         return save(ownerKey, idempotencyKey, task);
+    }
+
+    /**
+     * 仅异步 Worker 使用的围栏写入。默认实现保留内存测试与同步流程的既有行为；生产 MySQL 实现必须
+     * 以任务、RUNNING 状态和租约令牌为同一条更新条件。
+     */
+    default boolean saveOwnedRunning(LectureTaskLease lease, TeachingTaskResponse task) {
+        return false;
+    }
+
+    /** 当前 Worker 在调用外部 Writer 前直接确认其持久化租约仍然有效。 */
+    default boolean ownsLease(LectureTaskLease lease) {
+        return false;
+    }
+
+    /** 以同一围栏 CAS 写入最终响应并完成任务，防止陈旧 Worker 伪造完成快照。 */
+    default boolean completeOwned(LectureTaskLease lease, TeachingTaskResponse task) {
+        return false;
+    }
+
+    /** 以同一围栏 CAS 写入失败/重试快照和执行状态。 */
+    default LectureTaskLeaseStore.FailureOutcome failOwned(
+            LectureTaskLease lease,
+            TeachingTaskResponse task,
+            String error,
+            int maximumAttempts) {
+        return LectureTaskLeaseStore.FailureOutcome.LEASE_LOST;
     }
 }

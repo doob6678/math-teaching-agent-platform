@@ -22,7 +22,13 @@ import org.springframework.stereotype.Service;
 @Service
 public class KnowledgeGraphSpineSeedService {
 
-    private static final String SOURCE_TAG = "display_spine_v0.1";
+    private static final String SOURCE_TAG = "display_spine_v0.2";
+    private static final String KNOWLEDGE_PREFIX = "- \u77e5\u8bc6\u70b9\uff1a";
+    private static final String ROUTING_ALIAS_PREFIX = "- \u68c0\u7d22\u522b\u540d\uff1a";
+    private static final String RETRIEVAL_SIGNAL_PREFIX = "- \u9898\u5e72\u4fe1\u53f7\uff1a";
+    private static final String FEISHU_DIRECTORY_PREFIX = "- \u98de\u4e66\u76ee\u5f55\uff1a";
+    private static final String EXCLUSION_TERM_PREFIX = "- \u6613\u6df7\u6392\u9664\uff1a";
+    private static final String METHOD_PREFIX = "- \u9898\u578b\u65b9\u6cd5\uff1a";
 
     private final KnowledgeQuestionBankStore store;
     private final KnowledgeGraphSpineProperties properties;
@@ -99,7 +105,6 @@ public class KnowledgeGraphSpineSeedService {
         String currentModuleName = "";
         String currentTopicId = "";
         String currentTopicName = "";
-        String currentTopicKnowledge = "";
         boolean readingCoreRelations = false;
         List<String> coreRelationLines = new ArrayList<>();
         int methodCount = 0;
@@ -117,14 +122,14 @@ public class KnowledgeGraphSpineSeedService {
                 coreRelationLines.add(line.substring(2));
                 continue;
             }
-            if (line.startsWith("## ") && !line.startsWith("### ")) {
+            // Only numbered level-two headings are modules. Version notes and relation headings are metadata, never nodes.
+            if (line.matches("^##\\s+\\d+\\.\\s+.+$")) {
                 readingCoreRelations = false;
                 String moduleName = stripNumberPrefix(line.substring(3));
                 currentModuleName = moduleName;
                 currentModuleId = nodeId("module", moduleName);
                 currentTopicId = "";
                 currentTopicName = "";
-                currentTopicKnowledge = "";
                 nodes.put(currentModuleId, new SeedNode(
                         currentModuleId,
                         "MODULE",
@@ -134,10 +139,9 @@ public class KnowledgeGraphSpineSeedService {
                 aliases.put(moduleName, currentModuleId);
                 continue;
             }
-            if (line.startsWith("### ")) {
+            if (line.startsWith("### ") && !currentModuleId.isBlank()) {
                 String topicName = stripNumberPrefix(line.substring(4));
                 currentTopicName = topicName;
-                currentTopicKnowledge = "";
                 currentTopicId = nodeId("topic", currentModuleName + "/" + topicName);
                 nodes.put(currentTopicId, new SeedNode(
                         currentTopicId,
@@ -154,19 +158,35 @@ public class KnowledgeGraphSpineSeedService {
                         currentModuleName + " \u5305\u542b " + topicName));
                 continue;
             }
-            if (line.startsWith("- \u77e5\u8bc6\u70b9\uff1a") && !currentTopicId.isBlank()) {
-                currentTopicKnowledge = line.substring("- \u77e5\u8bc6\u70b9\uff1a".length()).strip();
-                SeedNode previous = nodes.get(currentTopicId);
-                nodes.put(currentTopicId, new SeedNode(
-                        previous.id(),
-                        previous.nodeType(),
-                        previous.name(),
-                        previous.chapterPath(),
-                        "\u4e8c\u7ea7\u77e5\u8bc6\u70b9\uff1b\u77e5\u8bc6\u70b9\uff1a" + currentTopicKnowledge));
+            if (line.startsWith(KNOWLEDGE_PREFIX) && !currentTopicId.isBlank()) {
+                appendTopicMetadata(nodes, currentTopicId, "\u77e5\u8bc6\u70b9", line.substring(KNOWLEDGE_PREFIX.length()).strip());
                 continue;
             }
-            if (line.startsWith("- \u9898\u578b\u65b9\u6cd5\uff1a") && !currentTopicId.isBlank() && methodCount < methodNodeLimit) {
-                String methods = line.substring("- \u9898\u578b\u65b9\u6cd5\uff1a".length()).strip();
+            if (line.startsWith(ROUTING_ALIAS_PREFIX) && !currentTopicId.isBlank()) {
+                String aliasesForTopic = line.substring(ROUTING_ALIAS_PREFIX.length()).strip();
+                appendTopicMetadata(nodes, currentTopicId, "routingAliases", aliasesForTopic);
+                for (String alias : splitChineseList(aliasesForTopic)) {
+                    aliases.put(alias, currentTopicId);
+                }
+                continue;
+            }
+            if (line.startsWith(RETRIEVAL_SIGNAL_PREFIX) && !currentTopicId.isBlank()) {
+                appendTopicMetadata(nodes, currentTopicId, "retrievalSignals",
+                        line.substring(RETRIEVAL_SIGNAL_PREFIX.length()).strip());
+                continue;
+            }
+            if (line.startsWith(FEISHU_DIRECTORY_PREFIX) && !currentTopicId.isBlank()) {
+                appendTopicMetadata(nodes, currentTopicId, "feishuDirectories",
+                        line.substring(FEISHU_DIRECTORY_PREFIX.length()).strip());
+                continue;
+            }
+            if (line.startsWith(EXCLUSION_TERM_PREFIX) && !currentTopicId.isBlank()) {
+                appendTopicMetadata(nodes, currentTopicId, "exclusionTerms",
+                        line.substring(EXCLUSION_TERM_PREFIX.length()).strip());
+                continue;
+            }
+            if (line.startsWith(METHOD_PREFIX) && !currentTopicId.isBlank() && methodCount < methodNodeLimit) {
+                String methods = line.substring(METHOD_PREFIX.length()).strip();
                 for (String method : splitChineseList(methods)) {
                     if (methodCount >= methodNodeLimit) {
                         break;
@@ -189,7 +209,6 @@ public class KnowledgeGraphSpineSeedService {
                 }
             }
         }
-        aliases(aliases);
         for (String relationLine : coreRelationLines) {
             coreRelation(relationLine, aliases).ifPresent(relations::add);
         }
@@ -229,11 +248,19 @@ public class KnowledgeGraphSpineSeedService {
      * Converts one source relation line into a relation when both endpoint aliases are known.
      */
     private static Optional<SeedRelation> coreRelation(String value, Map<String, String> aliases) {
-        String[] parts = value.split(" -> ", 2);
-        if (parts.length != 2) {
+        String relationType = "PREREQUISITE_FOR";
+        String evidence = "";
+        String endpoints = value;
+        String[] explicitParts = value.split("\\|", 3);
+        if (explicitParts.length == 3) {
+            relationType = explicitParts[0].strip().toUpperCase(Locale.ROOT);
+            endpoints = explicitParts[1].strip();
+            evidence = explicitParts[2].strip();
+        }
+        String[] parts = endpoints.split(" -> ", 2);
+        if (parts.length != 2 || relationType.isBlank()) {
             return Optional.empty();
         }
-        aliases(aliases);
         String sourceName = parts[0].strip();
         String targetName = parts[1].strip();
         String sourceId = aliases.get(sourceName);
@@ -242,35 +269,32 @@ public class KnowledgeGraphSpineSeedService {
             return Optional.empty();
         }
         return Optional.of(new SeedRelation(
-                relationId("core", sourceId, targetId),
+                relationId("core:" + relationType, sourceId, targetId),
                 sourceId,
                 targetId,
-                "PREREQUISITE_FOR",
-                sourceName + " -> " + targetName));
+                relationType,
+                evidence.isBlank() ? sourceName + " -> " + targetName : evidence));
     }
 
     /**
-     * Adds stable aliases for relation labels that differ from display node names.
+     * Adds a source-maintained routing value to a topic summary. The retrieval service consumes these fields directly,
+     * which keeps display names, Feishu terminology, and question-language variants in one reviewable graph source.
      */
-    private static void aliases(Map<String, String> aliases) {
-        copyAlias(aliases, "\u51fd\u6570\u57fa\u7840", "\u51fd\u6570\u6982\u5ff5\u4e0e\u8868\u793a");
-        copyAlias(aliases, "\u5bfc\u6570\u9690\u96f6\u70b9", "\u9690\u96f6\u70b9");
-        copyAlias(aliases, "\u89e3\u4e09\u89d2\u5f62", "\u6b63\u5f26\u5b9a\u7406\u4e0e\u4f59\u5f26\u5b9a\u7406");
-        copyAlias(aliases, "\u6570\u5217\u57fa\u7840", "\u7b49\u5dee\u7b49\u6bd4\u6570\u5217");
-        copyAlias(aliases, "\u6570\u5217\u6c42\u548c", "\u6570\u5217\u6c42\u901a\u9879\u4e0e\u6c42\u548c");
-        copyAlias(aliases, "\u51fd\u6570\u56fe\u50cf", "\u51fd\u6570\u56fe\u50cf\u53d8\u6362");
-        copyAlias(aliases, "\u5bfc\u6570\u5355\u8c03\u6027", "\u5bfc\u6570\u7814\u7a76\u51fd\u6570");
-        copyAlias(aliases, "\u53c2\u6570\u8303\u56f4", "\u5bfc\u6570\u7efc\u5408");
-        copyAlias(aliases, "\u7acb\u4f53\u51e0\u4f55\u89d2\u5ea6\u8ddd\u79bb", "\u7a7a\u95f4\u5411\u91cf");
-    }
-
-    /**
-     * Copies one alias when the target display name exists.
-     */
-    private static void copyAlias(Map<String, String> aliases, String alias, String targetName) {
-        if (!aliases.containsKey(alias) && aliases.containsKey(targetName)) {
-            aliases.put(alias, aliases.get(targetName));
+    private static void appendTopicMetadata(
+            Map<String, SeedNode> nodes,
+            String topicId,
+            String key,
+            String value) {
+        if (value.isBlank()) {
+            return;
         }
+        SeedNode previous = nodes.get(topicId);
+        nodes.put(topicId, new SeedNode(
+                previous.id(),
+                previous.nodeType(),
+                previous.name(),
+                previous.chapterPath(),
+                previous.sourceSummary() + "；" + key + "=" + value));
     }
 
     /**

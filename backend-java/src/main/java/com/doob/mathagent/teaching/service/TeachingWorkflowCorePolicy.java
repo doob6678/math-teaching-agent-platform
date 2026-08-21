@@ -223,8 +223,8 @@ final class TeachingWorkflowCorePolicy {
 
 
     /**
-     * Generates the independent versions only from the common reviewed draft.  This has no model or retrieval call,
-     * so approval is deterministic, retryable per version, and cannot incur another provider charge.
+     * 仅将 Python 已完成的三份 Markdown 转为可导出的 LaTeX。
+     * Java 在此边界不从请求、证据或旧草稿补写任何教学内容，三种受众正文均以 Writer 原文为准。
      */
     static TeachingHandoutVersions renderHandoutVersions(
             TeachingTaskRequest request,
@@ -235,17 +235,100 @@ final class TeachingWorkflowCorePolicy {
 
             TeachingTaskResponse.AiDraft aiDraft,
             TeachingDraftSections renderSections) {
-        TeachingHandoutVersions versions = TeachingHandoutVersionCollector.collect(
-                () -> guardHandoutLatex(
-                        buildTeacherHandoutLatex(
-                                request, evidence, knowledgePointPacks, memoryResponse, template, aiDraft, renderSections),
-                        true),
-                () -> guardHandoutLatex(
-                        buildStudentHandoutLatex(
-                                request, evidence, knowledgePointPacks, memoryResponse, template, aiDraft, renderSections),
-                        false),
-                () -> buildLectureHandoutLatex(request, knowledgePointPacks, renderSections));
-        requireQualifiedRenderedQuestionCount(template, versions.teacherHandoutLatex());
-        return versions;
+        if (aiDraft == null || !aiDraft.structured()) {
+            throw new IllegalStateException("Python 讲义正文不可用，无法渲染发布版本。");
+        }
+        return TeachingHandoutVersionCollector.collect(
+                () -> renderWriterMarkdown(aiDraft.teacherExplanation(), true),
+                () -> renderWriterMarkdown(aiDraft.studentHint(), false),
+                () -> renderWriterMarkdown(aiDraft.lectureContent(), true));
+    }
+
+
+    /**
+     * 将受信任 Writer 的 Markdown 结构映射为通用 LaTeX；不会补全、重排或推断正文语义。
+     * 图片 Markdown 在尚无不透明证据关联契约时不进入 PDF，避免将路径或未授权资源带入发布物。
+     */
+    static String renderWriterMarkdown(String markdown, boolean teacherVersion) {
+        String source = markdown == null ? "" : markdown.replace("\r\n", "\n").replace('\r', '\n').strip();
+        if (source.isBlank()) {
+            throw new IllegalStateException("Python 讲义正文为空，无法渲染发布版本。");
+        }
+        StringBuilder rendered = new StringBuilder();
+        List<String> listItems = new ArrayList<>();
+        boolean orderedList = false;
+        for (String rawLine : source.split("\n", -1)) {
+            String line = rawLine.strip();
+            if (line.matches("!\\[[^]]*]\\([^)]*\\)")) {
+                flushMarkdownList(rendered, listItems, orderedList);
+                continue;
+            }
+            Matcher heading = Pattern.compile("^(#{1,6})\\s+(.+?)\\s*$").matcher(line);
+            Matcher ordered = Pattern.compile("^\\d+[.)]\\s+(.+?)\\s*$").matcher(line);
+            Matcher bullet = Pattern.compile("^[-*+]\\s+(.+?)\\s*$").matcher(line);
+            if (heading.matches()) {
+                flushMarkdownList(rendered, listItems, orderedList);
+                String command = heading.group(1).length() == 1 ? "section" : heading.group(1).length() == 2
+                        ? "subsection" : "subsubsection";
+                rendered.append('\\').append(command).append("{")
+                        .append(renderInlineMarkdown(heading.group(2))).append("}\n");
+            } else if (ordered.matches()) {
+                if (!listItems.isEmpty() && !orderedList) {
+                    flushMarkdownList(rendered, listItems, false);
+                }
+                orderedList = true;
+                listItems.add(ordered.group(1));
+            } else if (bullet.matches()) {
+                if (!listItems.isEmpty() && orderedList) {
+                    flushMarkdownList(rendered, listItems, true);
+                }
+                orderedList = false;
+                listItems.add(bullet.group(1));
+            } else {
+                flushMarkdownList(rendered, listItems, orderedList);
+                if (!line.isBlank() && !line.equals("---") && !line.equals("***")) {
+                    rendered.append(renderInlineMarkdown(line)).append("\\par\n");
+                }
+            }
+        }
+        flushMarkdownList(rendered, listItems, orderedList);
+        String latex = rendered.toString();
+        if (latex.isBlank()) {
+            throw new IllegalStateException("Python 讲义正文为空，无法渲染发布版本。");
+        }
+        return latex
+                .replaceAll("(?m)^\\s*\\n", "\n")
+                .replaceAll("\\n{3,}", "\n\n")
+                .strip();
+    }
+
+
+    /** 按原始 Markdown 顺序输出列表，不添加任何教学条目。 */
+    private static void flushMarkdownList(StringBuilder rendered, List<String> items, boolean ordered) {
+        if (items.isEmpty()) {
+            return;
+        }
+        rendered.append(ordered ? "\\begin{enumerate}\n" : "\\begin{itemize}\n");
+        for (String item : items) {
+            rendered.append("\\item ").append(renderInlineMarkdown(item)).append('\n');
+        }
+        rendered.append(ordered ? "\\end{enumerate}\n" : "\\end{itemize}\n");
+        items.clear();
+    }
+
+
+    /** Renders Markdown bold spans after ordinary text/math escaping without modifying Writer teaching content. */
+    private static String renderInlineMarkdown(String value) {
+        String source = value == null ? "" : value;
+        Matcher emphasis = Pattern.compile("\\*\\*([^*\\n]+?)\\*\\*").matcher(source);
+        StringBuilder rendered = new StringBuilder();
+        int cursor = 0;
+        while (emphasis.find()) {
+            rendered.append(escapeLatex(source.substring(cursor, emphasis.start())));
+            rendered.append("\\textbf{").append(escapeLatex(emphasis.group(1))).append('}');
+            cursor = emphasis.end();
+        }
+        rendered.append(escapeLatex(source.substring(cursor)));
+        return rendered.toString();
     }
 }

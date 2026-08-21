@@ -1,5 +1,7 @@
 package com.doob.mathagent.teaching.service;
 
+import com.doob.mathagent.agent.service.ProviderRouteGrantSigner;
+import com.doob.mathagent.infrastructure.ai.AiProviderCatalog;
 import com.doob.mathagent.teaching.TeachingEvidence;
 import com.doob.mathagent.teaching.dto.TeachingTaskRequest;
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
@@ -29,23 +31,39 @@ import org.springframework.web.client.RestClient;
 @Service
 public class PythonTeachingHandoutClient implements TeachingHandoutAiClient {
 
-    private static final String CONTRACT_VERSION = "handout-ai-v1";
+    private static final String CONTRACT_VERSION = "handout-ai-v2";
     private static final long MIN_TIMEOUT_MS = 1_000L;
-    private static final long DEFAULT_TIMEOUT_MS = 900_000L;
+    private static final long DEFAULT_TIMEOUT_MS = 300_000L;
     private static final long DEFAULT_CONNECT_TIMEOUT_MS = 5_000L;
     private static final int MAX_EVIDENCE_REFS = 24;
     private static final int TRACE_ID_HEX_LENGTH = 32;
     private static final int SPAN_ID_HEX_LENGTH = 16;
+    private static final int DEFAULT_EVENT_PAGE_LIMIT = 100;
+    private static final int MAX_EVENT_PAGE_LIMIT = 500;
+
+    /** Safe operational fields emitted by the Python handout checkpoint stream. */
+    private static final java.util.Set<String> EVENT_FIELDS = java.util.Set.of(
+            "event", "status", "node", "phase", "revisionRound", "turn", "provider", "model", "deterministicRepair");
 
     private final Environment environment;
+    private final AiProviderCatalog providerCatalog;
+    private final ProviderRouteGrantSigner routeGrantSigner;
     private final RestClient client;
     private final long timeoutMs;
 
     /** Configures bounded connect/read timeouts from the same task lease budget as the Worker. */
-    public PythonTeachingHandoutClient(Environment environment, ObjectMapper objectMapper) {
+    public PythonTeachingHandoutClient(
+            Environment environment,
+            ObjectMapper objectMapper,
+            AiProviderCatalog providerCatalog,
+            ProviderRouteGrantSigner routeGrantSigner) {
         this.environment = environment;
+        this.providerCatalog = providerCatalog;
+        this.routeGrantSigner = routeGrantSigner;
         long configuredTimeout = environment.getProperty("math-agent.python-handout.timeout-ms", Long.class, DEFAULT_TIMEOUT_MS);
-        long leaseMs = environment.getProperty("math-agent.agent-worker.runtime.lease-seconds", Long.class, 900L) * 1_000L;
+        // This request runs under the top-level lecture-task lease claimed by LectureTaskConsumer. Using the
+        // unrelated stage-worker lease can let the Python call outlive its owning lecture-task generation.
+        long leaseMs = environment.getProperty("math-agent.teaching.lecture-task.lease-seconds", Long.class, 900L) * 1_000L;
         long safetyMarginMs = environment.getProperty("math-agent.python-handout.lease-safety-margin-ms", Long.class, 15_000L);
         this.timeoutMs = Math.max(MIN_TIMEOUT_MS, Math.min(configuredTimeout, Math.max(MIN_TIMEOUT_MS, leaseMs - safetyMarginMs)));
         long connectTimeoutMs = Math.min(timeoutMs, environment.getProperty(
@@ -61,6 +79,75 @@ public class PythonTeachingHandoutClient implements TeachingHandoutAiClient {
                 .requestFactory(requestFactory)
                 .build();
     }
+
+    /**
+     * Reads one durable Python event page after the supplied numeric cursor.
+     * The worker's event payload is operational only; content-bearing checkpoint fields are never projected.
+     */
+    List<HandoutEvent> readEvents(String runId, long afterId, int limit) {
+        if (runId == null || runId.isBlank()) {
+            throw new IllegalArgumentException("runId is required");
+        }
+        if (afterId < 0) {
+            throw new IllegalArgumentException("afterId must be non-negative");
+        }
+        int boundedLimit = Math.max(1, Math.min(limit, MAX_EVENT_PAGE_LIMIT));
+        String workerKey = environment.getProperty(
+                "math-agent.python-handout.worker-key", environment.getProperty("math-agent.worker-api-key", ""));
+        if (workerKey == null || workerKey.isBlank()) {
+            throw new IllegalStateException("Python handout worker key is not configured");
+        }
+        JsonNode root = client.get()
+                .uri(uriBuilder -> uriBuilder.path("/v1/handout-runs/{runId}/events")
+                        .queryParam("afterId", afterId).queryParam("limit", boundedLimit).build(runId))
+                .header("Authorization", "Bearer " + workerKey)
+                .retrieve().body(JsonNode.class);
+        if (root == null || !runId.equals(root.path("runId").asText())) {
+            throw new IllegalStateException("Python handout event response has an invalid runId");
+        }
+        List<HandoutEvent> events = new ArrayList<>();
+        long cursor = afterId;
+        for (JsonNode item : root.path("events")) {
+            long eventId = item.path("eventId").asLong(-1);
+            if (eventId <= cursor) {
+                continue;
+            }
+            String eventName = item.path("event").asText("");
+            if (eventName.isBlank()) {
+                continue;
+            }
+            Map<String, Object> safe = projectEvent(item);
+            if (safe.isEmpty()) {
+                continue;
+            }
+            events.add(new HandoutEvent(eventId, safe));
+            cursor = eventId;
+        }
+        long nextAfterId = root.path("nextAfterId").asLong(cursor);
+        if (nextAfterId < cursor) {
+            throw new IllegalStateException("Python handout event cursor moved backwards");
+        }
+        return List.copyOf(events);
+    }
+
+    static Map<String, Object> projectEvent(JsonNode item) {
+        if (item == null || item.path("event").asText("").isBlank()) {
+            return Map.of();
+        }
+        Map<String, Object> safe = new java.util.LinkedHashMap<>();
+        EVENT_FIELDS.stream().filter(item::has).forEach(field -> safe.put(field, scalar(item.get(field))));
+        safe.put("event", item.path("event").asText());
+        return Map.copyOf(safe);
+    }
+
+    private static Object scalar(JsonNode value) {
+        if (value == null || value.isNull()) return null;
+        if (value.isBoolean()) return value.booleanValue();
+        if (value.isNumber()) return value.numberValue();
+        return value.isTextual() ? value.textValue() : null;
+    }
+
+    record HandoutEvent(long eventId, Map<String, Object> data) {}
 
     /** Calls the only handout graph and projects its three audience documents into the teaching-task draft shape. */
     @Override
@@ -82,10 +169,11 @@ public class PythonTeachingHandoutClient implements TeachingHandoutAiClient {
                         Map.entry("taskId", taskId),
                         Map.entry("writingGoal", bounded(request.learningGoal(), 1_200)),
                         Map.entry("questionText", bounded(request.questionText(), 16_000)),
-                        Map.entry("evidenceRefs", evidenceRefs(evidence)),
-                        Map.entry("graphVersion", environment.getProperty("math-agent.python-handout.graph-version", "handout-v1")),
+                        Map.entry("evidenceRefs", evidenceRefs(taskId, evidence)),
+                        Map.entry("graphVersion", environment.getProperty("math-agent.python-handout.graph-version", "handout-v2")),
                         Map.entry("idempotencyKey", "teaching-handout:" + taskId),
                         Map.entry("traceparent", traceparent(taskId)),
+                        Map.entry("providerRoute", providerRoute(taskId)),
                         Map.entry("resume", true),
                         Map.entry("deadlineEpochMs", System.currentTimeMillis() + timeoutMs)))
                 .retrieve()
@@ -94,6 +182,40 @@ public class PythonTeachingHandoutClient implements TeachingHandoutAiClient {
             throw new IllegalStateException("Python handout returned an empty response");
         }
         return project(root);
+    }
+
+    /**
+     * Signs the bounded handout route accepted by the worker. Terra remains a supported route, while a deployment may
+     * explicitly prefer the verified DeepSeek flash route for acceptance so a known Terra outage cannot consume its
+     * task lease before generation begins.
+     */
+    private Map<String, Object> providerRoute(String runId) {
+        String preferred = environment.getProperty("math-agent.handout.preferred-provider", "deepseek").strip();
+        if ("deepseek".equalsIgnoreCase(preferred)) {
+            AiProviderCatalog.Provider deepseek = providerCatalog.provider("deepseek")
+                    .orElseThrow(() -> new IllegalStateException("DeepSeek handout route is not enabled"));
+            List<ProviderRouteGrantSigner.ProviderRoute> routes = List.of(
+                    new ProviderRouteGrantSigner.ProviderRoute(deepseek.name(), deepseek.chatModel()));
+            return Map.of(
+                    "primary", Map.of("name", deepseek.name(), "model", deepseek.chatModel()),
+                    "fallbacks", List.of(),
+                    "routeGrant", routeGrantSigner.sign(runId, "handout", routes));
+        }
+        AiProviderCatalog.Provider terra = providerCatalog.provider("openai")
+                .map(provider -> new AiProviderCatalog.Provider(provider.name(), "gpt-5.6-terra"))
+                .orElseThrow(() -> new IllegalStateException("Terra handout route is not enabled"));
+        List<AiProviderCatalog.Provider> fallbackProviders = providerCatalog.provider("deepseek").stream().toList();
+        List<Map<String, String>> fallbacks = fallbackProviders.stream()
+                .map(provider -> Map.of("name", provider.name(), "model", provider.chatModel()))
+                .toList();
+        List<ProviderRouteGrantSigner.ProviderRoute> routes = new ArrayList<>();
+        routes.add(new ProviderRouteGrantSigner.ProviderRoute(terra.name(), terra.chatModel()));
+        fallbackProviders.forEach(provider -> routes.add(new ProviderRouteGrantSigner.ProviderRoute(
+                provider.name(), provider.chatModel())));
+        return Map.of(
+                "primary", Map.of("name", terra.name(), "model", terra.chatModel()),
+                "fallbacks", fallbacks,
+                "routeGrant", routeGrantSigner.sign(runId, "handout", routes));
     }
 
     /** Keeps provider values and token totals from Python while treating absent pricing as unknown. */
@@ -134,7 +256,8 @@ public class PythonTeachingHandoutClient implements TeachingHandoutAiClient {
                 0,
                 0,
                 false,
-                List.copyOf(events));
+                List.copyOf(events),
+                assetPlacements(documents));
     }
 
     private static JsonNode nodeMetric(JsonNode metrics, String node) {
@@ -150,17 +273,78 @@ public class PythonTeachingHandoutClient implements TeachingHandoutAiClient {
         return document.path("markdown").asText("").strip();
     }
 
-    private static List<String> evidenceRefs(List<TeachingEvidence> evidence) {
+    /** Parses only bounded structured placement metadata; actual ownership authorization remains in the workflow. */
+    private static List<TeachingTaskResponse.AssetPlacement> assetPlacements(JsonNode documents) {
+        List<TeachingTaskResponse.AssetPlacement> placements = new ArrayList<>();
+        for (String stage : List.of("teacher_writer", "student_writer", "lecture_writer")) {
+            for (JsonNode item : documents.path(stage).path("assetPlacements")) {
+                int questionNumber = item.path("questionNumber").asInt(0);
+                String anchor = item.path("anchor").asText("");
+                String layout = item.path("layout").asText("");
+                String caption = item.path("caption").asText("");
+                List<String> assetIds = stringValues(item.path("assetIds"), 2);
+                List<String> variants = stringValues(item.path("variants"), 3);
+                if (questionNumber < 1 || assetIds.isEmpty()
+                        || !("question".equals(anchor) || "explanation_after_question".equals(anchor))
+                        || !("single".equals(layout) || "vertical_sequence".equals(layout) || "two_column".equals(layout))) {
+                    throw new IllegalStateException("Python handout returned invalid asset placement");
+                }
+                if (!variants.contains(stage) || variants.stream().anyMatch(variant -> !List.of(
+                        "teacher_writer", "student_writer", "lecture_writer").contains(variant))) {
+                    throw new IllegalStateException("Python handout returned invalid asset placement variant");
+                }
+                TeachingTaskResponse.AssetPlacement placement = new TeachingTaskResponse.AssetPlacement(
+                        questionNumber, assetIds, anchor, layout, variants, caption);
+                if (!placements.contains(placement)) {
+                    placements.add(placement);
+                }
+            }
+        }
+        return List.copyOf(placements);
+    }
+
+    private static List<String> stringValues(JsonNode values, int maxItems) {
+        List<String> result = new ArrayList<>();
+        for (JsonNode value : values) {
+            String text = value.asText("").strip();
+            if (!text.isBlank() && !result.contains(text)) {
+                result.add(text);
+            }
+        }
+        return result.size() <= maxItems ? List.copyOf(result) : List.of();
+    }
+
+    /** 使用与 Broker 相同的运行级签发规则，禁止将来源范围或内部块 ID 放到模型边界。 */
+    private List<String> evidenceRefs(String taskId, List<TeachingEvidence> evidence) {
         if (evidence == null || evidence.isEmpty()) {
             return List.of();
         }
         return evidence.stream()
                 .filter(item -> item != null)
-                .map(item -> bounded(item.sourceScope(), 80) + ":" + bounded(item.chunkId(), 240))
-                .filter(item -> !item.equals(":"))
+                .map(item -> evidenceRef(taskId, item))
                 .distinct()
                 .limit(MAX_EVIDENCE_REFS)
                 .toList();
+    }
+
+    private String evidenceRef(String taskId, TeachingEvidence evidence) {
+        return "ev_" + fingerprint(taskId + "|evidence|" + evidence.sourceDocumentId() + "|"
+                + evidence.sourceScope() + "|" + evidence.sourceTitle() + "|" + evidence.chunkId());
+    }
+
+    private String fingerprint(String value) {
+        try {
+            String secret = environment.getProperty("math-agent.agent-worker.shared-key", "");
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest((secret + "|" + value).getBytes(StandardCharsets.UTF_8));
+            StringBuilder encoded = new StringBuilder(digest.length * 2);
+            for (byte item : digest) {
+                encoded.append(String.format("%02x", item));
+            }
+            return encoded.substring(0, 32);
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 is unavailable", exception);
+        }
     }
 
     private static String bounded(String value, int limit) {

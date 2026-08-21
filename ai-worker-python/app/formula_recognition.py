@@ -33,6 +33,19 @@ class FormulaRecognitionError(RuntimeError):
     """Raised when a formula image cannot be verified as usable retrieval evidence."""
 
 
+def formula_transport_code(status_code: int | None = None) -> str:
+    """Classifies provider transport failures without exposing endpoint responses or a repair workflow."""
+    if status_code in {401, 403}:
+        return "FORMULA_VISION_AUTH_FAILED"
+    if status_code in {408, 429}:
+        return "FORMULA_VISION_RETRYABLE"
+    if status_code is not None and status_code >= 500:
+        return "FORMULA_VISION_UNAVAILABLE"
+    if status_code is not None:
+        return "FORMULA_VISION_REJECTED"
+    return "FORMULA_VISION_TRANSPORT_FAILED"
+
+
 @dataclass(frozen=True)
 class FormulaRecognitionResult:
     status: str
@@ -86,9 +99,9 @@ class FormulaRecognitionService:
                 timeout=self._settings.formula_vision_timeout_seconds,
             )
         except requests.RequestException as exc:
-            raise FormulaRecognitionError(f"formula vision request failed: {exc}") from exc
+            raise FormulaRecognitionError(formula_transport_code()) from exc
         if not response.ok:
-            raise FormulaRecognitionError(f"formula vision request failed: HTTP {response.status_code}: {response.text[:512]}")
+            raise FormulaRecognitionError(formula_transport_code(response.status_code))
         try:
             content = response.json()["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError, ValueError) as exc:

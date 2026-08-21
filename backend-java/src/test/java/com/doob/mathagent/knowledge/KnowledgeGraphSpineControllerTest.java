@@ -29,11 +29,12 @@ class KnowledgeGraphSpineControllerTest {
 
         KnowledgeGraphSpineResponse response = controller.displaySpine(request);
 
+        assertThat(response.version()).isEqualTo("v0.2");
         assertThat(response.viewerRole()).isEqualTo("student");
         // The curated source now includes the configured method-node budget; keep the controller contract aligned
         // with KnowledgeGraphSpineSeedServiceTest so the identity boundary is tested against the complete graph.
-        assertThat(response.nodeCount()).isEqualTo(141);
-        assertThat(response.edgeCount()).isEqualTo(139);
+        assertThat(response.nodeCount()).isEqualTo(142);
+        assertThat(response.edgeCount()).isEqualTo(146);
         assertThat(response.nodes()).extracting(KnowledgeGraphSpineResponse.Node::label)
                 .contains(
                         "\u51fd\u6570",

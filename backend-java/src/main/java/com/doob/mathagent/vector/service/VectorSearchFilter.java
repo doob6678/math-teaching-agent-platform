@@ -5,9 +5,9 @@ import java.util.List;
 /**
  * Optional metadata filters for vector search.
  *
- * @param tenantIds tenant ids admitted by the MySQL visibility query
- * @param documentIds source document ids admitted by the MySQL visibility query
- * @param permissionScopes resource scopes admitted by the MySQL visibility query
+ * @param tenantIds tenant ids enforced directly by Milvus metadata
+ * @param documentIds explicitly requested source document ids, enforced directly by Milvus metadata
+ * @param permissionScopes explicitly requested resource scopes, enforced directly by Milvus metadata
  * @param sourceTypes persisted resource categories admitted by the MySQL visibility query
  */
 public record VectorSearchFilter(

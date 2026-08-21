@@ -258,9 +258,6 @@ final class TeachingWorkflowStudentRenderer {
         StringBuilder builder = new StringBuilder("\\section{")
                 .append(escapeLatex(lectureTitle))
                 .append("}\n");
-        if (isQuadraticFunctionText(lectureTitle)) {
-            builder.append(quadraticReferenceGraph()).append("\n");
-        }
         // The first real question shares the current page with its concise knowledge card. Later questions remain
         // independently printable, which preserves writing space without creating an almost empty overview page.
         boolean firstPrintableQuestion = true;
@@ -1230,6 +1227,43 @@ final class TeachingWorkflowStudentRenderer {
 
 
     /**
+     * Converts only an exact, readable evidence image into the internal marker before a model-authored lecture card
+     * is persisted. This keeps a “如图” card and its source-bound asset in the same publication unit; asset ids and
+     * paths are never exposed to the model or rendered as text.
+     */
+    static List<String> bindAuthorizedLectureFigures(List<String> cards, List<TeachingEvidence> evidence) {
+        if (cards == null || cards.isEmpty() || evidence == null || evidence.isEmpty()) {
+            return cards == null ? List.of() : cards;
+        }
+        return cards.stream().map(card -> {
+            if (card == null || card.isBlank() || !requiresAuthorizedFigure(card)) {
+                return card;
+            }
+            // A Writer can only name opaque asset ids, not paths. Remove any marker it echoed and replace it with the
+            // exact verified evidence asset below; retaining the echoed marker could preserve a stale path after a
+            // container recreation and would defeat the question-scoped authorization check.
+            String cardWithoutUnverifiedMarkers = TeachingHandoutPdfExportService.IMAGE_MARKER.matcher(card)
+                    .replaceAll("").strip();
+            // An opaque asset id can only select the already authorized evidence row that supplied it. This is more
+            // precise than text similarity when a retrieved source window contains neighbouring colour variations.
+            List<TeachingEvidence> assetReferencedEvidence = evidence.stream()
+                    .filter(item -> item.assetIds().stream().anyMatch(assetId -> cardWithoutUnverifiedMarkers.contains(assetId)))
+                    .toList();
+            List<TeachingEvidence> matchingEvidence = assetReferencedEvidence.isEmpty()
+                    ? supportingEvidenceForQuestion(cardWithoutUnverifiedMarkers, evidence)
+                    : assetReferencedEvidence;
+            return matchingEvidence.stream()
+                    .map(TeachingEvidence::imagePath)
+                    .filter(path -> path != null && !path.isBlank())
+                    .filter(path -> Files.isRegularFile(Path.of(path)))
+                    .findFirst()
+                    .map(path -> cardWithoutUnverifiedMarkers + "\n" + TeachingHandoutPdfExportPolicyPartB.toImageMarker(
+                            new TeachingHandoutPdfExportService.HandoutImage("题图", path)))
+                    .orElse(card);
+        }).toList();
+    }
+
+    /**
      * 教学任务阶段计时器；只记录阶段耗时，不保存业务内容，避免日志泄露学生题目。
      */
     static TeachingDraftSections collectDraftSections(
@@ -1275,6 +1309,7 @@ final class TeachingWorkflowStudentRenderer {
                         draftFollowUps)
                 : List.of(guardDraftText(
                         com.doob.mathagent.infrastructure.text.FormulaMarkupSanitizer.sanitizeFeishuMath(aiDraft.lectureContent()), false));
+        lectureCards = bindAuthorizedLectureFigures(lectureCards, evidence);
         if (!lectureCards.isEmpty()) {
             risks.add(aiDraft != null && aiDraft.lectureContent() != null && !aiDraft.lectureContent().isBlank()
                     ? "lecture_cards_from_python_handout"

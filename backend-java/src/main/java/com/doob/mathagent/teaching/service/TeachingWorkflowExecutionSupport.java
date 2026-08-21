@@ -2,12 +2,7 @@ package com.doob.mathagent.teaching.service;
 
 import com.doob.mathagent.agent.service.AgentTraceRecord;
 import com.doob.mathagent.agent.service.AgentTraceStore;
-import com.doob.mathagent.agent.dto.AgentRunExecuteRequest;
-import com.doob.mathagent.agent.dto.AgentRunPlanRequest;
-import com.doob.mathagent.agent.service.AgentRunExecutionService;
-import com.doob.mathagent.agent.service.AgentRunPlanService;
 import com.doob.mathagent.agent.vo.AgentRunExecuteResponse;
-import com.doob.mathagent.agent.vo.AgentRunPlanResponse;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.knowledge.service.KnowledgeQuestionBankService;
 import com.doob.mathagent.knowledge.service.QuestionBankSearchText;
@@ -17,6 +12,7 @@ import com.doob.mathagent.memory.service.StudentMemoryCommand;
 import com.doob.mathagent.memory.service.StudentMemoryReuseService;
 import com.doob.mathagent.memory.vo.StudentMemoryResponse;
 import com.doob.mathagent.retrieval.RetrievalRequestContext;
+import com.doob.mathagent.retrieval.CanonicalMathPaperRetrievalService;
 import com.doob.mathagent.retrieval.TextbookRetrievalService;
 import com.doob.mathagent.retrieval.TextbookSearchHit;
 import com.doob.mathagent.retrieval.TextbookSearchRequest;
@@ -61,6 +57,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -68,8 +65,6 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.stereotype.Service;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import com.doob.mathagent.teaching.service.TeachingWorkflowService.ProgressPhase;
 import com.doob.mathagent.teaching.service.TeachingWorkflowService.ModelExplanationUnit;
 import com.doob.mathagent.teaching.service.TeachingWorkflowService.ModelExplanationHeader;
@@ -78,10 +73,6 @@ import com.doob.mathagent.teaching.service.TeachingWorkflowService.LabelPosition
 import com.doob.mathagent.teaching.service.TeachingWorkflowService.LabeledDraftBlock;
 import com.doob.mathagent.teaching.service.TeachingWorkflowService.EvidencePack;
 import com.doob.mathagent.teaching.service.TeachingWorkflowService.TimedEvidence;
-import com.doob.mathagent.teaching.service.TeachingWorkflowService.QuestionAgentContext;
-import com.doob.mathagent.teaching.service.TeachingWorkflowService.QuestionAgentBranch;
-import com.doob.mathagent.teaching.service.TeachingWorkflowService.QuestionAgentTiming;
-import com.doob.mathagent.teaching.service.TeachingWorkflowService.QuestionAgentBatch;
 import static com.doob.mathagent.teaching.service.TeachingWorkflowService.*;
 
 /**
@@ -91,10 +82,6 @@ import static com.doob.mathagent.teaching.service.TeachingWorkflowService.*;
  * and progress persistence. Keeping those responsibilities separate prevents another god class.</p>
  */
 class TeachingWorkflowExecutionSupport {
-    /** Records per-question degradation without hiding a failed provider branch from operational acceptance. */
-    private static final Logger log = LoggerFactory.getLogger(TeachingWorkflowExecutionSupport.class);
-    /** A question branch is an audit-grade concise explanation; the full pedagogical draft is generated later. */
-    private static final int QUESTION_AGENT_MAX_OUTPUT_TOKENS = 320;
     protected Path processedBooksRoot;
     protected TextbookRetrievalService retrievalService;
     protected TeachingTaskStore taskStore;
@@ -111,6 +98,8 @@ class TeachingWorkflowExecutionSupport {
     protected KnowledgeQuestionBankService questionBankService;
     protected TeacherResourceBlockSearchService teacherResourceBlockSearchService;
     protected TeacherResourceVisualEvidenceService teacherResourceVisualEvidenceService;
+    /** 规范真题经统一检索层和清单授权适配器接入，不与教师私有资料索引混用。 */
+    protected CanonicalMathPaperRetrievalService canonicalMathPaperRetrievalService;
     protected TaskExecutor taskExecutor;
     /** Separate bounded pool for nested retrieval/agent fan-out so an outer workflow worker cannot self-starve. */
     protected TaskExecutor evidenceTaskExecutor;
@@ -120,10 +109,6 @@ class TeachingWorkflowExecutionSupport {
     /** A task-level barrier prevents nested retrieval calls from retaining a worker lease indefinitely. */
     @Value("${math-agent.teaching.evidence-timeout-ms:240000}")
     protected long evidenceTimeoutMs = 240000L;
-    /** Shared planner/executor used by every question branch; null only in focused unit-test constructors. */
-    protected AgentRunPlanService agentRunPlanService;
-    protected AgentRunExecutionService agentRunExecutionService;
-
     /** Wires the sole Python graph used by durable teaching-handout tasks. */
     @Autowired
     void configurePythonTeachingHandoutClient(PythonTeachingHandoutClient client) {
@@ -168,7 +153,6 @@ class TeachingWorkflowExecutionSupport {
                 : retrievedPacks;
         TeachingHandoutVersions versions = renderHandoutVersions(
                 request, task.evidence(), knowledgePacks, memory, template, task.aiDraft(), task.mergeResult().mergedSections());
-        requireQualifiedRenderedQuestionCount(template, versions.teacherHandoutLatex());
         return task.withHandoutVersion("teacher", versions.teacherHandoutLatex())
                 .withHandoutVersion("student", versions.studentHandoutLatex())
                 .withHandoutVersion("lecture", versions.lectureHandoutLatex())
@@ -205,6 +189,20 @@ class TeachingWorkflowExecutionSupport {
             String ownerKey,
             String idempotencyKey,
             TeachingTaskResponse checkpoint) {
+        return execute(request, context, taskId, ownerKey, idempotencyKey, checkpoint, null);
+    }
+
+    /**
+     * 持有顶层租约的异步执行必须把令牌带入每个可见快照，防止被接管的旧 Worker 覆盖新结果。
+     */
+    protected TeachingTaskResponse execute(
+            TeachingTaskRequest request,
+            TeachingRequestContext context,
+            String taskId,
+            String ownerKey,
+            String idempotencyKey,
+            TeachingTaskResponse checkpoint,
+            com.doob.mathagent.teaching.mq.LectureTaskLease lease) {
         StageTimer timer = new StageTimer(checkpoint == null ? List.of() : checkpoint.stageTimings());
         traceRecorder.running(taskId, context, "WORKFLOW_ORCHESTRATOR", "TeachingOrchestrator", List.of(), 0L,
                 "主智能体已接收任务并开始执行固定教学 DAG。");
@@ -217,8 +215,9 @@ class TeachingWorkflowExecutionSupport {
         List<TeachingEvidence> textbookEvidence;
         List<TeachingEvidence> questionEvidence;
         List<TeachingEvidence> teacherResourceEvidence;
+        EvidencePack evidencePack = null;
         saveRunningProgress(
-                request, context, taskId, ownerKey, idempotencyKey, template, memoryResponse,
+                request, context, taskId, ownerKey, idempotencyKey, lease, template, memoryResponse,
                 List.of(), List.of(), List.of(), List.of(), null, timer,
                 ProgressPhase.EVIDENCE_COLLECTING);
         if (checkpoint != null && evidenceCheckpointComplete(checkpoint) && !requiresFreshEvidence(checkpoint)) {
@@ -236,66 +235,54 @@ class TeachingWorkflowExecutionSupport {
                     .toList();
             timer.mark("evidence_resume");
         } else {
-            EvidencePack evidencePack = retrieveEvidencePack(request, context, taskId);
-            textbookEvidence = evidencePack.textbookEvidence();
-            questionEvidence = evidencePack.questionEvidence();
-            teacherResourceEvidence = evidencePack.teacherResourceEvidence();
+            final String progressTaskId = taskId;
+            evidencePack = checkpoint == null
+                    ? retrieveEvidencePack(request, context, progressTaskId, partialPack -> {
+                        List<TeachingEvidence> partialTextbook = verifiedEvidence(partialPack.textbookEvidence());
+                        List<TeachingEvidence> partialQuestions = verifiedEvidence(partialPack.questionEvidence());
+                        List<TeachingEvidence> partialTeacherResources = verifiedEvidence(partialPack.teacherResourceEvidence());
+                        saveRunningProgress(
+                                request, context, progressTaskId, ownerKey, idempotencyKey, lease, template, memoryResponse,
+                                verifiedEvidence(partialPack.mergedEvidence()), partialTextbook, partialQuestions,
+                                partialTeacherResources, null, timer, ProgressPhase.EVIDENCE_COLLECTING,
+                                partialPack.textbookOutcome(), partialPack.questionOutcome(), partialPack.teacherResourceOutcome());
+                    })
+                    : retrieveMissingEvidenceBranches(request, context, progressTaskId, checkpoint, partialPack -> {
+                        List<TeachingEvidence> partialTextbook = verifiedEvidence(partialPack.textbookEvidence());
+                        List<TeachingEvidence> partialQuestions = verifiedEvidence(partialPack.questionEvidence());
+                        List<TeachingEvidence> partialTeacherResources = verifiedEvidence(partialPack.teacherResourceEvidence());
+                        saveRunningProgress(
+                                request, context, progressTaskId, ownerKey, idempotencyKey, lease, template, memoryResponse,
+                                verifiedEvidence(partialPack.mergedEvidence()), partialTextbook, partialQuestions,
+                                partialTeacherResources, null, timer, ProgressPhase.EVIDENCE_COLLECTING,
+                                partialPack.textbookOutcome(), partialPack.questionOutcome(), partialPack.teacherResourceOutcome());
+                    });
             timer.record("textbook_retrieval", evidencePack.textbookElapsedMs());
             timer.record("question_bank_retrieval", evidencePack.questionElapsedMs());
             timer.record("teacher_resource_retrieval", evidencePack.teacherResourceElapsedMs());
+            textbookEvidence = evidencePack.textbookEvidence();
+            questionEvidence = evidencePack.questionEvidence();
+            teacherResourceEvidence = evidencePack.teacherResourceEvidence();
             timer.resetCheckpoint();
             evidence = verifiedEvidence(evidencePack.mergedEvidence());
             textbookEvidence = verifiedEvidence(textbookEvidence);
             questionEvidence = verifiedEvidence(questionEvidence);
             teacherResourceEvidence = verifiedEvidence(teacherResourceEvidence);
-            if (evidence.isEmpty()) {
-                traceRecorder.failed(taskId, context, "WORKFLOW_ORCHESTRATOR", "TeachingOrchestrator", evidence,
-                        timingSum(timer, "textbook_retrieval", "question_bank_retrieval", "teacher_resource_retrieval"),
-                        new IllegalStateException("未检索到可核验证据"));
-                throw new IllegalStateException("未检索到可核验的教材、题库或教师资料证据；用户输入不能作为检索证据，已停止生成讲义。");
-            }
         }
         evidence = verifiedEvidence(evidence);
         textbookEvidence = verifiedEvidence(textbookEvidence);
         questionEvidence = verifiedEvidence(questionEvidence);
         teacherResourceEvidence = verifiedEvidence(teacherResourceEvidence);
-        if (evidence.isEmpty()) {
-            traceRecorder.failed(taskId, context, "WORKFLOW_ORCHESTRATOR", "TeachingOrchestrator", evidence,
-                    timingSum(timer, "textbook_retrieval", "question_bank_retrieval", "teacher_resource_retrieval"),
-                    new IllegalStateException("讲义任务缺少可核验来源证据"));
-            throw new IllegalStateException("讲义任务缺少可核验来源证据，禁止发布零证据讲义。");
-        }
-        traceRecorder.completed(taskId, context, "EVIDENCE_COLLECTION", "EvidenceCollector", evidence,
-                timingSum(timer, "textbook_retrieval", "question_bank_retrieval", "teacher_resource_retrieval"),
-                "已汇总教材、题库和教师资料的可核验来源。");
         saveRunningProgress(
-                request, context, taskId, ownerKey, idempotencyKey, template, memoryResponse,
+                request, context, taskId, ownerKey, idempotencyKey, lease, template, memoryResponse,
                 evidence, textbookEvidence, questionEvidence, teacherResourceEvidence, null, timer,
                 ProgressPhase.OUTLINE_BUILDING);
-        requireQualifiedQuestionEvidence(template, questionEvidence);
-        // Fan out an immutable context per verified question before the shared draft is built. This is the
-        // orchestration boundary for question agents and keeps cross-question state out of each worker.
-        QuestionAgentBatch questionAgentBatch = prepareQuestionAgentContexts(questionEvidence);
-
-
-        timer.record("question_agents_parallel", questionAgentBatch.elapsedMs());
-        // Keep one durable timing row per isolated question branch.  The aggregate barrier alone cannot tell the
-        // progress UI which question was slow, and would make a failed branch indistinguishable from a healthy one.
-        questionAgentBatch.branchTimings().forEach(branch ->
-                timer.record("question_agent_" + branch.agentId(), branch.elapsedMs()));
-        final String traceTaskId = taskId;
-        final TeachingRequestContext traceContext = context;
-        final List<TeachingEvidence> traceQuestionEvidence = List.copyOf(questionEvidence);
-        runQuestionAgents(
-                request,
-                context,
-                traceTaskId,
-                traceQuestionEvidence,
-                questionAgentBatch);
+        // Python receives the initial authorization snapshot, which may be empty. Its plan writer exclusively owns
+        // teacher-resource queries and persists any authorized hits through the broker before returning.
         List<TeachingReactStep> reactTrace = List.of();
         timer.mark("react_trace");
         saveRunningProgress(
-                request, context, taskId, ownerKey, idempotencyKey, template, memoryResponse,
+                request, context, taskId, ownerKey, idempotencyKey, lease, template, memoryResponse,
                 evidence, textbookEvidence, questionEvidence, teacherResourceEvidence, null, timer,
                 ProgressPhase.CONTENT_GENERATING);
         // Evidence may have been refreshed on an earlier recovery pass while the structured model draft already
@@ -307,9 +294,31 @@ class TeachingWorkflowExecutionSupport {
         TeachingTaskResponse.AiDraft aiDraft;
         long draftStarted = System.nanoTime();
         try {
+            if (lease != null && !taskStore.ownsLease(lease)) {
+                throw new TeachingWorkflowService.LeaseLostException();
+            }
             aiDraft = checkpoint != null && checkpoint.aiDraft() != null && checkpoint.aiDraft().structured()
                     ? checkpoint.aiDraft()
                     : draftWithConfiguredAiRuntime(taskId, request, evidence, memoryResponse, template);
+            // Python may issue plan-writer-owned teacher searches after this Java retrieval barrier. The broker
+            // persists those authorization-checked hits against the same task before returning documentRef; reload
+            // them now so the final task snapshot reflects real retrieval rather than the older pre-plan projection.
+            teacherResourceEvidence = brokerDiscoveredTeacherEvidence(taskId, teacherResourceEvidence);
+            evidence = verifiedEvidence(concatEvidence(textbookEvidence, questionEvidence, teacherResourceEvidence));
+            if (evidence.isEmpty()) {
+                IllegalStateException failure = new IllegalStateException(
+                        "讲义任务缺少可核验来源证据，禁止发布零证据讲义。");
+                traceRecorder.failed(taskId, context, "WORKFLOW_ORCHESTRATOR", "TeachingOrchestrator", evidence,
+                        timingSum(timer, "textbook_retrieval", "question_bank_retrieval", "teacher_resource_retrieval"),
+                        failure);
+                throw failure;
+            }
+            // The high-workload question requirement remains a publication gate, but cannot prevent Python from
+            // making its independent teacher-resource retrieval decision first.
+            requireQualifiedQuestionEvidence(template, questionEvidence);
+            traceRecorder.completed(taskId, context, "EVIDENCE_COLLECTION", "EvidenceCollector", evidence,
+                    timingSum(timer, "textbook_retrieval", "question_bank_retrieval", "teacher_resource_retrieval"),
+                    "已汇总教材、题库和教师资料的可核验来源。");
             traceRecorder.completed(taskId, context, "AI_DRAFT", "CoursewareAgent", evidence,
                     elapsedMs(draftStarted), "已收到结构化讲义草稿。");
         } catch (Throwable failure) {
@@ -321,7 +330,7 @@ class TeachingWorkflowExecutionSupport {
         // expose the actual retry/parse state and elapsed work in the workflow record without ever publishing an
         // unstructured response as a handout.
         saveRunningProgress(
-                request, context, taskId, ownerKey, idempotencyKey, template, memoryResponse,
+                request, context, taskId, ownerKey, idempotencyKey, lease, template, memoryResponse,
                 evidence, textbookEvidence, questionEvidence, teacherResourceEvidence, aiDraft, timer,
                 ProgressPhase.CONTENT_GENERATING);
 
@@ -331,9 +340,16 @@ class TeachingWorkflowExecutionSupport {
         requireStructuredQuestionReasoning(template, aiDraft);
         timer.mark("ai_draft");
         saveRunningProgress(
-                request, context, taskId, ownerKey, idempotencyKey, template, memoryResponse,
+                request, context, taskId, ownerKey, idempotencyKey, lease, template, memoryResponse,
                 evidence, textbookEvidence, questionEvidence, teacherResourceEvidence, aiDraft, timer,
                 ProgressPhase.HANDOUT_RENDERING);
+        RetrievalOutcome textbookOutcome = evidencePack == null ? RetrievalOutcome.completed() : evidencePack.textbookOutcome();
+        RetrievalOutcome questionOutcome = evidencePack == null ? RetrievalOutcome.completed() : evidencePack.questionOutcome();
+        RetrievalOutcome teacherResourceOutcome = evidencePack == null
+                ? RetrievalOutcome.completed() : evidencePack.teacherResourceOutcome();
+        if (!teacherResourceEvidence.isEmpty()) {
+            teacherResourceOutcome = completedOutcome("教师资料", new TimedEvidence(teacherResourceEvidence, 0L));
+        }
         List<TeachingWorkflowNode> nodes = buildNodes(
                 request,
                 evidence,
@@ -343,7 +359,8 @@ class TeachingWorkflowExecutionSupport {
                 aiDraft,
                 template,
                 canUseQuestionBank(context),
-                canUseTeacherResources(context));
+                canUseTeacherResources(context),
+                textbookOutcome, questionOutcome, teacherResourceOutcome);
         TeachingDraftSections draftSections = collectDraftSections(request, evidence, aiDraft);
         TeachingDraftReview draftReview = TeachingDraftReviewCollector.collect(draftSections);
         TeachingDraftMergeResult mergeResult = TeachingDraftMerger.merge(draftSections, draftReview);
@@ -385,7 +402,8 @@ class TeachingWorkflowExecutionSupport {
                 questionEvidence,
                 teacherResourceEvidence,
                 aiDraft,
-                template);
+                template,
+                textbookOutcome, questionOutcome, teacherResourceOutcome);
         if (taskId == null) {
             taskId = UUID.randomUUID().toString();
         }
@@ -417,18 +435,13 @@ class TeachingWorkflowExecutionSupport {
                 mergeResult,
                 null)
                 .withPageChrome(request.headerLeft(), request.headerRight(), request.footerLeft(), request.footerRight());
-        if (ownerKey != null && idempotencyKey != null) {
+        if (lease == null && ownerKey != null && idempotencyKey != null) {
             taskStore.save(ownerKey, idempotencyKey, response);
         }
         traceRecorder.completed(taskId, context, "WORKFLOW_ORCHESTRATOR", "TeachingOrchestrator", evidence,
                 timingSum(timer), "教学 DAG 已完成并生成可审计讲义结果。");
         saveAiDraftTrace(response, context);
         return response;
-    }
-
-    private long remainingEvidenceTimeoutMs(long evidenceStartedNanos) {
-        long elapsedMs = Math.max(0L, (System.nanoTime() - evidenceStartedNanos) / 1_000_000L);
-        return Math.max(1L, evidenceTimeoutMs - elapsedMs);
     }
 
     /**
@@ -451,6 +464,37 @@ class TeachingWorkflowExecutionSupport {
     /** New handouts fail closed when their sole Python execution plane is unavailable. */
     protected boolean pythonTeachingHandoutEnabled() {
         return pythonTeachingHandoutClient != null && pythonTeachingHandoutEnabledFlag;
+    }
+
+    /**
+     * Reads only teacher evidence appended by the broker for this task and merges it with the initial branch.
+     *
+     * <p>The task store remains the authorization ledger; Java never replays the user request as a teacher query.
+     * The source/block key avoids double-counting a hit already present in the initial snapshot or returned by two
+     * semantically similar Python plan queries.</p>
+     */
+    private List<TeachingEvidence> brokerDiscoveredTeacherEvidence(
+            String taskId, List<TeachingEvidence> initialTeacherEvidence) {
+        if (taskId == null || taskId.isBlank()) {
+            return initialTeacherEvidence == null ? List.of() : List.copyOf(initialTeacherEvidence);
+        }
+        List<TeachingEvidence> merged = new ArrayList<>(
+                initialTeacherEvidence == null ? List.of() : initialTeacherEvidence);
+        Set<String> known = merged.stream()
+                .map(item -> item.sourceScope() + "|" + item.sourceDocumentId() + "|" + item.chunkId())
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        taskStore.findByTaskId(taskId).ifPresent(snapshot -> {
+            for (TeachingEvidence item : snapshot.evidence() == null ? List.<TeachingEvidence>of() : snapshot.evidence()) {
+                if (item == null || !"TEACHER_RESOURCE".equals(item.sourceScope())) {
+                    continue;
+                }
+                String key = item.sourceScope() + "|" + item.sourceDocumentId() + "|" + item.chunkId();
+                if (known.add(key)) {
+                    merged.add(item);
+                }
+            }
+        });
+        return verifiedEvidence(merged);
     }
 
 
@@ -502,6 +546,7 @@ class TeachingWorkflowExecutionSupport {
 
     /**
      * 把教材检索命中转换为教学证据，明确标注 PUBLIC_TEXTBOOK 作用域。
+     * sourceDocumentId 必须填充 docId，用于 handout-document-read 工具的授权校验。
      */
     protected TeachingEvidence toEvidence(TextbookSearchHit hit) {
         return new TeachingEvidence(
@@ -512,7 +557,7 @@ class TeachingWorkflowExecutionSupport {
                 hit.textSnippet(),
                 resolvedTextbookImagePath(hit),
                 "",
-                "",
+                hit.docId() == null ? "" : hit.docId(),  // 修复：必须填充 sourceDocumentId 用于文档读取授权
                 "public_textbook",
                 "",
                 "textbook://" + hit.docId() + "/page/" + hit.pageNo() + "#chunk=" + hit.chunkId(),
@@ -546,6 +591,71 @@ class TeachingWorkflowExecutionSupport {
 
 
     /**
+     * Recovers only branches that were not settled in the failed snapshot. Completed branches stay frozen, including
+     * a legitimate zero-hit textbook result, so a manual resume cannot repeat the entire source fan-out.
+     */
+    protected EvidencePack retrieveMissingEvidenceBranches(
+            TeachingTaskRequest request,
+            TeachingRequestContext context,
+            String taskId,
+            TeachingTaskResponse checkpoint,
+            java.util.function.Consumer<EvidencePack> onBranchSettled) {
+        TaskExecutor evidenceExecutor = evidenceTaskExecutor != null ? evidenceTaskExecutor : taskExecutor;
+        if (evidenceExecutor == null) {
+            throw new IllegalStateException("Teaching evidence executor is not configured");
+        }
+        List<TeachingEvidence> textbook = checkpoint.evidence().stream()
+                .filter(item -> "PUBLIC_TEXTBOOK".equals(item.sourceScope())).toList();
+        List<TeachingEvidence> questions = checkpoint.evidence().stream()
+                .filter(item -> "QUESTION_BANK".equals(item.sourceScope())).toList();
+        List<TeachingEvidence> teacher = checkpoint.evidence().stream()
+                .filter(item -> "TEACHER_RESOURCE".equals(item.sourceScope())).toList();
+        RetrievalOutcome textbookOutcome = checkpointOutcome(checkpoint, "PUBLIC_TEXTBOOK_RETRIEVAL");
+        RetrievalOutcome questionOutcome = checkpointOutcome(checkpoint, "QUESTION_BANK_RETRIEVAL");
+        RetrievalOutcome teacherOutcome = checkpointOutcome(checkpoint, "TEACHER_RESOURCE_RETRIEVAL");
+        long textbookElapsedMs = 0L;
+        long questionElapsedMs = 0L;
+        long teacherElapsedMs = 0L;
+
+        // The first recovered verified source freezes the evidence barrier. Do not spend another source query after it.
+        // Recovery must preserve the same contract as a fresh run: Python decides whether private teacher material
+        // is needed. Replaying this branch here would reintroduce the unconditional latency regression on resume.
+        teacherOutcome = RetrievalOutcome.skipped("教师资料由 Python Writer 按需决定是否检索。");
+        if (!"completed".equals(questionOutcome.status()) && questions.isEmpty()) {
+            try {
+                List<TeachingEvidence> currentTeacher = teacher;
+                TimedEvidence recovered = awaitEvidence("question_bank", submitEvidence(() -> {
+                    List<String> pointQueries = currentTeacher.isEmpty()
+                            ? curriculumPointQueries(request, textbook)
+                            : curriculumPointQueries(request, currentTeacher);
+                    List<TeachingEvidence> retrieved = retrieveQuestionBankEvidence(request, context, pointQueries);
+                    return requiresQualifiedQuestionCompilation(request) ? retrieved : alignEvidenceToTopic(request, retrieved);
+                }, evidenceExecutor), evidenceTimeoutMs);
+                questions = verifiedEvidence(recovered.evidence());
+                questionElapsedMs = recovered.elapsedMs();
+                questionOutcome = completedOutcome("题库", recovered);
+            } catch (RuntimeException failure) {
+                questionOutcome = retrievalFailureOutcome("题库", failure, questionElapsedMs);
+            }
+        }
+        EvidencePack result = new EvidencePack(textbook, questions, teacher, textbookElapsedMs, questionElapsedMs,
+                teacherElapsedMs, textbookOutcome, questionOutcome, teacherOutcome);
+        onBranchSettled.accept(result);
+        return result;
+    }
+
+    /** Restores a branch state from the durable UI snapshot without interpreting an empty completed result as failure. */
+    private static RetrievalOutcome checkpointOutcome(TeachingTaskResponse checkpoint, String nodeCode) {
+        return checkpoint.nodes().stream()
+                .filter(node -> nodeCode.equals(node.code()))
+                .findFirst()
+                .map(node -> "completed".equalsIgnoreCase(node.status()) || "skipped".equalsIgnoreCase(node.status())
+                        ? RetrievalOutcome.completed()
+                        : RetrievalOutcome.degraded("上次运行未完成，恢复该分支。"))
+                .orElseGet(() -> RetrievalOutcome.degraded("上次运行缺少分支快照，恢复该分支。"));
+    }
+
+    /**
      * 教学任务的证据 DAG：教材与教师资料互不依赖，先并行召回；题库必须等教师资料定位到具体课程点后再检索，
      * 避免仅凭宽泛学习目标选入无关题目。
      */
@@ -556,198 +666,183 @@ class TeachingWorkflowExecutionSupport {
     /** Runs the retrieval barrier and records each real source branch under the parent task id. */
     protected EvidencePack retrieveEvidencePack(
             TeachingTaskRequest request, TeachingRequestContext context, String taskId) {
-        /*
-         * Do not reuse the outer teaching task executor here: the outer worker may already be occupied by this task.
-         * The Spring production wiring supplies a separate bounded executor; focused synchronous constructors fall
-         * back to their caller-owned executor without creating a request-level pool.
-         */
+        return retrieveEvidencePack(request, context, taskId, ignored -> { });
+    }
+
+    /**
+     * Settles sources independently so a slow optional branch cannot erase evidence already visible to the task owner.
+     * The callback persists only authorized, verified evidence; it never receives a provider response or raw exception.
+     */
+    protected EvidencePack retrieveEvidencePack(
+            TeachingTaskRequest request,
+            TeachingRequestContext context,
+            String taskId,
+            java.util.function.Consumer<EvidencePack> onBranchSettled) {
         TaskExecutor evidenceExecutor = evidenceTaskExecutor != null ? evidenceTaskExecutor : taskExecutor;
         if (evidenceExecutor == null) {
             throw new IllegalStateException("Teaching evidence executor is not configured");
         }
-        // 两条独立证据源并行执行，缩短讲义任务的关键路径；后续题库检索保持依赖关系，不在此并发。
-        long evidenceStartedNanos = System.nanoTime();
-        CompletableFuture<TimedEvidence> textbookFuture = CompletableFuture.supplyAsync(
-                () -> timeEvidence(() -> alignEvidenceToTopic(request, retrieveTextbookEvidence(request, context))),
-                evidenceExecutor);
-        CompletableFuture<TimedEvidence> teacherResourceFuture = CompletableFuture.supplyAsync(
-                () -> timeEvidence(() -> alignEvidenceToTopic(request, retrieveTeacherResourceEvidence(request, context))),
-                evidenceExecutor);
-        CompletableFuture<TimedEvidence> questionBankFuture = null;
+        long textbookStartedNanos = System.nanoTime();
+        CompletableFuture<TimedEvidence> textbookFuture = submitEvidence(
+                () -> alignEvidenceToTopic(request, retrieveTextbookEvidence(request, context)), evidenceExecutor);
+        // Canonical papers are an independently published public corpus. Its collection can legitimately be absent
+        // before the real-paper ingestion owner completes a run, which must never erase already authorized teacher
+        // resource evidence from this handout.
+        CompletableFuture<TimedEvidence> canonicalPaperFuture = submitEvidence(
+                () -> alignEvidenceToTopic(request, retrieveCanonicalMathPaperEvidence(request)), evidenceExecutor);
+        TimedEvidence textbook = new TimedEvidence(List.of(), 0L);
+        TimedEvidence teacherResource = new TimedEvidence(List.of(), 0L);
+        TimedEvidence questionBank = new TimedEvidence(List.of(), 0L);
+        RetrievalOutcome textbookOutcome;
+        // Teacher resources are optional private context. Python's plan writer decides whether they are needed;
+        // submitting this branch here would turn an AI decision into an unconditional, latency-heavy search.
+        RetrievalOutcome teacherOutcome = RetrievalOutcome.skipped("教师资料由 Python Writer 按需决定是否检索。");
+        RetrievalOutcome questionOutcome = RetrievalOutcome.running();
+
         try {
-            TimedEvidence textbook;
-            try {
-                textbook = awaitEvidence("textbook", textbookFuture, evidenceTimeoutMs);
-            } catch (RuntimeException failure) {
-                traceRecorder.failed(taskId, context, "PUBLIC_TEXTBOOK_RETRIEVAL", "TextbookRetriever", List.of(), 0L, failure);
-                traceRecorder.failed(taskId, context, "WORKFLOW_ORCHESTRATOR", "TeachingOrchestrator", List.of(), 0L, failure);
-                throw failure;
-            }
+            textbook = awaitEvidence("textbook", textbookFuture, evidenceTimeoutMs);
+            textbookOutcome = completedOutcome("公开教材", textbook);
             traceRecorder.completed(taskId, context, "PUBLIC_TEXTBOOK_RETRIEVAL", "TextbookRetriever",
-                    textbook.evidence(), textbook.elapsedMs(), "教材检索完成。");
-
-            TimedEvidence teacherResource;
-            try {
-                teacherResource = awaitEvidence(
-                        "teacher_resource", teacherResourceFuture, remainingEvidenceTimeoutMs(evidenceStartedNanos));
-            } catch (RuntimeException failure) {
-                traceRecorder.failed(taskId, context, "TEACHER_RESOURCE_RETRIEVAL", "TeacherResourceRetriever", List.of(), 0L, failure);
-                traceRecorder.failed(taskId, context, "WORKFLOW_ORCHESTRATOR", "TeachingOrchestrator", List.of(), 0L, failure);
-                throw failure;
-            }
-            traceRecorder.completed(taskId, context, "TEACHER_RESOURCE_RETRIEVAL", "TeacherResourceRetriever",
-                    teacherResource.evidence(), teacherResource.elapsedMs(), "教师资料检索完成。");
-
-            // The second retrieval is deliberately after the teacher-resource boundary.  This preserves the user's
-            // intended chain: real directory/teacher material -> concrete knowledge point -> atomic bank question.
-            TimedEvidence questionBank;
-            try {
-                questionBankFuture = CompletableFuture.supplyAsync(
-                        () -> timeEvidence(() -> {
-                            List<TeachingEvidence> retrievedQuestions = retrieveQuestionBankEvidence(
-                                    request, context, curriculumPointQueries(request, teacherResource.evidence()));
-                            // retrieveQuestionBankEvidence has already selected permission-checked atomic rows for a qualified
-                            // multi-topic compilation. Applying the single-topic aligner a second time collapses that pack back
-                            // to the first matching subject and recreates the one-question failure that this branch prevents.
-                            return requiresQualifiedQuestionCompilation(request)
-                                    ? retrievedQuestions
-                                    : alignEvidenceToTopic(request, retrievedQuestions);
-                        }), evidenceExecutor);
-                questionBank = awaitEvidence(
-                        "question_bank", questionBankFuture, remainingEvidenceTimeoutMs(evidenceStartedNanos));
-            } catch (RuntimeException failure) {
-                traceRecorder.failed(taskId, context, "QUESTION_BANK_RETRIEVAL", "QuestionBankRetriever", List.of(), 0L, failure);
-                traceRecorder.failed(taskId, context, "WORKFLOW_ORCHESTRATOR", "TeachingOrchestrator", List.of(), 0L, failure);
-                throw failure;
-            }
-            traceRecorder.completed(taskId, context, "QUESTION_BANK_RETRIEVAL", "QuestionBankRetriever",
-                    questionBank.evidence(), questionBank.elapsedMs(), "题库检索完成。");
-            return new EvidencePack(
-                    textbook.evidence(),
-                    questionBank.evidence(),
-                    teacherResource.evidence(),
-                    textbook.elapsedMs(),
-                    questionBank.elapsedMs(),
-                    teacherResource.elapsedMs());
-        } catch (RuntimeException exception) {
+                    textbook.evidence(), textbook.elapsedMs(), textbookOutcome.detail());
+        } catch (RuntimeException failure) {
             textbookFuture.cancel(true);
-            teacherResourceFuture.cancel(true);
-            if (questionBankFuture != null) {
-                questionBankFuture.cancel(true);
-            }
-            throw exception;
+            textbook = failedEvidence(textbookStartedNanos);
+            textbookOutcome = retrievalFailureOutcome("公开教材", failure, textbook.elapsedMs());
+            traceRecorder.failed(taskId, context, "PUBLIC_TEXTBOOK_RETRIEVAL", "TextbookRetriever",
+                    List.of(), textbook.elapsedMs(), failure);
         }
-    }
+        onBranchSettled.accept(new EvidencePack(textbook.evidence(), List.of(), List.of(),
+                textbook.elapsedMs(), 0L, 0L, textbookOutcome, questionOutcome, teacherOutcome));
 
-    /**
-     * Executes one real agent run for every retrieved atomic question.
-     *
-     * <p>The retrieval result is immutable input to each branch. The branch receives only a short task summary and
-     * stable evidence references; the user's text is never used as a search query or persisted as an evidence row.
-     * Branches run in source order because every {@code TeacherAssistantAgent} run deliberately shares the same
-     * user, tenant, and model concurrency keys. Dispatching them in parallel makes the distributed guard reject
-     * otherwise valid sibling work. A missing planner/executor is allowed only for legacy unit-test constructors,
-     * while the Spring production constructor always wires both services. Any production branch failure propagates
-     * to the parent DAG.</p>
-     */
-    protected void runQuestionAgents(
-            TeachingTaskRequest request,
-            TeachingRequestContext context,
-            String taskId,
-            List<TeachingEvidence> questionEvidence,
-            QuestionAgentBatch batch) {
-        if (questionEvidence == null || questionEvidence.isEmpty()) {
-            return;
-        }
-        // Focused compatibility constructors intentionally do not wire the production agent catalog. They exercise
-        // retrieval/rendering in isolation; the Spring production constructor always supplies both services and
-        // therefore cannot silently skip the real child-agent barrier.
-        if (agentRunPlanService == null || agentRunExecutionService == null) {
-            return;
-        }
-        int completedBranches = 0;
-        RuntimeException lastFailure = null;
-        for (TeachingEvidence evidence : questionEvidence) {
-            try {
-                executeQuestionAgent(request, context, taskId, evidence);
-                completedBranches += 1;
-            } catch (RuntimeException failure) {
-                /*
-                 * A child branch is an independently auditable cross-check.  Its failure is already persisted by
-                 * executeQuestionAgent(), while the same authorized stem remains available to the CoursewareAgent.
-                 * Continue with other questions so one transient provider timeout cannot discard their real work.
-                 */
-                lastFailure = failure;
-                log.warn("Question-agent branch failed; retaining its verified evidence for the main handout: {}",
-                        evidence.chunkId(), failure);
-            }
-        }
-        if (completedBranches == 0 && lastFailure != null) {
-            // No independent solution succeeded, so do not make the main writer appear agent-verified.
-            throw new IllegalStateException("所有题目子智能体均未完成，不能继续生成教师讲义", lastFailure);
-        }
-    }
-
-    /** Runs and records one isolated question-agent branch. */
-    private void executeQuestionAgent(
-            TeachingTaskRequest request,
-            TeachingRequestContext context,
-            String taskId,
-            TeachingEvidence evidence) {
-        String agentId = questionAgentId(evidence);
-        String nodeCode = "QUESTION_AGENT_" + agentId;
-        List<TeachingEvidence> branchEvidence = List.of(evidence);
-        long started = System.nanoTime();
-        traceRecorder.running(taskId, context, nodeCode, "QuestionSolvingAgent", branchEvidence, 0L,
-                "题目子智能体已分配，仅使用当前题目的检索证据。");
         try {
-            RequestSubject subject = new RequestSubject(
-                    context.tenantId(), context.subjectType(), context.subjectId(), context.deviceId()).normalize();
-            AgentRunPlanResponse plan = agentRunPlanService.plan(
-                    new AgentRunPlanRequest(
-                            "TeacherAssistantAgent",
-                            "question_solving",
-                            "teacher",
-                            Math.max(256, safeEvidenceText(evidence.snippet()).length()),
-                            QUESTION_AGENT_MAX_OUTPUT_TOKENS,
-                            evidence.imagePath() != null && !evidence.imagePath().isBlank(),
-                            true,
-                            "medium",
-                            "normal",
-                            3.0d,
-                            0,
-                            false,
-                            // The branch already receives one authorization-scoped, retrieved question snippet.
-                            // Re-opening global retrieval here adds a second model/tool turn without adding evidence
-                            // to this isolated solution, and can make a valid question explanation exceed its lease.
-                            List.of(),
-                            List.of(),
-                            List.of("PUBLIC_TEXTBOOK", "TEACHER_PRIVATE", "CLASS_AUTHORIZED"),
-                            false,
-                            "",
-                            ""),
-                    subject);
-            String summary = "独立解答题目：" + safeEvidenceText(evidence.sourceTitle()) + "。题目内容："
-                    + safeEvidenceText(evidence.snippet());
-            AgentRunExecuteResponse execution = agentRunExecutionService.execute(
-                    new AgentRunExecuteRequest(
-                            plan,
-                            summary,
-                            branchEvidence.stream().map(TeachingWorkflowService::evidenceRef).toList(),
-                            false),
-                    subject);
-            if (!"COMPLETED".equalsIgnoreCase(execution.status())) {
-                throw new IllegalStateException("题目子智能体返回状态：" + execution.status());
-            }
-            traceRecorder.completed(taskId, context, nodeCode, execution.agentCode(), branchEvidence,
-                    elapsedMs(started), "题目子智能体已完成真实模型调用并返回结果。");
-        } catch (Throwable failure) {
-            traceRecorder.failed(taskId, context, nodeCode, "QuestionSolvingAgent", branchEvidence,
-                    elapsedMs(started), failure);
-            throw failure instanceof RuntimeException runtime ? runtime : new IllegalStateException(failure);
+            TimedEvidence canonical = awaitEvidence("canonical_math_paper", canonicalPaperFuture, evidenceTimeoutMs);
+            // Canonical papers remain public evidence; they must not be mislabeled as private teacher material.
+            textbook = new TimedEvidence(concatEvidence(textbook.evidence(), canonical.evidence()),
+                    textbook.elapsedMs() + canonical.elapsedMs());
+        } catch (RuntimeException canonicalFailure) {
+            canonicalPaperFuture.cancel(true);
+            traceRecorder.failed(taskId, context, "CANONICAL_MATH_PAPER_RETRIEVAL", "CanonicalMathPaperRetriever",
+                    List.of(), 0L, canonicalFailure);
+        }
+        traceRecorder.completed(taskId, context, "TEACHER_RESOURCE_RETRIEVAL", "PythonWriterDecision",
+                List.of(), 0L, teacherOutcome.detail());
+        onBranchSettled.accept(new EvidencePack(textbook.evidence(), List.of(), teacherResource.evidence(),
+                textbook.elapsedMs(), 0L, teacherResource.elapsedMs(), textbookOutcome, questionOutcome, teacherOutcome));
+
+        // A timed-out teacher source still leaves a safe curriculum fallback: normalized request topics plus completed
+        // textbook evidence. The request guides lookup but never becomes an evidence row or bypasses question access.
+        long questionBankStartedNanos = System.nanoTime();
+        try {
+            List<TeachingEvidence> completedTeacherEvidence = teacherResource.evidence();
+            List<TeachingEvidence> completedTextbookEvidence = textbook.evidence();
+            CompletableFuture<TimedEvidence> questionBankFuture = submitEvidence(
+                    () -> {
+                        // Teacher resources are intentionally absent here. Their use is a Python model decision;
+                        // question-bank retrieval stays grounded in the already authorized public textbook branch.
+                        List<String> pointQueries = curriculumPointQueries(request, completedTextbookEvidence);
+                        List<TeachingEvidence> retrievedQuestions = retrieveQuestionBankEvidence(request, context, pointQueries);
+                        return requiresQualifiedQuestionCompilation(request)
+                                ? retrievedQuestions
+                                : alignEvidenceToTopic(request, retrievedQuestions);
+                    }, evidenceExecutor);
+            questionBank = awaitEvidence("question_bank", questionBankFuture, evidenceTimeoutMs);
+            questionOutcome = completedOutcome("题库", questionBank);
+            traceRecorder.completed(taskId, context, "QUESTION_BANK_RETRIEVAL", "QuestionBankRetriever",
+                    questionBank.evidence(), questionBank.elapsedMs(), questionOutcome.detail());
+        } catch (RuntimeException failure) {
+            questionBank = failedEvidence(questionBankStartedNanos);
+            questionOutcome = retrievalFailureOutcome("题库", failure, questionBank.elapsedMs());
+            traceRecorder.failed(taskId, context, "QUESTION_BANK_RETRIEVAL", "QuestionBankRetriever",
+                    List.of(), questionBank.elapsedMs(), failure);
+        }
+        EvidencePack result = new EvidencePack(textbook.evidence(), questionBank.evidence(), teacherResource.evidence(),
+                textbook.elapsedMs(), questionBank.elapsedMs(), teacherResource.elapsedMs(),
+                textbookOutcome, questionOutcome, teacherOutcome);
+        onBranchSettled.accept(result);
+        return result;
+    }
+
+    /** 
+     * Explains an evidence-only failure with settled source states instead of hiding useful branch diagnostics.
+     * 
+     * 修改说明（2026-08-18）：
+     * - 区分三种状态：failed（检索失败）、degraded（部分失败/超时）、completed（成功但无匹配）
+     * - degraded 表示检索过程有异常（超时、依赖不可用等），但不阻止其他来源的证据使用
+     * - completed 但无证据表示检索成功执行，但数据库中没有匹配的内容
+     * - 提供更清晰的诊断信息，帮助用户理解是数据问题还是检索问题
+     */
+    private static String evidenceFailureSummary(EvidencePack pack) {
+        // 分类统计各来源状态
+        List<String> statusDetails = new ArrayList<>();
+        
+        // 教材状态
+        String textbookStatus = pack.textbookOutcome().status();
+        if ("failed".equals(textbookStatus)) {
+            statusDetails.add("教材：failed");
+        } else if ("degraded".equals(textbookStatus)) {
+            statusDetails.add("教材：degraded");
+        } else if ("completed".equals(textbookStatus)) {
+            statusDetails.add("教材：completed");
+        }
+        
+        // 题库状态
+        String questionStatus = pack.questionOutcome().status();
+        if ("failed".equals(questionStatus)) {
+            statusDetails.add("题库：failed");
+        } else if ("degraded".equals(questionStatus)) {
+            statusDetails.add("题库：degraded");
+        } else if ("completed".equals(questionStatus)) {
+            statusDetails.add("题库：completed");
+        }
+        
+        // 教师资料状态
+        String teacherStatus = pack.teacherResourceOutcome().status();
+        if ("failed".equals(teacherStatus)) {
+            statusDetails.add("教师资料：failed");
+        } else if ("degraded".equals(teacherStatus)) {
+            statusDetails.add("教师资料：degraded");
+        } else if ("completed".equals(teacherStatus)) {
+            statusDetails.add("教师资料：completed");
+        } else if ("skipped".equals(teacherStatus)) {
+            statusDetails.add("教师资料：skipped");
+        }
+        
+        // 组装最终错误信息
+        return "未检索到可核验的教材、题库或教师资料证据；" + String.join("；", statusDetails) 
+                + "。用户输入不能作为检索证据，已停止生成讲义。";
+    }
+
+    /** Converts operational failures into a compact status without leaking internal connection details. */
+    private static RetrievalOutcome retrievalFailureOutcome(String source, RuntimeException failure, long elapsedMs) {
+        String category = failure instanceof RejectedExecutionException ? "executor_rejected"
+                : failure.getCause() instanceof java.util.concurrent.TimeoutException ? "timeout"
+                : "dependency_unavailable";
+        return RetrievalOutcome.degraded(source + "检索" + category + "，耗时" + elapsedMs
+                + "ms；已保留其他已授权资料，可独立恢复。");
+    }
+
+    /** Submits a branch once and turns queue rejection into an independently persisted branch outcome. */
+    private static CompletableFuture<TimedEvidence> submitEvidence(
+            java.util.function.Supplier<List<TeachingEvidence>> supplier, TaskExecutor executor) {
+        try {
+            return CompletableFuture.supplyAsync(() -> timeEvidence(supplier), executor);
+        } catch (RejectedExecutionException rejection) {
+            CompletableFuture<TimedEvidence> failed = new CompletableFuture<>();
+            failed.completeExceptionally(rejection);
+            return failed;
         }
     }
 
+    /** Uses the branch start time so a timeout remains operationally measurable in a durable snapshot. */
+    private static TimedEvidence failedEvidence(long branchStartedNanos) {
+        return new TimedEvidence(List.of(), Math.max(0L, (System.nanoTime() - branchStartedNanos) / 1_000_000L));
+    }
+
+    /** Safe telemetry is retained in task snapshots through node/event summaries and stage timings. */
+    private static RetrievalOutcome completedOutcome(String source, TimedEvidence evidence) {
+        return RetrievalOutcome.completed(source + "检索完成：候选/已核验=" + evidence.evidence().size()
+                + "/" + evidence.evidence().size() + "，耗时" + evidence.elapsedMs() + "ms。");
+    }
 
     protected List<TeachingEvidence> retrieveTextbookEvidence(TeachingTaskRequest request, TeachingRequestContext context) {
         /*
@@ -758,6 +853,15 @@ class TeachingWorkflowExecutionSupport {
          */
         LinkedHashMap<String, TeachingEvidence> merged = new LinkedHashMap<>();
         List<String> queries = alignedQueries(request);
+        String primaryTopic = primaryTopicKeyword(request);
+        if (!primaryTopic.isBlank()) {
+            LinkedHashSet<String> boundedQueries = new LinkedHashSet<>();
+            boundedQueries.add(primaryTopic);
+            boundedQueries.addAll(queries);
+            // The public endpoint's mature behavior is a compact topic lookup. Limit handout fan-out so a long goal
+            // cannot serially repeat an expensive textbook search and starve unrelated evidence branches.
+            queries = boundedQueries.stream().limit(2).toList();
+        }
         if (queries.isEmpty()) {
             String fallback = retrievalQuery(request);
             if (!fallback.isBlank()) {
@@ -880,6 +984,20 @@ class TeachingWorkflowExecutionSupport {
     }
 
 
+    /** 检索公共规范试卷；授权由语料清单和来源哈希完成，绝不依赖教师资料可见性。 */
+    protected List<TeachingEvidence> retrieveCanonicalMathPaperEvidence(TeachingTaskRequest request) {
+        if (canonicalMathPaperRetrievalService == null) {
+            return List.of();
+        }
+        String query = ((request.learningGoal() == null ? "" : request.learningGoal()) + " "
+                + (request.questionText() == null ? "" : request.questionText())).strip();
+        try {
+            return canonicalMathPaperRetrievalService.search(query, request.evidenceLimit());
+        } catch (IllegalArgumentException exception) {
+            return List.of();
+        }
+    }
+
     protected List<TeachingEvidence> retrieveTeacherResourceEvidence(TeachingTaskRequest request, TeachingRequestContext context) {
         if (!canUseTeacherResources(context) || teacherResourceBlockSearchService == null) {
             return List.of();
@@ -890,6 +1008,24 @@ class TeachingWorkflowExecutionSupport {
                 (request.questionText() == null ? "" : request.questionText()) + " "
                         + (request.learningGoal() == null ? "" : request.learningGoal())).find();
         List<String> alignedQueries = alignedQueries(request);
+        // A visual task already provides an exact source-facing goal. Searching every extracted natural-language
+        // token serially repeats the full vector/rerank pipeline and can consume the task-level evidence barrier
+        // before the authorized figure is reached. Start with that title, then use one compact curriculum fallback.
+        if (visualRequest) {
+            LinkedHashSet<String> visualQueries = new LinkedHashSet<>();
+            String exactGoal = request.learningGoal() == null ? "" : request.learningGoal().strip();
+            if (!exactGoal.isBlank()) {
+                visualQueries.add(exactGoal);
+            }
+            String coreTopic = primaryTopicKeyword(request);
+            if (!coreTopic.isBlank()) {
+                visualQueries.add(coreTopic);
+            }
+            alignedQueries.stream()
+                    .filter(query -> query != null && !query.isBlank())
+                    .forEach(visualQueries::add);
+            alignedQueries = visualQueries.stream().limit(TEACHER_RESOURCE_VISUAL_QUERY_LIMIT).toList();
+        }
         try {
             for (String query : alignedQueries) {
                 TeacherResourceBlockSearchResponse response = teacherResourceBlockSearchService.search(
@@ -1098,10 +1234,12 @@ class TeachingWorkflowExecutionSupport {
         }
         return candidates.stream()
                 .filter(item -> item != null)
-                .filter(item -> Set.of("PUBLIC_TEXTBOOK", "QUESTION_BANK", "TEACHER_RESOURCE")
+                .filter(item -> Set.of("PUBLIC_TEXTBOOK", "QUESTION_BANK", "TEACHER_RESOURCE", "CANONICAL_MATH_PAPER")
                         .contains(item.sourceScope()))
                 .filter(item -> item.snippet() != null && !item.snippet().isBlank())
-                .filter(item -> item.chunkId() != null && !item.chunkId().isBlank())
+                // TEACHER_RESOURCE可能没有chunkId（文档级证据），不应被过滤
+                .filter(item -> "TEACHER_RESOURCE".equals(item.sourceScope()) 
+                        || (item.chunkId() != null && !item.chunkId().isBlank()))
                 .toList();
     }
 
@@ -1170,6 +1308,30 @@ class TeachingWorkflowExecutionSupport {
     }
 
 
+    protected void saveRunningProgress(
+            TeachingTaskRequest request,
+            TeachingRequestContext context,
+            String taskId,
+            String ownerKey,
+            String idempotencyKey,
+            com.doob.mathagent.teaching.mq.LectureTaskLease lease,
+            TeachingHandoutTemplateProfile template,
+            StudentMemoryResponse memoryResponse,
+            List<TeachingEvidence> evidence,
+            List<TeachingEvidence> textbookEvidence,
+            List<TeachingEvidence> questionEvidence,
+            List<TeachingEvidence> teacherResourceEvidence,
+            TeachingTaskResponse.AiDraft aiDraft,
+            StageTimer timer,
+            ProgressPhase phase) {
+        RetrievalOutcome settled = RetrievalOutcome.completed();
+        saveRunningProgress(request, context, taskId, ownerKey, idempotencyKey, lease, template, memoryResponse,
+                evidence, textbookEvidence, questionEvidence, teacherResourceEvidence, aiDraft, timer, phase,
+                phase == ProgressPhase.EVIDENCE_COLLECTING ? RetrievalOutcome.running() : settled,
+                phase == ProgressPhase.EVIDENCE_COLLECTING ? RetrievalOutcome.running() : settled,
+                phase == ProgressPhase.EVIDENCE_COLLECTING ? RetrievalOutcome.running() : settled);
+    }
+
     /**
      * Persists one meaningful RUNNING snapshot after each durable boundary. The same snapshot is read by REST
      * recovery and SSE, preventing the frontend from rendering temporary zero-value placeholders.
@@ -1180,6 +1342,7 @@ class TeachingWorkflowExecutionSupport {
             String taskId,
             String ownerKey,
             String idempotencyKey,
+            com.doob.mathagent.teaching.mq.LectureTaskLease lease,
             TeachingHandoutTemplateProfile template,
             StudentMemoryResponse memoryResponse,
             List<TeachingEvidence> evidence,
@@ -1188,8 +1351,10 @@ class TeachingWorkflowExecutionSupport {
             List<TeachingEvidence> teacherResourceEvidence,
             TeachingTaskResponse.AiDraft aiDraft,
             StageTimer timer,
-
-            ProgressPhase phase) {
+            ProgressPhase phase,
+            RetrievalOutcome textbookOutcome,
+            RetrievalOutcome questionOutcome,
+            RetrievalOutcome teacherResourceOutcome) {
         if (taskId == null || ownerKey == null || idempotencyKey == null) {
             return;
         }
@@ -1204,7 +1369,7 @@ class TeachingWorkflowExecutionSupport {
                 template,
                 canUseQuestionBank(context),
                 canUseTeacherResources(context),
-                phase);
+                phase, textbookOutcome, questionOutcome, teacherResourceOutcome);
         TeachingTaskResponse snapshot = new TeachingTaskResponse(
                 taskId,
                 request.clientRequestId(),
@@ -1217,7 +1382,8 @@ class TeachingWorkflowExecutionSupport {
                 request.learningGoal(),
                 request.watermarkText(),
                 nodes,
-                progressWorkflowEvents(template, textbookEvidence, questionEvidence, teacherResourceEvidence, aiDraft, phase),
+                progressWorkflowEvents(template, textbookEvidence, questionEvidence, teacherResourceEvidence, aiDraft, phase,
+                        textbookOutcome, questionOutcome, teacherResourceOutcome),
                 List.of(),
                 evidence,
                 "", "", "", "",
@@ -1230,6 +1396,12 @@ class TeachingWorkflowExecutionSupport {
                 null,
                 null)
                 .withPageChrome(request.headerLeft(), request.headerRight(), request.footerLeft(), request.footerRight());
+        if (lease != null) {
+            if (!taskStore.saveOwnedRunning(lease, snapshot)) {
+                throw new TeachingWorkflowService.LeaseLostException();
+            }
+            return;
+        }
         taskStore.save(ownerKey, idempotencyKey, snapshot);
     }
 }

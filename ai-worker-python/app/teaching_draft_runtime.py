@@ -20,6 +20,7 @@ import requests
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.model_review_runtime import BoundedModelReviewController, ModelReviewExhausted, ModelReviewMetadata
 from app.usage import UsageEvent, UsageLedger, cost_for, fallback_tokens
 
 
@@ -130,7 +131,8 @@ class TeachingDraftRuntime:
         started_clock = time.perf_counter()
         request = payload.compact()
         providers = self._provider_order()
-        max_retries = self._max_retries()
+        review_controller = BoundedModelReviewController("executor", profile="agent_run")
+        max_retries = review_controller.max_turns - 1
         total_usage = {"promptTokens": 0, "completionTokens": 0, "totalTokens": 0, "estimatedCost": 0.0}
         usage_known = True
         events: list[dict[str, Any]] = []
@@ -140,47 +142,49 @@ class TeachingDraftRuntime:
 
         for provider in providers:
             model = self._model(provider)
-            for retry_no in range(max_retries + 1):
-                attempt_index += 1
-                attempt_started = time.perf_counter()
-                try:
-                    messages = self._messages(request, last_error if retry_no else "")
-                    content, usage = self._call_provider(request, provider, model, messages, attempt_index)
-                    attempt_metrics.append({
-                        "provider": provider,
-                        "model": model,
-                        "attempt": attempt_index,
-                        "status": "SUCCESS",
-                        "elapsedMs": round((time.perf_counter() - attempt_started) * 1000),
-                        **usage,
-                    })
+            attempt_started = time.perf_counter()
+            try:
+                parsed, usages, review = self._review_draft(request, provider, model, review_controller, attempt_index)
+                attempt_index += len(usages)
+                for usage in usages:
                     for key in ("promptTokens", "completionTokens", "totalTokens"):
                         total_usage[key] += int(usage.get(key, 0))
                     if float(usage.get("estimatedCost", -1.0)) < 0:
                         usage_known = False
                     elif usage_known:
                         total_usage["estimatedCost"] += float(usage.get("estimatedCost", 0.0))
-                    parsed = self._parse(content)
-                    if parsed is None:
-                        last_error = "provider JSON did not match the teaching draft schema"
-                        events.append(self._event("JSON_PARSE_FAILED", provider, model, retry_no, retry_no < max_retries, last_error))
-                        attempt_metrics[-1]["status"] = "STRUCTURED_OUTPUT_INVALID"
-                        continue
-                    events.append(self._event("MODEL_CALL_SUCCEEDED", provider, model, retry_no, False, True, "structured teaching draft received"))
-                    return self._success(
-                        request, provider, model, parsed, total_usage, usage_known, retry_no, events,
-                        started_at, started_clock, attempt_metrics)
-                except (HTTPException, requests.RequestException, ValueError, KeyError) as exc:
-                    last_error = type(exc).__name__
-                    events.append(self._event("MODEL_CALL_FAILED", provider, model, retry_no, retry_no < max_retries, last_error))
-                    attempt_metrics.append({
-                        "provider": provider,
-                        "model": model,
-                        "attempt": attempt_index,
-                        "status": "FAILED",
-                        "elapsedMs": round((time.perf_counter() - attempt_started) * 1000),
-                        "error": last_error,
-                    })
+                attempt_metrics.append({
+                    "provider": provider,
+                    "model": model,
+                    "attempt": attempt_index,
+                    "status": "SUCCESS",
+                    "elapsedMs": round((time.perf_counter() - attempt_started) * 1000),
+                })
+                events.append(self._event("MODEL_CALL_SUCCEEDED", provider, model, review.turns - 1, False, True, "structured teaching draft received"))
+                return self._success(
+                    request, provider, model, parsed, total_usage, usage_known, review, events,
+                    started_at, started_clock, attempt_metrics)
+            except ModelReviewExhausted:
+                last_error = "MODEL_REVIEW_EXHAUSTED"
+                events.append(self._event("STRUCTURED_OUTPUT_INVALID", provider, model, max_retries, False, last_error))
+                attempt_metrics.append({
+                    "provider": provider,
+                    "model": model,
+                    "attempt": attempt_index,
+                    "status": "STRUCTURED_OUTPUT_INVALID",
+                    "elapsedMs": round((time.perf_counter() - attempt_started) * 1000),
+                })
+            except (HTTPException, requests.RequestException, ValueError, KeyError) as exc:
+                last_error = type(exc).__name__
+                events.append(self._event("MODEL_CALL_FAILED", provider, model, 0, True, last_error))
+                attempt_metrics.append({
+                    "provider": provider,
+                    "model": model,
+                    "attempt": attempt_index,
+                    "status": "FAILED",
+                    "elapsedMs": round((time.perf_counter() - attempt_started) * 1000),
+                    "error": last_error,
+                })
 
         return {
             "contractVersion": request.contract_version,
@@ -207,7 +211,7 @@ class TeachingDraftRuntime:
             parsed: ParsedTeachingDraft,
             usage: dict[str, int | float],
             usage_known: bool,
-            retry_no: int,
+            review: ModelReviewMetadata,
             events: list[dict[str, Any]],
             started_at: str,
             started_clock: float,
@@ -236,12 +240,72 @@ class TeachingDraftRuntime:
                 "content": content,
             },
             "parseError": "",
-            "retryCount": retry_no,
-            "maxRetries": self._max_retries(),
-            "recoveredAfterRetry": retry_no > 0,
+            "retryCount": review.turns - 1,
+            "maxRetries": BoundedModelReviewController("executor", profile="agent_run").max_turns - 1,
+            "recoveredAfterRetry": review.turns > 1,
             "recoveryEvents": events,
             "metrics": self._metrics(started_at, started_clock, attempt_metrics),
         }
+
+    def _review_draft(
+            self,
+            request: TeachingDraftRequest,
+            provider: str,
+            model: str,
+            controller: BoundedModelReviewController,
+            attempt_offset: int,
+    ) -> tuple[ParsedTeachingDraft, list[dict[str, int | float]], ModelReviewMetadata]:
+        """Runs a bounded self-review envelope before this structured draft reaches Java."""
+        attempt = attempt_offset
+
+        def invoke(review_prompt: str, _: int) -> tuple[Any, dict[str, int | float]]:
+            nonlocal attempt
+            attempt += 1
+            content, usage = self._call_provider(
+                request, provider, model, self._review_messages(request, review_prompt), attempt,
+            )
+            try:
+                return json.loads(content), usage
+            except json.JSONDecodeError:
+                return None, usage
+
+        candidate, usages, metadata = controller.execute(
+            invoke,
+            self._review_prompt,
+            self._parse_review_candidate,
+        )
+        return candidate, usages, metadata
+
+    @staticmethod
+    def _parse_review_candidate(candidate: Any) -> ParsedTeachingDraft:
+        parsed = TeachingDraftRuntime._parse(json.dumps(candidate, ensure_ascii=False))
+        if parsed is None:
+            raise ValueError("teaching draft candidate is invalid")
+        return parsed
+
+    def _review_messages(self, request: TeachingDraftRequest, review_prompt: str) -> list[dict[str, str]]:
+        """Keeps correction prompts request-local; neither prior candidates nor review text are persisted."""
+        messages = self._messages(request, "")
+        messages[0] = {
+            "role": "system",
+            "content": messages[0]["content"] + (
+                ' 只返回严格 JSON 信封 {"candidate":{...},"review":{"approved":true|false,"feedbackCodes":[]}}。'
+                "feedbackCodes 只能是 ENVELOPE_INVALID、REVIEW_NOT_APPROVED、CANDIDATE_INVALID、"
+                "CANDIDATE_INCOMPLETE、CANDIDATE_UNSAFE 或 CANDIDATE_MISMATCH。"
+            ),
+        }
+        messages.append({"role": "user", "content": review_prompt})
+        return messages
+
+    @staticmethod
+    def _review_prompt(turn: int, prior: str | None, codes: tuple[str, ...]) -> str:
+        if turn == 1:
+            return "生成候选教学草稿并完成严格自审。"
+        return json.dumps({
+            "previousCandidate": prior or "",
+            "feedbackCodes": list(codes),
+            "instruction": "仅修正候选以满足结构与学生安全合同，再返回严格信封。",
+        }, ensure_ascii=False, separators=(",", ":"))
 
     def _call_provider(
             self,

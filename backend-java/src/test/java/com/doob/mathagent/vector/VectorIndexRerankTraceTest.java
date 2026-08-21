@@ -1,6 +1,7 @@
 package com.doob.mathagent.vector;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.doob.mathagent.teacher.service.InMemoryTeacherDocumentBlockStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherResourceStore;
@@ -9,7 +10,7 @@ import com.doob.mathagent.vector.service.VectorIndexProperties;
 import com.doob.mathagent.vector.service.VectorIndexService;
 import org.junit.jupiter.api.Test;
 
-/** Proves that callers can distinguish a real cross-encoder result from embedding fallback. */
+/** Proves that reranking never degrades into local embedding cosine work. */
 class VectorIndexRerankTraceTest {
 
     @Test
@@ -24,7 +25,7 @@ class VectorIndexRerankTraceTest {
     }
 
     @Test
-    void reportsEmbeddingFallbackWhenTheDedicatedRerankEndpointFails() {
+    void failsExplicitlyWhenTheDedicatedRerankEndpointFails() {
         VectorIndexService service = service((uri, headers, body, timeout) -> {
             if (uri.getPath().endsWith("/rerank")) {
                 return new VectorHttpResponse(500, "{\"error\":\"unavailable\"}");
@@ -37,10 +38,9 @@ class VectorIndexRerankTraceTest {
                     """);
         });
 
-        var result = service.rerankTextsWithTrace("query", java.util.List.of("candidate"));
-
-        assertThat(result.strategy()).isEqualTo("embedding_fallback");
-        assertThat(result.scores()).containsExactly(1.0d);
+        assertThatThrownBy(() -> service.rerankTextsWithTrace("query", java.util.List.of("candidate")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("GPU rerank service failed");
     }
 
     private static VectorIndexService service(com.doob.mathagent.vector.service.VectorHttpTransport transport) {

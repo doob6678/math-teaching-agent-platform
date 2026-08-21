@@ -1,0 +1,66 @@
+{
+  "policy": "bounded-model-review",
+  "profiles": {
+    "handout": {
+      "budget": {
+        "globalTurns": 16,
+        "perNodeTurns": 4
+      },
+      "nodes": [
+        "plan_writer",
+        "teacher_blueprint_writer",
+        "student_writer",
+        "lecture_writer"
+      ],
+      "repair": {
+        "enabled": true,
+        "includeBoundedCandidate": true,
+        "maxCandidateChars": 24000,
+        "normalTurns": 3,
+        "forcedFinalTurn": true
+      },
+      "blocking": {
+        "requiresApproval": true,
+        "exhaustionCode": "HANDOUT_OUTPUT_CONTRACT_FAILURE"
+      },
+      "tool": {
+        "feedbackOnly": true,
+        "allowEvidence": false,
+        "allowUrls": false,
+        "allowPaths": false
+      },
+      "feedbackCodes": [
+        "ENVELOPE_INVALID",
+        "REVIEW_NOT_APPROVED",
+        "CANDIDATE_INVALID",
+        "CANDIDATE_INCOMPLETE",
+        "CANDIDATE_UNSAFE",
+        "CANDIDATE_MISMATCH"
+      ]
+    },
+    "agent_run": {
+      "budget": {"globalTurns": 4, "perNodeTurns": 2},
+      "nodes": ["planner", "executor"],
+      "repair": {"enabled": true, "includeBoundedCandidate": true, "maxCandidateChars": 16000},
+      "blocking": {"requiresApproval": true, "exhaustionCode": "MODEL_REVIEW_EXHAUSTED"},
+      "tool": {"feedbackOnly": true, "allowEvidence": false, "allowUrls": false, "allowPaths": false},
+      "feedbackCodes": ["ENVELOPE_INVALID", "REVIEW_NOT_APPROVED", "CANDIDATE_INVALID", "CANDIDATE_INCOMPLETE", "CANDIDATE_UNSAFE", "CANDIDATE_MISMATCH"]
+    },
+    "student_explanation": {
+      "budget": {"globalTurns": 2, "perNodeTurns": 2},
+      "nodes": ["explanation_writer"],
+      "repair": {"enabled": true, "includeBoundedCandidate": true, "maxCandidateChars": 16000},
+      "blocking": {"requiresApproval": true, "exhaustionCode": "MODEL_REVIEW_EXHAUSTED"},
+      "tool": {"feedbackOnly": true, "allowEvidence": false, "allowUrls": false, "allowPaths": false},
+      "feedbackCodes": ["ENVELOPE_INVALID", "REVIEW_NOT_APPROVED", "CANDIDATE_INVALID", "CANDIDATE_INCOMPLETE", "CANDIDATE_UNSAFE", "CANDIDATE_MISMATCH"]
+    },
+    "vision_ingestion": {
+      "budget": {"globalTurns": 1, "perNodeTurns": 1},
+      "nodes": ["page_transcription"],
+      "repair": {"enabled": false, "includeBoundedCandidate": false, "maxCandidateChars": 0},
+      "blocking": {"requiresApproval": true, "exhaustionCode": "MODEL_REVIEW_EXHAUSTED"},
+      "tool": {"feedbackOnly": true, "allowEvidence": false, "allowUrls": false, "allowPaths": false},
+      "feedbackCodes": ["ENVELOPE_INVALID", "REVIEW_NOT_APPROVED", "CANDIDATE_INVALID", "CANDIDATE_INCOMPLETE", "CANDIDATE_UNSAFE", "CANDIDATE_MISMATCH"]
+    }
+  }
+}

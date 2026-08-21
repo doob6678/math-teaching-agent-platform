@@ -35,9 +35,16 @@ public class MyBatisLectureTaskLeaseStore implements LectureTaskLeaseStore {
         return java.util.List.copyOf(reclaimed);
     }
     @Override public boolean renew(LectureTaskLease lease, Instant expiresAt) { return mapper.update(null, owned(lease).set(TeachingTaskEntity::getLeaseExpireAt, expiresAt)) == 1; }
-    @Override public boolean failOrRetry(LectureTaskLease lease, String error, int maximumAttempts) {
+    @Override public FailureOutcome failOrRetry(LectureTaskLease lease, String error, int maximumAttempts) {
         boolean retry = lease.retryCount() < maximumAttempts;
-        return mapper.update(null, owned(lease).set(TeachingTaskEntity::getStatus, retry ? "RETRYING" : "FAILED").set(TeachingTaskEntity::getLastError, safe(error)).set(TeachingTaskEntity::getLeaseToken, null).set(TeachingTaskEntity::getLeaseExpireAt, null).set(TeachingTaskEntity::getFinishedAt, retry ? null : Instant.now())) == 1 && retry;
+        int changed = mapper.update(null, owned(lease)
+                .set(TeachingTaskEntity::getStatus, retry ? "RETRYING" : "FAILED")
+                .set(TeachingTaskEntity::getLastError, safe(error))
+                .set(TeachingTaskEntity::getLeaseToken, null)
+                .set(TeachingTaskEntity::getLeaseExpireAt, null)
+                .set(TeachingTaskEntity::getFinishedAt, retry ? null : Instant.now()));
+        if (changed != 1) return FailureOutcome.LEASE_LOST;
+        return retry ? FailureOutcome.RETRYING : FailureOutcome.TERMINAL_FAILURE;
     }
     private static LambdaUpdateWrapper<TeachingTaskEntity> owned(LectureTaskLease lease) { return new LambdaUpdateWrapper<TeachingTaskEntity>().eq(TeachingTaskEntity::getTaskId, lease.taskId()).eq(TeachingTaskEntity::getStatus, "RUNNING").eq(TeachingTaskEntity::getLeaseToken, lease.token()); }
     private static String safe(String message) { return message == null || message.isBlank() ? "Lecture task failed" : message.substring(0, Math.min(512, message.length())); }

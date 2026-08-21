@@ -15,4 +15,12 @@ class McpAccessPolicyTest {
         assertThat(McpAccessPolicy.scopesForProfile("teacher"))
                 .contains("teacher-resource:read");
     }
+
+    @Test
+    void adminProfileIncludesQuestionBankReaderForTenantAcceptanceAudits() {
+        assertThat(McpAccessPolicy.toolsForProfile("admin"))
+                .contains("search_question_bank_items", "search_multi_source_evidence");
+        assertThat(McpAccessPolicy.scopesForProfile("admin"))
+                .contains("question-bank:read", "teacher-resource:read");
+    }
 }

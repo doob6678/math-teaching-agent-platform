@@ -521,8 +521,11 @@ final class TeachingWorkflowLatexRenderer {
             if (card == null || card.isBlank()) {
                 continue;
             }
+            // Writer cards are Markdown-like source, not already escaped TeX.  Sanitizing before generic escaping
+            // preserves structural headings and opaque image markers; escaping first turns `##` into `\#\#` and
+            // makes the projection publication gate lose the question-to-figure association.
             String safeCard = TeachingHandoutPdfExportService.sanitizeLatexForExport(
-                    guardHandoutLatex(escapeLatex(card), true));
+                    guardHandoutLatex(card, true));
             if (safeCard.isBlank()) {
                 // Do not emit an empty heading/page when sanitization removes an unreadable model fragment.
                 continue;

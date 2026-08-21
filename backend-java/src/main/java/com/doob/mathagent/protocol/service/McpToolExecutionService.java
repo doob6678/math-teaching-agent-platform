@@ -5,9 +5,8 @@ import com.doob.mathagent.agent.dto.MultiAgentWritingRequest;
 import com.doob.mathagent.agent.dto.AgentTraceQueryRequest;
 import com.doob.mathagent.agent.service.AgentRunPlanService;
 import com.doob.mathagent.agent.service.AgentTraceQueryService;
+import com.doob.mathagent.agent.service.HandoutTaskFacade;
 import com.doob.mathagent.agent.service.MultiAgentWritingArtifact;
-import com.doob.mathagent.agent.service.MultiAgentWritingArtifactExportService;
-import com.doob.mathagent.agent.service.MultiAgentWritingService;
 import com.doob.mathagent.agent.service.MultiQuestionTextParser;
 import com.doob.mathagent.agent.vo.AgentRunExecuteResponse;
 import com.doob.mathagent.agent.vo.AgentRunPlanResponse;
@@ -32,6 +31,7 @@ import com.doob.mathagent.teacher.support.TeacherResourceRegistrationCommand;
 import com.doob.mathagent.teacher.search.TeacherResourceSearchFilter;
 import com.doob.mathagent.teacher.service.TeacherResourceService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncExecutionService;
+import com.doob.mathagent.teacher.service.TeacherSourceFileReader;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncJobService;
 import com.doob.mathagent.teacher.search.TeacherResourceBlockSearchResponse;
 import com.doob.mathagent.teacher.vo.TeacherFeishuDiscoveryResponse;
@@ -84,9 +84,10 @@ public class McpToolExecutionService {
     private final TeacherSourceSyncJobService teacherSourceSyncJobService;
     private final TeacherSourceSyncExecutionService teacherSourceSyncExecutionService;
     private final KnowledgeQuestionBankService questionBankService;
-    private final MultiAgentWritingService multiAgentWritingService;
-    private final MultiAgentWritingArtifactExportService multiAgentWritingArtifactExportService;
+    /** Routes legacy MCP writing tools through the teaching-task authorization and v2 Python adapter. */
+    private final HandoutTaskFacade handoutTaskFacade;
     private final TaskExecutor toolExecutor;
+    private TeacherSourceFileReader sourceFileReader;
 
     /**
      * Creates an MCP execution service.
@@ -108,9 +109,8 @@ public class McpToolExecutionService {
             TeacherSourceSyncJobService teacherSourceSyncJobService,
             TeacherSourceSyncExecutionService teacherSourceSyncExecutionService,
             KnowledgeQuestionBankService questionBankService,
-            MultiAgentWritingService multiAgentWritingService,
-            MultiAgentWritingArtifactExportService multiAgentWritingArtifactExportService,
-            @Qualifier("studentExplanationTaskExecutor") TaskExecutor toolExecutor) {
+            HandoutTaskFacade handoutTaskFacade,
+            @Qualifier("mcpRetrievalTaskExecutor") TaskExecutor toolExecutor) {
         this.clientResolver = Objects.requireNonNull(clientResolver, "clientResolver is required");
         this.textbookRetrievalService = Objects.requireNonNull(textbookRetrievalService, "textbookRetrievalService is required");
         this.textbookResourceProperties = Objects.requireNonNull(textbookResourceProperties, "textbookResourceProperties is required");
@@ -126,11 +126,15 @@ public class McpToolExecutionService {
         this.teacherSourceSyncExecutionService = Objects.requireNonNull(
                 teacherSourceSyncExecutionService, "teacherSourceSyncExecutionService is required");
         this.questionBankService = Objects.requireNonNull(questionBankService, "questionBankService is required");
-        this.multiAgentWritingService = Objects.requireNonNull(
-                multiAgentWritingService, "multiAgentWritingService is required");
-        this.multiAgentWritingArtifactExportService = Objects.requireNonNull(
-                multiAgentWritingArtifactExportService, "multiAgentWritingArtifactExportService is required");
+        this.handoutTaskFacade = Objects.requireNonNull(
+                handoutTaskFacade, "handoutTaskFacade is required");
         this.toolExecutor = Objects.requireNonNull(toolExecutor, "toolExecutor is required");
+    }
+
+    /** Injects the file-backed source reader without changing focused MCP test constructors. */
+    @Autowired(required = false)
+    public void setSourceFileReader(TeacherSourceFileReader sourceFileReader) {
+        this.sourceFileReader = sourceFileReader;
     }
 
     /**
@@ -393,11 +397,20 @@ public class McpToolExecutionService {
                 }).toList();
     }
 
-    /** Reads every parsed source block for one already-visible document so the agent can verify original wording. */
+    /** Reads authoritative source text from the Docker volume; this operation never queries MySQL. */
     private Object readTeacherResourceBlocks(McpClientRegistryProperties.Client client, McpToolCallRequest request) {
         String documentId = stringArgument(request == null ? Map.of() : request.arguments(), "documentId");
-        return teacherResourceBlockSearchService.listVisibleBlocks(
-                client.tenantId(), normalizedProfile(client.profile()), client.subjectId(), documentId);
+        if (sourceFileReader == null) {
+            throw new IllegalStateException("File-backed teacher source reader is not configured");
+        }
+        TeacherSourceFileReader.SourceDocument source = sourceFileReader.read(client.tenantId(), documentId);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("documentId", source.documentId());
+        result.put("sourceChecksum", source.checksum());
+        result.put("files", source.files().stream().map(file -> Map.of(
+                "relativeName", file.relativeName(),
+                "text", file.text())).toList());
+        return result;
     }
 
     /**
@@ -581,9 +594,12 @@ public class McpToolExecutionService {
             McpClientRegistryProperties.Client client,
             McpToolCallRequest request) {
         MultiAgentWritingRequest writingRequest = multiAgentWritingRequest(request);
-        MultiAgentWritingResponse response = multiAgentWritingService.startAsync(
+        // MCP evidence refs are retrieval handles, never Python authorization. The facade creates one teaching task,
+        // whose persisted evidence is then signed for this exact run by the v2 adapter.
+        MultiAgentWritingResponse response = handoutTaskFacade.startAsync(
                 writingRequest,
-                requestSubject(client));
+                requestSubject(client),
+                stringArgument(request == null ? Map.of() : request.arguments(), "clientRequestId"));
         Map<String, Object> result = multiAgentWritingResult(response);
         /*
          * Surface only deterministic parser metadata, never the submitted problem text. This lets an MCP client
@@ -602,8 +618,7 @@ public class McpToolExecutionService {
             McpToolCallRequest request) {
         Map<String, Object> arguments = request == null ? Map.of() : request.arguments();
         String workflowId = normalizedWorkflowId(stringArgument(arguments, "workflowId"));
-        MultiAgentWritingResponse response = multiAgentWritingService.find(workflowId, requestSubject(client))
-                .orElseThrow(() -> new IllegalArgumentException("Multi-agent writing workflow not found"));
+        MultiAgentWritingResponse response = handoutTaskFacade.get(workflowId, requestSubject(client));
         return multiAgentWritingResult(response);
     }
 
@@ -615,7 +630,7 @@ public class McpToolExecutionService {
             McpToolCallRequest request) {
         Map<String, Object> arguments = request == null ? Map.of() : request.arguments();
         String workflowId = normalizedWorkflowId(stringArgument(arguments, "workflowId"));
-        MultiAgentWritingArtifact artifact = multiAgentWritingService.artifact(workflowId, requestSubject(client));
+        MultiAgentWritingArtifact artifact = handoutTaskFacade.artifact(workflowId, requestSubject(client));
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("workflowId", artifact.workflowId());
         result.put("tenantId", artifact.tenantId());
@@ -636,9 +651,11 @@ public class McpToolExecutionService {
             McpToolCallRequest request) {
         Map<String, Object> arguments = request == null ? Map.of() : request.arguments();
         String workflowId = normalizedWorkflowId(stringArgument(arguments, "workflowId"));
-        MultiAgentWritingArtifactExportResponse response = multiAgentWritingArtifactExportService.export(
+        MultiAgentWritingArtifactExportResponse response = handoutTaskFacade.export(
                 workflowId,
                 stringArgumentOrDefault(arguments, "format", "markdown"),
+                "",
+                "",
                 requestSubject(client));
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("exportId", response.exportId());
@@ -661,9 +678,8 @@ public class McpToolExecutionService {
             McpToolCallRequest request) {
         Map<String, Object> arguments = request == null ? Map.of() : request.arguments();
         String workflowId = normalizedWorkflowId(stringArgument(arguments, "workflowId"));
-        MultiAgentWritingResponse response = multiAgentWritingService.resume(
+        MultiAgentWritingResponse response = handoutTaskFacade.resume(
                 workflowId,
-                multiAgentWritingRequest(request),
                 requestSubject(client));
         return multiAgentWritingResult(response);
     }
@@ -994,7 +1010,6 @@ public class McpToolExecutionService {
             row.put("pageNo", hit.pageNo());
             row.put("sectionTitle", hit.section());
             row.put("permissionScope", hit.permissionScope());
-            row.put("sourcePath", hit.sourcePath());
             row.put("blockRole", hit.blockRole());
             row.put("snippet", hit.snippet());
             row.put("evidenceText", hit.evidenceText());
@@ -1433,4 +1448,3 @@ public class McpToolExecutionService {
         return profile == null || profile.isBlank() ? "teacher" : profile.strip().toLowerCase();
     }
 }
-

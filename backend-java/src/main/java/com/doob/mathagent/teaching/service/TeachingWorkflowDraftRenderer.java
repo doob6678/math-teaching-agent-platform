@@ -142,12 +142,6 @@ final class TeachingWorkflowDraftRenderer {
                             .toList()))
                     .append("\n");
         }
-        if (!zhaoMaster && isQuadraticFunctionTopic(request)) {
-            // This is a real TikZ-rendered reference graph, not a textual placeholder.  It uses the canonical
-            // y=x^2 curve because a topic-only request has no user function to plot; labels identify only invariant
-            // geometric facts (vertex and symmetry axis), so the renderer cannot silently mark a wrong function.
-            builder.append(quadraticReferenceGraph()).append("\n");
-        }
         int questionNumber = 1;
         // The live draft is authored from the whole retrieval set. It is safe to enrich one-point lessons, but
         // reusing it under every sibling point can attach a correct explanation to the wrong question. For a
@@ -225,22 +219,6 @@ final class TeachingWorkflowDraftRenderer {
         String normalized = text == null ? "" : text.replaceAll("\\s+", "");
         return normalized.contains("二次函数") || normalized.contains("抛物线")
                 || normalized.contains("顶点") || normalized.contains("对称轴");
-    }
-
-
-    /** Returns a deterministic, compilable TikZ graph whose marked features are mathematically exact. */
-    static String quadraticReferenceGraph() {
-        return """
-                \\begin{tikzpicture}[x=0.95cm,y=0.65cm]
-                \\draw[->,HandoutBorder] (-3.2,0) -- (3.2,0) node[right] {$x$};
-                \\draw[->,HandoutBorder] (0,-0.6) -- (0,5.4) node[above] {$y$};
-                \\draw[HandoutAccent,line width=1.1pt,domain=-3:3,samples=100] plot (\\x,{0.5*\\x*\\x});
-
-                \\draw[HandoutBorder,dashed] (0,0) -- (0,5.0);
-                \\fill[HandoutAccent] (0,0) circle (2pt) node[below right] {$V(0,0)$};
-                \\node[HandoutBorder] at (1.8,4.7) {$y=x^2/2$};
-                \\end{tikzpicture}
-                """;
     }
 
 
@@ -365,9 +343,7 @@ final class TeachingWorkflowDraftRenderer {
                 .map(TeachingWorkflowService::pointTitleFromEvidence)
                 .filter(value -> !value.isBlank())
                 .findFirst())
-                .orElseGet(() -> request.learningGoal() == null || request.learningGoal().isBlank()
-                        ? "本节知识"
-                        : request.learningGoal().strip());
+                .orElse("");
         // The request text is context only. It is never promoted to a retrieval-evidence row or a source citation.
         // Without an atomic bank row the pack contains only the verified supporting source and no fabricated example.
         return List.of(new TeachingKnowledgePointPack(title, List.copyOf(supporting), null, null));
@@ -435,7 +411,7 @@ final class TeachingWorkflowDraftRenderer {
             return title;
         }
 
-        return request.learningGoal() == null || request.learningGoal().isBlank() ? "本节知识" : request.learningGoal().strip();
+        return "";
     }
 
 

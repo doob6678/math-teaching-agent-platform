@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+from app.embeddings import EmbeddingConfigurationError
 from app.server import app, embedding_service
 
 
@@ -17,6 +18,59 @@ class WorkerServerAuthTest(unittest.TestCase):
             os.environ.pop("MATH_AGENT_WORKER_API_KEY", None)
         else:
             os.environ["MATH_AGENT_WORKER_API_KEY"] = self.original_key
+
+    def test_lifespan_warms_retrieval_models_before_health_is_up(self):
+        class WarmupService:
+            def __init__(self):
+                self.initialized = False
+                self.calls = 0
+
+            def initialize_retrieval_models(self):
+                self.calls += 1
+                self.initialized = True
+
+            def is_retrieval_ready(self):
+                return self.initialized
+
+        service = WarmupService()
+
+        with patch("app.server.embedding_service", return_value=service):
+            with TestClient(app) as client:
+                response = client.get("/health")
+
+        self.assertEqual(service.calls, 1)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"status": "UP", "service": "math-agent-rag-worker"})
+
+    def test_lifespan_fails_startup_when_retrieval_gpu_probe_fails(self):
+        service = type("FailingWarmupService", (), {
+            "initialize_retrieval_models": lambda self: (_ for _ in ()).throw(
+                EmbeddingConfigurationError("configured CUDA device is unavailable")
+            ),
+        })()
+
+        with patch("app.server.embedding_service", return_value=service):
+            with self.assertRaisesRegex(RuntimeError, "local retrieval GPU readiness failed"):
+                with TestClient(app):
+                    pass
+
+    def test_health_stays_unavailable_until_retrieval_models_are_verified(self):
+        service = type("EmbeddingService", (), {"is_retrieval_ready": lambda self: False})()
+
+        with patch("app.server.embedding_service", return_value=service):
+            response = TestClient(app).get("/health")
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json(), {"status": "DOWN", "service": "math-agent-rag-worker"})
+
+    def test_health_does_not_expose_retrieval_details_after_readiness(self):
+        service = type("EmbeddingService", (), {"is_retrieval_ready": lambda self: True})()
+
+        with patch("app.server.embedding_service", return_value=service):
+            response = TestClient(app).get("/health")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"status": "UP", "service": "math-agent-rag-worker"})
 
     def test_capabilities_rejects_missing_presented_key(self):
         os.environ.pop("MATH_AGENT_WORKER_API_KEY", None)

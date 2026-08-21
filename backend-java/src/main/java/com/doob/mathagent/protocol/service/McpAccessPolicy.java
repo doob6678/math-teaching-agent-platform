@@ -29,6 +29,14 @@ public final class McpAccessPolicy {
             "resume_multi_agent_writing",
             "discover_feishu_resources",
             "download_feishu_resource");
+    /** Admin keys support the tenant-wide acceptance audit, including the governed question bank. */
+    private static final List<String> ADMIN_TOOLS = List.of(
+            "search_multi_source_evidence", "search_textbook_evidence", "search_teacher_resource_evidence",
+            "list_teacher_resources", "read_teacher_resource_blocks", "search_question_bank_items",
+            "get_teaching_ai_trace", "get_ai_diagnostic_summary", "get_multi_agent_writing_trace", "plan_agent_run",
+            "start_multi_agent_writing", "get_multi_agent_writing_status", "get_multi_agent_writing_artifact",
+            "export_multi_agent_writing_artifact", "resume_multi_agent_writing", "discover_feishu_resources",
+            "download_feishu_resource");
     private static final List<String> STUDENT_PROMPTS = List.of(
             "student_blank_handout_writer",
             "solution_reviewer");
@@ -49,6 +57,9 @@ public final class McpAccessPolicy {
             "agent-writing:execute",
             "agent-writing:read",
             "agent-writing:export");
+    private static final List<String> ADMIN_SCOPES = List.of(
+            "PUBLIC_TEXTBOOK", "teacher-resource:read", "teacher-resource:sync-execute", "question-bank:read",
+            "agent-trace:read", "agent:plan", "agent-writing:execute", "agent-writing:read", "agent-writing:export");
 
     private McpAccessPolicy() {
     }
@@ -69,7 +80,8 @@ public final class McpAccessPolicy {
      * Returns executable MCP tools allowed for one backend role.
      */
     public static List<String> toolsForProfile(String profile) {
-        return isTeacherProfile(profile) ? TEACHER_TOOLS : STUDENT_TOOLS;
+        return "admin".equals(normalizeProfile(profile)) ? ADMIN_TOOLS
+                : isTeacherProfile(profile) ? TEACHER_TOOLS : STUDENT_TOOLS;
     }
 
     /**
@@ -83,7 +95,8 @@ public final class McpAccessPolicy {
      * Returns logical scopes granted to MCP keys bound to one backend role.
      */
     public static List<String> scopesForProfile(String profile) {
-        return isTeacherProfile(profile) ? TEACHER_SCOPES : STUDENT_SCOPES;
+        return "admin".equals(normalizeProfile(profile)) ? ADMIN_SCOPES
+                : isTeacherProfile(profile) ? TEACHER_SCOPES : STUDENT_SCOPES;
     }
 
     private static boolean isTeacherProfile(String profile) {

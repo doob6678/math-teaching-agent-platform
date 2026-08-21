@@ -14,6 +14,9 @@ import org.springframework.stereotype.Component;
 public class ProviderRouteGrantSigner {
 
     private static final ObjectMapper JSON = new ObjectMapper();
+    // A handout grant is consumed after bounded authorization and document curation, which can legitimately take a
+    // significant fraction of the 900-second fenced lecture lease before the first provider call reaches Python.
+    private static final long DEFAULT_ROUTE_GRANT_TTL_SECONDS = 900L;
     private final Environment environment;
 
     public ProviderRouteGrantSigner(Environment environment) {
@@ -26,7 +29,7 @@ public class ProviderRouteGrantSigner {
             throw new IllegalStateException("Python provider route grant secret is not configured");
         }
         long expiresAt = System.currentTimeMillis() / 1000L
-                + configuredLongValue("route-grant-ttl-seconds", 120L);
+                + configuredLongValue("route-grant-ttl-seconds", DEFAULT_ROUTE_GRANT_TTL_SECONDS);
         Map<String, Object> payload = Map.of(
                 "runId", bounded(runId, 128),
                 "workload", bounded(workload, 64),

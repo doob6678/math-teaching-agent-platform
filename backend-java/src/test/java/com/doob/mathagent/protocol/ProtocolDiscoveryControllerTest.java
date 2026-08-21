@@ -81,6 +81,59 @@ class ProtocolDiscoveryControllerTest {
     }
 
     @Test
+    void startsLegacyMcpWritingAsOneTeachingTaskInsteadOfTheDisabledV1Workflow() throws Exception {
+        McpToolExecutionController controller = new McpToolExecutionController(McpToolExecutionServiceFixture.service(
+                registryWithWriting(), null, new TextbookResourceProperties(textbookCorpus())));
+
+        var response = controller.callTool(
+                "Bearer teacher_writing_secret_1234567890",
+                "start_multi_agent_writing",
+                new McpToolCallRequest(Map.of(
+                        "questions", List.of("Prove the vector angle relation."),
+                        "writingGoal", "Teacher handout",
+                        "evidenceRefs", List.of("PUBLIC_TEXTBOOK:untrusted:reference"))));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> result = (Map<String, Object>) response.result();
+        assertThat(result).containsEntry("status", "CREATED")
+                .containsKey("workflowId")
+                .doesNotContainKeys("evidenceRefs", "sourcePath");
+    }
+
+    @Test
+    void usesMcpClientRequestIdForDurableWriteRecoveryWithoutReusingFreshRuns() throws Exception {
+        McpToolExecutionController controller = new McpToolExecutionController(McpToolExecutionServiceFixture.service(
+                registryWithWriting(), null, new TextbookResourceProperties(textbookCorpus())));
+        Map<String, Object> baseArguments = Map.of(
+                "questionText", "Prove the vector angle relation.",
+                "writingGoal", "Teacher handout",
+                "evidenceRefs", List.of("PUBLIC_TEXTBOOK:untrusted:reference"));
+
+        Map<String, Object> first = result(controller.callTool(
+                "Bearer teacher_writing_secret_1234567890", "start_multi_agent_writing",
+                new McpToolCallRequest(withClientRequestId(baseArguments, "mcp-acceptance:parabola:20260819T123456Z:a"))));
+        Map<String, Object> recovered = result(controller.callTool(
+                "Bearer teacher_writing_secret_1234567890", "start_multi_agent_writing",
+                new McpToolCallRequest(withClientRequestId(baseArguments, "mcp-acceptance:parabola:20260819T123456Z:a"))));
+        Map<String, Object> fresh = result(controller.callTool(
+                "Bearer teacher_writing_secret_1234567890", "start_multi_agent_writing",
+                new McpToolCallRequest(withClientRequestId(baseArguments, "mcp-acceptance:parabola:20260819T123457Z:b"))));
+
+        assertThat(recovered.get("workflowId")).isEqualTo(first.get("workflowId"));
+        assertThat(fresh.get("workflowId")).isNotEqualTo(first.get("workflowId"));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> result(com.doob.mathagent.protocol.vo.McpToolCallResponse response) {
+        return (Map<String, Object>) response.result();
+    }
+
+    private static Map<String, Object> withClientRequestId(Map<String, Object> arguments, String clientRequestId) {
+        java.util.LinkedHashMap<String, Object> result = new java.util.LinkedHashMap<>(arguments);
+        result.put("clientRequestId", clientRequestId);
+        return result;
+    }
+    @Test
     void exposesMcpToolExecutionEndpointThroughService() throws Exception {
         McpToolExecutionController controller = new McpToolExecutionController(McpToolExecutionServiceFixture.service(
                 registryWithTextbookSearch(),
@@ -99,6 +152,21 @@ class ProtocolDiscoveryControllerTest {
         assertThat(response.toolName()).isEqualTo("search_textbook_evidence");
         assertThat(response.clientId()).isEqualTo("workbuddy-teacher");
         assertThat(response.subjectType()).isEqualTo("teacher");
+    }
+
+    /** Creates a teacher MCP key with only the writing capability required by this routing test. */
+    private static McpClientRegistryProperties registryWithWriting() {
+        McpClientRegistryProperties properties = new McpClientRegistryProperties();
+        properties.setClients(List.of(new McpClientRegistryProperties.Client(
+                "workbuddy-writer",
+                "teacher",
+                "school-a",
+                "teacher-mcp-client",
+                McpClientRegistryProperties.secretHash("teacher_writing_secret_1234567890"),
+                true,
+                List.of("start_multi_agent_writing"),
+                List.of("agent-writing:execute"))));
+        return properties;
     }
 
     /**

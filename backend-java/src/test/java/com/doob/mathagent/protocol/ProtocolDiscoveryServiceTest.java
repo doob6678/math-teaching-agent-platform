@@ -147,7 +147,7 @@ class ProtocolDiscoveryServiceTest {
                     assertThat(tool.requiredRoles()).containsExactly("teacher", "admin");
                     assertThat(tool.requiredScope()).isEqualTo("agent-writing:execute");
                     assertThat(tool.inputSchema().required()).isEmpty();
-                    assertThat(tool.inputSchema().properties()).containsKeys("questionText", "questions");
+                    assertThat(tool.inputSchema().properties()).containsKeys("questionText", "questions", "clientRequestId");
                 });
         assertThat(tools).filteredOn(tool -> tool.name().equals("get_multi_agent_writing_status"))
                 .singleElement()

@@ -4,6 +4,8 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.doob.mathagent.teaching.entity.TeachingTaskEntity;
 import com.doob.mathagent.teaching.mapper.TeachingTaskMapper;
+import com.doob.mathagent.teaching.mq.LectureTaskLease;
+import com.doob.mathagent.teaching.mq.LectureTaskLeaseStore;
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -138,6 +140,39 @@ public class MyBatisTeachingTaskStore implements TeachingTaskStore {
         return runningTask;
     }
 
+    @Override
+    public boolean saveOwnedRunning(LectureTaskLease lease, TeachingTaskResponse task) {
+        return mapper.saveOwnedRunningLectureTask(
+                lease.taskId(), lease.token(), writeResponse(task), currentStage(task, null), Instant.now()) == 1;
+    }
+
+    @Override
+    public boolean ownsLease(LectureTaskLease lease) {
+        return mapper.countOwnedRunningLectureTask(lease.taskId(), lease.token()) == 1;
+    }
+
+    @Override
+    public boolean completeOwned(LectureTaskLease lease, TeachingTaskResponse task) {
+        Instant now = Instant.now();
+        return mapper.completeOwnedLectureTask(
+                lease.taskId(), lease.token(), writeResponse(task), currentStage(task, null), now) == 1;
+    }
+
+    @Override
+    public LectureTaskLeaseStore.FailureOutcome failOwned(
+            LectureTaskLease lease, TeachingTaskResponse task, String error, int maximumAttempts) {
+        boolean retry = lease.retryCount() < maximumAttempts;
+        Instant now = Instant.now();
+        int changed = mapper.failOwnedLectureTask(
+                lease.taskId(), lease.token(), writeResponse(task), retry ? "RETRYING" : "FAILED", safeError(error),
+                retry ? null : now, now);
+        if (changed != 1) {
+            return LectureTaskLeaseStore.FailureOutcome.LEASE_LOST;
+        }
+        return retry ? LectureTaskLeaseStore.FailureOutcome.RETRYING
+                : LectureTaskLeaseStore.FailureOutcome.TERMINAL_FAILURE;
+    }
+
     private TeachingTaskEntity toEntity(String ownerKey, String idempotencyKey, TeachingTaskResponse task) {
         TeachingTaskEntity entity = new TeachingTaskEntity();
         entity.setTaskId(task.taskId());
@@ -170,6 +205,11 @@ public class MyBatisTeachingTaskStore implements TeachingTaskStore {
         } catch (JsonProcessingException exception) {
             throw new IllegalArgumentException("Teaching task response is not serializable", exception);
         }
+    }
+
+    private static String safeError(String message) {
+        return message == null || message.isBlank() ? "Lecture task failed"
+                : message.substring(0, Math.min(512, message.length()));
     }
 
     private TeachingTaskResponse readResponse(TeachingTaskEntity entity) {

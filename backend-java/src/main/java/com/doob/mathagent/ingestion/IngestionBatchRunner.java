@@ -114,7 +114,7 @@ public final class IngestionBatchRunner implements ApplicationRunner {
             statement.setString(5, arguments.inputRoot());
             statement.setString(6, arguments.model() == null ? "gpt-5.6-luna" : arguments.model());
             statement.setString(7, json(Map.of("discoveredFiles", preflight.files().size(), "candidateQuestions", 0)));
-            statement.setString(8, "/app/data/gaokao-evidence");
+            statement.setString(8, properties.getEvidenceRoot());
             statement.executeUpdate();
         }
     }

@@ -15,6 +15,7 @@ import com.sun.net.httpserver.HttpServer;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -37,6 +38,21 @@ class PythonAgentRunClientTest {
                 "run-001", "student_explanation", List.of(new ProviderRouteGrantSigner.ProviderRoute("openai", "model-a")));
 
         assertThat(grant).contains(".");
+    }
+
+    @Test
+    void defaultsHandoutRouteGrantLifetimeToTheLectureLeaseWindow() throws Exception {
+        MockEnvironment environment = new MockEnvironment()
+                .withProperty("math-agent.ai.route-grant-secret", "deployment-route-grant-key");
+        long before = System.currentTimeMillis() / 1000L;
+
+        String grant = new ProviderRouteGrantSigner(environment).sign(
+                "run-handout-ttl-001", "handout", List.of(
+                        new ProviderRouteGrantSigner.ProviderRoute("deepseek", "deepseek-v4-flash")));
+
+        String encodedPayload = grant.substring(0, grant.indexOf('.'));
+        JsonNode payload = OBJECT_MAPPER.readTree(Base64.getUrlDecoder().decode(encodedPayload));
+        assertThat(payload.path("expiresAt").asLong() - before).isBetween(899L, 901L);
     }
 
     @Test

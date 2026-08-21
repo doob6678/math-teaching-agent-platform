@@ -2,12 +2,12 @@
   "sourceRootWsl": "/mnt/d/BaiduNetdiskDownload/高中试卷/辽宁省名校联盟2026 05",
   "paperType": "SIMULATION",
   "subject": "MATHEMATICS",
-  "selectedFileNames": [
+  "selectedFiles": [
     "数学2026年辽宁高三5月初联考.pdf"
   ],
   "assetOutputRoot": "output/math-paper-assets/liaoning-2026-05",
   "questionAssetRoot": "output/math-paper-assets/liaoning-2026-05/数学2026年辽宁高三5月初联考",
-  "evidenceRoot": "output/math-paper-evidence/liaoning-2026-05",
+  "evidenceRoot": "output/math-paper-corpus",
   "localGpuModels": {
     "layoutModelDir": "/mnt/d/ModelScope/models/PaddlePaddle/PP-DocLayout-L",
     "ocrDetectionModelDir": "/mnt/d/ModelScope/models/PaddlePaddle/PP-OCRv5_mobile_det",

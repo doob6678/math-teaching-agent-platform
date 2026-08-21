@@ -322,25 +322,16 @@ final class TeachingHandoutPdfExportPolicyPartB {
         Optional<Path> localPath = existingLocalImagePath(image.path());
         String caption = INLINE_FIGURE_TRANSPORT_ALT.equals(safeText(image.alt())) ? "" : safeText(image.alt());
         StringBuilder builder = new StringBuilder();
-        if (localPath.isPresent()) {
-            builder.append("\\includegraphics[width=")
-                    .append(width)
-                    .append(",height=")
-                    .append(maxHeight)
-                    .append("]{")
-                    .append(latexImagePath(localPath.get()))
-                    .append("}\n");
-        } else {
-            builder.append("\\fbox{\\parbox[c][")
-                    .append(maxHeight)
-                    .append("][c]{")
-                    .append(width)
-                    .append("}{\\centering 图片未找到");
-            if (!caption.isBlank()) {
-                builder.append("\\\\").append(latexText(caption));
-            }
-            builder.append("}}\n");
+        if (localPath.isEmpty()) {
+            return "";
         }
+        builder.append("\\includegraphics[width=")
+                .append(width)
+                .append(",height=")
+                .append(maxHeight)
+                .append("]{")
+                .append(latexImagePath(localPath.get()))
+                .append("}\n");
         if (!caption.isBlank()) {
             builder.append("{\\small ").append(latexText(caption)).append("\\par}\n");
         }

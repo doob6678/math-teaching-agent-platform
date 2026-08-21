@@ -1,6 +1,6 @@
 import unittest
 
-from app.formula_recognition import FormulaRecognitionError, parse_formula_response
+from app.formula_recognition import FormulaRecognitionError, formula_transport_code, parse_formula_response
 
 
 class FormulaRecognitionResponseTest(unittest.TestCase):
@@ -20,6 +20,11 @@ class FormulaRecognitionResponseTest(unittest.TestCase):
                 '{"status":"recognized","latex":"x+y","plainText":"x+y","confidence":0.44}',
                 minimum_confidence=0.9,
             )
+    def test_transport_codes_are_stable_and_do_not_include_provider_response_text(self):
+        self.assertEqual(formula_transport_code(401), "FORMULA_VISION_AUTH_FAILED")
+        self.assertEqual(formula_transport_code(429), "FORMULA_VISION_RETRYABLE")
+        self.assertEqual(formula_transport_code(503), "FORMULA_VISION_UNAVAILABLE")
+        self.assertEqual(formula_transport_code(), "FORMULA_VISION_TRANSPORT_FAILED")
 
 
 if __name__ == "__main__":

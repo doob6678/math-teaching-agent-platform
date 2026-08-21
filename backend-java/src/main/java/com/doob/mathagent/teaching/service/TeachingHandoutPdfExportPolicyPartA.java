@@ -86,10 +86,6 @@ final class TeachingHandoutPdfExportPolicyPartA {
         Set<String> questionFingerprints = new HashSet<>();
         for (int unitIndex = 0; unitIndex < units.size(); unitIndex += 1) {
             String unit = units.get(unitIndex);
-            if (FIGURE_DEPENDENT_PROMPT.matcher(unit).find() && !hasAuthorizedImage(unit)) {
-                throw new IllegalStateException(version + " 版题干引用“如图”但本题没有同源、已授权且可读取的图像；"
-                        + "请先同步并绑定原图。");
-            }
             String fingerprint = questionFingerprint(unit);
             if (!fingerprint.isBlank() && !questionFingerprints.add(fingerprint)) {
                 throw new IllegalStateException(version + " 版含有重复题干；请保留一次原子题并重新生成。");
@@ -280,7 +276,11 @@ final class TeachingHandoutPdfExportPolicyPartA {
         String templateName = templateNameForVersion(task, version);
         PdfStyle style = PdfStyle.forVersion(version, templateName);
         HandoutTemplateStrategy templateStrategy = HandoutTemplateStrategies.forTemplate(templateName);
-        String sanitizedBody = sanitizeLatexForExport(task.handoutLatexFor(version));
+        String versionSource = task.handoutLatexFor(version);
+        if ("学生版".equals(style.versionLabel())) {
+            versionSource = restoreStudentWritingSpaces(versionSource);
+        }
+        String sanitizedBody = sanitizeLatexForExport(versionSource);
         // Old persisted snapshots may still contain the previous two-column projection or student scaffolding.
         // Apply the audience boundary at export time too, so a stale cache cannot reintroduce teacher explanations.
         if (style.isLecture()) {
@@ -348,12 +348,11 @@ final class TeachingHandoutPdfExportPolicyPartA {
                 \\renewcommand{\\frac}[2]{\\ensuremath{\\MathAgentOriginalFrac{#1}{#2}}}
                 \\let\\MathAgentOriginalTimes\\times
                 \\renewcommand{\\times}{\\ensuremath{\\MathAgentOriginalTimes}}
-                %% Keep Noto Sans SC as the body font because it has the complete maths glyph fallback required by
-                %% imported Chinese sources.  Only display headings use the serif companion, giving hierarchy without
-                %% turning a source root sign into a missing-glyph square.
-                \\IfFontExistsTF{Noto Sans SC}{\\setCJKmainfont{Noto Sans SC}}{\\IfFontExistsTF{Microsoft YaHei UI}{\\setCJKmainfont{Microsoft YaHei UI}}{\\IfFontExistsTF{SimSun}{\\setCJKmainfont{SimSun}}{}}}
-                \\IfFontExistsTF{Noto Sans SC}{\\setCJKsansfont{Noto Sans SC}}{\\IfFontExistsTF{Microsoft YaHei UI}{\\setCJKsansfont{Microsoft YaHei UI}}{}}
-                \\IfFontExistsTF{Noto Serif SC}{\\newCJKfontfamily\\HandoutDisplayFont{Noto Serif SC}}{\\newcommand{\\HandoutDisplayFont}{}}
+                %% The Linux PDF image installs the CJK family names exposed by fontconfig, which include “CJK”.
+                %% Keep Windows fallbacks for local development, but make the container's real font the first choice.
+                \\IfFontExistsTF{Noto Sans CJK SC}{\\setCJKmainfont{Noto Sans CJK SC}}{\\IfFontExistsTF{Noto Sans SC}{\\setCJKmainfont{Noto Sans SC}}{\\IfFontExistsTF{Microsoft YaHei UI}{\\setCJKmainfont{Microsoft YaHei UI}}{\\IfFontExistsTF{SimSun}{\\setCJKmainfont{SimSun}}{}}}}
+                \\IfFontExistsTF{Noto Sans CJK SC}{\\setCJKsansfont{Noto Sans CJK SC}}{\\IfFontExistsTF{Noto Sans SC}{\\setCJKsansfont{Noto Sans SC}}{\\IfFontExistsTF{Microsoft YaHei UI}{\\setCJKsansfont{Microsoft YaHei UI}}{}}}
+                \\IfFontExistsTF{Noto Serif CJK SC}{\\newCJKfontfamily\\HandoutDisplayFont{Noto Serif CJK SC}}{\\IfFontExistsTF{Noto Serif SC}{\\newCJKfontfamily\\HandoutDisplayFont{Noto Serif SC}}{\\newcommand{\\HandoutDisplayFont}{}}}
                 %% Imported inline root signs are classified as Latin symbols by XeLaTeX.  Arial is the verified
                 %% fallback on this Windows renderer; display typography is applied only to CJK headings above.
                 \\IfFontExistsTF{Arial}{\\setmainfont{Arial}}{}
@@ -404,8 +403,7 @@ final class TeachingHandoutPdfExportPolicyPartA {
         boolean questionSeen = false;
         for (String rawLine : body.replace("\r\n", "\n").replace('\r', '\n').split("\n", -1)) {
             String line = rawLine.strip();
-            boolean questionHeading = line.matches("^\\\\subsection\\*?\\{第\\s*\\d+\\s*题[^}]*}\\s*$")
-                    || line.matches("^\\\\section\\*?\\{第\\s*\\d+\\s*题[^}]*}\\s*$");
+            boolean questionHeading = isNumberedPresentationHeading(line);
             if (questionHeading && questionSeen && !endsWithPageBreak(result)) {
                 result.append("\\clearpage\n");
             }
@@ -427,8 +425,7 @@ final class TeachingHandoutPdfExportPolicyPartA {
         boolean questionSeen = false;
         for (String rawLine : body.replace("\r\n", "\n").replace('\r', '\n').split("\n", -1)) {
             String line = rawLine.strip();
-            boolean questionHeading = line.matches("^\\\\subsection\\*?\\{第\\s*\\d+\\s*题[^}]*}\\s*$")
-                    || line.matches("^\\\\section\\*?\\{第\\s*\\d+\\s*题[^}]*}\\s*$");
+            boolean questionHeading = isNumberedPresentationHeading(line);
             if (questionHeading && questionSeen && !endsWithPageBreak(result)) {
                 result.append(PRINTED_QUESTION_GAP).append('\n');
             }
@@ -438,6 +435,17 @@ final class TeachingHandoutPdfExportPolicyPartA {
             result.append(rawLine).append('\n');
         }
         return result.toString().strip();
+    }
+
+
+    /**
+     * Recognizes generic numbered slide boundaries. Writer content controls the heading text; publication contributes
+     * only the page boundary required by the projection template without deriving teaching meaning.
+     */
+    static boolean isNumberedPresentationHeading(String line) {
+        String number = "(?:\\d+|[一二三四五六七八九十]+)";
+        String label = "(?:第\\s*" + number + "\\s*题|题目\\s*" + number + "|知识点\\s*" + number + ")";
+        return line.matches("^\\\\(?:sub)?section\\*?\\{" + label + "[^}]*}\\s*$");
     }
 
 
@@ -490,9 +498,10 @@ final class TeachingHandoutPdfExportPolicyPartA {
 
     static void appendCleanSegment(StringBuilder result, StringBuilder segment) {
         String raw = segment.toString().strip();
+        // Python AI 已完成内容生成，Java 不再判断章节是否"空"，避免误删有效内容。
         String cleaned = isQuestionPageSegment(raw)
                 ? sanitizeQuestionPageSegment(raw)
-                : removeEmptyTitledBlocks(raw);
+                : raw;
         if (cleaned.isBlank()) {
             return;
         }
@@ -604,18 +613,12 @@ final class TeachingHandoutPdfExportPolicyPartA {
      * <p>The bridge must begin with TeX or an arithmetic connector. Consequently {@code $x$ and $y$} remains
      * prose-separated, while {@code $\sin$\theta=$\frac{1}{2}$} becomes one compiler-safe inline expression.</p>
      */
+    /**
+     * Retained as an identity function for old callers. Writer output is already structured and a heuristic that
+     * joins adjacent dollar ranges cannot distinguish a broken formula from normal Chinese prose between formulas.
+     */
     static String normalizeSplitAdjacentInlineMath(String value) {
-        if (value == null || value.isBlank()) {
-            return value == null ? "" : value;
-        }
-        Matcher matcher = SPLIT_ADJACENT_INLINE_MATH.matcher(value);
-        StringBuffer normalized = new StringBuffer();
-        while (matcher.find()) {
-            String replacement = "$" + matcher.group(1) + matcher.group(2) + matcher.group(3) + "$";
-            matcher.appendReplacement(normalized, Matcher.quoteReplacement(replacement));
-        }
-        matcher.appendTail(normalized);
-        return normalized.toString();
+        return value == null ? "" : value;
     }
 
     /**
@@ -745,8 +748,11 @@ final class TeachingHandoutPdfExportPolicyPartA {
             }
             result.append(rawLine).append('\n');
         }
-        // A projection without a numbered atomic question is an old topic-only scaffold, not a printable slide.
-        return hasNumberedQuestion ? result.toString().strip() : "";
+        // Projection writers use Markdown headings that sanitize into \subsection*{...}; they are not required to
+        // spell the heading as “第 N 题”.  Treating that optional label as a publication condition erased the entire
+        // valid slide body and made XeLaTeX correctly report “No pages of output”.  Keep every sanitized body here;
+        // page layout is handled by insertLectureQuestionBreaks rather than by discarding author content.
+        return result.toString().strip();
     }
 
 
@@ -787,6 +793,19 @@ final class TeachingHandoutPdfExportPolicyPartA {
         return result.toString().strip();
     }
 
+
+
+    /**
+     * Historical student Writer snapshots use a dedicated Markdown label for a handwritten answer area.  It carries
+     * no teaching meaning, so the publication layer turns only that standalone label into pure vertical writing space.
+     */
+    static String restoreStudentWritingSpaces(String body) {
+        if (body == null || body.isBlank()) {
+            return body == null ? "" : body;
+        }
+        return body.replaceAll("(?m)^\\*\\*(?:作答区|课堂作答区|我的解答|推导区)\\*\\*\\\\par\\s*$", "\\\\vspace{12.8em}")
+                .replaceAll("(?m)^\\*\\*(?:作答区|课堂作答区|我的解答|推导区)\\*\\*\\s*$", "\\\\vspace{12.8em}");
+    }
 
 
     /** Student publication keeps only explicitly marked question units; every teacher/explanation block is dropped. */

@@ -111,6 +111,10 @@ services:
   ai-worker:
     build: ./ai-worker-python
     restart: unless-stopped
+    # WSL's generated resolver can point Docker at an unreachable local gateway. Keep
+    # only the provider-owning worker on a reachable recursive resolver; provider URL
+    # and credentials remain unchanged and Docker still resolves service names itself.
+    dns: [8.8.8.8]
     # WSL2 exposes the Windows NVIDIA driver through CDI; this makes the local
     # BGE, reranker, and CLIP models use the same CUDA device inside the worker.
     gpus: all
@@ -118,6 +122,15 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api1.aisz.mom/v1}
       OPENAI_CHAT_MODEL: ${OPENAI_CHAT_MODEL:-gpt-5.6-luna}
+      # DeepSeek is a worker-only, explicitly enabled handout fallback. The credential is
+      # interpolated from the protected Compose environment and never enters Java/source.
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com/v1}
+      DEEPSEEK_CHAT_MODEL: ${DEEPSEEK_CHAT_MODEL:-deepseek-v4-flash}
+      MATH_AGENT_AI_RUNTIME_PROVIDER_ORDER: ${MATH_AGENT_AI_RUNTIME_PROVIDER_ORDER:-openai,deepseek}
+      # Acceptance can explicitly prefer the verified DeepSeek flash route without changing the retained Terra route.
+      MATH_AGENT_HANDOUT_PREFERRED_PROVIDER: ${MATH_AGENT_HANDOUT_PREFERRED_PROVIDER:-deepseek}
+      MATH_AGENT_HANDOUT_PROVIDER_ORDER: ${MATH_AGENT_HANDOUT_PROVIDER_ORDER:-deepseek,openai}
       # Keep generation credentials inside the worker. DashScope is a real fallback for a temporarily unavailable
       # OpenAI-compatible relay; it is never used for the local GPU embedding/reranking models.
       DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
@@ -132,6 +145,8 @@ services:
       # Python calls only this in-network Java broker route; the route resolves identity from runId in MySQL.
       MATH_AGENT_TOOL_BROKER_BASE_URL: http://backend:8080
       MATH_AGENT_AGENT_WORKER_SHARED_KEY: ${MATH_AGENT_AGENT_WORKER_SHARED_KEY:?MATH_AGENT_AGENT_WORKER_SHARED_KEY must be set}
+      # 讲义 broker 只读本运行已授权且有界的文档块；超时低于任务租约并由 Python deadline 再次收紧。
+      MATH_AGENT_HANDOUT_TOOL_BROKER_TIMEOUT_SECONDS: ${MATH_AGENT_HANDOUT_TOOL_BROKER_TIMEOUT_SECONDS:-120}
       # The AI runtime account can access only checkpoint/event/usage tables. Java keeps business-table credentials.
       MATH_AGENT_DB_HOST: mysql
       MATH_AGENT_DB_PORT: 3306
@@ -151,6 +166,16 @@ services:
       MATH_AGENT_STUDENT_EXPLANATION_CHECKPOINT_DB: /app/data/student-explanation-checkpoints.sqlite3
       MATH_AGENT_STUDENT_EXPLANATION_CHECKPOINT_BACKEND: ${MATH_AGENT_STUDENT_EXPLANATION_CHECKPOINT_BACKEND:-mysql}
       MATH_AGENT_HANDOUT_CONTEXT_LIMIT: ${MATH_AGENT_HANDOUT_CONTEXT_LIMIT:-12}
+      # Model generation is one draft plus at most one deterministic repair. Keep both below the Java request
+      # deadline so provider stalls are classified and the repair has a usable window.
+      MATH_AGENT_HANDOUT_MODEL_TIMEOUT_SECONDS: ${MATH_AGENT_HANDOUT_MODEL_TIMEOUT_SECONDS:-75}
+      MATH_AGENT_HANDOUT_MODEL_REPAIR_TIMEOUT_SECONDS: ${MATH_AGENT_HANDOUT_MODEL_REPAIR_TIMEOUT_SECONDS:-45}
+      MATH_AGENT_HANDOUT_MODEL_REPAIR_ATTEMPTS: ${MATH_AGENT_HANDOUT_MODEL_REPAIR_ATTEMPTS:-1}
+      MATH_AGENT_HANDOUT_MODEL_ATTEMPTS: ${MATH_AGENT_HANDOUT_MODEL_ATTEMPTS:-2}
+      MATH_AGENT_HANDOUT_MODEL_REPAIR_RESERVE_SECONDS: ${MATH_AGENT_HANDOUT_MODEL_REPAIR_RESERVE_SECONDS:-45}
+      MATH_AGENT_HANDOUT_CURATION_MODEL_RESERVE_SECONDS: ${MATH_AGENT_HANDOUT_CURATION_MODEL_RESERVE_SECONDS:-90}
+      MATH_AGENT_HANDOUT_RETRY_BACKOFF_SECONDS: ${MATH_AGENT_HANDOUT_RETRY_BACKOFF_SECONDS:-1}
+      MATH_AGENT_HANDOUT_RETRY_MAX_BACKOFF_SECONDS: ${MATH_AGENT_HANDOUT_RETRY_MAX_BACKOFF_SECONDS:-8}
       MATH_AGENT_CONTAINER_TEXT_MODEL_PATH: ${MATH_AGENT_CONTAINER_TEXT_MODEL_PATH:-/models/BAAI/bge-small-zh-v1.5}
       MATH_AGENT_CONTAINER_RERANK_MODEL_PATH: ${MATH_AGENT_CONTAINER_RERANK_MODEL_PATH:-/models/BAAI/bge-reranker-v2-m3}
       MATH_AGENT_CONTAINER_CLIP_MODEL_PATH: ${MATH_AGENT_CONTAINER_CLIP_MODEL_PATH:-/models/damo/multi-modal_clip-vit-large-patch14_zh}
@@ -196,19 +221,22 @@ services:
       MATH_AGENT_AGENT_WORKER_SHARED_KEY: ${MATH_AGENT_AGENT_WORKER_SHARED_KEY:?MATH_AGENT_AGENT_WORKER_SHARED_KEY must be set}
       # Java signs route grants but never receives provider API keys; the worker remains their only container owner.
       MATH_AGENT_PROVIDER_ROUTE_GRANT_SECRET: ${MATH_AGENT_PROVIDER_ROUTE_GRANT_SECRET:?MATH_AGENT_PROVIDER_ROUTE_GRANT_SECRET must be set}
-      MATH_AGENT_PROVIDER_ROUTE_GRANT_TTL_SECONDS: ${MATH_AGENT_PROVIDER_ROUTE_GRANT_TTL_SECONDS:-120}
+      # Grants remain run/workload/signed and must outlive the bounded RAG prelude before the first handout model call.
+      MATH_AGENT_PROVIDER_ROUTE_GRANT_TTL_SECONDS: ${MATH_AGENT_PROVIDER_ROUTE_GRANT_TTL_SECONDS:-900}
       # The selected provider is route metadata only; credentials remain confined to ai-worker.
-      MATH_AGENT_AI_DEFAULT_PROVIDER: ${MATH_AGENT_AI_DEFAULT_PROVIDER:-openai}
+      MATH_AGENT_AI_DEFAULT_PROVIDER: ${MATH_AGENT_AI_DEFAULT_PROVIDER:-deepseek}
       MATH_AGENT_PROVIDER_OPENAI_ENABLED: ${MATH_AGENT_PROVIDER_OPENAI_ENABLED:-true}
       MATH_AGENT_PROVIDER_DASHSCOPE_ENABLED: ${MATH_AGENT_PROVIDER_DASHSCOPE_ENABLED:-false}
-      MATH_AGENT_PROVIDER_DEEPSEEK_ENABLED: ${MATH_AGENT_PROVIDER_DEEPSEEK_ENABLED:-false}
+      MATH_AGENT_PROVIDER_DEEPSEEK_ENABLED: ${MATH_AGENT_PROVIDER_DEEPSEEK_ENABLED:-true}
       MATH_AGENT_PROVIDER_ARK_ENABLED: ${MATH_AGENT_PROVIDER_ARK_ENABLED:-false}
       # Route metadata must match the worker model, while its endpoint and API key stay worker-only.
       OPENAI_CHAT_MODEL: ${OPENAI_CHAT_MODEL:-gpt-5.6-luna}
       MATH_AGENT_PYTHON_HANDOUT_ENABLED: ${MATH_AGENT_PYTHON_HANDOUT_ENABLED:-true}
       MATH_AGENT_PYTHON_HANDOUT_BASE_URL: http://ai-worker:8091
-      MATH_AGENT_PYTHON_HANDOUT_GRAPH_VERSION: ${MATH_AGENT_PYTHON_HANDOUT_GRAPH_VERSION:-handout-v1}
-      MATH_AGENT_PYTHON_HANDOUT_TIMEOUT_MS: ${MATH_AGENT_PYTHON_HANDOUT_TIMEOUT_MS:-900000}
+      MATH_AGENT_PYTHON_HANDOUT_GRAPH_VERSION: ${MATH_AGENT_PYTHON_HANDOUT_GRAPH_VERSION:-handout-v2}
+      # A handout command shares the 900-second Rabbit lease. Leave the configured 15-second lease safety margin
+      # rather than cancelling a still-streaming, checkpointed model response at the former five-minute client cap.
+      MATH_AGENT_PYTHON_HANDOUT_TIMEOUT_MS: ${MATH_AGENT_PYTHON_HANDOUT_TIMEOUT_MS:-885000}
       MATH_AGENT_PYTHON_HANDOUT_CONNECT_TIMEOUT_MS: ${MATH_AGENT_PYTHON_HANDOUT_CONNECT_TIMEOUT_MS:-5000}
       MATH_AGENT_PYTHON_HANDOUT_LEASE_SAFETY_MARGIN_MS: ${MATH_AGENT_PYTHON_HANDOUT_LEASE_SAFETY_MARGIN_MS:-15000}
       MATH_AGENT_FEISHU_TOKEN_ENCRYPTION_KEY: ${MATH_AGENT_FEISHU_TOKEN_ENCRYPTION_KEY:?MATH_AGENT_FEISHU_TOKEN_ENCRYPTION_KEY must be set}
@@ -233,6 +261,9 @@ services:
       MATH_AGENT_TEACHER_SYNC_DOWNLOADER_SCRIPT: /app/scripts/download_feishu_url.py
       MATH_AGENT_TEACHER_SYNC_STAGING_ROOT: /app/data/teacher-source-imports
       MATH_AGENT_TEACHER_SYNC_ASSET_STORAGE_ROOT: /app/data/teacher-assets
+      # Deployment-provided teacher corpus remains backend-only and read-only. The AI worker must access it only
+      # through run-scoped agent tools after Java authorizes the selected document.
+      MATH_AGENT_LOCAL_TEACHER_RESOURCES_ROOT: ${MATH_AGENT_LOCAL_TEACHER_RESOURCES_ROOT:-/app/data/local-teacher-resources}
       MATH_AGENT_TEACHER_SYNC_SCHEDULER_ENABLED: ${MATH_AGENT_TEACHER_SYNC_SCHEDULER_ENABLED:-false}
       # Production Feishu URL sync must be executable inside the backend container.  The Windows launcher sets the
       # same flag, but Compose needs its own explicit default so a clean Docker start cannot silently disable the
@@ -247,13 +278,16 @@ services:
     ports: ["${MATH_AGENT_BACKEND_HOST_PORT:-8080}:8080"]
     volumes:
       - backend-data:/app/data
-      # Keep Feishu source files and persisted image assets visible on the Windows host. The named backend volume
-      # remains for unrelated runtime data, while these two operator-auditable paths survive container replacement.
+      # Keep all catalog-addressable teacher sources and extracted image assets on the host. Their in-container paths
+      # remain stable so MySQL source metadata and the persisted source catalog survive backend replacement together.
       - ./.local-storage/teacher-source-imports:/app/data/teacher-source-imports
+      - ./.local-storage/teacher-resource-uploads:/app/data/teacher-resource-uploads
       - ./.local-storage/teacher-assets:/app/data/teacher-assets
+      - "${MATH_AGENT_LOCAL_TEACHER_RESOURCES_HOST_ROOT:-./.local-storage/local-teacher-resources}:${MATH_AGENT_LOCAL_TEACHER_RESOURCES_ROOT:-/app/data/local-teacher-resources}:ro"
       # 题库输入目录由部署环境显式提供，预检脚本会校验批准范围内的 PDF 是否完整。
       - "${MATH_AGENT_GAOKAO_INPUT_HOST_ROOT:?MATH_AGENT_GAOKAO_INPUT_HOST_ROOT must be set}:/app/data/gaokao-input:ro"
-      - "./output/gaokao-evidence:/app/data/gaokao-evidence"
+      # 规范试卷语料包含 Terra 全页转写、逐题 Markdown 与来源页图；旧区域/配对审阅产物不作为 RAG 来源挂载。
+      - "./output/math-paper-corpus:/app/data/math-paper-corpus:ro"
       - "${MATH_AGENT_PROCESSED_BOOKS_HOST_ROOT:-/mnt/c/Users/doob/Desktop/个人资料/高中数学/下载课本代码/tchMaterial-parser-main/tchMaterial-parser-main/processed_books_section_shadow_all_mini_c2}:/app/data/textbooks:ro"
       - "${MATH_AGENT_PDF_FONT_HOST_PATH:?MATH_AGENT_PDF_FONT_HOST_PATH must be set}:/app/fonts/cjk.ttf:ro"
     depends_on:
@@ -263,10 +297,11 @@ services:
       milvus: {condition: service_healthy}
       ai-worker: {condition: service_healthy}
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/actuator/health/readiness >/dev/null || wget -qO- http://127.0.0.1:8080/actuator/health >/dev/null"]
+      # 只以 Spring readiness 作为容器就绪条件；启动期间失败应保持 starting，而不是回退为笼统的 health。
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/actuator/health/readiness >/dev/null"]
       interval: 15s
       timeout: 10s
-      start_period: 90s
+      start_period: 120s
       retries: 20
 
   frontend:

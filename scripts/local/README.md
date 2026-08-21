@@ -2,6 +2,29 @@
 
 These scripts start only real services. They do not switch the backend into no-database mode.
 
+## Compose ownership during acceptance
+
+真实讲义/PDF 验收只能由一个 Compose owner 管理：先由一个终端执行一次 `docker compose up -d`，之后不得并发运行会调用 `docker compose up/down/restart` 的本目录启动脚本、IDE 自动部署或 Docker Desktop 重建。`start-all.ps1`、`start-backend.ps1` 和 `start-worker.ps1` 面向独立本机服务，不得与 Compose 栈同时负责同一服务。验收 runner 启动、轮询和导出前会检查 backend/ai-worker 的健康状态、容器 ID 和 `RestartCount`，容器重建或连接拒绝时等待新的稳定窗口，不重复提交任务。
+
+验收期间不得执行 `docker compose down/up`，也不得并行启动本地启动器。先在 WSL 运行 `scripts/wsl/compose-stack-service.sh install` 和 `scripts/wsl/compose-stack-service.sh start`，由当前 Linux 用户的 systemd service 成为唯一 Compose owner。该服务仅使用 `docker compose --env-file .env up -d --no-recreate`，不会停止或重建容器；它不能跨完整 WSL 关闭、Linux 停机、Windows 重启或主机关闭。验收 runner 的稳定 ID/readiness gate 仍为提交任务前、轮询前和导出前的强制门禁。
+
+runner 默认使用宿主机 `http://127.0.0.1:8080`，也可显式设置 `MATH_AGENT_ACCEPTANCE_BASE_URL`；在 Compose 网络内运行时使用 `http://backend:8080`，不改变公开 URL、DNS 或端口配置。
+
+## Python MCP handout acceptance runner
+
+`run_handout_mcp_acceptance.py` runs one real, source-grounded MCP handout acceptance flow using Python standard-library JSON and HTTP handling, so Windows callers do not need PowerShell JSON quoting.
+
+```powershell
+python .\scripts\local\run_handout_mcp_acceptance.py --preflight-only
+python .\scripts\local\run_handout_mcp_acceptance.py --topic parabola --run-label handout-mcp-20260817-a
+```
+
+`--topic` accepts `parabola`, `hyperbola`, or `independence-test`; without it, topic selection rotates deterministically from `--run-label`. `--base-url`, `--timeout`, `--http-timeout`, `--poll-interval-seconds`, and `--stability-sample-seconds` configure the client. `--preflight-only` requires the WSL user unit `math-agent-rag-compose.service`, takes two backend/ai-worker samples separated by 30 seconds, checks unchanged IDs, `RestartCount=0`, healthy Compose state, and `/api/system/health` `UP`. It never logs in, creates an MCP key, or submits a task.
+
+A normal run writes `output/acceptance/handout-mcp/<run-label>/`: redacted `acceptance.json`, a non-secret `submission-correlation.json`, HTTP/timeline and task-status evidence, exported teacher/student/lecture PDFs, SHA-256, extracted text, and Poppler-rendered page PNGs. A `WAITING_REVIEW` workflow exits as review-required; the runner never approves it automatically. The rendered pages still require human review against the handout architecture checklist.
+
+Credentials are read only from the existing process environment or existing `.env`, never printed or copied. The temporary MCP key is held only in memory from the returned `secretKey` field, redacted from artifacts, and revoked in `finally`; never place it in `.env`, README output, or evidence. Every invocation creates a fresh idempotency correlation and sends exactly one workflow-start POST. On uncertainty, it persists the correlation and never retries submission; query only that same task after its ID is known. Cache or memory-reuse signals fail the freshness gate.
+
 1. `start-prerequisites.ps1`
    - Starts/checks WSL `Ubuntu`.
    - Verifies Redis at `127.0.0.1:6379`.

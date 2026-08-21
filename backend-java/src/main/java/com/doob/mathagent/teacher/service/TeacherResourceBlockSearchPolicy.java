@@ -308,20 +308,6 @@ final class TeacherResourceBlockSearchPolicy {
     }
 
 
-    static Comparator<BlockContext> semanticFallbackBlockComparator(
-            TeacherResourceDocumentResponse document,
-            Map<String, Double> semanticScoreByKey,
-            String normalizedQuery,
-            String[] terms) {
-        return Comparator.<BlockContext>comparingDouble(
-                        block -> semanticScoreByKey.getOrDefault(blockKey(document.documentId(), block.block().blockId()), 0.0d))
-                .reversed()
-                .thenComparing(Comparator.comparingInt(
-                        (BlockContext block) -> blockLexicalMatchCount(document, block, normalizedQuery, terms)).reversed())
-                .thenComparing(block -> block.block().blockOrder());
-    }
-
-
     /**
      * Legacy role-bucket heuristics were intentionally removed here. The previous implementation tried to infer
      * "analysis/question/lesson" intent from hand-written cue lists and then override the semantic ranking. That made

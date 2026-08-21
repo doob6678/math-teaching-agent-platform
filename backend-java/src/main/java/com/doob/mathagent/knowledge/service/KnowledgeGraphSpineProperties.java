@@ -29,14 +29,15 @@ public class KnowledgeGraphSpineProperties {
     private String permissionScope = "MATH_VIP";
 
     /**
-     * Maximum number of method nodes to expose in v0.1 so the frontend graph remains readable.
+     * Maximum number of method nodes imported from the curated source. The production default exceeds the complete
+     * v0.2 source so a display budget can never silently remove a searchable teaching method.
      */
-    private int methodNodeLimit = 100;
+    private int methodNodeLimit = 120;
 
     /**
      * Classpath Markdown source for the curated graph spine.
      */
-    private String sourceLocation = "classpath:knowledge/graph-spine-v0.1.md";
+    private String sourceLocation = "classpath:knowledge/graph-spine-v0.2.md";
 
     /**
      * Returns whether startup seeding is enabled.
@@ -80,16 +81,12 @@ public class KnowledgeGraphSpineProperties {
         this.permissionScope = permissionScope;
     }
 
-    /**
-     * Returns the v0.1 method node limit.
-     */
+    /** Returns the configured method node limit. */
     public int getMethodNodeLimit() {
         return methodNodeLimit;
     }
 
-    /**
-     * Updates the v0.1 method node limit.
-     */
+    /** Updates the configured method node limit. */
     public void setMethodNodeLimit(int methodNodeLimit) {
         this.methodNodeLimit = methodNodeLimit;
     }

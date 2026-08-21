@@ -14,7 +14,7 @@ public class IngestionProperties {
     private String inputRoot = "/app/data/gaokao-input";
 
     /** Docker bind-mounted evidence destination retained outside the backend container lifecycle. */
-    private String evidenceRoot = "/app/data/gaokao-evidence";
+    private String evidenceRoot = "/app/data/math-paper-corpus";
 
     /** Verified page-level Luna derivative bound; original page PNG remains stored beside this JPEG. */
     private int initialReviewMaxLongEdgePixels = 960;

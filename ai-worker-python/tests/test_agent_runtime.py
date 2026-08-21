@@ -10,7 +10,8 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from app.server import app
-from app.agent_runtime import AgentRuntime
+from app.agent_runtime import AgentRunRequest, AgentRuntime
+from app.streaming_runtime import AgentStreamingRuntime, NO_REWRITE_AFTER_VISIBLE_OUTPUT
 from app.ai_run_runtime import AiRunResult, AiRunRuntime
 
 
@@ -187,6 +188,48 @@ class AgentRuntimeContractTest(unittest.TestCase):
         self.assertFalse(response["costKnown"])
         self.assertNotIn("tenantId", response)
         self.assertNotIn("subjectId", response)
+
+    def test_streaming_policy_prohibits_rewrite_after_a_visible_delta(self):
+        self.assertTrue(NO_REWRITE_AFTER_VISIBLE_OUTPUT)
+
+        class InterruptedResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return False
+
+            def raise_for_status(self):
+                return None
+
+            def iter_lines(self, decode_unicode=True):
+                from requests import RequestException
+                yield 'data: {"choices":[{"delta":{"content":"partial"}}]}'
+                raise RequestException("interrupted")
+
+        runtime = AgentStreamingRuntime()
+        request = AgentRunRequest(runId="stream-review-boundary-1", message="解释函数定义域")
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}), patch(
+                "app.streaming_runtime.requests.post", return_value=InterruptedResponse()) as post:
+            events = list(runtime._model_stream(request, [{"role": "user", "content": "x"}], True, runtime._zero_usage()))
+
+        self.assertEqual(post.call_count, 1)
+        self.assertEqual([event["event"] for event in events], ["provider", "delta", "error"])
+
+    def test_agent_final_review_hides_envelope_from_the_public_result(self):
+        runtime = AgentRuntime()
+        request = AgentRunRequest(runId="review-run-1", message="解释函数单调性")
+        with patch.object(runtime, "_call_live_model", return_value=type("Result", (), {
+            "message": '{"candidate":{"message":"受限答案"},"review":{"approved":true,"feedbackCodes":[]}}',
+            "provider_name": "openai",
+            "model_code": "gpt-5.6-luna",
+            "actual_usage": {"promptTokens": 1, "completionTokens": 1, "totalTokens": 2, "estimatedCost": 0.0},
+        })()):
+            result = runtime._review_final_answer(request, [{"role": "user", "content": request.message}])
+
+        self.assertEqual(result.message, "受限答案")
+        self.assertNotIn("candidate", result.as_response())
+        self.assertNotIn("review", result.as_response())
 
     @staticmethod
     def _ai_run_payload():

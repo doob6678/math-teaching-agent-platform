@@ -1,24 +1,26 @@
 {
-  "sourceRootWsl": "/mnt/c/Users/doob/Desktop/个人资料/高考真题/数学高考真题试卷【点进去分开保存，链接长期在】/【新·PDF版】2008-2024·高考数学真题/版本3：数学（按年份分类）2008-2024/2024·高考数学真题",
+  "sourceRootWsl": "/mnt/c/Users/doob/Desktop/个人资料/高考真题/数学高考真题试卷【点进去分开保存，链接长期在】/【新·PDF版】2008-2024·高考数学真题/高考题目数学最近几年",
   "containerInputRoot": "/app/data/gaokao-input",
-  "evidenceRoot": "output/gaokao-evidence/2024",
+  "evidenceRoot": "output/math-paper-corpus",
   "questionAssetRoot": "output/math-paper-assets/gaokao-2024",
   "assetOutputRoot": "output/math-paper-assets/gaokao-2024",
   "paperType": "GAOKAO",
   "subject": "MATHEMATICS",
-  "selectedFileNames": [
-    "2024年高考数学试卷（北京）（空白卷）.pdf",
-    "2024年高考数学试卷（北京）（解析卷）.pdf",
-    "2024年高考数学试卷（新课标Ⅰ卷）（空白卷）.pdf",
+  "selectedFiles": [
+    "2022年高考数学试卷（新高考Ⅰ卷）（解析卷）.pdf",
+    "2022年高考数学试卷（新高考Ⅱ卷）（解析卷）.pdf",
+    "2023年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+    "2023年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+    "2024年高考数学试卷（理）（全国甲卷）（解析卷）.pdf",
+    "2024年高考数学试卷（理）（全国甲卷）（空白卷）.pdf",
+    "2024年高考数学试卷（天津）（解析卷）.pdf",
+    "2024年高考数学试卷（天津）（空白卷）.pdf",
     "2024年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
-    "2024年高考数学试卷（新课标Ⅱ卷）（空白卷）.pdf",
-    "2024年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf"
+    "2024年高考数学试卷（新课标Ⅰ卷）（空白卷）.pdf",
+    "2024年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+    "2024年高考数学试卷（新课标Ⅱ卷）（空白卷）.pdf"
   ],
-  "blankPaperGoldenExpectations": {
-    "regions-beijing-blank.jsonl": {"expectedQuestionNumbers": ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21"]},
-    "regions-new1-blank.jsonl": {"expectedQuestionNumbers": ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19"]},
-    "regions-new2-blank.jsonl": {"expectedQuestionNumbers": ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19"]}
-  },
+  "blankPaperGoldenExpectations": {},
   "visionOptimization": {
     "pageInitialReviewMaxLongEdgePixels": 960,
     "pageInitialReviewJpegQuality": 0.82,

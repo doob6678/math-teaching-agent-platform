@@ -1995,6 +1995,10 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
     event.preventDefault();
     if (!teachingTask) return;
     const selectedDraft = handoutDraftForVersion(teachingTask, handoutVersion);
+    if (handoutVersion === "student" && !selectedDraft.trim()) {
+      setTeachingError("学生版讲义尚未生成，无法提交反馈。");
+      return;
+    }
     const reviewContext = buildTeachingFeedbackReviewContext(
       teachingTask,
       handoutVersion,
@@ -4172,12 +4176,12 @@ function decisionLabel(decision: string) {
   return labels[decision] ?? decision;
 }
 
-function handoutDraftForVersion(task: TeachingTaskResponse, version: TeachingHandoutVersion) {
+export function handoutDraftForVersion(task: TeachingTaskResponse, version: TeachingHandoutVersion) {
   if (version === "lecture") {
     return task.lectureHandoutLatex ?? task.teacherHandoutLatex ?? task.handoutLatex ?? "";
   }
   if (version === "student") {
-    return task.studentHandoutLatex ?? task.handoutLatex ?? "";
+    return task.studentHandoutLatex ?? "";
   }
   return task.teacherHandoutLatex ?? task.handoutLatex ?? "";
 }

@@ -45,6 +45,7 @@ public class TeacherResourceVisualEvidenceService {
             String mimeType,
             RequestSubject subject,
             String verifiedAdjacentText) {
+        // 权限校验必须先于文件物化，避免把存储路径变成模型或渲染层可枚举的输入。
         if (teacherResourceBlockSearchService == null || assetId == null || assetId.isBlank() || subject == null) {
             return Optional.empty();
         }

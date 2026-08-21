@@ -870,7 +870,7 @@ function handoutDraftForVersion(task: TeachingTaskResponse, version: HandoutVers
     return task.lectureHandoutLatex ?? task.teacherHandoutLatex ?? task.handoutLatex ?? "";
   }
   if (version === "student") {
-    return task.studentHandoutLatex ?? task.handoutLatex ?? "";
+    return task.studentHandoutLatex ?? "";
   }
   return task.teacherHandoutLatex ?? task.handoutLatex ?? "";
 }

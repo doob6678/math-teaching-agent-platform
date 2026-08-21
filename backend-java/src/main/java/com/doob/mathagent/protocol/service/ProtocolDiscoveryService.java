@@ -223,6 +223,7 @@ public class ProtocolDiscoveryService {
                                         fieldArray("questions", "Preferred ordered question array for a batch; it takes precedence over questionText."),
                                         field("question", "string", "Alias for questionText when used by external agents."),
                                         fieldArray("evidenceRefs", "Evidence references returned by textbook or teacher-resource search."),
+                                        field("clientRequestId", "string", "Optional caller-generated idempotency key. Use the same key only to recover one uncertain submission; use a new key for a fresh handout."),
                                         field("preferredProviderName", "string", "Optional provider preference such as dashscope, openai, deepseek, or ark."),
                                         field("preferredModelCode", "string", "Optional backend model code.")))),
                 new McpToolDescriptor(

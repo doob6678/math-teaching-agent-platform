@@ -13,6 +13,10 @@ from app.sse import iter_sse_data_events
 from app.usage import UsageEvent, UsageLedger, cost_for, fallback_tokens
 
 
+# Once a delta crosses the SSE boundary it is user-visible and immutable: no review, rewrite, or provider fallback.
+NO_REWRITE_AFTER_VISIBLE_OUTPUT = True
+
+
 class AgentStreamingRuntime:
     """Streams model deltas while preserving provider rotation and immutable usage accounting."""
 
@@ -99,7 +103,9 @@ class AgentStreamingRuntime:
             except (requests.RequestException, ValueError, KeyError) as exc:
                 ledger.append(UsageEvent(request.runId, provider, model, attempt, "FAILED", 0, 0, 0, 0.0, "unavailable", type(exc).__name__))
                 failures.append(f"{provider}:{type(exc).__name__}")
-                if emitted_content:
+                if emitted_content and NO_REWRITE_AFTER_VISIBLE_OUTPUT:
+                    # A second model response after a visible delta would rewrite the user's answer. The caller gets
+                    # one terminal transport error instead; safe structured review is only available before streaming.
                     yield {"event": "error", "data": {"status": 503, "message": "provider stream interrupted after output", "provider": provider}}
                     return
                 # Rotation is permitted only before user-visible text; otherwise a second provider could duplicate

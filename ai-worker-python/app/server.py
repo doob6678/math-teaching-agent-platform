@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+from contextlib import asynccontextmanager
 from functools import lru_cache
 import secrets
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -14,6 +16,8 @@ except Exception as exc:  # pragma: no cover - import failure is explicit at ser
     raise RuntimeError("fastapi and pydantic are required to run the worker API") from exc
 
 from app.embeddings import (
+    DEFAULT_RETRIEVAL_READINESS_TIMEOUT_SECONDS,
+    EmbeddingConfigurationError,
     EmbeddingProviderError,
     EmbeddingService,
     clip_page_search_response,
@@ -49,7 +53,7 @@ from app.student_explanation_graph import (
 )
 from app.streaming_runtime import AgentStreamingRuntime
 from app.tokenizer import count_texts
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 import json
 
 
@@ -101,7 +105,22 @@ class TokenizeRequest(BaseModel):
     model: str = ""
 
 
-app = FastAPI(title="math-agent-rag-worker")
+@asynccontextmanager
+async def worker_lifespan(_app: FastAPI):
+    """Blocks serving until mandatory local retrieval models complete bounded CUDA readiness probes."""
+    try:
+        await asyncio.wait_for(
+            asyncio.to_thread(embedding_service().initialize_retrieval_models),
+            timeout=DEFAULT_RETRIEVAL_READINESS_TIMEOUT_SECONDS,
+        )
+    except TimeoutError as exc:
+        raise RuntimeError("local retrieval GPU readiness timed out") from exc
+    except (EmbeddingConfigurationError, EmbeddingProviderError) as exc:
+        raise RuntimeError("local retrieval GPU readiness failed") from exc
+    yield
+
+
+app = FastAPI(title="math-agent-rag-worker", lifespan=worker_lifespan)
 DEFAULT_HANDOUT_SSE_TIMEOUT_SECONDS = 900.0
 MIN_HANDOUT_SSE_TIMEOUT_SECONDS = 60.0
 HANDOUT_SSE_POLL_INTERVAL_SECONDS = 0.25
@@ -195,8 +214,10 @@ def require_worker_key(
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
-    return health_response()
+def health() -> JSONResponse:
+    ready = embedding_service().is_retrieval_ready()
+    status_code = 200 if ready else 503
+    return JSONResponse(status_code=status_code, content=health_response(ready))
 
 
 @app.get("/v1/capabilities", dependencies=[Depends(require_worker_key)])

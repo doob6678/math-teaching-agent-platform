@@ -42,10 +42,15 @@ public class InMemoryLectureTaskLeaseStore implements LectureTaskLeaseStore {
         Entry entry = validRunning(lease); if (entry == null) return false;
         entry.expiresAt = expiresAt; return true;
     }
-    @Override public synchronized boolean failOrRetry(LectureTaskLease lease, String error, int maximumAttempts) {
-        Entry entry = validRunning(lease); if (entry == null) return false;
-        entry.lastError = error; entry.token = null; entry.expiresAt = null;
-        boolean retry = lease.retryCount() < maximumAttempts; entry.status = retry ? LectureTaskLeaseStatus.RETRYING : LectureTaskLeaseStatus.FAILED; return retry;
+    @Override public synchronized FailureOutcome failOrRetry(LectureTaskLease lease, String error, int maximumAttempts) {
+        Entry entry = validRunning(lease);
+        if (entry == null) return FailureOutcome.LEASE_LOST;
+        entry.lastError = error;
+        entry.token = null;
+        entry.expiresAt = null;
+        boolean retry = lease.retryCount() < maximumAttempts;
+        entry.status = retry ? LectureTaskLeaseStatus.RETRYING : LectureTaskLeaseStatus.FAILED;
+        return retry ? FailureOutcome.RETRYING : FailureOutcome.TERMINAL_FAILURE;
     }
     public synchronized LectureTaskLeaseStatus status(String taskId) { return entries.get(taskId).status; }
     public synchronized String lastError(String taskId) { return entries.get(taskId).lastError; }

@@ -48,6 +48,41 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def resolve_selected_files(config: dict[str, object], source_root: Path) -> list[Path]:
+    """Keeps metadata audit bound to the same explicit, source-root-confined PDF whitelist."""
+    if "selectedFiles" not in config or "selectedFileNames" in config:
+        raise ValueError("configuration must contain only non-empty selectedFiles")
+    selected = config["selectedFiles"]
+    if not isinstance(selected, list) or not selected:
+        raise ValueError("selectedFiles must be a non-empty list")
+    resolved_root = source_root.resolve()
+    files: list[Path] = []
+    normalized_selectors: set[str] = set()
+    base_names: set[str] = set()
+    for selector in selected:
+        if not isinstance(selector, str) or not selector.strip() or "\\" in selector:
+            raise ValueError("selectedFiles entries must be non-empty POSIX relative paths")
+        relative = Path(selector)
+        if relative.is_absolute() or any(part in {"", ".", ".."} for part in relative.parts):
+            raise ValueError("selectedFiles entries must not be absolute or traverse directories")
+        if relative.suffix.lower() != ".pdf":
+            raise ValueError("selectedFiles entries must name PDF files")
+        normalized = relative.as_posix()
+        if normalized in normalized_selectors:
+            raise ValueError("selectedFiles contains duplicate normalized paths")
+        normalized_selectors.add(normalized)
+        candidate = (resolved_root / relative).resolve()
+        if not candidate.is_relative_to(resolved_root):
+            raise ValueError("selectedFiles entry escapes sourceRootWsl")
+        if not candidate.is_file():
+            raise FileNotFoundError(f"configured source PDF is missing: {normalized}")
+        if candidate.name in base_names:
+            raise ValueError("selectedFiles cannot contain duplicate PDF base names")
+        base_names.add(candidate.name)
+        files.append(candidate)
+    return files
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run a real Luna 2024 paper-pair metadata audit")
     parser.add_argument("--config", type=Path, default=CONFIG_PATH)
@@ -66,16 +101,10 @@ def main() -> None:
             raise RuntimeError("--config is required when the script is not run from the project scripts/wsl directory")
         config = json.loads(args.config.read_text(encoding="utf-8"))
         source_root = Path(config["sourceRootWsl"])
-        selected = []
-        missing = []
-        for name in config["selectedFileNames"]:
-            path = source_root / name
-            if not path.is_file():
-                missing.append(name)
-                continue
-            selected.append({"fileName": name, "bytes": path.stat().st_size, "sha256": sha256(path)})
-        if missing:
-            raise RuntimeError(f"Configured real-paper files are missing: {missing}")
+        selected = [
+            {"fileName": path.name, "bytes": path.stat().st_size, "sha256": sha256(path)}
+            for path in resolve_selected_files(config, source_root)
+        ]
         prompt = {
             "task": "Audit metadata-only blank-paper/solution-paper pairing. Do not claim to read page content.",
             "paperType": config["paperType"], "files": selected,

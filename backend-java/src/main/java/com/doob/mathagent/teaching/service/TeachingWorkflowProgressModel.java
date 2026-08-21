@@ -97,7 +97,10 @@ final class TeachingWorkflowProgressModel {
             TeachingHandoutTemplateProfile template,
             boolean questionBankAllowed,
             boolean teacherResourceAllowed,
-            ProgressPhase phase) {
+            ProgressPhase phase,
+            RetrievalOutcome textbookOutcome,
+            RetrievalOutcome questionOutcome,
+            RetrievalOutcome teacherResourceOutcome) {
         boolean evidenceReady = phase != ProgressPhase.EVIDENCE_COLLECTING;
         boolean outlineReady = phase == ProgressPhase.CONTENT_GENERATING || phase == ProgressPhase.HANDOUT_RENDERING;
         boolean contentGenerating = phase == ProgressPhase.CONTENT_GENERATING;
@@ -107,20 +110,17 @@ final class TeachingWorkflowProgressModel {
                 .filter(item -> "PUBLIC_TEXTBOOK".equals(item.sourceScope())).count();
         List<TeachingWorkflowNode> nodes = new ArrayList<>(List.of(
                 node("LEARNING_GOAL", "学习目标识别", "completed", "已确认学习目标：" + request.learningGoal()),
-                node("REUSE_RESOURCE", "历史资源复用", "completed", reused
-                        ? "命中可复用学习记录，后续不重复召回同类资料。"
-                        : "未命中可复用学习记录，继续收集本轮资料。"),
-                node("PUBLIC_TEXTBOOK_RETRIEVAL", "公开教材检索",
-                        evidenceReady ? "completed" : "running",
-                        evidenceReady ? "命中公开教材证据 " + publicCount + " 条。" : "正在并行检索公开教材。"),
-                node("QUESTION_BANK_RETRIEVAL", "题库检索",
-                        !questionBankAllowed ? "skipped" : evidenceReady ? "completed" : "running",
-                        !questionBankAllowed ? "当前身份没有题库读取权限。"
-                                : evidenceReady ? "命中题库题目 " + questionEvidence.size() + " 条。" : "正在并行检索题库。"),
-                node("TEACHER_RESOURCE_RETRIEVAL", "教师资料检索",
-                        !teacherResourceAllowed ? "skipped" : evidenceReady ? "completed" : "running",
-                        !teacherResourceAllowed ? "当前身份没有教师资料读取权限。"
-                                : evidenceReady ? "命中教师资料证据 " + teacherResourceEvidence.size() + " 条。" : "正在并行检索已同步教师资料。"),
+                // REUSE_RESOURCE 阶段已删除：老板不需要这个功能
+                retrievalNode("PUBLIC_TEXTBOOK_RETRIEVAL", "公开教材检索", publicCount,
+                        textbookOutcome, "公开教材证据", "正在并行检索公开教材。"),
+                !questionBankAllowed
+                        ? node("QUESTION_BANK_RETRIEVAL", "题库检索", "skipped", "当前身份没有题库读取权限。")
+                        : retrievalNode("QUESTION_BANK_RETRIEVAL", "题库检索", questionEvidence.size(),
+                                questionOutcome, "题库题目", "等待课程点确定后检索题库。"),
+                !teacherResourceAllowed
+                        ? node("TEACHER_RESOURCE_RETRIEVAL", "教师资料检索", "skipped", "当前身份没有教师资料读取权限。")
+                        : retrievalNode("TEACHER_RESOURCE_RETRIEVAL", "教师资料检索", teacherResourceEvidence.size(),
+                                teacherResourceOutcome, "教师资料证据", "正在并行检索已同步教师资料。"),
                 node("REACT_SOLVE", "讲解大纲", outlineReady ? "completed" : evidenceReady ? "running" : "pending",
                         outlineReady ? "已按汇总证据确定讲解大纲。" : evidenceReady ? "正在把来源汇总为讲解大纲。" : "等待资料汇总。"),
                 node("HANDOUT_TEMPLATE", "讲义结构", "completed", "已确定讲义结构。"),
@@ -135,6 +135,24 @@ final class TeachingWorkflowProgressModel {
     }
 
 
+    /** Presents a settled source branch without turning a timeout into a false successful empty search. */
+    private static TeachingWorkflowNode retrievalNode(
+            String code,
+            String name,
+            long evidenceCount,
+            RetrievalOutcome outcome,
+            String evidenceLabel,
+            String runningDetail) {
+        RetrievalOutcome resolved = outcome == null ? RetrievalOutcome.running() : outcome;
+        String detail = switch (resolved.status()) {
+            case "completed" -> "命中" + evidenceLabel + " " + evidenceCount + " 条。";
+            case "degraded", "failed", "skipped" -> resolved.detail();
+            default -> runningDetail;
+        };
+        return node(code, name, resolved.status(), detail);
+    }
+
+
     /** Builds the safe event hierarchy displayed while the fixed DAG is still executing. */
     static List<TeachingWorkflowEvent> progressWorkflowEvents(
             TeachingHandoutTemplateProfile template,
@@ -142,7 +160,10 @@ final class TeachingWorkflowProgressModel {
             List<TeachingEvidence> questionEvidence,
             List<TeachingEvidence> teacherResourceEvidence,
             TeachingTaskResponse.AiDraft aiDraft,
-            ProgressPhase phase) {
+            ProgressPhase phase,
+            RetrievalOutcome textbookOutcome,
+            RetrievalOutcome questionOutcome,
+            RetrievalOutcome teacherResourceOutcome) {
         boolean evidenceReady = phase != ProgressPhase.EVIDENCE_COLLECTING;
         boolean outlineReady = phase == ProgressPhase.CONTENT_GENERATING || phase == ProgressPhase.HANDOUT_RENDERING;
         boolean contentGenerating = phase == ProgressPhase.CONTENT_GENERATING;
@@ -150,10 +171,10 @@ final class TeachingWorkflowProgressModel {
         List<TeachingWorkflowEvent> events = new ArrayList<>(List.of(
                 workflowEvent("plan", "system", "TeachingPlanner", "plan", "教学任务计划", "已确定讲义结构。", List.of()),
                 workflowEvent("evidence", "tool", "EvidenceCollector", "evidence", "并行收集教材、题库和教师资料证据",
-                        evidenceReady
-                                ? evidenceWorkflowDetail(textbookEvidence, questionEvidence, teacherResourceEvidence)
-                                : "正在并行收集已授权资料。",
-                        evidenceReady ? "completed" : "running", List.of("PUBLIC_TEXTBOOK", "QUESTION_BANK", "TEACHER_RESOURCE")),
+                        evidenceProgressDetail(textbookEvidence, questionEvidence, teacherResourceEvidence,
+                                textbookOutcome, questionOutcome, teacherResourceOutcome),
+                        evidenceProgressStatus(textbookOutcome, questionOutcome, teacherResourceOutcome, evidenceReady),
+                        List.of("PUBLIC_TEXTBOOK", "QUESTION_BANK", "TEACHER_RESOURCE")),
                 workflowEvent("outline", "agent", "OutlinePlanner", "outline", "生成讲解大纲",
                         outlineReady ? "已根据汇总来源确定讲解大纲。" : evidenceReady ? "正在将来源整理为讲解大纲。" : "等待资料汇总。",
                         outlineReady ? "completed" : evidenceReady ? "running" : "pending", List.of()),
@@ -167,6 +188,41 @@ final class TeachingWorkflowProgressModel {
         // still reports running children; this completed snapshot reflects the real execution barrier.
         events.addAll(questionAgentEvents(questionEvidence, "completed"));
         return List.copyOf(events);
+    }
+
+
+    /** Keeps the aggregate event honest while source branches settle at different times. */
+    private static String evidenceProgressDetail(
+            List<TeachingEvidence> textbookEvidence,
+            List<TeachingEvidence> questionEvidence,
+            List<TeachingEvidence> teacherResourceEvidence,
+            RetrievalOutcome textbookOutcome,
+            RetrievalOutcome questionOutcome,
+            RetrievalOutcome teacherResourceOutcome) {
+        List<String> degraded = List.of(textbookOutcome, questionOutcome, teacherResourceOutcome).stream()
+                .filter(outcome -> outcome != null && ("degraded".equals(outcome.status())
+                        || "failed".equals(outcome.status()) || "skipped".equals(outcome.status())))
+                .map(RetrievalOutcome::detail)
+                .filter(detail -> detail != null && !detail.isBlank())
+                .toList();
+        String evidence = evidenceWorkflowDetail(textbookEvidence, questionEvidence, teacherResourceEvidence);
+        if (degraded.isEmpty()) {
+            return evidence;
+        }
+        return String.join("；", degraded) + "\n" + evidence;
+    }
+
+    private static String evidenceProgressStatus(
+            RetrievalOutcome textbookOutcome,
+            RetrievalOutcome questionOutcome,
+            RetrievalOutcome teacherResourceOutcome,
+            boolean evidenceReady) {
+        boolean running = List.of(textbookOutcome, questionOutcome, teacherResourceOutcome).stream()
+                .anyMatch(outcome -> outcome == null || "running".equals(outcome.status()));
+        boolean degraded = List.of(textbookOutcome, questionOutcome, teacherResourceOutcome).stream()
+                .anyMatch(outcome -> outcome != null && ("degraded".equals(outcome.status())
+                        || "failed".equals(outcome.status())));
+        return running ? "running" : degraded ? "degraded" : evidenceReady ? "completed" : "running";
     }
 
 
@@ -277,36 +333,30 @@ final class TeachingWorkflowProgressModel {
             TeachingTaskResponse.AiDraft aiDraft,
             TeachingHandoutTemplateProfile template,
             boolean questionBankAllowed,
-            boolean teacherResourceAllowed) {
-        String reuseSummary = memoryResponse.reused()
-                ? "命中学生记忆 %s，作用域 %s，相似度 %.4f，跳过重复教材召回。"
-                        .formatted(memoryResponse.memoryId(), memoryResponse.reuseScope(), memoryResponse.similarity())
-                : "未命中可复用学生记忆，原因：" + memoryResponse.reason() + "。";
+            boolean teacherResourceAllowed,
+            RetrievalOutcome textbookOutcome,
+            RetrievalOutcome questionOutcome,
+            RetrievalOutcome teacherResourceOutcome) {
+        // REUSE_RESOURCE 阶段已删除：老板不需要这个功能
         // Memory reuse supplies context only; evidence retrieval still runs so every published handout has current,
         // expandable sources. A reused answer must never make the DAG claim that retrieval was skipped.
-        boolean textbookRetrievalRan = true;
         long publicTextbookCount = evidence.stream()
                 .filter(item -> "PUBLIC_TEXTBOOK".equals(item.sourceScope()))
                 .count();
         long teacherResourceCount = teacherResourceEvidence.size();
         List<TeachingWorkflowNode> nodes = new ArrayList<>(List.of(
                 node("LEARNING_GOAL", "学习目标识别", "识别用户想学：" + request.learningGoal()),
-                node("REUSE_RESOURCE", "历史资源复用", reuseSummary),
-                node("PUBLIC_TEXTBOOK_RETRIEVAL", "公开教材检索",
-                        textbookRetrievalRan ? "completed" : "skipped",
-                        textbookRetrievalRan
-                                ? "命中公开教材证据 " + publicTextbookCount + " 条。"
-                                : "已复用学生记忆，本次未触发公开教材检索。"),
-                node("QUESTION_BANK_RETRIEVAL", "题库检索",
-                        textbookRetrievalRan && questionBankAllowed ? "completed" : "skipped",
-                        textbookRetrievalRan && questionBankAllowed
-                                ? "命中题库题目 " + questionEvidence.size() + " 条，已按难度作为讲义证据。"
-                                : "当前身份或复用路径未触发题库检索。"),
-                node("TEACHER_RESOURCE_RETRIEVAL", "教师资料检索",
-                        textbookRetrievalRan && teacherResourceAllowed ? "completed" : "skipped",
-                        textbookRetrievalRan && teacherResourceAllowed
-                                ? "命中教师资料证据 " + teacherResourceCount + " 条，已补充题型方法与教师沉淀。"
-                                : "当前身份或复用路径未触发教师资料检索。"),
+                // REUSE_RESOURCE 节点已删除
+                retrievalNode("PUBLIC_TEXTBOOK_RETRIEVAL", "公开教材检索", publicTextbookCount,
+                        textbookOutcome, "公开教材证据", "公开教材检索未完成。"),
+                !questionBankAllowed
+                        ? node("QUESTION_BANK_RETRIEVAL", "题库检索", "skipped", "当前身份没有题库读取权限。")
+                        : retrievalNode("QUESTION_BANK_RETRIEVAL", "题库检索", questionEvidence.size(),
+                                questionOutcome, "题库题目", "题库检索未完成。"),
+                !teacherResourceAllowed
+                        ? node("TEACHER_RESOURCE_RETRIEVAL", "教师资料检索", "skipped", "当前身份没有教师资料读取权限。")
+                        : retrievalNode("TEACHER_RESOURCE_RETRIEVAL", "教师资料检索", teacherResourceCount,
+                                teacherResourceOutcome, "教师资料证据", "教师资料检索未完成。"),
                 node("REACT_SOLVE", "解题编排", "基于教材证据、学生记忆和题型方法整理讲解步骤。"),
                 node("HANDOUT_TEMPLATE", "讲义结构", "自动组织讲义结构。"),
                 node("AI_DRAFT", "讲义内容生成", aiDraftSummary(aiDraft)),
@@ -417,7 +467,10 @@ final class TeachingWorkflowProgressModel {
             List<TeachingEvidence> questionEvidence,
             List<TeachingEvidence> teacherResourceEvidence,
             TeachingTaskResponse.AiDraft aiDraft,
-            TeachingHandoutTemplateProfile template) {
+            TeachingHandoutTemplateProfile template,
+            RetrievalOutcome textbookOutcome,
+            RetrievalOutcome questionOutcome,
+            RetrievalOutcome teacherResourceOutcome) {
         List<String> evidenceScopes = evidence.stream()
                 .map(TeachingEvidence::sourceScope)
                 .filter(scope -> scope != null && !scope.isBlank())
@@ -439,7 +492,9 @@ final class TeachingWorkflowProgressModel {
                         "EvidenceCollector",
                         "evidence",
                         "并行收集教材、题库和教师资料证据",
-                        evidenceWorkflowDetail(textbookEvidence, questionEvidence, teacherResourceEvidence),
+                        evidenceProgressDetail(textbookEvidence, questionEvidence, teacherResourceEvidence,
+                                textbookOutcome, questionOutcome, teacherResourceOutcome),
+                        evidenceProgressStatus(textbookOutcome, questionOutcome, teacherResourceOutcome, true),
                         evidenceScopes),
                 workflowEvent(
                         "generation",

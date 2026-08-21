@@ -40,6 +40,29 @@ class HandoutTaskFacadeContractTest {
     }
 
     @Test
+    void keepsValidatedMcpClientRequestIdWhileLegacyRequestsUseTheContentDigest() {
+        MultiAgentWritingRequest writing = new MultiAgentWritingRequest(
+                "Prepare a teacher handout", "Find the angle between two lines", List.of("evidence-a"),
+                false, "openai", "gpt-5.6-luna");
+
+        assertThat(HandoutTaskFacade.toTeachingTaskRequest(writing, "mcp-acceptance:parabola:20260819T123456Z:abc123")
+                .clientRequestId()).isEqualTo("mcp-acceptance:parabola:20260819T123456Z:abc123");
+        assertThat(HandoutTaskFacade.toTeachingTaskRequest(writing).clientRequestId()).startsWith("writing-");
+    }
+
+    @Test
+    void rejectsUnsafeMcpClientRequestIds() {
+        MultiAgentWritingRequest writing = new MultiAgentWritingRequest(
+                "Prepare a teacher handout", "Find the angle between two lines", List.of("evidence-a"),
+                false, "openai", "gpt-5.6-luna");
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                () -> HandoutTaskFacade.toTeachingTaskRequest(writing, "mcp acceptance/invalid"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("clientRequestId");
+    }
+
+    @Test
     void projectsEveryLegacyOperationToTheSameTeachingTaskId() {
         InMemoryTeachingTaskStore taskStore = new InMemoryTeachingTaskStore();
         InMemoryLectureTaskOutboxStore outboxStore = new InMemoryLectureTaskOutboxStore();

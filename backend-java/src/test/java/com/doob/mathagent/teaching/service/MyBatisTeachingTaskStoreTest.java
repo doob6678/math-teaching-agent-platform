@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.doob.mathagent.teaching.TeachingTaskStatus;
 import com.doob.mathagent.teaching.mapper.TeachingTaskMapper;
+import com.doob.mathagent.teaching.mq.LectureTaskLease;
+import com.doob.mathagent.teaching.mq.LectureTaskLeaseStore;
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.InputStream;
@@ -15,6 +17,40 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 class MyBatisTeachingTaskStoreTest {
+
+    @Test
+    void persistsTerminalOutputContractFailureAsFailedApiSnapshotWithoutRetry() throws Exception {
+        AtomicReference<Object[]> capturedArguments = new AtomicReference<>();
+        TeachingTaskMapper mapper = (TeachingTaskMapper) Proxy.newProxyInstance(
+                TeachingTaskMapper.class.getClassLoader(),
+                new Class<?>[] {TeachingTaskMapper.class},
+                (proxy, method, arguments) -> {
+                    if ("failOwnedLectureTask".equals(method.getName())) {
+                        capturedArguments.set(arguments);
+                        return 1;
+                    }
+                    throw new AssertionError("Unexpected mapper call: " + method.getName());
+                });
+        ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
+        MyBatisTeachingTaskStore store = new MyBatisTeachingTaskStore(mapper, objectMapper);
+        TeachingTaskResponse failed = runningTask().withReviewStatus(
+                TeachingTaskStatus.FAILED, "422 HANDOUT_OUTPUT_CONTRACT_FAILURE");
+
+        LectureTaskLeaseStore.FailureOutcome outcome = store.failOwned(
+                new LectureTaskLease("task-failed", "lease-contract", "worker-a", 1, Instant.now()),
+                failed,
+                "422 HANDOUT_OUTPUT_CONTRACT_FAILURE",
+                0);
+
+        assertThat(outcome).isEqualTo(LectureTaskLeaseStore.FailureOutcome.TERMINAL_FAILURE);
+        Object[] arguments = capturedArguments.get();
+        assertThat(arguments).isNotNull();
+        assertThat(arguments[3]).isEqualTo("FAILED");
+        assertThat(arguments[5]).isInstanceOf(Instant.class);
+        TeachingTaskResponse persisted = objectMapper.readValue((String) arguments[2], TeachingTaskResponse.class);
+        assertThat(persisted.status()).isEqualTo(TeachingTaskStatus.FAILED);
+        assertThat(persisted.errorMessage()).isEqualTo("422 HANDOUT_OUTPUT_CONTRACT_FAILURE");
+    }
 
     /** A task that exhausted automatic retries must receive a fresh lease budget after a deliberate user resume. */
     @Test
@@ -62,7 +98,8 @@ class MyBatisTeachingTaskStoreTest {
                 "last_error = NULL",
                 "finished_at = NULL",
                 "owner_key = #{ownerKey}",
-                "status IN ('FAILED', 'RUNNING', 'COMPLETED')");
+                "status IN ('FAILED', 'RETRYING', 'COMPLETED')",
+                "status = 'RUNNING' AND (lease_expire_at IS NULL OR lease_expire_at &lt; #{updatedAt})");
     }
 
     private static TeachingTaskResponse runningTask() {

@@ -1,6 +1,7 @@
 package com.doob.mathagent.teaching;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.doob.mathagent.agent.service.AgentTraceRecord;
 import com.doob.mathagent.agent.service.AgentTraceSearchCriteria;
@@ -25,9 +26,13 @@ import com.doob.mathagent.retrieval.TextbookSearchCache;
 import com.doob.mathagent.retrieval.TextbookSearchRequest;
 import com.doob.mathagent.retrieval.TextbookSearchResponse;
 import com.doob.mathagent.teaching.dto.TeachingTaskRequest;
+import com.doob.mathagent.teaching.mq.LectureTaskLease;
+import com.doob.mathagent.teaching.mq.LectureTaskLeaseStore;
+import com.doob.mathagent.teaching.mq.LectureTaskConsumer;
 import com.doob.mathagent.teaching.service.InMemoryTeachingTaskStore;
 import com.doob.mathagent.teaching.service.TeachingHandoutTemplateProfile;
 import com.doob.mathagent.teaching.service.TeachingHandoutTemplateService;
+import com.doob.mathagent.teaching.service.TeachingTaskStore;
 import com.doob.mathagent.teaching.service.TeachingWorkflowService;
 import com.doob.mathagent.teaching.TeachingKnowledgePointPack;
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
@@ -41,6 +46,8 @@ import com.doob.mathagent.teacher.search.TeacherResourceBlockSearchResponse;
 import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
 import com.doob.mathagent.vector.service.TestVectorIndexService;
 import java.time.Duration;
+import java.time.Instant;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -50,15 +57,147 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpServerErrorException;
 
 class TeachingWorkflowServiceTest {
 
 
     @TempDir
     Path tempDir;
+
+    @Test
+    void workerOutputContractFailureIsTerminalWhileThrottleAndServerFailuresRemainRetryable() {
+        assertThat(TeachingWorkflowService.isNonRetryableHandoutFailure(
+                HttpClientErrorException.create(
+                        HttpStatus.UNPROCESSABLE_ENTITY,
+                        "HANDOUT_OUTPUT_CONTRACT_FAILURE",
+                        null,
+                        "{\"code\":\"HANDOUT_OUTPUT_CONTRACT_FAILURE\"}".getBytes(StandardCharsets.UTF_8),
+                        StandardCharsets.UTF_8))).isTrue();
+        assertThat(TeachingWorkflowService.isNonRetryableHandoutFailure(
+                HttpClientErrorException.create(HttpStatus.TOO_MANY_REQUESTS, "throttled", null, new byte[0], null))).isFalse();
+        assertThat(TeachingWorkflowService.isNonRetryableHandoutFailure(
+                HttpServerErrorException.create(HttpStatus.SERVICE_UNAVAILABLE, "unavailable", null, new byte[0], null))).isFalse();
+    }
+
+    @Test
+    void retryableQueuedFailureAtMaximumAttemptsPersistsFailedSnapshotAndReturnsTerminalFailure() {
+        CapturingFailureStore taskStore = new CapturingFailureStore();
+        TeachingTaskResponse queued = queuedTask("queued-terminal");
+        taskStore.save("tenant-a:teacher:teacher-1", "request-terminal", queued);
+
+        LectureTaskLeaseStore.FailureOutcome outcome = queuedFailureService(taskStore).recordQueuedFailure(
+                queued.taskId(),
+                new LectureTaskLease(queued.taskId(), "lease-terminal", "worker-a", 3, Instant.now()),
+                new IllegalStateException("retryable writer outage"),
+                3);
+
+        assertThat(outcome).isEqualTo(LectureTaskLeaseStore.FailureOutcome.TERMINAL_FAILURE);
+        assertThat(taskStore.failedSnapshot).isNotNull();
+        assertThat(taskStore.failedSnapshot.status()).isEqualTo(TeachingTaskStatus.FAILED);
+        assertThat(taskStore.failedSnapshot.errorMessage()).isEqualTo("retryable writer outage");
+        assertThat(taskStore.maximumAttempts).isZero();
+    }
+
+    @Test
+    void retryableQueuedFailureBeforeMaximumAttemptsPersistsRetryingSnapshot() {
+        CapturingFailureStore taskStore = new CapturingFailureStore();
+        TeachingTaskResponse queued = queuedTask("queued-retrying");
+        taskStore.save("tenant-a:teacher:teacher-1", "request-retrying", queued);
+
+        LectureTaskLeaseStore.FailureOutcome outcome = queuedFailureService(taskStore).recordQueuedFailure(
+                queued.taskId(),
+                new LectureTaskLease(queued.taskId(), "lease-retrying", "worker-a", 2, Instant.now()),
+                new IllegalStateException("retryable writer outage"),
+                3);
+
+        assertThat(outcome).isEqualTo(LectureTaskLeaseStore.FailureOutcome.RETRYING);
+        assertThat(taskStore.failedSnapshot).isNotNull();
+        assertThat(taskStore.failedSnapshot.status()).isEqualTo(TeachingTaskStatus.RETRYING);
+        assertThat(taskStore.failedSnapshot.errorMessage()).isEqualTo("retryable writer outage");
+        assertThat(taskStore.maximumAttempts).isEqualTo(3);
+    }
+
+    @Test
+    void terminalQueuedFailureIsNotRepublishedByTheWorker() {
+        CapturingFailureStore taskStore = new CapturingFailureStore();
+        TeachingTaskResponse queued = queuedTask("queued-terminal-consumer");
+        taskStore.save("tenant-a:teacher:teacher-1", "request-terminal-consumer", queued);
+        List<String> republishedTaskIds = new java.util.ArrayList<>();
+        TeachingWorkflowService workflow = new TeachingWorkflowService(
+                tempDir, null, taskStore, null, null, new InMemoryAgentTraceStore()) {
+            @Override
+            public void executeQueued(String taskId, LectureTaskLease lease) {
+                throw HttpClientErrorException.create(
+                        HttpStatus.UNPROCESSABLE_ENTITY,
+                        "HANDOUT_OUTPUT_CONTRACT_FAILURE",
+                        null,
+                        "{\"code\":\"HANDOUT_OUTPUT_CONTRACT_FAILURE\"}".getBytes(StandardCharsets.UTF_8),
+                        StandardCharsets.UTF_8);
+            }
+        };
+        LectureTaskConsumer consumer = new LectureTaskConsumer(
+                leaseStoreFor(new LectureTaskLease(
+                        queued.taskId(), "lease-consumer", "worker-a", 1, Instant.now().plusSeconds(60))),
+                new com.doob.mathagent.teaching.mq.LectureTaskRetryCoordinator(
+                        workflow,
+                        new com.doob.mathagent.teaching.mq.LectureTaskOutboxStore() {
+                            @Override
+                            public void enqueue(String taskId) {
+                                republishedTaskIds.add(taskId);
+                            }
+
+                            @Override
+                            public java.util.List<com.doob.mathagent.teaching.mq.LectureTaskOutboxEvent> findPending(int limit) {
+                                return java.util.List.of();
+                            }
+
+                            @Override
+                            public void markPublished(String eventId) {
+                            }
+                        }),
+                workflow,
+                new org.springframework.mock.env.MockEnvironment()
+                        .withProperty("math-agent.teaching.lecture-task.maximum-attempts", "3"));
+
+        assertThatThrownBy(() -> consumer.consume(queued.taskId()))
+                .isInstanceOf(org.springframework.amqp.AmqpRejectAndDontRequeueException.class);
+        assertThat(taskStore.failureWrites).isEqualTo(1);
+        assertThat(taskStore.failedSnapshot.status()).isEqualTo(TeachingTaskStatus.FAILED);
+        assertThat(republishedTaskIds).isEmpty();
+    }
+
+    @Test
+    void workerOutputContractFailurePersistsOneTerminalFailedSnapshotWithoutRetryBudget() {
+        CapturingFailureStore taskStore = new CapturingFailureStore();
+        TeachingTaskResponse queued = queuedTask("queued-output-contract-failure");
+        taskStore.save("tenant-a:teacher:teacher-1", "request-output-contract-failure", queued);
+        HttpClientErrorException.UnprocessableEntity failure =
+                (HttpClientErrorException.UnprocessableEntity) HttpClientErrorException.create(
+                        HttpStatus.UNPROCESSABLE_ENTITY,
+                        "HANDOUT_OUTPUT_CONTRACT_FAILURE",
+                        null,
+                        "{\"code\":\"HANDOUT_OUTPUT_CONTRACT_FAILURE\"}".getBytes(StandardCharsets.UTF_8),
+                        StandardCharsets.UTF_8);
+
+        LectureTaskLeaseStore.FailureOutcome outcome = queuedFailureService(taskStore).recordQueuedFailure(
+                queued.taskId(),
+                new LectureTaskLease(queued.taskId(), "lease-output-contract", "worker-a", 1, Instant.now()),
+                failure,
+                3);
+
+        assertThat(outcome).isEqualTo(LectureTaskLeaseStore.FailureOutcome.TERMINAL_FAILURE);
+        assertThat(taskStore.failureWrites).isEqualTo(1);
+        assertThat(taskStore.failedSnapshot.status()).isEqualTo(TeachingTaskStatus.FAILED);
+        assertThat(taskStore.failedSnapshot.errorMessage()).isEqualTo("422 HANDOUT_OUTPUT_CONTRACT_FAILURE");
+        assertThat(taskStore.maximumAttempts).isZero();
+    }
 
     @Test
     void sourcePageAndAnalysisPageMirrorsKeepOnlyTheAnsweredAtomicQuestion() throws Exception {
@@ -277,7 +416,7 @@ class TeachingWorkflowServiceTest {
                 .extracting(TeachingWorkflowNode::code)
                 .containsExactly(
                         "LEARNING_GOAL",
-                        "REUSE_RESOURCE",
+                        // REUSE_RESOURCE 已删除
                         "PUBLIC_TEXTBOOK_RETRIEVAL",
                         "QUESTION_BANK_RETRIEVAL",
                         "TEACHER_RESOURCE_RETRIEVAL",
@@ -310,11 +449,10 @@ class TeachingWorkflowServiceTest {
         assertThat(response.draftSections().risks())
                 .contains("student_answer_leakage_review_required", "lecture_cards_from_python_handout")
                 .doesNotContain("source_grounding_missing");
-        assertThat(response.handoutLatex()).contains("\\section{函数新概念：题型总览}");
+        assertThat(response.handoutLatex()).contains("【知识定位】我想学会函数新概念综合题");
         assertThat(response.teacherHandoutLatex()).contains(
-                "\\section{函数新概念：题型总览}",
-                "\\section{题型：函数新概念}",
-                "\\subsection*{讲解}");
+                "【知识定位】我想学会函数新概念综合题",
+                "【方法步骤】", "【答案与评分点】");
         assertThat(response.teacherHandoutLatex()).doesNotContain(
                 "模板：", "题目入口", "讲评入口", "审题提醒", "题型入口", "知识入口",
                 "课前定位", "来源依据", "讲评主线", "核心公式与方法卡", "16:10 横版讲解卡", "板书与二次反馈");
@@ -328,8 +466,7 @@ class TeachingWorkflowServiceTest {
         assertThat(response.teacherHandoutLatex()).doesNotContain(
                 "![p", "## 正文", "书名：", "formula_text", "source_page_image", "D(x_0)=\\{d");
         assertThat(response.studentHandoutLatex()).contains(
-                "\\paragraph{知识速记}",
-                "\\paragraph{识别信号}");
+                "【知识速记】", "【题型识别】");
         assertThat(response.studentHandoutLatex()).doesNotContain("\\section{第 1 讲");
         assertThat(response.teacherHandoutLatex()).doesNotContain("\\section{核心方法}", "\\section{解题步骤}");
         assertThat(response.studentHandoutLatex()).doesNotContain("\\section{我的解答}", "\\section{订正记录}", "\\vspace{12em}");
@@ -377,13 +514,12 @@ class TeachingWorkflowServiceTest {
                 .orElseThrow();
 
         assertThat(response.teacherHandoutLatex())
-                .contains("\\section{题型：函数新概念}", "\\section{题型：分段函数}",
-                        "\\paragraph{条件落点}", "\\paragraph{推导链条}", "\\paragraph{答案与评分点}",
-                        "写出 D(1) 的定义", "按定义整理取值范围", "\\subsection*{第1题 例题}")
-                .doesNotContain("\\section{本节目标}", "\\section{核心方法}", "\\section{解题步骤}", "例题详解",
+                .contains("【知识定位】函数新概念与分段函数", "【方法步骤】", "【答案与评分点】")
+                .doesNotContain("\\section{本节目标}", "\\section{核心方法}", "\\section{解题步骤}",
                         "函数新概念：定义域判断", "函数新概念：定义域变式",
                         "分段函数：按区间代入", "分段函数：分类讨论变式");
         assertThat(response.studentHandoutLatex())
+                .contains("【知识速记】", "【题型识别】")
                 .doesNotContain("核心方法", "解题步骤", "答案要点",
                         "函数新概念：定义域判断", "分段函数：按区间代入");
     }
@@ -639,7 +775,7 @@ class TeachingWorkflowServiceTest {
                 .doesNotContain("教师版", "16:10 讲解版独立生成", "不从教师版截取", "题目入口", "审题提醒");
         assertThat(response.studentHandoutLatex())
                 .doesNotContain("教师版", "16:10 讲解版独立生成", "不从教师版截取")
-                .contains("\\paragraph{知识速记}", "\\paragraph{识别信号}");
+                .contains("【知识速记】", "【题型识别】");
     }
 
     @Test
@@ -753,16 +889,90 @@ class TeachingWorkflowServiceTest {
         assertThat(response.memoryReuse().reuseScope()).isEqualTo("private");
         assertThat(response.memoryReuse().answer()).contains("cosθ");
         assertThat(response.evidence()).isEmpty();
-        assertThat(response.nodes())
-                .filteredOn(node -> "REUSE_RESOURCE".equals(node.code()))
-                .extracting(TeachingWorkflowNode::summary)
-                .first()
-                .asString()
-                .contains("可复用学习记录");
+        // REUSE_RESOURCE 节点已删除，不再检查该节点
         assertThat(response.stageTimings()).extracting(TeachingTaskResponse.StageTiming::stage)
                 .containsExactly("memory_reuse");
         assertThat(response.status()).isEqualTo(TeachingTaskStatus.FAILED);
         assertThat(response.errorMessage()).contains("教材、题库或教师资料证据");
+    }
+
+    /** 已核验证据只触发一次 v2 Writer，不再经由通用题目代理的 /v1/ai-runs/sync。 */
+    @Test
+    void sendsVerifiedEvidenceDirectlyToTheV2WriterWithoutQuestionAgentRuns() throws Exception {
+        AtomicInteger writerCalls = new AtomicInteger();
+        TeachingWorkflowService service = new TeachingWorkflowService(
+                createTextbookCorpus(), retrievalService(), new InMemoryTeachingTaskStore(), memoryReuseService(),
+                null, new InMemoryAgentTraceStore());
+        service.setTeachingHandoutAiClientForTesting((taskId, request, evidence) -> {
+            writerCalls.incrementAndGet();
+            assertThat(evidence).isNotEmpty();
+            return TeachingHandoutAiClientFixture.completed().execute(taskId, request, evidence);
+        });
+
+        TeachingTaskRequest request = new TeachingTaskRequest(
+                "req-v2-direct-writer", "函数新概念 D(x_0)", "函数新概念", 24);
+        TeachingRequestContext context = new TeachingRequestContext("tenant-a", "teacher", "teacher-1", "device-1");
+        TeachingTaskResponse response = service.submit(request, context);
+        TeachingTaskResponse retried = service.submit(request, context);
+
+        assertThat(response.status()).isEqualTo(TeachingTaskStatus.COMPLETED);
+        assertThat(response.evidence()).isNotEmpty();
+        assertThat(retried.taskId()).isEqualTo(response.taskId());
+        assertThat(writerCalls).hasValue(1);
+        assertThat(response.nodes()).noneMatch(node -> node.code().startsWith("QUESTION_AGENT_"));
+        assertThat(response.workflowEvents()).noneMatch(event -> event.eventType().startsWith("QUESTION_AGENT_"));
+    }
+
+    /** Python may start with an empty authorization snapshot and contribute broker-persisted teacher evidence. */
+    @Test
+    void letsEmptyInitialEvidenceReachV2WriterAndReloadsDurableBrokerEvidence() throws Exception {
+        AtomicInteger writerCalls = new AtomicInteger();
+        InMemoryTeachingTaskStore taskStore = new InMemoryTeachingTaskStore();
+        TeachingWorkflowService service = new TeachingWorkflowService(
+                createTextbookCorpus(), new GateTextbookRetrievalService(new CountDownLatch(0), new AtomicBoolean()),
+                taskStore, memoryReuseService(), null, new InMemoryAgentTraceStore());
+        TeachingRequestContext context = new TeachingRequestContext("tenant-a", "teacher", "teacher-1", "device-1");
+        TeachingEvidence brokerEvidence = new TeachingEvidence(
+                "TEACHER_RESOURCE", "教师资料：函数定义", "broker-block-1", 7,
+                "函数定义的条件、对应关系与定义域应从同一来源逐项核验。", "", "", "broker-document-1");
+        service.setTeachingHandoutAiClientForTesting((taskId, request, evidence) -> {
+            writerCalls.incrementAndGet();
+            assertThat(evidence).isEmpty();
+            TeachingTaskResponse persisted = taskStore.findByTaskId(taskId).orElseThrow()
+                    .withEvidence(List.of(brokerEvidence));
+            taskStore.save(context.ownerKey(), context.idempotencyKey(request.clientRequestId()), persisted);
+            return TeachingHandoutAiClientFixture.completed().execute(taskId, request, evidence);
+        });
+
+        TeachingTaskResponse response = service.submit(
+                new TeachingTaskRequest("req-v2-empty-initial-broker-evidence", "函数定义", "理解函数定义", 1),
+                context);
+
+        assertThat(writerCalls).hasValue(1);
+        assertThat(response.status()).isEqualTo(TeachingTaskStatus.COMPLETED);
+        assertThat(response.evidence()).containsExactly(brokerEvidence);
+    }
+
+    /** A zero-evidence task fails closed only after Python had the opportunity to persist broker evidence. */
+    @Test
+    void rejectsEmptyEvidenceOnlyAfterCallingTheV2WriterAndReloadingBrokerLedger() throws Exception {
+        AtomicInteger writerCalls = new AtomicInteger();
+        TeachingWorkflowService service = new TeachingWorkflowService(
+                createTextbookCorpus(), new GateTextbookRetrievalService(new CountDownLatch(0), new AtomicBoolean()),
+                new InMemoryTeachingTaskStore(), memoryReuseService(), null, new InMemoryAgentTraceStore());
+        service.setTeachingHandoutAiClientForTesting((taskId, request, evidence) -> {
+            writerCalls.incrementAndGet();
+            assertThat(evidence).isEmpty();
+            return TeachingHandoutAiClientFixture.completed().execute(taskId, request, evidence);
+        });
+
+        TeachingTaskResponse response = service.submit(
+                new TeachingTaskRequest("req-v2-empty-initial-no-broker-evidence", "空间向量夹角", "空间向量夹角", 1),
+                new TeachingRequestContext("tenant-a", "teacher", "teacher-1", "device-1"));
+
+        assertThat(response.status()).isEqualTo(TeachingTaskStatus.FAILED);
+        assertThat(response.errorMessage()).contains("讲义任务缺少可核验来源证据");
+        assertThat(writerCalls).hasValue(1);
     }
 
     @Test
@@ -968,7 +1178,7 @@ class TeachingWorkflowServiceTest {
                 .anySatisfy(item -> assertThat(item.sourceScope()).isEqualTo("QUESTION_BANK"));
         assertThat(response.teacherHandoutLatex())
                 .contains("双曲线定义与参数关系", "$c=5$", "$b^2=16$",
-                        "步骤：1. 由 $2a=6$ 得 $a=3$", "补充1：注意 $b^2$ 不是 b", "\\paragraph{答案与评分点}")
+                        "步骤：1. 由 $2a=6$ 得 $a=3$", "补充1：注意 $b^2$ 不是 b", "【答案与评分点】")
                 .doesNotContain("\"answer\"", "\"steps\"", "\"scoring\"", "\"extraNote\"",
                         "双曲线定义与参数关系基础题 / 难度：A 基础", "教师版保留完整答案");
         assertThat(response.studentHandoutLatex())
@@ -1110,7 +1320,7 @@ class TeachingWorkflowServiceTest {
                 .filteredOn(node -> "TEACHER_RESOURCE_RETRIEVAL".equals(node.code()))
                 .singleElement()
                 .satisfies(node -> assertThat(node.summary()).contains("命中教师资料证据 1 条"));
-        assertThat(response.teacherHandoutLatex()).contains("\\section{题型：双曲线}")
+        assertThat(response.teacherHandoutLatex()).contains("【知识定位】双曲线定义与渐近线", "【方法步骤】")
                 .doesNotContain("\\section{本节目标}", "核心方法", "解题步骤")
                 .doesNotContain("圆锥曲线专题讲义 / 圆锥曲线 / 双曲线",
                         "题型方法、教师沉淀与讲义补充", "source_page_image", "## 正文");
@@ -1185,7 +1395,7 @@ class TeachingWorkflowServiceTest {
         assertThat(trace.message()).contains("Teaching AI draft structured");
         assertThat(trace.diagnosticEvents()).extracting(AgentTraceRecord.DiagnosticEvent::eventType)
                 .containsExactly("PYTHON_HANDOUT_TEACHER_WRITER");
-        assertThat(response.teacherHandoutLatex()).contains("\\section{题型：函数新概念}", "\\subsection*{讲解}", "\\subsection*{注意}")
+        assertThat(response.teacherHandoutLatex()).contains("【知识定位】先读清 $D(x_0)$ 的定义", "【方法步骤】", "【答案与评分点】")
                 .doesNotContain("\\section{本节目标}", "题目入口", "讲评入口", "审题提醒", "模板：", "16:10 横版讲解卡", "来源依据");
         assertThat(response.lectureHandoutLatex())
                 .contains("\\section{课堂讲解}", "\\subsection*{第 1 题 / 讲解单元}", "\\vspace{14em}")
@@ -1226,7 +1436,7 @@ class TeachingWorkflowServiceTest {
                 .doesNotContain("lectureCards");
         assertThat(response.studentHandoutLatex()).doesNotContain("\\section{第 1 讲");
         assertThat(response.studentHandoutLatex()).doesNotContain("\\section{我的解答}", "\\section{订正记录}", "\\vspace{12em}");
-        assertThat(response.studentHandoutLatex()).contains("\\paragraph{知识速记}", "$D(x_0)$", "$c^2=a^2+b^2$");
+        assertThat(response.studentHandoutLatex()).contains("【知识速记】", "$D(x_0)$", "$c^2=a^2+b^2$");
         assertThat(response.studentHandoutLatex()).contains("\\begin{itemize}");
         assertThat(response.studentHandoutLatex()).doesNotContain("【答案与评分点】", "答案：", "得分", "___");
         assertThat(response.teacherHandoutLatex())
@@ -1278,11 +1488,85 @@ class TeachingWorkflowServiceTest {
                 .contains("$y=\\frac{k}{x}$")
                 .doesNotContain("$y=k/x$", "教师版保留", "最终答案", "答案与评分点");
         assertThat(response.studentHandoutLatex())
-                .contains("\\paragraph{知识速记}", "\\paragraph{识别信号}");
+                .contains("【知识速记】", "【题型识别】");
     }
 
     private TeachingWorkflowService service(Path root) {
         return service(root, memoryReuseService());
+    }
+
+    /** Supplies only the dependencies recordQueuedFailure uses, keeping the regression tests independent of Spring. */
+    private TeachingWorkflowService queuedFailureService(TeachingTaskStore taskStore) {
+        return new TeachingWorkflowService(
+                tempDir,
+                null,
+                taskStore,
+                null,
+                null,
+                new InMemoryAgentTraceStore());
+    }
+
+    private static LectureTaskLeaseStore leaseStoreFor(LectureTaskLease lease) {
+        return new LectureTaskLeaseStore() {
+            @Override
+            public LectureTaskLease tryAcquire(String taskId, String workerId, Instant now, Duration leaseDuration) {
+                return lease.taskId().equals(taskId) ? lease : null;
+            }
+
+            @Override
+            public boolean complete(LectureTaskLease ignored) {
+                return false;
+            }
+
+            @Override
+            public FailureOutcome failOrRetry(LectureTaskLease ignored, String error, int maximumAttempts) {
+                return FailureOutcome.TERMINAL_FAILURE;
+            }
+        };
+    }
+
+    private static TeachingTaskResponse queuedTask(String taskId) {
+        return new TeachingTaskResponse(
+                taskId,
+                "request-" + taskId,
+                "tenant-a",
+                "teacher",
+                "teacher-1",
+                TeachingTaskStatus.RUNNING,
+                "question",
+                "learning goal",
+                List.of(),
+                List.of(),
+                List.of(),
+                "",
+                "",
+                "",
+                List.of(),
+                null,
+                List.of(),
+                null,
+                "");
+    }
+
+    /** Records the exact store boundary state so the test covers response and execution transitions together. */
+    private static final class CapturingFailureStore extends InMemoryTeachingTaskStore {
+        private TeachingTaskResponse failedSnapshot;
+        private int maximumAttempts;
+        private int failureWrites;
+
+        @Override
+        public LectureTaskLeaseStore.FailureOutcome failOwned(
+                LectureTaskLease lease,
+                TeachingTaskResponse task,
+                String error,
+                int maximumAttempts) {
+            this.failureWrites++;
+            this.failedSnapshot = task;
+            this.maximumAttempts = maximumAttempts;
+            return task.status() == TeachingTaskStatus.FAILED
+                    ? LectureTaskLeaseStore.FailureOutcome.TERMINAL_FAILURE
+                    : LectureTaskLeaseStore.FailureOutcome.RETRYING;
+        }
     }
 
     private TeachingWorkflowService service(Path root, StudentMemoryReuseService memoryReuseService) {

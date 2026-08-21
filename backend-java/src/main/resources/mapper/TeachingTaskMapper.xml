@@ -46,7 +46,7 @@
           AND lease_expire_at &lt; #{now}
     </update>
 
-    <!-- Resume clears the old lease and snapshot only for the owner and a recoverable status. -->
+    <!-- 人工恢复不得清除未过期 RUNNING 租约，避免双击恢复创建重复 Worker。 -->
     <update id="prepareLectureTaskForResume">
         UPDATE teaching_task
         SET status = 'RETRYING',
@@ -62,6 +62,61 @@
             updated_at = #{updatedAt}
         WHERE task_id = #{taskId}
           AND owner_key = #{ownerKey}
-          AND status IN ('FAILED', 'RUNNING', 'COMPLETED')
+          AND (
+              status IN ('FAILED', 'RETRYING', 'COMPLETED')
+              OR (status = 'RUNNING' AND (lease_expire_at IS NULL OR lease_expire_at &lt; #{updatedAt}))
+          )
+    </update>
+
+    <!-- Writer 调用前必须直接验证当前租约，避免已失效 Worker 再次消耗模型额度。 -->
+    <select id="countOwnedRunningLectureTask" resultType="int">
+        SELECT COUNT(1)
+        FROM teaching_task
+        WHERE task_id = #{taskId}
+          AND status = 'RUNNING'
+          AND lease_token = #{leaseToken}
+    </select>
+
+    <!-- 所有异步进度快照均由当前令牌围栏，不能覆盖接管者的 response_json。 -->
+    <update id="saveOwnedRunningLectureTask">
+        UPDATE teaching_task
+        SET response_json = #{responseJson},
+            current_stage = #{currentStage},
+            updated_at = #{updatedAt}
+        WHERE task_id = #{taskId}
+          AND status = 'RUNNING'
+          AND lease_token = #{leaseToken}
+    </update>
+
+    <!-- 响应快照与完成状态一并提交，防止完成状态与可见内容属于不同租约。 -->
+    <update id="completeOwnedLectureTask">
+        UPDATE teaching_task
+        SET response_json = #{responseJson},
+            current_stage = #{currentStage},
+            status = 'COMPLETED',
+            lease_owner = NULL,
+            lease_token = NULL,
+            lease_expire_at = NULL,
+            finished_at = #{finishedAt},
+            updated_at = #{finishedAt}
+        WHERE task_id = #{taskId}
+          AND status = 'RUNNING'
+          AND lease_token = #{leaseToken}
+    </update>
+
+    <!-- 失败诊断和重试状态也必须与旧令牌隔离，避免陈旧 Worker 触发再次投递或死信。 -->
+    <update id="failOwnedLectureTask">
+        UPDATE teaching_task
+        SET response_json = #{responseJson},
+            status = #{status},
+            last_error = #{error},
+            lease_owner = NULL,
+            lease_token = NULL,
+            lease_expire_at = NULL,
+            finished_at = #{finishedAt},
+            updated_at = #{updatedAt}
+        WHERE task_id = #{taskId}
+          AND status = 'RUNNING'
+          AND lease_token = #{leaseToken}
     </update>
 </mapper>

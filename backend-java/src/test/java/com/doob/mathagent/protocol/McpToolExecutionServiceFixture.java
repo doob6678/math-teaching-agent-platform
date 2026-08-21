@@ -2,10 +2,8 @@ package com.doob.mathagent.protocol;
 
 import com.doob.mathagent.agent.service.AgentRunPlanService;
 import com.doob.mathagent.agent.service.AgentTraceQueryService;
+import com.doob.mathagent.agent.service.HandoutTaskFacade;
 import com.doob.mathagent.agent.service.InMemoryAgentTraceStore;
-import com.doob.mathagent.agent.service.InMemoryMultiAgentWritingWorkflowStore;
-import com.doob.mathagent.agent.service.MultiAgentWritingArtifactExportService;
-import com.doob.mathagent.agent.service.MultiAgentWritingService;
 import com.doob.mathagent.infrastructure.ai.AiProviderCatalog;
 import com.doob.mathagent.infrastructure.ai.AiProviderProperties;
 import com.doob.mathagent.knowledge.service.InMemoryKnowledgeQuestionBankStore;
@@ -31,6 +29,12 @@ import com.doob.mathagent.teacher.service.TeacherSourceSyncExecutionService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncJobService;
 import com.doob.mathagent.teacher.sync.TeacherSourceSyncProperties;
 import com.doob.mathagent.teacher.vo.TeacherFeishuDiscoveryResponse;
+import com.doob.mathagent.teaching.mq.InMemoryLectureTaskOutboxStore;
+import com.doob.mathagent.teaching.service.InMemoryTeachingTaskStore;
+import com.doob.mathagent.teaching.service.LectureTaskSubmissionService;
+import com.doob.mathagent.teaching.service.TeachingHandoutPdfExportService;
+import com.doob.mathagent.teaching.service.TeachingHandoutTemplateService;
+import com.doob.mathagent.teaching.service.TeachingWorkflowService;
 import com.doob.mathagent.vector.service.TestVectorIndexService;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -103,60 +107,6 @@ final class McpToolExecutionServiceFixture {
             TeacherResourceService teacherResourceService,
             TeacherSourceSyncJobService teacherSourceSyncJobService,
             TeacherSourceSyncExecutionService teacherSourceSyncExecutionService) {
-        return service(
-                registryProperties,
-                textbookRetrievalService,
-                textbookResourceProperties,
-                teacherResourceBlockSearchService,
-                agentTraceQueryService,
-                agentRunPlanService,
-                teacherFeishuDiscoveryService,
-                teacherResourceService,
-                teacherSourceSyncJobService,
-                teacherSourceSyncExecutionService,
-                null);
-    }
-
-    static McpToolExecutionService service(
-            McpClientRegistryProperties registryProperties,
-            TextbookRetrievalService textbookRetrievalService,
-            TextbookResourceProperties textbookResourceProperties,
-            TeacherResourceBlockSearchService teacherResourceBlockSearchService,
-            AgentTraceQueryService agentTraceQueryService,
-            AgentRunPlanService agentRunPlanService,
-            TeacherFeishuDiscoveryService teacherFeishuDiscoveryService,
-            TeacherResourceService teacherResourceService,
-            TeacherSourceSyncJobService teacherSourceSyncJobService,
-            TeacherSourceSyncExecutionService teacherSourceSyncExecutionService,
-            MultiAgentWritingService multiAgentWritingService) {
-        return service(
-                registryProperties,
-                textbookRetrievalService,
-                textbookResourceProperties,
-                teacherResourceBlockSearchService,
-                agentTraceQueryService,
-                agentRunPlanService,
-                teacherFeishuDiscoveryService,
-                teacherResourceService,
-                teacherSourceSyncJobService,
-                teacherSourceSyncExecutionService,
-                multiAgentWritingService,
-                null);
-    }
-
-    static McpToolExecutionService service(
-            McpClientRegistryProperties registryProperties,
-            TextbookRetrievalService textbookRetrievalService,
-            TextbookResourceProperties textbookResourceProperties,
-            TeacherResourceBlockSearchService teacherResourceBlockSearchService,
-            AgentTraceQueryService agentTraceQueryService,
-            AgentRunPlanService agentRunPlanService,
-            TeacherFeishuDiscoveryService teacherFeishuDiscoveryService,
-            TeacherResourceService teacherResourceService,
-            TeacherSourceSyncJobService teacherSourceSyncJobService,
-            TeacherSourceSyncExecutionService teacherSourceSyncExecutionService,
-            MultiAgentWritingService multiAgentWritingService,
-            MultiAgentWritingArtifactExportService multiAgentWritingArtifactExportService) {
         InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
         InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
         InMemoryTeacherSourceSyncJobStore jobStore = new InMemoryTeacherSourceSyncJobStore();
@@ -180,9 +130,6 @@ final class McpToolExecutionServiceFixture {
                         checkpointStore,
                         TestVectorIndexService.successful(resourceStore, blockStore))
                 : teacherSourceSyncExecutionService;
-        MultiAgentWritingService resolvedWritingService = multiAgentWritingService == null
-                ? disabledWritingService()
-                : multiAgentWritingService;
         return new McpToolExecutionService(
                 registryProperties,
                 textbookRetrievalService == null ? defaultTextbookRetrievalService() : textbookRetrievalService,
@@ -197,10 +144,7 @@ final class McpToolExecutionServiceFixture {
                 resolvedJobService,
                 resolvedExecutionService,
                 new KnowledgeQuestionBankService(new InMemoryKnowledgeQuestionBankStore()),
-                resolvedWritingService,
-                multiAgentWritingArtifactExportService == null
-                        ? new MultiAgentWritingArtifactExportService(resolvedWritingService, 30)
-                        : multiAgentWritingArtifactExportService,
+                handoutTaskFacade(),
                 Runnable::run);
     }
 
@@ -279,13 +223,16 @@ final class McpToolExecutionServiceFixture {
                 1);
     }
 
-    private static MultiAgentWritingService disabledWritingService() {
-        return new MultiAgentWritingService(
-                new InMemoryMultiAgentWritingWorkflowStore(),
-                null,
-                new org.springframework.mock.env.MockEnvironment()
-                        .withProperty("math-agent.python-handout.enabled", "false"),
-                null);
+    /** Uses the production compatibility boundary so MCP tests do not reintroduce a legacy workflow route. */
+    private static HandoutTaskFacade handoutTaskFacade() {
+        InMemoryTeachingTaskStore taskStore = new InMemoryTeachingTaskStore();
+        TeachingWorkflowService workflowService = new TeachingWorkflowService(
+                Path.of("."), null, taskStore, null, null, new InMemoryAgentTraceStore(),
+                new TeachingHandoutTemplateService(), java.util.Optional.empty(), java.util.Optional.empty(), Runnable::run);
+        return new HandoutTaskFacade(
+                new LectureTaskSubmissionService(taskStore, new InMemoryLectureTaskOutboxStore()),
+                workflowService,
+                new TeachingHandoutPdfExportService());
     }
 
     private static AiProviderCatalog defaultProviderCatalog() {

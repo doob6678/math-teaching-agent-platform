@@ -26,6 +26,17 @@ public class MultiAgentWritingAsyncConfiguration {
         return boundedExecutor("teaching-evidence-", 4, 4, 64);
     }
 
+    /**
+     * Isolates synchronous MCP evidence fan-out from student SSE and explanation work.
+     *
+     * <p>Each multi-source call can occupy one branch per selected library. A dedicated bounded pool prevents a
+     * burst of student explanation streams from turning an otherwise fast retrieval into an unobservable queue wait.</p>
+     */
+    @Bean("mcpRetrievalTaskExecutor")
+    public TaskExecutor mcpRetrievalTaskExecutor() {
+        return boundedExecutor("mcp-retrieval-", 2, 4, 32);
+    }
+
     /** Shared bounded executor for student retrieval fan-out and SSE orchestration. */
     @Bean("studentExplanationTaskExecutor")
     public TaskExecutor studentExplanationTaskExecutor() {

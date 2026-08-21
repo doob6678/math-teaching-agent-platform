@@ -2,8 +2,6 @@ package com.doob.mathagent.teaching.service;
 
 import com.doob.mathagent.agent.service.AgentTraceRecord;
 import com.doob.mathagent.agent.service.AgentTraceStore;
-import com.doob.mathagent.agent.service.AgentRunExecutionService;
-import com.doob.mathagent.agent.service.AgentRunPlanService;
 import com.doob.mathagent.agent.vo.AgentRunExecuteResponse;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.knowledge.service.KnowledgeQuestionBankService;
@@ -14,6 +12,7 @@ import com.doob.mathagent.memory.service.StudentMemoryCommand;
 import com.doob.mathagent.memory.service.StudentMemoryReuseService;
 import com.doob.mathagent.memory.vo.StudentMemoryResponse;
 import com.doob.mathagent.retrieval.RetrievalRequestContext;
+import com.doob.mathagent.retrieval.CanonicalMathPaperRetrievalService;
 import com.doob.mathagent.retrieval.TextbookRetrievalService;
 import com.doob.mathagent.retrieval.TextbookSearchHit;
 import com.doob.mathagent.retrieval.TextbookSearchRequest;
@@ -67,6 +66,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.web.client.RestClientResponseException;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.stereotype.Service;
 
@@ -108,6 +108,11 @@ public class TeachingWorkflowService extends TeachingWorkflowExecutionSupport {
     static final int MAX_TOP_LEVEL_QUESTION_MARKERS = 1;
     /** Extra document-scoped hits used when a visual question's first block is text-only but a sibling carries assets. */
     static final int TEACHER_RESOURCE_IMAGE_RECOVERY_LIMIT = 3;
+    /**
+     * Visual handouts prioritize the source title and core topic instead of fanning every natural-language token out
+     * through expensive two-stage searches; later branches cannot improve a result that already carries an authorized figure.
+     */
+    static final int TEACHER_RESOURCE_VISUAL_QUERY_LIMIT = 2;
     /** Bounded RAG payload sent to a handout draft: enough for a source conclusion without exhausting model context. */
     static final int MAX_TEACHING_EVIDENCE_CHARS = 120;
     /** Reserve the beginning of a source excerpt for the problem context before retaining a later conclusion. */
@@ -236,13 +241,11 @@ public class TeachingWorkflowService extends TeachingWorkflowExecutionSupport {
             TeachingTaskStore taskStore,
             StudentMemoryReuseService memoryReuseService,
             AgentTraceStore agentTraceStore,
-            AgentRunPlanService agentRunPlanService,
-            AgentRunExecutionService agentRunExecutionService,
-
             TeachingHandoutTemplateService handoutTemplateService,
             Optional<KnowledgeQuestionBankService> questionBankService,
             Optional<TeacherResourceBlockSearchService> teacherResourceBlockSearchService,
             Optional<TeacherResourceVisualEvidenceService> teacherResourceVisualEvidenceService,
+            Optional<CanonicalMathPaperRetrievalService> canonicalMathPaperRetrievalService,
             @Qualifier("multiAgentWritingTaskExecutor") TaskExecutor taskExecutor) {
         this.processedBooksRoot = processedBooksRoot.toAbsolutePath().normalize();
         this.retrievalService = retrievalService;
@@ -250,12 +253,11 @@ public class TeachingWorkflowService extends TeachingWorkflowExecutionSupport {
         this.memoryReuseService = memoryReuseService;
         this.agentTraceStore = agentTraceStore;
         this.traceRecorder = new TeachingWorkflowTraceRecorder(agentTraceStore);
-        this.agentRunPlanService = agentRunPlanService;
-        this.agentRunExecutionService = agentRunExecutionService;
         this.handoutTemplateService = handoutTemplateService;
         this.questionBankService = questionBankService.orElse(null);
         this.teacherResourceBlockSearchService = teacherResourceBlockSearchService.orElse(null);
         this.teacherResourceVisualEvidenceService = teacherResourceVisualEvidenceService.orElse(null);
+        this.canonicalMathPaperRetrievalService = canonicalMathPaperRetrievalService.orElse(null);
         this.taskExecutor = taskExecutor;
         this.returnCompletedWhenExecutorIsSynchronous = false;
     }
@@ -288,11 +290,10 @@ public class TeachingWorkflowService extends TeachingWorkflowExecutionSupport {
                 taskStore,
                 memoryReuseService,
                 agentTraceStore,
-                null,
-                null,
                 handoutTemplateService,
                 questionBankService,
                 teacherResourceBlockSearchService,
+                Optional.empty(),
                 Optional.empty(),
                 taskExecutor);
     }
@@ -313,10 +314,9 @@ public class TeachingWorkflowService extends TeachingWorkflowExecutionSupport {
                 taskStore,
                 memoryReuseService,
                 agentTraceStore,
-                null,
-                null,
                 handoutTemplateService,
                 questionBankService,
+                Optional.empty(),
                 Optional.empty(),
                 Optional.empty(),
                 taskExecutor);
@@ -405,14 +405,19 @@ public class TeachingWorkflowService extends TeachingWorkflowExecutionSupport {
      * @return latest resumed snapshot (RUNNING for a real async executor, COMPLETED for synchronous test executors)
      */
     public TeachingTaskResponse resume(String taskId, TeachingRequestContext context) {
-        TeachingRequestContext normalizedContext = context.normalize();
-        TeachingTaskResponse failed = taskStore.findByTaskIdAndOwnerKey(taskId, normalizedContext.ownerKey())
-                .orElseThrow(() -> new IllegalArgumentException("Teaching task not found"));
+        TeachingRequestContext requester = context.normalize();
+        TeachingTaskResponse failed = findResumableTask(taskId, requester);
         if (failed.status() != TeachingTaskStatus.FAILED
                 && failed.status() != TeachingTaskStatus.RUNNING
+                && failed.status() != TeachingTaskStatus.RETRYING
                 && !hasRecoverableTeacherPublicationIssue(failed)) {
-            throw new IllegalStateException("Only failed, interrupted-running, or publication-rejected teaching tasks can be resumed");
+            throw new IllegalStateException("Only failed, interrupted-running, retrying, or publication-rejected teaching tasks can be resumed");
         }
+        // A same-tenant administrator may recover a stranded task after a local-account rotation, but generation and
+        // retrieval always retain the task's original subject. This preserves the source-visibility boundary instead
+        // of accidentally widening it to the administrator's current identity.
+        TeachingRequestContext taskContext = new TeachingRequestContext(
+                failed.tenantId(), failed.subjectType(), failed.subjectId(), requester.deviceId()).normalize();
         TeachingTaskRequest request = new TeachingTaskRequest(
                 failed.clientRequestId(),
                 failed.questionText(),
@@ -421,8 +426,8 @@ public class TeachingWorkflowService extends TeachingWorkflowExecutionSupport {
                 failed.selectedTemplate() == null ? null : failed.selectedTemplate().templateCode(),
                 failed.watermarkText(), failed.headerLeft(), failed.headerRight(), failed.footerLeft(), failed.footerRight(),
                 null, null, null).normalize();
-        String ownerKey = normalizedContext.ownerKey();
-        String idempotencyKey = normalizedContext.idempotencyKey(request.clientRequestId());
+        String ownerKey = taskContext.ownerKey();
+        String idempotencyKey = taskContext.idempotencyKey(request.clientRequestId());
         TeachingTaskResponse running = runningSnapshot(failed);
         // A manual resume starts a fresh worker retry budget. The MySQL store must explicitly transition the
         // execution row from terminal FAILED to RETRYING; normal snapshot saves intentionally preserve lease state.
@@ -431,12 +436,26 @@ public class TeachingWorkflowService extends TeachingWorkflowExecutionSupport {
         // the Worker, rather than an application-local executor, performs the resumed DAG.
         if (returnCompletedWhenExecutorIsSynchronous) {
             try {
-                return taskStore.save(ownerKey, idempotencyKey, execute(request, normalizedContext, failed.taskId(), ownerKey, idempotencyKey, failed));
+                return taskStore.save(ownerKey, idempotencyKey, execute(request, taskContext, failed.taskId(), ownerKey, idempotencyKey, failed));
             } catch (Throwable executionException) {
                 return taskStore.save(ownerKey, idempotencyKey, failedSnapshot(running, executionException));
             }
         }
         return running;
+    }
+
+    /** Authorizes task owners, plus same-tenant administrators recovering a durable task after account rotation. */
+    private TeachingTaskResponse findResumableTask(String taskId, TeachingRequestContext requester) {
+        TeachingTaskResponse owned = taskStore.findByTaskIdAndOwnerKey(taskId, requester.ownerKey()).orElse(null);
+        if (owned != null) {
+            return owned;
+        }
+        if ("admin".equals(requester.subjectType())) {
+            return taskStore.findByTaskId(taskId)
+                    .filter(task -> requester.tenantId().equals(task.tenantId()))
+                    .orElseThrow(() -> new IllegalArgumentException("Teaching task not found"));
+        }
+        throw new IllegalArgumentException("Teaching task not found");
     }
     // Delegates the pure policy/rendering rule to TeachingWorkflowCorePolicy; lifecycle state stays in the facade.
     static int evidenceLimitForResume(TeachingTaskResponse task) { return TeachingWorkflowCorePolicy.evidenceLimitForResume(task); }
@@ -504,7 +523,7 @@ public class TeachingWorkflowService extends TeachingWorkflowExecutionSupport {
      * <p>The AMQP message contains no request body or user identity; this method reconstructs the supported request
      * and backend subject exclusively from the durable snapshot.</p>
      */
-    public void executeQueued(String taskId) {
+    public void executeQueued(String taskId, com.doob.mathagent.teaching.mq.LectureTaskLease lease) {
         TeachingTaskResponse queued = taskStore.findByTaskId(taskId)
                 .orElseThrow(() -> new IllegalArgumentException("Teaching task not found: " + taskId));
         // RabbitMQ redelivery after a JVM restart is normal.  A terminal snapshot has already persisted every
@@ -527,16 +546,59 @@ public class TeachingWorkflowService extends TeachingWorkflowExecutionSupport {
                 queued.selectedTemplate() == null ? null : queued.selectedTemplate().templateCode(), queued.watermarkText(),
                 queued.headerLeft(), queued.headerRight(), queued.footerLeft(), queued.footerRight(), null, null, null).normalize();
         TeachingTaskResponse completed = execute(request, context, queued.taskId(), context.ownerKey(),
-                context.idempotencyKey(queued.clientRequestId()), queued.status() == TeachingTaskStatus.CREATED ? null : queued);
-        taskStore.save(context.ownerKey(), context.idempotencyKey(queued.clientRequestId()), completed);
+                context.idempotencyKey(queued.clientRequestId()), queued.status() == TeachingTaskStatus.CREATED ? null : queued, lease);
+        if (!taskStore.completeOwned(lease, completed)) {
+            throw new LeaseLostException();
+        }
     }
 
-    /** Preserves the latest durable DAG boundary when the Worker records a failed delivery. */
-    public void failQueued(String taskId, Throwable failure) {
-        taskStore.findByTaskId(taskId).ifPresent(task -> {
-            TeachingRequestContext context = new TeachingRequestContext(task.tenantId(), task.subjectType(), task.subjectId(), "lecture-worker").normalize();
-            taskStore.save(context.ownerKey(), context.idempotencyKey(task.clientRequestId()), failedSnapshot(task, failure));
-        });
+    /**
+     * 仅当前令牌可记录失败或重试快照；陈旧 Worker 只确认租约丢失，不得重投或死信。
+     */
+    public com.doob.mathagent.teaching.mq.LectureTaskLeaseStore.FailureOutcome recordQueuedFailure(
+            String taskId,
+            com.doob.mathagent.teaching.mq.LectureTaskLease lease,
+            Throwable failure,
+            int maximumAttempts) {
+        TeachingTaskResponse task = taskStore.findByTaskId(taskId).orElse(null);
+        if (task == null) {
+            return com.doob.mathagent.teaching.mq.LectureTaskLeaseStore.FailureOutcome.LEASE_LOST;
+        }
+        boolean terminal = isNonRetryableHandoutFailure(failure) || lease.retryCount() >= maximumAttempts;
+        TeachingTaskResponse snapshot = task.withReviewStatus(
+                terminal ? TeachingTaskStatus.FAILED : TeachingTaskStatus.RETRYING,
+                failureMessage(failure));
+        // The same bounded attempt rule selects the response snapshot and the CAS row status. Keeping both values
+        // aligned prevents a terminal database row from exposing a stale RETRYING response to status polling.
+        return taskStore.failOwned(lease, snapshot, failureMessage(failure), terminal ? 0 : maximumAttempts);
+    }
+
+    /**
+     * Treats stable client-contract failures from the Python handout broker as terminal for this durable task.
+     * Network, provider and throttling conditions remain retryable because the same persisted request can succeed.
+     */
+    public static boolean isNonRetryableHandoutFailure(Throwable failure) {
+        Throwable current = failure;
+        while (current != null) {
+            if (current instanceof RestClientResponseException responseException) {
+                int status = responseException.getStatusCode().value();
+                return status >= 400 && status < 500 && status != 408 && status != 429;
+            }
+            current = current.getCause();
+        }
+        return false;
+    }
+
+    /** 租约在外部调用或快照持久化期间失效时，只允许消费者确认该旧消息。 */
+    public static final class LeaseLostException extends RuntimeException {
+        public LeaseLostException() {
+            super("Lecture task lease lost");
+        }
+    }
+
+    private static String failureMessage(Throwable failure) {
+        String message = failure == null ? "Lecture task failed" : failure.getMessage();
+        return message == null || message.isBlank() ? "Lecture task failed" : message;
     }
 
     /**
@@ -1011,7 +1073,7 @@ public class TeachingWorkflowService extends TeachingWorkflowExecutionSupport {
         List<TeachingWorkflowNode> nodes = new ArrayList<>(List.of(
                 node("LEARNING_GOAL", "学习目标识别", "completed", "已确认学习目标：" + request.learningGoal()
                         + "；本轮证据目标：" + request.evidenceLimit() + " 条。"),
-                node("REUSE_RESOURCE", "历史资源复用", "pending", "等待检查可复用学习记录。"),
+                // REUSE_RESOURCE 阶段已删除：老板不需要这个功能
                 node("PUBLIC_TEXTBOOK_RETRIEVAL", "公开教材检索", "pending", "等待并行检索公开教材。"),
                 node("QUESTION_BANK_RETRIEVAL", "题库检索", "pending", "等待并行检索授权题库。"),
                 node("TEACHER_RESOURCE_RETRIEVAL", "教师资料检索", "pending", "等待并行检索已同步教师资料。"),
@@ -1025,9 +1087,9 @@ public class TeachingWorkflowService extends TeachingWorkflowExecutionSupport {
     }
     // Implementation moved to TeachingWorkflowExecutionSupport to keep the facade focused on lifecycle coordination.
     // Delegates the pure policy/rendering rule to TeachingWorkflowProgressModel; lifecycle state stays in the facade.
-    static List<TeachingWorkflowNode> progressWorkflowNodes(TeachingTaskRequest request, StudentMemoryResponse memoryResponse, List<TeachingEvidence> evidence, List<TeachingEvidence> textbookEvidence, List<TeachingEvidence> questionEvidence, List<TeachingEvidence> teacherResourceEvidence, TeachingTaskResponse.AiDraft aiDraft, TeachingHandoutTemplateProfile template, boolean questionBankAllowed, boolean teacherResourceAllowed, ProgressPhase phase) { return TeachingWorkflowProgressModel.progressWorkflowNodes(request, memoryResponse, evidence, textbookEvidence, questionEvidence, teacherResourceEvidence, aiDraft, template, questionBankAllowed, teacherResourceAllowed, phase); }
+    static List<TeachingWorkflowNode> progressWorkflowNodes(TeachingTaskRequest request, StudentMemoryResponse memoryResponse, List<TeachingEvidence> evidence, List<TeachingEvidence> textbookEvidence, List<TeachingEvidence> questionEvidence, List<TeachingEvidence> teacherResourceEvidence, TeachingTaskResponse.AiDraft aiDraft, TeachingHandoutTemplateProfile template, boolean questionBankAllowed, boolean teacherResourceAllowed, ProgressPhase phase, RetrievalOutcome textbookOutcome, RetrievalOutcome questionOutcome, RetrievalOutcome teacherResourceOutcome) { return TeachingWorkflowProgressModel.progressWorkflowNodes(request, memoryResponse, evidence, textbookEvidence, questionEvidence, teacherResourceEvidence, aiDraft, template, questionBankAllowed, teacherResourceAllowed, phase, textbookOutcome, questionOutcome, teacherResourceOutcome); }
     // Delegates the pure policy/rendering rule to TeachingWorkflowProgressModel; lifecycle state stays in the facade.
-    static List<TeachingWorkflowEvent> progressWorkflowEvents(TeachingHandoutTemplateProfile template, List<TeachingEvidence> textbookEvidence, List<TeachingEvidence> questionEvidence, List<TeachingEvidence> teacherResourceEvidence, TeachingTaskResponse.AiDraft aiDraft, ProgressPhase phase) { return TeachingWorkflowProgressModel.progressWorkflowEvents(template, textbookEvidence, questionEvidence, teacherResourceEvidence, aiDraft, phase); }
+    static List<TeachingWorkflowEvent> progressWorkflowEvents(TeachingHandoutTemplateProfile template, List<TeachingEvidence> textbookEvidence, List<TeachingEvidence> questionEvidence, List<TeachingEvidence> teacherResourceEvidence, TeachingTaskResponse.AiDraft aiDraft, ProgressPhase phase, RetrievalOutcome textbookOutcome, RetrievalOutcome questionOutcome, RetrievalOutcome teacherResourceOutcome) { return TeachingWorkflowProgressModel.progressWorkflowEvents(template, textbookEvidence, questionEvidence, teacherResourceEvidence, aiDraft, phase, textbookOutcome, questionOutcome, teacherResourceOutcome); }
     // Delegates the pure policy/rendering rule to TeachingWorkflowProgressModel; lifecycle state stays in the facade.
     static String evidenceWorkflowDetail(List<TeachingEvidence> textbookEvidence, List<TeachingEvidence> questionEvidence, List<TeachingEvidence> teacherResourceEvidence) { return TeachingWorkflowProgressModel.evidenceWorkflowDetail(textbookEvidence, questionEvidence, teacherResourceEvidence); }
     // Delegates the pure policy/rendering rule to TeachingWorkflowProgressModel; lifecycle state stays in the facade.
@@ -1037,7 +1099,7 @@ public class TeachingWorkflowService extends TeachingWorkflowExecutionSupport {
     // Delegates the pure policy/rendering rule to TeachingWorkflowProgressModel; lifecycle state stays in the facade.
     static TeachingWorkflowEvent childWorkflowEvent(String eventId, String parentEventId, String sourceType, String sourceName, String eventType, String title, String summary, String status, List<String> artifactRefs) { return TeachingWorkflowProgressModel.childWorkflowEvent(eventId, parentEventId, sourceType, sourceName, eventType, title, summary, status, artifactRefs); }
     // Delegates the pure policy/rendering rule to TeachingWorkflowProgressModel; lifecycle state stays in the facade.
-    static List<TeachingWorkflowNode> buildNodes(TeachingTaskRequest request, List<TeachingEvidence> evidence, List<TeachingEvidence> questionEvidence, List<TeachingEvidence> teacherResourceEvidence, StudentMemoryResponse memoryResponse, TeachingTaskResponse.AiDraft aiDraft, TeachingHandoutTemplateProfile template, boolean questionBankAllowed, boolean teacherResourceAllowed) { return TeachingWorkflowProgressModel.buildNodes(request, evidence, questionEvidence, teacherResourceEvidence, memoryResponse, aiDraft, template, questionBankAllowed, teacherResourceAllowed); }
+    static List<TeachingWorkflowNode> buildNodes(TeachingTaskRequest request, List<TeachingEvidence> evidence, List<TeachingEvidence> questionEvidence, List<TeachingEvidence> teacherResourceEvidence, StudentMemoryResponse memoryResponse, TeachingTaskResponse.AiDraft aiDraft, TeachingHandoutTemplateProfile template, boolean questionBankAllowed, boolean teacherResourceAllowed, RetrievalOutcome textbookOutcome, RetrievalOutcome questionOutcome, RetrievalOutcome teacherResourceOutcome) { return TeachingWorkflowProgressModel.buildNodes(request, evidence, questionEvidence, teacherResourceEvidence, memoryResponse, aiDraft, template, questionBankAllowed, teacherResourceAllowed, textbookOutcome, questionOutcome, teacherResourceOutcome); }
     // Delegates the pure policy/rendering rule to TeachingWorkflowProgressModel; lifecycle state stays in the facade.
     static List<TeachingWorkflowNode> questionAgentNodes(List<TeachingEvidence> questionEvidence, boolean evidenceReady, boolean outlineReady) { return TeachingWorkflowProgressModel.questionAgentNodes(questionEvidence, evidenceReady, outlineReady); }
     // Delegates the pure policy/rendering rule to TeachingWorkflowProgressModel; lifecycle state stays in the facade.
@@ -1051,7 +1113,7 @@ public class TeachingWorkflowService extends TeachingWorkflowExecutionSupport {
     // Delegates the pure policy/rendering rule to TeachingWorkflowProgressModel; lifecycle state stays in the facade.
     static TeachingWorkflowNode node(String code, String name, String status, String summary) { return TeachingWorkflowProgressModel.node(code, name, status, summary); }
     // Delegates the pure policy/rendering rule to TeachingWorkflowProgressModel; lifecycle state stays in the facade.
-    static List<TeachingWorkflowEvent> buildWorkflowEvents(List<TeachingWorkflowNode> nodes, List<TeachingEvidence> evidence, List<TeachingEvidence> textbookEvidence, List<TeachingEvidence> questionEvidence, List<TeachingEvidence> teacherResourceEvidence, TeachingTaskResponse.AiDraft aiDraft, TeachingHandoutTemplateProfile template) { return TeachingWorkflowProgressModel.buildWorkflowEvents(nodes, evidence, textbookEvidence, questionEvidence, teacherResourceEvidence, aiDraft, template); }
+    static List<TeachingWorkflowEvent> buildWorkflowEvents(List<TeachingWorkflowNode> nodes, List<TeachingEvidence> evidence, List<TeachingEvidence> textbookEvidence, List<TeachingEvidence> questionEvidence, List<TeachingEvidence> teacherResourceEvidence, TeachingTaskResponse.AiDraft aiDraft, TeachingHandoutTemplateProfile template, RetrievalOutcome textbookOutcome, RetrievalOutcome questionOutcome, RetrievalOutcome teacherResourceOutcome) { return TeachingWorkflowProgressModel.buildWorkflowEvents(nodes, evidence, textbookEvidence, questionEvidence, teacherResourceEvidence, aiDraft, template, textbookOutcome, questionOutcome, teacherResourceOutcome); }
     // Delegates the pure policy/rendering rule to TeachingWorkflowProgressModel; lifecycle state stays in the facade.
     static TeachingWorkflowEvent workflowEvent(String eventId, String sourceType, String sourceName, String eventType, String title, String summary, List<String> artifactRefs) { return TeachingWorkflowProgressModel.workflowEvent(eventId, sourceType, sourceName, eventType, title, summary, artifactRefs); }
     // Delegates the pure policy/rendering rule to TeachingWorkflowProgressModel; lifecycle state stays in the facade.
@@ -1075,7 +1137,6 @@ public class TeachingWorkflowService extends TeachingWorkflowExecutionSupport {
     // Delegates the pure policy/rendering rule to TeachingWorkflowDraftRenderer; lifecycle state stays in the facade.
     static boolean isQuadraticFunctionText(String text) { return TeachingWorkflowDraftRenderer.isQuadraticFunctionText(text); }
     // Delegates the pure policy/rendering rule to TeachingWorkflowDraftRenderer; lifecycle state stays in the facade.
-    static String quadraticReferenceGraph() { return TeachingWorkflowDraftRenderer.quadraticReferenceGraph(); }
     // Delegates the pure policy/rendering rule to TeachingWorkflowDraftRenderer; lifecycle state stays in the facade.
     static List<TeachingKnowledgePointPack> buildKnowledgePointPacks(TeachingTaskRequest request, List<TeachingEvidence> textbookEvidence, List<TeachingEvidence> teacherResourceEvidence, List<TeachingEvidence> questionEvidence) { return TeachingWorkflowDraftRenderer.buildKnowledgePointPacks(request, textbookEvidence, teacherResourceEvidence, questionEvidence); }
     // Delegates the pure policy/rendering rule to TeachingWorkflowDraftRenderer; lifecycle state stays in the facade.
@@ -1342,11 +1403,38 @@ public class TeachingWorkflowService extends TeachingWorkflowExecutionSupport {
             List<TeachingEvidence> teacherResourceEvidence,
             long textbookElapsedMs,
             long questionElapsedMs,
-            long teacherResourceElapsedMs) {
+            long teacherResourceElapsedMs,
+            RetrievalOutcome textbookOutcome,
+            RetrievalOutcome questionOutcome,
+            RetrievalOutcome teacherResourceOutcome) {
+
+        EvidencePack(
+                List<TeachingEvidence> textbookEvidence,
+                List<TeachingEvidence> questionEvidence,
+                List<TeachingEvidence> teacherResourceEvidence,
+                long textbookElapsedMs,
+                long questionElapsedMs,
+                long teacherResourceElapsedMs) {
+            this(textbookEvidence, questionEvidence, teacherResourceEvidence,
+                    textbookElapsedMs, questionElapsedMs, teacherResourceElapsedMs,
+                    RetrievalOutcome.running(), RetrievalOutcome.running(), RetrievalOutcome.running());
+        }
 
         List<TeachingEvidence> mergedEvidence() {
             return concatEvidence(textbookEvidence, questionEvidence, teacherResourceEvidence);
         }
+    }
+
+    /**
+     * Safe branch state retained beside evidence so an empty successful search is never confused with a timeout.
+     * The detail is deliberately a short user-facing diagnostic, never a provider response or source payload.
+     */
+    record RetrievalOutcome(String status, String detail) {
+        static RetrievalOutcome running() { return new RetrievalOutcome("running", "正在检索。"); }
+        static RetrievalOutcome completed() { return new RetrievalOutcome("completed", "检索完成。"); }
+        static RetrievalOutcome completed(String detail) { return new RetrievalOutcome("completed", detail); }
+        static RetrievalOutcome degraded(String detail) { return new RetrievalOutcome("degraded", detail); }
+        static RetrievalOutcome skipped(String detail) { return new RetrievalOutcome("skipped", detail); }
     }
 
     /** One real retrieval result paired with its own wall-clock duration before the three-way join. */

@@ -796,6 +796,8 @@ function statusLabel(status: string) {
     FAILED: "失败",
     PENDING: "等待中",
     completed: "已完成",
+    degraded: "已降级",
+    skipped: "已跳过",
     running: "生成中",
     pending: "等待中",
     failed: "失败",
@@ -805,14 +807,14 @@ function statusLabel(status: string) {
 
 function statusToneClass(status: string) {
   const normalized = status.toUpperCase();
-  if (normalized === "FAILED") return "failed";
+  if (normalized === "FAILED" || normalized === "DEGRADED") return "failed";
   if (normalized === "RUNNING" || normalized === "CREATED") return "running";
   return "completed";
 }
 
 function nodeToneClass(status: string) {
   const normalized = status.toUpperCase();
-  if (normalized === "FAILED") return "failed";
+  if (normalized === "FAILED" || normalized === "DEGRADED") return "failed";
   if (normalized === "RUNNING") return "running";
   if (normalized === "PENDING" || normalized === "CREATED") return "pending";
   return "completed";

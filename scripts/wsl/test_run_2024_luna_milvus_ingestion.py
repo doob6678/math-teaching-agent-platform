@@ -24,6 +24,8 @@ class LunaIngestionContractTest(unittest.TestCase):
                 {"choices": [{"message": {"content": '{"questions":[{"number":"1","text":"求值","latex":["x/2"]}]}'}}]},
                 "paper.pdf",
                 1,
+                "terra",
+                {},
             )
 
     def test_merges_continuation_with_next_page_fragment(self):
@@ -43,6 +45,22 @@ class LunaIngestionContractTest(unittest.TestCase):
         next_question = {"id": "second", "text": "18. 新题", "metadata": {"sourceFile": "paper.pdf", "page": 4, "questionNumber": "18", "latex": [], "continuesToNextPage": False}}
 
         self.assertEqual([first, next_question], MODULE.merge_cross_page_questions([first, next_question]))
+    def test_normalizes_only_unambiguous_printed_question_numbers(self):
+        self.assertEqual("1", MODULE.canonical_question_number("第 1 题"))
+        self.assertEqual("12", MODULE.canonical_question_number("12．"))
+        self.assertEqual("20", MODULE.canonical_question_number("20、"))
+
+    def test_rejects_subquestions_and_descriptive_question_labels(self):
+        for value in ("（1）", "小问3", "6（题干未显示）", "未显示（上一问续）", "题号不清"):
+            self.assertEqual("", MODULE.canonical_question_number(value))
+    def test_uses_first_visual_record_for_duplicate_paper_question_number(self):
+        early = {"id": "early", "text": "first", "metadata": {"sourceFile": "paper.pdf", "page": 1, "questionNumber": "7"}}
+        late = {"id": "late", "text": "later", "metadata": {"sourceFile": "paper.pdf", "page": 2, "questionNumber": "7"}}
+        other = {"id": "other", "text": "other", "metadata": {"sourceFile": "paper.pdf", "page": 2, "questionNumber": "8"}}
+        self.assertEqual([early, other], MODULE.canonical_question_records([late, other, early]))
+    def test_vector_metadata_omits_redundant_latex_but_keeps_safe_provenance(self):
+        metadata = MODULE.vector_metadata({"metadata": {"sourceFile": "paper.pdf", "latex": ["\\frac{1}{2}"], "page": 1, "questionAssets": [{"assetId": "asset-1", "_sourceAssetPath": "/mnt/private.png"}]}})
+        self.assertEqual({"sourceFile": "paper.pdf", "page": 1, "questionAssets": [{"assetId": "asset-1"}]}, metadata)
 
 
 if __name__ == "__main__":

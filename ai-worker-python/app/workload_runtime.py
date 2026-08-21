@@ -17,6 +17,7 @@ from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.ai_run_runtime import ProviderRoute
+from app.model_review_runtime import BoundedModelReviewController, ModelReviewExhausted
 from app.sse import iter_sse_data_events
 from app.usage import UsageEvent, UsageLedger, cost_for, fallback_tokens
 
@@ -180,43 +181,86 @@ class MigratedWorkloadRuntime:
         self._ledger = UsageLedger()
 
     def recognize_intent(self, request: IntentRunRequest) -> dict[str, Any]:
+        """Uses the shared bounded review profile before exposing an intent classification."""
         points = [item.model_dump() for item in request.knowledgePoints]
-        content, result = self._call_json(
-            request.runId,
-            request.providerRoute,
-            [
-                {"role": "system", "content": (
-                    "你是学习系统意图分类器。只返回 JSON："
-                    "{\"intentCode\":\"LEARNING_PATH|WRONG_QUESTION_REVIEW|MASTERY_STATUS|TARGETED_EXPLANATION|"
-                    "TARGETED_PRACTICE|QUESTION_RECOMMENDATION|ANSWER_SUBMISSION|UNKNOWN\","
-                    "\"confidence\":0.0,\"knowledgePointId\":null}。"
-                    "只能选择输入中可见的 knowledgePointId；无法判断返回 UNKNOWN。"
-                )},
-                {"role": "user", "content": json.dumps({"message": request.message, "knowledgePoints": points}, ensure_ascii=False)},
-            ],
-        )
-        parsed = self._json_object(content)
-        allowed_ids = {item.knowledgePointId for item in request.knowledgePoints}
-        intent = str(parsed.get("intentCode") or "UNKNOWN").strip().upper()
+        controller = BoundedModelReviewController("planner", profile="agent_run")
+
+        def invoke(review_prompt: str, _: int) -> tuple[Any, ProviderResult]:
+            content, result = self._call_json(
+                request.runId,
+                request.providerRoute,
+                self._intent_review_messages(request, points, review_prompt),
+            )
+            try:
+                return json.loads(content), result
+            except json.JSONDecodeError:
+                return None, result
+
+        try:
+            parsed, usages, review = controller.execute(
+                invoke,
+                self._review_prompt,
+                lambda candidate: self._validated_intent_candidate(candidate, request.knowledgePoints),
+            )
+        except ModelReviewExhausted as exc:
+            raise HTTPException(status_code=422, detail="MODEL_REVIEW_EXHAUSTED") from exc
+        result = usages[-1]
+        return {
+            "status": "COMPLETED",
+            **parsed,
+            "usage": result.usage(),
+            "providerName": result.provider,
+            "modelCode": result.model,
+        }
+
+    @staticmethod
+    def _intent_review_messages(
+            request: IntentRunRequest, points: list[dict[str, Any]], review_prompt: str) -> list[dict[str, Any]]:
+        return [
+            {"role": "system", "content": (
+                "你是学习系统意图分类器。只返回严格 JSON 信封："
+                "{\"candidate\":{\"intentCode\":\"LEARNING_PATH|WRONG_QUESTION_REVIEW|MASTERY_STATUS|"
+                "TARGETED_EXPLANATION|TARGETED_PRACTICE|QUESTION_RECOMMENDATION|ANSWER_SUBMISSION|UNKNOWN\","
+                "\"confidence\":0.0,\"knowledgePointId\":null},"
+                "\"review\":{\"approved\":true|false,\"feedbackCodes\":[]}}。"
+                "只能选择输入中可见的 knowledgePointId；无法判断返回 UNKNOWN。feedbackCodes 只能是固定策略代码。"
+            )},
+            {"role": "user", "content": json.dumps({
+                "message": request.message, "knowledgePoints": points, "reviewInstruction": review_prompt,
+            }, ensure_ascii=False, separators=(",", ":"))},
+        ]
+
+    @staticmethod
+    def _review_prompt(turn: int, prior: str | None, codes: tuple[str, ...]) -> str:
+        if turn == 1:
+            return "生成候选分类并完成严格自审。"
+        return json.dumps({
+            "previousCandidate": prior or "", "feedbackCodes": list(codes),
+            "instruction": "仅修正候选以满足字段、授权知识点和固定安全合同。",
+        }, ensure_ascii=False, separators=(",", ":"))
+
+    @staticmethod
+    def _validated_intent_candidate(
+            candidate: Any, knowledge_points: list[AuthorizedKnowledgePoint]) -> dict[str, Any]:
+        if not isinstance(candidate, dict):
+            raise ValueError("intent candidate must be an object")
+        allowed_ids = {item.knowledgePointId for item in knowledge_points}
+        intent = str(candidate.get("intentCode") or "UNKNOWN").strip().upper()
         allowed_intents = {
             "LEARNING_PATH", "WRONG_QUESTION_REVIEW", "MASTERY_STATUS", "TARGETED_EXPLANATION",
             "TARGETED_PRACTICE", "QUESTION_RECOMMENDATION", "ANSWER_SUBMISSION", "UNKNOWN",
         }
         if intent not in allowed_intents:
             intent = "UNKNOWN"
-        point_id = str(parsed.get("knowledgePointId") or "").strip()
+        point_id = str(candidate.get("knowledgePointId") or "").strip()
         if point_id not in allowed_ids:
             point_id = ""
-        confidence = parsed.get("confidence", 0.0)
+        confidence = candidate.get("confidence", 0.0)
         confidence = float(confidence) if isinstance(confidence, (int, float)) else 0.0
         return {
-            "status": "COMPLETED",
             "intentCode": intent,
             "confidence": min(1.0, max(0.0, confidence)),
             "knowledgePointId": point_id or None,
-            "usage": result.usage(),
-            "providerName": result.provider,
-            "modelCode": result.model,
         }
 
     def explain_student_problem(self, request: StudentExplanationRunRequest) -> dict[str, Any]:
@@ -506,31 +550,67 @@ class MigratedWorkloadRuntime:
         }
 
     def _compose_student_explanation(self, request: StudentExplanationRunRequest) -> dict[str, Any]:
+        """Reviews only the pre-publication card JSON; streaming remains outside this correction path."""
         sources = [item.model_dump() for item in request.evidence]
+        controller = BoundedModelReviewController("explanation_writer", profile="student_explanation")
+
+        def invoke(review_prompt: str, _: int) -> tuple[Any, ProviderResult]:
+            content, result = self._call_json(
+                request.runId,
+                request.providerRoute,
+                self._compose_review_messages(request, sources, review_prompt),
+            )
+            try:
+                return json.loads(content), result
+            except json.JSONDecodeError:
+                return None, result
+
+        try:
+            cards, usages, review = controller.execute(
+                invoke,
+                self._review_prompt,
+                lambda candidate: self._normalize_explanation_cards(self._candidate_object(candidate), request.evidence),
+            )
+        except ModelReviewExhausted as exc:
+            raise HTTPException(status_code=422, detail="MODEL_REVIEW_EXHAUSTED") from exc
+        result = usages[-1]
+        return {
+            "status": "COMPLETED",
+            **cards,
+            "usage": result.usage(),
+            "providerName": result.provider,
+            "modelCode": result.model,
+        }
+
+    @staticmethod
+    def _candidate_object(candidate: Any) -> dict[str, Any]:
+        if not isinstance(candidate, dict):
+            raise ValueError("student explanation candidate must be an object")
+        return candidate
+
+    @staticmethod
+    def _compose_review_messages(
+            request: StudentExplanationRunRequest, sources: list[dict[str, Any]], review_prompt: str) -> list[dict[str, Any]]:
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": (
-                "你是高中数学教师。只返回 JSON："
-                "{\"conversationTitle\":\"不超过15个中文字符\",\"cards\":[{\"cardKey\":\"stable_snake_case\","
+                "你是高中数学教师。只返回严格 JSON 信封："
+                "{\"candidate\":{\"conversationTitle\":\"不超过15个中文字符\",\"cards\":[{\"cardKey\":\"stable_snake_case\","
                 "\"title\":\"\",\"summary\":\"简明中文讲解\",\"items\":[],\"sourceUris\":[],"
-                "\"renderMode\":\"text|formula|source_list\"}]}。"
-                "只能引用输入 evidence 的 sourceUri，不得暴露推理过程。" + MATH_MARKUP_OUTPUT_CONTRACT
+                "\"renderMode\":\"text|formula|source_list\"}]},"
+                "\"review\":{\"approved\":true|false,\"feedbackCodes\":[]}}。"
+                "只能引用输入 evidence 的 sourceUri，不得暴露推理过程。feedbackCodes 只能使用固定策略代码。"
+                + MATH_MARKUP_OUTPUT_CONTRACT
             )},
-            {"role": "user", "content": json.dumps({"problem": request.problem, "evidence": sources}, ensure_ascii=False)},
+            {"role": "user", "content": json.dumps({
+                "problem": request.problem, "evidence": sources, "reviewInstruction": review_prompt,
+            }, ensure_ascii=False, separators=(",", ":"))},
         ]
         if request.imageDataUrl:
             messages[-1] = {"role": "user", "content": [
                 {"type": "text", "text": messages[-1]["content"]},
                 {"type": "image_url", "image_url": {"url": request.imageDataUrl}},
             ]}
-        content, result = self._call_json(request.runId, request.providerRoute, messages)
-        parsed = self._json_object(content)
-        return {
-            "status": "COMPLETED",
-            **self._normalize_explanation_cards(parsed, request.evidence),
-            "usage": result.usage(),
-            "providerName": result.provider,
-            "modelCode": result.model,
-        }
+        return messages
 
     @staticmethod
     def _normalize_explanation_cards(

@@ -116,6 +116,7 @@ public class TeacherResourceBlockSearchService {
     private final TeacherResourceSearchProperties searchProperties;
     private final TeacherResourceSearchProperties.QueryFocusBudget queryFocusBudget;
     private final TeacherResourceSearchProperties.SearchRuntimeBudget searchBudget;
+    private TeacherSourceFileReader sourceFileReader;
 
     /**
      * Creates a parsed block search service.
@@ -142,24 +143,7 @@ public class TeacherResourceBlockSearchService {
                 null);
     }
 
-    /**
-     * Converts a RAG hit from a historical synchronized mirror into an inspectable reference owned by the current
-     * viewer.  Search and the resource-detail endpoint intentionally use different visibility contracts: searchable
-     * shared mirrors may be returned by RAG, while the detail endpoint exposes only the viewer's current resource
-     * library.  Returning the mirror id directly therefore produced a broken citation link.
-     *
-     * <p>The resolver never widens the detail endpoint.  It considers only {@link TeacherResourceStore#listVisible}
-     * documents, then requires both a same-source signal (immutable source identity, source path, or stable Feishu
-     * token) and a same-block signal (checksum, source path plus section, or exact normalized content).  An
-     * ambiguous or incomplete match returns empty so callers can render evidence without advertising a false
-     * “view original” link.</p>
-     *
-     * @param tenantId backend-resolved tenant id
-     * @param viewerRole backend-resolved viewer role
-     * @param viewerSubjectId backend-resolved subject id
-     * @param hit original RAG hit, potentially from an old mirror
-     * @return current visible document/block reference when one can be verified
-     */
+    /** Returns the opaque Milvus evidence reference without a second document lookup or visibility decision. */
     public Optional<CanonicalReference> resolveVisibleReference(
             String tenantId,
             String viewerRole,
@@ -169,105 +153,12 @@ public class TeacherResourceBlockSearchService {
                 || hit.blockId() == null || hit.blockId().isBlank()) {
             return Optional.empty();
         }
-        String normalizedTenantId = requireText(tenantId, "tenantId is required");
-        String normalizedRole = requireText(viewerRole, "viewerRole is required").toLowerCase(Locale.ROOT);
-        String normalizedSubjectId = requireText(viewerSubjectId, "viewerSubjectId is required");
-        requireReaderRole(normalizedRole);
-
-        List<TeacherResourceDocumentResponse> visibleDocuments = resourceStore.listVisible(
-                normalizedTenantId, normalizedRole, normalizedSubjectId);
-        if (visibleDocuments.isEmpty()) {
-            return Optional.empty();
-        }
-        Map<String, TeacherResourceDocumentResponse> visibleById = visibleDocuments.stream()
-                .collect(Collectors.toMap(
-                        TeacherResourceDocumentResponse::documentId,
-                        Function.identity(),
-                        (left, ignored) -> left,
-                        LinkedHashMap::new));
-        Map<String, List<TeacherDocumentBlockResponse>> visibleBlocks = blockStore.listByDocuments(
-                normalizedTenantId, List.copyOf(visibleById.keySet()));
-
-        // 先在全部可见同源块中选取规范引用。遗留镜像即使对当前用户可见，也不能抢占同一资料的现行文档。
-        TeacherResourceDocumentResponse mirrorDocument = resourceStore.find(normalizedTenantId, hit.documentId());
-        TeacherDocumentBlockResponse mirrorBlock = mirrorDocument == null ? null : blockStore
-                .listByDocument(normalizedTenantId, mirrorDocument.documentId()).stream()
-                .filter(block -> hit.blockId().equals(block.blockId()))
-                .findFirst()
-                .orElse(null);
-        String mirrorSourceIdentity = textOrDefault(mirrorDocument == null ? null : mirrorDocument.sourceIdentity(), "");
-        String mirrorSourcePath = firstNonBlank(
-                hit.sourcePath(), mirrorBlock == null ? null : mirrorBlock.sourcePath());
-        String mirrorSection = firstNonBlank(hit.section(), mirrorBlock == null ? null : mirrorBlock.section());
-        String mirrorChecksum = textOrDefault(mirrorBlock == null ? null : mirrorBlock.checksum(), "");
-        String mirrorText = firstNonBlank(
-                mirrorBlock == null ? null : mirrorBlock.normalizedText(), hit.evidenceText(), hit.snippet());
-        Set<String> mirrorTokens = stableSourceTokens(
-                hit.documentTitle(),
-                mirrorDocument == null ? null : mirrorDocument.title(),
-                mirrorDocument == null ? null : mirrorDocument.originalUrl(),
-                mirrorSourceIdentity,
-                mirrorSourcePath);
-
-        List<CanonicalCandidate> candidates = new ArrayList<>();
-        for (TeacherResourceDocumentResponse visibleDocument : visibleDocuments) {
-            List<TeacherDocumentBlockResponse> candidateBlocks = visibleBlocks
-                    .getOrDefault(visibleDocument.documentId(), List.of());
-            int sourceScore = sourceAffinity(
-                    mirrorSourceIdentity, mirrorSourcePath, mirrorTokens, visibleDocument, candidateBlocks);
-            if (sourceScore == 0) {
-                continue;
-            }
-            for (TeacherDocumentBlockResponse candidateBlock : candidateBlocks) {
-                int blockScore = blockAffinity(
-                        hit, mirrorSourcePath, mirrorSection, mirrorChecksum, mirrorText, candidateBlock);
-                if (blockScore > 0) {
-                    candidates.add(new CanonicalCandidate(visibleDocument, candidateBlock, sourceScore, blockScore));
-                }
-            }
-        }
-        // 同源候选中优先使用非命中文档；这让旧 RAG 镜像稳定映射到当前可见资料。
-        Optional<CanonicalReference> canonical = candidates.stream()
-                .filter(candidate -> !hit.documentId().equals(candidate.document().documentId()))
-                .sorted(Comparator.comparingInt(CanonicalCandidate::sourceScore).reversed()
-                        .thenComparing(Comparator.comparingInt(CanonicalCandidate::blockScore).reversed())
-                        .thenComparing(candidate -> candidate.document().documentId())
-                        .thenComparing(candidate -> candidate.block().blockId()))
-                .findFirst()
-                .map(candidate -> new CanonicalReference(
-                        candidate.document().documentId(), candidate.block().blockId(), candidate.document().title(), candidate.document().originalUrl()));
-        if (canonical.isPresent()) {
-            return canonical;
-        }
-
-        // 当前文档自身可见时仍要求精确的活动块匹配，避免陈旧 RAG 块被错误公开。
-        TeacherResourceDocumentResponse directlyVisible = visibleById.get(hit.documentId());
-        if (directlyVisible != null) {
-            Optional<TeacherDocumentBlockResponse> exactBlock = visibleBlocks
-                    .getOrDefault(directlyVisible.documentId(), List.of()).stream()
-                    .filter(block -> hit.blockId().equals(block.blockId()))
-                    .findFirst();
-            if (exactBlock.isPresent()) {
-                return Optional.of(new CanonicalReference(
-                        directlyVisible.documentId(), exactBlock.get().blockId(), directlyVisible.title(), directlyVisible.originalUrl()));
-            }
-        }
-
-        return Optional.empty();
+        requireText(tenantId, "tenantId is required");
+        requireText(viewerRole, "viewerRole is required");
+        requireText(viewerSubjectId, "viewerSubjectId is required");
+        return Optional.of(new CanonicalReference(
+                hit.documentId(), hit.blockId(), textOrDefault(hit.documentTitle(), ""), ""));
     }
-    // Delegates pure search normalization/ranking logic to TeacherResourceBlockSearchPolicy.
-    static int sourceAffinity(String mirrorSourceIdentity, String mirrorSourcePath, Set<String> mirrorTokens, TeacherResourceDocumentResponse candidateDocument, List<TeacherDocumentBlockResponse> candidateBlocks) { return TeacherResourceBlockSearchPolicy.sourceAffinity(mirrorSourceIdentity, mirrorSourcePath, mirrorTokens, candidateDocument, candidateBlocks); }
-    // Delegates pure search normalization/ranking logic to TeacherResourceBlockSearchPolicy.
-    static int blockAffinity(TeacherResourceBlockSearchResponse.Hit hit, String mirrorSourcePath, String mirrorSection, String mirrorChecksum, String mirrorText, TeacherDocumentBlockResponse candidateBlock) { return TeacherResourceBlockSearchPolicy.blockAffinity(hit, mirrorSourcePath, mirrorSection, mirrorChecksum, mirrorText, candidateBlock); }
-    // Delegates pure search normalization/ranking logic to TeacherResourceBlockSearchPolicy.
-    static boolean mirrorBlockExternalIdMatches(TeacherResourceBlockSearchResponse.Hit hit, TeacherDocumentBlockResponse candidateBlock) { return TeacherResourceBlockSearchPolicy.mirrorBlockExternalIdMatches(hit, candidateBlock); }
-    // Delegates pure search normalization/ranking logic to TeacherResourceBlockSearchPolicy.
-    static boolean sameReferenceText(String left, String right) { return TeacherResourceBlockSearchPolicy.sameReferenceText(left, right); }
-    // Delegates pure search normalization/ranking logic to TeacherResourceBlockSearchPolicy.
-    static String firstNonBlank(String... values) { return TeacherResourceBlockSearchPolicy.firstNonBlank(values); }
-    // Delegates pure search normalization/ranking logic to TeacherResourceBlockSearchPolicy.
-    static Set<String> stableSourceTokens(String... values) { return TeacherResourceBlockSearchPolicy.stableSourceTokens(values); }
-
     /**
      * Production constructor with graph-aware query normalization.
      */
@@ -318,6 +209,22 @@ public class TeacherResourceBlockSearchService {
         this.textbookRetrievalService = textbookRetrievalService;
         this.textbookPageImageSearchService = textbookPageImageSearchService;
         this.textbookResourceProperties = textbookResourceProperties;
+    }
+
+    /** File-backed detail reads are injected separately so focused search tests do not need storage wiring. */
+    @Autowired(required = false)
+    public void setSourceFileReader(TeacherSourceFileReader sourceFileReader) {
+        this.sourceFileReader = sourceFileReader;
+    }
+
+    /**
+     * Reports whether an indexed teacher document still has a readable catalog-backed source root.
+     *
+     * <p>This remains a backend-only integrity check. It returns no path or source text and lets callers exclude
+     * stale vector candidates before they become RAG evidence.</p>
+     */
+    public boolean isSourceAvailable(String tenantId, String documentId) {
+        return sourceFileReader != null && sourceFileReader.isSourceAvailable(tenantId, documentId);
     }
 
     public TeacherResourceBlockSearchService(
@@ -438,6 +345,8 @@ public class TeacherResourceBlockSearchService {
             recordAudit(normalizedTenantId, normalizedRole, normalizedSubjectId, endpoint, emptyResponse, startedNanos);
             return emptyResponse;
         }
+        // Resolve the query against the authenticated viewer's curated graph before Milvus recall. This adds only
+        // canonical ids/tags to the focused query; evidence and visibility still come exclusively from real retrieval.
         TeacherResourceGraphAlignmentService.QueryGraphContext queryGraph = graphAlignmentService.alignQuery(
                 normalizedTenantId,
                 normalizedRole,
@@ -458,33 +367,12 @@ public class TeacherResourceBlockSearchService {
                     retrievalMode(STRATEGY_TWO_STAGE_DOC_BLOCK, normalizedFilter, "textbook_only"),
                     List.of());
         } else {
-            List<TeacherResourceDocumentResponse> documents =
-                    filteredDocuments(
-                            resourceStore.listSearchable(normalizedTenantId, normalizedRole, normalizedSubjectId),
-                            normalizedFilter);
-            if (includeRealTextbook) {
-                /*
-                 * Once processed_books is available, teacher search must not keep a second stale textbook branch in
-                 * source_document/document_block. Those imported PUBLIC_TEXTBOOK rows were only a historical bridge before
-                 * the dedicated textbook retriever and page-image index existed. Keeping both sources in mixed mode lets
-                 * old derivative rows compete against the real textbook page hit and makes "no library specified" behave
-                 * differently from "library=textbook".
-                 *
-                 * We therefore delete teacher-store textbook derivatives whenever the real textbook retriever is allowed
-                 * for this request, even when the caller is doing a mixed multi-library search.
-                 */
-                documents = documents.stream()
-                        .filter(document -> !"public_textbook".equals(TeacherResourceLibraryResolver.effectiveLibrary(document)))
-                        .toList();
-            }
             searchResponse = twoStageResponse(
                     normalizedTenantId,
-                    documents,
                     normalizedQuery,
                     focusedQuery,
                     safeLimit,
-                    normalizedFilter,
-                    queryGraph);
+                    normalizedFilter);
         }
         if (includeRealTextbook) {
             searchResponse = mergeRealTextbookHits(
@@ -498,109 +386,30 @@ public class TeacherResourceBlockSearchService {
                     normalizedFilter,
                     endpoint);
         }
-        searchResponse = attachVisibleAssetRefs(
-                searchResponse,
-                new RequestSubject(normalizedTenantId, normalizedRole, normalizedSubjectId, null));
         recordAudit(normalizedTenantId, normalizedRole, normalizedSubjectId, endpoint, searchResponse, startedNanos);
         return searchResponse;
     }
 
     private TeacherResourceBlockSearchResponse twoStageResponse(
             String tenantId,
-            List<TeacherResourceDocumentResponse> documents,
             String normalizedQuery,
             FocusedSearchQuery focusedQuery,
             int safeLimit,
-            TeacherResourceSearchFilter filter,
-            TeacherResourceGraphAlignmentService.QueryGraphContext queryGraph) {
-        if (documents.isEmpty()) {
-            return response(normalizedQuery, safeLimit, retrievalMode(STRATEGY_TWO_STAGE_DOC_BLOCK, filter, "no_visible_documents"), List.of());
-        }
-        Map<String, TeacherResourceDocumentResponse> documentsById = documents.stream()
-                .collect(Collectors.toMap(
-                        TeacherResourceDocumentResponse::documentId,
-                        Function.identity(),
-                        (left, ignored) -> left,
-                        LinkedHashMap::new));
-        List<String> visibleDocumentIds = List.copyOf(documentsById.keySet());
+            TeacherResourceSearchFilter filter) {
         VectorCoarseRecall vectorCoarseRecall = vectorCoarseRecall(
-                tenantId,
-                focusedQuery.semanticQuery(),
-                safeLimit,
-                visibleDocumentIds,
-                documents,
-                filter);
-        Map<String, List<BlockContext>> blocksByParent = stageOneBlockContexts(
-                tenantId,
-                documentsById,
-                visibleDocumentIds,
-                vectorCoarseRecall.candidateDocumentIds(),
-                filter.tags());
-        Map<String, TeacherResourceDocumentResponse> fileDocumentsByParent = fileDocumentsByParent(blocksByParent);
-        if (blocksByParent.isEmpty()) {
-            return response(normalizedQuery, safeLimit, retrievalMode(STRATEGY_TWO_STAGE_DOC_BLOCK, filter, "no_visible_blocks"), List.of());
-        }
-        Map<String, Double> vectorScoreByKey = vectorCoarseRecall.scoreByKey();
-        // Freeze lambda inputs explicitly so the Linux container compiler cannot treat later lexical rescoring
-        // assignments in this long method as a captured-variable mutation.
-        final Map<String, TeacherResourceDocumentResponse> titleDocumentsByParent = fileDocumentsByParent;
-        final String titleQuery = normalizedQuery;
-        final String[] titleTerms = focusedQuery.terms();
-        LinkedHashSet<String> titleCandidateIds = blocksByParent.entrySet().stream()
-                .filter(entry -> titleMatchesQuery(
-                        titleDocumentsByParent.get(entry.getKey()).title(), titleQuery, titleTerms))
-                .map(Map.Entry::getKey)
-                .collect(Collectors.toCollection(LinkedHashSet::new));
-        if (!titleCandidateIds.isEmpty()) {
-            LinkedHashSet<String> mergedCandidateIds = new LinkedHashSet<>(vectorCoarseRecall.candidateDocumentIds());
-            mergedCandidateIds.addAll(titleCandidateIds);
-            vectorCoarseRecall = new VectorCoarseRecall(vectorCoarseRecall.scoreByKey(), List.copyOf(mergedCandidateIds));
-        }
-        List<DocumentCandidate> documentCandidates = rerankedDocumentCandidates(
-                fileDocumentsByParent,
-                blocksByParent,
-                vectorScoreByKey,
-                focusedQuery.semanticQuery(),
-                focusedQuery.terms(),
-                safeLimit,
-                queryGraph);
-        if (documentCandidates.isEmpty() && blocksByParent.size() < visibleDocumentIds.size()) {
-            /*
-             * Semantic coarse recall is the primary path, but it must not become a hard gate. If the initial vector
-             * admission window missed every surviving document after block/tag filtering, fall back once to the full
-             * visible corpus so lexical rescue can still admit a document and the real reranker can judge it.
-             */
-            blocksByParent = loadVisibleBlockContexts(tenantId, documentsById, visibleDocumentIds, filter.tags());
-            fileDocumentsByParent = fileDocumentsByParent(blocksByParent);
-            if (blocksByParent.isEmpty()) {
-                return response(normalizedQuery, safeLimit, retrievalMode(STRATEGY_TWO_STAGE_DOC_BLOCK, filter, "no_visible_blocks"), List.of());
-            }
-            documentCandidates = rerankedDocumentCandidates(
-                    fileDocumentsByParent,
-                    blocksByParent,
-                    vectorScoreByKey,
-                    focusedQuery.semanticQuery(),
-                    focusedQuery.terms(),
-                    safeLimit,
-                    queryGraph);
-        }
-        List<DocumentCandidate> rankedDocuments = documentCandidates.stream()
-                .sorted(documentCandidateComparator()
-                        .thenComparing(candidate -> candidate.document().title())
-                        .thenComparing(candidate -> candidate.document().documentId()))
-                .limit(stageDocumentCandidateLimit(documentCandidates.size()))
+                tenantId, focusedQuery.semanticQuery(), safeLimit, filter);
+        // A source file can contain several independently useful questions.  Preserve every Milvus block hit
+        // instead of collapsing by sourcePath, otherwise a query can silently lose distinct questions from one paper.
+        List<TeacherResourceBlockSearchResponse.Hit> hits = vectorCoarseRecall.hits().stream()
+                // A stale vector must never make unavailable raw teacher text model-visible. The catalog is the same
+                // authorization-backed source used by document reads, so this cannot be repaired with a DB fallback.
+                .filter(hit -> sourceFileReader == null
+                        || sourceFileReader.isSourceAvailable(tenantId, hit.documentId()))
+                .limit(safeLimit)
+                .map(hit -> milvusHit(hit, normalizedQuery, focusedQuery.terms()))
                 .toList();
-        List<TeacherResourceBlockSearchResponse.Hit> hits = rerankedBlockHits(
-                rankedDocuments,
-                blocksByParent,
-                vectorScoreByKey,
-                focusedQuery.semanticQuery(),
-                focusedQuery.terms(),
-                normalizedQuery,
-                safeLimit,
-                filter,
-                queryGraph);
-        return response(normalizedQuery, safeLimit, retrievalMode(STRATEGY_TWO_STAGE_DOC_BLOCK, filter, null), hits);
+        return response(normalizedQuery, safeLimit,
+                retrievalMode(STRATEGY_TWO_STAGE_DOC_BLOCK, filter, "milvus_evidence_only"), hits);
     }
     // Delegates pure search normalization/ranking logic to TeacherResourceBlockSearchPolicy.
     static boolean titleMatchesQuery(String title, String normalizedQuery, String[] focusedTerms) { return TeacherResourceBlockSearchPolicy.titleMatchesQuery(title, normalizedQuery, focusedTerms); }
@@ -812,86 +621,37 @@ public class TeacherResourceBlockSearchService {
             String tenantId,
             String normalizedQuery,
             int safeLimit,
-            List<String> visibleDocumentIds,
-            List<TeacherResourceDocumentResponse> visibleDocuments,
             TeacherResourceSearchFilter filter) {
-        if (visibleDocumentIds == null || visibleDocumentIds.isEmpty()) {
-            return VectorCoarseRecall.EMPTY;
-        }
-        int vectorCandidateLimit = searchBudget.vectorCandidateLimit(
-                safeLimit,
-                stageDocumentCandidateLimit(visibleDocumentIds.size()));
-        Map<String, Double> scores = new LinkedHashMap<>();
-
-        LinkedHashSet<String> candidateDocumentIds = new LinkedHashSet<>();
+        int vectorCandidateLimit = searchBudget.vectorCandidateLimit(safeLimit, safeLimit);
         List<VectorSearchHit> hits;
         try {
-            List<String> visibleScopes = visibleDocuments.stream()
-                    .map(TeacherResourceDocumentResponse::permissionScope)
-                    .filter(value -> value != null && !value.isBlank())
-                    .distinct()
-                    .toList();
-            List<String> visibleSourceTypes = visibleDocuments.stream()
-                    .map(TeacherResourceDocumentResponse::sourceType)
-                    .filter(value -> value != null && !value.isBlank())
-                    .map(value -> value.toLowerCase(Locale.ROOT))
-                    .distinct()
-                    .toList();
             hits = vectorIndexService.searchTeacherResourceBlocks(
                     normalizedQuery,
                     vectorCandidateLimit,
                     new VectorSearchFilter(
                             List.of(tenantId),
-                            List.copyOf(visibleDocumentIds),
-                            visibleScopes,
-                            visibleSourceTypes));
+                            filter == null ? List.of() : filter.documentIds(),
+                            filter == null ? List.of() : filter.permissionScopes(),
+                            filter == null ? List.of() : filter.sourceTypes()));
         } catch (RuntimeException exception) {
             log.error("teacher_resource_search_vector_failed strategy=two_stage query={} documentCandidates={} message={}",
                     normalizedQuery,
-                    visibleDocumentIds.size(),
+                    0,
                     textOrDefault(exception.getMessage(), ""),
                     exception);
             throw new IllegalStateException("Teacher resource vector retrieval failed", exception);
         }
-        Set<String> visibleDocumentIdSet = new LinkedHashSet<>(visibleDocumentIds);
-        /*
-         * Historical Milvus rows predate sourcePath/providerItemId metadata.  Resolve the missing identity only from
-         * blocks already admitted by MySQL visibility, so compatibility never turns into an unfiltered cross-tenant
-         * lookup.  New rows use the value returned by Milvus directly.
-         */
-        Map<String, String> visibleSourcePathByBlock = blockStore.listByDocuments(tenantId, visibleDocumentIds)
-                .entrySet().stream()
-                .flatMap(entry -> entry.getValue().stream())
-                .collect(Collectors.toMap(
-                        block -> blockKey(block.documentId(), block.blockId()),
-                        block -> textOrDefault(block.sourcePath(), ""),
-                        (left, ignored) -> left,
-                        LinkedHashMap::new));
-        for (VectorSearchHit hit : hits) {
-            if (!visibleDocumentIdSet.contains(hit.documentId())) {
-                continue;
-            }
-            String resolvedSourcePath = textOrDefault(hit.sourcePath(), "");
-            if (resolvedSourcePath.isBlank()) {
-                resolvedSourcePath = visibleSourcePathByBlock.getOrDefault(blockKey(hit.documentId(), hit.blockId()), "");
-            }
-            String parentKey = fileParentKey(
-                    hit.documentId(), hit.providerItemId(), resolvedSourcePath, hit.blockId());
-            if (hit.sourcePath() == null || hit.sourcePath().isBlank()) {
-                log.warn("teacher_resource_data_quality_missing_file_identity tenantId={} documentId={} blockId={} origin=milvus",
-                        tenantId, hit.documentId(), hit.blockId());
-            }
-            candidateDocumentIds.add(parentKey);
-            // New vectors prefer providerItemId, while legacy block rows are still grouped by their persisted path.
-            // Admit the path key as well when both values exist so a mixed old/new corpus remains searchable.
-            if (hit.providerItemId() != null && !hit.providerItemId().isBlank()
-                    && !resolvedSourcePath.isBlank()) {
-                candidateDocumentIds.add(fileParentKey(hit.documentId(), "", resolvedSourcePath, hit.blockId()));
-            }
-            String key = blockKey(hit.documentId(), hit.blockId());
-            scores.merge(key, hit.score(), Math::max);
-        }
-        return new VectorCoarseRecall(Map.copyOf(scores), List.copyOf(candidateDocumentIds));
+        return new VectorCoarseRecall(List.copyOf(hits));
+    }
+
+    /** Converts a Milvus hit directly to model evidence; no document/block/asset database read is allowed here. */
+    private TeacherResourceBlockSearchResponse.Hit milvusHit(
+            VectorSearchHit hit, String normalizedQuery, String[] terms) {
+        String text = textOrDefault(hit.text(), "");
+        return new TeacherResourceBlockSearchResponse.Hit(
+                hit.documentId(), "", "", "", hit.blockId(), "", 0, "", "", null,
+                hit.sourcePath(), "reference", List.of(), List.of(hit.blockId()), text,
+                snippet(text, normalizedQuery, terms), hit.score(), List.of(), List.of());
     }
 
     private List<DocumentCandidate> rerankedDocumentCandidates(
@@ -1012,70 +772,15 @@ public class TeacherResourceBlockSearchService {
                     .thenComparing(blockSupportComparator(document, vectorScoreByKey, normalizedQuery, terms));
             return admitted.values().stream().sorted(admissionComparator).toList();
         }
-        Map<String, Double> semanticFallbackScores = semanticFallbackScoreByBlockKey(document, blocks, normalizedQuery);
-        if (!semanticFallbackScores.isEmpty()) {
-            return blocks.stream()
-                    .sorted(semanticFallbackBlockComparator(document, semanticFallbackScores, normalizedQuery, terms))
-                    .limit(searchBudget.maxBlocksPerDocumentForStageTwo())
-                    .toList();
-        }
         /*
-         * Lexical rescue is now the last fallback only. When neither Milvus block search nor the embedding similarity
-         * fallback can provide support scores, we still allow a token-overlap path so completely degraded environments
-         * do not collapse to zero recall.
+         * Absence from Milvus is an indexing consistency fault, not a reason to generate request-time embeddings for
+         * every block. The bounded lexical selector only prepares persisted candidates for the dedicated GPU reranker.
          */
         return blocks.stream()
                 .filter(block -> blockLexicalMatchCount(document, block, normalizedQuery, terms) > 0)
                 .sorted(blockSupportComparator(document, vectorScoreByKey, normalizedQuery, terms))
                 .limit(searchBudget.maxBlocksPerDocumentForStageTwo())
                 .toList();
-    }
-
-    /**
-     * If stage-one Milvus recall misses every block in a visible document, fall back once to embedding-space
-     * similarity over that document's own blocks instead of immediately gating the document by lexical overlap. This
-     * keeps the coarse stage semantic-first while still local to one document, avoiding a full-corpus rescoring pass.
-     */
-    private Map<String, Double> semanticFallbackScoreByBlockKey(
-            TeacherResourceDocumentResponse document,
-            List<BlockContext> blocks,
-            String normalizedQuery) {
-        if (blocks == null || blocks.isEmpty()) {
-            return Map.of();
-        }
-        LinkedHashMap<String, String> candidateTexts = new LinkedHashMap<>();
-        for (BlockContext block : blocks) {
-            String key = blockKey(document.documentId(), block.block().blockId());
-            candidateTexts.put(
-                    key,
-                    semanticCandidateText(
-                            document,
-                            block,
-                            evidenceWindow(block, blocks),
-                            searchBudget.blockEvidenceChars()));
-        }
-        try {
-            List<String> keys = new ArrayList<>(candidateTexts.keySet());
-            List<Double> scores = vectorIndexService.semanticSimilarity(
-                    normalizedQuery,
-                    keys.stream().map(candidateTexts::get).toList());
-            if (scores.isEmpty()) {
-                return Map.of();
-            }
-            Map<String, Double> scoreByKey = new LinkedHashMap<>();
-            for (int index = 0; index < keys.size() && index < scores.size(); index += 1) {
-                scoreByKey.put(keys.get(index), scores.get(index));
-            }
-            boolean hasPositiveScore = scoreByKey.values().stream().anyMatch(score -> score > 0.0d);
-            return hasPositiveScore ? Map.copyOf(scoreByKey) : Map.of();
-        } catch (RuntimeException exception) {
-            log.warn("teacher_resource_search_semantic_block_rescue_fallback query={} documentId={} message={}",
-                    normalizedQuery,
-                    document.documentId(),
-                    textOrDefault(exception.getMessage(), ""),
-                    exception);
-            return Map.of();
-        }
     }
 
     /**
@@ -1159,13 +864,9 @@ public class TeacherResourceBlockSearchService {
     static Comparator<DocumentCandidate> documentCandidateComparator() { return TeacherResourceBlockSearchPolicy.documentCandidateComparator(); }
     // Delegates pure search normalization/ranking logic to TeacherResourceBlockSearchPolicy.
     static Comparator<BlockContext> blockSupportComparator(TeacherResourceDocumentResponse document, Map<String, Double> vectorScoreByKey, String normalizedQuery, String[] terms) { return TeacherResourceBlockSearchPolicy.blockSupportComparator(document, vectorScoreByKey, normalizedQuery, terms); }
-    // Delegates pure search normalization/ranking logic to TeacherResourceBlockSearchPolicy.
-    static Comparator<BlockContext> semanticFallbackBlockComparator(TeacherResourceDocumentResponse document, Map<String, Double> semanticScoreByKey, String normalizedQuery, String[] terms) { return TeacherResourceBlockSearchPolicy.semanticFallbackBlockComparator(document, semanticScoreByKey, normalizedQuery, terms); }
-
     /**
-     * Stage two reranks candidate blocks with a dedicated rerank model when the worker provides one, then falls back
-     * to embedding cosine similarity inside {@link VectorIndexService}. The candidate text carries title/chapter/
-     * section/role context so the rerank can decide between near-duplicate sibling blocks inside the same document.
+     * Stage two reranks bounded Milvus candidates through the dedicated GPU service. Any service failure propagates
+     * instead of silently switching to request-time embedding cosine scores.
      */
     private Map<String, Double> semanticScoreByKey(
             List<DocumentCandidate> rankedDocuments,
@@ -1186,20 +887,16 @@ public class TeacherResourceBlockSearchService {
         }
         List<String> keys = new ArrayList<>(candidateTexts.keySet());
         List<String> texts = keys.stream().map(candidateTexts::get).toList();
-        try {
-            List<Double> scores = vectorIndexService.rerankTexts(normalizedQuery, texts);
-            Map<String, Double> scoreByKey = new LinkedHashMap<>();
-            for (int index = 0; index < keys.size() && index < scores.size(); index += 1) {
-                scoreByKey.put(keys.get(index), scores.get(index));
-            }
-            return Map.copyOf(scoreByKey);
-        } catch (RuntimeException exception) {
-            log.warn("teacher_resource_search_block_rerank_fallback query={} message={}",
-                    normalizedQuery,
-                    textOrDefault(exception.getMessage(), ""),
-                    exception);
-            return Map.of();
+        List<Double> scores = vectorIndexService.rerankTexts(normalizedQuery, texts);
+        if (scores.size() != keys.size()) {
+            throw new IllegalStateException("Teacher resource rerank returned " + scores.size()
+                    + " scores for " + keys.size() + " candidates");
         }
+        Map<String, Double> scoreByKey = new LinkedHashMap<>();
+        for (int index = 0; index < keys.size(); index += 1) {
+            scoreByKey.put(keys.get(index), scores.get(index));
+        }
+        return Map.copyOf(scoreByKey);
     }
 
     /**
@@ -1364,25 +1061,6 @@ public class TeacherResourceBlockSearchService {
         return new EvidenceWindow(List.copyOf(blockIds), String.join("\n", texts));
     }
 
-    /**
-     * Records the search audit event without letting audit failures break read-only search.
-     */
-    private void recordAudit(
-            String tenantId,
-            String subjectType,
-            String subjectId,
-            String endpoint,
-            TeacherResourceBlockSearchResponse response,
-            long startedNanos) {
-        long elapsedMs = (System.nanoTime() - startedNanos) / 1_000_000L;
-        auditSink.record(TeacherResourceBlockSearchAuditEvent.from(
-                tenantId,
-                subjectType,
-                subjectId,
-                textOrDefault(endpoint, "/api/teacher/resources/search"),
-                response,
-                elapsedMs));
-    }
     // Delegates pure search normalization/ranking logic to TeacherResourceBlockSearchPolicy.
     static BlockContext toContext(TeacherResourceDocumentResponse document, TeacherDocumentBlockResponse block) { return TeacherResourceBlockSearchPolicy.toContext(document, block); }
 
@@ -1450,6 +1128,24 @@ public class TeacherResourceBlockSearchService {
                 safeRetrievalMode(retrievalMode),
                 hits.size(),
                 hits);
+    }
+
+    /** Persists timing and hit metadata only; source正文仍不进入审计表。 */
+    private void recordAudit(
+            String tenantId,
+            String subjectType,
+            String subjectId,
+            String endpoint,
+            TeacherResourceBlockSearchResponse response,
+            long startedNanos) {
+        long elapsedMs = (System.nanoTime() - startedNanos) / 1_000_000L;
+        auditSink.record(TeacherResourceBlockSearchAuditEvent.from(
+                tenantId,
+                subjectType,
+                subjectId,
+                textOrDefault(endpoint, "/api/teacher/resources/search"),
+                response,
+                elapsedMs));
     }
     // Delegates pure search normalization/ranking logic to TeacherResourceBlockSearchPolicy.
     static TeacherResourceBlockSearchResponse.Hit textbookHit(TextbookSearchHit hit) { return TeacherResourceBlockSearchPolicy.textbookHit(hit); }
@@ -1542,18 +1238,8 @@ public class TeacherResourceBlockSearchService {
         if (response == null || response.hits() == null || response.hits().isEmpty()) {
             return response;
         }
-        Map<String, List<TeacherDocumentBlockResponse>> blocksByDocument = response.hits().stream()
-                .filter(Objects::nonNull)
-                .map(TeacherResourceBlockSearchResponse.Hit::documentId)
-                .filter(documentId -> documentId != null && !documentId.isBlank())
-                .distinct()
-                .collect(Collectors.toMap(
-                        Function.identity(),
-                        documentId -> blockStore.listByDocument(subject.tenantId(), documentId),
-                        (left, ignored) -> left,
-                        LinkedHashMap::new));
         List<TeacherResourceBlockSearchResponse.Hit> hits = response.hits().stream()
-                .map(hit -> attachVisibleAssetRefs(enrichNearbyImageAssets(hit, blocksByDocument), subject))
+                .map(hit -> attachVisibleAssetRefs(hit, subject))
                 .toList();
         return new TeacherResourceBlockSearchResponse(
                 response.queryId(),
@@ -1707,27 +1393,43 @@ public class TeacherResourceBlockSearchService {
         return Optional.empty();
     }
 
-    /**
-     * Reads all parsed blocks from one visible document for an authorized agent.  The document is first resolved
-     * through the same tenant/role/owner visibility gate used by search; callers never receive a filesystem path.
-     */
+    /** Reads authoritative source files from the Docker volume; no document or block database lookup is performed. */
     public List<TeacherDocumentBlockResponse> listVisibleBlocks(
             String tenantId,
             String viewerRole,
             String viewerSubjectId,
             String documentId) {
-        requireReaderRole(viewerRole);
         String normalizedDocumentId = textOrDefault(documentId, "");
         if (normalizedDocumentId.isBlank()) {
             throw new IllegalArgumentException("documentId is required");
         }
-        boolean visible = filteredDocuments(
-                resourceStore.listVisible(tenantId, viewerRole, viewerSubjectId), TeacherResourceSearchFilter.EMPTY)
-                .stream().anyMatch(document -> normalizedDocumentId.equals(document.documentId()));
-        if (!visible) {
-            throw new IllegalArgumentException("Teacher resource is not visible");
+        if (sourceFileReader == null) {
+            throw new IllegalStateException("File-backed teacher source reader is not configured");
         }
-        return blockStore.listByDocument(tenantId, normalizedDocumentId);
+        TeacherSourceFileReader.SourceDocument source = sourceFileReader.read(tenantId, normalizedDocumentId);
+        List<TeacherDocumentBlockResponse> blocks = new ArrayList<>();
+        int order = 0;
+        for (TeacherSourceFileReader.SourceFile file : source.files()) {
+            String text = file.text();
+            blocks.add(new TeacherDocumentBlockResponse(
+                    "file:" + Integer.toUnsignedString((normalizedDocumentId + ":" + file.relativeName()).hashCode()),
+                    normalizedDocumentId,
+                    file.relativeName(),
+                    "markdown",
+                    order++,
+                    "",
+                    "",
+                    null,
+                    null,
+                    text,
+                    text,
+                    "[]",
+                    "[]",
+                    "",
+                    1.0d,
+                    "active"));
+        }
+        return List.copyOf(blocks);
     }
     // Delegates pure search normalization/ranking logic to TeacherResourceBlockSearchPolicy.
     static boolean matchesTopLevelQuestionNumber(String text, String expectedNumber) { return TeacherResourceBlockSearchPolicy.matchesTopLevelQuestionNumber(text, expectedNumber); }
@@ -2039,9 +1741,8 @@ public class TeacherResourceBlockSearchService {
     }
 
     record VectorCoarseRecall(
-            Map<String, Double> scoreByKey,
-            List<String> candidateDocumentIds) {
-        static final VectorCoarseRecall EMPTY = new VectorCoarseRecall(Map.of(), List.of());
+            List<VectorSearchHit> hits) {
+        static final VectorCoarseRecall EMPTY = new VectorCoarseRecall(List.of());
     }
 
     /** Opaque reference that the authenticated teacher-resource detail endpoint can safely expand. */

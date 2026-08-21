@@ -81,7 +81,7 @@ class MigratedWorkloadContractTest(unittest.TestCase):
 
     def test_intent_runtime_accepts_only_authorized_knowledge_point(self):
         with patch("app.workload_runtime.MigratedWorkloadRuntime._call_json", return_value=(
-            '{"intentCode":"TARGETED_PRACTICE","confidence":0.8,"knowledgePointId":"kp-1"}',
+            '{"candidate":{"intentCode":"TARGETED_PRACTICE","confidence":0.8,"knowledgePointId":"kp-1"},"review":{"approved":true,"feedbackCodes":[]}}',
             type("Result", (), {"provider": "openai", "model": "gpt-5.6-luna", "usage": lambda self: {"promptTokens": 3, "completionTokens": 4, "totalTokens": 7, "estimatedCost": -1.0}})(),
         )):
             response = self.client.post(
@@ -97,10 +97,11 @@ class MigratedWorkloadContractTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["intentCode"], "TARGETED_PRACTICE")
         self.assertEqual(response.json()["knowledgePointId"], "kp-1")
+        self.assertNotIn("review", response.json())
 
     def test_student_explanation_strips_unapproved_citations(self):
         with patch("app.workload_runtime.MigratedWorkloadRuntime._call_json", return_value=(
-            '{"conversationTitle":"函数讲解","cards":[{"cardKey":"function","summary":"先判定义域。","sourceUris":["doc:allowed","doc:forbidden"],"renderMode":"text"}]}',
+            '{"candidate":{"conversationTitle":"函数讲解","cards":[{"cardKey":"function","summary":"先判定义域。","sourceUris":["doc:allowed","doc:forbidden"],"renderMode":"text"}]},"review":{"approved":true,"feedbackCodes":[]}}',
             type("Result", (), {"provider": "openai", "model": "gpt-5.6-luna", "usage": lambda self: {"promptTokens": 3, "completionTokens": 4, "totalTokens": 7, "estimatedCost": -1.0}})(),
         )):
             response = self.client.post(
@@ -115,6 +116,7 @@ class MigratedWorkloadContractTest(unittest.TestCase):
             )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["cards"][0]["sourceUris"], ["doc:allowed"])
+        self.assertNotIn("review", response.json())
 
     def test_react_final_returns_cards_without_a_compose_call(self):
         from app.server import migrated_workload_runtime

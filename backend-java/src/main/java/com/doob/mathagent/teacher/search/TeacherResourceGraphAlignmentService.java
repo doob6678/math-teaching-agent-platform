@@ -12,7 +12,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -189,6 +188,11 @@ public class TeacherResourceGraphAlignmentService {
      */
     private static PointMatchEvidence pointMatchEvidence(GraphPoint point, AlignmentText text) {
         int directFieldHits = fieldHitCount(text, point.normalizedName());
+        // Exclusions suppress alias-only matches; a direct canonical name remains authoritative for deliberate comparisons.
+        if (directFieldHits == 0 && point.exclusionTerms().stream()
+                .anyMatch(exclusion -> fieldHitCount(text, exclusion) > 0)) {
+            return new PointMatchEvidence(0, 0);
+        }
         int aliasFieldHits = 0;
         for (String alias : point.aliases()) {
             aliasFieldHits += fieldHitCount(text, alias);
@@ -273,30 +277,31 @@ public class TeacherResourceGraphAlignmentService {
                 values.add(normalized);
             }
         }
-        /*
-         * These aliases mirror the curated graph-spine seed so retrieval can normalize queries and block text to the
-         * same canonical node even when the seed keeps a more display-friendly node name.
-         */
-        copyAlias(values, point.knowledgePointName(), "函数基础", "函数概念与表示");
-        copyAlias(values, point.knowledgePointName(), "导数隐零点", "隐零点");
-        copyAlias(values, point.knowledgePointName(), "解三角形", "正弦定理与余弦定理");
-        copyAlias(values, point.knowledgePointName(), "数列基础", "等差等比数列");
-        copyAlias(values, point.knowledgePointName(), "数列求和", "数列求通项与求和");
-        copyAlias(values, point.knowledgePointName(), "函数图像", "函数图像变换");
-        copyAlias(values, point.knowledgePointName(), "导数单调性", "导数研究函数");
-        copyAlias(values, point.knowledgePointName(), "参数范围", "导数综合");
-        copyAlias(values, point.knowledgePointName(), "立体几何角度距离", "空间向量");
+        values.addAll(routingTerms(point.sourceSummary(), "routingAliases"));
+        values.addAll(routingTerms(point.sourceSummary(), "retrievalSignals"));
         return values.stream().filter(value -> !value.isBlank()).toList();
     }
 
-    private static void copyAlias(
-            Set<String> values,
-            String pointName,
-            String alias,
-            String canonicalName) {
-        if (normalizeText(pointName).equals(normalizeText(canonicalName))) {
-            values.add(normalizeText(alias));
+    /** Reads list-valued routing fields from the versioned graph source. */
+    private static List<String> routingTerms(String sourceSummary, String fieldName) {
+        if (sourceSummary == null || sourceSummary.isBlank()) {
+            return List.of();
         }
+        LinkedHashSet<String> terms = new LinkedHashSet<>();
+        String prefix = fieldName + "=";
+        for (String segment : sourceSummary.split("[;；]")) {
+            String normalized = segment.strip();
+            if (!normalized.startsWith(prefix)) {
+                continue;
+            }
+            for (String term : normalized.substring(prefix.length()).split("[、，,]")) {
+                String value = normalizeText(term);
+                if (!value.isBlank()) {
+                    terms.add(value);
+                }
+            }
+        }
+        return List.copyOf(terms);
     }
 
     public record GraphAlignment(List<String> nodeIds, List<String> tagNames) {
@@ -349,7 +354,8 @@ public class TeacherResourceGraphAlignmentService {
             String name,
             String normalizedName,
             String nodeType,
-            List<String> aliases) {
+            List<String> aliases,
+            List<String> exclusionTerms) {
 
         private static GraphPoint from(KnowledgePointRecord point) {
             return new GraphPoint(
@@ -357,7 +363,8 @@ public class TeacherResourceGraphAlignmentService {
                     point.knowledgePointName(),
                     normalizeText(point.knowledgePointName()),
                     nodeType(point.sourceSummary()),
-                    aliasTerms(point));
+                     aliasTerms(point),
+                     routingTerms(point.sourceSummary(), "exclusionTerms"));
         }
 
         private static String nodeType(String sourceSummary) {

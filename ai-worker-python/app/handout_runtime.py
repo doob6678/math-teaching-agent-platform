@@ -11,6 +11,7 @@ from __future__ import annotations
 from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -25,24 +26,61 @@ from typing import Annotated, Any, TypedDict
 import requests
 from fastapi import HTTPException
 from langgraph.graph import END, START, StateGraph
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, StrictBool, ValidationError, field_validator, model_validator
 
+from app.ai_run_runtime import ProviderRoute
+from app.model_review_runtime import ModelReviewMetadata
+from app.sse import iter_sse_data_events
 from app.usage import HandoutMetricsLedger, UsageEvent, UsageLedger, cost_for, fallback_tokens
 
 
-DEFAULT_GRAPH_VERSION = "handout-v1"
-DEFAULT_CONTRACT_VERSION = "handout-ai-v1"
+DEFAULT_GRAPH_VERSION = "handout-v2"
+DEFAULT_CONTRACT_VERSION = "handout-ai-v2"
 DEFAULT_CONTEXT_LIMIT = 12
-DEFAULT_NODE_TIMEOUT_SECONDS = 420.0
-# A relay can return a valid JSON envelope whose visible lesson field is incomplete.  Two bounded repairs retain
-# the real model-only authoring contract while keeping the three-writer graph inside its provider-call budget.
-DEFAULT_REPAIR_ATTEMPTS = 2
-DEFAULT_MAX_EVIDENCE_CHARS = 16000
+# Initial context is deliberately smaller than the evidence retained across collection rounds. New authorized hits
+# must remain available to the planner instead of being discarded merely because Java supplied twelve initial hits.
+DEFAULT_COLLECTION_EVIDENCE_CAPACITY = 24
+DEFAULT_COLLECTION_DECISION_LIMIT = 3
+DEFAULT_DOCUMENT_INSPECTION_LIMIT = 3
+DEFAULT_DOCUMENT_READ_BLOCKS = 80
+DEFAULT_DOCUMENT_READ_CHARS = 24_000
+DEFAULT_BROKER_TIMEOUT_SECONDS = 120.0
+MAX_BROKER_TIMEOUT_SECONDS = 300.0
+DEFAULT_RECOMMENDED_QUESTION_COUNT = 6
+DEFAULT_PLAN_REVISION_LIMIT = 2
+DEFAULT_BLUEPRINT_REVISION_LIMIT = 2
+DEFAULT_NODE_TIMEOUT_SECONDS = 300.0
+DEFAULT_MODEL_TIMEOUT_SECONDS = 75.0
+DEFAULT_MODEL_REPAIR_TIMEOUT_SECONDS = 45.0
+DEFAULT_MODEL_REPAIR_ATTEMPTS = 1
+DEFAULT_MODEL_RETRY_ATTEMPTS = 2
+DEFAULT_MODEL_REPAIR_RESERVE_SECONDS = 45.0
+DEFAULT_CURATION_MODEL_RESERVE_SECONDS = 90.0
+
+
+class HandoutOutputContractError(ValueError):
+    """Signals that deterministic validation still fails after the single permitted repair."""
+
+
+class ModelResponseParseError(ValueError):
+    """Returns a received-but-invalid provider response to the deterministic repair path without transport retries."""
+
+
+# One bounded original document may be supplied after RAG authorization; leave room for its full inspected content.
+DEFAULT_MAX_EVIDENCE_CHARS = 64_000
+DEFAULT_MAX_INSPECTED_SOURCE_CHARS = 64_000
 DEFAULT_MAX_OUTPUT_CHARS = 24000
 DEFAULT_MIN_DOCUMENT_CHARS = 32
 DEFAULT_MIN_QUESTION_TOKEN_MATCHES = 1
-DEFAULT_HANDOUT_MAX_TOTAL_TOKENS = 56000
-DEFAULT_HANDOUT_MAX_PROVIDER_CALLS = 8
+DEFAULT_HANDOUT_MAX_TOTAL_TOKENS = 400000
+DEFAULT_HANDOUT_MAX_PROVIDER_CALLS = 16
+# DeepSeek-compatible routes can account for internal reasoning inside completion_tokens even when JSON mode is
+# requested. Sixteen thousand tokens leaves room for that accounting plus a complete visible writer contract while
+# the per-run reservation still bounds total usage across all stages.
+DEFAULT_HANDOUT_MAX_OUTPUT_TOKENS = 16_000
+# Collection decisions choose only bounded broker actions, not lesson content; keep their completion ceiling materially
+# below writer calls even when deployments configure a larger general completion budget.
+DEFAULT_COLLECTION_DECISION_MAX_OUTPUT_TOKENS = 1_200
 DEFAULT_EVENT_PAGE_LIMIT = 100
 MAX_EVENT_PAGE_LIMIT = 500
 MAX_EVENT_HISTORY = 10000
@@ -64,6 +102,13 @@ GENERIC_QUESTION_TOKENS = frozenset({"已知", "函数", "求", "在", "其中",
 LECTURE_FORBIDDEN_MARKERS = ("<wait>", "TEACHER_IMAGE", "/api/teacher/resources/assets/", "资料依据", "完整解答")
 COMMON_FORBIDDEN_MARKERS = ("/api/teacher/resources/assets/", "TEACHER_IMAGE", "内部日志", "资源卡", "证据卡")
 ANSWER_LEAK_MARKERS = ("答案：", "答案:", "参考答案", "最终答案", "完整解答", "评分点：", "评分标准：", "教师提示：")
+TEACHER_REQUIRED_SECTION_MARKERS = ("题目", "解题过程", "最终答案", "评分点", "易错点")
+UNSAFE_DOCUMENT_TRANSPORT_PATTERN = re.compile(
+    r"(?i)(?:https?://|file://|data:[^\s]+;base64,|\\includegraphics\\b|<\s*(?:img|script|iframe)\\b)"
+)
+ESCAPED_OR_LIST_HEADING_PATTERN = re.compile(r"(?m)^\s*(?:\\#+\s+|[-*+]\s+#+\s+)")
+DISPLAY_MATH_LINE_PATTERN = re.compile(r"^\s*\$\$(?!\$)(?P<formula>.+?)(?<!\$)\$\$\s*$")
+UNESCAPED_DOLLAR_PATTERN = re.compile(r"(?<!\\)\$")
 STAGE_TITLES = {
     "teacher_writer": "教师版讲义",
     "student_writer": "学生版讲义",
@@ -72,22 +117,23 @@ STAGE_TITLES = {
 # The usage table's attempt number is the idempotency key; reserve a non-provider range for deterministic node rows.
 RUNTIME_USAGE_ATTEMPTS = {
     "resource_curation": 1001,
-    "teacher_writer": 1002,
-    "student_writer": 1003,
-    "lecture_writer": 1004,
-    "structured_validation": 1005,
+    "plan_writer": 1002,
+    "teacher_resource_curation": 1007,
+    "teacher_blueprint_writer": 1003,
+    "student_writer": 1004,
+    "lecture_writer": 1005,
+    "structured_validation": 1006,
 }
 RUNTIME_USAGE_FALLBACK_ATTEMPT = 1099
-# Provider attempts share one unique `(run_id, provider, model, attempt)` key.  Writer nodes run in parallel, so
-# each node owns a stable block instead of restarting at attempt one and silently collapsing three billable calls.
+# Provider attempts share one unique `(run_id, provider, model, attempt)` key. Each node has one initial
+# generation and at most one deterministic repair generation, so the slot preserves idempotency without
+# allocating token budget for the removed multi-round self-review protocol.
 PROVIDER_ATTEMPT_SLOT_SIZE = 100
 PROVIDER_ATTEMPT_BASES = {
-    "teacher_writer": 0,
-    "student_writer": PROVIDER_ATTEMPT_SLOT_SIZE,
-    "lecture_writer": PROVIDER_ATTEMPT_SLOT_SIZE * 2,
-    "teacher_writer_repair": PROVIDER_ATTEMPT_SLOT_SIZE * 3,
-    "student_writer_repair": PROVIDER_ATTEMPT_SLOT_SIZE * 4,
-    "lecture_writer_repair": PROVIDER_ATTEMPT_SLOT_SIZE * 5,
+    "plan_writer": 0,
+    "teacher_blueprint_writer": PROVIDER_ATTEMPT_SLOT_SIZE,
+    "student_writer": PROVIDER_ATTEMPT_SLOT_SIZE * 2,
+    "lecture_writer": PROVIDER_ATTEMPT_SLOT_SIZE * 3,
 }
 
 
@@ -107,7 +153,7 @@ def _text(value: Any) -> str:
 
 
 def _sum_usage(left: dict[str, int | float], right: dict[str, int | float]) -> dict[str, int | float]:
-    """Adds initial and one bounded repair usage so the workflow budget sees both provider calls."""
+    """Adds every logical model turn while preserving unknown provider pricing."""
     left_cost = float(left.get("estimatedCost", -1.0))
     right_cost = float(right.get("estimatedCost", -1.0))
     return {
@@ -288,45 +334,218 @@ class HandoutRunRequest(BaseModel):
     idempotency_key: str = Field(default="", alias="idempotencyKey", max_length=160)
     trace_id: str | None = Field(default=None, alias="traceId", max_length=120)
     traceparent: str | None = Field(default=None, max_length=160)
+    # Java supplies this signed, bounded route in production; direct unit fixtures can omit it.
+    provider_route: ProviderRoute | None = Field(default=None, alias="providerRoute")
     deadline_epoch_ms: int | None = Field(default=None, alias="deadlineEpochMs", ge=0)
+    # Java selects a durable boundary. COMPLETE preserves the existing synchronous teaching-task call during rollout.
+    operation: str = Field(default="COMPLETE", max_length=40)
+    revision_feedback: list[str] = Field(default_factory=list, alias="revisionFeedback", max_length=12)
     resume: bool = False
 
     def compact(self) -> "HandoutRunRequest":
         """Keeps the payload bounded while preserving the question verbatim up to the API contract limit."""
         return self.model_copy(update={
             "writing_goal": _bounded(self.writing_goal, 1200),
-            "question_text": _bounded(self.question_text, 16000),
+            # Question markers are line-oriented; collapsing their newlines would silently merge a batch into one stem.
+            "question_text": self.question_text.strip()[:16000],
             "evidence_refs": list(dict.fromkeys(_bounded(item, 240) for item in self.evidence_refs if item.strip()))[:24],
             "graph_version": _bounded(self.graph_version, 40) or DEFAULT_GRAPH_VERSION,
             # Legacy callers used runId as the retry identity. Preserve that deterministic behavior during rollout.
             "idempotency_key": _bounded(self.idempotency_key, 160) or self.run_id,
             "contract_version": _bounded(self.contract_version, 40) or DEFAULT_CONTRACT_VERSION,
+            "operation": _bounded(self.operation, 40).upper() or "COMPLETE",
+            "revision_feedback": _string_list(self.revision_feedback, 12),
         })
 
 
 class EvidenceItem(BaseModel):
-    """Compact permission-filtered evidence returned by Java."""
+    """Compact permission-filtered RAG evidence; refs and source-image placement stay opaque."""
 
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
     ref: str = Field(default="", max_length=240)
     title: str = Field(default="", max_length=600)
+    document_name: str = Field(default="", alias="documentName", max_length=600)
+    document_ref: str = Field(default="", alias="documentRef", max_length=240)
+    page_no: int = Field(default=0, alias="pageNo", ge=0)
     excerpt: str = Field(default="", max_length=3000)
+    asset_ids: list[str] = Field(default_factory=list, alias="assetIds", max_length=12)
     asset_id: str | None = Field(default=None, alias="assetId", max_length=160)
+
+    @model_validator(mode="after")
+    def normalize_asset_ids(self) -> "EvidenceItem":
+        """Preserves only broker-issued opaque asset identifiers, with the old single field as read compatibility."""
+        values = [str(value).strip() for value in [*self.asset_ids, self.asset_id] if str(value or "").strip()]
+        self.asset_ids = list(dict.fromkeys(values))[:12]
+        self.asset_id = self.asset_ids[0] if self.asset_ids else None
+        return self
+
+
+class AssetPlacement(BaseModel):
+    """AI-selected authorized source-image group; Java later validates and materializes it without selecting assets."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    question_number: int = Field(alias="questionNumber", ge=1, le=100)
+    asset_ids: list[str] = Field(alias="assetIds", min_length=1, max_length=2)
+    anchor: str = Field(pattern="^(question|explanation_after_question)$")
+    layout: str = Field(pattern="^(single|vertical_sequence|two_column)$")
+    variants: list[str] = Field(min_length=1, max_length=3)
+    caption: str = Field(default="", max_length=1000)
+
+    @model_validator(mode="after")
+    def validate_contract(self) -> "AssetPlacement":
+        self.asset_ids = list(dict.fromkeys(str(value).strip() for value in self.asset_ids if str(value).strip()))
+        self.variants = list(dict.fromkeys(str(value).strip() for value in self.variants if str(value).strip()))
+        if not self.asset_ids or len(self.asset_ids) > 2:
+            raise ValueError("asset placement requires one or two assetIds")
+        if not set(self.variants).issubset({"teacher_writer", "student_writer", "lecture_writer"}):
+            raise ValueError("asset placement has unsupported variant")
+        return self
+
+
+class PlannedQuestion(BaseModel):
+    """A concise, reviewable teaching decision for one question; it never contains hidden reasoning or source text."""
+
+    number: int = Field(ge=1, le=100)
+    question: str = Field(min_length=1, max_length=4000)
+    evidence_refs: list[str] = Field(default_factory=list, alias="evidenceRefs", max_length=12)
+    knowledge_point: str = Field(default="", alias="knowledgePoint", max_length=600)
+    teaching_sequence: list[str] = Field(default_factory=list, alias="teachingSequence", min_length=1, max_length=8)
+    figure_required: bool = Field(default=False, alias="figureRequired")
+    asset_placements: list[AssetPlacement] = Field(default_factory=list, alias="assetPlacements", max_length=2)
+
+
+class WritingPlan(BaseModel):
+    """Visible staged plan: instructional decisions only, never private model deliberation or raw evidence."""
+
+    learning_objective: str = Field(alias="learningObjective", min_length=1, max_length=1200)
+    questions: list[PlannedQuestion] = Field(min_length=1, max_length=24)
+    completion_criteria: list[str] = Field(alias="completionCriteria", min_length=1, max_length=12)
+    ready_for_next_stage: bool = Field(alias="readyForNextStage")
+    revision_round: int = Field(default=0, alias="revisionRound", ge=0, le=DEFAULT_PLAN_REVISION_LIMIT)
+    warnings: list[str] = Field(default_factory=list, max_length=24)
+    # Deprecated compatibility field: v1/v2 checkpoints may deserialize it, but collection is now complete before
+    # planning and no graph route or runtime behavior reads these values.
+    teacher_resource_queries: list[str] = Field(
+        default_factory=list, alias="teacherResourceQueries", max_length=4)
+
+
+class TeacherBlueprint(BaseModel):
+    """Reviewable teacher source from which student and lecture variants may be safely derived."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    title: str = Field(min_length=1, max_length=600)
+    markdown: str = Field(min_length=DEFAULT_MIN_DOCUMENT_CHARS, max_length=DEFAULT_MAX_OUTPUT_CHARS)
+    citations: list[str] = Field(default_factory=list, max_length=24)
+    asset_placements: list[AssetPlacement] = Field(default_factory=list, alias="assetPlacements", max_length=48)
+    # The blueprint retains writer-authored projection cards as opaque structure. Both direct card arrays and the
+    # legacy cards container are accepted because neither Python nor Java may rewrite their teaching semantics.
+    lecture_cards: list[dict[str, Any]] | dict[str, list[dict[str, Any]]] = Field(
+        default_factory=list,
+        alias="lectureCards",
+    )
+
+    @field_validator("lecture_cards", mode="before")
+    @classmethod
+    def validate_opaque_lecture_cards(cls, value: Any) -> Any:
+        """Accepts only the two writer contract containers without inspecting teaching-card content."""
+        cards = value if isinstance(value, list) else value.get("cards") if isinstance(value, dict) else None
+        if not isinstance(cards, list) or len(cards) > 48:
+            raise ValueError("lectureCards must be a bounded card list or cards container")
+        if isinstance(value, dict) and set(value) != {"cards"}:
+            raise ValueError("lectureCards container may contain only cards")
+        return value
+    completion_checklist: list[str] = Field(alias="completionChecklist", min_length=1, max_length=12)
+    remaining_edits: list[str] = Field(default_factory=list, alias="remainingEdits", max_length=12)
+    # DeepSeek Flash can emit the semantically equivalent derivationReady key. Missing readiness remains invalid and
+    # is repaired by the same DeepSeek route; it must never be inferred from otherwise valid lesson text.
+    # StrictBool prevents strings such as "true" from becoming an approval declaration through Pydantic coercion.
+    ready_for_derivation: StrictBool | None = Field(
+        default=None,
+        validation_alias=AliasChoices("readyForDerivation", "derivationReady"),
+        serialization_alias="readyForDerivation",
+    )
+    revision_round: int = Field(default=0, alias="revisionRound", ge=0, le=DEFAULT_BLUEPRINT_REVISION_LIMIT)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_duplicate_derivation_readiness(cls, value: Any) -> Any:
+        """Accept provider responses that state the same readiness decision under both supported names."""
+        if not isinstance(value, dict) or "readyForDerivation" not in value or "derivationReady" not in value:
+            return value
+        if value["readyForDerivation"] != value["derivationReady"]:
+            raise ValueError("conflicting teacher blueprint readiness declarations")
+        normalized = dict(value)
+        normalized.pop("derivationReady")
+        return normalized
 
 
 class EvidenceSnapshot(BaseModel):
-    """Single Java context response shared by all three Writer nodes."""
+    """Java-authorized RAG matches plus bounded original-source content shared by all writer nodes."""
 
     query: str = ""
-    items: list[EvidenceItem] = Field(default_factory=list, max_length=DEFAULT_CONTEXT_LIMIT)
+    items: list[EvidenceItem] = Field(default_factory=list, max_length=DEFAULT_COLLECTION_EVIDENCE_CAPACITY)
+    inspected_items: list[EvidenceItem] = Field(default_factory=list, alias="inspectedItems", max_length=DEFAULT_DOCUMENT_INSPECTION_LIMIT * DEFAULT_DOCUMENT_READ_BLOCKS)
     source: str = "java-broker"
 
     def prompt_text(self) -> str:
-        rows = []
-        for item in self.items[:DEFAULT_CONTEXT_LIMIT]:
-            rows.append(json.dumps(item.model_dump(by_alias=True, exclude_none=True), ensure_ascii=False, separators=(",", ":")))
-        return "\n".join(rows)[:DEFAULT_MAX_EVIDENCE_CHARS]
+        rows: list[str] = []
+        used = 0
+        # 当前命中与原文阅读块分别序列化，保证模型能够辨认二者的授权用途。
+        for kind, source, limit in (
+            ("retrieved_hit", self.items[:DEFAULT_CONTEXT_LIMIT], DEFAULT_MAX_EVIDENCE_CHARS),
+            ("inspected_source", self.inspected_items, DEFAULT_MAX_INSPECTED_SOURCE_CHARS),
+        ):
+            for item in source:
+                row = json.dumps({"kind": kind, **item.model_dump(by_alias=True, exclude_none=True)}, ensure_ascii=False, separators=(",", ":"))
+                separator = 1 if rows else 0
+                if used + separator + len(row) > limit:
+                    continue
+                rows.append(row)
+                used += separator + len(row)
+        return "\n".join(rows)
+
+
+class ResourceCollectionAction(BaseModel):
+    """One bounded opaque-broker action selected by the private collection decision."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    kind: str = Field(min_length=1, max_length=40)
+    document_ref: str = Field(default="", alias="documentRef", max_length=240)
+    query: str = Field(default="", max_length=160)
+    page_no: int = Field(default=0, alias="pageNo", ge=0)
+    page_radius: int = Field(default=0, alias="pageRadius", ge=0, le=4)
+
+    @model_validator(mode="after")
+    def validate_broker_scope(self) -> "ResourceCollectionAction":
+        """Allows only fixed broker actions and their minimum opaque arguments."""
+        if self.kind not in {"document_read", "document_page_read", "document_search", "canonical_question_read", "teacher_resource_search"}:
+            raise ValueError("unsupported collection action")
+        if self.kind in {"document_read", "document_page_read", "document_search", "canonical_question_read"} and not self.document_ref:
+            raise ValueError("document action requires documentRef")
+        if self.kind in {"document_search", "teacher_resource_search"} and not self.query.strip():
+            raise ValueError("search action requires query")
+        if self.kind in {"document_read", "canonical_question_read"} and (self.query or self.page_no or self.page_radius):
+            raise ValueError(f"{self.kind} cannot include query or page selection")
+        if self.kind == "document_page_read":
+            if self.query or self.page_no <= 0:
+                raise ValueError("document_page_read requires pageNo and cannot include query")
+        elif self.page_no or self.page_radius:
+            raise ValueError("only document_page_read can include page selection")
+        return self
+
+
+class ResourceCollectionDecision(BaseModel):
+    """Private ReAct decision that controls only the next bounded authorized collection action."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    sufficient: StrictBool
+    actions: list[ResourceCollectionAction] = Field(default_factory=list, max_length=4)
+    source_to_gap_assessment: str = Field(alias="sourceToGapAssessment", min_length=1, max_length=2400)
 
 
 class WriterDocument(BaseModel):
@@ -338,6 +557,7 @@ class WriterDocument(BaseModel):
     title: str = Field(min_length=1, max_length=600)
     markdown: str = Field(min_length=1, max_length=DEFAULT_MAX_OUTPUT_CHARS)
     citations: list[str] = Field(default_factory=list, max_length=24)
+    asset_placements: list[AssetPlacement] = Field(default_factory=list, alias="assetPlacements", max_length=48)
     warnings: list[str] = Field(default_factory=list, max_length=24)
 
 
@@ -405,7 +625,10 @@ class HandoutDraftPackage(BaseModel):
     contract_version: str = Field(default=DEFAULT_CONTRACT_VERSION, alias="contractVersion")
     graph_version: str = Field(alias="graphVersion")
     status: str
+    phase: str = "COMPLETED"
     evidence: EvidenceSnapshot
+    writing_plan: WritingPlan | None = Field(default=None, alias="writingPlan")
+    teacher_blueprint: TeacherBlueprint | None = Field(default=None, alias="teacherBlueprint")
     documents: dict[str, WriterDocument] = Field(default_factory=dict)
     validation: ValidationReport
     metrics: HandoutMetrics
@@ -416,6 +639,8 @@ class HandoutRunState(TypedDict, total=False):
 
     request: HandoutRunRequest
     evidence: EvidenceSnapshot
+    writing_plan: WritingPlan
+    teacher_blueprint: TeacherBlueprint
     writers: Annotated[list[WriterDocument], operator.add]
     package: HandoutDraftPackage
 
@@ -669,13 +894,7 @@ class _CheckpointStore:
 
     @contextmanager
     def run_lock(self, run_id: str):
-        """Claims one durable graph execution for a run across all worker replicas.
-
-        A checkpoint row lock protects each state merge but is released between graph nodes.  MySQL's named lock
-        remains held through the provider calls, so a concurrent redelivery re-reads the completed checkpoint after
-        the owner releases it instead of duplicating a billable writer call.  The lock name contains only an opaque
-        run ID and is bounded by the same operator-configurable graph timeout.
-        """
+        """在所有 Worker 副本间为同一运行声明唯一的持久图执行。"""
         if self.backend != "mysql":
             with self._sqlite_run_locks_guard:
                 local_lock = self._sqlite_run_locks.setdefault(run_id, threading.Lock())
@@ -684,7 +903,7 @@ class _CheckpointStore:
             return
         wait_seconds = max(0, int(os.getenv(
             "MATH_AGENT_HANDOUT_RUN_LOCK_WAIT_SECONDS", str(DEFAULT_RUN_LOCK_WAIT_SECONDS))))
-        lock_name = f"math-agent:handout:{run_id}"
+        lock_name = self._mysql_lock_name(run_id)
         with self._mysql_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute("SELECT GET_LOCK(%s,%s)", (lock_name, wait_seconds))
@@ -696,6 +915,12 @@ class _CheckpointStore:
             finally:
                 with conn.cursor() as cursor:
                     cursor.execute("SELECT RELEASE_LOCK(%s)", (lock_name,))
+
+    @staticmethod
+    def _mysql_lock_name(run_id: str) -> str:
+        """生成不含原始运行标识且满足 MySQL 64 字符限制的确定性锁名。"""
+        # 使用固定命名空间隔离业务锁；截取摘要后仍保留 236 位碰撞空间，覆盖合法运行标识范围。
+        return f"ma:h:{hashlib.sha256(run_id.encode('utf-8')).hexdigest()[:59]}"
 
     def save(self, run_id: str, status: str, state: dict[str, Any], event: dict[str, Any]) -> None:
         event_encoded = json.dumps(_jsonable(event), ensure_ascii=False, separators=(",", ":"))
@@ -718,15 +943,70 @@ class _CheckpointStore:
             conn.execute("INSERT INTO handout_event(run_id,event_json,created_at) VALUES(?,?,?)", (run_id, event_encoded, now))
             conn.commit()
 
+    def save_private_state(self, run_id: str, state: dict[str, Any]) -> None:
+        """Persists private AI turn material without creating an event-stream record."""
+        now = _utc_now()
+        if self.backend == "mysql":
+            with self._lock, self._mysql_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "INSERT INTO handout_checkpoint(run_id,status,state_json,updated_at) VALUES(%s,%s,%s,%s) "
+                        "ON DUPLICATE KEY UPDATE run_id=VALUES(run_id)",
+                        (run_id, "RUNNING", "{}", now),
+                    )
+                    cursor.execute("SELECT status,state_json FROM handout_checkpoint WHERE run_id=%s FOR UPDATE", (run_id,))
+                    row = cursor.fetchone()
+                    previous_state = json.loads(row[1]) if row and row[1] else {}
+                    merged_state = self._merge_state(previous_state, _jsonable(state))
+                    cursor.execute(
+                        "UPDATE handout_checkpoint SET state_json=%s,updated_at=%s WHERE run_id=%s",
+                        (json.dumps(merged_state, ensure_ascii=False, separators=(",", ":")), now, run_id),
+                    )
+                conn.commit()
+            return
+        with self._lock, closing(self._connect()) as conn:
+            previous = conn.execute("SELECT state_json FROM handout_checkpoint WHERE run_id=?", (run_id,)).fetchone()
+            previous_state = json.loads(previous["state_json"]) if previous is not None else {}
+            merged_state = self._merge_state(previous_state, _jsonable(state))
+            conn.execute(
+                "INSERT INTO handout_checkpoint(run_id,status,state_json,updated_at) VALUES(?,?,?,?) "
+                "ON CONFLICT(run_id) DO UPDATE SET state_json=excluded.state_json,updated_at=excluded.updated_at",
+                (run_id, "RUNNING", json.dumps(merged_state, ensure_ascii=False, separators=(",", ":")), now),
+            )
+            conn.commit()
+
+    def load_private_state(self, run_id: str) -> dict[str, Any]:
+        """Returns private diagnostics for operator-only verification without adding an event-stream entry."""
+        loaded = self.load(run_id)
+        return loaded[1] if loaded is not None else {}
+
     @staticmethod
     def _merge_state(previous: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
-        """Merges sibling node snapshots so concurrent Writer checkpoints cannot erase one another."""
-        merged = dict(previous)
+        """Merges sibling nodes and opaque worker-only diagnostics without public event leakage."""
+        # Graph state uses snake_case, while the durable checkpoint has explicit camelCase artifact keys. Retaining
+        # both lets a terminal package write resurrect stale graph values and obscures the one authoritative resume key.
+        runtime_only_keys = {"writing_plan", "teacher_blueprint"}
+        merged = {key: value for key, value in previous.items() if key not in runtime_only_keys}
         for key, value in incoming.items():
-            if key not in {"writers", "evidence"}:
+            if key not in {"writers", "evidence", "model_reviews", "privateDiagnostics", "modelTurnDiagnostics", *runtime_only_keys}:
                 merged[key] = value
         if incoming.get("evidence") is not None:
             merged["evidence"] = incoming["evidence"]
+        review_by_node = dict(previous.get("modelReviews") or previous.get("model_reviews") or {})
+        review_by_node.update(incoming.get("modelReviews") or incoming.get("model_reviews") or {})
+        if review_by_node:
+            merged["modelReviews"] = review_by_node
+        private_diagnostics = dict(previous.get("privateDiagnostics") or {})
+        private_diagnostics.update(incoming.get("privateDiagnostics") or {})
+        if private_diagnostics:
+            merged["privateDiagnostics"] = private_diagnostics
+        turn_diagnostics = dict(previous.get("modelTurnDiagnostics") or {})
+        for diagnostic_id, update in (incoming.get("modelTurnDiagnostics") or {}).items():
+            current = dict(turn_diagnostics.get(diagnostic_id) or {})
+            current.update(update if isinstance(update, dict) else {})
+            turn_diagnostics[diagnostic_id] = current
+        if turn_diagnostics:
+            merged["modelTurnDiagnostics"] = turn_diagnostics
         writer_by_stage: dict[str, Any] = {}
         for item in [*(previous.get("writers") or []), *(incoming.get("writers") or [])]:
             if not isinstance(item, dict):
@@ -796,8 +1076,8 @@ class HandoutRuntime:
 
     def execute(self, request: HandoutRunRequest) -> HandoutDraftPackage:
         request = request.compact()
-        # Obtain the cross-process ownership gate before reading any checkpoint.  Otherwise two replicas can both
-        # observe an empty row and independently start the three writer nodes before either checkpoint is written.
+        # Java 的每次租约接管都保持同一 durable taskId/runId；先取得跨进程运行锁再读检查点，
+        # 才能覆盖 Java 预检与 HTTP 派发之间的失租窗口，后到请求只能复用已完成包而不能再次调用 provider。
         with self._checkpoint.run_lock(request.run_id):
             return self._execute_locked(request)
 
@@ -823,16 +1103,47 @@ class HandoutRuntime:
                     raise HTTPException(status_code=409, detail="IDEMPOTENCY_KEY_INCOMPATIBLE")
         if existing and existing[0] == "COMPLETED" and existing[1].get("package"):
             return HandoutDraftPackage.model_validate(existing[1]["package"])
+        # A v1 checkpoint can already contain all validated audience documents. Preserve that completed work during
+        # the v2 rollout instead of reopening provider calls merely to recreate intermediate review artifacts.
+        if existing and existing[1].get("writers") and not existing[1].get("writingPlan"):
+            saved_writers = [WriterDocument.model_validate(item) for item in existing[1]["writers"]]
+            saved_codes = {item.stage_code for item in saved_writers}
+            if {"teacher_writer", "student_writer", "lecture_writer"}.issubset(saved_codes):
+                started_state["writers"] = saved_writers
+                for node in ("resource_curation", "plan_writer", "teacher_blueprint_writer", "teacher_writer", "student_writer", "lecture_writer"):
+                    self._record_node(request, node, telemetry.started, "RESUMED")
+                state = self._structured_validation(started_state)
+                package = state["package"].model_copy(update={"metrics": telemetry.finish()})
+                self._checkpoint.save(request.run_id, package.status, {**state, "package": package},
+                                      {"event": "completed", "status": package.status, "legacyCheckpoint": True})
+                return package
+            # A partially executed v1 run cannot safely infer a visible plan from an old teacher document. Explicitly
+            # reject it so Java can start the v2 staged artifact rather than silently spending model calls.
+            raise HTTPException(status_code=409, detail="LEGACY_CHECKPOINT_REQUIRES_RESTART")
         if existing and existing[1].get("evidence"):
             started_state["evidence"] = EvidenceSnapshot.model_validate(existing[1]["evidence"])
+        if existing and existing[1].get("writingPlan"):
+            saved_plan = WritingPlan.model_validate(existing[1]["writingPlan"])
+            if request.operation == "PLAN_REVISE":
+                if saved_plan.revision_round >= DEFAULT_PLAN_REVISION_LIMIT:
+                    raise HTTPException(status_code=409, detail="PLAN_REVISION_EXHAUSTED")
+            else:
+                started_state["writing_plan"] = saved_plan
+        if existing and existing[1].get("teacherBlueprint"):
+            saved_blueprint = TeacherBlueprint.model_validate(existing[1]["teacherBlueprint"])
+            if request.operation == "BLUEPRINT_REVISE":
+                if saved_blueprint.revision_round >= DEFAULT_BLUEPRINT_REVISION_LIMIT:
+                    raise HTTPException(status_code=409, detail="TEACHER_BLUEPRINT_REVISION_EXHAUSTED")
+            else:
+                started_state["teacher_blueprint"] = saved_blueprint
         if existing and existing[1].get("writers"):
             # A node checkpoint is authoritative after queue redelivery. Resumed nodes return validated artifacts
             # without opening another provider socket, so retries cannot silently double token cost.
             started_state["writers"] = [WriterDocument.model_validate(item) for item in existing[1]["writers"]]
-        self._checkpoint.save(request.run_id, "RUNNING", started_state, {"event": "started", "graphVersion": request.graph_version})
+        self._checkpoint.save(request.run_id, "RUNNING", started_state, {"event": "started", "graphVersion": request.graph_version, "operation": request.operation})
         try:
             state = self._graph.invoke(started_state)
-            package = state["package"]
+            package = state.get("package") or self._stage_package(request, state)
             telemetry.sample_system()
             package = package.model_copy(update={"metrics": telemetry.finish()})
             HandoutMetricsLedger().append(request, package.metrics, package.status)
@@ -840,6 +1151,16 @@ class HandoutRuntime:
             final_state["package"] = package
             self._checkpoint.save(request.run_id, package.status, final_state, {"event": "completed", "status": package.status})
             return package
+        except HandoutOutputContractError as exc:
+            telemetry.sample_system()
+            HandoutMetricsLedger().append(request, telemetry.finish(), "FAILED")
+            latest = self._checkpoint.load(request.run_id)
+            self._checkpoint.save(request.run_id, "FAILED", latest[1] if latest else started_state,
+                                  {"event": "failed", "error": "output_contract_failure"})
+            raise HTTPException(status_code=422, detail={
+                "code": "HANDOUT_OUTPUT_CONTRACT_FAILURE",
+                "message": "Handout model output failed deterministic validation after one repair",
+            }) from exc
         except HTTPException:
             telemetry.sample_system()
             HandoutMetricsLedger().append(request, telemetry.finish(), "FAILED")
@@ -850,11 +1171,33 @@ class HandoutRuntime:
             telemetry.sample_system()
             HandoutMetricsLedger().append(request, telemetry.finish(), "FAILED")
             latest = self._checkpoint.load(request.run_id)
-            self._checkpoint.save(request.run_id, "FAILED", latest[1] if latest else started_state, {"event": "failed", "error": type(exc).__name__})
-            raise HTTPException(status_code=503, detail="Handout graph failed") from exc
+            # The Java task timeline needs a concise actionable failure, not a generic 503 that hides the node or
+            # contract boundary. Keep Python internals out of the response while retaining the exception class.
+            safe_detail = str(exc).replace("\n", " ").strip()[:360]
+            failure = type(exc).__name__ if not safe_detail else f"{type(exc).__name__}: {safe_detail}"
+            self._checkpoint.save(request.run_id, "FAILED", latest[1] if latest else started_state,
+                                  {"event": "failed", "error": failure})
+            raise HTTPException(status_code=503, detail=f"Handout graph failed: {failure}") from exc
         finally:
             with self._telemetry_lock:
                 self._telemetry_by_run.pop(request.run_id, None)
+
+    @staticmethod
+    def _stage_package(request: HandoutRunRequest, state: HandoutRunState) -> HandoutDraftPackage:
+        """Returns a reviewable partial artifact; Java remains the authority that selects the next operation."""
+        plan = state.get("writing_plan")
+        blueprint = state.get("teacher_blueprint")
+        if request.operation in {"PLAN", "PLAN_REVISE"} and plan is not None:
+            phase = "PLAN_APPROVED"
+        elif request.operation in {"BLUEPRINT", "BLUEPRINT_REVISE"} and blueprint is not None:
+            phase = "TEACHER_BLUEPRINT_APPROVED"
+        else:
+            raise ValueError("staged operation completed without its required artifact")
+        return HandoutDraftPackage(runId=request.run_id, taskId=request.task_id, contractVersion=request.contract_version,
+                                  graphVersion=request.graph_version, status="WAITING_REVIEW", phase=phase,
+                                  evidence=state.get("evidence", EvidenceSnapshot()), writingPlan=plan,
+                                  teacherBlueprint=blueprint, documents={}, validation=ValidationReport(valid=True),
+                                  metrics=HandoutMetrics(startedAt=_utc_now()))
 
     def events(self, run_id: str) -> list[dict[str, Any]]:
         """Returns only operational events; prompt and source content never enter this stream."""
@@ -867,39 +1210,476 @@ class HandoutRuntime:
     def _build_graph(self):
         graph = StateGraph(HandoutRunState)
         graph.add_node("resource_curation", self._resource_curation)
+        graph.add_node("teacher_resource_curation", self._teacher_resource_curation)
+        graph.add_node("plan_writer", self._plan_writer)
+        graph.add_node("teacher_blueprint_writer", self._teacher_blueprint_writer)
         graph.add_node("teacher_writer", self._teacher_writer)
         graph.add_node("student_writer", self._student_writer)
         graph.add_node("lecture_writer", self._lecture_writer)
         graph.add_node("structured_validation", self._structured_validation)
         graph.add_edge(START, "resource_curation")
-        graph.add_edge("resource_curation", "teacher_writer")
-        graph.add_edge("resource_curation", "student_writer")
-        graph.add_edge("resource_curation", "lecture_writer")
+        graph.add_edge("resource_curation", "plan_writer")
+        graph.add_conditional_edges("plan_writer", self._after_plan)
+        graph.add_conditional_edges("teacher_resource_curation", self._after_teacher_resource_curation)
+        graph.add_conditional_edges("teacher_blueprint_writer", self._after_blueprint)
         graph.add_edge("teacher_writer", "structured_validation")
         graph.add_edge("student_writer", "structured_validation")
         graph.add_edge("lecture_writer", "structured_validation")
         graph.add_edge("structured_validation", END)
         return graph.compile()
 
+    @staticmethod
+    def _after_plan(state: HandoutRunState) -> str | list[str]:
+        """Collection is complete before planning; downstream nodes consume its consolidated evidence only."""
+        return END if state["request"].operation in {"PLAN", "PLAN_REVISE"} else "teacher_blueprint_writer"
+
+    @staticmethod
+    def _after_teacher_resource_curation(state: HandoutRunState) -> str | list[str]:
+        """Lets PLAN inspect AI-selected private evidence, then stops before any visible-content node."""
+        if state["request"].operation in {"PLAN", "PLAN_REVISE"}:
+            return END
+        return "teacher_blueprint_writer"
+
+    @staticmethod
+    def _after_blueprint(state: HandoutRunState) -> str | list[str]:
+        """Allows review of the teacher blueprint before any student or projection text is generated."""
+        if state["request"].operation in {"BLUEPRINT", "BLUEPRINT_REVISE"}:
+            return END
+        return ["teacher_writer", "student_writer", "lecture_writer"]
+
     def _resource_curation(self, state: HandoutRunState) -> dict[str, Any]:
+        """Collects authorized evidence before planning through a bounded private ReAct loop.
+
+        Java supplies only initial run-scoped context and executes exact Python-selected queries. Decision prompts,
+        broker payloads/responses and source-to-gap assessments are checkpointed privately; public events expose only
+        iteration, counts and a categorical stop reason.
+        """
         request = state["request"]
         self._check_deadline(request)
         started = time.monotonic()
         if state.get("evidence") is not None:
             self._record_node(request, "resource_curation", started, "RESUMED")
             return {"evidence": state["evidence"]}
-        payload = {"runId": request.run_id, "query": _bounded(request.question_text + " " + request.writing_goal, 6000), "evidenceRefs": request.evidence_refs, "limit": int(os.getenv("MATH_AGENT_HANDOUT_CONTEXT_LIMIT", str(DEFAULT_CONTEXT_LIMIT)))}
+        payload = {
+            "runId": request.run_id,
+            "evidenceRefs": request.evidence_refs,
+            "limit": int(os.getenv("MATH_AGENT_HANDOUT_CONTEXT_LIMIT", str(DEFAULT_CONTEXT_LIMIT))),
+        }
         try:
-            response = self._java_context(payload)
+            response = self._java_context(payload) if request.deadline_epoch_ms is None else self._java_context(
+                payload, deadline_epoch_ms=request.deadline_epoch_ms)
             evidence = EvidenceSnapshot.model_validate(response)
-            self._record_node(request, "resource_curation", started, "SUCCESS", java_requests=1, payload_bytes=len(json.dumps(payload, ensure_ascii=False).encode("utf-8")))
-            self._checkpoint.save(request.run_id, "RUNNING", {**state, "evidence": evidence}, {"event": "node_completed", "node": "resource_curation"})
-            return {"evidence": evidence}
+            # Direct context is intentionally not deep-read. Only a later AI-selected opaque document action may
+            # materialize original-Markdown blocks into inspected_items.
+            self._save_collection_diagnostic(request, {
+                "directContextEvidence": evidence.model_dump(by_alias=True, exclude_none=True),
+                "initialContextPayload": payload, "initialContextResponse": response,
+            })
+            for iteration in range(1, DEFAULT_COLLECTION_DECISION_LIMIT + 1):
+                decision, usage, provider, model, review = self._reviewed_model_candidate(
+                    request, "resource_curation", self._resource_collection_prompt(request, evidence, iteration),
+                    self._validate_collection_decision,
+                )
+                self._save_collection_diagnostic(request, {"iterations": {str(iteration): {
+                    "decisionPrompt": self._resource_collection_prompt(request, evidence, iteration),
+                    "effectiveDecision": decision.model_dump(by_alias=True), "provider": provider, "model": model,
+                    "review": review.checkpoint_value(), "evidenceBefore": evidence.model_dump(by_alias=True, exclude_none=True),
+                }}})
+                if decision.sufficient:
+                    if not any(item.ref for item in evidence.items):
+                        self._terminate_insufficient_evidence(request, evidence, iteration, "NO_USABLE_EVIDENCE")
+                    return self._handoff_collected_evidence(
+                        request, state, evidence, iteration, "SUFFICIENT", started, usage, provider, model, review)
+                # The final decision is a forced handoff boundary. Its prompt forbids another query, and any malformed
+                # query is ignored rather than extending collection beyond the fixed decision cap.
+                if iteration == DEFAULT_COLLECTION_DECISION_LIMIT:
+                    if not any(item.ref for item in evidence.items):
+                        self._terminate_insufficient_evidence(request, evidence, iteration, "NO_USABLE_EVIDENCE")
+                    return self._handoff_collected_evidence(
+                        request, state, evidence, iteration, "DECISION_CAP_REACHED_HANDOFF", started, usage, provider, model, review)
+                actions = decision.actions
+                if not actions:
+                    if not any(item.ref for item in evidence.items):
+                        self._terminate_insufficient_evidence(request, evidence, iteration, "NO_USABLE_EVIDENCE")
+                    return self._handoff_collected_evidence(
+                        request, state, evidence, iteration, "NO_USABLE_ACTION_HANDOFF", started, usage, provider, model, review)
+                before_refs = {item.ref for item in evidence.items if item.ref}
+                before_inspected_refs = {item.ref for item in evidence.inspected_items if item.ref}
+                evidence = self._execute_collection_actions(request, evidence, actions, iteration)
+                new_count = len({item.ref for item in evidence.items if item.ref} - before_refs)
+                new_inspected_count = len({item.ref for item in evidence.inspected_items if item.ref} - before_inspected_refs)
+                self._checkpoint.save(request.run_id, "RUNNING", {**state, "evidence": evidence}, {
+                    "event": "resource_collection", "iteration": iteration, "status": "COLLECTED",
+                    "actionCount": len(actions), "newEvidenceCount": new_count, "newInspectedCount": new_inspected_count,
+                    "evidenceCount": len(evidence.items),
+                })
+                if not new_count and not new_inspected_count and any(item.ref for item in evidence.items):
+                    # A selected read/search that returns no usable block is still a private observation the next
+                    # decision needs in order to choose a different authorized document or teacher-resource search.
+                    selected_document_action = any(action.kind in {"document_read", "document_search", "canonical_question_read"} for action in actions)
+                    if selected_document_action:
+                        self._save_collection_diagnostic(request, {"iterations": {str(iteration): {
+                            "collectionObservation": "UNREADABLE_OR_EMPTY_DOCUMENT",
+                        }}})
+                        continue
+                    return self._handoff_collected_evidence(
+                        request, state, evidence, iteration, "NO_NEW_USABLE_EVIDENCE_HANDOFF", started, usage, provider, model, review)
+            raise AssertionError("collection decision loop exceeded its fixed cap")
+        except HTTPException:
+            self._record_node(request, "resource_curation", started, "FAILED", java_requests=1,
+                              payload_bytes=len(json.dumps(payload, ensure_ascii=False).encode("utf-8")))
+            raise
         except Exception as exc:
-            self._record_node(request, "resource_curation", started, "FAILED", java_requests=1, payload_bytes=len(json.dumps(payload, ensure_ascii=False).encode("utf-8")), error=type(exc).__name__)
+            self._record_node(request, "resource_curation", started, "FAILED", java_requests=1,
+                              payload_bytes=len(json.dumps(payload, ensure_ascii=False).encode("utf-8")), error=type(exc).__name__)
             raise
 
+    def _handoff_collected_evidence(
+            self, request: HandoutRunRequest, state: HandoutRunState, evidence: EvidenceSnapshot, iteration: int,
+            reason: str, started: float, usage: dict[str, int | float], provider: str, model: str,
+            review: ModelReviewMetadata) -> dict[str, Any]:
+        """Stops collection without discarding non-empty authorized evidence; strict plan validation remains next."""
+        self._save_collection_diagnostic(request, {
+            "stopReason": reason, "consolidatedEvidence": evidence.model_dump(by_alias=True, exclude_none=True),
+        })
+        self._record_node(request, "resource_curation", started, "SUCCESS", provider_calls=review.turns,
+                          java_requests=1, payload_bytes=0, usage=usage, provider=provider, model=model)
+        self._checkpoint.save(request.run_id, "RUNNING", {**state, "evidence": evidence}, {
+            "event": "resource_collection", "iteration": iteration, "status": "HANDOFF", "stopCategory": reason,
+            "evidenceCount": len(evidence.items), "inspectedCount": len(evidence.inspected_items),
+        })
+        return {"evidence": evidence}
+
+    def _save_collection_diagnostic(self, request: HandoutRunRequest, update: dict[str, Any]) -> None:
+        """Stores protected collection replay material outside public event records."""
+        previous = self._checkpoint.load_private_state(request.run_id).get("privateDiagnostics", {}).get("resourceCollection", {})
+        merged = dict(previous) if isinstance(previous, dict) else {}
+        for key, value in update.items():
+            if isinstance(value, dict) and isinstance(merged.get(key), dict):
+                next_value = dict(merged[key])
+                next_value.update(value)
+                merged[key] = next_value
+            else:
+                merged[key] = value
+        self._checkpoint.save_private_state(request.run_id, {"privateDiagnostics": {"resourceCollection": merged}})
+
+    @staticmethod
+    def _validate_collection_decision(candidate: Any) -> ResourceCollectionDecision:
+        """A sufficient decision cannot also schedule a search, and an insufficient one needs an explicit gap."""
+        decision = ResourceCollectionDecision.model_validate(candidate)
+        if decision.sufficient and decision.actions:
+            raise ValueError("resource collection: sufficient decision cannot include actions")
+        return decision
+
+    def _resource_collection_prompt(self, request: HandoutRunRequest, evidence: EvidenceSnapshot, iteration: int) -> str:
+        """Supplies the private decision model only current run-authorized evidence and its own prior collection state."""
+        final_iteration = iteration >= DEFAULT_COLLECTION_DECISION_LIMIT
+        action_rules = (
+            "当前资料充分时必须立即停止并返回 sufficient=true、actions=[]。仅当存在明确来源缺口且未到上限时，"
+            "才可请求最多 4 个有界动作。"
+            if not final_iteration else
+            "这是最终第 %d/%d 轮：必须交接当前已授权证据，返回 sufficient=false、actions=[]；不得请求任何新动作。"
+            % (iteration, DEFAULT_COLLECTION_DECISION_LIMIT)
+        )
+        return json.dumps({
+            "stageCode": "resource_curation",
+            "instruction": "只输出 ResourceCollectionDecision JSON。评估直接命中与此前 agentSelectedDeepReads 是否足以支撑后续计划的真实题干、方法和必要图形。sourceToGapAssessment 必须说明来源覆盖与具体缺口。%s actions 最多 4 项；document_read、document_page_read、document_search 和 canonical_question_read 只能使用 authorizedEvidence 中已有的 opaque documentRef；canonical_question_read 仅用于 canonical 高考证据，固定读取当前 run 已授权的单题，不能提供题号、文件名、路径、查询或页码；document_page_read 的 pageNo 必须与该 documentRef 对应 retrieved_hit 的 pageNo 完全相同，pageRadius 只能为 0 至 4；teacher_resource_search 仅在当前授权文档仍不能填补缺口时使用。不得输出教学正文、逐步推理、路径、URL、Base64、文件系统信息或未经授权的引用。" % action_rules,
+            "iteration": iteration, "decisionLimit": DEFAULT_COLLECTION_DECISION_LIMIT, "finalIteration": final_iteration,
+            "writingGoal": request.writing_goal, "questionText": request.question_text,
+            "authorizedEvidence": evidence.prompt_text(),
+            "outputContract": {"sufficient": False, "actions": [{"kind": "document_read|document_page_read|document_search|canonical_question_read|teacher_resource_search", "documentRef": "opaque ref for document actions", "pageNo": "required only for document_page_read and must equal retrieved page", "pageRadius": "0 through 4 only for document_page_read", "query": "required only for search actions"}], "sourceToGapAssessment": "来源到缺口的评估"},
+        }, ensure_ascii=False)
+
+    def _execute_collection_actions(self, request: HandoutRunRequest, evidence: EvidenceSnapshot,
+                                    actions: list[ResourceCollectionAction], iteration: int) -> EvidenceSnapshot:
+        """Executes only decision-selected bounded actions against direct-hit or search-authorized opaque refs."""
+        diagnostics: dict[str, Any] = {"selectedActions": [action.model_dump(by_alias=True) for action in actions],
+                                       "agentSelectedDeepReads": [], "teacherSearches": []}
+        document_reads = [action.document_ref for action in actions if action.kind == "document_read"]
+        canonical_question_reads = {
+            action.document_ref for action in actions if action.kind == "canonical_question_read"
+        }
+        page_reads: dict[str, tuple[int, int]] = {}
+        document_queries: dict[str, list[str]] = {}
+        teacher_queries: list[str] = []
+        allowed_refs = {item.document_ref for item in evidence.items if item.document_ref}
+        for action in actions:
+            if action.kind == "document_page_read":
+                matching_item = next((item for item in evidence.items if item.document_ref == action.document_ref), None)
+                if matching_item is None or matching_item.page_no != action.page_no:
+                    diagnostics.setdefault("rejectedActions", []).append({"action": action.model_dump(by_alias=True), "reason": "UNAUTHORIZED_RETRIEVED_PAGE"})
+                else:
+                    page_reads[action.document_ref] = (action.page_no, action.page_radius)
+            elif action.kind == "document_search":
+                if action.document_ref not in allowed_refs:
+                    diagnostics.setdefault("rejectedActions", []).append({"action": action.model_dump(by_alias=True), "reason": "UNAUTHORIZED_DOCUMENT_REF"})
+                else:
+                    document_queries.setdefault(action.document_ref, []).append(action.query)
+            elif action.kind == "teacher_resource_search":
+                teacher_queries.append(action.query)
+        if teacher_queries:
+            evidence = self._collect_teacher_resource_queries(request, evidence, teacher_queries, iteration)
+            diagnostics["teacherSearches"] = teacher_queries
+        trace: list[dict[str, Any]] = []
+        target_refs = list(dict.fromkeys([*document_reads, *canonical_question_reads, *page_reads, *document_queries]))
+        if target_refs:
+            evidence = self._enrich_authorized_document_context(request, evidence,
+                document_search_queries=document_queries, diagnostic_trace=trace, target_document_refs=target_refs,
+                canonical_question_read_refs=canonical_question_reads, page_reads=page_reads)
+        diagnostics["agentSelectedDeepReads"] = trace
+        self._save_collection_diagnostic(request, {"iterations": {str(iteration): diagnostics}})
+        return evidence
+
+    def _collect_teacher_resource_queries(self, request: HandoutRunRequest, evidence: EvidenceSnapshot,
+                                          queries: list[str], iteration: int) -> EvidenceSnapshot:
+        """Executes exactly the model-selected queries and preserves the query-to-document provenance privately."""
+        discovered: list[EvidenceItem] = []
+        document_queries: dict[str, list[str]] = {}
+        diagnostics: dict[str, Any] = {"selectedQueries": queries, "searches": [], "dedupeDrops": [], "capacityDrops": []}
+        existing_refs = {item.ref for item in evidence.items if item.ref}
+        for query in queries:
+            self._ensure_curation_budget(request)
+            payload = {"runId": request.run_id, "query": _bounded(query, 160), "limit": 6}
+            response = self._java_broker_request("handout-teacher-resource-search", payload,
+                                                 deadline_epoch_ms=request.deadline_epoch_ms)
+            diagnostics["searches"].append({"payload": payload, "response": response})
+            rows = response.get("items", [])
+            if not isinstance(rows, list):
+                raise ValueError("Java teacher-resource search returned invalid items")
+            for row in rows:
+                if not isinstance(row, dict):
+                    diagnostics["dedupeDrops"].append({"reason": "INVALID_ITEM", "query": query})
+                    continue
+                item = EvidenceItem.model_validate(row)
+                if not item.ref or item.ref in existing_refs or any(found.ref == item.ref for found in discovered):
+                    diagnostics["dedupeDrops"].append({"reason": "DUPLICATE_OR_EMPTY_REF", "query": query, "item": row})
+                    continue
+                if len(evidence.items) + len(discovered) >= DEFAULT_COLLECTION_EVIDENCE_CAPACITY:
+                    diagnostics["capacityDrops"].append({"reason": "EVIDENCE_CAPACITY", "query": query, "item": row})
+                    continue
+                discovered.append(item)
+                if item.document_ref:
+                    document_queries.setdefault(item.document_ref, []).append(query)
+        merged = evidence.model_copy(update={"items": [*evidence.items, *discovered]})
+        # Search hits are direct context for the next decision. The collector must explicitly choose a document action
+        # before any original-Markdown block is materialized as an agent-selected deep read.
+        diagnostics["retainedNewEvidenceCount"] = len(discovered)
+        self._save_collection_diagnostic(request, {"iterations": {str(iteration): diagnostics}})
+        return merged
+
+    def _terminate_insufficient_evidence(self, request: HandoutRunRequest, evidence: EvidenceSnapshot,
+                                         iteration: int, reason: str) -> None:
+        """Creates a terminal, source-free public event before preventing plan and writer execution."""
+        self._save_collection_diagnostic(request, {"stopReason": reason, "consolidatedEvidence": evidence.model_dump(by_alias=True, exclude_none=True)})
+        self._checkpoint.save(request.run_id, "FAILED", {"request": request, "evidence": evidence}, {
+            "event": "resource_collection", "iteration": iteration, "status": "INSUFFICIENT",
+            "stopCategory": reason, "evidenceCount": len(evidence.items), "inspectedCount": len(evidence.inspected_items),
+        })
+        raise HTTPException(status_code=422, detail={"code": "HANDOUT_INSUFFICIENT_AUTHORIZED_EVIDENCE", "stopCategory": reason})
+
+    def _teacher_resource_curation(self, state: HandoutRunState) -> dict[str, Any]:
+        """Deprecated graph-node compatibility no-op; pre-plan collection owns all teacher-resource retrieval."""
+        request = state["request"]
+        started = time.monotonic()
+        evidence = state.get("evidence", EvidenceSnapshot())
+        self._record_node(request, "teacher_resource_curation", started, "SKIPPED")
+        return {"evidence": evidence}
+
+    def _record_model_turn(
+        self,
+        request: HandoutRunRequest,
+        node: str,
+        review_turn: int,
+        attempt_number: int,
+        update: dict[str, Any],
+    ) -> str:
+        """Appends the complete plaintext model exchange to the run checkpoint only.
+
+        This intentionally creates no public event. It is the operator replay record for every
+        provider call: outbound payload, raw reply, parsing, review, validation and retry outcome.
+        """
+        record_id = f"{node}:{review_turn}:{attempt_number}"
+        if hasattr(self, "_checkpoint"):
+            self._checkpoint.save_private_state(request.run_id, {"modelTurnDiagnostics": {record_id: update}})
+        return record_id
+
+    def _reviewed_model_candidate(
+        self,
+        request: HandoutRunRequest,
+        node: str,
+        initial_prompt: str,
+        validate_candidate,
+    ) -> tuple[Any, dict[str, int | float], str, str, ModelReviewMetadata]:
+        """Generates once and makes one full repair only when deterministic validation fails.
+
+        Model-written review envelopes and JSON patches were expensive and prolonged every normal request.
+        Validation remains authoritative: the repair prompt receives only the original contract, the invalid
+        candidate, and its deterministic failure code/message. All raw exchanges stay in the private checkpoint.
+        """
+        input_fingerprint = hashlib.sha256(
+            f"{request.run_id}:{request.task_id}:{node}:{request.writing_goal}:{request.question_text}".encode("utf-8")
+        ).hexdigest()
+        usages: list[dict[str, int | float]] = []
+        last_provider = ""
+        last_model = ""
+        candidate: Any = None
+        feedback_codes: tuple[str, ...] = ()
+        repair_attempts = max(0, int(os.getenv(
+            "MATH_AGENT_HANDOUT_MODEL_REPAIR_ATTEMPTS", str(DEFAULT_MODEL_REPAIR_ATTEMPTS))))
+
+        for turn in range(1, repair_attempts + 2):
+            prompt = initial_prompt if turn == 1 else self._repair_prompt(
+                node, initial_prompt, candidate, feedback_codes)
+            try:
+                raw, usage, provider, model = self._invoke_json_model(request, node, prompt, review_turn=turn)
+                # Older deterministic test adapters returned the removed review envelope. Runtime prompts now request
+                # the business JSON directly, but unwrapping this legacy shape preserves checkpoint compatibility.
+                candidate = raw.get("candidate") if isinstance(raw, dict) and raw.get("mode") == "full" and "candidate" in raw else raw
+                usages.append(usage)
+                last_provider, last_model = provider, model
+                validated = validate_candidate(candidate)
+            except (ValidationError, ValueError, ModelResponseParseError) as exc:
+                feedback_codes = self._validation_feedback_codes(exc)
+                self._record_model_turn(request, node, turn, 0, {
+                    "validation": "FAILED",
+                    "candidate": candidate,
+                    "validationErrorType": type(exc).__name__,
+                    "validationMessage": str(exc),
+                    "feedbackCodes": list(feedback_codes),
+                    "repairScheduled": turn <= repair_attempts,
+                })
+                if turn <= repair_attempts:
+                    continue
+                raise HandoutOutputContractError("HANDOUT_OUTPUT_CONTRACT_FAILURE") from exc
+
+            metadata = ModelReviewMetadata(
+                node=node,
+                turns=turn,
+                approved=True,
+                feedback_codes=feedback_codes,
+                candidate_hash=hashlib.sha256(json.dumps(candidate, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")).hexdigest(),
+                input_fingerprint=input_fingerprint,
+                status="APPROVED",
+            )
+            self._checkpoint.save(request.run_id, "RUNNING", {"modelReviews": {node: metadata.checkpoint_value()}},
+                                  metadata.event_value())
+            usage_total = {"promptTokens": 0, "completionTokens": 0, "totalTokens": 0, "estimatedCost": 0.0}
+            for item in usages:
+                usage_total = _sum_usage(usage_total, item)
+            return validated, usage_total, last_provider, last_model, metadata
+
+        raise HandoutOutputContractError("HANDOUT_OUTPUT_CONTRACT_FAILURE")
+
+    @staticmethod
+    def _validation_feedback_codes(error: Exception) -> tuple[str, ...]:
+        """Maps deterministic contract failures to a small non-prose repair contract."""
+        message = str(error).lower()
+        if "unauthorized evidence" in message:
+            return ("EVIDENCE_REFERENCE_INVALID",)
+        if "math" in message or "latex" in message:
+            return ("MATH_MARKUP_INVALID",)
+        if "question" in message or "missing" in message:
+            return ("CANDIDATE_INCOMPLETE",)
+        return ("CANDIDATE_INVALID",)
+
+    @staticmethod
+    def _repair_prompt(node: str, initial_prompt: str, candidate: Any, feedback_codes: tuple[str, ...]) -> str:
+        """Requests one complete replacement candidate from a concrete failed output and safe validation details."""
+        return json.dumps({
+            "stageCode": node,
+            "instruction": "上一次 JSON 未通过确定性合同校验。只输出一个完整、可直接校验的 JSON 对象或数组，不要 Markdown、解释、推理、URL、路径或 Base64。必须修复所有 failureCodes 和 validationMessage 指出的错误。",
+            "originalInstruction": initial_prompt,
+            "invalidCandidate": candidate,
+            "failureCodes": list(feedback_codes),
+        }, ensure_ascii=False)
+
+    def _plan_writer(self, state: HandoutRunState) -> dict[str, Any]:
+        """Produces a self-approved, deterministically validated teaching plan."""
+        request = state["request"]
+        started = time.monotonic()
+        if state.get("writing_plan") is not None:
+            self._record_node(request, "plan_writer", started, "RESUMED")
+            return {"writing_plan": state["writing_plan"]}
+        evidence = state.get("evidence", EvidenceSnapshot())
+        try:
+            plan, usage, provider, model, review = self._reviewed_model_candidate(
+                request,
+                "plan_writer",
+                self._plan_prompt(request, evidence),
+                lambda candidate: self._validate_plan_candidate(candidate, request, evidence),
+            )
+        except HandoutOutputContractError as exc:
+            self._record_node(request, "plan_writer", started, "FAILED", provider_calls=2, error="HANDOUT_OUTPUT_CONTRACT_FAILURE")
+            raise
+        self._record_node(request, "plan_writer", started, "SUCCESS", provider_calls=review.turns,
+                          usage=usage, provider=provider, model=model)
+        self._checkpoint.save(
+            request.run_id,
+            "RUNNING",
+            {"request": request, "writingPlan": plan,
+             "modelReviews": {"plan_writer": review.checkpoint_value()}},
+            {"event": "plan_ready", "phase": "PLAN_DRAFTED", "revisionRound": plan.revision_round},
+        )
+        return {"writing_plan": plan}
+
+    def _validate_plan_candidate(self, candidate: Any, request: HandoutRunRequest,
+                                 evidence: EvidenceSnapshot) -> WritingPlan:
+        """Applies all plan-specific deterministic checks only after model self-approval."""
+        plan = WritingPlan.model_validate(candidate)
+        saved = self._checkpoint.load(request.run_id) if request.operation == "PLAN_REVISE" else None
+        saved_round = int((saved[1].get("writingPlan") or {}).get("revisionRound", 0)) if saved else -1
+        expected_round = saved_round + 1 if request.operation == "PLAN_REVISE" else 0
+        if plan.revision_round != expected_round:
+            raise ValueError("writing plan: revision round does not match requested operation")
+        self._validate_writing_plan(plan, request, evidence)
+        return plan
+
+    def _teacher_blueprint_writer(self, state: HandoutRunState) -> dict[str, Any]:
+        """Writes a self-approved teacher source before deterministic derivation checks."""
+        request = state["request"]
+        started = time.monotonic()
+        if state.get("teacher_blueprint") is not None:
+            self._record_node(request, "teacher_blueprint_writer", started, "RESUMED")
+            return {"teacher_blueprint": state["teacher_blueprint"]}
+        plan = state.get("writing_plan")
+        if plan is None or not plan.ready_for_next_stage:
+            raise ValueError("teacher_blueprint_writer: approved writing plan is required")
+        try:
+            blueprint, usage, provider, model, review = self._reviewed_model_candidate(
+                request,
+                "teacher_blueprint_writer",
+                self._teacher_blueprint_prompt(request, state.get("evidence", EvidenceSnapshot()), plan),
+                lambda candidate: self._validate_blueprint_candidate(candidate, request, plan),
+            )
+        except HandoutOutputContractError:
+            self._record_node(request, "teacher_blueprint_writer", started, "FAILED", provider_calls=2,
+                              error="HANDOUT_OUTPUT_CONTRACT_FAILURE")
+            raise
+        self._record_node(request, "teacher_blueprint_writer", started, "SUCCESS", provider_calls=review.turns,
+                          usage=usage, provider=provider, model=model)
+        self._checkpoint.save(
+            request.run_id,
+            "RUNNING",
+            {"request": request, "teacherBlueprint": blueprint,
+             "modelReviews": {"teacher_blueprint_writer": review.checkpoint_value()}},
+            {"event": "teacher_blueprint_ready", "phase": "TEACHER_BLUEPRINT_DRAFTED",
+             "revisionRound": blueprint.revision_round},
+        )
+        return {"teacher_blueprint": blueprint}
+
+    def _validate_blueprint_candidate(self, candidate: Any, request: HandoutRunRequest,
+                                      plan: WritingPlan) -> TeacherBlueprint:
+        """Validates only self-approved blueprints and keeps revision ownership at this node."""
+        blueprint = TeacherBlueprint.model_validate(candidate)
+        saved = self._checkpoint.load(request.run_id) if request.operation == "BLUEPRINT_REVISE" else None
+        saved_round = int((saved[1].get("teacherBlueprint") or {}).get("revisionRound", 0)) if saved else -1
+        expected_round = saved_round + 1 if request.operation == "BLUEPRINT_REVISE" else 0
+        if blueprint.revision_round != expected_round:
+            raise ValueError("teacher blueprint: revision round does not match requested operation")
+        return self._validate_teacher_blueprint(blueprint, request, plan)
+
     def _writer(self, state: HandoutRunState, stage_code: str, audience: str, instruction: str) -> dict[str, Any]:
+        """Runs the student or lecture writer through the shared self-review controller."""
         request = state["request"]
         started = time.monotonic()
         resumed = next((item for item in state.get("writers", []) if item.stage_code == stage_code), None)
@@ -907,69 +1687,78 @@ class HandoutRuntime:
             self._record_node(request, stage_code, started, "RESUMED")
             return {"writers": []}
         evidence = state.get("evidence", EvidenceSnapshot())
-        prompt = self._writer_prompt(request, evidence, stage_code, audience, instruction)
-        provider_calls = 0
+        plan = state.get("writing_plan")
+        blueprint = state.get("teacher_blueprint")
+        if plan is None or blueprint is None or not blueprint.ready_for_derivation:
+            raise ValueError(f"{stage_code}: approved plan and teacher blueprint are required")
         try:
-            document, usage, provider, model = self._invoke_json_model(request, stage_code, prompt)
-            provider_calls = 1
-            try:
-                # This is the cheap and deterministic path: normalize wrapper shapes and validate semantics before
-                # spending another provider call. A valid but differently shaped lectureCards array is not an error.
-                document = self._normalize_writer_payload(document, stage_code, request.question_text)
-                repair_reason = ""
-            except (ValidationError, ValueError) as exc:
-                repair_reason = str(exc)
-                if DEFAULT_REPAIR_ATTEMPTS <= 0:
-                    raise
-                # The model is a last resort only for a semantically invalid response. The repair prompt contains the
-                # failed fields and the submitted questions, not the full evidence bundle, so repair cost stays bounded.
-                repair_errors = [repair_reason]
-                repaired = False
-                for repair_index in range(DEFAULT_REPAIR_ATTEMPTS):
-                    repaired_raw, repair_usage, repair_provider, repair_model = self._invoke_json_model(
-                        request,
-                        f"{stage_code}_repair",
-                        self._repair_prompt(request, stage_code, repair_errors),
-                    )
-                    provider_calls += 1
-                    # Usage is cumulative even when a repair response is rejected, so the accepted run never hides
-                    # billable provider work behind the final valid WriterDocument.
-                    usage = _sum_usage(usage, repair_usage)
-                    provider = repair_provider
-                    model = repair_model
-                    try:
-                        document = self._normalize_writer_payload(repaired_raw, stage_code, request.question_text)
-                        repaired = True
-                        break
-                    except (ValidationError, ValueError) as repair_error:
-                        repair_errors.append(str(repair_error))
-                if not repaired:
-                    raise ValueError(f"{stage_code}: repair exhausted: {'; '.join(repair_errors)}")
-            self._record_node(request, stage_code, started, "SUCCESS", provider_calls=provider_calls, usage=usage,
-                              provider=provider, model=model)
-            self._checkpoint.save(request.run_id, "RUNNING", {**state, "writers": [document]}, {"event": "node_completed", "node": stage_code, "provider": provider, "model": model, "deterministicRepair": bool(repair_reason)})
-            return {"writers": [document]}
-        except Exception as exc:
-            self._record_node(request, stage_code, started, "FAILED", provider_calls=max(1, provider_calls), error=type(exc).__name__)
-            # Preserve the failing node in the durable event stream without persisting provider response bodies or
-            # prompt text. This makes a later resume auditable when LangGraph wraps the original exception.
-            detail = type(exc).__name__
-            if isinstance(exc, ValueError) and not isinstance(exc, ValidationError):
-                detail = f"{detail}:{str(exc)[:180]}"
-            self._checkpoint.save(request.run_id, "RUNNING", state, {"event": "node_failed", "node": stage_code, "error": detail})
+            document, usage, provider, model, review = self._reviewed_model_candidate(
+                request,
+                stage_code,
+                self._writer_prompt(request, evidence, stage_code, audience, instruction, plan, blueprint),
+                lambda candidate: self._normalize_writer_payload(candidate, stage_code, request.question_text, plan),
+            )
+        except HandoutOutputContractError:
+            self._record_node(request, stage_code, started, "FAILED", provider_calls=2,
+                              error="HANDOUT_OUTPUT_CONTRACT_FAILURE")
             raise
+        self._record_node(request, stage_code, started, "SUCCESS", provider_calls=review.turns, usage=usage,
+                          provider=provider, model=model)
+        self._checkpoint.save(
+            request.run_id,
+            "RUNNING",
+            {"request": request, "writers": [document],
+             "modelReviews": {stage_code: review.checkpoint_value()}},
+            {"event": "node_completed", "node": stage_code, "reviewTurns": review.turns},
+        )
+        return {"writers": [document]}
 
     def _teacher_writer(self, state: HandoutRunState) -> dict[str, Any]:
-        return self._writer(state, "teacher_writer", "teacher", "写教师版讲义，保留逐题推导、答案、评分点和易错提醒。")
+        """Publishes the approved teacher blueprint without opening a divergent fourth model call."""
+        request = state["request"]
+        started = time.monotonic()
+        resumed = next((item for item in state.get("writers", []) if item.stage_code == "teacher_writer"), None)
+        if resumed is not None:
+            self._record_node(request, "teacher_writer", started, "RESUMED")
+            return {"writers": []}
+        blueprint = state.get("teacher_blueprint")
+        if blueprint is None or not blueprint.ready_for_derivation:
+            raise ValueError("teacher_writer: approved teacher blueprint is required")
+        document = WriterDocument(stageCode="teacher_writer", title=blueprint.title, markdown=blueprint.markdown,
+                                  citations=blueprint.citations, assetPlacements=blueprint.asset_placements,
+                                  warnings=blueprint.remaining_edits)
+        self._record_node(request, "teacher_writer", started, "SUCCESS")
+        self._checkpoint.save(
+            request.run_id,
+            "RUNNING",
+            {"request": request, "writers": [document]},
+            {"event": "node_completed", "node": "teacher_writer", "derivedFrom": "teacher_blueprint"},
+        )
+        return {"writers": [document]}
 
     def _student_writer(self, state: HandoutRunState) -> dict[str, Any]:
-        return self._writer(state, "student_writer", "student", "写学生练习版，只给题目、提示和留白，不输出答案、评分点或教师内部分析。")
+        return self._writer(
+            state,
+            "student_writer",
+            "student",
+            "逐题写学生练习版：题目、分层提示、作答区。绝不输出最终答案、结论、完整推导、评分点、"
+            "教师提示或正确选项；不要把教师版长解改写后放入学生版。标题从行首写 ## 标题，显示公式单行成对"
+            "写作 $$公式$$，不得转义标题、混用 \\[、\\] 或裸 $。",
+        )
 
     def _lecture_writer(self, state: HandoutRunState) -> dict[str, Any]:
-        return self._writer(state, "lecture_writer", "lecture", "写课堂投影版，按连续教学顺序组织知识点、例题和课堂追问。")
+        return self._writer(
+            state,
+            "lecture_writer",
+            "lecture",
+            "逐题写 16:10 课堂投影：每题一个独立教学单元，包含题目、最少必要的分步引导和课堂追问。"
+            "图必须与对应题同页；不要复制教师版长解，不要输出最终答案或完整解答。标题从行首写 ## 标题，显示"
+            "公式单行成对写作 $$公式$$，不得转义标题、混用 \\[、\\] 或裸 $。",
+        )
 
     @staticmethod
-    def _normalize_writer_payload(raw: Any, stage_code: str, question_text: str) -> WriterDocument:
+    def _normalize_writer_payload(raw: Any, stage_code: str, question_text: str,
+                                  plan: WritingPlan | None = None) -> WriterDocument:
         """Normalizes provider variants and enforces non-empty, ordered question semantics in code."""
         payload: Any = raw
         if isinstance(payload, list):
@@ -999,9 +1788,35 @@ class HandoutRuntime:
         if len(markdown.strip()) < DEFAULT_MIN_DOCUMENT_CHARS:
             raise ValueError(f"{stage_code}: markdown is empty or too short")
         document = WriterDocument(stageCode=stage_code, title=title, markdown=markdown,
-                                  citations=_string_list(payload.get("citations")), warnings=_string_list(payload.get("warnings")))
+                                  citations=_string_list(payload.get("citations")),
+                                  assetPlacements=payload.get("assetPlacements", []),
+                                  warnings=_string_list(payload.get("warnings")))
         HandoutRuntime._validate_document_semantics(document, stage_code, question_text)
+        if plan is not None:
+            HandoutRuntime._validate_document_asset_placements(document, stage_code, plan)
         return document
+
+    @staticmethod
+    def _validate_document_asset_placements(
+            document: WriterDocument, stage_code: str, plan: WritingPlan) -> None:
+        """Keeps each writer variant bound to the plan's AI-selected assets; writers cannot choose replacements."""
+        allowed = {
+            (placement.question_number, placement.anchor, placement.layout, tuple(placement.asset_ids), placement.caption)
+            for question in plan.questions for placement in question.asset_placements
+            if stage_code in placement.variants
+        }
+        seen: set[tuple[int, str, str, tuple[str, ...], str]] = set()
+        for placement in document.asset_placements:
+            if stage_code not in placement.variants:
+                raise ValueError(f"{stage_code}: asset placement excludes this variant")
+            key = (placement.question_number, placement.anchor, placement.layout, tuple(placement.asset_ids), placement.caption)
+            if key not in allowed:
+                raise ValueError(f"{stage_code}: asset placement differs from approved writing plan")
+            if key in seen:
+                raise ValueError(f"{stage_code}: duplicate asset placement")
+            seen.add(key)
+        if seen != allowed:
+            raise ValueError(f"{stage_code}: missing approved asset placement")
 
     @staticmethod
     def _validate_document_semantics(document: WriterDocument, stage_code: str, question_text: str) -> None:
@@ -1027,6 +1842,9 @@ class HandoutRuntime:
             # Advance past the earliest matched token so a repeated generic symbol cannot satisfy every later stem.
             position, token = min(found)
             cursor = position + len(token)
+        if UNSAFE_DOCUMENT_TRANSPORT_PATTERN.search(markdown):
+            raise ValueError(f"{stage_code}: unsafe image, URL, or HTML transport")
+        HandoutRuntime._validate_writer_markup(markdown, stage_code)
         if stage_code == "lecture_writer":
             forbidden = [marker for marker in (*COMMON_FORBIDDEN_MARKERS, *LECTURE_FORBIDDEN_MARKERS) if marker in markdown]
             if re.search(r"(?m)^\s*([-*_]){3,}\s*$", markdown) or re.search(r"_{2,}", markdown):
@@ -1037,10 +1855,33 @@ class HandoutRuntime:
             forbidden = [marker for marker in COMMON_FORBIDDEN_MARKERS if marker in markdown]
             if forbidden:
                 raise ValueError(f"{stage_code}: forbidden internal or asset content: {','.join(forbidden)}")
+        if stage_code == "teacher_writer":
+            missing_sections = [marker for marker in TEACHER_REQUIRED_SECTION_MARKERS if marker not in markdown]
+            if missing_sections:
+                raise ValueError(f"teacher_writer: missing required sections: {','.join(missing_sections)}")
         if stage_code == "student_writer":
             leaked = [marker for marker in ANSWER_LEAK_MARKERS if marker in markdown]
             if leaked:
                 raise ValueError(f"student_writer: answer leakage: {','.join(leaked)}")
+
+    @staticmethod
+    def _validate_writer_markup(markdown: str, stage_code: str) -> None:
+        """Keeps model Markdown within the small delimiter subset that the XeLaTeX exporter can publish safely."""
+        if ESCAPED_OR_LIST_HEADING_PATTERN.search(markdown):
+            raise ValueError(f"{stage_code}: headings must start with an unescaped Markdown #")
+        for line_number, line in enumerate(markdown.splitlines(), start=1):
+            has_display_delimiter = "$$" in line
+            if "\\[" in line or "\\]" in line:
+                raise ValueError(f"{stage_code}: line {line_number}: display math must use closed $$...$$ delimiters")
+            if not has_display_delimiter:
+                continue
+            match = DISPLAY_MATH_LINE_PATTERN.fullmatch(line)
+            if match is None or "$$" in match.group("formula"):
+                raise ValueError(f"{stage_code}: line {line_number}: display math must be one closed $$...$$ expression")
+            # A valid display line contains four unescaped dollar characters. Any additional one is a leaked inline
+            # delimiter that changes TeX mode and must be repaired before it reaches publication.
+            if len(UNESCAPED_DOLLAR_PATTERN.findall(line)) != 4:
+                raise ValueError(f"{stage_code}: line {line_number}: display math cannot contain inline dollar delimiters")
 
     def _structured_validation(self, state: HandoutRunState) -> dict[str, Any]:
         request = state["request"]
@@ -1048,49 +1889,264 @@ class HandoutRuntime:
         writers = state.get("writers", [])
         documents = {document.stage_code: document for document in writers}
         required = ("teacher_writer", "student_writer", "lecture_writer")
-        errors = [f"missing:{stage}" for stage in required if stage not in documents]
+        # All three visible writer artifacts already originate from the AI runtime. At this handoff boundary require
+        # only their presence so optional headings, question wording, and formatting never discard usable output.
+        errors = [f"missing:{stage}" for stage in required if not (documents.get(stage).title.strip() and documents.get(stage).markdown.strip())]
         observed_codes = [document.stage_code for document in writers]
         duplicate_codes = sorted({code for code in observed_codes if observed_codes.count(code) > 1})
         errors.extend(f"duplicate:{code}" for code in duplicate_codes)
-        for stage in required:
-            document = documents.get(stage)
-            if document is None:
-                continue
-            try:
-                self._validate_document_semantics(document, stage, request.question_text)
-            except ValueError as exc:
-                errors.append(str(exc))
-        # A second model call here used to turn an incomplete package into a superficially non-empty package. Writer
-        # nodes already get one bounded model fallback after deterministic normalization; this final gate only rejects.
+        # Publication continues with writer-produced content; validation reports operational artifact presence only.
         self._record_node(request, "structured_validation", started, "SUCCESS" if not errors else "FAILED", error=";".join(errors)[:500] if errors else None)
         report = ValidationReport(valid=not errors, repaired=False, errors=errors)
         metrics = HandoutMetrics(started_at=_utc_now())
-        package = HandoutDraftPackage(run_id=request.run_id, task_id=request.task_id, contract_version=request.contract_version, graph_version=request.graph_version, status="COMPLETED" if report.valid else "FAILED", evidence=state.get("evidence", EvidenceSnapshot()), documents=documents, validation=report, metrics=metrics)
-        self._checkpoint.save(request.run_id, package.status, {**state, "package": package}, {"event": "validated", "valid": report.valid, "errors": errors})
+        package = HandoutDraftPackage(run_id=request.run_id, task_id=request.task_id, contract_version=request.contract_version,
+                                      graph_version=request.graph_version, status="COMPLETED" if report.valid else "FAILED",
+                                      phase="COMPLETED" if report.valid else "FINAL_REVIEW", evidence=state.get("evidence", EvidenceSnapshot()),
+                                      writingPlan=state.get("writing_plan"), teacherBlueprint=state.get("teacher_blueprint"),
+                                      documents=documents, validation=report, metrics=metrics)
+        self._checkpoint.save(request.run_id, package.status, {**state, "package": package},
+                              {"event": "validated", "phase": package.phase, "valid": report.valid, "errors": errors})
         return {"package": package}
 
-    def _java_context(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def _java_context(self, payload: dict[str, Any], deadline_epoch_ms: int | None = None) -> dict[str, Any]:
+        if deadline_epoch_ms is None:
+            decoded = self._java_broker_request("handout-context", payload)
+        else:
+            decoded = self._java_broker_request("handout-context", payload, deadline_epoch_ms=deadline_epoch_ms)
+        return {"query": "", "items": decoded.get("items", decoded.get("hits", [])), "source": "java-broker"}
+
+    def _enrich_authorized_document_context(
+            self, request: HandoutRunRequest, evidence: EvidenceSnapshot,
+            search_keyword: str | None = None,
+            document_search_queries: dict[str, list[str]] | None = None,
+            diagnostic_trace: list[dict[str, Any]] | None = None,
+            target_document_refs: list[str] | None = None,
+            canonical_question_read_refs: set[str] | None = None,
+            page_reads: dict[str, tuple[int, int]] | None = None) -> EvidenceSnapshot:
+        """Appends bounded original parsed-Markdown windows only after an AI-selected opaque document action."""
+        inspected_document_refs = {item.document_ref for item in evidence.inspected_items if item.document_ref}
+        allowed_document_refs = {item.document_ref for item in evidence.items if item.document_ref}
+        requested_refs = target_document_refs if target_document_refs is not None else [
+            item.document_ref for item in evidence.items if item.document_ref
+        ]
+        document_refs = list(dict.fromkeys(
+            document_ref for document_ref in requested_refs
+            if document_ref in allowed_document_refs and document_ref not in inspected_document_refs
+        ))
+        # Search-stage enrichment continues the context-stage budget; a later model-selected source can never push
+        # the checkpoint beyond its fixed inspected-source allocation.
+        remaining = DEFAULT_MAX_INSPECTED_SOURCE_CHARS - sum(len(item.excerpt) for item in evidence.inspected_items)
+        for document_ref in document_refs[:DEFAULT_DOCUMENT_INSPECTION_LIMIT]:
+            self._ensure_curation_budget(request)
+            if remaining <= 0:
+                break
+            page_selection = (page_reads or {}).get(document_ref)
+            if document_ref in (canonical_question_read_refs or set()):
+                broker_operation = "handout-canonical-question-read"
+                broker_payload = {
+                    "runId": request.run_id,
+                    "documentRef": document_ref,
+                    "maxBlocks": 1,
+                    "maxChars": min(DEFAULT_DOCUMENT_READ_CHARS, remaining),
+                }
+            elif page_selection is None:
+                broker_operation = "handout-document-read"
+                broker_payload = {
+                    "runId": request.run_id,
+                    "documentRef": document_ref,
+                    "maxBlocks": DEFAULT_DOCUMENT_READ_BLOCKS,
+                    "maxChars": min(DEFAULT_DOCUMENT_READ_CHARS, remaining),
+                }
+            else:
+                page_no, page_radius = page_selection
+                broker_operation = "handout-document-page-read"
+                broker_payload = {
+                    "runId": request.run_id,
+                    "documentRef": document_ref,
+                    "pageNo": page_no,
+                    "pageRadius": page_radius,
+                    "maxBlocks": DEFAULT_DOCUMENT_READ_BLOCKS,
+                    "maxChars": min(DEFAULT_DOCUMENT_READ_CHARS, remaining),
+                }
+            if request.deadline_epoch_ms is None:
+                response = self._java_broker_request(broker_operation, broker_payload)
+            else:
+                response = self._java_broker_request(
+                    broker_operation, broker_payload, deadline_epoch_ms=request.deadline_epoch_ms)
+            blocks = response.get("blocks", [])
+            read_diagnostic = {"operation": broker_operation, "documentRef": document_ref,
+                               "selectionQueries": list(dict.fromkeys(document_search_queries.get(document_ref, []))) if document_search_queries else [],
+                               "payload": broker_payload, "response": response, "budgetBefore": remaining,
+                               "acceptedBlocks": [], "skippedBlocks": []}
+            if not isinstance(blocks, list):
+                if diagnostic_trace is not None:
+                    diagnostic_trace.append(read_diagnostic)
+                raise ValueError("Java handout document read returned invalid blocks")
+            document_name = next((item.document_name or item.title for item in evidence.items if item.document_ref == document_ref), "")
+            # 所有文档共用一个原文预算；超过剩余额度的块整体跳过，绝不截断块正文或丢失其不透明引用。
+            for block in blocks[:DEFAULT_DOCUMENT_READ_BLOCKS]:
+                if not isinstance(block, dict):
+                    read_diagnostic["skippedBlocks"].append({"reason": "INVALID_BLOCK"})
+                    continue
+                text = str(block.get("text") or "").strip()
+                reference = str(block.get("ref") or "").strip()
+                if not text or not reference:
+                    read_diagnostic["skippedBlocks"].append({"reason": "EMPTY_REF_OR_TEXT", "block": block})
+                    continue
+                if len(text) > remaining:
+                    read_diagnostic["skippedBlocks"].append({"reason": "CHARACTER_BUDGET", "ref": reference, "chars": len(text)})
+                    continue
+                evidence.inspected_items.append(EvidenceItem(
+                    ref=_bounded(reference, 240),
+                    title=document_name,
+                    documentName=document_name,
+                    documentRef=document_ref,
+                    pageNo=int(block.get("pageNo") or 0),
+                    excerpt=text,
+                ))
+                read_diagnostic["acceptedBlocks"].append({"ref": reference, "text": text, "chars": len(text)})
+                remaining -= len(text)
+            read_diagnostic["budgetAfter"] = remaining
+            if diagnostic_trace is not None:
+                diagnostic_trace.append(read_diagnostic)
+            # Search uses only plan-writer-selected keywords and the broker-authorized document returned for this run.
+            # The legacy single keyword argument remains for existing initial-context callers; teacher curation supplies
+            # the exact query set that discovered each document.
+            selected_queries = document_search_queries.get(document_ref, []) if document_search_queries else []
+            if search_keyword:
+                selected_queries.append(search_keyword)
+            for selected_query in dict.fromkeys(selected_queries):
+                self._ensure_curation_budget(request)
+                if remaining <= 0:
+                    break
+                search_payload = {
+                    "runId": request.run_id,
+                    "documentRef": document_ref,
+                    "keyword": _bounded(selected_query, 160),
+                    "maxBlocks": DEFAULT_DOCUMENT_READ_BLOCKS,
+                    "maxChars": min(DEFAULT_DOCUMENT_READ_CHARS, remaining),
+                }
+                if request.deadline_epoch_ms is None:
+                    search_response = self._java_broker_request("handout-document-search", search_payload)
+                else:
+                    search_response = self._java_broker_request(
+                        "handout-document-search", search_payload, deadline_epoch_ms=request.deadline_epoch_ms)
+                search_blocks = search_response.get("blocks", [])
+                search_diagnostic = {"operation": "handout-document-search", "documentRef": document_ref,
+                                     "selectionQuery": selected_query, "payload": search_payload, "response": search_response,
+                                     "budgetBefore": remaining, "acceptedBlocks": [], "skippedBlocks": []}
+                if not isinstance(search_blocks, list):
+                    if diagnostic_trace is not None:
+                        diagnostic_trace.append(search_diagnostic)
+                    raise ValueError("Java handout document search returned invalid blocks")
+                known_refs = {item.ref for item in evidence.inspected_items if item.ref}
+                for block in search_blocks[:DEFAULT_DOCUMENT_READ_BLOCKS]:
+                    if not isinstance(block, dict):
+                        search_diagnostic["skippedBlocks"].append({"reason": "INVALID_BLOCK"})
+                        continue
+                    text = str(block.get("text") or "").strip()
+                    reference = str(block.get("ref") or "").strip()
+                    if not text or not reference:
+                        search_diagnostic["skippedBlocks"].append({"reason": "EMPTY_REF_OR_TEXT", "block": block})
+                        continue
+                    if reference in known_refs:
+                        search_diagnostic["skippedBlocks"].append({"reason": "DUPLICATE_REF", "ref": reference})
+                        continue
+                    if len(text) > remaining:
+                        search_diagnostic["skippedBlocks"].append({"reason": "CHARACTER_BUDGET", "ref": reference, "chars": len(text)})
+                        continue
+                    evidence.inspected_items.append(EvidenceItem(
+                        ref=_bounded(reference, 240),
+                        title=document_name,
+                        documentName=document_name,
+                        documentRef=document_ref,
+                        excerpt=text,
+                    ))
+                    search_diagnostic["acceptedBlocks"].append({"ref": reference, "text": text, "chars": len(text)})
+                    known_refs.add(reference)
+                    remaining -= len(text)
+                search_diagnostic["budgetAfter"] = remaining
+                if diagnostic_trace is not None:
+                    diagnostic_trace.append(search_diagnostic)
+        return evidence
+
+    def _java_broker_request(
+            self, operation: str, payload: dict[str, Any], deadline_epoch_ms: int | None = None) -> dict[str, Any]:
+        """Uses fixed internal routes; neither a model nor input can select a URL, filesystem path, or shell command."""
+        routes = {
+            "handout-context": "handout-context",
+            "handout-document-page-read": "handout-document-page-read",
+            "handout-document-read": "handout-document-read",
+            "handout-canonical-question-read": "handout-canonical-question-read",
+            "handout-document-search": "handout-document-search",
+            "handout-teacher-resource-search": "handout-teacher-resource-search",
+        }
+        route = routes.get(operation)
+        if route is None:
+            raise ValueError("Unsupported Java handout broker operation")
         base_url = os.getenv("MATH_AGENT_TOOL_BROKER_BASE_URL", "http://backend:8080").rstrip("/")
         worker_key = os.getenv("MATH_AGENT_AGENT_WORKER_SHARED_KEY", "")
         if not worker_key:
             raise HTTPException(status_code=503, detail="MATH_AGENT_AGENT_WORKER_SHARED_KEY is required")
-        timeout = float(os.getenv("MATH_AGENT_TOOL_BROKER_TIMEOUT_SECONDS", "30"))
-        response = self._session.post(f"{base_url}/internal/agent-tools/v1/handout-context", headers={"X-Agent-Worker-Key": worker_key}, json=payload, timeout=timeout)
-        response.raise_for_status()
+        configured_timeout = float(os.getenv(
+            "MATH_AGENT_HANDOUT_TOOL_BROKER_TIMEOUT_SECONDS",
+            os.getenv("MATH_AGENT_TOOL_BROKER_TIMEOUT_SECONDS", str(DEFAULT_BROKER_TIMEOUT_SECONDS)),
+        ))
+        timeout = min(MAX_BROKER_TIMEOUT_SECONDS, max(1.0, configured_timeout))
+        deadline_epoch_ms = deadline_epoch_ms or payload.get("deadlineEpochMs")
+        if deadline_epoch_ms is not None:
+            remaining = (int(deadline_epoch_ms) - int(time.time() * 1000)) / 1000.0
+            if remaining <= 0:
+                raise RuntimeError("handout deadline exceeded before Java broker request")
+            # Java 读取的是已授权文档块；请求限时共享本次运行预算，避免为 broker 另开无限等待窗口。
+            timeout = min(timeout, remaining)
+        response = self._session.post(f"{base_url}/internal/agent-tools/v1/{route}", headers={"X-Agent-Worker-Key": worker_key}, json=payload, timeout=max(0.1, timeout))
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as error:
+            status = getattr(error.response, "status_code", None) or getattr(response, "status_code", 0)
+            # Source authorization/input failures are deterministic for this persisted run. Preserve their status so
+            # Java records a terminal task instead of retrying an unchanged document reference until timeout.
+            if 400 <= status < 500 and status not in {408, 429}:
+                raise HTTPException(status_code=status, detail={
+                    "code": "HANDOUT_BROKER_CLIENT_FAILURE",
+                    "operation": operation,
+                    "status": status,
+                }) from error
+            raise
         decoded = response.json()
-        return {"query": decoded.get("query", payload.get("query", "")), "items": decoded.get("items", decoded.get("hits", [])), "source": "java-broker"}
+        if not isinstance(decoded, dict):
+            raise ValueError("Java handout broker returned invalid response")
+        return decoded
 
-    def _invoke_json_model(self, request: HandoutRunRequest, node: str, prompt: str) -> tuple[Any, dict[str, int | float], str, str]:
-        providers = [item.strip().lower() for item in os.getenv("MATH_AGENT_AI_RUNTIME_PROVIDER_ORDER", os.getenv("MATH_AGENT_AI_RUNTIME_PROVIDER", "openai")).split(",") if item.strip()]
+    def _invoke_json_model(self, request: HandoutRunRequest, node: str, prompt: str,
+                           review_turn: int = 1) -> tuple[Any, dict[str, int | float], str, str]:
+        # Java owns the allow-list and signs the route. Production handouts never accept an
+        # unverified environment order, while unit fixtures retain the explicit test-only default.
+        if request.provider_route is not None:
+            request.provider_route.verify_for(request.run_id, "handout")
+            routes = [(selection.name, selection.model) for selection in [
+                request.provider_route.primary, *request.provider_route.fallbacks,
+            ]]
+        else:
+            routes = [(item.strip().lower(), "") for item in os.getenv(
+                "MATH_AGENT_HANDOUT_PROVIDER_ORDER", "deepseek",
+            ).split(",") if item.strip()]
         failures: list[str] = []
-        provider_attempts = max(1, int(os.getenv("MATH_AGENT_HANDOUT_MODEL_ATTEMPTS", "2")))
-        if provider_attempts >= PROVIDER_ATTEMPT_SLOT_SIZE:
-            raise RuntimeError("MATH_AGENT_HANDOUT_MODEL_ATTEMPTS exceeds the durable attempt slot size")
-        # The fixed node slot makes duplicate redelivery idempotent while preserving a separate immutable row for
-        # every writer and retry.  Unknown internal nodes are deliberately placed after the named writer slots.
-        attempt_number = PROVIDER_ATTEMPT_BASES.get(node, PROVIDER_ATTEMPT_SLOT_SIZE * 6)
-        for provider in providers:
-            key, base_url, model = self._provider_config(provider)
+        # Transport retries only absorb short provider failures. Deterministic JSON/contract repairs happen once in
+        # _reviewed_model_candidate and never repeat the same malformed response through the network retry loop.
+        provider_attempts = max(1, int(os.getenv("MATH_AGENT_HANDOUT_MODEL_ATTEMPTS", str(DEFAULT_MODEL_RETRY_ATTEMPTS))))
+        if provider_attempts * 2 >= PROVIDER_ATTEMPT_SLOT_SIZE:
+            raise RuntimeError("MATH_AGENT_HANDOUT_MODEL_ATTEMPTS exceeds the durable generation/repair attempt slot")
+        if review_turn < 1 or review_turn > 2:
+            raise RuntimeError("handout generation attempt is outside the one-repair policy budget")
+        # Each generation/repair turn owns its transport-retry range, preventing UsageLedger collisions while
+        # preserving a strict maximum of one contract-directed repair generation.
+        turn_slot_size = PROVIDER_ATTEMPT_SLOT_SIZE // 2
+        attempt_number = PROVIDER_ATTEMPT_BASES.get(node, PROVIDER_ATTEMPT_SLOT_SIZE * 4) + (review_turn - 1) * turn_slot_size
+        for provider, routed_model in routes:
+            key, base_url, configured_model = self._provider_config(provider)
+            model = routed_model or configured_model
             if not key or not base_url:
                 failures.append(f"{provider}:configuration")
                 continue
@@ -1101,27 +2157,132 @@ class HandoutRuntime:
                     {"role": "system", "content": "你是受控的高中数学讲义编排节点。只输出合法 JSON，不要 Markdown 代码围栏，不要输出路径、权限、数据库或运行时说明。"},
                     {"role": "user", "content": prompt},
                 ]
-                max_output_tokens = max(1, int(os.getenv("MATH_AGENT_HANDOUT_MAX_OUTPUT_TOKENS", "5000")))
+                # DeepSeek-compatible reasoning routes account for hidden reasoning within max_tokens. Reserve
+                # sufficient room for the complete visible JSON candidate after that internal reasoning finishes.
+                # Keep each model completion within the shared run budget. A 100k default reserved the entire
+                # 400k run budget after only a few repair turns and prevented the mandatory final review request.
+                max_output_tokens = max(1, int(os.getenv(
+                    "MATH_AGENT_HANDOUT_COLLECTION_DECISION_MAX_OUTPUT_TOKENS" if node == "resource_curation"
+                    else "MATH_AGENT_HANDOUT_MAX_OUTPUT_TOKENS",
+                    str(DEFAULT_COLLECTION_DECISION_MAX_OUTPUT_TOKENS if node == "resource_curation"
+                        else DEFAULT_HANDOUT_MAX_OUTPUT_TOKENS))))
                 with self._telemetry_lock:
                     telemetry = self._telemetry_by_run.get(request.run_id)
                 if telemetry is None:
                     raise RuntimeError("handout telemetry is unavailable for provider budget reservation")
                 prompt_estimate = fallback_tokens(messages, "")[0]
                 telemetry.reserve_provider_call(prompt_estimate, max_output_tokens)
-                payload = {"model": model, "messages": messages, "temperature": float(os.getenv("MATH_AGENT_HANDOUT_TEMPERATURE", "0.2")), "max_tokens": max_output_tokens}
+                payload = {
+                    "model": model,
+                    "messages": messages,
+                    "temperature": float(os.getenv("MATH_AGENT_HANDOUT_TEMPERATURE", "0.2")),
+                    "max_tokens": max_output_tokens,
+                }
+                if provider == "deepseek" and model == "deepseek-v4-flash":
+                    # Structured handout contracts need the visible JSON within the bounded completion budget. This
+                    # route otherwise spends that budget in reasoning_content, leaving an empty or truncated content
+                    # stream despite JSON-object mode. Operators may explicitly opt back in for provider diagnostics.
+                    payload["response_format"] = {"type": "json_object"}
+                    disable_thinking = os.getenv("MATH_AGENT_HANDOUT_DEEPSEEK_DISABLE_THINKING", "true")
+                    if disable_thinking.strip().lower() in {"1", "true", "yes"}:
+                        payload["enable_thinking"] = False
+                # Use provider SSE so every received writer character becomes a private durable artifact immediately.
+                # A timeout can then preserve the exact partial candidate instead of discarding the whole response body.
+                payload["stream"] = True
+                payload["stream_options"] = {"include_usage": True}
                 try:
-                    configured_timeout = float(os.getenv("MATH_AGENT_HANDOUT_MODEL_TIMEOUT_SECONDS", str(DEFAULT_NODE_TIMEOUT_SECONDS)))
+                    configured_timeout = float(os.getenv(
+                        "MATH_AGENT_HANDOUT_MODEL_REPAIR_TIMEOUT_SECONDS" if review_turn > 1 else "MATH_AGENT_HANDOUT_MODEL_TIMEOUT_SECONDS",
+                        str(DEFAULT_MODEL_REPAIR_TIMEOUT_SECONDS if review_turn > 1 else DEFAULT_MODEL_TIMEOUT_SECONDS),
+                    ))
                     timeout = configured_timeout
                     if request.deadline_epoch_ms is not None:
                         remaining = (request.deadline_epoch_ms - int(time.time() * 1000)) / 1000.0
-                        if remaining <= 0:
-                            raise RuntimeError("handout deadline exceeded before provider request")
-                        timeout = min(configured_timeout, remaining)
-                    response = self._session.post(f"{base_url}/chat/completions", headers={"Authorization": f"Bearer {key}"}, json=payload, timeout=max(0.1, timeout))
+                        reserve = 0.0 if review_turn > 1 else float(os.getenv(
+                            "MATH_AGENT_HANDOUT_MODEL_REPAIR_RESERVE_SECONDS", str(DEFAULT_MODEL_REPAIR_RESERVE_SECONDS)))
+                        usable = remaining - reserve
+                        if usable <= 0:
+                            raise HTTPException(status_code=504, detail={
+                                "code": "MODEL_TIMEOUT",
+                                "message": "Handout model generation has no remaining budget after repair reserve",
+                            })
+                        timeout = min(configured_timeout, usable)
+                    self._record_model_turn(request, node, review_turn, attempt_number, {
+                        "requestedAt": _utc_now(),
+                        "node": node,
+                        "reviewTurn": review_turn,
+                        "attemptNumber": attempt_number,
+                        "provider": provider,
+                        "model": model,
+                        "requestPayload": payload,
+                    })
+                    partial_content: list[str] = []
+                    raw_events: list[str] = []
+                    raw_usage: dict[str, Any] = {}
+                    response = self._session.post(
+                        f"{base_url}/chat/completions",
+                        headers={"Authorization": f"Bearer {key}"},
+                        json=payload,
+                        stream=True,
+                        timeout=max(0.1, timeout),
+                    )
                     response.raise_for_status()
-                    data = response.json()
-                    content = str((data.get("choices") or [])[0].get("message", {}).get("content") or "")
-                    raw_usage = data.get("usage") or {}
+                    try:
+                        content_type = str(getattr(response, "headers", {}).get("Content-Type", "")).lower()
+                        if "text/event-stream" not in content_type:
+                            # Some compatible relays ignore stream=true and still return one JSON response. Retain that
+                            # valid full candidate rather than treating it as an empty SSE stream.
+                            data = response.json()
+                            content = str((data.get("choices") or [])[0].get("message", {}).get("content") or "")
+                            raw_usage = data.get("usage") or {}
+                            raw_body = response.text
+                            if content:
+                                partial_content.append(content)
+                                self._record_model_turn(request, node, review_turn, attempt_number, {
+                                    "partialContent": content,
+                                    "partialChars": len(content),
+                                    "lastChunkAt": _utc_now(),
+                                    "outcome": "STREAM_COMPLETED",
+                                })
+                        else:
+                            for event_data in iter_sse_data_events(response):
+                                if event_data == "[DONE]":
+                                    continue
+                                raw_events.append(event_data)
+                                event = json.loads(event_data)
+                                if not isinstance(event, dict):
+                                    continue
+                                usage = event.get("usage")
+                                if isinstance(usage, dict):
+                                    raw_usage = usage
+                                for choice in event.get("choices") or []:
+                                    delta = choice.get("delta") or {}
+                                    content_delta = delta.get("content")
+                                    if not content_delta:
+                                        continue
+                                    partial_content.append(str(content_delta))
+                                    accumulated = "".join(partial_content)
+                                    self._record_model_turn(request, node, review_turn, attempt_number, {
+                                        "partialContent": accumulated,
+                                        "partialChars": len(accumulated),
+                                        "lastChunkAt": _utc_now(),
+                                        "outcome": "STREAMING",
+                                    })
+                            content = "".join(partial_content)
+                            raw_body = "\n".join(raw_events)
+                    finally:
+                        close = getattr(response, "close", None)
+                        if callable(close):
+                            close()
+                    self._record_model_turn(request, node, review_turn, attempt_number, {
+                        "httpStatus": 200,
+                        "rawResponse": raw_body,
+                        "receivedAt": _utc_now(),
+                    })
+                    data = {"choices": [{"message": {"content": content}}], "usage": raw_usage}
+                    self._record_model_turn(request, node, review_turn, attempt_number, {
+                        "parsedJson": data,
+                    })
                     prompt_tokens = int(raw_usage.get("prompt_tokens", 0) or 0)
                     # OpenAI-compatible providers put cache hits in either prompt_tokens_details or input_tokens_details.
                     cached_details = raw_usage.get("prompt_tokens_details") or raw_usage.get("input_tokens_details") or {}
@@ -1137,31 +2298,101 @@ class HandoutRuntime:
                         request.run_id, provider, model, attempt_number, "SUCCESS", prompt_tokens,
                         completion_tokens, total_tokens, price, source, cached_prompt_tokens=cached_prompt_tokens,
                     ))
-                    return self._parse_json(content), {"promptTokens": prompt_tokens, "completionTokens": completion_tokens, "totalTokens": total_tokens, "estimatedCost": price}, provider, model
+                    self._record_model_turn(request, node, review_turn, attempt_number, {
+                        "usage": {"promptTokens": prompt_tokens, "completionTokens": completion_tokens, "totalTokens": total_tokens, "estimatedCost": price},
+                    })
+                    try:
+                        parsed = self._parse_json(content)
+                        self._record_model_turn(request, node, review_turn, attempt_number, {
+                            "extractedContent": content,
+                            "extractedJson": parsed,
+                            "outcome": "SUCCESS",
+                        })
+                        return parsed, {"promptTokens": prompt_tokens, "completionTokens": completion_tokens, "totalTokens": total_tokens, "estimatedCost": price}, provider, model
+                    except (ValueError, json.JSONDecodeError) as parse_exc:
+                        self._record_model_turn(request, node, review_turn, attempt_number, {
+                            "extractedContent": content,
+                            "parseError": type(parse_exc).__name__,
+                            "parseMessage": str(parse_exc),
+                            "outcome": "PARSE_FAILED",
+                        })
+                        raise ModelResponseParseError(str(parse_exc)) from parse_exc
+                except ModelResponseParseError:
+                    # A complete response that cannot satisfy JSON parsing is a content defect, not a transient
+                    # transport failure. The caller performs one contract-directed full repair generation.
+                    raise
                 except requests.HTTPError as exc:
-                    # Keep only status and a bounded provider code in diagnostics; response bodies may contain prompt text.
+                    if partial_content:
+                        partial = "".join(partial_content)
+                        self._record_model_turn(request, node, review_turn, attempt_number, {
+                            "partialContent": partial,
+                            "partialChars": len(partial),
+                            "terminatedAt": _utc_now(),
+                            "outcome": "PARTIAL_TERMINATED",
+                        })
                     status = exc.response.status_code if exc.response is not None else 0
                     provider_code = ""
+                    raw_error_body = ""
                     if exc.response is not None:
                         try:
-                            provider_code = str((exc.response.json() or {}).get("error", {}).get("code", ""))[:80]
+                            raw_error_body = exc.response.text
+                            provider_code = str((exc.response.json() or {}).get("error", {}).get("code", ""))
                         except ValueError:
                             provider_code = ""
                     error_code = f"HTTP_{status}" + (f"_{provider_code}" if provider_code else "")
+                    if 500 <= status <= 599:
+                        error_code = "UNAVAILABLE_5XX"
+                    self._record_model_turn(request, node, review_turn, attempt_number, {
+                        "transportError": error_code,
+                        "exceptionType": type(exc).__name__,
+                        "httpStatus": status,
+                        "rawErrorBody": raw_error_body,
+                        "outcome": "HTTP_ERROR",
+                    })
                     failures.append(f"{provider}:{error_code}")
-                    # A failed response has no authoritative provider price. Persist the unknown sentinel rather
-                    # than reporting zero, which would look like a verified free model call in cost reporting.
                     UsageLedger().append(UsageEvent(request.run_id, provider, model, attempt_number, "FAILED", 0, 0, 0, -1.0, "unavailable", error_code))
-                    if status < 500 or provider_try + 1 >= provider_attempts:
+                    if provider_try + 1 >= provider_attempts:
                         break
+                    base_backoff = max(0.1, float(os.getenv("MATH_AGENT_HANDOUT_RETRY_BACKOFF_SECONDS", "1.0")))
+                    max_backoff = max(base_backoff, float(os.getenv("MATH_AGENT_HANDOUT_RETRY_MAX_BACKOFF_SECONDS", "8.0")))
+                    time.sleep(min(max_backoff, base_backoff * (provider_try + 1)))
                 except (requests.RequestException, ValueError, KeyError, IndexError, json.JSONDecodeError) as exc:
+                    if partial_content:
+                        partial = "".join(partial_content)
+                        self._record_model_turn(request, node, review_turn, attempt_number, {
+                            "partialContent": partial,
+                            "partialChars": len(partial),
+                            "terminatedAt": _utc_now(),
+                            "outcome": "PARTIAL_TERMINATED",
+                        })
+                    self._record_model_turn(request, node, review_turn, attempt_number, {
+                        "transportError": type(exc).__name__,
+                            "exceptionMessage": str(exc),
+                        "outcome": "TRANSPORT_ERROR",
+                    })
                     failures.append(f"{provider}:{type(exc).__name__}")
                     UsageLedger().append(UsageEvent(request.run_id, provider, model, attempt_number, "FAILED", 0, 0, 0, -1.0, "unavailable", type(exc).__name__))
                     if provider_try + 1 < provider_attempts:
-                        time.sleep(float(os.getenv("MATH_AGENT_HANDOUT_RETRY_BACKOFF_SECONDS", "1.0")) * (provider_try + 1))
+                        base_backoff = max(0.1, float(os.getenv("MATH_AGENT_HANDOUT_RETRY_BACKOFF_SECONDS", "1.0")))
+                        max_backoff = max(base_backoff, float(os.getenv("MATH_AGENT_HANDOUT_RETRY_MAX_BACKOFF_SECONDS", "8.0")))
+                        time.sleep(min(max_backoff, base_backoff * (provider_try + 1)))
                     else:
                         break
         raise HTTPException(status_code=503, detail="Handout model call failed: " + ",".join(failures))
+
+    @staticmethod
+    def _ensure_curation_budget(request: HandoutRunRequest) -> None:
+        """Stops source expansion before it consumes the generation and one-repair time reservation."""
+        if request.deadline_epoch_ms is None:
+            return
+        remaining = (request.deadline_epoch_ms - int(time.time() * 1000)) / 1000.0
+        reserve = float(os.getenv(
+            "MATH_AGENT_HANDOUT_CURATION_MODEL_RESERVE_SECONDS", str(DEFAULT_CURATION_MODEL_RESERVE_SECONDS)))
+        if remaining <= reserve:
+            raise HTTPException(status_code=504, detail={
+                "code": "HANDOUT_CURATION_TIMEOUT",
+                "message": "Handout source curation exhausted the reserved model generation window",
+            })
 
     @staticmethod
     def _check_deadline(request: HandoutRunRequest) -> None:
@@ -1176,24 +2407,25 @@ class HandoutRuntime:
 
     @staticmethod
     def _parse_json(content: str) -> Any:
-        """Extracts one JSON value from provider wrappers without asking the model to reformat valid JSON."""
+        """Parses one provider JSON root without mistaking a nested array for a complete response."""
         cleaned = (content or "").lstrip("\ufeff").strip()
         if cleaned.startswith("```"):
             cleaned = cleaned.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-        decoder = json.JSONDecoder()
-        # Providers sometimes place a citations array before the document object. Prefer an object root so that an
-        # incidental array is never mistaken for the whole WriterDocument; only fall back to an array when no object
-        # can be decoded (needed for providers that legitimately return lecture cards as a bare list).
-        for opening in ("{", "["):
-            candidate_positions = [index for index, character in enumerate(cleaned) if character == opening]
-            for position in candidate_positions:
-                try:
-                    value, _ = decoder.raw_decode(cleaned[position:])
-                    if isinstance(value, dict if opening == "{" else list):
-                        return value
-                except json.JSONDecodeError:
-                    continue
-        raise ValueError("model response contains no valid JSON object or array")
+        object_start = cleaned.find("{")
+        array_start = cleaned.find("[")
+        if object_start < 0 and array_start < 0:
+            raise ValueError("model response contains no valid JSON object or array")
+        # A provider may put a citations array in prose before the document object. Prefer the first object when one
+        # exists; once selected, never search its nested arrays after an incomplete object fails to decode.
+        position = object_start if object_start >= 0 else array_start
+        expected_type = dict if object_start >= 0 else list
+        try:
+            value, _ = json.JSONDecoder().raw_decode(cleaned[position:])
+        except json.JSONDecodeError as exc:
+            raise ValueError("model response contains no complete top-level JSON value") from exc
+        if not isinstance(value, expected_type):
+            raise ValueError("model response root type does not match its opening delimiter")
+        return value
 
     @staticmethod
     def _provider_config(provider: str) -> tuple[str | None, str, str]:
@@ -1201,15 +2433,131 @@ class HandoutRuntime:
         bases = {"openai": os.getenv("OPENAI_BASE_URL", "https://api1.aisz.mom/v1"), "dashscope": "https://dashscope.aliyuncs.com/compatible-mode/v1", "deepseek": "https://api.deepseek.com/v1", "ark": "https://ark.cn-beijing.volces.com/api/v3"}
         key = os.getenv(keys.get(provider, ""))
         base = os.getenv(f"{provider.upper()}_BASE_URL", bases.get(provider, "")).rstrip("/")
-        model = os.getenv(f"MATH_AGENT_AI_RUNTIME_{provider.upper()}_MODEL", os.getenv("MATH_AGENT_AI_RUNTIME_MODEL", os.getenv("OPENAI_CHAT_MODEL", "gpt-5.6-luna")))
+        model = os.getenv(f"{provider.upper()}_CHAT_MODEL", os.getenv(f"MATH_AGENT_AI_RUNTIME_{provider.upper()}_MODEL", os.getenv("MATH_AGENT_AI_RUNTIME_MODEL", os.getenv("OPENAI_CHAT_MODEL", "gpt-5.6-luna"))))
         return key, base, model
 
     @staticmethod
-    def _writer_prompt(request: HandoutRunRequest, evidence: EvidenceSnapshot, stage: str, audience: str, instruction: str) -> str:
+    def _plan_prompt(request: HandoutRunRequest, evidence: EvidenceSnapshot) -> str:
+        """Requests auditable instructional decisions rather than private model reasoning."""
+        return json.dumps({
+            "stageCode": "plan_writer",
+            "instruction": "只输出一个完整 WritingPlan JSON 对象，不要 Markdown 代码围栏。计划是可见教学决策，不是思考过程：禁止 <think>、逐步推理、工具日志、原始证据转录、路径、URL、Base64 或图片标记。不得输出单个题目对象或数组。顶层必须逐项包含 learningObjective（非空字符串）、questions（非空数组）、completionCriteria（非空字符串数组）、readyForNextStage（JSON 布尔值 true）、revisionRound（首次为整数 0）和 warnings（数组）；questions 的每一项必须逐项包含 number（从 1 连续编号）、question（题干）、evidenceRefs（数组）、knowledgePoint（字符串）、teachingSequence（至少一个字符串）和 figureRequired（JSON 布尔值）。如选用图片，assetPlacements 必须逐项写明当前题号、来自本题 evidenceRefs 的 opaque assetIds、锚点、布局、可见版本及可见说明；不得写任何图片路径、URL、Base64 或 LaTeX 图片命令。figureRequired 为 true 时必须选择至少一个合法 assetPlacement，否则改写为无需图的题目。按题目顺序覆盖提交题目；每题只引用 evidence 中实际存在的 ref。资料充足时建议组织约 %d 个以上互不重复的真实题目或变式；资料不足时只保留证据支持的题目，绝不凑题或编造题。授权资料收集已在此计划前完成，不得提出或输出检索查询。readyForNextStage 只能在所有完成标准已满足时为 true。" % DEFAULT_RECOMMENDED_QUESTION_COUNT,
+            "writingGoal": request.writing_goal,
+            "questionText": request.question_text,
+            "revisionFeedback": request.revision_feedback,
+            "requestedRevisionRound": "从已有计划修订时必须比原 round 加 1；首次为 0。",
+            "evidence": evidence.prompt_text(),
+            "outputContract": {
+                "learningObjective": "string",
+                "questions": [{"number": 1, "question": "题干", "evidenceRefs": ["evidence ref"], "knowledgePoint": "string", "teachingSequence": ["步骤"], "figureRequired": False, "assetPlacements": [{"questionNumber": 1, "assetIds": ["opaque asset id"], "anchor": "question", "layout": "single", "variants": ["teacher_writer", "student_writer", "lecture_writer"], "caption": "AI 编写的图片说明"}]}],
+                "completionCriteria": ["可检验完成条件"], "readyForNextStage": True, "revisionRound": 0,
+                "warnings": [],
+            },
+        }, ensure_ascii=False)
+
+    @staticmethod
+    def _validate_writing_plan(plan: WritingPlan, request: HandoutRunRequest, evidence: EvidenceSnapshot) -> None:
+        """Ensures plan structure and evidence authorization without constraining AI lesson design."""
+        # A plan may cite either the initial authorized retrieval hit or a block materialized by an
+        # AI-selected bounded deep read. Both ref classes are run-scoped broker evidence; only the latter
+        # carries more precise original wording for the same authorized document.
+        authorized_items = [*evidence.items, *evidence.inspected_items]
+        allowed_refs = {item.ref for item in authorized_items if item.ref}
+        for expected_number, planned in enumerate(plan.questions, start=1):
+            if planned.number != expected_number:
+                raise ValueError("writing plan: question numbers must be consecutive")
+            if not planned.evidence_refs:
+                raise ValueError(f"writing plan: question {expected_number} requires authorized evidence")
+            if not set(planned.evidence_refs).issubset(allowed_refs):
+                raise ValueError(f"writing plan: question {expected_number} cites unauthorized evidence")
+            placement_assets = {
+                asset_id for item in authorized_items if item.ref in planned.evidence_refs
+                for asset_id in item.asset_ids
+            }
+            if planned.figure_required and not planned.asset_placements:
+                raise ValueError(f"writing plan: question {expected_number} requires an AI-selected asset placement")
+            for placement in planned.asset_placements:
+                if placement.question_number != planned.number:
+                    raise ValueError(f"writing plan: question {expected_number} has a cross-question asset placement")
+                if not set(placement.asset_ids).issubset(placement_assets):
+                    raise ValueError(f"writing plan: question {expected_number} selects an asset outside its evidence")
+        if not plan.ready_for_next_stage:
+            raise ValueError("writing plan: model did not declare completion")
+
+    @staticmethod
+    def _teacher_blueprint_prompt(request: HandoutRunRequest, evidence: EvidenceSnapshot, plan: WritingPlan) -> str:
+        """Requests the single teacher source that downstream audiences derive from."""
+        return json.dumps({
+            "stageCode": "teacher_blueprint_writer",
+            "instruction": "只输出 DeepSeek/OpenAI structured JSON 的 TeacherBlueprint 对象。依据已批准 writingPlan 写教师版约 80% 完成的可审阅蓝图；不要输出 <think>、私有推理、路径、URL、Base64 或图片/LaTex 标记。每题必须按计划顺序包含题目、解题过程、最终答案、评分点、易错点。completionChecklist 必须列出已完成项目；remainingEdits 只写可执行的剩余编辑。标准字段是布尔型 readyForDerivation：仅当 markdown 已覆盖全部题目和全部五个必填章节时为 true，任何遗漏为 false；不得写字符串。兼容旧 structured 输出时仅接受等价字段 derivationReady，且同样必须是布尔值。不要故意省略声明。",
+            "writingGoal": request.writing_goal,
+            "questionText": request.question_text,
+            "approvedWritingPlan": plan.model_dump(by_alias=True, exclude_none=True),
+            "evidence": evidence.prompt_text(),
+            "mathematicsFormatting": HANDOUT_MATH_MARKUP_CONTRACT,
+            "outputContract": {
+                "type": "object",
+                "required": ["title", "markdown", "completionChecklist", "remainingEdits", "readyForDerivation", "revisionRound"],
+                "properties": {
+                    "title": "string",
+                    "markdown": "教师版蓝图",
+                    "citations": ["evidence ref"],
+                    "assetPlacements": [{"questionNumber": 1, "assetIds": ["opaque asset id"], "anchor": "question", "layout": "single", "variants": ["teacher_writer", "student_writer", "lecture_writer"], "caption": "AI 编写的图片说明"}],
+                    "lectureCards": [{"title": "投影标题", "content": "投影内容"}],
+                    "completionChecklist": ["完成项"],
+                    "remainingEdits": [],
+                    "readyForDerivation": "boolean",
+                    "revisionRound": 0,
+                },
+            },
+        }, ensure_ascii=False)
+
+    @staticmethod
+    def _validate_teacher_blueprint(blueprint: TeacherBlueprint, request: HandoutRunRequest, plan: WritingPlan) -> TeacherBlueprint:
+        """Accepts a readiness alias only after the complete teacher source passes deterministic semantic checks."""
+        document = WriterDocument(stageCode="teacher_writer", title=blueprint.title, markdown=blueprint.markdown,
+                                  citations=blueprint.citations, assetPlacements=blueprint.asset_placements,
+                                  warnings=blueprint.remaining_edits)
+        HandoutRuntime._validate_document_semantics(document, "teacher_writer", request.question_text)
+        HandoutRuntime._validate_document_asset_placements(document, "teacher_writer", plan)
+        if not blueprint.completion_checklist:
+            raise ValueError("teacher blueprint: completion checklist is empty")
+        if blueprint.ready_for_derivation is False:
+            raise ValueError("teacher blueprint: model explicitly declined derivation readiness")
+        if blueprint.ready_for_derivation is None:
+            raise ValueError("teacher blueprint: readyForDerivation is required")
+        return blueprint
+
+    @staticmethod
+    def _writer_prompt(request: HandoutRunRequest, evidence: EvidenceSnapshot, stage: str, audience: str, instruction: str,
+                       plan: WritingPlan, blueprint: TeacherBlueprint) -> str:
         projection_rules = {
             "preserveAllSubmittedQuestionsInOrder": True,
             "preserveAllKnowledgePoints": True,
+            "approvedUpstreamOnly": "只依据 approvedWritingPlan 和 approvedTeacherBlueprint 派生当前版本；不得增加未计划题目、交换题序、借用别题图片或暴露私有推理。",
+            "resourceImages": {
+                "allowedReferencesOnly": True,
+                "neverOutput": ["URL", "file path", "data URL", "Base64", "\\includegraphics", "HTML image tag"],
+                "figureDependentQuestionRule": "题干出现如图、下图或图中时，只能引用当前 evidence 中已有的、与本题同源的 opaque assetId；没有匹配 assetId 时必须改写为不依赖图片的文字题干，不得编造或借用其他题图片。",
+            },
+            "markdownStructure": {
+                "headings": "标题必须从行首写 # 或 ##，禁止 \\# 标题、列表前缀标题或代码围栏。",
+                "displayMath": "显示公式必须单独占一行并写为 $$公式$$；每行只能有一组闭合 $$，不得混用 \\[、\\]、$公式$ 或裸 $。",
+            },
+            "teacher_writer": {
+                "requiredOrderPerQuestion": ["题目", "解题过程", "最终答案", "评分点", "易错点"],
+                "solutionRule": "解题过程至少以步骤 1、步骤 2 编号；每步说明目的及计算或推理依据。最终答案独立成行，不能只写在推导段落中。",
+                "answerRule": "选择题写出选项及结论；填空题写出唯一填入内容；证明题写出结论与关键依据；计算题写出化简后的最终结果。",
+            },
+            "student_writer": {
+                "allowedContent": ["题目", "合法图片引用", "分层提示", "作答区"],
+                "forbiddenContent": ["最终答案", "结论", "完整推导", "评分点", "教师提示", "正确选项"],
+            },
             "lecture_writer": {
+                "oneQuestionPerTeachingUnit": True,
+                "figureWithQuestion": True,
+                "minimalText": True,
+                "noFinalAnswerOrFullSolution": True,
                 "noHorizontalRules": True,
                 "noFillInLines": True,
                 "blankSpaceOnly": True,
@@ -1219,14 +2567,17 @@ class HandoutRuntime:
         }
         return json.dumps({"stageCode": stage, "audience": audience, "instruction": instruction,
                            "writingGoal": request.writing_goal, "questionText": request.question_text,
+                           "approvedWritingPlan": plan.model_dump(by_alias=True, exclude_none=True),
+                           "approvedTeacherBlueprint": blueprint.model_dump(by_alias=True, exclude_none=True),
                            "evidence": evidence.prompt_text(), "projectionRules": projection_rules,
                            "mathematicsFormatting": HANDOUT_MATH_MARKUP_CONTRACT,
                            "outputContract": {"stageCode": stage, "title": "string", "markdown": "完整中文讲义内容",
-                                               "citations": ["evidence ref"], "warnings": []}}, ensure_ascii=False)
-
-    @staticmethod
-    def _repair_prompt(request: HandoutRunRequest, stage_code: str, errors: list[str]) -> str:
-        return json.dumps({"instruction": "修复当前讲义节点的结构或语义问题，只输出一个 WriterDocument JSON，不要数组；保留数学排版合同，尤其标题中的公式必须使用 $...$。", "stageCode": stage_code, "errors": errors, "questionText": request.question_text, "mathematicsFormatting": HANDOUT_MATH_MARKUP_CONTRACT, "outputContract": {"stageCode": stage_code, "title": "string", "markdown": "non-empty", "citations": [], "warnings": []}}, ensure_ascii=False)
+                                               "citations": ["evidence ref"], "assetPlacements": "必须与 approvedWritingPlan 中本 variant 的 placement 完全一致，不增删替换", "warnings": []},
+                           "examples": {
+                               "teacherSectionHeading": "## 最终答案\n\n$\\boxed{x=1}$",
+                               "studentHint": "提示：先写出定义域，再判断端点是否可取。",
+                               "forbiddenTransport": "不要输出 https://、file://、data:image、\\includegraphics 或 <img>。",
+                           }}, ensure_ascii=False)
 
     def _record_node(self, request: HandoutRunRequest, node: str, started: float, status: str, provider_calls: int = 0, java_requests: int = 0, payload_bytes: int = 0, usage: dict[str, int | float] | None = None, error: str | None = None, provider: str = "", model: str = "") -> None:
         """Node records are emitted through the event sink while preserving bounded operational metadata."""

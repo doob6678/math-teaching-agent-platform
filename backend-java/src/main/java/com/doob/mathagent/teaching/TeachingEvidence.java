@@ -5,18 +5,8 @@ import java.util.List;
 /**
  * 教学任务使用的证据。
  *
- * @param sourceScope 证据作用域，例如 PUBLIC_TEXTBOOK、PRIVATE_FEISHU、USER_HISTORY。
- * @param sourceTitle 证据来源标题。
- * @param chunkId 教材或文档 chunk ID。
- * @param pageNo 教材 PDF 页码；非教材来源可为 0。
- * @param snippet 证据文本片段。
- * @param imagePath 已授权的本地教材页图路径；空值表示当前证据没有可嵌入图片。
- * @param imageDescription 已核验的图像可见信息；只用于模型理解，不包含本地路径或访问令牌。
- * @param sourceDocumentId opaque teacher-resource document id; used only by the authenticated inspection endpoint.
- * @param sourceType normalized source library, such as feishu, public_textbook, or question_bank.
- * @param sourceUrl permission-checked original source URL when the source provides one.
- * @param sourcePath human-readable path inside the source document or textbook corpus.
- * @param assetIds permission-checked opaque image asset ids associated with this evidence block.
+ * <p>Canonical 题号仅作为 Java 内部的 manifest 选择器持久化。它不是路径、文件名或模型可见文档
+ * 标识，broker 只能从当前 run 已授权的证据行导出对应题目。</p>
  */
 public record TeachingEvidence(
         String sourceScope,
@@ -30,7 +20,8 @@ public record TeachingEvidence(
         String sourceType,
         String sourceUrl,
         String sourcePath,
-        List<String> assetIds) {
+        List<String> assetIds,
+        String canonicalQuestionNumber) {
 
     public TeachingEvidence {
         sourceScope = sourceScope == null ? "" : sourceScope;
@@ -44,47 +35,41 @@ public record TeachingEvidence(
         sourceUrl = sourceUrl == null ? "" : sourceUrl;
         sourcePath = sourcePath == null ? "" : sourcePath;
         assetIds = assetIds == null ? List.of() : List.copyOf(assetIds);
+        canonicalQuestionNumber = canonicalQuestionNumber == null ? "" : canonicalQuestionNumber;
+    }
+
+    /** Keeps the prior full evidence contract source-compatible. */
+    public TeachingEvidence(
+            String sourceScope, String sourceTitle, String chunkId, int pageNo, String snippet, String imagePath,
+            String imageDescription, String sourceDocumentId, String sourceType, String sourceUrl, String sourcePath,
+            List<String> assetIds) {
+        this(sourceScope, sourceTitle, chunkId, pageNo, snippet, imagePath, imageDescription, sourceDocumentId,
+                sourceType, sourceUrl, sourcePath, assetIds, "");
     }
 
     /** Keeps the original eight-field retrieval contract source-compatible. */
     public TeachingEvidence(
-            String sourceScope,
-            String sourceTitle,
-            String chunkId,
-            int pageNo,
-            String snippet,
-            String imagePath,
-            String imageDescription,
-            String sourceDocumentId) {
+            String sourceScope, String sourceTitle, String chunkId, int pageNo, String snippet, String imagePath,
+            String imageDescription, String sourceDocumentId) {
         this(sourceScope, sourceTitle, chunkId, pageNo, snippet, imagePath, imageDescription, sourceDocumentId,
-                "", "", "", List.of());
+                "", "", "", List.of(), "");
     }
 
     /** Preserves current renderers that do not have a teacher-resource inspection reference. */
     public TeachingEvidence(
-            String sourceScope,
-            String sourceTitle,
-            String chunkId,
-            int pageNo,
-            String snippet,
-            String imagePath,
+            String sourceScope, String sourceTitle, String chunkId, int pageNo, String snippet, String imagePath,
             String imageDescription) {
-        this(sourceScope, sourceTitle, chunkId, pageNo, snippet, imagePath, imageDescription, "", "", "", "", List.of());
+        this(sourceScope, sourceTitle, chunkId, pageNo, snippet, imagePath, imageDescription, "", "", "", "", List.of(), "");
     }
 
     /** Preserves existing callers that have an image but no verified visual description yet. */
     public TeachingEvidence(
-            String sourceScope,
-            String sourceTitle,
-            String chunkId,
-            int pageNo,
-            String snippet,
-            String imagePath) {
-        this(sourceScope, sourceTitle, chunkId, pageNo, snippet, imagePath, "", "", "", "", "", List.of());
+            String sourceScope, String sourceTitle, String chunkId, int pageNo, String snippet, String imagePath) {
+        this(sourceScope, sourceTitle, chunkId, pageNo, snippet, imagePath, "", "", "", "", "", List.of(), "");
     }
 
     /** Preserves existing retrieval callers that have text-only evidence. */
     public TeachingEvidence(String sourceScope, String sourceTitle, String chunkId, int pageNo, String snippet) {
-        this(sourceScope, sourceTitle, chunkId, pageNo, snippet, "", "", "", "", "", "", List.of());
+        this(sourceScope, sourceTitle, chunkId, pageNo, snippet, "", "", "", "", "", "", List.of(), "");
     }
 }

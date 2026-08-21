@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildTeachingFeedbackReviewContext } from "./App";
+import { buildTeachingFeedbackReviewContext, handoutDraftForVersion } from "./App";
 import { TeachingTaskResponse } from "../shared/api/textbookApi";
 
 vi.mock("pdfjs-dist", () => ({
@@ -55,6 +55,31 @@ function reviewTask(overrides: Partial<TeachingTaskResponse> = {}): TeachingTask
 }
 
 describe("buildTeachingFeedbackReviewContext", () => {
+  it("does not validate a teacher fallback as student handout content", () => {
+    const task = reviewTask({
+      handoutLatex: "\\section{例题与答案}\\paragraph{答案与评分点}答案为 $b^2=16$。",
+      teacherHandoutLatex: "\\section{例题与答案}\\paragraph{答案与评分点}答案为 $b^2=16$。",
+      studentHandoutLatex: undefined,
+    });
+    const selectedStudentDraft = handoutDraftForVersion(task, "student");
+    const context = buildTeachingFeedbackReviewContext(
+      task,
+      "student",
+      selectedStudentDraft,
+      null,
+      "",
+    );
+
+    expect(selectedStudentDraft).toBe("");
+    expect(handoutDraftForVersion(task, "teacher")).toContain("答案与评分点");
+    expect(handoutDraftForVersion(task, "lecture")).toContain("答案与评分点");
+    expect(context.reviewEvidence.handoutText.latexLength).toBe(0);
+    expect(context.reviewEvidence.safety).toMatchObject({
+      answerLeak: false,
+      studentAnswerIsolated: true,
+    });
+  });
+
   it("captures PDF preview image evidence and handout safety checks for human review", () => {
     const latex = `
       \\section{讲义信息}

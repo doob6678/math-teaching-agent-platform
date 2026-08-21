@@ -32,3 +32,15 @@ class ComposeRuntimeSecurityTest(unittest.TestCase):
         self.assertNotIn("\n    dns:", compose)
         self.assertNotRegex(compose, r"\bextra_hosts\s*:")
 
+    def test_teacher_source_mounts_are_durable_and_backend_only(self):
+        compose = COMPOSE_FILE.read_text(encoding="utf-8")
+        backend = _service_block(compose, "backend")
+        worker = _service_block(compose, "ai-worker")
+
+        self.assertIn("./.local-storage/teacher-resource-uploads:/app/data/teacher-resource-uploads", backend)
+        self.assertIn("MATH_AGENT_LOCAL_TEACHER_RESOURCES_HOST_ROOT", backend)
+        self.assertIn("MATH_AGENT_LOCAL_TEACHER_RESOURCES_ROOT", backend)
+        self.assertRegex(backend, r"local-teacher-resources[^\n]*:ro")
+        self.assertNotIn("teacher-resource-uploads", worker)
+        self.assertNotIn("local-teacher-resources", worker)
+

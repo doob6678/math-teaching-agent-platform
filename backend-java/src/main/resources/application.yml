@@ -54,6 +54,20 @@ server:
     # a real request such as “涂色问题” becomes question marks and the correct teacher document cannot be admitted.
     uri-encoding: UTF-8
 
+management:
+  endpoint:
+    health:
+      # Docker 只调用 readiness 路径；该组必须同时覆盖 Spring 生命周期与项目必需的真实依赖探测。
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState,infrastructureDependencies
+  endpoints:
+    web:
+      exposure:
+        include: health
+
 math-agent:
   mcp:
     # External MCP clients cannot use a proxy-rewritten Host header. Deployments set this explicit public endpoint;
@@ -72,10 +86,12 @@ math-agent:
     # Encrypted OAuth records require a deployment-owned 256-bit key; never ship a usable key in source control.
     token-encryption-key: ${MATH_AGENT_FEISHU_TOKEN_ENCRYPTION_KEY:}
   ai:
-    default-provider: openai
+    default-provider: ${MATH_AGENT_AI_DEFAULT_PROVIDER:deepseek}
     # Java only signs opaque route grants; provider keys and endpoints belong to ai-worker.
     route-grant-secret: ${MATH_AGENT_PROVIDER_ROUTE_GRANT_SECRET:}
-    route-grant-ttl-seconds: ${MATH_AGENT_PROVIDER_ROUTE_GRANT_TTL_SECONDS:120}
+    # The handout lease is 900 seconds and authorization/document curation precedes its first model call. Grants must
+    # survive that bounded prelude while retaining their run/workload/signature binding.
+    route-grant-ttl-seconds: ${MATH_AGENT_PROVIDER_ROUTE_GRANT_TTL_SECONDS:900}
     # Prices belong to the deployment because the OpenAI-compatible relay does not expose a reliable bill in every reply.
     # Blank keeps token ceilings active and marks monetary estimates unknown instead of fabricating a price.
     pricing-json: ${MATH_AGENT_AI_PRICES_JSON:}
@@ -90,13 +106,18 @@ math-agent:
       chat-model: ${OPENAI_CHAT_MODEL:gpt-5.6-luna}
     deepseek:
       name: deepseek
-      enabled: ${MATH_AGENT_PROVIDER_DEEPSEEK_ENABLED:false}
-      chat-model: deepseek-v4-flash
+      enabled: ${MATH_AGENT_PROVIDER_DEEPSEEK_ENABLED:true}
+      chat-model: ${DEEPSEEK_CHAT_MODEL:deepseek-v4-flash}
     ark:
       name: ark
       enabled: ${MATH_AGENT_PROVIDER_ARK_ENABLED:false}
       chat-model: doubao-seed-2-0-lite-260428
   teaching:
+    canonical-paper:
+      # The real-paper ingestion owner publishes this exact FLAT/COSINE collection after source manifests, Terra
+      # transcription and authorized records are complete. Do not point this optional branch at an empty placeholder.
+      corpus-root: /app/data/math-paper-corpus
+      collection-name: gaokao_math
     lecture-task:
       # The lease is longer than the configured provider timeout and is renewed while the task is active.
       lease-seconds: ${MATH_AGENT_TEACHING_LECTURE_TASK_LEASE_SECONDS:900}
@@ -140,7 +161,7 @@ math-agent:
     # Real-paper paths are mounted by docker-compose.yml and written here explicitly. Do not introduce an
     # environment-variable fallback: reproducible ingestion must have one reviewable configuration source.
     input-root: /app/data/gaokao-input
-    evidence-root: /app/data/gaokao-evidence
+    evidence-root: /app/data/math-paper-corpus
     # The mounted 2024 folder contains more papers than this acceptance scope. Keep the exact six reviewed PDFs in
     # versioned configuration so a CLI invocation cannot silently ingest 全国甲卷、上海卷或天津卷.
     selected-source-file-names:
@@ -356,7 +377,8 @@ math-agent:
     base-url: ${MATH_AGENT_PYTHON_HANDOUT_BASE_URL:http://ai-worker:8091}
     worker-key: ${MATH_AGENT_WORKER_API_KEY:}
     graph-version: ${MATH_AGENT_PYTHON_HANDOUT_GRAPH_VERSION:handout-v1}
-    timeout-ms: ${MATH_AGENT_PYTHON_HANDOUT_TIMEOUT_MS:900000}
+    # Keep the synchronous Python call inside the 900-second queue lease while preserving the 15-second safety margin.
+    timeout-ms: ${MATH_AGENT_PYTHON_HANDOUT_TIMEOUT_MS:885000}
     connect-timeout-ms: ${MATH_AGENT_PYTHON_HANDOUT_CONNECT_TIMEOUT_MS:5000}
     lease-safety-margin-ms: ${MATH_AGENT_PYTHON_HANDOUT_LEASE_SAFETY_MARGIN_MS:15000}
   knowledge:
@@ -364,8 +386,9 @@ math-agent:
       seed-enabled: true
       tenant-id: default
       permission-scope: MATH_VIP
-      method-node-limit: 100
-      source-location: classpath:knowledge/graph-spine-v0.1.md
+      # v0.2 contains the full curated method catalogue; no production method may be dropped by display budgeting.
+      method-node-limit: 120
+      source-location: classpath:knowledge/graph-spine-v0.2.md
   resources:
     # Production textbook retrieval uses the c2 section-child corpus. Each child keeps its source page while the
     # Java service groups section_id siblings into a transient logical parent for final evidence reranking.

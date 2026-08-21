@@ -8,6 +8,7 @@ import json
 import math
 import os
 from pathlib import Path
+import threading
 import time
 from typing import Iterable
 from urllib.parse import urlparse
@@ -23,6 +24,52 @@ class EmbeddingConfigurationError(RuntimeError):
 
 class EmbeddingProviderError(RuntimeError):
     pass
+
+
+RETRIEVAL_READINESS_PROBE = "retrieval readiness"
+DEFAULT_RETRIEVAL_READINESS_TIMEOUT_SECONDS = 120.0
+
+
+def require_cuda_device(torch, configured_device: str):
+    """Verifies that a configured CUDA device can execute a tensor operation before loading a retrieval model."""
+    try:
+        device = torch.device(configured_device)
+    except Exception as exc:
+        raise EmbeddingConfigurationError("configured retrieval device is invalid") from exc
+    if device.type != "cuda":
+        raise EmbeddingConfigurationError("configured retrieval device must be CUDA")
+    if not torch.cuda.is_available():
+        raise EmbeddingConfigurationError("configured CUDA device is unavailable")
+    device_count = torch.cuda.device_count()
+    if device.index is not None and (device.index < 0 or device.index >= device_count):
+        raise EmbeddingConfigurationError("configured CUDA device is unavailable")
+    try:
+        probe = torch.ones(1, device=device)
+        result = probe + probe
+        if result.device.type != "cuda":
+            raise EmbeddingConfigurationError("configured CUDA device did not execute the retrieval probe")
+        torch.cuda.synchronize(device)
+    except EmbeddingConfigurationError:
+        raise
+    except Exception as exc:
+        raise EmbeddingConfigurationError("configured CUDA device did not execute the retrieval probe") from exc
+    return device
+
+
+def verify_model_cuda(torch, model, configured_device: str, model_name: str) -> None:
+    """Rejects a loader that silently placed a configured retrieval model on CPU or another GPU."""
+    expected_device = torch.device(configured_device)
+    try:
+        model_device = getattr(model, "device", None)
+        if model_device is None:
+            model_device = next(model.parameters()).device
+        actual_device = torch.device(model_device)
+    except Exception as exc:
+        raise EmbeddingConfigurationError(f"{model_name} CUDA placement could not be verified") from exc
+    if actual_device.type != "cuda":
+        raise EmbeddingConfigurationError(f"{model_name} is not loaded on the configured CUDA device")
+    if expected_device.index is not None and actual_device.index != expected_device.index:
+        raise EmbeddingConfigurationError(f"{model_name} is not loaded on the configured CUDA device")
 
 
 @dataclass(frozen=True)
@@ -637,6 +684,19 @@ class LocalTextEmbeddingBackend:
             prompt_tokens=sum(len(value) for value in normalized_texts),
         )
 
+    def verify_gpu_readiness(self) -> None:
+        """Loads the configured local BGE model and runs one bounded CUDA-backed encoding before readiness."""
+        self._load()
+        try:
+            self.embed_text([RETRIEVAL_READINESS_PROBE], self.settings.embedding_dimensions)
+            import torch
+
+            torch.cuda.synchronize(torch.device(self.settings.local_text_embedding_device))
+        except (EmbeddingConfigurationError, EmbeddingProviderError):
+            raise
+        except Exception as exc:
+            raise EmbeddingConfigurationError("local BGE embedding readiness probe failed") from exc
+
     def _load(self) -> None:
         if self._model is not None:
             return
@@ -645,9 +705,15 @@ class LocalTextEmbeddingBackend:
         if not model_path:
             raise EmbeddingConfigurationError("MATH_AGENT_LOCAL_TEXT_EMBEDDING_MODEL_PATH requires complete model weights")
         try:
+            import torch
             from sentence_transformers import SentenceTransformer
 
-            self._model = SentenceTransformer(model_path, device=self.settings.local_text_embedding_device)
+            device = require_cuda_device(torch, self.settings.local_text_embedding_device)
+            model = SentenceTransformer(model_path, device=str(device), local_files_only=True)
+            verify_model_cuda(torch, model, str(device), "local BGE embedding model")
+            self._model = model
+        except EmbeddingConfigurationError:
+            raise
         except Exception as exc:
             raise EmbeddingConfigurationError(f"failed to load local BGE embedding model: {exc}") from exc
 
@@ -714,6 +780,8 @@ class LocalRerankBackend:
             encoded = {key: value.to(self.settings.local_rerank_device) for key, value in encoded.items()}
             with torch.no_grad():
                 logits = self._model(**encoded).logits
+            if logits.device.type != "cuda":
+                raise EmbeddingProviderError("local rerank did not execute on CUDA")
             if getattr(logits, "ndim", 0) == 2 and int(logits.shape[1]) > 1:
                 values = logits[:, -1]
             else:
@@ -731,6 +799,19 @@ class LocalRerankBackend:
             scores=scores,
         )
 
+    def verify_gpu_readiness(self) -> None:
+        """Loads the configured local reranker and verifies one real scoring pass remains on CUDA."""
+        self._load()
+        try:
+            self.rerank(RETRIEVAL_READINESS_PROBE, [RETRIEVAL_READINESS_PROBE])
+            torch = self._torch
+            assert torch is not None
+            torch.cuda.synchronize(torch.device(self.settings.local_rerank_device))
+        except (EmbeddingConfigurationError, EmbeddingProviderError):
+            raise
+        except Exception as exc:
+            raise EmbeddingConfigurationError("local reranker readiness probe failed") from exc
+
     def _load(self) -> None:
         if self._model is not None and self._tokenizer is not None:
             return
@@ -738,14 +819,23 @@ class LocalRerankBackend:
         model_path = self.settings.local_rerank_model_path
         if not model_path:
             raise EmbeddingConfigurationError("MATH_AGENT_LOCAL_RERANK_MODEL_PATH is required for local rerank")
-        from transformers import AutoModelForSequenceClassification, AutoTokenizer
+        try:
+            from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-        tokenizer = AutoTokenizer.from_pretrained(model_path)
-        model = AutoModelForSequenceClassification.from_pretrained(model_path)
-        model.eval()
-        model.to(self.settings.local_rerank_device)
-        self._tokenizer = tokenizer
-        self._model = model
+            torch = self._torch
+            assert torch is not None
+            device = require_cuda_device(torch, self.settings.local_rerank_device)
+            tokenizer = AutoTokenizer.from_pretrained(model_path, local_files_only=True)
+            model = AutoModelForSequenceClassification.from_pretrained(model_path, local_files_only=True)
+            model.eval()
+            model.to(device)
+            verify_model_cuda(torch, model, str(device), "local reranker model")
+            self._tokenizer = tokenizer
+            self._model = model
+        except EmbeddingConfigurationError:
+            raise
+        except Exception as exc:
+            raise EmbeddingConfigurationError("failed to load local reranker model") from exc
 
     def _import_dependencies(self) -> None:
         if self._torch is not None:
@@ -840,6 +930,20 @@ class EmbeddingService:
         self.local_text_embedding_backend = local_text_embedding_backend or LocalTextEmbeddingBackend(settings)
         self._page_image_index: LoadedPageImageIndex | None = None
         self._page_text_index: LoadedPageTextIndex | None = None
+        self._retrieval_ready = False
+        self._retrieval_readiness_lock = threading.Lock()
+
+    def initialize_retrieval_models(self) -> None:
+        """Makes readiness contingent on local embedding and reranking models completing real CUDA inference."""
+        with self._retrieval_readiness_lock:
+            if self._retrieval_ready:
+                return
+            self.local_text_embedding_backend.verify_gpu_readiness()
+            self.local_rerank_backend.verify_gpu_readiness()
+            self._retrieval_ready = True
+
+    def is_retrieval_ready(self) -> bool:
+        return self._retrieval_ready
 
     def status(self) -> dict[str, object]:
         local_clip_status = self.local_clip_backend.status()

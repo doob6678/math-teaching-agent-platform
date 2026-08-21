@@ -68,6 +68,66 @@ class EmbeddingServiceTest(unittest.TestCase):
         self.assertEqual(encoded[1][:4], [2, 6, 7, 3])
         self.assertNotEqual(encoded[0], encoded[1])
 
+    def test_retrieval_readiness_requires_embedding_and_reranker_probes(self):
+        settings = WorkerSettings.from_environment(env={})
+        calls = []
+        embedding_backend = type("EmbeddingBackend", (), {
+            "verify_gpu_readiness": lambda self: calls.append("embedding"),
+            "status": lambda self: {"status": "ready"},
+        })()
+        rerank_backend = type("RerankBackend", (), {
+            "verify_gpu_readiness": lambda self: calls.append("reranker"),
+            "status": lambda self: {"status": "ready"},
+        })()
+        service = EmbeddingService(
+            settings,
+            local_clip_backend=StubLocalClipBackend(),
+            local_text_embedding_backend=embedding_backend,
+            local_rerank_backend=rerank_backend,
+        )
+
+        self.assertFalse(service.is_retrieval_ready())
+        service.initialize_retrieval_models()
+
+        self.assertTrue(service.is_retrieval_ready())
+        self.assertEqual(calls, ["embedding", "reranker"])
+        service.initialize_retrieval_models()
+        self.assertEqual(calls, ["embedding", "reranker"])
+
+    def test_retrieval_readiness_does_not_mark_ready_when_reranker_probe_fails(self):
+        settings = WorkerSettings.from_environment(env={})
+        embedding_backend = type("EmbeddingBackend", (), {
+            "verify_gpu_readiness": lambda self: None,
+            "status": lambda self: {"status": "ready"},
+        })()
+        rerank_backend = type("RerankBackend", (), {
+            "verify_gpu_readiness": lambda self: (_ for _ in ()).throw(
+                EmbeddingConfigurationError("configured CUDA device is unavailable")
+            ),
+            "status": lambda self: {"status": "ready"},
+        })()
+        service = EmbeddingService(
+            settings,
+            local_clip_backend=StubLocalClipBackend(),
+            local_text_embedding_backend=embedding_backend,
+            local_rerank_backend=rerank_backend,
+        )
+
+        with self.assertRaisesRegex(EmbeddingConfigurationError, "CUDA device is unavailable"):
+            service.initialize_retrieval_models()
+
+        self.assertFalse(service.is_retrieval_ready())
+
+    def test_cuda_requirement_rejects_cpu_device_before_model_load(self):
+        fake_torch = type("FakeTorch", (), {
+            "device": staticmethod(lambda value: type("Device", (), {"type": value, "index": None})()),
+        })()
+
+        from app.embeddings import require_cuda_device
+
+        with self.assertRaisesRegex(EmbeddingConfigurationError, "must be CUDA"):
+            require_cuda_device(fake_torch, "cpu")
+
     def test_fails_when_local_bge_is_not_configured(self):
         settings = WorkerSettings.from_environment(env={
             "MATH_AGENT_EMBEDDING_PROVIDER_ORDER": "dashscope",

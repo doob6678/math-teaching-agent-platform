@@ -8,6 +8,8 @@ public enum TeachingTaskStatus {
     CREATED,
     /** 任务正在执行 DAG 节点。 */
     RUNNING,
+    /** 当前租约已释放并等待下一次有界重试，不能视为终态失败。 */
+    RETRYING,
     /** Automatic checks passed and a teacher or administrator must decide whether to publish. */
     WAITING_REVIEW,
     /** A durable non-publishable draft was requested and remains available for later editing. */

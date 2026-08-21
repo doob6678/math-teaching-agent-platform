@@ -25,11 +25,19 @@ public class LectureTaskConsumer {
                 return thread;
             });
     private final LectureTaskLeaseStore store;
-    private final LectureTaskPublisher publisher;
+    private final LectureTaskRetryCoordinator retryCoordinator;
     private final TeachingWorkflowService workflowService;
     private final Environment environment;
-    public LectureTaskConsumer(LectureTaskLeaseStore store, LectureTaskPublisher publisher, TeachingWorkflowService workflowService, Environment environment) {
-        this.store = store; this.publisher = publisher; this.workflowService = workflowService; this.environment = environment;
+
+    public LectureTaskConsumer(
+            LectureTaskLeaseStore store,
+            LectureTaskRetryCoordinator retryCoordinator,
+            TeachingWorkflowService workflowService,
+            Environment environment) {
+        this.store = store;
+        this.retryCoordinator = retryCoordinator;
+        this.workflowService = workflowService;
+        this.environment = environment;
     }
     @RabbitListener(queues = LectureTaskRabbitConfiguration.QUEUE, containerFactory = "lectureTaskRabbitListenerFactory")
     public void consume(String taskId) {
@@ -42,27 +50,41 @@ public class LectureTaskConsumer {
             log.info("lecture_task_lease_not_acquired taskId={} workerId={}", taskId, workerId);
             return;
         }
-        log.info("lecture_task_lease_acquired taskId={} workerId={} attempt={}", taskId, workerId, lease.retryCount());
+        log.info("lecture_task_lease_acquired taskId={} workerId={} attempt={} leaseToken={} expiresAt={} leaseSeconds={}",
+                taskId, workerId, lease.retryCount(), tokenFingerprint(lease.token()), lease.expiresAt(), leaseSeconds);
         ScheduledFuture<?> heartbeat = scheduleHeartbeat(lease, leaseSeconds);
         try {
-            workflowService.executeQueued(taskId);
-            if (!store.complete(lease)) throw new IllegalStateException("Lecture task lease was lost before completion");
+            workflowService.executeQueued(taskId, lease);
+        } catch (TeachingWorkflowService.LeaseLostException exception) {
+            // 陈旧 Worker 已失去围栏所有权，只确认旧消息，不能覆盖、重投或触发死信。
+            log.info("lecture_task_lease_lost taskId={} workerId={} attempt={} leaseToken={}",
+                    taskId, workerId, lease.retryCount(), tokenFingerprint(lease.token()));
+            return;
         } catch (Exception exception) {
             int maximumAttempts = Integer.parseInt(environment.getProperty("math-agent.teaching.lecture-task.maximum-attempts", "3"));
-            boolean retry = store.failOrRetry(lease, exception.getMessage(), maximumAttempts);
-            // Persist the user-visible error only after the CAS update so snapshot persistence cannot invalidate it.
-            workflowService.failQueued(taskId, exception);
-            if (retry) {
-                publisher.publish(taskId);
+            LectureTaskLeaseStore.FailureOutcome outcome = retryCoordinator.recordFailure(
+                    taskId, lease, exception, maximumAttempts);
+            if (outcome == LectureTaskLeaseStore.FailureOutcome.LEASE_LOST) {
+                log.info("lecture_task_failure_lease_lost taskId={} workerId={} attempt={} leaseToken={} errorType={}",
+                        taskId, workerId, lease.retryCount(), tokenFingerprint(lease.token()),
+                        exception.getClass().getSimpleName());
                 return;
             }
+            if (outcome == LectureTaskLeaseStore.FailureOutcome.RETRYING) {
+                log.warn("lecture_task_retry_scheduled taskId={} workerId={} attempt={} leaseToken={} maximumAttempts={} errorType={}",
+                        taskId, workerId, lease.retryCount(), tokenFingerprint(lease.token()), maximumAttempts,
+                        exception.getClass().getSimpleName());
+                return;
+            }
+            log.error("lecture_task_terminal_failure taskId={} workerId={} attempt={} leaseToken={} maximumAttempts={} errorType={}",
+                    taskId, workerId, lease.retryCount(), tokenFingerprint(lease.token()), maximumAttempts,
+                    exception.getClass().getSimpleName());
             throw new AmqpRejectAndDontRequeueException("Lecture task failed", exception);
         } finally {
             heartbeat.cancel(false);
         }
     }
 
-    /** Keeps the top-level lecture lease alive across model, compilation and PDF audit stages. */
     private ScheduledFuture<?> scheduleHeartbeat(LectureTaskLease lease, long leaseSeconds) {
         long configuredHeartbeat = Long.parseLong(environment.getProperty(
                 "math-agent.teaching.lecture-task.heartbeat-milliseconds", "15000"));
@@ -71,8 +93,18 @@ public class LectureTaskConsumer {
                 () -> {
                     boolean renewed = store.renew(lease, Instant.now().plusSeconds(leaseSeconds));
                     if (!renewed) {
-                        log.warn("lecture_task_lease_renew_failed taskId={} workerId={}", lease.taskId(), lease.workerId());
+                        log.warn("lecture_task_lease_renew_failed taskId={} workerId={} attempt={} leaseToken={} requestedExpiry={}",
+                                lease.taskId(), lease.workerId(), lease.retryCount(), tokenFingerprint(lease.token()),
+                                Instant.now().plusSeconds(leaseSeconds));
                     }
                 }, interval, interval, TimeUnit.MILLISECONDS);
+    }
+
+    /** Identifies one lease lifecycle in logs without exposing the bearer-like fencing token. */
+    private static String tokenFingerprint(String token) {
+        if (token == null || token.isBlank()) {
+            return "none";
+        }
+        return Integer.toHexString(token.hashCode());
     }
 }

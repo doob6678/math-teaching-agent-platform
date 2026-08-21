@@ -12,7 +12,7 @@ class IngestionPropertiesTest {
         IngestionProperties properties = new IngestionProperties();
 
         assertThat(properties.getInputRoot()).isEqualTo("/app/data/gaokao-input");
-        assertThat(properties.getEvidenceRoot()).isEqualTo("/app/data/gaokao-evidence");
+        assertThat(properties.getEvidenceRoot()).isEqualTo("/app/data/math-paper-corpus");
     }
 
     @Test

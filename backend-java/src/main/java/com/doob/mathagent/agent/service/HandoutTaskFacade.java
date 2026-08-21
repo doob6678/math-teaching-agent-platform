@@ -76,6 +76,23 @@ public class HandoutTaskFacade {
         return submit(request, subject);
     }
 
+    /**
+     * Starts an MCP submission with its caller-scoped idempotency key when supplied.
+     *
+     * <p>The key is transport metadata only. It never participates in the writer input, evidence selection, or
+     * published handout, but lets a caller recover one uncertain POST without forcing separate fresh runs to reuse
+     * an older content-derived task.</p>
+     */
+    public MultiAgentWritingResponse startAsync(
+            MultiAgentWritingRequest request,
+            RequestSubject subject,
+            String clientRequestId) {
+        TeachingTaskResponse task = submissionService.submit(
+                toTeachingTaskRequest(request, clientRequestId),
+                contextFor(subject));
+        return project(task);
+    }
+
     /** Reads an owned task through the teaching store; workflowId is intentionally only a compatibility alias. */
     public MultiAgentWritingResponse get(String workflowId, RequestSubject subject) {
         TeachingTaskResponse task = workflowService.get(workflowId, contextFor(subject))
@@ -169,13 +186,21 @@ public class HandoutTaskFacade {
      * generation, so an HTTP retry returns the same task while a material request change creates a new task.</p>
      */
     static TeachingTaskRequest toTeachingTaskRequest(MultiAgentWritingRequest request) {
+        return toTeachingTaskRequest(request, null);
+    }
+
+    /**
+     * Maps MCP-only idempotency metadata into the canonical teaching request while retaining the legacy digest when
+     * the caller did not provide a key.
+     */
+    static TeachingTaskRequest toTeachingTaskRequest(MultiAgentWritingRequest request, String suppliedClientRequestId) {
         MultiAgentWritingRequest normalized = request == null
                 ? new MultiAgentWritingRequest("", "", List.of(), false, "", "")
                 : request.normalize();
         int evidenceLimit = Math.max(DEFAULT_EVIDENCE_LIMIT,
                 Math.min(MAX_EVIDENCE_LIMIT, normalized.evidenceRefs().size()));
         return new TeachingTaskRequest(
-                stableClientRequestId(normalized),
+                resolvedClientRequestId(normalized, suppliedClientRequestId),
                 normalized.questionText(),
                 normalized.writingGoal(),
                 evidenceLimit,
@@ -315,5 +340,21 @@ public class HandoutTaskFacade {
         } catch (NoSuchAlgorithmException exception) {
             throw new IllegalStateException(HASH_ALGORITHM + " is unavailable", exception);
         }
+    }
+
+    /**
+     * Keeps externally supplied request IDs bounded and storage-safe without accepting opaque Unicode or whitespace
+     * values that cannot be reproduced reliably by an MCP client after a disconnect.
+     */
+    private static String resolvedClientRequestId(MultiAgentWritingRequest request, String suppliedClientRequestId) {
+        if (suppliedClientRequestId == null || suppliedClientRequestId.isBlank()) {
+            return stableClientRequestId(request);
+        }
+        String normalized = suppliedClientRequestId.strip();
+        if (normalized.length() > 128 || !normalized.matches("[A-Za-z0-9][A-Za-z0-9._:-]*")) {
+            throw new IllegalArgumentException(
+                    "clientRequestId must be 1-128 ASCII letters, digits, '.', '_', ':', or '-' characters");
+        }
+        return normalized;
     }
 }

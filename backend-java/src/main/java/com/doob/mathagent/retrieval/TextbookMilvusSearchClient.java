@@ -35,9 +35,30 @@ final class TextbookMilvusSearchClient {
     }
 
     List<MilvusHit> searchText(String query, int limit, List<String> docIds) {
+        return searchTextCollection(properties.normalizedTextbookTextCollectionName(), query, limit, docIds);
+    }
+
+    /** 统一 BGE/Milvus 通道可注册独立公开语料，调用方不再复制向量 HTTP 实现。 */
+    List<MilvusHit> searchTextCollection(String collectionName, String query, int limit, List<String> docIds) {
         List<List<Double>> vectors = workerEmbeddings("/embeddings", Map.of("model", properties.embeddingModel(), "input", List.of(query)),
                 properties.normalizedTextbookTextDimension());
-        return search(properties.normalizedTextbookTextCollectionName(), vectors, limit, docIds);
+        return search(collectionName, vectors, limit, docIds);
+    }
+
+    /**
+     * Checks the authoritative Milvus catalog before an optional corpus is queried.
+     *
+     * <p>Callers must not create an empty collection merely to make an optional evidence branch appear available.
+     * The owning ingestion pipeline is the only component allowed to create and populate its collection.</p>
+     */
+    boolean collectionExists(String collectionName) {
+        if (collectionName == null || collectionName.isBlank()) {
+            return false;
+        }
+        VectorHttpResponse response = milvusPost("/v2/vectordb/collections/has",
+                Map.of("collectionName", collectionName.strip()));
+        JsonNode root = responseJson("Milvus collection readiness check", response);
+        return root.path("data").path("has").asBoolean(false);
     }
 
     List<MilvusHit> searchImages(String query, String image, int limit, List<String> docIds) {

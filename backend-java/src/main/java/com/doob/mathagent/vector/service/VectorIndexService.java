@@ -5,6 +5,7 @@ import com.doob.mathagent.teacher.document.TeacherResourceStore;
 import com.doob.mathagent.teacher.block.TeacherDocumentBlockResponse;
 import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
 import com.doob.mathagent.teacher.sync.TeacherSourceSyncManifestStore;
+import com.doob.mathagent.teacher.service.TeacherSourceFileReader;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
@@ -37,8 +38,15 @@ public class VectorIndexService {
     private final VectorHttpTransport transport;
     private final TeacherResourceStore resourceStore;
     private final TeacherDocumentBlockStore blockStore;
+    /**
+     * Serializes the initial teacher-search readiness probe so concurrent warm-up requests do not all send the same
+     * idempotent Milvus control-plane calls. The volatile flag is set only after collection, index, and load succeed.
+     */
+    private final Object teacherSearchReadinessLock = new Object();
+    private volatile boolean teacherSearchReady;
     private TeacherResourceImageClipService teacherImageClipService;
     private TeacherSourceSyncManifestStore manifestStore;
+    private TeacherSourceFileReader sourceFileReader;
 
     public VectorIndexService(
             VectorIndexProperties properties,
@@ -61,6 +69,12 @@ public class VectorIndexService {
     @Autowired(required = false)
     public void setManifestStore(TeacherSourceSyncManifestStore manifestStore) {
         this.manifestStore = manifestStore;
+    }
+
+    /** Keeps the authoritative source locator in the Docker volume, separate from the vector and database stores. */
+    @Autowired(required = false)
+    public void setSourceFileReader(TeacherSourceFileReader sourceFileReader) {
+        this.sourceFileReader = sourceFileReader;
     }
 
     public VectorIndexStatusResponse status() {
@@ -116,6 +130,13 @@ public class VectorIndexService {
                         0,
                         "No parsed active blocks are available for indexing.");
             }
+            if (sourceFileReader != null && document.localPath() != null && !document.localPath().isBlank()) {
+                sourceFileReader.register(
+                        tenantId,
+                        documentId,
+                        java.nio.file.Path.of(document.localPath()),
+                        document.contentChecksum());
+            }
             EmbeddingBatch embeddings = embed(blocks.stream().map(TeacherDocumentBlockResponse::normalizedText).toList());
             ensureCollection();
             ensureVectorIndex();
@@ -162,7 +183,16 @@ public class VectorIndexService {
     }
 
     public List<VectorSearchHit> searchTeacherResourceBlocks(String query, int limit, VectorSearchFilter filter) {
-        return retryVectorSearch("teacher_resource_vector_search", () -> searchTeacherResourceBlocksOnce(query, limit, filter));
+        return retryVectorSearch("teacher_resource_vector_search", () -> {
+            try {
+                return searchTeacherResourceBlocksOnce(query, limit, filter);
+            } catch (RuntimeException exception) {
+                // A failed search cannot prove the collection is still usable. Force the next attempt to revalidate
+                // the collection, index, and load state instead of continuing to trust a stale process-local signal.
+                invalidateTeacherSearchReadiness();
+                throw exception;
+            }
+        });
     }
 
     public void indexStudentMemory(String tenantId, String studentId, String memoryId, String content) {
@@ -264,20 +294,16 @@ public class VectorIndexService {
     }
 
     /**
-     * Scores one query against candidate texts with a dedicated rerank endpoint when the local worker exposes one.
+     * Scores candidate texts with the dedicated GPU rerank service.
      *
-     * <p>Stage-one document rerank and stage-two block rerank should prefer an actual cross-encoder style score when
-     * available, then fall back to embedding cosine similarity if the worker has not been upgraded yet. Keeping the
-     * fallback here prevents callers from silently reintroducing bespoke score heuristics.</p>
+     * <p>Rerank availability is a real service dependency. A failed rerank must be repaired at the service boundary,
+     * never replaced by request-time embedding cosine similarity.</p>
      */
     public List<Double> rerankTexts(String query, List<String> candidateTexts) {
         return rerankTextsWithTrace(query, candidateTexts).scores();
     }
 
-    /**
-     * Runs the dedicated reranker when available and reports an explicit embedding fallback otherwise.
-     * Returning the mechanism with the scores prevents audit callers from inferring execution from timing or labels.
-     */
+    /** Runs the dedicated GPU reranker and records the actual execution mechanism. */
     public VectorTextRerankResult rerankTextsWithTrace(String query, List<String> candidateTexts) {
         properties.requireFullyConfigured();
         String normalizedQuery = text(query).strip();
@@ -312,13 +338,7 @@ public class VectorIndexService {
             }
             return new VectorTextRerankResult(scores, VectorTextRerankResult.CROSS_ENCODER);
         } catch (RuntimeException exception) {
-            log.warn("vector_rerank_fallback query={} message={}",
-                    normalizedQuery,
-                    text(exception.getMessage()),
-                    exception);
-            return new VectorTextRerankResult(
-                    semanticSimilarity(normalizedQuery, normalizedCandidates),
-                    VectorTextRerankResult.EMBEDDING_FALLBACK);
+            throw new IllegalStateException("GPU rerank service failed: " + text(exception.getMessage()), exception);
         }
     }
 
@@ -332,9 +352,7 @@ public class VectorIndexService {
             return List.of();
         }
         EmbeddingBatch embedding = embed(List.of(normalizedQuery));
-        ensureCollection();
-        ensureVectorIndex();
-        loadCollection();
+        ensureTeacherSearchReady();
         Map<String, Object> body = searchBody(embedding.vectors().getFirst(), limit, filter);
         VectorHttpResponse response = milvusPost("/v2/vectordb/entities/search", body);
         JsonNode root = readJson("Milvus search", response);
@@ -360,6 +378,32 @@ public class VectorIndexService {
             }
         }
         return List.copyOf(hits);
+    }
+
+    /**
+     * Performs the idempotent Milvus control-plane setup once for this process's teacher text search route.
+     *
+     * <p>Rebuilds deliberately retain their own explicit create/index/load sequence: they change collection contents
+     * and must not depend on a search-path observation made before the rebuild.</p>
+     */
+    private void ensureTeacherSearchReady() {
+        if (teacherSearchReady) {
+            return;
+        }
+        synchronized (teacherSearchReadinessLock) {
+            if (teacherSearchReady) {
+                return;
+            }
+            ensureCollection();
+            ensureVectorIndex();
+            loadCollection();
+            teacherSearchReady = true;
+        }
+    }
+
+    /** Clears the optimistic local readiness observation after a Milvus-backed teacher search failure. */
+    private void invalidateTeacherSearchReadiness() {
+        teacherSearchReady = false;
     }
 
     private static List<String> buildSemanticInputs(String normalizedQuery, List<String> candidateTexts) {

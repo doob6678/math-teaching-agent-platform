@@ -12,6 +12,23 @@
 
 ---
 
+## 高中数学来源与讲义调用流程
+
+高考原卷的 GPU 资产提取、Terra 页级转写、逐题 Markdown 发布、Milvus 入库、run-scoped 精读授权和 AI 选图/PDF 物化流程见[高中数学来源与讲义调用流程](docs/high-school-source-and-handout-flow.md)。
+
+## 不可违反的讲义架构
+
+开发前先阅读项目指令 [AGENTS.md](AGENTS.md)，交付前逐项执行[讲义架构验收清单](docs/handout-architecture-acceptance-checklist.md)。以下约束适用于教师版、学生版、课堂讲解版及其 PDF：
+
+1. **只有 AI/Python Writer** 可以创作任何可见教学正文，并决定图片是否使用及其位置；Java 和前端只做通用鉴权、持久化、格式化/渲染、可见性隔离与校验。
+2. Java 和前端不得写入固定教学文案、按题目/知识点分支、默认标题/答案/提示，也不得自行选择或回退生成示意图、图片。
+3. 图片领域和模型契约只以不透明的 `evidenceRef` 加 `assetId` 关联；禁止传递文件系统路径、URL、Base64 或 AI 生成的 LaTeX 图片命令。仅在权威 `evidenceRef` 与 `assetId` 已获授权且图片选择已校验后，通用渲染器可生成内部 LaTeX 图片标记；没有有效选择即不展示图片。
+4. 高中来源材料必须遵循：GPU PaddleOCR/版面分析生成题图 PNG、`question-assets.jsonl`、`assets.md` 和源文件哈希报告，再将完整页图交给默认 Luna（或显式 Terra）转写。题图不作为单题视觉输入；其来源、页码、bbox、哈希和绑定规则会写入题目 `metadata.questionAssets`，并与向量入库和讲义资产共用。
+5. **RAG 检索必须由 AI Agent 自主执行**：AI 通过 Java 提供的 MCP 工具（`handout-context`、`handout-document-read`、`handout-document-search`、`handout-teacher-resource-search`）自行构造检索参数并调用，Java 仅提供已授权的不透明 `evidenceRef`/`documentRef` 和受限读取接口。禁止 Java 或前端直接将用户输入作为检索 query，禁止在本机文件系统中直接搜索或读取资料，所有资源必须先入库到向量数据库（Milvus）后通过受控检索链路访问。
+6. 交付必须同时通过：来源证据和完整来源名、AI 独占可见内容、学生答案隔离、真实来源图片、中文与公式检查、PDF 视觉审阅。历史输出不能替代本次验收证据。
+
+---
+
 ## 核心对标：成熟高中数学教师式讲解
 
 项目把“豆包爱学”截图中的教学态度作为讲义与单题讲解的质量基线，而不是把“模型返回了文字”当作完成：
@@ -22,7 +39,7 @@
 4. 通过知识图谱说明知识点归属、先修关系、关联方法、学习阶段和难度；处理顺序是“扫描题目 → 匹配图谱 → 按知识点与思想方法组织”。
 5. 推理遵循“目标 → 相关知识 → 已知条件 → 逻辑推导”，并受真实证据约束，禁止虚构题目、来源、定理条件、图形关系和数值答案。
 
-多 Agent 流程当前固定为四个实际模型阶段：资源整理完成后，并行生成教师讲义、无答案学生空白讲义和无最终答案的 16:10 单题课堂引导稿，以控制 token、延迟和调用成本。模板选择、共享大纲、来源/学生安全/版式审查、合并协调等六个扩展提示词契约暂未接入执行链，不会额外产生模型调用；页眉、页脚、页码、字体和纸张比例由 PDF 渲染器控制，不写入模型正文。提示词档案与样例见 [讲义提示词档案与样式验收](docs/handout-prompt-profiles-and-style-acceptance.md)。
+多 Agent 流程的实际阶段由当前图版本与配置定义。Python 负责教学规划、修订以及教师版、学生版、课堂讲解版三份 Writer 文档；页眉、页脚、页码、字体和纸张比例由 PDF 渲染器控制，不写入模型正文。提示词档案与样例见 [讲义提示词档案与样式验收](docs/handout-prompt-profiles-and-style-acceptance.md)。
 
 ## 讲义与 PDF 不可违反的硬性要求
 
@@ -33,11 +50,21 @@
 当前多智能体讲义的真实阶段、图片从授权资料到模型/PDF 的路径，以及近期公式、资产和页面布局问题的根因记录，见[多智能体讲义工作流、图片编排与问题记录](docs/multi-agent-handout-workflow-and-incidents.md)。
 
 1. 写作前必须分别检索教材与已授权教师/飞书资料；教师讲义的每道原题均须可读地注明教材章节与资料来源，禁止只保留内部 ID。
-2. 教师讲义至少包含 6 道连续编号、独立陈述的原题；检索证据不足时必须明确失败，禁止编造题目凑数。
+2. 教师讲义必须包含足以达成已规划教学目标的、经来源核验的原题；不存在固定题量发布门槛。检索证据不足时必须明确失败，禁止编造题目凑数。
 3. 公式必须处于 `$...$` 或 `$$...$$` 数学环境。分式只能使用 `\frac{分子}{分母}`，根式只能使用 `\sqrt{完整被开方内容}`；禁止用 `/`、`／`、`√` 或不带花括号的根式替代结构。导出器会拒绝含歧义公式的文档并回报行号。
 4. 学生版的计算、证明和说明题必须给垂直留白；只有单值填空可用短横线。学生版和 16:10 版不得泄露最终答案、教师批注、trace 或来源内部标识。
 5. 16:10 版仅含一个题目，题干位于首个正文区块，页面比例为 16:10，且文本密度受审计门禁约束。
 6. PDF 必须由 Docker 内 XeLaTeX 与 Noto CJK 字体真实编译；验收必须在 Windows 渲染全部页面，保存截图、布局审计、SHA-256、HTTP 状态、trace、阶段耗时和 token 消耗。任何一项失败均不得标记验收完成。
+
+### 真实讲义验收的 Compose 稳定性
+
+讲义验收前先执行一次 `docker compose up -d`，随后**只能由一个 Compose owner 管理该项目**：不得同时运行会调用 `docker compose up/down/restart` 的 `scripts/local/start-all.ps1`、`start-backend.ps1`、`start-worker.ps1`、IDE 自动部署或 Docker Desktop 重建。验收 runner 在登录/提交前、每次轮询前、每次 PDF 导出前检查 backend 与 ai-worker 的健康状态、容器 ID 和 `RestartCount`，并要求稳定窗口；连接拒绝、非 healthy 或 ID 变化时只等待新的窗口，不重复提交任务。runner 默认兼容宿主机 `http://127.0.0.1:8080`，可用 `MATH_AGENT_ACCEPTANCE_BASE_URL` 显式指定 Compose 网络内的 `http://backend:8080`，不改变公开 URL、DNS 或端口配置。若 backend、ai-worker、MySQL、Redis、RabbitMQ、Milvus 同时重新开始计时，而容器日志为 Spring/Uvicorn 的正常 SIGTERM 优雅关闭、`ExitCode=0`、`OOMKilled=false`、`RestartCount=0`，则这是外部 Docker/Compose 客户端的显式 stop/recreate，不是应用崩溃或 healthcheck 失败；当前尚未确认该外部客户端的具体进程，不能将其误称为已定位。
+
+healthcheck 产生的 `exec_create`、`exec_start`、`exec_die` 是容器内探针命令，**不会重启服务**，不能据此修改业务代码。验收提交前相隔至少 30 秒两次采样 backend/worker 的容器 ID 与 `RestartCount`：只有 ID 未变、`RestartCount=0` 且 `docker compose ps` 与 backend `/api/system/health` 均为 healthy 才能提交。
+
+验收前在 WSL 使用 `scripts/wsl/compose-stack-service.sh install` 和 `scripts/wsl/compose-stack-service.sh start` 启用当前 Linux 用户的 Compose owner。该服务仅执行 `docker compose --env-file .env up -d --no-recreate`，不会停止或重建已有容器；整个验收始终只能有一个 Compose owner，禁止 `docker compose down/up` 及并行本地启动器。服务可跨启动它的 shell 保持，但不能跨完整 WSL 关闭、Linux 停机、Windows 重启或主机关闭；它不能替代 runner 对稳定容器 ID 和 readiness 的强制门禁。
+
+Windows 到 WSL 的 `127.0.0.1:8080` 转发在容器刚被重建时可能短暂拒绝连接。真实验收优先在 Compose 网络中运行接受器：使用 `http://backend:8080`，而不是依赖宿主机端口转发；若 ID 改变或发生 `ECONNREFUSED`，等待新的稳定健康窗口后重试，不能将其误判为业务失败。这只改变验收客户端的访问路径，不改变后端公开 URL、DNS 或服务配置。验收仍需在最终 PDF 生成后回到 Windows 浏览器查看预览并保存截图。
 
 ## 工程结构
 
@@ -65,6 +92,14 @@
 
 ## 教材与 RAG 检索
 
+**⚠️ 检索架构强制要求：**
+
+1. **所有资源必须先入库向量数据库**：教材、教师资料、高考题库等所有教学资源必须先通过批量入库流程写入 Milvus，禁止在运行时直接读取本机文件系统或云存储路径。
+2. **AI Agent 自主检索**：检索 query 由 Python AI Agent 根据教学目标自行生成，Java 后端仅执行已授权的向量检索并返回不透明 `evidenceRef`。禁止将用户原始输入直接作为检索参数。
+3. **MCP 工具边界**：AI 通过 `/internal/agent-tools/v1/handout-*` 系列接口获取资源，Java 校验运行授权后返回受限文本块和不透明资产引用，不暴露文件路径、URL 或数据库连接。
+
+### 教材检索链路
+
 教材检索链路固定使用 c2 section-child corpus，不允许回退到只有 `page_summary` 的页级语料。c2 的子块保留 `section_id`、`source_chunk_id` 和原始页码；Java 先对正文 BM25、小标题 BM25、BGE 文本向量和 CLIP 页面图像做候选召回，再按 section 子块聚合为临时逻辑父块，最后使用本地 BGE reranker 排序，并返回实际命中的子块页图。
 
 生产数据契约如下：
@@ -76,7 +111,9 @@
 
 每次检索生成 `queryId`，写入审计事件，支持按 `queryId` 查询命中详情，为 RAG 回答提供可追溯的教材证据。
 
-教师资料检索与教材检索保持一致的证据结构。飞书同步支持 checkpoint/resume，本地 md、txt、docx、pdf 等资料解析后按 block、checksum、citation 入库，后续可以从教师资源块中识别数学题、去重并绑定知识点，沉淀为教师侧题库资产。
+### 教师资料检索
+
+教师资料检索与教材检索保持一致的证据结构。飞书同步支持 checkpoint/resume，本地 md、txt、docx、pdf 等资料解析后按 block、checksum、citation 入库到向量数据库，后续可以从教师资源块中识别数学题、去重并绑定知识点，沉淀为教师侧题库资产。Python AI 通过 `handout-teacher-resource-search` 工具自行决定是否需要检索教师私有资源，Java 仅响应已签发 `runId` 的授权请求。
 
 ## 知识图谱与学习画像
 
@@ -176,25 +213,30 @@ RabbitMQ 使用持久化 direct exchange、命令队列和死信队列。MySQL `
 wsl.exe -d Ubuntu -- bash -lc "export LD_LIBRARY_PATH=/usr/lib/wsl/lib; export PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True; /mnt/c/Users/doob/Desktop/code/dev/math_agent_rag/.local-models/paddleocr-gpu/.venv/bin/python -c \"import paddle; assert paddle.is_compiled_with_cuda(); assert paddle.device.cuda.device_count() >= 1; paddle.set_device('gpu:0'); result = paddle.to_tensor([1.0], place='gpu:0') + paddle.to_tensor([1.0], place='gpu:0'); assert 'gpu' in str(result.place).lower() and float(result.numpy()[0]) == 2.0; print(paddle.__version__, paddle.device.cuda.get_device_name())\""
 ```
 
-本项目对配置文件 `config/gaokao-ingestion-2024.json` 中限定的六份 2024 北京、新课标Ⅰ、新课标Ⅱ PDF，使用唯一的真实入库命令：
+本项目的高考 canonical 资料严格只来自 `config/gaokao-ingestion-2024.json` 的 `selectedFiles`：该配置当前精确列出 12 份 PDF。真实输入根目录为 Windows
+`C:\Users\doob\Desktop\个人资料\高考真题\数学高考真题试卷【点进去分开保存，链接长期在】\【新·PDF版】2008-2024·高考数学真题\高考题目数学最近几年`，在 WSL 中为
+`/mnt/c/Users/doob/Desktop/个人资料/高考真题/数学高考真题试卷【点进去分开保存，链接长期在】/【新·PDF版】2008-2024·高考数学真题/高考题目数学最近几年`。不得以同名文件、分类目录扫描或旧的六份清单替代这个白名单。
+
+真实发布路径固定如下，名称必须保留原始 UTF-8 PDF 文件名，禁止乱码或改写来源名：
+
+- GPU 资产暂存：`output/math-paper-assets/gaokao-2024/<PDF 文件名去掉 .pdf>/`，其中包含 `asset-report.json`、`question-assets.jsonl`、`page-images/` 与 `figures/`。
+- canonical corpus：`output/math-paper-corpus/<完整 PDF 文件名（含 .pdf）>/`，其中包含 `source-manifest.json`、`document.md`、`questions/`、`page-images/` 与 `figures/`。
+- backend 以只读 bind mount 将主机 `./output/math-paper-corpus` 挂载为容器 `/app/data/math-paper-corpus:ro`；Java 只从该挂载读取已发布且哈希通过的 canonical 文档。
+
+唯一的真实发布命令为：
 
 ```powershell
-wsl.exe -d Ubuntu -- python3 /mnt/c/Users/doob/Desktop/code/dev/math_agent_rag/scripts/wsl/run_2024_luna_milvus_ingestion.py
+wsl.exe -d Ubuntu -- bash -lc "cd /mnt/c/Users/doob/Desktop/code/dev/math_agent_rag && python3 scripts/wsl/run_2024_luna_milvus_ingestion.py --config config/gaokao-ingestion-2024.json --vision-provider terra"
 ```
 
 该命令严格按以下顺序完成，任何一步失败都会以非零退出，不能产出“成功”结论：
 
-1. 以生产后端相同版本的 PDFBox 渲染每个真实 PDF 页，保留原始 PNG；再生成最长边 960px、JPEG quality 0.82 的初筛页图。
-2. 每页仅将压缩页图发送给默认的 `gpt-5.6-luna`（Terra 可通过 `--vision-provider terra` 显式切换），识别题干、LaTex 公式、题号和跨页风险；原始 PNG 仍作为可复核证据。
-3. 在 `output/gaokao-evidence/2024/runs/<run-id>/` 保存每页完整的非密钥请求、响应、页图 SHA-256、HTTP 状态、耗时及 provider 返回的 token usage。Authorization 不写入文件。
-4. 仅将视觉 provider 返回的非空题干和公式调用本机运行的真实 embedding worker，写入统一的高考 Milvus collection `gaokao_math`。
-5. 使用刚入库题干重新生成真实查询向量并从 Milvus 召回；若查不到对应的插入主键，整次运行失败。最终报告写入 `output/gaokao-evidence/2024/<run-id>-report.json`，其中汇总 `prompt_tokens`、`completion_tokens`、`total_tokens`。
+1. 使用生产后端对齐的 PDFBox 渲染真实 PDF 页；GPU `PP-DocLayout-L` 和 `PP-OCRv5` 仅在这些页图上定位题目与同源图片资产，生成 hash 绑定资产报告。
+2. 每页只通过已配置的 `gpt-5.6-terra` 进行视觉转写；Luna 或其他 provider 不允许执行 canonical 发布，也不得作为回退。
+3. 发布 hash 绑定的完整原卷 Markdown、题级 Markdown、manifest、页图与题图；未完成 manifest 或任一哈希校验时 Java 必须 fail closed。
+4. 使用本机真实 embedding 写入统一高考 Milvus collection `gaokao_math`，然后 flush 并以刚写入记录作真实 recall。
 
-高考题统一使用 `gaokao_math` collection；之后任何高考题导入不得新建按年份或模型拆分的 collection。AI 并发固定为 20；`--page-workers` 只能降低本次脚本进程的并发，不能把脚本线程数表述为全项目额度。后端 agent 路径的分布式额度由 Redis 租约控制；若要把外部批量脚本纳入同一额度，必须经后端入库 API 申请租约，而不是并行执行多个脚本。每页审计额外记录实际 worker 数、任务序号、线程名、开始/完成时间，保证并发时仍能对一张页图、一份请求/响应和一笔 token usage 一一追溯。Luna 请求通过 `--luna-bridge-container` 指定的健康 Docker worker 网络发出，容器名不是代码常量；使用 `docker compose ps -q ai-worker` 获取当前部署的容器 ID。单次 HTTP 默认限时 120 秒，并由父进程额外 5 秒宽限的硬超时兜底；520、429 和临时 5xx 只对该页请求进行局部、有界的最多 3 次重试。每个 run 都写入 source/config 哈希 manifest，`--finalize-run-id` 会重新验证 PDF、原图和压缩图哈希后才允许写入。跨页题仅在前页明确标记续页且后页没有新题号时合并；LaTeX 分式含斜杠会被拒绝，必须为 `\\frac{分子}{分母}`。向量化固定调用本机真实 ai-worker 的 `local_bge_embedding`（512 维）；Milvus 会确保 `gaokao_math` 上存在 `COSINE`/`FLAT` 的 `vector_index` 后才加载并写入。链路不会扫描配置之外的 2024 PDF，不使用文本层伪造视觉识别结果，不把模型输出当作官方答案或人工审核结论。provider 凭据和 endpoint 只注入 `ai-worker`；Java 仅使用 route metadata 签发受 `runId` 约束的 Python grant。
-
-`math-agent.agent-worker.runtime.max-concurrency` 固定为 `20`，表示全项目同时允许执行的 AI 工作单元总数，而不是单个 PDF 的页数。该值不接受环境变量覆盖。
-
-Luna 题目识别的公式契约要求：任何可见数学分数在 `latex` 字段中必须写成 `\\frac{分子}{分母}`；严禁使用 `1/2`、`a/b`、`x/y` 等斜杠记法代替分式。该约束同时写入 2024 页图识别提示词及后端已授权页图转写提示词，确保上传链路与批量链路一致。
+高考题统一使用 `gaokao_math` collection；之后任何高考题导入不得新建按年份或模型拆分的 collection。外部批量脚本不能绕开后端并发租约，也不得并行启动多个发布任务。AI 通过 run-scoped opaque `documentRef` 调用固定题级读取接口；用户可见来源标题保持真实 UTF-8 文件名，AI 不接触路径、URL、Base64 或 shell。
 
 ### Final local startup contract
 

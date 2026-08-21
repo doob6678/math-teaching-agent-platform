@@ -13,8 +13,8 @@ import org.springframework.stereotype.Service;
 @Service
 public class KnowledgeGraphSpineService {
 
-    private static final String VERSION = "v0.1";
-    private static final String SOURCE_TAG = "display_spine_v0.1";
+    private static final String VERSION = "v0.2";
+    private static final String SOURCE_TAG = "display_spine_v0.2";
 
     private final KnowledgeQuestionBankStore store;
 

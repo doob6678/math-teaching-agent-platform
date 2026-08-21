@@ -11,6 +11,7 @@ from fastapi import HTTPException
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, ConfigDict, Field
 import requests
+from app.model_review_runtime import BoundedModelReviewController, ModelReviewExhausted
 from app.usage import UsageEvent, UsageLedger, cost_for, fallback_tokens
 
 DEFAULT_MAX_OUTPUT_TOKENS = 512
@@ -99,7 +100,12 @@ class AgentRuntime:
             return {"request": request, "result": self._complete_with_observation(request, request.toolResult)}
         model_result = self._call_live_model(request)
         if model_result.tool_call is None:
-            return {"request": request, "result": model_result}
+            # The initial provider turn may be an unstructured direct answer. Before any sync response is returned,
+            # the bounded final review replaces it with an approved envelope under the same no-tools constraint.
+            return {"request": request, "result": self._review_final_answer(request, [
+                {"role": "system", "content": "Answer the user directly without tools or citations you cannot support."},
+                {"role": "user", "content": request.message},
+            ])}
         # The model selects a tool, but Java executes it under tenant visibility and never grants Python filesystem
         # access. The returned observation is supplied to the next bounded conversation turn by Java.
         observation = self._invoke_java_tool_broker(model_result.tool_call)
@@ -154,7 +160,62 @@ class AgentRuntime:
             messages.append({"role": "tool", "tool_call_id": "authorized_tool_0", "content": evidence})
         else:
             messages.append({"role": "user", "content": "Authorized tool observation:\n" + evidence})
-        return self._call_live_model(request, messages=messages, allow_tools=False)
+        return self._review_final_answer(request, messages)
+
+    def _review_final_answer(self, request: AgentRunRequest, messages: list[dict[str, Any]]) -> AgentRunResult:
+        """Reviews a pre-visible final answer without adding tools, source access, or response metadata."""
+        controller = BoundedModelReviewController("executor", profile="agent_run")
+
+        def invoke(review_prompt: str, _: int) -> tuple[Any, AgentRunResult]:
+            review_messages = [
+                {"role": "system", "content": (
+                    "Return exactly a JSON self-review envelope: "
+                    '{"candidate":{"message":"final answer"},"review":{"approved":true|false,"feedbackCodes":[]}}. '
+                    "Do not call tools. feedbackCodes must use only the approved fixed policy codes."
+                )},
+                *messages,
+                {"role": "user", "content": review_prompt},
+            ]
+            result = self._call_live_model(request, messages=review_messages, allow_tools=False)
+            try:
+                return json.loads(result.message or ""), result
+            except json.JSONDecodeError:
+                return None, result
+
+        try:
+            candidate, usages, _ = controller.execute(
+                invoke,
+                self._review_prompt,
+                self._validated_final_candidate,
+            )
+        except ModelReviewExhausted as exc:
+            raise HTTPException(status_code=422, detail="MODEL_REVIEW_EXHAUSTED") from exc
+        final = usages[-1]
+        return AgentRunResult(
+            status="COMPLETED",
+            message=candidate,
+            provider_name=final.provider_name,
+            model_code=final.model_code,
+            actual_usage=final.actual_usage,
+        )
+
+    @staticmethod
+    def _review_prompt(turn: int, prior: str | None, codes: tuple[str, ...]) -> str:
+        if turn == 1:
+            return "Produce the final answer candidate and strict self-review envelope."
+        return json.dumps({
+            "previousCandidate": prior or "", "feedbackCodes": list(codes),
+            "instruction": "Correct only the candidate to satisfy the final-answer contract.",
+        }, separators=(",", ":"))
+
+    @staticmethod
+    def _validated_final_candidate(candidate: Any) -> str:
+        if not isinstance(candidate, dict):
+            raise ValueError("final candidate must be an object")
+        message = candidate.get("message")
+        if not isinstance(message, str) or not message.strip():
+            raise ValueError("final candidate message is required")
+        return message.strip()
 
     @staticmethod
     def _requested_tool(request: AgentRunRequest) -> str | None:

@@ -19,6 +19,7 @@ import os
 import random
 import re
 import subprocess
+import shutil
 import time
 import threading
 import uuid
@@ -34,8 +35,9 @@ from PIL import Image
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = PROJECT_ROOT / "config" / "gaokao-ingestion-2024.json"
-DEFAULT_EVIDENCE_ROOT = PROJECT_ROOT / "output" / "gaokao-evidence" / "2024"
+DEFAULT_EVIDENCE_ROOT = PROJECT_ROOT / "output" / "math-paper-corpus"
 ALLOWED_EVIDENCE_OUTPUT_ROOT = PROJECT_ROOT / "output"
+TRANSCRIPTION_RUN_ROOT = PROJECT_ROOT / "output" / "math-paper-transcription-runs"
 DEFAULT_TERRA_VISION_MODEL = "gpt-5.6-terra"
 DEFAULT_LUNA_VISION_MODEL = "gpt-5.6-luna"
 DEFAULT_TIMEOUT_SECONDS = 120
@@ -64,6 +66,10 @@ GLOBAL_AI_CONCURRENCY_ENVIRONMENT_VARIABLE = "MATH_AGENT_AGENT_WORKER_MAX_CONCUR
 RENDERER_CLASS = "RenderPdfEvidencePage"
 _renderer_ready = False
 FRACTION_SLASH_PATTERN = re.compile(r"(?<!\\\\)\b(?:[A-Za-z0-9)}]+)\s*/\s*(?:[A-Za-z0-9({]+)\b")
+# Terra can preserve an exam's displayed number as ``第 1 题`` or ``1．``. Only those
+# exact visual equivalents may become a canonical selector; subquestions and descriptive
+# annotations remain non-canonical and cannot create a separate published question.
+CANONICAL_QUESTION_NUMBER_PATTERN = re.compile(r"^\s*(?:第\s*)?([1-9]\d{0,2})\s*(?:[.、．]|题)?\s*$")
 
 
 class NonRetryableLunaError(RuntimeError):
@@ -99,6 +105,41 @@ def load_dotenv(path: Path) -> dict[str, str]:
 def setting(name: str, dotenv: dict[str, str], default: str = "") -> str:
     """Environment wins, while .env gives the WSL command the same configured credentials as Compose."""
     return os.environ.get(name) or dotenv.get(name) or default
+
+
+def resolve_selected_files(config: dict[str, Any], source_root: Path) -> list[Path]:
+    """Resolves the sole explicit PDF whitelist without permitting traversal or source-root escape."""
+    if "selectedFiles" not in config or "selectedFileNames" in config:
+        raise ValueError("configuration must contain only non-empty selectedFiles")
+    selected = config["selectedFiles"]
+    if not isinstance(selected, list) or not selected:
+        raise ValueError("selectedFiles must be a non-empty list")
+    resolved_root = source_root.resolve()
+    files: list[Path] = []
+    normalized_selectors: set[str] = set()
+    base_names: set[str] = set()
+    for selector in selected:
+        if not isinstance(selector, str) or not selector.strip() or "\\" in selector:
+            raise ValueError("selectedFiles entries must be non-empty POSIX relative paths")
+        relative = Path(selector)
+        if relative.is_absolute() or any(part in {"", ".", ".."} for part in relative.parts):
+            raise ValueError("selectedFiles entries must not be absolute or traverse directories")
+        if relative.suffix.lower() != ".pdf":
+            raise ValueError("selectedFiles entries must name PDF files")
+        normalized = relative.as_posix()
+        if normalized in normalized_selectors:
+            raise ValueError("selectedFiles contains duplicate normalized paths")
+        normalized_selectors.add(normalized)
+        candidate = (resolved_root / relative).resolve()
+        if not candidate.is_relative_to(resolved_root):
+            raise ValueError("selectedFiles entry escapes sourceRootWsl")
+        if not candidate.is_file():
+            raise FileNotFoundError(f"configured source PDF is missing: {normalized}")
+        if candidate.name in base_names:
+            raise ValueError("selectedFiles cannot contain duplicate PDF base names")
+        base_names.add(candidate.name)
+        files.append(candidate)
+    return files
 
 
 def ensure_pdf_renderer() -> None:
@@ -173,7 +214,7 @@ def vision_request(image: Path, paper: str, page: int, model: str) -> dict[str, 
         },
         "constraints": [
             "Read only the supplied page image.",
-            "Preserve mathematical formulas as LaTex strings in latex. Every visible mathematical fraction MUST use \\frac{numerator}{denominator}; never write a fraction as a/b, 1/2, or x/y in a latex field.",
+            "pageText is the authoritative complete transcription of this page. Preserve mathematical formulas as LaTex strings in latex. Every visible mathematical fraction MUST use \\frac{numerator}{denominator}; never write a fraction as a/b, 1/2, or x/y in a latex field.",
             "Do not invent an answer, solution, unshown text, or an official correctness judgement.",
             "Use an empty questions list if no question is visible."
         ],
@@ -248,6 +289,12 @@ print(json.dumps({'status': response.status_code, 'body': body, 'elapsedMs': rou
     raise AssertionError("unreachable Luna retry state")
 
 
+def canonical_question_number(value: Any) -> str:
+    """Converts only unambiguous visually printed question-number formats to the canonical numeric selector."""
+    matched = CANONICAL_QUESTION_NUMBER_PATTERN.fullmatch(str(value or ""))
+    return matched.group(1) if matched else ""
+
+
 def recognized_questions(response: dict[str, Any], source_name: str, page: int, provider: str,
                          question_assets: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
     """Accept only structured visual output and create immutable source-backed vector payloads."""
@@ -272,15 +319,48 @@ def recognized_questions(response: dict[str, Any], source_name: str, page: int, 
                 raise RuntimeError(f"{provider} latex fraction must use \\frac{{numerator}}{{denominator}}, not slash notation")
         text = str(item["text"]).strip()
         vector_text = text + ("\n" + "\n".join(map(str, latex)) if latex else "")
-        # The key derives only from immutable visual evidence.  A recovery run can
+        question_number = canonical_question_number(item.get("number"))
+        # Non-canonical labels (subquestions/continuations) have no independent source
+        # identity. Retain them only as a possible explicitly flagged continuation.
+        if not question_number and not bool(item.get("continuesToNextPage", False)):
+            continue
+        # The key derives only from immutable visual evidence. A recovery run can
         # therefore upsert the same question instead of creating a fresh duplicate.
-        stable_identity = f"{source_name}\n{page}\n{item.get('number', '')}\n{vector_text}"
-        question_number = str(item.get("number", "")).strip()
+        stable_identity = f"{source_name}\n{page}\n{question_number}\n{vector_text}"
         output.append({
             "id": str(uuid.uuid5(uuid.NAMESPACE_URL, stable_identity)), "text": vector_text,
             "metadata": {"sourceFile": source_name, "page": page, "pageStart": page, "pageEnd": page, "questionNumber": question_number, "latex": latex, "confidence": item.get("confidence"), "continuesToNextPage": bool(item.get("continuesToNextPage", False)), "extraction": f"{provider.upper()}_VISUAL_PAGE", "questionAssets": question_assets.get(question_number, [])},
         })
     return output
+
+
+def recognized_page_text(response: dict[str, Any], provider: str) -> str:
+    """读取模型声明的页级完整转写，拒绝将局部题干误发布为整页正文。"""
+    try:
+        content = response["choices"][0]["message"]["content"]
+        parsed = json.loads(content) if isinstance(content, str) else content
+    except (KeyError, IndexError, TypeError, json.JSONDecodeError) as error:
+        raise RuntimeError(f"{provider} did not return a parseable JSON transcription: {error}") from error
+    page_text = str(parsed.get("pageText", "")).strip() if isinstance(parsed, dict) else ""
+    if not page_text:
+        raise RuntimeError(f"{provider} transcription has no authoritative pageText")
+    return page_text
+
+
+def canonical_question_records(questions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keeps one earliest visually sourced record per paper/question number for collision-free Markdown publication."""
+    selected: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for question in sorted(questions, key=lambda item: (
+            str(item["metadata"].get("sourceFile", "")),
+            int(item["metadata"].get("pageStart", item["metadata"].get("page", 0))),
+            str(item["metadata"].get("questionNumber", "")))):
+        key = (str(question["metadata"].get("sourceFile", "")), str(question["metadata"].get("questionNumber", "")))
+        if not key[0] or not key[1] or key in seen:
+            continue
+        seen.add(key)
+        selected.append(question)
+    return selected
 
 
 def merge_cross_page_questions(questions: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -339,14 +419,207 @@ def load_question_assets(asset_root: Path, source_file: Path) -> dict[str, list[
         actual_asset_sha256 = sha256_file(asset_path)
         if item.get("assetSha256") != actual_asset_sha256:
             raise RuntimeError(f"question asset hash is missing or invalid: {asset_path}")
+        # 文件系统位置只在本进程发布规范材料时使用。以下划线开头的临时字段绝不能进入
+        # Milvus metadata、RAG 载荷或模型上下文；可持久谱系只使用不可逆的资产标识和哈希。
+        source_sha256 = str(report["sourceSha256"])
+        asset_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"asset\n{source_sha256}\n{actual_asset_sha256}"))
         assets.setdefault(str(item["questionNumber"]), []).append({
-            "path": str(asset_path.relative_to(PROJECT_ROOT)),
-            "sha256": actual_asset_sha256,
+            "assetId": asset_id,
+            "assetSha256": actual_asset_sha256,
+            "sourceSha256": source_sha256,
             "pageNumber": item["pageNumber"],
             "bboxPixels": item["bboxPixels"],
             "bindingMethod": item["bindingMethod"],
+            "_sourceAssetPath": asset_path,
         })
     return assets
+
+
+def canonical_paper_directory_name(source_file: Path) -> str:
+    """以原始完整文件名（去扩展名）命名发布目录，并拒绝跨平台不可读的路径片段。"""
+    name = source_file.name.strip()
+    if not name or name in {".", ".."} or any(character in name for character in "\\/:*?\"<>|"):
+        raise ValueError(f"source filename cannot name a canonical paper directory: {source_file.name}")
+    return name
+
+
+def copy_source_asset(source: Path, destination: Path) -> None:
+    """复制经过哈希验证的来源图像，令发布材料在其试卷目录内可独立审阅。"""
+    if not source.is_file():
+        raise FileNotFoundError(f"source asset is unavailable: {source}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, destination)
+    if sha256_file(source) != sha256_file(destination):
+        raise RuntimeError(f"copied asset hash mismatch: {destination}")
+
+
+def publish_canonical_paper(
+        corpus_root: Path,
+        source_file: Path,
+        source_sha256: str,
+        page_texts: dict[int, str],
+        questions: list[dict[str, Any]],
+        asset_root: Path) -> dict[str, Any]:
+    """发布单份试卷的可读全文、逐题材料及来源图片，作为唯一 RAG 证据目录。"""
+    paper_root = corpus_root / canonical_paper_directory_name(source_file)
+    if paper_root.exists():
+        # A durable evidence finalization can reach the vector stage after every canonical
+        # file was atomically published. Never overwrite that evidence: reuse it only when
+        # the manifest proves it belongs to this exact source PDF.
+        manifest_path = paper_root / "source-manifest.json"
+        document_path = paper_root / "document.md"
+        if not manifest_path.is_file() or not document_path.is_file():
+            raise FileExistsError(f"incomplete canonical paper output cannot be reused: {paper_root}")
+        existing_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if (existing_manifest.get("documentFullName") != source_file.name
+                or existing_manifest.get("sourceSha256") != source_sha256):
+            raise FileExistsError(f"canonical paper output belongs to another source: {paper_root}")
+        return {"paperRoot": paper_root, "documentPath": document_path, "content": document_path.read_text(encoding="utf-8")}
+    paper_root.mkdir(parents=True)
+    paper_questions = [item for item in questions if item["metadata"].get("sourceFile") == source_file.name]
+    document_lines = [f"# {source_file.name}", "", f"- 来源 SHA-256：`{source_sha256}`", "- 正文权威来源：Terra 页级视觉转写。", ""]
+    page_index: list[dict[str, Any]] = []
+    question_index: list[dict[str, Any]] = []
+    for page_number, page_text in sorted(page_texts.items()):
+        source_image = asset_root / "page-images" / f"page-{page_number:03d}.png"
+        relative_image = Path("page-images") / f"page-{page_number:03d}.png"
+        copied_image = paper_root / relative_image
+        copy_source_asset(source_image, copied_image)
+        page_asset_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"page\n{source_sha256}\n{page_number}"))
+        page_index.append({
+            "pageNo": page_number,
+            "canonicalAssetPath": relative_image.as_posix(),
+            "assetId": page_asset_id,
+            "assetSha256": sha256_file(copied_image),
+        })
+        document_lines.extend([f"## 第 {page_number} 页", "", f"![第 {page_number} 页]({relative_image.as_posix()})", "", page_text, ""])
+    document_lines.extend(["# 题目索引", ""])
+    for question in sorted(paper_questions, key=lambda item: (int(item["metadata"].get("pageStart", 0)), str(item["metadata"].get("questionNumber", "")))):
+        metadata = question["metadata"]
+        number = str(metadata.get("questionNumber", "未编号")).strip() or "未编号"
+        if not number.isdigit():
+            raise RuntimeError(f"canonical publication requires a numeric question number: {source_file.name}")
+        file_stem = number.zfill(3)
+        question_file = Path("questions") / f"q-{file_stem}.md"
+        page_start = int(metadata.get("pageStart", metadata.get("page", 0)))
+        page_end = int(metadata.get("pageEnd", page_start))
+        source_pages = list(range(page_start, page_end + 1))
+        if page_start < 1 or page_end < page_start or any(page not in page_texts for page in source_pages):
+            raise RuntimeError(f"canonical question page range is not present in transcription: {source_file.name} #{number}")
+        question_lines = [
+            f"# {source_file.name} 第 {number} 题", "", f"- 来源页：{page_start} 至 {page_end}",
+            f"- 来源题目：{number}",
+            f"- 跨页连续：{'是' if len(source_pages) > 1 else '否'}", "", question["text"], "",
+        ]
+        copied_assets: list[dict[str, Any]] = []
+        manifest_assets: list[dict[str, Any]] = []
+        for asset_index, asset in enumerate(metadata.get("questionAssets", []), start=1):
+            source_asset = asset.get("_sourceAssetPath")
+            if not isinstance(source_asset, Path):
+                raise RuntimeError("question asset has no private publication path")
+            relative_asset = Path("figures") / f"q-{file_stem}-{asset_index:02d}{source_asset.suffix.lower()}"
+            copied_asset_path = paper_root / relative_asset
+            copy_source_asset(source_asset, copied_asset_path)
+            copied_asset = {key: value for key, value in asset.items() if not key.startswith("_")}
+            copied_asset["assetSha256"] = sha256_file(copied_asset_path)
+            copied_assets.append(copied_asset)
+            manifest_asset = {
+                **copied_asset,
+                "canonicalAssetPath": relative_asset.as_posix(),
+            }
+            manifest_assets.append(manifest_asset)
+            question_lines.extend([f"![第 {number} 题图]({relative_asset.as_posix()})", ""])
+        question_path = paper_root / question_file
+        question_path.parent.mkdir(parents=True, exist_ok=True)
+        question_path.write_text("\n".join(question_lines), encoding="utf-8")
+        page_asset_ids = [
+            str(uuid.uuid5(uuid.NAMESPACE_URL, f"page\n{source_sha256}\n{page}")) for page in source_pages
+        ]
+        metadata["pageAssetIds"] = page_asset_ids
+        metadata["questionAssets"] = copied_assets
+        metadata["sourcePages"] = source_pages
+        metadata["crossPageContinuity"] = {"present": len(source_pages) > 1, "pageBoundaries": [
+            {"fromPage": page, "toPage": page + 1} for page in source_pages[:-1]
+        ]}
+        question_index.append({
+            "questionNumber": number,
+            "questionId": question["id"],
+            "questionMarkdown": question_file.as_posix(),
+            "questionMarkdownSha256": sha256_file(question_path),
+            "sourcePages": source_pages,
+            "crossPageContinuity": metadata["crossPageContinuity"],
+            "assetIds": [asset["assetId"] for asset in copied_assets] + page_asset_ids,
+            "assets": manifest_assets,
+        })
+        document_lines.extend([f"- [第 {number} 题]({question_file.as_posix()})", ""])
+    document_path = paper_root / "document.md"
+    document_path.write_text("\n".join(document_lines), encoding="utf-8")
+    manifest = {
+        "documentFullName": source_file.name,
+        "sourceSha256": source_sha256,
+        "authoritativeTranscription": "TERRA_VISUAL_PAGE",
+        "documentMarkdown": "document.md",
+        "documentMarkdownSha256": sha256_file(document_path),
+        "questionCount": len(question_index),
+        "pageCount": len(page_index),
+        "pages": page_index,
+        "questions": question_index,
+    }
+    (paper_root / "source-manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"paperRoot": paper_root, "documentPath": document_path, "content": document_path.read_text(encoding="utf-8")}
+
+
+def vector_metadata(record: dict[str, Any]) -> dict[str, Any]:
+    """拒绝将路径或发布临时字段写入向量库，令 RAG 只能消费不透明来源谱系。"""
+    metadata = record.get("metadata", {})
+    if not isinstance(metadata, dict):
+        raise ValueError("vector record metadata must be an object")
+    # Formula strings are already part of the embedded text and canonical Markdown.
+    # Excluding this redundant field prevents the path guard treating TeX backslashes as paths.
+    metadata = {key: value for key, value in metadata.items() if key != "latex"}
+    forbidden_tokens = ("path", "root", "directory", "file://", "\\\\", "/app/", "/mnt/", "c:/", "d:/")
+
+    def validate(value: Any, key: str = "") -> Any:
+        normalized_key = key.lower()
+        if any(token in normalized_key for token in forbidden_tokens[:3]) or normalized_key.startswith("_"):
+            raise ValueError(f"vector metadata contains a filesystem key: {key}")
+        if isinstance(value, dict):
+            return {
+                child_key: validate(child_value, str(child_key))
+                for child_key, child_value in value.items()
+                if not str(child_key).startswith("_")
+            }
+        if isinstance(value, list):
+            return [validate(child) for child in value]
+        if isinstance(value, str) and any(token in value.lower() for token in forbidden_tokens[3:]):
+            raise ValueError("vector metadata contains a filesystem value")
+        return value
+
+    return validate(metadata)
+
+
+def resolve_vision_bridge_container(configured_override: str = "") -> str:
+    """解析当前健康的 Compose ai-worker，允许非密钥覆盖但拒绝停止或未就绪容器。"""
+    candidates: list[str] = []
+    if configured_override.strip():
+        candidates.append(configured_override.strip())
+    else:
+        result = subprocess.run(
+            ["docker", "compose", "-f", str(PROJECT_ROOT / "docker-compose.yml"), "ps", "-q", "ai-worker"],
+            capture_output=True, text=True, encoding="utf-8", check=False)
+        if result.returncode != 0:
+            raise RuntimeError("cannot inspect Compose ai-worker; start the project Compose stack before visual ingestion")
+        candidates.extend(line.strip() for line in result.stdout.splitlines() if line.strip())
+    for candidate in candidates:
+        inspection = subprocess.run(
+            ["docker", "inspect", "--format", "{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}", candidate],
+            capture_output=True, text=True, encoding="utf-8", check=False)
+        state = inspection.stdout.strip().lower()
+        if inspection.returncode == 0 and state == "running healthy":
+            return candidate
+    if configured_override.strip():
+        raise RuntimeError("configured vision bridge container is not running and healthy")
+    raise RuntimeError("no healthy Compose ai-worker container exists; start the Compose ai-worker and wait for its health check")
 
 
 def embed(texts: list[str], url: str, api_key: str, timeout: int) -> list[list[float]]:
@@ -480,7 +753,7 @@ def process_page(job: tuple[int, Path, int, Path], run_id: str, settings: dict[s
     usage = response.get("usage", {}) if isinstance(response, dict) else {}
     call_evidence = {"timestampUtc": utc_now(), "taskSequence": task_sequence, "workerThread": threading.current_thread().name, "taskStartedAt": task_started_at, "taskCompletedAt": utc_now(), "runId": run_id, "provider": arguments.vision_provider, "model": arguments.vision_model, "sourceFile": pdf.name, "page": page, "image": {"original": str(original), "originalSha256": sha256_file(original), "compressed": str(compressed), "compressedSha256": sha256_file(compressed)}, "request": request, "responseHttpStatus": status, "response": response, "usage": usage, "elapsedMs": elapsed_ms, "attempts": attempts, "credentialHandling": "Authorization was used only for transport and is omitted from evidence."}
     (paper_root / f"page-{page}-{arguments.vision_provider}-request-response.json").write_text(json.dumps(call_evidence, ensure_ascii=False, indent=2), encoding="utf-8")
-    return recognized_questions(response, pdf.name, page, arguments.vision_provider, question_assets), {"taskSequence": task_sequence, "workerThread": threading.current_thread().name, "sourceFile": pdf.name, "page": page, "usage": usage, "elapsedMs": elapsed_ms, "attemptCount": len(attempts)}
+    return recognized_questions(response, pdf.name, page, arguments.vision_provider, question_assets), {"taskSequence": task_sequence, "workerThread": threading.current_thread().name, "sourceFile": pdf.name, "page": page, "pageText": recognized_page_text(response, arguments.vision_provider), "usage": usage, "elapsedMs": elapsed_ms, "attemptCount": len(attempts)}
 
 
 def main() -> None:
@@ -493,8 +766,8 @@ def main() -> None:
     parser.add_argument("--timeout-grace-seconds", type=int, default=DEFAULT_TIMEOUT_GRACE_SECONDS)
     parser.add_argument("--page-workers", type=int,
                         help="optional lower per-run cap; it is local process capacity, not a distributed quota")
-    parser.add_argument("--vision-provider", choices=("terra", "luna"), default="luna",
-                        help="OpenAI-compatible visual model provider; Luna is the production default.")
+    parser.add_argument("--vision-provider", choices=("terra", "luna"), default="terra",
+                        help="OpenAI-compatible visual model provider; Terra is the authoritative production default.")
     parser.add_argument("--vision-model", help="Optional provider-model override; defaults match the selected provider.")
     parser.add_argument("--vision-bridge-container",
                         help="Docker container with the configured provider network and credentials.")
@@ -520,14 +793,13 @@ def main() -> None:
         base_url = setting("OPENAI_BASE_URL", dotenv)
         if not api_key or not base_url:
             raise RuntimeError("OPENAI_API_KEY and OPENAI_BASE_URL must be configured before real visual ingestion")
-        arguments.vision_bridge_container = (
+        configured_bridge = (
             arguments.vision_bridge_container
             or arguments.luna_bridge_container
             or setting("MATH_AGENT_VISION_BRIDGE_CONTAINER", dotenv)
             or setting("MATH_AGENT_LUNA_BRIDGE_CONTAINER", dotenv)
         )
-        if not arguments.vision_bridge_container:
-            raise RuntimeError("MATH_AGENT_VISION_BRIDGE_CONTAINER or --vision-bridge-container must name the configured Docker bridge container")
+        arguments.vision_bridge_container = resolve_vision_bridge_container(configured_bridge)
     global_ai_concurrency = int(setting(GLOBAL_AI_CONCURRENCY_ENVIRONMENT_VARIABLE, dotenv, str(DEFAULT_GLOBAL_AI_CONCURRENCY)))
     requested_page_workers = arguments.page_workers or global_ai_concurrency
     if global_ai_concurrency < 1 or requested_page_workers < 1:
@@ -535,10 +807,7 @@ def main() -> None:
     if requested_page_workers > global_ai_concurrency:
         raise ValueError(f"--page-workers={requested_page_workers} exceeds global {GLOBAL_AI_CONCURRENCY_ENVIRONMENT_VARIABLE}={global_ai_concurrency}")
     source_root = Path(config["sourceRootWsl"])
-    files = [source_root / name for name in config["selectedFileNames"]]
-    missing = [str(path) for path in files if not path.is_file()]
-    if missing:
-        raise RuntimeError(f"configured 2024 source PDFs are missing: {missing}")
+    files = resolve_selected_files(config, source_root)
     configured_asset_root = (PROJECT_ROOT / config["questionAssetRoot"]).resolve()
     # A one-paper simulation may name its exact asset directory, whereas a
     # Gaokao batch names the parent directory containing one subdirectory per
@@ -554,7 +823,7 @@ def main() -> None:
     }
     paper_type = str(config["paperType"]).lower()
     run_id = arguments.finalize_run_id or f"{arguments.vision_provider}-{paper_type}-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}"
-    run_root = evidence_root / "runs" / run_id
+    run_root = TRANSCRIPTION_RUN_ROOT / run_id
     settings = config["visionOptimization"]
     all_questions: list[dict[str, Any]] = []
     model_calls: list[dict[str, Any]] = []
@@ -581,7 +850,7 @@ def main() -> None:
             if evidence.get("provider") != arguments.vision_provider or evidence.get("model") != arguments.vision_model:
                 raise RuntimeError("recovery evidence provider/model does not match this finalization request")
             all_questions.extend(recognized_questions(evidence["response"], evidence["sourceFile"], int(evidence["page"]), arguments.vision_provider, question_assets_by_file[evidence["sourceFile"]]))
-            model_calls.append({"taskSequence": evidence.get("taskSequence"), "workerThread": evidence.get("workerThread"), "sourceFile": evidence["sourceFile"], "page": evidence["page"], "usage": evidence.get("usage", {}), "elapsedMs": evidence.get("elapsedMs"), "attemptCount": len(evidence.get("attempts", [])), "recoveredFromEvidence": True})
+            model_calls.append({"taskSequence": evidence.get("taskSequence"), "workerThread": evidence.get("workerThread"), "sourceFile": evidence["sourceFile"], "page": evidence["page"], "pageText": recognized_page_text(evidence["response"], arguments.vision_provider), "usage": evidence.get("usage", {}), "elapsedMs": evidence.get("elapsedMs"), "attemptCount": len(evidence.get("attempts", [])), "recoveredFromEvidence": True})
     else:
         run_root.mkdir(parents=True, exist_ok=False)
         # This immutable manifest binds later --finalize-run-id execution to the exact input PDF bytes and policy.
@@ -605,14 +874,55 @@ def main() -> None:
             raise RuntimeError("one or more page tasks failed; see page-level failure evidence: " + " | ".join(failures))
     model_calls.sort(key=lambda call: call["taskSequence"])
     all_questions = merge_cross_page_questions(all_questions)
+    # An unnumbered page fragment is valid only while being merged into an explicit
+    # preceding continuation. It is never a standalone canonical question/vector row.
+    all_questions = [item for item in all_questions if str(item["metadata"].get("questionNumber", "")).isdigit()]
+    all_questions = canonical_question_records(all_questions)
     if not all_questions:
         raise RuntimeError(f"{arguments.vision_provider} completed but returned no non-empty questions; refusing to create an empty success report")
+    if arguments.vision_provider != "terra":
+        raise RuntimeError("canonical publication requires Terra page-level visual transcription")
+    canonical_documents: list[dict[str, Any]] = []
+    for source_file in files:
+        source_hash = sha256_file(source_file)
+        paper_calls = [call for call in model_calls if call["sourceFile"] == source_file.name]
+        page_texts = {int(call["page"]): str(call["pageText"]) for call in paper_calls}
+        expected_pages = set(range(1, page_count(source_file) + 1))
+        if set(page_texts) != expected_pages:
+            raise RuntimeError(f"Terra transcription is incomplete for canonical publication: {source_file.name}")
+        published = publish_canonical_paper(
+            evidence_root,
+            source_file,
+            source_hash,
+            page_texts,
+            all_questions,
+            asset_root_by_file[source_file.name],
+        )
+        document_ref = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{source_file.name}\n{source_hash}"))
+        for question in all_questions:
+            metadata = question["metadata"]
+            if metadata.get("sourceFile") == source_file.name:
+                metadata["documentFullName"] = source_file.name
+                metadata["documentRef"] = document_ref
+                metadata["sourceSha256"] = source_hash
+        canonical_documents.append({
+            "id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"document\n{source_file.name}\n{source_hash}")),
+            "text": published["content"],
+            "metadata": {
+                "recordType": "FULL_DOCUMENT",
+                "documentFullName": source_file.name,
+                "documentRef": document_ref,
+                "sourceSha256": source_hash,
+                "extraction": "TERRA_VISUAL_PAGE",
+            },
+        })
+    index_records = canonical_documents + all_questions
     worker_key = setting("MATH_AGENT_WORKER_API_KEY", dotenv)
-    vectors = embed_all([item["text"] for item in all_questions], setting("MATH_AGENT_EMBEDDING_BASE_URL", dotenv, DEFAULT_EMBEDDING_URL), worker_key, arguments.timeout_seconds)
+    vectors = embed_all([item["text"] for item in index_records], setting("MATH_AGENT_EMBEDDING_BASE_URL", dotenv, DEFAULT_EMBEDDING_URL), worker_key, arguments.timeout_seconds)
     milvus_uri = setting("MATH_AGENT_VECTOR_INDEX_MILVUS_URI", dotenv, DEFAULT_MILVUS_URI)
     milvus_token = setting("MATH_AGENT_MILVUS_TOKEN", dotenv) or ("root:" + setting("MATH_AGENT_MILVUS_ROOT_PASSWORD", dotenv) if setting("MATH_AGENT_MILVUS_ROOT_PASSWORD", dotenv) else "")
     ensure_collection(milvus_uri, milvus_token, arguments.collection, arguments.timeout_seconds)
-    entities = [{PRIMARY_KEY_FIELD: item["id"], VECTOR_FIELD: vector, TEXT_FIELD: item["text"], METADATA_FIELD: item["metadata"]} for item, vector in zip(all_questions, vectors, strict=True)]
+    entities = [{PRIMARY_KEY_FIELD: item["id"], VECTOR_FIELD: vector, TEXT_FIELD: item["text"], METADATA_FIELD: vector_metadata(item)} for item, vector in zip(index_records, vectors, strict=True)]
     # Upsert makes evidence recovery idempotent: a repeat never creates a second
     # vector for the deterministic question key after an interrupted finalization.
     milvus_post(milvus_uri, milvus_token, "/v2/vectordb/entities/upsert", {"collectionName": arguments.collection, "data": entities}, arguments.timeout_seconds)
@@ -624,10 +934,11 @@ def main() -> None:
     recalled = milvus_post(milvus_uri, milvus_token, "/v2/vectordb/entities/search", {"collectionName": arguments.collection, "data": [query_vector], "annsField": VECTOR_FIELD, "limit": RETRIEVAL_LIMIT, "outputFields": [PRIMARY_KEY_FIELD, TEXT_FIELD, METADATA_FIELD]}, arguments.timeout_seconds)
     hits = search_hits(recalled)
     if not hits or not any(hit.get("id") == all_questions[0]["id"] or hit.get("entity", {}).get(PRIMARY_KEY_FIELD) == all_questions[0]["id"] for hit in hits):
-        raise RuntimeError("real Milvus recall did not return the inserted query question")
+        recalled_ids = [str(hit.get("id") or hit.get("entity", {}).get(PRIMARY_KEY_FIELD) or "") for hit in hits]
+        raise RuntimeError(f"real Milvus recall did not return the inserted query question; queryId={all_questions[0]['id']}; hitIds={recalled_ids}")
     totals = {name: sum(int(call["usage"].get(name, 0) or 0) for call in model_calls) for name in ("prompt_tokens", "completion_tokens", "total_tokens")}
-    report = {"timestampUtc": utc_now(), "runId": run_id, "provider": arguments.vision_provider, "model": arguments.vision_model, "selectedFileCount": len(files), "visionCallCount": len(model_calls), "questionCount": len(all_questions), "usage": totals, "concurrency": {"environmentVariable": GLOBAL_AI_CONCURRENCY_ENVIRONMENT_VARIABLE, "globalLimit": global_ai_concurrency, "effectivePageWorkers": requested_page_workers, "retryScope": "per_request_only", "maxAttemptsPerRequest": LUNA_MAX_ATTEMPTS}, "collection": arguments.collection, "realRecall": {"queryQuestionId": all_questions[0]["id"], "hitCount": len(hits), "hits": hits}, "modelCalls": model_calls, "evidenceRoot": str(run_root)}
-    report_path = evidence_root / f"{run_id}-report.json"
+    report = {"timestampUtc": utc_now(), "runId": run_id, "provider": arguments.vision_provider, "model": arguments.vision_model, "selectedFileCount": len(files), "visionCallCount": len(model_calls), "questionCount": len(all_questions), "fullDocumentCount": len(canonical_documents), "usage": totals, "concurrency": {"environmentVariable": GLOBAL_AI_CONCURRENCY_ENVIRONMENT_VARIABLE, "globalLimit": global_ai_concurrency, "effectivePageWorkers": requested_page_workers, "retryScope": "per_request_only", "maxAttemptsPerRequest": LUNA_MAX_ATTEMPTS}, "collection": arguments.collection, "realRecall": {"queryQuestionId": all_questions[0]["id"], "hitCount": len(hits), "hits": hits}, "modelCalls": model_calls, "canonicalEvidenceRoot": str(evidence_root)}
+    report_path = TRANSCRIPTION_RUN_ROOT / f"{run_id}-report.json"
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps({"report": str(report_path), "runId": run_id, "questionCount": len(all_questions), "usage": totals, "recallHitCount": len(hits)}, ensure_ascii=False))
 
