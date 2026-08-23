@@ -20,7 +20,9 @@ import com.doob.mathagent.protocol.dto.McpToolCallRequest;
 import com.doob.mathagent.protocol.vo.McpReactToolPlan;
 import com.doob.mathagent.protocol.vo.McpToolCallResponse;
 import com.doob.mathagent.resources.TextbookResourceProperties;
+import com.doob.mathagent.retrieval.CanonicalMathPaperRetrievalService;
 import com.doob.mathagent.retrieval.RetrievalRequestContext;
+import com.doob.mathagent.teaching.TeachingEvidence;
 import com.doob.mathagent.retrieval.TextbookRetrievalService;
 import com.doob.mathagent.retrieval.TextbookSearchRequest;
 import com.doob.mathagent.retrieval.TextbookSearchHit;
@@ -77,6 +79,7 @@ public class McpToolExecutionService {
     private final TextbookRetrievalService textbookRetrievalService;
     private final TextbookResourceProperties textbookResourceProperties;
     private final TeacherResourceBlockSearchService teacherResourceBlockSearchService;
+    private CanonicalMathPaperRetrievalService canonicalMathPaperRetrievalService;
     private final AgentTraceQueryService agentTraceQueryService;
     private final AgentRunPlanService agentRunPlanService;
     private final TeacherFeishuDiscoveryService teacherFeishuDiscoveryService;
@@ -135,6 +138,11 @@ public class McpToolExecutionService {
     @Autowired(required = false)
     public void setSourceFileReader(TeacherSourceFileReader sourceFileReader) {
         this.sourceFileReader = sourceFileReader;
+    }
+
+    @Autowired(required = false)
+    public void setCanonicalMathPaperRetrievalService(CanonicalMathPaperRetrievalService canonicalMathPaperRetrievalService) {
+        this.canonicalMathPaperRetrievalService = canonicalMathPaperRetrievalService;
     }
 
     /**
@@ -244,6 +252,7 @@ public class McpToolExecutionService {
         }
         SourceSelection selection = sourceSelection(arguments);
         List<CompletableFuture<LibraryEvidence>> pending = selection.libraries().stream()
+                .filter(library -> !"gaokao".equals(library))
                 .map(library -> CompletableFuture.supplyAsync(
                         () -> searchOneLibrary(client, query, limit, arguments, library), toolExecutor))
                 .toList();
@@ -254,7 +263,10 @@ public class McpToolExecutionService {
         List<TeacherResourceBlockSearchResponse.Hit> teacherHits = libraryEvidence.stream()
                 .flatMap(result -> result.teacherHits().stream())
                 .toList();
-        List<Map<String, Object>> mergedHits = mergedEvidenceHits(textbookHits, teacherHits, limit);
+        List<TeachingEvidence> gaokaoHits = selection.libraries().contains("gaokao") && canonicalMathPaperRetrievalService != null
+                ? canonicalMathPaperRetrievalService.search(query, limit)
+                : List.of();
+        List<Map<String, Object>> mergedHits = mergedEvidenceHits(textbookHits, teacherHits, gaokaoHits, limit);
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("query", query);
         result.put("limit", limit);
@@ -262,6 +274,7 @@ public class McpToolExecutionService {
         result.put("libraryStats", libraryEvidence.stream().map(LibraryEvidence::toSummary).toList());
         result.put("textbookHits", textbookHits);
         result.put("teacherResourceHits", teacherHits);
+        result.put("gaokaoHits", gaokaoHits.stream().map(McpToolExecutionService::canonicalEvidenceHit).toList());
         result.put("mergedHits", mergedHits);
         result.put(
                 "evidenceRefs",
@@ -270,8 +283,8 @@ public class McpToolExecutionService {
     }
 
     /**
-     * Carries controlled image URIs beside text anchors so the next MCP writing call cannot lose Feishu figures.
-     * The value is still an opaque evidence reference: no local storage path or provider credential is exposed.
+     * Carries stable asset references beside text anchors so the next MCP writing call cannot lose Feishu figures.
+     * The asset id is resolved only by the authorized backend task context; no storage URI is exposed.
      */
     private static List<String> evidenceRefsWithAssets(List<Map<String, Object>> mergedHits) {
         List<String> refs = new ArrayList<>();
@@ -288,11 +301,24 @@ public class McpToolExecutionService {
                 if (rawAsset instanceof TeacherResourceBlockSearchResponse.AssetRef asset
                         && asset.assetId() != null && !asset.assetId().isBlank()
                         && asset.assetUri() != null && !asset.assetUri().isBlank()) {
-                    refs.add("TEACHER_IMAGE:" + asset.assetId() + ":" + asset.assetUri());
+                    refs.add("asset://group/TEACHER_SHARED/" + asset.assetId());
                 }
             }
         }
         return refs.stream().distinct().toList();
+    }
+
+    private static Map<String, Object> canonicalEvidenceHit(TeachingEvidence evidence) {
+        Map<String, Object> hit = new LinkedHashMap<>();
+        hit.put("source", "canonical_math_paper");
+        hit.put("sourceType", "gaokao");
+        hit.put("title", evidence.sourceTitle());
+        hit.put("documentId", evidence.sourceDocumentId());
+        hit.put("questionNumber", evidence.canonicalQuestionNumber());
+        hit.put("pageNo", evidence.pageNo());
+        hit.put("snippet", evidence.snippet());
+        hit.put("transparentReference", transparentCanonicalReference(evidence));
+        return hit;
     }
 
     /**
@@ -950,14 +976,13 @@ public class McpToolExecutionService {
                 || "shared_resource".equals(library)
                 || "feishu".equals(library)
                 || "qq_bundle".equals(library)
-                || "gaokao".equals(library)
                 || "mock_exam".equals(library)
                 || "public_textbook_derivative".equals(library);
     }
 
     private static String teacherSourceTypeSelector(String library) {
         return switch (library) {
-            case "feishu", "qq_bundle", "gaokao", "mock_exam", "public_textbook_derivative" -> library;
+            case "feishu", "qq_bundle", "mock_exam", "public_textbook_derivative" -> library;
             default -> "";
         };
     }
@@ -975,6 +1000,7 @@ public class McpToolExecutionService {
     private static List<Map<String, Object>> mergedEvidenceHits(
             List<TextbookSearchHit> textbookHits,
             List<TeacherResourceBlockSearchResponse.Hit> teacherHits,
+            List<TeachingEvidence> gaokaoHits,
             int limit) {
         List<Map<String, Object>> merged = new ArrayList<>();
         for (int index = 0; index < textbookHits.size(); index++) {
@@ -993,7 +1019,8 @@ public class McpToolExecutionService {
             row.put("snippet", hit.textSnippet());
             row.put("sourcePageImage", hit.sourcePageImage());
             row.put("pageImageUri", hit.pageImageUri());
-            row.put("evidenceRef", "PUBLIC_TEXTBOOK:" + hit.docId() + ":" + hit.chunkId());
+            row.put("evidenceRef", "textbook://" + hit.docId() + "/chunk/" + hit.chunkId());
+            row.put("transparentReference", "textbook://" + hit.docId() + "/chunk/" + hit.chunkId());
             row.put("rawScore", hit.score());
             merged.add(row);
         }
@@ -1015,8 +1042,19 @@ public class McpToolExecutionService {
             row.put("evidenceText", hit.evidenceText());
             row.put("imageAssetIds", hit.imageAssetIds());
             row.put("assetRefs", hit.assetRefs());
-            row.put("evidenceRef", hit.permissionScope() + ":" + hit.documentId() + ":" + hit.blockId());
+            row.put("evidenceRef", transparentTeacherReference(hit));
+            row.put("transparentReference", transparentTeacherReference(hit));
             row.put("rawScore", hit.score());
+            merged.add(row);
+        }
+        for (int index = 0; index < gaokaoHits.size(); index++) {
+            TeachingEvidence evidence = gaokaoHits.get(index);
+            Map<String, Object> row = canonicalEvidenceHit(evidence);
+            row.put("rankInSource", index + 1);
+            row.put("mergedScore", reciprocalRankScore(index));
+            row.put("evidenceRef", transparentCanonicalReference(evidence));
+            row.put("transparentReference", transparentCanonicalReference(evidence));
+            row.put("rawScore", 0.0d);
             merged.add(row);
         }
         return merged.stream()
@@ -1025,6 +1063,16 @@ public class McpToolExecutionService {
                         .thenComparing(row -> String.valueOf(row.get("documentId"))))
                 .limit(Math.max(1, limit))
                 .toList();
+    }
+
+    private static String transparentTeacherReference(TeacherResourceBlockSearchResponse.Hit hit) {
+        String scope = hit.sourceType() == null || hit.sourceType().isBlank() ? "teacher_resource" : hit.sourceType();
+        String group = hit.permissionScope() == null || hit.permissionScope().isBlank() ? "TEACHER_SHARED" : hit.permissionScope();
+        return "feishu://group/" + group + "/resource/" + hit.documentId() + "/block/" + hit.blockId();
+    }
+
+    private static String transparentCanonicalReference(TeachingEvidence evidence) {
+        return "gaokao://canonical/" + evidence.sourceDocumentId() + "/question/" + evidence.canonicalQuestionNumber();
     }
 
     private static double reciprocalRankScore(int zeroBasedRank) {
@@ -1080,8 +1128,10 @@ public class McpToolExecutionService {
     /**
      * Enforces role ownership independently of the registry allow-list.
      *
-     * <p>Client configuration can be edited incorrectly. Teacher-resource and writing tools must never become
-     * callable by a student merely because an operator accidentally grants a matching tool name and scope.</p>
+     * <p>Client configuration can be edited incorrectly. Teacher-resource mutation and writing tools must never become
+     * callable by a student merely because an operator accidentally grants a matching tool name and scope. The
+     * read-only multi-source endpoint is also the public canonical Gaokao entrypoint; resource visibility remains
+     * enforced by each corpus service.</p>
      */
     private static void requireRoleForTool(McpClientRegistryProperties.Client client, String toolName) {
         if (!requiresTeacherRole(toolName)) {
@@ -1096,8 +1146,7 @@ public class McpToolExecutionService {
     /** Returns whether a tool reads teacher-owned data or starts teacher-owned workflow state. */
     private static boolean requiresTeacherRole(String toolName) {
         return switch (toolName) {
-            case MULTI_SOURCE_EVIDENCE_TOOL,
-                    TEACHER_RESOURCE_EVIDENCE_TOOL,
+            case TEACHER_RESOURCE_EVIDENCE_TOOL,
                     LIST_TEACHER_RESOURCES_TOOL,
                     READ_TEACHER_RESOURCE_BLOCKS_TOOL,
                     DISCOVER_FEISHU_RESOURCES_TOOL,

@@ -228,6 +228,12 @@ final class TeachingWorkflowLatexRenderer {
 
             return guardHandoutLatex(builder.toString(), true);
         }
+        if (draftSections != null && !draftSections.teacherExplanation().isBlank()) {
+            // Project a valid reviewed teacher explanation when the model omitted lecture cards; do not publish an empty slide.
+            String projectedExplanation = TeachingHandoutPdfExportService.sanitizeLatexForExport(
+                    draftSections.teacherExplanation());
+            return guardHandoutLatex("\\section{课堂讲解}\n" + projectedExplanation, true);
+        }
         StringBuilder builder = new StringBuilder();
         builder.append("\\section{课堂讲解}\n");
         String topic = request.learningGoal() == null || request.learningGoal().isBlank()

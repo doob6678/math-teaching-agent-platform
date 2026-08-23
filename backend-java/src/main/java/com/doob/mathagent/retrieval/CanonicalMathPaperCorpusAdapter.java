@@ -58,8 +58,18 @@ public class CanonicalMathPaperCorpusAdapter {
                 continue;
             }
             String documentName = metadata.path("documentFullName").asText("").strip();
+            if (documentName.isBlank()) {
+                // Older canonical ingestion rows used sourceFile. Resolve that filename against the published
+                // manifest below; the manifest remains the authority for hash and documentRef.
+                documentName = metadata.path("sourceFile").asText("").strip();
+            }
             String documentRef = metadata.path("documentRef").asText("").strip();
             String sourceHash = metadata.path("sourceSha256").asText("").strip();
+            if (documentRef.isBlank() || !sourceHash.matches("[0-9a-fA-F]{64}")) {
+                ManifestIdentity identity = manifestIdentity(documentName);
+                documentRef = identity.documentRef();
+                sourceHash = identity.sourceHash();
+            }
             String questionNumber = metadata.path("questionNumber").asText("").strip();
             if (!authorizedDocument(documentName, documentRef, sourceHash)
                     || !authorizedQuestion(documentName, questionNumber, metadata)) {
@@ -81,6 +91,31 @@ public class CanonicalMathPaperCorpusAdapter {
                     questionNumber));
         }
         return List.copyOf(result);
+    }
+
+    private ManifestIdentity manifestIdentity(String documentName) {
+        if (documentName == null || documentName.isBlank()) {
+            return new ManifestIdentity("", "");
+        }
+        Path documentRoot = corpusRoot.resolve(documentName).normalize();
+        Path manifest = documentRoot.resolve("source-manifest.json").normalize();
+        if (!documentRoot.startsWith(corpusRoot) || !Files.isRegularFile(manifest)) {
+            return new ManifestIdentity("", "");
+        }
+        try {
+            JsonNode source = JSON.readTree(Files.readString(manifest));
+            String canonicalName = source.path("documentFullName").asText("").strip();
+            String sourceHash = source.path("sourceSha256").asText("").strip();
+            if (!documentName.equals(canonicalName) || !sourceHash.matches("[0-9a-fA-F]{64}")) {
+                return new ManifestIdentity("", "");
+            }
+            return new ManifestIdentity(uuid5(documentName + "\\n" + sourceHash).toString(), sourceHash);
+        } catch (Exception ignored) {
+            return new ManifestIdentity("", "");
+        }
+    }
+
+    private record ManifestIdentity(String documentRef, String sourceHash) {
     }
 
     /** 清单校验是读取/渲染桥接前的来源授权边界，向量元数据本身不构成授权。 */
@@ -128,7 +163,17 @@ public class CanonicalMathPaperCorpusAdapter {
                         indexedAssets.add(value);
                     }
                 }
-                return indexedAssets.equals(assetIds(metadata))
+                for (JsonNode asset : question.path("assets")) {
+                    String value = asset.path("assetId").asText("").strip();
+                    if (!value.isBlank()) {
+                        indexedAssets.add(value);
+                    }
+                }
+                List<String> metadataAssets = assetIds(metadata);
+                boolean legacyRowWithoutAssetBinding = !metadata.has("questionAssets")
+                        && !metadata.has("pageAssetIds")
+                        && !metadata.has("assetIds");
+                return (legacyRowWithoutAssetBinding || indexedAssets.equals(metadataAssets))
                         && question.path("sourcePages").isArray()
                         && question.path("sourcePages").size() > 0;
             }

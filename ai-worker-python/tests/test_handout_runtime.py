@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 import threading
+from contextlib import contextmanager
 import time
 import unittest
 from unittest.mock import patch
@@ -21,7 +22,10 @@ from app.handout_runtime import (
     TeacherBlueprint,
     AssetPlacement,
     WritingPlan,
+    WriterDocument,
     DEFAULT_HANDOUT_MAX_OUTPUT_TOKENS,
+    DEFAULT_HANDOUT_MAX_TOTAL_TOKENS,
+    DEFAULT_COLLECTION_DECISION_MAX_OUTPUT_TOKENS,
     _CheckpointStore,
     _RunTelemetry,
 )
@@ -42,7 +46,15 @@ def _reviewed_provider(provider):
 class HandoutGraphContractTest(unittest.TestCase):
     """Checks graph topology, structural validation, and durable lifecycle events without a paid model call."""
 
-    def test_mysql_lock_name_hashes_maximum_length_run_id_within_mysql_limit(self):
+    def test_topic_only_request_allows_source_grounded_paraphrase(self):
+        document = WriterDocument(stageCode="student_writer", title="学生练习", markdown="## 题目\n\n抛物线的定义与焦点。\n\n## 练习\n\n完成推导。")
+        HandoutRuntime._validate_document_semantics(document, "student_writer", "讲解抛物线的定义、标准方程与焦点弦的来源。")
+
+    def test_explicit_question_batch_keeps_ordered_semantic_gate(self):
+        document = WriterDocument(stageCode="student_writer", title="学生练习", markdown="## 题目\n\n这是无关内容。")
+        with self.assertRaisesRegex(ValueError, "semantically unmatched"):
+            HandoutRuntime._validate_document_semantics(document, "student_writer", "【题目 1】\n求抛物线焦点。")
+
         run_id = "run-" + "x" * 76
 
         lock_name = _CheckpointStore._mysql_lock_name(run_id)
@@ -52,6 +64,56 @@ class HandoutGraphContractTest(unittest.TestCase):
         self.assertEqual(lock_name, _CheckpointStore._mysql_lock_name(run_id))
         self.assertNotIn(run_id, lock_name)
         self.assertNotEqual(lock_name, _CheckpointStore._mysql_lock_name(run_id[:-1] + "y"))
+
+    def test_handout_budget_defaults_match_expanded_structured_generation_envelope(self):
+        """Structured JSON ceilings and the run reservation remain explicit deployment defaults."""
+        self.assertEqual(DEFAULT_HANDOUT_MAX_OUTPUT_TOKENS, 32_000)
+        self.assertEqual(DEFAULT_COLLECTION_DECISION_MAX_OUTPUT_TOKENS, 4_800)
+        self.assertEqual(DEFAULT_HANDOUT_MAX_TOTAL_TOKENS, 1_200_000)
+
+    def test_checkpoint_mysql_outage_returns_retryable_response_without_failure_cleanup(self):
+        """A lost MySQL checkpoint connection preserves the durable recovery boundary for Java redelivery."""
+        import pymysql
+
+        class UnavailableCheckpoint:
+            def __init__(self):
+                self.save_calls = 0
+                self.load_calls = 0
+
+            @contextmanager
+            def run_lock(self, _run_id, _deadline_epoch_ms):
+                yield
+
+            def load(self, _run_id):
+                self.load_calls += 1
+                if self.load_calls == 1:
+                    return None
+                raise AssertionError("checkpoint cleanup must not read while MySQL is unavailable")
+
+            def save(self, _run_id, _status, _state, _event):
+                self.save_calls += 1
+                if self.save_calls == 1:
+                    return None
+                raise AssertionError("checkpoint cleanup must not write while MySQL is unavailable")
+
+        runtime = HandoutRuntime.__new__(HandoutRuntime)
+        runtime._checkpoint = UnavailableCheckpoint()
+        runtime._telemetry_lock = threading.Lock()
+        runtime._telemetry_by_run = {}
+        runtime._graph = type("Graph", (), {"invoke": lambda *_args: (_ for _ in ()).throw(
+            pymysql.OperationalError(2003, "checkpoint database unavailable"))})()
+        request = HandoutRunRequest(runId="run-checkpoint-outage-001", taskId="task-checkpoint-outage-001",
+                                    writingGoal="函数讲义", questionText="【题目 1】\n求函数定义域。")
+
+        with patch("app.handout_runtime.HandoutMetricsLedger.append") as append:
+            with self.assertRaises(HTTPException) as error:
+                runtime.execute(request)
+
+        self.assertEqual(error.exception.status_code, 503)
+        self.assertEqual(error.exception.detail["code"], "HANDOUT_CHECKPOINT_UNAVAILABLE")
+        self.assertEqual(runtime._checkpoint.save_calls, 1)
+        self.assertEqual(runtime._checkpoint.load_calls, 0)
+        append.assert_not_called()
 
     def test_default_output_reservation_keeps_all_provider_call_slots_available(self):
         """The bounded review policy must not consume later forced-final slots before they are called."""
@@ -94,6 +156,23 @@ class HandoutGraphContractTest(unittest.TestCase):
         self.assertEqual(len(attempts), 2)
         self.assertEqual(len(set(attempts)), 2)
 
+    def test_provider_length_stop_doubles_only_the_next_matching_route_ceiling(self):
+        """A provider length signal authorizes one future same-route ceiling increase without adding calls."""
+        runtime = HandoutRuntime.__new__(HandoutRuntime)
+
+        self.assertEqual(runtime._completion_ceiling("resource_curation", "deepseek", "deepseek-v4-flash", 4_800), 4_800)
+        self.assertEqual(runtime._record_length_ceiling("resource_curation", "deepseek", "deepseek-v4-flash", 4_800), 9_600)
+        self.assertEqual(runtime._completion_ceiling("resource_curation", "deepseek", "deepseek-v4-flash", 4_800), 9_600)
+        self.assertEqual(runtime._completion_ceiling("resource_curation", "deepseek", "deepseek-v4-flash", 4_800), 4_800)
+        self.assertEqual(runtime._completion_ceiling("plan_writer", "deepseek", "deepseek-v4-flash", 32_000), 32_000)
+
+    def test_parse_failure_without_provider_length_signal_does_not_change_ceiling(self):
+        """Malformed JSON alone must use the normal single repair rather than inventing a larger request."""
+        runtime = HandoutRuntime.__new__(HandoutRuntime)
+
+        self.assertEqual(runtime._completion_ceiling("resource_curation", "deepseek", "deepseek-v4-flash", 4_800), 4_800)
+        self.assertEqual(runtime._completion_ceiling("resource_curation", "deepseek", "deepseek-v4-flash", 4_800), 4_800)
+
     def test_openai_provider_route_uses_chat_completions_and_configured_terra_model(self):
         """The OpenAI-compatible relay uses Chat Completions; model routing remains environment-owned."""
         with patch.dict(os.environ, {
@@ -107,8 +186,8 @@ class HandoutGraphContractTest(unittest.TestCase):
         self.assertEqual(base_url, "https://relay.example/v1")
         self.assertEqual(model, "gpt-5.6-terra")
 
-    def test_openai_connection_errors_retry_then_return_safe_503(self):
-        """A DNS/socket failure is retried within the bounded OpenAI route without exposing request content."""
+    def test_openai_connection_errors_are_not_repeated_by_default(self):
+        """The default turn limit reports a transport failure instead of silently opening another paid request."""
         runtime = HandoutRuntime.__new__(HandoutRuntime)
         runtime._session = type("Session", (), {"post": lambda *_args, **_kwargs: (_ for _ in ()).throw(
             requests.ConnectionError("resolver unavailable"))})()
@@ -125,7 +204,7 @@ class HandoutGraphContractTest(unittest.TestCase):
             "OPENAI_BASE_URL": "https://relay.example/v1",
             "OPENAI_CHAT_MODEL": "gpt-5.6-terra",
             "MATH_AGENT_HANDOUT_PROVIDER_ORDER": "openai",
-            "MATH_AGENT_HANDOUT_MODEL_ATTEMPTS": "2",
+            "MATH_AGENT_HANDOUT_MODEL_ATTEMPTS": "1",
             "MATH_AGENT_HANDOUT_RETRY_BACKOFF_SECONDS": "0.1",
             "MATH_AGENT_HANDOUT_RETRY_MAX_BACKOFF_SECONDS": "0.1",
         }, clear=False), patch("app.handout_runtime.UsageLedger.append") as append, patch("app.handout_runtime.time.sleep"):
@@ -133,8 +212,8 @@ class HandoutGraphContractTest(unittest.TestCase):
                 runtime._invoke_json_model(request, "plan_writer", "{}")
 
         self.assertEqual(error.exception.status_code, 503)
-        self.assertEqual(error.exception.detail, "Handout model call failed: openai:ConnectionError,openai:ConnectionError")
-        self.assertEqual(append.call_count, 2)
+        self.assertEqual(error.exception.detail, "Handout model call failed: openai:ConnectionError")
+        self.assertEqual(append.call_count, 1)
 
     def test_terra_5xx_is_unavailable_after_bounded_retries_then_selects_eligible_deepseek(self):
         """Only a signed eligible fallback may run after Terra exhausts its bounded unavailable retries."""
@@ -185,6 +264,40 @@ class HandoutGraphContractTest(unittest.TestCase):
         self.assertEqual(append.call_count, 4)
         self.assertEqual([call.args[0].error_code for call in append.call_args_list[:3]], ["UNAVAILABLE_5XX"] * 3)
 
+    def test_missing_provider_usage_is_recorded_as_not_reported_without_local_estimate(self):
+        """A successful compatible response may omit billing fields, which must remain unavailable."""
+        class Response:
+            status_code = 200
+            headers = {"Content-Type": "application/json"}
+            text = '{"choices":[{"message":{"content":"{\\"ready\\":true}"},"finish_reason":"stop"}]}'
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"choices": [{"message": {"content": '{"ready":true}'}, "finish_reason": "stop"}]}
+
+            def close(self):
+                return None
+
+        runtime = HandoutRuntime.__new__(HandoutRuntime)
+        runtime._session = type("Session", (), {"post": lambda *_args, **_kwargs: Response()})()
+        runtime._telemetry_lock = threading.Lock()
+        runtime._telemetry_by_run = {"run-usage-unavailable-001": type("Telemetry", (), {"reserve_provider_call": lambda *_args: None})()}
+        request = HandoutRunRequest(runId="run-usage-unavailable-001", taskId="task-usage-unavailable-001",
+                                    writingGoal="函数讲义", questionText="【题目 1】\n求函数定义域。")
+        recorded: list[dict] = []
+        runtime._record_model_turn = lambda _request, _node, _turn, _attempt, update: recorded.append(update) or "test"
+
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key", "MATH_AGENT_HANDOUT_MODEL_ATTEMPTS": "1"}, clear=False), \
+             patch("app.handout_runtime.UsageLedger.append") as append:
+            _, usage, _, _ = runtime._invoke_json_model(request, "resource_curation", "{}")
+
+        self.assertEqual(usage["totalTokens"], 0)
+        self.assertEqual(append.call_args.args[0].usage_source, "not_reported")
+        usage_records = [item["usage"] for item in recorded if "usage" in item]
+        self.assertEqual(usage_records[-1]["availability"], "not_reported")
+
     def test_teacher_blueprint_accepts_canonical_derivation_readiness_declaration(self):
         """The documented DeepSeek JSON field must remain the primary strict boolean contract."""
         question = "【题目 1】\n已知函数 f(x)=x^2，求最小值。"
@@ -208,6 +321,36 @@ class HandoutGraphContractTest(unittest.TestCase):
 
         self.assertTrue(normalized.ready_for_derivation)
         self.assertTrue(normalized.model_dump(by_alias=True)["readyForDerivation"])
+
+    def test_teacher_blueprint_validates_ai_planned_questions_not_raw_goal_text(self):
+        """A concise raw goal must not reject a blueprint that covers the approved AI-authored plan."""
+        planned_question = "用配方法将 y=x^2-4x+3 化为顶点式，并写出顶点坐标。"
+        blueprint = TeacherBlueprint.model_validate({
+            "title": "教师版",
+            "markdown": (
+                f"## 题目\n\n{planned_question}\n\n## 解题过程\n\n步骤 1：完成配方。"
+                "\n\n## 最终答案\n\n顶点式为 $(x-2)^2-1$。\n\n## 评分点\n\n- 配方正确。"
+                "\n\n## 易错点\n\n- 注意常数项。"
+            ),
+            "completionChecklist": ["覆盖计划题目"],
+            "remainingEdits": [],
+            "readyForDerivation": True,
+        })
+        plan = WritingPlan.model_validate({
+            "learningObjective": "掌握顶点式",
+            "questions": [{"number": 1, "question": planned_question, "teachingSequence": ["配方"]}],
+            "completionCriteria": ["覆盖题目"],
+            "readyForNextStage": True,
+        })
+
+        normalized = HandoutRuntime._validate_teacher_blueprint(
+            blueprint,
+            HandoutRunRequest(runId="run-blueprint-plan-001", taskId="task-blueprint-plan-001",
+                              writingGoal="函数讲义", questionText="教师版课堂函数概念讲解"),
+            plan,
+        )
+
+        self.assertTrue(normalized.ready_for_derivation)
 
     def test_teacher_blueprint_accepts_derivation_ready_alias_after_semantic_gate(self):
         """Provider spelling variation is normalized only after teacher content proves complete."""

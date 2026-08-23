@@ -40,9 +40,9 @@ class TeachingWorkflowRetrievalProgressTest {
                 new TeachingRequestContext("tenant-a", "teacher", "teacher-1", "device-1"));
 
         assertThat(result.teacherResourceEvidence()).isEmpty();
-        assertThat(result.teacherResourceOutcome().status()).isEqualTo("skipped");
-        assertThat(result.teacherResourceOutcome().detail()).contains("Python Writer");
-        assertThat(result.teacherResourceElapsedMs()).isZero();
+        assertThat(result.teacherResourceOutcome().status()).isEqualTo("completed");
+        assertThat(result.teacherResourceOutcome().detail()).contains("教师资料");
+        assertThat(result.teacherResourceElapsedMs()).isGreaterThanOrEqualTo(0L);
     }
 
     @Test
@@ -69,8 +69,8 @@ class TeachingWorkflowRetrievalProgressTest {
             assertThat(result.textbookOutcome().status()).isEqualTo("degraded");
             assertThat(result.textbookOutcome().detail()).contains("timeout", "可独立恢复");
             assertThat(result.teacherResourceEvidence()).isEmpty();
-            assertThat(result.teacherResourceOutcome().status()).isEqualTo("skipped");
-            assertThat(result.teacherResourceOutcome().detail()).contains("Python Writer");
+            assertThat(result.teacherResourceOutcome().status()).isEqualTo("completed");
+            assertThat(result.teacherResourceOutcome().detail()).contains("教师资料");
         } finally {
             executor.shutdownNow();
         }
@@ -97,8 +97,8 @@ class TeachingWorkflowRetrievalProgressTest {
             assertThat(result.textbookEvidence()).containsExactly(textbookHit);
             assertThat(result.textbookOutcome().status()).isEqualTo("completed");
             assertThat(result.teacherResourceEvidence()).isEmpty();
-            assertThat(result.teacherResourceOutcome().status()).isEqualTo("skipped");
-            assertThat(result.teacherResourceOutcome().detail()).contains("Python Writer");
+            assertThat(result.teacherResourceOutcome().status()).isEqualTo("completed");
+            assertThat(result.teacherResourceOutcome().detail()).contains("教师资料");
             assertThat(result.mergedEvidence()).containsExactly(textbookHit);
         } finally {
             executor.shutdownNow();
@@ -164,7 +164,7 @@ class TeachingWorkflowRetrievalProgressTest {
 
         @Override
         protected List<TeachingEvidence> retrieveTeacherResourceEvidence(TeachingTaskRequest request, TeachingRequestContext context) {
-            return List.of(teacherHit);
+            return teacherHit == null ? List.of() : List.of(teacherHit);
         }
 
         @Override

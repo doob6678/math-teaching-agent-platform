@@ -6,6 +6,7 @@ readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly REPOSITORY_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 readonly UNIT_NAME="math-agent-rag-compose.service"
 readonly UNIT_TEMPLATE="${SCRIPT_DIR}/${UNIT_NAME}"
+readonly SYSTEM_UNIT="/etc/systemd/system/${UNIT_NAME}"
 readonly USER_UNIT_DIRECTORY="${XDG_CONFIG_HOME:-${HOME}/.config}/systemd/user"
 readonly INSTALLED_UNIT="${USER_UNIT_DIRECTORY}/${UNIT_NAME}"
 
@@ -22,6 +23,11 @@ require_user_systemd() {
     || fail '当前用户的 systemd --user manager 不可用。'
 }
 
+refuse_duplicate_owner() {
+  if [[ -f "$SYSTEM_UNIT" ]]; then
+    fail "检测到系统级 Compose owner ${SYSTEM_UNIT}；禁止再启动 user owner，避免两个 Compose 客户端竞争重建容器。"
+  fi
+}
 require_compose_inputs() {
   command -v docker >/dev/null 2>&1 || fail '未找到 docker。'
   docker compose version >/dev/null 2>&1 || fail 'Docker Compose v2 不可用。'
@@ -29,6 +35,7 @@ require_compose_inputs() {
 }
 
 install_unit() {
+  refuse_duplicate_owner
   require_user_systemd
   require_compose_inputs
   [[ -f "$UNIT_TEMPLATE" ]] || fail "缺少服务模板: $UNIT_TEMPLATE"
@@ -45,6 +52,7 @@ install_unit() {
 }
 
 start_unit() {
+  refuse_duplicate_owner
   require_user_systemd
   require_compose_inputs
   [[ -f "$INSTALLED_UNIT" ]] || fail "服务尚未安装；先执行: $0 install"

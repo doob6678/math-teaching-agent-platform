@@ -6,7 +6,9 @@ import com.doob.mathagent.agent.vo.AgentTraceResponse;
 import com.doob.mathagent.agent.vo.MultiAgentWritingArtifactExportResponse;
 import com.doob.mathagent.agent.vo.MultiAgentWritingTraceResponse;
 import com.doob.mathagent.agent.vo.MultiAgentWritingResponse;
+import com.doob.mathagent.agent.service.MultiAgentWritingArtifactExportService.ArtifactExportFormat;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
+import com.doob.mathagent.teaching.TeachingTaskStatus;
 import com.doob.mathagent.teaching.TeachingRequestContext;
 import com.doob.mathagent.teaching.TeachingWorkflowNode;
 import com.doob.mathagent.teaching.dto.TeachingTaskRequest;
@@ -113,15 +115,15 @@ public class HandoutTaskFacade {
     public MultiAgentWritingArtifact artifact(String workflowId, RequestSubject subject) {
         TeachingTaskResponse task = ownedTask(workflowId, subject);
         List<MultiAgentWritingArtifact.StageArtifact> stages = List.of(
-                artifactStage("teacher_writer", "CoursewareAgent", task.teacherHandoutLatex(), task.status().name()),
-                artifactStage("student_writer", "TeacherAssistantAgent", task.studentHandoutLatex(), task.status().name()),
-                artifactStage("lecture_writer", "HandoutFormatterAgent", task.lectureHandoutLatex(), task.status().name()));
+                artifactStage("teacher_writer", "CoursewareAgent", task.teacherHandoutLatex(), taskStatusValue(task.status())),
+                artifactStage("student_writer", "TeacherAssistantAgent", task.studentHandoutLatex(), taskStatusValue(task.status())),
+                artifactStage("lecture_writer", "HandoutFormatterAgent", task.lectureHandoutLatex(), taskStatusValue(task.status())));
         List<MultiAgentWritingArtifact.StructuredSection> sections = List.of(
                 section("teacher", "教师版讲义", "teacher_writer", task.draftSections().teacherExplanation()),
                 section("student", "学生版讲义", "student_writer", task.draftSections().studentWorksheet()),
                 section("lecture", "课堂投影", "lecture_writer", String.join("\n\n", task.draftSections().lectureCards())));
         return new MultiAgentWritingArtifact(
-                task.taskId(), task.tenantId(), task.subjectType(), task.subjectId(), task.status().name(),
+                task.taskId(), task.tenantId(), task.subjectType(), task.subjectId(), taskStatusValue(task.status()),
                 new AgentRunExecuteResponse.TokenUsage(0, 0, 0), stages, sections, task.handoutLatex());
     }
 
@@ -155,23 +157,22 @@ public class HandoutTaskFacade {
             String footerText,
             RequestSubject subject) {
         TeachingTaskResponse task = ownedTask(workflowId, subject);
-        String normalizedFormat = normalizeExportFormat(format);
+        String normalizedFormat = ArtifactExportFormat.normalizeExternalValue(format);
         // Teaching task page chrome is persisted at creation time. Ignoring a later legacy header would be unsafe,
         // so the compatibility route rejects mutation rather than silently publishing mismatched audit content.
         if ((headerText != null && !headerText.isBlank()) || (footerText != null && !footerText.isBlank())) {
             throw new IllegalArgumentException("Export page chrome is fixed by the teaching task");
         }
-        ExportPayload payload = switch (normalizedFormat) {
-            case "markdown" -> new ExportPayload("handout.md", "text/markdown; charset=UTF-8",
+        ExportPayload payload = switch (ArtifactExportFormat.requireSupported(normalizedFormat)) {
+            case MARKDOWN -> new ExportPayload("handout.md", "text/markdown; charset=UTF-8",
                     markdownFor(task, "teacher").getBytes(StandardCharsets.UTF_8));
-            case "latex" -> new ExportPayload("handout.tex", "application/x-tex; charset=UTF-8",
+            case LATEX -> new ExportPayload("handout.tex", "application/x-tex; charset=UTF-8",
                     TeachingHandoutPdfExportService.sanitizeLatexForExport(task.handoutLatexFor("teacher"))
                             .getBytes(StandardCharsets.UTF_8));
-            case "pdf", "pdf-teacher" -> pdfPayload(task, "teacher", "handout-teacher.pdf");
-            case "pdf-student" -> pdfPayload(task, "student", "handout-student.pdf");
-            case "pdf-lecture" -> pdfPayload(task, "lecture", "handout-lecture.pdf");
-            case "zip" -> zipPayload(task);
-            default -> throw new IllegalArgumentException("Unsupported artifact export format: " + normalizedFormat);
+            case PDF, PDF_TEACHER -> pdfPayload(task, "teacher", "handout-teacher.pdf");
+            case PDF_STUDENT -> pdfPayload(task, "student", "handout-student.pdf");
+            case PDF_LECTURE -> pdfPayload(task, "lecture", "handout-lecture.pdf");
+            case ZIP -> zipPayload(task);
         };
         byte[] bytes = payload.bytes();
         return new MultiAgentWritingArtifactExportResponse(
@@ -220,7 +221,7 @@ public class HandoutTaskFacade {
         List<MultiAgentWritingResponse.StageResult> stages = task.nodes().stream()
                 .map(HandoutTaskFacade::projectNode)
                 .toList();
-        String status = task.status().name();
+        String status = taskStatusValue(task.status());
         String message = task.errorMessage() == null || task.errorMessage().isBlank()
                 ? "Teaching task " + status.toLowerCase(java.util.Locale.ROOT)
                 : task.errorMessage();
@@ -237,6 +238,11 @@ public class HandoutTaskFacade {
         return new MultiAgentWritingResponse.StageResult(
                 node.code(), "teaching-task", "", "", "", node.status(),
                 new AgentRunExecuteResponse.TokenUsage(0, 0, 0), node.summary(), "", 0L);
+    }
+
+    /** Returns the stable external spelling of the authoritative teaching-task status enum. */
+    private static String taskStatusValue(TeachingTaskStatus status) {
+        return status.name();
     }
 
     /** Reads one task only after the teaching service has checked the backend-resolved owner context. */
@@ -298,12 +304,6 @@ public class HandoutTaskFacade {
         archive.putNextEntry(new ZipEntry(name));
         archive.write(bytes);
         archive.closeEntry();
-    }
-
-    /** Normalizes supported compatibility formats without accepting a caller-controlled filename or MIME type. */
-    private static String normalizeExportFormat(String format) {
-        String normalized = format == null ? "markdown" : format.strip().toLowerCase(Locale.ROOT);
-        return normalized.isEmpty() ? "markdown" : normalized;
     }
 
     /** Hashes output bytes after XeLaTeX/publication gates have completed, preserving transport integrity metadata. */

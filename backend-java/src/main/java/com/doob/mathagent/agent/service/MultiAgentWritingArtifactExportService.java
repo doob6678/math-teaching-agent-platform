@@ -143,18 +143,17 @@ public class MultiAgentWritingArtifactExportService {
             String footerText,
             RequestSubject subject) {
         MultiAgentWritingArtifact artifact = writingService.artifact(workflowId, subject);
-        String normalizedFormat = normalizeFormat(format);
+        String normalizedFormat = ArtifactExportFormat.normalizeExternalValue(format);
         String normalizedHeader = normalizeLayoutLabel(headerText);
         String normalizedFooter = normalizeLayoutLabel(footerText);
-        ExportPayload payload = switch (normalizedFormat) {
-            case "zip" -> zipPayload(artifact);
-            case "pdf" -> pdfPayload(artifact, HandoutVariant.FINAL, normalizedHeader, normalizedFooter);
-            case "pdf-teacher" -> pdfPayload(artifact, HandoutVariant.TEACHER, normalizedHeader, normalizedFooter);
-            case "pdf-student" -> pdfPayload(artifact, HandoutVariant.STUDENT, normalizedHeader, normalizedFooter);
-            case "pdf-lecture" -> pdfPayload(artifact, HandoutVariant.LECTURE, normalizedHeader, normalizedFooter);
-            case "latex" -> latexPayload(artifact);
-            case "markdown" -> markdownPayload(artifact);
-            default -> throw new IllegalArgumentException("Unsupported artifact export format: " + normalizedFormat);
+        ExportPayload payload = switch (ArtifactExportFormat.requireSupported(normalizedFormat)) {
+            case ZIP -> zipPayload(artifact);
+            case PDF -> pdfPayload(artifact, HandoutVariant.FINAL, normalizedHeader, normalizedFooter);
+            case PDF_TEACHER -> pdfPayload(artifact, HandoutVariant.TEACHER, normalizedHeader, normalizedFooter);
+            case PDF_STUDENT -> pdfPayload(artifact, HandoutVariant.STUDENT, normalizedHeader, normalizedFooter);
+            case PDF_LECTURE -> pdfPayload(artifact, HandoutVariant.LECTURE, normalizedHeader, normalizedFooter);
+            case LATEX -> latexPayload(artifact);
+            case MARKDOWN -> markdownPayload(artifact);
         };
         String exportId = UUID.randomUUID().toString();
         Instant expiresAt = Instant.now(clock).plus(ttl);
@@ -637,7 +636,7 @@ public class MultiAgentWritingArtifactExportService {
         }
         String selected = "";
         for (MultiAgentWritingArtifact.StructuredSection section : artifact.sections()) {
-            if (variant.sectionCode().equals(section.sectionCode()) && !section.content().isBlank()) {
+            if (variant.matchesSectionCode(section.sectionCode()) && !section.content().isBlank()) {
                 selected = section.content().strip();
             }
         }
@@ -1325,23 +1324,54 @@ public class MultiAgentWritingArtifactExportService {
     }
 
     /**
-     * Normalizes external format aliases.
+     * Maps legacy MCP export aliases onto one stable external protocol value per supported payload type.
+     *
+     * <p>These are export-format identifiers, not workflow status codes. The returned value remains the established
+     * wire value so callers that persist or compare it keep working while all alias handling stays in one place.</p>
      */
-    private static String normalizeFormat(String format) {
-        if (format == null || format.isBlank()) {
-            return "markdown";
+    enum ArtifactExportFormat {
+        MARKDOWN("markdown", "md", "markdown"),
+        LATEX("latex", "tex", "latex"),
+        PDF("pdf", "pdf"),
+        PDF_TEACHER("pdf-teacher", "pdf-teacher", "teacher-pdf"),
+        PDF_STUDENT("pdf-student", "pdf-student", "student-pdf"),
+        PDF_LECTURE("pdf-lecture", "pdf-lecture", "lecture-pdf", "pdf-16-10"),
+        ZIP("zip", "zip");
+
+        private final String externalValue;
+        private final List<String> acceptedValues;
+
+        ArtifactExportFormat(String externalValue, String... acceptedValues) {
+            this.externalValue = externalValue;
+            this.acceptedValues = List.of(acceptedValues);
         }
-        return switch (format.strip().toLowerCase()) {
-            case "md", "markdown" -> "markdown";
-            case "tex", "latex" -> "latex";
-            case "pdf" -> "pdf";
-            case "pdf-teacher", "teacher-pdf" -> "pdf-teacher";
-            case "pdf-student", "student-pdf" -> "pdf-student";
-            case "pdf-lecture", "lecture-pdf", "pdf-16-10" -> "pdf-lecture";
-            case "zip" -> "zip";
-            default -> format.strip().toLowerCase();
-        };
+
+        String externalValue() {
+            return externalValue;
+        }
+
+        static String normalizeExternalValue(String format) {
+            String normalized = format == null || format.isBlank()
+                    ? MARKDOWN.externalValue
+                    : format.strip().toLowerCase(Locale.ROOT);
+            for (ArtifactExportFormat candidate : values()) {
+                if (candidate.acceptedValues.contains(normalized)) {
+                    return candidate.externalValue;
+                }
+            }
+            return normalized;
+        }
+
+        static ArtifactExportFormat requireSupported(String externalValue) {
+            for (ArtifactExportFormat candidate : values()) {
+                if (candidate.externalValue.equals(externalValue)) {
+                    return candidate;
+                }
+            }
+            throw new IllegalArgumentException("Unsupported artifact export format: " + externalValue);
+        }
     }
+
 
     /**
      * Loads a local Unicode font so Chinese PDF exports are readable.
@@ -1517,6 +1547,15 @@ public class MultiAgentWritingArtifactExportService {
         }
 
         String sectionCode() { return sectionCode; }
+        boolean matchesSectionCode(String candidate) {
+            return sectionCode.equals(candidate)
+                    || switch (this) {
+                        case TEACHER -> "teacher".equals(candidate);
+                        case STUDENT -> "student".equals(candidate);
+                        case LECTURE -> "lecture".equals(candidate);
+                        case FINAL -> false;
+                    };
+        }
         String displayName() { return displayName; }
         String fileSuffix() { return fileSuffix; }
         String defaultFooter() { return defaultFooter; }

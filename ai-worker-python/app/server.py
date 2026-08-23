@@ -123,7 +123,7 @@ async def worker_lifespan(_app: FastAPI):
 app = FastAPI(title="math-agent-rag-worker", lifespan=worker_lifespan)
 DEFAULT_HANDOUT_SSE_TIMEOUT_SECONDS = 900.0
 MIN_HANDOUT_SSE_TIMEOUT_SECONDS = 60.0
-HANDOUT_SSE_POLL_INTERVAL_SECONDS = 0.25
+HANDOUT_SSE_POLL_INTERVAL_SECONDS = 0.05
 
 # The sync endpoint is used by the durable Java Worker.  SSE must not execute a second graph in the request thread,
 # so it submits once and only reads the shared checkpoint event cursor until the same run reaches a terminal event.
@@ -403,13 +403,13 @@ def _submit_handout_once(payload: HandoutRunRequest) -> Future:
 
 
 @app.post("/v1/handout-runs", dependencies=[Depends(require_worker_key)])
-def handout_run(payload: HandoutRunRequest) -> StreamingResponse:
+def handout_run(payload: HandoutRunRequest, last_event_id: int | None = Header(default=None, alias="Last-Event-ID")) -> StreamingResponse:
     """Starts one graph in the background and streams durable event-store pages by cursor."""
     future = _submit_handout_once(payload)
 
     def encoded_events():
         runtime = handout_runtime()
-        cursor = 0
+        cursor = max(0, last_event_id or 0)
         started_at = time.monotonic()
         stream_timeout = max(MIN_HANDOUT_SSE_TIMEOUT_SECONDS, float(os.getenv("MATH_AGENT_HANDOUT_SSE_TIMEOUT_SECONDS", str(DEFAULT_HANDOUT_SSE_TIMEOUT_SECONDS))))
         terminal_events = {"completed", "failed"}
@@ -419,7 +419,7 @@ def handout_run(payload: HandoutRunRequest) -> StreamingResponse:
                 cursor = event_id
                 event_name = str(event.get("event", "progress"))
                 data = {"runId": payload.run_id, "eventId": event_id, **event}
-                yield "event: " + event_name + "\ndata: " + json.dumps(data, ensure_ascii=False, separators=(",", ":")) + "\n\n"
+                yield "id: " + str(event_id) + "\nevent: " + event_name + "\ndata: " + json.dumps(data, ensure_ascii=False, separators=(",", ":")) + "\n\n"
                 if event_name in terminal_events:
                     return
             if future.done():

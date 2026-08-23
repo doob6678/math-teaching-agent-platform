@@ -451,16 +451,27 @@ public class AgentToolBrokerController {
      * repeated plan queries remain idempotent while distinct real hits are retained for the final source projection.
      * No query text, path, URL, or database detail is persisted in this bridge.</p>
      */
-    /** Creates the exact persisted ledger representation so returned opaque refs remain reloadable by handout-context. */
+    /**
+     * Creates the exact persisted ledger representation so returned opaque refs remain reloadable by handout-context.
+     *
+     * <p>The teacher-resource search index may legitimately return a public textbook hit. Its source scope must retain
+     * that authoritative reader domain: labelling it as a teacher resource makes the later run-scoped opaque document
+     * reference unresolvable and incorrectly produces a 403. This changes no authorization boundary; the same task,
+     * opaque reference and source-specific reader are still required.</p>
+     */
     private TeachingEvidence teacherEvidence(TeacherResourceBlockSearchResponse.Hit hit) {
+        String sourceType = hit.sourceType() == null ? "teacher_resource" : hit.sourceType();
+        boolean publicTextbook = "public_textbook".equalsIgnoreCase(sourceType.trim())
+                || "PUBLIC_TEXTBOOK".equalsIgnoreCase(
+                        hit.permissionScope() == null ? "" : hit.permissionScope().trim());
+        String sourceScope = publicTextbook ? "PUBLIC_TEXTBOOK" : "TEACHER_RESOURCE";
         return new TeachingEvidence(
-                "TEACHER_RESOURCE",
+                sourceScope,
                 hit.documentTitle() == null ? "" : hit.documentTitle(),
                 hit.blockId(),
                 hit.pageNo() == null ? 0 : hit.pageNo(),
                 compactEvidence(hit.evidenceText(), hit.snippet()),
-                "", "", hit.documentId(),
-                hit.sourceType() == null ? "teacher_resource" : hit.sourceType(),
+                "", "", hit.documentId(), sourceType,
                 "", "", hit.imageAssetIds() == null ? List.of() : hit.imageAssetIds());
     }
 

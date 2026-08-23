@@ -53,7 +53,9 @@ DEFAULT_NODE_TIMEOUT_SECONDS = 300.0
 DEFAULT_MODEL_TIMEOUT_SECONDS = 75.0
 DEFAULT_MODEL_REPAIR_TIMEOUT_SECONDS = 45.0
 DEFAULT_MODEL_REPAIR_ATTEMPTS = 1
-DEFAULT_MODEL_RETRY_ATTEMPTS = 2
+# A contract turn opens exactly one provider request. Deterministic validation may schedule one repair turn,
+# but transport failures are reported rather than silently multiplying paid generation calls.
+DEFAULT_MODEL_RETRY_ATTEMPTS = 1
 DEFAULT_MODEL_REPAIR_RESERVE_SECONDS = 45.0
 DEFAULT_CURATION_MODEL_RESERVE_SECONDS = 90.0
 
@@ -72,18 +74,27 @@ DEFAULT_MAX_INSPECTED_SOURCE_CHARS = 64_000
 DEFAULT_MAX_OUTPUT_CHARS = 24000
 DEFAULT_MIN_DOCUMENT_CHARS = 32
 DEFAULT_MIN_QUESTION_TOKEN_MATCHES = 1
-DEFAULT_HANDOUT_MAX_TOTAL_TOKENS = 400000
+# Reserve three times the former run envelope so a large structured completion can finish without starving later
+# graph nodes. The reservation remains a hard cap across concurrent writer nodes.
+DEFAULT_HANDOUT_MAX_TOTAL_TOKENS = 1_200_000
 DEFAULT_HANDOUT_MAX_PROVIDER_CALLS = 16
 # DeepSeek-compatible routes can account for internal reasoning inside completion_tokens even when JSON mode is
-# requested. Sixteen thousand tokens leaves room for that accounting plus a complete visible writer contract while
-# the per-run reservation still bounds total usage across all stages.
-DEFAULT_HANDOUT_MAX_OUTPUT_TOKENS = 16_000
-# Collection decisions choose only bounded broker actions, not lesson content; keep their completion ceiling materially
-# below writer calls even when deployments configure a larger general completion budget.
-DEFAULT_COLLECTION_DECISION_MAX_OUTPUT_TOKENS = 1_200
+# requested. Thirty-two thousand tokens leaves room for that accounting plus a complete visible writer contract.
+DEFAULT_HANDOUT_MAX_OUTPUT_TOKENS = 32_000
+# Resource collection returns bounded broker decisions rather than lesson prose, but provider reasoning can still
+# consume a short completion. The operational 4,800 default prevents a 1,200-token JSON truncation without retries.
+DEFAULT_COLLECTION_DECISION_MAX_OUTPUT_TOKENS = 4_800
+# A provider-reported length stop may increase a future request once; retain a hard ceiling below the run reservation.
+MAX_ADAPTIVE_COMPLETION_TOKENS = 128_000
 DEFAULT_EVENT_PAGE_LIMIT = 100
 MAX_EVENT_PAGE_LIMIT = 500
 MAX_EVENT_HISTORY = 10000
+# Provider deltas stay in memory between bounded private checkpoint flushes. The thresholds preserve a recoverable
+# prefix while avoiding one MySQL transaction and full JSON rewrite for every streamed token.
+DEFAULT_STREAM_CHECKPOINT_FLUSH_MS = 250
+DEFAULT_STREAM_CHECKPOINT_FLUSH_BYTES = 8 * 1024
+DEFAULT_STREAM_CHECKPOINT_FLUSH_CHUNKS = 32
+DEFAULT_STREAM_CHECKPOINT_HARD_BYTES = 32 * 1024
 # Writer nodes produce all reader-visible handout text, including headings.  This belongs in the generation contract
 # so a valid formula is emitted once instead of relying on an ever-growing list of renderer-specific repairs.
 HANDOUT_MATH_MARKUP_CONTRACT = {
@@ -893,22 +904,38 @@ class _CheckpointStore:
             conn.commit()
 
     @contextmanager
-    def run_lock(self, run_id: str):
-        """在所有 Worker 副本间为同一运行声明唯一的持久图执行。"""
+    def run_lock(self, run_id: str, deadline_epoch_ms: int | None = None):
+        """Claims one durable run lock without waiting past the caller's lease deadline."""
+        deadline = None if deadline_epoch_ms is None else max(0.0, (deadline_epoch_ms - int(time.time() * 1000)) / 1000.0)
         if self.backend != "mysql":
             with self._sqlite_run_locks_guard:
                 local_lock = self._sqlite_run_locks.setdefault(run_id, threading.Lock())
-            with local_lock:
+            acquired = local_lock.acquire(timeout=deadline) if deadline is not None else local_lock.acquire()
+            if not acquired:
+                raise HTTPException(status_code=504, detail={
+                    "code": "MODEL_TIMEOUT",
+                    "message": "Handout graph deadline exceeded while waiting for run ownership",
+                })
+            try:
                 yield
+            finally:
+                local_lock.release()
             return
         wait_seconds = max(0, int(os.getenv(
             "MATH_AGENT_HANDOUT_RUN_LOCK_WAIT_SECONDS", str(DEFAULT_RUN_LOCK_WAIT_SECONDS))))
+        if deadline is not None:
+            wait_seconds = min(wait_seconds, max(0, int(deadline)))
         lock_name = self._mysql_lock_name(run_id)
         with self._mysql_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute("SELECT GET_LOCK(%s,%s)", (lock_name, wait_seconds))
                 acquired = cursor.fetchone()
             if not acquired or int(acquired[0] or 0) != 1:
+                if deadline_epoch_ms is not None and int(time.time() * 1000) >= deadline_epoch_ms:
+                    raise HTTPException(status_code=504, detail={
+                        "code": "MODEL_TIMEOUT",
+                        "message": "Handout graph deadline exceeded while waiting for run ownership",
+                    })
                 raise HTTPException(status_code=409, detail="HANDOUT_RUN_LOCK_TIMEOUT")
             try:
                 yield
@@ -947,7 +974,9 @@ class _CheckpointStore:
         """Persists private AI turn material without creating an event-stream record."""
         now = _utc_now()
         if self.backend == "mysql":
-            with self._lock, self._mysql_connection() as conn:
+            # MySQL row locking is the cross-process merge guard. Avoid the process-global Python mutex here so a
+            # streaming flush for one run cannot block another run's terminal durability boundary.
+            with self._mysql_connection() as conn:
                 with conn.cursor() as cursor:
                     cursor.execute(
                         "INSERT INTO handout_checkpoint(run_id,status,state_json,updated_at) VALUES(%s,%s,%s,%s) "
@@ -1063,6 +1092,79 @@ def _jsonable(value: Any) -> Any:
     return value
 
 
+class _StreamingCheckpointBuffer:
+    """Batches private streamed output while retaining an exact, bounded recovery prefix."""
+
+    def __init__(self, flush_callback):
+        self._flush_callback = flush_callback
+        self.parts: list[str] = []
+        self.durable_chars = 0
+        self.pending_chars = 0
+        self.pending_bytes = 0
+        self.received_chunks = 0
+        self.flush_count = 0
+        self.max_pending_chars = 0
+        self.first_chunk_at: str | None = None
+        self.last_chunk_at: str | None = None
+        self.last_flushed_at: str | None = None
+        self.started = time.monotonic()
+        self.last_flush_monotonic = self.started
+        self.flush_reasons: dict[str, int] = {}
+
+    @property
+    def content(self) -> str:
+        return "".join(self.parts)
+
+    def add(self, value: str) -> None:
+        if not value:
+            return
+        now = _utc_now()
+        if self.first_chunk_at is None:
+            self.first_chunk_at = now
+        self.last_chunk_at = now
+        self.parts.append(value)
+        self.pending_chars += len(value)
+        self.pending_bytes += len(value.encode("utf-8"))
+        self.received_chunks += 1
+        self.max_pending_chars = max(self.max_pending_chars, self.pending_chars)
+
+    def should_flush(self) -> bool:
+        return bool(self.pending_chars) and (
+            self.pending_bytes >= int(os.getenv("MATH_AGENT_HANDOUT_STREAM_FLUSH_BYTES", str(DEFAULT_STREAM_CHECKPOINT_FLUSH_BYTES)))
+            or self.received_chunks >= int(os.getenv("MATH_AGENT_HANDOUT_STREAM_FLUSH_CHUNKS", str(DEFAULT_STREAM_CHECKPOINT_FLUSH_CHUNKS)))
+            or self.pending_bytes >= int(os.getenv("MATH_AGENT_HANDOUT_STREAM_HARD_BYTES", str(DEFAULT_STREAM_CHECKPOINT_HARD_BYTES)))
+            or (time.monotonic() - self.last_flush_monotonic) * 1000 >= float(os.getenv(
+                "MATH_AGENT_HANDOUT_STREAM_FLUSH_MS", str(DEFAULT_STREAM_CHECKPOINT_FLUSH_MS)))
+        )
+
+    def flush(self, reason: str) -> None:
+        if not self.pending_chars:
+            return
+        now = _utc_now()
+        self.flush_count += 1
+        self.flush_reasons[reason] = self.flush_reasons.get(reason, 0) + 1
+        self._flush_callback({
+            "partialContent": self.content,
+            "partialChars": len(self.content),
+            "durableChars": len(self.content),
+            "receivedChunkCount": self.received_chunks,
+            "persistedFlushCount": self.flush_count,
+            "firstChunkAt": self.first_chunk_at,
+            "lastChunkAt": self.last_chunk_at,
+            "lastFlushedAt": now,
+            "maxUnflushedChars": self.max_pending_chars,
+            "flushReason": reason,
+            "flushReasonCounts": dict(self.flush_reasons),
+            "outcome": "STREAMING",
+        })
+        self.durable_chars = len(self.content)
+        self.pending_chars = 0
+        self.pending_bytes = 0
+        self.last_flushed_at = now
+        self.last_flush_monotonic = time.monotonic()
+        self.received_chunks = 0
+
+
 class HandoutRuntime:
     """Executes the complete graph with one Java context request and three parallel model writers."""
 
@@ -1072,14 +1174,70 @@ class HandoutRuntime:
         self._checkpoint = _CheckpointStore()
         self._telemetry_by_run: dict[str, _RunTelemetry] = {}
         self._telemetry_lock = threading.Lock()
+        # Only an explicit provider length stop can create this short-lived, node-scoped next-call ceiling.
+        # It is runtime state rather than a guessed token calculation and never changes retry cardinality.
+        self._next_completion_ceilings: dict[tuple[str, str, str], int] = {}
+        self._completion_ceiling_lock = threading.Lock()
         self._graph = self._build_graph()
+
+    def _completion_ceiling(self, node: str, provider: str, model: str, configured: int) -> int:
+        """Return the configured ceiling or one provider-authorized length-recovery ceiling."""
+        key = (node, provider, model)
+        if not hasattr(self, "_completion_ceiling_lock"):
+            self._completion_ceiling_lock = threading.Lock()
+            self._next_completion_ceilings = {}
+        with self._completion_ceiling_lock:
+            return self._next_completion_ceilings.pop(key, max(1, configured))
+
+    def _record_length_ceiling(self, node: str, provider: str, model: str, requested: int) -> int:
+        """Double only a real length-truncated request for the next same-route invocation."""
+        ceiling = min(MAX_ADAPTIVE_COMPLETION_TOKENS, max(1, requested) * 2)
+        if not hasattr(self, "_completion_ceiling_lock"):
+            self._completion_ceiling_lock = threading.Lock()
+            self._next_completion_ceilings = {}
+        with self._completion_ceiling_lock:
+            self._next_completion_ceilings[(node, provider, model)] = ceiling
+        return ceiling
+
+    @staticmethod
+    def _is_checkpoint_store_unavailable(exc: BaseException) -> bool:
+        """Recognizes only MySQL-driver failures raised by the durable checkpoint store."""
+        try:
+            import pymysql
+        except ImportError:
+            return False
+        seen: set[int] = set()
+        current: BaseException | None = exc
+        while current is not None and id(current) not in seen:
+            if isinstance(current, pymysql.MySQLError):
+                return True
+            seen.add(id(current))
+            current = current.__cause__ or current.__context__
+        return False
+
+    @staticmethod
+    def _checkpoint_unavailable_response() -> HTTPException:
+        """Keeps a durable run retryable when its authoritative checkpoint store is offline."""
+        return HTTPException(status_code=503, detail={
+            "code": "HANDOUT_CHECKPOINT_UNAVAILABLE",
+            "message": "Handout checkpoint storage is temporarily unavailable; the run can be resumed.",
+        })
 
     def execute(self, request: HandoutRunRequest) -> HandoutDraftPackage:
         request = request.compact()
         # Java 的每次租约接管都保持同一 durable taskId/runId；先取得跨进程运行锁再读检查点，
         # 才能覆盖 Java 预检与 HTTP 派发之间的失租窗口，后到请求只能复用已完成包而不能再次调用 provider。
-        with self._checkpoint.run_lock(request.run_id):
-            return self._execute_locked(request)
+        try:
+            with self._checkpoint.run_lock(request.run_id, request.deadline_epoch_ms):
+                return self._execute_locked(request)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            # A failed ownership/read/startup checkpoint operation has no safe secondary write path. Preserve the
+            # last durable boundary and let Java redeliver this same run after the storage dependency recovers.
+            if self._is_checkpoint_store_unavailable(exc):
+                raise self._checkpoint_unavailable_response() from exc
+            raise
 
     def _execute_locked(self, request: HandoutRunRequest) -> HandoutDraftPackage:
         """Runs one graph after the durable run-level ownership gate has been acquired."""
@@ -1152,6 +1310,8 @@ class HandoutRuntime:
             self._checkpoint.save(request.run_id, package.status, final_state, {"event": "completed", "status": package.status})
             return package
         except HandoutOutputContractError as exc:
+            if self._is_checkpoint_store_unavailable(exc):
+                raise self._checkpoint_unavailable_response() from exc
             telemetry.sample_system()
             HandoutMetricsLedger().append(request, telemetry.finish(), "FAILED")
             latest = self._checkpoint.load(request.run_id)
@@ -1168,6 +1328,10 @@ class HandoutRuntime:
             self._checkpoint.save(request.run_id, "FAILED", latest[1] if latest else started_state, {"event": "failed", "error": "http_error"})
             raise
         except Exception as exc:
+            # Checkpoint writes are the recovery boundary. Once MySQL is unavailable, avoid telemetry and failure
+            # writes that would mask the outage or replace the last valid boundary.
+            if self._is_checkpoint_store_unavailable(exc):
+                raise self._checkpoint_unavailable_response() from exc
             telemetry.sample_system()
             HandoutMetricsLedger().append(request, telemetry.finish(), "FAILED")
             latest = self._checkpoint.load(request.run_id)
@@ -1799,17 +1963,21 @@ class HandoutRuntime:
     @staticmethod
     def _validate_document_asset_placements(
             document: WriterDocument, stage_code: str, plan: WritingPlan) -> None:
-        """Keeps each writer variant bound to the plan's AI-selected assets; writers cannot choose replacements."""
+        """Keeps each writer variant bound to the plan-selected asset identity and placement contract.
+
+        Captions are writer-authored visible prose, so an equivalent caption may be revised between the approved
+        plan and a derived audience document. The opaque asset ids and structural placement fields remain exact.
+        """
         allowed = {
-            (placement.question_number, placement.anchor, placement.layout, tuple(placement.asset_ids), placement.caption)
+            (placement.question_number, placement.anchor, placement.layout, tuple(placement.asset_ids))
             for question in plan.questions for placement in question.asset_placements
             if stage_code in placement.variants
         }
-        seen: set[tuple[int, str, str, tuple[str, ...], str]] = set()
+        seen: set[tuple[int, str, str, tuple[str, ...]]] = set()
         for placement in document.asset_placements:
             if stage_code not in placement.variants:
                 raise ValueError(f"{stage_code}: asset placement excludes this variant")
-            key = (placement.question_number, placement.anchor, placement.layout, tuple(placement.asset_ids), placement.caption)
+            key = (placement.question_number, placement.anchor, placement.layout, tuple(placement.asset_ids))
             if key not in allowed:
                 raise ValueError(f"{stage_code}: asset placement differs from approved writing plan")
             if key in seen:
@@ -1827,21 +1995,23 @@ class HandoutRuntime:
         questions = _submitted_questions(question_text)
         if not questions:
             raise ValueError("question batch is empty")
-        cursor = 0
-        for index, question in enumerate(questions, start=1):
-            tokens = _question_tokens(question)
-            if not tokens:
-                raise ValueError(f"{stage_code}: question {index} has no distinctive semantic tokens")
-            positions = [(markdown.find(token, cursor), token) for token in tokens]
-            found = [(position, token) for position, token in positions if position >= 0]
-            # Models may paraphrase a formula-rich stem, so requiring every extracted token would reject valid drafts.
-            # Requiring one distinctive token after the previous question still proves ordered coverage while the
-            # audience-specific and publication gates handle the stronger content/safety checks.
-            if len(found) < DEFAULT_MIN_QUESTION_TOKEN_MATCHES:
-                raise ValueError(f"{stage_code}: question {index} is missing or semantically unmatched")
-            # Advance past the earliest matched token so a repeated generic symbol cannot satisfy every later stem.
-            position, token = min(found)
-            cursor = position + len(token)
+        # A topic-only request is intentionally expanded into source-grounded questions by plan_writer. Requiring
+        # the original topic tokens in every audience projection rejects valid paraphrases and previously caused the
+        # student/lecture writers to fail after the plan and teacher blueprint had already passed. Keep the stronger
+        # ordered token gate only for an explicitly numbered question batch supplied by the caller.
+        explicit_batch = bool(QUESTION_MARKER_PATTERN.search(question_text or ""))
+        if explicit_batch:
+            cursor = 0
+            for index, question in enumerate(questions, start=1):
+                tokens = _question_tokens(question)
+                if not tokens:
+                    raise ValueError(f"{stage_code}: question {index} has no distinctive semantic tokens")
+                positions = [(markdown.find(token, cursor), token) for token in tokens]
+                found = [(position, token) for position, token in positions if position >= 0]
+                if len(found) < DEFAULT_MIN_QUESTION_TOKEN_MATCHES:
+                    raise ValueError(f"{stage_code}: question {index} is missing or semantically unmatched")
+                position, token = min(found)
+                cursor = position + len(token)
         if UNSAFE_DOCUMENT_TRANSPORT_PATTERN.search(markdown):
             raise ValueError(f"{stage_code}: unsafe image, URL, or HTML transport")
         HandoutRuntime._validate_writer_markup(markdown, stage_code)
@@ -1869,19 +2039,30 @@ class HandoutRuntime:
         """Keeps model Markdown within the small delimiter subset that the XeLaTeX exporter can publish safely."""
         if ESCAPED_OR_LIST_HEADING_PATTERN.search(markdown):
             raise ValueError(f"{stage_code}: headings must start with an unescaped Markdown #")
+        display_open = False
         for line_number, line in enumerate(markdown.splitlines(), start=1):
             has_display_delimiter = "$$" in line
             if "\\[" in line or "\\]" in line:
                 raise ValueError(f"{stage_code}: line {line_number}: display math must use closed $$...$$ delimiters")
+            if display_open:
+                if line.strip() == "$$":
+                    display_open = False
+                    continue
+                if "$$" in line or UNESCAPED_DOLLAR_PATTERN.search(line):
+                    raise ValueError(f"{stage_code}: line {line_number}: display math cannot contain nested or inline dollar delimiters")
+                continue
             if not has_display_delimiter:
+                continue
+            if line.strip() == "$$":
+                display_open = True
                 continue
             match = DISPLAY_MATH_LINE_PATTERN.fullmatch(line)
             if match is None or "$$" in match.group("formula"):
                 raise ValueError(f"{stage_code}: line {line_number}: display math must be one closed $$...$$ expression")
-            # A valid display line contains four unescaped dollar characters. Any additional one is a leaked inline
-            # delimiter that changes TeX mode and must be repaired before it reaches publication.
             if len(UNESCAPED_DOLLAR_PATTERN.findall(line)) != 4:
                 raise ValueError(f"{stage_code}: line {line_number}: display math cannot contain inline dollar delimiters")
+        if display_open:
+            raise ValueError(f"{stage_code}: display math block is not closed")
 
     def _structured_validation(self, state: HandoutRunState) -> dict[str, Any]:
         request = state["request"]
@@ -2161,11 +2342,12 @@ class HandoutRuntime:
                 # sufficient room for the complete visible JSON candidate after that internal reasoning finishes.
                 # Keep each model completion within the shared run budget. A 100k default reserved the entire
                 # 400k run budget after only a few repair turns and prevented the mandatory final review request.
-                max_output_tokens = max(1, int(os.getenv(
+                configured_max_output_tokens = max(1, int(os.getenv(
                     "MATH_AGENT_HANDOUT_COLLECTION_DECISION_MAX_OUTPUT_TOKENS" if node == "resource_curation"
                     else "MATH_AGENT_HANDOUT_MAX_OUTPUT_TOKENS",
                     str(DEFAULT_COLLECTION_DECISION_MAX_OUTPUT_TOKENS if node == "resource_curation"
                         else DEFAULT_HANDOUT_MAX_OUTPUT_TOKENS))))
+                max_output_tokens = self._completion_ceiling(node, provider, model, configured_max_output_tokens)
                 with self._telemetry_lock:
                     telemetry = self._telemetry_by_run.get(request.run_id)
                 if telemetry is None:
@@ -2216,9 +2398,13 @@ class HandoutRuntime:
                         "model": model,
                         "requestPayload": payload,
                     })
+                    stream_buffer = _StreamingCheckpointBuffer(
+                        lambda update: self._record_model_turn(request, node, review_turn, attempt_number, update)
+                    )
                     partial_content: list[str] = []
                     raw_events: list[str] = []
                     raw_usage: dict[str, Any] = {}
+                    provider_started = time.monotonic()
                     response = self._session.post(
                         f"{base_url}/chat/completions",
                         headers={"Authorization": f"Bearer {key}"},
@@ -2227,25 +2413,38 @@ class HandoutRuntime:
                         timeout=max(0.1, timeout),
                     )
                     response.raise_for_status()
+                    finish_reason: str | None = None
                     try:
                         content_type = str(getattr(response, "headers", {}).get("Content-Type", "")).lower()
                         if "text/event-stream" not in content_type:
                             # Some compatible relays ignore stream=true and still return one JSON response. Retain that
                             # valid full candidate rather than treating it as an empty SSE stream.
                             data = response.json()
-                            content = str((data.get("choices") or [])[0].get("message", {}).get("content") or "")
+                            first_choice = (data.get("choices") or [{}])[0]
+                            content = str(first_choice.get("message", {}).get("content") or "")
+                            finish_reason = str(first_choice.get("finish_reason") or "").strip() or None
                             raw_usage = data.get("usage") or {}
                             raw_body = response.text
                             if content:
+                                if stream_buffer is None:
+                                    stream_buffer = _StreamingCheckpointBuffer(
+                                        lambda update: self._record_model_turn(request, node, review_turn, attempt_number, update)
+                                    )
                                 partial_content.append(content)
-                                self._record_model_turn(request, node, review_turn, attempt_number, {
-                                    "partialContent": content,
-                                    "partialChars": len(content),
-                                    "lastChunkAt": _utc_now(),
-                                    "outcome": "STREAM_COMPLETED",
-                                })
+                                stream_buffer.add(content)
+                                stream_buffer.flush("non_stream_completion")
                         else:
                             for event_data in iter_sse_data_events(response):
+                                # requests applies its read timeout between chunks; enforce the Java-issued absolute
+                                # deadline here so a slow but chatty SSE response cannot outlive the task lease.
+                                # Leave response serialization and checkpoint cleanup time before Java's HTTP deadline.
+                                if request.deadline_epoch_ms is not None and (
+                                        request.deadline_epoch_ms - int(time.time() * 1000)) <= 15_000:
+                                    raise HTTPException(status_code=504, detail={
+                                        "code": "MODEL_TIMEOUT",
+                                        "message": "Handout model generation reached its lease safety margin",
+                                    })
+                                self._check_deadline(request)
                                 if event_data == "[DONE]":
                                     continue
                                 raw_events.append(event_data)
@@ -2256,50 +2455,68 @@ class HandoutRuntime:
                                 if isinstance(usage, dict):
                                     raw_usage = usage
                                 for choice in event.get("choices") or []:
+                                    reported_finish_reason = str(choice.get("finish_reason") or "").strip()
+                                    if reported_finish_reason:
+                                        finish_reason = reported_finish_reason
                                     delta = choice.get("delta") or {}
                                     content_delta = delta.get("content")
                                     if not content_delta:
                                         continue
                                     partial_content.append(str(content_delta))
-                                    accumulated = "".join(partial_content)
-                                    self._record_model_turn(request, node, review_turn, attempt_number, {
-                                        "partialContent": accumulated,
-                                        "partialChars": len(accumulated),
-                                        "lastChunkAt": _utc_now(),
-                                        "outcome": "STREAMING",
-                                    })
+                                    stream_buffer.add(str(content_delta))
+                                    if stream_buffer.should_flush():
+                                        stream_buffer.flush("threshold")
                             content = "".join(partial_content)
                             raw_body = "\n".join(raw_events)
                     finally:
+                        if stream_buffer is not None:
+                            stream_buffer.flush("terminal")
                         close = getattr(response, "close", None)
                         if callable(close):
                             close()
+                    elapsed_ms = max(0, int((time.monotonic() - provider_started) * 1000))
+                    adaptive_ceiling = None
+                    if finish_reason == "length":
+                        adaptive_ceiling = self._record_length_ceiling(node, provider, model, max_output_tokens)
                     self._record_model_turn(request, node, review_turn, attempt_number, {
                         "httpStatus": 200,
                         "rawResponse": raw_body,
                         "receivedAt": _utc_now(),
+                        "elapsedMs": elapsed_ms,
+                        "finishReason": finish_reason or "not_reported",
+                        "requestedCompletionTokens": max_output_tokens,
+                        "nextCompletionCeiling": adaptive_ceiling,
                     })
                     data = {"choices": [{"message": {"content": content}}], "usage": raw_usage}
                     self._record_model_turn(request, node, review_turn, attempt_number, {
                         "parsedJson": data,
                     })
+                    # Token and prefix-cache accounting is provider-owned. Missing fields remain unavailable rather
+                    # than being estimated from local strings, which would corrupt billing and cache evidence.
                     prompt_tokens = int(raw_usage.get("prompt_tokens", 0) or 0)
-                    # OpenAI-compatible providers put cache hits in either prompt_tokens_details or input_tokens_details.
                     cached_details = raw_usage.get("prompt_tokens_details") or raw_usage.get("input_tokens_details") or {}
                     cached_prompt_tokens = int(cached_details.get("cached_tokens", 0) or 0) if isinstance(cached_details, dict) else 0
                     completion_tokens = int(raw_usage.get("completion_tokens", 0) or 0)
                     total_tokens = int(raw_usage.get("total_tokens", 0) or 0)
-                    source = "provider"
-                    if total_tokens <= 0:
-                        prompt_tokens, completion_tokens, total_tokens = fallback_tokens(messages, content)
-                        source = "fallback"
-                    price = cost_for(provider, model, prompt_tokens, completion_tokens)
+                    reported_fields = {
+                        "promptTokens": "prompt_tokens" in raw_usage,
+                        "cachedPromptTokens": isinstance(cached_details, dict) and "cached_tokens" in cached_details,
+                        "completionTokens": "completion_tokens" in raw_usage,
+                        "totalTokens": "total_tokens" in raw_usage,
+                    }
+                    usage_availability = "provider" if all(
+                        reported_fields[key] for key in ("promptTokens", "completionTokens", "totalTokens")
+                    ) else "not_reported"
+                    price = cost_for(provider, model, prompt_tokens, completion_tokens) if usage_availability == "provider" else -1.0
                     UsageLedger().append(UsageEvent(
                         request.run_id, provider, model, attempt_number, "SUCCESS", prompt_tokens,
-                        completion_tokens, total_tokens, price, source, cached_prompt_tokens=cached_prompt_tokens,
+                        completion_tokens, total_tokens, price, usage_availability, cached_prompt_tokens=cached_prompt_tokens,
                     ))
                     self._record_model_turn(request, node, review_turn, attempt_number, {
-                        "usage": {"promptTokens": prompt_tokens, "completionTokens": completion_tokens, "totalTokens": total_tokens, "estimatedCost": price},
+                        "usage": {"promptTokens": prompt_tokens, "cachedPromptTokens": cached_prompt_tokens,
+                                  "completionTokens": completion_tokens, "totalTokens": total_tokens,
+                                  "estimatedCost": price, "availability": usage_availability,
+                                  "reportedFields": reported_fields},
                     })
                     try:
                         parsed = self._parse_json(content)
@@ -2518,7 +2735,10 @@ class HandoutRuntime:
         document = WriterDocument(stageCode="teacher_writer", title=blueprint.title, markdown=blueprint.markdown,
                                   citations=blueprint.citations, assetPlacements=blueprint.asset_placements,
                                   warnings=blueprint.remaining_edits)
-        HandoutRuntime._validate_document_semantics(document, "teacher_writer", request.question_text)
+        planned_question_text = "\n".join(
+            f"【题目 {question.number}】\n{question.question}" for question in plan.questions
+        )
+        HandoutRuntime._validate_document_semantics(document, "teacher_writer", planned_question_text)
         HandoutRuntime._validate_document_asset_placements(document, "teacher_writer", plan)
         if not blueprint.completion_checklist:
             raise ValueError("teacher blueprint: completion checklist is empty")

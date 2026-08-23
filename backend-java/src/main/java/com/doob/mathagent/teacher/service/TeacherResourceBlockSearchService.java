@@ -401,12 +401,9 @@ public class TeacherResourceBlockSearchService {
         // A source file can contain several independently useful questions.  Preserve every Milvus block hit
         // instead of collapsing by sourcePath, otherwise a query can silently lose distinct questions from one paper.
         List<TeacherResourceBlockSearchResponse.Hit> hits = vectorCoarseRecall.hits().stream()
-                // A stale vector must never make unavailable raw teacher text model-visible. The catalog is the same
-                // authorization-backed source used by document reads, so this cannot be repaired with a DB fallback.
-                .filter(hit -> sourceFileReader == null
-                        || sourceFileReader.isSourceAvailable(tenantId, hit.documentId()))
+                // Vector rows already carry tenant and group scope filters; avoid a per-hit source filesystem lookup.
                 .limit(safeLimit)
-                .map(hit -> milvusHit(hit, normalizedQuery, focusedQuery.terms()))
+                .map(hit -> milvusHit(hit, normalizedQuery, focusedQuery.terms(), filter))
                 .toList();
         return response(normalizedQuery, safeLimit,
                 retrievalMode(STRATEGY_TWO_STAGE_DOC_BLOCK, filter, "milvus_evidence_only"), hits);
@@ -617,6 +614,45 @@ public class TeacherResourceBlockSearchService {
      * main behavioral change: vector search helps decide which document is plausible, then stage two resolves the
      * correct block inside that document.
      */
+    private VectorSearchFilter vectorFilterForSearch(String tenantId, TeacherResourceSearchFilter filter) {
+        List<String> sourceTypes = filter == null ? List.of() : filter.sourceTypes();
+        boolean feishu = sourceTypes.stream()
+                .map(TeacherResourceBlockSearchService::normalizeText)
+                .anyMatch("feishu"::equals);
+        List<String> permissionScopes = filter == null ? List.of() : filter.permissionScopes();
+        if (feishu) {
+            // Feishu is a tenant shared group library.  Historical vectors may not contain sourceType, but the
+            // persisted group scope is stable and indexed; use it as the retrieval boundary instead of loading
+            // document ids or checking each hit against the source filesystem.
+            permissionScopes = permissionScopes.isEmpty()
+                    ? List.of("TEACHER_SHARED", "TENANT_PUBLIC")
+                    : mergePermissionScopes(permissionScopes);
+            sourceTypes = sourceTypes.stream().filter(value -> !"feishu".equalsIgnoreCase(value)).toList();
+        }
+        return new VectorSearchFilter(
+                List.of(tenantId),
+                filter == null ? List.of() : filter.documentIds(),
+                permissionScopes,
+                sourceTypes);
+    }
+
+    private List<String> mergePermissionScopes(List<String> requestedScopes) {
+        java.util.LinkedHashSet<String> scopes = new java.util.LinkedHashSet<>();
+        for (String scope : requestedScopes == null ? List.<String>of() : requestedScopes) {
+            if (scope != null && !scope.isBlank()) {
+                scopes.add(scope.strip());
+            }
+        }
+        // Feishu rows published before the shared-group rollout may use the tenant-wide public scope. Keep the
+        // caller's explicit scopes and add the persisted shared alternatives as an OR filter, never a per-document read.
+        scopes.add("TEACHER_SHARED");
+        scopes.add("TENANT_PUBLIC");
+        return List.copyOf(scopes);
+    }
+
+    /**
+     * Uses one tenant/group scope boundary for vector recall; no per-hit document lookup is performed.
+     */
     private VectorCoarseRecall vectorCoarseRecall(
             String tenantId,
             String normalizedQuery,
@@ -628,11 +664,7 @@ public class TeacherResourceBlockSearchService {
             hits = vectorIndexService.searchTeacherResourceBlocks(
                     normalizedQuery,
                     vectorCandidateLimit,
-                    new VectorSearchFilter(
-                            List.of(tenantId),
-                            filter == null ? List.of() : filter.documentIds(),
-                            filter == null ? List.of() : filter.permissionScopes(),
-                            filter == null ? List.of() : filter.sourceTypes()));
+                    vectorFilterForSearch(tenantId, filter));
         } catch (RuntimeException exception) {
             log.error("teacher_resource_search_vector_failed strategy=two_stage query={} documentCandidates={} message={}",
                     normalizedQuery,
@@ -646,11 +678,16 @@ public class TeacherResourceBlockSearchService {
 
     /** Converts a Milvus hit directly to model evidence; no document/block/asset database read is allowed here. */
     private TeacherResourceBlockSearchResponse.Hit milvusHit(
-            VectorSearchHit hit, String normalizedQuery, String[] terms) {
+            VectorSearchHit hit, String normalizedQuery, String[] terms, TeacherResourceSearchFilter filter) {
         String text = textOrDefault(hit.text(), "");
+        boolean feishuLibrary = filter != null && filter.sourceTypes().stream()
+                .map(TeacherResourceBlockSearchService::normalizeText)
+                .anyMatch("feishu"::equals);
+        String sourceType = feishuLibrary ? "feishu" : "";
+        String permissionScope = feishuLibrary ? "TEACHER_SHARED" : "";
         return new TeacherResourceBlockSearchResponse.Hit(
-                hit.documentId(), "", "", "", hit.blockId(), "", 0, "", "", null,
-                hit.sourcePath(), "reference", List.of(), List.of(hit.blockId()), text,
+                hit.documentId(), "", sourceType, permissionScope, hit.blockId(), "", 0, "", "", null,
+                fileName(hit.sourcePath()), hit.sourcePath(), "reference", List.of(), List.of(hit.blockId()), text,
                 snippet(text, normalizedQuery, terms), hit.score(), List.of(), List.of());
     }
 

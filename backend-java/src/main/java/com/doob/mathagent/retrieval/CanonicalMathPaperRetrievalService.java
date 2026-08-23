@@ -16,6 +16,7 @@ import org.springframework.stereotype.Service;
 @Service
 public class CanonicalMathPaperRetrievalService {
     private static final int MAX_RESULTS = 12;
+    private static final int AUTHORIZATION_CANDIDATE_LIMIT = 50;
     private final TextbookMilvusSearchClient milvusSearchClient;
     private final CanonicalMathPaperCorpusAdapter corpusAdapter;
     private final String collectionName;
@@ -40,8 +41,14 @@ public class CanonicalMathPaperRetrievalService {
         if (!isReady()) {
             return List.of();
         }
+        int requestedLimit = Math.max(1, Math.min(MAX_RESULTS, limit));
+        // Historical collections contain unpublished rows ahead of the published corpus. Recall the bounded
+        // Milvus window first, then let the manifest-backed adapter enforce the authoritative source boundary.
         return corpusAdapter.adapt(milvusSearchClient.searchTextCollection(
-                collectionName, normalizedQuery, Math.max(1, Math.min(MAX_RESULTS, limit)), List.of()));
+                collectionName, normalizedQuery, Math.max(requestedLimit, AUTHORIZATION_CANDIDATE_LIMIT), List.of()))
+                .stream()
+                .limit(requestedLimit)
+                .toList();
     }
 
     /** Optional canonical evidence is usable only when its owner published both corpus and loaded collection. */

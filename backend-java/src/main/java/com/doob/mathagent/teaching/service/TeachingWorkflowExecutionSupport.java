@@ -141,7 +141,8 @@ class TeachingWorkflowExecutionSupport {
                         "review rendering has no memory snapshot", List.of())
                 : fromMemoryReuse(task.memoryReuse());
         List<TeachingEvidence> questionEvidence = task.evidence().stream()
-                .filter(item -> "QUESTION_BANK".equals(item.sourceScope())).toList();
+                .filter(item -> "QUESTION_BANK".equals(item.sourceScope())
+                            || "CANONICAL_MATH_PAPER".equals(item.sourceScope())).toList();
         List<TeachingEvidence> textbookEvidence = task.evidence().stream()
                 .filter(item -> "PUBLIC_TEXTBOOK".equals(item.sourceScope())).toList();
         List<TeachingEvidence> teacherEvidence = task.evidence().stream()
@@ -225,7 +226,8 @@ class TeachingWorkflowExecutionSupport {
                     .filter(item -> "PUBLIC_TEXTBOOK".equals(item.sourceScope()))
                     .filter(item -> !isBenchmarkEvidence(item)).toList();
             questionEvidence = checkpoint.evidence().stream()
-                    .filter(item -> "QUESTION_BANK".equals(item.sourceScope()))
+                    .filter(item -> "QUESTION_BANK".equals(item.sourceScope())
+                            || "CANONICAL_MATH_PAPER".equals(item.sourceScope()))
                     .filter(item -> !isBenchmarkEvidence(item)).toList();
             teacherResourceEvidence = checkpoint.evidence().stream()
                     .filter(item -> "TEACHER_RESOURCE".equals(item.sourceScope()))
@@ -267,7 +269,6 @@ class TeachingWorkflowExecutionSupport {
             evidence = verifiedEvidence(evidencePack.mergedEvidence());
             textbookEvidence = verifiedEvidence(textbookEvidence);
             questionEvidence = verifiedEvidence(questionEvidence);
-            teacherResourceEvidence = verifiedEvidence(teacherResourceEvidence);
         }
         evidence = verifiedEvidence(evidence);
         textbookEvidence = verifiedEvidence(textbookEvidence);
@@ -607,7 +608,8 @@ class TeachingWorkflowExecutionSupport {
         List<TeachingEvidence> textbook = checkpoint.evidence().stream()
                 .filter(item -> "PUBLIC_TEXTBOOK".equals(item.sourceScope())).toList();
         List<TeachingEvidence> questions = checkpoint.evidence().stream()
-                .filter(item -> "QUESTION_BANK".equals(item.sourceScope())).toList();
+                .filter(item -> "QUESTION_BANK".equals(item.sourceScope())
+                            || "CANONICAL_MATH_PAPER".equals(item.sourceScope())).toList();
         List<TeachingEvidence> teacher = checkpoint.evidence().stream()
                 .filter(item -> "TEACHER_RESOURCE".equals(item.sourceScope())).toList();
         RetrievalOutcome textbookOutcome = checkpointOutcome(checkpoint, "PUBLIC_TEXTBOOK_RETRIEVAL");
@@ -685,18 +687,20 @@ class TeachingWorkflowExecutionSupport {
         long textbookStartedNanos = System.nanoTime();
         CompletableFuture<TimedEvidence> textbookFuture = submitEvidence(
                 () -> alignEvidenceToTopic(request, retrieveTextbookEvidence(request, context)), evidenceExecutor);
+        long teacherResourceStartedNanos = System.nanoTime();
+        CompletableFuture<TimedEvidence> teacherResourceFuture = submitEvidence(
+                () -> alignEvidenceToTopic(request, retrieveTeacherResourceEvidence(request, context)), evidenceExecutor);
         // Canonical papers are an independently published public corpus. Its collection can legitimately be absent
         // before the real-paper ingestion owner completes a run, which must never erase already authorized teacher
         // resource evidence from this handout.
         CompletableFuture<TimedEvidence> canonicalPaperFuture = submitEvidence(
                 () -> alignEvidenceToTopic(request, retrieveCanonicalMathPaperEvidence(request)), evidenceExecutor);
         TimedEvidence textbook = new TimedEvidence(List.of(), 0L);
+        TimedEvidence canonicalPaper = new TimedEvidence(List.of(), 0L);
         TimedEvidence teacherResource = new TimedEvidence(List.of(), 0L);
         TimedEvidence questionBank = new TimedEvidence(List.of(), 0L);
         RetrievalOutcome textbookOutcome;
-        // Teacher resources are optional private context. Python's plan writer decides whether they are needed;
-        // submitting this branch here would turn an AI decision into an unconditional, latency-heavy search.
-        RetrievalOutcome teacherOutcome = RetrievalOutcome.skipped("教师资料由 Python Writer 按需决定是否检索。");
+        RetrievalOutcome teacherOutcome;
         RetrievalOutcome questionOutcome = RetrievalOutcome.running();
 
         try {
@@ -712,34 +716,48 @@ class TeachingWorkflowExecutionSupport {
                     List.of(), textbook.elapsedMs(), failure);
         }
         onBranchSettled.accept(new EvidencePack(textbook.evidence(), List.of(), List.of(),
-                textbook.elapsedMs(), 0L, 0L, textbookOutcome, questionOutcome, teacherOutcome));
+                textbook.elapsedMs(), 0L, 0L, textbookOutcome, questionOutcome,
+                RetrievalOutcome.running()));
 
         try {
-            TimedEvidence canonical = awaitEvidence("canonical_math_paper", canonicalPaperFuture, evidenceTimeoutMs);
-            // Canonical papers remain public evidence; they must not be mislabeled as private teacher material.
-            textbook = new TimedEvidence(concatEvidence(textbook.evidence(), canonical.evidence()),
-                    textbook.elapsedMs() + canonical.elapsedMs());
+            canonicalPaper = awaitEvidence("canonical_math_paper", canonicalPaperFuture, evidenceTimeoutMs);
+            // Canonical papers are public question evidence, not textbook evidence. Keeping this branch separate
+            // prevents the textbook evidence limit from discarding real high-school parabola questions.
+            traceRecorder.completed(taskId, context, "CANONICAL_MATH_PAPER_RETRIEVAL", "CanonicalMathPaperRetriever",
+                    canonicalPaper.evidence(), canonicalPaper.elapsedMs(), completedOutcome("规范高考题库", canonicalPaper).detail());
         } catch (RuntimeException canonicalFailure) {
             canonicalPaperFuture.cancel(true);
             traceRecorder.failed(taskId, context, "CANONICAL_MATH_PAPER_RETRIEVAL", "CanonicalMathPaperRetriever",
                     List.of(), 0L, canonicalFailure);
         }
-        traceRecorder.completed(taskId, context, "TEACHER_RESOURCE_RETRIEVAL", "PythonWriterDecision",
-                List.of(), 0L, teacherOutcome.detail());
-        onBranchSettled.accept(new EvidencePack(textbook.evidence(), List.of(), teacherResource.evidence(),
-                textbook.elapsedMs(), 0L, teacherResource.elapsedMs(), textbookOutcome, questionOutcome, teacherOutcome));
 
-        // A timed-out teacher source still leaves a safe curriculum fallback: normalized request topics plus completed
-        // textbook evidence. The request guides lookup but never becomes an evidence row or bypasses question access.
+        try {
+            teacherResource = awaitEvidence("teacher_resource", teacherResourceFuture, evidenceTimeoutMs);
+            teacherOutcome = completedOutcome("教师资料", teacherResource);
+            traceRecorder.completed(taskId, context, "TEACHER_RESOURCE_RETRIEVAL", "TeacherResourceRetriever",
+                    teacherResource.evidence(), teacherResource.elapsedMs(), teacherOutcome.detail());
+        } catch (RuntimeException failure) {
+            teacherResourceFuture.cancel(true);
+            teacherResource = failedEvidence(teacherResourceStartedNanos);
+            teacherOutcome = retrievalFailureOutcome("教师资料", failure, teacherResource.elapsedMs());
+            traceRecorder.failed(taskId, context, "TEACHER_RESOURCE_RETRIEVAL", "TeacherResourceRetriever",
+                    List.of(), teacherResource.elapsedMs(), failure);
+        }
+        onBranchSettled.accept(new EvidencePack(
+                textbook.evidence(), canonicalPaper.evidence(), teacherResource.evidence(),
+                textbook.elapsedMs(), canonicalPaper.elapsedMs(), teacherResource.elapsedMs(),
+                textbookOutcome, questionOutcome, teacherOutcome));
+
+        // Question-bank retrieval runs after the authorized teacher context is available so its query can use concrete
+        // curriculum points disclosed by the teacher material without bypassing the public visibility boundary.
         long questionBankStartedNanos = System.nanoTime();
         try {
             List<TeachingEvidence> completedTeacherEvidence = teacherResource.evidence();
             List<TeachingEvidence> completedTextbookEvidence = textbook.evidence();
             CompletableFuture<TimedEvidence> questionBankFuture = submitEvidence(
                     () -> {
-                        // Teacher resources are intentionally absent here. Their use is a Python model decision;
-                        // question-bank retrieval stays grounded in the already authorized public textbook branch.
-                        List<String> pointQueries = curriculumPointQueries(request, completedTextbookEvidence);
+                        List<String> pointQueries = curriculumPointQueries(request,
+                                concatEvidence(completedTextbookEvidence, completedTeacherEvidence));
                         List<TeachingEvidence> retrievedQuestions = retrieveQuestionBankEvidence(request, context, pointQueries);
                         return requiresQualifiedQuestionCompilation(request)
                                 ? retrievedQuestions
@@ -755,8 +773,9 @@ class TeachingWorkflowExecutionSupport {
             traceRecorder.failed(taskId, context, "QUESTION_BANK_RETRIEVAL", "QuestionBankRetriever",
                     List.of(), questionBank.elapsedMs(), failure);
         }
-        EvidencePack result = new EvidencePack(textbook.evidence(), questionBank.evidence(), teacherResource.evidence(),
-                textbook.elapsedMs(), questionBank.elapsedMs(), teacherResource.elapsedMs(),
+        EvidencePack result = new EvidencePack(
+                textbook.evidence(), concatEvidence(canonicalPaper.evidence(), questionBank.evidence()), teacherResource.evidence(),
+                textbook.elapsedMs(), canonicalPaper.elapsedMs() + questionBank.elapsedMs(), teacherResource.elapsedMs(),
                 textbookOutcome, questionOutcome, teacherOutcome);
         onBranchSettled.accept(result);
         return result;

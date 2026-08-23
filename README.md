@@ -56,7 +56,14 @@
 5. 16:10 版仅含一个题目，题干位于首个正文区块，页面比例为 16:10，且文本密度受审计门禁约束。
 6. PDF 必须由 Docker 内 XeLaTeX 与 Noto CJK 字体真实编译；验收必须在 Windows 渲染全部页面，保存截图、布局审计、SHA-256、HTTP 状态、trace、阶段耗时和 token 消耗。任何一项失败均不得标记验收完成。
 
-### 真实讲义验收的 Compose 稳定性
+### 真实讲义验收的 SSE 吞吐与 checkpoint 落盘
+
+讲义模型请求使用 provider SSE，但 provider 小帧不能依赖 `requests` 默认 512 字节读取块；worker 显式使用 `chunk_size=1`，使已到达的两三个中文字符尽快进入解析。此前验收观察到约二十秒一批的现象，根因是读取缓冲叠加“每个 delta 重写完整 MySQL checkpoint”，不是模型 token 上限或恢复锁故障。
+
+流式私有诊断现在按 250ms、8KiB、32 个 delta 任一条件批量落盘，未落盘尾部有 32KiB 硬上限；模型解析、成功、超时、取消和异常前都强制 flush。MySQL 仍是唯一恢复权威，但不再为每个 delta 开新事务、重写不断增长的完整 JSON。公共 handout SSE 只发送不含正文、答案、教师批注、trace、来源内部标识或 asset id 的脱敏进度，并支持事件游标重连；未经过可见性判定的私有草稿不得直接公开。
+
+本次性能验收必须记录首个 chunk、接收 chunk 数、私有 flush 次数、最大未落盘字符、flush 延迟、终态强制 flush 与 SSE 游标连续性；不得把 raw prompt、raw completion、密钥或 opaque ref 写入 README 或公开报告。
+
 
 讲义验收前先执行一次 `docker compose up -d`，随后**只能由一个 Compose owner 管理该项目**：不得同时运行会调用 `docker compose up/down/restart` 的 `scripts/local/start-all.ps1`、`start-backend.ps1`、`start-worker.ps1`、IDE 自动部署或 Docker Desktop 重建。验收 runner 在登录/提交前、每次轮询前、每次 PDF 导出前检查 backend 与 ai-worker 的健康状态、容器 ID 和 `RestartCount`，并要求稳定窗口；连接拒绝、非 healthy 或 ID 变化时只等待新的窗口，不重复提交任务。runner 默认兼容宿主机 `http://127.0.0.1:8080`，可用 `MATH_AGENT_ACCEPTANCE_BASE_URL` 显式指定 Compose 网络内的 `http://backend:8080`，不改变公开 URL、DNS 或端口配置。若 backend、ai-worker、MySQL、Redis、RabbitMQ、Milvus 同时重新开始计时，而容器日志为 Spring/Uvicorn 的正常 SIGTERM 优雅关闭、`ExitCode=0`、`OOMKilled=false`、`RestartCount=0`，则这是外部 Docker/Compose 客户端的显式 stop/recreate，不是应用崩溃或 healthcheck 失败；当前尚未确认该外部客户端的具体进程，不能将其误称为已定位。
 
@@ -66,7 +73,20 @@ healthcheck 产生的 `exec_create`、`exec_start`、`exec_die` 是容器内探�
 
 Windows 到 WSL 的 `127.0.0.1:8080` 转发在容器刚被重建时可能短暂拒绝连接。真实验收优先在 Compose 网络中运行接受器：使用 `http://backend:8080`，而不是依赖宿主机端口转发；若 ID 改变或发生 `ECONNREFUSED`，等待新的稳定健康窗口后重试，不能将其误判为业务失败。这只改变验收客户端的访问路径，不改变后端公开 URL、DNS 或服务配置。验收仍需在最终 PDF 生成后回到 Windows 浏览器查看预览并保存截图。
 
-## 工程结构
+### 真实抛物线验收记录（2026-08-23）
+
+修复后的后端已通过 `backend-java` Maven 编译、`TeachingWorkflowRetrievalProgressTest`（4/4）和 `git diff --check`，并由 WSL Compose 无缓存构建部署；部署后 backend 状态为 `healthy`、`RestartCount=0`。本次修复将 `TeachingWorkflowExecutionSupport` 的教师资料分支从永久 `skipped` 改为真实授权检索，并保留规范高考检索为独立分支；高考检索仍由 `CanonicalMathPaperCorpusAdapter` 通过发布清单授权，候选窗口为 50 后再截取最终结果。
+
+证据目录：`output/acceptance/handout-mcp/parabola-canonical-candidate-window/`（提交前 MCP 三源真实命中：教材 9、飞书 10、高考 4）及 `output/acceptance/handout-mcp/parabola-canonical-recovery/`（唯一工作流 `cdb5e313-feff-4b34-a637-1f0dd4edd008`，恢复后 `COMPLETED`，任务创建次数 1）。修复部署后的只读核验目录为 `output/acceptance/handout-mcp/parabola-canonical-recovery-after-source-branch-fix/`，其中 `taskCreationPosts=0`，因为原工作流已经完成，恢复接口不会重新执行旧任务。
+
+旧工作流的持久化快照仍显示“教材 3、教师资料 0、题库 0”，三份导出 PDF 的 Poppler 文本均只有 191 字节的 XeLaTeX 空白页标记，学生版隔离和教师/高考来源使用因此均未通过。本次不能把旧产物标记为验收通过，也没有伪造新的任务或 PDF；必须在后续稳定窗口用新任务验证该修复后的三源工作流。
+
+本次恢复运行记录（2026-08-23）：`output/acceptance/handout-mcp/parabola-three-source-fixed-runtime-final-rerun/`。worker 无缓存重建后健康且 `RestartCount=0`；恢复唯一工作流 `8f473acc-6b43-4197-b063-11a8df9c4752`，`taskCreationPosts=0`，15 秒轮询最终 `COMPLETED`。已确认本次任务状态中的三源检索为公开教材 3 条、飞书教师资料 10 条、规范高考题库 2 条；AI_DRAFT 与 LATEX_HANDOUT 均完成。该恢复路径复用了已持久化授权证据，因此没有重复提交任务。
+
+本次导出真实使用 XeLaTeX，并由 Poppler 渲染全部页面：教师版 7 页（11989 文本字符，SHA-256 `99e435a47d3fd0e8115004685eb82e55013c2d673a670a921ad4fb027ef27d4d`）、学生版 4 页（2526 字符，SHA-256 `fefac73c74202cddd024551d762d6b624dd1b50f455c0dca8a324f3689784f19`）、16:10 课堂讲解版 4 页（4197 字符，SHA-256 `32e3ed5f8ebe226b85f921fe35b82b1d7381af2b089abb80de902a2206f958d5`）。逐页 PNG 均已保存并检查为非空，中文、公式、分页和课堂讲解内容正常；学生 PDF 文本未命中答案、教师批注、trace、内部来源标识、路径或 URL 隔离标记。
+
+注意：这是失败任务的恢复验收，不是新任务的完整 fresh-run 证据；恢复 runner 当前未重新落盘原始检索响应，且导出的教师正文未检出 `feishu://` 与 `gaokao://` 透明引用。因此本次只能记录为“工作流、三源计数、PDF 与学生隔离已通过；来源透明引用与 fresh-run 原始检索落盘仍待补证”，不得把本段标记为架构验收清单的最终全通过。后续应修复恢复路径的来源审计落盘，并在新的真实任务中确认教师版可见保留飞书题和规范高考题的透明相对引用。
+
 
 | 目录 | 说明 |
 |---|---|
@@ -115,6 +135,15 @@ Windows 到 WSL 的 `127.0.0.1:8080` 转发在容器刚被重建时可能短暂�
 
 教师资料检索与教材检索保持一致的证据结构。飞书同步支持 checkpoint/resume，本地 md、txt、docx、pdf 等资料解析后按 block、checksum、citation 入库到向量数据库，后续可以从教师资源块中识别数学题、去重并绑定知识点，沉淀为教师侧题库资产。Python AI 通过 `handout-teacher-resource-search` 工具自行决定是否需要检索教师私有资源，Java 仅响应已签发 `runId` 的授权请求。
 
+#### 飞书共享资料位置与权限
+
+部署环境将飞书同步资料以只读方式挂载到后端的 `/app/data/local-teacher-resources`，默认宿主目录为 `.local-storage/local-teacher-resources`；同步产生的规范镜像和解析资产分别保存在后端管理的 `teacher-source-imports`、`teacher-assets` 数据卷中。AI worker 不挂载这些目录，也不得在运行时扫描文件系统。
+
+所有飞书资源必须先完成注册、下载/同步、Markdown 或文档解析、块入库、embedding 和 Milvus 索引，且 `syncStatus=synced`、`parseStatus=parsed`、`embeddingStatus=ready`、`indexStatus=ready` 后才可检索。飞书注册默认使用 `TEACHER_SHARED` 共享范围；管理员可检索本租户全部已就绪飞书共享资料，教师按同一共享范围检索，学生不会获得教师共享库。检索时后端以持久化的共享范围字段作为用户组边界，并一次性传给向量检索，禁止按每条命中加载文档或源文件。
+
+MCP 和明文验收记录允许使用透明的相对来源引用，例如 `feishu://group/TEACHER_SHARED/resource/<documentId>/block/<blockId>`、`textbook://<bookId>/chunk/<chunkId>` 和 `gaokao://canonical/<paperId>/question/<questionId>`，并可记录完整来源名、相对文件名、块号、题号、页码和摘要。引用不得包含宿主机绝对路径、容器挂载路径、下载 URL、Token、Cookie、密码或 Base64；实际读取仍由 Java 的任务/运行授权接口完成。
+
+高考题是公共语料，所有已认证用户都可以通过 `gaokao_math` 检索；它不依赖教师资料用户组，也不回退到飞书资源库。
 ## 知识图谱与学习画像
 
 知识图谱模块提供**SVG 力导向图可视化**，基于力导向布局算法（排斥力 + 吸引力 + 向心力）自动排列知识点节点。主干模块以彩色矩形标识（12 色自动分配），知识点为蓝色圆形，高频方法为紫色圆形。图谱支持拖拽节点、拖拽平移、滚轮缩放、悬停高亮关联节点和关系、图例展示等交互。

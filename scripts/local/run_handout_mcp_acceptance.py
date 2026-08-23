@@ -159,13 +159,20 @@ def wsl_repository_root() -> str:
 
 
 def service_gate() -> dict[str, Any]:
-    """Check the sole WSL compose owner; never invoke compose lifecycle commands."""
+    """Check exactly one WSL Compose owner without invoking lifecycle commands."""
     unit = "math-agent-rag-compose.service"
-    enabled = wsl(f"systemctl --user is-enabled {unit}").strip()
-    active = wsl(f"systemctl --user is-active {unit}").strip()
-    if enabled != "enabled" or active != "active":
-        raise RuntimeError(f"WSL compose owner must be enabled and active(exited): {unit}")
-    return {"unit": unit, "enabled": enabled, "active": active}
+    checks = []
+    for scope, command in (("user", f"systemctl --user is-enabled {unit}"), ("system", f"systemctl is-enabled {unit}")):
+        try:
+            enabled = wsl(command).strip()
+            active = wsl(command.replace("is-enabled", "is-active")).strip()
+        except subprocess.CalledProcessError:
+            enabled, active = "unavailable", "unavailable"
+        checks.append({"scope": scope, "enabled": enabled, "active": active})
+    owners = [item for item in checks if item["enabled"] == "enabled" and item["active"] == "active"]
+    if len(owners) != 1:
+        raise RuntimeError("exactly one enabled and active WSL Compose owner is required: " + json.dumps(checks, ensure_ascii=False))
+    return {"unit": unit, "owner": owners[0]["scope"], "checks": checks}
 
 
 def docker_snapshot() -> dict[str, Any]:
@@ -192,9 +199,17 @@ def docker_snapshot() -> dict[str, Any]:
 
 class Http:
     """Cookie-backed JSON client that records only non-secret request metadata."""
-    def __init__(self, base: str, timeout: int, timeline: list[dict[str, Any]]) -> None:
-        self.base, self.timeout, self.timeline = base.rstrip("/"), timeout, timeline
+    def __init__(self, base: str, timeout: int, timeline: list[dict[str, Any]], journal: Path | None = None) -> None:
+        self.base, self.timeout, self.timeline, self.journal = base.rstrip("/"), timeout, timeline, journal
         self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(CookieJar()))
+
+    def _persist(self, event: dict[str, Any]) -> None:
+        if not self.journal:
+            return
+        with self.journal.open("a", encoding="utf-8", newline="\n") as handle:
+            handle.write(json.dumps(redact(event), ensure_ascii=False) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
 
     def request(self, method: str, path: str, body: Any | None = None, headers: dict[str, str] | None = None) -> tuple[Any, dict[str, str]]:
         progress("http_request_started", method=method, path=path)
@@ -206,13 +221,19 @@ class Http:
         try:
             with self.opener.open(request, timeout=self.timeout) as response:
                 raw = response.read()
-                self.timeline.append({"at": now(), "method": method, "path": path, "status": response.status, "durationMs": round((time.monotonic() - started) * 1000)})
+                event = {"at": now(), "method": method, "path": path, "status": response.status, "durationMs": round((time.monotonic() - started) * 1000)}
+                self.timeline.append(event)
+                self._persist({"kind": "http_response", **event})
                 return (json.loads(raw.decode("utf-8-sig")) if raw else {}, dict(response.headers.items()))
         except urllib.error.HTTPError as error:
-            self.timeline.append({"at": now(), "method": method, "path": path, "status": error.code, "durationMs": round((time.monotonic() - started) * 1000)})
+            event = {"at": now(), "method": method, "path": path, "status": error.code, "durationMs": round((time.monotonic() - started) * 1000)}
+            self.timeline.append(event)
+            self._persist({"kind": "http_error", **event})
             raise RuntimeError(f"HTTP {error.code} {path}") from error
         except urllib.error.URLError as error:
-            self.timeline.append({"at": now(), "method": method, "path": path, "status": "network-error", "durationMs": round((time.monotonic() - started) * 1000)})
+            event = {"at": now(), "method": method, "path": path, "status": "network-error", "durationMs": round((time.monotonic() - started) * 1000)}
+            self.timeline.append(event)
+            self._persist({"kind": "http_error", **event})
             raise RuntimeError(f"Network error for {path}: {type(error.reason).__name__}") from error
 
 
@@ -407,6 +428,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--preflight-only", action="store_true", help="Validate owner, health, IDs, and readiness without login or task submission.")
     parser.add_argument("--resource-curation-only", action="store_true", help="Run only the bounded pre-plan resource collector against a persisted authorized run; never creates a task or enters writer nodes.")
     parser.add_argument("--authorized-run-id", help="Existing Java-issued run ID used only by --resource-curation-only.")
+    parser.add_argument("--workflow-id", help="Resume an existing workflow without submitting a new task.")
+    parser.add_argument("--resume-failed", action="store_true", help="Resume an existing failed workflow once.")
     args = parser.parse_args(argv)
     if args.preflight_only and args.resource_curation_only:
         parser.error("--preflight-only and --resource-curation-only cannot be combined")
@@ -417,6 +440,43 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return args
 
 
+def resume_existing_workflow(mcp: "Mcp", workflow_id: str, args: argparse.Namespace, run_dir: Path, record: dict[str, Any]) -> int:
+    """Resume one persisted workflow without creating another task, then export verified PDFs."""
+    task = mcp.call("get_multi_agent_writing_status", {"workflowId": workflow_id})
+    write_json(run_dir / "latest-status.json", task)
+    if str(task.get("status", "")).upper() == "FAILED":
+        if not args.resume_failed:
+            raise RuntimeError("Existing workflow is FAILED; rerun with --resume-failed to resume it once.")
+        task = mcp.call("resume_multi_agent_writing", {"workflowId": workflow_id})
+        record["recovery"] = {"workflowId": workflow_id, "resumed": True, "taskCreationPosts": 0}
+        write_json(run_dir / "resume-response.json", task)
+    deadline = time.monotonic() + args.timeout
+    while not terminal_status(str(task.get("status"))):
+        task = mcp.call("get_multi_agent_writing_status", {"workflowId": workflow_id})
+        record["taskSnapshots"].append({"at": now(), "status": task.get("status"), "stages": task.get("stages"), "usage": task.get("totalUsage"), "message": task.get("message")})
+        write_json(run_dir / "latest-status.json", task)
+        write_json(run_dir / "acceptance-live.json", record)
+        progress("handout_status_poll_completed", workflowId=workflow_id, status=task.get("status"), stages=task.get("stages"))
+        if time.monotonic() >= deadline:
+            raise RuntimeError("Polling timeout; rerun with the same workflowId.")
+        time.sleep(args.poll_interval_seconds)
+    if str(task.get("status", "")).upper() != "COMPLETED":
+        raise RuntimeError("Task did not complete: " + str(task.get("status")))
+    artifacts = {}
+    for variant, fmt in (("teacher", "pdf-teacher"), ("student", "pdf-student"), ("lecture", "pdf-lecture")):
+        exported = mcp.call("export_multi_agent_writing_artifact", {"workflowId": workflow_id, "format": fmt})
+        data = base64.b64decode(exported["base64Content"], validate=True)
+        pdf = run_dir / variant / f"{variant}.pdf"
+        pdf.parent.mkdir(parents=True, exist_ok=True)
+        pdf.write_bytes(data)
+        audit = inspect_pdf(pdf, pdf.parent)
+        if not audit["renderedPages"] or audit["pages"] != len(audit["renderedPages"]):
+            raise RuntimeError(f"PDF visual render incomplete for {variant}")
+        artifacts[variant] = {"export": {k: v for k, v in exported.items() if k != "base64Content"}, "audit": audit}
+    record.update({"workflowId": workflow_id, "terminal": task, "artifacts": artifacts, "result": "completed", "completedAt": now()})
+    return 0
+
+
 def main(args: argparse.Namespace | None = None) -> int:
     args = args or parse_args()
     run_timestamp = utc_run_timestamp()
@@ -424,9 +484,10 @@ def main(args: argparse.Namespace | None = None) -> int:
     args.run_label = args.run_label or f"handout-mcp-{topic}-{run_timestamp}"
     run_dir = ROOT / "output" / "acceptance" / "handout-mcp" / args.run_label
     run_dir.mkdir(parents=True, exist_ok=False)
-    record: dict[str, Any] = {"runLabel": args.run_label, "runTimestamp": run_timestamp, "startedAt": now(), "serviceStates": [], "taskSnapshots": [], "timeline": [], "taskCreationPosts": 0, "reviewRecoveryExercised": False}
+    events_path = run_dir / "events.jsonl"
+    record: dict[str, Any] = {"runLabel": args.run_label, "runTimestamp": run_timestamp, "startedAt": now(), "serviceStates": [], "taskSnapshots": [], "timeline": [], "taskCreationPosts": 0, "reviewRecoveryExercised": False, "workflowId": args.workflow_id}
     key_id = ""
-    http = Http(args.base_url, args.http_timeout, record["timeline"])
+    http = Http(args.base_url, args.http_timeout, record["timeline"], events_path)
     try:
         progress("acceptance_started", runLabel=args.run_label, topic=topic, runDirectory=str(run_dir))
         progress("service_owner_gate_started")
@@ -495,13 +556,82 @@ def main(args: argparse.Namespace | None = None) -> int:
         key_id, secret = str(key["keyId"]), str(key["secretKey"])
         progress("mcp_key_created", keyId=key_id)
         mcp = Mcp(http, secret)
+        if args.workflow_id:
+            return resume_existing_workflow(mcp, args.workflow_id, args, run_dir, record)
         progress("evidence_retrieval_started", topic=topic)
-        search = mcp.call("search_multi_source_evidence", {"query": goal, "libraries": ["public_textbook", "feishu"], "limit": 6, "permissionScopes": ["PUBLIC_TEXTBOOK", "TEACHER_SHARED"]})
-        evidence_refs = [hit.get("evidenceRef") for hit in search.get("hits", search.get("mergedHits", [])) if hit.get("evidenceRef")]
+        library_queries = {
+            "public_textbook": goal,
+            "feishu": "抛物线 教师资料 题目 标准方程 焦点",
+            "gaokao": "抛物线 高考真题 题目 标准方程 焦点",
+        } if topic == "parabola" else {"public_textbook": goal, "feishu": goal}
+        searches: dict[str, Any] = {}
+        for library, query in library_queries.items():
+            progress("evidence_library_search_started", library=library, query=query)
+            searches[library] = mcp.call("search_multi_source_evidence", {"query": query, "libraries": [library], "limit": 10, "permissionScopes": ["PUBLIC_TEXTBOOK", "TEACHER_SHARED", "GAOKAO_PUBLIC"]})
+            progress("evidence_library_search_completed", library=library, hitCount=len(searches[library].get("mergedHits", [])))
+        search = {
+            "query": goal,
+            "libraries": list(library_queries),
+            "libraryResults": searches,
+            "textbookHits": searches["public_textbook"].get("textbookHits", []),
+            "teacherResourceHits": searches.get("feishu", {}).get("teacherResourceHits", []),
+            "gaokaoHits": searches.get("gaokao", {}).get("gaokaoHits", []),
+            "mergedHits": [hit for result in searches.values() for hit in result.get("mergedHits", [])],
+            "evidenceRefs": [ref for result in searches.values() for ref in result.get("evidenceRefs", [])],
+        }
+        evidence_refs = list(dict.fromkeys(ref for ref in search["evidenceRefs"] if ref))
+        write_json(run_dir / "retrieval-original.json", search)
         if not evidence_refs:
             raise RuntimeError("No authorized source-grounded evidence returned; task was not submitted.")
+        if topic == "parabola":
+            source_counts = {
+                "textbook": len(searches["public_textbook"].get("textbookHits", [])),
+                "feishu": len(searches.get("feishu", {}).get("teacherResourceHits", [])),
+                "gaokao": len(searches.get("gaokao", {}).get("gaokaoHits", [])),
+            }
+            record["retrievalSourceCounts"] = source_counts
+            if any(count <= 0 for count in source_counts.values()):
+                raise RuntimeError("Parabola acceptance requires nonzero textbook, feishu, and gaokao hits: " + json.dumps(source_counts, ensure_ascii=False))
         progress("evidence_retrieval_completed", hitCount=len(evidence_refs))
-        record["retrieval"] = {"topic": topic, "sourceStatuses": search.get("libraryResults", search.get("libraries", [])), "hitCount": len(evidence_refs), "evidenceRefs": evidence_refs}
+        record["retrieval"] = {
+            "topic": topic,
+            "sourceStatuses": search.get("libraryResults", search.get("libraries", [])),
+            "libraryStats": search.get("libraryStats", []),
+            "textbookHitCount": len(search.get("textbookHits", [])) if isinstance(search.get("textbookHits", []), list) else 0,
+            "teacherResourceHitCount": len(search.get("teacherResourceHits", [])) if isinstance(search.get("teacherResourceHits", []), list) else 0,
+            "gaokaoHitCount": len(search.get("gaokaoHits", [])) if isinstance(search.get("gaokaoHits", []), list) else 0,
+            "mergedHitCount": len(search.get("mergedHits", [])) if isinstance(search.get("mergedHits", []), list) else 0,
+            "hitCount": len(evidence_refs),
+            "evidenceRefs": evidence_refs,
+            "rawResponse": search,
+        }
+        write_json(run_dir / "retrieval-original.json", search)
+        original_blocks = []
+        for source_name, source_items in (
+                ("textbook", search.get("textbookHits", [])),
+                ("feishu", search.get("teacherResourceHits", [])),
+                ("gaokao", search.get("gaokaoHits", []))):
+            for item in source_items:
+                if not isinstance(item, dict):
+                    continue
+                title = item.get("title") or item.get("documentTitle") or item.get("bookName") or source_name
+                transparent_ref = item.get("transparentReference") or item.get("sourceReference") or item.get("evidenceRef") or ""
+                text = item.get("evidenceText") or item.get("snippet") or item.get("text") or ""
+                page = item.get("pageNo") or item.get("page") or ""
+                block = item.get("blockId") or item.get("questionNumber") or item.get("chunkId") or ""
+                if str(text).strip():
+                    original_blocks.append(
+                        f"## [{source_name}] {title}\n\n"
+                        f"reference: {transparent_ref}\n"
+                        f"location: {block} page={page}\n\n{text}\n")
+        write_json(run_dir / "retrieval-flow.json", {
+            "at": now(), "query": goal, "libraries": ["public_textbook", "feishu"],
+            "libraryStats": record["retrieval"]["libraryStats"],
+            "textbookHitCount": record["retrieval"]["textbookHitCount"],
+            "teacherResourceHitCount": record["retrieval"]["teacherResourceHitCount"],
+            "mergedHitCount": record["retrieval"]["mergedHitCount"],
+        })
+        (run_dir / "resource-original.md").write_text("\n".join(original_blocks), encoding="utf-8")
         progress("stability_gate_started", phase="before-submit")
         stable_gate(http, "before-submit", record["serviceStates"], args.stability_sample_seconds)
         progress("stability_gate_completed", phase="before-submit")
@@ -520,13 +650,18 @@ def main(args: argparse.Namespace | None = None) -> int:
         if contains_nonfresh_signal(task):
             raise RuntimeError("Task reports cache/memory reuse; fresh-generation acceptance is rejected.")
         while not terminal_status(str(task.get("status"))):
-            progress("stability_gate_started", phase="before-poll", workflowId=workflow_id)
-            stable_gate(http, "before-poll", record["serviceStates"], args.stability_sample_seconds)
-            progress("stability_gate_completed", phase="before-poll", workflowId=workflow_id)
             progress("handout_status_poll_started", workflowId=workflow_id)
             task = mcp.call("get_multi_agent_writing_status", {"workflowId": workflow_id})
             progress("handout_status_poll_completed", workflowId=workflow_id, status=task.get("status"), stages=task.get("stages"))
             record["taskSnapshots"].append({"at": now(), "status": task.get("status"), "stages": task.get("stages"), "usage": task.get("totalUsage"), "message": task.get("message")})
+            write_json(run_dir / "latest-status.json", task)
+            writers = task.get("writers") or task.get("artifacts", {}).get("writers") or []
+            for writer in writers if isinstance(writers, list) else []:
+                if not isinstance(writer, dict) or not isinstance(writer.get("markdown"), str) or not writer["markdown"].strip():
+                    continue
+                stage = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(writer.get("stageCode") or writer.get("stage_code") or "writer"))
+                (run_dir / f"{stage}.md").write_text(writer["markdown"], encoding="utf-8")
+            write_json(run_dir / "acceptance-live.json", record)
             if contains_nonfresh_signal(task):
                 raise RuntimeError("Task reports cache/memory reuse; fresh-generation acceptance is rejected.")
             if time.monotonic() >= deadline:
