@@ -1,0 +1,174 @@
+                       
+
+ A - CP - D
+ 1 
+
+
+       P - ABCD P A   ABCD
+
+                                                            P A = AC = 2
+
+                                                                BC = 1
+                                                                       
+
+                                                               AB = 3
+       AD  P B AD  P BC 
+
+
+       1 P A   ABCD P A  AD 
+       2 AD  P B P A  P B 
+       3 ABC  AB  BC  AD  BC 
+       4
+
+
+
+ 2 
+
+
+       P - ABCD P A   ABCD
+
+                                                            P A = AC = 2
+
+                                                                BC = 1
+                                                                       
+
+                                                               AB = 3
+       AD  DC A - CP - D 
+
+                                                                  
+                                                                     42
+                                                                    7
+                                                                    1
+                                                                    
+
+       AD 
+
+
+       1 A - CP - D  CP  D  AC  E
+       2 P AC  E  CP  F  DF 
+       3 DF  CP 
+       4
+
+                                                                AD = x
+       ADC  DC DE
+       5 DEF 
+x 
+
+
+
+ 3 
+
+
+       P - ABCD P A   ABCDAB  CD
+
+                                                            ABC = 90
+
+                   AB = P A = 2
+
+                                                          CD = 4
+
+                                                                  
+                                                        BC = 2 2
+ M  P D 
+  CM  AD 
+
+                                                              1
+                                                              6
+ BM 
+
+                                                              
+                                                            23
+ BM  PC
+  M  BC 
+
+                                                            
+                                                               10
+
+________ ________                                                   2
+                   
+
+
+
+       1 A AB 
+AP 
+
+       2 A, B, C, D, P  M 
+       3 CM  AD 
+       4 BM  P C 
+       5 M  BC  BC 
+
+
+
+ 4 
+
+
+
+      
+        0
+       
+        0
+       
+
+
+
+       1
+       2""" 0"
+       3
+       4
+
+
+
+ 5 
+
+
+
+       P - ABCD  CP  A - CP - D 
+       A - CP - D
+
+
+
+
+       1 CP 
+       2
+       3 n1n2 
+
+                                                         cos  = � n1 � n2
+                                                                       |n1| |n2|
+
+       4
+
+________ ________  3
+                                  
+
+
+
+ 6 --
+
+
+       2  A  AP 
+
+
+       A - CP - D  ACP  DCP 
+
+
+       1
+
+                                                         P A  ABCD
+      
+       2 ACP  ACAP 
+       3 DCP  CDCP 
+       4 ab
+
+                   n = (x, y, z)
+
+
+
+                   n � a = 0
+
+                                                                n � b = 0
+       5
+
+
+
+________ ________                 4
+

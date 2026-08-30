@@ -1,0 +1,3765 @@
+{
+  "status": "asset_contract_failed",
+  "runId": "kp-recall-f5d8b1f2-8e26-4ddd-81ea-b059c4d36e89",
+  "generatedAtUtc": "2026-08-26T09:07:44Z",
+  "durationSeconds": 7.34,
+  "readOnly": true,
+  "corpusEvidence": {
+    "sourceManifestCount": 12,
+    "questionCount": 250,
+    "sourceFiles": [
+      {
+        "sourceFile": "2022年高考数学试卷（新高考Ⅰ卷）（解析卷）.pdf",
+        "sourceSha256": "80e25b3bfa54d21707b954f6c7e65f42fc20c23a50e3115035a779ebb980e2f6"
+      },
+      {
+        "sourceFile": "2022年高考数学试卷（新高考Ⅱ卷）（解析卷）.pdf",
+        "sourceSha256": "ba3f4f7671530f95b342a514a061d792eaeabace73d43e0f11abf498b955ae31"
+      },
+      {
+        "sourceFile": "2023年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+        "sourceSha256": "e8add182bfb613712c493c9f4500392bc8086457cf531b0211d213dc12956052"
+      },
+      {
+        "sourceFile": "2023年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+        "sourceSha256": "e742a18e72afbaee51550c4a509123040094c7819c6f67db11b3e02456f7d118"
+      },
+      {
+        "sourceFile": "2024年高考数学试卷（天津）（空白卷）.pdf",
+        "sourceSha256": "b448d4774267d3d4450539231de6dfd40ca1a467fa78c736ef3ded296adeabb3"
+      },
+      {
+        "sourceFile": "2024年高考数学试卷（天津）（解析卷）.pdf",
+        "sourceSha256": "78b60b26337d96a0ef260b6d29d7134754ba7387fbe2d8559b7b996ff8a8a238"
+      },
+      {
+        "sourceFile": "2024年高考数学试卷（新课标Ⅰ卷）（空白卷）.pdf",
+        "sourceSha256": "ebb90dc92da44d693df3414b1ba632865d1d6398232c15d4d05bd24d29fb2e49"
+      },
+      {
+        "sourceFile": "2024年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+        "sourceSha256": "68f686d7116e2bfcbd980c532057c6e3026b0d0186762889e2282178410000b1"
+      },
+      {
+        "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（空白卷）.pdf",
+        "sourceSha256": "88f0d962b0713b9e1445dc8e0ce4b6c8310ad04321930476cd4bfdf3bd20694b"
+      },
+      {
+        "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+        "sourceSha256": "5202caa0aa66b25f146eca6b7efd4f61cc797526a94e41979265729b67e0c18c"
+      },
+      {
+        "sourceFile": "2024年高考数学试卷（理）（全国甲卷）（空白卷）.pdf",
+        "sourceSha256": "c2a6e47d135dba93e24576e9d1ff91edef93589062e7e36bee5b0a9e654381c6"
+      },
+      {
+        "sourceFile": "2024年高考数学试卷（理）（全国甲卷）（解析卷）.pdf",
+        "sourceSha256": "84a3d1d6345f16127a210a5fae6c223c9ecf0303797035e866eca23f017af6a5"
+      }
+    ],
+    "selection": "current canonical source-manifest.json and questions/*.md only"
+  },
+  "collection": "gaokao_math",
+  "embedding": {
+    "model": "local_bge_embedding",
+    "dimension": 512,
+    "transport": "real_local_endpoint"
+  },
+  "milvus": {
+    "transport": "real_read_only_search",
+    "metric": "COSINE",
+    "vectorField": "vector",
+    "outputFields": [
+      "id",
+      "metadata",
+      "text"
+    ],
+    "writeOperations": []
+  },
+  "topK": 10,
+  "seedAssignment": {
+    "seedSlots": [
+      "seed_1",
+      "seed_3",
+      "seed_5"
+    ],
+    "questionNumbers": [
+      "1",
+      "3",
+      "5"
+    ],
+    "directionPairing": "stable seed-slot order only; not a topic label or gold truth"
+  },
+  "queryModes": {
+    "topic_only": "configured topic evidence terms only",
+    "seed_stem_only": "answer-free stem of the assigned neutral seed slot",
+    "aligned_topic_plus_stem": "configured topic terms plus seed stem; executed only when stem evidence aligns"
+  },
+  "seedObservations": [
+    {
+      "seedSlot": "seed_1",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+      "sourceSha256": "68f686d7116e2bfcbd980c532057c6e3026b0d0186762889e2282178410000b1",
+      "questionNumber": "1",
+      "questionId": "6509db02-7f15-5435-a298-a9d152da368b",
+      "documentRef": "755aa477-bc93-5d7c-b504-3f4e2991feef",
+      "stem": "已知集合 \\(A=\\{x\\mid -5<x^3<5\\}\\)，\\(B=\\{-3,-1,0,2,3\\}\\)，则 \\(A\\cap B=\\)（ ） A. \\(\\{-1,0\\}\\) B. \\(\\{2,3\\}\\) C. \\(\\{-3,-1,0\\}\\) D. \\(\\{-1,0,2\\}\\) A=\\{x\\mid -5<x^3<5\\} B=\\{-3,-1,0,2,3\\} A\\cap B \\{-1,0\\} \\{2,3\\} \\{-3,-1,0\\} \\{-1,0,2\\}",
+      "stemSummary": "已知集合 \\(A=\\{x\\mid -5<x^3<5\\}\\)，\\(B=\\{-3,-1,0,2,3\\}\\)，则 \\(A\\cap B=\\)（ ） A. \\(\\{-1,0\\}\\) B. \\(\\{2,3\\}\\) C. \\(\\{-3,-1,0\\}\\) D. \\(\\{-1,0,2\\}\\) A=\\{x\\mid -5<x^3<5\\} B=\\{-3,-1,0,2,3\\} A\\cap B \\{-1,0\\} \\{2,3\\} \\{-3,-1,0\\} \\{-1,0,2\\}",
+      "observedContentLabels": [
+        {
+          "label": "set_operation_evidence",
+          "evidenceTerms": [
+            "集合"
+          ]
+        }
+      ],
+      "topicAlignment": {
+        "parabola": {
+          "aligned": false,
+          "evidenceTerms": [],
+          "decision": "sample_topic_mismatch"
+        },
+        "probability_statistics": {
+          "aligned": false,
+          "evidenceTerms": [],
+          "decision": "sample_topic_mismatch"
+        },
+        "spatial_vector": {
+          "aligned": false,
+          "evidenceTerms": [],
+          "decision": "sample_topic_mismatch"
+        }
+      }
+    },
+    {
+      "seedSlot": "seed_3",
+      "sourceFile": "2023年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+      "sourceSha256": "e742a18e72afbaee51550c4a509123040094c7819c6f67db11b3e02456f7d118",
+      "questionNumber": "3",
+      "questionId": "d9df4afe-a52d-5f30-912d-b082b80b4a61",
+      "documentRef": "bbf9ac25-3369-55a0-a903-374fe97d8334",
+      "stem": "某学校为了了解学生参加体育运动的情况，用比例分配的分层随机抽样方法作抽样调查，拟从初中部和高中部两层共抽取60名学生，已知该校初中部和高中部分别有400名和200名学生，则不同的抽样结果共有（ ）。 A．\\(C_{400}^{45}C_{200}^{15}\\) 种 B．\\(C_{400}^{20}C_{200}^{40}\\) 种 C．\\(C_{400}^{30}C_{200}^{30}\\) 种 D．\\(C_{400}^{40}C_{200}^{20}\\) 种 C_{400}^{45}C_{200}^{15} C_{400}^{20}C_{200}^{40} C_{400}^{30}C_{200}^{30} C_{400}^{40}C_{200}^{20}\\n\\n",
+      "stemSummary": "某学校为了了解学生参加体育运动的情况，用比例分配的分层随机抽样方法作抽样调查，拟从初中部和高中部两层共抽取60名学生，已知该校初中部和高中部分别有400名和200名学生，则不同的抽样结果共有（ ）。 A．\\(C_{400}^{45}C_{200}^{15}\\) 种 B．\\(C_{400}^{20}C_{200}^{40}\\) 种 C．\\(C_{400}^{30}C_{200}^{30}\\) 种 D．\\(C_{400}^{40}C_{200}^{20}\\) 种 C_{400}^{45}C_{200}^{15} C_{400}^{20}C_{200}^{40} C_{400}^{30}C_{200}^{30} C_{400}^{40}C_{200}^{20}\\n\\n",
+      "observedContentLabels": [
+        {
+          "label": "probability_statistics_evidence",
+          "evidenceTerms": [
+            "随机抽样"
+          ]
+        }
+      ],
+      "topicAlignment": {
+        "parabola": {
+          "aligned": false,
+          "evidenceTerms": [],
+          "decision": "sample_topic_mismatch"
+        },
+        "probability_statistics": {
+          "aligned": true,
+          "evidenceTerms": [
+            "随机抽样"
+          ],
+          "decision": "aligned_by_stem_evidence"
+        },
+        "spatial_vector": {
+          "aligned": false,
+          "evidenceTerms": [],
+          "decision": "sample_topic_mismatch"
+        }
+      }
+    },
+    {
+      "seedSlot": "seed_5",
+      "sourceFile": "2024年高考数学试卷（新课标Ⅰ卷）（空白卷）.pdf",
+      "sourceSha256": "ebb90dc92da44d693df3414b1ba632865d1d6398232c15d4d05bd24d29fb2e49",
+      "questionNumber": "5",
+      "questionId": "5f10ea33-ed43-5779-8d50-869fc8636760",
+      "documentRef": "64b54b7d-ba92-5ca7-b249-ec323141ece0",
+      "stem": "已知圆柱和圆锥的底面半径相等，侧面积相等，且它们的高均为√3，则圆锥的体积为（ ） A．2√3π B．3√3π C．6√3π D．9√3π \\sqrt{3} 2\\sqrt{3}\\pi 3\\sqrt{3}\\pi 6\\sqrt{3}\\pi 9\\sqrt{3}\\pi",
+      "stemSummary": "已知圆柱和圆锥的底面半径相等，侧面积相等，且它们的高均为√3，则圆锥的体积为（ ） A．2√3π B．3√3π C．6√3π D．9√3π \\sqrt{3} 2\\sqrt{3}\\pi 3\\sqrt{3}\\pi 6\\sqrt{3}\\pi 9\\sqrt{3}\\pi",
+      "observedContentLabels": [
+        {
+          "label": "solid_geometry_volume_evidence",
+          "evidenceTerms": [
+            "圆柱",
+            "圆锥",
+            "体积"
+          ]
+        }
+      ],
+      "topicAlignment": {
+        "parabola": {
+          "aligned": false,
+          "evidenceTerms": [],
+          "decision": "sample_topic_mismatch"
+        },
+        "probability_statistics": {
+          "aligned": false,
+          "evidenceTerms": [],
+          "decision": "sample_topic_mismatch"
+        },
+        "spatial_vector": {
+          "aligned": false,
+          "evidenceTerms": [],
+          "decision": "sample_topic_mismatch"
+        }
+      }
+    }
+  ],
+  "goldSets": {
+    "parabola": {
+      "selection": {
+        "supervision": "weak_supervision_manual_audit",
+        "authoritativeKnowledgeLabelsPresent": false,
+        "evidenceSource": "canonical question stem before answer/solution markers",
+        "rule": "stem contains at least one configured strong domain evidence term; deterministic source-diverse ordering; seed questionIds excluded",
+        "configuredEvidenceTerms": [
+          "抛物线"
+        ],
+        "candidateCount": 7,
+        "excludedSeedCount": 0,
+        "selectedCount": 3
+      },
+      "refs": [
+        {
+          "sourceFile": "2022年高考数学试卷（新高考Ⅰ卷）（解析卷）.pdf",
+          "sourceSha256": "80e25b3bfa54d21707b954f6c7e65f42fc20c23a50e3115035a779ebb980e2f6",
+          "questionNumber": "11",
+          "questionId": "66689e71-0f07-5efb-a1f4-0f4b5df3320a",
+          "documentRef": "f5522733-121d-5a32-b090-030c0dd5106d",
+          "stemSummary": "已知 O 为坐标原点，点 A(1,1) 在抛物线 C：x²=2py(p>0) 上，过点 B(0,-1) 的直线交 C 于 P，Q 两点，则（ ） A．C 的准线为 y=-1 B．直线 AB 与 C 相切 C．|OP|·|OQ|>|OA|² D．|BP|·|BQ|≥|BA|² O A(1,1) C:\\ x^2=2py,\\ p>0 B(0,-1) y=-1 \\lvert OP\\rvert\\cdot\\lvert OQ\\rvert>\\lvert OA\\rvert^2 \\lvert BP\\rvert\\cdot\\lvert BQ\\rvert\\geq\\lvert BA\\rvert^2",
+          "evidenceTerms": [
+            "抛物线"
+          ]
+        },
+        {
+          "sourceFile": "2022年高考数学试卷（新高考Ⅱ卷）（解析卷）.pdf",
+          "sourceSha256": "ba3f4f7671530f95b342a514a061d792eaeabace73d43e0f11abf498b955ae31",
+          "questionNumber": "10",
+          "questionId": "d9ac3f54-456f-5274-a5a3-da700fa22778",
+          "documentRef": "a6a01cfe-7dfd-5308-8df2-d82fa407858d",
+          "stemSummary": "已知O为坐标原点，过抛物线C：y²=2px(p>0)焦点F的直线与C交于A，B两点。其中A在第一象限，点M(p,0)，若|AF|=|AM|，则（ ） A．直线AB的斜率为2√6 B．|OB|=|OF| C．|AB|>4|OF| D．∠OAM+∠OBM<180° y^2=2px\\,(p>0) M(p,0) |AF|=|AM| 2\\sqrt{6} |OB|=|OF| |AB|>4|OF| \\angle OAM+\\angle OBM<180^\\circ\\n\\n",
+          "evidenceTerms": [
+            "抛物线"
+          ]
+        },
+        {
+          "sourceFile": "2023年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+          "sourceSha256": "e742a18e72afbaee51550c4a509123040094c7819c6f67db11b3e02456f7d118",
+          "questionNumber": "10",
+          "questionId": "02467056-6d65-509e-808b-d538272034fc",
+          "documentRef": "bbf9ac25-3369-55a0-a903-374fe97d8334",
+          "stemSummary": "设 O 为坐标原点，直线 \\(y=-\\sqrt{3}(x-1)\\) 过抛物线 \\(C:y^2=2px\\,(p>0)\\) 的焦点，且与 \\(C\\) 交于 \\(M，N\\) 两点，\\(l\\) 为 \\(C\\) 的准线，则（ ）。 A．\\(p=2\\) B．\\(\\left|MN\\right|=\\frac{8}{3}\\) C．以 \\(MN\\) 为直径的圆与 \\(l\\) 相切 D．\\(\\triangle OMN\\) 为等腰三角形 y=-\\sqrt{3}(x-1) C:y^2=2px\\,(p>0) p=2 \\left|MN\\right|=\\frac{8}{3} \\triangle OMN\\n\\n",
+          "evidenceTerms": [
+            "抛物线"
+          ]
+        }
+      ]
+    },
+    "probability_statistics": {
+      "selection": {
+        "supervision": "weak_supervision_manual_audit",
+        "authoritativeKnowledgeLabelsPresent": false,
+        "evidenceSource": "canonical question stem before answer/solution markers",
+        "rule": "stem contains at least one configured strong domain evidence term; deterministic source-diverse ordering; seed questionIds excluded",
+        "configuredEvidenceTerms": [
+          "概率",
+          "随机抽样",
+          "频率",
+          "正态分布",
+          "频数",
+          "相关性"
+        ],
+        "candidateCount": 23,
+        "excludedSeedCount": 1,
+        "selectedCount": 3
+      },
+      "refs": [
+        {
+          "sourceFile": "2022年高考数学试卷（新高考Ⅰ卷）（解析卷）.pdf",
+          "sourceSha256": "80e25b3bfa54d21707b954f6c7e65f42fc20c23a50e3115035a779ebb980e2f6",
+          "questionNumber": "5",
+          "questionId": "723e74f5-c965-59ab-ac06-8e6acb9edf68",
+          "documentRef": "f5522733-121d-5a32-b090-030c0dd5106d",
+          "stemSummary": "从2至8的7个整数中随机取2个不同的数，则这2个数互质的概率为（ ） A．\\(\\frac{1}{6}\\) B．\\(\\frac{1}{3}\\) C．\\(\\frac{1}{2}\\) D．\\(\\frac{2}{3}\\) \\frac{1}{6} \\frac{1}{3} \\frac{1}{2} \\frac{2}{3}\\n\\n",
+          "evidenceTerms": [
+            "概率"
+          ]
+        },
+        {
+          "sourceFile": "2022年高考数学试卷（新高考Ⅱ卷）（解析卷）.pdf",
+          "sourceSha256": "ba3f4f7671530f95b342a514a061d792eaeabace73d43e0f11abf498b955ae31",
+          "questionNumber": "13",
+          "questionId": "a0866723-c600-5790-80f0-fc72800fb673",
+          "documentRef": "a6a01cfe-7dfd-5308-8df2-d82fa407858d",
+          "stemSummary": "已知随机变量\\(X\\)服从正态分布\\(N(2,\\sigma^2)\\)，且\\(P(2<X\\leq2.5)=0.36\\)，则\\(P(X>2.5)=\\)________。 X\\sim N(2,\\sigma^2) P(2<X\\leq2.5)=0.36 P(X>2.5)\\n\\n",
+          "evidenceTerms": [
+            "正态分布"
+          ]
+        },
+        {
+          "sourceFile": "2023年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+          "sourceSha256": "e8add182bfb613712c493c9f4500392bc8086457cf531b0211d213dc12956052",
+          "questionNumber": "21",
+          "questionId": "708ae244-8a55-5e4b-b6f6-0ae4321e0a05",
+          "documentRef": "f0931840-c2b6-5a14-8af5-623bbcca2218",
+          "stemSummary": "甲、乙两人投篮，每次由其中一人投篮，规则如下：若命中则此人继续投篮，若未命中则换为对方投篮。无论之前投篮情况如何，甲每次投篮的命中率均为0.6，乙每次投篮的命中率均为0.8。由抽签确定第1次投篮的人选，第1次投篮的人是甲、乙的概率各为0.5。 （1）求第2次投篮的人是乙的概率； （2）求第i次投篮的人是甲的概率； （3）已知：若随机变量 \\(X_i\\) 服从两点分布，且 \\(P(X_i=1)=1-P(X_i=0)=q_i,\\ i=1,2,\\cdots,n\\)，则 \\(E\\left(\\sum_{i=1}^{n}X_i\\right)=\\sum_{i=1}^{n}q_i\\)。记前n次（即从第1次到第n次投篮）中甲投篮的次数为Y，求 \\(E(Y)\\)。 0.6 0.8 0.5 P(X_i=1)=1-P(X_i=0)=q...",
+          "evidenceTerms": [
+            "概率"
+          ]
+        }
+      ]
+    },
+    "spatial_vector": {
+      "selection": {
+        "supervision": "weak_supervision_manual_audit",
+        "authoritativeKnowledgeLabelsPresent": false,
+        "evidenceSource": "canonical question stem before answer/solution markers",
+        "rule": "stem contains at least one configured strong domain evidence term; deterministic source-diverse ordering; seed questionIds excluded",
+        "configuredEvidenceTerms": [
+          "空间向量",
+          "法向量",
+          "二面角",
+          "直三棱柱",
+          "三棱锥",
+          "四棱锥",
+          "四棱柱"
+        ],
+        "candidateCount": 15,
+        "excludedSeedCount": 0,
+        "selectedCount": 3
+      },
+      "refs": [
+        {
+          "sourceFile": "2022年高考数学试卷（新高考Ⅰ卷）（解析卷）.pdf",
+          "sourceSha256": "80e25b3bfa54d21707b954f6c7e65f42fc20c23a50e3115035a779ebb980e2f6",
+          "questionNumber": "8",
+          "questionId": "ef9c9a69-5ff4-55e8-a63e-5f2b347451d6",
+          "documentRef": "f5522733-121d-5a32-b090-030c0dd5106d",
+          "stemSummary": "已知正四棱锥的侧棱长为 \\(l\\)，其各顶点都在同一球面上。若该球的体积为 \\(36\\pi\\)，且 \\(3\\le l\\le3\\sqrt{3}\\)，则该正四棱锥体积的取值范围是（ ） A．\\(\\left[18,\\frac{81}{4}\\right]\\) B．\\(\\left[\\frac{27}{4},\\frac{81}{4}\\right]\\) C．\\(\\left[\\frac{27}{4},\\frac{64}{3}\\right]\\) D． 36\\pi 3\\le l\\le3\\sqrt{3} \\left[18,\\frac{81}{4}\\right] \\left[\\frac{27}{4},\\frac{81}{4}\\right] \\left[\\frac{27}{4},\\frac{64}{3}\\right]\\n\\n",
+          "evidenceTerms": [
+            "四棱锥"
+          ]
+        },
+        {
+          "sourceFile": "2022年高考数学试卷（新高考Ⅱ卷）（解析卷）.pdf",
+          "sourceSha256": "ba3f4f7671530f95b342a514a061d792eaeabace73d43e0f11abf498b955ae31",
+          "questionNumber": "11",
+          "questionId": "a9faeaca-b583-5184-98c3-66c8faa2ce47",
+          "documentRef": "a6a01cfe-7dfd-5308-8df2-d82fa407858d",
+          "stemSummary": "如图，四边形ABCD为正方形，ED⊥平面ABCD，FB∥ED，AB＝ED＝2FB，记三棱锥E-ACD，F-ABC，F-ACE的体积分别为V₁，V₂，V₃，则（ ） A．V₃＝2V₂ B．V₃＝V₁ C．V₃＝V₁＋V₂ D．2V₃＝3V₁ ED\\perp \\text{平面 }ABCD FB\\parallel ED AB=ED=2FB V_1=V_{E-ACD} V_2=V_{F-ABC} V_3=V_{F-ACE} V_3=2V_2 V_3=V_1 V_3=V_1+V_2 2V_3=3V_1\\n\\n",
+          "evidenceTerms": [
+            "三棱锥"
+          ]
+        },
+        {
+          "sourceFile": "2023年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+          "sourceSha256": "e8add182bfb613712c493c9f4500392bc8086457cf531b0211d213dc12956052",
+          "questionNumber": "18",
+          "questionId": "445ee3ea-929f-52f7-8a32-07c49495c616",
+          "documentRef": "f0931840-c2b6-5a14-8af5-623bbcca2218",
+          "stemSummary": "如图，在正四棱柱 \\(ABCD-A_1B_1C_1D_1\\) 中，\\(AB=2\\)，\\(AA_1=4\\)。点 \\(A_2,B_2,C_2,D_2\\) 分别在棱 \\(AA_1,BB_1,CC_1,DD_1\\) 上，\\(AA_2=1\\)，\\(BB_2=DD_2=2\\)，\\(CC_2=3\\)。 （1）证明：\\(B_2C_2//A_2D_2\\)； （2）点 \\(P\\) 在线段 \\(BB_1\\) 上，当二面角 \\(P-A_2C_2-D_2\\) 为 \\(150^\\circ\\) 时，求 \\(B_2P\\)。 ABCD-A_1B_1C_1D_1 AB=2 AA_1=4 AA_2=1 BB_2=DD_2=2 CC_2=3 \\overline{B_2C_2}\\parallel\\overline{A_2D_2} \\angle(P-A_...",
+          "evidenceTerms": [
+            "二面角",
+            "四棱柱"
+          ]
+        }
+      ]
+    }
+  },
+  "directions": {
+    "parabola": {
+      "seed": {
+        "seedSlot": "seed_1",
+        "questionNumber": "1",
+        "sourceFile": "2024年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+        "questionId": "6509db02-7f15-5435-a298-a9d152da368b",
+        "topicAlignment": {
+          "aligned": false,
+          "evidenceTerms": [],
+          "decision": "sample_topic_mismatch"
+        }
+      },
+      "goldSelection": {
+        "supervision": "weak_supervision_manual_audit",
+        "authoritativeKnowledgeLabelsPresent": false,
+        "evidenceSource": "canonical question stem before answer/solution markers",
+        "rule": "stem contains at least one configured strong domain evidence term; deterministic source-diverse ordering; seed questionIds excluded",
+        "configuredEvidenceTerms": [
+          "抛物线"
+        ],
+        "candidateCount": 7,
+        "excludedSeedCount": 0,
+        "selectedCount": 3
+      },
+      "goldRefs": [
+        {
+          "sourceFile": "2022年高考数学试卷（新高考Ⅰ卷）（解析卷）.pdf",
+          "sourceSha256": "80e25b3bfa54d21707b954f6c7e65f42fc20c23a50e3115035a779ebb980e2f6",
+          "questionNumber": "11",
+          "questionId": "66689e71-0f07-5efb-a1f4-0f4b5df3320a",
+          "documentRef": "f5522733-121d-5a32-b090-030c0dd5106d",
+          "stemSummary": "已知 O 为坐标原点，点 A(1,1) 在抛物线 C：x²=2py(p>0) 上，过点 B(0,-1) 的直线交 C 于 P，Q 两点，则（ ） A．C 的准线为 y=-1 B．直线 AB 与 C 相切 C．|OP|·|OQ|>|OA|² D．|BP|·|BQ|≥|BA|² O A(1,1) C:\\ x^2=2py,\\ p>0 B(0,-1) y=-1 \\lvert OP\\rvert\\cdot\\lvert OQ\\rvert>\\lvert OA\\rvert^2 \\lvert BP\\rvert\\cdot\\lvert BQ\\rvert\\geq\\lvert BA\\rvert^2",
+          "evidenceTerms": [
+            "抛物线"
+          ]
+        },
+        {
+          "sourceFile": "2022年高考数学试卷（新高考Ⅱ卷）（解析卷）.pdf",
+          "sourceSha256": "ba3f4f7671530f95b342a514a061d792eaeabace73d43e0f11abf498b955ae31",
+          "questionNumber": "10",
+          "questionId": "d9ac3f54-456f-5274-a5a3-da700fa22778",
+          "documentRef": "a6a01cfe-7dfd-5308-8df2-d82fa407858d",
+          "stemSummary": "已知O为坐标原点，过抛物线C：y²=2px(p>0)焦点F的直线与C交于A，B两点。其中A在第一象限，点M(p,0)，若|AF|=|AM|，则（ ） A．直线AB的斜率为2√6 B．|OB|=|OF| C．|AB|>4|OF| D．∠OAM+∠OBM<180° y^2=2px\\,(p>0) M(p,0) |AF|=|AM| 2\\sqrt{6} |OB|=|OF| |AB|>4|OF| \\angle OAM+\\angle OBM<180^\\circ\\n\\n",
+          "evidenceTerms": [
+            "抛物线"
+          ]
+        },
+        {
+          "sourceFile": "2023年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+          "sourceSha256": "e742a18e72afbaee51550c4a509123040094c7819c6f67db11b3e02456f7d118",
+          "questionNumber": "10",
+          "questionId": "02467056-6d65-509e-808b-d538272034fc",
+          "documentRef": "bbf9ac25-3369-55a0-a903-374fe97d8334",
+          "stemSummary": "设 O 为坐标原点，直线 \\(y=-\\sqrt{3}(x-1)\\) 过抛物线 \\(C:y^2=2px\\,(p>0)\\) 的焦点，且与 \\(C\\) 交于 \\(M，N\\) 两点，\\(l\\) 为 \\(C\\) 的准线，则（ ）。 A．\\(p=2\\) B．\\(\\left|MN\\right|=\\frac{8}{3}\\) C．以 \\(MN\\) 为直径的圆与 \\(l\\) 相切 D．\\(\\triangle OMN\\) 为等腰三角形 y=-\\sqrt{3}(x-1) C:y^2=2px\\,(p>0) p=2 \\left|MN\\right|=\\frac{8}{3} \\triangle OMN\\n\\n",
+          "evidenceTerms": [
+            "抛物线"
+          ]
+        }
+      ],
+      "queryEvaluations": [
+        {
+          "direction": "parabola",
+          "seedSlot": "seed_1",
+          "mode": "topic_only",
+          "evaluationStatus": "evaluated",
+          "query": "抛物线 焦点 准线",
+          "queryInput": "topic terms only",
+          "score": {
+            "topKHit": true,
+            "goldCount": 3,
+            "relevantHitCount": 3,
+            "falsePositiveCount": 7,
+            "returnedUniqueHitCount": 10,
+            "recallAtK": 1.0,
+            "precisionAtK": 0.3,
+            "mrr": 0.5,
+            "nDCGAtK": 0.644784,
+            "firstGoldHitRank": 2,
+            "goldHitRanks": {
+              "66689e71-0f07-5efb-a1f4-0f4b5df3320a": 5,
+              "d9ac3f54-456f-5274-a5a3-da700fa22778": 6,
+              "02467056-6d65-509e-808b-d538272034fc": 2
+            },
+            "grade": "B"
+          },
+          "goldRefs": [
+            {
+              "sourceFile": "2022年高考数学试卷（新高考Ⅰ卷）（解析卷）.pdf",
+              "sourceSha256": "80e25b3bfa54d21707b954f6c7e65f42fc20c23a50e3115035a779ebb980e2f6",
+              "questionNumber": "11",
+              "questionId": "66689e71-0f07-5efb-a1f4-0f4b5df3320a",
+              "documentRef": "f5522733-121d-5a32-b090-030c0dd5106d",
+              "stemSummary": "已知 O 为坐标原点，点 A(1,1) 在抛物线 C：x²=2py(p>0) 上，过点 B(0,-1) 的直线交 C 于 P，Q 两点，则（ ） A．C 的准线为 y=-1 B．直线 AB 与 C 相切 C．|OP|·|OQ|>|OA|² D．|BP|·|BQ|≥|BA|² O A(1,1) C:\\ x^2=2py,\\ p>0 B(0,-1) y=-1 \\lvert OP\\rvert\\cdot\\lvert OQ\\rvert>\\lvert OA\\rvert^2 \\lvert BP\\rvert\\cdot\\lvert BQ\\rvert\\geq\\lvert BA\\rvert^2",
+              "evidenceTerms": [
+                "抛物线"
+              ]
+            },
+            {
+              "sourceFile": "2022年高考数学试卷（新高考Ⅱ卷）（解析卷）.pdf",
+              "sourceSha256": "ba3f4f7671530f95b342a514a061d792eaeabace73d43e0f11abf498b955ae31",
+              "questionNumber": "10",
+              "questionId": "d9ac3f54-456f-5274-a5a3-da700fa22778",
+              "documentRef": "a6a01cfe-7dfd-5308-8df2-d82fa407858d",
+              "stemSummary": "已知O为坐标原点，过抛物线C：y²=2px(p>0)焦点F的直线与C交于A，B两点。其中A在第一象限，点M(p,0)，若|AF|=|AM|，则（ ） A．直线AB的斜率为2√6 B．|OB|=|OF| C．|AB|>4|OF| D．∠OAM+∠OBM<180° y^2=2px\\,(p>0) M(p,0) |AF|=|AM| 2\\sqrt{6} |OB|=|OF| |AB|>4|OF| \\angle OAM+\\angle OBM<180^\\circ\\n\\n",
+              "evidenceTerms": [
+                "抛物线"
+              ]
+            },
+            {
+              "sourceFile": "2023年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+              "sourceSha256": "e742a18e72afbaee51550c4a509123040094c7819c6f67db11b3e02456f7d118",
+              "questionNumber": "10",
+              "questionId": "02467056-6d65-509e-808b-d538272034fc",
+              "documentRef": "bbf9ac25-3369-55a0-a903-374fe97d8334",
+              "stemSummary": "设 O 为坐标原点，直线 \\(y=-\\sqrt{3}(x-1)\\) 过抛物线 \\(C:y^2=2px\\,(p>0)\\) 的焦点，且与 \\(C\\) 交于 \\(M，N\\) 两点，\\(l\\) 为 \\(C\\) 的准线，则（ ）。 A．\\(p=2\\) B．\\(\\left|MN\\right|=\\frac{8}{3}\\) C．以 \\(MN\\) 为直径的圆与 \\(l\\) 相切 D．\\(\\triangle OMN\\) 为等腰三角形 y=-\\sqrt{3}(x-1) C:y^2=2px\\,(p>0) p=2 \\left|MN\\right|=\\frac{8}{3} \\triangle OMN\\n\\n",
+              "evidenceTerms": [
+                "抛物线"
+              ]
+            }
+          ],
+          "returnedHitCount": 10,
+          "rawTopKDuplicateKeyCount": 0,
+          "rawTopKDuplicateRowCount": 0,
+          "rawTopKLargestRepeatedKeyOccupancy": 1,
+          "rawTopKRepeatedKeys": [],
+          "duplicateHitCountCollapsed": 0,
+          "hits": [
+            {
+              "rank": 1,
+              "rawRank": 1,
+              "recordId": "deb040b6-2964-50d2-a1a9-7960e085140d",
+              "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+              "questionNumber": "10",
+              "questionId": "deb040b6-2964-50d2-a1a9-7960e085140d",
+              "documentRef": "7b1615dd-3104-5585-915c-7b618a72686a",
+              "distance": 0.704777,
+              "textSummary": "抛物线 \\(C：y^2=4x\\) 的准线为 \\(l\\)，\\(P\\) 为 \\(C\\) 上的动点，过 \\(P\\) 作 \\(\\odot A：x^2+(y-4)^2=1\\) 的一条切线，\\(Q\\) 为切点，过 \\(P\\) 作 \\(l\\) 的垂线，垂足为 \\(B\\)，则（ ） A．\\(l\\) 与 \\(\\odot A\\) 相切 C:y^2=4x \\odot A:x^2+(y-4)^2=1\\n\\n",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "抛物线 \\(C：y^2=4x\\) 的准线为 \\(l\\)，\\(P\\) 为 \\(C\\) 上的动点，过 \\(P\\) 作 \\(\\odot A：x^2+(y-4)^2=1\\) 的一条切线，\\(Q\\) 为切点，过 \\(P\\) 作 \\(l\\) 的垂线，垂足为 \\(B\\)，则（ ） A．\\(l\\) 与 \\(\\odot A\\) 相切 C:y^2=4x \\odot A:x^2+(y-4)^2=1\\n\\n",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "6bc10c9b-6d91-532c-8708-93381cc21895",
+                  "20dc7c60-aa95-5cca-a421-b5e762a3e4b3",
+                  "3de59ca8-2905-59bf-a9c8-627531196531"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 2,
+              "rawRank": 2,
+              "recordId": "02467056-6d65-509e-808b-d538272034fc",
+              "sourceFile": "2023年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+              "questionNumber": "10",
+              "questionId": "02467056-6d65-509e-808b-d538272034fc",
+              "documentRef": "bbf9ac25-3369-55a0-a903-374fe97d8334",
+              "distance": 0.67494243,
+              "textSummary": "设 O 为坐标原点，直线 \\(y=-\\sqrt{3}(x-1)\\) 过抛物线 \\(C:y^2=2px\\,(p>0)\\) 的焦点，且与 \\(C\\) 交于 \\(M，N\\) 两点，\\(l\\) 为 \\(C\\) 的准线，则（ ）。 A．\\(p=2\\) B．\\(\\left|MN\\right|=\\frac{8}{3}\\) C．以 \\(MN\\) 为直径的圆与 \\(l\\) 相切 D．\\(\\triangle OMN\\) 为等腰三角形 y=-\\sqrt{3}(x-1) C:y^2=2px\\,(p>0) p=2 \\left|MN\\right|=\\frac{8}{3} \\triangle OMN\\n\\n",
+              "isGold": true,
+              "goldQuestionIds": [
+                "02467056-6d65-509e-808b-d538272034fc"
+              ],
+              "recordType": "question",
+              "stemSummary": "设 O 为坐标原点，直线 \\(y=-\\sqrt{3}(x-1)\\) 过抛物线 \\(C:y^2=2px\\,(p>0)\\) 的焦点，且与 \\(C\\) 交于 \\(M，N\\) 两点，\\(l\\) 为 \\(C\\) 的准线，则（ ）。 A．\\(p=2\\) B．\\(\\left|MN\\right|=\\frac{8}{3}\\) C．以 \\(MN\\) 为直径的圆与 \\(l\\) 相切 D．\\(\\triangle OMN\\) 为等腰三角形 y=-\\sqrt{3}(x-1) C:y^2=2px\\,(p>0) p=2 \\left|MN\\right|=\\frac{8}{3} \\triangle OMN\\n\\n",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "808a7d21-2c7e-57e5-abb6-3adc85282656",
+                  "6225232c-ad4d-547b-9615-930ba39d282a"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 3,
+              "rawRank": 3,
+              "recordId": "7def1f0f-5a9e-56ac-a857-849521fdb062",
+              "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（空白卷）.pdf",
+              "questionNumber": "10",
+              "questionId": "7def1f0f-5a9e-56ac-a857-849521fdb062",
+              "documentRef": "2bbd3635-abb8-5a1f-b3e2-c23a43f91b76",
+              "distance": 0.63431025,
+              "textSummary": "抛物线C：y²=4x的准线为l，P为C上的动点，过P作圆O：x²+(y−4)²=1的一条切线，Q为切点，过P作l的垂线，垂足为B，则（ ） A．l与⊙O相切 B．当P，O，B三点共线时，|PQ|=√15 C．当|PB|=2时，PA⊥AB C:y^2=4x x^2+(y-4)^2=1 |PQ|=\\sqrt{15} |PB|=2 PA\\perp AB",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "抛物线C：y²=4x的准线为l，P为C上的动点，过P作圆O：x²+(y−4)²=1的一条切线，Q为切点，过P作l的垂线，垂足为B，则（ ） A．l与⊙O相切 B．当P，O，B三点共线时，|PQ|=√15 C．当|PB|=2时，PA⊥AB C:y^2=4x x^2+(y-4)^2=1 |PQ|=\\sqrt{15} |PB|=2 PA\\perp AB",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "23e0274b-15e8-57bd-a57a-0e763c4417a2"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 4,
+              "rawRank": 4,
+              "recordId": "a44a3cc1-a48b-5c86-b4d3-d1e6e300bbb3",
+              "sourceFile": "2024年高考数学试卷（天津）（解析卷）.pdf",
+              "questionNumber": "12",
+              "questionId": "a44a3cc1-a48b-5c86-b4d3-d1e6e300bbb3",
+              "documentRef": "784c6c04-7db1-5429-b82a-d76103c8399e",
+              "distance": 0.6192093,
+              "textSummary": "$(x-1)^2+y^2=25$的圆心与抛物线$y^2=2px(p>0)$的焦点$F$重合，$A$为两曲线的交点，则原点到直线$AF$的距离为\\underline{\\hspace{1.5cm}}。 (x-1)^2+y^2=25 y^2=2px(p>0) F A AF\\n\\n",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "$(x-1)^2+y^2=25$的圆心与抛物线$y^2=2px(p>0)$的焦点$F$重合，$A$为两曲线的交点，则原点到直线$AF$的距离为\\underline{\\hspace{1.5cm}}。 (x-1)^2+y^2=25 y^2=2px(p>0) F A AF\\n\\n",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "fbfec15d-acda-5325-9430-5fa98025e97d",
+                  "455ea7f7-9795-5106-94a0-c49d305015a0"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 5,
+              "rawRank": 5,
+              "recordId": "66689e71-0f07-5efb-a1f4-0f4b5df3320a",
+              "sourceFile": "2022年高考数学试卷（新高考Ⅰ卷）（解析卷）.pdf",
+              "questionNumber": "11",
+              "questionId": "66689e71-0f07-5efb-a1f4-0f4b5df3320a",
+              "documentRef": "f5522733-121d-5a32-b090-030c0dd5106d",
+              "distance": 0.59457487,
+              "textSummary": "已知 O 为坐标原点，点 A(1,1) 在抛物线 C：x²=2py(p>0) 上，过点 B(0,-1) 的直线交 C 于 P，Q 两点，则（ ） A．C 的准线为 y=-1 B．直线 AB 与 C 相切 C．|OP|·|OQ|>|OA|² D．|BP|·|BQ|≥|BA|² O A(1,1) C:\\ x^2=2py,\\ p>0 B(0,-1) y=-1 \\lvert OP\\rvert\\cdot\\lvert OQ\\rvert>\\lvert OA\\rvert^2 \\lvert BP\\rvert\\cdot\\lvert BQ\\rvert\\geq\\lvert BA\\rvert^2",
+              "isGold": true,
+              "goldQuestionIds": [
+                "66689e71-0f07-5efb-a1f4-0f4b5df3320a"
+              ],
+              "recordType": "question",
+              "stemSummary": "已知 O 为坐标原点，点 A(1,1) 在抛物线 C：x²=2py(p>0) 上，过点 B(0,-1) 的直线交 C 于 P，Q 两点，则（ ） A．C 的准线为 y=-1 B．直线 AB 与 C 相切 C．|OP|·|OQ|>|OA|² D．|BP|·|BQ|≥|BA|² O A(1,1) C:\\ x^2=2py,\\ p>0 B(0,-1) y=-1 \\lvert OP\\rvert\\cdot\\lvert OQ\\rvert>\\lvert OA\\rvert^2 \\lvert BP\\rvert\\cdot\\lvert BQ\\rvert\\geq\\lvert BA\\rvert^2",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "db964fe6-571b-5045-b00c-99a1e0805d7c"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 6,
+              "rawRank": 6,
+              "recordId": "d9ac3f54-456f-5274-a5a3-da700fa22778",
+              "sourceFile": "2022年高考数学试卷（新高考Ⅱ卷）（解析卷）.pdf",
+              "questionNumber": "10",
+              "questionId": "d9ac3f54-456f-5274-a5a3-da700fa22778",
+              "documentRef": "a6a01cfe-7dfd-5308-8df2-d82fa407858d",
+              "distance": 0.5878177,
+              "textSummary": "已知O为坐标原点，过抛物线C：y²=2px(p>0)焦点F的直线与C交于A，B两点。其中A在第一象限，点M(p,0)，若|AF|=|AM|，则（ ） A．直线AB的斜率为2√6 B．|OB|=|OF| C．|AB|>4|OF| D．∠OAM+∠OBM<180° y^2=2px\\,(p>0) M(p,0) |AF|=|AM| 2\\sqrt{6} |OB|=|OF| |AB|>4|OF| \\angle OAM+\\angle OBM<180^\\circ\\n\\n",
+              "isGold": true,
+              "goldQuestionIds": [
+                "d9ac3f54-456f-5274-a5a3-da700fa22778"
+              ],
+              "recordType": "question",
+              "stemSummary": "已知O为坐标原点，过抛物线C：y²=2px(p>0)焦点F的直线与C交于A，B两点。其中A在第一象限，点M(p,0)，若|AF|=|AM|，则（ ） A．直线AB的斜率为2√6 B．|OB|=|OF| C．|AB|>4|OF| D．∠OAM+∠OBM<180° y^2=2px\\,(p>0) M(p,0) |AF|=|AM| 2\\sqrt{6} |OB|=|OF| |AB|>4|OF| \\angle OAM+\\angle OBM<180^\\circ\\n\\n",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "b2899707-85cb-5890-8295-2ec2dd2f882c",
+                  "b74dbf03-d77b-5bf0-8327-6825a03992c4",
+                  "b80279d3-8b41-58aa-bc41-e934d53c7532"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 7,
+              "rawRank": 7,
+              "recordId": "167736a1-a18d-58d7-980a-de826921c38f",
+              "sourceFile": "2024年高考数学试卷（天津）（空白卷）.pdf",
+              "questionNumber": "12",
+              "questionId": "167736a1-a18d-58d7-980a-de826921c38f",
+              "documentRef": "3240274f-66bf-5562-ba04-df455e553cc8",
+              "distance": 0.57582337,
+              "textSummary": "\\((x-1)^2+y^2=25\\) 的圆心与抛物线 \\(y^2=2px(p>0)\\) 的焦点 \\(F\\) 重合，\\(A\\) 为两曲线的交点，则原点到直线 \\(AF\\) 的距离为\\underline{\\hspace{1.5cm}}。 (x-1)^2+y^2=25 y^2=2px p>0 AF",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "\\((x-1)^2+y^2=25\\) 的圆心与抛物线 \\(y^2=2px(p>0)\\) 的焦点 \\(F\\) 重合，\\(A\\) 为两曲线的交点，则原点到直线 \\(AF\\) 的距离为\\underline{\\hspace{1.5cm}}。 (x-1)^2+y^2=25 y^2=2px p>0 AF",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "51bc140b-15cc-52c7-804b-51707ccfc110"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 8,
+              "rawRank": 8,
+              "recordId": "430d7940-5d72-50a7-8f40-bea0492e3dbc",
+              "sourceFile": "2024年高考数学试卷（新课标Ⅰ卷）（空白卷）.pdf",
+              "questionNumber": "12",
+              "questionId": "430d7940-5d72-50a7-8f40-bea0492e3dbc",
+              "documentRef": "64b54b7d-ba92-5ca7-b249-ec323141ece0",
+              "distance": 0.54687554,
+              "textSummary": "设双曲线C的左右焦点分别为F₁，F₂，过F₂作平行于y轴的直线交C于A，B两点，若|F₁A|=13，|AB|=10，则C的离心率为__________。 C:\\frac{x^2}{a^2}-\\frac{y^2}{b^2}=1\\quad(a>0,b>0) |F_1A|=13 |AB|=10",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "设双曲线C的左右焦点分别为F₁，F₂，过F₂作平行于y轴的直线交C于A，B两点，若|F₁A|=13，|AB|=10，则C的离心率为__________。 C:\\frac{x^2}{a^2}-\\frac{y^2}{b^2}=1\\quad(a>0,b>0) |F_1A|=13 |AB|=10",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "d2da78c5-8024-58f7-9267-5236c2fb17e2"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 9,
+              "rawRank": 9,
+              "recordId": "9bad4853-ba08-5fd0-a564-9a8c85cb6b15",
+              "sourceFile": "2023年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+              "questionNumber": "16",
+              "questionId": "9bad4853-ba08-5fd0-a564-9a8c85cb6b15",
+              "documentRef": "f0931840-c2b6-5a14-8af5-623bbcca2218",
+              "distance": 0.5377984,
+              "textSummary": "已知双曲线 C：x²/a²−y²/b²=1（a>0，b>0）的左、右焦点分别为 F₁，F₂，点 A 在 C 上，点 B 在 y 轴上，\\overrightarrow{F₁A}⊥\\overrightarrow{F₁B}，\\overrightarrow{F₂A}=−2/3\\overrightarrow{F₂B}，则 C 的离心率为________． C:\\frac{x^2}{a^2}-\\frac{y^2}{b^2}=1 a>0 b>0 \\overrightarrow{F_1A}\\perp\\overrightarrow{F_1B} \\overrightarrow{F_2A}=-\\frac{2}{3}\\overrightarrow{F_2B}\\n\\n",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "已知双曲线 C：x²/a²−y²/b²=1（a>0，b>0）的左、右焦点分别为 F₁，F₂，点 A 在 C 上，点 B 在 y 轴上，\\overrightarrow{F₁A}⊥\\overrightarrow{F₁B}，\\overrightarrow{F₂A}=−2/3\\overrightarrow{F₂B}，则 C 的离心率为________． C:\\frac{x^2}{a^2}-\\frac{y^2}{b^2}=1 a>0 b>0 \\overrightarrow{F_1A}\\perp\\overrightarrow{F_1B} \\overrightarrow{F_2A}=-\\frac{2}{3}\\overrightarrow{F_2B}\\n\\n",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "d432c421-b4a4-5f6b-9347-b6ec22ae900a",
+                  "9803d155-a96b-5752-b03f-4049c77be985",
+                  "7d691068-90b1-56cf-af09-b573b0736d16"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 10,
+              "rawRank": 10,
+              "recordId": "eb4170d7-777c-5e4b-8323-b36bd3b72d11",
+              "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+              "questionNumber": "5",
+              "questionId": "eb4170d7-777c-5e4b-8323-b36bd3b72d11",
+              "documentRef": "7b1615dd-3104-5585-915c-7b618a72686a",
+              "distance": 0.53383315,
+              "textSummary": "已知曲线C：x²+y²=16（y>0），从C上任意一点P向x轴作垂线段PP′，P′为垂足，则线段PP′的中点M的轨迹方程为（ ） A．x²/16+y²/4=1（y>0） B．x²/16+y²/8=1（y>0） C．y²/16+x²/4=1（y>0） D．y²/16+x²/8=1（y>0） C:x^2+y^2=16\\ (y>0) \\frac{x^2}{16}+\\frac{y^2}{4}=1\\ (y>0) \\frac{x^2}{16}+\\frac{y^2}{8}=1\\ (y>0) \\frac{y^2}{16}+\\frac{x^2}{4}=1\\ (y>0) \\frac{y^2}{16}+\\frac{x^2}{8}=1\\ (y>0)\\n\\n",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "已知曲线C：x²+y²=16（y>0），从C上任意一点P向x轴作垂线段PP′，P′为垂足，则线段PP′的中点M的轨迹方程为（ ） A．x²/16+y²/4=1（y>0） B．x²/16+y²/8=1（y>0） C．y²/16+x²/4=1（y>0） D．y²/16+x²/8=1（y>0） C:x^2+y^2=16\\ (y>0) \\frac{x^2}{16}+\\frac{y^2}{4}=1\\ (y>0) \\frac{x^2}{16}+\\frac{y^2}{8}=1\\ (y>0) \\frac{y^2}{16}+\\frac{x^2}{4}=1\\ (y>0) \\frac{y^2}{16}+\\frac{x^2}{8}=1\\ (y>0)\\n\\n",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "99574af1-815c-5e96-ac69-30e61176e9df"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            }
+          ],
+          "rowMatches": [
+            {
+              "rank": 1,
+              "rawRank": 1,
+              "goldQuestionIds": []
+            },
+            {
+              "rank": 2,
+              "rawRank": 2,
+              "goldQuestionIds": [
+                "02467056-6d65-509e-808b-d538272034fc"
+              ]
+            },
+            {
+              "rank": 3,
+              "rawRank": 3,
+              "goldQuestionIds": []
+            },
+            {
+              "rank": 4,
+              "rawRank": 4,
+              "goldQuestionIds": []
+            },
+            {
+              "rank": 5,
+              "rawRank": 5,
+              "goldQuestionIds": [
+                "66689e71-0f07-5efb-a1f4-0f4b5df3320a"
+              ]
+            },
+            {
+              "rank": 6,
+              "rawRank": 6,
+              "goldQuestionIds": [
+                "d9ac3f54-456f-5274-a5a3-da700fa22778"
+              ]
+            },
+            {
+              "rank": 7,
+              "rawRank": 7,
+              "goldQuestionIds": []
+            },
+            {
+              "rank": 8,
+              "rawRank": 8,
+              "goldQuestionIds": []
+            },
+            {
+              "rank": 9,
+              "rawRank": 9,
+              "goldQuestionIds": []
+            },
+            {
+              "rank": 10,
+              "rawRank": 10,
+              "goldQuestionIds": []
+            }
+          ]
+        },
+        {
+          "direction": "parabola",
+          "seedSlot": "seed_1",
+          "mode": "seed_stem_only",
+          "evaluationStatus": "invalid_seed_mismatch",
+          "query": "已知集合 \\(A=\\{x\\mid -5<x^3<5\\}\\)，\\(B=\\{-3,-1,0,2,3\\}\\)，则 \\(A\\cap B=\\)（ ） A. \\(\\{-1,0\\}\\) B. \\(\\{2,3\\}\\) C. \\(\\{-3,-1,0\\}\\) D. \\(\\{-1,0,2\\}\\) A=\\{x\\mid -5<x^3<5\\} B=\\{-3,-1,0,2,3\\} A\\cap B \\{-1,0\\} \\{2,3\\} \\{-3,-1,0\\} \\{-1,0,2\\}",
+          "queryInput": "answer-free canonical seed stem",
+          "score": null,
+          "goldRefs": [
+            {
+              "sourceFile": "2022年高考数学试卷（新高考Ⅰ卷）（解析卷）.pdf",
+              "sourceSha256": "80e25b3bfa54d21707b954f6c7e65f42fc20c23a50e3115035a779ebb980e2f6",
+              "questionNumber": "11",
+              "questionId": "66689e71-0f07-5efb-a1f4-0f4b5df3320a",
+              "documentRef": "f5522733-121d-5a32-b090-030c0dd5106d",
+              "stemSummary": "已知 O 为坐标原点，点 A(1,1) 在抛物线 C：x²=2py(p>0) 上，过点 B(0,-1) 的直线交 C 于 P，Q 两点，则（ ） A．C 的准线为 y=-1 B．直线 AB 与 C 相切 C．|OP|·|OQ|>|OA|² D．|BP|·|BQ|≥|BA|² O A(1,1) C:\\ x^2=2py,\\ p>0 B(0,-1) y=-1 \\lvert OP\\rvert\\cdot\\lvert OQ\\rvert>\\lvert OA\\rvert^2 \\lvert BP\\rvert\\cdot\\lvert BQ\\rvert\\geq\\lvert BA\\rvert^2",
+              "evidenceTerms": [
+                "抛物线"
+              ]
+            },
+            {
+              "sourceFile": "2022年高考数学试卷（新高考Ⅱ卷）（解析卷）.pdf",
+              "sourceSha256": "ba3f4f7671530f95b342a514a061d792eaeabace73d43e0f11abf498b955ae31",
+              "questionNumber": "10",
+              "questionId": "d9ac3f54-456f-5274-a5a3-da700fa22778",
+              "documentRef": "a6a01cfe-7dfd-5308-8df2-d82fa407858d",
+              "stemSummary": "已知O为坐标原点，过抛物线C：y²=2px(p>0)焦点F的直线与C交于A，B两点。其中A在第一象限，点M(p,0)，若|AF|=|AM|，则（ ） A．直线AB的斜率为2√6 B．|OB|=|OF| C．|AB|>4|OF| D．∠OAM+∠OBM<180° y^2=2px\\,(p>0) M(p,0) |AF|=|AM| 2\\sqrt{6} |OB|=|OF| |AB|>4|OF| \\angle OAM+\\angle OBM<180^\\circ\\n\\n",
+              "evidenceTerms": [
+                "抛物线"
+              ]
+            },
+            {
+              "sourceFile": "2023年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+              "sourceSha256": "e742a18e72afbaee51550c4a509123040094c7819c6f67db11b3e02456f7d118",
+              "questionNumber": "10",
+              "questionId": "02467056-6d65-509e-808b-d538272034fc",
+              "documentRef": "bbf9ac25-3369-55a0-a903-374fe97d8334",
+              "stemSummary": "设 O 为坐标原点，直线 \\(y=-\\sqrt{3}(x-1)\\) 过抛物线 \\(C:y^2=2px\\,(p>0)\\) 的焦点，且与 \\(C\\) 交于 \\(M，N\\) 两点，\\(l\\) 为 \\(C\\) 的准线，则（ ）。 A．\\(p=2\\) B．\\(\\left|MN\\right|=\\frac{8}{3}\\) C．以 \\(MN\\) 为直径的圆与 \\(l\\) 相切 D．\\(\\triangle OMN\\) 为等腰三角形 y=-\\sqrt{3}(x-1) C:y^2=2px\\,(p>0) p=2 \\left|MN\\right|=\\frac{8}{3} \\triangle OMN\\n\\n",
+              "evidenceTerms": [
+                "抛物线"
+              ]
+            }
+          ],
+          "returnedHitCount": 10,
+          "rawTopKDuplicateKeyCount": 0,
+          "rawTopKDuplicateRowCount": 0,
+          "rawTopKLargestRepeatedKeyOccupancy": 1,
+          "rawTopKRepeatedKeys": [],
+          "duplicateHitCountCollapsed": 0,
+          "hits": [
+            {
+              "rank": 1,
+              "rawRank": 1,
+              "recordId": "6509db02-7f15-5435-a298-a9d152da368b",
+              "sourceFile": "2024年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+              "questionNumber": "1",
+              "questionId": "6509db02-7f15-5435-a298-a9d152da368b",
+              "documentRef": "755aa477-bc93-5d7c-b504-3f4e2991feef",
+              "distance": 0.7598045,
+              "textSummary": "已知集合 \\(A=\\{x\\mid -5<x^3<5\\}\\)，\\(B=\\{-3,-1,0,2,3\\}\\)，则 \\(A\\cap B=\\)（ ） A. \\(\\{-1,0\\}\\) B. \\(\\{2,3\\}\\) C. \\(\\{-3,-1,0\\}\\) D. \\(\\{-1,0,2\\}\\) A=\\{x\\mid -5<x^3<5\\} B=\\{-3,-1,0,2,3\\} A\\cap B \\{-1,0\\} \\{2,3\\} \\{-3,-1,0\\} \\{-1,0,2\\}",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "已知集合 \\(A=\\{x\\mid -5<x^3<5\\}\\)，\\(B=\\{-3,-1,0,2,3\\}\\)，则 \\(A\\cap B=\\)（ ） A. \\(\\{-1,0\\}\\) B. \\(\\{2,3\\}\\) C. \\(\\{-3,-1,0\\}\\) D. \\(\\{-1,0,2\\}\\) A=\\{x\\mid -5<x^3<5\\} B=\\{-3,-1,0,2,3\\} A\\cap B \\{-1,0\\} \\{2,3\\} \\{-3,-1,0\\} \\{-1,0,2\\}",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "1a2f78a2-2481-59fd-b5b5-39b84eba74c9"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 2,
+              "rawRank": 2,
+              "recordId": "b8db8f0d-a766-58a4-83db-8e44da8d56e6",
+              "sourceFile": "2024年高考数学试卷（天津）（解析卷）.pdf",
+              "questionNumber": "1",
+              "questionId": "b8db8f0d-a766-58a4-83db-8e44da8d56e6",
+              "documentRef": "784c6c04-7db1-5429-b82a-d76103c8399e",
+              "distance": 0.7585354,
+              "textSummary": "集合 A={1,2,3,4}，B={2,3,4,5}，则 A∩B=（ ） A．{1,2,3,4} B．{2,3,4} C．{2,4} D．{1} A=\\{1,2,3,4\\} B=\\{2,3,4,5\\} A\\cap B \\{1,2,3,4\\} \\{2,3,4\\} \\{2,4\\} \\{1\\}\\n\\n",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "集合 A={1,2,3,4}，B={2,3,4,5}，则 A∩B=（ ） A．{1,2,3,4} B．{2,3,4} C．{2,4} D．{1} A=\\{1,2,3,4\\} B=\\{2,3,4,5\\} A\\cap B \\{1,2,3,4\\} \\{2,3,4\\} \\{2,4\\} \\{1\\}\\n\\n",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "6d61394d-2bf3-5425-bd8b-3cf8b69d23db",
+                  "6437d441-a024-5b63-a6ff-278773b4f7f6"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 3,
+              "rawRank": 3,
+              "recordId": "4cbfd585-e544-5c52-b1c4-2c0130b115a2",
+              "sourceFile": "2023年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+              "questionNumber": "1",
+              "questionId": "4cbfd585-e544-5c52-b1c4-2c0130b115a2",
+              "documentRef": "f0931840-c2b6-5a14-8af5-623bbcca2218",
+              "distance": 0.75708103,
+              "textSummary": "已知集合 \\(M=\\{-2,-1,0,1,2\\}\\)，\\(N=\\{x\\mid x^2-x-6\\geq0\\}\\)，则 \\(M\\cap N=\\)（ ） A．\\(\\{-2,-1,0,1\\}\\) B．\\(\\{0,1,2\\}\\) C．\\(\\{-2\\}\\) D．\\(2\\) M=\\{-2,-1,0,1,2\\} N=\\{x\\mid x^2-x-6\\geq0\\} M\\cap N \\{-2,-1,0,1\\} \\{0,1,2\\} \\{-2\\} 2\\n\\n",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "已知集合 \\(M=\\{-2,-1,0,1,2\\}\\)，\\(N=\\{x\\mid x^2-x-6\\geq0\\}\\)，则 \\(M\\cap N=\\)（ ） A．\\(\\{-2,-1,0,1\\}\\) B．\\(\\{0,1,2\\}\\) C．\\(\\{-2\\}\\) D．\\(2\\) M=\\{-2,-1,0,1,2\\} N=\\{x\\mid x^2-x-6\\geq0\\} M\\cap N \\{-2,-1,0,1\\} \\{0,1,2\\} \\{-2\\} 2\\n\\n",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "47fe8e6e-6a34-5b03-8557-512de12cddbe",
+                  "e8dc1497-6fbb-510d-b785-cec6a57ae785"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 4,
+              "rawRank": 4,
+              "recordId": "70965f1d-50f6-50a3-b196-9b6fa61c3a52",
+              "sourceFile": "2023年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+              "questionNumber": "2",
+              "questionId": "70965f1d-50f6-50a3-b196-9b6fa61c3a52",
+              "documentRef": "bbf9ac25-3369-55a0-a903-374fe97d8334",
+              "distance": 0.75234663,
+              "textSummary": "设集合 \\(A=\\{0,-a\\}\\)，\\(B=\\{1,a-2,2a-2\\}\\)，若 \\(A\\subseteq B\\)，则 \\(a=\\)（ ）。 A．2 B．1 C．\\(\\frac{2}{3}\\) D．-1 A=\\{0,-a\\} B=\\{1,a-2,2a-2\\} A\\subseteq B \\frac{2}{3}\\n\\n",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "设集合 \\(A=\\{0,-a\\}\\)，\\(B=\\{1,a-2,2a-2\\}\\)，若 \\(A\\subseteq B\\)，则 \\(a=\\)（ ）。 A．2 B．1 C．\\(\\frac{2}{3}\\) D．-1 A=\\{0,-a\\} B=\\{1,a-2,2a-2\\} A\\subseteq B \\frac{2}{3}\\n\\n",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "6a2f3993-07f8-53d7-b2eb-6ad8c44a618a",
+                  "29ce4a5d-77cc-5982-aed1-148bd4ce39dc"
+                ],
+                "controlledManifestResolution": "pass",
+                "controlledManifestFigureCount": 1,
+                "canonicalFigureReferences": [
+                  "figures/q-002-01.png"
+                ],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 5,
+              "rawRank": 5,
+              "recordId": "2621553f-b197-5b4e-9eea-0f7bdc4418ae",
+              "sourceFile": "2022年高考数学试卷（新高考Ⅱ卷）（解析卷）.pdf",
+              "questionNumber": "1",
+              "questionId": "2621553f-b197-5b4e-9eea-0f7bdc4418ae",
+              "documentRef": "a6a01cfe-7dfd-5308-8df2-d82fa407858d",
+              "distance": 0.74949,
+              "textSummary": "已知集合 A={-1,1,2,4}，B={x||x-1|≤1}，则 A∩B=（ ） A．{-1,2} B．{1,2} C．{1,4} D．{-1,4} A=\\{-1,1,2,4\\} B=\\left\\{x\\mid \\left|x-1\\right|\\leq 1\\right\\} A\\cap B \\{-1,2\\} \\{1,2\\} \\{1,4\\} \\{-1,4\\}",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "已知集合 A={-1,1,2,4}，B={x||x-1|≤1}，则 A∩B=（ ） A．{-1,2} B．{1,2} C．{1,4} D．{-1,4} A=\\{-1,1,2,4\\} B=\\left\\{x\\mid \\left|x-1\\right|\\leq 1\\right\\} A\\cap B \\{-1,2\\} \\{1,2\\} \\{1,4\\} \\{-1,4\\}",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "0ef23b53-bb11-5c7d-97c1-8cb23dfb1cbb"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 6,
+              "rawRank": 6,
+              "recordId": "68247586-223d-52e1-8319-ae967d570e4a",
+              "sourceFile": "2024年高考数学试卷（新课标Ⅰ卷）（空白卷）.pdf",
+              "questionNumber": "1",
+              "questionId": "68247586-223d-52e1-8319-ae967d570e4a",
+              "documentRef": "64b54b7d-ba92-5ca7-b249-ec323141ece0",
+              "distance": 0.7471038,
+              "textSummary": "已知集合 A={x|-5<x³<5}, B={-3,-1,0,2,3}，则 A∩B=（ ） A．{-1,0} B．{2,3} C．{-3,-1,0} D．{-1,0,2} A=\\{x\\mid -5<x^3<5\\} B=\\{-3,-1,0,2,3\\} A\\cap B \\{-1,0\\} \\{2,3\\} \\{-3,-1,0\\} \\{-1,0,2\\}",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "已知集合 A={x|-5<x³<5}, B={-3,-1,0,2,3}，则 A∩B=（ ） A．{-1,0} B．{2,3} C．{-3,-1,0} D．{-1,0,2} A=\\{x\\mid -5<x^3<5\\} B=\\{-3,-1,0,2,3\\} A\\cap B \\{-1,0\\} \\{2,3\\} \\{-3,-1,0\\} \\{-1,0,2\\}",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "1ba89205-af6c-5f74-b9f8-fd170760b07e"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 7,
+              "rawRank": 7,
+              "recordId": "00f709fe-f898-52dd-a20f-ee464229378a",
+              "sourceFile": "2024年高考数学试卷（理）（全国甲卷）（解析卷）.pdf",
+              "questionNumber": "2",
+              "questionId": "00f709fe-f898-52dd-a20f-ee464229378a",
+              "documentRef": "a98cedd8-4988-5d8f-87f7-f9d27f63cd9c",
+              "distance": 0.73955405,
+              "textSummary": "集合 A={1,2,3,4,5,9}，B={x\\mid\\sqrt{x}\\in A}，则 C_A(A\\cap B)=（ ） A．{1,4,9} B．{3,4,9} C．{1,2,3} D．{2,3,5} A=\\{1,2,3,4,5,9\\} B=\\{x\\mid\\sqrt{x}\\in A\\} C_A(A\\cap B) \\{1,4,9\\} \\{3,4,9\\} \\{1,2,3\\} \\{2,3,5\\}\\n\\n",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "集合 A={1,2,3,4,5,9}，B={x\\mid\\sqrt{x}\\in A}，则 C_A(A\\cap B)=（ ） A．{1,4,9} B．{3,4,9} C．{1,2,3} D．{2,3,5} A=\\{1,2,3,4,5,9\\} B=\\{x\\mid\\sqrt{x}\\in A\\} C_A(A\\cap B) \\{1,4,9\\} \\{3,4,9\\} \\{1,2,3\\} \\{2,3,5\\}\\n\\n",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "c9068665-7fe3-5c41-849d-6d63a606a727",
+                  "c6c509e5-8f80-556a-ae1f-640922a5c431"
+                ],
+                "controlledManifestResolution": "pass",
+                "controlledManifestFigureCount": 1,
+                "canonicalFigureReferences": [
+                  "figures/q-002-01.png"
+                ],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 8,
+              "rawRank": 8,
+              "recordId": "6d3fb1b3-f094-53ff-95d4-e1735c94fa54",
+              "sourceFile": "2022年高考数学试卷（新高考Ⅰ卷）（解析卷）.pdf",
+              "questionNumber": "1",
+              "questionId": "6d3fb1b3-f094-53ff-95d4-e1735c94fa54",
+              "documentRef": "f5522733-121d-5a32-b090-030c0dd5106d",
+              "distance": 0.7311976,
+              "textSummary": "若集合 M={x|√x<4}，N={x|3x≥1}，则 M∩N=（ ） A．{x|0≤x<2} B．{x|1/3≤x<2} C．{x|3≤x<16} D．{x|1/3≤x<16} M=\\{x\\mid \\sqrt{x}<4\\} N=\\{x\\mid 3x\\geq 1\\} M\\cap N \\{x\\mid 0\\leq x<2\\} \\left\\{x\\mid \\frac{1}{3}\\leq x<2\\right\\} \\{x\\mid 3\\leq x<16\\} \\left\\{x\\mid \\frac{1}{3}\\leq x<16\\right\\}",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "若集合 M={x|√x<4}，N={x|3x≥1}，则 M∩N=（ ） A．{x|0≤x<2} B．{x|1/3≤x<2} C．{x|3≤x<16} D．{x|1/3≤x<16} M=\\{x\\mid \\sqrt{x}<4\\} N=\\{x\\mid 3x\\geq 1\\} M\\cap N \\{x\\mid 0\\leq x<2\\} \\left\\{x\\mid \\frac{1}{3}\\leq x<2\\right\\} \\{x\\mid 3\\leq x<16\\} \\left\\{x\\mid \\frac{1}{3}\\leq x<16\\right\\}",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "1f9cee66-c5cb-5785-9c8d-f8fc6956657f",
+                  "2e4b4bb5-819e-57f2-9847-6b59d69b8835"
+                ],
+                "controlledManifestResolution": "pass",
+                "controlledManifestFigureCount": 1,
+                "canonicalFigureReferences": [
+                  "figures/q-001-01.png"
+                ],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 9,
+              "rawRank": 9,
+              "recordId": "e8b17f0b-9742-5958-8649-d2fdb51b0fd0",
+              "sourceFile": "2024年高考数学试卷（理）（全国甲卷）（解析卷）.pdf",
+              "questionNumber": "9",
+              "questionId": "e8b17f0b-9742-5958-8649-d2fdb51b0fd0",
+              "documentRef": "a98cedd8-4988-5d8f-87f7-f9d27f63cd9c",
+              "distance": 0.7302801,
+              "textSummary": "已知向量 \\(\\vec{a}=(x+1,x),\\vec{b}=(x,2)\\)，则（ ） A．“\\(x=-3\\)”是“\\(\\vec{a}\\perp\\vec{b}\\)”的必要条件 B．“\\(x=-3\\)”是“\\(\\vec{a}\\parallel\\vec{b}\\)”的必要条件 C．“\\(x=0\\)”是“\\(\\vec{a}\\perp\\vec{b}\\)”的充分条件 D．“\\(x=-1+\\sqrt{3}\\)”是“\\(\\vec{a}\\parallel\\vec{b}\\)”的充分条件 \\vec{a}=(x+1,x) \\vec{b}=(x,2) x=-3 \\vec{a}\\perp\\vec{b} \\vec{a}\\parallel\\vec{b} x=0 x=-1+\\sqrt{3}\\n\\n",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "已知向量 \\(\\vec{a}=(x+1,x),\\vec{b}=(x,2)\\)，则（ ） A．“\\(x=-3\\)”是“\\(\\vec{a}\\perp\\vec{b}\\)”的必要条件 B．“\\(x=-3\\)”是“\\(\\vec{a}\\parallel\\vec{b}\\)”的必要条件 C．“\\(x=0\\)”是“\\(\\vec{a}\\perp\\vec{b}\\)”的充分条件 D．“\\(x=-1+\\sqrt{3}\\)”是“\\(\\vec{a}\\parallel\\vec{b}\\)”的充分条件 \\vec{a}=(x+1,x) \\vec{b}=(x,2) x=-3 \\vec{a}\\perp\\vec{b} \\vec{a}\\parallel\\vec{b} x=0 x=-1+\\sqrt{3}\\n\\n",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "c4846eb0-9597-5c65-b9a2-2c20691bdabc"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 10,
+              "rawRank": 10,
+              "recordId": "0b102118-b8a0-5836-aff2-5dc76d46bf79",
+              "sourceFile": "2022年高考数学试卷（新高考Ⅰ卷）（解析卷）.pdf",
+              "questionNumber": "2",
+              "questionId": "0b102118-b8a0-5836-aff2-5dc76d46bf79",
+              "documentRef": "f5522733-121d-5a32-b090-030c0dd5106d",
+              "distance": 0.720114,
+              "textSummary": "若 i(1-z)=1，则 z+z̄=（ ） A．-2 B．-1 C．1 D．2 i(1-z)=1 z+\\overline{z} -2 -1 1 2\\n\\n",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "若 i(1-z)=1，则 z+z̄=（ ） A．-2 B．-1 C．1 D．2 i(1-z)=1 z+\\overline{z} -2 -1 1 2\\n\\n",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "2e4b4bb5-819e-57f2-9847-6b59d69b8835",
+                  "eb38e820-fa80-5a3e-a59d-24e0393976f2"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            }
+          ],
+          "rowMatches": []
+        },
+        {
+          "direction": "parabola",
+          "seedSlot": "seed_1",
+          "mode": "aligned_topic_plus_stem",
+          "evaluationStatus": "not_run_seed_mismatch",
+          "query": null,
+          "score": null,
+          "hits": [],
+          "goldRefs": [
+            {
+              "sourceFile": "2022年高考数学试卷（新高考Ⅰ卷）（解析卷）.pdf",
+              "sourceSha256": "80e25b3bfa54d21707b954f6c7e65f42fc20c23a50e3115035a779ebb980e2f6",
+              "questionNumber": "11",
+              "questionId": "66689e71-0f07-5efb-a1f4-0f4b5df3320a",
+              "documentRef": "f5522733-121d-5a32-b090-030c0dd5106d",
+              "stemSummary": "已知 O 为坐标原点，点 A(1,1) 在抛物线 C：x²=2py(p>0) 上，过点 B(0,-1) 的直线交 C 于 P，Q 两点，则（ ） A．C 的准线为 y=-1 B．直线 AB 与 C 相切 C．|OP|·|OQ|>|OA|² D．|BP|·|BQ|≥|BA|² O A(1,1) C:\\ x^2=2py,\\ p>0 B(0,-1) y=-1 \\lvert OP\\rvert\\cdot\\lvert OQ\\rvert>\\lvert OA\\rvert^2 \\lvert BP\\rvert\\cdot\\lvert BQ\\rvert\\geq\\lvert BA\\rvert^2",
+              "evidenceTerms": [
+                "抛物线"
+              ]
+            },
+            {
+              "sourceFile": "2022年高考数学试卷（新高考Ⅱ卷）（解析卷）.pdf",
+              "sourceSha256": "ba3f4f7671530f95b342a514a061d792eaeabace73d43e0f11abf498b955ae31",
+              "questionNumber": "10",
+              "questionId": "d9ac3f54-456f-5274-a5a3-da700fa22778",
+              "documentRef": "a6a01cfe-7dfd-5308-8df2-d82fa407858d",
+              "stemSummary": "已知O为坐标原点，过抛物线C：y²=2px(p>0)焦点F的直线与C交于A，B两点。其中A在第一象限，点M(p,0)，若|AF|=|AM|，则（ ） A．直线AB的斜率为2√6 B．|OB|=|OF| C．|AB|>4|OF| D．∠OAM+∠OBM<180° y^2=2px\\,(p>0) M(p,0) |AF|=|AM| 2\\sqrt{6} |OB|=|OF| |AB|>4|OF| \\angle OAM+\\angle OBM<180^\\circ\\n\\n",
+              "evidenceTerms": [
+                "抛物线"
+              ]
+            },
+            {
+              "sourceFile": "2023年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+              "sourceSha256": "e742a18e72afbaee51550c4a509123040094c7819c6f67db11b3e02456f7d118",
+              "questionNumber": "10",
+              "questionId": "02467056-6d65-509e-808b-d538272034fc",
+              "documentRef": "bbf9ac25-3369-55a0-a903-374fe97d8334",
+              "stemSummary": "设 O 为坐标原点，直线 \\(y=-\\sqrt{3}(x-1)\\) 过抛物线 \\(C:y^2=2px\\,(p>0)\\) 的焦点，且与 \\(C\\) 交于 \\(M，N\\) 两点，\\(l\\) 为 \\(C\\) 的准线，则（ ）。 A．\\(p=2\\) B．\\(\\left|MN\\right|=\\frac{8}{3}\\) C．以 \\(MN\\) 为直径的圆与 \\(l\\) 相切 D．\\(\\triangle OMN\\) 为等腰三角形 y=-\\sqrt{3}(x-1) C:y^2=2px\\,(p>0) p=2 \\left|MN\\right|=\\frac{8}{3} \\triangle OMN\\n\\n",
+              "evidenceTerms": [
+                "抛物线"
+              ]
+            }
+          ],
+          "note": "aligned topic+stem is intentionally skipped because the assigned seed stem is not aligned"
+        }
+      ],
+      "metricsByMode": {
+        "topic_only": {
+          "evaluationStatus": "evaluated",
+          "score": {
+            "topKHit": true,
+            "goldCount": 3,
+            "relevantHitCount": 3,
+            "falsePositiveCount": 7,
+            "returnedUniqueHitCount": 10,
+            "recallAtK": 1.0,
+            "precisionAtK": 0.3,
+            "mrr": 0.5,
+            "nDCGAtK": 0.644784,
+            "firstGoldHitRank": 2,
+            "goldHitRanks": {
+              "66689e71-0f07-5efb-a1f4-0f4b5df3320a": 5,
+              "d9ac3f54-456f-5274-a5a3-da700fa22778": 6,
+              "02467056-6d65-509e-808b-d538272034fc": 2
+            },
+            "grade": "B"
+          }
+        },
+        "seed_stem_only": {
+          "evaluationStatus": "invalid_seed_mismatch",
+          "score": null
+        },
+        "aligned_topic_plus_stem": {
+          "evaluationStatus": "not_run_seed_mismatch",
+          "score": null
+        }
+      }
+    },
+    "probability_statistics": {
+      "seed": {
+        "seedSlot": "seed_3",
+        "questionNumber": "3",
+        "sourceFile": "2023年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+        "questionId": "d9df4afe-a52d-5f30-912d-b082b80b4a61",
+        "topicAlignment": {
+          "aligned": true,
+          "evidenceTerms": [
+            "随机抽样"
+          ],
+          "decision": "aligned_by_stem_evidence"
+        }
+      },
+      "goldSelection": {
+        "supervision": "weak_supervision_manual_audit",
+        "authoritativeKnowledgeLabelsPresent": false,
+        "evidenceSource": "canonical question stem before answer/solution markers",
+        "rule": "stem contains at least one configured strong domain evidence term; deterministic source-diverse ordering; seed questionIds excluded",
+        "configuredEvidenceTerms": [
+          "概率",
+          "随机抽样",
+          "频率",
+          "正态分布",
+          "频数",
+          "相关性"
+        ],
+        "candidateCount": 23,
+        "excludedSeedCount": 1,
+        "selectedCount": 3
+      },
+      "goldRefs": [
+        {
+          "sourceFile": "2022年高考数学试卷（新高考Ⅰ卷）（解析卷）.pdf",
+          "sourceSha256": "80e25b3bfa54d21707b954f6c7e65f42fc20c23a50e3115035a779ebb980e2f6",
+          "questionNumber": "5",
+          "questionId": "723e74f5-c965-59ab-ac06-8e6acb9edf68",
+          "documentRef": "f5522733-121d-5a32-b090-030c0dd5106d",
+          "stemSummary": "从2至8的7个整数中随机取2个不同的数，则这2个数互质的概率为（ ） A．\\(\\frac{1}{6}\\) B．\\(\\frac{1}{3}\\) C．\\(\\frac{1}{2}\\) D．\\(\\frac{2}{3}\\) \\frac{1}{6} \\frac{1}{3} \\frac{1}{2} \\frac{2}{3}\\n\\n",
+          "evidenceTerms": [
+            "概率"
+          ]
+        },
+        {
+          "sourceFile": "2022年高考数学试卷（新高考Ⅱ卷）（解析卷）.pdf",
+          "sourceSha256": "ba3f4f7671530f95b342a514a061d792eaeabace73d43e0f11abf498b955ae31",
+          "questionNumber": "13",
+          "questionId": "a0866723-c600-5790-80f0-fc72800fb673",
+          "documentRef": "a6a01cfe-7dfd-5308-8df2-d82fa407858d",
+          "stemSummary": "已知随机变量\\(X\\)服从正态分布\\(N(2,\\sigma^2)\\)，且\\(P(2<X\\leq2.5)=0.36\\)，则\\(P(X>2.5)=\\)________。 X\\sim N(2,\\sigma^2) P(2<X\\leq2.5)=0.36 P(X>2.5)\\n\\n",
+          "evidenceTerms": [
+            "正态分布"
+          ]
+        },
+        {
+          "sourceFile": "2023年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+          "sourceSha256": "e8add182bfb613712c493c9f4500392bc8086457cf531b0211d213dc12956052",
+          "questionNumber": "21",
+          "questionId": "708ae244-8a55-5e4b-b6f6-0ae4321e0a05",
+          "documentRef": "f0931840-c2b6-5a14-8af5-623bbcca2218",
+          "stemSummary": "甲、乙两人投篮，每次由其中一人投篮，规则如下：若命中则此人继续投篮，若未命中则换为对方投篮。无论之前投篮情况如何，甲每次投篮的命中率均为0.6，乙每次投篮的命中率均为0.8。由抽签确定第1次投篮的人选，第1次投篮的人是甲、乙的概率各为0.5。 （1）求第2次投篮的人是乙的概率； （2）求第i次投篮的人是甲的概率； （3）已知：若随机变量 \\(X_i\\) 服从两点分布，且 \\(P(X_i=1)=1-P(X_i=0)=q_i,\\ i=1,2,\\cdots,n\\)，则 \\(E\\left(\\sum_{i=1}^{n}X_i\\right)=\\sum_{i=1}^{n}q_i\\)。记前n次（即从第1次到第n次投篮）中甲投篮的次数为Y，求 \\(E(Y)\\)。 0.6 0.8 0.5 P(X_i=1)=1-P(X_i=0)=q...",
+          "evidenceTerms": [
+            "概率"
+          ]
+        }
+      ],
+      "queryEvaluations": [
+        {
+          "direction": "probability_statistics",
+          "seedSlot": "seed_3",
+          "mode": "topic_only",
+          "evaluationStatus": "evaluated",
+          "query": "概率 统计 随机抽样 频率 分布",
+          "queryInput": "topic terms only",
+          "score": {
+            "topKHit": true,
+            "goldCount": 3,
+            "relevantHitCount": 2,
+            "falsePositiveCount": 8,
+            "returnedUniqueHitCount": 10,
+            "recallAtK": 0.666667,
+            "precisionAtK": 0.2,
+            "mrr": 1.0,
+            "nDCGAtK": 0.636439,
+            "firstGoldHitRank": 1,
+            "goldHitRanks": {
+              "723e74f5-c965-59ab-ac06-8e6acb9edf68": 1,
+              "a0866723-c600-5790-80f0-fc72800fb673": 6,
+              "708ae244-8a55-5e4b-b6f6-0ae4321e0a05": null
+            },
+            "grade": "A"
+          },
+          "goldRefs": [
+            {
+              "sourceFile": "2022年高考数学试卷（新高考Ⅰ卷）（解析卷）.pdf",
+              "sourceSha256": "80e25b3bfa54d21707b954f6c7e65f42fc20c23a50e3115035a779ebb980e2f6",
+              "questionNumber": "5",
+              "questionId": "723e74f5-c965-59ab-ac06-8e6acb9edf68",
+              "documentRef": "f5522733-121d-5a32-b090-030c0dd5106d",
+              "stemSummary": "从2至8的7个整数中随机取2个不同的数，则这2个数互质的概率为（ ） A．\\(\\frac{1}{6}\\) B．\\(\\frac{1}{3}\\) C．\\(\\frac{1}{2}\\) D．\\(\\frac{2}{3}\\) \\frac{1}{6} \\frac{1}{3} \\frac{1}{2} \\frac{2}{3}\\n\\n",
+              "evidenceTerms": [
+                "概率"
+              ]
+            },
+            {
+              "sourceFile": "2022年高考数学试卷（新高考Ⅱ卷）（解析卷）.pdf",
+              "sourceSha256": "ba3f4f7671530f95b342a514a061d792eaeabace73d43e0f11abf498b955ae31",
+              "questionNumber": "13",
+              "questionId": "a0866723-c600-5790-80f0-fc72800fb673",
+              "documentRef": "a6a01cfe-7dfd-5308-8df2-d82fa407858d",
+              "stemSummary": "已知随机变量\\(X\\)服从正态分布\\(N(2,\\sigma^2)\\)，且\\(P(2<X\\leq2.5)=0.36\\)，则\\(P(X>2.5)=\\)________。 X\\sim N(2,\\sigma^2) P(2<X\\leq2.5)=0.36 P(X>2.5)\\n\\n",
+              "evidenceTerms": [
+                "正态分布"
+              ]
+            },
+            {
+              "sourceFile": "2023年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+              "sourceSha256": "e8add182bfb613712c493c9f4500392bc8086457cf531b0211d213dc12956052",
+              "questionNumber": "21",
+              "questionId": "708ae244-8a55-5e4b-b6f6-0ae4321e0a05",
+              "documentRef": "f0931840-c2b6-5a14-8af5-623bbcca2218",
+              "stemSummary": "甲、乙两人投篮，每次由其中一人投篮，规则如下：若命中则此人继续投篮，若未命中则换为对方投篮。无论之前投篮情况如何，甲每次投篮的命中率均为0.6，乙每次投篮的命中率均为0.8。由抽签确定第1次投篮的人选，第1次投篮的人是甲、乙的概率各为0.5。 （1）求第2次投篮的人是乙的概率； （2）求第i次投篮的人是甲的概率； （3）已知：若随机变量 \\(X_i\\) 服从两点分布，且 \\(P(X_i=1)=1-P(X_i=0)=q_i,\\ i=1,2,\\cdots,n\\)，则 \\(E\\left(\\sum_{i=1}^{n}X_i\\right)=\\sum_{i=1}^{n}q_i\\)。记前n次（即从第1次到第n次投篮）中甲投篮的次数为Y，求 \\(E(Y)\\)。 0.6 0.8 0.5 P(X_i=1)=1-P(X_i=0)=q...",
+              "evidenceTerms": [
+                "概率"
+              ]
+            }
+          ],
+          "returnedHitCount": 10,
+          "rawTopKDuplicateKeyCount": 0,
+          "rawTopKDuplicateRowCount": 0,
+          "rawTopKLargestRepeatedKeyOccupancy": 1,
+          "rawTopKRepeatedKeys": [],
+          "duplicateHitCountCollapsed": 0,
+          "hits": [
+            {
+              "rank": 1,
+              "rawRank": 1,
+              "recordId": "723e74f5-c965-59ab-ac06-8e6acb9edf68",
+              "sourceFile": "2022年高考数学试卷（新高考Ⅰ卷）（解析卷）.pdf",
+              "questionNumber": "5",
+              "questionId": "723e74f5-c965-59ab-ac06-8e6acb9edf68",
+              "documentRef": "f5522733-121d-5a32-b090-030c0dd5106d",
+              "distance": 0.6412691,
+              "textSummary": "从2至8的7个整数中随机取2个不同的数，则这2个数互质的概率为（ ） A．\\(\\frac{1}{6}\\) B．\\(\\frac{1}{3}\\) C．\\(\\frac{1}{2}\\) D．\\(\\frac{2}{3}\\) \\frac{1}{6} \\frac{1}{3} \\frac{1}{2} \\frac{2}{3}\\n\\n",
+              "isGold": true,
+              "goldQuestionIds": [
+                "723e74f5-c965-59ab-ac06-8e6acb9edf68"
+              ],
+              "recordType": "question",
+              "stemSummary": "从2至8的7个整数中随机取2个不同的数，则这2个数互质的概率为（ ） A．\\(\\frac{1}{6}\\) B．\\(\\frac{1}{3}\\) C．\\(\\frac{1}{2}\\) D．\\(\\frac{2}{3}\\) \\frac{1}{6} \\frac{1}{3} \\frac{1}{2} \\frac{2}{3}\\n\\n",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "21b3c02f-9e59-50eb-b6c8-6f0599689133"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 2,
+              "rawRank": 2,
+              "recordId": "2bc6c60a-f556-5ab8-878d-ae9c758ee6df",
+              "sourceFile": "2022年高考数学试卷（新高考Ⅱ卷）（解析卷）.pdf",
+              "questionNumber": "19",
+              "questionId": "2bc6c60a-f556-5ab8-878d-ae9c758ee6df",
+              "documentRef": "a6a01cfe-7dfd-5308-8df2-d82fa407858d",
+              "distance": 0.63147056,
+              "textSummary": "在某地区进行流行病学调查，随机调查了100位某种疾病患者的年龄，得到如下的样本数据的频率分布直方图： （1）估计该地区这种疾病患者的平均年龄（同一组中的数据用该区间的中点值为代表）； （2）估计该地区一位这种疾病患者的年龄位于区间[20,70)的概率； （3）已知该地区这种疾病的患病率为0.1%；该地区年龄位于区间[40,50)的人口占该地区总人口的16%. 从该地区中任选一人，若此人的年龄位于区间[40,50)，求此人患这种疾病的概率．（以样本数据中患者的年龄位于各区间的频率作为患者的年龄位于该区间的概率，精确到0.0001）． \\text{频率}/\\text{组距} \\text{年龄}/\\text{岁} [20,70) [40,50) 0.1\\% 16\\%\\n\\n",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "在某地区进行流行病学调查，随机调查了100位某种疾病患者的年龄，得到如下的样本数据的频率分布直方图： （1）估计该地区这种疾病患者的平均年龄（同一组中的数据用该区间的中点值为代表）； （2）估计该地区一位这种疾病患者的年龄位于区间[20,70)的概率； （3）已知该地区这种疾病的患病率为0.1%；该地区年龄位于区间[40,50)的人口占该地区总人口的16%. 从该地区中任选一人，若此人的年龄位于区间[40,50)，求此人患这种疾病的概率．（以样本数据中患者的年龄位于各区间的频率作为患者的年龄位于该区间的概率，精确到0.0001）． \\text{频率}/\\text{组距} \\text{年龄}/\\text{岁} [20,70) [40,50) 0.1\\% 16\\%\\n\\n",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "de0ad4cd-d73a-53eb-a9f3-f76fa7c06702",
+                  "9cf45a27-d816-5507-87b5-46827246e8f3",
+                  "5a8b1df1-9827-5843-8ace-09019cf11e92"
+                ],
+                "controlledManifestResolution": "pass",
+                "controlledManifestFigureCount": 1,
+                "canonicalFigureReferences": [
+                  "figures/q-019-01.png"
+                ],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 3,
+              "rawRank": 3,
+              "recordId": "d9df4afe-a52d-5f30-912d-b082b80b4a61",
+              "sourceFile": "2023年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+              "questionNumber": "3",
+              "questionId": "d9df4afe-a52d-5f30-912d-b082b80b4a61",
+              "documentRef": "bbf9ac25-3369-55a0-a903-374fe97d8334",
+              "distance": 0.6242149,
+              "textSummary": "某学校为了了解学生参加体育运动的情况，用比例分配的分层随机抽样方法作抽样调查，拟从初中部和高中部两层共抽取60名学生，已知该校初中部和高中部分别有400名和200名学生，则不同的抽样结果共有（ ）。 A．\\(C_{400}^{45}C_{200}^{15}\\) 种 B．\\(C_{400}^{20}C_{200}^{40}\\) 种 C．\\(C_{400}^{30}C_{200}^{30}\\) 种 D．\\(C_{400}^{40}C_{200}^{20}\\) 种 C_{400}^{45}C_{200}^{15} C_{400}^{20}C_{200}^{40} C_{400}^{30}C_{200}^{30} C_{400}^{40}C_{200}^{20}\\n\\n",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "某学校为了了解学生参加体育运动的情况，用比例分配的分层随机抽样方法作抽样调查，拟从初中部和高中部两层共抽取60名学生，已知该校初中部和高中部分别有400名和200名学生，则不同的抽样结果共有（ ）。 A．\\(C_{400}^{45}C_{200}^{15}\\) 种 B．\\(C_{400}^{20}C_{200}^{40}\\) 种 C．\\(C_{400}^{30}C_{200}^{30}\\) 种 D．\\(C_{400}^{40}C_{200}^{20}\\) 种 C_{400}^{45}C_{200}^{15} C_{400}^{20}C_{200}^{40} C_{400}^{30}C_{200}^{30} C_{400}^{40}C_{200}^{20}\\n\\n",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "29ce4a5d-77cc-5982-aed1-148bd4ce39dc",
+                  "e2b664ec-d65d-53db-8ec6-1f1917bd3bb3"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 4,
+              "rawRank": 4,
+              "recordId": "f80822da-c509-533a-ac3d-11f8946ab22d",
+              "sourceFile": "2023年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+              "questionNumber": "19",
+              "questionId": "f80822da-c509-533a-ac3d-11f8946ab22d",
+              "documentRef": "bbf9ac25-3369-55a0-a903-374fe97d8334",
+              "distance": 0.6139036,
+              "textSummary": "某研究小组经过研究发现某种疾病的患病者与未患病者的某项医学指标有明显差异，经过大量调查，得到如下的患病者和未患病者该指标的频率分布直方图。 利用该指标制定一个检测标准，需要确定临界值c，将该指标大于c的人判定为阳性，小于或等于c的人判定为阴性。此检测标准的漏诊率是将患病者判定为阴性的概率，记为p(c)；误诊率是将未患病者判定为阳性的概率，记为q(c)。假设数据在组内均匀分布，以事件发生的频率作为相应事件发生的概率。 （1）当漏诊率p(c)=0.5%时，求临界值c和误诊率q(c)； （2）设函数f(c)=p(c)+q(c)，当c∈[95,105]时，求f(c)的解析式，并求f(c)在区间[95,105]的最小值。 c p(c) q(c) p(c)=0.5\\% f(c)=p(c)+q(c) c\\in[95,105]...",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "某研究小组经过研究发现某种疾病的患病者与未患病者的某项医学指标有明显差异，经过大量调查，得到如下的患病者和未患病者该指标的频率分布直方图。 利用该指标制定一个检测标准，需要确定临界值c，将该指标大于c的人判定为阳性，小于或等于c的人判定为阴性。此检测标准的漏诊率是将患病者判定为阴性的概率，记为p(c)；误诊率是将未患病者判定为阳性的概率，记为q(c)。假设数据在组内均匀分布，以事件发生的频率作为相应事件发生的概率。 （1）当漏诊率p(c)=0.5%时，求临界值c和误诊率q(c)； （2）设函数f(c)=p(c)+q(c)，当c∈[95,105]时，求f(c)的解析式，并求f(c)在区间[95,105]的最小值。 c p(c) q(c) p(c)=0.5\\% f(c)=p(c)+q(c) c\\in[95,105]...",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "d693733a-b64f-5297-a872-08ea57d12596",
+                  "b5e48e78-c1f8-5be2-b77b-85b9d77e7205",
+                  "bbce7a3c-6257-5990-b072-1dcfa04d2b7b"
+                ],
+                "controlledManifestResolution": "pass",
+                "controlledManifestFigureCount": 1,
+                "canonicalFigureReferences": [
+                  "figures/q-019-01.png"
+                ],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 5,
+              "rawRank": 5,
+              "recordId": "e6d780d7-850b-582a-9c1c-4c045e35e79a",
+              "sourceFile": "2024年高考数学试卷（天津）（解析卷）.pdf",
+              "questionNumber": "13",
+              "questionId": "e6d780d7-850b-582a-9c1c-4c045e35e79a",
+              "documentRef": "784c6c04-7db1-5429-b82a-d76103c8399e",
+              "distance": 0.57270455,
+              "textSummary": "\\(A,B,C,D,E\\) 五种活动，甲、乙都要选择三个活动参加．(1) 甲选到 \\(A\\) 的概率为______；已知乙选了 \\(A\\) 活动，他再选择 \\(B\\) 活动的概率为______． A,B,C,D,E\\n\\n",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "\\(A,B,C,D,E\\) 五种活动，甲、乙都要选择三个活动参加．(1) 甲选到 \\(A\\) 的概率为______；已知乙选了 \\(A\\) 活动，他再选择 \\(B\\) 活动的概率为______． A,B,C,D,E\\n\\n",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "455ea7f7-9795-5106-94a0-c49d305015a0",
+                  "bdb14056-e6af-5200-8dfc-ac9962ac60ab"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 6,
+              "rawRank": 6,
+              "recordId": "a0866723-c600-5790-80f0-fc72800fb673",
+              "sourceFile": "2022年高考数学试卷（新高考Ⅱ卷）（解析卷）.pdf",
+              "questionNumber": "13",
+              "questionId": "a0866723-c600-5790-80f0-fc72800fb673",
+              "documentRef": "a6a01cfe-7dfd-5308-8df2-d82fa407858d",
+              "distance": 0.5588929,
+              "textSummary": "已知随机变量\\(X\\)服从正态分布\\(N(2,\\sigma^2)\\)，且\\(P(2<X\\leq2.5)=0.36\\)，则\\(P(X>2.5)=\\)________。 X\\sim N(2,\\sigma^2) P(2<X\\leq2.5)=0.36 P(X>2.5)\\n\\n",
+              "isGold": true,
+              "goldQuestionIds": [
+                "a0866723-c600-5790-80f0-fc72800fb673"
+              ],
+              "recordType": "question",
+              "stemSummary": "已知随机变量\\(X\\)服从正态分布\\(N(2,\\sigma^2)\\)，且\\(P(2<X\\leq2.5)=0.36\\)，则\\(P(X>2.5)=\\)________。 X\\sim N(2,\\sigma^2) P(2<X\\leq2.5)=0.36 P(X>2.5)\\n\\n",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "d93d3b65-0ef4-535b-bb81-12e50080a671"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 7,
+              "rawRank": 7,
+              "recordId": "0e7f3906-0e34-5a86-a3bb-4e884c864518",
+              "sourceFile": "2024年高考数学试卷（理）（全国甲卷）（空白卷）.pdf",
+              "questionNumber": "16",
+              "questionId": "0e7f3906-0e34-5a86-a3bb-4e884c864518",
+              "documentRef": "2aa739f1-b835-5d7a-be43-dc7065e9beed",
+              "distance": 0.554856,
+              "textSummary": "有6个相同的球，分别标有数字1、2、3、4、5、6，从中不放回地随机抽取3次，每次取1个球。记m为前两次取出的球上数字的平均值，n为取出的三个球上数字的平均值，则m与n差的绝对值不超过\\frac{1}{2}的概率是______． m n \\frac{1}{2}",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "有6个相同的球，分别标有数字1、2、3、4、5、6，从中不放回地随机抽取3次，每次取1个球。记m为前两次取出的球上数字的平均值，n为取出的三个球上数字的平均值，则m与n差的绝对值不超过\\frac{1}{2}的概率是______． m n \\frac{1}{2}",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "cddd9219-4f21-5a06-8c61-d2eddf223830"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 8,
+              "rawRank": 8,
+              "recordId": "9ed3d5e5-2273-5ee9-ae00-8c372bbffd5a",
+              "sourceFile": "2024年高考数学试卷（理）（全国甲卷）（解析卷）.pdf",
+              "questionNumber": "16",
+              "questionId": "9ed3d5e5-2273-5ee9-ae00-8c372bbffd5a",
+              "documentRef": "a98cedd8-4988-5d8f-87f7-f9d27f63cd9c",
+              "distance": 0.55416524,
+              "textSummary": "有6个不同的球，分别标有数字1、2、3、4、5、6，从中不放回地随机抽取3次，每次取1个球.记 \\(m\\) 为前两次取出的球上数字的平均值，\\(n\\) 为抽出的三个球上数字的平均值，则 \\(m\\) 与 \\(n\\) 的差的绝对值不超过 \\(\\frac{1}{2}\\) 的概率是\\(\\underline{\\qquad}\\). \\left|m-n\\right|\\leq\\frac{1}{2}\\n\\n",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "有6个不同的球，分别标有数字1、2、3、4、5、6，从中不放回地随机抽取3次，每次取1个球.记 \\(m\\) 为前两次取出的球上数字的平均值，\\(n\\) 为抽出的三个球上数字的平均值，则 \\(m\\) 与 \\(n\\) 的差的绝对值不超过 \\(\\frac{1}{2}\\) 的概率是\\(\\underline{\\qquad}\\). \\left|m-n\\right|\\leq\\frac{1}{2}\\n\\n",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "d619505c-ee19-59a9-909d-544f6e50da3a",
+                  "8eefa304-5fae-50db-8085-6e7370cd4d0a"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 9,
+              "rawRank": 9,
+              "recordId": "88943399-b5ac-5d40-af87-fb439289e5ac",
+              "sourceFile": "2023年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+              "questionNumber": "12",
+              "questionId": "88943399-b5ac-5d40-af87-fb439289e5ac",
+              "documentRef": "bbf9ac25-3369-55a0-a903-374fe97d8334",
+              "distance": 0.5452643,
+              "textSummary": "在信道内传输0，1信号，信号的传输相互独立。发送0时，收到1的概率为\\(\\alpha(0<\\alpha<1)\\)，收到0的概率为\\(1-\\alpha\\)；发送1时，收到0的概率为\\(\\beta(0<\\beta<1)\\)，收到1的概率为\\(1-\\beta\\)。考虑两种传输方案：单次传输和三次传输。单次传输是指每个信号只发送1次，三次传输是指每个信号重复发送3次。收到的信号需要译码，译码规则如下：单次传输时，收到的信号即为译码；三次传输时，收到的信号中出现次数多的即为译码（例如，若依次收到1，0，1，则译码为1）。 A．采用单次传输方案，若依次发送1，0，1，则依次收到1，0，1的概率为\\((1-\\alpha)(1-\\beta)^2\\) B．采用三次传输方案，若发送1，则依次收到1，0，1的概率为\\(\\beta(1...",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "在信道内传输0，1信号，信号的传输相互独立。发送0时，收到1的概率为\\(\\alpha(0<\\alpha<1)\\)，收到0的概率为\\(1-\\alpha\\)；发送1时，收到0的概率为\\(\\beta(0<\\beta<1)\\)，收到1的概率为\\(1-\\beta\\)。考虑两种传输方案：单次传输和三次传输。单次传输是指每个信号只发送1次，三次传输是指每个信号重复发送3次。收到的信号需要译码，译码规则如下：单次传输时，收到的信号即为译码；三次传输时，收到的信号中出现次数多的即为译码（例如，若依次收到1，0，1，则译码为1）。 A．采用单次传输方案，若依次发送1，0，1，则依次收到1，0，1的概率为\\((1-\\alpha)(1-\\beta)^2\\) B．采用三次传输方案，若发送1，则依次收到1，0，1的概率为\\(\\beta(1...",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "4390febb-ee4a-5c23-b2ba-651c67b51bcc",
+                  "d9f37279-45da-56a6-ba05-e0cb2cea345e"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 10,
+              "rawRank": 10,
+              "recordId": "6cf80d71-2fb4-5e2e-9ad1-d833ee006f7d",
+              "sourceFile": "2024年高考数学试卷（理）（全国甲卷）（解析卷）.pdf",
+              "questionNumber": "17",
+              "questionId": "6cf80d71-2fb4-5e2e-9ad1-d833ee006f7d",
+              "documentRef": "a98cedd8-4988-5d8f-87f7-f9d27f63cd9c",
+              "distance": 0.5428853,
+              "textSummary": "某工厂进行生产线智能化升级改造，升级改造后，从该工厂甲、乙两个车间的产品中随机抽取150件进行检验，数据如下： | | 优级品 | 合格品 | 不合格品 | 总计 | |---|---:|---:|---:|---:| | 甲车间 | 26 | 24 | 0 | 50 | | 乙车间 | 70 | 28 | 2 | 100 | | 总计 | 96 | 52 | 2 | 150 | （1）填写如下列联表： | | 优级品 | 非优级品 | |---|---|---| | 甲车间 | | | 150 \\begin{array}{c|cccc} & \\text{优级品} & \\text{合格品} & \\text{不合格品} & \\text{总计}\\\\ \\hline \\text{甲车间} & 26 & 24 & 0 &...",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "某工厂进行生产线智能化升级改造，升级改造后，从该工厂甲、乙两个车间的产品中随机抽取150件进行检验，数据如下： | | 优级品 | 合格品 | 不合格品 | 总计 | |---|---:|---:|---:|---:| | 甲车间 | 26 | 24 | 0 | 50 | | 乙车间 | 70 | 28 | 2 | 100 | | 总计 | 96 | 52 | 2 | 150 | （1）填写如下列联表： | | 优级品 | 非优级品 | |---|---|---| | 甲车间 | | | 150 \\begin{array}{c|cccc} & \\text{优级品} & \\text{合格品} & \\text{不合格品} & \\text{总计}\\\\ \\hline \\text{甲车间} & 26 & 24 & 0 &...",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "38165d97-a86b-5265-9e67-df989ba72732",
+                  "dd5c0460-6111-5bad-adf0-ece7ed88ae5a",
+                  "8eefa304-5fae-50db-8085-6e7370cd4d0a",
+                  "acc0abab-200d-5d2e-a0ee-3b5465eb646d",
+                  "40420777-9452-5ccf-9b63-9543091b1e71"
+                ],
+                "controlledManifestResolution": "pass",
+                "controlledManifestFigureCount": 2,
+                "canonicalFigureReferences": [
+                  "figures/q-017-01.png",
+                  "figures/q-017-02.png"
+                ],
+                "forbiddenReferenceDetected": false
+              }
+            }
+          ],
+          "rowMatches": [
+            {
+              "rank": 1,
+              "rawRank": 1,
+              "goldQuestionIds": [
+                "723e74f5-c965-59ab-ac06-8e6acb9edf68"
+              ]
+            },
+            {
+              "rank": 2,
+              "rawRank": 2,
+              "goldQuestionIds": []
+            },
+            {
+              "rank": 3,
+              "rawRank": 3,
+              "goldQuestionIds": []
+            },
+            {
+              "rank": 4,
+              "rawRank": 4,
+              "goldQuestionIds": []
+            },
+            {
+              "rank": 5,
+              "rawRank": 5,
+              "goldQuestionIds": []
+            },
+            {
+              "rank": 6,
+              "rawRank": 6,
+              "goldQuestionIds": [
+                "a0866723-c600-5790-80f0-fc72800fb673"
+              ]
+            },
+            {
+              "rank": 7,
+              "rawRank": 7,
+              "goldQuestionIds": []
+            },
+            {
+              "rank": 8,
+              "rawRank": 8,
+              "goldQuestionIds": []
+            },
+            {
+              "rank": 9,
+              "rawRank": 9,
+              "goldQuestionIds": []
+            },
+            {
+              "rank": 10,
+              "rawRank": 10,
+              "goldQuestionIds": []
+            }
+          ]
+        },
+        {
+          "direction": "probability_statistics",
+          "seedSlot": "seed_3",
+          "mode": "seed_stem_only",
+          "evaluationStatus": "evaluated",
+          "query": "某学校为了了解学生参加体育运动的情况，用比例分配的分层随机抽样方法作抽样调查，拟从初中部和高中部两层共抽取60名学生，已知该校初中部和高中部分别有400名和200名学生，则不同的抽样结果共有（ ）。 A．\\(C_{400}^{45}C_{200}^{15}\\) 种 B．\\(C_{400}^{20}C_{200}^{40}\\) 种 C．\\(C_{400}^{30}C_{200}^{30}\\) 种 D．\\(C_{400}^{40}C_{200}^{20}\\) 种 C_{400}^{45}C_{200}^{15} C_{400}^{20}C_{200}^{40} C_{400}^{30}C_{200}^{30} C_{400}^{40}C_{200}^{20}\\n\\n",
+          "queryInput": "answer-free canonical seed stem",
+          "score": {
+            "topKHit": true,
+            "goldCount": 3,
+            "relevantHitCount": 1,
+            "falsePositiveCount": 9,
+            "returnedUniqueHitCount": 10,
+            "recallAtK": 0.333333,
+            "precisionAtK": 0.1,
+            "mrr": 0.166667,
+            "nDCGAtK": 0.16716,
+            "firstGoldHitRank": 6,
+            "goldHitRanks": {
+              "723e74f5-c965-59ab-ac06-8e6acb9edf68": 6,
+              "a0866723-c600-5790-80f0-fc72800fb673": null,
+              "708ae244-8a55-5e4b-b6f6-0ae4321e0a05": null
+            },
+            "grade": "C"
+          },
+          "goldRefs": [
+            {
+              "sourceFile": "2022年高考数学试卷（新高考Ⅰ卷）（解析卷）.pdf",
+              "sourceSha256": "80e25b3bfa54d21707b954f6c7e65f42fc20c23a50e3115035a779ebb980e2f6",
+              "questionNumber": "5",
+              "questionId": "723e74f5-c965-59ab-ac06-8e6acb9edf68",
+              "documentRef": "f5522733-121d-5a32-b090-030c0dd5106d",
+              "stemSummary": "从2至8的7个整数中随机取2个不同的数，则这2个数互质的概率为（ ） A．\\(\\frac{1}{6}\\) B．\\(\\frac{1}{3}\\) C．\\(\\frac{1}{2}\\) D．\\(\\frac{2}{3}\\) \\frac{1}{6} \\frac{1}{3} \\frac{1}{2} \\frac{2}{3}\\n\\n",
+              "evidenceTerms": [
+                "概率"
+              ]
+            },
+            {
+              "sourceFile": "2022年高考数学试卷（新高考Ⅱ卷）（解析卷）.pdf",
+              "sourceSha256": "ba3f4f7671530f95b342a514a061d792eaeabace73d43e0f11abf498b955ae31",
+              "questionNumber": "13",
+              "questionId": "a0866723-c600-5790-80f0-fc72800fb673",
+              "documentRef": "a6a01cfe-7dfd-5308-8df2-d82fa407858d",
+              "stemSummary": "已知随机变量\\(X\\)服从正态分布\\(N(2,\\sigma^2)\\)，且\\(P(2<X\\leq2.5)=0.36\\)，则\\(P(X>2.5)=\\)________。 X\\sim N(2,\\sigma^2) P(2<X\\leq2.5)=0.36 P(X>2.5)\\n\\n",
+              "evidenceTerms": [
+                "正态分布"
+              ]
+            },
+            {
+              "sourceFile": "2023年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+              "sourceSha256": "e8add182bfb613712c493c9f4500392bc8086457cf531b0211d213dc12956052",
+              "questionNumber": "21",
+              "questionId": "708ae244-8a55-5e4b-b6f6-0ae4321e0a05",
+              "documentRef": "f0931840-c2b6-5a14-8af5-623bbcca2218",
+              "stemSummary": "甲、乙两人投篮，每次由其中一人投篮，规则如下：若命中则此人继续投篮，若未命中则换为对方投篮。无论之前投篮情况如何，甲每次投篮的命中率均为0.6，乙每次投篮的命中率均为0.8。由抽签确定第1次投篮的人选，第1次投篮的人是甲、乙的概率各为0.5。 （1）求第2次投篮的人是乙的概率； （2）求第i次投篮的人是甲的概率； （3）已知：若随机变量 \\(X_i\\) 服从两点分布，且 \\(P(X_i=1)=1-P(X_i=0)=q_i,\\ i=1,2,\\cdots,n\\)，则 \\(E\\left(\\sum_{i=1}^{n}X_i\\right)=\\sum_{i=1}^{n}q_i\\)。记前n次（即从第1次到第n次投篮）中甲投篮的次数为Y，求 \\(E(Y)\\)。 0.6 0.8 0.5 P(X_i=1)=1-P(X_i=0)=q...",
+              "evidenceTerms": [
+                "概率"
+              ]
+            }
+          ],
+          "returnedHitCount": 10,
+          "rawTopKDuplicateKeyCount": 0,
+          "rawTopKDuplicateRowCount": 0,
+          "rawTopKLargestRepeatedKeyOccupancy": 1,
+          "rawTopKRepeatedKeys": [],
+          "duplicateHitCountCollapsed": 0,
+          "hits": [
+            {
+              "rank": 1,
+              "rawRank": 1,
+              "recordId": "d9df4afe-a52d-5f30-912d-b082b80b4a61",
+              "sourceFile": "2023年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+              "questionNumber": "3",
+              "questionId": "d9df4afe-a52d-5f30-912d-b082b80b4a61",
+              "documentRef": "bbf9ac25-3369-55a0-a903-374fe97d8334",
+              "distance": 0.92621315,
+              "textSummary": "某学校为了了解学生参加体育运动的情况，用比例分配的分层随机抽样方法作抽样调查，拟从初中部和高中部两层共抽取60名学生，已知该校初中部和高中部分别有400名和200名学生，则不同的抽样结果共有（ ）。 A．\\(C_{400}^{45}C_{200}^{15}\\) 种 B．\\(C_{400}^{20}C_{200}^{40}\\) 种 C．\\(C_{400}^{30}C_{200}^{30}\\) 种 D．\\(C_{400}^{40}C_{200}^{20}\\) 种 C_{400}^{45}C_{200}^{15} C_{400}^{20}C_{200}^{40} C_{400}^{30}C_{200}^{30} C_{400}^{40}C_{200}^{20}\\n\\n",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "某学校为了了解学生参加体育运动的情况，用比例分配的分层随机抽样方法作抽样调查，拟从初中部和高中部两层共抽取60名学生，已知该校初中部和高中部分别有400名和200名学生，则不同的抽样结果共有（ ）。 A．\\(C_{400}^{45}C_{200}^{15}\\) 种 B．\\(C_{400}^{20}C_{200}^{40}\\) 种 C．\\(C_{400}^{30}C_{200}^{30}\\) 种 D．\\(C_{400}^{40}C_{200}^{20}\\) 种 C_{400}^{45}C_{200}^{15} C_{400}^{20}C_{200}^{40} C_{400}^{30}C_{200}^{30} C_{400}^{40}C_{200}^{20}\\n\\n",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "29ce4a5d-77cc-5982-aed1-148bd4ce39dc",
+                  "e2b664ec-d65d-53db-8ec6-1f1917bd3bb3"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 2,
+              "rawRank": 2,
+              "recordId": "9ed3d5e5-2273-5ee9-ae00-8c372bbffd5a",
+              "sourceFile": "2024年高考数学试卷（理）（全国甲卷）（解析卷）.pdf",
+              "questionNumber": "16",
+              "questionId": "9ed3d5e5-2273-5ee9-ae00-8c372bbffd5a",
+              "documentRef": "a98cedd8-4988-5d8f-87f7-f9d27f63cd9c",
+              "distance": 0.6731832,
+              "textSummary": "有6个不同的球，分别标有数字1、2、3、4、5、6，从中不放回地随机抽取3次，每次取1个球.记 \\(m\\) 为前两次取出的球上数字的平均值，\\(n\\) 为抽出的三个球上数字的平均值，则 \\(m\\) 与 \\(n\\) 的差的绝对值不超过 \\(\\frac{1}{2}\\) 的概率是\\(\\underline{\\qquad}\\). \\left|m-n\\right|\\leq\\frac{1}{2}\\n\\n",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "有6个不同的球，分别标有数字1、2、3、4、5、6，从中不放回地随机抽取3次，每次取1个球.记 \\(m\\) 为前两次取出的球上数字的平均值，\\(n\\) 为抽出的三个球上数字的平均值，则 \\(m\\) 与 \\(n\\) 的差的绝对值不超过 \\(\\frac{1}{2}\\) 的概率是\\(\\underline{\\qquad}\\). \\left|m-n\\right|\\leq\\frac{1}{2}\\n\\n",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "d619505c-ee19-59a9-909d-544f6e50da3a",
+                  "8eefa304-5fae-50db-8085-6e7370cd4d0a"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 3,
+              "rawRank": 3,
+              "recordId": "e6d780d7-850b-582a-9c1c-4c045e35e79a",
+              "sourceFile": "2024年高考数学试卷（天津）（解析卷）.pdf",
+              "questionNumber": "13",
+              "questionId": "e6d780d7-850b-582a-9c1c-4c045e35e79a",
+              "documentRef": "784c6c04-7db1-5429-b82a-d76103c8399e",
+              "distance": 0.6637552,
+              "textSummary": "\\(A,B,C,D,E\\) 五种活动，甲、乙都要选择三个活动参加．(1) 甲选到 \\(A\\) 的概率为______；已知乙选了 \\(A\\) 活动，他再选择 \\(B\\) 活动的概率为______． A,B,C,D,E\\n\\n",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "\\(A,B,C,D,E\\) 五种活动，甲、乙都要选择三个活动参加．(1) 甲选到 \\(A\\) 的概率为______；已知乙选了 \\(A\\) 活动，他再选择 \\(B\\) 活动的概率为______． A,B,C,D,E\\n\\n",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "455ea7f7-9795-5106-94a0-c49d305015a0",
+                  "bdb14056-e6af-5200-8dfc-ac9962ac60ab"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 4,
+              "rawRank": 4,
+              "recordId": "4b843ca5-f010-5a69-8766-82342777098b",
+              "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+              "questionNumber": "18",
+              "questionId": "4b843ca5-f010-5a69-8766-82342777098b",
+              "documentRef": "7b1615dd-3104-5585-915c-7b618a72686a",
+              "distance": 0.6547239,
+              "textSummary": "某校篮球联赛分为两个阶段，每个参赛队由两名队员组成，比赛具体规则如下：第一阶段由参赛队中一名队员投篮 3 次，若 3 次都未投中，则该队被淘汰，比赛成绩为 0 分；若至少投中一次，则该队进入第二阶段，由该队的另一名队员投篮 3 次，每次投中得 5 分，未投中得 0 分。该队的比赛成绩为第二阶段的得分总和。某参赛队由甲、乙两名队员组成，设甲每次投中的概率为 \\(p\\)，乙每次投中的概率为 \\(q\\)，各次投中与否相互独立。 （1）若 \\(p=0.4\\)，\\(q=0.5\\)，甲参加第一阶段比赛，求甲、乙所在队的比赛成绩不少于 5 分的概率。 （2）假设 \\(0<p<q\\)， （i）为使得甲、乙所在队的比赛成绩为 15 分的概率最大，应该由谁参加第一阶段比赛？ （ii）为使甲、乙所在队的比赛成绩的数学期望最大，应该由...",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "某校篮球联赛分为两个阶段，每个参赛队由两名队员组成，比赛具体规则如下：第一阶段由参赛队中一名队员投篮 3 次，若 3 次都未投中，则该队被淘汰，比赛成绩为 0 分；若至少投中一次，则该队进入第二阶段，由该队的另一名队员投篮 3 次，每次投中得 5 分，未投中得 0 分。该队的比赛成绩为第二阶段的得分总和。某参赛队由甲、乙两名队员组成，设甲每次投中的概率为 \\(p\\)，乙每次投中的概率为 \\(q\\)，各次投中与否相互独立。 （1）若 \\(p=0.4\\)，\\(q=0.5\\)，甲参加第一阶段比赛，求甲、乙所在队的比赛成绩不少于 5 分的概率。 （2）假设 \\(0<p<q\\)， （i）为使得甲、乙所在队的比赛成绩为 15 分的概率最大，应该由谁参加第一阶段比赛？ （ii）为使甲、乙所在队的比赛成绩的数学期望最大，应该由...",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "213945da-2b93-506f-97e2-4bb51cba4310",
+                  "10341e8d-8651-5bae-a855-275060b49285"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 5,
+              "rawRank": 5,
+              "recordId": "bf5ec0f2-15c6-50dd-a4a6-8e34fc5177fa",
+              "sourceFile": "2024年高考数学试卷（天津）（空白卷）.pdf",
+              "questionNumber": "13",
+              "questionId": "bf5ec0f2-15c6-50dd-a4a6-8e34fc5177fa",
+              "documentRef": "3240274f-66bf-5562-ba04-df455e553cc8",
+              "distance": 0.6447585,
+              "textSummary": "\\(A,B,C,D,E\\) 五种活动，甲、乙都要选择三个活动参加。\\((1)\\) 甲选到 \\(A\\) 的概率为\\underline{\\hspace{1.5cm}}；已知乙选了 \\(A\\) 活动，他再选择 \\(B\\) 活动的概率为\\underline{\\hspace{1.5cm}}。 A,B,C,D,E",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "\\(A,B,C,D,E\\) 五种活动，甲、乙都要选择三个活动参加。\\((1)\\) 甲选到 \\(A\\) 的概率为\\underline{\\hspace{1.5cm}}；已知乙选了 \\(A\\) 活动，他再选择 \\(B\\) 活动的概率为\\underline{\\hspace{1.5cm}}。 A,B,C,D,E",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "51bc140b-15cc-52c7-804b-51707ccfc110"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 6,
+              "rawRank": 6,
+              "recordId": "723e74f5-c965-59ab-ac06-8e6acb9edf68",
+              "sourceFile": "2022年高考数学试卷（新高考Ⅰ卷）（解析卷）.pdf",
+              "questionNumber": "5",
+              "questionId": "723e74f5-c965-59ab-ac06-8e6acb9edf68",
+              "documentRef": "f5522733-121d-5a32-b090-030c0dd5106d",
+              "distance": 0.64449483,
+              "textSummary": "从2至8的7个整数中随机取2个不同的数，则这2个数互质的概率为（ ） A．\\(\\frac{1}{6}\\) B．\\(\\frac{1}{3}\\) C．\\(\\frac{1}{2}\\) D．\\(\\frac{2}{3}\\) \\frac{1}{6} \\frac{1}{3} \\frac{1}{2} \\frac{2}{3}\\n\\n",
+              "isGold": true,
+              "goldQuestionIds": [
+                "723e74f5-c965-59ab-ac06-8e6acb9edf68"
+              ],
+              "recordType": "question",
+              "stemSummary": "从2至8的7个整数中随机取2个不同的数，则这2个数互质的概率为（ ） A．\\(\\frac{1}{6}\\) B．\\(\\frac{1}{3}\\) C．\\(\\frac{1}{2}\\) D．\\(\\frac{2}{3}\\) \\frac{1}{6} \\frac{1}{3} \\frac{1}{2} \\frac{2}{3}\\n\\n",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "21b3c02f-9e59-50eb-b6c8-6f0599689133"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 7,
+              "rawRank": 7,
+              "recordId": "0398a516-17b2-5a9f-b608-a461951724ec",
+              "sourceFile": "2024年高考数学试卷（新课标Ⅰ卷）（空白卷）.pdf",
+              "questionNumber": "9",
+              "questionId": "0398a516-17b2-5a9f-b608-a461951724ec",
+              "documentRef": "64b54b7d-ba92-5ca7-b249-ec323141ece0",
+              "distance": 0.6354362,
+              "textSummary": "为了解某地区居民的年收入（单位：万元）情况，从该地区抽取样本，得到该地区居民年收入的样本均值 \\(\\bar{x}=2.1\\)，样本方差 \\(s^2=0.01\\)。已知该地区以往的年收入 \\(X\\) 服从正态分布 \\(N(1.8,0.1^2)\\)，假设抽样后居民的年收入 \\(Y\\) 服从正态分布 \\(N(\\bar{x},s^2)\\)，则（ ）（若随机变量 \\(Z\\) 服从正态分布 \\(N(\\mu,\\sigma^2)\\)，\\(P(Z<\\mu+\\sigma)\\approx0.8413\\)） A．\\(P(X>2)>0.2\\) B．\\(P(X>2)<0.5\\) C．\\(P(Y>2)>0.5\\) D．\\(P(Y>2)<0.8\\) \\bar{x}=2.1 s^2=0.01 X\\sim N(1.8,0.1^2) Y\\sim N...",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "为了解某地区居民的年收入（单位：万元）情况，从该地区抽取样本，得到该地区居民年收入的样本均值 \\(\\bar{x}=2.1\\)，样本方差 \\(s^2=0.01\\)。已知该地区以往的年收入 \\(X\\) 服从正态分布 \\(N(1.8,0.1^2)\\)，假设抽样后居民的年收入 \\(Y\\) 服从正态分布 \\(N(\\bar{x},s^2)\\)，则（ ）（若随机变量 \\(Z\\) 服从正态分布 \\(N(\\mu,\\sigma^2)\\)，\\(P(Z<\\mu+\\sigma)\\approx0.8413\\)） A．\\(P(X>2)>0.2\\) B．\\(P(X>2)<0.5\\) C．\\(P(Y>2)>0.5\\) D．\\(P(Y>2)<0.8\\) \\bar{x}=2.1 s^2=0.01 X\\sim N(1.8,0.1^2) Y\\sim N...",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "bb2a3ea1-ec8c-526c-92b8-eb6341d851bc"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 8,
+              "rawRank": 8,
+              "recordId": "cbdcde69-56d4-5ab9-bc0f-b76d5028fbc0",
+              "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（空白卷）.pdf",
+              "questionNumber": "18",
+              "questionId": "cbdcde69-56d4-5ab9-bc0f-b76d5028fbc0",
+              "documentRef": "2bbd3635-abb8-5a1f-b3e2-c23a43f91b76",
+              "distance": 0.62537783,
+              "textSummary": "某投篮比赛分为两个阶段，每个参赛队由两名队员组成，比赛具体规则如下：第一阶段由参赛队中一名队员投篮3次，若3次都未投中，则该队被淘汰，比赛成绩为0分；若至少投中一次，则该队进入第二阶段，由该队的另一名队员投篮3次，每次投中得5分，未投中得0分。该队的比赛成绩为第二阶段的得分总和。某参赛队由甲、乙两名队员组成，设甲每次投中的概率为p，乙每次投中的概率为q，各次投中与否相互独立。 （1）若p=0.4，q=0.5，甲参加第一阶段比赛，求甲、乙所在队的比赛成绩不少于5分的概率； （2）假设0<p<q。 （i）为使得甲、乙所在队的比赛成绩为15分的概率最大，应该由谁参加第一阶段比赛？ （ii）为使得甲、乙所在队的比赛成绩的数学期望最大，应该由谁参加第一阶段比赛？ p=0.4 q=0.5 0<p<q",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "某投篮比赛分为两个阶段，每个参赛队由两名队员组成，比赛具体规则如下：第一阶段由参赛队中一名队员投篮3次，若3次都未投中，则该队被淘汰，比赛成绩为0分；若至少投中一次，则该队进入第二阶段，由该队的另一名队员投篮3次，每次投中得5分，未投中得0分。该队的比赛成绩为第二阶段的得分总和。某参赛队由甲、乙两名队员组成，设甲每次投中的概率为p，乙每次投中的概率为q，各次投中与否相互独立。 （1）若p=0.4，q=0.5，甲参加第一阶段比赛，求甲、乙所在队的比赛成绩不少于5分的概率； （2）假设0<p<q。 （i）为使得甲、乙所在队的比赛成绩为15分的概率最大，应该由谁参加第一阶段比赛？ （ii）为使得甲、乙所在队的比赛成绩的数学期望最大，应该由谁参加第一阶段比赛？ p=0.4 q=0.5 0<p<q",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "66dce091-2935-5a22-8e0e-7fc8bfe24555"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 9,
+              "rawRank": 9,
+              "recordId": "0e7f3906-0e34-5a86-a3bb-4e884c864518",
+              "sourceFile": "2024年高考数学试卷（理）（全国甲卷）（空白卷）.pdf",
+              "questionNumber": "16",
+              "questionId": "0e7f3906-0e34-5a86-a3bb-4e884c864518",
+              "documentRef": "2aa739f1-b835-5d7a-be43-dc7065e9beed",
+              "distance": 0.6207608,
+              "textSummary": "有6个相同的球，分别标有数字1、2、3、4、5、6，从中不放回地随机抽取3次，每次取1个球。记m为前两次取出的球上数字的平均值，n为取出的三个球上数字的平均值，则m与n差的绝对值不超过\\frac{1}{2}的概率是______． m n \\frac{1}{2}",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "有6个相同的球，分别标有数字1、2、3、4、5、6，从中不放回地随机抽取3次，每次取1个球。记m为前两次取出的球上数字的平均值，n为取出的三个球上数字的平均值，则m与n差的绝对值不超过\\frac{1}{2}的概率是______． m n \\frac{1}{2}",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "cddd9219-4f21-5a06-8c61-d2eddf223830"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 10,
+              "rawRank": 10,
+              "recordId": "e1ea9a7b-e505-5547-bbd3-13c11c101061",
+              "sourceFile": "2023年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+              "questionNumber": "20",
+              "questionId": "e1ea9a7b-e505-5547-bbd3-13c11c101061",
+              "documentRef": "f0931840-c2b6-5a14-8af5-623bbcca2218",
+              "distance": 0.6172494,
+              "textSummary": "设等差数列 \\(\\{a_n\\}\\) 的公差为 \\(d\\)，且 \\(d>1\\)。令 \\(b_n=\\frac{n^2+n}{a_n}\\)，记 \\(S_n,T_n\\) 分别为数列 \\(\\{a_n\\},\\{b_n\\}\\) 的前 \\(n\\) 项和。 （1）若 \\(3a_2=3a_1+a_3\\)，\\(S_3+T_3=21\\)，求 \\(\\{a_n\\}\\) 的通项公式； （2）若 \\(\\{b_n\\}\\) 为等差数列，且 \\(S_{99}-T_{99}=99\\)，求 \\(d\\)。 \\{a_n\\} d>1 b_n=\\frac{n^2+n}{a_n} S_n,T_n 3a_2=3a_1+a_3 S_3+T_3=21 S_{99}-T_{99}=99\\n\\n",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "设等差数列 \\(\\{a_n\\}\\) 的公差为 \\(d\\)，且 \\(d>1\\)。令 \\(b_n=\\frac{n^2+n}{a_n}\\)，记 \\(S_n,T_n\\) 分别为数列 \\(\\{a_n\\},\\{b_n\\}\\) 的前 \\(n\\) 项和。 （1）若 \\(3a_2=3a_1+a_3\\)，\\(S_3+T_3=21\\)，求 \\(\\{a_n\\}\\) 的通项公式； （2）若 \\(\\{b_n\\}\\) 为等差数列，且 \\(S_{99}-T_{99}=99\\)，求 \\(d\\)。 \\{a_n\\} d>1 b_n=\\frac{n^2+n}{a_n} S_n,T_n 3a_2=3a_1+a_3 S_3+T_3=21 S_{99}-T_{99}=99\\n\\n",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "bbf48ce7-8486-5f44-8eea-a07e91f4053b",
+                  "68e31cd7-c2d2-5d3a-a886-975a0131513d"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            }
+          ],
+          "rowMatches": [
+            {
+              "rank": 1,
+              "rawRank": 1,
+              "goldQuestionIds": []
+            },
+            {
+              "rank": 2,
+              "rawRank": 2,
+              "goldQuestionIds": []
+            },
+            {
+              "rank": 3,
+              "rawRank": 3,
+              "goldQuestionIds": []
+            },
+            {
+              "rank": 4,
+              "rawRank": 4,
+              "goldQuestionIds": []
+            },
+            {
+              "rank": 5,
+              "rawRank": 5,
+              "goldQuestionIds": []
+            },
+            {
+              "rank": 6,
+              "rawRank": 6,
+              "goldQuestionIds": [
+                "723e74f5-c965-59ab-ac06-8e6acb9edf68"
+              ]
+            },
+            {
+              "rank": 7,
+              "rawRank": 7,
+              "goldQuestionIds": []
+            },
+            {
+              "rank": 8,
+              "rawRank": 8,
+              "goldQuestionIds": []
+            },
+            {
+              "rank": 9,
+              "rawRank": 9,
+              "goldQuestionIds": []
+            },
+            {
+              "rank": 10,
+              "rawRank": 10,
+              "goldQuestionIds": []
+            }
+          ]
+        },
+        {
+          "direction": "probability_statistics",
+          "seedSlot": "seed_3",
+          "mode": "aligned_topic_plus_stem",
+          "evaluationStatus": "evaluated",
+          "query": "概率 统计 随机抽样 频率 分布 某学校为了了解学生参加体育运动的情况，用比例分配的分层随机抽样方法作抽样调查，拟从初中部和高中部两层共抽取60名学生，已知该校初中部和高中部分别有400名和200名学生，则不同的抽样结果共有（ ）。 A．\\(C_{400}^{45}C_{200}^{15}\\) 种 B．\\(C_{400}^{20}C_{200}^{40}\\) 种 C．\\(C_{400}^{30}C_{200}^{30}\\) 种 D．\\(C_{400}^{40}C_{200}^{20}\\) 种 C_{400}^{45}C_{200}^{15} C_{400}^{20}C_{200}^{40} C_{400}^{30}C_{200}^{30} C_{400}^{40}C_{200}^{20}\\n\\n",
+          "queryInput": "answer-free canonical seed stem",
+          "score": {
+            "topKHit": true,
+            "goldCount": 3,
+            "relevantHitCount": 1,
+            "falsePositiveCount": 9,
+            "returnedUniqueHitCount": 10,
+            "recallAtK": 0.333333,
+            "precisionAtK": 0.1,
+            "mrr": 0.5,
+            "nDCGAtK": 0.296082,
+            "firstGoldHitRank": 2,
+            "goldHitRanks": {
+              "723e74f5-c965-59ab-ac06-8e6acb9edf68": 2,
+              "a0866723-c600-5790-80f0-fc72800fb673": null,
+              "708ae244-8a55-5e4b-b6f6-0ae4321e0a05": null
+            },
+            "grade": "B"
+          },
+          "goldRefs": [
+            {
+              "sourceFile": "2022年高考数学试卷（新高考Ⅰ卷）（解析卷）.pdf",
+              "sourceSha256": "80e25b3bfa54d21707b954f6c7e65f42fc20c23a50e3115035a779ebb980e2f6",
+              "questionNumber": "5",
+              "questionId": "723e74f5-c965-59ab-ac06-8e6acb9edf68",
+              "documentRef": "f5522733-121d-5a32-b090-030c0dd5106d",
+              "stemSummary": "从2至8的7个整数中随机取2个不同的数，则这2个数互质的概率为（ ） A．\\(\\frac{1}{6}\\) B．\\(\\frac{1}{3}\\) C．\\(\\frac{1}{2}\\) D．\\(\\frac{2}{3}\\) \\frac{1}{6} \\frac{1}{3} \\frac{1}{2} \\frac{2}{3}\\n\\n",
+              "evidenceTerms": [
+                "概率"
+              ]
+            },
+            {
+              "sourceFile": "2022年高考数学试卷（新高考Ⅱ卷）（解析卷）.pdf",
+              "sourceSha256": "ba3f4f7671530f95b342a514a061d792eaeabace73d43e0f11abf498b955ae31",
+              "questionNumber": "13",
+              "questionId": "a0866723-c600-5790-80f0-fc72800fb673",
+              "documentRef": "a6a01cfe-7dfd-5308-8df2-d82fa407858d",
+              "stemSummary": "已知随机变量\\(X\\)服从正态分布\\(N(2,\\sigma^2)\\)，且\\(P(2<X\\leq2.5)=0.36\\)，则\\(P(X>2.5)=\\)________。 X\\sim N(2,\\sigma^2) P(2<X\\leq2.5)=0.36 P(X>2.5)\\n\\n",
+              "evidenceTerms": [
+                "正态分布"
+              ]
+            },
+            {
+              "sourceFile": "2023年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+              "sourceSha256": "e8add182bfb613712c493c9f4500392bc8086457cf531b0211d213dc12956052",
+              "questionNumber": "21",
+              "questionId": "708ae244-8a55-5e4b-b6f6-0ae4321e0a05",
+              "documentRef": "f0931840-c2b6-5a14-8af5-623bbcca2218",
+              "stemSummary": "甲、乙两人投篮，每次由其中一人投篮，规则如下：若命中则此人继续投篮，若未命中则换为对方投篮。无论之前投篮情况如何，甲每次投篮的命中率均为0.6，乙每次投篮的命中率均为0.8。由抽签确定第1次投篮的人选，第1次投篮的人是甲、乙的概率各为0.5。 （1）求第2次投篮的人是乙的概率； （2）求第i次投篮的人是甲的概率； （3）已知：若随机变量 \\(X_i\\) 服从两点分布，且 \\(P(X_i=1)=1-P(X_i=0)=q_i,\\ i=1,2,\\cdots,n\\)，则 \\(E\\left(\\sum_{i=1}^{n}X_i\\right)=\\sum_{i=1}^{n}q_i\\)。记前n次（即从第1次到第n次投篮）中甲投篮的次数为Y，求 \\(E(Y)\\)。 0.6 0.8 0.5 P(X_i=1)=1-P(X_i=0)=q...",
+              "evidenceTerms": [
+                "概率"
+              ]
+            }
+          ],
+          "returnedHitCount": 10,
+          "rawTopKDuplicateKeyCount": 0,
+          "rawTopKDuplicateRowCount": 0,
+          "rawTopKLargestRepeatedKeyOccupancy": 1,
+          "rawTopKRepeatedKeys": [],
+          "duplicateHitCountCollapsed": 0,
+          "hits": [
+            {
+              "rank": 1,
+              "rawRank": 1,
+              "recordId": "d9df4afe-a52d-5f30-912d-b082b80b4a61",
+              "sourceFile": "2023年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+              "questionNumber": "3",
+              "questionId": "d9df4afe-a52d-5f30-912d-b082b80b4a61",
+              "documentRef": "bbf9ac25-3369-55a0-a903-374fe97d8334",
+              "distance": 0.8641733,
+              "textSummary": "某学校为了了解学生参加体育运动的情况，用比例分配的分层随机抽样方法作抽样调查，拟从初中部和高中部两层共抽取60名学生，已知该校初中部和高中部分别有400名和200名学生，则不同的抽样结果共有（ ）。 A．\\(C_{400}^{45}C_{200}^{15}\\) 种 B．\\(C_{400}^{20}C_{200}^{40}\\) 种 C．\\(C_{400}^{30}C_{200}^{30}\\) 种 D．\\(C_{400}^{40}C_{200}^{20}\\) 种 C_{400}^{45}C_{200}^{15} C_{400}^{20}C_{200}^{40} C_{400}^{30}C_{200}^{30} C_{400}^{40}C_{200}^{20}\\n\\n",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "某学校为了了解学生参加体育运动的情况，用比例分配的分层随机抽样方法作抽样调查，拟从初中部和高中部两层共抽取60名学生，已知该校初中部和高中部分别有400名和200名学生，则不同的抽样结果共有（ ）。 A．\\(C_{400}^{45}C_{200}^{15}\\) 种 B．\\(C_{400}^{20}C_{200}^{40}\\) 种 C．\\(C_{400}^{30}C_{200}^{30}\\) 种 D．\\(C_{400}^{40}C_{200}^{20}\\) 种 C_{400}^{45}C_{200}^{15} C_{400}^{20}C_{200}^{40} C_{400}^{30}C_{200}^{30} C_{400}^{40}C_{200}^{20}\\n\\n",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "29ce4a5d-77cc-5982-aed1-148bd4ce39dc",
+                  "e2b664ec-d65d-53db-8ec6-1f1917bd3bb3"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 2,
+              "rawRank": 2,
+              "recordId": "723e74f5-c965-59ab-ac06-8e6acb9edf68",
+              "sourceFile": "2022年高考数学试卷（新高考Ⅰ卷）（解析卷）.pdf",
+              "questionNumber": "5",
+              "questionId": "723e74f5-c965-59ab-ac06-8e6acb9edf68",
+              "documentRef": "f5522733-121d-5a32-b090-030c0dd5106d",
+              "distance": 0.70279145,
+              "textSummary": "从2至8的7个整数中随机取2个不同的数，则这2个数互质的概率为（ ） A．\\(\\frac{1}{6}\\) B．\\(\\frac{1}{3}\\) C．\\(\\frac{1}{2}\\) D．\\(\\frac{2}{3}\\) \\frac{1}{6} \\frac{1}{3} \\frac{1}{2} \\frac{2}{3}\\n\\n",
+              "isGold": true,
+              "goldQuestionIds": [
+                "723e74f5-c965-59ab-ac06-8e6acb9edf68"
+              ],
+              "recordType": "question",
+              "stemSummary": "从2至8的7个整数中随机取2个不同的数，则这2个数互质的概率为（ ） A．\\(\\frac{1}{6}\\) B．\\(\\frac{1}{3}\\) C．\\(\\frac{1}{2}\\) D．\\(\\frac{2}{3}\\) \\frac{1}{6} \\frac{1}{3} \\frac{1}{2} \\frac{2}{3}\\n\\n",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "21b3c02f-9e59-50eb-b6c8-6f0599689133"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 3,
+              "rawRank": 3,
+              "recordId": "2bc6c60a-f556-5ab8-878d-ae9c758ee6df",
+              "sourceFile": "2022年高考数学试卷（新高考Ⅱ卷）（解析卷）.pdf",
+              "questionNumber": "19",
+              "questionId": "2bc6c60a-f556-5ab8-878d-ae9c758ee6df",
+              "documentRef": "a6a01cfe-7dfd-5308-8df2-d82fa407858d",
+              "distance": 0.6869924,
+              "textSummary": "在某地区进行流行病学调查，随机调查了100位某种疾病患者的年龄，得到如下的样本数据的频率分布直方图： （1）估计该地区这种疾病患者的平均年龄（同一组中的数据用该区间的中点值为代表）； （2）估计该地区一位这种疾病患者的年龄位于区间[20,70)的概率； （3）已知该地区这种疾病的患病率为0.1%；该地区年龄位于区间[40,50)的人口占该地区总人口的16%. 从该地区中任选一人，若此人的年龄位于区间[40,50)，求此人患这种疾病的概率．（以样本数据中患者的年龄位于各区间的频率作为患者的年龄位于该区间的概率，精确到0.0001）． \\text{频率}/\\text{组距} \\text{年龄}/\\text{岁} [20,70) [40,50) 0.1\\% 16\\%\\n\\n",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "在某地区进行流行病学调查，随机调查了100位某种疾病患者的年龄，得到如下的样本数据的频率分布直方图： （1）估计该地区这种疾病患者的平均年龄（同一组中的数据用该区间的中点值为代表）； （2）估计该地区一位这种疾病患者的年龄位于区间[20,70)的概率； （3）已知该地区这种疾病的患病率为0.1%；该地区年龄位于区间[40,50)的人口占该地区总人口的16%. 从该地区中任选一人，若此人的年龄位于区间[40,50)，求此人患这种疾病的概率．（以样本数据中患者的年龄位于各区间的频率作为患者的年龄位于该区间的概率，精确到0.0001）． \\text{频率}/\\text{组距} \\text{年龄}/\\text{岁} [20,70) [40,50) 0.1\\% 16\\%\\n\\n",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "de0ad4cd-d73a-53eb-a9f3-f76fa7c06702",
+                  "9cf45a27-d816-5507-87b5-46827246e8f3",
+                  "5a8b1df1-9827-5843-8ace-09019cf11e92"
+                ],
+                "controlledManifestResolution": "pass",
+                "controlledManifestFigureCount": 1,
+                "canonicalFigureReferences": [
+                  "figures/q-019-01.png"
+                ],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 4,
+              "rawRank": 4,
+              "recordId": "e6d780d7-850b-582a-9c1c-4c045e35e79a",
+              "sourceFile": "2024年高考数学试卷（天津）（解析卷）.pdf",
+              "questionNumber": "13",
+              "questionId": "e6d780d7-850b-582a-9c1c-4c045e35e79a",
+              "documentRef": "784c6c04-7db1-5429-b82a-d76103c8399e",
+              "distance": 0.6763271,
+              "textSummary": "\\(A,B,C,D,E\\) 五种活动，甲、乙都要选择三个活动参加．(1) 甲选到 \\(A\\) 的概率为______；已知乙选了 \\(A\\) 活动，他再选择 \\(B\\) 活动的概率为______． A,B,C,D,E\\n\\n",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "\\(A,B,C,D,E\\) 五种活动，甲、乙都要选择三个活动参加．(1) 甲选到 \\(A\\) 的概率为______；已知乙选了 \\(A\\) 活动，他再选择 \\(B\\) 活动的概率为______． A,B,C,D,E\\n\\n",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "455ea7f7-9795-5106-94a0-c49d305015a0",
+                  "bdb14056-e6af-5200-8dfc-ac9962ac60ab"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 5,
+              "rawRank": 5,
+              "recordId": "9ed3d5e5-2273-5ee9-ae00-8c372bbffd5a",
+              "sourceFile": "2024年高考数学试卷（理）（全国甲卷）（解析卷）.pdf",
+              "questionNumber": "16",
+              "questionId": "9ed3d5e5-2273-5ee9-ae00-8c372bbffd5a",
+              "documentRef": "a98cedd8-4988-5d8f-87f7-f9d27f63cd9c",
+              "distance": 0.6692755,
+              "textSummary": "有6个不同的球，分别标有数字1、2、3、4、5、6，从中不放回地随机抽取3次，每次取1个球.记 \\(m\\) 为前两次取出的球上数字的平均值，\\(n\\) 为抽出的三个球上数字的平均值，则 \\(m\\) 与 \\(n\\) 的差的绝对值不超过 \\(\\frac{1}{2}\\) 的概率是\\(\\underline{\\qquad}\\). \\left|m-n\\right|\\leq\\frac{1}{2}\\n\\n",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "有6个不同的球，分别标有数字1、2、3、4、5、6，从中不放回地随机抽取3次，每次取1个球.记 \\(m\\) 为前两次取出的球上数字的平均值，\\(n\\) 为抽出的三个球上数字的平均值，则 \\(m\\) 与 \\(n\\) 的差的绝对值不超过 \\(\\frac{1}{2}\\) 的概率是\\(\\underline{\\qquad}\\). \\left|m-n\\right|\\leq\\frac{1}{2}\\n\\n",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "d619505c-ee19-59a9-909d-544f6e50da3a",
+                  "8eefa304-5fae-50db-8085-6e7370cd4d0a"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 6,
+              "rawRank": 6,
+              "recordId": "bf5ec0f2-15c6-50dd-a4a6-8e34fc5177fa",
+              "sourceFile": "2024年高考数学试卷（天津）（空白卷）.pdf",
+              "questionNumber": "13",
+              "questionId": "bf5ec0f2-15c6-50dd-a4a6-8e34fc5177fa",
+              "documentRef": "3240274f-66bf-5562-ba04-df455e553cc8",
+              "distance": 0.6454911,
+              "textSummary": "\\(A,B,C,D,E\\) 五种活动，甲、乙都要选择三个活动参加。\\((1)\\) 甲选到 \\(A\\) 的概率为\\underline{\\hspace{1.5cm}}；已知乙选了 \\(A\\) 活动，他再选择 \\(B\\) 活动的概率为\\underline{\\hspace{1.5cm}}。 A,B,C,D,E",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "\\(A,B,C,D,E\\) 五种活动，甲、乙都要选择三个活动参加。\\((1)\\) 甲选到 \\(A\\) 的概率为\\underline{\\hspace{1.5cm}}；已知乙选了 \\(A\\) 活动，他再选择 \\(B\\) 活动的概率为\\underline{\\hspace{1.5cm}}。 A,B,C,D,E",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "51bc140b-15cc-52c7-804b-51707ccfc110"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 7,
+              "rawRank": 7,
+              "recordId": "0e7f3906-0e34-5a86-a3bb-4e884c864518",
+              "sourceFile": "2024年高考数学试卷（理）（全国甲卷）（空白卷）.pdf",
+              "questionNumber": "16",
+              "questionId": "0e7f3906-0e34-5a86-a3bb-4e884c864518",
+              "documentRef": "2aa739f1-b835-5d7a-be43-dc7065e9beed",
+              "distance": 0.6432153,
+              "textSummary": "有6个相同的球，分别标有数字1、2、3、4、5、6，从中不放回地随机抽取3次，每次取1个球。记m为前两次取出的球上数字的平均值，n为取出的三个球上数字的平均值，则m与n差的绝对值不超过\\frac{1}{2}的概率是______． m n \\frac{1}{2}",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "有6个相同的球，分别标有数字1、2、3、4、5、6，从中不放回地随机抽取3次，每次取1个球。记m为前两次取出的球上数字的平均值，n为取出的三个球上数字的平均值，则m与n差的绝对值不超过\\frac{1}{2}的概率是______． m n \\frac{1}{2}",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "cddd9219-4f21-5a06-8c61-d2eddf223830"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 8,
+              "rawRank": 8,
+              "recordId": "0398a516-17b2-5a9f-b608-a461951724ec",
+              "sourceFile": "2024年高考数学试卷（新课标Ⅰ卷）（空白卷）.pdf",
+              "questionNumber": "9",
+              "questionId": "0398a516-17b2-5a9f-b608-a461951724ec",
+              "documentRef": "64b54b7d-ba92-5ca7-b249-ec323141ece0",
+              "distance": 0.6322023,
+              "textSummary": "为了解某地区居民的年收入（单位：万元）情况，从该地区抽取样本，得到该地区居民年收入的样本均值 \\(\\bar{x}=2.1\\)，样本方差 \\(s^2=0.01\\)。已知该地区以往的年收入 \\(X\\) 服从正态分布 \\(N(1.8,0.1^2)\\)，假设抽样后居民的年收入 \\(Y\\) 服从正态分布 \\(N(\\bar{x},s^2)\\)，则（ ）（若随机变量 \\(Z\\) 服从正态分布 \\(N(\\mu,\\sigma^2)\\)，\\(P(Z<\\mu+\\sigma)\\approx0.8413\\)） A．\\(P(X>2)>0.2\\) B．\\(P(X>2)<0.5\\) C．\\(P(Y>2)>0.5\\) D．\\(P(Y>2)<0.8\\) \\bar{x}=2.1 s^2=0.01 X\\sim N(1.8,0.1^2) Y\\sim N...",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "为了解某地区居民的年收入（单位：万元）情况，从该地区抽取样本，得到该地区居民年收入的样本均值 \\(\\bar{x}=2.1\\)，样本方差 \\(s^2=0.01\\)。已知该地区以往的年收入 \\(X\\) 服从正态分布 \\(N(1.8,0.1^2)\\)，假设抽样后居民的年收入 \\(Y\\) 服从正态分布 \\(N(\\bar{x},s^2)\\)，则（ ）（若随机变量 \\(Z\\) 服从正态分布 \\(N(\\mu,\\sigma^2)\\)，\\(P(Z<\\mu+\\sigma)\\approx0.8413\\)） A．\\(P(X>2)>0.2\\) B．\\(P(X>2)<0.5\\) C．\\(P(Y>2)>0.5\\) D．\\(P(Y>2)<0.8\\) \\bar{x}=2.1 s^2=0.01 X\\sim N(1.8,0.1^2) Y\\sim N...",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "bb2a3ea1-ec8c-526c-92b8-eb6341d851bc"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 9,
+              "rawRank": 9,
+              "recordId": "f80822da-c509-533a-ac3d-11f8946ab22d",
+              "sourceFile": "2023年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+              "questionNumber": "19",
+              "questionId": "f80822da-c509-533a-ac3d-11f8946ab22d",
+              "documentRef": "bbf9ac25-3369-55a0-a903-374fe97d8334",
+              "distance": 0.6311961,
+              "textSummary": "某研究小组经过研究发现某种疾病的患病者与未患病者的某项医学指标有明显差异，经过大量调查，得到如下的患病者和未患病者该指标的频率分布直方图。 利用该指标制定一个检测标准，需要确定临界值c，将该指标大于c的人判定为阳性，小于或等于c的人判定为阴性。此检测标准的漏诊率是将患病者判定为阴性的概率，记为p(c)；误诊率是将未患病者判定为阳性的概率，记为q(c)。假设数据在组内均匀分布，以事件发生的频率作为相应事件发生的概率。 （1）当漏诊率p(c)=0.5%时，求临界值c和误诊率q(c)； （2）设函数f(c)=p(c)+q(c)，当c∈[95,105]时，求f(c)的解析式，并求f(c)在区间[95,105]的最小值。 c p(c) q(c) p(c)=0.5\\% f(c)=p(c)+q(c) c\\in[95,105]...",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "某研究小组经过研究发现某种疾病的患病者与未患病者的某项医学指标有明显差异，经过大量调查，得到如下的患病者和未患病者该指标的频率分布直方图。 利用该指标制定一个检测标准，需要确定临界值c，将该指标大于c的人判定为阳性，小于或等于c的人判定为阴性。此检测标准的漏诊率是将患病者判定为阴性的概率，记为p(c)；误诊率是将未患病者判定为阳性的概率，记为q(c)。假设数据在组内均匀分布，以事件发生的频率作为相应事件发生的概率。 （1）当漏诊率p(c)=0.5%时，求临界值c和误诊率q(c)； （2）设函数f(c)=p(c)+q(c)，当c∈[95,105]时，求f(c)的解析式，并求f(c)在区间[95,105]的最小值。 c p(c) q(c) p(c)=0.5\\% f(c)=p(c)+q(c) c\\in[95,105]...",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "d693733a-b64f-5297-a872-08ea57d12596",
+                  "b5e48e78-c1f8-5be2-b77b-85b9d77e7205",
+                  "bbce7a3c-6257-5990-b072-1dcfa04d2b7b"
+                ],
+                "controlledManifestResolution": "pass",
+                "controlledManifestFigureCount": 1,
+                "canonicalFigureReferences": [
+                  "figures/q-019-01.png"
+                ],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 10,
+              "rawRank": 10,
+              "recordId": "4b843ca5-f010-5a69-8766-82342777098b",
+              "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+              "questionNumber": "18",
+              "questionId": "4b843ca5-f010-5a69-8766-82342777098b",
+              "documentRef": "7b1615dd-3104-5585-915c-7b618a72686a",
+              "distance": 0.61532426,
+              "textSummary": "某校篮球联赛分为两个阶段，每个参赛队由两名队员组成，比赛具体规则如下：第一阶段由参赛队中一名队员投篮 3 次，若 3 次都未投中，则该队被淘汰，比赛成绩为 0 分；若至少投中一次，则该队进入第二阶段，由该队的另一名队员投篮 3 次，每次投中得 5 分，未投中得 0 分。该队的比赛成绩为第二阶段的得分总和。某参赛队由甲、乙两名队员组成，设甲每次投中的概率为 \\(p\\)，乙每次投中的概率为 \\(q\\)，各次投中与否相互独立。 （1）若 \\(p=0.4\\)，\\(q=0.5\\)，甲参加第一阶段比赛，求甲、乙所在队的比赛成绩不少于 5 分的概率。 （2）假设 \\(0<p<q\\)， （i）为使得甲、乙所在队的比赛成绩为 15 分的概率最大，应该由谁参加第一阶段比赛？ （ii）为使甲、乙所在队的比赛成绩的数学期望最大，应该由...",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "某校篮球联赛分为两个阶段，每个参赛队由两名队员组成，比赛具体规则如下：第一阶段由参赛队中一名队员投篮 3 次，若 3 次都未投中，则该队被淘汰，比赛成绩为 0 分；若至少投中一次，则该队进入第二阶段，由该队的另一名队员投篮 3 次，每次投中得 5 分，未投中得 0 分。该队的比赛成绩为第二阶段的得分总和。某参赛队由甲、乙两名队员组成，设甲每次投中的概率为 \\(p\\)，乙每次投中的概率为 \\(q\\)，各次投中与否相互独立。 （1）若 \\(p=0.4\\)，\\(q=0.5\\)，甲参加第一阶段比赛，求甲、乙所在队的比赛成绩不少于 5 分的概率。 （2）假设 \\(0<p<q\\)， （i）为使得甲、乙所在队的比赛成绩为 15 分的概率最大，应该由谁参加第一阶段比赛？ （ii）为使甲、乙所在队的比赛成绩的数学期望最大，应该由...",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "213945da-2b93-506f-97e2-4bb51cba4310",
+                  "10341e8d-8651-5bae-a855-275060b49285"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            }
+          ],
+          "rowMatches": [
+            {
+              "rank": 1,
+              "rawRank": 1,
+              "goldQuestionIds": []
+            },
+            {
+              "rank": 2,
+              "rawRank": 2,
+              "goldQuestionIds": [
+                "723e74f5-c965-59ab-ac06-8e6acb9edf68"
+              ]
+            },
+            {
+              "rank": 3,
+              "rawRank": 3,
+              "goldQuestionIds": []
+            },
+            {
+              "rank": 4,
+              "rawRank": 4,
+              "goldQuestionIds": []
+            },
+            {
+              "rank": 5,
+              "rawRank": 5,
+              "goldQuestionIds": []
+            },
+            {
+              "rank": 6,
+              "rawRank": 6,
+              "goldQuestionIds": []
+            },
+            {
+              "rank": 7,
+              "rawRank": 7,
+              "goldQuestionIds": []
+            },
+            {
+              "rank": 8,
+              "rawRank": 8,
+              "goldQuestionIds": []
+            },
+            {
+              "rank": 9,
+              "rawRank": 9,
+              "goldQuestionIds": []
+            },
+            {
+              "rank": 10,
+              "rawRank": 10,
+              "goldQuestionIds": []
+            }
+          ]
+        }
+      ],
+      "metricsByMode": {
+        "topic_only": {
+          "evaluationStatus": "evaluated",
+          "score": {
+            "topKHit": true,
+            "goldCount": 3,
+            "relevantHitCount": 2,
+            "falsePositiveCount": 8,
+            "returnedUniqueHitCount": 10,
+            "recallAtK": 0.666667,
+            "precisionAtK": 0.2,
+            "mrr": 1.0,
+            "nDCGAtK": 0.636439,
+            "firstGoldHitRank": 1,
+            "goldHitRanks": {
+              "723e74f5-c965-59ab-ac06-8e6acb9edf68": 1,
+              "a0866723-c600-5790-80f0-fc72800fb673": 6,
+              "708ae244-8a55-5e4b-b6f6-0ae4321e0a05": null
+            },
+            "grade": "A"
+          }
+        },
+        "seed_stem_only": {
+          "evaluationStatus": "evaluated",
+          "score": {
+            "topKHit": true,
+            "goldCount": 3,
+            "relevantHitCount": 1,
+            "falsePositiveCount": 9,
+            "returnedUniqueHitCount": 10,
+            "recallAtK": 0.333333,
+            "precisionAtK": 0.1,
+            "mrr": 0.166667,
+            "nDCGAtK": 0.16716,
+            "firstGoldHitRank": 6,
+            "goldHitRanks": {
+              "723e74f5-c965-59ab-ac06-8e6acb9edf68": 6,
+              "a0866723-c600-5790-80f0-fc72800fb673": null,
+              "708ae244-8a55-5e4b-b6f6-0ae4321e0a05": null
+            },
+            "grade": "C"
+          }
+        },
+        "aligned_topic_plus_stem": {
+          "evaluationStatus": "evaluated",
+          "score": {
+            "topKHit": true,
+            "goldCount": 3,
+            "relevantHitCount": 1,
+            "falsePositiveCount": 9,
+            "returnedUniqueHitCount": 10,
+            "recallAtK": 0.333333,
+            "precisionAtK": 0.1,
+            "mrr": 0.5,
+            "nDCGAtK": 0.296082,
+            "firstGoldHitRank": 2,
+            "goldHitRanks": {
+              "723e74f5-c965-59ab-ac06-8e6acb9edf68": 2,
+              "a0866723-c600-5790-80f0-fc72800fb673": null,
+              "708ae244-8a55-5e4b-b6f6-0ae4321e0a05": null
+            },
+            "grade": "B"
+          }
+        }
+      }
+    },
+    "spatial_vector": {
+      "seed": {
+        "seedSlot": "seed_5",
+        "questionNumber": "5",
+        "sourceFile": "2024年高考数学试卷（新课标Ⅰ卷）（空白卷）.pdf",
+        "questionId": "5f10ea33-ed43-5779-8d50-869fc8636760",
+        "topicAlignment": {
+          "aligned": false,
+          "evidenceTerms": [],
+          "decision": "sample_topic_mismatch"
+        }
+      },
+      "goldSelection": {
+        "supervision": "weak_supervision_manual_audit",
+        "authoritativeKnowledgeLabelsPresent": false,
+        "evidenceSource": "canonical question stem before answer/solution markers",
+        "rule": "stem contains at least one configured strong domain evidence term; deterministic source-diverse ordering; seed questionIds excluded",
+        "configuredEvidenceTerms": [
+          "空间向量",
+          "法向量",
+          "二面角",
+          "直三棱柱",
+          "三棱锥",
+          "四棱锥",
+          "四棱柱"
+        ],
+        "candidateCount": 15,
+        "excludedSeedCount": 0,
+        "selectedCount": 3
+      },
+      "goldRefs": [
+        {
+          "sourceFile": "2022年高考数学试卷（新高考Ⅰ卷）（解析卷）.pdf",
+          "sourceSha256": "80e25b3bfa54d21707b954f6c7e65f42fc20c23a50e3115035a779ebb980e2f6",
+          "questionNumber": "8",
+          "questionId": "ef9c9a69-5ff4-55e8-a63e-5f2b347451d6",
+          "documentRef": "f5522733-121d-5a32-b090-030c0dd5106d",
+          "stemSummary": "已知正四棱锥的侧棱长为 \\(l\\)，其各顶点都在同一球面上。若该球的体积为 \\(36\\pi\\)，且 \\(3\\le l\\le3\\sqrt{3}\\)，则该正四棱锥体积的取值范围是（ ） A．\\(\\left[18,\\frac{81}{4}\\right]\\) B．\\(\\left[\\frac{27}{4},\\frac{81}{4}\\right]\\) C．\\(\\left[\\frac{27}{4},\\frac{64}{3}\\right]\\) D． 36\\pi 3\\le l\\le3\\sqrt{3} \\left[18,\\frac{81}{4}\\right] \\left[\\frac{27}{4},\\frac{81}{4}\\right] \\left[\\frac{27}{4},\\frac{64}{3}\\right]\\n\\n",
+          "evidenceTerms": [
+            "四棱锥"
+          ]
+        },
+        {
+          "sourceFile": "2022年高考数学试卷（新高考Ⅱ卷）（解析卷）.pdf",
+          "sourceSha256": "ba3f4f7671530f95b342a514a061d792eaeabace73d43e0f11abf498b955ae31",
+          "questionNumber": "11",
+          "questionId": "a9faeaca-b583-5184-98c3-66c8faa2ce47",
+          "documentRef": "a6a01cfe-7dfd-5308-8df2-d82fa407858d",
+          "stemSummary": "如图，四边形ABCD为正方形，ED⊥平面ABCD，FB∥ED，AB＝ED＝2FB，记三棱锥E-ACD，F-ABC，F-ACE的体积分别为V₁，V₂，V₃，则（ ） A．V₃＝2V₂ B．V₃＝V₁ C．V₃＝V₁＋V₂ D．2V₃＝3V₁ ED\\perp \\text{平面 }ABCD FB\\parallel ED AB=ED=2FB V_1=V_{E-ACD} V_2=V_{F-ABC} V_3=V_{F-ACE} V_3=2V_2 V_3=V_1 V_3=V_1+V_2 2V_3=3V_1\\n\\n",
+          "evidenceTerms": [
+            "三棱锥"
+          ]
+        },
+        {
+          "sourceFile": "2023年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+          "sourceSha256": "e8add182bfb613712c493c9f4500392bc8086457cf531b0211d213dc12956052",
+          "questionNumber": "18",
+          "questionId": "445ee3ea-929f-52f7-8a32-07c49495c616",
+          "documentRef": "f0931840-c2b6-5a14-8af5-623bbcca2218",
+          "stemSummary": "如图，在正四棱柱 \\(ABCD-A_1B_1C_1D_1\\) 中，\\(AB=2\\)，\\(AA_1=4\\)。点 \\(A_2,B_2,C_2,D_2\\) 分别在棱 \\(AA_1,BB_1,CC_1,DD_1\\) 上，\\(AA_2=1\\)，\\(BB_2=DD_2=2\\)，\\(CC_2=3\\)。 （1）证明：\\(B_2C_2//A_2D_2\\)； （2）点 \\(P\\) 在线段 \\(BB_1\\) 上，当二面角 \\(P-A_2C_2-D_2\\) 为 \\(150^\\circ\\) 时，求 \\(B_2P\\)。 ABCD-A_1B_1C_1D_1 AB=2 AA_1=4 AA_2=1 BB_2=DD_2=2 CC_2=3 \\overline{B_2C_2}\\parallel\\overline{A_2D_2} \\angle(P-A_...",
+          "evidenceTerms": [
+            "二面角",
+            "四棱柱"
+          ]
+        }
+      ],
+      "queryEvaluations": [
+        {
+          "direction": "spatial_vector",
+          "seedSlot": "seed_5",
+          "mode": "topic_only",
+          "evaluationStatus": "evaluated",
+          "query": "空间向量 立体几何 法向量 二面角 垂直",
+          "queryInput": "topic terms only",
+          "score": {
+            "topKHit": true,
+            "goldCount": 3,
+            "relevantHitCount": 1,
+            "falsePositiveCount": 9,
+            "returnedUniqueHitCount": 10,
+            "recallAtK": 0.333333,
+            "precisionAtK": 0.1,
+            "mrr": 1.0,
+            "nDCGAtK": 0.469279,
+            "firstGoldHitRank": 1,
+            "goldHitRanks": {
+              "ef9c9a69-5ff4-55e8-a63e-5f2b347451d6": null,
+              "a9faeaca-b583-5184-98c3-66c8faa2ce47": null,
+              "445ee3ea-929f-52f7-8a32-07c49495c616": 1
+            },
+            "grade": "A"
+          },
+          "goldRefs": [
+            {
+              "sourceFile": "2022年高考数学试卷（新高考Ⅰ卷）（解析卷）.pdf",
+              "sourceSha256": "80e25b3bfa54d21707b954f6c7e65f42fc20c23a50e3115035a779ebb980e2f6",
+              "questionNumber": "8",
+              "questionId": "ef9c9a69-5ff4-55e8-a63e-5f2b347451d6",
+              "documentRef": "f5522733-121d-5a32-b090-030c0dd5106d",
+              "stemSummary": "已知正四棱锥的侧棱长为 \\(l\\)，其各顶点都在同一球面上。若该球的体积为 \\(36\\pi\\)，且 \\(3\\le l\\le3\\sqrt{3}\\)，则该正四棱锥体积的取值范围是（ ） A．\\(\\left[18,\\frac{81}{4}\\right]\\) B．\\(\\left[\\frac{27}{4},\\frac{81}{4}\\right]\\) C．\\(\\left[\\frac{27}{4},\\frac{64}{3}\\right]\\) D． 36\\pi 3\\le l\\le3\\sqrt{3} \\left[18,\\frac{81}{4}\\right] \\left[\\frac{27}{4},\\frac{81}{4}\\right] \\left[\\frac{27}{4},\\frac{64}{3}\\right]\\n\\n",
+              "evidenceTerms": [
+                "四棱锥"
+              ]
+            },
+            {
+              "sourceFile": "2022年高考数学试卷（新高考Ⅱ卷）（解析卷）.pdf",
+              "sourceSha256": "ba3f4f7671530f95b342a514a061d792eaeabace73d43e0f11abf498b955ae31",
+              "questionNumber": "11",
+              "questionId": "a9faeaca-b583-5184-98c3-66c8faa2ce47",
+              "documentRef": "a6a01cfe-7dfd-5308-8df2-d82fa407858d",
+              "stemSummary": "如图，四边形ABCD为正方形，ED⊥平面ABCD，FB∥ED，AB＝ED＝2FB，记三棱锥E-ACD，F-ABC，F-ACE的体积分别为V₁，V₂，V₃，则（ ） A．V₃＝2V₂ B．V₃＝V₁ C．V₃＝V₁＋V₂ D．2V₃＝3V₁ ED\\perp \\text{平面 }ABCD FB\\parallel ED AB=ED=2FB V_1=V_{E-ACD} V_2=V_{F-ABC} V_3=V_{F-ACE} V_3=2V_2 V_3=V_1 V_3=V_1+V_2 2V_3=3V_1\\n\\n",
+              "evidenceTerms": [
+                "三棱锥"
+              ]
+            },
+            {
+              "sourceFile": "2023年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+              "sourceSha256": "e8add182bfb613712c493c9f4500392bc8086457cf531b0211d213dc12956052",
+              "questionNumber": "18",
+              "questionId": "445ee3ea-929f-52f7-8a32-07c49495c616",
+              "documentRef": "f0931840-c2b6-5a14-8af5-623bbcca2218",
+              "stemSummary": "如图，在正四棱柱 \\(ABCD-A_1B_1C_1D_1\\) 中，\\(AB=2\\)，\\(AA_1=4\\)。点 \\(A_2,B_2,C_2,D_2\\) 分别在棱 \\(AA_1,BB_1,CC_1,DD_1\\) 上，\\(AA_2=1\\)，\\(BB_2=DD_2=2\\)，\\(CC_2=3\\)。 （1）证明：\\(B_2C_2//A_2D_2\\)； （2）点 \\(P\\) 在线段 \\(BB_1\\) 上，当二面角 \\(P-A_2C_2-D_2\\) 为 \\(150^\\circ\\) 时，求 \\(B_2P\\)。 ABCD-A_1B_1C_1D_1 AB=2 AA_1=4 AA_2=1 BB_2=DD_2=2 CC_2=3 \\overline{B_2C_2}\\parallel\\overline{A_2D_2} \\angle(P-A_...",
+              "evidenceTerms": [
+                "二面角",
+                "四棱柱"
+              ]
+            }
+          ],
+          "returnedHitCount": 10,
+          "rawTopKDuplicateKeyCount": 0,
+          "rawTopKDuplicateRowCount": 0,
+          "rawTopKLargestRepeatedKeyOccupancy": 1,
+          "rawTopKRepeatedKeys": [],
+          "duplicateHitCountCollapsed": 0,
+          "hits": [
+            {
+              "rank": 1,
+              "rawRank": 1,
+              "recordId": "445ee3ea-929f-52f7-8a32-07c49495c616",
+              "sourceFile": "2023年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+              "questionNumber": "18",
+              "questionId": "445ee3ea-929f-52f7-8a32-07c49495c616",
+              "documentRef": "f0931840-c2b6-5a14-8af5-623bbcca2218",
+              "distance": 0.6939741,
+              "textSummary": "如图，在正四棱柱 \\(ABCD-A_1B_1C_1D_1\\) 中，\\(AB=2\\)，\\(AA_1=4\\)。点 \\(A_2,B_2,C_2,D_2\\) 分别在棱 \\(AA_1,BB_1,CC_1,DD_1\\) 上，\\(AA_2=1\\)，\\(BB_2=DD_2=2\\)，\\(CC_2=3\\)。 （1）证明：\\(B_2C_2//A_2D_2\\)； （2）点 \\(P\\) 在线段 \\(BB_1\\) 上，当二面角 \\(P-A_2C_2-D_2\\) 为 \\(150^\\circ\\) 时，求 \\(B_2P\\)。 ABCD-A_1B_1C_1D_1 AB=2 AA_1=4 AA_2=1 BB_2=DD_2=2 CC_2=3 \\overline{B_2C_2}\\parallel\\overline{A_2D_2} \\angle(P-A_...",
+              "isGold": true,
+              "goldQuestionIds": [
+                "445ee3ea-929f-52f7-8a32-07c49495c616"
+              ],
+              "recordType": "question",
+              "stemSummary": "如图，在正四棱柱 \\(ABCD-A_1B_1C_1D_1\\) 中，\\(AB=2\\)，\\(AA_1=4\\)。点 \\(A_2,B_2,C_2,D_2\\) 分别在棱 \\(AA_1,BB_1,CC_1,DD_1\\) 上，\\(AA_2=1\\)，\\(BB_2=DD_2=2\\)，\\(CC_2=3\\)。 （1）证明：\\(B_2C_2//A_2D_2\\)； （2）点 \\(P\\) 在线段 \\(BB_1\\) 上，当二面角 \\(P-A_2C_2-D_2\\) 为 \\(150^\\circ\\) 时，求 \\(B_2P\\)。 ABCD-A_1B_1C_1D_1 AB=2 AA_1=4 AA_2=1 BB_2=DD_2=2 CC_2=3 \\overline{B_2C_2}\\parallel\\overline{A_2D_2} \\angle(P-A_...",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "4ddeef5b-2eb2-5391-a510-6f4e8d8eab86",
+                  "ff15803a-e395-57d5-a237-faf0df0295c2",
+                  "5208aad5-e152-5298-b213-7bc0febb7cca"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 2,
+              "rawRank": 2,
+              "recordId": "462e2e9a-7cf3-5d50-8fb3-cc89c398fdf9",
+              "sourceFile": "2022年高考数学试卷（新高考Ⅰ卷）（解析卷）.pdf",
+              "questionNumber": "19",
+              "questionId": "462e2e9a-7cf3-5d50-8fb3-cc89c398fdf9",
+              "documentRef": "f5522733-121d-5a32-b090-030c0dd5106d",
+              "distance": 0.6742454,
+              "textSummary": "如图，直三棱柱 \\(ABC-A_1B_1C_1\\) 的体积为4，\\(\\triangle ABC\\) 的面积为 \\(2\\sqrt{2}\\)。 （1）求 \\(A_1\\) 到平面 \\(ABC\\) 的距离； （2）设 \\(D\\) 为 \\(A_1C\\) 的中点，\\(AA_1=AB\\)，平面 \\(ABC\\perp\\) 平面 \\(ABB_1A_1\\)，求二面角 \\(A-BD-C\\) 的正弦值。 ABC-A_1B_1C_1 \\triangle ABC 2\\sqrt{2} A_1 ABC D A_1C AA_1=AB ABC\\perp ABB_1A_1 A-BD-C\\n\\n",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "如图，直三棱柱 \\(ABC-A_1B_1C_1\\) 的体积为4，\\(\\triangle ABC\\) 的面积为 \\(2\\sqrt{2}\\)。 （1）求 \\(A_1\\) 到平面 \\(ABC\\) 的距离； （2）设 \\(D\\) 为 \\(A_1C\\) 的中点，\\(AA_1=AB\\)，平面 \\(ABC\\perp\\) 平面 \\(ABB_1A_1\\)，求二面角 \\(A-BD-C\\) 的正弦值。 ABC-A_1B_1C_1 \\triangle ABC 2\\sqrt{2} A_1 ABC D A_1C AA_1=AB ABC\\perp ABB_1A_1 A-BD-C\\n\\n",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "5f3352a9-a667-5f96-aa48-eec9ba18210d",
+                  "5feabcc7-229f-5841-84d5-a7840dc7572b",
+                  "d8b06f6f-476c-571d-8556-be7320ddcf43",
+                  "791ca086-5a10-564f-8bb6-242a2f30e59a"
+                ],
+                "controlledManifestResolution": "pass",
+                "controlledManifestFigureCount": 1,
+                "canonicalFigureReferences": [
+                  "figures/q-019-01.png"
+                ],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 3,
+              "rawRank": 3,
+              "recordId": "90bfc3be-5604-50b1-a4d2-0fafcdf8ed46",
+              "sourceFile": "2022年高考数学试卷（新高考Ⅱ卷）（解析卷）.pdf",
+              "questionNumber": "20",
+              "questionId": "90bfc3be-5604-50b1-a4d2-0fafcdf8ed46",
+              "documentRef": "a6a01cfe-7dfd-5308-8df2-d82fa407858d",
+              "distance": 0.66996706,
+              "textSummary": "如图，\\(PO\\)是三棱锥\\(P-ABC\\)的高，\\(PA=PB\\)，\\(AB\\perp AC\\)，\\(E\\)是\\(PB\\)的中点．（1）证明：\\(OE\\perp\\)平面\\(PAC\\)；（2）若\\(\\angle ABO=\\angle CBO=30^\\circ\\)，\\(PO=3\\)，\\(PA=5\\)，求二面角\\(C-AE-B\\)的正弦值． PO P-ABC PA=PB AB\\perp AC E\\text{ 是 }PB\\text{ 的中点} OE\\perp\\text{平面 }PAC \\angle ABO=\\angle CBO=30^\\circ PO=3 PA=5 \\text{二面角 }C-AE-B\\n\\n",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "如图，\\(PO\\)是三棱锥\\(P-ABC\\)的高，\\(PA=PB\\)，\\(AB\\perp AC\\)，\\(E\\)是\\(PB\\)的中点．（1）证明：\\(OE\\perp\\)平面\\(PAC\\)；（2）若\\(\\angle ABO=\\angle CBO=30^\\circ\\)，\\(PO=3\\)，\\(PA=5\\)，求二面角\\(C-AE-B\\)的正弦值． PO P-ABC PA=PB AB\\perp AC E\\text{ 是 }PB\\text{ 的中点} OE\\perp\\text{平面 }PAC \\angle ABO=\\angle CBO=30^\\circ PO=3 PA=5 \\text{二面角 }C-AE-B\\n\\n",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "06e6f46b-94f4-5082-9fda-40f7d8c2f206",
+                  "5a8b1df1-9827-5843-8ace-09019cf11e92",
+                  "053a7dbd-aac3-59aa-98c5-6f232fb58009",
+                  "851c969f-1a53-5df9-9ef9-77313d5756df"
+                ],
+                "controlledManifestResolution": "pass",
+                "controlledManifestFigureCount": 1,
+                "canonicalFigureReferences": [
+                  "figures/q-020-01.png"
+                ],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 4,
+              "rawRank": 4,
+              "recordId": "79966358-f10b-5ab5-83b5-d5bbaa567df6",
+              "sourceFile": "2024年高考数学试卷（天津）（解析卷）.pdf",
+              "questionNumber": "17",
+              "questionId": "79966358-f10b-5ab5-83b5-d5bbaa567df6",
+              "documentRef": "784c6c04-7db1-5429-b82a-d76103c8399e",
+              "distance": 0.6598311,
+              "textSummary": "已知四棱柱ABCD-A₁B₁C₁D₁中，底面ABCD为梯形，AB∥CD，AA₁⊥平面ABCD，AD⊥AB，其中AB=AA₁=2，AD=DC=1。N是B₁C₁的中点，M是DD₁的中点。 （1）求证D₁N∥平面CB₁M； （2）求平面CB₁M与平面BB₁CC₁的夹角余弦值； （3）求点B到平面CB₁M的距离。 ABCD-A_1B_1C_1D_1 AB\\parallel CD AA_1\\perp\\text{平面 }ABCD AD\\perp AB AB=AA_1=2 AD=DC=1 N\\text{ 是 }B_1C_1\\text{ 的中点} M\\text{ 是 }DD_1\\text{ 的中点} D_1N\\parallel\\text{平面 }CB_1M \\text{平面 }CB_1M\\text{ 与平面 }BB_1CC_1...",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "已知四棱柱ABCD-A₁B₁C₁D₁中，底面ABCD为梯形，AB∥CD，AA₁⊥平面ABCD，AD⊥AB，其中AB=AA₁=2，AD=DC=1。N是B₁C₁的中点，M是DD₁的中点。 （1）求证D₁N∥平面CB₁M； （2）求平面CB₁M与平面BB₁CC₁的夹角余弦值； （3）求点B到平面CB₁M的距离。 ABCD-A_1B_1C_1D_1 AB\\parallel CD AA_1\\perp\\text{平面 }ABCD AD\\perp AB AB=AA_1=2 AD=DC=1 N\\text{ 是 }B_1C_1\\text{ 的中点} M\\text{ 是 }DD_1\\text{ 的中点} D_1N\\parallel\\text{平面 }CB_1M \\text{平面 }CB_1M\\text{ 与平面 }BB_1CC_1...",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "7063d412-e5b6-544a-ada1-22ec2607a169",
+                  "d6d73844-95df-5921-89fd-4b139c02f2ec",
+                  "c5909bd1-1352-5556-a237-9efdc0d45296"
+                ],
+                "controlledManifestResolution": "pass",
+                "controlledManifestFigureCount": 1,
+                "canonicalFigureReferences": [
+                  "figures/q-017-01.png"
+                ],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 5,
+              "rawRank": 5,
+              "recordId": "12673247-949f-5d2b-a348-4486baa1efe7",
+              "sourceFile": "2023年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+              "questionNumber": "20",
+              "questionId": "12673247-949f-5d2b-a348-4486baa1efe7",
+              "documentRef": "bbf9ac25-3369-55a0-a903-374fe97d8334",
+              "distance": 0.6548486,
+              "textSummary": "如图，三棱锥\\(A-BCD\\)中，\\(DA=DB=DC\\)，\\(BD\\perp CD\\)，\\(\\angle ADB=\\angle ADC=60^\\circ\\)，\\(E\\)为\\(BC\\)的中点。 （1）证明：\\(BC\\perp DA\\)； （2）点\\(F\\)满足\\(EF=DA\\)，求二面角\\(D-AB-F\\)的正弦值。 A-BCD DA=DB=DC BD\\perp CD \\angle ADB=\\angle ADC=60^\\circ BC\\perp DA EF=DA\\n\\n",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "如图，三棱锥\\(A-BCD\\)中，\\(DA=DB=DC\\)，\\(BD\\perp CD\\)，\\(\\angle ADB=\\angle ADC=60^\\circ\\)，\\(E\\)为\\(BC\\)的中点。 （1）证明：\\(BC\\perp DA\\)； （2）点\\(F\\)满足\\(EF=DA\\)，求二面角\\(D-AB-F\\)的正弦值。 A-BCD DA=DB=DC BD\\perp CD \\angle ADB=\\angle ADC=60^\\circ BC\\perp DA EF=DA\\n\\n",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "03eaa15b-e619-561f-9403-35fc2e3d567e",
+                  "bbce7a3c-6257-5990-b072-1dcfa04d2b7b",
+                  "5689f468-a089-5a31-9e05-af3a74aaa125"
+                ],
+                "controlledManifestResolution": "pass",
+                "controlledManifestFigureCount": 1,
+                "canonicalFigureReferences": [
+                  "figures/q-020-01.png"
+                ],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 6,
+              "rawRank": 6,
+              "recordId": "806dfdc4-651f-5d1a-b2c3-775458d9072e",
+              "sourceFile": "2023年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+              "questionNumber": "9",
+              "questionId": "806dfdc4-651f-5d1a-b2c3-775458d9072e",
+              "documentRef": "bbf9ac25-3369-55a0-a903-374fe97d8334",
+              "distance": 0.6462047,
+              "textSummary": "已知圆锥的顶点为P，底面圆心为O，AB为底面直径，∠APB=120°，PA=2，点C在底面圆周上，且二面角P-AC-O为45°，则（ ）． A．该圆锥的体积为π B．该圆锥的侧面积为4√3π C．AC=2√2 D．△PAC的面积为√3 \\angle APB=120^\\circ PA=2 P-AC-O 45^\\circ \\pi 4\\sqrt{3}\\pi AC=2\\sqrt{2} S_{\\triangle PAC}=\\sqrt{3}\\n\\n",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "已知圆锥的顶点为P，底面圆心为O，AB为底面直径，∠APB=120°，PA=2，点C在底面圆周上，且二面角P-AC-O为45°，则（ ）． A．该圆锥的体积为π B．该圆锥的侧面积为4√3π C．AC=2√2 D．△PAC的面积为√3 \\angle APB=120^\\circ PA=2 P-AC-O 45^\\circ \\pi 4\\sqrt{3}\\pi AC=2\\sqrt{2} S_{\\triangle PAC}=\\sqrt{3}\\n\\n",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "ab91ebb8-2db7-5056-b39d-e10abc455c57",
+                  "808a7d21-2c7e-57e5-abb6-3adc85282656"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 7,
+              "rawRank": 7,
+              "recordId": "07f10956-c0d6-5ac5-8047-7bf7e188d76c",
+              "sourceFile": "2023年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+              "questionNumber": "12",
+              "questionId": "07f10956-c0d6-5ac5-8047-7bf7e188d76c",
+              "documentRef": "f0931840-c2b6-5a14-8af5-623bbcca2218",
+              "distance": 0.64447665,
+              "textSummary": "下列物体中，能够被整体放入棱长为1（单位：m）的正方体容器（容器壁厚度忽略不计）内的有（ ） A．直径为0.99m的球体 B．所有棱长均为1.4m的四面体 C．底面直径为0.01m，高为1.8m的圆柱体 D．底面直径为1.2m，高为0.01m的圆柱体 1\\mathrm{m} 0.99\\mathrm{m} 1.4\\mathrm{m} 0.01\\mathrm{m} 1.8\\mathrm{m} 1.2\\mathrm{m}\\n\\n",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "下列物体中，能够被整体放入棱长为1（单位：m）的正方体容器（容器壁厚度忽略不计）内的有（ ） A．直径为0.99m的球体 B．所有棱长均为1.4m的四面体 C．底面直径为0.01m，高为1.8m的圆柱体 D．底面直径为1.2m，高为0.01m的圆柱体 1\\mathrm{m} 0.99\\mathrm{m} 1.4\\mathrm{m} 0.01\\mathrm{m} 1.8\\mathrm{m} 1.2\\mathrm{m}\\n\\n",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "64472c0a-775b-5794-b859-aa5c343ecdba",
+                  "a9b03d14-d031-5160-80d7-dbe23cff155b"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 8,
+              "rawRank": 8,
+              "recordId": "eb4170d7-777c-5e4b-8323-b36bd3b72d11",
+              "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+              "questionNumber": "5",
+              "questionId": "eb4170d7-777c-5e4b-8323-b36bd3b72d11",
+              "documentRef": "7b1615dd-3104-5585-915c-7b618a72686a",
+              "distance": 0.6267519,
+              "textSummary": "已知曲线C：x²+y²=16（y>0），从C上任意一点P向x轴作垂线段PP′，P′为垂足，则线段PP′的中点M的轨迹方程为（ ） A．x²/16+y²/4=1（y>0） B．x²/16+y²/8=1（y>0） C．y²/16+x²/4=1（y>0） D．y²/16+x²/8=1（y>0） C:x^2+y^2=16\\ (y>0) \\frac{x^2}{16}+\\frac{y^2}{4}=1\\ (y>0) \\frac{x^2}{16}+\\frac{y^2}{8}=1\\ (y>0) \\frac{y^2}{16}+\\frac{x^2}{4}=1\\ (y>0) \\frac{y^2}{16}+\\frac{x^2}{8}=1\\ (y>0)\\n\\n",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "已知曲线C：x²+y²=16（y>0），从C上任意一点P向x轴作垂线段PP′，P′为垂足，则线段PP′的中点M的轨迹方程为（ ） A．x²/16+y²/4=1（y>0） B．x²/16+y²/8=1（y>0） C．y²/16+x²/4=1（y>0） D．y²/16+x²/8=1（y>0） C:x^2+y^2=16\\ (y>0) \\frac{x^2}{16}+\\frac{y^2}{4}=1\\ (y>0) \\frac{x^2}{16}+\\frac{y^2}{8}=1\\ (y>0) \\frac{y^2}{16}+\\frac{x^2}{4}=1\\ (y>0) \\frac{y^2}{16}+\\frac{x^2}{8}=1\\ (y>0)\\n\\n",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "99574af1-815c-5e96-ac69-30e61176e9df"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 9,
+              "rawRank": 9,
+              "recordId": "353c5ee7-0201-5774-8ca2-426c0e89c81f",
+              "sourceFile": "2023年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+              "questionNumber": "17",
+              "questionId": "353c5ee7-0201-5774-8ca2-426c0e89c81f",
+              "documentRef": "bbf9ac25-3369-55a0-a903-374fe97d8334",
+              "distance": 0.62482834,
+              "textSummary": "记△ABC的内角A，B，C的对边分别为a，b，c，已知△ABC的面积为√3，D为BC中点，且AD=1。（1）若∠ADC=π/3，求tan B；（2）若b²+c²=8，求b，c。 \\triangle ABC a,b,c S_{\\triangle ABC}=\\sqrt{3} AD=1 \\angle ADC=\\frac{\\pi}{3} \\tan B b^2+c^2=8\\n\\n",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "记△ABC的内角A，B，C的对边分别为a，b，c，已知△ABC的面积为√3，D为BC中点，且AD=1。（1）若∠ADC=π/3，求tan B；（2）若b²+c²=8，求b，c。 \\triangle ABC a,b,c S_{\\triangle ABC}=\\sqrt{3} AD=1 \\angle ADC=\\frac{\\pi}{3} \\tan B b^2+c^2=8\\n\\n",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "0727993b-3c0f-5a9c-b109-2cea65713a87",
+                  "1bf38da8-6273-544a-8afa-80fa6bb7adca"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 10,
+              "rawRank": 10,
+              "recordId": "486a450c-40fe-5b8a-a398-646fc5e6b53d",
+              "sourceFile": "2023年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+              "questionNumber": "22",
+              "questionId": "486a450c-40fe-5b8a-a398-646fc5e6b53d",
+              "documentRef": "f0931840-c2b6-5a14-8af5-623bbcca2218",
+              "distance": 0.6247557,
+              "textSummary": "在直角坐标系 xOy 中，点 P 到 x 轴的距离等于点 P 到点 \\(\\left(0,\\frac{1}{2}\\right)\\) 的距离，记点 P 的轨迹为 W。 （1）求 W 的方程； （2）已知矩形 ABCD 有三个顶点在 W 上，证明：矩形 ABCD 的周长大于 \\(3\\sqrt{3}\\)。 xOy \\left(0,\\frac{1}{2}\\right) 3\\sqrt{3}\\n\\n",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "在直角坐标系 xOy 中，点 P 到 x 轴的距离等于点 P 到点 \\(\\left(0,\\frac{1}{2}\\right)\\) 的距离，记点 P 的轨迹为 W。 （1）求 W 的方程； （2）已知矩形 ABCD 有三个顶点在 W 上，证明：矩形 ABCD 的周长大于 \\(3\\sqrt{3}\\)。 xOy \\left(0,\\frac{1}{2}\\right) 3\\sqrt{3}\\n\\n",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "5916217a-26b2-5044-a23f-49bfba4d4cb6",
+                  "27341d3e-ac73-5c6a-9f78-161420228c97",
+                  "940d328e-fe63-57fe-b1db-4d1513dd6720",
+                  "311428a9-bdf7-5fba-a068-d6456196235a",
+                  "947aeef3-15a1-5d04-a9d9-2abe331ea31c",
+                  "3a8c4cac-58b3-53b9-8ee3-6067a5ff56bd"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            }
+          ],
+          "rowMatches": [
+            {
+              "rank": 1,
+              "rawRank": 1,
+              "goldQuestionIds": [
+                "445ee3ea-929f-52f7-8a32-07c49495c616"
+              ]
+            },
+            {
+              "rank": 2,
+              "rawRank": 2,
+              "goldQuestionIds": []
+            },
+            {
+              "rank": 3,
+              "rawRank": 3,
+              "goldQuestionIds": []
+            },
+            {
+              "rank": 4,
+              "rawRank": 4,
+              "goldQuestionIds": []
+            },
+            {
+              "rank": 5,
+              "rawRank": 5,
+              "goldQuestionIds": []
+            },
+            {
+              "rank": 6,
+              "rawRank": 6,
+              "goldQuestionIds": []
+            },
+            {
+              "rank": 7,
+              "rawRank": 7,
+              "goldQuestionIds": []
+            },
+            {
+              "rank": 8,
+              "rawRank": 8,
+              "goldQuestionIds": []
+            },
+            {
+              "rank": 9,
+              "rawRank": 9,
+              "goldQuestionIds": []
+            },
+            {
+              "rank": 10,
+              "rawRank": 10,
+              "goldQuestionIds": []
+            }
+          ]
+        },
+        {
+          "direction": "spatial_vector",
+          "seedSlot": "seed_5",
+          "mode": "seed_stem_only",
+          "evaluationStatus": "invalid_seed_mismatch",
+          "query": "已知圆柱和圆锥的底面半径相等，侧面积相等，且它们的高均为√3，则圆锥的体积为（ ） A．2√3π B．3√3π C．6√3π D．9√3π \\sqrt{3} 2\\sqrt{3}\\pi 3\\sqrt{3}\\pi 6\\sqrt{3}\\pi 9\\sqrt{3}\\pi",
+          "queryInput": "answer-free canonical seed stem",
+          "score": null,
+          "goldRefs": [
+            {
+              "sourceFile": "2022年高考数学试卷（新高考Ⅰ卷）（解析卷）.pdf",
+              "sourceSha256": "80e25b3bfa54d21707b954f6c7e65f42fc20c23a50e3115035a779ebb980e2f6",
+              "questionNumber": "8",
+              "questionId": "ef9c9a69-5ff4-55e8-a63e-5f2b347451d6",
+              "documentRef": "f5522733-121d-5a32-b090-030c0dd5106d",
+              "stemSummary": "已知正四棱锥的侧棱长为 \\(l\\)，其各顶点都在同一球面上。若该球的体积为 \\(36\\pi\\)，且 \\(3\\le l\\le3\\sqrt{3}\\)，则该正四棱锥体积的取值范围是（ ） A．\\(\\left[18,\\frac{81}{4}\\right]\\) B．\\(\\left[\\frac{27}{4},\\frac{81}{4}\\right]\\) C．\\(\\left[\\frac{27}{4},\\frac{64}{3}\\right]\\) D． 36\\pi 3\\le l\\le3\\sqrt{3} \\left[18,\\frac{81}{4}\\right] \\left[\\frac{27}{4},\\frac{81}{4}\\right] \\left[\\frac{27}{4},\\frac{64}{3}\\right]\\n\\n",
+              "evidenceTerms": [
+                "四棱锥"
+              ]
+            },
+            {
+              "sourceFile": "2022年高考数学试卷（新高考Ⅱ卷）（解析卷）.pdf",
+              "sourceSha256": "ba3f4f7671530f95b342a514a061d792eaeabace73d43e0f11abf498b955ae31",
+              "questionNumber": "11",
+              "questionId": "a9faeaca-b583-5184-98c3-66c8faa2ce47",
+              "documentRef": "a6a01cfe-7dfd-5308-8df2-d82fa407858d",
+              "stemSummary": "如图，四边形ABCD为正方形，ED⊥平面ABCD，FB∥ED，AB＝ED＝2FB，记三棱锥E-ACD，F-ABC，F-ACE的体积分别为V₁，V₂，V₃，则（ ） A．V₃＝2V₂ B．V₃＝V₁ C．V₃＝V₁＋V₂ D．2V₃＝3V₁ ED\\perp \\text{平面 }ABCD FB\\parallel ED AB=ED=2FB V_1=V_{E-ACD} V_2=V_{F-ABC} V_3=V_{F-ACE} V_3=2V_2 V_3=V_1 V_3=V_1+V_2 2V_3=3V_1\\n\\n",
+              "evidenceTerms": [
+                "三棱锥"
+              ]
+            },
+            {
+              "sourceFile": "2023年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+              "sourceSha256": "e8add182bfb613712c493c9f4500392bc8086457cf531b0211d213dc12956052",
+              "questionNumber": "18",
+              "questionId": "445ee3ea-929f-52f7-8a32-07c49495c616",
+              "documentRef": "f0931840-c2b6-5a14-8af5-623bbcca2218",
+              "stemSummary": "如图，在正四棱柱 \\(ABCD-A_1B_1C_1D_1\\) 中，\\(AB=2\\)，\\(AA_1=4\\)。点 \\(A_2,B_2,C_2,D_2\\) 分别在棱 \\(AA_1,BB_1,CC_1,DD_1\\) 上，\\(AA_2=1\\)，\\(BB_2=DD_2=2\\)，\\(CC_2=3\\)。 （1）证明：\\(B_2C_2//A_2D_2\\)； （2）点 \\(P\\) 在线段 \\(BB_1\\) 上，当二面角 \\(P-A_2C_2-D_2\\) 为 \\(150^\\circ\\) 时，求 \\(B_2P\\)。 ABCD-A_1B_1C_1D_1 AB=2 AA_1=4 AA_2=1 BB_2=DD_2=2 CC_2=3 \\overline{B_2C_2}\\parallel\\overline{A_2D_2} \\angle(P-A_...",
+              "evidenceTerms": [
+                "二面角",
+                "四棱柱"
+              ]
+            }
+          ],
+          "returnedHitCount": 10,
+          "rawTopKDuplicateKeyCount": 0,
+          "rawTopKDuplicateRowCount": 0,
+          "rawTopKLargestRepeatedKeyOccupancy": 1,
+          "rawTopKRepeatedKeys": [],
+          "duplicateHitCountCollapsed": 0,
+          "hits": [
+            {
+              "rank": 1,
+              "rawRank": 1,
+              "recordId": "08d97c75-3244-5728-9376-a2848118d361",
+              "sourceFile": "2024年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+              "questionNumber": "5",
+              "questionId": "08d97c75-3244-5728-9376-a2848118d361",
+              "documentRef": "755aa477-bc93-5d7c-b504-3f4e2991feef",
+              "distance": 0.88641363,
+              "textSummary": "已知圆柱和圆锥的底面半径相等，侧面积相等，且它们的高均为 \\(\\sqrt{3}\\)，则圆锥的体积为（ ） A．\\(2\\sqrt{3}\\pi\\) B．\\(3\\sqrt{3}\\pi\\) C．\\(6\\sqrt{3}\\pi\\) D．\\(9\\sqrt{3}\\pi\\) \\sqrt{3} 2\\sqrt{3}\\pi 3\\sqrt{3}\\pi 6\\sqrt{3}\\pi 9\\sqrt{3}\\pi\\n\\n",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "已知圆柱和圆锥的底面半径相等，侧面积相等，且它们的高均为 \\(\\sqrt{3}\\)，则圆锥的体积为（ ） A．\\(2\\sqrt{3}\\pi\\) B．\\(3\\sqrt{3}\\pi\\) C．\\(6\\sqrt{3}\\pi\\) D．\\(9\\sqrt{3}\\pi\\) \\sqrt{3} 2\\sqrt{3}\\pi 3\\sqrt{3}\\pi 6\\sqrt{3}\\pi 9\\sqrt{3}\\pi\\n\\n",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "d6fbfdc1-5179-5caa-94e4-fdc123d77448",
+                  "337b0e09-06ed-51de-ab82-aa5d728be68b"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 2,
+              "rawRank": 2,
+              "recordId": "5f10ea33-ed43-5779-8d50-869fc8636760",
+              "sourceFile": "2024年高考数学试卷（新课标Ⅰ卷）（空白卷）.pdf",
+              "questionNumber": "5",
+              "questionId": "5f10ea33-ed43-5779-8d50-869fc8636760",
+              "documentRef": "64b54b7d-ba92-5ca7-b249-ec323141ece0",
+              "distance": 0.8734887,
+              "textSummary": "已知圆柱和圆锥的底面半径相等，侧面积相等，且它们的高均为√3，则圆锥的体积为（ ） A．2√3π B．3√3π C．6√3π D．9√3π \\sqrt{3} 2\\sqrt{3}\\pi 3\\sqrt{3}\\pi 6\\sqrt{3}\\pi 9\\sqrt{3}\\pi",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "已知圆柱和圆锥的底面半径相等，侧面积相等，且它们的高均为√3，则圆锥的体积为（ ） A．2√3π B．3√3π C．6√3π D．9√3π \\sqrt{3} 2\\sqrt{3}\\pi 3\\sqrt{3}\\pi 6\\sqrt{3}\\pi 9\\sqrt{3}\\pi",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "1ba89205-af6c-5f74-b9f8-fd170760b07e"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 3,
+              "rawRank": 3,
+              "recordId": "806dfdc4-651f-5d1a-b2c3-775458d9072e",
+              "sourceFile": "2023年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+              "questionNumber": "9",
+              "questionId": "806dfdc4-651f-5d1a-b2c3-775458d9072e",
+              "documentRef": "bbf9ac25-3369-55a0-a903-374fe97d8334",
+              "distance": 0.7926816,
+              "textSummary": "已知圆锥的顶点为P，底面圆心为O，AB为底面直径，∠APB=120°，PA=2，点C在底面圆周上，且二面角P-AC-O为45°，则（ ）． A．该圆锥的体积为π B．该圆锥的侧面积为4√3π C．AC=2√2 D．△PAC的面积为√3 \\angle APB=120^\\circ PA=2 P-AC-O 45^\\circ \\pi 4\\sqrt{3}\\pi AC=2\\sqrt{2} S_{\\triangle PAC}=\\sqrt{3}\\n\\n",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "已知圆锥的顶点为P，底面圆心为O，AB为底面直径，∠APB=120°，PA=2，点C在底面圆周上，且二面角P-AC-O为45°，则（ ）． A．该圆锥的体积为π B．该圆锥的侧面积为4√3π C．AC=2√2 D．△PAC的面积为√3 \\angle APB=120^\\circ PA=2 P-AC-O 45^\\circ \\pi 4\\sqrt{3}\\pi AC=2\\sqrt{2} S_{\\triangle PAC}=\\sqrt{3}\\n\\n",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "ab91ebb8-2db7-5056-b39d-e10abc455c57",
+                  "808a7d21-2c7e-57e5-abb6-3adc85282656"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 4,
+              "rawRank": 4,
+              "recordId": "462e2e9a-7cf3-5d50-8fb3-cc89c398fdf9",
+              "sourceFile": "2022年高考数学试卷（新高考Ⅰ卷）（解析卷）.pdf",
+              "questionNumber": "19",
+              "questionId": "462e2e9a-7cf3-5d50-8fb3-cc89c398fdf9",
+              "documentRef": "f5522733-121d-5a32-b090-030c0dd5106d",
+              "distance": 0.7276626,
+              "textSummary": "如图，直三棱柱 \\(ABC-A_1B_1C_1\\) 的体积为4，\\(\\triangle ABC\\) 的面积为 \\(2\\sqrt{2}\\)。 （1）求 \\(A_1\\) 到平面 \\(ABC\\) 的距离； （2）设 \\(D\\) 为 \\(A_1C\\) 的中点，\\(AA_1=AB\\)，平面 \\(ABC\\perp\\) 平面 \\(ABB_1A_1\\)，求二面角 \\(A-BD-C\\) 的正弦值。 ABC-A_1B_1C_1 \\triangle ABC 2\\sqrt{2} A_1 ABC D A_1C AA_1=AB ABC\\perp ABB_1A_1 A-BD-C\\n\\n",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "如图，直三棱柱 \\(ABC-A_1B_1C_1\\) 的体积为4，\\(\\triangle ABC\\) 的面积为 \\(2\\sqrt{2}\\)。 （1）求 \\(A_1\\) 到平面 \\(ABC\\) 的距离； （2）设 \\(D\\) 为 \\(A_1C\\) 的中点，\\(AA_1=AB\\)，平面 \\(ABC\\perp\\) 平面 \\(ABB_1A_1\\)，求二面角 \\(A-BD-C\\) 的正弦值。 ABC-A_1B_1C_1 \\triangle ABC 2\\sqrt{2} A_1 ABC D A_1C AA_1=AB ABC\\perp ABB_1A_1 A-BD-C\\n\\n",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "5f3352a9-a667-5f96-aa48-eec9ba18210d",
+                  "5feabcc7-229f-5841-84d5-a7840dc7572b",
+                  "d8b06f6f-476c-571d-8556-be7320ddcf43",
+                  "791ca086-5a10-564f-8bb6-242a2f30e59a"
+                ],
+                "controlledManifestResolution": "pass",
+                "controlledManifestFigureCount": 1,
+                "canonicalFigureReferences": [
+                  "figures/q-019-01.png"
+                ],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 5,
+              "rawRank": 5,
+              "recordId": "ef9c9a69-5ff4-55e8-a63e-5f2b347451d6",
+              "sourceFile": "2022年高考数学试卷（新高考Ⅰ卷）（解析卷）.pdf",
+              "questionNumber": "8",
+              "questionId": "ef9c9a69-5ff4-55e8-a63e-5f2b347451d6",
+              "documentRef": "f5522733-121d-5a32-b090-030c0dd5106d",
+              "distance": 0.72503865,
+              "textSummary": "已知正四棱锥的侧棱长为 \\(l\\)，其各顶点都在同一球面上。若该球的体积为 \\(36\\pi\\)，且 \\(3\\le l\\le3\\sqrt{3}\\)，则该正四棱锥体积的取值范围是（ ） A．\\(\\left[18,\\frac{81}{4}\\right]\\) B．\\(\\left[\\frac{27}{4},\\frac{81}{4}\\right]\\) C．\\(\\left[\\frac{27}{4},\\frac{64}{3}\\right]\\) D． 36\\pi 3\\le l\\le3\\sqrt{3} \\left[18,\\frac{81}{4}\\right] \\left[\\frac{27}{4},\\frac{81}{4}\\right] \\left[\\frac{27}{4},\\frac{64}{3}\\right]\\n\\n",
+              "isGold": true,
+              "goldQuestionIds": [
+                "ef9c9a69-5ff4-55e8-a63e-5f2b347451d6"
+              ],
+              "recordType": "question",
+              "stemSummary": "已知正四棱锥的侧棱长为 \\(l\\)，其各顶点都在同一球面上。若该球的体积为 \\(36\\pi\\)，且 \\(3\\le l\\le3\\sqrt{3}\\)，则该正四棱锥体积的取值范围是（ ） A．\\(\\left[18,\\frac{81}{4}\\right]\\) B．\\(\\left[\\frac{27}{4},\\frac{81}{4}\\right]\\) C．\\(\\left[\\frac{27}{4},\\frac{64}{3}\\right]\\) D． 36\\pi 3\\le l\\le3\\sqrt{3} \\left[18,\\frac{81}{4}\\right] \\left[\\frac{27}{4},\\frac{81}{4}\\right] \\left[\\frac{27}{4},\\frac{64}{3}\\right]\\n\\n",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "55441eff-eada-5ef0-b27a-5441ea01b644",
+                  "30cf4c75-fa28-5124-ba77-34cde481a0f8"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 6,
+              "rawRank": 6,
+              "recordId": "79c46f27-85ba-509e-8987-8c1f92eb285a",
+              "sourceFile": "2023年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+              "questionNumber": "14",
+              "questionId": "79c46f27-85ba-509e-8987-8c1f92eb285a",
+              "documentRef": "bbf9ac25-3369-55a0-a903-374fe97d8334",
+              "distance": 0.7232239,
+              "textSummary": "底面边长为4的正四棱锥被平行于其底面的平面所截，被去一个底面边长为2，高为3的正四棱锥，所得棱台的体积为\\(\\underline{\\qquad}\\)。 4 2 3\\n\\n",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "底面边长为4的正四棱锥被平行于其底面的平面所截，被去一个底面边长为2，高为3的正四棱锥，所得棱台的体积为\\(\\underline{\\qquad}\\)。 4 2 3\\n\\n",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "d9f37279-45da-56a6-ba05-e0cb2cea345e",
+                  "4d282136-b024-5b3b-a99a-e0cca156596a"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 7,
+              "rawRank": 7,
+              "recordId": "79966358-f10b-5ab5-83b5-d5bbaa567df6",
+              "sourceFile": "2024年高考数学试卷（天津）（解析卷）.pdf",
+              "questionNumber": "17",
+              "questionId": "79966358-f10b-5ab5-83b5-d5bbaa567df6",
+              "documentRef": "784c6c04-7db1-5429-b82a-d76103c8399e",
+              "distance": 0.69862515,
+              "textSummary": "已知四棱柱ABCD-A₁B₁C₁D₁中，底面ABCD为梯形，AB∥CD，AA₁⊥平面ABCD，AD⊥AB，其中AB=AA₁=2，AD=DC=1。N是B₁C₁的中点，M是DD₁的中点。 （1）求证D₁N∥平面CB₁M； （2）求平面CB₁M与平面BB₁CC₁的夹角余弦值； （3）求点B到平面CB₁M的距离。 ABCD-A_1B_1C_1D_1 AB\\parallel CD AA_1\\perp\\text{平面 }ABCD AD\\perp AB AB=AA_1=2 AD=DC=1 N\\text{ 是 }B_1C_1\\text{ 的中点} M\\text{ 是 }DD_1\\text{ 的中点} D_1N\\parallel\\text{平面 }CB_1M \\text{平面 }CB_1M\\text{ 与平面 }BB_1CC_1...",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "已知四棱柱ABCD-A₁B₁C₁D₁中，底面ABCD为梯形，AB∥CD，AA₁⊥平面ABCD，AD⊥AB，其中AB=AA₁=2，AD=DC=1。N是B₁C₁的中点，M是DD₁的中点。 （1）求证D₁N∥平面CB₁M； （2）求平面CB₁M与平面BB₁CC₁的夹角余弦值； （3）求点B到平面CB₁M的距离。 ABCD-A_1B_1C_1D_1 AB\\parallel CD AA_1\\perp\\text{平面 }ABCD AD\\perp AB AB=AA_1=2 AD=DC=1 N\\text{ 是 }B_1C_1\\text{ 的中点} M\\text{ 是 }DD_1\\text{ 的中点} D_1N\\parallel\\text{平面 }CB_1M \\text{平面 }CB_1M\\text{ 与平面 }BB_1CC_1...",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "7063d412-e5b6-544a-ada1-22ec2607a169",
+                  "d6d73844-95df-5921-89fd-4b139c02f2ec",
+                  "c5909bd1-1352-5556-a237-9efdc0d45296"
+                ],
+                "controlledManifestResolution": "pass",
+                "controlledManifestFigureCount": 1,
+                "canonicalFigureReferences": [
+                  "figures/q-017-01.png"
+                ],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 8,
+              "rawRank": 8,
+              "recordId": "3e79683e-b10a-57cc-8ca7-7d7590f7500f",
+              "sourceFile": "2024年高考数学试卷（理）（全国甲卷）（空白卷）.pdf",
+              "questionNumber": "14",
+              "questionId": "3e79683e-b10a-57cc-8ca7-7d7590f7500f",
+              "documentRef": "2aa739f1-b835-5d7a-be43-dc7065e9beed",
+              "distance": 0.69695026,
+              "textSummary": "已知甲、乙两个圆台上、下底面的半径均为r₁和r₂，母线长分别为2(r₂−r₁)和3(r₂−r₁)，则两个圆台的体积之比\\frac{V_甲}{V_乙}=______． r_{1} r_{2} 2(r_{2}-r_{1}) 3(r_{2}-r_{1}) \\frac{V_{\\text{甲}}}{V_{\\text{乙}}}",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "已知甲、乙两个圆台上、下底面的半径均为r₁和r₂，母线长分别为2(r₂−r₁)和3(r₂−r₁)，则两个圆台的体积之比\\frac{V_甲}{V_乙}=______． r_{1} r_{2} 2(r_{2}-r_{1}) 3(r_{2}-r_{1}) \\frac{V_{\\text{甲}}}{V_{\\text{乙}}}",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "cddd9219-4f21-5a06-8c61-d2eddf223830"
+                ],
+                "controlledManifestResolution": "not_required",
+                "controlledManifestFigureCount": 0,
+                "canonicalFigureReferences": [],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 9,
+              "rawRank": 9,
+              "recordId": "89923ab3-a20e-5931-a174-74637d01db84",
+              "sourceFile": "2024年高考数学试卷（天津）（空白卷）.pdf",
+              "questionNumber": "17",
+              "questionId": "89923ab3-a20e-5931-a174-74637d01db84",
+              "documentRef": "3240274f-66bf-5562-ba04-df455e553cc8",
+              "distance": 0.6945855,
+              "textSummary": "已知四棱柱\\(ABCD-A_1B_1C_1D_1\\)中，底面\\(ABCD\\)为梯形，\\(AB\\parallel CD\\)，\\(AA_1\\perp\\)平面\\(ABCD\\)，\\(AD\\perp AB\\)，其中\\(AB=AA_1=2\\)，\\(AD=DC=1\\)。\\(N\\)是\\(B_1C_1\\)的中点，\\(M\\)是\\(DD_1\\)的中点。 （1）求证\\(DN\\parallel\\)平面\\(CB_1M\\)； （2）求平面\\(CB_1M\\)与平面\\(BB_1CC_1\\)的夹角余弦值； （3）求点\\(B\\)到平面\\(CB_1M\\)的距离。 ABCD-A_1B_1C_1D_1 AB\\parallel CD AA_1\\perp\\text{平面 }ABCD AD\\perp AB AB=AA_1=2 AD=DC=1 DN\\parall...",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "已知四棱柱\\(ABCD-A_1B_1C_1D_1\\)中，底面\\(ABCD\\)为梯形，\\(AB\\parallel CD\\)，\\(AA_1\\perp\\)平面\\(ABCD\\)，\\(AD\\perp AB\\)，其中\\(AB=AA_1=2\\)，\\(AD=DC=1\\)。\\(N\\)是\\(B_1C_1\\)的中点，\\(M\\)是\\(DD_1\\)的中点。 （1）求证\\(DN\\parallel\\)平面\\(CB_1M\\)； （2）求平面\\(CB_1M\\)与平面\\(BB_1CC_1\\)的夹角余弦值； （3）求点\\(B\\)到平面\\(CB_1M\\)的距离。 ABCD-A_1B_1C_1D_1 AB\\parallel CD AA_1\\perp\\text{平面 }ABCD AD\\perp AB AB=AA_1=2 AD=DC=1 DN\\parall...",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "651d4898-bb0b-56b8-b0b9-b2587a670064",
+                  "af525490-9c8a-5eaf-aecd-16ba6ca26a36"
+                ],
+                "controlledManifestResolution": "pass",
+                "controlledManifestFigureCount": 1,
+                "canonicalFigureReferences": [
+                  "figures/q-017-01.png"
+                ],
+                "forbiddenReferenceDetected": false
+              }
+            },
+            {
+              "rank": 10,
+              "rawRank": 10,
+              "recordId": "990147b7-2d4a-5852-985f-bb38855ab441",
+              "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+              "questionNumber": "7",
+              "questionId": "990147b7-2d4a-5852-985f-bb38855ab441",
+              "documentRef": "7b1615dd-3104-5585-915c-7b618a72686a",
+              "distance": 0.6936059,
+              "textSummary": "已知正三棱台 \\(ABC-A_1B_1C_1\\) 的体积为 \\(\\frac{52}{3}\\)，\\(AB=6\\)，\\(A_1B_1=2\\)，则 \\(A_1A\\) 与平面 \\(ABC\\) 所成角的正切值为（ ） A．\\(\\frac{1}{2}\\) B．\\(1\\) C．\\(2\\) D．\\(3\\) ABC-A_1B_1C_1 \\frac{52}{3} AB=6 A_1B_1=2 A_1A \\frac{1}{2}\\n\\n",
+              "isGold": false,
+              "goldQuestionIds": [],
+              "recordType": "question",
+              "stemSummary": "已知正三棱台 \\(ABC-A_1B_1C_1\\) 的体积为 \\(\\frac{52}{3}\\)，\\(AB=6\\)，\\(A_1B_1=2\\)，则 \\(A_1A\\) 与平面 \\(ABC\\) 所成角的正切值为（ ） A．\\(\\frac{1}{2}\\) B．\\(1\\) C．\\(2\\) D．\\(3\\) ABC-A_1B_1C_1 \\frac{52}{3} AB=6 A_1B_1=2 A_1A \\frac{1}{2}\\n\\n",
+              "assetContract": {
+                "status": "fail",
+                "reasons": [
+                  "metadata_asset_not_bound_to_manifest_figure"
+                ],
+                "vectorMetadataHasAssetIds": true,
+                "vectorMetadataAssetIds": [
+                  "f04b0b43-9ab8-5cd0-a11a-d3c85410c43c",
+                  "0365b225-16d4-53fd-90cf-c66e5f63b288",
+                  "65e6d980-6acf-5387-b2c1-9a512b3e350e"
+                ],
+                "controlledManifestResolution": "pass",
+                "controlledManifestFigureCount": 1,
+                "canonicalFigureReferences": [
+                  "figures/q-007-01.png"
+                ],
+                "forbiddenReferenceDetected": false
+              }
+            }
+          ],
+          "rowMatches": []
+        },
+        {
+          "direction": "spatial_vector",
+          "seedSlot": "seed_5",
+          "mode": "aligned_topic_plus_stem",
+          "evaluationStatus": "not_run_seed_mismatch",
+          "query": null,
+          "score": null,
+          "hits": [],
+          "goldRefs": [
+            {
+              "sourceFile": "2022年高考数学试卷（新高考Ⅰ卷）（解析卷）.pdf",
+              "sourceSha256": "80e25b3bfa54d21707b954f6c7e65f42fc20c23a50e3115035a779ebb980e2f6",
+              "questionNumber": "8",
+              "questionId": "ef9c9a69-5ff4-55e8-a63e-5f2b347451d6",
+              "documentRef": "f5522733-121d-5a32-b090-030c0dd5106d",
+              "stemSummary": "已知正四棱锥的侧棱长为 \\(l\\)，其各顶点都在同一球面上。若该球的体积为 \\(36\\pi\\)，且 \\(3\\le l\\le3\\sqrt{3}\\)，则该正四棱锥体积的取值范围是（ ） A．\\(\\left[18,\\frac{81}{4}\\right]\\) B．\\(\\left[\\frac{27}{4},\\frac{81}{4}\\right]\\) C．\\(\\left[\\frac{27}{4},\\frac{64}{3}\\right]\\) D． 36\\pi 3\\le l\\le3\\sqrt{3} \\left[18,\\frac{81}{4}\\right] \\left[\\frac{27}{4},\\frac{81}{4}\\right] \\left[\\frac{27}{4},\\frac{64}{3}\\right]\\n\\n",
+              "evidenceTerms": [
+                "四棱锥"
+              ]
+            },
+            {
+              "sourceFile": "2022年高考数学试卷（新高考Ⅱ卷）（解析卷）.pdf",
+              "sourceSha256": "ba3f4f7671530f95b342a514a061d792eaeabace73d43e0f11abf498b955ae31",
+              "questionNumber": "11",
+              "questionId": "a9faeaca-b583-5184-98c3-66c8faa2ce47",
+              "documentRef": "a6a01cfe-7dfd-5308-8df2-d82fa407858d",
+              "stemSummary": "如图，四边形ABCD为正方形，ED⊥平面ABCD，FB∥ED，AB＝ED＝2FB，记三棱锥E-ACD，F-ABC，F-ACE的体积分别为V₁，V₂，V₃，则（ ） A．V₃＝2V₂ B．V₃＝V₁ C．V₃＝V₁＋V₂ D．2V₃＝3V₁ ED\\perp \\text{平面 }ABCD FB\\parallel ED AB=ED=2FB V_1=V_{E-ACD} V_2=V_{F-ABC} V_3=V_{F-ACE} V_3=2V_2 V_3=V_1 V_3=V_1+V_2 2V_3=3V_1\\n\\n",
+              "evidenceTerms": [
+                "三棱锥"
+              ]
+            },
+            {
+              "sourceFile": "2023年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+              "sourceSha256": "e8add182bfb613712c493c9f4500392bc8086457cf531b0211d213dc12956052",
+              "questionNumber": "18",
+              "questionId": "445ee3ea-929f-52f7-8a32-07c49495c616",
+              "documentRef": "f0931840-c2b6-5a14-8af5-623bbcca2218",
+              "stemSummary": "如图，在正四棱柱 \\(ABCD-A_1B_1C_1D_1\\) 中，\\(AB=2\\)，\\(AA_1=4\\)。点 \\(A_2,B_2,C_2,D_2\\) 分别在棱 \\(AA_1,BB_1,CC_1,DD_1\\) 上，\\(AA_2=1\\)，\\(BB_2=DD_2=2\\)，\\(CC_2=3\\)。 （1）证明：\\(B_2C_2//A_2D_2\\)； （2）点 \\(P\\) 在线段 \\(BB_1\\) 上，当二面角 \\(P-A_2C_2-D_2\\) 为 \\(150^\\circ\\) 时，求 \\(B_2P\\)。 ABCD-A_1B_1C_1D_1 AB=2 AA_1=4 AA_2=1 BB_2=DD_2=2 CC_2=3 \\overline{B_2C_2}\\parallel\\overline{A_2D_2} \\angle(P-A_...",
+              "evidenceTerms": [
+                "二面角",
+                "四棱柱"
+              ]
+            }
+          ],
+          "note": "aligned topic+stem is intentionally skipped because the assigned seed stem is not aligned"
+        }
+      ],
+      "metricsByMode": {
+        "topic_only": {
+          "evaluationStatus": "evaluated",
+          "score": {
+            "topKHit": true,
+            "goldCount": 3,
+            "relevantHitCount": 1,
+            "falsePositiveCount": 9,
+            "returnedUniqueHitCount": 10,
+            "recallAtK": 0.333333,
+            "precisionAtK": 0.1,
+            "mrr": 1.0,
+            "nDCGAtK": 0.469279,
+            "firstGoldHitRank": 1,
+            "goldHitRanks": {
+              "ef9c9a69-5ff4-55e8-a63e-5f2b347451d6": null,
+              "a9faeaca-b583-5184-98c3-66c8faa2ce47": null,
+              "445ee3ea-929f-52f7-8a32-07c49495c616": 1
+            },
+            "grade": "A"
+          }
+        },
+        "seed_stem_only": {
+          "evaluationStatus": "invalid_seed_mismatch",
+          "score": null
+        },
+        "aligned_topic_plus_stem": {
+          "evaluationStatus": "not_run_seed_mismatch",
+          "score": null
+        }
+      }
+    }
+  },
+  "overallMetrics": {
+    "applicableQueryMetrics": {
+      "queryCount": 5,
+      "recallAtK": 0.533333,
+      "precisionAtK": 0.16,
+      "mrr": 0.633333,
+      "nDCGAtK": 0.442749,
+      "grades": {
+        "A": 2,
+        "B": 2,
+        "C": 1,
+        "F": 0
+      }
+    },
+    "byMode": {
+      "topic_only": {
+        "excludedInvalidOrSkippedCount": 0,
+        "metrics": {
+          "queryCount": 3,
+          "recallAtK": 0.666667,
+          "precisionAtK": 0.2,
+          "mrr": 0.833333,
+          "nDCGAtK": 0.583501,
+          "grades": {
+            "A": 2,
+            "B": 1,
+            "C": 0,
+            "F": 0
+          }
+        }
+      },
+      "seed_stem_only": {
+        "excludedInvalidOrSkippedCount": 2,
+        "metrics": {
+          "queryCount": 1,
+          "recallAtK": 0.333333,
+          "precisionAtK": 0.1,
+          "mrr": 0.166667,
+          "nDCGAtK": 0.16716,
+          "grades": {
+            "A": 0,
+            "B": 0,
+            "C": 1,
+            "F": 0
+          }
+        }
+      },
+      "aligned_topic_plus_stem": {
+        "excludedInvalidOrSkippedCount": 2,
+        "metrics": {
+          "queryCount": 1,
+          "recallAtK": 0.333333,
+          "precisionAtK": 0.1,
+          "mrr": 0.5,
+          "nDCGAtK": 0.296082,
+          "grades": {
+            "A": 0,
+            "B": 1,
+            "C": 0,
+            "F": 0
+          }
+        }
+      }
+    }
+  },
+  "assetContract": {
+    "status": "fail",
+    "vectorMetadataContract": "opaque assetId only; no visible locator is required",
+    "controlledResolutionContract": "manifest question assets resolve only to canonical figures/ references",
+    "forbiddenReferenceKinds": [
+      "page_image",
+      "remote_locator",
+      "encoded_binary",
+      "filesystem_path"
+    ],
+    "errors": [
+      "metadata_asset_not_bound_to_manifest_figure"
+    ]
+  },
+  "failureClassification": {
+    "counts": {
+      "false_positive_hit": 61,
+      "metadata_asset_not_bound_to_manifest_figure": 70,
+      "sample_topic_mismatch": 2
+    },
+    "seedMismatchIsExcludedFromDirectionMetrics": true,
+    "goldMissesAreCountedOnlyForEvaluatedModes": true
+  },
+  "limitations": [
+    "The canonical manifests do not publish authoritative knowledge-point labels.",
+    "Gold sets are weak-supervision/manual-audit samples selected from answer-free canonical stems; they are not automatic ground truth.",
+    "Seed slots 1/3/5 are an observation group. Stable slot order pairs them to directions only for query diagnostics; a mismatch is invalid rather than a recall failure.",
+    "Milvus outputFields intentionally omit text; each question hit receives a bounded answer-free stem summary from the verified canonical Markdown."
+  ]
+}

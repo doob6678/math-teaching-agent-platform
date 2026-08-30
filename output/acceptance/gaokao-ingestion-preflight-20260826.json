@@ -1,0 +1,26 @@
+{
+  "status": "preflight_read_only",
+  "generatedAtUtc": "2026-08-26T00:00:00Z",
+  "collection": "gaokao_math",
+  "operation": "server_side_filtered_count_only",
+  "entityRowsLoaded": false,
+  "fullCollectionQuery": false,
+  "sourceCount": 12,
+  "sourceCounts": {
+    "2022年高考数学试卷（新高考Ⅰ卷）（解析卷）.pdf": 30,
+    "2022年高考数学试卷（新高考Ⅱ卷）（解析卷）.pdf": 30,
+    "2023年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf": 27,
+    "2023年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf": 28,
+    "2024年高考数学试卷（理）（全国甲卷）（解析卷）.pdf": 35,
+    "2024年高考数学试卷（理）（全国甲卷）（空白卷）.pdf": 39,
+    "2024年高考数学试卷（天津）（解析卷）.pdf": 26,
+    "2024年高考数学试卷（天津）（空白卷）.pdf": 40,
+    "2024年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf": 118,
+    "2024年高考数学试卷（新课标Ⅰ卷）（空白卷）.pdf": 118,
+    "2024年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf": 132,
+    "2024年高考数学试卷（新课标Ⅱ卷）（空白卷）.pdf": 118
+  },
+  "filterContract": "(metadata[\\\"sourceFile\\\"] == JSON_QUOTED_SOURCE or metadata[\\\"documentFullName\\\"] == JSON_QUOTED_SOURCE)",
+  "cleanupScope": "gaokao_math and the twelve configured canonical source filenames only",
+  "nextOperation": "source-scoped cleanup followed by replacement upsert"
+}

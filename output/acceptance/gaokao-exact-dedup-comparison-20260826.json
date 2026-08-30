@@ -1,0 +1,95 @@
+{
+  "status": "partial_success_full_acceptance_failed",
+  "generatedAtUtc": "2026-08-26T07:12:31Z",
+  "baselineReport": "output/acceptance/knowledge-point-recall-baseline-pre-dedup-20260826.json",
+  "afterReport": "output/acceptance/knowledge-point-recall-report-after-exact-dedup-20260826.json",
+  "ingestionReport": "output/math-paper-transcription-runs/terra-gaokao-20260820T232559Z-975d2574-report.json",
+  "collection": "gaokao_math",
+  "topK": 10,
+  "primaryKey": "(sourceSha256, canonical numeric questionNumber)",
+  "comparison": {
+    "overallApplicable": {
+      "baselineMrr": 0.288889,
+      "afterMrr": 0.575,
+      "delta": 0.286111,
+      "baselineRecallAt10": 0.2,
+      "afterRecallAt10": 0.333333,
+      "baselinePrecisionAt10": 0.06,
+      "afterPrecisionAt10": 0.13
+    },
+    "topicOnly": {
+      "baselineMrr": 0.37037,
+      "afterMrr": 0.75,
+      "delta": 0.37963,
+      "baselineRecallAt10": 0.222222,
+      "afterRecallAt10": 0.333333,
+      "baselinePrecisionAt10": 0.066667,
+      "afterPrecisionAt10": 0.15
+    },
+    "parabolaTopicOnly": {
+      "baselineMrr": 0.111111,
+      "afterMrr": 0.25,
+      "baselineFirstGoldHitRank": 9,
+      "afterFirstGoldHitRank": 4
+    }
+  },
+  "canonicalReplacement": {
+    "sourceCount": 12,
+    "questionCount": 250,
+    "manifestDuplicateSourceQuestionKeys": 0,
+    "cleanupMatchedCount": 741,
+    "cleanupDeletedCount": 741,
+    "upsertEntityCount": 262,
+    "upsertBatchSize": 100,
+    "upsertBatchCount": 3,
+    "flushCount": 1,
+    "clientFullCollectionLoad": false
+  },
+  "rawTop10DuplicateObservation": {
+    "coveredReplacementSources": "No duplicate source/question keys in the current 12-source canonical replacement rows.",
+    "uncoveredResiduals": {
+      "parabolaTopicOnly": {
+        "duplicateKeyCount": 2,
+        "duplicateRowCount": 6,
+        "largestOccupancy": 4,
+        "keys": [
+          {"sourceFile": "2024年高考数学试卷（北京）（空白卷）.pdf", "questionNumber": "11", "occupancy": 4},
+          {"sourceFile": "2024年高考数学试卷（北京）（解析卷）.pdf", "questionNumber": "11", "occupancy": 4}
+        ]
+      },
+      "spatialVectorSeedStemOnly": {
+        "duplicateKeyCount": 2,
+        "duplicateRowCount": 4,
+        "largestOccupancy": 4,
+        "keys": [
+          {"sourceFile": "2024年高考数学试卷（北京）（解析卷）.pdf", "questionNumber": "14", "occupancy": 4},
+          {"sourceFile": "2024年高考数学试卷（北京）（空白卷）.pdf", "questionNumber": "14", "occupancy": 2}
+        ]
+      }
+    }
+  },
+  "residualRisk": {
+    "status": "failed",
+    "reason": "Legacy rows from Beijing and Liaoning sources are outside the current canonical replacement whitelist and have no matching current canonical publication in this run; deleting them would be unscoped.",
+    "counts": {
+      "beijingBlankRows": 84,
+      "beijingSolutionRows": 88,
+      "liaoningRows": 19,
+      "nonCanonicalHitsInAfterReport": 12
+    },
+    "requiredNextReplacementScope": [
+      "2024年高考数学试卷（北京）（空白卷）.pdf",
+      "2024年高考数学试卷（北京）（解析卷）.pdf",
+      "数学2026年辽宁高三5月初联考.pdf"
+    ]
+  },
+  "acceptance": {
+    "exactIngestionDedup": "passed_for_current_12_source_replacement",
+    "mrrImprovement": "passed",
+    "coveredRawTop10Uniqueness": "passed",
+    "fullCollectionRawTop10Uniqueness": "failed_due_to_uncovered_legacy_sources",
+    "assetContract": "failed_closed",
+    "noFullCollectionLoad": "passed",
+    "otherCollectionsTouched": false
+  }
+}

@@ -1,0 +1,212 @@
+16:10                                                                                                                                          16:10 
+                                                                                                                                                          1
+16:10 
+ 1
+
+
+
+       P - ABCD P A   ABCDP A = AC = 2BC = 1AB = 3 AD  P B AD   P BC
+       P  ABCD P A   ABCD P BP CAC AD  P BC 
+
+
+
+       1 P A   ABCD P A  AD 
+       2 AD  P B P A  P B  P AB 
+       3 AD   P AB AD  AB 
+       4 ABC 
+
+                                                                                                                              AB2 + BC2 = AC2
+       AB  BC  ADBC 
+       5 AD  BC BC   P BC
+
+
+
+   AD  P B  AD   P AB
+   BC  P B 
+
+
+16:10                                                                                                                                          16:10 
+                                                                                                                                                          2
+ 2
+
+
+
+       P - ABCD P A   ABCDP A = AC = 2BC = 1AB = 3 AD  DC A - CP - D 
+                                                                                                                                         
+                                                                                                                                           42
+                                                                                                                                           7
+
+       AD 
+       CP  D  DE  AC E P AC  E  EF  CP  F  DF 
+
+
+
+ 1 A - CP - D  CP  ACP  DCP 
+ 2 P AC   ABCD DE  AC  DE  P AC 
+ 3 DE  CP EF  CP  DF  CP 
+ 4
+
+                     tan DF E =  sin DF E
+                                           1 - sin2 DF E
+
+ 5
+
+                     AD = x
+
+ ADC  DC DE
+ 6 E  AC  P AC  EF 
+
+                     tan DF E = DE
+                                        EF
+
+
+
+  ACP  DCP 
+ 
+
+
+16:10                                                               16:10 
+                                                                               3
+ 3
+
+
+
+ P - ABCD P A   ABCDAB  CDABC = 90AB = P A = 2CD = 4BC = 22M  P D 
+
+   CM  AD       1
+  |BM | = 23
+                6
+
+ BM  PC
+  M  BC  10
+
+ A  BC AB AP  M  P D 
+
+
+
+       1 A, B, C, D, P 
+       2 M 
+
+                                       P +D
+                                M=
+
+                                           2
+
+ 3 CM  AD 
+
+                                cos  = |u � v|
+                                           |u| |v|
+
+ 4 B--M   P--C  
+
+ 5 BC ""
+
+                         d2  =  |-B-M|2  -  |  proj         B--M|2
+                                                        BC
+
+
+
+  
+   0
+   |BM | 
+
+
+16:10                                                                                                                                            16:10 
+                                                                                                                                                            4
+ 4
+
+
+
+      
+        0
+       
+        0
+       
+
+
+
+       1
+       2 
+
+                                                                                                                                      a � b = 0
+       3 """"
+       4  0 
+       5 
+
+
+
+  ""
+   1  AD 
+
+
+16:10                              16:10 
+
+ 5
+
+
+
+       P - ABCD  CP  A - CP - D 
+       CP  CP A  CP D  CP  CP 
+
+
+
+       1
+       2 ACP  DCP  n1n2  
+       3    
+
+ 4      =  =-
+ 5        cos  = � n1 � n2
+                        |n1| |n2|
+
+
+
+  
+  
+
+                                   5
+16:10                                                                                                                                      16:10 
+
+ 6--
+
+
+
+       2  A  AP  A - CP - D  ACP  DCP 
+
+
+       AB  BC  AP  ACP  DCP  CP 
+
+
+
+       1
+
+ B, C, P  D   A(0, 0, 0)
+ 2 ACP           A-C
+
+                                                                                                                                   -
+                                                                                                                                   AP
+ n1 = (x1, y1, z1) 0 
+ 3 DCP 
+
+                                                                                                                                   C--D
+
+                                                                                                                                   --
+                                                                                                                                   CP
+ n2 = (x2, y2, z2)
+ 4
+
+                                                                                                                                 n1 � n2
+                                                                                                                                |n1| |n2|
+ 5 A - CP - D 
+
+
+
+  
+
+                                                                                                                                           6
+16:10   16:10 
+
+  
+  
+
+        7
+

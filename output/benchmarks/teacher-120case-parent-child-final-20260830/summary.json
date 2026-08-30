@@ -1,0 +1,27 @@
+{
+  "generatedAt": "2026-08-30T09:47:23+0800",
+  "documentRecall": {
+    "doc@1": 0.7,
+    "doc@3": 0.833333,
+    "doc@5": 0.916667
+  },
+  "blockRecall": {
+    "block@1": 0.683333,
+    "block@3": 0.808333,
+    "block@5": 0.883333,
+    "exactBlock@1": 0.375,
+    "exactBlock@3": 0.375,
+    "exactBlock@5": 0.375
+  },
+  "latencyMs": {
+    "average": 338.283,
+    "p50": 312.0,
+    "p95": 436.0,
+    "p99": 1268.0
+  },
+  "transportTelemetry": {
+    "retryCount": 0,
+    "rateLimit429Count": 0,
+    "totalBackoffMs": 0
+  }
+}

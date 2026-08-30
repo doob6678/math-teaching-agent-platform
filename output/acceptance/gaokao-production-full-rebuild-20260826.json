@@ -1,0 +1,132 @@
+{
+  "status": "production_rebuild_passed",
+  "collection": "gaokao_math",
+  "corpusRoot": "/mnt/c/Users/doob/Desktop/code/dev/math_agent_rag/output/math-paper-corpus",
+  "manifestCount": 12,
+  "questionCount": 250,
+  "entityCount": 262,
+  "embedding": {
+    "model": "local_bge_embedding",
+    "dimension": 512,
+    "batchSize": 10
+  },
+  "timingsSeconds": {
+    "canonicalValidationSeconds": 2.161,
+    "embeddingSeconds": 1.564,
+    "dropCollectionSeconds": 0.67,
+    "createAndLoadSeconds": 0.108,
+    "upsertSeconds": 0.187,
+    "flushSeconds": 0.005,
+    "countSeconds": 0.656,
+    "parabolaTop10Seconds": 0.03
+  },
+  "milvus": {
+    "collectionDropped": true,
+    "upsertBatchSize": 100,
+    "upsertBatchCount": 3,
+    "flushCount": 1,
+    "entityCountAfterRebuild": 262,
+    "sourceCounts": {
+      "2022年高考数学试卷（新高考Ⅰ卷）（解析卷）.pdf": 23,
+      "2022年高考数学试卷（新高考Ⅱ卷）（解析卷）.pdf": 23,
+      "2023年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf": 23,
+      "2023年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf": 23,
+      "2024年高考数学试卷（天津）（空白卷）.pdf": 21,
+      "2024年高考数学试卷（天津）（解析卷）.pdf": 21,
+      "2024年高考数学试卷（新课标Ⅰ卷）（空白卷）.pdf": 20,
+      "2024年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf": 20,
+      "2024年高考数学试卷（新课标Ⅱ卷）（空白卷）.pdf": 20,
+      "2024年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf": 20,
+      "2024年高考数学试卷（理）（全国甲卷）（空白卷）.pdf": 24,
+      "2024年高考数学试卷（理）（全国甲卷）（解析卷）.pdf": 24
+    }
+  },
+  "parabolaTop10": {
+    "query": "抛物线 焦点 准线",
+    "limit": 10,
+    "hits": [
+      {
+        "rank": 1,
+        "id": "deb040b6-2964-50d2-a1a9-7960e085140d",
+        "recordType": "QUESTION",
+        "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+        "questionNumber": "10",
+        "textPreview": "# 2024年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf 第 10 题\n\n- 来源页：8 至 10\n- 来源题目：10\n- 跨页连续：是\n\n抛物线 \\(C：y^2=4x\\) 的准线为 \\(l\\)，\\(P\\) 为 \\(C\\) 上的动点，过 \\(P\\) 作 \\(\\odot A：x^2+(y-4)^2=1\\) 的一条切线，\\(Q\\) 为切点，过 \\(P\\) 作 "
+      },
+      {
+        "rank": 2,
+        "id": "02467056-6d65-509e-808b-d538272034fc",
+        "recordType": "QUESTION",
+        "sourceFile": "2023年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+        "questionNumber": "10",
+        "textPreview": "# 2023年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf 第 10 题\n\n- 来源页：6 至 7\n- 来源题目：10\n- 跨页连续：是\n\n设 O 为坐标原点，直线 \\(y=-\\sqrt{3}(x-1)\\) 过抛物线 \\(C:y^2=2px\\,(p>0)\\) 的焦点，且与 \\(C\\) 交于 \\(M，N\\) 两点，\\(l\\) 为 \\(C\\) 的准线，则（ ）。"
+      },
+      {
+        "rank": 3,
+        "id": "7def1f0f-5a9e-56ac-a857-849521fdb062",
+        "recordType": "QUESTION",
+        "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（空白卷）.pdf",
+        "questionNumber": "10",
+        "textPreview": "# 2024年高考数学试卷（新课标Ⅱ卷）（空白卷）.pdf 第 10 题\n\n- 来源页：2 至 2\n- 来源题目：10\n- 跨页连续：否\n\n抛物线C：y²=4x的准线为l，P为C上的动点，过P作圆O：x²+(y−4)²=1的一条切线，Q为切点，过P作l的垂线，垂足为B，则（　　）\nA．l与⊙O相切\nB．当P，O，B三点共线时，|PQ|=√15\nC．当|PB|"
+      },
+      {
+        "rank": 4,
+        "id": "a44a3cc1-a48b-5c86-b4d3-d1e6e300bbb3",
+        "recordType": "QUESTION",
+        "sourceFile": "2024年高考数学试卷（天津）（解析卷）.pdf",
+        "questionNumber": "12",
+        "textPreview": "# 2024年高考数学试卷（天津）（解析卷）.pdf 第 12 题\n\n- 来源页：7 至 8\n- 来源题目：12\n- 跨页连续：是\n\n$(x-1)^2+y^2=25$的圆心与抛物线$y^2=2px(p>0)$的焦点$F$重合，$A$为两曲线的交点，则原点到直线$AF$的距离为\\underline{\\hspace{1.5cm}}。\n(x-1)^2+y^2=25"
+      },
+      {
+        "rank": 5,
+        "id": "66689e71-0f07-5efb-a1f4-0f4b5df3320a",
+        "recordType": "QUESTION",
+        "sourceFile": "2022年高考数学试卷（新高考Ⅰ卷）（解析卷）.pdf",
+        "questionNumber": "11",
+        "textPreview": "# 2022年高考数学试卷（新高考Ⅰ卷）（解析卷）.pdf 第 11 题\n\n- 来源页：7 至 7\n- 来源题目：11\n- 跨页连续：否\n\n已知 O 为坐标原点，点 A(1,1) 在抛物线 C：x²=2py(p>0) 上，过点 B(0,-1) 的直线交 C 于 P，Q 两点，则（　　）\nA．C 的准线为 y=-1\nB．直线 AB 与 C 相切\nC．|OP|·"
+      },
+      {
+        "rank": 6,
+        "id": "d9ac3f54-456f-5274-a5a3-da700fa22778",
+        "recordType": "QUESTION",
+        "sourceFile": "2022年高考数学试卷（新高考Ⅱ卷）（解析卷）.pdf",
+        "questionNumber": "10",
+        "textPreview": "# 2022年高考数学试卷（新高考Ⅱ卷）（解析卷）.pdf 第 10 题\n\n- 来源页：6 至 8\n- 来源题目：10\n- 跨页连续：是\n\n已知O为坐标原点，过抛物线C：y²=2px(p>0)焦点F的直线与C交于A，B两点。其中A在第一象限，点M(p,0)，若|AF|=|AM|，则（ ）\nA．直线AB的斜率为2√6\nB．|OB|=|OF|\nC．|AB|>4|"
+      },
+      {
+        "rank": 7,
+        "id": "167736a1-a18d-58d7-980a-de826921c38f",
+        "recordType": "QUESTION",
+        "sourceFile": "2024年高考数学试卷（天津）（空白卷）.pdf",
+        "questionNumber": "12",
+        "textPreview": "# 2024年高考数学试卷（天津）（空白卷）.pdf 第 12 题\n\n- 来源页：3 至 3\n- 来源题目：12\n- 跨页连续：否\n\n\\((x-1)^2+y^2=25\\) 的圆心与抛物线 \\(y^2=2px(p>0)\\) 的焦点 \\(F\\) 重合，\\(A\\) 为两曲线的交点，则原点到直线 \\(AF\\) 的距离为\\underline{\\hspace{1.5cm"
+      },
+      {
+        "rank": 8,
+        "id": "430d7940-5d72-50a7-8f40-bea0492e3dbc",
+        "recordType": "QUESTION",
+        "sourceFile": "2024年高考数学试卷（新课标Ⅰ卷）（空白卷）.pdf",
+        "questionNumber": "12",
+        "textPreview": "# 2024年高考数学试卷（新课标Ⅰ卷）（空白卷）.pdf 第 12 题\n\n- 来源页：3 至 3\n- 来源题目：12\n- 跨页连续：否\n\n设双曲线C的左右焦点分别为F₁，F₂，过F₂作平行于y轴的直线交C于A，B两点，若|F₁A|=13，|AB|=10，则C的离心率为__________。\nC:\\frac{x^2}{a^2}-\\frac{y^2}{b^2}"
+      },
+      {
+        "rank": 9,
+        "id": "9bad4853-ba08-5fd0-a564-9a8c85cb6b15",
+        "recordType": "QUESTION",
+        "sourceFile": "2023年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+        "questionNumber": "16",
+        "textPreview": "# 2023年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf 第 16 题\n\n- 来源页：13 至 15\n- 来源题目：16\n- 跨页连续：是\n\n已知双曲线 C：x²/a²−y²/b²=1（a>0，b>0）的左、右焦点分别为 F₁，F₂，点 A 在 C 上，点 B 在 y 轴上，\\overrightarrow{F₁A}⊥\\overrightarrow{F₁B}"
+      },
+      {
+        "rank": 10,
+        "id": "eb4170d7-777c-5e4b-8323-b36bd3b72d11",
+        "recordType": "QUESTION",
+        "sourceFile": "2024年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+        "questionNumber": "5",
+        "textPreview": "# 2024年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf 第 5 题\n\n- 来源页：3 至 3\n- 来源题目：5\n- 跨页连续：否\n\n已知曲线C：x²+y²=16（y>0），从C上任意一点P向x轴作垂线段PP′，P′为垂足，则线段PP′的中点M的轨迹方程为（ ）\nA．x²/16+y²/4=1（y>0）\nB．x²/16+y²/8=1（y>0）\nC．y²/16"
+      }
+    ],
+    "questionHitCount": 10,
+    "duplicateSourceQuestionKeys": {}
+  }
+}

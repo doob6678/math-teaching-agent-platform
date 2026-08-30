@@ -1,0 +1,7 @@
+{
+  "status": "run_separately",
+  "sqlBoundedEvidence": {
+    "status": "response_candidate_funnel",
+    "bounded": true
+  }
+}

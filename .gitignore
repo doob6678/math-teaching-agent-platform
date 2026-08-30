@@ -35,7 +35,29 @@ build/
 *.log
 logs/
 .local-storage/
-output/
+# output/ 默认只留本机；下面按 2026-08-30 决定保留指定的讲义产物与最新测评数据。
+# gitignore 级联规则：父目录必须逐级取消排除，子项才能重新纳入版本控制。
+output/*
+!output/acceptance/
+output/acceptance/*
+!output/acceptance/handout-mcp/
+output/acceptance/handout-mcp/*
+!output/acceptance/handout-mcp/handout-mcp-solid-geometry-gaokao-figure-final-20260829T165522Z/
+!output/acceptance/handout-mcp/handout-mcp-coloring-combinatorics-relevant-images-20260829T130201Z/
+!output/acceptance/handout-mcp/handout-mcp-parabola-image-binding-final-verified-20260829/
+# 运行事件日志是中间产物而非讲义成品，涂色运行的 11M events.jsonl 不入库。
+output/acceptance/handout-mcp/handout-mcp-coloring-combinatorics-relevant-images-20260829T130201Z/events.jsonl
+# 2026-08-26 知识点召回与高考库重建测评报告。
+!output/acceptance/gaokao-production-full-rebuild-20260826.json
+!output/acceptance/knowledge-point-recall-baseline-pre-dedup-20260826.json
+!output/acceptance/knowledge-point-recall-report-after-exact-dedup-20260826.json
+!output/acceptance/knowledge-point-recall-report-after-full-rebuild-20260826.json
+!output/acceptance/gaokao-exact-dedup-comparison-20260826.json
+!output/acceptance/gaokao-ingestion-preflight-20260826.json
+# 教师检索 120 例最新权威评测（2026-08-30 parent-child final）。
+!output/benchmarks/
+output/benchmarks/*
+!output/benchmarks/teacher-120case-parent-child-final-20260830/
 tmp/
 .playwright-cli/
 docs/superpowers/plans/

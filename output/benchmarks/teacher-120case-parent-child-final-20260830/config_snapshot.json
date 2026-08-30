@@ -1,0 +1,162 @@
+{
+  "backendUrl": "http://127.0.0.1:8080",
+  "workerUrl": "http://127.0.0.1:8092",
+  "authenticatedAs": "local-browser-acceptance",
+  "requestLimit": 5,
+  "before": {
+    "timestamp": "2026-08-30T09:46:40+0800",
+    "host": "Windows-11-10.0.26200-SP0",
+    "gpu": "NVIDIA GeForce RTX 5060 Laptop GPU, 0, 3682, 8151",
+    "worker": {
+      "url": "http://127.0.0.1:8092",
+      "health": {
+        "status": 200,
+        "body": {
+          "status": "UP",
+          "service": "math-agent-rag-worker"
+        }
+      },
+      "capabilities": {
+        "status": 401,
+        "body": {
+          "detail": "invalid worker API key"
+        }
+      }
+    },
+    "containers": {
+      "ai-worker": {
+        "name": "math-agent-rag-ai-worker-1",
+        "state": "running",
+        "health": "healthy",
+        "id": "b32d43d86b1b"
+      },
+      "backend": {
+        "name": "math-agent-rag-backend-1",
+        "state": "running",
+        "health": "healthy",
+        "id": "4dea77b292e5"
+      },
+      "frontend": {
+        "name": "math-agent-rag-frontend-1",
+        "state": "running",
+        "health": "healthy",
+        "id": "5513106f7626"
+      },
+      "milvus": {
+        "name": "math-agent-rag-milvus-1",
+        "state": "running",
+        "health": "healthy",
+        "id": "befa503d905f"
+      },
+      "milvus-etcd": {
+        "name": "math-agent-rag-milvus-etcd-1",
+        "state": "running",
+        "health": "healthy",
+        "id": "c6d6057442ad"
+      },
+      "milvus-minio": {
+        "name": "math-agent-rag-milvus-minio-1",
+        "state": "running",
+        "health": "healthy",
+        "id": "57d203106754"
+      },
+      "mysql": {
+        "name": "math-agent-rag-mysql-1",
+        "state": "running",
+        "health": "healthy",
+        "id": "c63d5c40d332"
+      },
+      "rabbitmq": {
+        "name": "math-agent-rag-rabbitmq-1",
+        "state": "running",
+        "health": "healthy",
+        "id": "594207d9f076"
+      },
+      "redis": {
+        "name": "math-agent-rag-redis-1",
+        "state": "running",
+        "health": "healthy",
+        "id": "fafb62d6085f"
+      }
+    },
+    "containerCount": 9
+  },
+  "after": {
+    "timestamp": "2026-08-30T09:47:22+0800",
+    "host": "Windows-11-10.0.26200-SP0",
+    "gpu": "NVIDIA GeForce RTX 5060 Laptop GPU, 1, 3682, 8151",
+    "worker": {
+      "url": "http://127.0.0.1:8092",
+      "health": {
+        "status": 200,
+        "body": {
+          "status": "UP",
+          "service": "math-agent-rag-worker"
+        }
+      },
+      "capabilities": {
+        "status": 401,
+        "body": {
+          "detail": "invalid worker API key"
+        }
+      }
+    },
+    "containers": {
+      "ai-worker": {
+        "name": "math-agent-rag-ai-worker-1",
+        "state": "running",
+        "health": "healthy",
+        "id": "b32d43d86b1b"
+      },
+      "backend": {
+        "name": "math-agent-rag-backend-1",
+        "state": "running",
+        "health": "healthy",
+        "id": "4dea77b292e5"
+      },
+      "frontend": {
+        "name": "math-agent-rag-frontend-1",
+        "state": "running",
+        "health": "healthy",
+        "id": "5513106f7626"
+      },
+      "milvus": {
+        "name": "math-agent-rag-milvus-1",
+        "state": "running",
+        "health": "healthy",
+        "id": "befa503d905f"
+      },
+      "milvus-etcd": {
+        "name": "math-agent-rag-milvus-etcd-1",
+        "state": "running",
+        "health": "healthy",
+        "id": "c6d6057442ad"
+      },
+      "milvus-minio": {
+        "name": "math-agent-rag-milvus-minio-1",
+        "state": "running",
+        "health": "healthy",
+        "id": "57d203106754"
+      },
+      "mysql": {
+        "name": "math-agent-rag-mysql-1",
+        "state": "running",
+        "health": "healthy",
+        "id": "c63d5c40d332"
+      },
+      "rabbitmq": {
+        "name": "math-agent-rag-rabbitmq-1",
+        "state": "running",
+        "health": "healthy",
+        "id": "594207d9f076"
+      },
+      "redis": {
+        "name": "math-agent-rag-redis-1",
+        "state": "running",
+        "health": "healthy",
+        "id": "fafb62d6085f"
+      }
+    },
+    "containerCount": 9
+  }
+}

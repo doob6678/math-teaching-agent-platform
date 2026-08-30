@@ -1,0 +1,80 @@
+{
+  "status": "baseline_pre_exact_dedup",
+  "generatedAtUtc": "2026-08-26T02:38:54Z",
+  "sourceReport": "output/acceptance/knowledge-point-recall-report.json",
+  "runId": "kp-recall-0260af10-a7aa-4980-8209-ad401574c146",
+  "readOnly": true,
+  "collection": "gaokao_math",
+  "topK": 10,
+  "corpusEvidence": {
+    "sourceManifestCount": 12,
+    "questionCount": 250,
+    "selection": "current canonical source-manifest.json and questions/*.md only"
+  },
+  "embedding": {
+    "model": "local_bge_embedding",
+    "dimension": 512,
+    "transport": "real_local_endpoint"
+  },
+  "milvus": {
+    "transport": "real_read_only_search",
+    "writeOperations": []
+  },
+  "metrics": {
+    "overallApplicable": {
+      "queryCount": 5,
+      "recallAt10": 0.2,
+      "precisionAt10": 0.06,
+      "mrr": 0.288889
+    },
+    "topicOnly": {
+      "queryCount": 3,
+      "recallAt10": 0.222222,
+      "precisionAt10": 0.066667,
+      "mrr": 0.37037
+    },
+    "parabolaTopicOnly": {
+      "recallAt10": 0.333333,
+      "precisionAt10": 0.1,
+      "mrr": 0.111111,
+      "firstGoldHitRank": 9
+    },
+    "probabilityStatisticsTopicOnly": {
+      "recallAt10": 0.333333,
+      "precisionAt10": 0.1,
+      "mrr": 1.0,
+      "firstGoldHitRank": 1
+    },
+    "spatialVectorTopicOnly": {
+      "recallAt10": 0.0,
+      "precisionAt10": 0.0,
+      "mrr": 0.0,
+      "firstGoldHitRank": null
+    }
+  },
+  "duplicateObservation": {
+    "query": "抛物线 焦点 准线",
+    "rawTop10DuplicateKeyCount": 2,
+    "rawTop10DuplicateRowCount": 6,
+    "rawTop10LargestRepeatedKeyOccupancy": 4,
+    "rawTop10RepeatedKeys": [
+      {
+        "sourceFile": "2024年高考数学试卷（北京）（空白卷）.pdf",
+        "questionNumber": "11",
+        "occupancy": 4
+      },
+      {
+        "sourceFile": "2024年高考数学试卷（北京）（解析卷）.pdf",
+        "questionNumber": "11",
+        "occupancy": 4
+      }
+    ],
+    "goldDisplacedByHistoricalRows": true,
+    "note": "The current raw top-10 contains two repeated source/question keys. Each key occupies four rows, for six duplicate rows beyond one representative per key, before canonical gold rows. The evaluator's duplicate collapse is diagnostic only and is not the ingestion fix."
+  },
+  "acceptance": {
+    "status": "failed",
+    "assetContractStatus": "asset_contract_failed",
+    "reason": "Fresh real Milvus recall contains legacy rows with incomplete/non-canonical provenance, so this report cannot be marked as a successful asset-contract acceptance."
+  }
+}

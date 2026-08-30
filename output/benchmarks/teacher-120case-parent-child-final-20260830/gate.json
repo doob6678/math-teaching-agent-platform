@@ -1,0 +1,16 @@
+{
+  "passed": true,
+  "checks": {
+    "sampleCount": true,
+    "successfulCount": true,
+    "docAt1": true,
+    "docAt3": true,
+    "blockAt3": true,
+    "p95Recorded": true,
+    "p99Recorded": true,
+    "memoryBoundary": true,
+    "sqlBoundedEvidence": true,
+    "candidateFunnel": true
+  },
+  "failedChecks": []
+}

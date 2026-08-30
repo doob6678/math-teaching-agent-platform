@@ -1,0 +1,438 @@
+                                  
+
+       P - ABCD 
+
+
+
+      1. 
+      2. 
+      3. 
+      4. 
+
+
+
+      1. 
+      2. 
+      3.  0
+      4. 
+      5.  0
+      6. 
+
+
+
+       P - ABCD  P A   ABCD
+A - CP - D 
+
+                                                                    1
+  
+
+
+
+ 1
+
+      
+       P - ABCD P A   ABCDP A = AC = 2BC = 1AB = 3 AD  P B
+AD   P BC
+      
+       P A   ABCD AD   ABCD P A  AD
+       AD  P B P A  P B  P  P A, P B   P AB AD   P AB
+       AD  AB
+       ABC 
+
+                                                                       
+                                            BC2 + AB2 = 12 + ( 3)2 = 4 = AC2.
+
+  2
+                                                               
+
+ BC  AB
+ AD  BC  ABCD  AB AD  BC
+ BC   P BC AD  P BC 
+
+                     AD  P BC.
+
+
+
+                                                    AD  P BC.
+
+
+1.  P A   ABCD  P A  AD
+2.  AD  P A  AD  P B AD   P AB
+3.  BC  AB
+4.  AD  BC  AD   P BC
+
+1.  AD  P B  AD   P AB AD  P A
+2.  BC P B
+3.  AD  P BC""""
+
+ 2 AD
+
+
+ P - ABCD P A   ABCDP A = AC = 2BC = 1AB = 3 AD  DC
+              
+ A - CP - D   42         
+              7      AD
+
+
+
+ D  DE  AC  E P AC  E  EF  CP  F  DF 
+
+ P AC   ABCD AC DE  AC DE   P AC
+ DE  CP  EF  CP  DE  EF 
+
+                                                    CP  DEF.
+
+ DF  CP  DF E  A - CP - D 
+
+
+                         AD = x.
+
+ ADC                                 
+ ADC          DC = AC2 - AD2 = 4 - x2.
+
+                  1             1
+                   AD  � DC  =   AC  � DE,
+                  2             2
+
+                             
+                             x 4 - x2
+                     DE =              .
+                                2
+
+                                                               3
+                                                                   
+
+        CE =    4 - x2  .
+
+                  2
+
+ EF C EC  EF  P A = AC  P AC 
+
+        EF = 4 -x2 .
+                  22
+
+                        42
+ DF E                      .
+ DEF    sin DF E =      7
+
+        tan DF E     =  
+                          6.
+
+        tan DF E  =     DE
+                             .
+                        EF
+
+        
+        x 4-x2       
+
+             2    =     6.
+          4-x2
+          22
+
+                     
+        x2        = 6,
+
+          4 - x2
+
+          x2 = 3.
+
+ x > 0
+
+               
+          x = 3.
+
+
+
+                                                                 
+                                                        AD = 3.
+
+
+1.  DE, EF, DF  DF E 
+2.  tan DF E = 6
+3.  DE  EF 
+4.  AD = 3
+
+1.  A - CP - D  CP  AC  CD
+2.  CP 
+3. 
+4.  AD = x  x > 0 
+
+                                                                   4
+                                                                  
+
+ 3
+
+
+
+ P - ABCD P A   ABCDAB  CDABC = 90AB = P A = 2
+CD = 4BC = 22M                                                       23
+ BM  P C  M      P D                 CM        AD      1   |BM |  =
+                 BC  10
+                                                       6
+
+
+
+ A  BC AB AP  x y z 
+
+
+
+                                                     
+                A(0, 0, 0), B(0, 2, 0), C(2 2, 2, 0),
+
+                       
+                  D(2 2, -2, 0), P (0, 0, 2).
+
+ M  P D                     
+                        M ( 2, -1, 1).
+
+                  --          
+                  CM = (- 2, -3, 1),
+
+                  -- 
+                  AD = (2 2, -2, 0).
+
+                  cos   =  |-C-M  �  A--D|  =  1
+                           --     �  --         .
+                           |CM |     |AD|
+                                               6
+
+                  -B-M     =         -3,  1),
+                              ( 2,
+
+                                               
+                  |BM | = 2 + 9 + 1 = 2 3.
+
+  
+ 
+
+                  P--C     =         2,  -2),
+                              (2 2,
+
+                -B-M � -P-C = 4 - 6 - 2 = -4 = 0.
+
+       BM  P C 
+        BC  x B--M  BC  2 M  BC
+
+
+                                                   
+
+                  |BM |2 - ( 2)2 = 12 - 2 = 10.
+
+                                                                  5
+  
+
+        
+      
+      
+
+                                                                .
+
+      
+      1. 
+      2. 
+      3.  |BM |
+      4.  BM  P C 
+      5. 
+      
+      1. 
+      2.  0
+      3.  |BM |
+
+ 4
+
+      
+        0 
+ 
+ 0 
+      
+        0
+       
+
+        0
+
+       
+      
+
+                                                          
+
+      
+      1. 
+      2. 
+      3. ""
+      4. 
+      
+      1. """"
+      2.  0
+      3. 
+
+  6
+  
+
+ 5
+
+      
+       P - ABCD  CP  A - CP - D 
+
+      
+       A - CP - D  CP A  CP D  CP 
+       CP  ACP  DCP  CP 
+
+       ACP  DCP  n1n2  
+
+                                                                 =
+
+      
+
+                                                               =  - .
+
+      
+
+
+      
+
+                                                         cos  = � n1 � n2 .
+                                                                      |n1||n2|
+
+      
+
+
+      
+
+                                                         cos  = � n1 � n2 .
+                                                                      |n1||n2|
+
+      
+      
+      1.  A - CP - D  CP 
+      2. 
+      3. 
+      4. 
+      
+      1. 
+      2.  [0, ]
+      3. 
+
+ 6--
+
+      
+       2  A  x y  AP 
+ z  A - CP - D  ACP  DCP
+
+      
+       AB  x BC  y AP  z 
+
+  7
+                                                                             
+                                                                               8
+                             
+  A(0, 0, 0), B( 3, 0, 0), C( 3, 1, 0), P (0, 0, 2),
+
+
+
+                                                        D(u, v, 0).
+ ACP 
+
+                                                    - 
+                                                    AC = ( 3, 1, 0),
+
+             -
+             AP = (0, 0, 2).
+
+ ACP 
+
+                                                    n1 = (x1, y1, z1).
+
+
+                                                            -
+                                                       n1 � AC = 0,
+
+                  -
+             n1 � AP = 0,
+
+
+
+                                                                 
+                                                    n1 = (1, - 3, 0).
+ DCP 
+
+       C--D  =  (u  -        v  -  1,                                   0),
+                         3,
+
+       -C-P     =            -1,   2).
+                   (- 3,
+
+ DCP 
+
+             n2 = (x2, y2, z2).
+                    --
+ n2
+               n2 � CD = 0,
+                    --
+
+               n2 � CP = 0,
+
+                   n1 � n2 .
+                  |n1||n2|
+
+
+                                                                  
+
+       A - CP - D 
+
+
+                    cos (A - CP - D) = � n1 � n2 .
+                                                     |n1||n2|
+
+                                                      42
+                                                         ,
+                    sin (A - CP - D) =                7
+
+                    cos2 (A  -  CP    -  D)  =  1  -  42   =  1
+                                                               .
+                                                      49 7
+
+
+
+                           tan (A  -  CP  -  D)    =  
+                                                        6
+
+
+
+
+
+ 0 
+
+
+
+
+
+1.  AP  
+              -     -AP 
+2.    AC P    AC  
+
+3.    DCP     --    C--P 
+              CD
+
+4.  0
+5. 
+
+
+
+1. 
+
+2. 
+
+3. 
+
+4. 
+
+
+
+      1. """"
+      2. 
+
+      3. 
+      4.  A - CP - D CP 
+
+                                                                  9
+
