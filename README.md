@@ -2,7 +2,27 @@
 
 这是一个面向高中数学教学场景设计并实现的 AI 教学 Agent 平台。项目围绕教师端、学生端和管理端联动展开，把教材检索、教师资料解析、题库导入、知识图谱、学生学习画像、教学任务编排、模型治理、权限限流与审计串成一条可落地的教学业务链路。
 
-平台以 Java 后端为核心，基于 Spring Boot 3.5、Java 21、Spring AI、MyBatis-Plus、MySQL 和 Redis 搭建 Agent/RAG 服务分层。工程结构按 controller、service、dto、vo、mapper 拆分，业务模块之间保持清晰边界，同时为前端控制台、外部 MCP/A2A 集成和后台资料处理提供统一接口。
+平台以 Java 后端为核心，基于 Spring Boot 3.5、Java 21、Spring AI、MyBatis-Plus、MySQL 和 Redis 搭建 Agent/RAG 服务分层；Python Worker 基于 FastAPI + LangGraph 在 GPU 环境执行多智能体写作与讲义生成；前端采用 React 19 + Vite 7 + TypeScript 5。工程结构按 controller、service、dto、vo、mapper 拆分，业务模块之间保持清晰边界，同时为前端控制台、外部 MCP/A2A 集成和后台资料处理提供统一接口。
+
+---
+
+## 讲义成品示例
+
+以下页面均由真实任务生成：Python AI Writer 完成全部教学正文与图片选用，Java 完成鉴权、持久化与 XeLaTeX/PDF 渲染，讲义中的题目图片来自经过授权校验的真实来源资产。
+
+**抛物线专题·教师版（第 5 页）**——题目「焦点弦中点比例关系」配真实来源图形，公式、评分点与易错点完整：
+
+![抛物线教师版第5页](docs/assets/handouts/parabola-teacher-figure-p5.png)
+
+**涂色问题专题·教师版（第 5 页）**——区域涂色示意图按解题步骤着色，分类讨论与组合计数公式同页呈现：
+
+![涂色问题教师版第5页](docs/assets/handouts/coloring-teacher-figure-p5.png)
+
+完整成品（教师版/学生版/16:10 课堂投影版三版本 PDF 与验收记录）保留在版本库中：
+
+- [涂色组合专题](output/acceptance/handout-mcp/handout-mcp-coloring-combinatorics-relevant-images-20260829T130201Z/)
+- [立体几何专题](output/acceptance/handout-mcp/handout-mcp-solid-geometry-gaokao-figure-final-20260829T165522Z/)
+- [抛物线专题](output/acceptance/handout-mcp/handout-mcp-parabola-image-binding-final-verified-20260829/)
 
 ---
 
@@ -14,37 +34,35 @@
 
 开发前先阅读项目指令 [AGENTS.md](AGENTS.md)，交付前逐项执行[讲义架构验收清单](docs/handout-architecture-acceptance-checklist.md)。以下约束适用于教师版、学生版、课堂讲解版及其 PDF：
 
-！！禁止给AI传入UUID等会让AI迷惑的资源信息，必须语义明确，img01等这种，禁止返回超长UUID，严禁返回，这是架构严重错误！！
+给 AI 的资源引用必须语义明确（如 `img01` 这类短标识），禁止把超长 UUID 等模型无法理解的标识传给模型。
 
 1. **只有 AI/Python Writer** 可以创作任何可见教学正文，并决定图片是否使用及其位置；Java 和前端只做通用鉴权、持久化、格式化/渲染、可见性隔离与校验。
 2. Java 和前端不得写入固定教学文案、按题目/知识点分支、默认标题/答案/提示，也不得自行选择或回退生成示意图、图片。
 3. 图片领域和模型契约只以不透明的 `evidenceRef` 加 `assetId` 关联；禁止传递文件系统路径、URL、Base64 或 AI 生成的 LaTeX 图片命令。仅在权威 `evidenceRef` 与 `assetId` 已获授权且图片选择已校验后，通用渲染器可生成内部 LaTeX 图片标记；没有有效选择即不展示图片。
 4. 高中来源材料必须遵循：GPU PaddleOCR/版面分析生成题图 PNG、`question-assets.jsonl`、`assets.md` 和源文件哈希报告，再将完整页图交给默认 Luna（或显式 Terra）转写。题图不作为单题视觉输入；其来源、页码、bbox、哈希和绑定规则会写入题目 `metadata.questionAssets`，并与向量入库和讲义资产共用。
 5. **高考题讲义图片只允许使用题目级 `figures/` 资产**：以 `output/math-paper-corpus/<完整来源文件名>/figures/` 中由题目 `questions[].assets`/`assetIds` 明确绑定、且题目 Markdown 有对应引用的图片为唯一合格来源。`page-images/` 是整页定位、OCR、版面审计和来源复核的内部产物，禁止进入 AI 选图、授权资产、讲义 Markdown、XeLaTeX 物化和任何 PDF；禁止对页面进行二次切分来补图。题目没有可核验的 `figures/` 引用时，高考只使用题目文字，不显示图片。教材页面图同样不进入讲义 PDF。
-6. **RAG 检索必须由 AI Agent 自主执行**：AI 通过 Java 提供的 MCP 工具（`handout-context`、`handout-document-read`、`handout-document-search`、`handout-teacher-resource-search`）自行构造检索参数并调用，Java 仅提供已授权的不透明 `evidenceRef`/`documentRef` 和受限读取接口。禁止 Java 或前端直接将用户输入作为检索 query，
+6. **RAG 检索必须由 AI Agent 自主执行**：AI 通过 Java 提供的 MCP 工具（`handout-context`、`handout-document-read`、`handout-document-search`、`handout-teacher-resource-search`）自行构造检索参数并调用，Java 仅提供已授权的不透明 `evidenceRef`/`documentRef` 和受限读取接口。禁止 Java 或前端直接将用户输入作为检索 query。
 7. 交付必须同时通过：来源证据和完整来源名、AI 独占可见内容、学生答案隔离、真实来源图片、中文与公式检查、PDF 视觉审阅。历史输出不能替代本次验收证据。
 
 ---
 
 ## 核心对标：成熟高中数学教师式讲解
 
-项目把“豆包爱学”截图中的教学态度作为讲义与单题讲解的质量基线，而不是把“模型返回了文字”当作完成：
+项目把成熟教学产品的讲解态度作为讲义与单题讲解的质量基线，而不是把"模型返回了文字"当作完成：
 
-1. 按“题型识别 → 方法梳理 → 分步推理 → 总结回顾”组织数学内容。
+1. 按"题型识别 → 方法梳理 → 分步推理 → 总结回顾"组织数学内容。
 2. 解释概念、方法选择和每一步为什么成立，设置理解检查、追问和 `<wait>` 课堂停顿，不只给答案。
 3. 用清晰板书顺序呈现题目、公式、计算和结论；先准确术语、后口语化解释，兼顾严谨、考点、评分点与常见误区。
-4. 通过知识图谱说明知识点归属、先修关系、关联方法、学习阶段和难度；处理顺序是“扫描题目 → 匹配图谱 → 按知识点与思想方法组织”。
-5. 推理遵循“目标 → 相关知识 → 已知条件 → 逻辑推导”，并受真实证据约束，禁止虚构题目、来源、定理条件、图形关系和数值答案。
+4. 通过知识图谱说明知识点归属、先修关系、关联方法、学习阶段和难度；处理顺序是"扫描题目 → 匹配图谱 → 按知识点与思想方法组织"。
+5. 推理遵循"目标 → 相关知识 → 已知条件 → 逻辑推导"，并受真实证据约束，禁止虚构题目、来源、定理条件、图形关系和数值答案。
 
 多 Agent 流程的实际阶段由当前图版本与配置定义。Python 负责教学规划、修订以及教师版、学生版、课堂讲解版三份 Writer 文档；页眉、页脚、页码、字体和纸张比例由 PDF 渲染器控制，不写入模型正文。提示词档案与样例见 [讲义提示词档案与样式验收](docs/handout-prompt-profiles-and-style-acceptance.md)。
 
 ## 讲义与 PDF 不可违反的硬性要求
 
-以下要求是讲义链路的开发契约，不得以“模型已返回文本”替代真实验收：
+以下要求是讲义链路的开发契约，不得以"模型已返回文本"替代真实验收：
 
-涉及讲义、公式、PDF、页眉页脚、学生作答区或 16:10 版的任何开发，**必须先阅读并遵守**[讲义 PDF 渲染开发规范](docs/handout-pdf-rendering-development-standard.md)。
-
-当前多智能体讲义的真实阶段、图片从授权资料到模型/PDF 的路径，以及近期公式、资产和页面布局问题的根因记录，见[多智能体讲义工作流、图片编排与问题记录](docs/multi-agent-handout-workflow-and-incidents.md)。
+涉及讲义、公式、PDF、页眉页脚、学生作答区或 16:10 版的任何开发，**必须先阅读并遵守**[讲义 PDF 渲染开发规范](docs/handout-pdf-rendering-development-standard.md)。多智能体讲义工作流的实际拓扑与图片从授权资料到模型/PDF 的完整路径见[多智能体讲义工作流与图片编排](docs/multi-agent-handout-workflow.md)。
 
 1. 写作前必须分别检索教材与已授权教师/飞书资料；教师讲义的每道原题均须可读地注明教材章节与资料来源，禁止只保留内部 ID。
 2. 教师讲义必须包含足以达成已规划教学目标的、经来源核验的原题；不存在固定题量发布门槛。检索证据不足时必须明确失败，禁止编造题目凑数。
@@ -53,43 +71,32 @@
 5. 16:10 版仅含一个题目，题干位于首个正文区块，页面比例为 16:10，且文本密度受审计门禁约束。
 6. PDF 必须由 Docker 内 XeLaTeX 与 Noto CJK 字体真实编译；验收必须在 Windows 渲染全部页面，保存截图、布局审计、SHA-256、HTTP 状态、trace、阶段耗时和 token 消耗。任何一项失败均不得标记验收完成。
 
-### 真实讲义验收的 SSE 吞吐与 checkpoint 落盘
+### 流式输出与断点恢复设计
 
-讲义模型请求使用 provider SSE，但 provider 小帧不能依赖 `requests` 默认 512 字节读取块；worker 显式使用 `chunk_size=1`，使已到达的两三个中文字符尽快进入解析。此前验收观察到约二十秒一批的现象，根因是读取缓冲叠加“每个 delta 重写完整 MySQL checkpoint”，不是模型 token 上限或恢复锁故障。
+讲义模型请求使用 provider SSE，worker 以 `chunk_size=1` 显式读取，使已到达的中文字符尽快进入解析；公共 handout SSE 只发送不含正文、答案、教师批注、trace、来源内部标识或 asset id 的脱敏进度，并支持事件游标重连。
 
-流式私有诊断现在按 250ms、8KiB、32 个 delta 任一条件批量落盘，未落盘尾部有 32KiB 硬上限；模型解析、成功、超时、取消和异常前都强制 flush。MySQL 仍是唯一恢复权威，但不再为每个 delta 开新事务、重写不断增长的完整 JSON。公共 handout SSE 只发送不含正文、答案、教师批注、trace、来源内部标识或 asset id 的脱敏进度，并支持事件游标重连；未经过可见性判定的私有草稿不得直接公开。
+流式私有诊断按 250ms、8KiB、32 个 delta 任一条件批量落盘，未落盘尾部有 32KiB 硬上限；模型解析、成功、超时、取消和异常前都强制 flush。MySQL 是唯一恢复权威：checkpoint 恢复复用已持久化的授权证据，不重复提交任务；未经过可见性判定的私有草稿不得直接公开。
 
-本次性能验收必须记录首个 chunk、接收 chunk 数、私有 flush 次数、最大未落盘字符、flush 延迟、终态强制 flush 与 SSE 游标连续性；不得把 raw prompt、raw completion、密钥或 opaque ref 写入 README 或公开报告。
+### 验收运行约束
 
+- 验收前执行一次 `docker compose up -d`，之后**只能由一个 Compose owner** 管理该项目：不得并行运行 `scripts/local/start-all.ps1`、`start-backend.ps1`、`start-worker.ps1`、IDE 自动部署或 Docker Desktop 重建。
+- 在 WSL 用 `scripts/wsl/compose-stack-service.sh install && scripts/wsl/compose-stack-service.sh start` 启用当前用户的 Compose owner；该服务只执行 `docker compose --env-file .env up -d --no-recreate`。
+- 验收 runner 在登录/提交前、每次轮询前、每次 PDF 导出前检查 backend 与 ai-worker 的健康状态、容器 ID 与 `RestartCount`，要求稳定窗口；runner 默认兼容宿主机 `http://127.0.0.1:8080`，可用 `MATH_AGENT_ACCEPTANCE_BASE_URL` 指定 Compose 网络内 `http://backend:8080`。healthcheck 的 `exec_*` 事件是容器内探针命令，不会重启服务。
 
-讲义验收前先执行一次 `docker compose up -d`，随后**只能由一个 Compose owner 管理该项目**：不得同时运行会调用 `docker compose up/down/restart` 的 `scripts/local/start-all.ps1`、`start-backend.ps1`、`start-worker.ps1`、IDE 自动部署或 Docker Desktop 重建。验收 runner 在登录/提交前、每次轮询前、每次 PDF 导出前检查 backend 与 ai-worker 的健康状态、容器 ID 和 `RestartCount`，并要求稳定窗口；连接拒绝、非 healthy 或 ID 变化时只等待新的窗口，不重复提交任务。runner 默认兼容宿主机 `http://127.0.0.1:8080`，可用 `MATH_AGENT_ACCEPTANCE_BASE_URL` 显式指定 Compose 网络内的 `http://backend:8080`，不改变公开 URL、DNS 或端口配置。若 backend、ai-worker、MySQL、Redis、RabbitMQ、Milvus 同时重新开始计时，而容器日志为 Spring/Uvicorn 的正常 SIGTERM 优雅关闭、`ExitCode=0`、`OOMKilled=false`、`RestartCount=0`，则这是外部 Docker/Compose 客户端的显式 stop/recreate，不是应用崩溃或 healthcheck 失败；当前尚未确认该外部客户端的具体进程，不能将其误称为已定位。
+---
 
-healthcheck 产生的 `exec_create`、`exec_start`、`exec_die` 是容器内探针命令，**不会重启服务**，不能据此修改业务代码。验收提交前相隔至少 30 秒两次采样 backend/worker 的容器 ID 与 `RestartCount`：只有 ID 未变、`RestartCount=0` 且 `docker compose ps` 与 backend `/api/system/health` 均为 healthy 才能提交。
-
-验收前在 WSL 使用 `scripts/wsl/compose-stack-service.sh install` 和 `scripts/wsl/compose-stack-service.sh start` 启用当前 Linux 用户的 Compose owner。该服务仅执行 `docker compose --env-file .env up -d --no-recreate`，不会停止或重建已有容器；整个验收始终只能有一个 Compose owner，禁止 `docker compose down/up` 及并行本地启动器。服务可跨启动它的 shell 保持，但不能跨完整 WSL 关闭、Linux 停机、Windows 重启或主机关闭；它不能替代 runner 对稳定容器 ID 和 readiness 的强制门禁。
-
-Windows 到 WSL 的 `127.0.0.1:8080` 转发在容器刚被重建时可能短暂拒绝连接。真实验收优先在 Compose 网络中运行接受器：使用 `http://backend:8080`，而不是依赖宿主机端口转发；若 ID 改变或发生 `ECONNREFUSED`，等待新的稳定健康窗口后重试，不能将其误判为业务失败。这只改变验收客户端的访问路径，不改变后端公开 URL、DNS 或服务配置。验收仍需在最终 PDF 生成后回到 Windows 浏览器查看预览并保存截图。
-
-### 真实抛物线验收记录（2026-08-23）
-
-修复后的后端已通过 `backend-java` Maven 编译、`TeachingWorkflowRetrievalProgressTest`（4/4）和 `git diff --check`，并由 WSL Compose 无缓存构建部署；部署后 backend 状态为 `healthy`、`RestartCount=0`。本次修复将 `TeachingWorkflowExecutionSupport` 的教师资料分支从永久 `skipped` 改为真实授权检索，并保留规范高考检索为独立分支；高考检索仍由 `CanonicalMathPaperCorpusAdapter` 通过发布清单授权，候选窗口为 50 后再截取最终结果。
-
-证据目录：`output/acceptance/handout-mcp/parabola-canonical-candidate-window/`（提交前 MCP 三源真实命中：教材 9、飞书 10、高考 4）及 `output/acceptance/handout-mcp/parabola-canonical-recovery/`（唯一工作流 `cdb5e313-feff-4b34-a637-1f0dd4edd008`，恢复后 `COMPLETED`，任务创建次数 1）。修复部署后的只读核验目录为 `output/acceptance/handout-mcp/parabola-canonical-recovery-after-source-branch-fix/`，其中 `taskCreationPosts=0`，因为原工作流已经完成，恢复接口不会重新执行旧任务。
-
-旧工作流的持久化快照仍显示“教材 3、教师资料 0、题库 0”，三份导出 PDF 的 Poppler 文本均只有 191 字节的 XeLaTeX 空白页标记，学生版隔离和教师/高考来源使用因此均未通过。本次不能把旧产物标记为验收通过，也没有伪造新的任务或 PDF；必须在后续稳定窗口用新任务验证该修复后的三源工作流。
-
-本次恢复运行记录（2026-08-23）：`output/acceptance/handout-mcp/parabola-three-source-fixed-runtime-final-rerun/`。worker 无缓存重建后健康且 `RestartCount=0`；恢复唯一工作流 `8f473acc-6b43-4197-b063-11a8df9c4752`，`taskCreationPosts=0`，15 秒轮询最终 `COMPLETED`。已确认本次任务状态中的三源检索为公开教材 3 条、飞书教师资料 10 条、规范高考题库 2 条；AI_DRAFT 与 LATEX_HANDOUT 均完成。该恢复路径复用了已持久化授权证据，因此没有重复提交任务。
-
-本次导出真实使用 XeLaTeX，并由 Poppler 渲染全部页面：教师版 7 页（11989 文本字符，SHA-256 `99e435a47d3fd0e8115004685eb82e55013c2d673a670a921ad4fb027ef27d4d`）、学生版 4 页（2526 字符，SHA-256 `fefac73c74202cddd024551d762d6b624dd1b50f455c0dca8a324f3689784f19`）、16:10 课堂讲解版 4 页（4197 字符，SHA-256 `32e3ed5f8ebe226b85f921fe35b82b1d7381af2b089abb80de902a2206f958d5`）。逐页 PNG 均已保存并检查为非空，中文、公式、分页和课堂讲解内容正常；学生 PDF 文本未命中答案、教师批注、trace、内部来源标识、路径或 URL 隔离标记。
-
-注意：这是失败任务的恢复验收，不是新任务的完整 fresh-run 证据；恢复 runner 当前未重新落盘原始检索响应，且导出的教师正文未检出 `feishu://` 与 `gaokao://` 透明引用。因此本次只能记录为“工作流、三源计数、PDF 与学生隔离已通过；来源透明引用与 fresh-run 原始检索落盘仍待补证”，不得把本段标记为架构验收清单的最终全通过。后续应修复恢复路径的来源审计落盘，并在新的真实任务中确认教师版可见保留飞书题和规范高考题的透明相对引用。
-
+## 目录结构
 
 | 目录 | 说明 |
 |---|---|
 | `backend-java/` | Spring Boot 3.5 + Java 21 后端，承载业务接口、Agent 编排、RAG 检索、数据库持久化、安全策略和协议服务。 |
+| `ai-worker-python/` | FastAPI + LangGraph 的 GPU AI Worker，承载讲义生成、教学规划、流式输出与模型适配层。 |
 | `frontend/` | 配套前端控制台，覆盖多页面导航（工作台、教材检索、教学任务、Agent 编排、流式编排、知识库、系统设置、独立登录页）。 |
-| `文档/` | 产品方案、工程设计、开发进度、资料位置和交付记录。 |
+| `docs/` | 现行架构规范、部署手册与验收清单。 |
+| `wiki-export/` | 项目 Wiki 导出（10 章 61 篇），见 [Wiki 目录索引](wiki-export/README.md)。 |
+| `benchmarks/` | 检索评测与数据集构建脚本。 |
+| `output/acceptance/` | 讲义成品与验收证据（保留指定产物）。 |
+| `output/benchmarks/` | 教师检索权威评测数据。 |
 
 ## 后端模块
 
@@ -141,6 +148,7 @@ Windows 到 WSL 的 `127.0.0.1:8080` 转发在容器刚被重建时可能短暂�
 MCP 和明文验收记录允许使用透明的相对来源引用，例如 `feishu://group/TEACHER_SHARED/resource/<documentId>/block/<blockId>`、`textbook://<bookId>/chunk/<chunkId>` 和 `gaokao://canonical/<paperId>/question/<questionId>`，并可记录完整来源名、相对文件名、块号、题号、页码和摘要。引用不得包含宿主机绝对路径、容器挂载路径、下载 URL、Token、Cookie、密码或 Base64；实际读取仍由 Java 的任务/运行授权接口完成。
 
 高考题是公共语料，所有已认证用户都可以通过 `gaokao_math` 检索；它不依赖教师资料用户组，也不回退到飞书资源库。
+
 ## 知识图谱与学习画像
 
 知识图谱模块提供**SVG 力导向图可视化**，基于力导向布局算法（排斥力 + 吸引力 + 向心力）自动排列知识点节点。主干模块以彩色矩形标识（12 色自动分配），知识点为蓝色圆形，高频方法为紫色圆形。图谱支持拖拽节点、拖拽平移、滚轮缩放、悬停高亮关联节点和关系、图例展示等交互。
@@ -191,7 +199,6 @@ RabbitMQ 使用持久化 direct exchange、命令队列和死信队列。MySQL `
 ### 核心特性
 
 - **API 超时控制**：30 秒超时（AbortController），超时抛出明确错误
-- **指数退避重试**：网络失败时自动重试（1s → 2s → max 4s + jitter）
 - **UUID 幂等**：所有 clientRequestId 使用 `crypto.randomUUID()`
 - **统一表单体系**：所有 input/select/textarea/button 统一使用 CSS 类体系
 - **登录引导**：未登录用户访问受限页面时显示引导卡片，点击跳转登录页
@@ -205,11 +212,60 @@ RabbitMQ 使用持久化 direct exchange、命令队列和死信队列。MySQL `
 - **图例**：显示所有模块颜色 + 节点类型标识
 - **工具提示**：悬停显示节点详情、关联关系、路径
 
+## 质量与测试
+
+三端自动化测试于 2026-08-30 全量真实运行通过：
+
+| 端 | 命令 | 结果 |
+|---|---|---|
+| Java 后端 | `mvn test` | **710 个测试，0 失败**（1 个按假设跳过） |
+| Python Worker | `pytest tests/` | **188 通过 + 31 子测试**（1 个按假设跳过） |
+| 前端 | `npx vitest run` | **22 个文件，110 个测试全部通过** |
+
+检索质量以 [教师资料 120 例权威评测](output/benchmarks/teacher-120case-parent-child-final-20260830/)（真实 HTTP 后端、窗口 block 口径、资源快照落盘）为准：doc@1 0.700、doc@3 0.833、block@3 0.808、P95 436ms。
+
+讲义 PDF 交付执行 [讲义架构验收清单](docs/handout-architecture-acceptance-checklist.md)：来源证据与完整来源名、AI 独占可见内容、学生答案隔离、真实来源图片、中文与公式、全页视觉审阅逐项留证。
+
 ## 运行入口
 
-完整的后端拆分、环境变量来源、aisz provider、资源格式、端到端流程、MySQL/Milvus 实时快照和验收产物见
+完整的后端拆分、环境变量来源、provider 接入、资源格式、端到端流程、MySQL/Milvus 实时快照和验收产物见
 [后端拆分与运行手册](docs/backend-split-operations.md)。本地 Docker 入口固定为
 `http://127.0.0.1:5173/`，后端为 `http://127.0.0.1:8080`，Python worker 为 `http://127.0.0.1:8092`。
+
+The Compose deployment is intentionally single-configuration: do not set ports, database, Milvus, embedding,
+worker, retry, or concurrency environment variables. Their fixed values live in `docker-compose.yml` and
+`backend-java/src/main/resources/application.yml`: frontend `5173`, backend `8080`, worker `8092`, MySQL `3307`,
+Redis `6380`, Milvus `19531`, `gaokao_math`, `local_bge_embedding` (512 dimensions), and AI concurrency `20`.
+The AI worker owns provider credentials and endpoints. The backend receives only route metadata and signs scoped grants; set `MATH_AGENT_PROVIDER_ROUTE_GRANT_SECRET` and the provider enable flags in the deployment environment.
+
+GLM（智谱）走 Z.ai 的 Anthropic 兼容端点，不是 OpenAI 格式：worker 内 `app/anthropic_compat.py` 在传输边界完成 OpenAI↔Anthropic 请求/响应/SSE 转换，六个 runtime 调用点只按 provider 名分支。`glm-5.3-flash` 强制思考（网关不支持关闭，仅 low/high/max 三档，默认弱思考 `MATH_AGENT_GLM_THINKING_EFFORT=low`），思考计入 `max_tokens`（下限 `MATH_AGENT_GLM_MIN_MAX_TOKENS=2048`），且与 `temperature` 互斥（适配层自动丢弃）。凭据：`GLM_API_KEY` + `GLM_BASE_URL`（默认 `https://api.z.ai/api/anthropic`），仅注入 ai-worker。
+
+```powershell
+$env:OPENAI_API_KEY = "your-provider-key"
+$env:GLM_API_KEY = "your-glm-key"
+wsl.exe -d Ubuntu -- bash -lc "cd /mnt/c/Users/doob/Desktop/code/dev/math_agent_rag && docker compose up -d --build"
+```
+
+After the stack is healthy, open `http://127.0.0.1:5173`. Do not use the obsolete `5174` or `8081` ports.
+
+构建经验：worker 使用本机已验证的 `math-agent-rag-ai-worker:deps-20260827` GPU 依赖基底；换机器首次使用或修改 `requirements.txt` 时必须先准备同名且重新校验的依赖基底。源码改动只重建 `COPY app` 层，不会重新 pip 安装或下载 `/models`；禁止使用 `--cache-from image:tag`（DaoCloud 代理会返回 403）及任何 prune。
+
+后端本地直跑：
+
+```powershell
+cd backend-java
+mvn spring-boot:run
+```
+
+配套前端：
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+后端服务不持有 provider 密钥；provider 凭据、endpoint 和模型环境变量仅注入 `ai-worker`。Java 后端通过 `MATH_AGENT_PROVIDER_ROUTE_GRANT_SECRET` 签发受限 route grant，启动前必须配置该密钥。
 
 ## 2024 高考数学题库：真实视觉入库链路
 
@@ -255,7 +311,7 @@ wsl.exe -d Ubuntu -- bash -lc "export LD_LIBRARY_PATH=/usr/lib/wsl/lib; export P
 wsl.exe -d Ubuntu -- bash -lc "cd /mnt/c/Users/doob/Desktop/code/dev/math_agent_rag && python3 scripts/wsl/run_2024_luna_milvus_ingestion.py --config config/gaokao-ingestion-2024.json --vision-provider terra"
 ```
 
-该命令严格按以下顺序完成，任何一步失败都会以非零退出，不能产出“成功”结论：
+该命令严格按以下顺序完成，任何一步失败都会以非零退出，不能产出"成功"结论：
 
 1. 使用生产后端对齐的 PDFBox 渲染真实 PDF 页；GPU `PP-DocLayout-L` 和 `PP-OCRv5` 仅在这些页图上定位题目与同源图片资产，生成 hash 绑定资产报告。
 2. 每页只通过已配置的 `gpt-5.6-terra` 进行视觉转写；Luna 或其他 provider 不允许执行 canonical 发布，也不得作为回退。
@@ -264,47 +320,25 @@ wsl.exe -d Ubuntu -- bash -lc "cd /mnt/c/Users/doob/Desktop/code/dev/math_agent_
 
 高考题统一使用 `gaokao_math` collection；之后任何高考题导入不得新建按年份或模型拆分的 collection。题目向量的最终主键固定为 `UUIDv5(URL, "question\\n" + sourceSha256 + "\\n" + numericQuestionNumber)`：同一来源同一题号只有一条记录，同一来源的不同题号保持独立。题号修复、跨页合并和答案/解析挂载全部在最终 ID 生成前完成；答案或解析变化不会改变题目身份。入库使用 embedding 批次 10、Milvus upsert 有界批次（默认 100）和单次最终 flush，历史清理只允许在 `gaokao_math` 中按当前 canonical replacement 白名单的 `sourceFile/documentFullName` 服务端过滤执行，不读取全量 collection，也不按语义、答案或关键词去重。
 
-每个新来源必须先完成完整 PDF、Terra 页级 evidence、题目级 `figures/` 资产、`source-manifest.json` 和 `questions/*.md` 的 canonical replacement；只有 replacement 已覆盖该来源时才允许清理其历史行。未覆盖来源即使在召回中出现，也必须保留为残留风险并使资产验收失败，禁止猜测删除。真实去重对照证据见 `output/acceptance/knowledge-point-recall-baseline-pre-dedup-20260826.json`、`output/acceptance/gaokao-ingestion-preflight-20260826.json`、`output/math-paper-transcription-runs/terra-gaokao-20260820T232559Z-975d2574-report.json` 和 `output/acceptance/knowledge-point-recall-report-after-exact-dedup-20260826.json`。
+每个新来源必须先完成完整 PDF、Terra 页级 evidence、题目级 `figures/` 资产、`source-manifest.json` 和 `questions/*.md` 的 canonical replacement；只有 replacement 已覆盖该来源时才允许清理其历史行。未覆盖来源即使在召回中出现，也必须保留为残留风险并使资产验收失败，禁止猜测删除。
 
-### Final local startup contract
+2024 视觉入库会读取全局并发值并据此创建最多相同数量的页任务；其最终报告的 `concurrency.globalLimit` 与 `concurrency.effectivePageWorkers`、以及每页审计的 `taskSequence`、`workerThread`、`taskStartedAt`、`taskCompletedAt` 共同证明没有绕开全局控制。
 
-The Compose deployment is intentionally single-configuration: do not set ports, database, Milvus, embedding,
-worker, retry, or concurrency environment variables. Their fixed values live in `docker-compose.yml` and
-`backend-java/src/main/resources/application.yml`: frontend `5173`, backend `8080`, worker `8092`, MySQL `3307`,
-Redis `6380`, Milvus `19531`, `gaokao_math`, `local_bge_embedding` (512 dimensions), and AI concurrency `20`.
-The AI worker owns provider credentials and endpoints. The backend receives only route metadata and signs scoped grants; set `MATH_AGENT_PROVIDER_ROUTE_GRANT_SECRET` and the provider enable flags in the deployment environment.
+## 文档导航
 
-GLM（智谱）走 Z.ai 的 Anthropic 兼容端点，不是 OpenAI 格式：worker 内 `app/anthropic_compat.py` 在传输边界完成 OpenAI↔Anthropic 请求/响应/SSE 转换，六个 runtime 调用点只按 provider 名分支。`glm-5.3-flash` 强制思考（网关不支持关闭，仅 low/high/max 三档，默认弱思考 `MATH_AGENT_GLM_THINKING_EFFORT=low`），思考计入 `max_tokens`（下限 `MATH_AGENT_GLM_MIN_MAX_TOKENS=2048`），且与 `temperature` 互斥（适配层自动丢弃）。凭据：`GLM_API_KEY` + `GLM_BASE_URL`（默认 `https://api.z.ai/api/anthropic`），仅注入 ai-worker。
+现行规范（docs/）：
 
-```powershell
-$env:OPENAI_API_KEY = "your-provider-key"
-$env:GLM_API_KEY = "your-glm-key"
-wsl.exe -d Ubuntu -- bash -lc "cd /mnt/c/Users/doob/Desktop/code/dev/math_agent_rag && docker compose up -d --build"
-```
+- [讲义架构验收清单](docs/handout-architecture-acceptance-checklist.md) —— 交付门禁与逐项证据要求
+- [讲义 PDF 渲染开发规范](docs/handout-pdf-rendering-development-standard.md) —— XeLaTeX/PDF 契约
+- [多智能体讲义工作流与图片编排](docs/multi-agent-handout-workflow.md) —— 写作拓扑与图片路径
+- [高中数学来源与讲义调用流程](docs/high-school-source-and-handout-flow.md) —— 高考语料入库与授权
+- [数学 PDF 题目资产接入改造方案](docs/math-pdf-question-assets-integration-plan.md)
+- [Agent Worker 架构文档](docs/agent-worker-architecture.md)
+- [后端拆分与运行手册](docs/backend-split-operations.md)
+- [Docker WSL 部署](docs/docker-wsl-deployment.md)
+- [讲义提示词档案与样式验收](docs/handout-prompt-profiles-and-style-acceptance.md)
+- [高考题库的去重逻辑设计](docs/高考题库的去重逻辑设计.md)
+- [Python AI 解耦审查](docs/python-ai-separation-architecture-review-2026-08-04.md)
+- [教师资料 RAG 升级设计](docs/teacher-resource-service-rag-upgrade.md)
 
-After the stack is healthy, open `http://127.0.0.1:5173`. Do not use the obsolete `5174` or `8081` ports.
-
-构建经验：worker 使用本机已验证的 `math-agent-rag-ai-worker:deps-20260827` GPU 依赖基底；换机器首次使用或修改 `requirements.txt` 时必须先准备同名且重新校验的依赖基底。源码改动只重建 `COPY app` 层，不会重新 pip 安装或下载 `/models`；禁止使用 `--cache-from image:tag`（DaoCloud 代理会返回 403）及任何 prune。
-
-2024 视觉入库会读取这一个全局值并据此创建最多相同数量的页任务；其最终报告的 `concurrency.globalLimit` 与 `concurrency.effectivePageWorkers`、以及每页审计的 `taskSequence`、`workerThread`、`taskStartedAt`、`taskCompletedAt` 共同证明没有绕开全局控制。
-
-后端服务：
-
-```powershell
-cd backend-java
-mvn spring-boot:run
-```
-
-配套前端：
-
-```powershell
-cd frontend
-npm install
-npm run dev
-```
-
-后端服务不持有 provider 密钥；provider 凭据、endpoint 和模型环境变量仅注入 `ai-worker`。Java 后端通过 `MATH_AGENT_PROVIDER_ROUTE_GRANT_SECRET` 签发受限 route grant，启动前必须配置该密钥。
-# Python AI 解耦审查
-
-讲义 AI 从 Java 迁移到 Python LangGraph 的边界、通信优化、共享 checkpoint、灰度与上线清单见：
-[`docs/python-ai-separation-architecture-review-2026-08-04.md`](docs/python-ai-separation-architecture-review-2026-08-04.md)。
+系统化的逐模块讲解（10 章 61 篇，含架构边界、分布式执行、检索与知识资源、安全与治理）见 [Wiki 目录索引](wiki-export/README.md)。
