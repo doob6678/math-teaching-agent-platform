@@ -73,6 +73,8 @@ docs/superpowers/plans/
 
 # Local work folders and generated previews
 .resume_work/
+resume/
+resume_numbers.md
 .tmp/
 .trae/
 artifacts-*.png
@@ -85,3 +87,10 @@ Thumbs.db
 
 # 基准评测真实凭据配置（复制自 config.example.json 后填写，禁止入库）
 benchmarks/config.json
+
+# Local-only working documents and scratch outputs
+文档/
+提升rag/
+测试与功能梳理/
+archive/
+性能提升/
