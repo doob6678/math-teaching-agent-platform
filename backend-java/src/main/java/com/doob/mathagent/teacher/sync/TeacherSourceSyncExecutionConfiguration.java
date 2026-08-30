@@ -8,6 +8,7 @@ import com.doob.mathagent.teacher.formula.TeacherFormulaRecognitionProperties;
 import com.doob.mathagent.teacher.search.TeacherResourceGraphAlignmentService;
 import com.doob.mathagent.teacher.service.TeacherResourceAssetService;
 import com.doob.mathagent.teacher.service.TeacherPageTranscriptionClient;
+import com.doob.mathagent.teacher.service.TeacherSourceFileReader;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncExecutionService;
 import com.doob.mathagent.feishu.FeishuCredentialService;
 import com.doob.mathagent.feishu.FeishuResourceBindingService;
@@ -42,8 +43,9 @@ public class TeacherSourceSyncExecutionConfiguration {
             TeacherPageTranscriptionClient pageTranscriptionClient,
             FeishuCredentialService feishuCredentialService,
             FeishuResourceBindingService feishuResourceBindingService,
-            TeacherSourceSyncManifestStore manifestStore) {
-        return new TeacherSourceSyncExecutionService(
+            TeacherSourceSyncManifestStore manifestStore,
+            TeacherSourceFileReader sourceFileReader) {
+        TeacherSourceSyncExecutionService service = new TeacherSourceSyncExecutionService(
                 resourceStore,
                 jobStore,
                 blockStore,
@@ -59,5 +61,7 @@ public class TeacherSourceSyncExecutionConfiguration {
                 feishuCredentialService,
                 feishuResourceBindingService,
                 manifestStore);
+        service.setSourceFileReader(sourceFileReader);
+        return service;
     }
 }

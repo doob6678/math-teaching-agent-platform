@@ -32,17 +32,18 @@ public final class TeacherSourceFileReader {
     private static final List<String> TEXT_EXTENSIONS = List.of(".md", ".markdown", ".txt");
 
     private final Path catalogPath;
+    private final TeacherSourceSyncProperties properties;
     private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
 
     public TeacherSourceFileReader(TeacherSourceSyncProperties properties) {
-        Objects.requireNonNull(properties, "properties is required");
+        this.properties = Objects.requireNonNull(properties, "properties is required");
         this.catalogPath = properties.feishuStagingRoot().resolve(".source-file-catalog.json").normalize();
     }
 
-    /** Registers the source root after parsing, before its vector index is published. */
+    /** Registers a validated Feishu source root before its vector index is published. */
     public void register(String tenantId, String documentId, Path root, String checksum) {
         String key = key(tenantId, documentId);
-        Path normalizedRoot = Objects.requireNonNull(root, "root is required").toAbsolutePath().normalize();
+        Path normalizedRoot = properties.requireSourceRoot(root);
         Entry entry = new Entry(normalizedRoot.toString(), text(checksum));
         lock.writeLock().lock();
         try {
@@ -54,11 +55,23 @@ public final class TeacherSourceFileReader {
         }
     }
 
+    /** Removes a stale source registration after an archived or textless source is replaced. */
+    public void unregister(String tenantId, String documentId) {
+        String key = key(tenantId, documentId);
+        lock.writeLock().lock();
+        try {
+            Map<String, Entry> entries = load();
+            if (entries.remove(key) != null) {
+                persist(entries);
+            }
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+
     /**
-     * Checks whether a catalog entry can still supply source text without exposing its storage location to callers.
-     *
-     * <p>Vector rows may outlive an operator-replaced volume. Search callers use this check before turning such a row
-     * into model-visible evidence, while {@link #read(String, String)} retains the detailed fail-closed read contract.</p>
+     * Vector rows may outlive an operator-replaced volume. Search callers use this check before turning such a row
+     * into model-visible evidence, while {@link #read(String, String)} retains the detailed fail-closed read contract.
      */
     public boolean isSourceAvailable(String tenantId, String documentId) {
         lock.readLock().lock();
@@ -67,7 +80,7 @@ public final class TeacherSourceFileReader {
             if (entry == null) {
                 return false;
             }
-            Path root = Path.of(entry.root()).toAbsolutePath().normalize();
+            Path root = properties.requireSourceRoot(Path.of(entry.root()));
             return Files.exists(root) && Files.isReadable(root) && !listTextFiles(root).isEmpty();
         } catch (IOException | RuntimeException exception) {
             return false;
@@ -77,7 +90,75 @@ public final class TeacherSourceFileReader {
     }
 
     /**
-     * Reads source text by opaque document id.  A changed/missing source is an error, never a database fallback.
+     * Reads one registered FILE path with a character bound. The caller supplies the persisted FILE relative path;
+     * this method never enumerates sibling files or exposes the backend source root.
+     */
+    public SourceFile readFile(
+            String tenantId,
+            String rootDocumentId,
+            String relativeName,
+            int maxCharacters) {
+        lock.readLock().lock();
+        try {
+            Entry entry = load().get(key(tenantId, rootDocumentId));
+            if (entry == null) {
+                throw new IllegalArgumentException("Source file is not registered for this tenant/document");
+            }
+            Path root = properties.requireSourceRoot(Path.of(entry.root()));
+            Path relative = Path.of(text(relativeName).replace('\\', '/')).normalize();
+            if (relative.isAbsolute() || relative.getNameCount() == 0 || relative.startsWith("..")) {
+                throw new IllegalArgumentException("Source file relative path is invalid");
+            }
+            Path file = root.resolve(relative).normalize();
+            if (!file.startsWith(root) || !Files.isRegularFile(file) || !isText(file)) {
+                throw new IllegalStateException("Registered source file is unavailable");
+            }
+            int bound = Math.max(1, Math.min(maxCharacters, 1_000_000));
+            String content;
+            try (var reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
+                StringBuilder value = new StringBuilder(Math.min(bound, 8192));
+                char[] buffer = new char[Math.min(8192, bound)];
+                int remaining = bound;
+                while (remaining > 0) {
+                    int read = reader.read(buffer, 0, Math.min(buffer.length, remaining));
+                    if (read < 0) {
+                        break;
+                    }
+                    value.append(buffer, 0, read);
+                    remaining -= read;
+                }
+                content = value.toString();
+            }
+            return new SourceFile(relative.toString().replace("\\", "/"), content);
+        } catch (IOException exception) {
+            throw new IllegalStateException("Failed to read registered source file", exception);
+        } finally {
+            lock.readLock().unlock();
+        }
+    }
+
+    /**
+     * Checks one registered FILE path without materializing the ROOT file catalog.
+     */
+    public boolean isFileAvailable(String tenantId, String rootDocumentId, String relativeName) {
+        try {
+            Entry entry = load().get(key(tenantId, rootDocumentId));
+            if (entry == null) {
+                return false;
+            }
+            Path root = properties.requireSourceRoot(Path.of(entry.root()));
+            Path relative = Path.of(text(relativeName).replace('\\', '/')).normalize();
+            Path file = root.resolve(relative).normalize();
+            return !relative.isAbsolute() && !relative.startsWith("..") && file.startsWith(root)
+                    && Files.isRegularFile(file) && isText(file);
+        } catch (RuntimeException exception) {
+            return false;
+        }
+    }
+
+    /**
+     * Reads source text by opaque document id. This legacy compatibility method remains for management callers;
+     * retrieval and MCP use readFile/readFilePage-style FILE APIs and never invoke this ROOT-wide catalog read.
      */
     public SourceDocument read(String tenantId, String documentId) {
         lock.readLock().lock();
@@ -86,7 +167,12 @@ public final class TeacherSourceFileReader {
             if (entry == null) {
                 throw new IllegalArgumentException("Source file is not registered for this tenant/document");
             }
-            Path root = Path.of(entry.root()).toAbsolutePath().normalize();
+            Path root;
+            try {
+                root = properties.requireSourceRoot(Path.of(entry.root()));
+            } catch (IllegalArgumentException exception) {
+                throw new IllegalStateException("Registered source root is unavailable", exception);
+            }
             if (!Files.exists(root)) {
                 throw new IllegalStateException("Registered source root is unavailable");
             }
@@ -113,8 +199,16 @@ public final class TeacherSourceFileReader {
         if (Files.isRegularFile(root)) {
             return isText(root) ? List.of(root) : List.of();
         }
+        Path realRoot = root.toRealPath();
         try (var stream = Files.walk(root)) {
-            return stream.filter(Files::isRegularFile).filter(this::isText)
+            return stream.filter(Files::isRegularFile)
+                    .filter(path -> {
+                        try {
+                            return path.toRealPath().startsWith(realRoot) && isText(path);
+                        } catch (IOException exception) {
+                            return false;
+                        }
+                    })
                     .sorted(Comparator.comparing(Path::toString)).toList();
         }
     }

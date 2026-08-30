@@ -228,8 +228,7 @@ public class TeacherResourceUploadService {
     }
 
     private Path storageRoot(RequestSubject owner) {
-        return resourceProperties.localFileStorageRoot()
-                .resolve("teacher-resource-uploads")
+        return resourceProperties.teacherResourceUploadRoot()
                 .resolve(owner.tenantId())
                 .resolve(owner.subjectType())
                 .resolve(owner.subjectId());

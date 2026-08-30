@@ -25,6 +25,18 @@ public interface MultiAgentWritingWorkflowStore {
     MultiAgentWritingWorkflowRecord save(MultiAgentWritingWorkflowRecord record);
 
     /**
+     * Persists an explicit recovery transition for an existing workflow.
+     *
+     * <p>Unlike an ordinary snapshot save, this operation is allowed to move a completed workflow back to RUNNING
+     * because the caller has already created a durable recovery task for the same workflow id.</p>
+     *
+     * @param record recovery snapshot
+     * @return normalized saved snapshot
+     */
+    default MultiAgentWritingWorkflowRecord requeue(MultiAgentWritingWorkflowRecord record) {
+        return save(record);
+    }
+    /**
      * Finds one workflow when the backend subject may view it.
      *
      * @param workflowId backend workflow id

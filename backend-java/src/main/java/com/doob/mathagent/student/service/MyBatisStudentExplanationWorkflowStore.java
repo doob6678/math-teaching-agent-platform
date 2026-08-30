@@ -1,6 +1,7 @@
 package com.doob.mathagent.student.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.student.dto.StudentExplanationRequest;
 import com.doob.mathagent.student.entity.StudentExplanationWorkflowEventEntity;
@@ -88,11 +89,13 @@ public class MyBatisStudentExplanationWorkflowStore implements StudentExplanatio
 
     @Override
     public List<WorkflowEvent> eventsAfter(String runId, long afterEventId, int limit) {
-        return eventMapper.selectList(new LambdaQueryWrapper<StudentExplanationWorkflowEventEntity>()
-                        .eq(StudentExplanationWorkflowEventEntity::getRunId, runId)
-                        .gt(StudentExplanationWorkflowEventEntity::getEventId, Math.max(0L, afterEventId))
-                        .orderByAsc(StudentExplanationWorkflowEventEntity::getEventId)
-                        .last("LIMIT " + Math.max(1, Math.min(limit, MAX_EVENT_PAGE_SIZE))))
+        return eventMapper.selectPage(
+                        Page.of(1, Math.max(1, Math.min(limit, MAX_EVENT_PAGE_SIZE))),
+                        new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<StudentExplanationWorkflowEventEntity>()
+                                .eq(StudentExplanationWorkflowEventEntity::getRunId, runId)
+                                .gt(StudentExplanationWorkflowEventEntity::getEventId, Math.max(0L, afterEventId))
+                                .orderByAsc(StudentExplanationWorkflowEventEntity::getEventId))
+                .getRecords()
                 .stream()
                 .map(item -> new WorkflowEvent(item.getEventId(), item.getEventName(), read(item.getEventJson(), StudentExplanationStreamEvent.class)))
                 .toList();

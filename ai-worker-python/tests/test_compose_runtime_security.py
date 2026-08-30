@@ -29,7 +29,14 @@ class ComposeRuntimeSecurityTest(unittest.TestCase):
         self.assertNotIn("MYSQL_ROOT_PASSWORD", worker)
         self.assertIn("MATH_AGENT_AI_RUNTIME_DB_USERNAME", worker)
         self.assertIn("MATH_AGENT_AI_RUNTIME_DB_PASSWORD", worker)
-        self.assertNotIn("\n    dns:", compose)
+        # 只有 ai-worker 允许显式 dns：WSL 生成的解析器可能指向不可达网关，provider 归属的
+        # worker 需要可达递归解析器；其余服务（尤其 backend/mysql）仍禁止 dns 覆盖。
+        non_worker_blocks = [
+            _service_block(compose, name)
+            for name in ("mysql", "redis", "rabbitmq", "backend", "frontend")
+        ]
+        for block in non_worker_blocks:
+            self.assertNotRegex(block, r"(?m)^\s{4}dns:\s")
         self.assertNotRegex(compose, r"\bextra_hosts\s*:")
 
     def test_teacher_source_mounts_are_durable_and_backend_only(self):

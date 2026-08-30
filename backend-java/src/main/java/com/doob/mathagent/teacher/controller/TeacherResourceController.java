@@ -2,6 +2,8 @@ package com.doob.mathagent.teacher.controller;
 
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.infrastructure.security.RequestSubjectResolver;
+import com.doob.mathagent.retrieval.CanonicalMathPaperRetrievalService;
+import com.doob.mathagent.teaching.TeachingEvidence;
 import com.doob.mathagent.teacher.dto.TeacherResourceRegistrationRequest;
 import com.doob.mathagent.teacher.search.audit.TeacherResourceBlockSearchAuditEvent;
 import com.doob.mathagent.teacher.search.audit.TeacherResourceBlockSearchAuditLookup;
@@ -23,6 +25,7 @@ import com.doob.mathagent.teacher.service.TeacherSourceSyncJobService;
 import com.doob.mathagent.teacher.block.TeacherDocumentBlockResponse;
 import com.doob.mathagent.teacher.search.TeacherResourceBlockSearchResponse;
 import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
+import com.doob.mathagent.teacher.document.TeacherFileDocumentResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncCheckpointResponse;
 import com.doob.mathagent.teacher.vo.TeacherSourceSyncJobResponse;
 import com.doob.mathagent.teacher.vo.TeacherResourceAssetResponse;
@@ -35,6 +38,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.UUID;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.Resource;
 import org.springframework.core.env.Environment;
@@ -81,6 +85,8 @@ public class TeacherResourceController {
     private final FeishuCredentialService feishuCredentialService;
     private final FeishuResourceBindingService feishuResourceBindingService;
     private final Environment environment;
+    /** Optional public canonical-paper route; teacher-resource FILE search remains the default path. */
+    private CanonicalMathPaperRetrievalService canonicalMathPaperRetrievalService;
 
     /**
      * Creates a teacher resource controller.
@@ -180,6 +186,13 @@ public class TeacherResourceController {
         this.feishuCredentialService = feishuCredentialService;
         this.feishuResourceBindingService = feishuResourceBindingService;
         this.environment = environment;
+    }
+
+    /** Allows the public teacher-resource endpoint to reuse the manifest-authorized canonical paper retriever. */
+    @Autowired(required = false)
+    public void setCanonicalMathPaperRetrievalService(
+            CanonicalMathPaperRetrievalService canonicalMathPaperRetrievalService) {
+        this.canonicalMathPaperRetrievalService = canonicalMathPaperRetrievalService;
     }
 
     /**
@@ -311,7 +324,15 @@ public class TeacherResourceController {
             HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest).normalize();
         requireTeacherOrAdmin(subject);
+        TeacherResourceSearchFilter filter = TeacherResourceSearchFilter.of(
+                permissionScopes,
+                documentIds,
+                libraries,
+                tags);
         try {
+            if (filter.sourceTypes().contains("gaokao")) {
+                return searchCanonicalMathPapers(query, limit);
+            }
             return blockSearchService.search(
                     subject.tenantId(),
                     subject.subjectType(),
@@ -319,18 +340,89 @@ public class TeacherResourceController {
                     query,
                     limit,
                     "/api/teacher/resources/search",
-                    TeacherResourceSearchFilter.of(
-                            permissionScopes,
-                            documentIds,
-                            libraries,
-                            tags));
+                    filter);
         } catch (IllegalArgumentException exception) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, exception.getMessage(), exception);
         }
     }
 
     /**
-     * Searches only rendered teacher-resource page assets through the private CLIP collection.  The request image is
+     * Adapts already-authorized canonical evidence to the teacher search response without making it a teacher FILE.
+     * An explicit gaokao selector is exclusive, so no Feishu or mock-exam fallback can leak into this route.
+     */
+    private TeacherResourceBlockSearchResponse searchCanonicalMathPapers(
+            String query,
+            int limit) {
+        int safeLimit = Math.max(1, Math.min(12, limit));
+        List<TeachingEvidence> evidence = canonicalMathPaperRetrievalService == null
+                ? List.of()
+                : canonicalMathPaperRetrievalService.search(query, safeLimit);
+        List<TeacherResourceBlockSearchResponse.Hit> hits = evidence.stream()
+                .map(TeacherResourceController::canonicalPaperHit)
+                .limit(safeLimit)
+                .toList();
+        return new TeacherResourceBlockSearchResponse(
+                UUID.randomUUID().toString(),
+                query == null ? "" : query.strip(),
+                safeLimit,
+                "canonical_gaokao_manifest_authorized",
+                hits.size(),
+                hits,
+                new TeacherResourceBlockSearchResponse.CandidateFunnel(
+                        List.of(), List.of(), List.of(), List.of(),
+                        hits.stream()
+                                .map(TeacherResourceBlockSearchResponse.Hit::fileDocumentId)
+                                .filter(value -> value != null && !value.isBlank())
+                                .distinct()
+                                .toList(),
+                        hits.stream()
+                                .map(TeacherResourceBlockSearchResponse.Hit::blockId)
+                                .filter(value -> value != null && !value.isBlank())
+                                .distinct()
+                                .toList(),
+                        hits.size(),
+                        false,
+                        java.util.Map.of(),
+                        List.of(),
+                        List.of(),
+                        hits.isEmpty() ? "no_canonical_hits" : "none"));
+    }
+
+    private static TeacherResourceBlockSearchResponse.Hit canonicalPaperHit(TeachingEvidence evidence) {
+        String questionNumber = evidence.canonicalQuestionNumber();
+        String documentRef = evidence.sourceDocumentId();
+        String blockId = evidence.chunkId();
+        String sourcePath = evidence.sourceTitle();
+        String evidenceRef = evidence.chunkId();
+        return new TeacherResourceBlockSearchResponse.Hit(
+                documentRef,
+                evidence.sourceTitle(),
+                "gaokao",
+                "PUBLIC_GAOKAO",
+                blockId.isBlank() ? evidenceRef : blockId,
+                "question",
+                0,
+                "",
+                "",
+                evidence.pageNo(),
+                sourcePath,
+                sourcePath,
+                "reference",
+                List.of(),
+                evidence.chunkId().isBlank() ? List.of(evidenceRef) : List.of(evidenceRef),
+                evidence.snippet(),
+                evidence.snippet(),
+                0.0d,
+                evidence.assetIds(),
+                List.of(),
+                "",
+                documentRef,
+                "",
+                "");
+    }
+
+    /**
+     * Searches only rendered teacher-resource page assets through the private CLIP collection. The request image is
      * a data URI supplied by the browser; no local path is accepted, so the backend remains the only file boundary.
      */
     @PostMapping("/api/teacher/resources/image-search")
@@ -365,19 +457,53 @@ public class TeacherResourceController {
     }
 
     /**
-     * Lists parsed blocks for one visible teacher resource.
+     * Lists a bounded page of searchable physical FILE documents below one visible Feishu ROOT.
+     * The ROOT is only the authorization/synchronization scope; every returned id is an independent persisted FILE.
+     */
+    @GetMapping("/api/teacher/resources/{documentId}/files")
+    public List<TeacherFileDocumentResponse> listPhysicalFiles(
+            @PathVariable String documentId,
+            @RequestParam(defaultValue = "512") int limit,
+            HttpServletRequest httpRequest) {
+        RequestSubject subject = subjectResolver.resolve(httpRequest).normalize();
+        try {
+            return teacherResourceService.listPhysicalFiles(
+                    subject.tenantId(), subject.subjectType(), subject.subjectId(), documentId, limit);
+        } catch (IllegalArgumentException exception) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Teacher resource FILE documents not found", exception);
+        }
+    }
+
+    /**
+     * Lists parsed blocks for one visible physical FILE document.
      *
-     * This read-only endpoint exists so evaluation tooling can build strict RAG recall sets from real parsed blocks
-     * instead of inventing ground-truth ids. It must keep the same teacher/admin visibility boundary as resource list
-     * and search; do not replace it with a direct file or database shortcut in benchmark code.
-     *
-     * @param documentId resource document id
-     * @param httpRequest HTTP request containing backend session
-     * @return active parsed document blocks for the visible resource
+     * <p>ROOT rows are deliberately rejected here. The management endpoint is bounded to a FILE-local page so it cannot
+     * turn a shared ROOT into an unbounded document or benchmark oracle.</p>
      */
     @GetMapping("/api/teacher/resources/{documentId}/blocks")
     public List<TeacherDocumentBlockResponse> listBlocks(
             @PathVariable String documentId,
+            @RequestParam(defaultValue = "512") int limit,
+            HttpServletRequest httpRequest) {
+        RequestSubject subject = subjectResolver.resolve(httpRequest).normalize();
+        try {
+            if (limit < 1 || limit > 512) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "limit must be between 1 and 512");
+            }
+            boolean visibleFile = teacherResourceService.isVisiblePhysicalFile(
+                    subject.tenantId(), subject.subjectType(), subject.subjectId(), documentId);
+            if (!visibleFile) {
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Teacher resource FILE not found");
+            }
+            return blockStore.listBlocksForFile(subject.tenantId(), documentId, limit, null);
+        } catch (IllegalArgumentException exception) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Teacher resource FILE not found", exception);
+        }
+    }
+
+    /** Compatibility helper retained for focused controller tests and non-HTTP callers. */
+    public List<TeacherDocumentBlockResponse> listBlocks(
+            String documentId,
             HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest).normalize();
         boolean visible = teacherResourceService
@@ -391,9 +517,9 @@ public class TeacherResourceController {
     }
 
     /**
-     * Lists image metadata for one visible resource so inventory and UI callers can audit real asset ingestion.
+     * Lists metadata for active image assets attached to a visible teacher resource.
      *
-     * <p>Only metadata is returned here.  The image bytes remain behind the existing opaque asset-id endpoint,
+     * <p>Only metadata is returned here. The image bytes remain behind the existing opaque asset-id endpoint,
      * keeping storage keys and provider tokens out of the response while using the same visibility boundary as blocks.</p>
      */
     @GetMapping("/api/teacher/resources/{documentId}/assets")

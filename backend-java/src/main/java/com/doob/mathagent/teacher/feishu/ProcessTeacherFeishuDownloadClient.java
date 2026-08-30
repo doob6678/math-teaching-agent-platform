@@ -172,7 +172,8 @@ public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownload
             if (failed > 0) {
                 throw new ProcessDownloadFailure(
                         "Feishu downloader reported failed files: " + failed,
-                        result.checkpoint().hasCursor() ? result.checkpoint() : readCheckpoint(checkpointPath));
+                        result.checkpoint().hasCursor() ? result.checkpoint() : readCheckpoint(checkpointPath),
+                        result.failedItemsJson());
             }
             return result;
         } catch (IOException exception) {
@@ -199,15 +200,11 @@ public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownload
             String downloadedItemsJson = jsonArray(root.path("checkpoint").path("downloaded_items"));
             String failedItemsJson = jsonArray(root.path("failed_items"));
             JsonNode provider = root.path("provider");
+            String timing = timingSummary(root);
             return new FeishuDownloadResult(
-                    savedPath,
-                    files,
-                    skipped,
-                    failed,
-                    "Downloaded " + files + " Feishu files; skipped " + skipped,
-                    checkpoint,
-                    downloadedItemsJson,
-                    failedItemsJson,
+                    savedPath, files, skipped, failed,
+                    "Downloaded " + files + " Feishu files; skipped " + skipped + timing,
+                    checkpoint, downloadedItemsJson, failedItemsJson,
                     textOrDefault(provider.path("title").asText(""), null),
                     textOrDefault(provider.path("revision").asText(""), null),
                     jsonArray(root.path("discovered_items")),
@@ -233,6 +230,21 @@ public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownload
                     "[]",
                     "[]");
         }
+    }
+
+    private static String timingSummary(JsonNode root) {
+        JsonNode timing = root.path("timing");
+        long elapsedMs = timing.isObject()
+                ? timing.path("elapsed_ms").asLong(root.path("elapsed_ms").asLong(-1L))
+                : root.path("elapsed_ms").asLong(-1L);
+        if (elapsedMs < 0L) {
+            return "";
+        }
+        return "; downloadElapsedMs=" + elapsedMs
+                + ", changedFiles=" + root.path("stats").path("changed_files").asInt(0)
+                + ", unchangedFiles=" + root.path("stats").path("unchanged_files").asInt(0)
+                + ", assets=" + root.path("stats").path("assets").asInt(0)
+                + ", failedItems=" + root.path("failed_items").size();
     }
 
     /**
@@ -307,8 +319,7 @@ public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownload
             command.add(configuredAppkey.toString());
         }
         command.add("--manifest-path");
-        command.add(outputRoot.resolve(".manifests").resolve(
-                com.doob.mathagent.teacher.support.TeacherResourceSourceIdentity.hash(url) + ".json").toString());
+        command.add(outputRoot.resolve(".manifests").resolve("manifest.json").toString());
         FeishuDownloadCheckpoint normalized = checkpoint == null ? FeishuDownloadCheckpoint.empty() : checkpoint;
         if (normalized.hasCursor()) {
             Files.writeString(checkpointPath, checkpointJson(normalized), StandardCharsets.UTF_8);
@@ -438,6 +449,9 @@ public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownload
             boolean retryable,
             FeishuDownloadCheckpoint checkpoint) {
         String message = textOrDefault(exception.getMessage(), "Feishu downloader failed");
+        String failedItemsJson = exception instanceof ProcessDownloadFailure failure
+                ? failure.failedItemsJson()
+                : "[]";
         Matcher codeMatcher = PROVIDER_CODE_PATTERN.matcher(message);
         String providerCode = null;
         // A Markdown fallback can report an initial endpoint validation failure followed by the decisive raw-content
@@ -467,7 +481,8 @@ public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownload
                 retryable,
                 exception,
                 checkpoint,
-                new TeacherSourceSyncFailureResponse(providerCode, retryable, scopes, authorizationUrl));
+                new TeacherSourceSyncFailureResponse(providerCode, retryable, scopes, authorizationUrl),
+                failedItemsJson);
     }
 
     /**
@@ -546,14 +561,24 @@ public class ProcessTeacherFeishuDownloadClient implements TeacherFeishuDownload
     private static final class ProcessDownloadFailure extends IllegalStateException {
 
         private final FeishuDownloadCheckpoint checkpoint;
+        private final String failedItemsJson;
 
         private ProcessDownloadFailure(String message, FeishuDownloadCheckpoint checkpoint) {
+            this(message, checkpoint, "[]");
+        }
+
+        private ProcessDownloadFailure(String message, FeishuDownloadCheckpoint checkpoint, String failedItemsJson) {
             super(message);
             this.checkpoint = checkpoint == null ? FeishuDownloadCheckpoint.empty() : checkpoint;
+            this.failedItemsJson = failedItemsJson == null || failedItemsJson.isBlank() ? "[]" : failedItemsJson.strip();
         }
 
         private FeishuDownloadCheckpoint checkpoint() {
             return checkpoint;
+        }
+
+        private String failedItemsJson() {
+            return failedItemsJson;
         }
     }
 }

@@ -27,6 +27,75 @@ class TeacherResourceAssetServiceTest {
     Path tempDir;
 
     @Test
+    void rejectsNonImagePayloadBeforeWritingAssetMetadataOrBinary() {
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherResourceAssetStore assetStore = new InMemoryTeacherResourceAssetStore();
+        TeacherResourceAssetService service =
+                new TeacherResourceAssetService(assetStore, resourceStore, testSyncProperties());
+        TeacherResourceDocumentResponse document = document("doc-invalid-image", "teacher-1", "TEACHER_PRIVATE");
+        resourceStore.save(document);
+
+        assertThatThrownBy(() -> service.saveExtractedAsset(
+                document,
+                "IMAJES/curve.png",
+                null,
+                "IMAJES/curve.png",
+                "<html>proxy error</html>".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                "image/png"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Rejected invalid teacher image")
+                .hasMessageContaining("doc-invalid-image")
+                .hasMessageContaining("IMAJES/curve.png");
+
+        assertThat(assetStore.snapshot()).isEmpty();
+        assertThat(Files.exists(testSyncProperties().assetStorageRoot())).isFalse();
+    }
+
+    @Test
+    void rejectsTruncatedAndMislabeledImagesBeforePersisting() throws Exception {
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherResourceAssetStore assetStore = new InMemoryTeacherResourceAssetStore();
+        TeacherResourceAssetService service =
+                new TeacherResourceAssetService(assetStore, resourceStore, testSyncProperties());
+        TeacherResourceDocumentResponse document = document("doc-image-contract", "teacher-1", "TEACHER_PRIVATE");
+        resourceStore.save(document);
+        byte[] png = pngBytes();
+
+        assertThatThrownBy(() -> service.saveExtractedAsset(
+                document, "broken.png", null, "broken", java.util.Arrays.copyOf(png, 12), "image/png"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("image decoder rejected");
+        assertThatThrownBy(() -> service.saveExtractedAsset(
+                document, "diagram.jpg", null, "wrong-mime", png, "image/jpeg"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("declared MIME does not match image signature");
+
+        assertThat(assetStore.snapshot()).isEmpty();
+        assertThat(Files.exists(testSyncProperties().assetStorageRoot())).isFalse();
+    }
+
+    @Test
+    void historicalInvalidImageIsOnlyMarkedInactive() throws Exception {
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherResourceAssetStore assetStore = new InMemoryTeacherResourceAssetStore();
+        TeacherResourceAssetService service =
+                new TeacherResourceAssetService(assetStore, resourceStore, testSyncProperties());
+        TeacherResourceDocumentResponse document = document("doc-historical-image", "teacher-1", "TEACHER_PRIVATE");
+        resourceStore.save(document);
+        TeacherResourceAssetResponse asset = service.saveExtractedAsset(
+                document, "diagram.png", null, "diagram", pngBytes(), "image/png").orElseThrow();
+        Path storage = testSyncProperties().assetStorageRoot().resolve(asset.storageKey());
+        Files.writeString(storage, "not an image", java.nio.charset.StandardCharsets.UTF_8);
+
+        assertThat(service.deactivateInvalidImageAssets("school-a", document.documentId())).isEqualTo(1);
+        assertThat(assetStore.snapshot()).singleElement().satisfies(saved -> {
+            assertThat(saved.assetId()).isEqualTo(asset.assetId());
+            assertThat(saved.status()).isEqualTo("inactive");
+        });
+        assertThat(Files.readString(storage, java.nio.charset.StandardCharsets.UTF_8)).isEqualTo("not an image");
+    }
+
+    @Test
     void ownerAndAdminCanReadPrivateAssetButOtherTeacherAndStudentCannot() throws Exception {
         InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
         InMemoryTeacherResourceAssetStore assetStore = new InMemoryTeacherResourceAssetStore();
@@ -76,6 +145,38 @@ class TeacherResourceAssetServiceTest {
                 .isEqualTo(asset.assetId());
         assertThat(service.openVisibleAsset(asset.assetId(), subject("student", "student-1")).assetId())
                 .isEqualTo(asset.assetId());
+    }
+
+    @Test
+    void opensAuthorizedFileImageByExactDocumentAndLogicalPathWithoutMakingFileSearchable() throws Exception {
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherResourceAssetStore assetStore = new InMemoryTeacherResourceAssetStore();
+        TeacherResourceAssetService service =
+                new TeacherResourceAssetService(assetStore, resourceStore, testSyncProperties());
+        String logicalPath = "解析几何/抛物线/抛物线的点差法/IMAJES/image-001.jpg";
+        TeacherResourceDocumentResponse fileDocument = new TeacherResourceDocumentResponse(
+                "2093279637590351873", "school-a", "scheduler", "feishu", "抛物线的点差法.md", null,
+                tempDir.resolve("source.md").toString(), "TEACHER_SHARED", "synced", "parsed", "ready", "ready",
+                "md", java.util.List.of(), "TEXT");
+        TeacherResourceDocumentResponse duplicateDocument = new TeacherResourceDocumentResponse(
+                "2093346775849418753", "school-a", "scheduler", "feishu", "另一份抛物线资料.md", null,
+                tempDir.resolve("duplicate.md").toString(), "TEACHER_SHARED", "synced", "parsed", "ready", "ready",
+                "md", java.util.List.of(), "TEXT");
+        resourceStore.save(fileDocument);
+        resourceStore.save(duplicateDocument);
+        TeacherResourceAssetResponse asset = service.saveExtractedAsset(
+                        fileDocument, logicalPath, null, "IMAJES/image-001.jpg", pngBytes(), "image/png")
+                .orElseThrow();
+        TeacherResourceAssetResponse duplicateAsset = service.saveExtractedAsset(
+                        duplicateDocument, logicalPath, null, "IMAJES/image-001.jpg", pngBytes(), "image/png")
+                .orElseThrow();
+
+        assertThat(service.openVisibleLogicalAsset(fileDocument.documentId(), logicalPath, subject("admin", "admin-1"))
+                .orElseThrow().assetId()).isEqualTo(asset.assetId());
+        assertThat(service.openVisibleLogicalAsset(duplicateDocument.documentId(), logicalPath, subject("admin", "admin-1"))
+                .orElseThrow().assetId()).isEqualTo(duplicateAsset.assetId());
+        assertThat(service.openVisibleLogicalAsset("missing-document", logicalPath, subject("admin", "admin-1")))
+                .isEmpty();
     }
 
     @Test

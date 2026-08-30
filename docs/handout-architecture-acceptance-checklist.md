@@ -25,8 +25,10 @@
 
 ## 图片与来源
 
-- [ ] 图片引用只包含不透明 `evidenceRef` 与 `assetId`；没有文件路径、URL、Base64 或 LaTeX 图片代码进入领域数据。
 - [ ] 每张展示图片均能映射到本次运行授权的真实来源资产；无有效选择的区块不显示图片。
+- [ ] 禁止使用assetID，禁止使用，已经过时！！！禁止返回AI assetID
+- [ ] **高考图片资格门禁：只允许使用完整来源目录 `output/math-paper-corpus/<完整来源文件名>/figures/` 中由题目级 manifest 和 `questions/*.md` 明确绑定、明确引用的 `figures/` 资产。`page-images/` 仅用于页级定位、OCR、版面审计和来源复核，严禁进入 AI 选图、授权物化、讲义 Markdown、XeLaTeX 或任何 PDF；严禁对页面进行二次切分来生成讲义图片。题目没有合格 `figures/` 引用时，高考题只保留文字、不显示图片。**
+- [ ] **教材图片隔离：教材检索返回的 `sourcePageImage`、页面图片 URI 和教材页图资产不得进入教师版、学生版或课堂讲解版 PDF；讲义图片只能来自已授权飞书原始图片或合格高考 `figures/`。**
 - [ ] 高中来源链路可复核 GPU PaddleOCR/版面资产、同源 Terra/Luna 页级转写、完整来源名目录、全文 Markdown、逐题 Markdown 和复制的来源资产。
 - [ ] 在授权分块和向量入库前完成上述来源目录与资产发布，且入库记录能回溯到来源证据。
 

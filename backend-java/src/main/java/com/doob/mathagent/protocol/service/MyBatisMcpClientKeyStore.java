@@ -85,6 +85,16 @@ public class MyBatisMcpClientKeyStore implements McpClientKeyStore {
                 > 0;
     }
 
+    @Override
+    public boolean deleteRevoked(String tenantId, String ownerUserId, String keyId) {
+        // 归属条件与 status=revoked 一并放进 DELETE 的 WHERE，保证只能物理删除本人已吊销的 key。
+        return mapper.delete(new LambdaQueryWrapper<McpClientKeyEntity>()
+                .eq(McpClientKeyEntity::getTenantId, tenantId)
+                .eq(McpClientKeyEntity::getOwnerUserId, ownerUserId)
+                .eq(McpClientKeyEntity::getKeyId, keyId)
+                .eq(McpClientKeyEntity::getStatus, "revoked")) > 0;
+    }
+
     private static McpClientKeyEntity toEntity(McpClientKeyRecord record) {
         McpClientKeyEntity entity = new McpClientKeyEntity();
         entity.setKeyId(record.keyId());

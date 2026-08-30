@@ -61,12 +61,14 @@ public interface StudentExplanationHistoryStore {
 
     /**
      * Lists durable conversation shells so the frontend can render a ChatGPT-like sidebar.
+     * page 从 1 开始：侧边栏“加载更多”按页向后翻，避免一次性返回全部历史。
      */
     List<StudentExplanationConversationSummary> listConversations(
             String tenantId,
             String subjectType,
             String subjectId,
-            int limit);
+            int limit,
+            int page);
 
     /**
      * Loads one full conversation thread with persisted question/response pairs.

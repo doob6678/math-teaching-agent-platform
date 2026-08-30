@@ -3476,6 +3476,12 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
       });
     },
 
+    deleteMcpKey(keyId: string): Promise<McpClientKeyRevocationResponse> {
+      return requestJson<McpClientKeyRevocationResponse>(`/api/mcp/keys/${encodeURIComponent(keyId)}`, {
+        method: "DELETE",
+      });
+    },
+
     getMyMcpConfiguration(): Promise<McpConfigurationResponse> {
       return requestJson<McpConfigurationResponse>("/api/mcp/configuration/me");
     },
@@ -3678,9 +3684,9 @@ export function createTextbookApiClient(baseUrl: string, fetchImpl: FetchLike = 
       return requestJson<StudentExplanationHistoryResponse>(`/api/students/explanations/history?${params.toString()}`);
     },
 
-    listStudentExplanationConversations(limit = 20): Promise<StudentExplanationConversationListResponse> {
+    listStudentExplanationConversations(limit = 20, page = 1): Promise<StudentExplanationConversationListResponse> {
       return requestJson<StudentExplanationConversationListResponse>(
-        `/api/students/explanations/conversations?limit=${encodeURIComponent(String(limit))}`,
+        `/api/students/explanations/conversations?limit=${encodeURIComponent(String(limit))}&page=${encodeURIComponent(String(page))}`,
       );
     },
 

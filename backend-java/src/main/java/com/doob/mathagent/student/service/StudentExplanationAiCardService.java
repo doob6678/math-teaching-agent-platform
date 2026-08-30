@@ -95,13 +95,24 @@ public class StudentExplanationAiCardService {
             StudentExplanationAiStreamListener streamListener,
             String runId) {
         Set<String> allowed = availableTools == null ? Set.of() : Set.copyOf(availableTools);
-        PythonMigratedWorkloadClient.ExplanationDecision result = workloadClient.decideStudentExplanation(
+        // 决策改走 Python 流式端点：final 轮的 title/summary JSON 增量实时交给投影层（StudentExplanationController
+        // 只提取 title/summary/items 文本），学生首字从整包完成降到首个字段到达；action 轮没有这些字段不会泄漏工具名。
+        PythonMigratedWorkloadClient.ExplanationDecision result = workloadClient.streamDecideStudentExplanation(
                 safe(runId).isBlank() ? stableRunId(problem, imageDataUrl, "react") : safe(runId),
                 safe(problem),
                 evidence(sources),
                 List.copyOf(allowed),
                 observations == null ? List.of() : observations,
-                safe(imageDataUrl));
+                safe(imageDataUrl),
+                event -> {
+                    if (!"delta".equals(event.eventName()) || safe(event.content()).isBlank()) {
+                        return;
+                    }
+                    StudentExplanationAiStreamListener listener = streamListener == null
+                            ? StudentExplanationAiStreamListener.NOOP : streamListener;
+                    listener.onDelta(new AiChatStreamDelta(
+                            event.providerName(), event.modelCode(), event.content(), "", 0, 0, 0), List.of());
+                });
         if ("final".equals(result.decision())) {
             List<StudentExplanationResponse.ExplanationCard> cards = normalizeCards(result.cards(), sources);
             if (cards.isEmpty()) {
@@ -195,8 +206,11 @@ public class StudentExplanationAiCardService {
                     }
                     StudentExplanationAiStreamListener listener = streamListener == null
                             ? StudentExplanationAiStreamListener.NOOP : streamListener;
+                    // 注意 AiChatStreamDelta 的字段顺序是 (provider, model, reasoningDelta, contentDelta)：
+                    // worker 的可见 JSON 增量必须进 contentDelta；此前传到 reasoning 槽位导致投影层全部丢弃，
+                    // 学生端首字退化成整包完成（9 秒级）。
                     listener.onDelta(new AiChatStreamDelta(
-                            event.providerName(), event.modelCode(), event.content(), "", 0, 0, 0), List.of());
+                            event.providerName(), event.modelCode(), "", event.content(), 0, 0, 0), List.of());
                 });
         List<StudentExplanationResponse.ExplanationCard> cards = normalizeCards(result.cards(), sources);
         if (cards.isEmpty()) {

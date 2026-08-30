@@ -28,7 +28,12 @@ def main() -> int:
         default=ROOT / "backend-java" / "src" / "main" / "resources" / "knowledge" / "graph-spine-v0.1.md",
         help="UTF-8 knowledge-point data source used to build the real evaluation query set",
     )
-    parser.add_argument("--output", type=Path, default=ROOT / "docs" / "textbook-milvus-recall-verification.json")
+    # 2026-08-30 文档清理后，历史验证证据统一归档在 archive/ 下，新产出默认也写入这里。
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=ROOT / "archive" / "2026-08-30-doc-cleanup" / "acceptance-evidence" / "textbook-milvus-recall-verification.json",
+    )
     args = parser.parse_args()
     cfg = yaml.safe_load((ROOT / "backend-java/src/main/resources/application.yml").read_text(encoding="utf-8"))["math-agent"]["vector-index"]
     worker_key = worker_key_from_local_secret()

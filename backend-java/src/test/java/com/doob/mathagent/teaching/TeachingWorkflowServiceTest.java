@@ -51,6 +51,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -676,6 +677,37 @@ class TeachingWorkflowServiceTest {
 
         assertThat(evidence.snippet()).contains("24", "48", "72").doesNotContain("390", "如图，一个地区分为5个行政区域");
         assertThat(evidence.sourceDocumentId()).isEqualTo("teacher-document");
+    }
+
+    @Test
+    void initialTeacherRetrievalProjectsOnlyTheAuthoritativeImageBinding() throws Exception {
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        resourceStore.save(teacherResourceDocument("image-document", "teacher-1", "TEACHER_PRIVATE", "抛物线资料"));
+        String markdownLine = "![](IMAJES/image-001.jpg)";
+        String logicalPath = "抛物线/定义/IMAJES/image-001.jpg";
+        blockStore.replaceActiveBlocks("tenant-a", "image-document", List.of(new TeacherDocumentBlockResponse(
+                "image-block", "image-document", "image-block", "markdown", 0, "函数", "二次函数", 1, null,
+                "抛物线资料.md", "reference", "顶点式图像。" + markdownLine, "顶点式图像。" + markdownLine,
+                "[{\"markdownLine\":\"![](IMAJES/image-001.jpg)\",\"logicalPath\":\"抛物线/定义/IMAJES/image-001.jpg\"}]",
+                "[]", "[]", "[]", "checksum", 1.0d, "active")));
+        TeachingWorkflowService workflow = new TeachingWorkflowService(
+                createTextbookCorpus(), retrievalService(), new InMemoryTeachingTaskStore(), memoryReuseService(),
+                null, new InMemoryAgentTraceStore(), new TeachingHandoutTemplateService(), Optional.empty(),
+                Optional.of(TeacherResourceBlockSearchServiceFixture.service(resourceStore, blockStore)), Runnable::run);
+        var method = TeachingWorkflowService.class.getDeclaredMethod(
+                "toTeacherResourceEvidence", TeacherResourceBlockSearchResponse.Hit.class, TeachingRequestContext.class);
+        method.setAccessible(true);
+
+        TeachingEvidence evidence = (TeachingEvidence) method.invoke(workflow,
+                new TeacherResourceBlockSearchResponse.Hit(
+                        "image-document", "抛物线资料", "feishu", "TEACHER_PRIVATE", "image-block", "markdown", 1,
+                        "二次函数", "顶点式", 1, "抛物线资料.md", "reference", List.of("二次函数"), List.of("image-block"),
+                        "顶点式图像。" + markdownLine, "顶点式图像。", 1.0d, List.of(), List.of()),
+                new TeachingRequestContext("tenant-a", "teacher", "teacher-1", "device-1"));
+
+        assertThat(evidence.imageRefs()).containsExactly(Map.of(
+                "markdownLine", markdownLine, "logicalPath", logicalPath));
     }
 
     @Test

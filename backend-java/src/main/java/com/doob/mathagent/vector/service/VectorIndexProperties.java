@@ -27,7 +27,8 @@ public record VectorIndexProperties(
         boolean teacherImageClipEnabled,
         String teacherImageCollectionName,
         int teacherImageDimension,
-        int teacherImageQueryDimension) {
+        int teacherImageQueryDimension,
+        Boolean childChunkSearchEnabled) {
 
     /** Pins Spring property binding to the full production configuration shape. */
     @ConstructorBinding
@@ -48,7 +49,7 @@ public record VectorIndexProperties(
         this(enabled, milvusUri, milvusToken, collectionName, studentMemoryCollectionName,
                 "math_agent_textbook_pages_bge", "math_agent_textbook_pages_clip", 512, 768, 512, dimension,
                 embeddingBaseUrl, embeddingApiKey, embeddingModel, requestTimeoutMs,
-                10, false, "math_agent_teacher_page_assets_clip", 768, 512);
+                10, false, "math_agent_teacher_page_assets_clip", 768, 512, null);
     }
 
     public VectorIndexProperties(
@@ -64,11 +65,28 @@ public record VectorIndexProperties(
         this(enabled, milvusUri, milvusToken, collectionName, "math_agent_student_memories_bge",
                 "math_agent_textbook_pages_bge", "math_agent_textbook_pages_clip", 512, 768, 512, dimension,
                 embeddingBaseUrl, embeddingApiKey, embeddingModel, requestTimeoutMs,
-                10, false, "math_agent_teacher_page_assets_clip", 768, 512);
+                10, false, "math_agent_teacher_page_assets_clip", 768, 512, null);
     }
 
     public String normalizedCollectionName() {
         return collectionName == null || collectionName.isBlank() ? "math_agent_teacher_text_blocks_bge" : collectionName.strip();
+    }
+
+    /**
+     * 20260830 parent-child retrieval: child chunks live in a derived sibling collection with the same generic
+     * schema. The name is derived, not configured, so rollback is a pure search-route switch and the production
+     * block collection is never rebuilt or deleted.
+     */
+    public String normalizedChildCollectionName() {
+        return normalizedCollectionName() + "_child";
+    }
+
+    /**
+     * 20260830：子块融合路由开关（默认开）。实测融合路由 gate 全过但 doc@3 比纯块路由低约 3pp，
+     * 保留一行配置回滚能力：math-agent.vector-index.child-chunk-search-enabled: false。
+     */
+    public boolean normalizedChildChunkSearchEnabled() {
+        return childChunkSearchEnabled == null || childChunkSearchEnabled;
     }
 
     public String normalizedStudentMemoryCollectionName() {

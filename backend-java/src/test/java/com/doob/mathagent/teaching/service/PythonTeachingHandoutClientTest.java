@@ -1,6 +1,7 @@
 package com.doob.mathagent.teaching.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.doob.mathagent.agent.service.ProviderRouteGrantSigner;
 import com.doob.mathagent.infrastructure.ai.AiProviderCatalog;
@@ -27,8 +28,8 @@ class PythonTeachingHandoutClientTest {
                 {
                   "status":"COMPLETED",
                   "documents":{
-                    "teacher_writer":{"markdown":"教师逐题讲解","assetPlacements":[{"questionNumber":1,"assetIds":["asset-a","asset-b"],"anchor":"question","layout":"two_column","variants":["teacher_writer","student_writer"],"caption":"函数图像"}]},
-                    "student_writer":{"markdown":"学生练习","assetPlacements":[{"questionNumber":1,"assetIds":["asset-a","asset-b"],"anchor":"question","layout":"two_column","variants":["teacher_writer","student_writer"],"caption":"函数图像"}]},
+                    "teacher_writer":{"markdown":"教师逐题讲解\\n\\n![函数图像](IMAJES/image-001.png)","assetPlacements":[{"logicalPath":"函数资料/IMAJES/image-001.png","markdownLine":"![函数图像](IMAJES/image-001.png)","anchorBefore":"教师逐题讲解","anchorAfter":"","layout":"single","variants":["teacher_writer","student_writer"],"caption":"函数图像"}]},
+                    "student_writer":{"markdown":"学生练习\\n\\n![函数图像](IMAJES/image-001.png)","assetPlacements":[{"logicalPath":"函数资料/IMAJES/image-001.png","markdownLine":"![函数图像](IMAJES/image-001.png)","anchorBefore":"学生练习","anchorAfter":"","layout":"single","variants":["teacher_writer","student_writer"],"caption":"函数图像"}]},
                     "lecture_writer":{"markdown":"课堂投影"}
                   },
                   "metrics":{
@@ -41,18 +42,40 @@ class PythonTeachingHandoutClientTest {
                 """));
 
         assertThat(draft.structured()).isTrue();
-        assertThat(draft.teacherExplanation()).isEqualTo("教师逐题讲解");
-        assertThat(draft.studentHint()).isEqualTo("学生练习");
+        assertThat(draft.teacherExplanation()).contains("教师逐题讲解", "![函数图像](IMAJES/image-001.png)");
+        assertThat(draft.studentHint()).contains("学生练习", "![函数图像](IMAJES/image-001.png)");
         assertThat(draft.lectureContent()).isEqualTo("课堂投影");
-        assertThat(draft.assetPlacements()).singleElement().satisfies(placement -> {
-            assertThat(placement.questionNumber()).isEqualTo(1);
-            assertThat(placement.assetIds()).containsExactly("asset-a", "asset-b");
+        assertThat(draft.assetPlacements()).hasSize(2).first().satisfies(placement -> {
+            assertThat(placement.logicalPath()).isEqualTo("函数资料/IMAJES/image-001.png");
+            assertThat(placement.markdownLine()).isEqualTo("![函数图像](IMAJES/image-001.png)");
+            assertThat(placement.anchorBefore()).isEqualTo("教师逐题讲解");
+            assertThat(placement.anchorAfter()).isBlank();
             assertThat(placement.variants()).containsExactly("teacher_writer", "student_writer");
         });
+        assertThat(draft.assetPlacements()).noneMatch(placement -> placement.markdownLine().contains("asset-a"));
         assertThat(draft.followUpQuestions()).isEmpty();
         assertThat(draft.providerName()).isEqualTo("openai");
         assertThat(draft.modelCode()).isEqualTo("gpt-5.6-luna");
         assertThat(draft.totalTokens()).isEqualTo(200);
+    }
+
+    @Test
+    void rejectsRetiredQuestionAndAssetIdPlacementContract() throws Exception {
+        JsonNode response = new ObjectMapper().readTree("""
+                {
+                  "status":"COMPLETED",
+                  "documents":{
+                    "teacher_writer":{"markdown":"教师正文","assetPlacements":[{"questionNumber":1,"assetIds":["asset-a"],"anchor":"题目","layout":"single","variants":["teacher_writer"]}]},
+                    "student_writer":{"markdown":"学生正文"},
+                    "lecture_writer":{"markdown":"课堂正文"}
+                  },
+                  "metrics":{}
+                }
+                """);
+
+        assertThatThrownBy(() -> PythonTeachingHandoutClient.project(response))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("invalid source-image placement");
     }
 
     @Test

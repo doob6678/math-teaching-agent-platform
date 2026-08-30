@@ -77,6 +77,33 @@ public class MyBatisMultiAgentWritingWorkflowStore implements MultiAgentWritingW
     }
 
     /**
+     * Persists a deliberate recovery transition. The recovery endpoint has already created the same-workflow task,
+     * so a completed snapshot must not win the merge and hide the queued execution from the Worker.
+     */
+    @Override
+    public MultiAgentWritingWorkflowRecord requeue(MultiAgentWritingWorkflowRecord record) {
+        MultiAgentWritingWorkflowRecord normalized = record.normalize();
+        for (int attempt = 0; attempt < MAX_CAS_RETRIES; attempt++) {
+            MultiAgentWritingWorkflowEntity existingEntity = mapper.selectById(normalized.workflowId());
+            if (existingEntity == null) {
+                throw new IllegalArgumentException("Multi-agent writing workflow not found");
+            }
+            MultiAgentWritingWorkflowRecord existing = toRecord(existingEntity);
+            MultiAgentWritingWorkflowRecord replacement = new MultiAgentWritingWorkflowRecord(
+                    existing.workflowId(), existing.tenantId(), existing.subjectType(), existing.subjectId(),
+                    normalized.status(), existing.createdAt(), normalized.updatedAt(), normalized.stages(),
+                    normalized.totalUsage(), normalized.message()).normalize();
+            MultiAgentWritingWorkflowEntity entity = toEntity(replacement);
+            long revision = existingEntity.getRevision() == null ? 0L : existingEntity.getRevision();
+            entity.setRevision(revision);
+            if (mapper.updateIfRevisionMatches(entity, revision) == 1) {
+                return replacement;
+            }
+        }
+        throw new IllegalStateException("Concurrent multi-agent workflow recovery did not converge");
+    }
+
+    /**
      * Finds a visible workflow snapshot by workflow id.
      */
     @Override

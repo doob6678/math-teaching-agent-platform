@@ -35,6 +35,7 @@ import com.doob.mathagent.teaching.TeachingWorkflowEvent;
 import com.doob.mathagent.teaching.TeachingWorkflowNode;
 import com.doob.mathagent.teaching.dto.TeachingTaskRequest;
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
+import com.doob.mathagent.teacher.block.TeacherDocumentBlockResponse;
 import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService;
 import com.doob.mathagent.teacher.search.TeacherResourceBlockSearchResponse;
 import com.doob.mathagent.teacher.search.TeacherResourceSearchFilter;
@@ -1218,6 +1219,15 @@ class TeachingWorkflowExecutionSupport {
                         .flatMap(Optional::stream)
                         .findFirst()
                         .orElse(null);
+        List<Map<String, String>> imageRefs = inspectionReference
+                .filter(reference -> !reference.documentId().isBlank() && !reference.blockId().isBlank())
+                .flatMap(reference -> teacherResourceBlockSearchService.listVisibleBlocks(
+                        context.tenantId(), context.subjectType(), context.subjectId(), reference.documentId()).stream()
+                        .filter(block -> reference.blockId().equals(block.blockId())
+                                || reference.blockId().equals(block.externalBlockId()))
+                        .findFirst())
+                .map(this::authorizedImageRefs)
+                .orElse(List.of());
         return new TeachingEvidence(
                 "TEACHER_RESOURCE",
                 teacherResourceSourceTitle(hit),
@@ -1242,7 +1252,37 @@ class TeachingWorkflowExecutionSupport {
                 hit.sourceType(),
                 inspectionReference.map(TeacherResourceBlockSearchService.CanonicalReference::originalUrl).orElse(""),
                 hit.sourcePath(),
-                hit.imageAssetIds() == null ? List.of() : hit.imageAssetIds());
+                hit.imageAssetIds() == null ? List.of() : hit.imageAssetIds(),
+                "",
+                imageRefs);
+    }
+
+    /**
+     * Projects only the authoritative persisted Markdown image tuple into a run evidence row. Asset identifiers and
+     * source locations remain Java-only; the broker later replaces just the Markdown alt text with a run alias.
+     */
+    private List<Map<String, String>> authorizedImageRefs(TeacherDocumentBlockResponse block) {
+        if (block == null || block.imageRefs() == null || block.imageRefs().isBlank()) {
+            return List.of();
+        }
+        try {
+            com.fasterxml.jackson.databind.JsonNode root = new com.fasterxml.jackson.databind.ObjectMapper()
+                    .readTree(block.imageRefs());
+            if (root == null || !root.isArray()) {
+                return List.of();
+            }
+            List<Map<String, String>> imageRefs = new ArrayList<>();
+            for (com.fasterxml.jackson.databind.JsonNode value : root) {
+                String markdownLine = value.path("markdownLine").asText("").strip();
+                String logicalPath = value.path("logicalPath").asText("").strip();
+                if (!markdownLine.isBlank() && !logicalPath.isBlank()) {
+                    imageRefs.add(Map.of("markdownLine", markdownLine, "logicalPath", logicalPath));
+                }
+            }
+            return List.copyOf(imageRefs);
+        } catch (IOException exception) {
+            return List.of();
+        }
     }
 
 

@@ -21,6 +21,23 @@ public class InMemoryTeacherSourceSyncJobStore implements TeacherSourceSyncJobSt
     }
 
     @Override
+    public int terminateActiveByDocument(String tenantId, String documentId, java.time.Instant now) {
+        int[] count = {0};
+        jobs.replaceAll((jobId, job) -> {
+            if (!job.tenantId().equals(tenantId) || !job.documentId().equals(documentId)
+                    || !java.util.Set.of("queued", "running", "paused", "AUTH_REQUIRED").contains(job.status())) {
+                return job;
+            }
+            count[0]++;
+            return new TeacherSourceSyncJobResponse(
+                    job.jobId(), job.documentId(), job.tenantId(), job.sourceType(), job.operation(),
+                    "cancelled", "resource_archived", job.attempt(), job.createdBy(), job.stagingPath(),
+                    "Source document archived; sync job cancelled", job.createdAt(), now.toString(), job.failure());
+        });
+        return count[0];
+    }
+
+    @Override
     public List<TeacherSourceSyncJobResponse> listByDocument(String tenantId, String documentId) {
         return jobs.values().stream()
                 .filter(job -> job.tenantId().equals(tenantId))

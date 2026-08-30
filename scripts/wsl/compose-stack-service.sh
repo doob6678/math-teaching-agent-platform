@@ -56,9 +56,9 @@ start_unit() {
   require_user_systemd
   require_compose_inputs
   [[ -f "$INSTALLED_UNIT" ]] || fail "服务尚未安装；先执行: $0 install"
-  # systemd 的 ExecStart 使用 --no-recreate，不会因该操作重建已有容器。
+  # The installed unit uses --wait so dependency health is settled before it reports success.
   systemctl --user start "$UNIT_NAME"
-  printf 'WSL user Compose owner 已启动。\n'
+  printf 'WSL user Compose owner 已启动，并等待依赖健康。\n'
 }
 
 status_unit() {

@@ -116,6 +116,23 @@ public class McpClientKeyService implements McpClientResolver {
         return new McpClientKeyRevocationResponse(keyId, REVOKED, revokedAt);
     }
 
+    /**
+     * Physically deletes one owned MCP key. Only already-revoked keys are deletable so acceptance runs and
+     * manual rotation can clean up their own stopped keys without ever dropping a usable credential.
+     */
+    public McpClientKeyRevocationResponse deleteKey(RequestSubject subject, String keyId) {
+        RequestSubject normalized = requireAuthenticatedSubject(subject);
+        boolean owned = keyStore.findByOwnerAndKeyId(normalized.tenantId(), normalized.subjectId(), keyId).isPresent();
+        if (!owned) {
+            throw new IllegalArgumentException("Owned MCP key not found");
+        }
+        boolean deleted = keyStore.deleteRevoked(normalized.tenantId(), normalized.subjectId(), keyId);
+        if (!deleted) {
+            throw new IllegalArgumentException("Only revoked MCP keys can be deleted");
+        }
+        return new McpClientKeyRevocationResponse(keyId, "deleted", LocalDateTime.now());
+    }
+
     @Override
     public Optional<McpClientRegistryProperties.Client> findEnabledClientBySecret(String secret) {
         Optional<McpClientRegistryProperties.Client> persisted = keyStore.findActiveBySecretHash(McpClientRegistryProperties.secretHash(secret))

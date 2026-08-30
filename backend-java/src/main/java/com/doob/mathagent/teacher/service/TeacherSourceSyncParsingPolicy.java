@@ -26,7 +26,9 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.ByteArrayOutputStream;
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.net.URLDecoder;
 import java.nio.file.Files;
@@ -97,7 +99,11 @@ final class TeacherSourceSyncParsingPolicy {
         }
         ByteArrayOutputStream imageBytes = new ByteArrayOutputStream();
         ImageIO.write(fallbackRenderer.renderImageWithDPI(pageNo - 1, pdfPageRenderDpi()), "png", imageBytes);
-        return imageBytes.toByteArray();
+        byte[] rendered = imageBytes.toByteArray();
+        if (rendered.length == 0) {
+            throw new IOException("PDF page renderer returned no PNG bytes");
+        }
+        return rendered;
     }
 
 
@@ -127,7 +133,11 @@ final class TeacherSourceSyncParsingPolicy {
                 return Optional.empty();
             }
             Path output = temporaryDirectory.resolve("page.png");
-            return Files.isRegularFile(output) ? Optional.of(Files.readAllBytes(output)) : Optional.empty();
+            if (!Files.isRegularFile(output)) {
+                return Optional.empty();
+            }
+            byte[] rendered = Files.readAllBytes(output);
+            return rendered.length == 0 ? Optional.empty() : Optional.of(rendered);
         } catch (IOException exception) {
             return Optional.empty();
         } catch (InterruptedException exception) {
@@ -186,15 +196,54 @@ final class TeacherSourceSyncParsingPolicy {
     }
 
 
-    /**
-     * Checks whether the file can be parsed by the current local sync parser set.
-     */
+    /** Streams supported files in deterministic order without materializing the complete source tree. */
+    static Stream<Path> streamSupportedFiles(Path root) {
+        if (Files.isRegularFile(root)) {
+            return isSupportedFile(root) ? Stream.of(root) : Stream.empty();
+        }
+        try {
+            return Files.walk(root, MAX_SCAN_DEPTH)
+                    .filter(Files::isRegularFile)
+                    .filter(TeacherSourceSyncExecutionService::isSupportedFile)
+                    .sorted(Comparator.comparing(Path::toString));
+        } catch (IOException exception) {
+            throw new IllegalArgumentException("Failed to scan local resource path: " + root, exception);
+        }
+    }
+    /** Streams files for one native Feishu export without materializing unrelated staging artifacts. */
+    static Stream<Path> streamSupportedFiles(Path root, String requiredExtension) {
+        String extension = requiredExtension == null ? "" : requiredExtension.strip().toLowerCase(Locale.ROOT);
+        if (extension.isBlank()) {
+            return streamSupportedFiles(root);
+        }
+        if (Files.isRegularFile(root)) {
+            return hasExtension(root, extension) ? Stream.of(root) : Stream.empty();
+        }
+        try {
+            return Files.walk(root, MAX_SCAN_DEPTH)
+                    .filter(Files::isRegularFile)
+                    .filter(file -> hasExtension(file, extension))
+                    .sorted(Comparator.comparing(Path::toString));
+        } catch (IOException exception) {
+            throw new IllegalArgumentException("Failed to scan local resource path: " + root, exception);
+        }
+    }
+
+    /** Checks whether the file can be parsed by the current local sync parser set. */
     static boolean isSupportedFile(Path file) {
+        return hasExtension(file, ".md")
+                || hasExtension(file, ".txt")
+                || hasExtension(file, ".docx")
+                || hasExtension(file, ".pdf");
+    }
+
+    private static boolean hasExtension(Path file, String extension) {
+        if (file == null || file.getFileName() == null) {
+            return false;
+        }
         String fileName = file.getFileName().toString().toLowerCase(Locale.ROOT);
-        return fileName.endsWith(".md")
-                || fileName.endsWith(".txt")
-                || fileName.endsWith(".docx")
-                || fileName.endsWith(".pdf");
+        String normalized = extension.startsWith(".") ? extension : "." + extension;
+        return fileName.endsWith(normalized);
     }
 
 
@@ -210,9 +259,144 @@ final class TeacherSourceSyncParsingPolicy {
     }
 
 
-    /**
+    /** Streams parsed source blocks and formula evidence without retaining the whole file result. */
+    static void consumeFileBlocks(
+            Path file,
+            FormulaVisionBudget formulaVisionBudget,
+            java.util.function.BiConsumer<ParsedBlock, List<FormulaReference>> consumer) {
+        String fileName = file.getFileName().toString().toLowerCase(Locale.ROOT);
+        if (fileName.endsWith(".md") || fileName.endsWith(".txt")) {
+            consumeTextBlocks(file, consumer);
+            return;
+        }
+        if (fileName.endsWith(".docx")) {
+            consumeDocxBlocks(file, consumer);
+            return;
+        }
+        if (fileName.endsWith(".pdf")) {
+            consumePdfBlocks(file, formulaVisionBudget, consumer);
+        }
+    }
 
-     * Parses a supported source file into normalized text blocks.
+    private static void consumeTextBlocks(Path file,
+            java.util.function.BiConsumer<ParsedBlock, List<FormulaReference>> consumer) {
+        String currentChapter = stripExtension(file.getFileName().toString());
+        String currentSection = null;
+        Integer currentPage = null;
+        StringBuilder current = new StringBuilder();
+        List<PendingAsset> currentAssets = new ArrayList<>();
+        try (BufferedReader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                String stripped = line.strip();
+                if (stripped.startsWith("# ")) {
+                    emitBlock(consumer, currentChapter, currentSection, currentPage, current, currentAssets);
+                    currentChapter = stripped.substring(2).strip(); currentSection = null; currentPage = null; continue;
+                }
+                if (stripped.startsWith("## ") || stripped.startsWith("### ")) {
+                    emitBlock(consumer, currentChapter, currentSection, currentPage, current, currentAssets);
+                    int prefix = stripped.startsWith("## ") ? 3 : 4;
+                    currentSection = stripped.substring(prefix).strip(); currentPage = pageNumberFromSection(currentSection); continue;
+                }
+                    ImageReference image = markdownImageReference(stripped);
+                    if (image != null) {
+                        ImageReference sourceImage = image.withMarkdownLine(stripped);
+                        readMarkdownAsset(file, sourceImage, file.getFileName().toString()).ifPresent(currentAssets::add);
+                        // Keep the exact source Markdown line so deep reads and exports can resolve the original image.
+                        current.append(stripped).append('\n');
+                        continue;
+                    }
+                if (!stripped.isBlank()) {
+                    if (!currentAssets.isEmpty()) emitBlock(consumer, currentChapter, currentSection, currentPage, current, currentAssets);
+                    current.append(stripped).append('\n');
+                }
+            }
+            emitBlock(consumer, currentChapter, currentSection, currentPage, current, currentAssets);
+        } catch (IOException exception) {
+            throw new IllegalArgumentException("Failed to read local resource file: " + file, exception);
+        }
+    }
+
+    private static void emitBlock(java.util.function.BiConsumer<ParsedBlock, List<FormulaReference>> consumer, String chapter, String section,
+            Integer pageNo, StringBuilder current, List<PendingAsset> currentAssets) {
+        String value = current.toString().strip();
+        if (!value.isBlank() || !currentAssets.isEmpty()) {
+            consumer.accept(new ParsedBlock(chapter, section, pageNo,
+                    value,
+                    List.copyOf(currentAssets), List.of()), List.of());
+        }
+        current.setLength(0); currentAssets.clear();
+    }
+
+    private static void consumePdfBlocks(Path file, FormulaVisionBudget budget,
+            java.util.function.BiConsumer<ParsedBlock, List<FormulaReference>> consumer) {
+        String chapter = stripExtension(file.getFileName().toString());
+        int batchSize = 2;
+        try (PDDocument document = Loader.loadPDF(file.toFile())) {
+            PDFTextStripper stripper = new PDFTextStripper();
+            PDFRenderer renderer = new PDFRenderer(document);
+            List<ParsedBlock> batch = new ArrayList<>(batchSize);
+            for (int page = 1; page <= document.getNumberOfPages(); page += 1) {
+                stripper.setStartPage(page); stripper.setEndPage(page);
+                String text = textOrDefault(stripper.getText(document), "");
+                byte[] rendered = renderPdfPageAsPng(file, page, renderer);
+                TeacherResourceAssetService.ValidatedAsset validated = TeacherResourceAssetService.validateImageBytes(
+                        "parser", file.getFileName().toString(), "pdf-page:" + page, rendered, "image/png");
+                batch.add(new ParsedBlock(chapter, null, page,
+                        text.isBlank() ? "[PDF page image; no extractable text]" : text,
+                        List.of(new PendingAsset("pdf-page:" + page, validated.bytes(), validated.mimeType())), List.of()));
+                if (batch.size() == batchSize || page == document.getNumberOfPages()) {
+                    for (int index = 0; index < batch.size(); index += 1) {
+                        consumer.accept(batch.get(index), List.of());
+                    }
+                    batch.clear();
+                }
+            }
+        } catch (IOException exception) {
+            throw new IllegalArgumentException("Failed to parse PDF resource file: " + file, exception);
+        }
+    }
+
+    private static void consumeDocxBlocks(Path file,
+            java.util.function.BiConsumer<ParsedBlock, List<FormulaReference>> consumer) {
+        String chapter = stripExtension(file.getFileName().toString());
+        configurePoiDocxEntryLimit();
+        try (XWPFDocument document = new XWPFDocument(Files.newInputStream(file))) {
+            for (XWPFParagraph paragraph : document.getParagraphs()) {
+                List<PendingAsset> assets = new ArrayList<>();
+                StringBuilder text = new StringBuilder();
+                for (XWPFRun run : paragraph.getRuns()) {
+                    String runText = textOrDefault(run.text(), "");
+                    if (!runText.isBlank()) text.append(runText).append(' ');
+                    for (XWPFPicture picture : run.getEmbeddedPictures()) {
+                        XWPFPictureData pictureData = picture.getPictureData();
+                        if (pictureData == null) continue;
+                        String providerId = pictureData.getPackagePart().getPartName().getName();
+                        String mimeType = textOrDefault(pictureData.getPackagePart().getContentType(), "application/octet-stream");
+                        byte[] data = pictureData.getData();
+                        if (data == null || data.length == 0) data = readDocxPackagePart(file, providerId);
+                        TeacherResourceAssetService.ValidatedAsset validated = TeacherResourceAssetService.validateImageBytes(
+                                "parser", file.getFileName().toString(), providerId, data, mimeType);
+                        assets.add(new PendingAsset(providerId, validated.bytes(), validated.mimeType()));
+                    }
+                }
+                String paragraphText = textOrDefault(text.toString(), paragraph.getText());
+                List<OmmlFormulaExtractor.ExtractedFormula> formulas = OmmlFormulaExtractor.extractFromParagraphXml(paragraph.getCTP().xmlText());
+                if (!paragraphText.isBlank() || !assets.isEmpty() || !formulas.isEmpty()) {
+                    ParsedBlock parsed = new ParsedBlock(chapter, null, null,
+                            paragraphText.isBlank() && formulas.isEmpty() ? "[DOCX image block; no extractable text]" : paragraphText,
+                            List.copyOf(assets), formulas);
+                    consumer.accept(parsed, formulaReferences(formulas));
+                }
+            }
+        } catch (IOException exception) {
+            throw new IllegalArgumentException("Failed to parse DOCX resource file: " + file, exception);
+        }
+    }
+
+
+
+    /**
      */
     static List<ParsedBlock> parseFileBlocks(Path file) {
         String fileName = file.getFileName().toString().toLowerCase(Locale.ROOT);
@@ -265,11 +449,10 @@ final class TeacherSourceSyncParsingPolicy {
             }
             ImageReference image = markdownImageReference(stripped);
             if (image != null) {
-                readMarkdownAsset(file, image.path()).ifPresent(currentAssets::add);
-                // Keep alt text as retrieval evidence, but never persist a signed Feishu URL in a searchable block.
-                if (!image.altText().isBlank()) {
-                    current.append(image.altText()).append('\n');
-                }
+                ImageReference sourceImage = image.withMarkdownLine(stripped);
+                readMarkdownAsset(file, sourceImage, file.getFileName().toString()).ifPresent(currentAssets::add);
+                // Preserve the original Markdown image reference in the contiguous source block.
+                current.append(stripped).append('\n');
                 continue;
             }
             if (!stripped.isBlank()) {
@@ -303,8 +486,7 @@ final class TeacherSourceSyncParsingPolicy {
             List<PendingAsset> currentAssets) {
         String value = current.toString().strip();
         if (!value.isBlank() || !currentAssets.isEmpty()) {
-            String text = value.isBlank() ? "[Markdown image block; no extractable text]" : value;
-            blocks.add(new ParsedBlock(chapter, section, pageNo, text, List.copyOf(currentAssets), List.of()));
+            blocks.add(new ParsedBlock(chapter, section, pageNo, value, List.copyOf(currentAssets), List.of()));
         }
         current.setLength(0);
         currentAssets.clear();
@@ -329,20 +511,35 @@ final class TeacherSourceSyncParsingPolicy {
     static ImageReference markdownImageReference(String line) {
         Matcher markdown = MARKDOWN_IMAGE_PATTERN.matcher(line);
         if (markdown.find()) {
-            return new ImageReference(
+            return qualifiedImageReference(
                     textOrDefault(markdown.group(1), ""),
-                    decodeLocalImagePath(textOrDefault(markdown.group(2), textOrDefault(markdown.group(3), ""))));
+                    textOrDefault(markdown.group(2), textOrDefault(markdown.group(3), "")));
         }
         Matcher html = HTML_IMAGE_TAG_PATTERN.matcher(line);
         if (html.find()) {
             String tag = html.group();
             String href = htmlAttributeValue(HTML_IMAGE_HREF_PATTERN, tag);
             String src = htmlAttributeValue(HTML_IMAGE_SRC_PATTERN, tag);
-            return new ImageReference(
-                    "",
-                    decodeLocalImagePath(firstNonBlank(href, src)));
+            return qualifiedImageReference("", firstNonBlank(href, src));
         }
         return null;
+    }
+
+    static ImageReference qualifiedImageReference(String altText, String rawPath) {
+        String value = textOrDefault(rawPath, "");
+        int separator = value.indexOf("::");
+        if (separator < 0) {
+            String imagePath = decodeLocalImagePath(value);
+            return new ImageReference(altText, imagePath, "", "", fileName(imagePath));
+        }
+        if (separator == 0 || separator == value.length() - 2 || value.indexOf("::", separator + 2) >= 0) {
+            return new ImageReference(altText, "", "", "", "");
+        }
+        String sourcePath = value.substring(0, separator).replace('\\', '/');
+        String imagePath = decodeLocalImagePath(value.substring(separator + 2));
+        String normalizedSource = sourcePath.replace("\\", "/");
+        String fileName = fileName(imagePath);
+        return new ImageReference(altText, imagePath, normalizedSource + "::" + imagePath, normalizedSource, fileName);
     }
 
 
@@ -357,39 +554,82 @@ final class TeacherSourceSyncParsingPolicy {
 
 
     /** Reads a local image only when it remains under the exported document's parent directory. */
-    static Optional<PendingAsset> readMarkdownAsset(Path markdownFile, String imagePath) {
-        String normalizedPath = textOrDefault(imagePath, "");
-        if (normalizedPath.isBlank()
-                || normalizedPath.startsWith("http://")
-                || normalizedPath.startsWith("https://")
-                || normalizedPath.startsWith("data:")) {
+    static Optional<PendingAsset> readMarkdownAsset(Path markdownFile, ImageReference image) {
+        return readMarkdownAsset(markdownFile, image, markdownFile == null || markdownFile.getFileName() == null
+                ? "" : markdownFile.getFileName().toString());
+    }
+
+    static Optional<PendingAsset> readMarkdownAsset(Path markdownFile, ImageReference image, String sourcePath) {
+        if (image == null || image.path().isBlank()) {
+            return Optional.empty();
+        }
+        String localPath = image.path();
+        if (localPath.startsWith("http://") || localPath.startsWith("https://") || localPath.startsWith("data:")) {
             return Optional.empty();
         }
         Path parent = markdownFile.toAbsolutePath().normalize().getParent();
-        if (parent == null) {
-            return Optional.empty();
-        }
-        Path target = parent.resolve(normalizedPath).normalize();
-        if (!target.startsWith(parent) || !Files.isRegularFile(target)) {
-            return Optional.empty();
-        }
+        if (parent == null) return Optional.empty();
+        Path target = resolveLocalAssetPath(parent, localPath);
+        if (target == null) return Optional.empty();
         try {
             byte[] content = Files.readAllBytes(target);
             if (content.length == 0) {
-                return Optional.empty();
+                throw new IllegalArgumentException("Markdown image payload is empty: sourcePath=" + sourcePath
+                        + ", imagePath=" + localPath);
             }
             String mimeType = Files.probeContentType(target);
-            if (mimeType == null || mimeType.isBlank()) {
-                mimeType = mimeTypeFromName(target.getFileName().toString());
-            }
+            if (mimeType == null || mimeType.isBlank()) mimeType = mimeTypeFromName(target.getFileName().toString());
+            String logicalPath = logicalImagePath(sourcePath, localPath);
+            String providerReference = logicalPath;
+            TeacherResourceAssetService.ValidatedAsset validated = TeacherResourceAssetService.validateImageBytes(
+                    "parser", logicalPath, providerReference, content, mimeType);
             return Optional.of(new PendingAsset(
-                    normalizedPath.replace('\\', '/'),
-                    content,
-
-                    textOrDefault(mimeType, "application/octet-stream")));
+                    providerReference, localPath, image.originalFilename(), providerReference,
+                    image.markdownLine(), validated.bytes(), validated.mimeType()));
         } catch (IOException exception) {
             return Optional.empty();
         }
+    }
+
+    /**
+     * Resolves a relative Markdown image below its already-authorized source directory. Feishu exports can preserve
+     * a lowercase path such as {@code imajes/image-001.jpg} while materializing the directory as {@code IMAJES};
+     * Windows accepted that mismatch, but the Linux worker did not. Exact paths remain preferred. The fallback walks
+     * one segment at a time and rejects ambiguous siblings, so it neither escapes the source directory nor guesses an
+     * image by basename.
+     */
+    private static Path resolveLocalAssetPath(Path parent, String localPath) {
+        Path exact = parent.resolve(localPath).normalize();
+        if (!exact.startsWith(parent)) return null;
+        if (Files.isRegularFile(exact)) return exact;
+        Path resolved = parent;
+        for (String segment : localPath.replace('\\', '/').split("/")) {
+            if (segment.isBlank() || ".".equals(segment) || "..".equals(segment)) return null;
+            try (Stream<Path> children = Files.list(resolved)) {
+                List<Path> matches = children
+                        .filter(child -> child.getFileName().toString().equalsIgnoreCase(segment))
+                        .toList();
+                if (matches.size() != 1) return null;
+                resolved = matches.getFirst();
+            } catch (IOException exception) {
+                return null;
+            }
+        }
+        return resolved.startsWith(parent) && Files.isRegularFile(resolved) ? resolved : null;
+    }
+
+    static Optional<PendingAsset> readMarkdownAsset(Path markdownFile, String imagePath) {
+        return readMarkdownAsset(markdownFile, qualifiedImageReference("", imagePath));
+    }
+
+
+    static String logicalImagePath(String sourcePath, String imagePath) {
+        String source = textOrDefault(sourcePath, "document.md").replace('\\', '/');
+        String image = textOrDefault(imagePath, "").replace('\\', '/');
+        while (image.startsWith("./")) image = image.substring(2);
+        int dot = source.lastIndexOf('.');
+        String article = dot > 0 ? source.substring(0, dot) : source;
+        return (article + "/" + image).replaceAll("/{2,}", "/");
     }
 
 
@@ -410,6 +650,12 @@ final class TeacherSourceSyncParsingPolicy {
         }
     }
 
+
+    static String fileName(String value) {
+        String normalized = textOrDefault(value, "").replace('\\', '/');
+        int slash = normalized.lastIndexOf('/');
+        return slash < 0 ? normalized : normalized.substring(slash + 1);
+    }
 
     static String mimeTypeFromName(String fileName) {
         String normalized = textOrDefault(fileName, "").toLowerCase(Locale.ROOT);
@@ -465,7 +711,9 @@ final class TeacherSourceSyncParsingPolicy {
                              */
                             data = readDocxPackagePart(file, providerId);
                         }
-                        assets.add(new PendingAsset(providerId, data, mimeType));
+                        TeacherResourceAssetService.ValidatedAsset validated = TeacherResourceAssetService.validateImageBytes(
+                                "parser", file.getFileName().toString(), providerId, data, mimeType);
+                        assets.add(new PendingAsset(providerId, validated.bytes(), validated.mimeType()));
                     }
                 }
                 String paragraphText = textOrDefault(text.toString(), paragraph.getText());
@@ -543,9 +791,10 @@ final class TeacherSourceSyncParsingPolicy {
                 stripper.setEndPage(page);
                 String text = textOrDefault(stripper.getText(document), "");
                 List<PendingAsset> assets = new ArrayList<>();
-                ByteArrayOutputStream imageBytes = new ByteArrayOutputStream();
-                imageBytes.write(renderPdfPageAsPng(file, page, renderer));
-                assets.add(new PendingAsset("pdf-page:" + page, imageBytes.toByteArray(), "image/png"));
+                byte[] rendered = renderPdfPageAsPng(file, page, renderer);
+                TeacherResourceAssetService.ValidatedAsset validated = TeacherResourceAssetService.validateImageBytes(
+                        "parser", file.getFileName().toString(), "pdf-page:" + page, rendered, "image/png");
+                assets.add(new PendingAsset("pdf-page:" + page, validated.bytes(), validated.mimeType()));
                 if (!text.isBlank() || !assets.isEmpty()) {
                     blocks.add(new ParsedBlock(
                             chapter,
@@ -686,6 +935,10 @@ final class TeacherSourceSyncParsingPolicy {
             ref.put("assetId", asset.assetId());
             ref.put("pageNo", asset.pageNo());
             ref.put("sourcePath", asset.sourcePath());
+            ref.put("imageReference", asset.imageReference());
+            ref.put("originalFilename", asset.originalFilename());
+            ref.put("markdownLine", asset.markdownLine());
+            ref.put("logicalPath", asset.logicalPath());
             ref.put("mimeType", asset.mimeType());
             refs.add(ref);
         }

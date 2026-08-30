@@ -1,7 +1,6 @@
 package com.doob.mathagent.student.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.student.dto.StudentExplanationRequest;
 import com.doob.mathagent.student.entity.StudentExplanationMessageEntity;
@@ -122,11 +121,14 @@ public class MyBatisStudentExplanationHistoryStore implements StudentExplanation
         if (conversationId != null && !conversationId.isBlank()) {
             wrapper.eq(StudentExplanationMessageEntity::getConversationId, conversationId.strip());
         }
-        Page<StudentExplanationMessageEntity> page = messageMapper.selectPage(Page.of(1, boundedLimit), wrapper);
-        Map<String, StudentExplanationSessionEntity> sessionsByConversationId = loadSessions(page.getRecords().stream()
+        // 项目未引入 MyBatis-Plus 分页拦截器（3.5.9+ 已拆到 mybatis-plus-jsqlparser 依赖），
+        // selectPage 不会追加 LIMIT 而是静默全量返回；上限必须用 last() 显式落到 SQL 层。
+        wrapper.last("LIMIT " + boundedLimit);
+        List<StudentExplanationMessageEntity> records = messageMapper.selectList(wrapper);
+        Map<String, StudentExplanationSessionEntity> sessionsByConversationId = loadSessions(records.stream()
                 .map(StudentExplanationMessageEntity::getConversationId)
                 .collect(Collectors.toCollection(java.util.LinkedHashSet::new)));
-        return page.getRecords().stream()
+        return records.stream()
                 .map(entity -> toSummary(entity, sessionsByConversationId.get(entity.getConversationId())))
                 .toList();
     }
@@ -178,7 +180,8 @@ public class MyBatisStudentExplanationHistoryStore implements StudentExplanation
             String tenantId,
             String subjectType,
             String subjectId,
-            int limit) {
+            int limit,
+            int page) {
         int boundedLimit = Math.max(1, Math.min(limit, 30));
         LambdaQueryWrapper<StudentExplanationSessionEntity> wrapper =
                 new LambdaQueryWrapper<StudentExplanationSessionEntity>()
@@ -187,8 +190,12 @@ public class MyBatisStudentExplanationHistoryStore implements StudentExplanation
                         .eq(StudentExplanationSessionEntity::getSubjectId, subjectId)
                         .orderByDesc(StudentExplanationSessionEntity::getUpdatedAt)
                         .orderByDesc(StudentExplanationSessionEntity::getCreatedAt);
-        Page<StudentExplanationSessionEntity> page = sessionMapper.selectPage(Page.of(1, boundedLimit), wrapper);
-        return page.getRecords().stream().map(MyBatisStudentExplanationHistoryStore::toConversationSummary).toList();
+        // 按页号分页（page 从 1 开始），支撑侧边栏向后翻页而不是永远只看到第一页。
+        // 同样因为缺少分页拦截器，LIMIT/OFFSET 用 last() 显式追加；两个值均为钳制后的整数，无注入面。
+        int boundedPage = Math.max(1, page);
+        wrapper.last("LIMIT " + boundedLimit + " OFFSET " + (long) (boundedPage - 1) * boundedLimit);
+        List<StudentExplanationSessionEntity> records = sessionMapper.selectList(wrapper);
+        return records.stream().map(MyBatisStudentExplanationHistoryStore::toConversationSummary).toList();
     }
 
     @Override
@@ -208,15 +215,22 @@ public class MyBatisStudentExplanationHistoryStore implements StudentExplanation
                 || !subjectId.equals(session.getSubjectId())) {
             return null;
         }
+        // limit 必须在 SQL 层生效：此前 selectList 全量拉取，几百轮的会话会拖慢打开速度并挤占前端渲染。
+        // 先按时间倒序取最近 N 条，再回正序，保持时间线顺序不变。
+        int boundedLimit = Math.max(1, Math.min(limit, 500));
         LambdaQueryWrapper<StudentExplanationMessageEntity> wrapper =
                 new LambdaQueryWrapper<StudentExplanationMessageEntity>()
                         .eq(StudentExplanationMessageEntity::getTenantId, tenantId)
                         .eq(StudentExplanationMessageEntity::getSubjectType, subjectType)
                         .eq(StudentExplanationMessageEntity::getSubjectId, subjectId)
                         .eq(StudentExplanationMessageEntity::getConversationId, conversationId.strip())
-                        .orderByAsc(StudentExplanationMessageEntity::getCreatedAt)
-                        .orderByAsc(StudentExplanationMessageEntity::getExplanationId);
-        List<StudentExplanationMessageEntity> messages = messageMapper.selectList(wrapper);
+                        .orderByDesc(StudentExplanationMessageEntity::getCreatedAt)
+                        .orderByDesc(StudentExplanationMessageEntity::getExplanationId);
+        // 缺少分页拦截器时 selectPage 不生效，这里同样用 last() 显式截断。
+        wrapper.last("LIMIT " + boundedLimit);
+        List<StudentExplanationMessageEntity> messages =
+                new java.util.ArrayList<>(messageMapper.selectList(wrapper));
+        java.util.Collections.reverse(messages);
         return new StudentExplanationConversationDetail(
                 session.getConversationId(),
                 session.getTenantId(),

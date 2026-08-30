@@ -568,6 +568,10 @@ public class TeachingWorkflowService extends TeachingWorkflowExecutionSupport {
         TeachingTaskResponse snapshot = task.withReviewStatus(
                 terminal ? TeachingTaskStatus.FAILED : TeachingTaskStatus.RETRYING,
                 failureMessage(failure));
+        // 终态失败必须收敛运行中节点，否则持久化快照会永久显示"生成中"与失败徽章矛盾；重试快照保持 running 以便续跑。
+        if (terminal) {
+            snapshot = snapshot.withNodes(TeachingWorkflowProgressModel.failRunningNodes(snapshot.nodes()));
+        }
         // The same bounded attempt rule selects the response snapshot and the CAS row status. Keeping both values
         // aligned prevents a terminal database row from exposing a stale RETRYING response to status polling.
         return taskStore.failOwned(lease, snapshot, failureMessage(failure), terminal ? 0 : maximumAttempts);

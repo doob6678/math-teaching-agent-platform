@@ -1,15 +1,8 @@
-FROM python:3.12-slim
+FROM math-agent-rag-ai-worker:deps-20260827
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
-    && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt ./
-# 禁止恢复 DashScope embedding；生产镜像必须安装 Torch/Transformers 并只加载挂载到 /models 的本地权重。
-# Do not restore DashScope embeddings; the production image must install Torch/Transformers for /models weights.
-# Preserve Docker's package cache and use bounded retries: local model weights are mounted from /models, while this
-# layer installs only the Python runtimes needed to execute those local models on slow or intermittently connected WSL.
-RUN pip install --retries 8 --timeout 120 -r requirements.txt
+# The dependency base is validated once with GPU runtimes installed; source-only rebuilds must not reinstall them.
 COPY app ./app
 RUN mkdir -p /app/data/usage
 EXPOSE 8091

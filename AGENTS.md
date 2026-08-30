@@ -12,6 +12,7 @@
 ## 资产与授权边界
 
 - 图片领域和模型契约只使用不透明 `evidenceRef` 和 `assetId`；不得传递文件系统路径、URL、Base64 或 AI 生成的 LaTeX 图片命令。
+- ！！！在讲义写作部分，绝对不可以把图片二进制或者base64传给AI，绝对不可以！！！
 - 只有通过当前主体和当前运行授权校验、且已完成权威图片选择校验的资产才能物化给渲染或视觉模型。通用渲染器仅可在此后生成内部 LaTeX 图片标记，不得自行选图或回退；无有效选择时不显示图片。
 - RAG 后的 AI 仅能读取或检索本次运行已授权的文档，不得获得任意文件系统或 shell 能力。
 
@@ -39,12 +40,12 @@
 - Python AI `plan_writer` 生成检索 query：`["二次函数顶点式", "配方法", "函数图像平移"]`
 - Python 调用 `handout-teacher-resource-search(runId=task_abc123, query="二次函数顶点式")`
 - Java 校验 `task_abc123` 后执行 Milvus 检索，返回 `evidenceRef=ev_a1b2c3...`
+- 禁止返回给AIeva1b2c3等作为图片链接发送给AI，必须返回真实路径，但是不是绝对路径，确保AI可以阅读并且给出来
 
-**示例（错误，禁止）**：
-- ❌ Java 直接调用 `retrievalService.search(userInput)`
-- ❌ 前端直接传入文件路径或 URL
-- ❌ Python 读取本机 `/data/teacher-resources/` 目录
-- ❌ 在运行时扫描文件系统搜索资料
+**示例**：
+
+- ✅️ Python 读取本机 `/data/teacher-resources/` 目录
+- ✅️ 在运行时扫描文件系统搜索资料
 
 ## 高中来源入库边界
 
@@ -55,3 +56,8 @@
 
 - 每次交付均按[讲义架构验收清单](docs/handout-architecture-acceptance-checklist.md)记录本次运行的真实证据。
 - 必须验证来源证据/完整来源名、AI 独占可见内容、学生答案隔离、真实来源图片、中文与公式、PDF 视觉审阅。历史报告、旧 PDF 或旧截图不能作为本次验收通过依据。
+
+## 容器与模型缓存
+
+- 经验：Torch/CUDA 重复下载通常是浮动基础镜像 digest 变化使 pip 依赖层失效，并非模型下载；禁止删除 Docker/build/pip/model 缓存或执行 prune。
+- 模型只读复用现有 `/models` 权重；worker 应复用固定的 GPU 依赖基底或等价的持久化 pip 缓存，换机器或修改依赖时先重新准备并校验基底，源码重建只更新源码层，禁止运行时下载新模型或重复安装已有依赖。

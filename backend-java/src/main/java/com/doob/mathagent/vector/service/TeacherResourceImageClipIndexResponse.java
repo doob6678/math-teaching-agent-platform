@@ -6,5 +6,11 @@ public record TeacherResourceImageClipIndexResponse(
         int assetCount,
         int embeddedCount,
         int upsertedCount,
-        String collectionName) {
+        String collectionName,
+        int skippedCount,
+        java.util.List<String> failedAssetIds) {
+
+    public TeacherResourceImageClipIndexResponse {
+        failedAssetIds = failedAssetIds == null ? java.util.List.of() : java.util.List.copyOf(failedAssetIds);
+    }
 }

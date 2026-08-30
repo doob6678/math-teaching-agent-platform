@@ -16,13 +16,14 @@ import org.springframework.core.env.Environment;
  * @param referenceHandoutPdf reference handout PDF used for visual/layout comparison
  * @param promptDesignPdf prompt design PDF used for AI workflow design reference
  * @param localFileStorageRoot local file storage root for uploaded files and generated artifacts
- */
+ * @param teacherResourceUploadRoot managed root for teacher resource uploads */
 public record ProjectResourceProperties(
         Path projectTestDataRoot,
         Path designSpecRoot,
         Path referenceHandoutPdf,
         Path promptDesignPdf,
-        Path localFileStorageRoot) {
+        Path localFileStorageRoot,
+        Path teacherResourceUploadRoot) {
 
     /** Environment variable for the project test data directory. */
     static final String PROJECT_TEST_DATA_ROOT_KEY = "MATH_AGENT_PROJECT_TEST_DATA_ROOT";
@@ -39,6 +40,24 @@ public record ProjectResourceProperties(
     /** Environment variable for local uploaded/generated file storage. */
     static final String LOCAL_FILE_STORAGE_ROOT_KEY = "MATH_AGENT_LOCAL_FILE_STORAGE_ROOT";
 
+    /** Environment variable for the managed teacher resource upload root. */
+    static final String TEACHER_RESOURCE_UPLOAD_ROOT_KEY = "MATH_AGENT_TEACHER_RESOURCE_UPLOAD_ROOT";
+
+    public ProjectResourceProperties(
+            Path projectTestDataRoot,
+            Path designSpecRoot,
+            Path referenceHandoutPdf,
+            Path promptDesignPdf,
+            Path localFileStorageRoot) {
+        this(
+                projectTestDataRoot,
+                designSpecRoot,
+                referenceHandoutPdf,
+                promptDesignPdf,
+                localFileStorageRoot,
+                localFileStorageRoot.resolve("teacher-resource-uploads"));
+    }
+
     /**
      * Normalizes every configured path to an absolute path.
      */
@@ -48,6 +67,7 @@ public record ProjectResourceProperties(
         referenceHandoutPdf = normalize(referenceHandoutPdf);
         promptDesignPdf = normalize(promptDesignPdf);
         localFileStorageRoot = normalize(localFileStorageRoot);
+        teacherResourceUploadRoot = normalize(teacherResourceUploadRoot);
     }
 
     /**
@@ -71,7 +91,8 @@ public record ProjectResourceProperties(
                 environment.get(DESIGN_SPEC_ROOT_KEY),
                 environment.get(REFERENCE_HANDOUT_PDF_KEY),
                 environment.get(PROMPT_DESIGN_PDF_KEY),
-                environment.get(LOCAL_FILE_STORAGE_ROOT_KEY));
+                environment.get(LOCAL_FILE_STORAGE_ROOT_KEY),
+                environment.get(TEACHER_RESOURCE_UPLOAD_ROOT_KEY));
     }
 
     /**
@@ -86,7 +107,8 @@ public record ProjectResourceProperties(
                 property(environment, "math-agent.resources.design-spec-root", DESIGN_SPEC_ROOT_KEY),
                 property(environment, "math-agent.resources.reference-handout-pdf", REFERENCE_HANDOUT_PDF_KEY),
                 property(environment, "math-agent.resources.prompt-design-pdf", PROMPT_DESIGN_PDF_KEY),
-                property(environment, "math-agent.resources.local-file-storage-root", LOCAL_FILE_STORAGE_ROOT_KEY));
+                property(environment, "math-agent.resources.local-file-storage-root", LOCAL_FILE_STORAGE_ROOT_KEY),
+                property(environment, "math-agent.resources.teacher-resource-upload-root", TEACHER_RESOURCE_UPLOAD_ROOT_KEY));
     }
 
     /**
@@ -97,6 +119,7 @@ public record ProjectResourceProperties(
      * @param referenceHandoutPdf reference handout PDF
      * @param promptDesignPdf prompt design PDF
      * @param localFileStorageRoot local file storage root
+     * @param teacherResourceUploadRoot managed teacher resource upload root
      * @return local project resource properties
      */
     private static ProjectResourceProperties fromValues(
@@ -104,13 +127,22 @@ public record ProjectResourceProperties(
             String designSpecRoot,
             String referenceHandoutPdf,
             String promptDesignPdf,
-            String localFileStorageRoot) {
+            String localFileStorageRoot,
+            String teacherResourceUploadRoot) {
         return new ProjectResourceProperties(
                 path(projectTestDataRoot, PROJECT_TEST_DATA_ROOT_KEY),
                 path(designSpecRoot, DESIGN_SPEC_ROOT_KEY),
                 path(referenceHandoutPdf, REFERENCE_HANDOUT_PDF_KEY),
                 path(promptDesignPdf, PROMPT_DESIGN_PDF_KEY),
-                path(localFileStorageRoot, LOCAL_FILE_STORAGE_ROOT_KEY));
+                path(localFileStorageRoot, LOCAL_FILE_STORAGE_ROOT_KEY),
+                pathOrDefault(
+                        teacherResourceUploadRoot,
+                        Path.of(localFileStorageRoot).resolve("teacher-resource-uploads").toString(),
+                        TEACHER_RESOURCE_UPLOAD_ROOT_KEY));
+    }
+
+    private static Path pathOrDefault(String value, String defaultValue, String key) {
+        return Path.of(value == null || value.isBlank() ? defaultValue : value);
     }
 
     /**

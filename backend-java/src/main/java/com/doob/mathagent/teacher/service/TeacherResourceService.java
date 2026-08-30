@@ -2,11 +2,14 @@ package com.doob.mathagent.teacher.service;
 
 import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
 import com.doob.mathagent.teacher.document.TeacherResourceStore;
+import com.doob.mathagent.teacher.document.TeacherFileDocumentResponse;
 import com.doob.mathagent.teacher.support.TeacherResourceRegistrationCommand;
 import com.doob.mathagent.teacher.support.TeacherResourceSourceIdentity;
+import com.doob.mathagent.teacher.sync.TeacherSourceSyncJobStore;
 import com.doob.mathagent.teacher.sync.TeacherSourceSyncProperties;
 import com.doob.mathagent.resources.ProjectResourceProperties;
 import com.doob.mathagent.vector.service.VectorIndexService;
+import java.time.Instant;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
@@ -30,6 +33,7 @@ public class TeacherResourceService {
     private final VectorIndexService vectorIndexService;
     private final TeacherResourceAssetService assetService;
     private final TeacherSourceSyncProperties syncProperties;
+    private final TeacherSourceSyncJobStore syncJobStore;
     private final ProjectResourceProperties resourceProperties;
 
     /**
@@ -43,12 +47,14 @@ public class TeacherResourceService {
             VectorIndexService vectorIndexService,
             TeacherResourceAssetService assetService,
             TeacherSourceSyncProperties syncProperties,
-            ProjectResourceProperties resourceProperties) {
+            ProjectResourceProperties resourceProperties,
+            TeacherSourceSyncJobStore syncJobStore) {
         this.store = store;
         this.vectorIndexService = vectorIndexService;
         this.assetService = assetService;
         this.syncProperties = syncProperties;
         this.resourceProperties = resourceProperties;
+        this.syncJobStore = syncJobStore;
     }
 
     /** Compatibility constructor for narrow parser tests that intentionally do not provision asset storage. */
@@ -58,6 +64,7 @@ public class TeacherResourceService {
         this.assetService = TeacherResourceAssetService.disabled();
         this.syncProperties = null;
         this.resourceProperties = null;
+        this.syncJobStore = null;
     }
 
     /**
@@ -103,7 +110,7 @@ public class TeacherResourceService {
                     normalized.title(), normalized.originalUrl(), normalized.localPath(),
                     permissionScope,
                     "registered", "pending", "pending", "waiting_rebuild", normalized.feishuExportFormat(),
-                    previewFiles(normalized.localPath()), normalized.parseMode(), null, null, sourceIdentity));
+                    previewFiles(normalized.sourceType(), normalized.localPath(), normalized.feishuExportFormat()), normalized.parseMode(), null, null, sourceIdentity));
         }
         TeacherResourceDocumentResponse document = new TeacherResourceDocumentResponse(
                 UUID.randomUUID().toString(),
@@ -119,7 +126,7 @@ public class TeacherResourceService {
                 "pending",
                 "waiting_rebuild",
                 normalized.feishuExportFormat(),
-                previewFiles(normalized.localPath()),
+                previewFiles(normalized.sourceType(), normalized.localPath(), normalized.feishuExportFormat()),
                 normalized.parseMode(),
                 null,
                 null,
@@ -169,7 +176,7 @@ public class TeacherResourceService {
                 document.embeddingStatus(),
                 document.indexStatus(),
                 document.feishuExportFormat(),
-                previewFiles(document.localPath()),
+                previewFiles(document.sourceType(), document.localPath(), document.feishuExportFormat()),
                 document.parseMode(),
                 document.providerRevision(),
                 document.contentChecksum(),
@@ -177,14 +184,71 @@ public class TeacherResourceService {
     }
 
     /**
+     * Lists the bounded, searchable physical FILE documents below one visible ROOT resource.
+     *
+     * <p>The ROOT is checked through the same tenant/role/owner policy as management operations. The store then applies
+     * the FILE, parse, embedding, visibility, and SQL limit predicates without loading any blocks.</p>
+     */
+    public List<TeacherFileDocumentResponse> listPhysicalFiles(
+            String tenantId,
+            String viewerRole,
+            String viewerSubjectId,
+            String rootDocumentId,
+            int limit) {
+        String normalizedTenantId = requireText(tenantId, "tenantId is required");
+        String normalizedRole = requireText(viewerRole, "viewerRole is required").toLowerCase();
+        String normalizedSubjectId = requireText(viewerSubjectId, "viewerSubjectId is required");
+        requireTeacherOrAdmin(normalizedRole);
+        if (limit < 1 || limit > 512) {
+            throw new IllegalArgumentException("limit must be between 1 and 512");
+        }
+        TeacherResourceDocumentResponse root = store.find(normalizedTenantId, requireText(rootDocumentId, "rootDocumentId is required"));
+        if (root == null || !"feishu".equalsIgnoreCase(textOrDefault(root.sourceType(), ""))) {
+            throw new IllegalArgumentException("Teacher resource ROOT not found: " + rootDocumentId);
+        }
+        boolean visibleRoot = store.listVisible(normalizedTenantId, normalizedRole, normalizedSubjectId).stream()
+                .anyMatch(candidate -> root.documentId().equals(candidate.documentId()));
+        if (!visibleRoot) {
+            throw new IllegalArgumentException("Teacher resource ROOT not visible: " + rootDocumentId);
+        }
+        return store.listSearchableFileDocuments(
+                        normalizedTenantId,
+                        normalizedRole,
+                        normalizedSubjectId,
+                        List.of(root.documentId()),
+                        limit)
+                .stream()
+                .map(TeacherFileDocumentResponse::from)
+                .toList();
+    }
+
+    /** Returns whether one persisted FILE document is visible and searchable for this viewer. */
+    public boolean isVisiblePhysicalFile(
+            String tenantId,
+            String viewerRole,
+            String viewerSubjectId,
+            String fileDocumentId) {
+        String normalizedTenantId = requireText(tenantId, "tenantId is required");
+        String normalizedRole = requireText(viewerRole, "viewerRole is required").toLowerCase();
+        String normalizedSubjectId = requireText(viewerSubjectId, "viewerSubjectId is required");
+        requireTeacherOrAdmin(normalizedRole);
+        String normalizedFileId = requireText(fileDocumentId, "fileDocumentId is required");
+        return store.listSearchableFileDocumentsByIds(
+                        normalizedTenantId, normalizedRole, normalizedSubjectId, List.of(normalizedFileId), 1)
+                .stream()
+                .anyMatch(file -> normalizedFileId.equals(file.documentId()));
+    }
+
+    /**
      * Archives a resource document. Admin can archive any tenant resource; teachers can archive their own resources.
      *
      * @param tenantId tenant id
-     * @param viewerRole current viewer role
-     * @param viewerSubjectId current viewer subject id
+     * @param viewerRole backend-resolved viewer role
+     * @param viewerSubjectId backend-resolved viewer subject id
      * @param documentId document id
      * @return archived resource document
      */
+
     public TeacherResourceDocumentResponse archive(
             String tenantId,
             String viewerRole,
@@ -200,6 +264,14 @@ public class TeacherResourceService {
         }
         if (!"admin".equals(normalizedRole) && !document.ownerSubjectId().equals(normalizedSubjectId)) {
             throw new IllegalArgumentException("Teacher can archive only own resources");
+        }
+        if (syncJobStore != null) {
+            syncJobStore.terminateActiveByDocument(normalizedTenantId, documentId, Instant.now());
+        }
+        if (store.supportsFileDocuments()) {
+            purgeFileDocuments(
+                    normalizedTenantId,
+                    document.documentId());
         }
         vectorIndexService.deleteTeacherResourceVectors(normalizedTenantId, documentId);
         // Archive keeps source identity for audit, but its parsed body must not remain in the local corpus.
@@ -227,6 +299,31 @@ public class TeacherResourceService {
                 document.contentChecksum(),
                 document.sourceIdentity());
         return store.save(archived);
+    }
+
+    /** Cleans each persisted FILE under a ROOT without loading blocks or the full child set. */
+    private void purgeFileDocuments(String tenantId, String rootDocumentId) {
+        String afterFileDocumentId = "";
+        while (true) {
+            List<TeacherResourceStore.TeacherFileDocument> files = store.listFileDocumentsForIndexing(
+                    tenantId,
+                    rootDocumentId,
+                    64,
+                    afterFileDocumentId);
+            if (files.isEmpty()) {
+                return;
+            }
+            for (TeacherResourceStore.TeacherFileDocument file : files) {
+                vectorIndexService.deleteTeacherResourceVectors(tenantId, file.documentId());
+                vectorIndexService.purgeTeacherResourceContent(tenantId, file.documentId());
+                assetService.purgeDocumentAssets(tenantId, file.documentId());
+                store.archiveFileDocument(tenantId, file.documentId());
+                afterFileDocumentId = file.documentId();
+            }
+            if (files.size() < 64) {
+                return;
+            }
+        }
     }
 
     /**
@@ -289,26 +386,47 @@ public class TeacherResourceService {
      * @param localPath local file or folder path
      * @return preview file list
      */
-    private static List<TeacherResourceDocumentResponse.PreviewFile> previewFiles(String localPath) {
+    private List<TeacherResourceDocumentResponse.PreviewFile> previewFiles(
+            String sourceType, String localPath, String feishuExportFormat) {
         if (localPath == null || localPath.isBlank()) {
             return List.of();
         }
         Path root;
         try {
-            root = Path.of(localPath);
-        } catch (InvalidPathException exception) {
+            root = Path.of(localPath).toAbsolutePath().normalize();
+            if ("feishu".equalsIgnoreCase(textOrDefault(sourceType, "")) && syncProperties != null) {
+                root = syncProperties.requireStagingPath(root);
+            } else if ("feishu".equalsIgnoreCase(textOrDefault(sourceType, ""))) {
+                return List.of();
+            }
+            root = root.toRealPath();
+        } catch (IOException | IllegalArgumentException exception) {
             return List.of();
         }
         if (!Files.exists(root)) {
             return List.of();
         }
+        String requiredExtension = "feishu".equalsIgnoreCase(textOrDefault(sourceType, ""))
+                ? "." + textOrDefault(feishuExportFormat, "md").toLowerCase()
+                : "";
         if (Files.isRegularFile(root)) {
-            return List.of(previewFile(root.getParent(), root));
+            return matchesPreviewExtension(root, requiredExtension)
+                    ? List.of(previewFile(root.getParent(), root))
+                    : List.of();
         }
+        Path realRoot = root;
         try (Stream<Path> stream = Files.walk(root, MAX_PREVIEW_DEPTH)) {
             return stream
                     .filter(Files::isRegularFile)
-                    .map(path -> previewFile(root, path))
+                    .filter(path -> matchesPreviewExtension(path, requiredExtension))
+                    .filter(path -> {
+                        try {
+                            return path.toRealPath().startsWith(realRoot);
+                        } catch (IOException exception) {
+                            return false;
+                        }
+                    })
+                    .map(path -> previewFile(realRoot, path))
                     .sorted(Comparator.comparing(TeacherResourceDocumentResponse.PreviewFile::relativePath))
                     .toList();
         } catch (IOException exception) {
@@ -332,7 +450,15 @@ public class TeacherResourceService {
         } catch (InvalidPathException exception) {
             throw new IllegalArgumentException("Archived Feishu staging path is invalid", exception);
         }
-        if (!candidate.startsWith(root) || candidate.equals(root) || candidate.equals(syncProperties.assetStorageRoot())) {
+        if (!Files.exists(candidate)) {
+            return;
+        }
+        try {
+            candidate = syncProperties.requireStagingPath(candidate);
+        } catch (IllegalArgumentException exception) {
+            throw new IllegalArgumentException("Archived Feishu staging path is outside the configured staging root", exception);
+        }
+        if (!candidate.startsWith(root) || candidate.equals(root)) {
             throw new IllegalArgumentException("Archived Feishu staging path is outside the configured staging root");
         }
         try {
@@ -362,8 +488,7 @@ public class TeacherResourceService {
         if (resourceProperties == null || document.localPath() == null || document.localPath().isBlank()) {
             return;
         }
-        Path root = resourceProperties.localFileStorageRoot()
-                .resolve("teacher-resource-uploads").toAbsolutePath().normalize();
+        Path root = resourceProperties.teacherResourceUploadRoot();
         Path candidate;
         try {
             candidate = Path.of(document.localPath()).toAbsolutePath().normalize();
@@ -395,6 +520,13 @@ public class TeacherResourceService {
         } catch (IOException exception) {
             throw new IllegalStateException("Failed to remove " + description, exception);
         }
+    }
+
+    private static boolean matchesPreviewExtension(Path file, String requiredExtension) {
+        if (requiredExtension == null || requiredExtension.isBlank()) {
+            return true;
+        }
+        return file.getFileName().toString().toLowerCase().endsWith(requiredExtension);
     }
 
     /**

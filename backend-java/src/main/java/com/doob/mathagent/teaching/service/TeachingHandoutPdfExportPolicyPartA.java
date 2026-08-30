@@ -519,8 +519,14 @@ final class TeachingHandoutPdfExportPolicyPartA {
 
     /** Keeps authored question-page content while hiding workspace-only labels. */
     static String sanitizeQuestionPageSegment(String segment) {
-        return segment
-                .replaceAll("(?m)^\\\\(?:section|subsection|paragraph)\\*?\\{(?:作答|作答区|课堂作答区|我的解答|推导区|手写区|留白区|空白区|板书区|教师板书区)}\\s*$", "")
+        String withoutWorkspaceHeadings = segment
+                .replaceAll("(?m)^\\\\(?:section|subsection|paragraph)\\*?\\{(?:作答|作答区|课堂作答区|我的解答|推导区|手写区|留白区|空白区|板书区|教师板书区)}\\s*$", "");
+        // 列表脚手架只允许在整段没有任何 \item 时剥掉（旧学生作答页的空列表框）。
+        // 有真实条目的段落必须保留 begin/end，否则 XeLaTeX 以 "Lonely \item" 终止整份讲义编译。
+        if (withoutWorkspaceHeadings.contains("\\item")) {
+            return withoutWorkspaceHeadings.strip();
+        }
+        return withoutWorkspaceHeadings
                 .replaceAll("(?m)^\\\\(?:begin|end)\\{(?:center|itemize|enumerate)}\\s*$", "")
                 .strip();
     }

@@ -1,6 +1,7 @@
 package com.doob.mathagent.teacher.service;
 
 import com.doob.mathagent.infrastructure.security.RequestSubject;
+import com.doob.mathagent.resources.ProjectResourceProperties;
 import com.doob.mathagent.teacher.asset.TeacherResourceAssetStore;
 import com.doob.mathagent.teacher.document.TeacherResourceStore;
 import com.doob.mathagent.teacher.vo.TeacherResourceAssetResponse;
@@ -17,12 +18,16 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Comparator;
+import java.util.Iterator;
 import java.util.UUID;
 import java.util.List;
 import javax.imageio.ImageIO;
+import javax.imageio.ImageReader;
+import javax.imageio.stream.ImageInputStream;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.rendering.ImageType;
@@ -50,9 +55,27 @@ public class TeacherResourceAssetService {
     private final TeacherResourceAssetStore assetStore;
     private final TeacherResourceStore resourceStore;
     private final TeacherSourceSyncProperties syncProperties;
+    private final Path managedUploadRoot;
     private final boolean enabled;
 
     @Autowired
+    public TeacherResourceAssetService(
+            TeacherResourceAssetStore assetStore,
+            TeacherResourceStore resourceStore,
+            TeacherSourceSyncProperties syncProperties,
+            ProjectResourceProperties resourceProperties) {
+        this.assetStore = Objects.requireNonNull(assetStore, "assetStore");
+        this.resourceStore = Objects.requireNonNull(resourceStore, "resourceStore");
+        this.syncProperties = Objects.requireNonNull(syncProperties, "syncProperties");
+        ProjectResourceProperties configuredResources = Objects.requireNonNull(resourceProperties, "resourceProperties");
+        this.managedUploadRoot = configuredResources.teacherResourceUploadRoot();
+        this.enabled = true;
+    }
+
+    /**
+     * Compatibility constructor for focused tests that use an explicit temporary source path. Production wiring uses
+     * the four-argument constructor so local asset recovery is restricted to the managed upload volume.
+     */
     public TeacherResourceAssetService(
             TeacherResourceAssetStore assetStore,
             TeacherResourceStore resourceStore,
@@ -60,6 +83,7 @@ public class TeacherResourceAssetService {
         this.assetStore = Objects.requireNonNull(assetStore, "assetStore");
         this.resourceStore = Objects.requireNonNull(resourceStore, "resourceStore");
         this.syncProperties = Objects.requireNonNull(syncProperties, "syncProperties");
+        this.managedUploadRoot = null;
         this.enabled = true;
     }
 
@@ -67,6 +91,7 @@ public class TeacherResourceAssetService {
         this.assetStore = null;
         this.resourceStore = null;
         this.syncProperties = null;
+        this.managedUploadRoot = null;
         this.enabled = false;
     }
 
@@ -98,6 +123,64 @@ public class TeacherResourceAssetService {
         }
     }
 
+    /** Marks one active asset inactive when a later backend-owned materialization check rejects it. */
+    public boolean deactivateAsset(String tenantId, String assetId, String reason) {
+        if (!enabled || assetId == null || assetId.isBlank()) {
+            return false;
+        }
+        Optional<TeacherResourceAssetResponse> candidate = assetStore.find(tenantId, assetId);
+        if (candidate.isEmpty() || !"active".equalsIgnoreCase(textOrDefault(candidate.get().status(), ""))) {
+            return false;
+        }
+        TeacherResourceAssetResponse asset = candidate.get();
+        assetStore.save(new TeacherResourceAssetResponse(
+                asset.assetId(), asset.tenantId(), asset.ownerSubjectId(), asset.documentId(), asset.blockId(),
+                asset.permissionScope(), asset.sourcePath(), asset.pageNo(), asset.providerAssetId(),
+                asset.checksum(), asset.mimeType(), asset.width(), asset.height(), asset.storageKey(), "inactive"));
+        LOGGER.warn("teacher_image_asset_deactivated documentId={} assetId={} reason={}",
+                asset.documentId(), asset.assetId(), textOrDefault(reason, "unspecified"));
+        return true;
+    }
+
+
+    public int deactivateInvalidImageAssets(String tenantId, String documentId) {
+        if (!enabled) {
+            return 0;
+        }
+        int invalidated = 0;
+        for (TeacherResourceAssetResponse asset : assetStore.listByDocument(tenantId, documentId)) {
+            if (!"active".equalsIgnoreCase(textOrDefault(asset.status(), ""))
+                    || !textOrDefault(asset.mimeType(), "").toLowerCase(Locale.ROOT).startsWith("image/")) {
+                continue;
+            }
+            try {
+                Path path = safeStoragePath(asset.storageKey());
+                if (!Files.isRegularFile(path)) {
+                    throw new IllegalArgumentException("asset binary is missing");
+                }
+                validateImageBytes(
+                        documentId,
+                        asset.sourcePath(),
+                        asset.providerAssetId(),
+                        Files.readAllBytes(path),
+                        asset.mimeType());
+            } catch (IOException | RuntimeException exception) {
+                LOGGER.warn(
+                        "teacher_image_asset_invalidated documentId={} assetId={} reason={}",
+                        documentId,
+                        asset.assetId(),
+                        safeReason(exception));
+                TeacherResourceAssetResponse inactive = new TeacherResourceAssetResponse(
+                        asset.assetId(), asset.tenantId(), asset.ownerSubjectId(), asset.documentId(), asset.blockId(),
+                        asset.permissionScope(), asset.sourcePath(), asset.pageNo(), asset.providerAssetId(),
+                        asset.checksum(), asset.mimeType(), asset.width(), asset.height(), asset.storageKey(), "inactive");
+                assetStore.save(inactive);
+                invalidated++;
+            }
+        }
+        return invalidated;
+    }
+
     /**
      * Removes all binary generations for an archived source and then its asset metadata. Storage keys are resolved
      * through safeStoragePath, so a corrupt database value cannot escape the configured backend-owned asset root.
@@ -117,6 +200,111 @@ public class TeacherResourceAssetService {
     }
 
     /**
+     * Re-materializes every persisted asset generation for one Feishu document with readable, deterministic names.
+     * The opaque asset id is preserved; only the backend storage key changes after the new file is durable.
+     */
+    public AssetMigrationSummary migrateDocumentAssetsToReadableNames(String tenantId, String documentId) {
+        if (!enabled) {
+            return new AssetMigrationSummary(0, 0, 0);
+        }
+        long started = System.nanoTime();
+        List<TeacherResourceAssetResponse> assets = assetStore.listByDocument(tenantId, documentId).stream()
+                .sorted(Comparator.comparing(TeacherResourceAssetResponse::sourcePath, Comparator.nullsFirst(String::compareTo))
+                        .thenComparing(TeacherResourceAssetResponse::pageNo, Comparator.nullsFirst(Integer::compareTo))
+                        .thenComparing(TeacherResourceAssetResponse::assetId, Comparator.nullsFirst(String::compareTo)))
+                .toList();
+        if (assets.isEmpty()) {
+            return new AssetMigrationSummary(0, 0, elapsedMillis(started));
+        }
+        TeacherResourceDocumentResponse document = resourceStore.find(tenantId, documentId);
+        if (document == null) {
+            return new AssetMigrationSummary(0, 0, elapsedMillis(started));
+        }
+        Path documentRoot = documentAssetRoot(document);
+        Map<String, Integer> imageOrders = new java.util.LinkedHashMap<>();
+        Map<String, Integer> pageOrders = new java.util.LinkedHashMap<>();
+        int migrated = 0;
+        int removedLegacyFiles = 0;
+        for (TeacherResourceAssetResponse asset : assets) {
+            Path oldPath = safeStoragePath(asset.storageKey());
+            if (!Files.isRegularFile(oldPath)) {
+                continue;
+            }
+            String sourcePath = textOrDefault(asset.sourcePath(), "document.md").replace('\\', '/');
+            Path documentDirectory = documentAssetDirectory(documentRoot, sourcePath);
+            String extension = extensionForMime(asset.mimeType());
+            boolean pageAsset = asset.pageNo() != null && asset.pageNo() > 0
+                    && sourcePath.toLowerCase(Locale.ROOT).endsWith(".pdf");
+            String orderKey = sourcePath;
+            int sequence = pageAsset
+                    ? pageOrders.merge(orderKey, 1, Integer::sum)
+                    : imageOrders.merge(orderKey, 1, Integer::sum);
+            String fileName = String.format(Locale.ROOT, pageAsset ? "page-%03d%s" : "image-%03d%s", sequence, extension);
+            Path target = documentDirectory.resolve(fileName).normalize();
+            if (!target.startsWith(documentRoot)) {
+                throw new IllegalArgumentException("Teacher resource asset target is invalid");
+            }
+            if (!oldPath.equals(target)) {
+                try {
+                    Files.createDirectories(target.getParent());
+                    Files.copy(oldPath, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                    TeacherResourceAssetResponse relocated = new TeacherResourceAssetResponse(
+                            asset.assetId(), asset.tenantId(), asset.ownerSubjectId(), asset.documentId(), asset.blockId(),
+                            asset.permissionScope(), asset.sourcePath(), asset.pageNo(), asset.providerAssetId(),
+                            asset.checksum(), asset.mimeType(), asset.width(), asset.height(),
+                            syncProperties.assetStorageRoot().relativize(target).toString().replace('\\', '/'), asset.status());
+                    assetStore.save(relocated);
+                    Files.deleteIfExists(oldPath);
+                    migrated++;
+                    if (isLegacyHashFile(oldPath)) {
+                        removedLegacyFiles++;
+                    }
+                } catch (IOException exception) {
+                    throw new IllegalStateException("Failed to migrate teacher resource asset " + asset.assetId(), exception);
+                }
+            }
+        }
+        return new AssetMigrationSummary(migrated, removedLegacyFiles, elapsedMillis(started));
+    }
+
+    private Path documentAssetRoot(TeacherResourceDocumentResponse document) {
+        Path root = syncProperties.assetStorageRoot().resolve(safeFileName(document.title(), "document")).normalize();
+        if (!root.startsWith(syncProperties.assetStorageRoot())) {
+            throw new IllegalArgumentException("Teacher resource asset document root is invalid");
+        }
+        return root;
+    }
+
+    private Path documentAssetDirectory(Path documentRoot, String sourcePath) {
+        String normalized = sourcePath.replace('\\', '/');
+        Path relative = Path.of(normalized);
+        Path parent = relative.getParent();
+        Path result = documentRoot;
+        if (parent != null) {
+            for (Path part : parent) {
+                result = result.resolve(safeFileName(part.toString(), "folder"));
+            }
+        }
+        return result.normalize();
+    }
+
+    private static long elapsedMillis(long started) {
+        return java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+    }
+
+    private static boolean isLegacyHashFile(Path path) {
+        if (path.getFileName() == null) {
+            return false;
+        }
+        String name = path.getFileName().toString();
+        return name.matches("(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.[a-z0-9]+")
+                || name.matches("(?i)[0-9a-f]{32,}\\.[a-z0-9]+");
+    }
+
+    public record AssetMigrationSummary(int migratedCount, int removedLegacyFileCount, long elapsedMs) {
+    }
+
+    /**
      * Saves one extracted binary asset and returns an opaque asset reference for block imageRefs.
      *
      * The provider id is source-structure based, not a filename classifier. This keeps repeated syncs idempotent while
@@ -129,20 +317,42 @@ public class TeacherResourceAssetService {
             String providerAssetId,
             byte[] content,
             String mimeType) {
-        if (!enabled || document == null || content == null || content.length == 0) {
-            /*
-             * Do not silently drop assets. If this fires in production, the parser found an image/attachment reference
-             * but either Spring wired the disabled test service or the extractor produced an empty byte array.
-             */
+        return saveExtractedAsset(document, sourcePath, pageNo, providerAssetId, content, mimeType, true);
+    }
+
+    /**
+     * Saves one extracted asset. Image callers must pass {@code expectedImage=true}; ordinary Feishu attachments keep
+     * their binary bytes and are not forced through an image decoder.
+     */
+    public Optional<TeacherResourceAssetResponse> saveExtractedAsset(
+            TeacherResourceDocumentResponse document,
+            String sourcePath,
+            Integer pageNo,
+            String providerAssetId,
+            byte[] content,
+            String mimeType,
+            boolean expectedImage) {
+        if (!enabled || document == null) {
             LOGGER.warn(
-                    "Skip teacher resource asset: enabled={}, documentId={}, sourcePath={}, providerAssetId={}, bytes={}",
+                    "Skip teacher resource asset: enabled={}, documentId={}, sourcePath={}, providerAssetId={}",
                     enabled,
                     document == null ? "" : document.documentId(),
                     sourcePath,
-                    providerAssetId,
-                    content == null ? null : content.length);
+                    providerAssetId);
             return Optional.empty();
         }
+        if (content == null || content.length == 0) {
+            if (expectedImage) {
+                throw invalidImage(document.documentId(), sourcePath, providerAssetId, "image payload is empty");
+            }
+            LOGGER.warn(
+                    "Skip empty teacher resource attachment: documentId={}, sourcePath={}, providerAssetId={}",
+                    document.documentId(), sourcePath, providerAssetId);
+            return Optional.empty();
+        }
+        ValidatedAsset validated = expectedImage
+                ? validateImageContent(document, sourcePath, providerAssetId, content, mimeType)
+                : ValidatedAsset.binary(content, normalizedMime(mimeType));
         String checksum = sha256(content);
         String normalizedProviderId = textOrDefault(providerAssetId, sourcePath + ":" + checksum);
         Optional<TeacherResourceAssetResponse> existing = assetStore.findByProviderChecksum(
@@ -152,37 +362,41 @@ public class TeacherResourceAssetService {
                 checksum);
         if (existing.isPresent()) {
             TeacherResourceAssetResponse previous = existing.get();
-            // Metadata can outlive the bind-mounted asset directory when a container is recreated. Re-materialize the
-            // exact binary before returning the old opaque id so document_block.imageRefs never point at a dead file.
             if (!storageFileExists(previous)) {
-                persistAssetBytes(previous, content);
+                persistAssetBytes(previous, validated);
             }
             if (!"active".equalsIgnoreCase(textOrDefault(previous.status(), ""))) {
-                /*
-                 * Feishu parser extraction runs before manifest ingestion.  The sync service intentionally marks the
-                 * old generation inactive between those phases; reactivating the exact checksum row preserves the
-                 * block's opaque asset id and keeps the ready gate truthful without creating a duplicate binary.
-                 */
                 previous = new TeacherResourceAssetResponse(
                         previous.assetId(), previous.tenantId(), previous.ownerSubjectId(), previous.documentId(),
                         previous.blockId(), previous.permissionScope(), previous.sourcePath(), previous.pageNo(),
-                        previous.providerAssetId(), previous.checksum(), previous.mimeType(), previous.width(),
-                        previous.height(), previous.storageKey(), "active");
+                        previous.providerAssetId(), previous.checksum(), validated.mimeType(), validated.width(),
+                        validated.height(), previous.storageKey(), "active");
                 return Optional.of(assetStore.save(previous));
             }
             return Optional.of(previous);
         }
         String assetId = UUID.randomUUID().toString();
-        String extension = extensionForMime(mimeType);
-        String storageKey = document.tenantId() + "/" + document.documentId() + "/" + assetId + extension;
-        Path target = safeStoragePath(storageKey);
+        String extension = extensionForMime(validated.mimeType());
+        String normalizedSourcePath = textOrDefault(sourcePath, "document.md").replace('\\', '/');
+        Path documentRoot = documentAssetRoot(document);
+        Path documentDirectory = documentAssetDirectory(documentRoot, normalizedSourcePath);
+        String storageFileName;
+        if (pageNo != null && pageNo > 0 && normalizedSourcePath.toLowerCase(Locale.ROOT).endsWith(".pdf")) {
+            storageFileName = String.format(Locale.ROOT, "page-%03d%s", pageNo, extension);
+        } else {
+            String logicalFileName = Path.of(normalizedSourcePath).getFileName() == null
+                    ? "image" + extension
+                    : Path.of(normalizedSourcePath).getFileName().toString();
+            storageFileName = safeFileName(logicalFileName, "image" + extension);
+        }
+        Path target = documentDirectory.resolve(storageFileName).normalize();
+        String storageKey = syncProperties.assetStorageRoot().relativize(target).toString().replace('\\', '/');
         try {
             Files.createDirectories(target.getParent());
             Files.write(target, content);
         } catch (IOException exception) {
             throw new IllegalStateException("Failed to persist teacher resource asset", exception);
         }
-        ImageSize imageSize = imageSize(content);
         TeacherResourceAssetResponse asset = new TeacherResourceAssetResponse(
                 assetId,
                 document.tenantId(),
@@ -194,12 +408,97 @@ public class TeacherResourceAssetService {
                 pageNo,
                 normalizedProviderId,
                 checksum,
-                textOrDefault(mimeType, "application/octet-stream"),
-                imageSize.width(),
-                imageSize.height(),
+                validated.mimeType(),
+                validated.width(),
+                validated.height(),
                 storageKey,
                 "active");
         return Optional.of(assetStore.save(asset));
+    }
+
+    /**
+     * Opens one active image bound to the exact authoritative document and Markdown logical path.
+     *
+     * <p>Source-image aliases are issued from a persisted document block, so a globally repeated relative path is not
+     * enough authority to select a binary. This remains a direct, run-authorized asset lookup and does not expose FILE
+     * documents through generic resource discovery.</p>
+     */
+    public Optional<VisibleAsset> openVisibleLogicalAsset(
+            String documentId, String logicalPath, RequestSubject subject) {
+        if (!enabled || documentId == null || documentId.isBlank()
+                || logicalPath == null || logicalPath.isBlank() || subject == null) {
+            return Optional.empty();
+        }
+        String normalizedPath = normalizeLogicalImagePath(logicalPath);
+        RequestSubject normalized = subject.normalize();
+        List<TeacherResourceAssetResponse> documentAssets = assetStore
+                .listByDocument(normalized.tenantId(), documentId.strip());
+        List<TeacherResourceAssetResponse> pathMatches = documentAssets.stream()
+                .filter(asset -> normalizedPath.equals(normalizePersistedLogicalImagePath(asset.sourcePath())))
+                .toList();
+        List<TeacherResourceAssetResponse> activeImageMatches = pathMatches.stream()
+                .filter(asset -> "active".equalsIgnoreCase(textOrDefault(asset.status(), "")))
+                .filter(asset -> textOrDefault(asset.mimeType(), "").toLowerCase(Locale.ROOT).startsWith("image/"))
+                .toList();
+        List<TeacherResourceAssetResponse> matches = activeImageMatches.stream()
+                .filter(asset -> canRead(asset, normalized))
+                .toList();
+        if (matches.isEmpty()) {
+            LOGGER.warn("handout_source_image_authorization_rejected documentId={} pathFingerprint={} documentAssets={} pathMatches={} activeImageMatches={} visibleMatches={}",
+                    documentId.strip(), logicalPathFingerprint(normalizedPath), documentAssets.size(), pathMatches.size(),
+                    activeImageMatches.size(), matches.size());
+        }
+        if (matches.size() > 1) {
+            throw new IllegalStateException("Teacher resource document image path is ambiguous");
+        }
+        if (matches.isEmpty()) {
+            return Optional.empty();
+        }
+        return Optional.of(openVisibleAsset(matches.get(0).assetId(), normalized));
+    }
+
+    private static String normalizeLogicalImagePath(String logicalPath) {
+        String normalizedPath = logicalPath.strip().replace('\\', '/');
+        if (normalizedPath.startsWith("/") || normalizedPath.contains("..")
+                || normalizedPath.contains("http://") || normalizedPath.contains("https://")) {
+            throw new IllegalArgumentException("Teacher resource logical image path is invalid");
+        }
+        return normalizedPath;
+    }
+
+    private static String normalizePersistedLogicalImagePath(String logicalPath) {
+        return textOrDefault(logicalPath, "").strip().replace('\\', '/');
+    }
+
+    private static String logicalPathFingerprint(String logicalPath) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(logicalPath.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(digest, 0, 8);
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 is unavailable", exception);
+        }
+    }
+
+    /**
+     * Opens an asset after applying the same tenant/owner/scope rules used by teacher resource search.
+     */
+    public Optional<VisibleAsset> openVisibleQualifiedAsset(String qualifiedReference, RequestSubject subject) {
+        if (!enabled || qualifiedReference == null || qualifiedReference.isBlank()) return Optional.empty();
+        RequestSubject normalized = subject.normalize();
+        for (TeacherResourceDocumentResponse document : resourceStore.listVisible(
+                normalized.tenantId(), normalized.subjectType(), normalized.subjectId())) {
+            for (TeacherResourceAssetResponse asset : assetStore.listByDocument(normalized.tenantId(), document.documentId())) {
+                if (!"active".equalsIgnoreCase(textOrDefault(asset.status(), ""))
+                        || !qualifiedReference.equals(asset.providerAssetId())) continue;
+                try {
+                    return Optional.of(openVisibleAsset(asset.assetId(), normalized));
+                } catch (IllegalArgumentException ignored) {
+                    return Optional.empty();
+                }
+            }
+        }
+        return Optional.empty();
     }
 
     /**
@@ -218,23 +517,14 @@ public class TeacherResourceAssetService {
         }
         Path path = safeStoragePath(asset.storageKey());
         if (!Files.isRegularFile(path)) {
-            // Repair legacy rows lazily. This covers assets created before the host bind mount was restored and keeps
-            // reads deterministic without inventing a public URL for a local teacher resource.
             TeacherResourceDocumentResponse document = resourceStore.find(asset.tenantId(), asset.documentId());
-            if (document != null) {
-                restoreMissingAsset(asset, document);
-            }
+            if (document != null) restoreMissingAsset(asset, document);
             if (!Files.isRegularFile(path)) {
                 throw new IllegalArgumentException("Teacher resource asset file is unavailable");
             }
         }
-        return new VisibleAsset(
-                asset.assetId(),
-                asset.mimeType(),
-                safeDownloadName(asset),
-                new FileSystemResource(path));
+        return new VisibleAsset(asset.assetId(), asset.mimeType(), safeDownloadName(asset), new FileSystemResource(path));
     }
-
     /**
      * Resolves one visible asset reference without opening the binary stream.
      */
@@ -329,11 +619,11 @@ public class TeacherResourceAssetService {
     }
 
     /** Writes newly extracted bytes to an existing storage key, preserving the stable asset id and database row. */
-    private void persistAssetBytes(TeacherResourceAssetResponse asset, byte[] content) {
+    private void persistAssetBytes(TeacherResourceAssetResponse asset, ValidatedAsset content) {
         Path target = safeStoragePath(asset.storageKey());
         try {
             Files.createDirectories(target.getParent());
-            Files.write(target, content);
+            Files.write(target, content.bytes());
         } catch (IOException exception) {
             throw new IllegalStateException("Failed to restore teacher resource asset binary", exception);
         }
@@ -354,7 +644,13 @@ public class TeacherResourceAssetService {
         try {
             byte[] content = sourcePageBytes(source, asset.pageNo(), asset.mimeType());
             if (content.length > 0) {
-                persistAssetBytes(asset, content);
+                ValidatedAsset validated = textOrDefault(asset.mimeType(), "")
+                        .toLowerCase(Locale.ROOT)
+                        .startsWith("image/")
+                                ? validateImageBytes(
+                                        asset.documentId(), asset.sourcePath(), asset.providerAssetId(), content, asset.mimeType())
+                                : ValidatedAsset.binary(content, normalizedMime(asset.mimeType()));
+                persistAssetBytes(asset, validated);
                 LOGGER.info("Restored missing teacher resource asset {} from {} page {}",
                         asset.assetId(), source, asset.pageNo());
             }
@@ -363,27 +659,54 @@ public class TeacherResourceAssetService {
         }
     }
 
-    /** Resolves localPath plus a relative sourcePath while rejecting path traversal from database metadata. */
-    private static Path resolveSourceFile(
+    /** Resolves a source asset only inside the Feishu staging volume or managed local upload volume. */
+    private Path resolveSourceFile(
             TeacherResourceDocumentResponse document,
             String sourcePath) {
         String configured = textOrDefault(document.localPath(), "");
         if (configured.isBlank()) {
             return null;
         }
-        Path root = Path.of(configured).toAbsolutePath().normalize();
-        if (Files.isRegularFile(root)) {
-            return root;
-        }
-        if (!Files.isDirectory(root)) {
-            return null;
-        }
         String relative = textOrDefault(sourcePath, "").replace('\\', '/');
-        if (relative.isBlank()) {
+        if (relative.isBlank() || isTextSourcePath(relative)) {
             return null;
         }
-        Path candidate = root.resolve(relative).normalize();
-        return candidate.startsWith(root) ? candidate : null;
+        Path root;
+        try {
+            Path configuredPath = Path.of(configured);
+            if ("feishu".equalsIgnoreCase(textOrDefault(document.sourceType(), ""))) {
+                root = syncProperties.requireStagingPath(configuredPath);
+            } else {
+                root = configuredPath.toAbsolutePath().normalize().toRealPath();
+                if (managedUploadRoot != null) {
+                    Path managedRoot = managedUploadRoot.toRealPath();
+                    if (!root.startsWith(managedRoot)) {
+                        return null;
+                    }
+                }
+            }
+        } catch (IOException | RuntimeException exception) {
+            return null;
+        }
+        try {
+            if (Files.isRegularFile(root)) {
+                return root.getFileName().toString().equals(relative) ? root : null;
+            }
+            Path candidate = root.resolve(relative).normalize();
+            Path realRoot = root.toRealPath();
+            if (!candidate.startsWith(realRoot)) {
+                return null;
+            }
+            Path realCandidate = candidate.toRealPath();
+            return realCandidate.startsWith(realRoot) && Files.isRegularFile(realCandidate) ? realCandidate : null;
+        } catch (IOException | RuntimeException exception) {
+            return null;
+        }
+    }
+
+    private static boolean isTextSourcePath(String sourcePath) {
+        String normalized = sourcePath.toLowerCase(Locale.ROOT);
+        return normalized.endsWith(".md") || normalized.endsWith(".markdown") || normalized.endsWith(".txt");
     }
 
     /** Reads a source image or renders one PDF page to PNG for the missing asset row. */
@@ -403,6 +726,39 @@ public class TeacherResourceAssetService {
         }
     }
 
+    private String nextSequentialImageName(Path directory, String extension) {
+        int index = 1;
+        Path candidate;
+        do {
+            candidate = directory.resolve(String.format(Locale.ROOT, "image-%03d%s", index++, extension));
+        } while (Files.exists(candidate));
+        return candidate.getFileName().toString();
+    }
+
+    private Path nextAvailableStoragePath(Path directory, String fileName) {
+        Path candidate = directory.resolve(fileName).normalize();
+        if (!candidate.startsWith(syncProperties.assetStorageRoot()) || !Files.exists(candidate)) {
+            return candidate;
+        }
+        String stem = fileName;
+        String suffix = "";
+        int dot = fileName.lastIndexOf('.');
+        if (dot > 0) {
+            stem = fileName.substring(0, dot);
+            suffix = fileName.substring(dot);
+        }
+        int index = 2;
+        do {
+            candidate = directory.resolve(stem + "-" + index++ + suffix).normalize();
+        } while (Files.exists(candidate));
+        return candidate;
+    }
+
+    private static String safeFileName(String value, String fallback) {
+        String normalized = textOrDefault(value, fallback).replaceAll("[<>:\"/\\\\|?*]", "_").strip();
+        return normalized.isBlank() ? fallback : normalized;
+    }
+
     private static String safeDownloadName(TeacherResourceAssetResponse asset) {
         String extension = extensionForMime(asset.mimeType());
         String source = textOrDefault(asset.sourcePath(), asset.assetId()).replace('\\', '/');
@@ -415,16 +771,127 @@ public class TeacherResourceAssetService {
         return base.endsWith(extension) ? base : base + extension;
     }
 
-    private static ImageSize imageSize(byte[] content) {
-        try {
-            BufferedImage image = ImageIO.read(new ByteArrayInputStream(content));
-            if (image == null) {
-                return new ImageSize(null, null);
-            }
-            return new ImageSize(image.getWidth(), image.getHeight());
-        } catch (IOException exception) {
-            return new ImageSize(null, null);
+    /**
+     * Decodes one candidate image before it is permitted to become an active asset. The signature check prevents an
+     * HTML/JSON error body renamed to .png from reaching ImageIO or being trusted through a provider MIME header.
+     */
+    static ValidatedAsset validateImageBytes(
+            String documentId,
+            String sourcePath,
+            String providerAssetId,
+            byte[] content,
+            String declaredMimeType) {
+        if (content == null || content.length == 0) {
+            throw invalidImage(documentId, sourcePath, providerAssetId, "image payload is empty");
         }
+        String detectedMimeType = imageMimeFromSignature(content);
+        if (detectedMimeType.isBlank()) {
+            throw invalidImage(documentId, sourcePath, providerAssetId, "image payload has no supported signature");
+        }
+        String declared = normalizedMime(declaredMimeType);
+        if (!declared.isBlank() && !"application/octet-stream".equals(declared)
+                && !mimeTypesMatch(declared, detectedMimeType)) {
+            throw invalidImage(documentId, sourcePath, providerAssetId,
+                    "declared MIME does not match image signature");
+        }
+        try (ImageInputStream input = ImageIO.createImageInputStream(new ByteArrayInputStream(content))) {
+            if (input == null) {
+                throw invalidImage(documentId, sourcePath, providerAssetId, "image decoder input is unavailable");
+            }
+            Iterator<ImageReader> readers = ImageIO.getImageReaders(input);
+            if (!readers.hasNext()) {
+                throw invalidImage(documentId, sourcePath, providerAssetId, "no installed decoder accepts the image");
+            }
+            ImageReader reader = readers.next();
+            try {
+                reader.setInput(input, false, true);
+                BufferedImage image = reader.read(0);
+                if (image == null || image.getWidth() <= 0 || image.getHeight() <= 0) {
+                    throw invalidImage(documentId, sourcePath, providerAssetId, "image decoder returned invalid dimensions");
+                }
+                return new ValidatedAsset(content, detectedMimeType, image.getWidth(), image.getHeight());
+            } finally {
+                reader.dispose();
+            }
+        } catch (IOException exception) {
+            throw invalidImage(documentId, sourcePath, providerAssetId, "image decoder rejected the payload");
+        }
+    }
+
+    private static ValidatedAsset validateImageContent(
+            TeacherResourceDocumentResponse document,
+            String sourcePath,
+            String providerAssetId,
+            byte[] content,
+            String mimeType) {
+        return validateImageBytes(
+                document.documentId(), sourcePath, providerAssetId, content, mimeType);
+    }
+
+    private static IllegalArgumentException invalidImage(
+            String documentId,
+            String sourcePath,
+            String providerAssetId,
+            String reason) {
+        return new IllegalArgumentException(
+                "Rejected invalid teacher image: documentId=" + textOrDefault(documentId, "unknown")
+                        + ", sourcePath=" + textOrDefault(sourcePath, "unknown")
+                        + ", providerAssetId=" + textOrDefault(providerAssetId, "unknown")
+                        + ", reason=" + reason);
+    }
+
+    private static String imageMimeFromSignature(byte[] content) {
+        if (startsWith(content, new byte[] {(byte) 0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'})) {
+            return "image/png";
+        }
+        if (startsWith(content, new byte[] {(byte) 0xff, (byte) 0xd8, (byte) 0xff})) {
+            return "image/jpeg";
+        }
+        if (startsWith(content, "GIF87a".getBytes(java.nio.charset.StandardCharsets.US_ASCII))
+                || startsWith(content, "GIF89a".getBytes(java.nio.charset.StandardCharsets.US_ASCII))) {
+            return "image/gif";
+        }
+        if (startsWith(content, new byte[] {'B', 'M'})) {
+            return "image/bmp";
+        }
+        if (startsWith(content, new byte[] {'I', 'I', '*', 0})
+                || startsWith(content, new byte[] {'M', 'M', 0, '*'})) {
+            return "image/tiff";
+        }
+        if (content.length >= 12
+                && startsWith(content, new byte[] {'R', 'I', 'F', 'F'})
+                && content[8] == 'W' && content[9] == 'E' && content[10] == 'B' && content[11] == 'P') {
+            return "image/webp";
+        }
+        return "";
+    }
+
+    private static boolean startsWith(byte[] content, byte[] signature) {
+        if (content.length < signature.length) {
+            return false;
+        }
+        for (int index = 0; index < signature.length; index += 1) {
+            if (content[index] != signature[index]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean mimeTypesMatch(String declared, String detected) {
+        return declared.equals(detected)
+                || ("image/jpg".equals(declared) && "image/jpeg".equals(detected));
+    }
+
+    private static String normalizedMime(String value) {
+        String normalized = textOrDefault(value, "").toLowerCase(Locale.ROOT);
+        int separator = normalized.indexOf(';');
+        return separator < 0 ? normalized : normalized.substring(0, separator).strip();
+    }
+
+    private static String safeReason(Exception exception) {
+        String message = textOrDefault(exception.getMessage(), exception.getClass().getSimpleName());
+        return message.length() <= 500 ? message : message.substring(0, 500);
     }
 
     private static String sha256(byte[] content) {
@@ -474,6 +941,9 @@ public class TeacherResourceAssetService {
         }
     }
 
-    private record ImageSize(Integer width, Integer height) {
+    record ValidatedAsset(byte[] bytes, String mimeType, Integer width, Integer height) {
+        private static ValidatedAsset binary(byte[] bytes, String mimeType) {
+            return new ValidatedAsset(bytes, textOrDefault(mimeType, "application/octet-stream"), null, null);
+        }
     }
 }

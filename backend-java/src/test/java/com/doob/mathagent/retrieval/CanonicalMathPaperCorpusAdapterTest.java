@@ -50,6 +50,34 @@ class CanonicalMathPaperCorpusAdapterTest {
     }
 
     @Test
+    void acceptsFlatIndexedAssetIdsFromCanonicalVectorMetadata() throws Exception {
+        Path corpusRoot = Files.createTempDirectory("canonical-paper-flat-assets-");
+        String documentName = "2024 抛物线试卷.pdf";
+        String sourceHash = "c".repeat(64);
+        Path paperRoot = corpusRoot.resolve(documentName);
+        Files.createDirectories(paperRoot.resolve("questions"));
+        Path questionMarkdown = paperRoot.resolve("questions/q-007.md");
+        Files.writeString(questionMarkdown, "# 第 7 题\\n抛物线题", java.nio.charset.StandardCharsets.UTF_8);
+        Files.writeString(paperRoot.resolve("source-manifest.json"), JSON.writeValueAsString(
+                java.util.Map.of("documentFullName", documentName, "sourceSha256", sourceHash,
+                        "questions", List.of(java.util.Map.of("questionNumber", "7",
+                                "questionMarkdown", "questions/q-007.md",
+                                "questionMarkdownSha256", sha256(questionMarkdown),
+                                "sourcePages", List.of(4),
+                                "assetIds", List.of("figure-opaque"))))));
+        String documentRef = uuid5(documentName + "\n" + sourceHash).toString();
+        var metadata = JSON.readTree("""
+                {"documentFullName":"2024 抛物线试卷.pdf","documentRef":"%s","sourceSha256":"%s",
+                 "pageStart":4,"questionNumber":"7","assetIds":["figure-opaque"]}
+                """.formatted(documentRef, sourceHash));
+
+        var evidence = new CanonicalMathPaperCorpusAdapter(corpusRoot).adapt(List.of(
+                new TextbookMilvusSearchClient.MilvusHit("row", "抛物线题干", metadata, 0.9d)));
+
+        assertThat(evidence).singleElement().satisfies(item ->
+                assertThat(item.assetIds()).containsExactly("figure-opaque"));
+    }
+    @Test
     void rejectsAHitWhoseManifestBindingDoesNotMatch() throws Exception {
         Path corpusRoot = Files.createTempDirectory("canonical-paper-corpus-");
         String documentName = "paper.pdf";
@@ -63,6 +91,7 @@ class CanonicalMathPaperCorpusAdapterTest {
         assertThat(new CanonicalMathPaperCorpusAdapter(corpusRoot).adapt(List.of(
                 new TextbookMilvusSearchClient.MilvusHit("row", "题干", metadata, 0.8d)))).isEmpty();
     }
+
 
     private static String sha256(Path path) throws Exception {
         return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")

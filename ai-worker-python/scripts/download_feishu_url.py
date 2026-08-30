@@ -33,6 +33,74 @@ HTML_IMAGE_ATTRIBUTE_PATTERN = re.compile(
 )
 
 
+SUPPORTED_IMAGE_SIGNATURES: Tuple[Tuple[bytes, str], ...] = (
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+    (b"BM", "image/bmp"),
+    (b"II*\x00", "image/tiff"),
+    (b"MM\x00*", "image/tiff"),
+)
+
+
+def detected_image_mime(payload: bytes) -> str:
+    """Returns the MIME type proven by a supported image file signature."""
+    data = bytes(payload or b"")
+    for signature, mime_type in SUPPORTED_IMAGE_SIGNATURES:
+        if data.startswith(signature):
+            return mime_type
+    # RIFF is shared by several formats; only the WEBP marker identifies an image here.
+    if len(data) >= 12 and data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return "image/webp"
+    return ""
+
+
+_URL_PATTERN = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
+_SECRET_QUERY_PATTERN = re.compile(
+    r"(?i)([?&](?:access_token|app_secret|authorization|cookie|sig|signature|token)=)[^&\s,}]+"
+)
+
+
+def safe_url_reference(value: str) -> str:
+    """Keeps error context while removing query strings and URL user information."""
+    try:
+        parsed = urllib.parse.urlsplit(str(value or ""))
+        if parsed.scheme and parsed.hostname:
+            return f"{parsed.scheme}://{parsed.hostname}{parsed.path or '/'}"
+    except ValueError:
+        pass
+    return str(value or "")
+
+
+def safe_error_message(error: Any) -> str:
+    """Redacts signed URL queries and credential-like query values from provider errors."""
+    message = str(error or "")
+    message = _URL_PATTERN.sub(lambda match: safe_url_reference(match.group(0)), message)
+    return _SECRET_QUERY_PATTERN.sub(r"\1<redacted>", message)
+
+
+def image_failure(
+    document_token: str,
+    image_index: int,
+    reference: str,
+    token: str,
+    error: Any,
+) -> Dict[str, Any]:
+    """Builds an observable image failure without retaining signed URL credentials."""
+    image_name = f"image-{image_index:03d}"
+    return {
+        "type": "image",
+        "token": safe_url_reference(token) if str(token or "").lower().startswith(("http://", "https://")) else token,
+        "name": image_name,
+        "path": safe_url_reference(reference),
+        "message": (
+            f"document={document_token} image={image_name} "
+            f"source={safe_url_reference(reference)}: {safe_error_message(error)}"
+        ),
+    }
+
+
 class _FeishuMarkupNormalizer(HTMLParser):
     """Converts Feishu's XML export into line-oriented Markdown-compatible text.
 
@@ -94,6 +162,53 @@ def normalize_feishu_document_markup(content: str) -> str:
         return content
     normalized = "".join(parser.parts).replace("\r\n", "\n").replace("\r", "\n")
     return normalized.strip() + "\n" if normalized.strip() else ""
+
+
+def normalize_document_image_items(
+    markdown: str,
+    image_items: List[Dict[str, Any]],
+    markdown_dir: Path,
+) -> Tuple[str, List[Dict[str, Any]]]:
+    """Normalizes image manifests to the document-local IMAJES directory."""
+    rewritten = str(markdown or "")
+    normalized_items: List[Dict[str, Any]] = []
+    for item in image_items:
+        relative_path = str(item.get("relativePath", "") or "").replace("\\", "/").strip("/")
+        if not relative_path:
+            normalized_items.append(item)
+            continue
+        target = (markdown_dir / relative_path).resolve()
+        if not target.is_file() or target.parent.name != "IMAJES":
+            normalized_items.append(item)
+            continue
+        scoped_path = target.relative_to(markdown_dir.resolve()).as_posix()
+        rewritten = rewritten.replace(relative_path, scoped_path)
+        updated = dict(item)
+        updated["path"] = scoped_path
+        updated["relativePath"] = scoped_path
+        updated["providerAssetId"] = scoped_path
+        normalized_items.append(updated)
+    return rewritten, normalized_items
+
+
+def qualify_markdown_image_reference(source_relative_path: str, local_reference: str) -> str:
+    """Prefixes a document-local image path with its readable Markdown document identity."""
+    source = str(source_relative_path or "").replace("\\", "/").strip().strip("/")
+    reference = str(local_reference or "").replace("\\", "/").strip()
+    parts = [part for part in reference.split("/") if part]
+    if not source or not reference or "::" in source or "::" in reference:
+        raise ValueError("invalid qualified Markdown image reference")
+    if reference.startswith(("http://", "https://", "data:", "/")) or ".." in parts:
+        raise ValueError("image reference must be a local relative path")
+    if len(parts) < 2 or parts[-2] != "IMAJES" or not parts[-1]:
+        raise ValueError("image reference must point into a document-local IMAJES directory")
+    return f"{source}::{reference}"
+
+
+def qualify_materialized_markdown(markdown: str, source_relative_path: str) -> str:
+    """Keeps portable document-local image links unchanged for direct Markdown preview."""
+    del source_relative_path
+    return str(markdown or "")
 
 
 class FeishuHttpError(RuntimeError):
@@ -552,18 +667,12 @@ class FeishuClient:
         markdown: str,
         output_dir: Path,
     ) -> Tuple[str, List[Dict[str, Any]], List[Dict[str, Any]]]:
-        """Materializes Markdown/HTML images and returns a provider-neutral manifest.
-
-        The direct URL is attempted first because it preserves the exact image represented by the export.  If a
-        signed stream URL has expired, the document block API is consulted and the corresponding media token is
-        downloaded with the same authenticated Feishu client.  No image URL or provider token is emitted in the
-        rewritten Markdown; only a safe relative path remains for the Java parser.
-        """
+        """Materializes Markdown/HTML images below the current document's IMAJES directory."""
         references = markdown_image_references(markdown)
         if not references:
             return markdown, [], []
         image_tokens = self.list_document_image_tokens(document_token)
-        asset_dir = output_dir / "_feishu_images"
+        asset_dir = output_dir / "IMAJES"
         manifests: List[Dict[str, Any]] = []
         failures: List[Dict[str, Any]] = []
         rewritten = markdown
@@ -573,39 +682,34 @@ class FeishuClient:
             source_url = reference["url"]
             if source_url in replacements:
                 continue
+            media_token = image_tokens[index - 1] if index <= len(image_tokens) else ""
             try:
                 payload, name, mime_type = self.download_embedded_image(source_url)
+                provider_token = source_url
             except Exception as direct_error:
                 # A signed stream URL may be expired.  The block API gives us the durable media token for the
                 # same document, which still honours the tenant app's real Feishu permissions.
-                if token_index >= len(image_tokens):
-                    failures.append({
-                        "type": "image",
-                        "token": source_url,
-                        "name": source_url,
-                        "path": reference["url"],
-                        "message": str(direct_error),
-                    })
+                if not media_token:
+                    failures.append(image_failure(document_token, index, source_url, source_url, direct_error))
                     continue
-                media_token = image_tokens[token_index]
-                token_index += 1
                 try:
                     payload, name, mime_type = self.download_media(media_token)
+                    provider_token = media_token
                 except Exception as media_error:
-                    failures.append({
-                        "type": "image",
-                        "token": media_token,
-                        "name": source_url,
-                        "path": reference["url"],
-                        "message": f"signed URL failed: {direct_error}; media token failed: {media_error}",
-                    })
+                    failures.append(image_failure(
+                        document_token,
+                        index,
+                        source_url,
+                        media_token,
+                        f"signed URL failed: {safe_error_message(direct_error)}; "
+                        f"media token failed: {safe_error_message(media_error)}",
+                    ))
                     continue
-            target_name = safe_image_filename(name, index, mime_type)
-            target = unique_image_path(asset_dir, target_name)
+            target_name = document_image_filename(index, mime_type)
+            target = asset_dir / target_name
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(payload)
             relative_path = target.relative_to(output_dir).as_posix()
-            provider_token = image_tokens[token_index - 1] if token_index > 0 else source_url
             manifest = file_manifest(
                 target,
                 output_dir,
@@ -631,12 +735,12 @@ class FeishuClient:
         return rewritten, manifests, failures
 
     def download_embedded_image(self, image_url: str) -> Tuple[bytes, str, str]:
-        """Downloads a provider image URL with the tenant authorization header."""
+        """Downloads and validates a provider image URL with tenant authorization."""
         normalized = urllib.parse.urljoin("https://open.feishu.cn", str(image_url or "").strip())
         response = self.request("GET", normalized)
         mime_type = str(response.headers.get("Content-Type", "") or "").split(";", 1)[0].strip()
         name = parse_content_disposition_filename(response.headers.get("Content-Disposition", ""), "image")
-        return response.content, name, mime_type or "application/octet-stream"
+        return validate_image_payload(response.content, name, mime_type)
 
     def list_document_image_tokens(self, document_token: str) -> List[str]:
         """Reads durable image block tokens for a single document, preserving provider order."""
@@ -678,12 +782,12 @@ class FeishuClient:
         return tokens
 
     def download_media(self, media_token: str) -> Tuple[bytes, str, str]:
-        """Downloads a durable Feishu media token using the authenticated Drive API."""
+        """Downloads and validates a durable Feishu media token."""
         url = f"https://open.feishu.cn/open-apis/drive/v1/medias/{urllib.parse.quote(media_token)}/download"
         response = self.request("GET", url)
         mime_type = str(response.headers.get("Content-Type", "") or "").split(";", 1)[0].strip()
         name = parse_content_disposition_filename(response.headers.get("Content-Disposition", ""), media_token)
-        return response.content, name, mime_type or "application/octet-stream"
+        return validate_image_payload(response.content, name, mime_type)
 
     def get_docx_sync_metadata(self, document_token: str) -> Dict[str, str]:
         """Returns provider-owned title/revision values without deriving them from filenames or local timestamps."""
@@ -730,7 +834,52 @@ class FeishuClient:
         url = f"https://open.feishu.cn/open-apis/drive/v1/files/{urllib.parse.quote(file_token)}/download"
         response = self.request("GET", url)
         filename = parse_content_disposition_filename(response.headers.get("Content-Disposition", ""), file_token)
+        header_mime = str(response.headers.get("Content-Type", "") or "").split(";", 1)[0].strip().lower()
+        filename_mime, _ = mimetypes.guess_type(filename)
+        if header_mime.startswith("image/") or str(filename_mime or "").startswith("image/"):
+            payload, _, _ = validate_image_payload(response.content, filename, header_mime or str(filename_mime or ""))
+            return payload, filename, len(payload)
         return response.content, filename, len(response.content)
+
+
+def supported_image_mime_for_path(path: Path) -> str:
+    """Returns the image MIME inferred from a supported binary signature, or empty for invalid bytes."""
+    try:
+        return detected_image_mime(path.read_bytes())
+    except OSError:
+        return ""
+
+
+def existing_document_assets_are_valid(root_dir: Path, relative_path: str, asset_kind: str) -> bool:
+    """Prevents stale invalid embedded images from being accepted by incremental manifest reuse."""
+    if str(asset_kind or "").lower() != "document":
+        return True
+    root = root_dir.resolve()
+    document = (root / str(relative_path or "").replace("\\", "/")).resolve()
+    if not document.is_file() or not document.is_relative_to(root):
+        return False
+    image_dir = document.parent / "IMAJES"
+    if not image_dir.is_dir() or not image_dir.is_relative_to(root):
+        return True
+    return all(
+        detected_image_mime(asset.read_bytes())
+        for asset in image_dir.iterdir()
+        if asset.is_file()
+    )
+
+
+def validate_image_payload(payload: bytes, name: str, mime_type: str) -> Tuple[bytes, str, str]:
+    """Rejects successful provider responses whose bytes do not have a supported image signature."""
+    normalized_mime = str(mime_type or "").split(";", 1)[0].strip().lower()
+    data = bytes(payload or b"")
+    detected_mime = detected_image_mime(data)
+    if not detected_mime:
+        raise ValueError(
+            "Feishu image response is not a supported image payload: "
+            f"name={safe_error_message(name)}, mimeType={normalized_mime or 'unknown'}"
+        )
+    # The signature is authoritative. A misleading image/* header must not select the wrong local extension.
+    return data, name, detected_mime
 
 
 def save_bytes(content: bytes, output_dir: Path, filename: str) -> Path:
@@ -806,40 +955,39 @@ def normalize_materialized_html_images(markdown: str) -> str:
     """Converts worker-owned local HTML image tags into portable Markdown image syntax.
 
     A rewritten `href` can coexist with Feishu's opaque `src` token, therefore inspect all image attributes and
-    select only the `_feishu_images/` relative path.  This keeps remote URLs and non-image HTML unchanged.
+    select only the `IMAJES/` relative path.  This keeps remote URLs and non-image HTML unchanged.
     """
     def replace_tag(match: re.Match[str]) -> str:
         tag = match.group(0)
         for attribute in HTML_IMAGE_ATTRIBUTE_PATTERN.finditer(tag):
             value = html.unescape(str(attribute.group(1) or attribute.group(2) or attribute.group(3) or "")).strip()
-            if value.startswith("_feishu_images/"):
+            if value.startswith("IMAJES/"):
                 return f"![]({value})"
         return tag
 
     return HTML_IMAGE_TAG_PATTERN.sub(replace_tag, markdown or "")
 
 
+def document_asset_directory(markdown_dir: Path, document_token: str) -> Path:
+    """Keeps every Feishu document image directly below its document directory."""
+    del document_token
+    return markdown_dir / "IMAJES"
+
+
+def document_image_filename(index: int, mime_type: str) -> str:
+    """Names images by their appearance order within one Feishu document."""
+    guessed = mimetypes.guess_extension(str(mime_type or "").split(";", 1)[0].strip()) or ".bin"
+    return f"image-{index:03d}{guessed.lower()}"
+
+
 def safe_image_filename(name: str, index: int, mime_type: str) -> str:
-    """Creates a deterministic, path-safe image filename while retaining the provider extension when available."""
+    """Retained for compatibility with callers that need a sanitized provider filename."""
     candidate = sanitize_name(name, f"image-{index}")
     suffix = Path(candidate).suffix.lower()
     if not suffix or len(suffix) > 8:
         guessed = mimetypes.guess_extension(str(mime_type or "").split(";", 1)[0].strip()) or ".bin"
         candidate = f"{Path(candidate).stem}{guessed}"
     return candidate
-
-
-def unique_image_path(asset_dir: Path, filename: str) -> Path:
-    """Keeps provider image names and suffixes only a collision on disk."""
-    candidate = asset_dir / filename
-    if not candidate.exists():
-        return candidate
-    collision_index = 2
-    while True:
-        alternative = asset_dir / f"{candidate.stem}-{collision_index}{candidate.suffix}"
-        if not alternative.exists():
-            return alternative
-        collision_index += 1
 
 
 def load_resume_checkpoint(checkpoint_path: str = "") -> Dict[str, Any]:
@@ -885,18 +1033,66 @@ def save_incremental_manifest(manifest_path: str, items: Dict[str, Dict[str, Any
     temporary_path.replace(path)
 
 
+def remove_stale_materialized_file(manifest: Dict[str, Any], root_dir: Path) -> None:
+    relative_path = str(manifest.get("relativePath", "") or "").replace("\\", "/").strip("/")
+    if not relative_path:
+        return
+    target = (root_dir / relative_path).resolve()
+    root = root_dir.resolve()
+    if not target.is_file() or not target.is_relative_to(root):
+        return
+    target.unlink()
+    asset_dir = target.parent / "IMAJES"
+    if asset_dir.is_dir() and not any(asset_dir.iterdir()):
+        asset_dir.rmdir()
+    parent = target.parent
+    while parent != root and parent.is_dir():
+        if any(parent.iterdir()):
+            break
+        parent.rmdir()
+        parent = parent.parent
+
+
+def cleanup_stale_manifest_items(
+    previous_manifest: Dict[str, Dict[str, Any]],
+    active_tokens: set[str],
+    root_dir: Path,
+) -> None:
+    """Deletes only durable files absent from a complete, successful provider discovery."""
+    for token, manifest in previous_manifest.items():
+        if token not in active_tokens:
+            remove_stale_materialized_file(manifest, root_dir)
+
+
 def provider_item_signature(item: Dict[str, Any]) -> str:
     """Builds a stable metadata signature without fetching document bodies or embedded assets."""
     fields = {
         "type": item.get("type", item.get("docs_type", "")),
         "token": item.get("token", item.get("docs_token", "")),
         "name": item.get("name", item.get("title", "")),
-        "modified_time": item.get("modified_time", item.get("modifiedTime", "")),
-        "created_time": item.get("created_time", item.get("createdTime", "")),
-        "size": item.get("size", item.get("size_bytes", item.get("sizeBytes", ""))),
-        "revision": item.get("revision", item.get("revision_id", item.get("version", ""))),
+        "modified_time": item.get(
+            "modified_time",
+            item.get("modifiedTime", ""),
+        ),
+        "created_time": item.get(
+            "created_time",
+            item.get("createdTime", ""),
+        ),
+        "size": item.get(
+            "size",
+            item.get("size_bytes", item.get("sizeBytes", "")),
+        ),
+        "revision": item.get(
+            "revision",
+            item.get("revision_id", item.get("version", "")),
+        ),
     }
-    return json.dumps(fields, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return json.dumps(
+        fields,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
 def write_resume_checkpoint(
@@ -980,6 +1176,8 @@ def download_folder(
     downloaded_items = [item for item in list_field(checkpoint.get("downloaded_items")) if isinstance(item, dict)]
     downloaded_tokens = {str(item.get("token", "")) for item in downloaded_items if str(item.get("token", ""))}
     incremental_manifest = load_incremental_manifest(manifest_path)
+    previous_manifest = {token: dict(value) for token, value in incremental_manifest.items()}
+    discovered_tokens: set[str] = set()
     discovered_items: List[Dict[str, Any]] = []
     changed_items: List[Dict[str, Any]] = []
     unchanged_items: List[Dict[str, Any]] = []
@@ -1065,19 +1263,21 @@ def download_folder(
                 }
                 item_started_at = time.perf_counter()
                 discovered_items.append(item_metadata)
-                previous_manifest = incremental_manifest.get(item_token, {})
-                expected_relative_path = str(previous_manifest.get("relativePath", "") or "")
+                discovered_tokens.add(item_token)
+                existing_manifest = incremental_manifest.get(item_token, {})
+                expected_relative_path = str(existing_manifest.get("relativePath", "") or "")
                 existing_target = root_dir / expected_relative_path if expected_relative_path else None
                 unchanged = (
-                    bool(previous_manifest)
-                    and previous_manifest.get("signature") == provider_item_signature(item)
+                    bool(existing_manifest)
+                    and existing_manifest.get("signature") == provider_item_signature(item)
                     and existing_target is not None
                     and existing_target.is_file()
+                    and existing_document_assets_are_valid(root_dir, expected_relative_path, str(existing_manifest.get("assetKind", "")))
                 )
                 if unchanged:
                     counters["skipped"] += 1
                     counters["unchanged_files"] += 1
-                    unchanged_items.append(item_metadata)
+                    unchanged_items.append({**item_metadata, **previous_manifest})
                     remember_item_timing(item_metadata, "unchanged", item_started_at)
                     continue
                 if item_token in downloaded_tokens and not previous_manifest:
@@ -1089,6 +1289,9 @@ def download_folder(
                         if file_extension == "md":
                             content, suggested_name, _, image_items, image_failures = download_markdown_document(
                                 client, item_token, current_dir)
+                            normalized_markdown, image_items = normalize_document_image_items(
+                                content.decode("utf-8", errors="replace"), image_items, current_dir)
+                            content = normalized_markdown.encode("utf-8")
                             downloaded_items.extend(image_items)
                             counters["assets"] += len(image_items)
                             counters["bytes"] += sum(int(item.get("sizeBytes", 0) or 0) for item in image_items)
@@ -1100,6 +1303,9 @@ def download_folder(
                         # only Windows-forbidden path characters are escaped by save_bytes for filesystem safety.
                         extension = f".{file_extension.lower()}"
                         target_name = item_name if item_name.lower().endswith(extension) else f"{item_name}{extension}"
+                        relative_markdown_path = (current_dir / target_name).relative_to(root_dir).as_posix()
+                        if item_type in EXPORTABLE_TYPES and file_extension == "md":
+                            content = qualify_materialized_markdown(content.decode("utf-8", errors="replace"), relative_markdown_path).encode("utf-8")
                         target = save_bytes(content, current_dir, target_name)
                         counters["bytes"] += target.stat().st_size
                         counters["files"] += 1
@@ -1134,6 +1340,8 @@ def download_folder(
                     downloaded_items.append(manifest)
                     manifest["signature"] = provider_item_signature(item)
                     incremental_manifest[item_token] = manifest
+                    if expected_relative_path and expected_relative_path != manifest.get("relativePath", ""):
+                        remove_stale_materialized_file(existing_manifest, root_dir)
                     changed_items.append({**item_metadata, **manifest})
                     counters["changed_files"] += 1
                     remember_item_timing(item_metadata, "changed", item_started_at)
@@ -1162,8 +1370,16 @@ def download_folder(
     start_page_token = str(checkpoint.get("page_token", "") or "")
     start_dir = path_to_dir(output_base, start_path, root_dir)
     walk(start_token, start_dir, start_path, start_page_token)
-    # Keep entries for temporarily inaccessible provider items. They will be retried when their metadata changes or
-    # when an operator removes the stale manifest entry; never delete local teacher content during a background sweep.
+    complete_discovery = (
+        counters.get("limit_reached", 0) == 0
+        and not failed_items
+        and not str(latest_checkpoint.get("page_token", "") or "")
+        and latest_checkpoint.get("current_folder_token") == folder_token
+    )
+    if complete_discovery:
+        cleanup_stale_manifest_items(previous_manifest, discovered_tokens, root_dir)
+        for token in set(previous_manifest) - discovered_tokens:
+            incremental_manifest.pop(token, None)
     save_incremental_manifest(manifest_path, incremental_manifest)
     return {
         "saved_path": str(root_dir),
@@ -1186,7 +1402,7 @@ def download_from_url(
     output_dir: Path,
     *,
     max_files: int = 0,
-    file_extension: str = "docx",
+    file_extension: str = "md",
     resume_checkpoint: Optional[Dict[str, Any]] = None,
     checkpoint_path: str = "",
     manifest_path: str = "",
@@ -1219,6 +1435,9 @@ def download_from_url(
         if file_extension == "md":
             content, suggested_name, size, image_items, image_failures = download_markdown_document(
                 client, token, output_dir)
+            normalized_markdown, image_items = normalize_document_image_items(
+                content.decode("utf-8", errors="replace"), image_items, output_dir)
+            content = normalized_markdown.encode("utf-8")
         else:
             content, suggested_name, size = client.export_docx(token, file_extension)
         canonical_title = str(provider_metadata.get("title", "") or "").strip()
@@ -1228,6 +1447,9 @@ def download_from_url(
         target_name = canonical_title if canonical_title.lower().endswith(extension) else f"{canonical_title}{extension}"
         if not canonical_title:
             target_name = suggested_name or f"{token}{extension}"
+        if file_extension == "md":
+            relative_markdown_path = Path(target_name).as_posix()
+            content = qualify_materialized_markdown(content.decode("utf-8", errors="replace"), relative_markdown_path).encode("utf-8")
         target = save_bytes(content, output_dir, target_name)
         downloaded_item = file_manifest(
             target,

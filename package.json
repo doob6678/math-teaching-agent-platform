@@ -2,6 +2,7 @@
   "dependencies": {
     "@openai/codex": "^0.147.0",
     "@playwright/test": "^1.62.1",
+    "docx": "^9.7.1",
     "playwright": "^1.62.1"
   }
 }

@@ -37,11 +37,21 @@ public class AgentWorkerTaskDispatchService {
     }
 
     /**
-     * Commits retry state plus its next event, or terminal task/workflow state, as one database transaction.
+     * Commits an explicit same-workflow recovery transition plus its durable Worker command.
      *
-     * @return true when a new queued generation was created; false for a terminal task or a lost lease
+     * <p>Recovery is intentionally separate from normal submission because a completed workflow may be moved back to
+     * RUNNING only after the caller has verified that new authorized evidence is available.</p>
      */
     @Transactional
+    public MultiAgentWritingWorkflowRecord submitRecovery(
+            MultiAgentWritingWorkflowRecord workflow, String agentCode, String stageCode, String requestJson) {
+        MultiAgentWritingWorkflowRecord saved = workflowStore.requeue(workflow);
+        AgentWorkerTask task = taskStore.create(
+                saved.workflowId(), saved.tenantId(), agentCode, stageCode, requestJson);
+        outboxStore.enqueue(task);
+        return saved;
+    }
+
     public boolean handleFailure(AgentWorkerTask task, String errorSummary, int maximumAttempts) {
         AgentWorkerTask retry = taskStore.failOrRequeue(task, errorSummary, maximumAttempts);
         if (retry != null) {

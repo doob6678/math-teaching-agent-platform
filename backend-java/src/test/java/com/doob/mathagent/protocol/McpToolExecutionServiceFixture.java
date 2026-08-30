@@ -4,6 +4,16 @@ import com.doob.mathagent.agent.service.AgentRunPlanService;
 import com.doob.mathagent.agent.service.AgentTraceQueryService;
 import com.doob.mathagent.agent.service.HandoutTaskFacade;
 import com.doob.mathagent.agent.service.InMemoryAgentTraceStore;
+import com.doob.mathagent.agent.service.InMemoryMultiAgentWritingWorkflowStore;
+import com.doob.mathagent.agent.service.MultiAgentWritingArtifactExportService;
+import com.doob.mathagent.agent.service.MultiAgentWritingService;
+import com.doob.mathagent.agent.service.PythonHandoutClient;
+import com.doob.mathagent.agent.worker.AgentWorkerTask;
+import com.doob.mathagent.agent.worker.AgentWorkerTaskDispatchService;
+import com.doob.mathagent.agent.worker.AgentWorkerTaskOutboxEvent;
+import com.doob.mathagent.agent.worker.AgentWorkerTaskOutboxStore;
+import com.doob.mathagent.agent.worker.AgentWorkerTaskStore;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.doob.mathagent.infrastructure.ai.AiProviderCatalog;
 import com.doob.mathagent.infrastructure.ai.AiProviderProperties;
 import com.doob.mathagent.knowledge.service.InMemoryKnowledgeQuestionBankStore;
@@ -39,7 +49,9 @@ import com.doob.mathagent.vector.service.TestVectorIndexService;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.List;
+import org.springframework.core.env.StandardEnvironment;
 
 final class McpToolExecutionServiceFixture {
 
@@ -130,6 +142,7 @@ final class McpToolExecutionServiceFixture {
                         checkpointStore,
                         TestVectorIndexService.successful(resourceStore, blockStore))
                 : teacherSourceSyncExecutionService;
+        MultiAgentWritingService writingService = multiAgentWritingService();
         return new McpToolExecutionService(
                 registryProperties,
                 textbookRetrievalService == null ? defaultTextbookRetrievalService() : textbookRetrievalService,
@@ -145,7 +158,84 @@ final class McpToolExecutionServiceFixture {
                 resolvedExecutionService,
                 new KnowledgeQuestionBankService(new InMemoryKnowledgeQuestionBankStore()),
                 handoutTaskFacade(),
+                writingService,
+                multiAgentWritingArtifactExportService(writingService),
                 Runnable::run);
+    }
+
+    private static MultiAgentWritingService multiAgentWritingService() {
+        InMemoryMultiAgentWritingWorkflowStore workflowStore = new InMemoryMultiAgentWritingWorkflowStore();
+        StandardEnvironment environment = new StandardEnvironment();
+        return new MultiAgentWritingService(
+                workflowStore,
+                new AgentWorkerTaskDispatchService(workflowStore, new TestWorkerTaskStore(), new TestOutboxStore()),
+                environment,
+                new PythonHandoutClient(environment, new ObjectMapper()));
+    }
+
+    private static MultiAgentWritingArtifactExportService multiAgentWritingArtifactExportService(
+            MultiAgentWritingService writingService) {
+        return new MultiAgentWritingArtifactExportService(writingService, 30);
+    }
+
+    private static final class TestWorkerTaskStore extends AgentWorkerTaskStore {
+        private TestWorkerTaskStore() {
+            super(null);
+        }
+
+        @Override
+        public AgentWorkerTask create(
+                String workflowId,
+                String tenantId,
+                String agentCode,
+                String stageCode,
+                String requestJson) {
+            Instant now = Instant.now();
+            return new AgentWorkerTask(
+                    workflowId + ":task", workflowId, tenantId, agentCode, stageCode, "QUEUED", 0, 1,
+                    null, null, null, requestJson, null, now, now);
+        }
+    }
+
+    private static final class TestOutboxStore implements AgentWorkerTaskOutboxStore {
+        @Override
+        public void enqueue(AgentWorkerTask task) {
+        }
+
+        @Override
+        public List<AgentWorkerTaskOutboxEvent> claimReady(
+                String publisherId, Instant now, java.time.Duration leaseDuration, int limit) {
+            return List.of();
+        }
+
+        @Override
+        public boolean markPublished(AgentWorkerTaskOutboxEvent event, Instant publishedAt) {
+            return true;
+        }
+
+        @Override
+        public void releaseForRetry(AgentWorkerTaskOutboxEvent event, Instant nextAttemptAt, String errorSummary) {
+        }
+
+        @Override
+        public int recoverExpiredPublishing(Instant now) {
+            return 0;
+        }
+
+        @Override
+        public List<AgentWorkerTask> findOrphanQueued(Instant olderThan, int limit) {
+            return List.of();
+        }
+
+        @Override
+        public long pendingCount() {
+            return 0;
+        }
+
+        @Override
+        public Instant oldestPendingCreatedAt() {
+            return null;
+        }
     }
 
     private static TextbookRetrievalService defaultTextbookRetrievalService() {

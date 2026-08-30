@@ -17,6 +17,9 @@ class HttpAttempt:
     elapsed_ms: int
     ok: bool
     body: dict[str, Any] | list[Any] | str
+    retry_count: int = 0
+    rate_limit_429_count: int = 0
+    total_backoff_ms: int = 0
 
 
 class MathAgentClient:
@@ -67,6 +70,9 @@ class MathAgentClient:
         last_error: Exception | None = None
         response = None
         start = time.perf_counter()
+        retry_count = 0
+        rate_limit_429_count = 0
+        total_backoff_ms = 0
         for attempt in range(self.max_retries + 1):
             try:
                 # `requests` may choose a locale-dependent JSON serialization path on Windows.  Send UTF-8 bytes
@@ -83,14 +89,24 @@ class MathAgentClient:
                     headers=request_headers,
                     timeout=self.timeout,
                 )
-                break
+                if response.status_code != 429 or attempt >= self.max_retries:
+                    break
+                retry_count += 1
+                rate_limit_429_count += 1
+                retry_after = _retry_after_seconds(response.headers.get("Retry-After"))
+                # 429 recovery is deliberately fixed to 1s/2s/4s and never exceeds four seconds.
+                delay = retry_after if retry_after is not None else min(4.0, float(2 ** min(attempt, 2)))
+                delay = min(4.0, max(1.0, delay))
+                total_backoff_ms += int(round(delay * 1000))
+                time.sleep(delay)
             except (requests_exceptions.ConnectionError, requests_exceptions.Timeout) as error:
                 last_error = error
                 if attempt >= self.max_retries:
                     raise
-                # Benchmark runs can overlap with local backend restarts or short proxy hiccups.
-                # Use a bounded exponential backoff so a brief outage does not invalidate the run.
-                time.sleep(min(8.0, 0.8 * (2 ** attempt)))
+                retry_count += 1
+                delay = min(4.0, float(2 ** min(attempt, 2)))
+                total_backoff_ms += int(round(delay * 1000))
+                time.sleep(delay)
         if response is None:
             raise RuntimeError(f"request failed without response: {method} {path}") from last_error
         elapsed_ms = int(round((time.perf_counter() - start) * 1000))
@@ -99,4 +115,23 @@ class MathAgentClient:
             parsed = response.json()
         except ValueError:
             parsed = response.text
-        return HttpAttempt(response.status_code, elapsed_ms, response.ok, parsed)
+        return HttpAttempt(
+            response.status_code,
+            elapsed_ms,
+            response.ok,
+            parsed,
+            retry_count,
+            rate_limit_429_count,
+            total_backoff_ms,
+        )
+
+
+def _retry_after_seconds(value: str | None) -> float | None:
+    """Parse the server's delta-seconds hint without allowing an unbounded sleep."""
+    if not value:
+        return None
+    try:
+        seconds = float(value.strip())
+    except ValueError:
+        return None
+    return seconds if seconds >= 0 else None

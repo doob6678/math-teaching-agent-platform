@@ -33,10 +33,10 @@ def iter_sse_data_events(response: requests.Response) -> Iterator[str]:
         except json.JSONDecodeError:
             return raw_value
 
-    # requests defaults to a 512-byte read buffer. Provider token frames are often much smaller, especially for
-    # Chinese JSON output, so use the smallest read unit to deliver each completed SSE line without local buffering.
-    for raw_line in response.iter_lines(chunk_size=1, decode_unicode=True):
-        line = raw_line.decode("utf-8", "replace") if isinstance(raw_line, bytes) else raw_line
+    # Decode provider bytes explicitly as UTF-8. requests may infer ISO-8859-1 from a relay's
+    # missing or incorrect charset, which corrupts Chinese headings before deterministic validation.
+    for raw_line in response.iter_lines(chunk_size=1, decode_unicode=False):
+        line = raw_line.decode("utf-8", "replace") if isinstance(raw_line, bytes) else str(raw_line)
         if line == "":
             if data_lines:
                 standard_value = "\n".join(data_lines)

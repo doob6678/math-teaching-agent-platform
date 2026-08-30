@@ -22,6 +22,7 @@ import subprocess
 import shutil
 import time
 import threading
+import unicodedata
 import uuid
 import zipfile
 from datetime import datetime, timezone
@@ -55,6 +56,7 @@ PAGE_RENDER_DPI = 180
 # runs while still keeping the real nearest-neighbour request intentionally small.
 RETRIEVAL_LIMIT = 10
 EMBEDDING_BATCH_SIZE = 10
+MILVUS_UPSERT_BATCH_SIZE = 100
 DEFAULT_TIMEOUT_GRACE_SECONDS = 5
 LUNA_MAX_ATTEMPTS = 3
 LUNA_RETRY_INITIAL_DELAY_SECONDS = 2
@@ -347,20 +349,40 @@ def recognized_page_text(response: dict[str, Any], provider: str) -> str:
     return page_text
 
 
-def canonical_question_records(questions: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Keeps one earliest visually sourced record per paper/question number for collision-free Markdown publication."""
+def canonical_question_id(source_sha256: str, question_number: Any) -> str:
+    """Build the final question identity from immutable source bytes and the printed number only."""
+    if not re.fullmatch(r"[0-9a-f]{64}", str(source_sha256 or "")):
+        raise ValueError("canonical question identity requires a lowercase SHA-256 source identity")
+    normalized_number = canonical_question_number(question_number)
+    if not re.fullmatch(r"[1-9]\d{0,2}", normalized_number):
+        raise ValueError("canonical question identity requires a numeric question number")
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"question\n{source_sha256}\n{int(normalized_number)}"))
+
+
+def canonical_question_records(
+        questions: list[dict[str, Any]], with_stats: bool = False) -> list[dict[str, Any]] | tuple[list[dict[str, Any]], int]:
+    """Keep one earliest source-hash/question-number record and optionally report skipped duplicates."""
     selected: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
+    duplicate_count = 0
     for question in sorted(questions, key=lambda item: (
-            str(item["metadata"].get("sourceFile", "")),
+            str(item["metadata"].get("sourceSha256", "")),
             int(item["metadata"].get("pageStart", item["metadata"].get("page", 0))),
-            str(item["metadata"].get("questionNumber", "")))):
-        key = (str(question["metadata"].get("sourceFile", "")), str(question["metadata"].get("questionNumber", "")))
-        if not key[0] or not key[1] or key in seen:
+            str(item["metadata"].get("questionNumber", "")),
+            str(item.get("id", "")))):
+        metadata = question["metadata"]
+        source_identity = str(metadata.get("sourceSha256", "")).strip()
+        number = canonical_question_number(metadata.get("questionNumber"))
+        if not source_identity or not number:
             continue
+        key = (source_identity, number)
+        if key in seen:
+            duplicate_count += 1
+            continue
+        metadata["questionNumber"] = number
         seen.add(key)
         selected.append(question)
-    return selected
+    return (selected, duplicate_count) if with_stats else selected
 
 
 def merge_cross_page_questions(questions: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -369,7 +391,17 @@ def merge_cross_page_questions(questions: list[dict[str, Any]]) -> list[dict[str
     A new printed number is authoritative evidence of a distinct question, so it is never merged even when Luna
     incorrectly marked the previous page as continuing. The merged identity is recalculated from its full evidence.
     """
-    ordered = sorted(questions, key=lambda item: (str(item["metadata"].get("sourceFile", "")), int(item["metadata"].get("pageStart", item["metadata"].get("page", 0))), str(item["id"])))
+    ordered = sorted(
+        questions,
+        key=lambda item: (
+            str(item["metadata"].get("sourceFile", "")),
+            int(item["metadata"].get("pageStart", item["metadata"].get("page", 0))),
+            (0, int(str(item["metadata"].get("questionNumber", ""))))
+            if str(item["metadata"].get("questionNumber", "")).isdigit()
+            else (1, 0),
+            str(item["id"]),
+        ),
+    )
     merged: list[dict[str, Any]] = []
     for current in ordered:
         metadata = current["metadata"]
@@ -379,8 +411,11 @@ def merge_cross_page_questions(questions: list[dict[str, Any]]) -> list[dict[str
             can_merge = (
                 previous_metadata.get("sourceFile") == metadata.get("sourceFile")
                 and bool(previous_metadata.get("continuesToNextPage"))
-                and not str(metadata.get("questionNumber", "")).strip()
                 and int(metadata.get("pageStart", metadata.get("page", 0))) == int(previous_metadata.get("pageEnd", previous_metadata.get("page", 0))) + 1
+                and (
+                    not str(metadata.get("questionNumber", "")).strip()
+                    or str(metadata.get("questionNumber", "")).strip() == str(previous_metadata.get("questionNumber", "")).strip()
+                )
             )
             if can_merge:
                 combined_latex = list(previous_metadata.get("latex", [])) + list(metadata.get("latex", []))
@@ -453,6 +488,286 @@ def copy_source_asset(source: Path, destination: Path) -> None:
         raise RuntimeError(f"copied asset hash mismatch: {destination}")
 
 
+
+def _normalize_locator_text(text: str) -> str:
+    """Normalizes equivalent Unicode and TeX glyphs for locating the same visual stem."""
+    normalized = unicodedata.normalize("NFKC", text)
+    return normalized.translate(str.maketrans({
+        "²": "^2",
+        "³": "^3",
+        "⁴": "^4",
+        "⁵": "^5",
+        "₁": "_1",
+        "₂": "_2",
+        "₃": "_3",
+        "−": "-",
+        "—": "-",
+    }))
+
+
+def _compact_with_offsets(text: str) -> tuple[str, list[int]]:
+    """Builds a normalized whitespace-free view while retaining source offsets."""
+    compact: list[str] = []
+    offsets: list[int] = []
+    for index, character in enumerate(text):
+        normalized = _normalize_locator_text(character)
+        for output_character in normalized:
+            if output_character.isspace():
+                continue
+            compact.append(output_character)
+            offsets.append(index)
+    return "".join(compact), offsets
+
+
+def _page_footer_only(text: str) -> bool:
+    """Treats printed page counters as layout noise when deciding a question's last source page."""
+    without_footer = re.sub(r"(?m)^\s*第\s*\d+\s*页\s*[｜|/]\s*共\s*\d+\s*页\s*$", "", text)
+    return not re.sub(r"\s+", "", without_footer)
+
+
+def _question_signature(question: dict[str, Any]) -> str:
+    """Returns a stable stem prefix for locating the same question in full Terra page text."""
+    text = str(question.get("text", "")).strip()
+    first_line = next((line.strip() for line in text.splitlines() if line.strip()), text)
+    signature = re.sub(r"\\\\[A-Za-z]*$", "", re.sub(r"\\s+", "", first_line)[:96])
+    return signature
+
+
+def _locate_question_in_pages(
+        question: dict[str, Any], page_texts: dict[int, str], joined_pages: list[tuple[int, int, int, str]]) -> tuple[int, int]:
+    """Locates a structured question stem in authoritative pages before falling back to its printed number."""
+    signature = _question_signature(question)
+    preferred_page = int(question["metadata"].get("pageStart", question["metadata"].get("page", 0)) or 0)
+    candidates = sorted(joined_pages, key=lambda item: (0 if item[0] == preferred_page else 1, item[0]))
+    for page, base, _end, page_text in candidates:
+            compact, offsets = _compact_with_offsets(page_text)
+            if signature and len(signature) >= 12:
+                matches = [match.start() for match in re.finditer(re.escape(signature), compact)]
+                if matches:
+                    return base + offsets[matches[0]], page
+
+    number = str(question["metadata"].get("questionNumber", "")).strip()
+    if number.isdigit():
+        anchor = re.compile(rf"(?<!\d){re.escape(number)}\s*[．.、)]\s*")
+        number_matches: list[tuple[int, int]] = []
+        for page, base, _end, page_text in candidates:
+            for matched in anchor.finditer(page_text):
+                number_matches.append((base + matched.start(), page))
+        if number_matches:
+            preferred = [item for item in number_matches if item[1] == preferred_page]
+            if preferred:
+                return preferred[0]
+            if len(number_matches) == 1:
+                return number_matches[0]
+    signature_prefix = signature[:24]
+    if signature_prefix:
+        compact_prefix = re.sub(r"\s+", "", signature_prefix)
+        prefix_matches: list[tuple[int, int]] = []
+        for page, base, _end, page_text in candidates:
+            compact, offsets = _compact_with_offsets(page_text)
+            compact_index = compact.find(compact_prefix)
+            if compact_index >= 0:
+                prefix_matches.append((base + offsets[compact_index], page))
+        if len(prefix_matches) == 1:
+            return prefix_matches[0]
+
+    raise RuntimeError(
+        f"cannot locate structured question stem in Terra page text: "
+        f"{question['metadata'].get('sourceFile', '')} #{number}"
+    )
+
+
+def attach_solution_sections(
+        source_file: Path,
+        page_texts: dict[int, str],
+        paper_questions: list[dict[str, Any]]) -> None:
+    """Appends each解析卷题干's complete answer/solution block from Terra page text.
+
+    The structured visual question is still the identity and stem authority.  PageText is
+    used only for the answer and explanation because long questions can continue through
+    pages containing only （1）/（2）/（3） labels, which are not independent questions.
+    """
+    if "解析卷" not in source_file.name:
+        return
+    if not paper_questions:
+        raise RuntimeError(f"solution paper has no canonical questions: {source_file.name}")
+    ordered_pages = sorted((int(page), str(text)) for page, text in page_texts.items())
+    joined_pages: list[tuple[int, int, int, str]] = []
+    joined_parts: list[str] = []
+    cursor = 0
+    for page, text in ordered_pages:
+        if joined_parts:
+            joined_parts.append("\\n\\n")
+            cursor += 2
+        start = cursor
+        joined_parts.append(text)
+        cursor += len(text)
+        joined_pages.append((page, start, cursor, text))
+    joined = "".join(joined_parts)
+
+    located: list[tuple[int, int, dict[str, Any]]] = []
+    for question in paper_questions:
+        try:
+            position, page = _locate_question_in_pages(question, page_texts, joined_pages)
+        except RuntimeError:
+            metadata = question["metadata"]
+            page = int(metadata.get("pageStart", metadata.get("page", 0)) or 0)
+            metadata["solutionAttached"] = False
+            metadata["solutionAttachmentStatus"] = "UNLOCATED_STRUCTURED_STEM"
+            continue
+        located.append((position, page, question))
+    located.sort(key=lambda item: item[0])
+    located_starts = {id(question): start for start, _page, question in located}
+
+    for index, (start, start_page, question) in enumerate(located):
+        if index + 1 < len(located):
+            next_start = located[index + 1][0]
+        else:
+            next_start = len(joined)
+            current_number = str(question["metadata"].get("questionNumber", ""))
+            following = [
+                item for item in paper_questions
+                if id(item) not in located_starts
+                and str(item["metadata"].get("questionNumber", "")) > current_number
+            ]
+            if following:
+                next_page = min(int(item["metadata"].get("pageStart", 0) or 0) for item in following)
+                next_page_bounds = [page_start for page, page_start, _page_end, _text in joined_pages if page == next_page]
+                if next_page_bounds:
+                    next_start = min(next_start, next_page_bounds[0])
+        end = next_start
+        segment = joined[start:end]
+        source_pages: list[int] = []
+        for page, page_start, page_end, page_text in joined_pages:
+            overlap_start = max(start, page_start)
+            overlap_end = min(end, page_end)
+            if overlap_start < overlap_end and not _page_footer_only(joined[overlap_start:overlap_end]):
+                source_pages.append(page)
+        if not source_pages:
+            source_pages = [start_page]
+        metadata = question["metadata"]
+        metadata["pageStart"] = source_pages[0]
+        metadata["pageEnd"] = source_pages[-1]
+        metadata["sourcePages"] = source_pages
+        metadata["crossPageContinuity"] = {
+            "present": len(source_pages) > 1,
+            "pageBoundaries": [
+                {"fromPage": page, "toPage": page + 1} for page in source_pages[:-1]
+            ],
+        }
+        solution_start = segment.find("【答案】")
+        if solution_start < 0:
+            metadata["solutionAttached"] = False
+            continue
+        solution = segment[solution_start:].strip()
+        solution = re.sub(
+            r"(?m)^\s*第\s*\d+\s*页\s*[｜|/]\s*共\s*\d+\s*页\s*$",
+            "",
+            solution,
+        ).strip()
+        metadata["solutionAttached"] = True
+        question["text"] = f"{str(question['text']).strip()}\\n\\n{solution}"
+
+
+def reconcile_question_numbers_from_page_text(
+        questions: list[dict[str, Any]], page_texts_by_source: dict[str, dict[int, str]]) -> None:
+    """Repairs visual number slips by binding each structured stem to its printed page anchor."""
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for question in questions:
+        source_name = str(question["metadata"].get("sourceFile", ""))
+        grouped.setdefault(source_name, []).append(question)
+    anchor_pattern = re.compile(r"(?m)^\s*([1-9]\d{0,2})\s*[．.、)]\s*")
+    for source_name, source_questions in grouped.items():
+        page_texts = page_texts_by_source.get(source_name, {})
+        if not page_texts:
+            continue
+        ordered_pages = sorted((int(page), str(text)) for page, text in page_texts.items())
+        joined_pages: list[tuple[int, int, int, str]] = []
+        cursor = 0
+        for page, text in ordered_pages:
+            if joined_pages:
+                cursor += 2
+            start = cursor
+            cursor += len(text)
+            joined_pages.append((page, start, cursor, text))
+        for question in source_questions:
+            try:
+                position, page = _locate_question_in_pages(question, page_texts, joined_pages)
+            except RuntimeError:
+                continue
+            page_start, page_end, page_text = next(
+                (start, end, text) for candidate_page, start, end, text in joined_pages if candidate_page == page
+            )
+            local_position = position - page_start
+            matches = list(anchor_pattern.finditer(page_text[:local_position]))
+            if not matches:
+                continue
+            number = matches[-1].group(1)
+            metadata = question["metadata"]
+            old_number = str(metadata.get("questionNumber", "")).strip()
+            if old_number != number:
+                metadata["questionNumber"] = number
+                identity = f"{source_name}\\n{page}\\n{number}\\n{question['text']}"
+                question["id"] = str(uuid.uuid5(uuid.NAMESPACE_URL, identity))
+            metadata["pageStart"] = page
+
+
+def repair_question_number_collisions(
+        questions: list[dict[str, Any]], with_stats: bool = False) -> list[dict[str, Any]] | tuple[list[dict[str, Any]], int]:
+    """Repairs uniquely inferable printed-number collisions and reports handled collisions.
+
+    The decision uses source, page order, and numeric selectors only. It never inspects answer
+    or explanation text, so incomplete solution pages remain valid question evidence. The
+    optional count is the number of duplicate-number records repaired or removed, not a
+    semantic duplicate count.
+    """
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for question in questions:
+        grouped.setdefault(str(question["metadata"].get("sourceFile", "")), []).append(question)
+    retained: list[dict[str, Any]] = []
+    collision_count = 0
+    for source_name, source_questions in grouped.items():
+        ordered = sorted(
+            source_questions,
+            key=lambda item: (
+                int(item["metadata"].get("pageStart", item["metadata"].get("page", 0))),
+                str(item["id"]),
+            ),
+        )
+        numbers = [str(item["metadata"].get("questionNumber", "")).strip() for item in ordered]
+        if not numbers or any(not number.isdigit() for number in numbers):
+            retained.extend(ordered)
+            continue
+        expected = {str(value) for value in range(min(map(int, numbers)), max(map(int, numbers)) + 1)}
+        missing = sorted(expected - set(numbers), key=int)
+        duplicate_positions: list[int] = []
+        seen: set[str] = set()
+        for index, number in enumerate(numbers):
+            if number in seen:
+                duplicate_positions.append(index)
+            else:
+                seen.add(number)
+        if not duplicate_positions:
+            retained.extend(ordered)
+            continue
+        collision_count += len(duplicate_positions)
+        if len(missing) == len(duplicate_positions):
+            for index, number in zip(duplicate_positions, missing, strict=True):
+                question = ordered[index]
+                metadata = question["metadata"]
+                metadata["questionNumber"] = number
+                page = int(metadata.get("pageStart", metadata.get("page", 0)))
+                question["id"] = str(uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    f"{source_name}\\n{page}\\n{number}\\n{question['text']}",
+                ))
+            retained.extend(ordered)
+            continue
+        duplicate_indexes = set(duplicate_positions)
+        retained.extend(question for index, question in enumerate(ordered) if index not in duplicate_indexes)
+    return (retained, collision_count) if with_stats else retained
+
+
 def publish_canonical_paper(
         corpus_root: Path,
         source_file: Path,
@@ -463,9 +778,7 @@ def publish_canonical_paper(
     """发布单份试卷的可读全文、逐题材料及来源图片，作为唯一 RAG 证据目录。"""
     paper_root = corpus_root / canonical_paper_directory_name(source_file)
     if paper_root.exists():
-        # A durable evidence finalization can reach the vector stage after every canonical
-        # file was atomically published. Never overwrite that evidence: reuse it only when
-        # the manifest proves it belongs to this exact source PDF.
+        # Recovery must refresh generated question Markdown and hashes after solution enrichment.
         manifest_path = paper_root / "source-manifest.json"
         document_path = paper_root / "document.md"
         if not manifest_path.is_file() or not document_path.is_file():
@@ -474,8 +787,12 @@ def publish_canonical_paper(
         if (existing_manifest.get("documentFullName") != source_file.name
                 or existing_manifest.get("sourceSha256") != source_sha256):
             raise FileExistsError(f"canonical paper output belongs to another source: {paper_root}")
-        return {"paperRoot": paper_root, "documentPath": document_path, "content": document_path.read_text(encoding="utf-8")}
-    paper_root.mkdir(parents=True)
+        for generated_path in (paper_root / "questions").glob("q-*.md"):
+            generated_path.unlink()
+        for generated_path in (paper_root / "figures").glob("q-*.*"):
+            generated_path.unlink()
+    else:
+        paper_root.mkdir(parents=True)
     paper_questions = [item for item in questions if item["metadata"].get("sourceFile") == source_file.name]
     document_lines = [f"# {source_file.name}", "", f"- 来源 SHA-256：`{source_sha256}`", "- 正文权威来源：Terra 页级视觉转写。", ""]
     page_index: list[dict[str, Any]] = []
@@ -673,6 +990,71 @@ def milvus_post(uri: str, token: str, path: str, body: dict[str, Any], timeout: 
     raise RuntimeError(f"Milvus {path} failed after {MILVUS_MAX_ATTEMPTS} attempts: {last_error}") from last_error
 
 
+def milvus_upsert_batches(
+        uri: str, token: str, collection: str, entities: list[dict[str, Any]], batch_size: int, timeout: int) -> int:
+    """Upsert bounded slices so retries and request memory stay scoped to one batch."""
+    if batch_size < 1:
+        raise ValueError("Milvus upsert batch size must be positive")
+    batch_count = 0
+    for start in range(0, len(entities), batch_size):
+        batch = entities[start:start + batch_size]
+        if not batch:
+            continue
+        milvus_post(uri, token, "/v2/vectordb/entities/upsert", {
+            "collectionName": collection,
+            "data": batch,
+        }, timeout)
+        batch_count += 1
+    return batch_count
+
+
+def milvus_filter_expression(field: str, value: str) -> str:
+    """Build a JSON-quoted Milvus metadata equality filter without interpolating raw input."""
+    if field not in {"sourceFile", "documentFullName"} or not value:
+        raise ValueError("source cleanup accepts only non-empty source provenance fields")
+    return f'metadata["{field}"] == {json.dumps(value, ensure_ascii=False)}'
+
+
+def milvus_source_filter(source_name: str) -> str:
+    """Match both legacy and canonical provenance fields in one server-side expression."""
+    if not source_name:
+        raise ValueError("source cleanup requires a non-empty source name")
+    return "(" + " or ".join(
+        milvus_filter_expression(field, source_name) for field in ("sourceFile", "documentFullName")
+    ) + ")"
+
+
+def milvus_query_count(uri: str, token: str, collection: str, expression: str, timeout: int) -> int:
+    """Ask Milvus for a server-side filtered count without returning entity rows."""
+    payload = milvus_post(uri, token, "/v2/vectordb/entities/query", {
+        "collectionName": collection,
+        "filter": expression,
+        "outputFields": ["count(*)"],
+    }, timeout)
+    rows = payload.get("data", [])
+    if not isinstance(rows, list) or not rows:
+        return 0
+    return int(rows[0].get("count(*)", 0) or 0)
+
+
+def cleanup_source_records(
+        uri: str, token: str, collection: str, source_names: list[str], timeout: int) -> dict[str, int]:
+    """Replace only explicitly selected source provenance; never enumerate the collection client-side."""
+    if collection != DEFAULT_COLLECTION:
+        raise ValueError("source cleanup is restricted to the canonical gaokao collection")
+    matched = 0
+    deleted = 0
+    for source_name in sorted(set(source_names)):
+        expression = milvus_source_filter(source_name)
+        count = milvus_query_count(uri, token, collection, expression, timeout)
+        matched += count
+        if count:
+            milvus_post(uri, token, "/v2/vectordb/entities/delete", {
+                "collectionName": collection,
+                "filter": expression,
+            }, timeout)
+            deleted += count
+    return {"matchedCount": matched, "deletedCount": deleted}
 def search_hits(response: dict[str, Any]) -> list[dict[str, Any]]:
     """Normalize Milvus v2's one-query nested rows before checking the deterministic inserted ID.
 
@@ -774,7 +1156,11 @@ def main() -> None:
     parser.add_argument("--luna-bridge-container",
                         help="Deprecated alias for --vision-bridge-container.")
     parser.add_argument("--finalize-run-id", help="resume only the embedding, Milvus and recall stages from durable page evidence")
+    parser.add_argument("--milvus-upsert-batch-size", type=int, default=MILVUS_UPSERT_BATCH_SIZE,
+                        help="maximum number of entities per Milvus upsert request")
     arguments = parser.parse_args()
+    if arguments.milvus_upsert_batch_size < 1:
+        parser.error("--milvus-upsert-batch-size must be positive")
     config = json.loads(arguments.config.read_text(encoding="utf-8"))
     if config.get("subject") != "MATHEMATICS":
         raise ValueError("only MATHEMATICS ingestion configurations are accepted")
@@ -821,6 +1207,7 @@ def main() -> None:
         pdf.name: load_question_assets(asset_root_by_file[pdf.name], pdf)
         for pdf in files
     }
+    source_hash_by_name = {pdf.name: sha256_file(pdf) for pdf in files}
     paper_type = str(config["paperType"]).lower()
     run_id = arguments.finalize_run_id or f"{arguments.vision_provider}-{paper_type}-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}"
     run_root = TRANSCRIPTION_RUN_ROOT / run_id
@@ -849,7 +1236,10 @@ def main() -> None:
                 raise RuntimeError(f"recovery evidence image hash validation failed: {evidence_file}")
             if evidence.get("provider") != arguments.vision_provider or evidence.get("model") != arguments.vision_model:
                 raise RuntimeError("recovery evidence provider/model does not match this finalization request")
-            all_questions.extend(recognized_questions(evidence["response"], evidence["sourceFile"], int(evidence["page"]), arguments.vision_provider, question_assets_by_file[evidence["sourceFile"]]))
+            page_questions = recognized_questions(evidence["response"], evidence["sourceFile"], int(evidence["page"]), arguments.vision_provider, question_assets_by_file[evidence["sourceFile"]])
+            for question in page_questions:
+                question["metadata"]["sourceSha256"] = source_hash_by_name[evidence["sourceFile"]]
+            all_questions.extend(page_questions)
             model_calls.append({"taskSequence": evidence.get("taskSequence"), "workerThread": evidence.get("workerThread"), "sourceFile": evidence["sourceFile"], "page": evidence["page"], "pageText": recognized_page_text(evidence["response"], arguments.vision_provider), "usage": evidence.get("usage", {}), "elapsedMs": evidence.get("elapsedMs"), "attemptCount": len(evidence.get("attempts", [])), "recoveredFromEvidence": True})
     else:
         run_root.mkdir(parents=True, exist_ok=False)
@@ -866,6 +1256,8 @@ def main() -> None:
                 _sequence, pdf, page, _paper_root = futures[future]
                 try:
                     questions, model_call = future.result()
+                    for question in questions:
+                        question["metadata"]["sourceSha256"] = source_hash_by_name[pdf.name]
                     all_questions.extend(questions)
                     model_calls.append(model_call)
                 except Exception as error:
@@ -873,11 +1265,20 @@ def main() -> None:
         if failures:
             raise RuntimeError("one or more page tasks failed; see page-level failure evidence: " + " | ".join(failures))
     model_calls.sort(key=lambda call: call["taskSequence"])
+    page_texts_by_source = {
+        source_file.name: {
+            int(call["page"]): str(call["pageText"])
+            for call in model_calls
+            if call["sourceFile"] == source_file.name
+        }
+        for source_file in files
+    }
     all_questions = merge_cross_page_questions(all_questions)
     # An unnumbered page fragment is valid only while being merged into an explicit
     # preceding continuation. It is never a standalone canonical question/vector row.
     all_questions = [item for item in all_questions if str(item["metadata"].get("questionNumber", "")).isdigit()]
-    all_questions = canonical_question_records(all_questions)
+    all_questions, collision_count = repair_question_number_collisions(all_questions, with_stats=True)
+    all_questions, duplicate_skipped_count = canonical_question_records(all_questions, with_stats=True)
     if not all_questions:
         raise RuntimeError(f"{arguments.vision_provider} completed but returned no non-empty questions; refusing to create an empty success report")
     if arguments.vision_provider != "terra":
@@ -890,6 +1291,18 @@ def main() -> None:
         expected_pages = set(range(1, page_count(source_file) + 1))
         if set(page_texts) != expected_pages:
             raise RuntimeError(f"Terra transcription is incomplete for canonical publication: {source_file.name}")
+        paper_questions = [
+            item for item in all_questions
+            if item["metadata"].get("sourceFile") == source_file.name
+        ]
+        attach_solution_sections(source_file, page_texts, paper_questions)
+        document_ref = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{source_file.name}\n{source_hash}"))
+        for question in paper_questions:
+            metadata = question["metadata"]
+            metadata["documentFullName"] = source_file.name
+            metadata["documentRef"] = document_ref
+            metadata["sourceSha256"] = source_hash
+            question["id"] = canonical_question_id(source_hash, metadata.get("questionNumber"))
         published = publish_canonical_paper(
             evidence_root,
             source_file,
@@ -898,13 +1311,6 @@ def main() -> None:
             all_questions,
             asset_root_by_file[source_file.name],
         )
-        document_ref = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{source_file.name}\n{source_hash}"))
-        for question in all_questions:
-            metadata = question["metadata"]
-            if metadata.get("sourceFile") == source_file.name:
-                metadata["documentFullName"] = source_file.name
-                metadata["documentRef"] = document_ref
-                metadata["sourceSha256"] = source_hash
         canonical_documents.append({
             "id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"document\n{source_file.name}\n{source_hash}")),
             "text": published["content"],
@@ -922,22 +1328,27 @@ def main() -> None:
     milvus_uri = setting("MATH_AGENT_VECTOR_INDEX_MILVUS_URI", dotenv, DEFAULT_MILVUS_URI)
     milvus_token = setting("MATH_AGENT_MILVUS_TOKEN", dotenv) or ("root:" + setting("MATH_AGENT_MILVUS_ROOT_PASSWORD", dotenv) if setting("MATH_AGENT_MILVUS_ROOT_PASSWORD", dotenv) else "")
     ensure_collection(milvus_uri, milvus_token, arguments.collection, arguments.timeout_seconds)
+    cleanup_stats = cleanup_source_records(
+        milvus_uri, milvus_token, arguments.collection, [pdf.name for pdf in files], arguments.timeout_seconds)
     entities = [{PRIMARY_KEY_FIELD: item["id"], VECTOR_FIELD: vector, TEXT_FIELD: item["text"], METADATA_FIELD: vector_metadata(item)} for item, vector in zip(index_records, vectors, strict=True)]
-    # Upsert makes evidence recovery idempotent: a repeat never creates a second
-    # vector for the deterministic question key after an interrupted finalization.
-    milvus_post(milvus_uri, milvus_token, "/v2/vectordb/entities/upsert", {"collectionName": arguments.collection, "data": entities}, arguments.timeout_seconds)
+    # Upsert makes evidence recovery idempotent while the bounded helper avoids a
+    # single request whose retry would resend the entire publication batch.
+    upsert_batch_count = milvus_upsert_batches(
+        milvus_uri, milvus_token, arguments.collection, entities,
+        arguments.milvus_upsert_batch_size, arguments.timeout_seconds)
     # Milvus v2's REST FlushReq accepts one collectionName (unlike older SDK APIs
     # which exposed a plural collectionNames list), so keep this payload versioned
     # to the same v2 REST contract used by every other operation in this script.
     milvus_post(milvus_uri, milvus_token, "/v2/vectordb/collections/flush", {"collectionName": arguments.collection}, arguments.timeout_seconds)
     query_vector = embed_all([all_questions[0]["text"]], setting("MATH_AGENT_EMBEDDING_BASE_URL", dotenv, DEFAULT_EMBEDDING_URL), worker_key, arguments.timeout_seconds)[0]
-    recalled = milvus_post(milvus_uri, milvus_token, "/v2/vectordb/entities/search", {"collectionName": arguments.collection, "data": [query_vector], "annsField": VECTOR_FIELD, "limit": RETRIEVAL_LIMIT, "outputFields": [PRIMARY_KEY_FIELD, TEXT_FIELD, METADATA_FIELD]}, arguments.timeout_seconds)
+    recall_limit = RETRIEVAL_LIMIT
+    recalled = milvus_post(milvus_uri, milvus_token, "/v2/vectordb/entities/search", {"collectionName": arguments.collection, "data": [query_vector], "annsField": VECTOR_FIELD, "limit": recall_limit, "outputFields": [PRIMARY_KEY_FIELD, TEXT_FIELD, METADATA_FIELD]}, arguments.timeout_seconds)
     hits = search_hits(recalled)
     if not hits or not any(hit.get("id") == all_questions[0]["id"] or hit.get("entity", {}).get(PRIMARY_KEY_FIELD) == all_questions[0]["id"] for hit in hits):
         recalled_ids = [str(hit.get("id") or hit.get("entity", {}).get(PRIMARY_KEY_FIELD) or "") for hit in hits]
         raise RuntimeError(f"real Milvus recall did not return the inserted query question; queryId={all_questions[0]['id']}; hitIds={recalled_ids}")
     totals = {name: sum(int(call["usage"].get(name, 0) or 0) for call in model_calls) for name in ("prompt_tokens", "completion_tokens", "total_tokens")}
-    report = {"timestampUtc": utc_now(), "runId": run_id, "provider": arguments.vision_provider, "model": arguments.vision_model, "selectedFileCount": len(files), "visionCallCount": len(model_calls), "questionCount": len(all_questions), "fullDocumentCount": len(canonical_documents), "usage": totals, "concurrency": {"environmentVariable": GLOBAL_AI_CONCURRENCY_ENVIRONMENT_VARIABLE, "globalLimit": global_ai_concurrency, "effectivePageWorkers": requested_page_workers, "retryScope": "per_request_only", "maxAttemptsPerRequest": LUNA_MAX_ATTEMPTS}, "collection": arguments.collection, "realRecall": {"queryQuestionId": all_questions[0]["id"], "hitCount": len(hits), "hits": hits}, "modelCalls": model_calls, "canonicalEvidenceRoot": str(evidence_root)}
+    report = {"timestampUtc": utc_now(), "runId": run_id, "provider": arguments.vision_provider, "model": arguments.vision_model, "selectedFileCount": len(files), "visionCallCount": len(model_calls), "questionCount": len(all_questions), "fullDocumentCount": len(canonical_documents), "duplicateSkippedCount": duplicate_skipped_count, "collisionCount": collision_count, "cleanup": cleanup_stats, "usage": totals, "concurrency": {"environmentVariable": GLOBAL_AI_CONCURRENCY_ENVIRONMENT_VARIABLE, "globalLimit": global_ai_concurrency, "effectivePageWorkers": requested_page_workers, "retryScope": "per_request_only", "maxAttemptsPerRequest": LUNA_MAX_ATTEMPTS}, "collection": arguments.collection, "milvusWrite": {"upsertEntityCount": len(entities), "upsertBatchSize": arguments.milvus_upsert_batch_size, "upsertBatchCount": upsert_batch_count, "flushCount": 1, "clientFullCollectionLoad": False}, "realRecall": {"queryQuestionId": all_questions[0]["id"], "hitCount": len(hits), "hits": hits}, "modelCalls": model_calls, "canonicalEvidenceRoot": str(evidence_root)}
     report_path = TRANSCRIPTION_RUN_ROOT / f"{run_id}-report.json"
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps({"report": str(report_path), "runId": run_id, "questionCount": len(all_questions), "usage": totals, "recallHitCount": len(hits)}, ensure_ascii=False))

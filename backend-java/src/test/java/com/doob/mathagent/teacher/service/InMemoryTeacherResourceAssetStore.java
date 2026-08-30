@@ -95,4 +95,11 @@ public class InMemoryTeacherResourceAssetStore implements TeacherResourceAssetSt
                 .filter(asset -> asset.tenantId().equals(tenantId) && asset.documentId().equals(documentId))
                 .toList();
     }
+
+    @Override
+    public List<TeacherResourceAssetResponse> listByLogicalPath(String tenantId, String logicalPath) {
+        return assets.values().stream()
+                .filter(asset -> asset.tenantId().equals(tenantId) && asset.sourcePath().equals(logicalPath))
+                .toList();
+    }
 }

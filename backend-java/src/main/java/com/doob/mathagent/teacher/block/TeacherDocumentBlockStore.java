@@ -1,6 +1,5 @@
 package com.doob.mathagent.teacher.block;
 
-import com.doob.mathagent.teacher.block.TeacherDocumentBlockResponse;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -10,52 +9,84 @@ import java.util.Map;
  */
 public interface TeacherDocumentBlockStore {
 
-    /**
-     * Replaces active blocks for a document with newly parsed blocks.
-     *
-     * @param tenantId tenant id used by callers for isolation checks
-     * @param documentId source document id
-     * @param blocks parsed active blocks
-     * @return saved active blocks
-     */
+    /** Replaces active blocks for one already-persisted FILE document. */
     List<TeacherDocumentBlockResponse> replaceActiveBlocks(
             String tenantId,
             String documentId,
             List<TeacherDocumentBlockResponse> blocks);
 
-    /**
-     * Lists active blocks for a document.
-     *
-     * @param tenantId tenant id used by callers for isolation checks
-     * @param documentId source document id
-     * @return active blocks ordered by blockOrder
-     */
+    /** Starts a bounded replacement generation for one FILE by retiring its prior active blocks. */
+    default void beginFileReplacement(String tenantId, String fileDocumentId) {
+        // Stores without generation support retain the compatibility replacement contract.
+    }
+
+    /** Writes one bounded batch into a replacement generation without loading the FILE's old blocks. */
+    default List<TeacherDocumentBlockResponse> replaceActiveBlockBatch(
+            String tenantId,
+            String fileDocumentId,
+            List<TeacherDocumentBlockResponse> blocks) {
+        return replaceActiveBlocks(tenantId, fileDocumentId, blocks);
+    }
+
+    /** Completes a bounded FILE replacement after all batches have been persisted. */
+    default void completeFileReplacement(String tenantId, String fileDocumentId) {
+        // Retired blocks were already made inactive by beginFileReplacement.
+    }
+
+    /** Lists active blocks for a document; retained for management and compatibility paths, not bounded search. */
     List<TeacherDocumentBlockResponse> listByDocument(String tenantId, String documentId);
 
-    /**
-     * Removes parsed source content after an archived source has had its vectors removed.
-     *
-     * <p>The source-document row remains as a compact audit record, while its raw text, normalized text and
-     * block-level references must not remain available through the local corpus.</p>
-     *
-     * @param tenantId tenant boundary
-     * @param documentId archived source document id
-     */
+    /** Returns selected blocks by persisted block id, bounded by the caller's id list. */
+    default List<TeacherDocumentBlockResponse> listBlocksByIds(
+            String tenantId, String fileDocumentId, List<String> blockIds, int limit) {
+        return List.of();
+    }
+
+    /** Returns a bounded block-order window from one FILE document. */
+    default List<TeacherDocumentBlockResponse> listEvidenceWindow(
+            String tenantId, String fileDocumentId, int centerBlockOrder, int radius, int limit) {
+        return List.of();
+    }
+
+    /** Returns a bounded page of active blocks for one FILE document. */
+    default List<TeacherDocumentBlockResponse> listBlocksForFile(
+            String tenantId, String fileDocumentId, int limit, Integer afterBlockOrder) {
+        return List.of();
+    }
+
+    /** Returns BM25-ranked active blocks from visible physical Feishu FILE documents. */
+    default List<TeacherDocumentBlockResponse> searchFileBlocksByLexicalTerms(
+            String tenantId, String viewerRole, String viewerSubjectId, List<String> terms, int limit) {
+        return searchFileBlocksByLexicalTerms(
+                tenantId, viewerRole, viewerSubjectId, terms, limit,
+                com.doob.mathagent.teacher.search.TeacherResourceSearchFilter.EMPTY);
+    }
+
+    /** Returns BM25-ranked active FILE blocks while preserving caller-supplied document and scope boundaries. */
+    default List<TeacherDocumentBlockResponse> searchFileBlocksByLexicalTerms(
+            String tenantId,
+            String viewerRole,
+            String viewerSubjectId,
+            List<String> terms,
+            int limit,
+            com.doob.mathagent.teacher.search.TeacherResourceSearchFilter filter) {
+        return List.of();
+    }
+
+    /** Returns a SQL-bounded graph-tag representative block for each visible physical FILE. */
+    default List<TeacherDocumentBlockResponse> searchFileBlocksByGraphTags(
+            String tenantId, String viewerRole, String viewerSubjectId, List<String> tagNames, int limit) {
+        return List.of();
+    }
+
+    /** Removes parsed source content after an archived source has had its vectors removed. */
     default void purgeDocumentContent(String tenantId, String documentId) {
         // Lightweight stores that do not retain block data need no extra work.
     }
 
     /**
-     * Lists active blocks for multiple documents.
-     *
-     * <p>Teacher search uses this to avoid an N+1 query pattern during stage-one candidate admission. The default
-     * implementation preserves compatibility for lightweight/in-memory stores by delegating to
-     * {@link #listByDocument(String, String)} one document at a time; database-backed stores should override it with a
-     * single batched query.</p>
-     *
-     * @param tenantId tenant id used by callers for isolation checks
-     * @param documentIds source document ids in preferred caller order
-     * @return active blocks keyed by document id
+     * Legacy multi-document API. It is retained for management/compatibility callers only; search must use the bounded
+     * file APIs above so a shared ROOT never causes a full-corpus block load.
      */
     default Map<String, List<TeacherDocumentBlockResponse>> listByDocuments(String tenantId, List<String> documentIds) {
         Map<String, List<TeacherDocumentBlockResponse>> blocksByDocumentId = new LinkedHashMap<>();
@@ -71,5 +102,3 @@ public interface TeacherDocumentBlockStore {
         return blocksByDocumentId;
     }
 }
-
-

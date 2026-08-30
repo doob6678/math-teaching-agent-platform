@@ -117,6 +117,17 @@ public class MyBatisTeacherResourceAssetStore implements TeacherResourceAssetSto
     }
 
     @Override
+    public List<TeacherResourceAssetResponse> listByLogicalPath(String tenantId, String logicalPath) {
+        if (logicalPath == null || logicalPath.isBlank()) {
+            return List.of();
+        }
+        return mapper.selectList(new LambdaQueryWrapper<TeacherResourceAssetEntity>()
+                        .eq(TeacherResourceAssetEntity::getTenantId, tenantId)
+                        .eq(TeacherResourceAssetEntity::getSourcePath, logicalPath))
+                .stream().map(MyBatisTeacherResourceAssetStore::toResponse).toList();
+    }
+
+    @Override
     public void purgeDocumentAssets(String tenantId, String documentId) {
         Long numericDocumentId = parseId(documentId);
         if (numericDocumentId == null) {

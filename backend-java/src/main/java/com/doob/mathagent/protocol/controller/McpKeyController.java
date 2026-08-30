@@ -11,6 +11,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import java.util.List;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -79,6 +80,18 @@ public class McpKeyController {
     public McpClientKeyRevocationResponse revokeKey(@PathVariable String keyId, HttpServletRequest request) {
         try {
             return keyService.revokeKey(authenticatedSubject(request), keyId);
+        } catch (IllegalArgumentException exception) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, exception.getMessage(), exception);
+        }
+    }
+
+    /**
+     * Physically deletes one owned MCP key. Only keys already in revoked status can be deleted.
+     */
+    @DeleteMapping("/api/mcp/keys/{keyId}")
+    public McpClientKeyRevocationResponse deleteKey(@PathVariable String keyId, HttpServletRequest request) {
+        try {
+            return keyService.deleteKey(authenticatedSubject(request), keyId);
         } catch (IllegalArgumentException exception) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, exception.getMessage(), exception);
         }

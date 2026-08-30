@@ -13,10 +13,13 @@ import com.doob.mathagent.teacher.block.TeacherDocumentBlockResponse;
 import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
 import com.doob.mathagent.teacher.search.TeacherResourceBlockSearchResponse;
 import com.doob.mathagent.teacher.service.InMemoryTeacherDocumentBlockStore;
+import com.doob.mathagent.teacher.service.InMemoryTeacherResourceAssetStore;
 import com.doob.mathagent.teacher.service.InMemoryTeacherResourceStore;
+import com.doob.mathagent.teacher.service.TeacherResourceAssetService;
 import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService;
 import com.doob.mathagent.teacher.service.TeacherSourceFileReader;
 import com.doob.mathagent.teacher.sync.TeacherSourceSyncProperties;
+import com.doob.mathagent.teacher.vo.TeacherResourceAssetResponse;
 import com.doob.mathagent.resources.TextbookAuthorizedBlockReader;
 import com.doob.mathagent.resources.TextbookCatalogReader;
 import com.doob.mathagent.resources.TextbookChunkReader;
@@ -24,6 +27,8 @@ import com.doob.mathagent.teaching.TeachingEvidence;
 import com.doob.mathagent.teaching.TeachingTaskStatus;
 import com.doob.mathagent.teaching.service.TeachingTaskStore;
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -32,6 +37,7 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import javax.imageio.ImageIO;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.http.HttpStatus;
@@ -136,12 +142,16 @@ class AgentToolBrokerControllerTest {
                 "TEACHER_PRIVATE", "synced", "parsed", "ready", "ready", "md", List.of(), "TEXT"));
         blockStore.replaceActiveBlocks("tenant", documentId, List.of(new TeacherDocumentBlockResponse(
                 "teacher-block-001", documentId, "lesson.md", "markdown", 0, "函数", "最小值", 1, null,
-                "", "reference", "配方法可以确定二次函数的最小值。", "配方法可以确定二次函数的最小值。",
-                "[]", "[]", "[]", "[]", "checksum", 1.0d, "active")));
+                "", "reference", "配方法可以确定二次函数的最小值。" + "![](IMAJES/image-001.jpg)",
+                "配方法可以确定二次函数的最小值。" + "![](IMAJES/image-001.jpg)",
+                "[{\"markdownLine\":\"![](IMAJES/image-001.jpg)\",\"logicalPath\":\"函数/最值/IMAJES/image-001.jpg\"}]",
+                "[]", "[]", "[]", "checksum", 1.0d, "active")));
         TeacherResourceBlockSearchService searchService = TeacherResourceBlockSearchServiceFixture.service(resourceStore, blockStore);
-        Path sourceRoot = tempDir.resolve("teacher-source");
-        Files.createDirectories(sourceRoot);
-        Files.writeString(sourceRoot.resolve("lesson.md"), "配方法可以确定二次函数的最小值。", StandardCharsets.UTF_8);
+        Path sourceRoot = tempDir.resolve("staging").resolve("teacher-source");
+        Files.createDirectories(sourceRoot.resolve("IMAJES"));
+        Files.writeString(sourceRoot.resolve("lesson.md"),
+                "配方法可以确定二次函数的最小值。![](IMAJES/image-001.jpg)", StandardCharsets.UTF_8);
+        Files.write(sourceRoot.resolve("IMAJES/image-001.jpg"), new byte[] {(byte) 0xff, (byte) 0xd8, (byte) 0xff});
         TeacherSourceFileReader sourceReader = new TeacherSourceFileReader(new TeacherSourceSyncProperties(
                 "", tempDir.resolve("download.py"), tempDir.resolve("appkey"), tempDir.resolve("staging"),
                 tempDir.resolve("assets"), 1, 30));
@@ -158,9 +168,19 @@ class AgentToolBrokerControllerTest {
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> items = (List<Map<String, Object>>) search.get("items");
         assertThat(items).singleElement().satisfies(item -> {
+            String excerpt = String.valueOf(item.get("excerpt"));
             assertThat(item).containsEntry("ref", evidenceRef(workerKey, runId, taskStore.findByTaskId(runId)
                             .orElseThrow().evidence().getFirst()))
                     .containsEntry("documentRef", documentRef(workerKey, runId, documentId));
+            assertThat(excerpt).contains("配方法可以确定二次函数的最小值。", "![source-image:", "](IMAJES/image-001.jpg)")
+                    .doesNotContain("asset-", documentId, "函数/最值", "![](IMAJES/image-001.jpg)");
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> imageRefs = (List<Map<String, Object>>) item.get("imageRefs");
+            assertThat(imageRefs).containsExactly(Map.of(
+                    "markdownLine", String.valueOf(imageRefs.getFirst().get("markdownLine")),
+                    "logicalPath", "函数/最值/IMAJES/image-001.jpg"));
+            assertThat(String.valueOf(imageRefs.getFirst().get("markdownLine")))
+                    .startsWith("![source-image:").endsWith("](IMAJES/image-001.jpg)");
             assertThat(item).doesNotContainKeys("sourcePath", "sourceUrl", "query", "collection", "base64");
         });
         assertThat(taskStore.findByTaskId(runId).orElseThrow().evidence()).singleElement().satisfies(evidence -> {
@@ -169,6 +189,9 @@ class AgentToolBrokerControllerTest {
             assertThat(evidence.chunkId()).isEqualTo("teacher-block-001");
             assertThat(evidence.sourcePath()).isBlank();
             assertThat(evidence.sourceUrl()).isBlank();
+            assertThat(evidence.imageRefs()).containsExactly(Map.of(
+                    "markdownLine", "![](IMAJES/image-001.jpg)",
+                    "logicalPath", "函数/最值/IMAJES/image-001.jpg"));
         });
 
         @SuppressWarnings("unchecked")
@@ -183,11 +206,148 @@ class AgentToolBrokerControllerTest {
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> blocks = (List<Map<String, Object>>) read.get("blocks");
         assertThat(blocks).hasSize(1);
-        assertThat(blocks.getFirst()).containsEntry("text", "配方法可以确定二次函数的最小值。");
+        assertThat(String.valueOf(blocks.getFirst().get("text")))
+                .contains("配方法可以确定二次函数的最小值。", "![source-image:", "](IMAJES/image-001.jpg)")
+                .doesNotContain(documentId, "函数/最值", "asset-");
         assertThatThrownBy(() -> controller.handoutDocumentRead(workerKey, new HandoutDocumentReadRequest(
                 runId, documentRef(workerKey, runId, "foreign-document"), 80, 4_000)))
                 .isInstanceOf(ResponseStatusException.class)
                 .satisfies(error -> assertThat(((ResponseStatusException) error).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
+    }
+
+    @Test
+    void handoutContextRewritesBoundMarkdownImagesForPythonInSourceOrder() throws Exception {
+        String workerKey = "worker-secret";
+        String runId = "run-context-images-001";
+        String documentId = "teacher-images-001";
+        String first = "![](IMAJES/image-001.jpg)";
+        String second = "![](IMAJES/image-002.png)";
+        TeachingEvidence evidence = new TeachingEvidence(
+                "TEACHER_RESOURCE", "图形资料.md", "block-images", 1,
+                "图像定义。" + first + "图像结论。" + second,
+                "", "", documentId, "feishu", "", "", List.of(), "", List.of(
+                        Map.of("markdownLine", first, "logicalPath", "图形资料/IMAJES/image-001.jpg"),
+                        Map.of("markdownLine", second, "logicalPath", "图形资料/IMAJES/image-002.png")));
+        AgentToolBrokerController controller = new AgentToolBrokerController(
+                null, null, new MockEnvironment().withProperty("math-agent.agent-worker.shared-key", workerKey),
+                null, new InMemoryTaskStore(task(runId, List.of(evidence))), null);
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> items = (List<Map<String, Object>>) controller.handoutContext(workerKey,
+                new HandoutContextRequest(runId, List.of(evidenceRef(workerKey, runId, evidence)), 12)).get("items");
+
+        assertThat(items).singleElement().satisfies(item -> {
+            String excerpt = String.valueOf(item.get("excerpt"));
+            assertThat(excerpt).contains("图像定义。", "图像结论。")
+                    .contains("![source-image:")
+                    .contains("](IMAJES/image-001.jpg)", "](IMAJES/image-002.png)")
+                    .doesNotContain("asset-", documentId, "![](IMAJES/image-001.jpg)", "![](IMAJES/image-002.png)");
+            assertThat(excerpt.indexOf("image-001.jpg)")).isLessThan(excerpt.indexOf("image-002.png)"));
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> imageRefs = (List<Map<String, Object>>) item.get("imageRefs");
+            assertThat(imageRefs).hasSize(2);
+            assertThat(String.valueOf(imageRefs.getFirst().get("markdownLine")))
+                    .startsWith("![source-image:").endsWith("](IMAJES/image-001.jpg)");
+            assertThat(imageRefs.getFirst()).containsEntry("logicalPath", "图形资料/IMAJES/image-001.jpg");
+            assertThat(String.valueOf(imageRefs.get(1).get("markdownLine")))
+                    .startsWith("![source-image:").endsWith("](IMAJES/image-002.png)");
+            assertThat(imageRefs.get(1)).containsEntry("logicalPath", "图形资料/IMAJES/image-002.png");
+        });
+    }
+    @Test
+    void physicalFileEvidenceRewritesBoundMarkdownImageWhenRootIdDiffers() throws Exception {
+        String workerKey = "worker-secret";
+        String runId = "run-physical-file-image-001";
+        String rootDocumentId = "teacher-root-001";
+        String fileDocumentId = "teacher-file-001";
+        String markdownImage = "![](IMAJES/image-001.jpg)";
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        resourceStore.save(new TeacherResourceDocumentResponse(
+                fileDocumentId, "tenant", "teacher-1", "feishu", "抛物线资料.md", null, null,
+                "TEACHER_PRIVATE", "synced", "parsed", "ready", "ready", "md", List.of(), "TEXT"));
+        blockStore.replaceActiveBlocks("tenant", fileDocumentId, List.of(new TeacherDocumentBlockResponse(
+                "image-block-001", fileDocumentId, "image-block-001", "markdown", 0, "", "", 1, null,
+                "", "reference", "图像定义。" + markdownImage, "图像定义。" + markdownImage,
+                "[{\"markdownLine\":\"![](IMAJES/image-001.jpg)\",\"logicalPath\":\"抛物线/IMAJES/image-001.jpg\"}]",
+                "[]", "[]", "[]", "checksum", 1.0d, "active")));
+        TeacherResourceBlockSearchService searchService = TeacherResourceBlockSearchServiceFixture.service(resourceStore, blockStore);
+        Path sourceRoot = tempDir.resolve("staging").resolve("teacher-source");
+        Files.createDirectories(sourceRoot);
+        Files.writeString(sourceRoot.resolve("抛物线资料.md"), "图像定义。" + markdownImage, StandardCharsets.UTF_8);
+        TeacherSourceFileReader sourceReader = new TeacherSourceFileReader(new TeacherSourceSyncProperties(
+                "", tempDir.resolve("download.py"), tempDir.resolve("appkey"), tempDir.resolve("staging"),
+                tempDir.resolve("assets"), 1, 30));
+        sourceReader.register("tenant", fileDocumentId, sourceRoot, "checksum");
+        searchService.setSourceFileReader(sourceReader);
+        TeachingEvidence evidence = new TeachingEvidence(
+                "TEACHER_RESOURCE", "抛物线资料.md", "image-block-001", 1,
+                "图像定义。" + markdownImage, "", "", fileDocumentId, "feishu", "", "", List.of());
+        AgentToolBrokerController controller = new AgentToolBrokerController(
+                searchService, null, new MockEnvironment().withProperty("math-agent.agent-worker.shared-key", workerKey),
+                null, new InMemoryTaskStore(task(runId, List.of(evidence))), null);
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> items = (List<Map<String, Object>>) controller.handoutContext(workerKey,
+                new HandoutContextRequest(runId, List.of(evidenceRef(workerKey, runId, evidence)), 12)).get("items");
+
+        assertThat(items).singleElement().satisfies(item -> {
+            String excerpt = String.valueOf(item.get("excerpt"));
+            assertThat(excerpt).contains("![source-image:", "](IMAJES/image-001.jpg)")
+                    .doesNotContain(rootDocumentId, fileDocumentId, "抛物线/IMAJES", markdownImage, "asset-");
+        });
+    }
+
+    @Test
+    void handoutDocumentReadSkipsStaleImageBlockAndKeepsAuthorizedSibling() throws Exception {
+        String workerKey = "worker-secret";
+        String runId = "run-stale-image-sibling-001";
+        String documentId = "teacher-stale-image-001";
+        String staleImage = "![](IMAJES/stale.png)";
+        String validImage = "![](IMAJES/valid.png)";
+        String validLogicalPath = "抛物线/IMAJES/valid.png";
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        InMemoryTeacherResourceAssetStore assetStore = new InMemoryTeacherResourceAssetStore();
+        TeacherResourceDocumentResponse document = new TeacherResourceDocumentResponse(
+                documentId, "tenant", "teacher-1", "feishu", "抛物线资料.md", null, null,
+                "TEACHER_PRIVATE", "synced", "parsed", "ready", "ready", "md", List.of(), "TEXT");
+        resourceStore.save(document);
+        blockStore.replaceActiveBlocks("tenant", documentId, List.of(
+                new TeacherDocumentBlockResponse("stale-block", documentId, "stale-block", "markdown", 0,
+                        "", "", 1, null, "", "reference", "失效图。" + staleImage,
+                        "失效图。" + staleImage,
+                        "[{\"markdownLine\":\"![](IMAJES/stale.png)\",\"logicalPath\":\"抛物线/IMAJES/stale.png\"}]",
+                        "[]", "[]", "[]", "checksum", 1.0d, "active"),
+                new TeacherDocumentBlockResponse("valid-block", documentId, "valid-block", "markdown", 1,
+                        "", "", 2, null, "", "reference", "有效图。" + validImage,
+                        "有效图。" + validImage,
+                        "[{\"markdownLine\":\"![](IMAJES/valid.png)\",\"logicalPath\":\"抛物线/IMAJES/valid.png\"}]",
+                        "[]", "[]", "[]", "checksum", 1.0d, "active")));
+        TeacherResourceAssetService assetService = new TeacherResourceAssetService(assetStore, resourceStore,
+                new TeacherSourceSyncProperties("", tempDir.resolve("download.py"), tempDir.resolve("appkey"),
+                        tempDir.resolve("staging"), tempDir.resolve("assets"), 1, 30));
+        TeacherResourceAssetResponse asset = assetService.saveExtractedAsset(document, validLogicalPath, null,
+                "IMAJES/valid.png", validPngBytes(), "image/png").orElseThrow();
+        assertThat(asset.assetId()).isNotBlank();
+        TeacherResourceBlockSearchService searchService = TeacherResourceBlockSearchServiceFixture.service(resourceStore, blockStore);
+        TeachingEvidence evidence = new TeachingEvidence("TEACHER_RESOURCE", "抛物线资料.md", "valid-block", 2,
+                "有效图。" + validImage, "", "", documentId, "feishu", "", "", List.of());
+        AgentToolBrokerController controller = new AgentToolBrokerController(searchService, assetService,
+                new MockEnvironment().withProperty("math-agent.agent-worker.shared-key", workerKey), null,
+                new InMemoryTaskStore(task(runId, List.of(evidence))), null);
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> blocks = (List<Map<String, Object>>) controller.handoutDocumentRead(workerKey,
+                new HandoutDocumentReadRequest(runId, documentRef(workerKey, runId, documentId), 80, 4_000)).get("blocks");
+
+        assertThat(blocks).singleElement().satisfies(block -> {
+            assertThat(String.valueOf(block.get("text"))).contains("有效图。", "![source-image:", "](IMAJES/valid.png)")
+                    .doesNotContain("失效图。", "stale.png", "抛物线/IMAJES");
+            assertThat(block.get("imageRefs")).asList().singleElement().satisfies(imageRef ->
+                    assertThat(String.valueOf(((Map<?, ?>) imageRef).get("markdownLine")))
+                            .startsWith("![source-image:").endsWith("](IMAJES/valid.png)"));
+        });
     }
 
     @Test
@@ -286,10 +446,20 @@ class AgentToolBrokerControllerTest {
                 new TeachingTaskResponse.MemoryReuse(false, null, "private", "", 0D, ""), List.of(), null, "");
     }
 
+    private static byte[] validPngBytes() throws Exception {
+        BufferedImage image = new BufferedImage(2, 2, BufferedImage.TYPE_INT_RGB);
+        image.setRGB(0, 0, 0xFF0000);
+        image.setRGB(1, 1, 0x00FF00);
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        ImageIO.write(image, "png", output);
+        return output.toByteArray();
+    }
+
     private static String evidenceRef(String secret, String runId, TeachingEvidence evidence) throws Exception {
         byte[] digest = MessageDigest.getInstance("SHA-256").digest((secret + "|" + runId + "|evidence|"
                 + evidence.sourceDocumentId() + "|" + evidence.sourceScope() + "|" + evidence.sourceTitle() + "|"
-                + evidence.chunkId()).getBytes(StandardCharsets.UTF_8));
+                + evidence.chunkId() + "|assets=" + (evidence.assetIds() == null ? "" : evidence.assetIds().stream()
+                        .sorted().collect(java.util.stream.Collectors.joining(",")))).getBytes(StandardCharsets.UTF_8));
         return "ev_" + HexFormat.of().formatHex(digest, 0, 16);
     }
 

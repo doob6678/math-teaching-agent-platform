@@ -38,4 +38,10 @@ public interface McpClientKeyStore {
      * Revokes one owned key and returns whether a row changed.
      */
     boolean revoke(String tenantId, String ownerUserId, String keyId, LocalDateTime revokedAt);
+
+    /**
+     * Physically deletes one owned key, but only when it is already revoked. Acceptance scripts and rotation
+     * hygiene accumulate revoked rows forever otherwise; active keys must never be deletable this way.
+     */
+    boolean deleteRevoked(String tenantId, String ownerUserId, String keyId);
 }

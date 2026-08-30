@@ -112,7 +112,10 @@ public class PythonHandoutClient {
                 Map.entry("contractVersion", HANDOUT_CONTRACT_VERSION),
                 Map.entry("writingGoal", request.writingGoal()),
                 Map.entry("questionText", request.questionText()),
-                Map.entry("evidenceRefs", request.evidenceRefs()),
+                Map.entry("evidenceRefs", request.evidenceRefs().stream()
+                        .filter(PythonHandoutClient::isIssuedEvidenceRef)
+                        .toList()),
+                Map.entry("initialEvidence", initialEvidence(request, workflowId, environment)),
                 Map.entry("graphVersion", environment.getProperty("math-agent.python-handout.graph-version", "handout-v1")),
                 Map.entry("traceId", traceId == null ? workflowId : traceId),
                 Map.entry("traceparent", traceparent(traceId == null ? workflowId : traceId)),
@@ -123,7 +126,62 @@ public class PythonHandoutClient {
                 Map.entry("deadlineEpochMs", System.currentTimeMillis() + timeoutMs));
     }
 
-    /** Maps one Python document to the existing stage result without copying raw prompt data. */
+    private static List<Map<String, Object>> initialEvidence(
+            MultiAgentWritingRequest request, String workflowId, Environment environment) {
+        String sharedKey = environment.getProperty("math-agent.agent-worker.shared-key", "");
+        List<com.doob.mathagent.teaching.TeachingEvidence> evidence = request.initialEvidence();
+        List<String> refs = request.evidenceRefs().stream()
+                .filter(PythonHandoutClient::isIssuedEvidenceRef)
+                .toList();
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (int index = 0; index < evidence.size() && index < refs.size(); index++) {
+            com.doob.mathagent.teaching.TeachingEvidence item = evidence.get(index);
+            String ref = refs.get(index);
+            Map<String, Object> row = new java.util.LinkedHashMap<>();
+            row.put("ref", ref);
+            row.put("title", item.sourceTitle());
+            row.put("documentName", item.sourceTitle());
+            // This opaque reference must use the identical run-scoped secret namespace as AgentToolBrokerController;
+            // otherwise Python can select an initial evidence document that the broker cannot subsequently authorize.
+            row.put("documentRef", item.sourceDocumentId().isBlank() ? ""
+                    : "doc_" + fingerprint(sharedKey + "|" + workflowId + "|document|" + item.sourceDocumentId()));
+            row.put("transparentRef", transparentReference(item));
+            row.put("pageNo", item.pageNo());
+            row.put("excerpt", item.snippet());
+            row.put("imageRefs", item.imageRefs());
+            result.add(row);
+        }
+        return List.copyOf(result);
+    }
+
+    private static String transparentReference(com.doob.mathagent.teaching.TeachingEvidence item) {
+        String scope = item.sourceScope();
+        if ("PUBLIC_TEXTBOOK".equals(scope) && !item.sourceDocumentId().isBlank() && !item.chunkId().isBlank()) {
+            return "textbook://" + item.sourceDocumentId() + "/chunk/" + item.chunkId();
+        }
+        if ("TEACHER_RESOURCE".equals(scope) && !item.sourceDocumentId().isBlank() && !item.chunkId().isBlank()) {
+            return "feishu://group/TEACHER_SHARED/resource/" + item.sourceDocumentId() + "/block/" + item.chunkId();
+        }
+        if ("CANONICAL_MATH_PAPER".equals(scope)
+                && !item.sourceDocumentId().isBlank() && !item.canonicalQuestionNumber().isBlank()) {
+            return "gaokao://canonical/" + item.sourceDocumentId() + "/question/" + item.canonicalQuestionNumber();
+        }
+        return "";
+    }
+
+    private static String fingerprint(String value) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8));
+            return java.util.HexFormat.of().formatHex(digest, 0, 16);
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 is unavailable", exception);
+        }
+    }
+
+    private static boolean isIssuedEvidenceRef(String value) {
+        return value != null && value.matches("ev_[0-9a-f]{32}");
+    }
+
     private PythonHandoutResult parse(JsonNode root, String workflowId) {
         String status = text(root, "status", "FAILED");
         JsonNode metrics = root.path("metrics");
@@ -154,7 +212,7 @@ public class PythonHandoutClient {
             String graphStatus) {
         String provider = text(metric, "provider", "python-langgraph");
         String model = text(metric, "model", "");
-        String generated = content == null || content.isMissingNode() ? "" : content.toString();
+        String generated = generatedMarkdown(content);
         AgentRunExecuteResponse.TokenUsage usage = new AgentRunExecuteResponse.TokenUsage(
                 intValue(metric, "promptTokens"), intValue(metric, "completionTokens"), intValue(metric, "totalTokens"));
         long elapsed = metric.path("elapsedMs").asLong(0L);
@@ -162,9 +220,74 @@ public class PythonHandoutClient {
                 stageCode, agentCode, workflowId + ":" + stageCode, provider, model,
                 "COMPLETED".equals(graphStatus) ? "COMPLETED" : "FAILED", usage,
                 "COMPLETED".equals(graphStatus) ? "Python LangGraph node completed." : "Python LangGraph node failed.",
-                generated, elapsed);
+                generated, elapsed, citations(content), assetPlacements(content));
     }
 
+    /** Projects only writer-authored Markdown while preserving opaque asset placement data for the exporter. */
+    private static String generatedMarkdown(JsonNode content) {
+        if (content == null || content.isMissingNode() || content.isNull()) {
+            return "";
+        }
+        JsonNode markdown = content.path("markdown");
+        if (!markdown.isTextual() || markdown.asText().isBlank()) {
+            return content.toString();
+        }
+        return markdown.asText();
+    }
+
+    private static List<String> citations(JsonNode content) {
+        List<String> result = new ArrayList<>();
+        JsonNode values = content == null ? null : content.path("citations");
+        if (values == null || !values.isArray()) {
+            values = content == null ? null : content.path("items");
+        }
+        if (values != null && values.isArray()) {
+            for (JsonNode value : values) {
+                String candidate = value.isTextual() ? value.asText() : text(value, "ref", "");
+                String transparent = value.isObject() ? text(value, "transparentRef", "") : "";
+                if (candidate.matches("ev_[0-9a-f]{32}") && !result.contains(candidate)) result.add(candidate);
+                if (transparent.matches("(?:textbook|feishu|gaokao)://[^\\s]{1,500}") && !result.contains(transparent)) {
+                    result.add(transparent);
+                }
+                if (result.size() >= 48) break;
+            }
+        }
+        return List.copyOf(result);
+    }
+
+    private static List<MultiAgentWritingResponse.AssetPlacement> assetPlacements(JsonNode content) {
+        List<MultiAgentWritingResponse.AssetPlacement> result = new ArrayList<>();
+        JsonNode values = content == null ? null : content.path("assetPlacements");
+        if (values != null && values.isArray()) {
+            for (JsonNode value : values) {
+                String logicalPath = text(value, "logicalPath", "");
+                String markdownLine = text(value, "markdownLine", "");
+                String anchorBefore = text(value, "anchorBefore", "");
+                String anchorAfter = text(value, "anchorAfter", "");
+                String layout = text(value, "layout", "");
+                List<String> variants = textArray(value.path("variants"), "(teacher_writer|student_writer|lecture_writer)", 3);
+                if (!logicalPath.isBlank() && markdownLine.startsWith("![")
+                        && markdownLine.contains("](")
+                        && layout.matches("single|vertical_sequence|two_column") && !variants.isEmpty()) {
+                    result.add(new MultiAgentWritingResponse.AssetPlacement(
+                            logicalPath, markdownLine, anchorBefore, anchorAfter, layout, variants,
+                            text(value, "caption", "").substring(0, Math.min(text(value, "caption", "").length(), 1000))));
+                }
+            }
+        }
+        return List.copyOf(result.subList(0, Math.min(result.size(), 48)));
+    }
+
+    private static List<String> textArray(JsonNode node, String pattern, int max) {
+        List<String> result = new ArrayList<>();
+        if (node != null && node.isArray()) {
+            for (JsonNode value : node) {
+                if (value.isTextual() && value.asText().matches(pattern) && !result.contains(value.asText())) result.add(value.asText());
+                if (result.size() >= max) break;
+            }
+        }
+        return result;
+    }
     private static JsonNode nodeMetric(JsonNode metrics, String node) {
         for (JsonNode metric : metrics.path("nodeMetrics")) {
             if (node.equals(metric.path("node").asText())) return metric;

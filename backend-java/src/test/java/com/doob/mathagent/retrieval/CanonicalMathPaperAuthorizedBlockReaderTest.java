@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.doob.mathagent.teacher.block.TeacherDocumentBlockResponse;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -61,6 +62,65 @@ class CanonicalMathPaperAuthorizedBlockReaderTest {
 
         Files.writeString(question, "篡改后的题目", StandardCharsets.UTF_8);
         assertThat(reader.isAvailable(authorizedDocumentRef)).isFalse();
+    }
+
+    @Test
+    void projectsOnlyManifestBoundQuestionFigureRowsForAuthorizedQuestionReads() throws Exception {
+        String documentName = "2024立体几何真题.pdf";
+        String sourceHash = sha256("original-solid-geometry-pdf".getBytes(StandardCharsets.UTF_8));
+        Path paperRoot = tempDir.resolve(documentName);
+        Files.createDirectories(paperRoot.resolve("questions"));
+        Files.createDirectories(paperRoot.resolve("figures"));
+        Path document = paperRoot.resolve("document.md");
+        Path question = paperRoot.resolve("questions/q-001.md");
+        Path figure = paperRoot.resolve("figures/q-001-01.png");
+        Path pageImage = paperRoot.resolve("page-images/page-01.png");
+        Files.writeString(document, """
+                # 2024立体几何真题
+                ## 第 1 页
+                1. 如图，四棱锥。
+                """, StandardCharsets.UTF_8);
+        Files.writeString(question, """
+                # 2024立体几何真题 第 1 题
+
+                如图，四棱锥 P-ABCD。
+
+                ![第 1 题图](figures/q-001-01.png)
+                """, StandardCharsets.UTF_8);
+        Files.write(figure, "figure-bytes".getBytes(StandardCharsets.UTF_8));
+        Files.createDirectories(paperRoot.resolve("page-images"));
+        Files.write(pageImage, "page-bytes".getBytes(StandardCharsets.UTF_8));
+        Files.writeString(paperRoot.resolve("source-manifest.json"), JSON.writeValueAsString(java.util.Map.of(
+                "documentFullName", documentName,
+                "sourceSha256", sourceHash,
+                "documentMarkdown", "document.md",
+                "documentMarkdownSha256", sha256(document),
+                "questionCount", 1,
+                "questions", List.of(java.util.Map.of(
+                        "questionNumber", "1", "questionMarkdown", "questions/q-001.md",
+                        "questionMarkdownSha256", sha256(question), "sourcePages", List.of(1),
+                        "assets", List.of(
+                                java.util.Map.of(
+                                        "assetId", "figure-asset-1", "assetSha256", sha256(figure),
+                                        "canonicalAssetPath", "figures/q-001-01.png"),
+                                java.util.Map.of(
+                                        "assetId", "page-asset-1", "assetSha256", sha256(pageImage),
+                                        "canonicalAssetPath", "page-images/page-01.png")))))),
+                StandardCharsets.UTF_8);
+        CanonicalMathPaperAuthorizedBlockReader reader = new CanonicalMathPaperAuthorizedBlockReader(tempDir);
+        String authorizedDocumentRef = uuid5(documentName + "\n" + sourceHash);
+
+        JsonNode imageRefs = JSON.readTree(reader.readQuestion(authorizedDocumentRef, "1").getFirst().imageRefs());
+
+        assertThat(imageRefs).hasSize(1);
+        assertThat(imageRefs.get(0).path("markdownLine").asText())
+                .isEqualTo("![第 1 题图](figures/q-001-01.png)");
+        assertThat(imageRefs.get(0).path("logicalPath").asText()).isEqualTo("figures/q-001-01.png");
+        assertThat(imageRefs.toString()).doesNotContain("assetId", "page-images", "/app/");
+
+        // A figure whose manifest hash no longer matches the copied asset is excluded, never partially trusted.
+        Files.write(figure, "tampered-figure-bytes".getBytes(StandardCharsets.UTF_8));
+        assertThat(reader.readQuestion(authorizedDocumentRef, "1").getFirst().imageRefs()).isEqualTo("[]");
     }
 
     private static String sha256(Path source) throws Exception {

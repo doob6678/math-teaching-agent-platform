@@ -94,4 +94,20 @@ public class InMemoryMcpClientKeyStore implements McpClientKeyStore {
                 revokedAt));
         return true;
     }
+
+    @Override
+    public boolean deleteRevoked(String tenantId, String ownerUserId, String keyId) {
+        McpClientKeyRecord existing = records.get(keyId);
+        if (existing == null) {
+            return false;
+        }
+        if (!tenantId.equals(existing.tenantId()) || !ownerUserId.equals(existing.ownerUserId())) {
+            return false;
+        }
+        if (!"revoked".equals(existing.status())) {
+            return false;
+        }
+        records.remove(keyId);
+        return true;
+    }
 }

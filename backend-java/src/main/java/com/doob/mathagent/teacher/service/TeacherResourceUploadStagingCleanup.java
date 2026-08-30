@@ -26,7 +26,6 @@ import org.springframework.stereotype.Component;
 public class TeacherResourceUploadStagingCleanup {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(TeacherResourceUploadStagingCleanup.class);
-    private static final String UPLOAD_ROOT_NAME = "teacher-resource-uploads";
     private static final String VISUAL_MATERIALIZATION_PREFIX = "math-agent-teacher-asset-";
     private static final int UPLOAD_DIRECTORY_DEPTH = 4;
     private static final int WALK_DEPTH = UPLOAD_DIRECTORY_DEPTH + 1;
@@ -70,8 +69,7 @@ public class TeacherResourceUploadStagingCleanup {
     @Scheduled(fixedDelayString = "${math-agent.teacher.upload.staging-cleanup-interval-ms:3600000}")
     public void removeExpiredStagingTrees() {
         if (resourceProperties != null && resourceProperties.localFileStorageRoot() != null) {
-            Path root = resourceProperties.localFileStorageRoot()
-                    .resolve(UPLOAD_ROOT_NAME).toAbsolutePath().normalize();
+            Path root = resourceProperties.teacherResourceUploadRoot();
             removeExpiredUploadTrees(root);
         }
         removeExpiredVisualMaterializations(clock.instant().minus(retention));

@@ -19,7 +19,8 @@ public record TeacherResourceSearchProperties(
         int defaultLimit,
         int maxLimit,
         QueryFocusBudget queryFocus,
-        SearchRuntimeBudget runtime) {
+        SearchRuntimeBudget runtime,
+        FileCandidateFusion candidateFusion) {
 
     /**
      * Returns normalized defaults for non-Spring and test constructors.
@@ -29,7 +30,8 @@ public record TeacherResourceSearchProperties(
                 10,
                 20,
                 QueryFocusBudget.defaults(),
-                SearchRuntimeBudget.defaults());
+                SearchRuntimeBudget.defaults(),
+                FileCandidateFusion.defaults());
     }
 
     /**
@@ -115,12 +117,47 @@ public record TeacherResourceSearchProperties(
                                 defaultRuntime.lexicalRescueEnabled()),
                         integerOrDefault(
                                 environment.getProperty("math-agent.teacher.search.runtime.max-lexical-rescue-blocks-per-document"),
-                                defaultRuntime.maxLexicalRescueBlocksPerDocument())));
+                                defaultRuntime.maxLexicalRescueBlocksPerDocument()),
+                        doubleOrDefault(
+                                environment.getProperty("math-agent.teacher.search.runtime.minimum-rerank-score"),
+                                defaultRuntime.minimumRerankScore()),
+                        doubleOrDefault(
+                                environment.getProperty("math-agent.teacher.search.runtime.low-confidence-score"),
+                                defaultRuntime.lowConfidenceScore()),
+                        doubleOrDefault(
+                                environment.getProperty("math-agent.teacher.search.runtime.minimum-rerank-margin"),
+                                defaultRuntime.minimumRerankMargin())),
+                new FileCandidateFusion(
+                        integerOrDefault(
+                                environment.getProperty("math-agent.teacher.search.candidate-fusion.rrf-k"),
+                                defaults.candidateFusion().rrfK()),
+                        doubleOrDefault(
+                                environment.getProperty("math-agent.teacher.search.candidate-fusion.vector-weight"),
+                                defaults.candidateFusion().vectorWeight()),
+                        doubleOrDefault(
+                                environment.getProperty("math-agent.teacher.search.candidate-fusion.lexical-weight"),
+                                defaults.candidateFusion().lexicalWeight()),
+                        doubleOrDefault(
+                                environment.getProperty("math-agent.teacher.search.candidate-fusion.tag-weight"),
+                                defaults.candidateFusion().tagWeight()),
+                        integerOrDefault(
+                                environment.getProperty("math-agent.teacher.search.candidate-fusion.route-candidate-limit"),
+                                defaults.candidateFusion().routeCandidateLimit()),
+                        integerOrDefault(
+                                environment.getProperty("math-agent.teacher.search.candidate-fusion.vector-quality-limit"),
+                                defaults.candidateFusion().vectorQualityLimit()),
+                        integerOrDefault(
+                                environment.getProperty("math-agent.teacher.search.candidate-fusion.lexical-quality-limit"),
+                                defaults.candidateFusion().lexicalQualityLimit()),
+                        integerOrDefault(
+                                environment.getProperty("math-agent.teacher.search.candidate-fusion.tag-quality-limit"),
+                                defaults.candidateFusion().tagQualityLimit())));
     }
 
     public TeacherResourceSearchProperties {
         queryFocus = queryFocus == null ? QueryFocusBudget.defaults() : queryFocus;
         runtime = runtime == null ? SearchRuntimeBudget.defaults() : runtime;
+        candidateFusion = candidateFusion == null ? FileCandidateFusion.defaults() : candidateFusion;
         defaultLimit = Math.max(1, defaultLimit);
         maxLimit = Math.max(defaultLimit, maxLimit);
     }
@@ -169,13 +206,16 @@ public record TeacherResourceSearchProperties(
             int maxBlockRerankCandidates,
             int maxBlocksPerDocumentForStageTwo,
             boolean lexicalRescueEnabled,
-            int maxLexicalRescueBlocksPerDocument) {
+            int maxLexicalRescueBlocksPerDocument,
+            double minimumRerankScore,
+            double lowConfidenceScore,
+            double minimumRerankMargin) {
 
         public static SearchRuntimeBudget defaults() {
             return new SearchRuntimeBudget(
                     64,
                     80,
-                    1,
+                    16,
                     32,
                     120,
                     48,
@@ -193,7 +233,10 @@ public record TeacherResourceSearchProperties(
                     36,
                     3,
                     false,
-                    3);
+                    12,
+                    -6.60d,
+                    -6.00d,
+                    0.15d);
         }
 
         public SearchRuntimeBudget {
@@ -214,9 +257,12 @@ public record TeacherResourceSearchProperties(
             documentDigestChars = Math.max(documentEvidenceChars, documentDigestChars);
             maxDocumentRerankCandidates = Math.max(1, maxDocumentRerankCandidates);
             maxVectorCandidates = Math.max(1, maxVectorCandidates);
-            maxBlockRerankCandidates = Math.max(1, maxBlockRerankCandidates);
+            maxBlockRerankCandidates = Math.min(12, Math.max(1, maxBlockRerankCandidates));
             maxBlocksPerDocumentForStageTwo = Math.max(1, maxBlocksPerDocumentForStageTwo);
             maxLexicalRescueBlocksPerDocument = Math.max(1, maxLexicalRescueBlocksPerDocument);
+            minimumRerankScore = Double.isFinite(minimumRerankScore) ? minimumRerankScore : -6.60d;
+            lowConfidenceScore = Double.isFinite(lowConfidenceScore) ? lowConfidenceScore : -6.00d;
+            minimumRerankMargin = Math.max(0.0d, Double.isFinite(minimumRerankMargin) ? minimumRerankMargin : 0.15d);
         }
 
         public int vectorCandidateLimit(int requestedLimit, int candidateDocumentCount) {
@@ -235,12 +281,65 @@ public record TeacherResourceSearchProperties(
         }
     }
 
+    /** FILE-level route fusion parameters. RRF combines ranks only after each route deduplicates physical files. */
+    public record FileCandidateFusion(
+            int rrfK,
+            double vectorWeight,
+            double lexicalWeight,
+            double tagWeight,
+            int routeCandidateLimit,
+            int vectorQualityLimit,
+            int lexicalQualityLimit,
+            int tagQualityLimit) {
+
+        public FileCandidateFusion(
+                int rrfK,
+                double vectorWeight,
+                double lexicalWeight,
+                double tagWeight,
+                int routeCandidateLimit) {
+            this(rrfK, vectorWeight, lexicalWeight, tagWeight, routeCandidateLimit, 32, 32, 32);
+        }
+
+        public static FileCandidateFusion defaults() {
+            // Lexical recall remains observable and operator-configurable, but generic Chinese terms currently create
+            // broad FILE candidates; keep semantic and graph evidence authoritative in the production default.
+            return new FileCandidateFusion(60, 1.0d, 0.0d, 1.0d, 96, 32, 32, 32);
+        }
+
+        public FileCandidateFusion {
+            rrfK = Math.max(1, rrfK);
+            vectorWeight = Math.max(0.0d, vectorWeight);
+            lexicalWeight = Math.max(0.0d, lexicalWeight);
+            tagWeight = Math.max(0.0d, tagWeight);
+            routeCandidateLimit = Math.max(12, Math.min(256, routeCandidateLimit));
+            vectorQualityLimit = boundedQualityLimit(vectorQualityLimit, routeCandidateLimit);
+            lexicalQualityLimit = boundedQualityLimit(lexicalQualityLimit, routeCandidateLimit);
+            tagQualityLimit = boundedQualityLimit(tagQualityLimit, routeCandidateLimit);
+        }
+
+        private static int boundedQualityLimit(int value, int routeLimit) {
+            return Math.max(1, Math.min(routeLimit, value));
+        }
+    }
+
     private static int integerOrDefault(String value, int defaultValue) {
         if (value == null || value.isBlank()) {
             return defaultValue;
         }
         try {
             return Integer.parseInt(value.strip());
+        } catch (NumberFormatException exception) {
+            return defaultValue;
+        }
+    }
+
+    private static double doubleOrDefault(String value, double defaultValue) {
+        if (value == null || value.isBlank()) {
+            return defaultValue;
+        }
+        try {
+            return Double.parseDouble(value.strip());
         } catch (NumberFormatException exception) {
             return defaultValue;
         }

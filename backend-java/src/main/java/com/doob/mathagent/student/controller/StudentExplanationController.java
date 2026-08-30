@@ -134,13 +134,15 @@ public class StudentExplanationController {
     @GetMapping("/api/students/explanations/conversations")
     public StudentExplanationConversationListResponse conversations(
             @RequestParam(value = "limit", defaultValue = "20") int limit,
+            @RequestParam(value = "page", defaultValue = "1") int page,
             HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest);
         List<StudentExplanationConversationSummary> items = historyStore.listConversations(
                 subject.tenantId(),
                 subject.subjectType(),
                 subject.subjectId(),
-                limit);
+                limit,
+                page);
         return new StudentExplanationConversationListResponse(items.stream()
                 .map(item -> new StudentExplanationConversationListResponse.Item(
                         item.conversationId(),

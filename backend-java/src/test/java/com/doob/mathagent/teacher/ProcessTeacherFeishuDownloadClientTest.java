@@ -144,7 +144,13 @@ class ProcessTeacherFeishuDownloadClientTest {
                         "current_path": "高中数学/导数",
                         "visited_folder_tokens": ["rootToken", "folderToken-failed"],
                         "downloaded_items": [{"token": "docx-ok"}]
-                    }
+                    },
+                    "failed_items": [{
+                        "type": "image",
+                        "token": "media-image-1",
+                        "path": "解析几何/IMAJES/image-001.png",
+                        "message": "unsupported image payload"
+                    }]
                 }, ensure_ascii=False), encoding="utf-8")
                 """);
         Path appkey = tempDir.resolve("APPKEY.md");
@@ -166,7 +172,14 @@ class ProcessTeacherFeishuDownloadClientTest {
                 // The process adapter intentionally exposes the structured provider exception so the job can retain
                 // retryability and the last durable folder checkpoint instead of discarding that recovery context.
                 .isInstanceOf(TeacherFeishuDownloadException.class)
-                .hasMessageContaining("reported failed files: 1");
+                .hasMessageContaining("reported failed files: 1")
+                .satisfies(error -> {
+                    TeacherFeishuDownloadException exception = (TeacherFeishuDownloadException) error;
+                    assertThat(exception.failedItemsJson())
+                            .contains("media-image-1")
+                            .contains("unsupported image payload")
+                            .contains("解析几何/IMAJES/image-001.png");
+                });
     }
 
     @Test

@@ -13,6 +13,7 @@ import com.doob.mathagent.teacher.formula.OmmlFormulaExtractor;
 import com.doob.mathagent.teacher.formula.TeacherFormulaRecognitionClient;
 import com.doob.mathagent.teacher.formula.TeacherFormulaRecognitionProperties;
 import com.doob.mathagent.teacher.search.TeacherResourceGraphAlignmentService;
+import com.doob.mathagent.teacher.support.TeacherResourceSourceIdentity;
 import com.doob.mathagent.teacher.sync.TeacherSourceSyncCheckpointStore;
 import com.doob.mathagent.teacher.sync.TeacherSourceSyncJobStore;
 import com.doob.mathagent.teacher.sync.TeacherSourceSyncProperties;
@@ -26,6 +27,7 @@ import com.doob.mathagent.vector.service.VectorIndexService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -39,6 +41,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -46,6 +49,8 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.UUID;
+import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 import java.util.stream.Stream;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -86,7 +91,9 @@ public class TeacherSourceSyncExecutionService {
     static final Logger LOGGER = LoggerFactory.getLogger(TeacherSourceSyncExecutionService.class);
     static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     static final int MAX_SCAN_DEPTH = 8;
-    /** File-level failures are retried by the scheduler after this delay; authorization failures stay paused. */
+    private static final String FILE_SPLIT_FINGERPRINT = "teacher-sync-file-v2";
+
+
     static final long FILE_RETRY_DELAY_SECONDS = 300L;
     static final int PDF_PAGE_RENDER_DPI = 144;
     static final String PDF_PAGE_RENDER_DPI_ENV = "MATH_AGENT_PDF_PAGE_RENDER_DPI";
@@ -127,6 +134,11 @@ public class TeacherSourceSyncExecutionService {
     private FeishuCredentialService feishuCredentialService;
     private FeishuResourceBindingService feishuResourceBindingService;
     private TeacherSourceSyncManifestStore manifestStore;
+    private TeacherSourceFileReader sourceFileReader;
+
+    public void setSourceFileReader(TeacherSourceFileReader sourceFileReader) {
+        this.sourceFileReader = sourceFileReader;
+    }
 
     /**
      * Creates a sync execution service.
@@ -400,7 +412,18 @@ public class TeacherSourceSyncExecutionService {
                         syncProperties.feishuSmokeMaxFiles(),
                         textOrDefault(document.feishuExportFormat(), "md"),
                         toDownloadCheckpoint(resumeCheckpoint), usableUserCredential ? userCredential.accessToken() : null);
+                Path savedSourceRoot = syncProperties.requireStagingPath(result.savedPath());
                 changedItemsJson = result.changedItemsJson();
+                TeacherSourceSyncCheckpointResponse downloadedCheckpoint = result.checkpoint().hasCursor()
+                        ? toStoredCheckpoint(document, running, result.checkpoint(), result.failedItemsJson())
+                        : null;
+                saveFeishuCheckpoint(
+                        document,
+                        running,
+                        downloadedCheckpoint,
+                        mergeDownloadedItemsJson(result),
+                        result.failedItemsJson(),
+                        2);
                 if (manifestStore != null) {
                     manifestStore.recordDiscovery(
                             document.tenantId(), document.originalUrl(), document.ownerSubjectId(), document.documentId(),
@@ -434,7 +457,27 @@ public class TeacherSourceSyncExecutionService {
                  * whole staging tree, or rebuild Milvus. The provider title/revision is still persisted so the local
                  * record remains an accurate mirror of Feishu metadata.
                  */
+                boolean imageBindingBackfillRequired = resourceStore.supportsFileDocuments()
+                        && requiresImageBindingBackfill(normalizedTenantId, document.documentId());
                 if (result.changedItemsJson().equals("[]")) {
+                    /*
+                     * A ready legacy ROOT may have no FILE rows yet. Treat that state as a one-time durable migration
+                     * trigger: the existing staging snapshot is still authorized by the successful downloader, so it
+                     * can be parsed into independent FILE documents without deleting the legacy ROOT blocks.
+                     */
+                    boolean fileMigrationRequired = resourceStore.supportsFileDocuments()
+                            && (resourceStore.listFileDocumentsForIndexing(
+                                    normalizedTenantId, document.documentId(), 1, "").isEmpty()
+                                || resourceStore.hasArchivedFileDocuments(
+                                        normalizedTenantId, document.documentId()));
+                    if (!fileMigrationRequired && !imageBindingBackfillRequired) {
+                        if (resourceStore.supportsFileDocuments()) {
+                            archiveMissingFileDocuments(
+                                    normalizedTenantId,
+                                    document,
+                                    result.discoveredItemsJson());
+                        }
+                        syncSourceCatalog(document, savedSourceRoot, document.contentChecksum(), true);
                     TeacherResourceDocumentResponse metadataOnly = withSyncFingerprint(
                             new TeacherResourceDocumentResponse(
                                     downloaded.documentId(), downloaded.tenantId(), downloaded.ownerSubjectId(),
@@ -444,20 +487,52 @@ public class TeacherSourceSyncExecutionService {
                                     downloaded.feishuExportFormat(), downloaded.previewFiles(), downloaded.parseMode(),
                                     downloaded.providerRevision(), document.contentChecksum(), downloaded.sourceIdentity()),
                             document.contentChecksum());
-                    TeacherResourceDocumentResponse unchanged = markUnchangedFeishuResourceSynced(metadataOnly, document);
+                    if (hasVerifiedVectorReadiness(document)) {
+                        TeacherResourceDocumentResponse unchanged = markUnchangedFeishuResourceSynced(metadataOnly, document);
+                        if (manifestStore != null && !result.unchangedItemsJson().equals("[]")) {
+                            manifestStore.markIndexed(document.tenantId(), syncRootUrl, result.unchangedItemsJson(), Instant.now());
+                        }
+                        TeacherResourceAssetService.AssetMigrationSummary assetMigration =
+                                assetService.migrateDocumentAssetsToReadableNames(document.tenantId(), document.documentId());
+                        TeacherSourceSyncJobResponse completed = updateJob(
+                                running, "completed", "skipped_unchanged", result.savedPath().toString(),
+                                result.message() + "; metadata unchanged; local files and vector index retained"
+                                        + "; readableAssetMigration=" + assetMigration.migratedCount()
+                                        + ", legacyHashFilesRemoved=" + assetMigration.removedLegacyFileCount()
+                                        + ", assetMigrationElapsedMs=" + assetMigration.elapsedMs());
+                        saveFeishuCheckpoint(
+                                unchanged, completed,
+                                result.checkpoint().hasCursor()
+                                        ? toStoredCheckpoint(unchanged, completed, result.checkpoint(), result.failedItemsJson())
+                                        : null,
+                                mergeDownloadedItemsJson(result), result.failedItemsJson(), 2);
+                        return jobStore.save(completed);
+                    }
+                    /*
+                     * A metadata-identical source can still have failed vector status after a previous worker outage.
+                     * Reuse the already authorized active blocks so recovery rebuilds Milvus without downloading or
+                     * reparsing the source again. The vector service applies the same tenant and subject checks.
+                     */
+                    TeacherResourceDocumentResponse pending = markLocalResourceSynced(
+                            withSyncFingerprint(downloaded, document.contentChecksum()));
+                    if (manifestStore != null && !result.unchangedItemsJson().equals("[]")) {
+                        manifestStore.markEmbedding(document.tenantId(), syncRootUrl, result.unchangedItemsJson(), Instant.now());
+                    }
+                    String vectorMessage = autoRebuildVectorIndex(pending, normalizedRole, normalizedSubjectId);
                     if (manifestStore != null && !result.unchangedItemsJson().equals("[]")) {
                         manifestStore.markIndexed(document.tenantId(), syncRootUrl, result.unchangedItemsJson(), Instant.now());
                     }
                     TeacherSourceSyncJobResponse completed = updateJob(
-                            running, "completed", "skipped_unchanged", result.savedPath().toString(),
-                            result.message() + "; metadata unchanged; local files and vector index retained");
+                            running, "completed", "vector_rebuild_completed", result.savedPath().toString(),
+                            result.message() + "; metadata unchanged; rebuilt vector index from persisted blocks" + vectorMessage);
                     saveFeishuCheckpoint(
-                            unchanged, completed,
+                            pending, completed,
                             result.checkpoint().hasCursor()
-                                    ? toStoredCheckpoint(unchanged, completed, result.checkpoint(), result.failedItemsJson())
+                                    ? toStoredCheckpoint(pending, completed, result.checkpoint(), result.failedItemsJson())
                                     : null,
                             mergeDownloadedItemsJson(result), result.failedItemsJson(), 2);
                     return jobStore.save(completed);
+                    }
                 }
                 /*
                  * Retire the prior generation before parsing. Parsing persists and reactivates the exact assets used
@@ -468,15 +543,38 @@ public class TeacherSourceSyncExecutionService {
                 if (manifestStore != null) {
                     manifestStore.markParsing(document.tenantId(), document.originalUrl(), result.changedItemsJson(), Instant.now());
                 }
-                List<TeacherDocumentBlockResponse> blocks = parseResourceFiles(
-                        normalizedTenantId,
-                        normalizedRole,
-                        normalizedSubjectId,
-                        downloaded,
-                        true);
-                String contentChecksum = semanticContentChecksum(blocks, downloaded.title());
+                FileSeparatedParseResult separatedParse = null;
+                List<TeacherDocumentBlockResponse> blocks = List.of();
+                String contentChecksum;
+                if (resourceStore.supportsFileDocuments()) {
+                    separatedParse = parseResourceFilesIntoFileDocuments(
+                            normalizedTenantId,
+                            normalizedRole,
+                            normalizedSubjectId,
+                            downloaded,
+                            true,
+                            running,
+                            mergeProviderFileItems(result));
+                    contentChecksum = separatedParse.rootChecksum();
+                } else {
+                    blocks = parseResourceFiles(
+                            normalizedTenantId,
+                            normalizedRole,
+                            normalizedSubjectId,
+                            downloaded,
+                            true,
+                            running);
+                    contentChecksum = semanticContentChecksum(blocks, downloaded.title());
+                }
                 downloaded = withSyncFingerprint(downloaded, contentChecksum);
-                if (contentChecksum.equals(document.contentChecksum()) && hasVerifiedVectorReadiness(document)) {
+                if (resourceStore.supportsFileDocuments()) {
+                    archiveMissingFileDocuments(
+                            normalizedTenantId,
+                            downloaded,
+                            mergeProviderFileItems(result));
+                }
+                if (!imageBindingBackfillRequired
+                        && contentChecksum.equals(document.contentChecksum()) && hasVerifiedVectorReadiness(document)) {
                     /*
                      * Feishu can change title/revision without changing parsed body. Persist those real provider
                      * metadata changes, but retain active block/asset/vector rows: a delete-and-rebuild here would
@@ -503,15 +601,21 @@ public class TeacherSourceSyncExecutionService {
                 }
                 resourceStore.save(downloaded);
                 int feishuManifestAssets = ingestFeishuDownloadedAssetManifest(downloaded, result);
+                TeacherResourceAssetService.AssetMigrationSummary assetMigration =
+                        assetService.migrateDocumentAssetsToReadableNames(downloaded.tenantId(), downloaded.documentId());
                 String vectorMessage = "";
 
                 if (manifestStore != null) {
                     manifestStore.markParsed(document.tenantId(), syncRootUrl, changedItemsJson, Instant.now());
                 }
 
-                if (!blocks.isEmpty()) {
-                    blockStore.replaceActiveBlocks(document.tenantId(), document.documentId(), blocks);
-                    TeacherResourceDocumentResponse synced = markLocalResourceSynced(downloaded);
+                int parsedBlockCount = separatedParse == null ? blocks.size() : separatedParse.blockCount();
+                if (parsedBlockCount > 0) {
+                    if (separatedParse == null) {
+                        blockStore.replaceActiveBlocks(document.tenantId(), document.documentId(), blocks);
+                    }
+                    syncSourceCatalog(document, savedSourceRoot, contentChecksum, true);
+                    TeacherResourceDocumentResponse synced = markLocalResourceSynced(downloaded, contentChecksum);
                     if (manifestStore != null) {
                         manifestStore.markEmbedding(document.tenantId(), syncRootUrl, changedItemsJson, Instant.now());
                     }
@@ -519,20 +623,26 @@ public class TeacherSourceSyncExecutionService {
                     if (manifestStore != null) {
                         manifestStore.markIndexed(document.tenantId(), syncRootUrl, changedItemsJson, Instant.now());
                     }
-                } else if (manifestStore != null) {
-                    // A changed attachment may be valid without producing searchable text blocks.
-                    manifestStore.markIndexed(document.tenantId(), syncRootUrl, changedItemsJson, Instant.now());
+                } else {
+                    syncSourceCatalog(document, savedSourceRoot, contentChecksum, false);
+                    if (manifestStore != null) {
+                        // A changed attachment may be valid without producing searchable text blocks.
+                        manifestStore.markIndexed(document.tenantId(), syncRootUrl, changedItemsJson, Instant.now());
+                    }
                 }
                 TeacherSourceSyncJobResponse completed = updateJob(
                         running,
                         "completed",
                         "download_completed",
                         result.savedPath().toString(),
-                        blocks.isEmpty()
+                        parsedBlockCount == 0
                                 ? result.message() + "; no supported files parsed"
                                         + assetCountSuffix(feishuManifestAssets)
-                                : result.message() + "; Parsed " + blocks.size() + " blocks"
+                                : result.message() + "; Parsed " + parsedBlockCount + " blocks"
                                         + assetCountSuffix(feishuManifestAssets)
+                                        + "; readableAssetMigration=" + assetMigration.migratedCount()
+                                        + ", legacyHashFilesRemoved=" + assetMigration.removedLegacyFileCount()
+                                        + ", assetMigrationElapsedMs=" + assetMigration.elapsedMs()
                                         + aiModeSuffix(document)
                                         + vectorMessage);
                 TeacherSourceSyncCheckpointResponse successCheckpoint = result.checkpoint().hasCursor()
@@ -552,7 +662,9 @@ public class TeacherSourceSyncExecutionService {
                     normalizedTenantId,
                     normalizedRole,
                     normalizedSubjectId,
-                    document);
+                    document,
+                    false,
+                    running);
             blockStore.replaceActiveBlocks(document.tenantId(), document.documentId(), blocks);
             TeacherResourceDocumentResponse synced = markLocalResourceSynced(document);
             String vectorMessage = autoRebuildVectorIndex(synced, normalizedRole, normalizedSubjectId);
@@ -569,6 +681,8 @@ public class TeacherSourceSyncExecutionService {
         } catch (RuntimeException exception) {
                 if (exception instanceof VectorIndexSyncException) {
                 markManifestFailure(document, syncRootUrl, changedItemsJson, exception, true);
+                LOGGER.warn("teacher_source_sync_failed document={} phase=vector_index_failed type={} message={}",
+                        document.documentId(), exception.getClass().getSimpleName(), exception.getMessage());
                 TeacherSourceSyncJobResponse failed = updateJob(
                         running,
                         "failed",
@@ -588,17 +702,25 @@ public class TeacherSourceSyncExecutionService {
                     failure = feishuException.failure();
                 }
                 TeacherSourceSyncCheckpointResponse checkpointToSave = failureCheckpoint.hasCursor()
-                        ? toStoredCheckpoint(document, running, failureCheckpoint, "[]")
+                        ? toStoredCheckpoint(document, running, failureCheckpoint, failedItemsJson(exception, retryable))
                         : resumeCheckpoint;
+                boolean downloadFailure = exception instanceof TeacherFeishuDownloadException
+                        || "[]".equals(changedItemsJson);
+                String failurePhase = downloadFailure
+                        ? (retryable ? "download_paused" : "download_failed")
+                        : "parse_failed";
                 boolean authorizationRequired = failure.authorizationUrl() != null
                         || (failure.requiredScopes() != null && !failure.requiredScopes().isEmpty());
                 if (!authorizationRequired) {
                     markManifestFailure(document, syncRootUrl, changedItemsJson, exception, retryable);
                 }
+                LOGGER.info("teacher_source_sync_failed document={} phase={} type={} message={}",
+                        document.documentId(), authorizationRequired ? "authorization_required" : failurePhase,
+                        exception.getClass().getSimpleName(), exception.getMessage());
                 TeacherSourceSyncJobResponse pausedOrFailed = updateJob(
                         running,
                         authorizationRequired ? "AUTH_REQUIRED" : (retryable ? "paused" : "failed"),
-                        authorizationRequired ? "authorization_required" : (retryable ? "download_paused" : "download_failed"),
+                        authorizationRequired ? "authorization_required" : failurePhase,
                         null,
                         exception.getMessage(),
                         failure);
@@ -612,6 +734,8 @@ public class TeacherSourceSyncExecutionService {
                 return jobStore.save(pausedOrFailed);
             }
             markManifestFailure(document, syncRootUrl, changedItemsJson, exception, false);
+            LOGGER.info("teacher_source_sync_failed document={} phase=parse_failed type={} message={}",
+                    document.documentId(), exception.getClass().getSimpleName(), exception.getMessage());
             TeacherSourceSyncJobResponse failed = updateJob(
                     running,
                     "failed",
@@ -632,13 +756,18 @@ public class TeacherSourceSyncExecutionService {
         if (manifestStore == null) {
             return;
         }
-        Instant now = Instant.now();
-        Instant nextRetryAt = retryable ? now.plusSeconds(FILE_RETRY_DELAY_SECONDS) : null;
-        if (changedItemsJson == null || changedItemsJson.equals("[]")) {
-            manifestStore.markRootFailed(document.tenantId(), rootUrl, exception.getMessage(), nextRetryAt, now);
-        } else {
-            manifestStore.markFailed(
-                    document.tenantId(), rootUrl, changedItemsJson, exception.getMessage(), nextRetryAt, now);
+        try {
+            Instant now = Instant.now();
+            Instant nextRetryAt = retryable ? now.plusSeconds(FILE_RETRY_DELAY_SECONDS) : null;
+            if (changedItemsJson == null || changedItemsJson.equals("[]")) {
+                manifestStore.markRootFailed(document.tenantId(), rootUrl, exception.getMessage(), nextRetryAt, now);
+            } else {
+                manifestStore.markFailed(
+                        document.tenantId(), rootUrl, changedItemsJson, exception.getMessage(), nextRetryAt, now);
+            }
+        } catch (RuntimeException manifestException) {
+            LOGGER.warn("teacher_source_sync_manifest_failure_recording_failed document={} type={}",
+                    document.documentId(), manifestException.getClass().getSimpleName());
         }
     }
 
@@ -790,6 +919,11 @@ public class TeacherSourceSyncExecutionService {
             if (relativePath.isBlank()) {
                 continue;
             }
+            if ("image".equalsIgnoreCase(assetKind) && isDocumentScopedMarkdownImage(relativePath)) {
+                // The Markdown parser owns block binding for document-scoped preview images. The manifest remains
+                // download audit data only, preventing the same binary from being persisted once per path and again per block.
+                continue;
+            }
             Path file = resolveDownloadedItemPath(result.savedPath(), relativePath);
             if (!Files.isRegularFile(file)) {
                 continue;
@@ -810,7 +944,8 @@ public class TeacherSourceSyncExecutionService {
                                 null,
                                 providerAssetId,
                                 Files.readAllBytes(file),
-                                textOrDefault(item.path("mimeType").asText(""), "application/octet-stream"));
+                                textOrDefault(item.path("mimeType").asText(""), "application/octet-stream"),
+                                "image".equalsIgnoreCase(assetKind));
                 if (saved.isPresent()) {
                     count += 1;
                 }
@@ -820,6 +955,11 @@ public class TeacherSourceSyncExecutionService {
         }
         return count;
     }
+    private static boolean isDocumentScopedMarkdownImage(String relativePath) {
+        String normalized = textOrDefault(relativePath, "").replace('\\', '/');
+        return normalized.startsWith("IMAJES/") || normalized.contains("/IMAJES/");
+    }
+
     // Delegates deterministic sync/parse policy to TeacherSourceSyncPolicy.
     static Path resolveDownloadedItemPath(Path savedPath, String relativePath) { return TeacherSourceSyncPolicy.resolveDownloadedItemPath(savedPath, relativePath); }
 
@@ -827,6 +967,12 @@ public class TeacherSourceSyncExecutionService {
      * Marks a local resource as parsed while keeping embedding/index rebuild pending.
      */
     private TeacherResourceDocumentResponse markLocalResourceSynced(TeacherResourceDocumentResponse document) {
+        return markLocalResourceSynced(document, document.contentChecksum());
+    }
+
+    private TeacherResourceDocumentResponse markLocalResourceSynced(
+            TeacherResourceDocumentResponse document,
+            String contentChecksum) {
         TeacherResourceDocumentResponse synced = new TeacherResourceDocumentResponse(
                 document.documentId(),
                 document.tenantId(),
@@ -844,10 +990,25 @@ public class TeacherSourceSyncExecutionService {
                 document.previewFiles(),
                 document.parseMode(),
                 document.providerRevision(),
-                document.contentChecksum(),
+                contentChecksum,
                 document.sourceIdentity());
         resourceStore.save(synced);
         return synced;
+    }
+
+    private void syncSourceCatalog(
+            TeacherResourceDocumentResponse document,
+            Path savedSourceRoot,
+            String checksum,
+            boolean requireTextSource) {
+        if (sourceFileReader == null) {
+            throw new IllegalStateException("Feishu source reader is not configured");
+        }
+        if (requireTextSource && syncProperties.isValidSourceRoot(savedSourceRoot)) {
+            sourceFileReader.register(document.tenantId(), document.documentId(), savedSourceRoot, checksum);
+        } else {
+            sourceFileReader.unregister(document.tenantId(), document.documentId());
+        }
     }
 
     /**
@@ -912,7 +1073,11 @@ public class TeacherSourceSyncExecutionService {
                     "Vector index rebuild failed: " + textOrDefault(response.message(), "unknown error"),
                     null);
         }
-        return "; Vector index " + response.status() + ": " + textOrDefault(response.message(), "");
+        return "; Vector index " + response.status() + ": " + textOrDefault(response.message(), "")
+                + "; deletedExistingCount=" + response.deletedExistingCount()
+                + ", embeddingElapsedMs=" + response.embeddingElapsedMs()
+                + ", milvusDeleteElapsedMs=" + response.milvusDeleteElapsedMs()
+                + ", milvusUpsertElapsedMs=" + response.milvusUpsertElapsedMs();
     }
 
     static final class VectorIndexSyncException extends RuntimeException {
@@ -923,91 +1088,396 @@ public class TeacherSourceSyncExecutionService {
     }
 
     /**
-     * Parses a local teacher resource into document blocks.
+     * Detects historical Markdown image rows that were persisted before the original row and logical asset path became
+     * mandatory. The next authorized no-op Feishu download reparses only the already staged source; it never guesses
+     * an image path from a filename or alters the teacher's original files.
      */
-    private List<TeacherDocumentBlockResponse> parseResourceFiles(
+    private boolean requiresImageBindingBackfill(String tenantId, String rootDocumentId) {
+        String afterFileDocumentId = "";
+        while (true) {
+            List<TeacherResourceStore.TeacherFileDocument> files = resourceStore.listFileDocumentsForIndexing(
+                    tenantId, rootDocumentId, 128, afterFileDocumentId);
+            if (files.isEmpty()) {
+                return false;
+            }
+            for (TeacherResourceStore.TeacherFileDocument file : files) {
+                for (TeacherDocumentBlockResponse block : blockStore.listByDocument(tenantId, file.documentId())) {
+                    String rawText = textOrDefault(block.rawText(), "").strip();
+                    if (MARKDOWN_IMAGE_PATTERN.matcher(rawText).find()
+                            && (block.imageRefs() == null || block.imageRefs().isBlank() || block.imageRefs().equals("[]"))) {
+                        return true;
+                    }
+                    if ("[Markdown image block; no extractable text]".equals(rawText)
+                            && hasLegacyMarkdownImageReference(block.imageRefs())) {
+                        return true;
+                    }
+                }
+            }
+            afterFileDocumentId = files.getLast().documentId();
+        }
+    }
+
+    /** Returns whether an old image payload lacks the exact Markdown row and logical path required for authorization. */
+    private static boolean hasLegacyMarkdownImageReference(String imageRefs) {
+        if (imageRefs == null || imageRefs.isBlank() || imageRefs.equals("[]")) {
+            return false;
+        }
+        try {
+            JsonNode refs = OBJECT_MAPPER.readTree(imageRefs);
+            if (refs == null || !refs.isArray()) {
+                return false;
+            }
+            for (JsonNode ref : refs) {
+                if (!ref.isObject()) {
+                    continue;
+                }
+                boolean identifiesImage = !ref.path("imageReference").asText("").isBlank()
+                        || !ref.path("assetId").asText("").isBlank();
+                if (identifiesImage && (ref.path("markdownLine").asText("").isBlank()
+                        || ref.path("logicalPath").asText("").isBlank())) {
+                    return true;
+                }
+            }
+            return false;
+        } catch (JsonProcessingException exception) {
+            return false;
+        }
+    }
+
+    /**
+     * Parses and persists one ROOT as independent FILE documents when the backing store supports the durable model.
+     * The compatibility return value is used only by legacy stores/tests that do not expose FILE rows.
+     */
+    private FileSeparatedParseResult parseResourceFilesIntoFileDocuments(
             String tenantId,
             String viewerRole,
             String viewerSubjectId,
-            TeacherResourceDocumentResponse document) {
-        return parseResourceFiles(tenantId, viewerRole, viewerSubjectId, document, false);
+            TeacherResourceDocumentResponse document,
+            boolean allowNoSupportedFiles,
+            TeacherSourceSyncJobResponse running,
+            String providerItemsJson) {
+        Path root = Path.of(textOrDefault(document.localPath(), ""));
+        if (!Files.exists(root)) {
+            throw new IllegalArgumentException("Local resource path does not exist: " + root);
+        }
+        FormulaVisionBudget formulaVisionBudget = FormulaVisionBudget.forDocument(document, formulaRecognitionProperties);
+        int totalFiles = 0;
+        int[] totalBlocks = {0};
+        MessageDigest rootDigest = digest();
+        Stream<Path> files = streamSupportedFiles(root, feishuFileExtension(document));
+        java.util.Iterator<Path> iterator = files.iterator();
+        while (iterator.hasNext()) {
+                Path file = iterator.next();
+                totalFiles += 1;
+                String relativePath = root.equals(file)
+                        ? file.getFileName().toString()
+                        : root.relativize(file).toString();
+                String safeRelativePath = relativePath.replace('\\', '/');
+                String providerItemId = providerItemIdForPath(providerItemsJson, safeRelativePath);
+                if (providerItemId.isBlank() && manifestStore != null) {
+                    // Unchanged files are absent from changedItemsJson. Resolve their stable provider identity from the
+                    // persisted manifest before falling back to the ingestion-bound path hash.
+                    providerItemId = textOrDefault(
+                            manifestStore.providerItemId(tenantId, document.documentId(), safeRelativePath), "");
+                }
+                String checksum = fileChecksum(file);
+                TeacherResourceStore.TeacherFileDocument fileDocument = resourceStore.findOrCreateFileDocument(
+                        document, providerItemId, safeRelativePath, checksum, FILE_SPLIT_FINGERPRINT);
+                if (fileDocument == null || fileDocument.documentId().isBlank()) {
+                    throw new IllegalStateException("FILE document persistence is unavailable for source path: " + safeRelativePath);
+                }
+                blockStore.beginFileReplacement(tenantId, fileDocument.documentId());
+                persistParseProgress(running, "parse_file_started", safeRelativePath, totalBlocks[0], -1);
+                final int[] order = {0};
+                consumeFileBlocks(
+                        tenantId,
+                        viewerRole,
+                        viewerSubjectId,
+                        fileDocument.document(),
+                        file,
+                        safeRelativePath,
+                        formulaVisionBudget,
+                        (parsed, formulas) -> {
+                            TeacherDocumentBlockResponse block = withDocumentAndOrder(
+                                    toBlock(tenantId, viewerRole, viewerSubjectId, fileDocument.document(),
+                                            safeRelativePath, parsed, order[0], formulas),
+                                    fileDocument.documentId(),
+                                    order[0]++);
+                            blockStore.replaceActiveBlockBatch(
+                                    tenantId, fileDocument.documentId(), List.of(block));
+                            totalBlocks[0] += 1;
+                        });
+                blockStore.completeFileReplacement(tenantId, fileDocument.documentId());
+                resourceStore.save(markLocalResourceSynced(fileDocument.document(), checksum));
+                rootDigest.update(safeRelativePath.getBytes(StandardCharsets.UTF_8));
+                rootDigest.update(checksum.getBytes(StandardCharsets.UTF_8));
+                persistParseProgress(running, "parse_file_completed", safeRelativePath, totalBlocks[0], -1);
+            }
+            files.close();
+        if (totalFiles == 0 && !allowNoSupportedFiles) {
+            throw new IllegalArgumentException("Feishu staging path contains no files matching export format "
+                    + feishuFileExtension(document) + ": " + root);
+        }
+        return new FileSeparatedParseResult(totalFiles, totalBlocks[0], HexFormat.of().formatHex(rootDigest.digest()));
     }
 
+    /**
+     * Removes FILE rows absent from a successful provider discovery without loading their blocks. Cleanup is deliberately
+     * ordered vector -> block -> asset -> source row so a failed dependent cleanup leaves the FILE visible for retry.
+     */
+    private void archiveMissingFileDocuments(
+            String tenantId,
+            TeacherResourceDocumentResponse rootDocument,
+            String discoveredItemsJson) {
+        List<String> activeIdentityHashes = new ArrayList<>();
+        try {
+            JsonNode discovered = OBJECT_MAPPER.readTree(jsonOrEmptyArray(discoveredItemsJson));
+            if (!discovered.isArray() || discovered.isEmpty()) {
+                // An empty provider manifest is not proof that every persisted file disappeared. A failed,
+                // incomplete, or legacy downloader response must never archive the physical document set.
+                LOGGER.warn("teacher_source_sync_archive_skipped root={} reason=empty_discovery_manifest",
+                        rootDocument.documentId());
+                return;
+            }
+            for (JsonNode item : discovered) {
+                String providerItemId = textOrDefault(item.path("token").asText(""), "");
+                String sourcePath = textOrDefault(
+                        item.path("relativePath").asText(item.path("path").asText("")), "")
+                        .replace('\\', '/');
+                if (providerItemId.isBlank() && sourcePath.isBlank()) {
+                    continue;
+                }
+                if (!providerItemId.isBlank()) {
+                    activeIdentityHashes.add(fileIdentityHash(rootDocument.documentId(), providerItemId, sourcePath));
+                }
+                if (!sourcePath.isBlank()) {
+                    // Keep the path identity as a migration fallback for rows created before provider tokens were
+                    // available, and for manifests whose provider path omits the exported filename extension.
+                    activeIdentityHashes.add(fileIdentityHash(rootDocument.documentId(), "", sourcePath));
+                }
+            }
+        } catch (JsonProcessingException exception) {
+            throw new IllegalArgumentException("Feishu discovery manifest is invalid", exception);
+        }
+        activeIdentityHashes = activeIdentityHashes.stream().filter(value -> value != null && !value.isBlank()).distinct().toList();
+        if (activeIdentityHashes.isEmpty()) {
+            LOGGER.warn("teacher_source_sync_archive_skipped root={} reason=no_file_identities",
+                    rootDocument.documentId());
+            return;
+        }
+        String afterFileDocumentId = "";
+        boolean deletedAny = false;
+        while (true) {
+            List<TeacherResourceStore.TeacherFileDocument> missing = resourceStore.listMissingFileDocuments(
+                    tenantId,
+                    rootDocument.documentId(),
+                    activeIdentityHashes,
+                    afterFileDocumentId,
+                    1);
+            if (missing.isEmpty()) {
+                if (deletedAny) {
+                    vectorIndexService.flushTeacherResourceVectors();
+                }
+                return;
+            }
+            for (TeacherResourceStore.TeacherFileDocument file : missing) {
+                vectorIndexService.deleteTeacherResourceVectors(tenantId, file.documentId(), false);
+                vectorIndexService.purgeTeacherResourceContent(tenantId, file.documentId());
+                assetService.purgeDocumentAssets(tenantId, file.documentId());
+                resourceStore.archiveFileDocument(tenantId, file.documentId());
+                afterFileDocumentId = file.documentId();
+                deletedAny = true;
+            }
+        }
+    }
+
+    private static String mergeProviderFileItems(TeacherFeishuDownloadClient.FeishuDownloadResult result) {
+        ArrayNode merged = OBJECT_MAPPER.createArrayNode();
+        appendJsonItems(merged, result.changedItemsJson());
+        appendJsonItems(merged, result.unchangedItemsJson());
+        try {
+            return OBJECT_MAPPER.writeValueAsString(merged);
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("Failed to serialize Feishu provider file manifest", exception);
+        }
+    }
+
+    private static void appendJsonItems(ArrayNode target, String json) {
+        try {
+            JsonNode node = OBJECT_MAPPER.readTree(jsonOrEmptyArray(json));
+            if (node != null && node.isArray()) {
+                node.forEach(target::add);
+            }
+        } catch (JsonProcessingException exception) {
+            throw new IllegalArgumentException("Feishu provider file manifest is invalid", exception);
+        }
+    }
+
+    private static String fileIdentityHash(String rootDocumentId, String providerItemId, String sourcePath) {
+        String identity = providerItemId == null || providerItemId.isBlank()
+                ? rootDocumentId + "\u001f" + sourcePath
+                : providerItemId;
+        return TeacherResourceSourceIdentity.hash(identity);
+    }
+
+    private void consumeFileBlocks(
+            String tenantId,
+            String viewerRole,
+            String viewerSubjectId,
+            TeacherResourceDocumentResponse document,
+            Path file,
+            String relativePath,
+            FormulaVisionBudget formulaVisionBudget,
+            BiConsumer<ParsedBlock, List<FormulaReference>> consumer) {
+        TeacherSourceSyncParsingPolicy.consumeFileBlocks(
+                file,
+                formulaVisionBudget,
+                (parsed, formulas) -> consumer.accept(parsed, formulas));
+    }
+
+    private List<TeacherDocumentBlockResponse> parseSingleFile(
+            String tenantId,
+            String viewerRole,
+            String viewerSubjectId,
+            TeacherResourceDocumentResponse document,
+            Path file,
+            String relativePath,
+            FormulaVisionBudget formulaVisionBudget) {
+        String lowerName = file.getFileName().toString().toLowerCase(Locale.ROOT);
+        if (lowerName.endsWith(".pdf")) {
+            return parsePdfBlocksIncrementally(
+                    tenantId, viewerRole, viewerSubjectId, document, file, relativePath, 0, formulaVisionBudget);
+        }
+        List<ParsedBlock> parsedBlocks = new ArrayList<>(parseFileBlocks(file));
+        if ("AI".equalsIgnoreCase(textOrDefault(document.parseMode(), "TEXT")) && lowerName.endsWith(".docx")) {
+            parsedBlocks.addAll(parseRenderedDocxPages(file));
+        }
+        boolean hasRenderedDocxPages = lowerName.endsWith(".docx")
+                && parsedBlocks.stream().anyMatch(parsed -> parsed.pageNo() != null && !parsed.assets().isEmpty());
+        List<List<FormulaReference>> pageFormulas = hasRenderedDocxPages
+                ? emptyFormulaBatches(parsedBlocks.size())
+                : recognizePdfPageBatches(document, parsedBlocks, formulaVisionBudget);
+        List<TeacherDocumentBlockResponse> result = new ArrayList<>(parsedBlocks.size());
+        for (int index = 0; index < parsedBlocks.size(); index += 1) {
+            result.add(toBlock(
+                    tenantId, viewerRole, viewerSubjectId, document, relativePath, parsedBlocks.get(index), index,
+                    pageFormulas.get(index)));
+        }
+        return result;
+    }
+
+    private static TeacherDocumentBlockResponse withDocumentAndOrder(
+            TeacherDocumentBlockResponse block, String documentId, int order) {
+        return new TeacherDocumentBlockResponse(
+                block.blockId(), documentId, block.externalBlockId(), block.blockType(), order, block.chapter(),
+                block.section(), block.pageNo(), block.printedPageNo(), block.sourcePath(), block.blockRole(),
+                block.rawText(), block.normalizedText(), block.imageRefs(), block.formulaRefs(), block.graphNodeIdsJson(),
+                block.graphTagNamesJson(), block.checksum(), block.confidence(), block.status());
+    }
+
+    private static MessageDigest digest() {
+        try {
+            return MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 is unavailable", exception);
+        }
+    }
+
+    private static String fileChecksum(Path file) {
+        MessageDigest digest = digest();
+        try (var input = Files.newInputStream(file)) {
+            byte[] buffer = new byte[8192];
+            int read;
+            while ((read = input.read(buffer)) >= 0) {
+                if (read > 0) digest.update(buffer, 0, read);
+            }
+            return HexFormat.of().formatHex(digest.digest());
+        } catch (IOException exception) {
+            throw new IllegalArgumentException("Failed to checksum source file: " + file, exception);
+        }
+    }
+
+    private static String providerItemIdForPath(String itemsJson, String relativePath) {
+        if (itemsJson == null || itemsJson.isBlank()) return "";
+        try {
+            JsonNode items = OBJECT_MAPPER.readTree(itemsJson);
+            if (!items.isArray()) return "";
+            String normalized = normalizeProviderPath(relativePath);
+            String withoutExtension = stripProviderExportExtension(normalized);
+            for (JsonNode item : items) {
+                String token = textOrDefault(item.path("token").asText(""), "");
+                if (token.isBlank()) continue;
+                String itemRelativePath = normalizeProviderPath(item.path("relativePath").asText(""));
+                String itemPath = normalizeProviderPath(item.path("path").asText(""));
+                if (providerPathMatches(normalized, withoutExtension, itemRelativePath)
+                        || providerPathMatches(normalized, withoutExtension, itemPath)) {
+                    return token;
+                }
+            }
+        } catch (JsonProcessingException ignored) {
+            // The provider manifest is advisory; the durable path hash remains the fallback identity.
+        }
+        return "";
+    }
+
+    private static boolean providerPathMatches(String normalized, String withoutExtension, String candidate) {
+        if (candidate.isBlank()) return false;
+        String candidateWithoutExtension = stripProviderExportExtension(candidate);
+        return normalized.equals(candidate)
+                || withoutExtension.equals(candidateWithoutExtension)
+                || normalized.endsWith("/" + candidate)
+                || withoutExtension.endsWith("/" + candidateWithoutExtension)
+                || candidate.endsWith("/" + normalized)
+                || candidateWithoutExtension.endsWith("/" + withoutExtension);
+    }
+
+    private static String normalizeProviderPath(String value) {
+        return value == null ? "" : value.replace('\\', '/').strip().replaceAll("^/+|/+$", "");
+    }
+
+    private static String stripProviderExportExtension(String path) {
+        int slash = path.lastIndexOf('/');
+        int dot = path.lastIndexOf('.');
+        return dot > slash ? path.substring(0, dot) : path;
+    }
+
+    /** Legacy root-level parser retained only for non-FILE test stores and old local callers. */
     private List<TeacherDocumentBlockResponse> parseResourceFiles(
             String tenantId,
             String viewerRole,
             String viewerSubjectId,
             TeacherResourceDocumentResponse document,
-            boolean allowNoSupportedFiles) {
+            boolean allowNoSupportedFiles,
+            TeacherSourceSyncJobResponse runningJob) {
         Path root = Path.of(textOrDefault(document.localPath(), ""));
-        if (!Files.exists(root)) {
-            throw new IllegalArgumentException("Local resource path does not exist: " + root);
-        }
-        List<Path> files = listSupportedFiles(root);
-        if (files.isEmpty()) {
-            if (allowNoSupportedFiles) {
-                return List.of();
-            }
-            throw new IllegalArgumentException("Local resource path contains no supported .md, .txt, .docx, or .pdf files: " + root);
-        }
+        if (!Files.exists(root)) throw new IllegalArgumentException("Local resource path does not exist: " + root);
         List<TeacherDocumentBlockResponse> blocks = new ArrayList<>();
-        FormulaVisionBudget formulaVisionBudget = FormulaVisionBudget.forDocument(document, formulaRecognitionProperties);
-        int order = 0;
-        for (Path file : files) {
-            String relativePath = root.equals(file) ? file.getFileName().toString() : root.relativize(file).toString();
-            if (file.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".pdf")) {
-                /*
-                 * A scanned teaching PDF can contain hundreds of rendered page images. Persist each bounded visual
-                 * batch before rendering the next one so the source file is indexed losslessly without retaining an
-                 * entire handout's PNG payload in the JVM heap.
-                 */
-                List<TeacherDocumentBlockResponse> pdfBlocks = parsePdfBlocksIncrementally(
-                        tenantId,
-                        viewerRole,
-                        viewerSubjectId,
-                        document,
-                        file,
-                        relativePath.replace('\\', '/'),
-                        order,
-                        formulaVisionBudget);
-                blocks.addAll(pdfBlocks);
-                order += pdfBlocks.size();
-                continue;
-            }
-            List<ParsedBlock> parsedBlocks = new ArrayList<>(parseFileBlocks(file));
-            if ("AI".equalsIgnoreCase(textOrDefault(document.parseMode(), "TEXT"))
-                    && file.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".docx")) {
-                /* Render complete Word pages once, then feed them into the same PDF page-batch path. Do not inspect
-                 * individual WMF/PNG equation assets: that would multiply visual calls and lose page context. */
-                parsedBlocks.addAll(parseRenderedDocxPages(file));
-            }
-            /*
-             * AI-mode DOCX sources now have real rendered pages.  Their visible text is transcribed later by
-             * TeacherPageTranscriptionClient after the page asset is persisted and authorization is rechecked.  Do
-
-             * not first spend the formula worker budget on the same page raster: it serializes a large paper into
-             * dozens of redundant vision calls before source blocks exist. Native OMML remains in formula_refs, and
-             * the page transcription is the authoritative gpt-5.6-luna evidence for visible equations and diagrams.
-             */
-            boolean hasRenderedDocxPages = file.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".docx")
-                    && parsedBlocks.stream().anyMatch(parsed -> parsed.pageNo() != null && !parsed.assets().isEmpty());
-            List<List<FormulaReference>> pageFormulas = hasRenderedDocxPages
-                    ? emptyFormulaBatches(parsedBlocks.size())
-                    : recognizePdfPageBatches(document, parsedBlocks, formulaVisionBudget);
-            for (int index = 0; index < parsedBlocks.size(); index += 1) {
-                ParsedBlock parsed = parsedBlocks.get(index);
-                blocks.add(toBlock(
-                        tenantId,
-                        viewerRole,
-                        viewerSubjectId,
-                        document,
-                        relativePath.replace('\\', '/'),
-                        parsed,
-                        order++,
-                        pageFormulas.get(index)));
-            }
+        try (Stream<Path> files = streamSupportedFiles(root)) {
+            files.forEach(file -> {
+                String relativePath = root.equals(file) ? file.getFileName().toString() : root.relativize(file).toString();
+                List<TeacherDocumentBlockResponse> parsed = parseSingleFile(
+                        tenantId, viewerRole, viewerSubjectId, document, file, relativePath.replace('\\', '/'),
+                        FormulaVisionBudget.forDocument(document, formulaRecognitionProperties));
+                blocks.addAll(parsed);
+            });
+        }
+        if (blocks.isEmpty() && !allowNoSupportedFiles) {
+            throw new IllegalArgumentException("Local resource path contains no supported source files: " + root);
         }
         return blocks;
+    }
+
+    private void persistParseProgress(
+            TeacherSourceSyncJobResponse runningJob,
+            String phase,
+            String relativePath,
+            int parsedBlocks,
+            int totalFiles) {
+        if (runningJob == null || jobStore == null) {
+            return;
+        }
+        String message = "Parsing " + relativePath + " (" + parsedBlocks + " blocks, " + totalFiles + " files)";
+        jobStore.save(updateJob(runningJob, "running", phase, null, message));
     }
 
     /** Returns one independent mutable formula list per parsed block when page transcription owns vision work. */
@@ -1046,14 +1516,15 @@ public class TeacherSourceSyncExecutionService {
                 stripper.setStartPage(page);
                 stripper.setEndPage(page);
                 String text = textOrDefault(stripper.getText(pdf), "");
-                ByteArrayOutputStream imageBytes = new ByteArrayOutputStream();
-                imageBytes.write(renderPdfPageAsPng(file, page, renderer));
+                byte[] rendered = renderPdfPageAsPng(file, page, renderer);
+                TeacherResourceAssetService.ValidatedAsset validated = TeacherResourceAssetService.validateImageBytes(
+                        "parser", relativePath, "pdf-page:" + page, rendered, "image/png");
                 batch.add(new ParsedBlock(
                         chapter,
                         null,
                         page,
                         text.isBlank() ? "[PDF page image; no extractable text]" : text,
-                        List.of(new PendingAsset("pdf-page:" + page, imageBytes.toByteArray(), "image/png")),
+                        List.of(new PendingAsset("pdf-page:" + page, validated.bytes(), validated.mimeType())),
                         List.of()));
                 if (batch.size() == batchSize || page == pdf.getNumberOfPages()) {
                     List<List<FormulaReference>> formulas =
@@ -1088,8 +1559,20 @@ public class TeacherSourceSyncExecutionService {
     static Optional<byte[]> tryRenderPdfPageWithNativeRenderer(Path pdf, int pageNo) { return TeacherSourceSyncParsingPolicy.tryRenderPdfPageWithNativeRenderer(pdf, pageNo); }
     // Delegates deterministic file/parse policy to TeacherSourceSyncParsingPolicy.
     static int pdfPageRenderDpi() { return TeacherSourceSyncParsingPolicy.pdfPageRenderDpi(); }
+    private static String feishuFileExtension(TeacherResourceDocumentResponse document) {
+        String format = textOrDefault(document.feishuExportFormat(), "md").toLowerCase(Locale.ROOT);
+        return switch (format) {
+            case "md" -> ".md";
+            case "docx" -> ".docx";
+            case "pdf" -> ".pdf";
+            default -> throw new IllegalArgumentException("Unsupported Feishu export format: " + format);
+        };
+    }
+
     // Delegates deterministic file/parse policy to TeacherSourceSyncParsingPolicy.
-    static List<Path> listSupportedFiles(Path root) { return TeacherSourceSyncParsingPolicy.listSupportedFiles(root); }
+    static Stream<Path> streamSupportedFiles(Path root) { return TeacherSourceSyncParsingPolicy.streamSupportedFiles(root); }
+    // Delegates deterministic file/parse policy to TeacherSourceSyncParsingPolicy.
+    static Stream<Path> streamSupportedFiles(Path root, String requiredExtension) { return TeacherSourceSyncParsingPolicy.streamSupportedFiles(root, requiredExtension); }
     // Delegates deterministic file/parse policy to TeacherSourceSyncParsingPolicy.
     static boolean isSupportedFile(Path file) { return TeacherSourceSyncParsingPolicy.isSupportedFile(file); }
     // Delegates deterministic file/parse policy to TeacherSourceSyncParsingPolicy.
@@ -1108,6 +1591,7 @@ public class TeacherSourceSyncExecutionService {
     static String htmlAttributeValue(Pattern attributePattern, String tag) { return TeacherSourceSyncParsingPolicy.htmlAttributeValue(attributePattern, tag); }
     // Delegates deterministic file/parse policy to TeacherSourceSyncParsingPolicy.
     static Optional<PendingAsset> readMarkdownAsset(Path markdownFile, String imagePath) { return TeacherSourceSyncParsingPolicy.readMarkdownAsset(markdownFile, imagePath); }
+    static String logicalImagePath(String sourcePath, String imagePath) { return TeacherSourceSyncParsingPolicy.logicalImagePath(sourcePath, imagePath); }
     // Delegates deterministic file/parse policy to TeacherSourceSyncParsingPolicy.
     static String decodeLocalImagePath(String path) { return TeacherSourceSyncParsingPolicy.decodeLocalImagePath(path); }
     // Delegates deterministic file/parse policy to TeacherSourceSyncParsingPolicy.
@@ -1225,22 +1709,27 @@ public class TeacherSourceSyncExecutionService {
         }
         List<StoredAssetReference> refs = new ArrayList<>();
         for (PendingAsset pending : parsed.assets()) {
+            String logicalPath = logicalImagePath(sourcePath, pending.imageReference());
             Optional<com.doob.mathagent.teacher.vo.TeacherResourceAssetResponse> saved =
                     assetService.saveExtractedAsset(
                             document,
-                            sourcePath,
+                            logicalPath,
                             pageNo,
-                            pending.providerAssetId(),
+                            logicalPath,
                             pending.content(),
-                            pending.mimeType());
-            saved.ifPresent(asset -> {
-                refs.add(new StoredAssetReference(
-                        asset.assetId(),
-                        asset.pageNo(),
-                        textOrDefault(asset.sourcePath(), ""),
-                        textOrDefault(asset.mimeType(), "application/octet-stream"),
-                        pending.content()));
-            });
+                            pending.mimeType(),
+                            true);
+            saved.ifPresent(asset -> refs.add(new StoredAssetReference(
+                    asset.assetId(),
+                    asset.pageNo(),
+                    textOrDefault(asset.sourcePath(), logicalPath),
+                    pending.imageReference(),
+                    pending.originalFilename(),
+                    logicalPath,
+                    pending.markdownLine(),
+                    logicalPath,
+                    textOrDefault(asset.mimeType(), "application/octet-stream"),
+                    pending.content())));
         }
         return List.copyOf(refs);
     }
@@ -1454,9 +1943,9 @@ public class TeacherSourceSyncExecutionService {
     // Delegates deterministic file/parse policy to TeacherSourceSyncParsingPolicy.
     static boolean containsAny(String haystack, String... needles) { return TeacherSourceSyncParsingPolicy.containsAny(haystack, needles); }
 
-    /**
-     * Internal parsed block model.
-     */
+    record FileSeparatedParseResult(int fileCount, int blockCount, String rootChecksum) {
+    }
+    /** Internal parsed block model. */
     record ParsedBlock(
             String chapter,
             String section,
@@ -1467,10 +1956,35 @@ public class TeacherSourceSyncExecutionService {
     }
 
     /** Local Markdown image metadata extracted before the block is persisted. */
-    record ImageReference(String altText, String path) {
+    record ImageReference(String altText, String path, String qualifiedReference, String sourcePath, String originalFilename,
+                          String markdownLine) {
+        ImageReference(String altText, String path, String qualifiedReference, String sourcePath, String originalFilename) {
+            this(altText, path, qualifiedReference, sourcePath, originalFilename, "");
+        }
+
+        ImageReference withMarkdownLine(String line) {
+            return new ImageReference(altText, path, qualifiedReference, sourcePath, originalFilename,
+                    line == null ? "" : line);
+        }
     }
 
-    record PendingAsset(String providerAssetId, byte[] content, String mimeType) {
+    record PendingAsset(String providerAssetId, String imageReference, String originalFilename, String qualifiedReference,
+                        String markdownLine, byte[] content, String mimeType) {
+
+        PendingAsset(String providerAssetId, String imageReference, String originalFilename, String qualifiedReference,
+                     byte[] content, String mimeType) {
+            this(providerAssetId, imageReference, originalFilename, qualifiedReference, "", content, mimeType);
+        }
+
+        PendingAsset(String providerAssetId, byte[] content, String mimeType) {
+            this(providerAssetId, providerAssetId, fileName(providerAssetId), providerAssetId, "", content, mimeType);
+        }
+
+        private static String fileName(String value) {
+            String normalized = value == null ? "" : value.replace('\\', '/');
+            int slash = normalized.lastIndexOf('/');
+            return slash < 0 ? normalized : normalized.substring(slash + 1);
+        }
     }
 
     /** Asset bytes are retained only through this sync call; durable references remain opaque asset ids in MySQL. */
@@ -1478,6 +1992,11 @@ public class TeacherSourceSyncExecutionService {
             String assetId,
             Integer pageNo,
             String sourcePath,
+            String imageReference,
+            String originalFilename,
+            String qualifiedReference,
+            String markdownLine,
+            String logicalPath,
             String mimeType,
             byte[] content) {
     }

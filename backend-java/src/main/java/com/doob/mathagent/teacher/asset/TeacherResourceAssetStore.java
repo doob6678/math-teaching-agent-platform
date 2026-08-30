@@ -42,6 +42,16 @@ public interface TeacherResourceAssetStore {
         return List.of();
     }
 
+    /**
+     * Finds asset rows by the exact persisted logical source path.
+     *
+     * <p>This lookup is used only after a run has already authorized the matching Markdown row. It intentionally does
+     * not make a FILE document discoverable as a searchable resource.</p>
+     */
+    default List<TeacherResourceAssetResponse> listByLogicalPath(String tenantId, String logicalPath) {
+        return List.of();
+    }
+
     /** Removes the metadata rows only after the service has securely removed backend-owned binary files. */
     default void purgeDocumentAssets(String tenantId, String documentId) {
     }

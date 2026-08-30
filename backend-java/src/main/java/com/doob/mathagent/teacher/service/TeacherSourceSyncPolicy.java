@@ -149,6 +149,10 @@ final class TeacherSourceSyncPolicy {
      * Builds a compact failed-items JSON array from a download failure.
      */
     static String failedItemsJson(RuntimeException exception, boolean retryable) {
+        if (exception instanceof TeacherFeishuDownloadException feishuException
+                && !"[]".equals(jsonOrEmptyArray(feishuException.failedItemsJson()))) {
+            return jsonOrEmptyArray(feishuException.failedItemsJson());
+        }
         return "[{\"message\":\"" + escapeJson(textOrDefault(exception.getMessage(), exception.getClass().getSimpleName()))
                 + "\",\"retryable\":" + retryable + "}]";
     }

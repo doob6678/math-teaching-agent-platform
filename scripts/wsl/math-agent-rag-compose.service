@@ -8,8 +8,8 @@ Conflicts=math-agent-rag-compose-user.service
 Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=/mnt/c/Users/doob/Desktop/code/dev/math_agent_rag
-# This is the only canonical owner. It starts existing containers without recreation and then exits successfully.
-ExecStart=/usr/bin/flock -n /run/math-agent-rag-compose.lock /usr/bin/docker compose --env-file .env up -d --no-recreate
+# This is the only canonical owner. Compose waits for dependency health before reporting success.
+ExecStart=/usr/bin/flock -n /run/math-agent-rag-compose.lock /usr/bin/docker compose --env-file .env up -d --no-recreate --wait --wait-timeout 300
 # No ExecStop: stopping the owner never stops or deletes containers.
 
 [Install]

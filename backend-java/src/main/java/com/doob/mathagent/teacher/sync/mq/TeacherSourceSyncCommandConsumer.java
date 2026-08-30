@@ -32,9 +32,10 @@ public class TeacherSourceSyncCommandConsumer {
     @RabbitListener(queues = "${math-agent.teacher.sync.rabbitmq.queue}",
             containerFactory = "teacherSourceSyncRabbitListenerContainerFactory")
     public void consume(TeacherSourceSyncCommand command) {
+        TeacherSourceSyncJobResponse job = null;
         try {
             validate(command);
-            TeacherSourceSyncJobResponse job = jobStore.listByDocument(command.tenantId(), command.documentId()).stream()
+            job = jobStore.listByDocument(command.tenantId(), command.documentId()).stream()
                     .filter(candidate -> command.jobId().equals(candidate.jobId()))
                     .findFirst()
                     .orElseThrow(() -> new IllegalArgumentException("Teacher source sync job does not exist: " + command.jobId()));
@@ -51,10 +52,31 @@ public class TeacherSourceSyncCommandConsumer {
                         command.documentId(), command.jobId());
             }
         } catch (IllegalArgumentException exception) {
+            failRunningJob(job, exception);
             throw new AmqpRejectAndDontRequeueException("Invalid teacher source sync command", exception);
         } catch (RuntimeException exception) {
+            /*
+             * The execution service normally converts business failures itself. This boundary also covers failures
+             * thrown before that conversion (for example a listener wiring or persistence exception), so a message
+             * cannot leave a durable job in running forever while it is moved to the dead-letter queue.
+             */
+            failRunningJob(job, exception);
             throw new AmqpRejectAndDontRequeueException("Unexpected teacher source sync consumer failure", exception);
         }
+    }
+
+    private void failRunningJob(TeacherSourceSyncJobResponse job, RuntimeException exception) {
+        if (job == null || !"running".equalsIgnoreCase(job.status())) {
+            return;
+        }
+        String message = exception.getMessage();
+        if (message == null || message.isBlank()) {
+            message = exception.getClass().getSimpleName();
+        }
+        jobStore.save(new TeacherSourceSyncJobResponse(
+                job.jobId(), job.documentId(), job.tenantId(), job.sourceType(), job.operation(),
+                "failed", "consumer_failed", job.attempt(), job.createdBy(), job.stagingPath(),
+                message, job.createdAt(), java.time.Instant.now().toString(), job.failure()));
     }
 
     private static boolean canExecute(String action, String status) {

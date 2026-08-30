@@ -30,6 +30,7 @@ DEFAULT_ADMIN_USERNAME = "admin"
 DEFAULT_ADMIN_PASSWORD = "admin-123456"
 DEFAULT_CASE_COUNT = 100
 DEFAULT_CASES_PER_LIBRARY = 20
+DEFAULT_REQUEST_INTERVAL_SECONDS = 0.35
 MAX_QUERY_CHARS = 120
 MIN_QUERY_CHARS = 12
 MIN_BLOCK_TEXT_CHARS = 18
@@ -46,6 +47,7 @@ def main() -> None:
     parser.add_argument("--case-count", type=int, default=DEFAULT_CASE_COUNT)
     parser.add_argument("--cases-per-library", type=int, default=DEFAULT_CASES_PER_LIBRARY)
     parser.add_argument("--timeout", type=float, default=120.0)
+    parser.add_argument("--request-interval-seconds", type=float, default=DEFAULT_REQUEST_INTERVAL_SECONDS)
     args = parser.parse_args()
 
     config = _load_config(Path(args.config) if args.config else None)
@@ -57,29 +59,62 @@ def main() -> None:
 
     client = MathAgentClient(backend_url, timeout=args.timeout)
     client.login(username, password)
-    resources_attempt = client.get("/api/teacher/resources")
+    request_interval = max(0.0, float(args.request_interval_seconds))
+    last_request_at = 0.0
+
+    def paced_get(path: str, params: dict[str, Any] | None = None):
+        nonlocal last_request_at
+        now = time.monotonic()
+        wait_seconds = request_interval - (now - last_request_at)
+        if wait_seconds > 0:
+            time.sleep(wait_seconds)
+        attempt = client.get(path, params=params)
+        last_request_at = time.monotonic()
+        return attempt
+
+    resources_attempt = paced_get("/api/teacher/resources")
     if resources_attempt.status != 200 or not isinstance(resources_attempt.body, list):
         raise RuntimeError(f"Cannot read visible teacher resources: HTTP {resources_attempt.status} {resources_attempt.body}")
 
+    roots: list[dict[str, Any]] = []
     resources: list[dict[str, Any]] = []
     blocks_by_document: dict[str, list[dict[str, Any]]] = {}
     for raw_resource in resources_attempt.body:
         if not isinstance(raw_resource, dict):
             continue
-        document_id = _text(raw_resource.get("documentId"))
-        if not document_id:
+        root_id = _text(raw_resource.get("documentId"))
+        if not root_id or _text(raw_resource.get("sourceType")).lower() != "feishu":
             continue
-        blocks_attempt = client.get(f"/api/teacher/resources/{document_id}/blocks")
-        if blocks_attempt.status != 200 or not isinstance(blocks_attempt.body, list):
-            raise RuntimeError(f"Cannot read blocks for {document_id}: HTTP {blocks_attempt.status} {blocks_attempt.body}")
-        normalized_resource = dict(raw_resource)
-        normalized_resource["effectiveLibrary"] = _effective_library(raw_resource)
-        normalized_resource["blockCount"] = len(blocks_attempt.body)
-        normalized_resource["splitFingerprint"] = _split_fingerprint(blocks_attempt.body)
-        resources.append(normalized_resource)
-        blocks_by_document[document_id] = [_normalize_block(block) for block in blocks_attempt.body if isinstance(block, dict)]
+        roots.append(raw_resource)
+        files_attempt = paced_get(f"/api/teacher/resources/{root_id}/files", params={"limit": 512})
+        if files_attempt.status != 200 or not isinstance(files_attempt.body, list):
+            raise RuntimeError(f"Cannot read FILE documents for ROOT {root_id}: HTTP {files_attempt.status} {files_attempt.body}")
+        for raw_file in files_attempt.body:
+            if not isinstance(raw_file, dict):
+                continue
+            file_id = _text(raw_file.get("documentId"))
+            if not file_id:
+                continue
+            normalized_resource = dict(raw_file)
+            normalized_resource["fileDocumentId"] = file_id
+            normalized_resource["rootDocumentId"] = _text(raw_file.get("rootDocumentId") or root_id)
+            normalized_resource["documentKind"] = "FILE"
+            normalized_resource["effectiveLibrary"] = _effective_library(raw_file)
+            blocks_attempt = paced_get(
+                f"/api/teacher/resources/{file_id}/blocks", params={"limit": 512})
+            if blocks_attempt.status != 200 or not isinstance(blocks_attempt.body, list):
+                raise RuntimeError(f"Cannot read FILE blocks for {file_id}: HTTP {blocks_attempt.status} {blocks_attempt.body}")
+            normalized_resource["blockCount"] = len(blocks_attempt.body)
+            normalized_resource["splitFingerprint"] = _text(raw_file.get("splitFingerprint")) or _split_fingerprint(blocks_attempt.body)
+            resources.append(normalized_resource)
+            blocks_by_document[file_id] = [_normalize_block(block) for block in blocks_attempt.body if isinstance(block, dict)]
 
     searchable_resources = [resource for resource in resources if _is_production_searchable_resource(resource)]
+    if not searchable_resources:
+        raise RuntimeError(
+            "Current API exposes no searchable physical FILE documents; refusing to build a ROOT-only oracle. "
+            "Run the isolated FILE reindex first."
+        )
     cases = _build_positive_cases(
         searchable_resources,
         blocks_by_document,
@@ -213,6 +248,11 @@ def _case(case_number: int, resource: dict[str, Any], block: dict[str, Any], lib
         "query": query,
         "query_variant": variant_type,
         "expected_document_id": document_id,
+        "expected_root_document_id": document_id,
+        "expected_file_document_id": _text(resource.get("fileDocumentId")),
+        "expected_provider_item_id": _text(resource.get("providerItemId")),
+        "expected_source_path": _text(block.get("sourcePath")),
+        "expected_block_order": int(block.get("blockOrder") or 0),
         "expected_block_id": _text(block.get("blockId")),
         "expected_library": library,
         "requested_library": library,
@@ -270,7 +310,13 @@ def _build_manifest(resources: list[dict[str, Any]], searchable_resources: list[
 
 
 def _is_production_searchable_resource(resource: dict[str, Any]) -> bool:
-    return all(_text(resource.get(field)).lower() in {"synced", "parsed", "ready"} for field in ("syncStatus", "parseStatus", "embeddingStatus"))
+    return all(_text(resource.get(field)).lower() in {"synced", "parsed", "ready"}
+               for field in ("syncStatus", "parseStatus", "embeddingStatus", "indexStatus")) and _is_physical_file_resource(resource)
+
+
+def _is_physical_file_resource(resource: dict[str, Any]) -> bool:
+    """A current oracle is valid only for a persisted FILE document, never a shared ROOT row."""
+    return bool(_text(resource.get("fileDocumentId")) or _text(resource.get("documentKind")).upper() == "FILE")
 
 
 def _effective_library(resource: dict[str, Any]) -> str:

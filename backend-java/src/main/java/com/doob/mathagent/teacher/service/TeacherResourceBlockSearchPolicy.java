@@ -55,6 +55,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService.BlockContext;
+import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService.BlockEvidence;
 import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService.DocumentCandidate;
 import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService.BlockCandidate;
 import com.doob.mathagent.teacher.service.TeacherResourceBlockSearchService.EvidenceWindow;
@@ -80,7 +81,6 @@ final class TeacherResourceBlockSearchPolicy {
     private static final Set<String> QUERY_STOP_WORDS = Set.of(
             "a", "an", "and", "about", "are", "as", "at", "by", "for", "from", "how", "in", "is", "it",
             "need", "not", "of", "on", "or", "reference", "the", "this", "to", "with", "teacher", "student");
-
     private TeacherResourceBlockSearchPolicy() {
         // Stateless policy component.
     }
@@ -286,9 +286,104 @@ final class TeacherResourceBlockSearchPolicy {
 
 
     /**
-     * Stage-one document order is the Milvus semantic coarse-recall order. Lexical, graph, and role data only admit
-     * fallback candidates or enrich the later rerank payload; they do not create an opaque weighted score cocktail.
+     * Weighted reciprocal-rank fusion over already FILE-deduplicated route lists.
+     * The deterministic id tie-breaker makes reports reproducible when routes give identical RRF scores.
      */
+    static List<String> fuseFileRanks(
+            List<String> vectorFiles,
+            List<String> lexicalFiles,
+            List<String> tagFiles,
+            TeacherResourceSearchProperties.FileCandidateFusion fusion) {
+        return fuseFileScores(vectorFiles, lexicalFiles, tagFiles, fusion).keySet().stream().toList();
+    }
+
+    /** Returns deterministic weighted RRF scores so later FILE/block ordering preserves the admission signal. */
+    static Map<String, Double> fuseFileScores(
+            List<String> vectorFiles,
+            List<String> lexicalFiles,
+            List<String> tagFiles,
+            TeacherResourceSearchProperties.FileCandidateFusion fusion) {
+        Map<String, Double> scores = new LinkedHashMap<>();
+        addRrfScores(scores, vectorFiles, fusion.vectorWeight(), fusion.rrfK());
+        addRrfScores(scores, lexicalFiles, fusion.lexicalWeight(), fusion.rrfK());
+        addRrfScores(scores, tagFiles, fusion.tagWeight(), fusion.rrfK());
+        return scores.entrySet().stream()
+                .sorted(Map.Entry.<String, Double>comparingByValue().reversed()
+                        .thenComparing(Map.Entry::getKey))
+                .collect(java.util.stream.Collectors.toMap(
+                        Map.Entry::getKey,
+                        Map.Entry::getValue,
+                        (left, ignored) -> left,
+                        LinkedHashMap::new));
+    }
+
+    private static void addRrfScores(Map<String, Double> scores, List<String> fileIds, double weight, int rrfK) {
+        if (fileIds == null || fileIds.isEmpty() || weight <= 0.0d) {
+            return;
+        }
+        LinkedHashSet<String> unique = new LinkedHashSet<>();
+        for (String fileId : fileIds) {
+            if (fileId != null && !fileId.isBlank()) {
+                unique.add(fileId.strip());
+            }
+        }
+        int rank = 1;
+        for (String fileId : unique) {
+            scores.merge(fileId, weight / (rrfK + rank), Double::sum);
+            rank += 1;
+        }
+    }
+
+    /**
+     * Protects fixed route-local FILE admission quotas before weighted RRF fills any remaining slots.
+     * Route ranks are already deduplicated and therefore remain the only comparable unit across routes.
+     */
+    static List<String> admitFileCandidates(
+            List<String> vectorFiles,
+            List<String> lexicalFiles,
+            List<String> tagFiles,
+            Map<String, Double> fusedFileScores,
+            int vectorReserve,
+            int lexicalReserve,
+            int maxCandidates) {
+        int candidateLimit = Math.max(1, maxCandidates);
+        LinkedHashSet<String> admitted = new LinkedHashSet<>();
+        addRouteQuota(admitted, vectorFiles, vectorReserve, candidateLimit);
+        addRouteQuota(admitted, lexicalFiles, lexicalReserve, candidateLimit);
+        if (fusedFileScores != null) {
+            fusedFileScores.keySet().stream()
+                    .filter(fileId -> fileId != null && !fileId.isBlank())
+                    .map(String::strip)
+                    .forEach(fileId -> {
+                        if (admitted.size() < candidateLimit) {
+                            admitted.add(fileId);
+                        }
+                    });
+        }
+        return List.copyOf(admitted);
+    }
+
+    private static void addRouteQuota(
+            LinkedHashSet<String> admitted,
+            List<String> routeFiles,
+            int reserve,
+            int candidateLimit) {
+        if (routeFiles == null || reserve <= 0) {
+            return;
+        }
+        int routeCount = 0;
+        for (String fileId : routeFiles) {
+            if (admitted.size() >= candidateLimit || routeCount >= reserve) {
+                break;
+            }
+            if (fileId != null && !fileId.isBlank() && admitted.add(fileId.strip())) {
+                routeCount += 1;
+            } else if (fileId != null && !fileId.isBlank()) {
+                routeCount += 1;
+            }
+        }
+    }
+
     static Comparator<DocumentCandidate> documentCandidateComparator() {
         return Comparator.comparingDouble(DocumentCandidate::coarseScore).reversed();
     }
@@ -308,19 +403,262 @@ final class TeacherResourceBlockSearchPolicy {
     }
 
 
+    private static final double REPRESENTATIVE_VECTOR_WEIGHT = 8.0d;
+    private static final double REPRESENTATIVE_METADATA_WEIGHT = 0.15d;
+    private static final double REPRESENTATIVE_TAG_WEIGHT = 0.10d;
+    private static final double REPRESENTATIVE_LEXICAL_WEIGHT = 0.25d;
+    private static final double REPRESENTATIVE_ROUTE_WEIGHT = 0.25d;
+    /** Bounded body overlap lets an already-read neighbor compete without replacing a clear semantic lead. */
+    private static final double REPRESENTATIVE_BODY_WEIGHT = 0.80d;
+    private static final double REPRESENTATIVE_SUPPORT_CAP = 4.0d;
+    private static final int REPRESENTATIVE_SIGNAL_CAP = 8;
+    private static final int REPRESENTATIVE_BODY_SIGNAL_CAP = 8;
+
+    static Comparator<BlockContext> representativeBlockComparator(
+            TeacherResourceDocumentResponse document,
+            Map<String, Double> vectorScoreByKey,
+            String normalizedQuery,
+            String[] terms) {
+        return representativeBlockComparator(document, vectorScoreByKey, Map.of(), normalizedQuery, terms);
+    }
+
     /**
-     * Legacy role-bucket heuristics were intentionally removed here. The previous implementation tried to infer
-     * "analysis/question/lesson" intent from hand-written cue lists and then override the semantic ranking. That made
-     * retrieval behavior brittle and benchmark-sensitive. The rewritten pipeline keeps blockRole/sourcePath/chapter/
-     * section and the adjacent evidence window inside the rerank text itself, so the real rerank model stays primary
-     * while lexical and graph signals only break ties.
+     * Selects one FILE block with a bounded combination of semantic and query-specific support.
+     *
+     * <p>Vector cosine remains the continuous primary signal, but a small cosine gap must not hide a block whose
+     * persisted heading, body, graph tags, or route-local evidence directly answers the query. The support component is
+     * capped so a strong semantic result cannot be displaced by a noisy lexical/tag match. This comparator is used only
+     * for the single representative block per physical FILE; neighboring blocks remain bounded context.</p>
+     */
+    static Comparator<BlockContext> representativeBlockComparator(
+            TeacherResourceDocumentResponse document,
+            Map<String, Double> vectorScoreByKey,
+            Map<String, BlockEvidence> blockEvidenceByKey,
+            String normalizedQuery,
+            String[] terms) {
+        return Comparator.<BlockContext>comparingDouble(block -> representativeBlockScore(
+                        document, block, vectorScoreByKey, blockEvidenceByKey, normalizedQuery, terms))
+                .reversed()
+                .thenComparing(Comparator.comparingDouble(
+                        (BlockContext block) -> representativeVectorScore(
+                                document, block, vectorScoreByKey, blockEvidenceByKey)).reversed())
+                .thenComparing(Comparator.comparingInt(
+                        (BlockContext block) -> metadataMatchScore(document, block, normalizedQuery, terms)).reversed())
+                .thenComparing(Comparator.comparingInt(
+                        (BlockContext block) -> graphTagAlignmentScore(block, normalizedQuery, terms)).reversed())
+                .thenComparing(Comparator.comparingInt(
+                        (BlockContext block) -> exactLexicalMatchScore(document, block, normalizedQuery, terms)).reversed())
+                .thenComparing(Comparator.comparingDouble(
+                        (BlockContext block) -> representativeRouteSupport(
+                                document, block, blockEvidenceByKey)).reversed())
+                .thenComparing(Comparator.comparingInt(
+                        (BlockContext block) -> roleIntentScore(normalizedQuery, block)).reversed())
+                .thenComparingInt(block -> block.block().blockOrder())
+                .thenComparing(block -> block.block().blockId());
+    }
+
+    /** Returns the bounded score used for FILE-local representative admission. */
+    static double representativeBlockScore(
+            TeacherResourceDocumentResponse document,
+            BlockContext block,
+            Map<String, Double> vectorScoreByKey,
+            Map<String, BlockEvidence> blockEvidenceByKey,
+            String normalizedQuery,
+            String[] terms) {
+        double vector = representativeVectorScore(document, block, vectorScoreByKey, blockEvidenceByKey);
+        double support = REPRESENTATIVE_METADATA_WEIGHT * boundedRepresentativeSignal(
+                metadataMatchScore(document, block, normalizedQuery, terms))
+                + REPRESENTATIVE_TAG_WEIGHT * boundedRepresentativeSignal(
+                        graphTagAlignmentScore(block, normalizedQuery, terms))
+                + REPRESENTATIVE_LEXICAL_WEIGHT * boundedRepresentativeSignal(
+                        exactLexicalMatchScore(document, block, normalizedQuery, terms))
+                + REPRESENTATIVE_BODY_WEIGHT * boundedRepresentativeSignal(
+                        bodyLexicalMatchScore(block, normalizedQuery, terms))
+                + REPRESENTATIVE_ROUTE_WEIGHT * representativeRouteSupport(
+                        document, block, blockEvidenceByKey);
+        return REPRESENTATIVE_VECTOR_WEIGHT * vector + Math.min(REPRESENTATIVE_SUPPORT_CAP, support);
+    }
+
+    private static double representativeVectorScore(
+            TeacherResourceDocumentResponse document,
+            BlockContext block,
+            Map<String, Double> vectorScoreByKey,
+            Map<String, BlockEvidence> blockEvidenceByKey) {
+        BlockEvidence evidence = blockEvidenceByKey.get(blockKey(
+                textOrDefault(block.fileDocumentId(), document.documentId()),
+                block.block().blockId()));
+        return evidence == null
+                ? vectorScoreByKey.getOrDefault(
+                        blockKey(document.documentId(), block.block().blockId()), 0.0d)
+                : evidence.vectorScore();
+    }
+
+    private static double representativeRouteSupport(
+            TeacherResourceDocumentResponse document,
+            BlockContext block,
+            Map<String, BlockEvidence> blockEvidenceByKey) {
+        BlockEvidence evidence = blockEvidenceByKey.get(blockKey(
+                textOrDefault(block.fileDocumentId(), document.documentId()),
+                block.block().blockId()));
+        if (evidence == null) {
+            return 0.0d;
+        }
+        return Math.min(1.0d, Math.max(0.0d, evidence.lexicalScore())
+                + Math.max(0.0d, evidence.tagScore()));
+    }
+
+    private static int boundedRepresentativeSignal(int score) {
+        return Math.max(0, Math.min(REPRESENTATIVE_SIGNAL_CAP, score));
+    }
+
+    static int metadataMatchScore(
+            TeacherResourceDocumentResponse document,
+            BlockContext block,
+            String normalizedQuery,
+            String[] terms) {
+        String title = normalizeText(textOrDefault(document.title(), ""));
+        String chapter = normalizeText(textOrDefault(block.block().chapter(), ""));
+        String section = normalizeText(textOrDefault(block.block().section(), ""));
+        String path = normalizeText(textOrDefault(block.sourcePath(), ""));
+        int score = 0;
+        if (!normalizedQuery.isBlank()) {
+            if (title.contains(normalizedQuery)) {
+                score += 8;
+            }
+            if (chapter.contains(normalizedQuery)) {
+                score += 6;
+            }
+            if (section.contains(normalizedQuery)) {
+                score += 6;
+            }
+            if (path.contains(normalizedQuery)) {
+                score += 4;
+            }
+        }
+        for (String term : terms == null ? new String[0] : terms) {
+            String normalizedTerm = normalizeText(term);
+            if (normalizedTerm.length() < MIN_TITLE_RECALL_TERM_LENGTH) {
+                continue;
+            }
+            if (title.contains(normalizedTerm)) {
+                score += 2;
+            }
+            if (chapter.contains(normalizedTerm)) {
+                score += 2;
+            }
+            if (section.contains(normalizedTerm)) {
+                score += 2;
+            }
+            if (path.contains(normalizedTerm)) {
+                score += 1;
+            }
+        }
+        return score;
+    }
+
+    static int graphTagAlignmentScore(BlockContext block, String normalizedQuery, String[] terms) {
+        String graphTags = normalizeText(String.join(" ", block.graphTags()));
+        if (graphTags.isBlank()) {
+            return 0;
+        }
+        int score = !normalizedQuery.isBlank() && graphTags.contains(normalizedQuery) ? 8 : 0;
+        for (String term : terms == null ? new String[0] : terms) {
+            String normalizedTerm = normalizeText(term);
+            if (normalizedTerm.length() >= MIN_TITLE_RECALL_TERM_LENGTH && graphTags.contains(normalizedTerm)) {
+                score += 2;
+            }
+        }
+        return score;
+    }
+
+    static int exactLexicalMatchScore(
+            TeacherResourceDocumentResponse document,
+            BlockContext block,
+            String normalizedQuery,
+            String[] terms) {
+        String metadata = normalizeText(String.join(
+                " ",
+                textOrDefault(document.title(), ""),
+                textOrDefault(block.block().chapter(), ""),
+                textOrDefault(block.block().section(), ""),
+                textOrDefault(block.sourcePath(), "")));
+        String body = normalizeText(textOrDefault(block.block().normalizedText(), block.block().rawText()));
+        int score = 0;
+        if (!normalizedQuery.isBlank() && metadata.contains(normalizedQuery)) {
+            score += 6;
+        }
+        if (!normalizedQuery.isBlank() && body.contains(normalizedQuery)) {
+            score += 4;
+        }
+        if (terms != null) {
+            for (String term : terms) {
+                String normalizedTerm = normalizeText(term);
+                if (normalizedTerm.length() >= MIN_TITLE_RECALL_TERM_LENGTH && body.contains(normalizedTerm)) {
+                    score += 1;
+                }
+            }
+        }
+        return score;
+    }
+
+    /** Counts meaningful query terms in the current block body only; metadata and route evidence stay separate. */
+    static int bodyLexicalMatchScore(
+            BlockContext block,
+            String normalizedQuery,
+            String[] terms) {
+        String body = normalizeText(textOrDefault(
+                block.block().normalizedText(),
+                block.block().rawText()));
+        if (body.isBlank()) {
+            return 0;
+        }
+        int score = !normalizedQuery.isBlank() && body.contains(normalizedQuery) ? 4 : 0;
+        for (String term : terms == null ? new String[0] : terms) {
+            String normalizedTerm = normalizeText(term);
+            if (normalizedTerm.length() >= MIN_TITLE_RECALL_TERM_LENGTH
+                    && body.contains(normalizedTerm)) {
+                score += 1;
+            }
+        }
+        return score;
+    }
+
+
+    /**
+     * Orders final block candidates with the reranker as the primary semantic signal and stable metadata tie-breakers.
      */
     static Comparator<BlockCandidate> blockCandidateComparator() {
-        Comparator<BlockCandidate> comparator = Comparator.comparingInt(BlockCandidate::roleIntentScore).reversed();
-        comparator = comparator.thenComparing(Comparator.comparingDouble(BlockCandidate::rerankScore).reversed());
+        Comparator<BlockCandidate> comparator = Comparator.comparingDouble(BlockCandidate::rerankScore).reversed();
         comparator = comparator.thenComparing(Comparator.comparingDouble(BlockCandidate::documentCoarseScore).reversed());
         comparator = comparator.thenComparing(Comparator.comparingDouble(BlockCandidate::vectorSemanticScore).reversed());
-        return comparator.thenComparing(Comparator.comparingInt(BlockCandidate::lexicalMatches).reversed());
+        comparator = comparator.thenComparing(Comparator.comparingInt(BlockCandidate::lexicalMatches).reversed());
+        return comparator.thenComparing(Comparator.comparingInt(BlockCandidate::roleIntentScore).reversed());
+    }
+
+    /**
+     * Rejects a normally successful search only when the calibrated rerank evidence is clearly low confidence.
+     * Scores are expected in descending order and remain in the cross-encoder's native score space.
+     */
+    static boolean shouldAbstain(
+            List<Double> descendingScores,
+            double minimumRerankScore,
+            double lowConfidenceScore,
+            double minimumRerankMargin) {
+        if (descendingScores == null || descendingScores.isEmpty()) {
+            return false;
+        }
+        double top = descendingScores.get(0) == null ? Double.NaN : descendingScores.get(0);
+        if (!Double.isFinite(top) || top < minimumRerankScore) {
+            return true;
+        }
+        if (descendingScores.size() < 2) {
+            return false;
+        }
+        Double secondValue = descendingScores.get(1);
+        double second = secondValue == null ? Double.NaN : secondValue;
+        return Double.isFinite(second)
+                && top < lowConfidenceScore
+                && top - second < Math.max(0.0d, minimumRerankMargin);
     }
 
     /**
@@ -929,6 +1267,14 @@ final class TeacherResourceBlockSearchPolicy {
             }
         }
         return false;
+    }
+
+
+    static boolean containsAny(String haystack, List<String> needles) {
+        if (needles == null || needles.isEmpty()) {
+            return false;
+        }
+        return needles.stream().anyMatch(needle -> containsAny(haystack, needle));
     }
 
 

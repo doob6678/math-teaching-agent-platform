@@ -20,6 +20,7 @@ import com.doob.mathagent.teacher.feishu.TeacherFeishuDownloadException;
 import com.doob.mathagent.teacher.support.TeacherResourceRegistrationCommand;
 import com.doob.mathagent.teacher.service.TeacherResourceAssetService;
 import com.doob.mathagent.teacher.service.TeacherResourceService;
+import com.doob.mathagent.teacher.service.TeacherSourceFileReader;
 import com.doob.mathagent.teacher.search.TeacherResourceGraphAlignmentService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncExecutionService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncJobService;
@@ -612,7 +613,7 @@ class TeacherSourceSyncExecutionServiceTest {
                 "teacher",
                 "teacher-1",
                 resource.documentId());
-        Path savedPath = tempDir.resolve("downloaded-feishu");
+        Path savedPath = tempDir.resolve("feishu-staging").resolve("downloaded-feishu");
         Files.createDirectories(savedPath);
         Files.writeString(savedPath.resolve("summary.txt"), "Feishu downloaded summary");
         TeacherSourceSyncExecutionService executionService = new TeacherSourceSyncExecutionService(
@@ -623,6 +624,7 @@ class TeacherSourceSyncExecutionServiceTest {
                 testSyncProperties(),
                 checkpointStore,
                 TestVectorIndexService.successful(resourceStore, blockStore));
+        configureSourceReader(executionService, testSyncProperties());
 
         TeacherSourceSyncJobResponse completed = executionService.execute(
                 "school-a",
@@ -658,7 +660,7 @@ class TeacherSourceSyncExecutionServiceTest {
                 null,
                 "TEACHER_PRIVATE",
                 "md"));
-        Path savedPath = tempDir.resolve("unchanged-feishu-document");
+        Path savedPath = tempDir.resolve("feishu-staging").resolve("unchanged-feishu-document");
         Files.createDirectories(savedPath);
         Files.writeString(savedPath.resolve("coloring.md"), "# 涂色问题\n\n相邻区域不能使用同一种颜色。");
         TeacherSourceSyncJobService jobService = new TeacherSourceSyncJobService(resourceStore, jobStore);
@@ -670,6 +672,7 @@ class TeacherSourceSyncExecutionServiceTest {
                 testSyncProperties(),
                 checkpointStore,
                 TestVectorIndexService.successful(resourceStore, blockStore));
+        configureSourceReader(executionService, testSyncProperties());
 
         TeacherSourceSyncJobResponse firstJob = jobService.createSyncJob(
                 "school-a", "teacher", "teacher-1", resource.documentId());
@@ -696,13 +699,14 @@ class TeacherSourceSyncExecutionServiceTest {
         TeacherResourceDocumentResponse resource = resourceService.register(new TeacherResourceRegistrationCommand(
                 "school-a", "teacher", "teacher-1", "feishu", "涂色问题",
                 "https://wiki.feishu.cn/docx/coloring-problem", null, "TEACHER_PRIVATE", "md"));
-        Path savedPath = tempDir.resolve("unchanged-feishu-failed-index-document");
+        Path savedPath = tempDir.resolve("feishu-staging").resolve("unchanged-feishu-failed-index-document");
         Files.createDirectories(savedPath);
         Files.writeString(savedPath.resolve("coloring.md"), "# 涂色问题\n\n相邻区域不能使用同一种颜色。");
         TeacherSourceSyncJobService jobService = new TeacherSourceSyncJobService(resourceStore, jobStore);
         TeacherSourceSyncExecutionService executionService = new TeacherSourceSyncExecutionService(
                 resourceStore, jobStore, blockStore, new SuccessfulFeishuDownloadClient(savedPath),
                 testSyncProperties(), checkpointStore, TestVectorIndexService.successful(resourceStore, blockStore));
+        configureSourceReader(executionService, testSyncProperties());
 
         TeacherSourceSyncJobResponse firstJob = jobService.createSyncJob(
                 "school-a", "teacher", "teacher-1", resource.documentId());
@@ -778,7 +782,7 @@ class TeacherSourceSyncExecutionServiceTest {
                 "[{\"message\":\"ProxyError\",\"retryable\":true}]",
                 2,
                 java.time.Instant.now().toString()));
-        Path savedPath = tempDir.resolve("checkpoint-resume");
+        Path savedPath = tempDir.resolve("feishu-staging").resolve("checkpoint-resume");
         Files.createDirectories(savedPath);
         Files.writeString(savedPath.resolve("resume.txt"), "resumed from checkpoint");
         CapturingCheckpointFeishuDownloadClient feishuClient =
@@ -791,6 +795,7 @@ class TeacherSourceSyncExecutionServiceTest {
                 testSyncProperties(),
                 checkpointStore,
                 TestVectorIndexService.successful(resourceStore, blockStore));
+        configureSourceReader(executionService, testSyncProperties());
 
         TeacherSourceSyncJobResponse completed = executionService.resume(
                 "school-a",
@@ -859,7 +864,7 @@ class TeacherSourceSyncExecutionServiceTest {
 
     @Test
     void feishuSyncJobParsesDownloadedDocxAndTextFilesIntoDocumentBlocks() throws Exception {
-        Path savedPath = tempDir.resolve("downloaded-feishu-content");
+        Path savedPath = tempDir.resolve("feishu-staging").resolve("downloaded-feishu-content");
         Files.createDirectories(savedPath);
         writeDocx(savedPath.resolve("probability-mistakes.docx"), List.of(
                 "Probability mistakes",
@@ -894,6 +899,7 @@ class TeacherSourceSyncExecutionServiceTest {
                 testSyncProperties(),
                 checkpointStore,
                 TestVectorIndexService.successful(resourceStore, blockStore));
+        configureSourceReader(executionService, testSyncProperties());
 
         TeacherSourceSyncJobResponse completed = executionService.execute(
                 "school-a",
@@ -918,9 +924,9 @@ class TeacherSourceSyncExecutionServiceTest {
 
     @Test
     void feishuSyncJobPersistsDownloadedImageManifestWhenNoTextBlocksExist() throws Exception {
-        Path savedPath = tempDir.resolve("downloaded-feishu-assets");
+        Path savedPath = tempDir.resolve("feishu-staging").resolve("downloaded-feishu-assets");
         Files.createDirectories(savedPath.resolve("figures"));
-        Files.write(savedPath.resolve("figures").resolve("curve.png"), new byte[] {1, 2, 3, 4, 5});
+        Files.write(savedPath.resolve("figures").resolve("curve.png"), pngBytes());
         InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
         InMemoryTeacherSourceSyncJobStore jobStore = new InMemoryTeacherSourceSyncJobStore();
         InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
@@ -952,6 +958,7 @@ class TeacherSourceSyncExecutionServiceTest {
                 TestVectorIndexService.successful(resourceStore, blockStore),
                 TeacherResourceGraphAlignmentService.disabled(),
                 new TeacherResourceAssetService(assetStore, resourceStore, testSyncProperties()));
+        configureSourceReader(executionService, testSyncProperties());
 
         TeacherSourceSyncJobResponse completed = executionService.execute(
                 "school-a",
@@ -978,25 +985,69 @@ class TeacherSourceSyncExecutionServiceTest {
     }
 
     @Test
+    void standaloneFeishuMarkdownImageRetainsItsOriginalMarkdownRow() throws Exception {
+        Path savedPath = tempDir.resolve("feishu-staging").resolve("standalone-feishu-image");
+        Files.createDirectories(savedPath.resolve("IMAJES"));
+        Files.writeString(savedPath.resolve("diagram.md"), "# 抛物线图像\n\n![](imajes/definition.png)\n");
+        Files.write(savedPath.resolve("IMAJES/definition.png"), pngBytes());
+        String manifest = """
+                [{
+                  "type":"image",
+                  "token":"media-definition-1",
+                  "name":"definition.png",
+                  "path":"IMAJES/definition.png",
+                  "relativePath":"IMAJES/definition.png",
+                  "providerAssetId":"IMAJES/definition.png",
+                  "mimeType":"image/png",
+                  "assetKind":"image"
+                }]
+                """;
+        InMemoryTeacherResourceStore resourceStore = new InMemoryTeacherResourceStore();
+        InMemoryTeacherSourceSyncJobStore jobStore = new InMemoryTeacherSourceSyncJobStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        InMemoryTeacherResourceAssetStore assetStore = new InMemoryTeacherResourceAssetStore();
+        TeacherResourceService resourceService = TeacherResourceServiceFixture.service(resourceStore);
+        TeacherResourceDocumentResponse resource = resourceService.register(new TeacherResourceRegistrationCommand(
+                "school-a", "teacher", "teacher-1", "feishu", "抛物线图像", "https://my.feishu.cn/docx/parabola-image",
+                null, "TEACHER_PRIVATE", "md"));
+        TeacherSourceSyncJobResponse queued = new TeacherSourceSyncJobService(resourceStore, jobStore).createSyncJob(
+                "school-a", "teacher", "teacher-1", resource.documentId());
+        TeacherSourceSyncExecutionService executionService = new TeacherSourceSyncExecutionService(
+                resourceStore, jobStore, blockStore, new ManifestMarkdownFeishuDownloadClient(savedPath, manifest),
+                testSyncProperties(), new InMemoryTeacherSourceSyncCheckpointStore(),
+                TestVectorIndexService.successful(resourceStore, blockStore), TeacherResourceGraphAlignmentService.disabled(),
+                new TeacherResourceAssetService(assetStore, resourceStore, testSyncProperties()));
+        configureSourceReader(executionService, testSyncProperties());
+
+        assertThat(executionService.execute("school-a", "teacher", "teacher-1", resource.documentId(), queued.jobId()).status())
+                .isEqualTo("completed");
+        assertThat(blockStore.listByDocument("school-a", resource.documentId()))
+                .singleElement()
+                .satisfies(block -> assertThat(block.rawText())
+                        .isEqualTo("![](imajes/definition.png)")
+                        .doesNotContain("[Markdown image block; no extractable text]"));
+    }
+
+    @Test
     void singleFeishuMarkdownDocumentBindsMaterializedImageToTheOwningBlock() throws Exception {
-        Path savedPath = tempDir.resolve("single-feishu-markdown");
-        Files.createDirectories(savedPath.resolve("_feishu_images"));
+        Path savedPath = tempDir.resolve("feishu-staging").resolve("single-feishu-markdown");
+        Files.createDirectories(savedPath.resolve("IMAJES"));
         Files.writeString(
                 savedPath.resolve("coloring.md"),
                 "# 涂色问题\n\n2013年涂色问题如图，行政区域地图如下。\n\n"
-                        + "<img href=\"_feishu_images/map.png\" mime=\"image/png\" src=\"provider-token\"/>\n\n"
+                        + "![行政区域地图](IMAJES/map.png)\n\n"
                         // The next paragraph belongs to a later variation.  It must not become part of the map
                         // question's searchable source window, otherwise a 4-colour asset can be reused for 6 colours.
                         + "后续的6种颜色变式另作讨论。\n");
-        Files.write(savedPath.resolve("_feishu_images/map.png"), new byte[] {1, 2, 3, 4});
+        Files.write(savedPath.resolve("IMAJES/map.png"), pngBytes());
         String manifest = """
                 [{
                   "type":"image",
                   "token":"media-map-1",
                   "name":"map.png",
-                  "path":"_feishu_images/map.png",
-                  "relativePath":"_feishu_images/map.png",
-                  "providerAssetId":"_feishu_images/map.png",
+                  "path":"IMAJES/map.png",
+                  "relativePath":"IMAJES/map.png",
+                  "providerAssetId":"IMAJES/map.png",
                   "mimeType":"image/png",
                   "assetKind":"image"
                 }]
@@ -1028,6 +1079,7 @@ class TeacherSourceSyncExecutionServiceTest {
                 TestVectorIndexService.successful(resourceStore, blockStore),
                 TeacherResourceGraphAlignmentService.disabled(),
                 new TeacherResourceAssetService(assetStore, resourceStore, testSyncProperties()));
+        configureSourceReader(executionService, testSyncProperties());
 
         TeacherSourceSyncJobResponse completed = executionService.execute(
                 "school-a", "teacher", "teacher-1", resource.documentId(), queued.jobId());
@@ -1035,7 +1087,7 @@ class TeacherSourceSyncExecutionServiceTest {
         assertThat(completed.status()).isEqualTo("completed");
         assertThat(assetStore.snapshot()).hasSize(1);
         TeacherResourceAssetResponse asset = assetStore.snapshot().getFirst();
-        assertThat(asset.providerAssetId()).isEqualTo("_feishu_images/map.png");
+        assertThat(asset.providerAssetId()).isEqualTo("coloring/IMAJES/map.png");
         assertThat(blockStore.listByDocument("school-a", resource.documentId()))
                 .anySatisfy(block -> {
                     assertThat(block.rawText()).contains("行政区域地图");
@@ -1094,7 +1146,7 @@ class TeacherSourceSyncExecutionServiceTest {
         assertThat(completed.status()).isEqualTo("completed");
         assertThat(assetStore.snapshot()).hasSize(1);
         TeacherResourceAssetResponse asset = assetStore.snapshot().getFirst();
-        assertThat(asset.sourcePath()).isEqualTo("diagram-note.docx");
+        assertThat(asset.sourcePath()).isEqualTo("diagram-note/word/media/image1.png");
         assertThat(asset.providerAssetId()).contains("/word/media/");
         assertThat(asset.mimeType()).isEqualTo("image/png");
         assertThat(Files.exists(testSyncProperties().assetStorageRoot().resolve(asset.storageKey()))).isTrue();
@@ -1144,6 +1196,7 @@ class TeacherSourceSyncExecutionServiceTest {
                 properties,
                 new InMemoryTeacherSourceSyncCheckpointStore(),
                 TestVectorIndexService.successful(resourceStore, blockStore));
+        configureSourceReader(executionService, properties);
 
         TeacherSourceSyncJobResponse completed = executionService.execute(
                 "school-a",
@@ -1162,6 +1215,12 @@ class TeacherSourceSyncExecutionServiceTest {
         assertThat(downloaded.parseStatus()).isEqualTo("parsed");
         assertThat(downloaded.localPath()).isEqualTo(completed.stagingPath());
         assertThat(blockStore.listByDocument("school-a", resource.documentId())).isNotEmpty();
+    }
+
+    private static void configureSourceReader(
+            TeacherSourceSyncExecutionService executionService,
+            TeacherSourceSyncProperties properties) {
+        executionService.setSourceFileReader(new TeacherSourceFileReader(properties));
     }
 
     /**
@@ -1188,6 +1247,18 @@ class TeacherSourceSyncExecutionServiceTest {
             }
             document.write(output);
         }
+    }
+
+    private static byte[] pngBytes() throws Exception {
+        BufferedImage image = new BufferedImage(12, 8, BufferedImage.TYPE_INT_RGB);
+        for (int x = 0; x < image.getWidth(); x += 1) {
+            for (int y = 0; y < image.getHeight(); y += 1) {
+                image.setRGB(x, y, x < 6 ? Color.BLUE.getRGB() : Color.ORANGE.getRGB());
+            }
+        }
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        ImageIO.write(image, "png", output);
+        return output.toByteArray();
     }
 
     /**

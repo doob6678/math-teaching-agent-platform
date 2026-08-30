@@ -14,6 +14,8 @@ import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -28,6 +30,7 @@ import org.springframework.stereotype.Service;
 public class CanonicalMathPaperAuthorizedBlockReader {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final UUID URL_NAMESPACE = UUID.fromString("6ba7b811-9dad-11d1-80b4-00c04fd430c8");
+    private static final Pattern MARKDOWN_IMAGE_ROW = Pattern.compile("(?m)^!\\[[^]\\r\\n]*]\\((figures/[A-Za-z0-9._/-]+)\\)\\s*$");
     private final Path corpusRoot;
 
     public CanonicalMathPaperAuthorizedBlockReader(
@@ -71,10 +74,47 @@ public class CanonicalMathPaperAuthorizedBlockReader {
         String text = readVerified(questionMarkdown, markdownHash);
         int pageNo = question.path("sourcePages").isArray() && !question.path("sourcePages").isEmpty()
                 ? question.path("sourcePages").get(0).asInt(0) : 0;
+        String imageRefs = imageRefs(paper, question, text);
         return List.of(new TeacherDocumentBlockResponse(
                 "question-" + questionNumber, opaqueDocumentRef, "question-" + questionNumber,
                 "canonical_question_markdown", 1, "", "第 " + questionNumber + " 题", pageNo > 0 ? pageNo : null,
-                "", "", "reference", text, text, "[]", "[]", "[]", "[]", "", 1.0d, "active"));
+                "", "", "reference", text, text, imageRefs, "[]", "[]", "[]", "", 1.0d, "active"));
+    }
+
+    /**
+     * Projects only original question Markdown rows that are also manifest-bound question figures. Page images,
+     * unbound assets, and synthetic rows cannot cross this boundary because each candidate must satisfy all three
+     * identities: the original Markdown row, its manifest path, and the manifest asset hash.
+     */
+    private static String imageRefs(PublishedPaper paper, JsonNode question, String markdown) {
+        java.util.Map<String, String> markdownRowsByPath = new java.util.LinkedHashMap<>();
+        Matcher matcher = MARKDOWN_IMAGE_ROW.matcher(markdown == null ? "" : markdown);
+        while (matcher.find()) {
+            markdownRowsByPath.putIfAbsent(matcher.group(1), matcher.group().strip());
+        }
+        if (markdownRowsByPath.isEmpty()) return "[]";
+
+        List<java.util.Map<String, String>> refs = new ArrayList<>();
+        for (JsonNode asset : question.path("assets")) {
+            String logicalPath = asset.path("canonicalAssetPath").asText("").strip().replace('\\', '/');
+            String expectedHash = asset.path("assetSha256").asText("").strip();
+            String markdownLine = markdownRowsByPath.get(logicalPath);
+            if (markdownLine == null || !logicalPath.matches("figures/[A-Za-z0-9._/-]+")
+                    || logicalPath.contains("..") || !expectedHash.matches("[0-9a-fA-F]{64}")) {
+                continue;
+            }
+            Path image = paper.root().resolve(logicalPath).normalize();
+            try {
+                if (!image.startsWith(paper.root()) || !Files.isRegularFile(image)
+                        || !sha256(image).equalsIgnoreCase(expectedHash)) {
+                    continue;
+                }
+            } catch (IOException exception) {
+                continue;
+            }
+            refs.add(java.util.Map.of("markdownLine", markdownLine, "logicalPath", logicalPath));
+        }
+        return refs.isEmpty() ? "[]" : JSON.valueToTree(refs).toString();
     }
 
     private PublishedPaper requirePublished(String opaqueDocumentRef) {

@@ -62,6 +62,40 @@ class TopicAndSafetyTest(unittest.TestCase):
         self.assertIsNone(args.run_label)
         self.assertRegex(runner.utc_run_timestamp(), r"^\d{8}T\d{6}Z$")
 
+    def test_coloring_topic_requires_authoritative_main_map_image_row(self):
+        topic, goal, question = runner.topic_for("ignored", "coloring-combinatorics")
+        self.assertEqual("coloring-combinatorics", topic)
+        self.assertIn("涂色问题", goal)
+        self.assertIn("相邻区域不得同色", question)
+        self.assertEqual("IMAJES/image-001.jpg", runner.required_source_image_target(topic))
+
+        runner.assert_required_source_image_retained(topic, {
+            "output": "![source-image:opaque-alias](IMAJES/image-001.jpg)",
+        })
+        with self.assertRaisesRegex(RuntimeError, "omitted required authorized source image target"):
+            runner.assert_required_source_image_retained(topic, {
+                "output": "![source-image:opaque-alias](IMAJES/image-005.jpg)",
+            })
+
+    def test_topics_without_a_required_source_image_do_not_add_a_retention_gate(self):
+        self.assertEqual("", runner.required_source_image_target("independence-test"))
+        runner.assert_required_source_image_retained("independence-test", {"output": "no image"})
+
+    def test_solid_geometry_topic_requires_manifest_bound_gaokao_figure_row(self):
+        topic, goal, question = runner.topic_for("ignored", "solid-geometry")
+        self.assertEqual("solid-geometry", topic)
+        self.assertIn("立体几何", goal)
+        self.assertIn("四棱锥", question)
+        self.assertEqual("figures/q-017-01.png", runner.required_source_image_target(topic))
+
+        runner.assert_required_source_image_retained(topic, {
+            "output": "![source-image:opaque-alias](figures/q-017-01.png)",
+        })
+        with self.assertRaisesRegex(RuntimeError, "omitted required authorized source image target"):
+            runner.assert_required_source_image_retained(topic, {
+                "output": "![source-image:opaque-alias](figures/q-018-01.png)",
+            })
+
     def test_correlation_uses_the_mcp_client_request_field(self):
         timestamp = "20260819T123456Z"
         correlation = {

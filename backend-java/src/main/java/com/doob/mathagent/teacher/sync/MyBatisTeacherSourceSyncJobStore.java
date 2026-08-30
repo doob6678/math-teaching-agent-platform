@@ -82,11 +82,8 @@ public class MyBatisTeacherSourceSyncJobStore implements TeacherSourceSyncJobSto
                 .eq(TeacherSourceSyncJobEntity::getSourceDocumentId, sourceDocumentId)
                 .orderByDesc(TeacherSourceSyncJobEntity::getCreatedAt)
                 .orderByDesc(TeacherSourceSyncJobEntity::getId);
-        // The service validates both values before this store is called. Applying LIMIT/OFFSET in this query keeps
-        // historical jobs in MySQL instead of materializing them all and trying to page after the fact in React.
-        long offset = Math.multiplyExact((long) pageNumber - 1L, (long) pageSize);
-        query.last("LIMIT " + pageSize + " OFFSET " + offset);
-        return mapper.selectList(query).stream()
+        Page<TeacherSourceSyncJobEntity> page = Page.of(pageNumber, pageSize);
+        return mapper.selectPage(page, query).getRecords().stream()
                 .map(MyBatisTeacherSourceSyncJobStore::toResponse)
                 .toList();
     }
@@ -107,6 +104,22 @@ public class MyBatisTeacherSourceSyncJobStore implements TeacherSourceSyncJobSto
                 .getRecords();
         TeacherSourceSyncJobEntity entity = entities.stream().findFirst().orElse(null);
         return entity == null ? null : toResponse(entity);
+    }
+
+    @Override
+    public int terminateActiveByDocument(String tenantId, String documentId, Instant now) {
+        Long sourceDocumentId = parseId(documentId);
+        if (sourceDocumentId == null) {
+            return 0;
+        }
+        return mapper.update(null, new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<TeacherSourceSyncJobEntity>()
+                .eq(TeacherSourceSyncJobEntity::getTenantId, tenantId)
+                .eq(TeacherSourceSyncJobEntity::getSourceDocumentId, sourceDocumentId)
+                .in(TeacherSourceSyncJobEntity::getStatus, List.of("queued", "running", "paused", "AUTH_REQUIRED"))
+                .set(TeacherSourceSyncJobEntity::getStatus, "cancelled")
+                .set(TeacherSourceSyncJobEntity::getPhase, "resource_archived")
+                .set(TeacherSourceSyncJobEntity::getMessage, "Source document archived; sync job cancelled")
+                .set(TeacherSourceSyncJobEntity::getUpdatedAt, LocalDateTime.ofInstant(now, ZoneOffset.UTC)));
     }
 
     @Override

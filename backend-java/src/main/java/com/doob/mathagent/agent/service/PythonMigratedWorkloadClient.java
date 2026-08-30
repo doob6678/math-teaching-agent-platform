@@ -113,6 +113,51 @@ public class PythonMigratedWorkloadClient {
                 "imageDataUrl", imageDataUrl == null ? "" : imageDataUrl,
                 "providerRoute", providerRoute(runId, "student_explanation")));
         requireCompleted(root, "student explanation decision");
+        return explanationDecision(root);
+    }
+
+    /**
+     * 调用 Python 流式 ReAct 决策：final 轮的 title/summary JSON 增量实时交给公共投影层，
+     * 学生端首字从整包完成（秒级十位）降到模型首个文本字段到达。工具与检索词仍由 Java 调用方复验。
+     */
+    public ExplanationDecision streamDecideStudentExplanation(
+            String runId,
+            String problem,
+            List<ExplanationEvidence> evidence,
+            List<String> availableTools,
+            List<String> observations,
+            String imageDataUrl,
+            Consumer<ExplanationStreamEvent> listener) {
+        String workerKey = environment.getProperty(
+                "math-agent.python-agent.worker-key", environment.getProperty("math-agent.worker-api-key", ""));
+        if (workerKey == null || workerKey.isBlank()) {
+            throw new IllegalStateException("Python agent worker key is not configured");
+        }
+        Map<String, Object> payload = Map.of(
+                "runId", bounded(runId, 128),
+                "mode", "react",
+                "problem", bounded(problem, 8_000),
+                "evidence", explanationEvidence(evidence),
+                "availableTools", availableTools == null ? List.of() : availableTools.stream().map(item -> bounded(item, 80)).toList(),
+                "observations", observations == null ? List.of() : observations.stream().map(item -> bounded(item, 800)).toList(),
+                "imageDataUrl", imageDataUrl == null ? "" : imageDataUrl,
+                "providerRoute", providerRoute(runId, "student_explanation"));
+        try {
+            return client.post()
+                    .uri("/v1/student-explanations/stream")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .accept(MediaType.TEXT_EVENT_STREAM)
+                    .header("Authorization", "Bearer " + workerKey)
+                    .header("X-Trace-Id", bounded(runId, 128))
+                    .body(payload)
+                    .exchange((request, response) -> readDecisionStream(response, listener));
+        } catch (RestClientException exception) {
+            throw new IllegalStateException("Python worker streaming request failed", exception);
+        }
+    }
+
+    /** 把流式 completed 载荷解析成与同步决策一致的 ExplanationDecision。 */
+    private ExplanationDecision explanationDecision(JsonNode root) {
         List<ExplanationCard> finalCards = new ArrayList<>();
         for (JsonNode item : root.path("cards")) {
             finalCards.add(new ExplanationCard(
@@ -172,12 +217,29 @@ public class PythonMigratedWorkloadClient {
     private ExplanationResult readExplanationStream(
             org.springframework.http.client.ClientHttpResponse response,
             Consumer<ExplanationStreamEvent> listener) throws java.io.IOException {
+        return readWorkerEventStream(response, listener, this::explanationResult);
+    }
+
+    private ExplanationDecision readDecisionStream(
+            org.springframework.http.client.ClientHttpResponse response,
+            Consumer<ExplanationStreamEvent> listener) throws java.io.IOException {
+        return readWorkerEventStream(response, listener, this::explanationDecision);
+    }
+
+    /**
+     * 逐行读取 worker SSE：delta 立即回调，completed 交给调用方提供的解析器，error 直接抛出。
+     * 卡片流解析 ExplanationResult，决策流解析 ExplanationDecision，两种端点共享同一份帧解析。
+     */
+    private <T> T readWorkerEventStream(
+            org.springframework.http.client.ClientHttpResponse response,
+            Consumer<ExplanationStreamEvent> listener,
+            java.util.function.Function<JsonNode, T> completedParser) throws java.io.IOException {
         if (!response.getStatusCode().is2xxSuccessful()) {
             throw new IllegalStateException("Python worker streaming request returned " + response.getStatusCode().value());
         }
         String eventName = "";
         StringBuilder data = new StringBuilder();
-        ExplanationResult completed = null;
+        T completed = null;
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(response.getBody(), StandardCharsets.UTF_8))) {
             String line;
@@ -188,13 +250,17 @@ public class PythonMigratedWorkloadClient {
                         if (!payload.isObject()) {
                             throw new IllegalStateException("Python worker stream payload is not a JSON object");
                         }
-                        ExplanationStreamEvent event = streamEvent(eventName, payload);
-                        if (event != null) {
-                            if (listener != null) listener.accept(event);
-                            if ("completed".equals(event.eventName())) completed = event.result();
-                            if ("error".equals(event.eventName())) {
-                                throw new AiProviderUnavailableException(503, bounded(event.message(), 240));
+                        String normalized = bounded(eventName, 32);
+                        if ("delta".equals(normalized)) {
+                            if (listener != null) {
+                                listener.accept(new ExplanationStreamEvent("delta", payload.path("content").asText(""), null,
+                                        bounded(payload.path("providerName").asText(), 64),
+                                        bounded(payload.path("modelCode").asText(), 160), ""));
                             }
+                        } else if ("completed".equals(normalized)) {
+                            completed = completedParser.apply(payload);
+                        } else if ("error".equals(normalized)) {
+                            throw new AiProviderUnavailableException(503, bounded(payload.path("message").asText("Python worker stream failed"), 240));
                         }
                     }
                     eventName = "";
@@ -211,24 +277,6 @@ public class PythonMigratedWorkloadClient {
             throw new IllegalStateException("Python worker stream ended without a completed result");
         }
         return completed;
-    }
-
-    private ExplanationStreamEvent streamEvent(String eventName, JsonNode payload) {
-        String normalized = bounded(eventName, 32);
-        if ("delta".equals(normalized)) {
-            return new ExplanationStreamEvent(normalized, payload.path("content").asText(""), null,
-                    bounded(payload.path("providerName").asText(), 64),
-                    bounded(payload.path("modelCode").asText(), 160), "");
-        }
-        if ("completed".equals(normalized)) {
-            return new ExplanationStreamEvent(normalized, "", explanationResult(payload),
-                    bounded(payload.path("providerName").asText(), 64),
-                    bounded(payload.path("modelCode").asText(), 160), "");
-        }
-        if ("error".equals(normalized)) {
-            return new ExplanationStreamEvent(normalized, "", null, "", "", payload.path("message").asText("Python worker stream failed"));
-        }
-        return null;
     }
 
     private ExplanationResult explanationResult(JsonNode root) {

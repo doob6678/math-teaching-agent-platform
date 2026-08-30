@@ -1,8 +1,11 @@
 package com.doob.mathagent.agent.service;
 
 import com.doob.mathagent.agent.vo.MultiAgentWritingArtifactExportResponse;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.infrastructure.text.FormulaMarkupSanitizer;
+import com.doob.mathagent.retrieval.CanonicalMathPaperAssetService;
 import com.doob.mathagent.teacher.service.TeacherResourceAssetService;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -56,16 +59,30 @@ public class MultiAgentWritingArtifactExportService {
     /** CSS pixels are converted to TeX points so rich-text student work areas remain actual blank space. */
     private static final double CSS_PIXELS_PER_INCH = 96.0d;
     private static final double TEX_POINTS_PER_INCH = 72.0d;
-    /** Human-readable title of the configured TENANT_PUBLIC shared-root evidence corpus. */
-    private static final String SHARED_ROOT_SOURCE_TITLE = "高中数学（全局共享）";
     /** Bounds XeLaTeX so malformed generated source cannot retain a PDF request forever. */
     private static final Duration LATEX_TIMEOUT = Duration.ofSeconds(45);
     /** The exporter resolves only backend-issued asset routes, never arbitrary model-supplied remote URLs. */
     private static final Pattern AUTHORIZED_ASSET_IMAGE = Pattern.compile(
             "!\\[[^]]*]\\(/api/teacher/resources/assets/([A-Za-z0-9-]{8,80})\\)");
+    private static final Pattern QUALIFIED_IMAGE = Pattern.compile(
+            "!\\[[^]]*]\\(([^\\s()]+::(?:IMAJES/|[^\\s()]+/IMAJES/)[^\\s()]+)\\)");
+    /** Only a Java-issued opaque row may request source-image materialization. */
+    private static final Pattern SOURCE_IMAGE_ROW = Pattern.compile(
+            "!\\[source-image:[A-Za-z0-9._:-]{1,120}]\\([^\\s()]+\\)");
+    /** Opaque evidence references authorize internal tool calls but are never visible handout content. */
+    private static final Pattern INTERNAL_EVIDENCE_REFERENCE = Pattern.compile("(?<![A-Za-z0-9_])ev_[a-f0-9]{32}(?![A-Za-z0-9_])");
+    /** Writer-copied internal citation labels have no teaching meaning and must not leave an empty visible section. */
+    private static final Pattern INTERNAL_EVIDENCE_CITATION_LINE = Pattern.compile(
+            "(?m)^\\s*(?:证据引用|资料引用|资料依据|evidence references?)\\s*[:：;；]?\\s*\\R?(?:\\s*[;；]\\s*\\R?)?");
+    private static final ObjectMapper ARTIFACT_JSON = new ObjectMapper();
+    private static final Pattern NUMBERED_MARKDOWN_HEADING = Pattern.compile(
+            "^#{1,6}\\s+[^0-9\\r\\n]*?(\\d+)[^0-9\\r\\n]*$");
+    private static final Pattern CHINESE_NUMBERED_MARKDOWN_HEADING = Pattern.compile(
+            "^#{1,6}\\s+.*?(?:题目?|问题|第)\\s*([零〇一二三四五六七八九十百千万两]+).*$");
 
     private final MultiAgentWritingService writingService;
     private final TeacherResourceAssetService assetService;
+    private final CanonicalMathPaperAssetService canonicalAssetService;
     private final Clock clock;
     private final Duration ttl;
 
@@ -79,13 +96,14 @@ public class MultiAgentWritingArtifactExportService {
     public MultiAgentWritingArtifactExportService(
             MultiAgentWritingService writingService,
             TeacherResourceAssetService assetService,
+            CanonicalMathPaperAssetService canonicalAssetService,
             @Value("${math-agent.agent.writing.artifact-export-ttl-minutes:30}") long ttlMinutes) {
-        this(writingService, assetService, Clock.systemUTC(), Duration.ofMinutes(Math.max(1, ttlMinutes)));
+        this(writingService, assetService, canonicalAssetService, Clock.systemUTC(), Duration.ofMinutes(Math.max(1, ttlMinutes)));
     }
 
     /** Compatibility constructor for direct controller tests that do not wire persistence-backed image assets. */
     public MultiAgentWritingArtifactExportService(MultiAgentWritingService writingService, long ttlMinutes) {
-        this(writingService, null, Clock.systemUTC(), Duration.ofMinutes(Math.max(1, ttlMinutes)));
+        this(writingService, null, null, Clock.systemUTC(), Duration.ofMinutes(Math.max(1, ttlMinutes)));
     }
 
     /**
@@ -99,17 +117,19 @@ public class MultiAgentWritingArtifactExportService {
             MultiAgentWritingService writingService,
             Clock clock,
             Duration ttl) {
-        this(writingService, null, clock, ttl);
+        this(writingService, null, null, clock, ttl);
     }
 
     /** Test constructor keeps text-only export coverage independent of the persistence-backed asset gateway. */
     public MultiAgentWritingArtifactExportService(
             MultiAgentWritingService writingService,
             TeacherResourceAssetService assetService,
+            CanonicalMathPaperAssetService canonicalAssetService,
             Clock clock,
             Duration ttl) {
         this.writingService = writingService;
         this.assetService = assetService;
+        this.canonicalAssetService = canonicalAssetService;
         this.clock = clock;
         this.ttl = ttl == null || ttl.isNegative() || ttl.isZero() ? DEFAULT_TTL : ttl;
     }
@@ -213,13 +233,14 @@ public class MultiAgentWritingArtifactExportService {
             String footerText) {
         Path workDir = null;
         try {
-            String content = variantMarkdown(artifact, variant);
+            String content = stripInternalEvidenceReferences(variantMarkdown(artifact, variant));
             enforceAudienceBoundary(content, variant);
             String title = variantTitle(artifact, content, variant);
             Path engine = latexEnginePath().orElseThrow(() -> new IllegalStateException("未找到 XeLaTeX，拒绝生成未渲染公式的 PDF"));
             workDir = Files.createTempDirectory("math-agent-writing-pdf-");
             content = materializeAuthorizedImages(content, workDir, new RequestSubject(
-                    artifact.tenantId(), artifact.subjectType(), artifact.subjectId(), "artifact-export"));
+                    artifact.tenantId(), artifact.subjectType(), artifact.subjectId(), "artifact-export"),
+                    authorizedSourceImages(artifact));
             Path source = workDir.resolve("handout.tex");
             Files.writeString(source, latexDocument(content, title, variant, headerText, footerText), StandardCharsets.UTF_8);
             runXeLaTeX(engine, workDir, source);
@@ -242,36 +263,122 @@ public class MultiAgentWritingArtifactExportService {
     }
 
     /**
-     * Copies owner-visible image assets into the isolated XeLaTeX directory and replaces their Markdown transports.
-     *
-     * <p>The asset service repeats visibility and MIME validation. A missing or disallowed image becomes a readable
-     * placeholder rather than an HTTP fetch, filesystem path, or security-detail leak.</p>
+     * Reads the Java-issued alias map recorded with resource curation. The model never supplies this mapping: it only
+     * chooses an authorized image by retaining the exact source-image Markdown row in its prose.
      */
-    private String materializeAuthorizedImages(String markdown, Path workDir, RequestSubject subject) throws IOException {
-        Matcher matcher = AUTHORIZED_ASSET_IMAGE.matcher(markdown == null ? "" : markdown);
-        StringBuffer rendered = new StringBuffer();
-        int imageIndex = 1;
-        while (matcher.find()) {
-            String replacement = "资料图片（未提供）";
-            if (assetService != null) {
-                try {
-                    TeacherResourceAssetService.VisibleAsset asset = assetService.openVisibleAsset(matcher.group(1), subject);
-                    String suffix = imageSuffix(asset.mimeType());
-                    if (suffix != null) {
-                        String fileName = "asset-" + imageIndex++ + suffix;
-                        try (InputStream input = asset.resource().getInputStream()) {
-                            Files.copy(input, workDir.resolve(fileName));
+    private static List<SourceImageBinding> authorizedSourceImages(MultiAgentWritingArtifact artifact) {
+        java.util.LinkedHashMap<String, SourceImageBinding> bindings = new java.util.LinkedHashMap<>();
+        for (MultiAgentWritingArtifact.StageArtifact stage : artifact.stages()) {
+            if (!"resource_curation".equals(stage.stageCode()) || stage.generatedContent().isBlank()) continue;
+            try {
+                JsonNode evidence = ARTIFACT_JSON.readTree(stage.generatedContent());
+                for (String itemField : List.of("items", "inspectedItems")) {
+                    JsonNode items = evidence.path(itemField);
+                    if (!items.isArray()) continue;
+                    for (JsonNode item : items) {
+                        JsonNode imageRefs = item.path("imageRefs");
+                        if (!imageRefs.isArray()) continue;
+                        for (JsonNode image : imageRefs) {
+                            String markdownLine = image.path("markdownLine").asText("");
+                            String logicalPath = image.path("logicalPath").asText("");
+                            String sourceDocumentId = item.path("sourceDocumentId").asText("");
+                            String sourceScope = item.path("sourceScope").asText("");
+                            String canonicalQuestionNumber = item.path("canonicalQuestionNumber").asText("");
+                            if (!SOURCE_IMAGE_ROW.matcher(markdownLine).matches()
+                                    || logicalPath.isBlank() || sourceDocumentId.isBlank()) continue;
+                            SourceImageBinding binding = new SourceImageBinding(
+                                    markdownLine, sourceDocumentId, logicalPath, sourceScope, canonicalQuestionNumber);
+                            SourceImageBinding previous = bindings.putIfAbsent(markdownLine, binding);
+                            if (previous != null && (!previous.sourceDocumentId().equals(sourceDocumentId)
+                                    || !previous.logicalPath().equals(logicalPath)
+                                    || !previous.sourceScope().equals(sourceScope)
+                                    || !previous.canonicalQuestionNumber().equals(canonicalQuestionNumber))) {
+                                throw new IllegalStateException("同一来源图片别名对应多个授权资源");
+                            }
                         }
-                        replacement = "MATHAGENTIMAGE{" + fileName + "}";
                     }
-                } catch (RuntimeException ignored) {
-                    // Do not reveal authorization or storage details in a teacher-facing export.
                 }
+            } catch (IOException exception) {
+                throw new IllegalStateException("受权图片映射记录损坏", exception);
             }
-            matcher.appendReplacement(rendered, Matcher.quoteReplacement(replacement));
         }
-        matcher.appendTail(rendered);
-        return rendered.toString();
+        return List.copyOf(bindings.values());
+    }
+
+    /**
+     * Copies only Java-authorized source-image rows into the isolated compiler directory. A Markdown row is both the
+     * writer's visible placement decision and the lookup key into the protected run evidence; no second placement
+     * object, question number, asset id, or inferred basename is accepted.
+     */
+    private String materializeAuthorizedImages(
+            String markdown, Path workDir, RequestSubject subject,
+            List<SourceImageBinding> authorizedBindings) throws IOException {
+        String enriched = safeText(markdown).replace("\r\n", "\n").replace('\r', '\n');
+        java.util.Map<String, SourceImageBinding> bindings = new java.util.LinkedHashMap<>();
+        for (SourceImageBinding binding : authorizedBindings == null ? List.<SourceImageBinding>of() : authorizedBindings) {
+            SourceImageBinding previous = bindings.putIfAbsent(binding.markdownLine(), binding);
+            if (previous != null && (!previous.sourceDocumentId().equals(binding.sourceDocumentId())
+                    || !previous.logicalPath().equals(binding.logicalPath())
+                    || !previous.sourceScope().equals(binding.sourceScope())
+                    || !previous.canonicalQuestionNumber().equals(binding.canonicalQuestionNumber()))) {
+                throw new IllegalStateException("同一来源图片别名对应多个授权资源");
+            }
+        }
+        Matcher images = SOURCE_IMAGE_ROW.matcher(enriched);
+        StringBuffer materialized = new StringBuffer(enriched.length());
+        int imageIndex = 1;
+        while (images.find()) {
+            String markdownLine = images.group();
+            SourceImageBinding binding = bindings.get(markdownLine);
+            if (binding == null) {
+                throw new IllegalStateException("讲义包含未授权或被改写的来源图片引用");
+            }
+            InputStream imageStream;
+            String mimeType;
+            if ("CANONICAL_MATH_PAPER".equals(binding.sourceScope())) {
+                if (canonicalAssetService == null || binding.canonicalQuestionNumber().isBlank()) {
+                    throw new IllegalStateException("高考题图片资源服务不可用，拒绝导出图片讲义");
+                }
+                CanonicalMathPaperAssetService.VisibleAsset asset = canonicalAssetService
+                        .openVisibleQuestionFigure(binding.sourceDocumentId(), binding.canonicalQuestionNumber(),
+                                binding.logicalPath(), subject)
+                        .orElseThrow(() -> new IllegalStateException("未找到已授权的高考题图资源"));
+                imageStream = asset.resource().getInputStream();
+                mimeType = asset.mimeType();
+            } else {
+                if (assetService == null) {
+                    throw new IllegalStateException("图片资源服务不可用，拒绝导出图片讲义");
+                }
+                TeacherResourceAssetService.VisibleAsset asset = assetService
+                        .openVisibleLogicalAsset(binding.sourceDocumentId(), binding.logicalPath(), subject)
+                        .orElseThrow(() -> new IllegalStateException("未找到已授权的逻辑图片资源"));
+                imageStream = asset.resource().getInputStream();
+                mimeType = asset.mimeType();
+            }
+            String suffix = imageSuffix(mimeType);
+            if (suffix == null) {
+                throw new IllegalStateException("图片资源格式不受支持");
+            }
+            String fileName = "asset-" + imageIndex++ + suffix;
+            try (InputStream input = imageStream) {
+                Files.copy(input, workDir.resolve(fileName));
+            }
+            images.appendReplacement(materialized, Matcher.quoteReplacement("MATHAGENTIMAGE{" + fileName + "}"));
+        }
+        images.appendTail(materialized);
+        String result = materialized.toString();
+        if (AUTHORIZED_ASSET_IMAGE.matcher(result).find() || QUALIFIED_IMAGE.matcher(result).find()) {
+            throw new IllegalStateException("讲义包含无法解析的旧图片引用，拒绝导出");
+        }
+        return result;
+    }
+
+    private record SourceImageBinding(
+            String markdownLine,
+            String sourceDocumentId,
+            String logicalPath,
+            String sourceScope,
+            String canonicalQuestionNumber) {
     }
 
     /** XeLaTeX can safely embed only the supported raster formats from the asset store. */
@@ -539,8 +646,12 @@ public class MultiAgentWritingArtifactExportService {
             }
             // Headings are document labels, not formula prose.  Passing “Teacher Draft” to a heuristic formula
             // recognizer can mistake Markdown punctuation for subtraction; preserve it verbatim and sanitize body.
+            // Writer math already carries $...$ delimiters; the Feishu heuristic assumes undelimited raw text and
+            // must not re-wrap it — re-wrapping corrupts valid inline math into mixed delimiters that fail below.
             lines[lineIndex] = sourceLine.startsWith("#") || isMarkdownUriLine(sourceLine)
+                    || isTransparentReferenceLine(sourceLine)
                     || sourceLine.contains("MATHAGENTIMAGE{")
+                    || sourceLine.contains("$")
                     ? sourceLine
                     : FormulaMarkupSanitizer.sanitizeFeishuMath(sourceLine);
         }
@@ -554,6 +665,11 @@ public class MultiAgentWritingArtifactExportService {
 
     /** Preserves a multi-line display block while still applying the shared formula and CJK normalization rules. */
     private static String sanitizeDisplayMathBodyLine(String sourceLine) {
+        // Body text that already contains writer-owned $ delimiters is left untouched for the same reason as body
+        // lines above: the Feishu heuristic is for undelimited transport text and re-wrapping corrupts valid math.
+        if (sourceLine.contains("$")) {
+            return sourceLine;
+        }
         String wrapped = FormulaMarkupSanitizer.sanitizeFeishuMath("$$\n" + sourceLine + "\n$$");
         if (wrapped.startsWith("$$") && wrapped.endsWith("$$")) {
             return wrapped.substring(2, wrapped.length() - 2).strip();
@@ -564,6 +680,10 @@ public class MultiAgentWritingArtifactExportService {
     /** Markdown image/link targets are transport paths, never mathematical slash fractions. */
     private static boolean isMarkdownUriLine(String line) {
         return line != null && line.contains("](") && line.endsWith(")");
+    }
+
+    private static boolean isTransparentReferenceLine(String line) {
+        return line != null && Pattern.compile("(?:textbook|feishu|gaokao)://[^\\s]{1,500}").matcher(line).find();
     }
 
     /**
@@ -630,14 +750,16 @@ public class MultiAgentWritingArtifactExportService {
     }
 
     /** Selects the audience-owned stage artifact instead of mixing teacher answers into every export. */
-    private static String variantMarkdown(MultiAgentWritingArtifact artifact, HandoutVariant variant) {
+    private String variantMarkdown(MultiAgentWritingArtifact artifact, HandoutVariant variant) {
         if (variant == HandoutVariant.FINAL) {
             return finalHandoutMarkdown(artifact);
         }
         String selected = "";
+        MultiAgentWritingArtifact.StructuredSection selectedSection = null;
         for (MultiAgentWritingArtifact.StructuredSection section : artifact.sections()) {
             if (variant.matchesSectionCode(section.sectionCode()) && !section.content().isBlank()) {
                 selected = section.content().strip();
+                selectedSection = section;
             }
         }
         if (!selected.isBlank()) {
@@ -645,15 +767,7 @@ public class MultiAgentWritingArtifactExportService {
                 return classroomLectureProjection(selected, teacherDraftMarkdown(artifact));
             }
             String safe = variant.requiresAnswerFreeProjection() ? stripRestrictedSections(selected) : selected;
-            // Teacher and student documents may share retrieval context, but a generic source thumbnail is not part
-            // of either audience's lesson body. Remove the unbound transport before the student/teacher branches.
             safe = stripUnboundGenericAssetImages(safe);
-            if (variant == HandoutVariant.TEACHER) {
-                // A generic retrieval thumbnail is not a teaching figure: without a question-bound caption it can
-                // expand into an unrelated full exam page. Keep the readable source attribution, but remove only this
-                // exact unbound transport so descriptive, question-specific asset alts remain available.
-                return appendReadableEvidenceAttribution(stripUnboundGenericAssetImages(safe), artifact.mergedMarkdown());
-            }
             return variant == HandoutVariant.STUDENT ? normalizeStudentWritingSpace(safe) : safe;
         }
         if (variant == HandoutVariant.TEACHER) {
@@ -662,15 +776,92 @@ public class MultiAgentWritingArtifactExportService {
         throw new IllegalStateException("讲义缺少" + variant.displayName() + "正文，拒绝用教师版内容代替");
     }
 
-    /** Keeps a retrieved human-readable source title visible even when a writer omitted it from its prose. */
-    private static String appendReadableEvidenceAttribution(String teacherMarkdown, String mergedMarkdown) {
-        String source = safeText(mergedMarkdown);
-        if (teacherMarkdown.contains(SHARED_ROOT_SOURCE_TITLE)) return teacherMarkdown;
-        // The shared-root corpus is backend configuration, while the artifact intentionally stores only bounded
-        // writer output. Print its readable title here so a source survives model omission without exposing IDs.
-        return teacherMarkdown.strip() + "\n\n## 资料依据\n\n资料依据：" + SHARED_ROOT_SOURCE_TITLE
-                + "（飞书共享资料，已用于本讲义证据整理）。\n";
+    /** Locates the writer-owned numbered heading without depending on a language-specific title string. */
+    private static int findNumberedHeading(List<String> lines, int questionNumber) {
+        int found = -1;
+        for (int index = 0; index < lines.size(); index += 1) {
+            Integer headingNumber = numberedHeadingValue(lines.get(index));
+            if (headingNumber == null || headingNumber != questionNumber) {
+                continue;
+            }
+            if (found >= 0) {
+                throw new IllegalStateException("图片锚点对应多个题目标题");
+            }
+            found = index;
+        }
+        if (found < 0) {
+            throw new IllegalStateException("图片锚点缺少对应题目标题");
+        }
+        return found;
     }
+
+    /** Supports the Chinese-number headings emitted by the lecture writer, such as “题目四”. */
+    private static Integer numberedHeadingValue(String line) {
+        Matcher arabic = NUMBERED_MARKDOWN_HEADING.matcher(line);
+        if (arabic.matches()) {
+            return Integer.valueOf(arabic.group(1));
+        }
+        Matcher chinese = CHINESE_NUMBERED_MARKDOWN_HEADING.matcher(line);
+        return chinese.matches() ? chineseNumberValue(chinese.group(1)) : null;
+    }
+
+    private static Integer chineseNumberValue(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        int total = 0;
+        int section = 0;
+        for (int index = 0; index < value.length(); index += 1) {
+            char digit = value.charAt(index);
+            int number = switch (digit) {
+                case '零', '〇' -> 0;
+                case '一' -> 1;
+                case '二', '两' -> 2;
+                case '三' -> 3;
+                case '四' -> 4;
+                case '五' -> 5;
+                case '六' -> 6;
+                case '七' -> 7;
+                case '八' -> 8;
+                case '九' -> 9;
+                default -> -1;
+            };
+            if (number >= 0) {
+                section = section * 10 + number;
+                continue;
+            }
+            if (digit == '十') {
+                total += (section == 0 ? 1 : section) * 10;
+                section = 0;
+            } else if (digit == '百') {
+                total += (section == 0 ? 1 : section) * 100;
+                section = 0;
+            } else if (digit == '千') {
+                total += (section == 0 ? 1 : section) * 1000;
+                section = 0;
+            } else if (digit == '万') {
+                total = (total + section) * 10000;
+                section = 0;
+            } else {
+                return null;
+            }
+        }
+        int result = total + section;
+        return result > 0 ? result : null;
+    }
+
+    /** Places an after-question figure before the next peer section, preserving the writer's document structure. */
+    private static int nextPeerHeading(List<String> lines, int headingIndex) {
+        int depth = markdownHeadingDepth(lines.get(headingIndex));
+        for (int index = headingIndex + 1; index < lines.size(); index += 1) {
+            int candidateDepth = markdownHeadingDepth(lines.get(index));
+            if (candidateDepth > 0 && candidateDepth <= depth) {
+                return index;
+            }
+        }
+        return lines.size();
+    }
+
 
     /** Removes only generic asset thumbnails that have no question-bound description or instructional role. */
     private static String stripUnboundGenericAssetImages(String markdown) {
@@ -715,6 +906,12 @@ public class MultiAgentWritingArtifactExportService {
             }
         }
         return handoutTitle(artifact) + "（" + variant.displayName() + "）";
+    }
+
+    /** Removes internal authorization tokens that a model copied from its broker context into visible prose. */
+    private static String stripInternalEvidenceReferences(String markdown) {
+        String withoutReferences = INTERNAL_EVIDENCE_REFERENCE.matcher(safeText(markdown)).replaceAll("");
+        return INTERNAL_EVIDENCE_CITATION_LINE.matcher(withoutReferences).replaceAll("");
     }
 
     /** Prevents a reviewed teacher solution from accidentally being published as a blank student handout. */
@@ -986,7 +1183,8 @@ public class MultiAgentWritingArtifactExportService {
         // writer is therefore the authoritative final teacher body, while student and 16:10 remain separate sections.
         // Falling back only to this audience-owned section preserves the no-trace export guarantee.
         for (MultiAgentWritingArtifact.StructuredSection section : artifact.sections()) {
-            if ("teacher-explanation".equals(section.sectionCode()) && !section.content().isBlank()) {
+            if (("teacher-explanation".equals(section.sectionCode()) || "teacher_writer".equals(section.sectionCode()))
+                    && !section.content().isBlank()) {
                 return section.content().strip();
             }
         }
@@ -1037,6 +1235,19 @@ public class MultiAgentWritingArtifactExportService {
             }
         }
         return "";
+    }
+
+    /** Builds a stable tabular layout for any Markdown row width instead of assuming a two-column table. */
+    private static String tableColumnSpec(int cellCount) {
+        int columns = Math.max(1, Math.min(cellCount, 8));
+        StringBuilder spec = new StringBuilder();
+        for (int index = 0; index < columns; index++) {
+            if (index > 0) {
+                spec.append('|');
+            }
+            spec.append("p{\\dimexpr\\linewidth/").append(columns).append("-2\\tabcolsep\\relax}");
+        }
+        return spec.toString();
     }
 
     /**
@@ -1129,11 +1340,13 @@ public class MultiAgentWritingArtifactExportService {
                     latex.append("\\hline\n");
                     continue;
                 }
+                String[] cells = tableLine.substring(1, tableLine.length() - 1).split("\\|", -1);
                 if (!inTable) {
-                    latex.append("\\begin{center}\n\\begin{tabular}{|p{0.28\\linewidth}|p{0.60\\linewidth}|}\n\\hline\n");
+                    latex.append("\\begin{center}\n\\begin{tabular}{|")
+                            .append(tableColumnSpec(cells.length))
+                            .append("|}\n\\hline\n");
                     inTable = true;
                 }
-                String[] cells = tableLine.substring(1, tableLine.length() - 1).split("\\|", -1);
                 for (int index = 0; index < cells.length; index++) {
                     if (index > 0) {
                         latex.append(" & " );
@@ -1550,9 +1763,9 @@ public class MultiAgentWritingArtifactExportService {
         boolean matchesSectionCode(String candidate) {
             return sectionCode.equals(candidate)
                     || switch (this) {
-                        case TEACHER -> "teacher".equals(candidate);
-                        case STUDENT -> "student".equals(candidate);
-                        case LECTURE -> "lecture".equals(candidate);
+                        case TEACHER -> "teacher".equals(candidate) || "teacher_writer".equals(candidate);
+                        case STUDENT -> "student".equals(candidate) || "student_writer".equals(candidate);
+                        case LECTURE -> "lecture".equals(candidate) || "lecture_writer".equals(candidate);
                         case FINAL -> false;
                     };
         }

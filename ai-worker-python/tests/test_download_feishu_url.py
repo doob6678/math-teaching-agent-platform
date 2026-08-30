@@ -11,6 +11,11 @@ download_feishu_url = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(download_feishu_url)
 
 
+MINIMAL_PNG = b"\x89PNG\r\n\x1a\n" + b"png-payload"
+MINIMAL_JPEG = b"\xff\xd8\xff" + b"jpeg-payload"
+MINIMAL_GIF = b"GIF89a" + b"gif-payload"
+
+
 class FakeFeishuClient:
     def __init__(self) -> None:
         self.markdown_tokens = []
@@ -64,9 +69,16 @@ class DownloadedHtmlImageFeishuClient(download_feishu_url.FeishuClient):
     def list_document_image_tokens(self, _document_token):
         return []
 
+    def request(self, method, url, **_kwargs):
+        class Response:
+            content = "TODO 这不是图片，而是文档正文".encode("utf-8")
+            headers = {"Content-Type": "image/png"}
+
+        return Response()
+
     def download_embedded_image(self, image_url):
         self.downloaded_urls.append(image_url)
-        return b"html-image-bytes", "map.jpg", "image/jpeg"
+        return MINIMAL_JPEG, "map.jpg", "image/jpeg"
 
 
 class MultipleNamedImageFeishuClient(download_feishu_url.FeishuClient):
@@ -74,23 +86,23 @@ class MultipleNamedImageFeishuClient(download_feishu_url.FeishuClient):
         return []
 
     def download_embedded_image(self, image_url):
-        return str(image_url).encode("utf-8"), "image.png", "image/png"
+        return MINIMAL_PNG, "image.png", "image/png"
 
 
 class EmbeddedImageFeishuClient(FakeFeishuClient):
     def download_docx_markdown_with_assets(self, document_token, output_dir):
-        content = b"# doc\n\n![image](_feishu_images/image.png)"
+        content = b"# doc\n\n![image](IMAJES/image.png)"
         asset = {
             "type": "image",
             "token": "media-token",
             "name": "image.png",
-            "path": "_feishu_images/image.png",
-            "relativePath": "_feishu_images/image.png",
-            "providerAssetId": "_feishu_images/image.png",
+            "path": "IMAJES/image.png",
+            "relativePath": "IMAJES/image.png",
+            "providerAssetId": "IMAJES/image.png",
             "mimeType": "image/png",
             "assetKind": "image",
         }
-        target = output_dir / "_feishu_images" / "image.png"
+        target = output_dir / "IMAJES" / "image.png"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(b"png")
         return content, f"{document_token}.md", len(content), [asset], []
@@ -100,6 +112,31 @@ class FailedEmbeddedImageFeishuClient(EmbeddedImageFeishuClient):
     def download_docx_markdown_with_assets(self, document_token, output_dir):
         content, name, size, assets, _ = super().download_docx_markdown_with_assets(document_token, output_dir)
         return content, name, size, assets, [{"type": "image", "token": "media-token", "message": "expired"}]
+
+
+class ManifestImageFeishuClient(FakeFeishuClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.downloaded = []
+
+    def download_docx_markdown_with_assets(self, document_token, output_dir):
+        self.downloaded.append(document_token)
+        content = b"# doc\n\n![image](IMAJES/image-001.png)"
+        image_dir = output_dir / "IMAJES"
+        image_dir.mkdir(parents=True, exist_ok=True)
+        image_path = image_dir / "image-001.png"
+        image_path.write_bytes(MINIMAL_PNG)
+        asset = {
+            "type": "image",
+            "token": "media-token",
+            "name": image_path.name,
+            "path": "IMAJES/image-001.png",
+            "relativePath": "IMAJES/image-001.png",
+            "providerAssetId": "IMAJES/image-001.png",
+            "mimeType": "image/png",
+            "assetKind": "image",
+        }
+        return content, f"{document_token}.md", len(content), [asset], []
 
 
 class DownloadFeishuUrlTest(unittest.TestCase):
@@ -180,7 +217,8 @@ class DownloadFeishuUrlTest(unittest.TestCase):
             self.assertEqual(client.docx_exports, [])
             self.assertEqual(saved_path.name, "向量和角度.md")
             self.assertEqual(saved_path.suffix, ".md")
-            self.assertIn("数量积用于判断垂直", saved_path.read_text(encoding="utf-8"))
+            saved_text = (Path(temp_dir) / "向量和角度.md").read_text(encoding="utf-8")
+            self.assertIn("数量积用于判断垂直", saved_text)
             self.assertEqual(result["file_extension"], "md")
             self.assertEqual(result["stats"]["files"], 1)
             self.assertEqual(result["stats"]["failed"], 0)
@@ -198,7 +236,14 @@ class DownloadFeishuUrlTest(unittest.TestCase):
 
             self.assertEqual(result["stats"]["assets"], 1)
             self.assertEqual(result["stats"]["failed"], 0)
-            self.assertEqual(result["checkpoint"]["downloaded_items"][1]["providerAssetId"], "_feishu_images/image.png")
+            saved_text = (Path(temp_dir) / "向量和角度.md").read_text(encoding="utf-8")
+            self.assertIn("IMAJES/image.png", saved_text)
+            self.assertNotIn("向量", saved_text)
+            self.assertNotIn("::", saved_text)
+            self.assertEqual(
+                result["checkpoint"]["downloaded_items"][1]["providerAssetId"],
+                "IMAJES/image.png",
+            )
 
     def test_single_document_image_failure_is_reported_and_not_ready(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -231,6 +276,62 @@ class DownloadFeishuUrlTest(unittest.TestCase):
             self.assertEqual(result["checkpoint"]["downloaded_items"][0]["token"], "doc_token_1")
             self.assertEqual(result["checkpoint"]["downloaded_items"][0]["relativePath"], "空间向量.md")
             self.assertEqual(result["failed_items"], [])
+
+    def test_folder_download_removes_old_path_when_provider_token_is_renamed(self):
+        class RenamedFeishuClient(FakeFeishuClient):
+            def list_folder_page(self, folder_token, page_token=""):
+                if page_token:
+                    return [], "", False
+                return [
+                    {
+                        "type": "docx",
+                        "name": "新空间向量",
+                        "token": "doc_token_1",
+                    }
+                ], "", False
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            root_dir = output_dir / "教材资料"
+            old_file = root_dir / "旧目录" / "旧空间向量.md"
+            old_file.parent.mkdir(parents=True)
+            old_file.write_text("# 旧正文\n", encoding="utf-8")
+            old_item = {
+                "type": "docx",
+                "name": "旧空间向量",
+                "token": "doc_token_1",
+            }
+            manifest_path = output_dir / "manifest.json"
+            manifest_path.write_text(
+                download_feishu_url.json.dumps({
+                    "version": 1,
+                    "items": {
+                        "doc_token_1": {
+                            **old_item,
+                            "relativePath": "旧目录/旧空间向量.md",
+                            "assetKind": "document",
+                            "signature": download_feishu_url.provider_item_signature(old_item),
+                        }
+                    },
+                }, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            result = download_feishu_url.download_from_url(
+                RenamedFeishuClient(),
+                "https://my.feishu.cn/drive/folder/folderToken",
+                output_dir,
+                file_extension="md",
+                manifest_path=str(manifest_path),
+            )
+
+            new_file = root_dir / "新空间向量.md"
+            self.assertTrue(new_file.is_file())
+            self.assertFalse(old_file.exists())
+            self.assertFalse(old_file.parent.exists())
+            self.assertEqual(result["changed_items"][0]["relativePath"], "新空间向量.md")
+            manifest = download_feishu_url.load_incremental_manifest(str(manifest_path))
+            self.assertEqual(manifest["doc_token_1"]["relativePath"], "新空间向量.md")
 
     def test_folder_resume_keeps_checkpoint_local_root_when_provider_title_differs(self):
         client = FakeFeishuClient()
@@ -267,20 +368,96 @@ class DownloadFeishuUrlTest(unittest.TestCase):
             self.assertEqual(result["stats"]["files"], 1)
             self.assertEqual(result["checkpoint"]["downloaded_items"][0]["type"], "file")
 
-    def test_folder_download_records_failed_items(self):
-        client = FailingFeishuClient()
+    def test_incremental_manifest_redownloads_document_with_invalid_local_image(self):
+        client = ManifestImageFeishuClient()
+        item = {
+            "type": "docx",
+            "name": "空间向量",
+            "token": "doc_token_1",
+        }
         with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            root_dir = output_dir / "教材资料"
+            document = root_dir / "空间向量.md"
+            image_dir = root_dir / "IMAJES"
+            image_dir.mkdir(parents=True)
+            document.write_text("# 旧正文\n", encoding="utf-8")
+            (image_dir / "image-001.png").write_text("TODO 这不是图片\n", encoding="utf-8")
+            manifest_path = output_dir / "manifest.json"
+            manifest_path.write_text(
+                download_feishu_url.json.dumps({
+                    "version": 1,
+                    "items": {
+                        "doc_token_1": {
+                            "type": "docx",
+                            "name": "空间向量",
+                            "token": "doc_token_1",
+                            "relativePath": "空间向量.md",
+                            "assetKind": "document",
+                            "signature": download_feishu_url.provider_item_signature(item),
+                        }
+                    },
+                }, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
             result = download_feishu_url.download_from_url(
                 client,
                 "https://my.feishu.cn/drive/folder/folderToken",
-                Path(temp_dir),
+                output_dir,
                 file_extension="md",
+                manifest_path=str(manifest_path),
             )
 
-            self.assertEqual(result["stats"]["files"], 0)
-            self.assertEqual(result["stats"]["failed"], 1)
-            self.assertEqual(result["failed_items"][0]["token"], "doc_token_1")
-            self.assertIn("ProxyError", result["failed_items"][0]["message"])
+            self.assertEqual(client.downloaded, ["doc_token_1"])
+            self.assertEqual(result["stats"]["changed_files"], 1)
+            self.assertEqual(result["unchanged_items"], [])
+            self.assertTrue((root_dir / "IMAJES" / "image-001.png").read_bytes().startswith(MINIMAL_PNG[:8]))
+
+    def test_incremental_manifest_keeps_document_with_valid_local_image_unchanged(self):
+        client = ManifestImageFeishuClient()
+        item = {
+            "type": "docx",
+            "name": "空间向量",
+            "token": "doc_token_1",
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            root_dir = output_dir / "教材资料"
+            document = root_dir / "空间向量.md"
+            image_dir = root_dir / "IMAJES"
+            image_dir.mkdir(parents=True)
+            document.write_text("# 正文\n", encoding="utf-8")
+            (image_dir / "image-001.png").write_bytes(MINIMAL_PNG)
+            manifest_path = output_dir / "manifest.json"
+            manifest_path.write_text(
+                download_feishu_url.json.dumps({
+                    "version": 1,
+                    "items": {
+                        "doc_token_1": {
+                            "type": "docx",
+                            "name": "空间向量",
+                            "token": "doc_token_1",
+                            "relativePath": "空间向量.md",
+                            "assetKind": "document",
+                            "signature": download_feishu_url.provider_item_signature(item),
+                        }
+                    },
+                }, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            result = download_feishu_url.download_from_url(
+                client,
+                "https://my.feishu.cn/drive/folder/folderToken",
+                output_dir,
+                file_extension="md",
+                manifest_path=str(manifest_path),
+            )
+
+            self.assertEqual(client.downloaded, [])
+            self.assertEqual(result["stats"]["changed_files"], 0)
+            self.assertEqual(result["stats"]["unchanged_files"], 1)
 
     def test_markdown_images_are_materialized_and_manifest_is_provider_neutral(self):
         client = download_feishu_url.FeishuClient.__new__(download_feishu_url.FeishuClient)
@@ -298,13 +475,13 @@ class DownloadFeishuUrlTest(unittest.TestCase):
             )
 
             self.assertEqual(failures, [])
-            self.assertIn("_feishu_images/diagram.png", rewritten)
+            self.assertIn("IMAJES/image-001.png", rewritten)
             self.assertNotIn("internal-api-drive-stream", rewritten)
             self.assertEqual(len(manifests), 1)
             self.assertEqual(manifests[0]["assetKind"], "image")
             self.assertTrue((output_dir / manifests[0]["relativePath"]).exists())
 
-    def test_multiple_images_do_not_overwrite_same_provider_name(self):
+    def test_multiple_images_use_document_order_names(self):
         client = MultipleNamedImageFeishuClient.__new__(MultipleNamedImageFeishuClient)
         with tempfile.TemporaryDirectory() as temp_dir:
             output_dir = Path(temp_dir)
@@ -316,10 +493,22 @@ class DownloadFeishuUrlTest(unittest.TestCase):
             self.assertEqual(failures, [])
             self.assertEqual(
                 [item["relativePath"] for item in manifests],
-                ["_feishu_images/image.png", "_feishu_images/image-2.png"],
+                [
+                    "IMAJES/image-001.png",
+                    "IMAJES/image-002.png",
+                ],
             )
-            self.assertIn("_feishu_images/image.png", rewritten)
-            self.assertIn("_feishu_images/image-2.png", rewritten)
+            self.assertIn("IMAJES/image-001.png", rewritten)
+            self.assertIn("IMAJES/image-002.png", rewritten)
+
+    def test_image_names_never_use_provider_or_hash_values(self):
+        client = MultipleNamedImageFeishuClient.__new__(MultipleNamedImageFeishuClient)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            _, manifests, _ = client.materialize_markdown_images(
+                "doc-token", "![图](https://img.test/provider-token)", Path(temp_dir)
+            )
+            self.assertEqual(manifests[0]["name"], "image-001.png")
+            self.assertNotRegex(manifests[0]["name"], r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
     def test_feishu_html_href_images_are_extracted_in_document_order(self):
         markdown = (
@@ -351,7 +540,7 @@ class DownloadFeishuUrlTest(unittest.TestCase):
 
             self.assertEqual(failures, [])
             self.assertEqual(client.downloaded_urls, ["https://internal-api-drive-stream.feishu.cn/stream?x=1&sig=2"])
-            self.assertIn('_feishu_images/map.jpg', rewritten)
+            self.assertIn('IMAJES/image-001.jpg', rewritten)
             self.assertNotIn('internal-api-drive-stream', rewritten)
             self.assertEqual(len(manifests), 1)
             self.assertTrue((Path(temp_dir) / manifests[0]["relativePath"]).is_file())
@@ -368,7 +557,7 @@ class DownloadFeishuUrlTest(unittest.TestCase):
 
             self.assertEqual(failures, [])
             self.assertEqual(len(manifests), 1)
-            self.assertEqual(rewritten, '![](_feishu_images/map.jpg)')
+            self.assertEqual(rewritten, '![](IMAJES/image-001.jpg)')
 
     def test_expired_markdown_image_falls_back_to_durable_media_token(self):
         client = download_feishu_url.FeishuClient.__new__(download_feishu_url.FeishuClient)
@@ -389,8 +578,16 @@ class DownloadFeishuUrlTest(unittest.TestCase):
             )
 
             self.assertEqual(failures, [])
-            self.assertIn("_feishu_images/media.png", rewritten)
+            self.assertIn("IMAJES/image-001.png", rewritten)
             self.assertEqual(manifests[0]["token"], "media-token-1")
+
+    def test_invalid_successful_image_payload_is_rejected(self):
+        with self.assertRaises(ValueError):
+            download_feishu_url.validate_image_payload(
+                "TODO 这不是图片，而是文档正文".encode("utf-8"),
+                "image-001.png",
+                "image/png",
+            )
 
     def test_failed_markdown_image_is_not_hidden_from_sync_summary(self):
         client = download_feishu_url.FeishuClient.__new__(download_feishu_url.FeishuClient)

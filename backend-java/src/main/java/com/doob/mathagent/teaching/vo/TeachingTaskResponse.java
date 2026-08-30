@@ -176,6 +176,22 @@ public record TeachingTaskResponse(
     }
 
     /**
+     * Replaces the projected DAG nodes without altering ownership, execution state, or generated text.
+     *
+     * <p>Terminal failure persistence uses this copy to close out nodes that were mid-flight when the run died;
+     * otherwise the durable FAILED snapshot would keep advertising "生成中" stages that will never resume.</p>
+     */
+    public TeachingTaskResponse withNodes(List<TeachingWorkflowNode> nextNodes) {
+        return new TeachingTaskResponse(
+                taskId, clientRequestId, tenantId, subjectType, subjectId, selectedTemplate, status,
+                questionText, learningGoal, watermarkText,
+                nextNodes == null ? List.of() : List.copyOf(nextNodes), workflowEvents, reactTrace, evidence,
+                handoutLatex, teacherHandoutLatex, studentHandoutLatex, lectureHandoutLatex, interactiveSuggestions,
+                memoryReuse, stageTimings, aiDraft, draftSections, draftReview, mergeResult, errorMessage,
+                headerLeft, headerRight, footerLeft, footerRight);
+    }
+
+    /**
      * Backward-compatible constructor for call sites that already set a selected template and lecture version
      * before workflow events were added.
      */
@@ -530,16 +546,27 @@ public record TeachingTaskResponse(
     }
 
     /**
-     * AI-authored image placement contract. Asset identifiers remain opaque until Java revalidates task, subject and
-     * variant ownership before controlled materialization for the renderer.
+     * AI-authored source image placement. The original Markdown row and logical article path are the only image
+     * selectors crossing the Python/Java boundary; Java performs the final run/subject authorization before export.
      */
     public record AssetPlacement(
-            int questionNumber,
-            List<String> assetIds,
-            String anchor,
+            String logicalPath,
+            String markdownLine,
+            String anchorBefore,
+            String anchorAfter,
             String layout,
             List<String> variants,
             String caption) {
+
+        public AssetPlacement {
+            logicalPath = logicalPath == null ? "" : logicalPath;
+            markdownLine = markdownLine == null ? "" : markdownLine;
+            anchorBefore = anchorBefore == null ? "" : anchorBefore;
+            anchorAfter = anchorAfter == null ? "" : anchorAfter;
+            layout = layout == null ? "" : layout;
+            variants = variants == null ? List.of() : List.copyOf(variants);
+            caption = caption == null ? "" : caption;
+        }
     }
 
     /**

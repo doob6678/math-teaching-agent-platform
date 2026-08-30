@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import {
+  repairMojibakeText,
   safeUserFacingText,
   stageDetailText,
   TeachingConversationPanel,
@@ -83,6 +84,50 @@ function buildResponse(overrides: Partial<StudentExplanationResponse> = {}): Stu
 }
 
 describe("TeachingConversationPanel", () => {
+  it("repairs double-encoded UTF-8 mojibake titles and leaves normal text untouched", () => {
+    expect(repairMojibakeText("ä¸­ç­‰æ•°å­¦")).toBe("中等数学");
+    expect(repairMojibakeText("中等数学")).toBe("中等数学");
+    expect(repairMojibakeText("plain english")).toBe("plain english");
+  });
+
+  it("renders paired decoration glyphs as emphasis and drops stray ones", () => {
+    const response = buildResponse({
+      cards: [{
+        cardKey: "glyph-emphasis",
+        title: "三角函数",
+        summary: "◆识别函数类型◆，然后判断周期。孤立的 ◆ 标记会被移除。",
+        items: [],
+        sourceUris: [],
+        renderMode: "text",
+      }],
+    });
+    const html = renderToStaticMarkup(
+      <TeachingConversationPanel
+        conversationTitle="三角函数周期"
+        value=""
+        entries={[{ id: "assistant-glyph", role: "assistant", createdAt: "2026-08-30T00:00:00Z", response }]}
+        recentConversations={[]}
+        loading={false}
+        loadingHistory={false}
+        error=""
+        imageDraft={null}
+        uploadingImage={false}
+        imageError=""
+        openingConversationId=""
+        onValueChange={vi.fn()}
+        onSubmit={vi.fn()}
+        onImageSelect={vi.fn()}
+        onClearImage={vi.fn()}
+        onStartNewConversation={vi.fn()}
+        onOpenConversation={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain("teaching-emphasis");
+    expect(html).toContain("识别函数类型");
+    expect(html).not.toContain("◆");
+  });
+
   it("renders Chinese and escaped LaTex formulas without replacement or ext corruption", () => {
     const response = buildResponse({
       cards: [{

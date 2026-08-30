@@ -273,28 +273,29 @@ public class PythonTeachingHandoutClient implements TeachingHandoutAiClient {
         return document.path("markdown").asText("").strip();
     }
 
-    /** Parses only bounded structured placement metadata; actual ownership authorization remains in the workflow. */
+    /** Parses the current source-row placement contract; legacy question/asset-id placement is rejected. */
     private static List<TeachingTaskResponse.AssetPlacement> assetPlacements(JsonNode documents) {
         List<TeachingTaskResponse.AssetPlacement> placements = new ArrayList<>();
         for (String stage : List.of("teacher_writer", "student_writer", "lecture_writer")) {
             for (JsonNode item : documents.path(stage).path("assetPlacements")) {
-                int questionNumber = item.path("questionNumber").asInt(0);
-                String anchor = item.path("anchor").asText("");
+                String logicalPath = item.path("logicalPath").asText("").strip();
+                String markdownLine = item.path("markdownLine").asText("").strip();
+                String anchorBefore = item.path("anchorBefore").asText("");
+                String anchorAfter = item.path("anchorAfter").asText("");
                 String layout = item.path("layout").asText("");
                 String caption = item.path("caption").asText("");
-                List<String> assetIds = stringValues(item.path("assetIds"), 2);
                 List<String> variants = stringValues(item.path("variants"), 3);
-                if (questionNumber < 1 || assetIds.isEmpty()
-                        || !("question".equals(anchor) || "explanation_after_question".equals(anchor))
-                        || !("single".equals(layout) || "vertical_sequence".equals(layout) || "two_column".equals(layout))) {
-                    throw new IllegalStateException("Python handout returned invalid asset placement");
-                }
-                if (!variants.contains(stage) || variants.stream().anyMatch(variant -> !List.of(
-                        "teacher_writer", "student_writer", "lecture_writer").contains(variant))) {
-                    throw new IllegalStateException("Python handout returned invalid asset placement variant");
+                if (logicalPath.isBlank() || !markdownLine.startsWith("![") || !markdownLine.contains("](")
+                        || logicalPath.contains("..") || logicalPath.contains("://")
+                        || markdownLine.contains("http://") || markdownLine.contains("https://")
+                        || !("single".equals(layout) || "vertical_sequence".equals(layout) || "two_column".equals(layout))
+                        || variants.isEmpty() || !variants.contains(stage)
+                        || variants.stream().anyMatch(variant -> !List.of(
+                                "teacher_writer", "student_writer", "lecture_writer").contains(variant))) {
+                    throw new IllegalStateException("Python handout returned invalid source-image placement");
                 }
                 TeachingTaskResponse.AssetPlacement placement = new TeachingTaskResponse.AssetPlacement(
-                        questionNumber, assetIds, anchor, layout, variants, caption);
+                        logicalPath, markdownLine, anchorBefore, anchorAfter, layout, variants, caption);
                 if (!placements.contains(placement)) {
                     placements.add(placement);
                 }
@@ -328,8 +329,15 @@ public class PythonTeachingHandoutClient implements TeachingHandoutAiClient {
     }
 
     private String evidenceRef(String taskId, TeachingEvidence evidence) {
+        // 必须与 AgentToolBrokerController.evidenceRef / MultiAgentWritingService.issuedEvidenceRef 完全同构
+        //（含 "|assets=" 分量）。缺该分量时，任何带 assetIds 的证据在 handout-context 回调侧重算指纹
+        // 都会对不上，导致整个讲义任务 403 HANDOUT_BROKER_CLIENT_FAILURE。
+        String assets = evidence.assetIds() == null
+                ? ""
+                : evidence.assetIds().stream().sorted().collect(java.util.stream.Collectors.joining(","));
         return "ev_" + fingerprint(taskId + "|evidence|" + evidence.sourceDocumentId() + "|"
-                + evidence.sourceScope() + "|" + evidence.sourceTitle() + "|" + evidence.chunkId());
+                + evidence.sourceScope() + "|" + evidence.sourceTitle() + "|" + evidence.chunkId()
+                + "|assets=" + assets);
     }
 
     private String fingerprint(String value) {

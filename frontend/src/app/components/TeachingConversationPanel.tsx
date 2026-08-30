@@ -1,6 +1,6 @@
 import katex from "katex";
 import { ChangeEvent, ClipboardEvent, FormEvent, useEffect, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, ChevronDown, ExternalLink, Loader2, Plus, Sparkles, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, ChevronDown, ChevronLeft, ExternalLink, History, Loader2, Plus, Sparkles, X } from "lucide-react";
 import {
   StudentExplanationConversationSummary,
   StudentExplanationImageUploadResponse,
@@ -36,6 +36,10 @@ export type TeachingConversationThreadItem =
       liveContent?: string;
       /** Compatibility-only provider reasoning field. Raw reasoning is intentionally never rendered to the learner. */
       liveThinking?: string;
+      /** 提交到首个内容增量到达的毫秒数（TTFT）。用于在界面上如实展示首 token 响应速度。 */
+      firstTokenMs?: number;
+      /** 提交到流式回合完整结束的毫秒数，与 firstTokenMs 一起构成速度展示。 */
+      totalMs?: number;
     };
 
 type ConversationImageDraft = StudentExplanationImageUploadResponse & {
@@ -49,6 +53,8 @@ export function TeachingConversationPanel({
   recentConversations,
   loading,
   loadingHistory,
+  hasMoreConversations = false,
+  loadingMoreConversations = false,
   error,
   imageDraft,
   uploadingImage,
@@ -62,6 +68,7 @@ export function TeachingConversationPanel({
   onConversationMemoryChange: _onConversationMemoryChange,
   onStartNewConversation,
   onOpenConversation,
+  onLoadMoreConversations = () => {},
 }: {
   conversationTitle: string;
   value: string;
@@ -69,6 +76,9 @@ export function TeachingConversationPanel({
   recentConversations: StudentExplanationConversationSummary[];
   loading: boolean;
   loadingHistory: boolean;
+  /** 服务端还有更多历史会话时显示“加载更多”，列表分页由后端 page 参数支撑。 */
+  hasMoreConversations?: boolean;
+  loadingMoreConversations?: boolean;
   error: string;
   imageDraft: ConversationImageDraft | null;
   uploadingImage: boolean;
@@ -84,13 +94,14 @@ export function TeachingConversationPanel({
   onConversationMemoryChange?: (enabled: boolean) => void;
   onStartNewConversation: () => void;
   onOpenConversation: (conversation: StudentExplanationConversationSummary) => void;
+  onLoadMoreConversations?: () => void;
 }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const followsLatestRef = useRef(true);
   const [clipboardError, setClipboardError] = useState("");
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const latestHistory = recentConversations.slice(0, 3);
+  // 宽屏默认展开左侧历史栏（常驻侧栏），窄屏默认收起、由顶栏按钮唤出抽屉。
+  const [drawerOpen, setDrawerOpen] = useState(() => typeof window !== "undefined" && window.innerWidth >= 1100);
 
   useEffect(() => {
     const container = scrollRef.current;
@@ -147,16 +158,79 @@ export function TeachingConversationPanel({
 
   return (
     <section className="teaching-live-shell teaching-chat-shell" aria-label="AI 讲题">
+      <div
+        className={`teaching-chat-drawer-backdrop${drawerOpen ? " open" : ""}`}
+        onClick={() => setDrawerOpen(false)}
+        aria-hidden={!drawerOpen}
+      />
+      <aside className={`teaching-chat-drawer${drawerOpen ? " open" : ""}`} aria-label="AI讲题历史记录">
+        <div className="teaching-chat-drawer-head">
+          <strong>最近讲题</strong>
+          {loadingHistory ? <span className="teaching-chat-drawer-sync"><Loader2 className="spin" size={12} />同步中</span> : null}
+          <button type="button" className="teaching-chat-drawer-close" onClick={() => setDrawerOpen(false)} aria-label="关闭历史记录">
+            <ArrowLeft size={16} />
+          </button>
+        </div>
+        <div className="teaching-chat-drawer-list">
+          {recentConversations.length ? recentConversations.slice(0, 30).map((item) => (
+            <button
+              type="button"
+              className="teaching-chat-drawer-item"
+              key={item.conversationId}
+              title={titleTooltip(item.title)}
+              disabled={loading || openingConversationId === item.conversationId}
+              onClick={() => {
+                // 宽屏（≥1101px）历史栏是常驻侧栏，点开对话不收起——此前无条件收起且收起后没有明显
+                // 的恢复入口，观感上就是"点进对话左侧栏消失了"的 bug。窄屏抽屉是覆盖层，选中后
+                // 仍要自动收起露出正文。
+                if (typeof window !== "undefined" && window.innerWidth < 1101) setDrawerOpen(false);
+                onOpenConversation(item);
+              }}
+            >
+              <strong><InlineMathText text={safeUserFacingText(item.title, "最近讲题")} /></strong>
+              <span>{openingConversationId === item.conversationId ? "正在加载" : `${item.totalMessages} 轮`}</span>
+            </button>
+          )) : (
+            <div className="teaching-chat-drawer-empty">还没有历史讲题记录。</div>
+          )}
+          {hasMoreConversations ? (
+            <button
+              type="button"
+              className="teaching-chat-drawer-more"
+              disabled={loadingMoreConversations}
+              onClick={onLoadMoreConversations}
+            >
+              {loadingMoreConversations ? "正在加载…" : "加载更早的讲题"}
+            </button>
+          ) : null}
+        </div>
+      </aside>
+
+      {/* 抽屉拉手：挂在 shell 上而不是 aside 里，侧栏 display:none 收起时拉手仍然可见，
+          贴在侧栏右缘（收起时贴屏幕左缘），点一下即可展开/伸缩。仅宽屏渲染，窄屏沿用顶栏按钮。 */}
+      <button
+        type="button"
+        className={`teaching-chat-drawer-handle${drawerOpen ? " open" : ""}`}
+        onClick={() => setDrawerOpen((current) => !current)}
+        aria-label={drawerOpen ? "收起历史记录" : "展开历史记录"}
+        aria-expanded={drawerOpen}
+        title={drawerOpen ? "收起历史记录" : "展开历史记录"}
+      >
+        <ChevronLeft size={14} />
+      </button>
+
+      <div className="teaching-chat-main">
       <header className="teaching-live-header teaching-chat-header-fixed">
         <div className="teaching-live-brand teaching-chat-header-main">
           <button
             type="button"
             className="teaching-live-brand-icon teaching-chat-drawer-trigger"
             onClick={() => setDrawerOpen((current) => !current)}
-            aria-label={drawerOpen ? "收起历史抽屉" : "打开历史抽屉"}
+            aria-label={drawerOpen ? "收起历史记录" : "打开历史记录"}
             aria-expanded={drawerOpen}
+            title={drawerOpen ? "收起历史记录" : "历史记录"}
           >
-            <Sparkles size={16} />
+            <History size={16} />
           </button>
           <div className="teaching-live-brand-copy">
             <strong><InlineMathText text={safeUserFacingText(conversationTitle, "AI 讲题")} /></strong>
@@ -167,60 +241,8 @@ export function TeachingConversationPanel({
             <Plus size={15} />
             <span>新建对话</span>
           </button>
-          {latestHistory.length ? (
-            <div className="teaching-history-strip" aria-label="最近讲题记录">
-              {loadingHistory ? (
-                <span className="teaching-history-chip muted"><Loader2 className="spin" size={12} />同步中</span>
-              ) : latestHistory.map((item) => (
-                <button
-                  type="button"
-                  className="teaching-history-chip"
-                  key={item.conversationId}
-                  title={titleTooltip(item.title)}
-                  disabled={loading || openingConversationId === item.conversationId}
-                  onClick={() => onOpenConversation(item)}
-                >
-                  <InlineMathText text={safeUserFacingText(item.title, "最近讲题")} />
-                </button>
-              ))}
-            </div>
-          ) : null}
         </div>
       </header>
-
-      <div
-        className={`teaching-chat-drawer-backdrop${drawerOpen ? " open" : ""}`}
-        onClick={() => setDrawerOpen(false)}
-        aria-hidden={!drawerOpen}
-      />
-      <aside className={`teaching-chat-drawer${drawerOpen ? " open" : ""}`} aria-label="AI讲题历史抽屉">
-        <div className="teaching-chat-drawer-head">
-          <strong>最近讲题</strong>
-          <button type="button" className="teaching-chat-drawer-close" onClick={() => setDrawerOpen(false)} aria-label="关闭历史抽屉">
-            <ArrowLeft size={16} />
-          </button>
-        </div>
-        <div className="teaching-chat-drawer-list">
-          {recentConversations.length ? recentConversations.slice(0, 12).map((item) => (
-            <button
-              type="button"
-              className="teaching-chat-drawer-item"
-              key={item.conversationId}
-              title={titleTooltip(item.title)}
-              disabled={loading || openingConversationId === item.conversationId}
-              onClick={() => {
-                setDrawerOpen(false);
-                onOpenConversation(item);
-              }}
-            >
-              <strong><InlineMathText text={safeUserFacingText(item.title, "最近讲题")} /></strong>
-              <span>{openingConversationId === item.conversationId ? "正在加载" : `${item.totalMessages} 轮`}</span>
-            </button>
-          )) : (
-            <div className="teaching-chat-drawer-empty">还没有历史讲题记录。</div>
-          )}
-        </div>
-      </aside>
 
       <div className="teaching-live-scroll" ref={scrollRef} onScroll={handleConversationScroll}>
         {!entries.length ? (
@@ -253,7 +275,11 @@ export function TeachingConversationPanel({
             <div className="teaching-assistant-avatar">AI</div>
             <div className="teaching-assistant-flow">
               {entry.response ? (
-                <AssistantResponse response={entry.response} />
+                <AssistantResponse
+                  response={entry.response}
+                  firstTokenMs={entry.firstTokenMs}
+                  totalMs={entry.totalMs}
+                />
               ) : entry.loading ? (
                 <LiveAssistantResponse entry={entry} />
               ) : entry.error ? (
@@ -333,6 +359,7 @@ export function TeachingConversationPanel({
           {composerError ? <div className="teaching-inline-error">{composerError}</div> : null}
         </div>
       </form>
+      </div>
     </section>
   );
 }
@@ -362,6 +389,9 @@ function LiveAssistantResponse({ entry }: { entry: Extract<TeachingConversationT
       <section className="teaching-status-card pending compact">
         <div className="teaching-status-head compact">
           <strong>正在讲解</strong>
+          {typeof entry.firstTokenMs === "number" ? (
+            <span className="teaching-speed-chip good" title="从提交到首个讲解内容到达的耗时">首字 {formatSpeedMs(entry.firstTokenMs)}</span>
+          ) : null}
           <span><Loader2 className="spin" size={12} />{formatElapsed(liveElapsedMs)}</span>
         </div>
         {progress?.questionText || entry.questionText ? (
@@ -408,7 +438,7 @@ function LiveAssistantResponse({ entry }: { entry: Extract<TeachingConversationT
   );
 }
 
-/** Adds each received character to the same answer card so network-sized SSE frames never appear all at once. */
+/** Adaptive character queue: small deltas keep a typewriter feel while large backlogs drain within a bounded time. */
 function useCharacterRenderedText(source: string) {
   // The initial source is rendered for server/static output only. During an actual conversation the pending card
   // starts empty, then every later SSE update enters through the character queue below.
@@ -420,9 +450,13 @@ function useCharacterRenderedText(source: string) {
 
   useEffect(() => {
     if (!source || rendered.length >= source.length || !source.startsWith(rendered)) return;
+    const remaining = source.length - rendered.length;
+    // 积压越大步长越大，保证任何长度的回答都能在约 MAX_CATCH_UP 内追平；小增量时步长为 1，仍保留逐字效果。
+    const maxTicks = Math.max(1, CHARACTER_RENDER_MAX_CATCH_UP_MS / CHARACTER_RENDER_TICK_MS);
+    const step = Math.max(1, Math.ceil(remaining / maxTicks));
     const timer = globalThis.setTimeout(
-      () => setRendered(source.slice(0, rendered.length + 1)),
-      CHARACTER_RENDER_INTERVAL_MS,
+      () => setRendered(source.slice(0, rendered.length + step)),
+      CHARACTER_RENDER_TICK_MS,
     );
     return () => globalThis.clearTimeout(timer);
   }, [rendered, source]);
@@ -430,7 +464,16 @@ function useCharacterRenderedText(source: string) {
   return rendered;
 }
 
-function AssistantResponse({ response }: { response: StudentExplanationResponse }) {
+function AssistantResponse({
+  response,
+  firstTokenMs,
+  totalMs,
+}: {
+  response: StudentExplanationResponse;
+  /** 本轮实测的首字耗时与总耗时；只有当回合由当前浏览器流式发起时才有值。 */
+  firstTokenMs?: number;
+  totalMs?: number;
+}) {
   const cards = visibleExplanationCards(response.cards ?? []);
   const sources = response.sources ?? [];
   const stages = visibleWorkflowStages(response.workflowStages ?? []);
@@ -438,6 +481,12 @@ function AssistantResponse({ response }: { response: StudentExplanationResponse 
   return (
     <div className="teaching-answer-layout">
       <div className="teaching-answer-content">
+        {typeof firstTokenMs === "number" ? (
+          <div className="teaching-speed-line" title="首个讲解内容到达 / 本轮讲解全程耗时">
+            <span className="teaching-speed-chip good">首字 {formatSpeedMs(firstTokenMs)}</span>
+            {typeof totalMs === "number" ? <span className="teaching-speed-chip">全程 {formatSpeedMs(totalMs)}</span> : null}
+          </div>
+        ) : null}
         {cards.length ? cards.map((card, index) => (
           <ExplanationCard key={`${response.explanationId}:${card.cardKey}:${index}`} card={card} sources={sources} />
         )) : (
@@ -671,16 +720,34 @@ function ExplanationCard({
   );
 }
 
+/**
+ * 部分历史模型输出用 ◆ 充当强调定界符。成对出现时转成内部标记并渲染为加粗，孤立的 ◆ 直接移除，
+ * 避免坏字符裸露在回答正文里；标记只在本函数内部使用，不会进入存储或后端。
+ */
+function stripDecorationGlyphs(text: string) {
+  return text.replace(/◆\s*([^◆]{0,160}?)\s*◆/g, "\u0001$1\u0002").replace(/◆+/g, "");
+}
+
+/** 把内部强调标记渲染为加粗片段；没有标记时按纯文本返回，保持普通内容的渲染路径不变。 */
+function renderEmphasisText(text: string, keyPrefix: string) {
+  const parts = text.split(/\u0001([\s\S]*?)\u0002/);
+  if (parts.length === 1) return text;
+  return parts.map((part, index) => index % 2 === 1
+    ? <strong key={`${keyPrefix}-em-${index}`} className="teaching-emphasis">{part}</strong>
+    : <span key={`${keyPrefix}-plain-${index}`}>{part}</span>);
+}
+
 function RichText({ text }: { text: string }) {
+  const prepared = stripDecorationGlyphs(text || "");
   return (
     <>
-      {(text || "")
+      {prepared
         .split(/\n+/)
         .filter((line) => line.trim().length > 0)
         .map((line, lineIndex) => (
           <span className="teaching-rich-line" key={`line-${lineIndex}`}>
             {splitMathText(line).map((segment) => {
-              if (!segment.math) return <span key={segment.key}>{segment.text}</span>;
+              if (!segment.math) return <span key={segment.key}>{renderEmphasisText(segment.text, segment.key)}</span>;
               const expression = segment.text;
               if (hasUnbalancedBraces(expression)) return <span key={segment.key}>{segment.raw}</span>;
               try {
@@ -708,7 +775,7 @@ function RichText({ text }: { text: string }) {
 function InlineMathText({ text }: { text: string }) {
   return (
     <span className="teaching-title-math">
-      {splitMathText(text).map((segment) => {
+      {splitMathText(stripDecorationGlyphs(text)).map((segment) => {
         if (!segment.math) return <span key={segment.key}>{segment.text}</span>;
         if (hasUnbalancedBraces(segment.text)) return <span key={segment.key}>{segment.raw}</span>;
         try {
@@ -869,7 +936,10 @@ function formatShortTime(value: string) {
 }
 
 const LIVE_ELAPSED_REFRESH_MS = 250;
-const CHARACTER_RENDER_INTERVAL_MS = 12;
+// 打字机按 24ms 一跳渲染；积压越多每跳补的字符越多，追平时间被压在约 1.5 秒内。
+// 旧实现固定每 12ms 渲染 1 个字符，3000 字回答在流结束后还要空转约 36 秒才能读完逐字效果。
+const CHARACTER_RENDER_TICK_MS = 24;
+const CHARACTER_RENDER_MAX_CATCH_UP_MS = 1500;
 
 function liveElapsedSince(createdAt: string, backendElapsedMs?: number) {
   const createdAtMs = Date.parse(createdAt);
@@ -881,6 +951,55 @@ function formatElapsed(value?: number) {
   const ms = Math.max(0, value ?? 0);
   if (ms >= 1000) return `${(ms / 1000).toFixed(ms >= 10_000 ? 0 : 1)} 秒`;
   return `${ms} 毫秒`;
+}
+
+/** Speed chips keep one decimal under 10s and round above, so long waits stay readable without false precision. */
+function formatSpeedMs(value?: number) {
+  const ms = Math.max(0, value ?? 0);
+  if (ms >= 10_000) return `${Math.round(ms / 1000)} 秒`;
+  return `${(ms / 1000).toFixed(1)} 秒`;
+}
+
+/**
+ * 修复历史数据里的双重编码乱码（例如 “ä¸­ç­‰æ•°å­¦” → “中等数学”）。
+ * 双重编码有两个常见变体：按 Latin-1 解码（字节原样落在 U+00A0-U+00FF）和按 Windows-1252 解码
+ * （0x80-0x9F 字节变成 € ‰ • 等可见字符）。这里先把两种变体都还原成字节序列，再按 UTF-8 重解码；
+ * 只有解码成功、结果含中文且没有替换符时才替换，正常中英文不会进入该分支。
+ */
+const CP1252_REVERSE_BYTES: ReadonlyMap<string, number> = new Map([
+  ["\u20ac", 0x80], ["\u201a", 0x82], ["\u0192", 0x83], ["\u201e", 0x84],
+  ["\u2026", 0x85], ["\u2020", 0x86], ["\u2021", 0x87], ["\u02c6", 0x88], ["\u2030", 0x89],
+  ["\u0160", 0x8a], ["\u2039", 0x8b], ["\u0152", 0x8c], ["\u017d", 0x8e], ["\u2018", 0x91],
+  ["\u2019", 0x92], ["\u201c", 0x93], ["\u201d", 0x94], ["\u2022", 0x95], ["\u2013", 0x96],
+  ["\u2014", 0x97], ["\u02dc", 0x98], ["\u2122", 0x99], ["\u0161", 0x9a], ["\u203a", 0x9b],
+  ["\u0153", 0x9c], ["\u017e", 0x9e], ["\u0178", 0x9f],
+]);
+
+export function repairMojibakeText(value: string): string {
+  // 快速路径：不含任何 Latin-1 高位字符或 cp1252 特有符号时必然不是双重编码。
+  if (!/[\u00a0-\u00ff\u20ac\u201a-\u2026\u2020-\u2030\u2039-\u203a\u0152-\u0153\u0160-\u0161\u0178-\u017e\u02c6\u02dc\u2018-\u201d\u2122\u0192]/.test(value)) {
+    return value;
+  }
+  const bytes: number[] = [];
+  for (const char of value) {
+    const code = char.charCodeAt(0);
+    if (code <= 0xff) {
+      bytes.push(code);
+      continue;
+    }
+    const mapped = CP1252_REVERSE_BYTES.get(char);
+    if (mapped === undefined) return value;
+    bytes.push(mapped);
+  }
+  try {
+    const decoded = new TextDecoder("utf-8", { fatal: true }).decode(new Uint8Array(bytes));
+    if (decoded !== value && /[\u4e00-\u9fff]/.test(decoded) && !decoded.includes("\ufffd")) {
+      return decoded;
+    }
+  } catch {
+    // 无法按 UTF-8 重解码说明不是双重编码乱码，保持原文。
+  }
+  return value;
 }
 
 function cleanText(value?: string) {
@@ -913,7 +1032,7 @@ function translateStageDetail(value?: string) {
 }
 
 export function safeUserFacingText(value?: string, fallback = "内容已整理。") {
-  const raw = (value ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const raw = repairMojibakeText(value ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   const lines = raw
     .split("\n")
     .map((line) => line.trim())

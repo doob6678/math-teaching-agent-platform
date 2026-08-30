@@ -17,6 +17,8 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 /**
@@ -27,6 +29,7 @@ import org.springframework.stereotype.Service;
  */
 @Service
 public class TeacherResourceImageClipService {
+    private static final Logger LOGGER = LoggerFactory.getLogger(TeacherResourceImageClipService.class);
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final int UPSERT_BATCH_SIZE = 32;
 
@@ -49,37 +52,51 @@ public class TeacherResourceImageClipService {
     /** Rebuilds all active rendered image rows for one authorized teacher resource. */
     public TeacherResourceImageClipIndexResponse indexDocument(
             String tenantId, String subjectType, String subjectId, String documentId) {
+        requireEnabled();
         properties.requireFullyConfigured();
         TeacherResourceDocumentResponse document = requireVisibleDocument(tenantId, subjectType, subjectId, documentId);
         RequestSubject subject = new RequestSubject(tenantId, subjectType, subjectId, "teacher-image-clip").normalize();
+        int invalidatedAssets = assetService.deactivateInvalidImageAssets(tenantId, documentId);
         List<TeacherResourceAssetResponse> assets = assetService.listActiveImageAssets(tenantId, documentId);
+        LOGGER.info("teacher_image_clip_asset_audit document={} invalidatedAssets={} activeImageAssets={}",
+                documentId, invalidatedAssets, assets.size());
         ensureCollection();
         ensureIndex();
         loadCollection();
         deleteDocument(document);
         int embedded = 0;
         int upserted = 0;
-        for (int start = 0; start < assets.size(); start += UPSERT_BATCH_SIZE) {
-            int end = Math.min(start + UPSERT_BATCH_SIZE, assets.size());
-            List<TeacherResourceAssetResponse> batch = assets.subList(start, end);
-            List<String> imageDataUris = new ArrayList<>(batch.size());
-            for (TeacherResourceAssetResponse asset : batch) {
-                imageDataUris.add(readDataUri(asset, subject));
+        int skipped = 0;
+        List<String> failedAssetIds = new ArrayList<>();
+        List<ClipInput> inputs = new ArrayList<>();
+        for (TeacherResourceAssetResponse asset : assets) {
+            try {
+                inputs.add(new ClipInput(asset, readDataUri(asset, subject)));
+            } catch (RuntimeException exception) {
+                if (assetService.deactivateAsset(tenantId, asset.assetId(), clipFailureReason(exception))) {
+                    skipped++;
+                    failedAssetIds.add(asset.assetId());
+                }
             }
-            // One worker request lets CLIP tokenize and execute the whole batch together. Calling once per asset made
-            // CPU deployments reload preprocessing state and turned a small Feishu folder into minutes of overhead.
-            List<List<Double>> vectors = embedImages(imageDataUris);
-            if (vectors.size() != batch.size()) {
-                throw new IllegalStateException("CLIP image batch size mismatch: expected "
-                        + batch.size() + " but got " + vectors.size());
-            }
-            embedded += vectors.size();
-            upserted += upsert(document, batch, vectors);
+        }
+        for (int start = 0; start < inputs.size(); start += UPSERT_BATCH_SIZE) {
+            int end = Math.min(start + UPSERT_BATCH_SIZE, inputs.size());
+            ClipBatchResult result = embedBatchWithIsolation(
+                    document, tenantId, inputs.subList(start, end), failedAssetIds);
+            embedded += result.embeddedCount();
+            upserted += result.upsertedCount();
+            skipped += result.skippedCount();
+        }
+        if (!assets.isEmpty() && embedded == 0) {
+            throw new IllegalStateException("CLIP embedding failed for every active teacher image asset");
         }
         flushCollection();
         loadCollection();
+        LOGGER.info(
+                "teacher_image_clip_index_complete document={} activeAssets={} embedded={} upserted={} skipped={} failedAssetIds={}",
+                documentId, assets.size(), embedded, upserted, skipped, failedAssetIds);
         return new TeacherResourceImageClipIndexResponse(documentId, assets.size(), embedded, upserted,
-                properties.normalizedTeacherImageCollectionName());
+                properties.normalizedTeacherImageCollectionName(), skipped, List.copyOf(failedAssetIds));
     }
 
     /**
@@ -94,6 +111,11 @@ public class TeacherResourceImageClipService {
      * @return number of active image assets that were the deletion target
      */
     public int deleteDocumentVectors(String tenantId, String documentId) {
+        return deleteDocumentVectors(tenantId, documentId, true);
+    }
+
+    /** Deletes one document's CLIP rows and optionally flushes the shared image collection. */
+    public int deleteDocumentVectors(String tenantId, String documentId, boolean flush) {
         if (!properties.teacherImageClipEnabled()) {
             return 0;
         }
@@ -106,8 +128,18 @@ public class TeacherResourceImageClipService {
         ensureIndex();
         loadCollection();
         deleteDocument(document);
-        flushCollection();
+        if (flush) {
+            flushCollection();
+        }
         return targetCount;
+    }
+
+    /** Flushes the shared CLIP collection after a batch of set-based deletes. */
+    public void flushTeacherResourceImageVectors() {
+        if (!properties.teacherImageClipEnabled()) {
+            return;
+        }
+        flushCollection();
     }
 
     /** Searches teacher page images with text or an image query and enforces visibility after Milvus recall. */
@@ -119,6 +151,7 @@ public class TeacherResourceImageClipService {
             String image,
             int limit,
             List<String> documentIds) {
+        requireEnabled();
         properties.requireFullyConfigured();
         String normalizedQuery = text(query).strip();
         String normalizedImage = text(image).strip();
@@ -179,7 +212,58 @@ public class TeacherResourceImageClipService {
                 .orElseThrow(() -> new IllegalArgumentException("Teacher resource not visible for CLIP indexing"));
     }
 
-    private List<String> visibleDocumentIds(String tenantId, String subjectType, String subjectId, List<String> requested) {
+    private ClipBatchResult embedBatchWithIsolation(
+            TeacherResourceDocumentResponse document,
+            String tenantId,
+            List<ClipInput> batch,
+            List<String> failedAssetIds) {
+        try {
+            List<List<Double>> vectors = embedImages(batch.stream().map(ClipInput::dataUri).toList());
+            if (vectors.size() != batch.size()) {
+                throw new IllegalStateException("CLIP image batch size mismatch: expected "
+                        + batch.size() + " but got " + vectors.size());
+            }
+            int upserted = upsert(document, batch.stream().map(ClipInput::asset).toList(), vectors);
+            return new ClipBatchResult(vectors.size(), upserted, 0);
+        } catch (RuntimeException batchFailure) {
+            List<ClipInput> failedInputs = new ArrayList<>();
+            int embedded = 0;
+            int upserted = 0;
+            for (ClipInput input : batch) {
+                try {
+                    List<List<Double>> vectors = embedImages(List.of(input.dataUri()));
+                    if (vectors.size() != 1) {
+                        throw new IllegalStateException("CLIP single-image response size mismatch");
+                    }
+                    embedded += 1;
+                    upserted += upsert(document, List.of(input.asset()), vectors);
+                } catch (RuntimeException singleFailure) {
+                    failedInputs.add(input);
+                }
+            }
+            // A complete single-image failure is a worker or transport outage, not evidence that every source asset is
+            // corrupt. Preserve active assets and fail the document index instead of permanently suppressing good images.
+            if (embedded == 0) {
+                throw batchFailure;
+            }
+            for (ClipInput failed : failedInputs) {
+                if (assetService.deactivateAsset(tenantId, failed.asset().assetId(), clipFailureReason(batchFailure))) {
+                    failedAssetIds.add(failed.asset().assetId());
+                }
+            }
+            LOGGER.warn(
+                    "teacher_image_clip_batch_isolated document={} batchSize={} embedded={} skipped={} reason={}",
+                    document.documentId(), batch.size(), embedded, failedInputs.size(), clipFailureReason(batchFailure));
+            return new ClipBatchResult(embedded, upserted, failedInputs.size());
+        }
+    }
+
+    private static String clipFailureReason(RuntimeException exception) {
+        String message = text(exception.getMessage());
+        return message.length() <= 500 ? message : message.substring(0, 500);
+    }
+    private List<String> visibleDocumentIds(
+            String tenantId, String subjectType, String subjectId, List<String> requested) {
         // Keep requested-document filtering after the store applies tenant and viewer visibility rules.
         List<String> visible = resourceStore.listSearchable(tenantId, subjectType, subjectId).stream()
                 .map(TeacherResourceDocumentResponse::documentId).toList();
@@ -245,7 +329,14 @@ public class TeacherResourceImageClipService {
         return List.copyOf(result);
     }
 
-    private int upsert(TeacherResourceDocumentResponse document, List<TeacherResourceAssetResponse> assets,
+    private record ClipInput(TeacherResourceAssetResponse asset, String dataUri) {
+    }
+
+    private record ClipBatchResult(int embeddedCount, int upsertedCount, int skippedCount) {
+    }
+    private int upsert(
+            TeacherResourceDocumentResponse document,
+            List<TeacherResourceAssetResponse> assets,
             List<List<Double>> vectors) {
         List<Map<String, Object>> rows = new ArrayList<>();
         for (int index = 0; index < assets.size(); index++) {
@@ -370,6 +461,12 @@ public class TeacherResourceImageClipService {
             return JSON.writeValueAsString(value);
         } catch (Exception exception) {
             throw new IllegalStateException("Failed to serialize CLIP vector request", exception);
+        }
+    }
+
+    private void requireEnabled() {
+        if (!properties.teacherImageClipEnabled()) {
+            throw new IllegalStateException("Teacher image CLIP is disabled");
         }
     }
 

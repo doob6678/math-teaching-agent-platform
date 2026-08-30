@@ -1,11 +1,11 @@
-import { AlertCircle, Copy, Loader2, Network, ShieldCheck } from "lucide-react";
+import { AlertCircle, Copy, KeyRound, Loader2, Network, ShieldCheck } from "lucide-react";
 import {
   McpClientKeyCreatedResponse,
   McpClientKeyResponse,
   McpConfigurationResponse,
   McpConnectionTestResult,
 } from "../../shared/api/textbookApi";
-import { PanelTitle, StatusLine } from "./panelShared";
+import { StatusLine } from "./panelShared";
 
 const TOOL_LABELS: Record<string, string> = {
   search_multi_source_evidence: "多源证据检索",
@@ -34,6 +34,16 @@ const TOOL_BADGES: Record<string, string> = {
   download_feishu_resource: "执行",
 };
 
+/** 把后端 ISO 时间戳压缩成 "YYYY-MM-DD HH:mm"，解析失败时原样返回，仅供展示。 */
+function formatKeyTime(value: string | null | undefined, fallback: string) {
+  if (!value) return fallback;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/** 账号概览：DeepSeek 平台式大数字信息卡，凭证边界折叠在右侧说明里。 */
 export function McpIdentityBoundaryCard({
   username,
   userId,
@@ -46,54 +56,41 @@ export function McpIdentityBoundaryCard({
   tenantId?: string | null;
 }) {
   return (
-    <section className="mcp-boundary-panel">
-      <div className="mcp-identity-strip">
-        <div>
-          <span>账号</span>
+    <section className="mcp-overview" aria-label="当前账号边界">
+      <div className="mcp-overview-stats">
+        <div className="mcp-stat">
+          <span>当前账号</span>
           <strong>{username || "未登录"}</strong>
         </div>
-        <div>
+        <div className="mcp-stat">
+          <span>角色 / 租户</span>
+          <strong>{roleLabel}<em>{tenantId || "-"}</em></strong>
+        </div>
+        <div className="mcp-stat mcp-stat--wide">
           <span>用户 ID</span>
-          <strong>{userId || "-"}</strong>
-        </div>
-        <div>
-          <span>角色</span>
-          <strong>{roleLabel}</strong>
-        </div>
-        <div>
-          <span>租户</span>
-          <strong>{tenantId || "-"}</strong>
+          <strong className="mono">{userId || "-"}</strong>
         </div>
       </div>
-      <details className="mcp-policy-note ai-run-disclosure">
-        <summary>权限说明</summary>
-        <p>外部客户端只能拿到后端根据当前登录态生成的 MCP 配置。角色、租户、主体和工具白名单都由后端解析，前端不传身份参数。</p>
-      </details>
-      <details className="mcp-policy-note mcp-sandbox-note ai-run-disclosure">
-        <summary>隔离与审计</summary>
-        <div className="mcp-sandbox-grid" aria-label="MCP 隔离策略">
-          <span>
-            <strong>租户隔离</strong>
-            <em>教材、教师资源、题库和任务都按 tenantId 隔离。</em>
-          </span>
-          <span>
-            <strong>身份绑定</strong>
-            <em>MCP key 绑定当前账号，不能切换成别人的身份。</em>
-          </span>
-          <span>
-            <strong>最小暴露</strong>
-            <em>只暴露当前账号真实可执行的工具和提示词。</em>
-          </span>
-          <span>
-            <strong>审计回溯</strong>
-            <em>密钥、调用和导出都能按账号和任务追踪。</em>
-          </span>
+      <details className="mcp-overview-note">
+        <summary>
+          <ShieldCheck size={14} />
+          <span>凭证边界与审计</span>
+        </summary>
+        <div className="mcp-overview-note-body">
+          <p>外部客户端只能拿到后端根据当前登录态生成的 MCP 配置。角色、租户、主体和工具白名单都由后端解析，前端不传身份参数。</p>
+          <div className="mcp-overview-policies">
+            <span><strong>租户隔离</strong><em>教材、教师资源、题库和任务都按 tenantId 隔离。</em></span>
+            <span><strong>身份绑定</strong><em>MCP key 绑定当前账号，不能切换成别人的身份。</em></span>
+            <span><strong>最小暴露</strong><em>只暴露当前账号真实可执行的工具和提示词。</em></span>
+            <span><strong>审计回溯</strong><em>密钥、调用和导出都能按账号和任务追踪。</em></span>
+          </div>
         </div>
       </details>
     </section>
   );
 }
 
+/** Key 创建块：说明压成一行，动作按钮右对齐，贴近 DeepSeek 的操作条布局。 */
 export function McpConfigurationForm({
   creating,
   loadingKeys,
@@ -110,103 +107,116 @@ export function McpConfigurationForm({
   onRefresh: () => void;
 }) {
   return (
-    <section className="mcp-config-form">
-      <PanelTitle icon={<ShieldCheck size={18} />} title="后端生成 MCP Key" />
-      <div className="search-form">
-        <p>这里不再输入 secret。点击后由后端按当前 Sa-Token 登录态创建个人 MCP key，并只返回一次真实 secret。</p>
-        <div className="profile-strip">
-          <div>
-            <span>生成方式</span>
-            <strong>后端生成 / 个人可见</strong>
-          </div>
-          <div>
-            <span>最新预览</span>
-            <strong>{latestCreatedKey?.secretKeyPreview ?? "尚未创建"}</strong>
-          </div>
+    <section className="mcp-create">
+      <div className="mcp-create-copy">
+        <div className="mcp-create-title">
+          <KeyRound size={15} />
+          <strong>创建新的 MCP Key</strong>
         </div>
-        <div className="button-row">
-          <button type="button" className="btn btn-primary" disabled={creating} onClick={onCreate}>
-            {creating ? <Loader2 className="spin" size={17} /> : <ShieldCheck size={17} />}
-            <span>{creating ? "创建中" : "创建我的 MCP Key"}</span>
-          </button>
-          <button type="button" className="btn btn-secondary" disabled={loadingKeys} onClick={onRefresh}>
-            {loadingKeys ? <Loader2 className="spin" size={17} /> : <Network size={17} />}
-            <span>{loadingKeys ? "刷新中" : "刷新列表和配置"}</span>
-          </button>
-        </div>
+        <p>
+          由后端按当前登录态生成，真实 secret 只在创建时返回一次；
+          最新预览 <code>{latestCreatedKey?.secretKeyPreview ?? "尚未创建"}</code>。
+        </p>
+      </div>
+      <div className="mcp-create-actions">
+        <button type="button" className="mcp-btn mcp-btn--primary" disabled={creating} onClick={onCreate}>
+          {creating ? <Loader2 className="spin" size={15} /> : <ShieldCheck size={15} />}
+          <span>{creating ? "创建中…" : "创建 MCP Key"}</span>
+        </button>
+        <button type="button" className="mcp-btn" disabled={loadingKeys} onClick={onRefresh}>
+          {loadingKeys ? <Loader2 className="spin" size={15} /> : <Network size={15} />}
+          <span>刷新</span>
+        </button>
       </div>
       {error ? <StatusLine icon={<AlertCircle size={16} />} text={error} tone="danger" /> : null}
     </section>
   );
 }
 
+/** 密钥列表：DeepSeek 式分隔行 + 状态徽标，revoked 占多数时限制高度滚动。 */
 export function McpKeyVaultPanel({
   keys,
   latestCreatedKey,
   revokingKeyId,
+  deletingKeyId,
   loading,
   copyMessage,
   onCopyLatestSecret,
   onRevokeKey,
+  onDeleteKey,
 }: {
   keys: McpClientKeyResponse[];
   latestCreatedKey: McpClientKeyCreatedResponse | null;
   revokingKeyId: string;
+  deletingKeyId: string;
   loading: boolean;
   copyMessage: string;
   onCopyLatestSecret: () => void;
   onRevokeKey: (keyId: string) => void;
+  onDeleteKey: (keyId: string) => void;
 }) {
   return (
-    <section className="mcp-config-panel">
-      <div className="result-header">
-        <div>
-          <p className="eyebrow">我的密钥</p>
-          <h2>MCP Key 列表</h2>
-        </div>
+    <section className="mcp-vault" aria-label="我的密钥">
+      <div className="mcp-vault-head">
+        <h3>我的密钥 <em>{keys.length}</em></h3>
       </div>
       {latestCreatedKey ? (
-        <div className="profile-strip">
-          <div>
-            <span>一次性真实 Secret</span>
-            <strong>{latestCreatedKey.secretKey}</strong>
+        <div className="mcp-secret-callout">
+          <div className="mcp-secret-callout-copy">
+            <span>刚创建的 secret（仅此一次展示机会，请立即保存）</span>
+            <code>{latestCreatedKey.secretKey}</code>
           </div>
-          <div>
-            <span>当前预览</span>
-            <strong>{latestCreatedKey.secretKeyPreview}</strong>
-          </div>
-          <div>
-            <span>操作</span>
-            <button className="btn btn-secondary btn-sm" type="button" onClick={onCopyLatestSecret}>
-              <Copy size={14} />
-              <span>复制 Secret</span>
-            </button>
-          </div>
+          <button className="mcp-btn mcp-btn--small" type="button" onClick={onCopyLatestSecret}>
+            <Copy size={13} />
+            <span>复制</span>
+          </button>
         </div>
       ) : null}
-      {copyMessage ? <StatusLine icon={<ShieldCheck size={16} />} text={copyMessage} /> : null}
+      {copyMessage ? <StatusLine icon={<ShieldCheck size={16} />} text={copyMessage} tone="success" /> : null}
       {keys.length ? (
-        <div className="mcp-layer-list">
+        <div className="mcp-key-list">
           {keys.map((key) => (
-            <div className="mcp-layer" key={key.keyId}>
-              <strong>{key.name}</strong>
-              <span>{key.secretKeyPreview} · {key.keyProfile} · {key.status}</span>
-              <span>创建于 {key.createdAt ?? "-"}</span>
-              <span>最近使用 {key.lastUsedAt ?? "未使用"}</span>
-              <button
-                className="btn btn-secondary btn-sm"
-                type="button"
-                disabled={loading || revokingKeyId === key.keyId || key.status !== "active"}
-                onClick={() => onRevokeKey(key.keyId)}
-              >
-                {revokingKeyId === key.keyId ? <Loader2 className="spin" size={14} /> : null}
-                <span>{key.status === "active" ? "吊销" : "已停用"}</span>
-              </button>
+            <div className={`mcp-key-row${key.status === "active" ? " active" : ""}`} key={key.keyId}>
+              <div className="mcp-key-row-main">
+                <strong>{key.name}</strong>
+                <span className={`mcp-key-status ${key.status === "active" ? "ok" : "off"}`}>
+                  <i />
+                  {key.status === "active" ? "启用中" : "已停用"}
+                </span>
+                {key.status === "active" ? (
+                  <button
+                    className="mcp-btn mcp-btn--small mcp-btn--danger-ghost"
+                    type="button"
+                    disabled={loading || revokingKeyId === key.keyId}
+                    onClick={() => onRevokeKey(key.keyId)}
+                  >
+                    {revokingKeyId === key.keyId ? <Loader2 className="spin" size={13} /> : null}
+                    <span>吊销</span>
+                  </button>
+                ) : (
+                  // 已停用的 key 只能物理删除（后端同样只放行 revoked），用于清理验收脚本留下的历史 key。
+                  <button
+                    className="mcp-btn mcp-btn--small mcp-btn--danger-ghost"
+                    type="button"
+                    disabled={loading || deletingKeyId === key.keyId}
+                    onClick={() => onDeleteKey(key.keyId)}
+                  >
+                    {deletingKeyId === key.keyId ? <Loader2 className="spin" size={13} /> : null}
+                    <span>删除</span>
+                  </button>
+                )}
+              </div>
+              <div className="mcp-key-row-meta">
+                <code>{key.secretKeyPreview}</code>
+                <span>{key.keyProfile}</span>
+                <em>创建 {formatKeyTime(key.createdAt, "-")}</em>
+                <em>最近使用 {formatKeyTime(key.lastUsedAt, "未使用")}</em>
+              </div>
             </div>
           ))}
         </div>
       ) : (
-        <div className="empty-state compact">
+        <div className="mcp-empty">
           当前账号还没有 MCP key。创建后只会返回一次真实 secret，之后列表只显示预览值。
         </div>
       )}
@@ -214,6 +224,7 @@ export function McpKeyVaultPanel({
   );
 }
 
+/** 连接配置：地址 / 环境变量行 + 深色配置 JSON，工具与提示词白名单平铺。 */
 export function McpConfigurationPanel({
   configuration,
   copyMessage,
@@ -224,58 +235,60 @@ export function McpConfigurationPanel({
   onCopy: () => void;
 }) {
   return (
-    <section className="mcp-config-panel">
-      <div className="result-header">
-        <div>
-          <p className="eyebrow">外部客户端</p>
-          <h2>MCP 配置</h2>
-        </div>
-        {configuration ? <div className="strategy-pill">{keyProfileLabel(configuration.keyProfile)}</div> : null}
+    <section className="mcp-config" aria-label="MCP 配置">
+      <div className="mcp-config-head">
+        <h3>MCP 配置</h3>
+        {configuration ? <span className="mcp-profile-pill">{keyProfileLabel(configuration.keyProfile)}</span> : null}
       </div>
       {configuration ? (
-        <div className="mcp-config-grid">
-          <div className="profile-strip">
+        <div className="mcp-config-body">
+          <div className="mcp-kv">
             <div>
-              <span>地址</span>
-              <strong>{configuration.url}</strong>
+              <span>服务地址</span>
+              <code>{configuration.url}</code>
             </div>
             <div>
               <span>密钥预览</span>
-              <strong>{configuration.secretKeyPreview}</strong>
+              <code>{configuration.secretKeyPreview}</code>
             </div>
             <div>
               <span>环境变量</span>
-              <strong>{configuration.secretEnvName}</strong>
+              <code>{configuration.secretEnvName}</code>
             </div>
           </div>
-          <div className="mcp-exposure-list">
-            <McpExposureColumn title="工具" items={configuration.exposedTools} />
-            <McpExposureColumn title="提示词" items={configuration.exposedPrompts} />
+
+          <div className="mcp-exposure">
+            <McpExposureColumn title="可用工具" items={configuration.exposedTools} />
+            <McpExposureColumn title="可用提示词" items={configuration.exposedPrompts} />
           </div>
-          <div className="mcp-layer-list">
-            {configuration.layers.map((layer) => (
-              <div className="mcp-layer" key={layer.code}>
-                <strong>{layer.name}</strong>
-                <span>{layer.description}</span>
-                <span>凭据: {layer.requiredCredential}</span>
-              </div>
-            ))}
+
+          {configuration.layers.length ? (
+            <div className="mcp-layers">
+              {configuration.layers.map((layer) => (
+                <div className="mcp-layer-row" key={layer.code}>
+                  <strong>{layer.name}</strong>
+                  <span>{layer.description}</span>
+                  <em>凭据 {layer.requiredCredential}</em>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          <div className="mcp-code-block">
+            <div className="mcp-code-head">
+              <span className="mcp-code-dot" />
+              <strong>标准配置 JSON</strong>
+              <button className="mcp-btn mcp-btn--small mcp-btn--on-dark" type="button" onClick={onCopy}>
+                <Copy size={13} />
+                <span>复制</span>
+              </button>
+            </div>
+            {copyMessage ? <StatusLine icon={<ShieldCheck size={16} />} text={copyMessage} tone="success" /> : null}
+            <pre className="mcp-code">{configuration.configJson}</pre>
           </div>
-          <div className="mcp-json-head">
-            <strong>配置 JSON</strong>
-            <button className="btn btn-secondary btn-sm" type="button" onClick={onCopy}>
-              <Copy size={14} />
-              <span>复制</span>
-            </button>
-          </div>
-          {copyMessage ? <StatusLine icon={<ShieldCheck size={16} />} text={copyMessage} /> : null}
-          <details className="review-details">
-            <summary>查看可复制 JSON</summary>
-            <pre className="formula-block mcp-json">{configuration.configJson}</pre>
-          </details>
         </div>
       ) : (
-        <div className="empty-state compact">
+        <div className="mcp-empty">
           当前账号还没有可用的 MCP 配置。先创建 key，再由后端按当前登录态生成配置。
         </div>
       )}
@@ -283,6 +296,7 @@ export function McpConfigurationPanel({
   );
 }
 
+/** 握手测试：标题行 + 主按钮，结果以kv行和工具徽标呈现。 */
 export function McpConnectionTestPanel({
   testing,
   result,
@@ -297,45 +311,48 @@ export function McpConnectionTestPanel({
   ready: boolean;
 }) {
   return (
-    <section className="mcp-test-panel">
+    <section className="mcp-test" aria-label="连接测试">
       <div className="mcp-test-head">
         <div>
-          <p className="eyebrow">连接测试</p>
-          <h2>标准 MCP 握手</h2>
+          <h3>连接测试</h3>
+          <p>使用创建时返回的真实 secret 执行标准 MCP 握手（initialize + tools/list）。</p>
         </div>
-        <button className="btn btn-secondary btn-sm" type="button" onClick={onTest} disabled={testing || !ready}>
-          {testing ? <Loader2 className="spin" size={16} /> : <Network size={16} />}
-          <span>{testing ? "测试中" : "测试连接"}</span>
+        <button className="mcp-btn mcp-btn--primary" type="button" onClick={onTest} disabled={testing || !ready}>
+          {testing ? <Loader2 className="spin" size={15} /> : <Network size={15} />}
+          <span>{testing ? "测试中…" : "测试连接"}</span>
         </button>
       </div>
       {error ? <StatusLine icon={<AlertCircle size={16} />} text={error} tone="danger" /> : null}
       {result ? (
         <div className="mcp-test-result">
-          <StatusLine icon={<ShieldCheck size={16} />} text={`连接成功，可见工具 ${result.toolCount} 个`} />
-          <div className="mcp-test-meta">
+          <div className="mcp-test-ok">
+            <ShieldCheck size={15} />
+            <span>握手成功，可见工具 {result.toolCount} 个</span>
+          </div>
+          <div className="mcp-kv mcp-kv--inline">
             <div>
               <span>服务</span>
-              <strong>{result.serverName}</strong>
+              <code>{result.serverName}</code>
             </div>
             <div>
               <span>版本</span>
-              <strong>{result.serverVersion}</strong>
+              <code>{result.serverVersion}</code>
             </div>
             <div>
               <span>协议</span>
-              <strong>{result.protocolVersion}</strong>
+              <code>{result.protocolVersion}</code>
             </div>
           </div>
-          <div className="mcp-tool-chip-list">
+          <div className="mcp-tool-chips">
             {result.tools.map((tool) => (
               <span key={tool}>{optionLabel(tool)}</span>
             ))}
           </div>
         </div>
       ) : !error ? (
-        <div className="empty-state compact">
+        <div className="mcp-empty">
           {ready
-            ? "这里会使用本次创建时返回的真实 secret 执行 initialize 和 tools/list，确认外部客户端可以真实接通。"
+            ? "点击「测试连接」验证外部客户端可以真实接通。"
             : "先创建新的 MCP key，这里才能用本次返回的真实 secret 做握手测试。"}
         </div>
       ) : null}
@@ -346,13 +363,17 @@ export function McpConnectionTestPanel({
 function McpExposureColumn({ title, items }: { title: string; items: string[] }) {
   return (
     <div className="mcp-exposure-column">
-      <strong>{title}</strong>
-      {items.map((item) => (
-        <span key={item}>
-          {optionLabel(item)}
-          <em>{TOOL_BADGES[item] ?? "已开放"}</em>
-        </span>
-      ))}
+      <strong>{title}<em>{items.length}</em></strong>
+      {items.length ? (
+        items.map((item) => (
+          <span key={item}>
+            {optionLabel(item)}
+            {TOOL_BADGES[item] ? <em>{TOOL_BADGES[item]}</em> : null}
+          </span>
+        ))
+      ) : (
+        <span className="none">暂无</span>
+      )}
     </div>
   );
 }

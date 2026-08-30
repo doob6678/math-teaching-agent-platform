@@ -38,17 +38,23 @@ public class MyBatisTeacherSourceSyncManifestStore implements TeacherSourceSyncM
                 || normalizedPath.isBlank()) {
             return "";
         }
-        return mapper.selectPage(Page.of(1, 1), new LambdaQueryWrapper<TeacherSourceSyncManifestEntity>()
-                        .eq(TeacherSourceSyncManifestEntity::getTenantId, tenantId)
-                        .eq(TeacherSourceSyncManifestEntity::getDocumentId, documentId)
-                        .eq(TeacherSourceSyncManifestEntity::getLogicalPath, normalizedPath)
-                        .eq(TeacherSourceSyncManifestEntity::getItemType, "file")
-                        .orderByAsc(TeacherSourceSyncManifestEntity::getProviderItemId))
-                .getRecords().stream()
-                .map(TeacherSourceSyncManifestEntity::getProviderItemId)
+        String pathWithoutExportExtension = stripExportExtension(normalizedPath);
+        return mapper.selectProviderItemIdByPath(
+                        tenantId,
+                        documentId,
+                        normalizedPath,
+                        pathWithoutExportExtension)
+                .stream()
                 .filter(value -> value != null && !value.isBlank())
                 .findFirst()
                 .orElse("");
+    }
+
+    private static String stripExportExtension(String path) {
+        String normalized = path == null ? "" : path;
+        int slash = normalized.lastIndexOf('/');
+        int dot = normalized.lastIndexOf('.');
+        return dot > slash ? normalized.substring(0, dot) : normalized;
     }
 
     @Override

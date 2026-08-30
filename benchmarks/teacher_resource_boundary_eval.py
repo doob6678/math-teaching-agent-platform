@@ -52,14 +52,23 @@ def main() -> None:
     dataset = read_dataset(args.dataset)
     profiles = read_profiles(args.profiles_json)
     missing_profiles = sorted({str(case["authProfile"]) for case in dataset["cases"] if str(case["authProfile"]) not in profiles})
-    if missing_profiles:
+    missing_non_cross_tenant = [
+        name for name in missing_profiles
+        if any(str(case["authProfile"]) == name and case["caseType"] != "cross_tenant" for case in dataset["cases"])
+    ]
+    if missing_non_cross_tenant:
         raise RuntimeError(
             "configuration_error component=boundary_eval stage=authentication "
-            f"message=missing profiles {missing_profiles}; set MATH_AGENT_BENCHMARK_PROFILES with real credentials")
+            f"message=missing profiles {missing_non_cross_tenant}; set MATH_AGENT_BENCHMARK_PROFILES with real credentials")
 
     sessions = {name: login(args.backend_url, profile, args.timeout) for name, profile in profiles.items()}
-    rows = [run_case(case, sessions[str(case["authProfile"])], args.backend_url, args.timeout, max(1, args.limit))
-            for case in dataset["cases"]]
+    rows = []
+    for case in dataset["cases"]:
+        profile_name = str(case["authProfile"])
+        if profile_name not in sessions:
+            rows.append(configuration_blocked_row(case, "missing_real_second_tenant_profile"))
+            continue
+        rows.append(run_case(case, sessions[profile_name], args.backend_url, args.timeout, max(1, args.limit)))
     report = build_report(dataset, args, rows)
     write_report(args.output_dir, report, rows)
     print(json.dumps(report["summary"], ensure_ascii=False, indent=2))
@@ -123,6 +132,25 @@ def run_case(case: dict[str, Any], client: MathAgentClient, base_url: str, timeo
     return result_row(case, response.status, response.elapsed_ms, hits, body, evaluate_hits(expectation, response.status, hits))
 
 
+def configuration_blocked_row(case: dict[str, Any], failure_type: str) -> dict[str, Any]:
+    """Retain an unevaluable boundary case without fabricating a second identity or HTTP result."""
+    return {
+        "caseId": case["caseId"],
+        "caseType": case["caseType"],
+        "query": case["query"],
+        "authProfile": case["authProfile"],
+        "expected": case["expected"],
+        "httpStatus": None,
+        "latencyMs": None,
+        "queryId": "",
+        "passed": False,
+        "status": "configuration_blocked",
+        "failureType": failure_type,
+        "candidateFunnel": {"status": "not_run", "failureType": failure_type},
+        "hits": [],
+    }
+
+
 def result_row(case: dict[str, Any], status: int, elapsed_ms: float, hits: list[dict[str, Any]], body: Any, passed: bool) -> dict[str, Any]:
     return {
         "caseId": case["caseId"],
@@ -134,6 +162,7 @@ def result_row(case: dict[str, Any], status: int, elapsed_ms: float, hits: list[
         "latencyMs": round(float(elapsed_ms), 3),
         "queryId": str(body.get("queryId") or "") if isinstance(body, dict) else "",
         "passed": passed,
+        "candidateFunnel": compact_funnel(body),
         "hits": [compact_hit(hit) for hit in hits],
     }
 
@@ -163,7 +192,31 @@ def evaluate_hits(expected: dict[str, Any], status: int, hits: list[dict[str, An
 
 
 def compact_hit(hit: dict[str, Any]) -> dict[str, Any]:
-    return {key: hit.get(key) for key in ("documentId", "documentTitle", "fileName", "sourceType", "sourcePath", "pageNo", "blockId", "score")}
+    return {key: hit.get(key) for key in (
+        "documentId", "rootDocumentId", "fileDocumentId", "providerItemId", "splitFingerprint",
+        "blockId", "blockOrder", "sourcePath", "sourceType", "blockRole", "evidenceBlockIds", "score",
+    )}
+
+
+def compact_funnel(body: Any) -> dict[str, Any]:
+    funnel = body.get("candidateFunnel") if isinstance(body, dict) else None
+    if not isinstance(funnel, dict):
+        return {"status": "incomplete", "failureType": "missing_funnel"}
+    return {
+        "vectorFileDocumentIds": list(funnel.get("vectorFileDocumentIds") or []),
+        "lexicalFileDocumentIds": list(funnel.get("lexicalFileDocumentIds") or []),
+        "tagFileDocumentIds": list(funnel.get("tagFileDocumentIds") or []),
+        "fusedFileDocumentIds": list(funnel.get("fusedFileDocumentIds") or []),
+        "finalFileDocumentIds": list(funnel.get("finalFileDocumentIds") or []),
+        "representativeBlockIds": list(funnel.get("representativeBlockIds") or []),
+        "rerankCandidateCount": funnel.get("rerankCandidateCount"),
+        "sqlBoundedEvidence": funnel.get("sqlBoundedEvidence"),
+        "fusedFileScores": dict(funnel.get("fusedFileScores") or {}),
+        "fileCandidates": list(funnel.get("fileCandidates") or []),
+        "blockEvidence": list(funnel.get("blockEvidence") or []),
+        "failureType": str(funnel.get("failureType") or "unknown"),
+        "status": "complete" if funnel.get("rerankCandidateCount") is not None else "incomplete",
+    }
 
 
 def build_report(dataset: dict[str, Any], args: argparse.Namespace, rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -180,7 +233,12 @@ def build_report(dataset: dict[str, Any], args: argparse.Namespace, rows: list[d
             "blockRecallAt1": block_recall(positives, 1),
             "blockRecallAt3": block_recall(positives, 3),
             "latencyMs": latency_summary(latencies),
-            "crossTenantErrorCount": sum(1 for row in rows if row["caseType"] == "cross_tenant" and not row["passed"]),
+            "crossTenantErrorCount": sum(
+                1 for row in rows
+                if row["caseType"] == "cross_tenant"
+                and row.get("status") != "configuration_blocked"
+                and not row["passed"]),
+            "configurationBlockedCount": sum(1 for row in rows if row.get("status") == "configuration_blocked"),
             "wrongSourceTypeHitCount": wrong_source_type_hits(rows),
             "unauthorizedHitCount": sum(1 for row in rows if row["caseType"] == "no_permission" and not row["passed"]),
             "emptyResultAccuracy": rate(expected_empty, lambda row: row["passed"]),

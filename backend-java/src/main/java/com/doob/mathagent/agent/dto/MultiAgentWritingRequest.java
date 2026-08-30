@@ -1,6 +1,7 @@
 package com.doob.mathagent.agent.dto;
 
 import java.util.List;
+import com.doob.mathagent.teaching.TeachingEvidence;
 
 /**
  * Request for a backend-owned multi-agent writing workflow.
@@ -18,7 +19,14 @@ public record MultiAgentWritingRequest(
         List<String> evidenceRefs,
         boolean dryRun,
         String preferredProviderName,
-        String preferredModelCode) {
+        String preferredModelCode,
+        List<TeachingEvidence> initialEvidence) {
+
+    public MultiAgentWritingRequest(
+            String writingGoal, String questionText, List<String> evidenceRefs, boolean dryRun,
+            String preferredProviderName, String preferredModelCode) {
+        this(writingGoal, questionText, evidenceRefs, dryRun, preferredProviderName, preferredModelCode, List.of());
+    }
 
     /**
      * Returns a null-safe request without trusting any frontend identity field.
@@ -42,7 +50,8 @@ public record MultiAgentWritingRequest(
                 evidenceRefs == null ? List.of() : evidenceRefs.stream().map(MultiAgentWritingRequest::safeText).toList(),
                 dryRun,
                 normalizedProvider,
-                normalizedModel);
+                normalizedModel,
+                initialEvidence == null ? List.of() : initialEvidence.stream().toList());
     }
 
     /**

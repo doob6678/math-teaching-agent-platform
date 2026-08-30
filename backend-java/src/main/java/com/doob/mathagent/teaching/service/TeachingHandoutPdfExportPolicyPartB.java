@@ -421,8 +421,14 @@ final class TeachingHandoutPdfExportPolicyPartB {
                 .replace("\\triangle\\{", "\\triangle{")
                 // The same legacy writer escaped every argument brace independently (for example
                 // \frac\{1\}\{2\}); after command recovery both braces are structural, not printable sets.
+                // 现役 Writer 的可伸缩集合定界符 \left\{ … \right\} 是合法输出，不能被这次全局反转义破坏，
+                // 否则 XeLaTeX 以 "Missing delimiter" 终止整份讲义；先用占位符屏蔽再还原。
+                .replace("\\left\\{", "\u0001LEFTSET\u0001")
+                .replace("\\right\\}", "\u0001RIGHTSET\u0001")
                 .replace("\\{", "{")
-                .replace("\\}", "}");
+                .replace("\\}", "}")
+                .replace("\u0001LEFTSET\u0001", "\\left\\{")
+                .replace("\u0001RIGHTSET\u0001", "\\right\\}");
         Matcher quadratic = SPLIT_QUADRATIC_FRACTION.matcher(normalized);
         StringBuffer rebuilt = new StringBuffer();
         while (quadratic.find()) {

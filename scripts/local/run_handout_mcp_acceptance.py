@@ -47,7 +47,29 @@ TOPICS = (
     ("parabola", "抛物线的定义、标准方程与焦点弦", "讲解抛物线的定义、标准方程与焦点弦的来源。"),
     ("hyperbola", "双曲线的定义、标准方程与渐近线", "讲解双曲线的定义、标准方程与渐近线的关系。"),
     ("independence-test", "独立性检验与列联表", "讲解独立性检验中列联表和统计推断的基本方法。"),
+    ("coloring-combinatorics", "排列组合涂色问题的分类计数与容斥去重", "讲解排列组合中的涂色问题：一个地区分为5个行政区域，相邻区域不得同色，现有四种颜色可供选择，求不同着色方法；重点说明分类计数、最小涂色组合与容斥去重。"),
+    ("solid-geometry", "立体几何空间向量与二面角", "讲解立体几何中的空间向量方法：如图，四棱锥 P-ABCD 中 PA⊥底面 ABCD，证明线面平行并求二面角 A-CP-D 相关线段长度，重点说明线面垂直、线面平行与二面角的向量求法。"),
 )
+
+TOPIC_REQUIRED_SOURCE_IMAGE_TARGETS = {
+    "coloring-combinatorics": "IMAJES/image-001.jpg",
+    "solid-geometry": "figures/q-017-01.png",
+}
+
+_PROGRESS_JOURNAL: Path | None = None
+
+
+def configure_progress_journal(path: Path | None) -> None:
+    global _PROGRESS_JOURNAL
+    _PROGRESS_JOURNAL = path
+
+
+def _append_jsonl(path: Path, value: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8", newline="\n") as handle:
+        handle.write(json.dumps(redact(value), ensure_ascii=False) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
 
 
 def now() -> str:
@@ -56,16 +78,22 @@ def now() -> str:
 
 def progress(event: str, **details: Any) -> None:
     """Emit one flushed, redacted milestone for every external interaction."""
-    print(json.dumps(redact({"at": now(), "event": event, **details}), ensure_ascii=False), flush=True)
+    payload = redact({"at": now(), "event": event, **details})
+    print(json.dumps(payload, ensure_ascii=False), flush=True)
+    if _PROGRESS_JOURNAL is not None:
+        _append_jsonl(_PROGRESS_JOURNAL, payload)
 
 
 def redact(value: Any) -> Any:
-    """Redact credential values while retaining non-secret operational counters such as token usage."""
+    """Redact credentials and binary transport payloads while retaining AI interaction records."""
     if isinstance(value, dict):
-        return {
-            str(key): "[REDACTED]" if str(key).replace("-", "_").lower() in CREDENTIAL_KEY_NAMES else redact(item)
-            for key, item in value.items()
-        }
+        result: dict[str, Any] = {}
+        for key, item in value.items():
+            normalized_key = str(key).replace("-", "_").lower()
+            if normalized_key in {"base64", "base64content", "base64_content", "dataurl", "image_data_url", "imagedataurl"}:
+                continue
+            result[str(key)] = "[REDACTED]" if normalized_key in CREDENTIAL_KEY_NAMES else redact(item)
+        return result
     if isinstance(value, list):
         return [redact(item) for item in value]
     return value
@@ -83,6 +111,21 @@ def topic_for(run_label: str, requested: str | None) -> tuple[str, str, str]:
         raise ValueError("--topic must be one of: " + ", ".join(item[0] for item in TOPICS))
     digest = int(hashlib.sha256(run_label.encode("utf-8")).hexdigest()[:8], 16)
     return TOPICS[digest % len(TOPICS)]
+
+
+def required_source_image_target(topic: str) -> str:
+    """Returns the one authoritative original image target required by a topic-specific acceptance run."""
+    return TOPIC_REQUIRED_SOURCE_IMAGE_TARGETS.get(topic, "")
+
+
+def assert_required_source_image_retained(topic: str, workflow: dict[str, Any]) -> None:
+    """Reject a completed run that dropped the exact Java-issued source image target."""
+    target = required_source_image_target(topic)
+    if not target:
+        return
+    retained_rows = re.findall(r"!\[source-image:[^]]+]\(([^)]+)\)", json.dumps(workflow, ensure_ascii=False))
+    if target not in retained_rows:
+        raise RuntimeError(f"{topic} workflow omitted required authorized source image target: {target}")
 
 
 def utc_run_timestamp() -> str:
@@ -152,26 +195,44 @@ def wsl(command: str) -> str:
 
 def wsl_repository_root() -> str:
     """Convert the workspace path without depending on Windows argument rewriting."""
+    root = ROOT.resolve().as_posix()
+    if root.startswith("/mnt/"):
+        return root
     drive = ROOT.drive.rstrip(":").lower()
     if not drive:
         raise RuntimeError("Workspace root must be on a mounted Windows drive for WSL Compose inspection.")
-    return "/mnt/" + drive + ROOT.as_posix()[2:]
+    return "/mnt/" + drive + root[2:]
+
+
+def wsl_service_status(scope: str, unit: str) -> tuple[str, str]:
+    """Read enabled and active state in one WSL session so startup does not restart the Compose wait gate."""
+    prefix = "systemctl --user" if scope == "user" else "systemctl"
+    completed = subprocess.run(
+        [
+            "wsl.exe", "-d", os.getenv("MATH_AGENT_WSL_DISTRO", "Ubuntu"), "--", "bash", "-lc",
+            f"{prefix} is-enabled {unit}; {prefix} is-active {unit}; exit 0",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=30,
+    )
+    states = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+    return (states + ["unavailable", "unavailable"])[:2]
 
 
 def service_gate() -> dict[str, Any]:
-    """Check exactly one WSL Compose owner without invoking lifecycle commands."""
+    """Require one enabled Compose owner; stable_gate verifies real container health and identity afterward."""
     unit = "math-agent-rag-compose.service"
     checks = []
-    for scope, command in (("user", f"systemctl --user is-enabled {unit}"), ("system", f"systemctl is-enabled {unit}")):
-        try:
-            enabled = wsl(command).strip()
-            active = wsl(command.replace("is-enabled", "is-active")).strip()
-        except subprocess.CalledProcessError:
-            enabled, active = "unavailable", "unavailable"
+    for scope in ("user", "system"):
+        enabled, active = wsl_service_status(scope, unit)
         checks.append({"scope": scope, "enabled": enabled, "active": active})
-    owners = [item for item in checks if item["enabled"] == "enabled" and item["active"] == "active"]
+    owners = [item for item in checks if item["enabled"] == "enabled"]
     if len(owners) != 1:
-        raise RuntimeError("exactly one enabled and active WSL Compose owner is required: " + json.dumps(checks, ensure_ascii=False))
+        raise RuntimeError("exactly one enabled WSL Compose owner is required: " + json.dumps(checks, ensure_ascii=False))
     return {"unit": unit, "owner": owners[0]["scope"], "checks": checks}
 
 
@@ -221,10 +282,10 @@ class Http:
         try:
             with self.opener.open(request, timeout=self.timeout) as response:
                 raw = response.read()
-                event = {"at": now(), "method": method, "path": path, "status": response.status, "durationMs": round((time.monotonic() - started) * 1000)}
-                self.timeline.append(event)
+                event = {"at": now(), "method": method, "path": path, "status": response.status, "durationMs": round((time.monotonic() - started) * 1000), "response": json.loads(raw.decode("utf-8-sig")) if raw else {}}
+                self.timeline.append({k: v for k, v in event.items() if k != "response"})
                 self._persist({"kind": "http_response", **event})
-                return (json.loads(raw.decode("utf-8-sig")) if raw else {}, dict(response.headers.items()))
+                return (event["response"], dict(response.headers.items()))
         except urllib.error.HTTPError as error:
             event = {"at": now(), "method": method, "path": path, "status": error.code, "durationMs": round((time.monotonic() - started) * 1000)}
             self.timeline.append(event)
@@ -288,6 +349,40 @@ def write_json(path: Path, value: Any) -> None:
     path.write_text(json.dumps(redact(value), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def stream_probe_process(command: list[str], output_path: Path, timeout: int) -> list[str]:
+    """Stream the worker probe output to a durable log while retaining only its JSON result line."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    lines: list[str] = []
+    started = time.monotonic()
+    with output_path.open("a", encoding="utf-8", newline="\n") as log:
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+        )
+        assert process.stdout is not None
+        try:
+            for line in process.stdout:
+                log.write(line)
+                log.flush()
+                os.fsync(log.fileno())
+                progress("resource_curation_probe_output", line=line.rstrip("\n"))
+                if line.strip():
+                    lines.append(line.strip())
+            return_code = process.wait(timeout=max(1, timeout - int(time.monotonic() - started)))
+        except BaseException:
+            process.kill()
+            process.wait()
+            raise
+    if return_code != 0:
+        raise RuntimeError(f"resource curation probe process failed with exit {return_code}; see {output_path}")
+    return lines
+
+
 def run_resource_curation_probe(args: argparse.Namespace, run_dir: Path) -> dict[str, Any]:
     """Runs only the live collector while keeping MySQL probe state separate from broker authorization state."""
     source_run_id = str(args.authorized_run_id)
@@ -313,8 +408,19 @@ source_state = source[1]
 source_request = source_state.get("request") if isinstance(source_state, dict) else None
 if not isinstance(source_request, dict):
     raise RuntimeError("authorized source run lacks persisted request")
-evidence_refs = source_request.get("evidenceRefs") or []
-if not isinstance(evidence_refs, list) or not evidence_refs:
+evidence_snapshot = source_state.get("evidence") if isinstance(source_state, dict) else None
+evidence_refs = [
+    str(item.get("ref"))
+    for item in (evidence_snapshot.get("items", []) if isinstance(evidence_snapshot, dict) else [])
+    if isinstance(item, dict) and str(item.get("ref", "")).startswith("ev_")
+]
+if not evidence_refs:
+    evidence_refs = [
+        str(reference)
+        for reference in (source_request.get("evidenceRefs") or [])
+        if str(reference).startswith("ev_")
+    ]
+if not evidence_refs:
     raise RuntimeError("authorized source run has no persisted issued evidenceRefs")
 secret = os.environ.get("MATH_AGENT_PROVIDER_ROUTE_GRANT_SECRET", "")
 if not secret:
@@ -331,14 +437,24 @@ broker_trace = []
 def source_context(payload, **kwargs):
     forwarded = dict(payload)
     forwarded["runId"] = source_run_id
-    result = original_context(forwarded, **kwargs)
+    authorized_items = []
+    rejected_refs = []
+    for reference in payload.get("evidenceRefs", []):
+        single = {{**forwarded, "evidenceRefs": [reference]}}
+        try:
+            result = original_context(single, **kwargs)
+            items = [item for item in result.get("items", []) if isinstance(item, dict)]
+            authorized_items.extend(items)
+            broker_trace.append({{"operation": "handout-context", "request": single, "response": result}})
+        except Exception as exc:
+            rejected_refs.append(reference)
+            broker_trace.append({{"operation": "handout-context", "request": single,
+                                 "errorType": type(exc).__name__, "error": str(exc)}})
     # The probe must assess the deep-read chain, not let unrelated retained snippets satisfy its deliberately
     # narrow source-verification goal. These are unchanged, already-authorized context entries, only filtered.
-    readable_items = [item for item in result.get("items", []) if isinstance(item, dict) and item.get("documentRef")]
-    if readable_items:
-        result = {{**result, "items": readable_items}}
-    broker_trace.append({{"operation": "handout-context", "request": forwarded, "response": result}})
-    return result
+    readable_items = [item for item in authorized_items if item.get("documentRef")]
+    return {{"query": "", "items": readable_items, "source": "java-broker",
+            "rejectedEvidenceRefs": rejected_refs}}
 def source_broker(operation, payload, **kwargs):
     forwarded = dict(payload)
     forwarded["runId"] = source_run_id
@@ -380,39 +496,192 @@ print(json.dumps(result, ensure_ascii=False))
         "-e MATH_AGENT_HANDOUT_COLLECTION_DECISION_MAX_OUTPUT_TOKENS=12000 "
         "-e MATH_AGENT_HANDOUT_MAX_PROVIDER_CALLS=4 "
         "-e MATH_AGENT_HANDOUT_MAX_TOTAL_TOKENS=100000 "
-        "ai-worker python -c " + shlex.quote("import base64;exec(base64.b64decode(" + repr(encoded) + "))")
+        "ai-worker python -u -c " + shlex.quote("import base64;exec(base64.b64decode(" + repr(encoded) + "))")
     )
     started = time.monotonic()
-    completed = subprocess.run(
+    probe_log = run_dir / "resource-curation-probe.log"
+    completed_lines = stream_probe_process(
         ["wsl.exe", "-d", os.getenv("MATH_AGENT_WSL_DISTRO", "Ubuntu"), "--", "bash", "-lc", command],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=args.timeout + 15,
+        probe_log,
+        args.timeout + 15,
     )
     elapsed_seconds = round(time.monotonic() - started, 3)
-    if completed.returncode != 0:
-        raise RuntimeError("resource curation probe process failed: " + completed.stderr.strip())
-    lines = [line for line in completed.stdout.splitlines() if line.strip()]
+    lines = [line for line in completed_lines if line.strip()]
     if not lines:
         raise RuntimeError("resource curation probe returned no result")
     result = json.loads(lines[-1])
     result["elapsedSeconds"] = elapsed_seconds
+    result["probeLog"] = str(probe_log)
     return result
 
 
 def inspect_pdf(pdf: Path, destination: Path) -> dict[str, Any]:
     destination.mkdir(parents=True, exist_ok=True)
-    def tool(name: str) -> str:
-        configured = os.getenv(name, "")
-        return configured if configured and Path(configured).is_file() else shutil.which(name.lower().replace("_bin", "")) or name.lower().replace("_bin", "")
-    info = subprocess.run([tool("PDFINFO_BIN"), str(pdf)], check=True, capture_output=True, text=True, encoding="utf-8", errors="replace").stdout
+
+    def windows_path(path: Path) -> str:
+        value = str(path.resolve()).replace("\\\\", "/")
+        match = re.match(r"^/mnt/([A-Za-z])/(.*)$", value)
+        if match:
+            return match.group(1).upper() + ":/" + match.group(2)
+        return value
+
+    def command(name: str, *arguments: str) -> tuple[list[str], bool]:
+        configured_name = {
+            "pdfinfo": "PDFINFO_BIN",
+            "pdftoppm": "PDFTOPPM_BIN",
+            "pdftotext": "PDFTOTEXT_BIN",
+            "pdfimages": "PDFIMAGES_BIN",
+        }[name]
+        configured = os.getenv(configured_name, "")
+        native = configured if configured and Path(configured).is_file() else shutil.which(name)
+        if native:
+            return [native, *arguments], native.lower().endswith(".exe")
+        if os.name == "posix":
+            candidates = []
+            for user_root in Path("/mnt/c/Users").glob("*"):
+                candidates.append(user_root / "AppData/Local/Programs/MiKTeX/miktex/bin/x64" / f"{name}.exe")
+            candidates.append(Path(f"/mnt/c/Program Files/Git/mingw64/bin/{name}.exe"))
+            for candidate in candidates:
+                if candidate.is_file():
+                    return [str(candidate), *arguments], True
+        if os.name == "nt":
+            return ["wsl.exe", "-d", os.getenv("MATH_AGENT_WSL_DISTRO", "Ubuntu"), "--", "/usr/bin/" + name, *arguments], False
+        return [name, *arguments], False
+
+    pdf_command, pdf_is_windows = command("pdfinfo")
+    pdf_argument = windows_path(pdf) if pdf_is_windows else str(pdf)
+    pdf_command = [*pdf_command[:1], pdf_argument, *pdf_command[1:]]
+    info = subprocess.run(
+        pdf_command,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    ).stdout
     pages = int(re.search(r"^Pages:\s+(\d+)", info, re.M).group(1))
-    subprocess.run([tool("PDFTOPPM_BIN"), "-png", "-r", "144", str(pdf), str(destination / "page")], check=True, capture_output=True)
-    text = subprocess.run([tool("PDFTOTEXT_BIN"), "-layout", str(pdf), "-"], check=True, capture_output=True, text=True, encoding="utf-8", errors="replace").stdout
+    ppm_command, ppm_is_windows = command("pdftoppm")
+    ppm_pdf_argument = windows_path(pdf) if ppm_is_windows else str(pdf)
+    ppm_output_prefix = windows_path(destination / "page") if ppm_is_windows else str(destination / "page")
+    subprocess.run(
+        [*ppm_command, "-png", "-r", "144", ppm_pdf_argument, ppm_output_prefix],
+        check=True,
+        capture_output=True,
+    )
+    text_command, text_is_windows = command("pdftotext")
+    text_pdf_argument = windows_path(pdf) if text_is_windows else str(pdf)
+    text = subprocess.run(
+        [*text_command, "-layout", text_pdf_argument, "-"],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    ).stdout
     (destination / "extracted.txt").write_text(text, encoding="utf-8")
-    return {"sha256": hashlib.sha256(pdf.read_bytes()).hexdigest(), "pages": pages, "renderedPages": [p.name for p in sorted(destination.glob("page-*.png"))], "textChars": len(text), "metadata": info}
+    image_command, image_is_windows = command("pdfimages")
+    image_pdf_argument = windows_path(pdf) if image_is_windows else str(pdf)
+    listing = subprocess.run(
+        [*image_command, "-list", image_pdf_argument],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    ).stdout
+    image_count = max(0, len([line for line in listing.splitlines() if re.match(r"^\s*\d+\s+\d+\s+", line)]))
+    (destination / "images.txt").write_text(listing, encoding="utf-8")
+    return {
+        "sha256": hashlib.sha256(pdf.read_bytes()).hexdigest(),
+        "pages": pages,
+        "renderedPages": [p.name for p in sorted(destination.glob("page-*.png"))],
+        "textChars": len(text),
+        "imageCount": image_count,
+        "metadata": info,
+    }
+
+
+def persist_retrieval_evidence(payload: Any, run_dir: Path) -> dict[str, int]:
+    """Persist source-bearing fields found in recovery status/trace without reading files or resolving IDs locally."""
+    buckets = {"textbook": [], "feishu": [], "gaokao": []}
+
+    def visit(value: Any) -> None:
+        if isinstance(value, dict):
+            for key, bucket in (("textbookHits", "textbook"), ("teacherResourceHits", "feishu"), ("gaokaoHits", "gaokao")):
+                rows = value.get(key)
+                if isinstance(rows, list):
+                    buckets[bucket].extend(row for row in rows if isinstance(row, dict))
+            for child in value.values():
+                visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    def row_key(item: dict[str, Any]) -> str:
+        for key in ("evidenceRef", "ref", "transparentReference", "transparentRef"):
+            value = item.get(key)
+            if value is not None and str(value).strip():
+                return str(value).strip()
+        return json.dumps(item, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+    def unique_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        seen: set[str] = set()
+        result: list[dict[str, Any]] = []
+        for item in rows:
+            key = row_key(item)
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(item)
+        return result
+
+    visit(payload)
+    buckets = {name: unique_rows(rows) for name, rows in buckets.items()}
+    counts = {name: len(rows) for name, rows in buckets.items()}
+    existing_source = run_dir / "retrieval-source-original.json"
+    if existing_source.is_file():
+        try:
+            persisted = json.loads(existing_source.read_text(encoding="utf-8"))
+            persisted_buckets = {"textbook": [], "feishu": [], "gaokao": []}
+
+            def visit_persisted(value: Any) -> None:
+                if isinstance(value, dict):
+                    for key, bucket in (("textbookHits", "textbook"), ("teacherResourceHits", "feishu"), ("gaokaoHits", "gaokao")):
+                        rows = value.get(key)
+                        if isinstance(rows, list):
+                            persisted_buckets[bucket].extend(row for row in rows if isinstance(row, dict))
+                    for child in value.values():
+                        visit_persisted(child)
+                elif isinstance(value, list):
+                    for child in value:
+                        visit_persisted(child)
+
+            visit_persisted(persisted)
+            persisted_buckets = {name: unique_rows(rows) for name, rows in persisted_buckets.items()}
+            persisted_counts = {name: len(rows) for name, rows in persisted_buckets.items()}
+            if any(persisted_counts.values()):
+                # The copied fresh source response is authoritative; status payloads repeat nested stage evidence.
+                buckets, counts = persisted_buckets, persisted_counts
+        except (OSError, ValueError, TypeError):
+            pass
+    original_blocks = []
+    for source, rows in buckets.items():
+        for item in rows:
+            text = item.get("evidenceText") or item.get("snippet") or item.get("text") or item.get("excerpt") or ""
+            if not str(text).strip():
+                continue
+            title = item.get("title") or item.get("documentTitle") or item.get("bookName") or source
+            reference = item.get("transparentReference") or item.get("sourceReference") or item.get("evidenceRef") or ""
+            original_blocks.append(f"## [{source}] {title}\n\nreference: {reference}\n\n{text}\n")
+    if original_blocks:
+        (run_dir / "resource-original.md").write_text("\n".join(original_blocks), encoding="utf-8")
+    snapshot = {"sourceCounts": counts, "payload": payload}
+    if not existing_source.is_file() or any(counts.values()):
+        write_json(run_dir / "retrieval-original.json", snapshot)
+    else:
+        # A status response can contain only the persisted workflow snapshot. Never replace fresh retrieval evidence with that empty view.
+        write_json(run_dir / "retrieval-status-snapshot.json", snapshot)
+    return counts
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -429,6 +698,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--resource-curation-only", action="store_true", help="Run only the bounded pre-plan resource collector against a persisted authorized run; never creates a task or enters writer nodes.")
     parser.add_argument("--authorized-run-id", help="Existing Java-issued run ID used only by --resource-curation-only.")
     parser.add_argument("--workflow-id", help="Resume an existing workflow without submitting a new task.")
+    parser.add_argument("--source-evidence", help="Fresh retrieval JSON copied into a recovery run before resume.")
     parser.add_argument("--resume-failed", action="store_true", help="Resume an existing failed workflow once.")
     args = parser.parse_args(argv)
     if args.preflight_only and args.resource_curation_only:
@@ -440,28 +710,104 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return args
 
 
-def resume_existing_workflow(mcp: "Mcp", workflow_id: str, args: argparse.Namespace, run_dir: Path, record: dict[str, Any]) -> int:
+def resume_existing_workflow(mcp: "Mcp", workflow_id: str, args: argparse.Namespace, run_dir: Path, record: dict[str, Any], topic: str) -> int:
     """Resume one persisted workflow without creating another task, then export verified PDFs."""
     task = mcp.call("get_multi_agent_writing_status", {"workflowId": workflow_id})
     write_json(run_dir / "latest-status.json", task)
-    if str(task.get("status", "")).upper() == "FAILED":
-        if not args.resume_failed:
+    persist_retrieval_evidence(task, run_dir)
+    status = str(task.get("status", "")).upper()
+    should_refresh_evidence = bool(args.source_evidence) and status == "COMPLETED"
+    if status == "FAILED" or should_refresh_evidence:
+        if status == "FAILED" and not args.resume_failed:
             raise RuntimeError("Existing workflow is FAILED; rerun with --resume-failed to resume it once.")
-        task = mcp.call("resume_multi_agent_writing", {"workflowId": workflow_id})
-        record["recovery"] = {"workflowId": workflow_id, "resumed": True, "taskCreationPosts": 0}
+        recovery_arguments = {
+            "workflowId": workflow_id,
+            "writingGoal": "教师版、学生版和16:10课堂讲解版讲义",
+            "questionText": TOPICS[[item[0] for item in TOPICS].index(topic)][2],
+        }
+        retrieval = run_dir / "retrieval-source-original.json"
+        if not retrieval.is_file():
+            retrieval = run_dir / "retrieval-original.json"
+        if retrieval.is_file():
+            saved_retrieval = json.loads(retrieval.read_text(encoding="utf-8"))
+            saved_refs = saved_retrieval.get("evidenceRefs", [])
+            if isinstance(saved_refs, list):
+                recovery_arguments["evidenceRefs"] = [str(ref) for ref in saved_refs if str(ref).strip()]
+        saved_search = json.loads(retrieval.read_text(encoding="utf-8")) if retrieval.is_file() else {}
+        library_results = saved_search.get("libraryResults", {}) if isinstance(saved_search.get("libraryResults", {}), dict) else {}
+        def saved_hits(name: str, key: str) -> list[dict[str, Any]]:
+            direct = saved_search.get(key, [])
+            if isinstance(direct, list) and direct:
+                return direct
+            nested = library_results.get(name, {}) if isinstance(library_results.get(name, {}), dict) else {}
+            values = nested.get(key, [])
+            return values if isinstance(values, list) else []
+        recovery_evidence = []
+        for source_name, source_key, library_name in (("textbook", "textbookHits", "public_textbook"), ("feishu", "teacherResourceHits", "feishu"), ("gaokao", "gaokaoHits", "gaokao")):
+            for item in saved_hits(library_name, source_key):
+                if not isinstance(item, dict):
+                    continue
+                recovery_evidence.append({
+                    "sourceScope": {"textbook": "PUBLIC_TEXTBOOK", "feishu": "TEACHER_RESOURCE", "gaokao": "CANONICAL_MATH_PAPER"}[source_name],
+                    "sourceTitle": item.get("title") or item.get("documentTitle") or item.get("bookName") or source_name,
+                    "chunkId": item.get("chunkId") or item.get("blockId") or "",
+                    "pageNo": item.get("pageNo") or item.get("page") or 0,
+                    "snippet": item.get("evidenceText") or item.get("snippet") or item.get("text") or "",
+                    "sourceDocumentId": item.get("fileDocumentId") or item.get("sourceDocumentId") or item.get("documentId") or item.get("docId") or "",
+                    "fileDocumentId": item.get("fileDocumentId") or "",
+                    "sourceType": item.get("sourceType") or ("feishu" if source_name == "feishu" else source_name),
+                    "assetIds": [
+                        str(asset) for asset in (
+                            item.get("imageAssetIds")
+                            or item.get("assetIds")
+                            or item.get("pageAssetIds")
+                            or [asset.get("assetId") for asset in (item.get("questionAssets") or item.get("assets") or []) if isinstance(asset, dict)]
+                            or []
+                        ) if str(asset).strip()
+                    ],
+                    "canonicalQuestionNumber": item.get("questionNumber") or "",
+                })
+        recovery_arguments["initialEvidence"] = recovery_evidence[:24]
+        task = mcp.call("resume_multi_agent_writing", recovery_arguments)
+        record["recovery"] = {
+            "workflowId": workflow_id,
+            "resumed": True,
+            "evidenceRefreshed": should_refresh_evidence,
+            "taskCreationPosts": 0,
+            "status": task.get("status"),
+        }
         write_json(run_dir / "resume-response.json", task)
+        write_json(run_dir / "latest-status.json", task)
+        persist_retrieval_evidence(task, run_dir)
+        if str(task.get("status", "")).upper() == "COMPLETED":
+            raise RuntimeError(
+                "Resume returned COMPLETED without requeueing the existing workflow; refusing to export the old package."
+            )
     deadline = time.monotonic() + args.timeout
     while not terminal_status(str(task.get("status"))):
         task = mcp.call("get_multi_agent_writing_status", {"workflowId": workflow_id})
         record["taskSnapshots"].append({"at": now(), "status": task.get("status"), "stages": task.get("stages"), "usage": task.get("totalUsage"), "message": task.get("message")})
         write_json(run_dir / "latest-status.json", task)
+        source_counts = persist_retrieval_evidence(task, run_dir)
+        record["retrievalSourceCounts"] = source_counts
+        record["retrievalEvidencePersisted"] = True
         write_json(run_dir / "acceptance-live.json", record)
-        progress("handout_status_poll_completed", workflowId=workflow_id, status=task.get("status"), stages=task.get("stages"))
+        stage_summary = [
+            {
+                "stageCode": stage.get("stageCode", ""),
+                "status": stage.get("status", ""),
+                "elapsedMs": stage.get("elapsedMs", 0),
+            }
+            for stage in task.get("stages", [])
+            if isinstance(stage, dict)
+        ]
+        progress("handout_status_poll_completed", workflowId=workflow_id, status=task.get("status"), stages=stage_summary)
         if time.monotonic() >= deadline:
             raise RuntimeError("Polling timeout; rerun with the same workflowId.")
         time.sleep(args.poll_interval_seconds)
     if str(task.get("status", "")).upper() != "COMPLETED":
         raise RuntimeError("Task did not complete: " + str(task.get("status")))
+    assert_required_source_image_retained(topic, task)
     artifacts = {}
     for variant, fmt in (("teacher", "pdf-teacher"), ("student", "pdf-student"), ("lecture", "pdf-lecture")):
         exported = mcp.call("export_multi_agent_writing_artifact", {"workflowId": workflow_id, "format": fmt})
@@ -473,7 +819,16 @@ def resume_existing_workflow(mcp: "Mcp", workflow_id: str, args: argparse.Namesp
         if not audit["renderedPages"] or audit["pages"] != len(audit["renderedPages"]):
             raise RuntimeError(f"PDF visual render incomplete for {variant}")
         artifacts[variant] = {"export": {k: v for k, v in exported.items() if k != "base64Content"}, "audit": audit}
-    record.update({"workflowId": workflow_id, "terminal": task, "artifacts": artifacts, "result": "completed", "completedAt": now()})
+        if topic == "parabola" or required_source_image_target(topic):
+            teacher_text = (run_dir / "teacher" / "extracted.txt").read_text(encoding="utf-8")
+            internal_reference_count = sum(teacher_text.count(marker) for marker in ("feishu://", "gaokao://", "textbook://"))
+            image_count = int(artifacts.get("teacher", {}).get("audit", {}).get("imageCount", 0))
+            record["sourceImagePdfAudit"] = {"internalReferenceCount": internal_reference_count, "teacherPdfImageCount": image_count}
+            if internal_reference_count:
+                raise RuntimeError(f"{topic} teacher PDF exposes internal source references")
+            if image_count == 0:
+                raise RuntimeError(f"{topic} teacher PDF contains no embedded source image")
+        record.update({"workflowId": workflow_id, "terminal": task, "artifacts": artifacts, "result": "completed", "completedAt": now()})
     return 0
 
 
@@ -481,10 +836,19 @@ def main(args: argparse.Namespace | None = None) -> int:
     args = args or parse_args()
     run_timestamp = utc_run_timestamp()
     topic, goal, question = topic_for(args.run_label or run_timestamp, args.topic)
+    if args.workflow_id and args.source_evidence and not args.topic:
+        # Evidence-refresh recovery must keep the fixed handout subject auditable instead of deriving a random topic from the run label.
+        topic, goal, question = TOPICS[0]
     args.run_label = args.run_label or f"handout-mcp-{topic}-{run_timestamp}"
     run_dir = ROOT / "output" / "acceptance" / "handout-mcp" / args.run_label
     run_dir.mkdir(parents=True, exist_ok=False)
+    if args.source_evidence:
+        source_path = Path(args.source_evidence).resolve()
+        if not source_path.is_file():
+            raise RuntimeError(f"Source evidence file does not exist: {source_path}")
+        shutil.copyfile(source_path, run_dir / "retrieval-source-original.json")
     events_path = run_dir / "events.jsonl"
+    configure_progress_journal(events_path)
     record: dict[str, Any] = {"runLabel": args.run_label, "runTimestamp": run_timestamp, "startedAt": now(), "serviceStates": [], "taskSnapshots": [], "timeline": [], "taskCreationPosts": 0, "reviewRecoveryExercised": False, "workflowId": args.workflow_id}
     key_id = ""
     http = Http(args.base_url, args.http_timeout, record["timeline"], events_path)
@@ -503,6 +867,17 @@ def main(args: argparse.Namespace | None = None) -> int:
             progress("resource_curation_probe_started", authorizedRunId=args.authorized_run_id)
             probe = run_resource_curation_probe(args, run_dir)
             record["resourceCurationProbe"] = probe
+            write_json(run_dir / "broker-deep-read-python-visible.json", {
+                "probeRunId": probe.get("probeRunId"),
+                "agentSelectedDeepReads": [
+                    read
+                    for value in ((probe.get("privateDiagnostics", {}).get("privateDiagnostics", {})
+                                   .get("resourceCollection", {}).get("iterations", {}) or {}).values())
+                    if isinstance(value, dict)
+                    for read in value.get("agentSelectedDeepReads", [])
+                    if isinstance(read, dict)
+                ],
+            })
             if probe.get("status") != "PASSED":
                 raise RuntimeError("resource curation probe failed: " + str(probe.get("error")))
             evidence = probe.get("evidence", {})
@@ -557,13 +932,20 @@ def main(args: argparse.Namespace | None = None) -> int:
         progress("mcp_key_created", keyId=key_id)
         mcp = Mcp(http, secret)
         if args.workflow_id:
-            return resume_existing_workflow(mcp, args.workflow_id, args, run_dir, record)
+            return resume_existing_workflow(mcp, args.workflow_id, args, run_dir, record, topic)
         progress("evidence_retrieval_started", topic=topic)
         library_queries = {
             "public_textbook": goal,
             "feishu": "抛物线 教师资料 题目 标准方程 焦点",
             "gaokao": "抛物线 高考真题 题目 标准方程 焦点",
-        } if topic == "parabola" else {"public_textbook": goal, "feishu": goal}
+        } if topic == "parabola" else {
+            "public_textbook": goal,
+            "feishu": "排列组合 涂色问题 分类计数 容斥 2013年涂色问题",
+        } if topic == "coloring-combinatorics" else {
+            "public_textbook": goal,
+            "feishu": "立体几何 四棱锥 线面垂直 二面角 教师资料",
+            "gaokao": "四棱锥P-ABCD PA垂直底面 二面角A-CP-D 正弦值 求AD 高考真题",
+        } if topic == "solid-geometry" else {"public_textbook": goal, "feishu": goal}
         searches: dict[str, Any] = {}
         for library, query in library_queries.items():
             progress("evidence_library_search_started", library=library, query=query)
@@ -581,6 +963,7 @@ def main(args: argparse.Namespace | None = None) -> int:
         }
         evidence_refs = list(dict.fromkeys(ref for ref in search["evidenceRefs"] if ref))
         write_json(run_dir / "retrieval-original.json", search)
+        write_json(run_dir / "retrieval-source-original.json", search)
         if not evidence_refs:
             raise RuntimeError("No authorized source-grounded evidence returned; task was not submitted.")
         if topic == "parabola":
@@ -593,19 +976,7 @@ def main(args: argparse.Namespace | None = None) -> int:
             if any(count <= 0 for count in source_counts.values()):
                 raise RuntimeError("Parabola acceptance requires nonzero textbook, feishu, and gaokao hits: " + json.dumps(source_counts, ensure_ascii=False))
         progress("evidence_retrieval_completed", hitCount=len(evidence_refs))
-        record["retrieval"] = {
-            "topic": topic,
-            "sourceStatuses": search.get("libraryResults", search.get("libraries", [])),
-            "libraryStats": search.get("libraryStats", []),
-            "textbookHitCount": len(search.get("textbookHits", [])) if isinstance(search.get("textbookHits", []), list) else 0,
-            "teacherResourceHitCount": len(search.get("teacherResourceHits", [])) if isinstance(search.get("teacherResourceHits", []), list) else 0,
-            "gaokaoHitCount": len(search.get("gaokaoHits", [])) if isinstance(search.get("gaokaoHits", []), list) else 0,
-            "mergedHitCount": len(search.get("mergedHits", [])) if isinstance(search.get("mergedHits", []), list) else 0,
-            "hitCount": len(evidence_refs),
-            "evidenceRefs": evidence_refs,
-            "rawResponse": search,
-        }
-        write_json(run_dir / "retrieval-original.json", search)
+        write_json(run_dir / "retrieval-status-snapshot.json", search)
         original_blocks = []
         for source_name, source_items in (
                 ("textbook", search.get("textbookHits", [])),
@@ -624,12 +995,27 @@ def main(args: argparse.Namespace | None = None) -> int:
                         f"## [{source_name}] {title}\n\n"
                         f"reference: {transparent_ref}\n"
                         f"location: {block} page={page}\n\n{text}\n")
+        retrieval_stats = {
+            "libraryStats": {
+                library: {
+                    "hitCount": len(result.get("mergedHits", [])),
+                    "evidenceRefCount": len(result.get("evidenceRefs", [])),
+                    "textbookHitCount": len(result.get("textbookHits", [])),
+                    "teacherResourceHitCount": len(result.get("teacherResourceHits", [])),
+                    "gaokaoHitCount": len(result.get("gaokaoHits", [])),
+                }
+                for library, result in searches.items()
+            },
+            "textbookHitCount": len(search["textbookHits"]),
+            "teacherResourceHitCount": len(search["teacherResourceHits"]),
+            "gaokaoHitCount": len(search["gaokaoHits"]),
+            "mergedHitCount": len(search["mergedHits"]),
+            "evidenceRefCount": len(evidence_refs),
+        }
+        record["retrieval"] = retrieval_stats
         write_json(run_dir / "retrieval-flow.json", {
-            "at": now(), "query": goal, "libraries": ["public_textbook", "feishu"],
-            "libraryStats": record["retrieval"]["libraryStats"],
-            "textbookHitCount": record["retrieval"]["textbookHitCount"],
-            "teacherResourceHitCount": record["retrieval"]["teacherResourceHitCount"],
-            "mergedHitCount": record["retrieval"]["mergedHitCount"],
+            "at": now(), "query": goal, "libraries": list(library_queries), **retrieval_stats,
+            "rawResponses": searches,
         })
         (run_dir / "resource-original.md").write_text("\n".join(original_blocks), encoding="utf-8")
         progress("stability_gate_started", phase="before-submit")
@@ -637,8 +1023,39 @@ def main(args: argparse.Namespace | None = None) -> int:
         progress("stability_gate_completed", phase="before-submit")
         correlation = {"runLabel": args.run_label, "topic": topic, "runTimestamp": run_timestamp, "clientRequestId": idempotency_key(topic, run_timestamp), "submittedAt": now()}
         write_json(run_dir / "submission-correlation.json", correlation)
-        progress("handout_submission_started", clientRequestId=correlation["clientRequestId"])
-        started = submit_once(mcp, {"writingGoal": "教师版、学生版和16:10课堂讲解版讲义", "questionText": question, "evidenceRefs": evidence_refs, "clientRequestId": correlation["clientRequestId"]}, record)
+        initial_evidence = []
+        for source_name, source_items in (("textbook", search.get("textbookHits", [])),
+                                          ("feishu", search.get("teacherResourceHits", [])),
+                                          ("gaokao", search.get("gaokaoHits", []))):
+            for item in source_items:
+                if not isinstance(item, dict):
+                    continue
+                source_scope = {"textbook": "PUBLIC_TEXTBOOK", "feishu": "TEACHER_RESOURCE", "gaokao": "CANONICAL_MATH_PAPER"}[source_name]
+                assets = item.get("imageAssetIds") or []
+                if not isinstance(assets, list):
+                    assets = []
+                initial_evidence.append({
+                    "sourceScope": source_scope,
+                    "sourceTitle": item.get("title") or item.get("documentTitle") or item.get("bookName") or source_name,
+                    "chunkId": item.get("chunkId") or item.get("blockId") or "",
+                    "pageNo": item.get("pageNo") or item.get("page") or 0,
+                    "snippet": item.get("evidenceText") or item.get("snippet") or item.get("text") or "",
+                    "sourceDocumentId": item.get("fileDocumentId") or item.get("sourceDocumentId") or item.get("documentId") or item.get("docId") or "",
+                    "fileDocumentId": item.get("fileDocumentId") or "",
+                    "sourceType": item.get("sourceType") or ("feishu" if source_name == "feishu" else source_name),
+                    "assetIds": [str(asset) for asset in assets if str(asset).strip()],
+                    "imageRefs": [
+                        {"markdownLine": str(image.get("markdownLine", "")), "logicalPath": str(image.get("logicalPath", ""))}
+                        for image in (item.get("imageRefs") or [])
+                        if isinstance(image, dict)
+                        and str(image.get("markdownLine", "")).strip()
+                        and str(image.get("logicalPath", "")).strip()
+                    ][:12],
+                    "canonicalQuestionNumber": item.get("questionNumber") or "",
+                })
+        initial_evidence = initial_evidence[:24]
+        progress("handout_submission_started", clientRequestId=correlation["clientRequestId"], initialEvidenceCount=len(initial_evidence))
+        started = submit_once(mcp, {"writingGoal": "教师版、学生版和16:10课堂讲解版讲义", "questionText": question, "evidenceRefs": evidence_refs, "initialEvidence": initial_evidence, "clientRequestId": correlation["clientRequestId"]}, record)
         workflow_id = str(started.get("workflowId", ""))
         if not workflow_id:
             raise RuntimeError("MCP start response lacks workflowId; no retry was issued.")
@@ -652,7 +1069,16 @@ def main(args: argparse.Namespace | None = None) -> int:
         while not terminal_status(str(task.get("status"))):
             progress("handout_status_poll_started", workflowId=workflow_id)
             task = mcp.call("get_multi_agent_writing_status", {"workflowId": workflow_id})
-            progress("handout_status_poll_completed", workflowId=workflow_id, status=task.get("status"), stages=task.get("stages"))
+            stage_summary = [
+                {
+                    "stageCode": stage.get("stageCode", ""),
+                    "status": stage.get("status", ""),
+                    "elapsedMs": stage.get("elapsedMs", 0),
+                }
+                for stage in task.get("stages", [])
+                if isinstance(stage, dict)
+            ]
+            progress("handout_status_poll_completed", workflowId=workflow_id, status=task.get("status"), stages=stage_summary)
             record["taskSnapshots"].append({"at": now(), "status": task.get("status"), "stages": task.get("stages"), "usage": task.get("totalUsage"), "message": task.get("message")})
             write_json(run_dir / "latest-status.json", task)
             writers = task.get("writers") or task.get("artifacts", {}).get("writers") or []
@@ -668,14 +1094,35 @@ def main(args: argparse.Namespace | None = None) -> int:
                 raise RuntimeError("Polling timeout; use the persisted workflowId with read-only MCP status, not a new submit.")
             time.sleep(args.poll_interval_seconds)
         record["terminal"] = task
+        write_json(run_dir / "broker-deep-read-python-visible.json", {
+            "workflowId": workflow_id,
+            "status": task.get("status"),
+            "resourceCuration": task.get("privateDiagnostics", {}).get("resourceCollection", {})
+                if isinstance(task.get("privateDiagnostics"), dict) else {},
+        })
         if str(task.get("status", "")).upper() == "WAITING_REVIEW":
             record["result"] = "review-required"
             raise RuntimeError("Task requires review. The runner does not approve it automatically.")
         if str(task.get("status", "")).upper() != "COMPLETED":
             raise RuntimeError("Task did not complete: " + str(task.get("status")))
-        # Refresh recovery is read-only and remains scoped to this exact persisted task ID.
-        recovered, _ = http.request("GET", "/api/teaching/tasks/" + urllib.parse.quote(workflow_id, safe=""))
-        record["recovery"] = {"workflowId": workflow_id, "sameTask": str(recovered.get("taskId", recovered.get("workflowId", workflow_id))) == workflow_id, "status": recovered.get("status")}
+        assert_required_source_image_retained(topic, task)
+        # Refresh recovery is read-only and remains scoped to this exact persisted workflow ID.
+        # The workflow is owned by the MCP writing service, not the legacy teaching-task table;
+        # querying /api/teaching/tasks here produces a false 404 after a successful MCP run.
+        recovered = mcp.call("get_multi_agent_writing_status", {"workflowId": workflow_id})
+        recovered_status = str(recovered.get("status", "")).upper()
+        recovered_workflow_id = str(recovered.get("workflowId", workflow_id))
+        record["recovery"] = {
+            "workflowId": workflow_id,
+            "sameTask": recovered_workflow_id == workflow_id,
+            "status": recovered.get("status"),
+            "source": "mcp:get_multi_agent_writing_status",
+        }
+        if recovered_workflow_id != workflow_id or recovered_status != "COMPLETED":
+            raise RuntimeError(
+                "Read-only MCP recovery did not confirm the completed workflow: "
+                + json.dumps(record["recovery"], ensure_ascii=False)
+            )
         record["reviewRecoveryExercised"] = True
         artifacts = {}
         for variant, fmt in (("teacher", "pdf-teacher"), ("student", "pdf-student"), ("lecture", "pdf-lecture")):
@@ -687,6 +1134,20 @@ def main(args: argparse.Namespace | None = None) -> int:
             pdf.parent.mkdir(parents=True, exist_ok=True)
             pdf.write_bytes(data)
             artifacts[variant] = {"export": {k: v for k, v in exported.items() if k != "base64Content"}, "audit": inspect_pdf(pdf, pdf.parent)}
+            if not artifacts[variant]["audit"]["renderedPages"] or artifacts[variant]["audit"]["pages"] != len(artifacts[variant]["audit"]["renderedPages"]):
+                raise RuntimeError(f"PDF visual render incomplete for {variant}")
+            if (topic == "parabola" or required_source_image_target(topic)) and variant == "teacher":
+                teacher_text = (run_dir / "teacher" / "extracted.txt").read_text(encoding="utf-8")
+                internal_reference_count = sum(teacher_text.count(marker) for marker in ("feishu://", "gaokao://", "textbook://"))
+                image_count = int(artifacts[variant]["audit"].get("imageCount", 0))
+                record["sourceImagePdfAudit"] = {
+                    "internalReferenceCount": internal_reference_count,
+                    "teacherPdfImageCount": image_count,
+                }
+                if internal_reference_count:
+                    raise RuntimeError(f"{topic} teacher PDF exposes internal source references")
+                if image_count == 0:
+                    raise RuntimeError(f"{topic} teacher PDF contains no embedded source image")
             progress("pdf_export_completed", workflowId=workflow_id, variant=variant, pdf=str(pdf), audit=artifacts[variant]["audit"])
         student_text = (run_dir / "student" / "extracted.txt").read_text(encoding="utf-8")
         forbidden = [r"答案", r"教师批注", r"trace", r"model[_ -]?call", r"sourcePath", r"assetId", r"https?://", r"[A-Za-z]:\\"]

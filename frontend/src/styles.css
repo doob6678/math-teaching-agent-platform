@@ -3172,6 +3172,21 @@ h1, h2, h3, h4, h5, h6 {
   gap: 10px;
 }
 
+/* 来源条目里的 textbook:// 长串和 chunk id 不可断行时会横向溢出所在列，
+   钻到右侧预览列下方形成"重叠"观感；允许任意断行并把各层子项宽度收进列内。 */
+.handout-assistant-thread,
+.handout-thread-message,
+.handout-thread-message-body,
+.handout-thread-source-item {
+  min-width: 0;
+}
+
+.handout-thread-source-item,
+.handout-thread-source-item small,
+.handout-thread-source-item p {
+  overflow-wrap: anywhere;
+}
+
 .handout-thread-outline-item,
 .handout-thread-source-item {
   display: grid;
@@ -3885,7 +3900,10 @@ h1, h2, h3, h4, h5, h6 {
 
 .handout-workbench-grid {
   display: grid;
-  grid-template-columns: minmax(220px, 0.68fr) minmax(360px, 1fr) minmax(440px, 1.45fr);
+  /* 第一列用 auto 而不是 minmax(220px,…)：历史侧栏收起后只有 76px 宽，
+     固定 220px 列会在按钮右侧留下一大片空白；auto 让列随内容收紧，
+     省下的宽度全部流向中间表单列和右侧预览列。 */
+  grid-template-columns: auto minmax(340px, 0.9fr) minmax(480px, 1.5fr);
   gap: 16px;
   align-items: start;
 }
@@ -4206,7 +4224,7 @@ h1, h2, h3, h4, h5, h6 {
 
 @media (max-width: 1320px) {
   .handout-workbench-grid {
-    grid-template-columns: minmax(220px, 0.72fr) minmax(0, 1.28fr);
+    grid-template-columns: auto minmax(0, 1.28fr);
   }
 
   .handout-workspace-preview {
@@ -4416,11 +4434,61 @@ h1, h2, h3, h4, h5, h6 {
   border: 0;
   box-shadow: none;
   overflow: hidden;
+  /* 历史栏抽屉拉手的绝对定位锚点。 */
+  position: relative;
+}
+
+/* 抽屉拉手：宽屏常驻在历史栏右缘的竖向小拉手，点一下展开/收起侧栏；
+   收起后拉手贴屏幕左缘继续可见，解决"点进对话后侧栏消失找不回"的问题。 */
+.teaching-chat-shell .teaching-chat-drawer-handle {
+  position: absolute;
+  top: 50%;
+  left: 264px;
+  margin-top: -38px;
+  width: 20px;
+  height: 76px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  border-right-color: rgba(203, 213, 225, 0.9);
+  border-radius: 10px;
+  background: #ffffff;
+  color: #94a3b8;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.07);
+  z-index: 46;
+  transition: left 0.22s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.teaching-chat-shell .teaching-chat-drawer-handle:hover {
+  color: #0f172a;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.12);
+}
+
+.teaching-chat-shell .teaching-chat-drawer-handle:not(.open) {
+  left: 0;
+}
+
+.teaching-chat-shell .teaching-chat-drawer-handle svg {
+  transition: transform 0.22s ease;
+}
+
+/* 收起时箭头翻转向右，提示"向右展开"。 */
+.teaching-chat-shell .teaching-chat-drawer-handle:not(.open) svg {
+  transform: rotate(180deg);
+}
+
+@media (max-width: 1100px) {
+  /* 窄屏历史栏是覆盖式抽屉，开关走顶栏历史按钮和遮罩，不渲染边缘拉手。 */
+  .teaching-chat-shell .teaching-chat-drawer-handle {
+    display: none;
+  }
 }
 
 .teaching-chat-shell .teaching-live-header {
   flex: 0 0 auto;
-  padding: 14px max(24px, calc((100vw - 980px) / 2)) 8px;
+  /* 用 100% 而不是 100vw：侧栏打开时主列变窄，按视口算会把内容列挤偏。 */
+  padding: 14px max(24px, calc((100% - 980px) / 2)) 8px;
   color: #0f172a;
   border-bottom: 1px solid rgba(241, 245, 249, 0.96);
   background: rgba(255, 255, 255, 0.96);
@@ -4504,6 +4572,66 @@ h1, h2, h3, h4, h5, h6 {
   cursor: pointer;
 }
 
+/* 主列承载 header + 消息滚动区 + 输入栏；左侧历史栏与主列并排，形成经典的会话布局。 */
+.teaching-chat-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.teaching-chat-drawer-sync {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+/* 宽屏：历史栏常驻左侧，不再用抽屉遮罩；窄屏保持原有抽屉交互。 */
+@media (min-width: 1101px) {
+  .teaching-chat-shell {
+    flex-direction: row;
+  }
+
+  .teaching-chat-shell .teaching-chat-drawer-backdrop {
+    display: none;
+  }
+
+  .teaching-chat-shell .teaching-chat-drawer {
+    position: relative;
+    top: auto;
+    left: auto;
+    bottom: auto;
+    flex: 0 0 264px;
+    width: 264px;
+    align-self: stretch;
+    transform: none;
+    transition: none;
+    box-shadow: none;
+    border-top: 0;
+    border-bottom: 0;
+    border-left: 0;
+    background: #fbfdfc;
+    padding: 16px 12px;
+  }
+
+  .teaching-chat-shell .teaching-chat-drawer:not(.open) {
+    display: none;
+  }
+
+  .teaching-chat-shell .teaching-chat-drawer-close {
+    display: none;
+  }
+
+  /* 常驻侧栏下顶栏的历史按钮退化为收起/展开开关，视觉弱化。 */
+  .teaching-chat-shell .teaching-chat-drawer-trigger {
+    opacity: 0.72;
+  }
+}
+
 .teaching-chat-shell .teaching-chat-drawer-list {
   min-height: 0;
   overflow-y: auto;
@@ -4517,6 +4645,23 @@ h1, h2, h3, h4, h5, h6 {
   border: 1px solid rgba(226, 232, 240, 0.92);
   background: #ffffff;
   padding: 12px;
+}
+
+/* 历史栏分页按钮：与条目卡片同风格的轻量次级按钮。 */
+.teaching-chat-shell .teaching-chat-drawer-more {
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: 12px;
+  border: 1px dashed rgba(148, 163, 184, 0.6);
+  background: transparent;
+  color: #475569;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.teaching-chat-shell .teaching-chat-drawer-more:disabled {
+  color: #94a3b8;
+  cursor: default;
 }
 
 .teaching-chat-shell .teaching-chat-drawer-item strong,
@@ -4632,7 +4777,7 @@ h1, h2, h3, h4, h5, h6 {
   min-height: 0;
   gap: 12px;
   max-height: none;
-  padding: 18px max(24px, calc((100vw - 980px) / 2)) 152px;
+  padding: 18px max(24px, calc((100% - 980px) / 2)) 152px;
   overflow-y: auto;
   scroll-padding-top: 96px;
   scroll-padding-bottom: 164px;
@@ -4942,7 +5087,7 @@ h1, h2, h3, h4, h5, h6 {
   margin-top: auto;
   grid-template-columns: 1fr;
   gap: 10px;
-  padding: 8px max(24px, calc((100vw - 980px) / 2)) 16px;
+  padding: 8px max(24px, calc((100% - 980px) / 2)) 16px;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.24) 0%, #ffffff 22%);
   border-top: 1px solid rgba(241, 245, 249, 0.98);
   backdrop-filter: blur(10px);
@@ -4973,6 +5118,11 @@ h1, h2, h3, h4, h5, h6 {
   font-size: 15px;
   line-height: 1.65;
   resize: none;
+}
+
+/* 聚焦时不再出现浏览器默认蓝色轮廓（老板要求高亮取消）；容器边框保持常亮浅灰，视觉更安静 */
+.teaching-chat-shell .teaching-composer-field textarea:focus {
+  outline: none;
 }
 
 .teaching-chat-shell .teaching-composer-field textarea::placeholder {
@@ -5150,11 +5300,46 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .teaching-chat-shell .teaching-answer-layout {
+  /* 单列布局：回答全宽阅读，执行与证据作为折叠区放在回答下方，不再左右分栏。 */
   display: grid;
-  grid-template-columns: minmax(0, 760px) minmax(280px, 340px);
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
-  gap: 20px;
-  width: min(100%, 1120px);
+  gap: 12px;
+  width: 100%;
+}
+
+/* 回答卡上方的速度徽标行：展示首字耗时与全程耗时，来自本浏览器实测的 TTFT 数据。 */
+.teaching-speed-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.teaching-speed-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(226, 232, 240, 0.92);
+  background: #f8fafc;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.teaching-speed-chip.good {
+  border-color: rgba(16, 185, 129, 0.28);
+  background: #ecfdf5;
+  color: #047857;
+}
+
+/* ◆ 强调标记渲染出的加粗片段。 */
+.teaching-emphasis {
+  color: #0f172a;
+  font-weight: 700;
 }
 
 .teaching-chat-shell .teaching-answer-content {
@@ -5183,8 +5368,8 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .teaching-chat-shell .teaching-evidence-inspector {
-  position: sticky;
-  top: 84px;
+  /* 单列布局下证据折叠区跟随回答文档流，不再 sticky 悬浮。 */
+  position: static;
   min-width: 0;
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-tool);
@@ -6135,164 +6320,673 @@ h1, h2, h3, h4, h5, h6 {
   gap: 20px;
 }
 
-.mcp-page-grid {
+/*
+ * MCP 接入页：仿 DeepSeek 开放平台的设计语言——浅灰页面、白色细边卡片、
+ * 大数字概览、分隔行式密钥列表、深色配置代码块。蓝色 #4D6BFE 仅作为本页主操作色。
+ */
+.mcp-page {
   display: grid;
-  grid-template-columns: minmax(360px, 0.9fr) minmax(460px, 1.1fr);
+  gap: 16px;
+}
+
+.mcp-columns {
+  display: grid;
+  grid-template-columns: minmax(380px, 1fr) minmax(420px, 1.08fr);
   gap: 16px;
   align-items: start;
 }
 
-.mcp-config-card,
-.mcp-result-card,
-.mcp-identity-card {
+.mcp-card {
   min-width: 0;
+  padding: 20px 22px 22px;
+  display: grid;
+  gap: 16px;
+  background: #ffffff;
+  border: 1px solid #e5e8ec;
+  border-radius: 12px;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
 }
 
-.mcp-identity-strip {
+.mcp-card-head h2 {
+  margin: 0;
+  color: #171a20;
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.mcp-card-head p {
+  margin: 4px 0 0;
+  color: #8a919f;
+  font-size: 13px;
+}
+
+/* 账号概览：大数字信息卡 */
+.mcp-overview {
+  display: grid;
+  gap: 12px;
+  padding: 20px 22px;
+  background: #ffffff;
+  border: 1px solid #e5e8ec;
+  border-radius: 12px;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+}
+
+.mcp-overview-stats {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.8fr) minmax(130px, 0.7fr) minmax(220px, 1.2fr);
+  gap: 12px;
+}
+
+.mcp-stat {
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px;
+  border: 1px solid #eef0f3;
+  border-radius: 10px;
+  background: #fafbfc;
+}
+
+.mcp-stat > span {
+  color: #8a919f;
+  font-size: 12px;
+}
+
+.mcp-stat strong {
+  color: #171a20;
+  font-size: 19px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.mcp-stat strong em {
+  margin-left: 8px;
+  color: #8a919f;
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 500;
+}
+
+.mcp-stat strong.mono,
+.mcp-code,
+.mcp-kv code,
+.mcp-secret-callout code,
+.mcp-key-row-meta code {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", monospace;
+}
+
+.mcp-stat strong.mono {
+  font-size: 13px;
+  font-weight: 500;
+  color: #41474f;
+  line-height: 1.5;
+}
+
+/* 凭证边界折叠说明 */
+.mcp-overview-note {
+  border-top: 1px solid #f1f3f5;
+  padding-top: 4px;
+}
+
+.mcp-overview-note summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  margin-left: -8px;
+  border-radius: 8px;
+  color: #5b6472;
+  font-size: 13px;
+  font-weight: 550;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.mcp-overview-note summary::-webkit-details-marker {
+  display: none;
+}
+
+.mcp-overview-note summary:hover {
+  background: #f4f6f9;
+  color: #171a20;
+}
+
+.mcp-overview-note-body p {
+  margin: 6px 0 10px;
+  color: #5b6472;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.mcp-overview-policies {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
 }
 
-.mcp-identity-strip > div,
-.mcp-test-meta > div {
+.mcp-overview-policies span {
   display: grid;
-  gap: 5px;
-  padding: 12px 14px;
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius-tool);
-  background: var(--surface-subtle);
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid #eef0f3;
+  border-radius: 10px;
+  background: #fafbfc;
 }
 
-.mcp-identity-strip span,
-.mcp-test-meta span {
-  color: var(--slate);
+.mcp-overview-policies strong {
+  color: #171a20;
+  font-size: 12.5px;
+}
+
+.mcp-overview-policies em {
+  color: #8a919f;
+  font-size: 12px;
+  font-style: normal;
+  line-height: 1.55;
+}
+
+/* 创建条：说明一行 + 右侧动作 */
+.mcp-create {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border: 1px solid #eef0f3;
+  border-radius: 10px;
+  background: #fafbfc;
+}
+
+.mcp-create-copy {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.mcp-create-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #171a20;
+  font-size: 13.5px;
+  font-weight: 650;
+}
+
+.mcp-create-copy p {
+  margin: 0;
+  color: #8a919f;
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.mcp-create-copy code {
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: #f1f3f6;
+  color: #41474f;
   font-size: 12px;
 }
 
-.mcp-identity-strip strong,
-.mcp-test-meta strong {
-  color: var(--navy);
-  font-size: 14px;
+.mcp-create-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* 本页按钮体系：DeepSeek 蓝主操作 + 中性次操作 */
+.mcp-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 1px solid #dde1e8;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #41474f;
+  font-size: 13px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.mcp-btn:hover:not(:disabled) {
+  border-color: #c8cdd6;
+  background: #f7f8fa;
+  color: #171a20;
+}
+
+.mcp-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.mcp-btn--primary {
+  border-color: #4d6bfe;
+  background: #4d6bfe;
+  color: #ffffff;
+}
+
+.mcp-btn--primary:hover:not(:disabled) {
+  border-color: #3f5be8;
+  background: #3f5be8;
+  color: #ffffff;
+}
+
+.mcp-btn--small {
+  padding: 5px 10px;
+  font-size: 12px;
+  border-radius: 7px;
+}
+
+.mcp-btn--danger-ghost:hover:not(:disabled) {
+  border-color: #f3c1c1;
+  background: #fef5f5;
+  color: #d54545;
+}
+
+.mcp-btn--on-dark {
+  border-color: rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.08);
+  color: #e8eaf0;
+}
+
+.mcp-btn--on-dark:hover:not(:disabled) {
+  border-color: rgba(255, 255, 255, 0.4);
+  background: rgba(255, 255, 255, 0.14);
+  color: #ffffff;
+}
+
+/* 密钥列表：分隔行 */
+.mcp-vault {
+  display: grid;
+  gap: 10px;
+}
+
+.mcp-vault-head h3,
+.mcp-config-head h3,
+.mcp-test-head h3 {
+  margin: 0;
+  color: #171a20;
+  font-size: 14.5px;
+  font-weight: 650;
+}
+
+.mcp-vault-head h3 em {
+  margin-left: 6px;
+  color: #8a919f;
+  font-size: 12.5px;
+  font-style: normal;
+  font-weight: 500;
+}
+
+.mcp-secret-callout {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid #d9e0ff;
+  border-radius: 10px;
+  background: #f3f6ff;
+}
+
+.mcp-secret-callout-copy {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.mcp-secret-callout-copy span {
+  color: #4d6bfe;
+  font-size: 12px;
+  font-weight: 550;
+}
+
+.mcp-secret-callout code {
+  color: #26304a;
+  font-size: 12.5px;
   overflow-wrap: anywhere;
 }
 
-.mcp-policy-note {
-  margin-top: 12px;
-  padding: 10px 12px;
-  border: 1px solid rgba(15, 118, 110, 0.16);
-  border-radius: var(--radius-tool);
-  background: #f0fdfa;
-}
-
-.mcp-policy-note summary {
-  cursor: pointer;
-  color: #0f766e;
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.mcp-policy-note p {
-  margin: 8px 0 0;
-  color: var(--navy-mid);
-  font-size: 13px;
-  line-height: 1.7;
-}
-
-.mcp-sandbox-note {
-  background: #f8fafc;
-  border-color: rgba(79, 70, 229, 0.16);
-}
-
-.mcp-sandbox-note summary {
-  color: #4338ca;
-}
-
-.mcp-sandbox-grid {
+.mcp-key-list {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  margin-top: 10px;
+  max-height: 430px;
+  overflow-y: auto;
 }
 
-.mcp-sandbox-grid span {
+.mcp-key-row {
   display: grid;
-  gap: 4px;
-  padding: 9px 10px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  border-radius: 8px;
-  background: #ffffff;
+  gap: 5px;
+  padding: 11px 2px;
+  border-bottom: 1px solid #f1f3f5;
 }
 
-.mcp-sandbox-grid strong {
-  color: var(--navy);
+.mcp-key-row:last-child {
+  border-bottom: 0;
+}
+
+.mcp-key-row:hover {
+  background: #fafbfc;
+}
+
+.mcp-key-row-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.mcp-key-row-main strong {
+  color: #171a20;
+  font-size: 13.5px;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcp-key-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   font-size: 12px;
-  line-height: 1.3;
+  color: #8a919f;
 }
 
-.mcp-sandbox-grid em {
-  color: var(--slate);
-  font-size: 11px;
+.mcp-key-status i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #c2c8d1;
+}
+
+.mcp-key-status.ok {
+  color: #16a34a;
+}
+
+.mcp-key-status.ok i {
+  background: #16a34a;
+}
+
+.mcp-key-row-main .mcp-btn {
+  margin-left: auto;
+}
+
+.mcp-key-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  color: #8a919f;
+  font-size: 12px;
+}
+
+.mcp-key-row-meta code {
+  color: #41474f;
+  font-size: 12px;
+}
+
+.mcp-key-row-meta em {
   font-style: normal;
-  line-height: 1.45;
 }
 
-.mcp-test-panel,
-.mcp-config-panel {
+/* 连接测试 */
+.mcp-test {
   display: grid;
-  gap: 14px;
-}
-
-.mcp-test-panel {
-  margin-bottom: 18px;
-  padding-bottom: 18px;
-  border-bottom: 1px solid var(--slate-lightest);
+  gap: 12px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #f1f3f5;
 }
 
 .mcp-test-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.mcp-test-head p {
+  margin: 4px 0 0;
+  color: #8a919f;
+  font-size: 12.5px;
+  line-height: 1.6;
+  max-width: 420px;
+}
+
+.mcp-test-result {
+  display: grid;
+  gap: 10px;
+}
+
+.mcp-test-ok {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 12px;
+  border: 1px solid #cdeed8;
+  border-radius: 8px;
+  background: #f2fcf5;
+  color: #15803d;
+  font-size: 13px;
+  font-weight: 550;
+}
+
+.mcp-tool-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.mcp-tool-chips span {
+  display: inline-flex;
+  max-width: 240px;
+  padding: 4px 10px;
+  border: 1px solid #e7eaef;
+  border-radius: 999px;
+  background: #fafbfc;
+  color: #41474f;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* MCP 配置 */
+.mcp-config {
+  display: grid;
+  gap: 12px;
+}
+
+.mcp-config-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
 
-.mcp-test-head h2 {
-  margin: 0;
-  color: var(--navy);
-  font-size: 18px;
-  font-weight: 750;
+.mcp-profile-pill {
+  padding: 3px 10px;
+  border: 1px solid #dbe4ff;
+  border-radius: 999px;
+  background: #f3f6ff;
+  color: #4d6bfe;
+  font-size: 12px;
+  font-weight: 600;
 }
 
-.mcp-test-result {
+.mcp-config-body {
   display: grid;
-  gap: 12px;
+  gap: 14px;
 }
 
-.mcp-test-meta {
+.mcp-kv {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 10px;
 }
 
-.mcp-tool-chip-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 7px;
+.mcp-kv > div {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid #eef0f3;
+  border-radius: 10px;
+  background: #fafbfc;
+  min-width: 0;
 }
 
-.mcp-tool-chip-list span {
-  display: inline-flex;
-  max-width: 220px;
-  padding: 5px 9px;
-  border: 1px solid rgba(37, 99, 235, 0.16);
-  border-radius: 999px;
-  background: var(--blue-subtle);
-  color: var(--blue);
+.mcp-kv span {
+  color: #8a919f;
   font-size: 12px;
-  font-weight: 650;
+}
+
+.mcp-kv code {
+  color: #26304a;
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+.mcp-exposure {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.mcp-exposure-column {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+  padding: 12px 14px;
+  border: 1px solid #eef0f3;
+  border-radius: 10px;
+  background: #fafbfc;
+}
+
+.mcp-exposure-column strong {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #171a20;
+  font-size: 13px;
+}
+
+.mcp-exposure-column strong em {
+  color: #8a919f;
+  font-size: 11.5px;
+  font-style: normal;
+  font-weight: 500;
+}
+
+.mcp-exposure-column > span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #41474f;
+  font-size: 12.5px;
+}
+
+.mcp-exposure-column > span.none {
+  color: #a3aab6;
+}
+
+.mcp-exposure-column > span em {
+  padding: 1px 7px;
+  border: 1px solid #dbe4ff;
+  border-radius: 999px;
+  background: #f3f6ff;
+  color: #4d6bfe;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 600;
+}
+
+.mcp-layers {
+  display: grid;
+  gap: 8px;
+}
+
+.mcp-layer-row {
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid #eef0f3;
+  border-radius: 10px;
+  background: #fafbfc;
+}
+
+.mcp-layer-row strong {
+  color: #171a20;
+  font-size: 13px;
+}
+
+.mcp-layer-row span {
+  color: #5b6472;
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.mcp-layer-row em {
+  color: #8a919f;
+  font-size: 12px;
+  font-style: normal;
+}
+
+/* 深色配置代码块 */
+.mcp-code-block {
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  border: 1px solid #23272f;
+  border-radius: 10px;
+  background: #0f1115;
+}
+
+.mcp-code-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  background: #161a22;
+}
+
+.mcp-code-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #4d6bfe;
+}
+
+.mcp-code-head strong {
+  color: #d7dae0;
+  font-size: 12.5px;
+  font-weight: 550;
+}
+
+.mcp-code-head .mcp-btn {
+  margin-left: auto;
+}
+
+.mcp-code {
+  margin: 0;
+  padding: 14px 16px;
+  max-height: 340px;
+  overflow: auto;
+  color: #cdd2db;
+  font-size: 12.5px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.mcp-empty {
+  padding: 20px;
+  border: 1px dashed #e3e7ed;
+  border-radius: 10px;
+  background: #fcfcfd;
+  color: #8a919f;
+  font-size: 13px;
+  line-height: 1.7;
+  text-align: center;
 }
 
 ::-webkit-scrollbar {
@@ -6322,9 +7016,10 @@ h1, h2, h3, h4, h5, h6 {
     grid-template-columns: 1fr;
   }
 
-  .mcp-page-grid,
-  .mcp-identity-strip,
-  .mcp-test-meta {
+  .mcp-columns,
+  .mcp-overview-stats,
+  .mcp-overview-policies,
+  .mcp-exposure {
     grid-template-columns: 1fr;
   }
 

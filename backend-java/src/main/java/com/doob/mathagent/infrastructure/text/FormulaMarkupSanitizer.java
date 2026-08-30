@@ -56,9 +56,14 @@ public final class FormulaMarkupSanitizer {
      */
     private static final Pattern TRAILING_EMPTY_DISPLAY_PAIR = Pattern.compile(
             "(?m)(?<!\\\\)(\\$\\$[^$\\r\\n]*?\\$\\$)(?:\\$\\$)+\\s*$");
+    /** Model output can duplicate the opening delimiter between two enumerated atoms, for example `$a、$b$`. */
+    private static final Pattern BROKEN_ADJACENT_INLINE_SPANS = Pattern.compile(
+            "\\$([^$\\r\\n]+)(、|，|,)\\$([^$\\r\\n]+)\\$");
+    /** A closing/opening inline delimiter can lose its separating space before a standalone TeX operator. */
+    private static final Pattern ADJACENT_INLINE_OPERATOR_SPANS = Pattern.compile(
+            "(\\$[^$\\r\\n]+)\\$\\$(\\\\(?:times|cdot))\\$");
     /** CJK words are valid prose, but raw CJK inside TeX math is an undefined control/input in XeLaTeX. */
     private static final Pattern CJK_TEXT_RUN = Pattern.compile("[\\u3400-\\u4DBF\\u4E00-\\u9FFF\\uF900-\\uFAFF]+");
-
     private FormulaMarkupSanitizer() {
     }
 
@@ -70,6 +75,15 @@ public final class FormulaMarkupSanitizer {
             return value == null ? "" : value.strip();
         }
         String normalized = normalizeLegacyLatexEscapes(value);
+        normalized = normalizeAdjacentInlineOperatorSpans(normalized);
+        // A complete model-authored line can contain several independent inline formulas. Once every formula is
+        // already delimited and no prose segment carries a bare math transport form, the later heuristic wrappers
+        // have no legitimate work and can only risk crossing a closed delimiter boundary.
+        if (hasOnlyCanonicalDelimitedMath(normalized)) {
+            return normalized.strip();
+        }
+        normalized = normalizeBrokenAdjacentInlineSpans(normalized);
+        normalized = normalizeUnpairedInlineDollarSigns(normalized);
         normalized = normalizeTrailingEmptyDisplayPair(normalized);
         normalized = normalizeFractionAndRadicalCommands(normalized);
         normalized = replaceEnvironment(normalized);
@@ -91,6 +105,98 @@ public final class FormulaMarkupSanitizer {
         normalized = wrapMatches(normalized, VECTOR_COORDINATE_EQUATION);
         normalized = wrapMatches(normalized, BARE_VECTOR_OR_OPERATOR_COMMAND);
         return cleanupFractionMathDelimiters(normalized).strip();
+    }
+
+    private static boolean hasOnlyCanonicalDelimitedMath(String value) {
+        if (value.contains("\\[") || value.contains("\\]") || value.contains("\\(") || value.contains("\\)")
+                || value.indexOf('√') >= 0 || value.indexOf('⊥') >= 0 || value.indexOf('∥') >= 0
+                || value.indexOf('‖') >= 0 || value.indexOf('∠') >= 0) {
+            return false;
+        }
+        boolean math = false;
+        boolean hasDelimiter = false;
+        boolean cjkInsideMath = false;
+        StringBuilder prose = new StringBuilder();
+        for (int index = 0; index < value.length(); index += 1) {
+            if (value.startsWith("$$", index)) {
+                math = !math;
+                hasDelimiter = true;
+                index += 1;
+                continue;
+            }
+            char character = value.charAt(index);
+            if (character == '$' && (index == 0 || value.charAt(index - 1) != '\\')) {
+                math = !math;
+                hasDelimiter = true;
+                continue;
+            }
+            if (math && CJK_TEXT_RUN.matcher(String.valueOf(character)).matches()) {
+                cjkInsideMath = true;
+            }
+            if (!math) {
+                prose.append(character);
+            }
+        }
+        if (!hasDelimiter || math || cjkInsideMath || value.contains("\\perp") || value.contains("\\parallel")
+                || value.chars().anyMatch(character -> "⁰¹²³⁴⁵⁶⁷⁸⁹₀₁₂₃₄₅₆₇₈₉±×÷".indexOf(character) >= 0)) {
+            return false;
+        }
+        String outsideMath = prose.toString();
+        return !BARE_COORDINATE.matcher(outsideMath).find()
+                && !BARE_FRACTION_COMMAND.matcher(outsideMath).find()
+                && !BARE_VECTOR_OR_OPERATOR_COMMAND.matcher(outsideMath).find()
+                && !VECTOR_COORDINATE_EQUATION.matcher(outsideMath).find()
+                && !BARE_FORMULA.matcher(outsideMath).find();
+    }
+
+    private static String normalizeUnpairedInlineDollarSigns(String value) {
+        StringBuilder normalized = new StringBuilder(value.length());
+        boolean inlineMathOpen = false;
+        for (int index = 0; index < value.length(); index += 1) {
+            char current = value.charAt(index);
+            boolean escaped = index > 0 && value.charAt(index - 1) == '\\';
+            boolean displayDelimiter = current == '$' && index + 1 < value.length()
+                    && value.charAt(index + 1) == '$' && !escaped;
+            if (displayDelimiter) {
+                normalized.append("$$");
+                index += 1;
+                continue;
+            }
+            if (current == '$' && !escaped) {
+                inlineMathOpen = !inlineMathOpen;
+            }
+            normalized.append(current);
+        }
+        if (inlineMathOpen) {
+            int lastInlineDollar = normalized.lastIndexOf("$");
+            normalized.replace(lastInlineDollar, lastInlineDollar + 1, "\\$");
+        }
+        return normalized.toString();
+    }
+
+    private static String normalizeBrokenAdjacentInlineSpans(String value) {
+        Matcher matcher = BROKEN_ADJACENT_INLINE_SPANS.matcher(value);
+        StringBuffer buffer = new StringBuffer();
+        while (matcher.find()) {
+            matcher.appendReplacement(buffer, Matcher.quoteReplacement(
+                    "$" + matcher.group(1) + matcher.group(2) + matcher.group(3) + "$"));
+        }
+        matcher.appendTail(buffer);
+        return buffer.toString();
+    }
+
+    /**
+     * Repairs the unambiguous transport form {@code $a$$\times$} as {@code $a$ $\times$}. The two original inline
+     * math spans remain independent, so this does not combine or reinterpret the teacher-authored expression.
+     */
+    private static String normalizeAdjacentInlineOperatorSpans(String value) {
+        Matcher matcher = ADJACENT_INLINE_OPERATOR_SPANS.matcher(value);
+        StringBuffer buffer = new StringBuffer();
+        while (matcher.find()) {
+            matcher.appendReplacement(buffer, Matcher.quoteReplacement(matcher.group(1) + "$ $" + matcher.group(2) + "$"));
+        }
+        matcher.appendTail(buffer);
+        return buffer.toString();
     }
 
     /**
@@ -153,8 +259,8 @@ public final class FormulaMarkupSanitizer {
         normalized = normalized.replaceAll("(?<![A-Za-z])1\\s*\\+\\s*k\\s*/\\s*1\\s*-\\s*k(?![A-Za-z])",
                 "\\\\frac{1+k}{1-k}");
         normalized = normalized.replaceAll("(?<![A-Za-z])\\\\sqrt\\s+([A-Za-z0-9]+)", "\\\\sqrt{$1}");
-        // JSON/model boundaries sometimes split the TeX command as "\\ rac" or "\\  rac".
-        // Collapse that transport whitespace before formula wrapping so the renderer always receives \\frac.
+        // JSON/model boundaries may encode the lost transport whitespace as a literal \n, \r, or \t before `rac`.
+        normalized = normalized.replaceAll("\\\\[nrt]\\s*rac\\b", "\\\\frac");
         normalized = normalized.replaceAll("\\\\\\s+rac\\b", "\\\\frac");
         normalized = normalized.replaceAll("(?<![A-Za-z])\\s+rac\\b", "\\\\frac");
         // Keep the compact exponent form expected by the shared frontend renderer; both `^2` and `^{2}`

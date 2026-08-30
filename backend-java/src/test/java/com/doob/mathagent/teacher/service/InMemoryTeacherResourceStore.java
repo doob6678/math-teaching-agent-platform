@@ -68,6 +68,50 @@ public class InMemoryTeacherResourceStore implements TeacherResourceStore {
                 .toList();
     }
 
+    @Override
+    public List<TeacherFileDocument> listSearchableFileDocuments(
+            String tenantId,
+            String viewerRole,
+            String viewerSubjectId,
+            List<String> rootDocumentIds,
+            int limit) {
+        java.util.Set<String> roots = new java.util.LinkedHashSet<>(rootDocumentIds == null ? List.of() : rootDocumentIds);
+        return listSearchable(tenantId, viewerRole, viewerSubjectId).stream()
+                .filter(document -> roots.isEmpty() || roots.contains(document.documentId()))
+                .limit(Math.max(1, Math.min(limit, 256)))
+                .map(document -> new TeacherFileDocument(
+                        document.documentId(),
+                        document.documentId(),
+                        "",
+                        "",
+                        document.documentId(),
+                        "test",
+                        document))
+                .toList();
+    }
+
+    @Override
+    public List<TeacherFileDocument> listSearchableFileDocumentsByIds(
+            String tenantId,
+            String viewerRole,
+            String viewerSubjectId,
+            List<String> fileDocumentIds,
+            int limit) {
+        java.util.Set<String> ids = new java.util.LinkedHashSet<>(fileDocumentIds == null ? List.of() : fileDocumentIds);
+        return listSearchable(tenantId, viewerRole, viewerSubjectId).stream()
+                .filter(document -> ids.contains(document.documentId()))
+                .limit(Math.max(1, Math.min(limit, 12)))
+                .map(document -> new TeacherFileDocument(
+                        document.documentId(),
+                        document.documentId(),
+                        "",
+                        "",
+                        document.documentId(),
+                        "test",
+                        document))
+                .toList();
+    }
+
     /**
      * Finds a resource document by tenant and id.
      *

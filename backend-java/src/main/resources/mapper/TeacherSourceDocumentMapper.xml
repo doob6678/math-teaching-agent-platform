@@ -1,0 +1,166 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.doob.mathagent.teacher.document.mapper.TeacherSourceDocumentMapper">
+    <select id="selectActiveFileByIdentity" resultType="com.doob.mathagent.teacher.document.entity.TeacherSourceDocumentEntity">
+        SELECT * FROM source_document
+        WHERE tenant_id = #{tenantId}
+          AND source_type = 'feishu'
+          AND JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.documentKind')) = 'FILE'
+          AND JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.rootDocumentId')) = #{rootDocumentId}
+          AND (
+               (#{providerItemId} &lt;&gt; '' AND JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.providerItemId')) = #{providerItemId})
+               OR JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.fileIdentityHash')) IN (#{fileIdentityHash}, #{pathIdentityHash})
+               OR (#{sourcePath} &lt;&gt; '' AND JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.sourcePath')) = #{sourcePath})
+          )
+        ORDER BY id ASC LIMIT 1
+    </select>
+
+    <select id="selectSearchableRootDocuments" resultType="com.doob.mathagent.teacher.document.entity.TeacherSourceDocumentEntity">
+        SELECT root_doc.* FROM source_document root_doc
+        WHERE root_doc.tenant_id = #{tenantId}
+          AND root_doc.sync_status &lt;&gt; 'archived'
+          AND (root_doc.metadata_json IS NULL
+               OR JSON_UNQUOTE(JSON_EXTRACT(root_doc.metadata_json, '$.documentKind')) &lt;&gt; 'FILE')
+          <choose>
+            <when test="viewerRole == 'admin'"></when>
+            <when test="viewerRole == 'teacher'">
+              AND (root_doc.created_by = #{viewerSubjectId}
+                   OR root_doc.permission_scope IN ('TEACHER_SHARED', 'TENANT_PUBLIC', 'PUBLIC_TEXTBOOK', 'MATH_VIP', 'CLASS_AUTHORIZED'))
+            </when>
+            <when test="viewerRole == 'student'">
+              AND root_doc.permission_scope IN ('TENANT_PUBLIC', 'PUBLIC_TEXTBOOK', 'MATH_VIP', 'CLASS_AUTHORIZED')
+            </when>
+            <otherwise> AND 1 = 0 </otherwise>
+          </choose>
+        ORDER BY root_doc.title ASC, root_doc.id ASC
+    </select>
+
+    <select id="existsArchivedFileByRoot" resultType="boolean">
+        SELECT EXISTS(
+            SELECT 1 FROM source_document
+            WHERE tenant_id = #{tenantId}
+              AND source_type = 'feishu'
+              AND sync_status = 'archived'
+              AND JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.documentKind')) = 'FILE'
+              AND JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.rootDocumentId')) = #{rootDocumentId}
+        )
+    </select>
+
+    <select id="selectSearchableFiles" resultType="com.doob.mathagent.teacher.document.entity.TeacherSourceDocumentEntity">
+        SELECT file_doc.* FROM source_document file_doc
+        WHERE file_doc.tenant_id = #{tenantId}
+          AND file_doc.source_type = 'feishu'
+          AND file_doc.sync_status &lt;&gt; 'archived'
+          AND file_doc.parse_status IN ('parsed', 'completed')
+          AND file_doc.embedding_status IN ('ready', 'completed')
+          AND JSON_UNQUOTE(JSON_EXTRACT(file_doc.metadata_json, '$.documentKind')) = 'FILE'
+          AND JSON_UNQUOTE(JSON_EXTRACT(file_doc.metadata_json, '$.rootDocumentId')) IN
+          <foreach collection="rootDocumentIds" item="rootId" open="(" separator="," close=")">#{rootId}</foreach>
+          AND EXISTS (
+              SELECT 1 FROM source_document root_doc
+              WHERE root_doc.tenant_id = #{tenantId}
+                AND root_doc.id = CAST(JSON_UNQUOTE(JSON_EXTRACT(file_doc.metadata_json, '$.rootDocumentId')) AS UNSIGNED)
+                AND root_doc.sync_status &lt;&gt; 'archived'
+          )
+          <choose>
+            <when test="viewerRole == 'admin'">
+            </when>
+            <when test="viewerRole == 'teacher'">
+              AND (file_doc.created_by = #{viewerSubjectId}
+                   OR file_doc.permission_scope IN ('TEACHER_SHARED', 'TENANT_PUBLIC', 'PUBLIC_TEXTBOOK', 'MATH_VIP', 'CLASS_AUTHORIZED'))
+            </when>
+            <when test="viewerRole == 'student'">
+              AND file_doc.permission_scope IN ('TENANT_PUBLIC', 'PUBLIC_TEXTBOOK', 'MATH_VIP', 'CLASS_AUTHORIZED')
+            </when>
+            <otherwise> AND 1 = 0 </otherwise>
+          </choose>
+        ORDER BY file_doc.title ASC, file_doc.id ASC
+        LIMIT #{limit}
+    </select>
+
+    <select id="selectSearchableFilesByIds" resultType="com.doob.mathagent.teacher.document.entity.TeacherSourceDocumentEntity">
+        SELECT file_doc.* FROM source_document file_doc
+        WHERE file_doc.tenant_id = #{tenantId}
+          AND file_doc.source_type = 'feishu'
+          AND file_doc.sync_status &lt;&gt; 'archived'
+          AND file_doc.parse_status IN ('parsed', 'completed')
+          AND file_doc.embedding_status IN ('ready', 'completed')
+          AND JSON_UNQUOTE(JSON_EXTRACT(file_doc.metadata_json, '$.documentKind')) = 'FILE'
+          AND file_doc.id IN
+          <foreach collection="fileDocumentIds" item="fileId" open="(" separator="," close=")">CAST(#{fileId} AS UNSIGNED)</foreach>
+          <choose>
+            <when test="viewerRole == 'admin'"></when>
+            <when test="viewerRole == 'teacher'">
+              AND (file_doc.created_by = #{viewerSubjectId}
+                   OR file_doc.permission_scope IN ('TEACHER_SHARED', 'TENANT_PUBLIC', 'PUBLIC_TEXTBOOK', 'MATH_VIP', 'CLASS_AUTHORIZED'))
+            </when>
+            <when test="viewerRole == 'student'">
+              AND file_doc.permission_scope IN ('TENANT_PUBLIC', 'PUBLIC_TEXTBOOK', 'MATH_VIP', 'CLASS_AUTHORIZED')
+            </when>
+            <otherwise> AND 1 = 0 </otherwise>
+          </choose>
+        ORDER BY file_doc.id ASC
+        LIMIT #{limit}
+    </select>
+
+    <select id="selectFileDocumentsForIndexing" resultType="com.doob.mathagent.teacher.document.entity.TeacherSourceDocumentEntity">
+        SELECT file_doc.* FROM source_document file_doc
+        WHERE file_doc.tenant_id = #{tenantId}
+          AND file_doc.source_type = 'feishu'
+          AND file_doc.sync_status &lt;&gt; 'archived'
+          AND JSON_UNQUOTE(JSON_EXTRACT(file_doc.metadata_json, '$.documentKind')) = 'FILE'
+          AND JSON_UNQUOTE(JSON_EXTRACT(file_doc.metadata_json, '$.rootDocumentId')) = #{rootDocumentId}
+          <if test="afterFileDocumentId != null and afterFileDocumentId != ''">AND file_doc.id &gt; CAST(#{afterFileDocumentId} AS UNSIGNED)</if>
+        ORDER BY file_doc.id ASC
+        LIMIT #{limit}
+    </select>
+
+    <select id="selectMissingFileDocuments" resultType="com.doob.mathagent.teacher.document.entity.TeacherSourceDocumentEntity">
+        SELECT file_doc.* FROM source_document file_doc
+        WHERE file_doc.tenant_id = #{tenantId}
+          AND file_doc.source_type = 'feishu'
+          AND file_doc.sync_status &lt;&gt; 'archived'
+          AND JSON_UNQUOTE(JSON_EXTRACT(file_doc.metadata_json, '$.documentKind')) = 'FILE'
+          AND JSON_UNQUOTE(JSON_EXTRACT(file_doc.metadata_json, '$.rootDocumentId')) = #{rootDocumentId}
+          <if test="afterFileDocumentId != null and afterFileDocumentId != ''">AND file_doc.id &gt; CAST(#{afterFileDocumentId} AS UNSIGNED)</if>
+          <choose>
+            <when test="activeFileIdentityHashes != null and activeFileIdentityHashes.size() &gt; 0">
+              AND JSON_UNQUOTE(JSON_EXTRACT(file_doc.metadata_json, '$.fileIdentityHash')) NOT IN
+              <foreach collection="activeFileIdentityHashes" item="identityHash" open="(" separator="," close=")">#{identityHash}</foreach>
+            </when>
+            <otherwise></otherwise>
+          </choose>
+        ORDER BY file_doc.id ASC
+        LIMIT #{limit}
+    </select>
+
+    <update id="archiveFileDocument">
+        UPDATE source_document
+        SET sync_status = 'archived', parse_status = 'archived', embedding_status = 'archived',
+            metadata_json = JSON_SET(COALESCE(metadata_json, '{}'), '$.indexStatus', 'archived')
+        WHERE tenant_id = #{tenantId}
+          AND id = #{fileDocumentId}
+          AND source_type = 'feishu'
+          AND sync_status &lt;&gt; 'archived'
+          AND JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.documentKind')) = 'FILE'
+    </update>
+
+    <update id="archiveMissingFiles">
+        UPDATE source_document
+        SET sync_status = 'archived', parse_status = 'archived', embedding_status = 'archived'
+        WHERE tenant_id = #{tenantId}
+          AND source_type = 'feishu'
+          AND sync_status &lt;&gt; 'archived'
+          AND JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.documentKind')) = 'FILE'
+          AND JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.rootDocumentId')) = #{rootDocumentId}
+          <choose>
+            <when test="activeFileIdentityHashes != null and activeFileIdentityHashes.size() &gt; 0">
+              AND JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.fileIdentityHash')) NOT IN
+              <foreach collection="activeFileIdentityHashes" item="identityHash" open="(" separator="," close=")">#{identityHash}</foreach>
+            </when>
+            <otherwise></otherwise>
+          </choose>
+    </update>
+</mapper>

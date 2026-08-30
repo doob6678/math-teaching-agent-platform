@@ -20,14 +20,18 @@ import org.springframework.stereotype.Repository;
 public class MyBatisTeacherDocumentBlockStore implements TeacherDocumentBlockStore {
 
     private final TeacherDocumentBlockMapper mapper;
+    private final TeacherResourceBm25SearchEngine bm25SearchEngine;
 
     /**
      * Creates a MyBatis-backed block store.
      *
      * @param mapper document block mapper
      */
-    public MyBatisTeacherDocumentBlockStore(TeacherDocumentBlockMapper mapper) {
+    public MyBatisTeacherDocumentBlockStore(
+            TeacherDocumentBlockMapper mapper,
+            TeacherResourceBm25SearchEngine bm25SearchEngine) {
         this.mapper = mapper;
+        this.bm25SearchEngine = bm25SearchEngine;
     }
 
     /**
@@ -81,12 +85,65 @@ public class MyBatisTeacherDocumentBlockStore implements TeacherDocumentBlockSto
                             .eq(TeacherDocumentBlockEntity::getId, entity.getId())
                             .set(TeacherDocumentBlockEntity::getStatus, "inactive"));
         }
+        bm25SearchEngine.invalidateTenant(tenantId);
         return listByDocument(tenantId, documentId);
     }
 
-    /**
-     * Lists active blocks for a numeric source document.
-     */
+    @Override
+    public void completeFileReplacement(String tenantId, String fileDocumentId) {
+        bm25SearchEngine.invalidateTenant(tenantId);
+    }
+
+    @Override
+    public void beginFileReplacement(String tenantId, String fileDocumentId) {
+        Long sourceDocumentId = parseId(fileDocumentId);
+        if (sourceDocumentId == null || tenantId == null || tenantId.isBlank()) {
+            return;
+        }
+        bm25SearchEngine.invalidateTenant(tenantId);
+        mapper.retireActiveForFile(tenantId, sourceDocumentId);
+    }
+
+    @Override
+    public List<TeacherDocumentBlockResponse> replaceActiveBlockBatch(
+            String tenantId,
+            String fileDocumentId,
+            List<TeacherDocumentBlockResponse> blocks) {
+        Long sourceDocumentId = parseId(fileDocumentId);
+        if (sourceDocumentId == null || tenantId == null || tenantId.isBlank()
+                || blocks == null || blocks.isEmpty()) {
+            return List.of();
+        }
+        List<String> externalIds = blocks.stream()
+                .map(TeacherDocumentBlockResponse::externalBlockId)
+                .filter(value -> value != null && !value.isBlank())
+                .distinct()
+                .toList();
+        Map<String, TeacherDocumentBlockEntity> existingByExternalId = new LinkedHashMap<>();
+        if (!externalIds.isEmpty()) {
+            for (TeacherDocumentBlockEntity entity : mapper.selectByExternalIds(
+                    tenantId, sourceDocumentId, externalIds, Math.min(128, externalIds.size()))) {
+                if (entity.getExternalBlockId() != null && !entity.getExternalBlockId().isBlank()) {
+                    existingByExternalId.putIfAbsent(entity.getExternalBlockId(), entity);
+                }
+            }
+        }
+        for (TeacherDocumentBlockResponse block : blocks) {
+            TeacherDocumentBlockEntity entity = toEntity(block);
+            entity.setSourceDocumentId(sourceDocumentId);
+            entity.setStatus("active");
+            TeacherDocumentBlockEntity existing = existingByExternalId.get(block.externalBlockId());
+            if (existing != null) {
+                entity.setId(existing.getId());
+                mapper.updateById(entity);
+            } else {
+                mapper.insert(entity);
+            }
+        }
+        bm25SearchEngine.invalidateTenant(tenantId);
+        return blocks;
+    }
+    /** Lists active blocks for a numeric source document. */
     @Override
     public List<TeacherDocumentBlockResponse> listByDocument(String tenantId, String documentId) {
         Long sourceDocumentId = parseId(documentId);
@@ -123,6 +180,7 @@ public class MyBatisTeacherDocumentBlockStore implements TeacherDocumentBlockSto
                         .set(TeacherDocumentBlockEntity::getGraphNodeIdsJson, "[]")
                         .set(TeacherDocumentBlockEntity::getGraphTagNamesJson, "[]")
                         .set(TeacherDocumentBlockEntity::getStatus, "purged"));
+        bm25SearchEngine.invalidateTenant(tenantId);
     }
 
     /**
@@ -167,9 +225,105 @@ public class MyBatisTeacherDocumentBlockStore implements TeacherDocumentBlockSto
         return blocksByDocumentId;
     }
 
-    /**
-     * Converts a response to a MyBatis entity.
-     */
+    /** Returns selected active blocks for one FILE document by persisted block ids. */
+    @Override
+    public List<TeacherDocumentBlockResponse> listBlocksByIds(
+            String tenantId, String fileDocumentId, List<String> blockIds, int limit) {
+        Long sourceDocumentId = parseId(fileDocumentId);
+        List<Long> numericBlockIds = numericIds(blockIds);
+        if (sourceDocumentId == null || tenantId == null || tenantId.isBlank()
+                || numericBlockIds.isEmpty() || limit <= 0) {
+            return List.of();
+        }
+        return mapper.selectActiveByIds(
+                        tenantId,
+                        sourceDocumentId,
+                        numericBlockIds,
+                        Math.min(limit, 128))
+                .stream()
+                .map(MyBatisTeacherDocumentBlockStore::toResponse)
+                .toList();
+    }
+
+    /** Returns a bounded active block-order window from one FILE document. */
+    @Override
+    public List<TeacherDocumentBlockResponse> listEvidenceWindow(
+            String tenantId, String fileDocumentId, int centerBlockOrder, int radius, int limit) {
+        Long sourceDocumentId = parseId(fileDocumentId);
+        if (sourceDocumentId == null || tenantId == null || tenantId.isBlank()
+                || centerBlockOrder < 0 || radius < 0 || limit <= 0) {
+            return List.of();
+        }
+        int boundedRadius = Math.min(radius, 16);
+        return mapper.selectActiveWindow(
+                        tenantId,
+                        sourceDocumentId,
+                        Math.max(0, centerBlockOrder - boundedRadius),
+                        centerBlockOrder + boundedRadius,
+                        Math.min(limit, 64))
+                .stream()
+                .map(MyBatisTeacherDocumentBlockStore::toResponse)
+                .toList();
+    }
+
+    /** Returns one bounded active block page for a FILE document. */
+    @Override
+    public List<TeacherDocumentBlockResponse> listBlocksForFile(
+            String tenantId, String fileDocumentId, int limit, Integer afterBlockOrder) {
+        Long sourceDocumentId = parseId(fileDocumentId);
+        if (sourceDocumentId == null || tenantId == null || tenantId.isBlank() || limit <= 0) {
+            return List.of();
+        }
+        return mapper.selectActivePage(
+                        tenantId,
+                        sourceDocumentId,
+                        Math.min(limit, 512),
+                        afterBlockOrder)
+                .stream()
+                .map(MyBatisTeacherDocumentBlockStore::toResponse)
+                .toList();
+    }
+
+    /** Returns BM25-ranked blocks from the embedded Lucene index with live SQL authorization revalidation. */
+    @Override
+    public List<TeacherDocumentBlockResponse> searchFileBlocksByLexicalTerms(
+            String tenantId, String viewerRole, String viewerSubjectId, List<String> terms, int limit) {
+        return searchFileBlocksByLexicalTerms(
+                tenantId, viewerRole, viewerSubjectId, terms, limit,
+                com.doob.mathagent.teacher.search.TeacherResourceSearchFilter.EMPTY);
+    }
+
+    /** Returns BM25-ranked blocks with explicit FILE and permission filters applied in both snapshot and revalidation. */
+    @Override
+    public List<TeacherDocumentBlockResponse> searchFileBlocksByLexicalTerms(
+            String tenantId,
+            String viewerRole,
+            String viewerSubjectId,
+            List<String> terms,
+            int limit,
+            com.doob.mathagent.teacher.search.TeacherResourceSearchFilter filter) {
+        return bm25SearchEngine.search(tenantId, viewerRole, viewerSubjectId, terms, Math.min(limit, 96), filter)
+                .stream()
+                .map(MyBatisTeacherDocumentBlockStore::toResponse)
+                .toList();
+    }
+
+    /** Returns one active block per visible FILE from the SQL-bounded graph-tag route. */
+    @Override
+    public List<TeacherDocumentBlockResponse> searchFileBlocksByGraphTags(
+            String tenantId, String viewerRole, String viewerSubjectId, List<String> tagNames, int limit) {
+        List<String> normalizedTags = normalizedTerms(tagNames);
+        if (tenantId == null || tenantId.isBlank() || normalizedTags.isEmpty() || limit <= 0) {
+            return List.of();
+        }
+        return mapper.selectSearchableFileBlocksByGraphTags(
+                        tenantId, viewerRole, viewerSubjectId, normalizedTags, Math.min(limit, 96))
+                .stream()
+                .map(MyBatisTeacherDocumentBlockStore::toResponse)
+                .toList();
+    }
+
+    /** Converts a response to a MyBatis entity. */
     private static TeacherDocumentBlockEntity toEntity(TeacherDocumentBlockResponse block) {
         TeacherDocumentBlockEntity entity = new TeacherDocumentBlockEntity();
         entity.setId(parseId(block.blockId()));
@@ -222,6 +376,25 @@ public class MyBatisTeacherDocumentBlockStore implements TeacherDocumentBlockSto
                 entity.getStatus());
     }
 
+    private static List<String> normalizedTerms(List<String> values) {
+        return (values == null ? List.<String>of() : values).stream()
+                .filter(value -> value != null && !value.isBlank())
+                .map(String::strip)
+                .distinct()
+                .limit(32)
+                .toList();
+    }
+
+    private static List<Long> numericIds(List<String> values) {
+        List<Long> result = new ArrayList<>();
+        for (String value : values == null ? List.<String>of() : values) {
+            Long id = parseId(value);
+            if (id != null) {
+                result.add(id);
+            }
+        }
+        return result;
+    }
     private static String sourceKey(String externalBlockId, Long fallbackId) {
         if (externalBlockId != null && !externalBlockId.isBlank()) {
             return externalBlockId.strip();

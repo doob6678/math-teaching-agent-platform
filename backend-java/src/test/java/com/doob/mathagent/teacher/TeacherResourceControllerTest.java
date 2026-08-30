@@ -22,6 +22,7 @@ import com.doob.mathagent.teacher.search.TeacherResourceGraphAlignmentService;
 import com.doob.mathagent.teacher.service.TeacherResourceUploadService;
 import com.doob.mathagent.teacher.service.TeacherResourceService;
 import com.doob.mathagent.teacher.sync.TeacherSourceSyncCheckpointQueryService;
+import com.doob.mathagent.teacher.service.TeacherSourceFileReader;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncExecutionService;
 import com.doob.mathagent.teacher.service.TeacherSourceSyncJobService;
 import com.doob.mathagent.teacher.sync.TeacherSourceSyncProperties;
@@ -71,7 +72,7 @@ class TeacherResourceControllerTest {
             TeacherFeishuDownloadClient feishuDownloadClient,
             TeacherSourceSyncProperties syncProperties,
             InMemoryTeacherSourceSyncCheckpointStore checkpointStore) {
-        return new TeacherSourceSyncExecutionService(
+        TeacherSourceSyncExecutionService service = new TeacherSourceSyncExecutionService(
                 resourceStore,
                 jobStore,
                 blockStore,
@@ -79,6 +80,8 @@ class TeacherResourceControllerTest {
                 syncProperties,
                 checkpointStore,
                 TestVectorIndexService.successful(resourceStore, blockStore));
+        service.setSourceFileReader(new TeacherSourceFileReader(syncProperties));
+        return service;
     }
 
     private static TeacherResourceController controller(
@@ -502,7 +505,7 @@ class TeacherResourceControllerTest {
         InMemoryTeacherSourceSyncJobStore jobStore = new InMemoryTeacherSourceSyncJobStore();
         InMemoryTeacherSourceSyncCheckpointStore checkpointStore = new InMemoryTeacherSourceSyncCheckpointStore();
         FailsOnceThenSucceedsFeishuClient feishuClient =
-                new FailsOnceThenSucceedsFeishuClient(tempDir.resolve("feishu-resumed"));
+                new FailsOnceThenSucceedsFeishuClient();
         TeacherResourceController controller = controller(
                 TeacherResourceServiceFixture.service(store),
                 new TeacherSourceSyncJobService(store, jobStore),
@@ -539,7 +542,7 @@ class TeacherResourceControllerTest {
         assertThat(resumed.status()).isEqualTo("completed");
         assertThat(resumed.phase()).isEqualTo("download_completed");
         assertThat(checkpointStore.findByJobId("school-a", queued.jobId()).orElseThrow().downloadedItemsJson())
-                .contains("feishu-resumed");
+                .contains("\\\\feishu-staging\\\\resumed");
     }
 
     @Test
@@ -554,7 +557,7 @@ class TeacherResourceControllerTest {
                         store,
                         jobStore,
                         new InMemoryTeacherDocumentBlockStore(),
-                        new FailsOnceThenSucceedsFeishuClient(tempDir.resolve("feishu-resumed")),
+                        new FailsOnceThenSucceedsFeishuClient(),
                         testSyncProperties(),
                         checkpointStore),
                 null,
@@ -782,7 +785,7 @@ class TeacherResourceControllerTest {
                 java.util.List.of("derivative"),
                 new MockHttpServletRequest());
 
-        assertThat(response.retrievalMode()).isEqualTo("two_stage_doc_block_filtered");
+        assertThat(response.retrievalMode()).isEqualTo("two_stage_doc_block_filtered_file_rrf");
         assertThat(response.hits()).extracting(TeacherResourceBlockSearchResponse.Hit::blockId)
                 .containsExactly("block-vip");
     }
@@ -843,7 +846,7 @@ class TeacherResourceControllerTest {
                 null,
                 new MockHttpServletRequest());
 
-        assertThat(response.retrievalMode()).isEqualTo("two_stage_doc_block_filtered");
+        assertThat(response.retrievalMode()).isEqualTo("two_stage_doc_block_filtered_file_rrf");
         assertThat(response.hits()).extracting(TeacherResourceBlockSearchResponse.Hit::documentId)
                 .containsExactly("doc-qq");
         assertThat(response.hits().getFirst().sourceType()).isEqualTo("qq_bundle");
@@ -923,7 +926,7 @@ class TeacherResourceControllerTest {
                 null,
                 new MockHttpServletRequest());
 
-        assertThat(response.retrievalMode()).isEqualTo("two_stage_doc_block_filtered");
+        assertThat(response.retrievalMode()).isEqualTo("two_stage_doc_block_filtered_file_rrf");
         assertThat(response.hits()).extracting(TeacherResourceBlockSearchResponse.Hit::documentId)
                 .containsExactly("doc-generic");
         assertThat(response.hits()).extracting(TeacherResourceBlockSearchResponse.Hit::sourceType)
@@ -1136,12 +1139,7 @@ class TeacherResourceControllerTest {
 
     private static final class FailsOnceThenSucceedsFeishuClient implements TeacherFeishuDownloadClient {
 
-        private final Path savedPath;
         private int calls;
-
-        private FailsOnceThenSucceedsFeishuClient(Path savedPath) {
-            this.savedPath = savedPath;
-        }
 
         @Override
         public FeishuDownloadResult download(
@@ -1154,6 +1152,7 @@ class TeacherResourceControllerTest {
             if (calls == 1) {
                 throw new TeacherFeishuDownloadException("ProxyError: proxy connection reset", true);
             }
+            Path savedPath = stagingRoot.resolve("resumed").toAbsolutePath().normalize();
             try {
                 Files.createDirectories(savedPath);
                 Files.writeString(savedPath.resolve("resume-result.txt"), "Feishu resume downloaded text");

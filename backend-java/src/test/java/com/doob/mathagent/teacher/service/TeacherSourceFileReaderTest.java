@@ -18,7 +18,7 @@ class TeacherSourceFileReaderTest {
     @Test
     void registeredRootSurvivesReaderRecreationAndMissingRegisteredRootIsRejected() throws Exception {
         Path stagingRoot = tempDir.resolve("teacher-source-imports");
-        Path sourceRoot = tempDir.resolve("teacher-resource-uploads").resolve("document-1");
+        Path sourceRoot = stagingRoot.resolve("document-1");
         Files.createDirectories(sourceRoot);
         Files.writeString(sourceRoot.resolve("lesson.md"), "可读取的抛物线资料");
         TeacherSourceSyncProperties properties = properties(stagingRoot);
@@ -46,7 +46,7 @@ class TeacherSourceFileReaderTest {
 
     private static TeacherSourceSyncProperties properties(Path stagingRoot) {
         return new TeacherSourceSyncProperties(
-                "", stagingRoot.resolve("download.py"), stagingRoot.resolve("appkey"), stagingRoot,
-                stagingRoot.resolve("assets"), 1, 30);
+                "", stagingRoot.resolveSibling("download.py"), stagingRoot.resolveSibling("appkey"), stagingRoot,
+                stagingRoot.resolveSibling("teacher-assets"), 1, 30);
     }
 }

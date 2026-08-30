@@ -121,7 +121,7 @@ def main() -> None:
             row = _run_one(client, case, mode, args.limit)
             rows.append(row)
             with partial_rows_path.open("a", encoding="utf-8") as partial_rows:
-                partial_rows.write(json.dumps(row, ensure_ascii=False) + "\n")
+                partial_rows.write(json.dumps(row, ensure_ascii=True) + "\n")
             # Sampling every Nth completed request keeps the resource series real while preventing thousands of
             # sequential Docker CLI calls from dominating wall time and introducing unrelated tail noise.
             if request_index % sample_interval == 0 or request_index == len(modes) * len(cases) - 1:
@@ -434,12 +434,12 @@ def _write_outputs(
     (output_dir / "dataset_snapshot.json").write_text(json.dumps(dataset, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     (output_dir / "metrics.json").write_text(json.dumps(metrics, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     (output_dir / "corpus_inventory.json").write_text(json.dumps(inventory, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    (output_dir / "query_rows.jsonl").write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n", encoding="utf-8")
-    (output_dir / "resource_samples.jsonl").write_text("\n".join(json.dumps(sample.__dict__, ensure_ascii=False) for sample in resources) + "\n", encoding="utf-8")
+    (output_dir / "query_rows.jsonl").write_text("\n".join(json.dumps(row, ensure_ascii=True) for row in rows) + "\n", encoding="utf-8")
+    (output_dir / "resource_samples.jsonl").write_text("\n".join(json.dumps(sample.__dict__, ensure_ascii=True) for sample in resources) + "\n", encoding="utf-8")
     if sync_summary_path and sync_summary_path.exists():
         summary = json.loads(sync_summary_path.read_text(encoding="utf-8"))
         sanitized = {"resource_type": summary.get("resource_type"), "token": summary.get("token"), "url": summary.get("url"), "folder_name": summary.get("folder_name"), "stats": summary.get("stats"), "elapsed_ms": summary.get("elapsed_ms"), "failed_count": len(summary.get("failed_items") or [])}
-        (output_dir / "feishu_sync_evidence.json").write_text(json.dumps(sanitized, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        (output_dir / "feishu_sync_evidence.json").write_text(json.dumps(sanitized, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
     (output_dir / "summary.md").write_text(_markdown_summary(metrics), encoding="utf-8")
 
 

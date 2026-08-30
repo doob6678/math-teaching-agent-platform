@@ -37,7 +37,7 @@ public record TeacherSourceSyncProperties(
                 feishuDownloaderScript,
                 feishuAppkeyPath,
                 feishuStagingRoot,
-                feishuStagingRoot.resolve("_assets"),
+                defaultAssetStorageRoot(feishuStagingRoot),
                 feishuSmokeMaxFiles,
                 30);
     }
@@ -54,7 +54,7 @@ public record TeacherSourceSyncProperties(
                 feishuDownloaderScript,
                 feishuAppkeyPath,
                 feishuStagingRoot,
-                feishuStagingRoot.resolve("_assets"),
+                defaultAssetStorageRoot(feishuStagingRoot),
                 feishuSmokeMaxFiles,
                 feishuProcessTimeoutSeconds);
     }
@@ -81,9 +81,9 @@ public record TeacherSourceSyncProperties(
                         Path.of(System.getProperty("user.dir", "."), ".local-storage", "teacher-source-imports").toString())),
                 Path.of(textOrDefault(
                         environment.getProperty("math-agent.teacher.sync.asset-storage-root"),
-                        environment.getProperty(
-                                "math-agent.teacher.sync.feishu.staging-root",
-                                Path.of(System.getProperty("user.dir", "."), ".local-storage", "teacher-source-imports").toString()) + "/_assets")),
+                        defaultAssetStorageRoot(Path.of(textOrDefault(
+                                environment.getProperty("math-agent.teacher.sync.feishu.staging-root"),
+                                Path.of(System.getProperty("user.dir", "."), ".local-storage", "teacher-source-imports").toString()))).toString())),
                 integerOrDefault(environment.getProperty("math-agent.teacher.sync.feishu.smoke-max-files"), 1),
                 integerOrDefault(environment.getProperty("math-agent.teacher.sync.feishu.process-timeout-seconds"), 30));
     }
@@ -96,6 +96,11 @@ public record TeacherSourceSyncProperties(
         feishuAppkeyPath = feishuAppkeyPath.toAbsolutePath().normalize();
         feishuStagingRoot = feishuStagingRoot.toAbsolutePath().normalize();
         assetStorageRoot = assetStorageRoot.toAbsolutePath().normalize();
+        if (feishuStagingRoot.equals(assetStorageRoot)
+                || feishuStagingRoot.startsWith(assetStorageRoot)
+                || assetStorageRoot.startsWith(feishuStagingRoot)) {
+            throw new IllegalArgumentException("Teacher source and asset roots must be independent directories");
+        }
         feishuSmokeMaxFiles = Math.max(0, feishuSmokeMaxFiles);
         feishuProcessTimeoutSeconds = Math.max(1, feishuProcessTimeoutSeconds);
     }
@@ -141,6 +146,87 @@ public record TeacherSourceSyncProperties(
         } catch (NumberFormatException exception) {
             return defaultValue;
         }
+    }
+
+    private static Path defaultAssetStorageRoot(Path stagingRoot) {
+        Path normalized = stagingRoot.toAbsolutePath().normalize();
+        Path parent = normalized.getParent();
+        return (parent == null ? normalized.resolveSibling("teacher-assets") : parent.resolve("teacher-assets"))
+                .toAbsolutePath()
+                .normalize();
+    }
+
+    /**
+     * Validates a source document path. Feishu source text is authoritative only inside the staging volume; the
+     * asset volume is deliberately a sibling root and can never become a source fallback.
+     */
+    public Path requireStagingPath(Path path) {
+        Path candidate = java.util.Objects.requireNonNull(path, "staging path is required").toAbsolutePath().normalize();
+        if (!java.nio.file.Files.exists(candidate)) {
+            throw new IllegalArgumentException("Teacher staging path does not exist");
+        }
+        try {
+            Path realCandidate = candidate.toRealPath();
+            Path realStaging = realPathOrNormalized(feishuStagingRoot);
+            Path realAssets = realPathOrNormalized(assetStorageRoot);
+            if (realCandidate.equals(realStaging)
+                    || !realCandidate.startsWith(realStaging)
+                    || realCandidate.equals(realAssets)
+                    || realCandidate.startsWith(realAssets)) {
+                throw new IllegalArgumentException("Teacher staging path is outside the configured source volume");
+            }
+            return realCandidate;
+        } catch (java.io.IOException exception) {
+            throw new IllegalArgumentException("Teacher staging path cannot be resolved", exception);
+        }
+    }
+
+    public Path requireSourceRoot(Path root) {
+        Path candidate = requireStagingPath(root);
+        try {
+            if (!containsSupportedSourceFile(candidate)) {
+                throw new IllegalArgumentException("Teacher source root contains no supported text file");
+            }
+            return candidate;
+        } catch (java.io.IOException exception) {
+            throw new IllegalArgumentException("Teacher source root cannot be resolved", exception);
+        }
+    }
+
+    public boolean isValidSourceRoot(Path root) {
+        try {
+            requireSourceRoot(root);
+            return true;
+        } catch (RuntimeException exception) {
+            return false;
+        }
+    }
+
+    private static boolean containsSupportedSourceFile(Path root) throws java.io.IOException {
+        if (java.nio.file.Files.isRegularFile(root)) {
+            return isSupportedSourceFile(root);
+        }
+        try (java.util.stream.Stream<Path> stream = java.nio.file.Files.walk(root)) {
+            return stream.filter(java.nio.file.Files::isRegularFile)
+                    .filter(path -> {
+                        try {
+                            return path.toRealPath().startsWith(root) && isSupportedSourceFile(path);
+                        } catch (java.io.IOException exception) {
+                            return false;
+                        }
+                    })
+                    .findAny()
+                    .isPresent();
+        }
+    }
+
+    private static boolean isSupportedSourceFile(Path path) {
+        String name = path.getFileName().toString().toLowerCase(java.util.Locale.ROOT);
+        return name.endsWith(".md") || name.endsWith(".markdown") || name.endsWith(".txt");
+    }
+
+    private static Path realPathOrNormalized(Path path) throws java.io.IOException {
+        return java.nio.file.Files.exists(path) ? path.toRealPath() : path.toAbsolutePath().normalize();
     }
 
     /**

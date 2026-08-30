@@ -204,7 +204,8 @@ class SystemRuntimeStatusServiceTest {
                     String tenantId,
                     String subjectType,
                     String subjectId,
-                    int limit) {
+                    int limit,
+                    int page) {
                 return List.of();
             }
 

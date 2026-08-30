@@ -26,7 +26,9 @@ declare module "lucide-react" {
   export const LogOut: LucideIcon;
   export const Bell: LucideIcon;
   export const ChevronDown: LucideIcon;
+  export const ChevronLeft: LucideIcon;
   export const ChevronRight: LucideIcon;
+  export const KeyRound: LucideIcon;
   export const Menu: LucideIcon;
   export const X: LucideIcon;
   export const Plus: LucideIcon;
@@ -49,6 +51,7 @@ declare module "lucide-react" {
   export const ZoomIn: LucideIcon;
   export const ZoomOut: LucideIcon;
   export const Clock: LucideIcon;
+  export const History: LucideIcon;
   export const Download: LucideIcon;
   export const Eye: LucideIcon;
 }

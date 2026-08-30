@@ -10,6 +10,7 @@ public class TeacherFeishuDownloadException extends RuntimeException {
     private final boolean retryable;
     private final TeacherFeishuDownloadClient.FeishuDownloadCheckpoint checkpoint;
     private final TeacherSourceSyncFailureResponse failure;
+    private final String failedItemsJson;
 
     /**
      * Creates a Feishu download exception.
@@ -59,10 +60,24 @@ public class TeacherFeishuDownloadException extends RuntimeException {
             Throwable cause,
             TeacherFeishuDownloadClient.FeishuDownloadCheckpoint checkpoint,
             TeacherSourceSyncFailureResponse failure) {
+        this(message, retryable, cause, checkpoint, failure, "[]");
+    }
+
+    /**
+     * Creates a failure with the downloader's item-level error records for durable checkpoint inspection.
+     */
+    public TeacherFeishuDownloadException(
+            String message,
+            boolean retryable,
+            Throwable cause,
+            TeacherFeishuDownloadClient.FeishuDownloadCheckpoint checkpoint,
+            TeacherSourceSyncFailureResponse failure,
+            String failedItemsJson) {
         super(message, cause);
         this.retryable = retryable;
         this.checkpoint = checkpoint == null ? TeacherFeishuDownloadClient.FeishuDownloadCheckpoint.empty() : checkpoint;
         this.failure = failure == null ? TeacherSourceSyncFailureResponse.none() : failure;
+        this.failedItemsJson = failedItemsJson == null || failedItemsJson.isBlank() ? "[]" : failedItemsJson.strip();
     }
 
     /**
@@ -82,5 +97,10 @@ public class TeacherFeishuDownloadException extends RuntimeException {
     /** Provider details safe to persist in source_sync_job.metadata_json and show to the authorization UI. */
     public TeacherSourceSyncFailureResponse failure() {
         return failure;
+    }
+
+    /** Item-level downloader failures retained as plaintext checkpoint evidence after provider-side redaction. */
+    public String failedItemsJson() {
+        return failedItemsJson;
     }
 }

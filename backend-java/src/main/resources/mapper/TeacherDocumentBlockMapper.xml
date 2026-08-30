@@ -1,0 +1,236 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.doob.mathagent.teacher.block.mapper.TeacherDocumentBlockMapper">
+    <select id="selectActiveByIds" resultType="com.doob.mathagent.teacher.block.entity.TeacherDocumentBlockEntity">
+        SELECT db.* FROM document_block db JOIN source_document sd ON sd.id = db.source_document_id
+        WHERE sd.tenant_id = #{tenantId}
+          AND db.source_document_id = #{fileDocumentId}
+          AND db.status = 'active'
+          AND db.id IN
+          <foreach collection="blockIds" item="blockId" open="(" separator="," close=")">#{blockId}</foreach>
+        ORDER BY db.block_order ASC, db.id ASC
+        LIMIT #{limit}
+    </select>
+
+    <select id="selectActiveWindow" resultType="com.doob.mathagent.teacher.block.entity.TeacherDocumentBlockEntity">
+        SELECT db.* FROM document_block db JOIN source_document sd ON sd.id = db.source_document_id
+        WHERE sd.tenant_id = #{tenantId}
+          AND db.source_document_id = #{fileDocumentId}
+          AND db.status = 'active'
+          AND db.block_order BETWEEN #{startOrder} AND #{endOrder}
+        ORDER BY db.block_order ASC, db.id ASC
+        LIMIT #{limit}
+    </select>
+
+    <select id="selectByExternalIds" resultType="com.doob.mathagent.teacher.block.entity.TeacherDocumentBlockEntity">
+        SELECT db.* FROM document_block db JOIN source_document sd ON sd.id = db.source_document_id
+        WHERE sd.tenant_id = #{tenantId}
+          AND db.source_document_id = #{fileDocumentId}
+          AND db.external_block_id IN
+          <foreach collection="externalBlockIds" item="externalBlockId" open="(" separator="," close=")">#{externalBlockId}</foreach>
+        ORDER BY db.block_order ASC, db.id ASC
+        LIMIT #{limit}
+    </select>
+
+    <update id="retireActiveForFile">
+        UPDATE document_block db JOIN source_document sd ON sd.id = db.source_document_id
+        SET db.status = 'inactive'
+        WHERE sd.tenant_id = #{tenantId}
+          AND db.source_document_id = #{fileDocumentId}
+          AND db.status = 'active'
+    </update>
+
+    <select id="selectActivePage" resultType="com.doob.mathagent.teacher.block.entity.TeacherDocumentBlockEntity">
+        SELECT db.* FROM document_block db JOIN source_document sd ON sd.id = db.source_document_id
+        WHERE sd.tenant_id = #{tenantId}
+          AND db.source_document_id = #{fileDocumentId}
+          AND db.status = 'active'
+          <if test="afterBlockOrder != null">AND db.block_order &gt; #{afterBlockOrder}</if>
+        ORDER BY db.block_order ASC, db.id ASC
+        LIMIT #{limit}
+    </select>
+
+    <!-- One physical FILE contributes one representative lexical block. All visibility and readiness predicates stay in SQL. -->
+    <select id="selectSearchableFileBlocksByLexicalTerms" resultType="com.doob.mathagent.teacher.block.entity.TeacherDocumentBlockEntity">
+        SELECT ranked.* FROM (
+            SELECT db.*,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY db.source_document_id
+                       ORDER BY
+                         <foreach collection="terms" item="term" separator=" + ">
+                           CASE WHEN LOWER(CONCAT_WS(' ', file_doc.title, db.chapter, db.section, db.source_path,
+                               db.block_role, db.raw_text, db.normalized_text)) LIKE CONCAT('%', LOWER(#{term}), '%') THEN 1 ELSE 0 END
+                         </foreach> DESC,
+                         db.block_order ASC,
+                         db.id ASC
+                   ) AS file_rank
+            FROM document_block db
+            JOIN source_document file_doc ON file_doc.id = db.source_document_id
+            WHERE file_doc.tenant_id = #{tenantId}
+              AND file_doc.source_type = 'feishu'
+              AND file_doc.sync_status &lt;&gt; 'archived'
+              AND file_doc.parse_status IN ('parsed', 'completed')
+              AND file_doc.embedding_status IN ('ready', 'completed')
+              AND JSON_UNQUOTE(JSON_EXTRACT(file_doc.metadata_json, '$.documentKind')) = 'FILE'
+              AND db.status = 'active'
+              AND EXISTS (
+                  SELECT 1 FROM source_document root_doc
+                  WHERE root_doc.tenant_id = #{tenantId}
+                    AND root_doc.id = CAST(JSON_UNQUOTE(JSON_EXTRACT(file_doc.metadata_json, '$.rootDocumentId')) AS UNSIGNED)
+                    AND root_doc.sync_status &lt;&gt; 'archived'
+              )
+              <choose>
+                <when test="viewerRole == 'admin'"></when>
+                <when test="viewerRole == 'teacher'">
+                  AND (file_doc.created_by = #{viewerSubjectId}
+                       OR file_doc.permission_scope IN ('TEACHER_SHARED', 'TENANT_PUBLIC', 'PUBLIC_TEXTBOOK', 'MATH_VIP', 'CLASS_AUTHORIZED'))
+                </when>
+                <when test="viewerRole == 'student'">
+                  AND file_doc.permission_scope IN ('TENANT_PUBLIC', 'PUBLIC_TEXTBOOK', 'MATH_VIP', 'CLASS_AUTHORIZED')
+                </when>
+                <otherwise> AND 1 = 0 </otherwise>
+              </choose>
+              AND (
+                <foreach collection="terms" item="term" separator=" OR ">
+                  LOWER(CONCAT_WS(' ', file_doc.title, db.chapter, db.section, db.source_path,
+                      db.block_role, db.raw_text, db.normalized_text)) LIKE CONCAT('%', LOWER(#{term}), '%')
+                </foreach>
+              )
+        ) ranked
+        WHERE ranked.file_rank = 1
+        ORDER BY ranked.block_order ASC, ranked.id ASC
+        LIMIT #{limit}
+    </select>
+
+    <!-- The embedded BM25 index is built only from this authorized, ready FILE/block snapshot. -->
+    <select id="selectSearchableFileBlocksForBm25Index" resultType="com.doob.mathagent.teacher.block.entity.TeacherDocumentBlockEntity">
+        SELECT db.*
+        FROM document_block db
+        JOIN source_document file_doc ON file_doc.id = db.source_document_id
+        WHERE file_doc.tenant_id = #{tenantId}
+          AND file_doc.source_type = 'feishu'
+          AND file_doc.sync_status &lt;&gt; 'archived'
+          AND file_doc.parse_status IN ('parsed', 'completed')
+          AND file_doc.embedding_status IN ('ready', 'completed')
+          AND JSON_UNQUOTE(JSON_EXTRACT(file_doc.metadata_json, '$.documentKind')) = 'FILE'
+          AND JSON_UNQUOTE(JSON_EXTRACT(file_doc.metadata_json, '$.indexStatus')) IN ('ready', 'completed')
+          AND db.status = 'active'
+          AND EXISTS (
+              SELECT 1 FROM source_document root_doc
+              WHERE root_doc.tenant_id = #{tenantId}
+                AND root_doc.id = CAST(JSON_UNQUOTE(JSON_EXTRACT(file_doc.metadata_json, '$.rootDocumentId')) AS UNSIGNED)
+                AND root_doc.sync_status &lt;&gt; 'archived'
+          )
+          <choose>
+            <when test="viewerRole == 'admin'"></when>
+            <when test="viewerRole == 'teacher'">
+              AND (file_doc.created_by = #{viewerSubjectId}
+                   OR file_doc.permission_scope IN ('TEACHER_SHARED', 'TENANT_PUBLIC', 'PUBLIC_TEXTBOOK', 'MATH_VIP', 'CLASS_AUTHORIZED'))
+            </when>
+            <when test="viewerRole == 'student'">
+              AND file_doc.permission_scope IN ('TENANT_PUBLIC', 'PUBLIC_TEXTBOOK', 'MATH_VIP', 'CLASS_AUTHORIZED')
+            </when>
+            <otherwise> AND 1 = 0 </otherwise>
+          </choose>
+          <if test="documentIds != null and documentIds.size() > 0">
+            AND file_doc.id IN
+            <foreach collection="documentIds" item="documentId" open="(" separator="," close=")">#{documentId}</foreach>
+          </if>
+          <if test="permissionScopes != null and permissionScopes.size() > 0">
+            AND file_doc.permission_scope IN
+            <foreach collection="permissionScopes" item="permissionScope" open="(" separator="," close=")">#{permissionScope}</foreach>
+          </if>
+          <if test="afterBlockId != null">AND db.id &gt; #{afterBlockId}</if>
+        ORDER BY db.id ASC
+        LIMIT #{limit}
+    </select>
+
+    <!-- Lucene ids are persisted block ids; this query is the final live authorization/readiness boundary. -->
+    <select id="selectSearchableFileBlocksByIds" resultType="com.doob.mathagent.teacher.block.entity.TeacherDocumentBlockEntity">
+        SELECT db.*
+        FROM document_block db
+        JOIN source_document file_doc ON file_doc.id = db.source_document_id
+        WHERE file_doc.tenant_id = #{tenantId}
+          AND file_doc.source_type = 'feishu'
+          AND file_doc.sync_status &lt;&gt; 'archived'
+          AND file_doc.parse_status IN ('parsed', 'completed')
+          AND file_doc.embedding_status IN ('ready', 'completed')
+          AND JSON_UNQUOTE(JSON_EXTRACT(file_doc.metadata_json, '$.documentKind')) = 'FILE'
+          AND JSON_UNQUOTE(JSON_EXTRACT(file_doc.metadata_json, '$.indexStatus')) IN ('ready', 'completed')
+          AND db.status = 'active'
+          AND db.id IN
+          <foreach collection="blockIds" item="blockId" open="(" separator="," close=")">#{blockId}</foreach>
+          AND EXISTS (
+              SELECT 1 FROM source_document root_doc
+              WHERE root_doc.tenant_id = #{tenantId}
+                AND root_doc.id = CAST(JSON_UNQUOTE(JSON_EXTRACT(file_doc.metadata_json, '$.rootDocumentId')) AS UNSIGNED)
+                AND root_doc.sync_status &lt;&gt; 'archived'
+          )
+          <choose>
+            <when test="viewerRole == 'admin'"></when>
+            <when test="viewerRole == 'teacher'">
+              AND (file_doc.created_by = #{viewerSubjectId}
+                   OR file_doc.permission_scope IN ('TEACHER_SHARED', 'TENANT_PUBLIC', 'PUBLIC_TEXTBOOK', 'MATH_VIP', 'CLASS_AUTHORIZED'))
+            </when>
+            <when test="viewerRole == 'student'">
+              AND file_doc.permission_scope IN ('TENANT_PUBLIC', 'PUBLIC_TEXTBOOK', 'MATH_VIP', 'CLASS_AUTHORIZED')
+            </when>
+            <otherwise> AND 1 = 0 </otherwise>
+          </choose>
+          <if test="documentIds != null and documentIds.size() > 0">
+            AND file_doc.id IN
+            <foreach collection="documentIds" item="documentId" open="(" separator="," close=")">#{documentId}</foreach>
+          </if>
+          <if test="permissionScopes != null and permissionScopes.size() > 0">
+            AND file_doc.permission_scope IN
+            <foreach collection="permissionScopes" item="permissionScope" open="(" separator="," close=")">#{permissionScope}</foreach>
+          </if>
+        LIMIT #{limit}
+    </select>
+
+    <select id="selectSearchableFileBlocksByGraphTags" resultType="com.doob.mathagent.teacher.block.entity.TeacherDocumentBlockEntity">
+        SELECT ranked.* FROM (
+            SELECT db.*,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY db.source_document_id
+                       ORDER BY db.block_order ASC, db.id ASC
+                   ) AS file_rank
+            FROM document_block db
+            JOIN source_document file_doc ON file_doc.id = db.source_document_id
+            WHERE file_doc.tenant_id = #{tenantId}
+              AND file_doc.source_type = 'feishu'
+              AND file_doc.sync_status &lt;&gt; 'archived'
+              AND file_doc.parse_status IN ('parsed', 'completed')
+              AND file_doc.embedding_status IN ('ready', 'completed')
+              AND JSON_UNQUOTE(JSON_EXTRACT(file_doc.metadata_json, '$.documentKind')) = 'FILE'
+              AND db.status = 'active'
+              AND EXISTS (
+                  SELECT 1 FROM source_document root_doc
+                  WHERE root_doc.tenant_id = #{tenantId}
+                    AND root_doc.id = CAST(JSON_UNQUOTE(JSON_EXTRACT(file_doc.metadata_json, '$.rootDocumentId')) AS UNSIGNED)
+                    AND root_doc.sync_status &lt;&gt; 'archived'
+              )
+              <choose>
+                <when test="viewerRole == 'admin'"></when>
+                <when test="viewerRole == 'teacher'">
+                  AND (file_doc.created_by = #{viewerSubjectId}
+                       OR file_doc.permission_scope IN ('TEACHER_SHARED', 'TENANT_PUBLIC', 'PUBLIC_TEXTBOOK', 'MATH_VIP', 'CLASS_AUTHORIZED'))
+                </when>
+                <when test="viewerRole == 'student'">
+                  AND file_doc.permission_scope IN ('TENANT_PUBLIC', 'PUBLIC_TEXTBOOK', 'MATH_VIP', 'CLASS_AUTHORIZED')
+                </when>
+                <otherwise> AND 1 = 0 </otherwise>
+              </choose>
+              AND (
+                <foreach collection="tagNames" item="tagName" separator=" OR ">
+                  JSON_SEARCH(COALESCE(db.graph_tag_names_json, JSON_ARRAY()), 'one', #{tagName}) IS NOT NULL
+                </foreach>
+              )
+        ) ranked
+        WHERE ranked.file_rank = 1
+        ORDER BY ranked.block_order ASC, ranked.id ASC
+        LIMIT #{limit}
+    </select>
+</mapper>

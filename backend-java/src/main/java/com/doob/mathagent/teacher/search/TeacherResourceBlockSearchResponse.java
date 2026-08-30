@@ -1,6 +1,7 @@
 package com.doob.mathagent.teacher.search;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * Search response for parsed teacher resource document blocks.
@@ -18,7 +19,80 @@ public record TeacherResourceBlockSearchResponse(
         int limit,
         String retrievalMode,
         int hitCount,
-        List<Hit> hits) {
+        List<Hit> hits,
+        CandidateFunnel candidateFunnel) {
+
+    /** Compatibility constructor for callers that do not expose route diagnostics. */
+    public TeacherResourceBlockSearchResponse(
+            String queryId,
+            String query,
+            int limit,
+            String retrievalMode,
+            int hitCount,
+            List<Hit> hits) {
+        this(queryId, query, limit, retrievalMode, hitCount, hits, CandidateFunnel.EMPTY);
+    }
+
+    /**
+     * Bounded per-request candidate trace. It contains only durable FILE/block ids and never source text or paths.
+     */
+    public record CandidateFunnel(
+            List<String> vectorFileDocumentIds,
+            List<String> lexicalFileDocumentIds,
+            List<String> tagFileDocumentIds,
+            List<String> fusedFileDocumentIds,
+            List<String> finalFileDocumentIds,
+            List<String> representativeBlockIds,
+            int rerankCandidateCount,
+            boolean sqlBoundedEvidence,
+            Map<String, Double> fusedFileScores,
+            List<FileCandidateTrace> fileCandidates,
+            List<BlockEvidenceTrace> blockEvidence,
+            String failureType) {
+
+        /** Compatibility constructor for callers that only provide the original route lists. */
+        public CandidateFunnel(
+                List<String> vectorFileDocumentIds,
+                List<String> lexicalFileDocumentIds,
+                List<String> tagFileDocumentIds,
+                List<String> fusedFileDocumentIds,
+                List<String> finalFileDocumentIds,
+                List<String> representativeBlockIds,
+                int rerankCandidateCount,
+                boolean sqlBoundedEvidence) {
+            this(vectorFileDocumentIds, lexicalFileDocumentIds, tagFileDocumentIds, fusedFileDocumentIds,
+                    finalFileDocumentIds, representativeBlockIds, rerankCandidateCount, sqlBoundedEvidence,
+                    Map.of(), List.of(), List.of(), "none");
+        }
+
+        public static final CandidateFunnel EMPTY = new CandidateFunnel(
+                List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), 0, false,
+                Map.of(), List.of(), List.of(), "empty");
+    }
+
+    /** Durable FILE-level funnel trace. Scores are continuous weighted-RRF scores, never raw route scores. */
+    public record FileCandidateTrace(
+            String fileDocumentId,
+            double fusedRrfScore,
+            int fusedRank,
+            int finalRank,
+            boolean inFinalCandidates) {
+    }
+
+    /** Route-local block evidence retained for representative selection and post-run audit. */
+    public record BlockEvidenceTrace(
+            String fileDocumentId,
+            String blockId,
+            int blockOrder,
+            int vectorRank,
+            double vectorScore,
+            int lexicalRank,
+            double lexicalScore,
+            int tagRank,
+            double tagScore,
+            List<String> routeSources,
+            boolean representative) {
+    }
 
     /**
      * Single parsed teacher document block search hit.
@@ -43,6 +117,10 @@ public record TeacherResourceBlockSearchResponse(
      * @param score lexical relevance score
      * @param imageAssetIds opaque asset ids parsed from block imageRefs
      * @param assetRefs visible backend-controlled asset references
+     * @param rootDocumentId durable ROOT resource identity when the hit is a physical FILE
+     * @param fileDocumentId durable physical FILE document identity
+     * @param providerItemId stable provider file identity
+     * @param splitFingerprint parser split version used for the indexed file
      */
     public record Hit(
             String documentId,
@@ -64,7 +142,38 @@ public record TeacherResourceBlockSearchResponse(
             String snippet,
             double score,
             List<String> imageAssetIds,
-            List<AssetRef> assetRefs) {
+            List<AssetRef> assetRefs,
+            String rootDocumentId,
+            String fileDocumentId,
+            String providerItemId,
+            String splitFingerprint) {
+
+        /** Compatibility constructor for all existing teacher/textbook callers. */
+        public Hit(
+                String documentId,
+                String documentTitle,
+                String sourceType,
+                String permissionScope,
+                String blockId,
+                String blockType,
+                int blockOrder,
+                String chapter,
+                String section,
+                Integer pageNo,
+                String fileName,
+                String sourcePath,
+                String blockRole,
+                List<String> graphTags,
+                List<String> evidenceBlockIds,
+                String evidenceText,
+                String snippet,
+                double score,
+                List<String> imageAssetIds,
+                List<AssetRef> assetRefs) {
+            this(documentId, documentTitle, sourceType, permissionScope, blockId, blockType, blockOrder, chapter,
+                    section, pageNo, fileName, sourcePath, blockRole, graphTags, evidenceBlockIds, evidenceText,
+                    snippet, score, imageAssetIds, assetRefs, "", documentId, "", "");
+        }
 
         /** Compatibility constructor for callers that predate the explicit fileName response field. */
         public Hit(
@@ -131,6 +240,10 @@ public record TeacherResourceBlockSearchResponse(
         }
 
         public Hit withAssetRefs(List<AssetRef> visibleAssetRefs) {
+            return withImageAssetRefs(imageAssetIds, visibleAssetRefs);
+        }
+
+        public Hit withImageAssetRefs(List<String> visibleAssetIds, List<AssetRef> visibleAssetRefs) {
             return new Hit(
                     documentId,
                     documentTitle,
@@ -150,8 +263,12 @@ public record TeacherResourceBlockSearchResponse(
                     evidenceText,
                     snippet,
                     score,
-                    imageAssetIds,
-                    visibleAssetRefs == null ? List.of() : List.copyOf(visibleAssetRefs));
+                    visibleAssetIds == null ? List.of() : List.copyOf(visibleAssetIds),
+                    visibleAssetRefs == null ? List.of() : List.copyOf(visibleAssetRefs),
+                    rootDocumentId,
+                    fileDocumentId,
+                    providerItemId,
+                    splitFingerprint);
         }
 
         private static String fileNameFromPath(String sourcePath) {

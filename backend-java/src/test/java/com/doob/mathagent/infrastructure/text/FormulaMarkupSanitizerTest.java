@@ -16,11 +16,35 @@ class FormulaMarkupSanitizerTest {
     }
 
     @Test
+    void escapesAnUnpairedDollarAsOrdinaryProse() {
+        String sanitized = FormulaMarkupSanitizer.sanitizeFeishuMath("教学主线：定义导入 $");
+
+        assertThat(sanitized).isEqualTo("教学主线：定义导入 \\$");
+    }
+
+    @Test
+    void repairsDuplicatedOpeningDelimiterBetweenEnumeratedMathAtoms() {
+        String sanitized = FormulaMarkupSanitizer.sanitizeFeishuMath("由定义将 $|AF|、$|BF|$ 转化为到准线的距离。");
+
+        assertThat(sanitized).contains("$|AF|、|BF|$");
+        assertThat(sanitized).doesNotContain("$|AF|、$|BF|$");
+    }
+
+    @Test
+    void repairsMissingSeparatorBetweenAdjacentInlineMathSpans() {
+        String sanitized = FormulaMarkupSanitizer.sanitizeFeishuMath(
+                "（1）$x^2=8y=2$$\\times$ 4y，所以$p=4$；");
+
+        assertThat(sanitized).isEqualTo("（1）$x^2=8y=2$ $\\times$ 4y，所以$p=4$；");
+    }
+
+    @Test
     void removesOnlyAnEmptyTrailingDisplayMathPair() {
         String sanitized = FormulaMarkupSanitizer.sanitizeFeishuMath("$$a=2.$$$$");
 
         assertThat(sanitized).isEqualTo("$$a=2.$$");
     }
+
 
     @Test
     void keepsAValidDisplayFormulaWithContentUntouched() {
@@ -135,6 +159,15 @@ class FormulaMarkupSanitizerTest {
     }
 
     @Test
+    void repairsEscapedTransportWhitespaceInsideFracCommand() {
+        String sanitized = FormulaMarkupSanitizer.sanitizeFeishuMath(
+                "焦点到顶点的距离不是 $p$，而是 $\\nrac{p}{2}$。" );
+
+        assertThat(sanitized).contains("$\\frac{p}{2}$");
+        assertThat(sanitized).doesNotContain("\\nrac");
+    }
+
+    @Test
     void canonicalizesOnlyUnambiguousRadicalsAndFractions() {
         String sanitized = FormulaMarkupSanitizer.sanitizeFeishuMath(
                 "面积为 √(a+b)，且 sinA=1/2，另有 \\frac a{\\sin A}。 ");
@@ -149,6 +182,15 @@ class FormulaMarkupSanitizerTest {
         String sanitized = FormulaMarkupSanitizer.sanitizeFeishuMath("错误候选 √3a 必须要求模型补花括号。");
 
         assertThat(sanitized).contains("√3a");
+    }
+
+    @Test
+    void preservesMultipleCompleteInlineLatexSpansBeforeDisplayMath() {
+        String source = "当直线 $l$ 的斜率不存在时，$l$ 为通径，由问题3知 $|AB|=2p$，而此时 $x_1=x_2=\\frac{p}{2}$，所以";
+
+        String sanitized = FormulaMarkupSanitizer.sanitizeFeishuMath(source);
+
+        assertThat(sanitized).isEqualTo(source);
     }
 
     @Test

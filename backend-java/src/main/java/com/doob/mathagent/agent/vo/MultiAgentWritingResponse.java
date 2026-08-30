@@ -3,20 +3,7 @@ package com.doob.mathagent.agent.vo;
 import java.time.Instant;
 import java.util.List;
 
-/**
- * Safe response for one multi-agent writing workflow.
- *
- * @param workflowId backend workflow id shared by all stage plans and traces
- * @param tenantId backend tenant id
- * @param subjectType backend subject role
- * @param subjectId backend subject id
- * @param status workflow status
- * @param createdAt workflow creation time
- * @param updatedAt latest workflow status update time
- * @param stages ordered writing stages and their trace ids
- * @param totalUsage summed provider-reported token usage
- * @param message safe workflow status message without raw prompt or full model output
- */
+/** Safe response for one multi-agent writing workflow. */
 public record MultiAgentWritingResponse(
         String workflowId,
         String tenantId,
@@ -29,20 +16,7 @@ public record MultiAgentWritingResponse(
         AgentRunExecuteResponse.TokenUsage totalUsage,
         String message) {
 
-    /**
-     * One writing agent stage result.
-     *
-     * @param stageCode stable stage code
-     * @param agentCode agent executed by the backend
-     * @param traceId trace id for recovery and diagnostics
-     * @param providerName provider used by the stage
-     * @param modelCode model used by the stage
-     * @param status execution status
-     * @param actualUsage provider-reported token usage
-     * @param message safe status message without raw model output
-     * @param generatedContent model-generated content for this owned writing workflow stage
-     * @param elapsedMs wall-clock duration from stage planning through provider completion
-     */
+    /** One writing stage plus bounded writer-owned evidence metadata. */
     public record StageResult(
             String stageCode,
             String agentCode,
@@ -53,35 +27,53 @@ public record MultiAgentWritingResponse(
             AgentRunExecuteResponse.TokenUsage actualUsage,
             String message,
             String generatedContent,
-            long elapsedMs) {
+            long elapsedMs,
+            List<String> citations,
+            List<AssetPlacement> assetPlacements) {
 
-        /**
-         * Backward-compatible constructor for stored rows created before generated content snapshots existed.
-         */
-        public StageResult(
-                String stageCode,
-                String agentCode,
-                String traceId,
-                String providerName,
-                String modelCode,
-                String status,
-                AgentRunExecuteResponse.TokenUsage actualUsage,
-                String message) {
-            this(stageCode, agentCode, traceId, providerName, modelCode, status, actualUsage, message, "", 0L);
+        public StageResult {
+            citations = citations == null ? List.of() : List.copyOf(citations);
+            assetPlacements = assetPlacements == null ? List.of() : List.copyOf(assetPlacements);
         }
 
-        /** Compatibility constructor for snapshots created before stage wall-clock timing was exposed. */
-        public StageResult(
-                String stageCode,
-                String agentCode,
-                String traceId,
-                String providerName,
-                String modelCode,
-                String status,
-                AgentRunExecuteResponse.TokenUsage actualUsage,
-                String message,
-                String generatedContent) {
-            this(stageCode, agentCode, traceId, providerName, modelCode, status, actualUsage, message, generatedContent, 0L);
+        public StageResult(String stageCode, String agentCode, String traceId, String providerName, String modelCode,
+                           String status, AgentRunExecuteResponse.TokenUsage actualUsage, String message) {
+            this(stageCode, agentCode, traceId, providerName, modelCode, status, actualUsage, message, "", 0L,
+                    List.of(), List.of());
         }
+
+        public StageResult(String stageCode, String agentCode, String traceId, String providerName, String modelCode,
+                           String status, AgentRunExecuteResponse.TokenUsage actualUsage, String message,
+                           String generatedContent) {
+            this(stageCode, agentCode, traceId, providerName, modelCode, status, actualUsage, message, generatedContent, 0L,
+                    List.of(), List.of());
+        }
+
+        public StageResult(String stageCode, String agentCode, String traceId, String providerName, String modelCode,
+                           String status, AgentRunExecuteResponse.TokenUsage actualUsage, String message,
+                           String generatedContent, long elapsedMs) {
+            this(stageCode, agentCode, traceId, providerName, modelCode, status, actualUsage, message, generatedContent,
+                    elapsedMs, List.of(), List.of());
+        }
+    }
+
+    /** Writer-selected source image placement; the exporter resolves the original row within its authorized article. */
+    public record AssetPlacement(
+            String logicalPath,
+            String markdownLine,
+            String anchorBefore,
+            String anchorAfter,
+            String layout,
+            List<String> variants,
+            String caption) {
+        public AssetPlacement {
+            logicalPath = logicalPath == null ? "" : logicalPath;
+            markdownLine = markdownLine == null ? "" : markdownLine;
+            anchorBefore = anchorBefore == null ? "" : anchorBefore;
+            anchorAfter = anchorAfter == null ? "" : anchorAfter;
+            variants = variants == null ? List.of() : List.copyOf(variants);
+            caption = caption == null ? "" : caption;
+        }
+
     }
 }

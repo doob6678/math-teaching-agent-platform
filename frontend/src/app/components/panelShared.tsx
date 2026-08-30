@@ -75,7 +75,7 @@ export function StatusLine({
 }: {
   icon: ReactNode;
   text: string;
-  tone?: "muted" | "danger" | "warning";
+  tone?: "muted" | "success" | "danger" | "warning";
 }) {
   return (
     <div className={`status-line ${tone}`}>

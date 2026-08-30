@@ -447,6 +447,10 @@ public class TeachingHandoutPdfExportService {
         // \left outside dollar delimiters makes XeLaTeX abort with "Missing $ inserted" and previously triggered
         // the lossy text fallback. Normalize only this unambiguous grammar; malformed or incomplete math still fails.
         normalized = normalizeSplitFunctionArguments(normalized);
+        // A model can serialize a scalable set brace as `\left{` / `\right}` with literal brace characters. TeX
+        // requires escaped delimiters after \left/\right and always aborts with "Missing delimiter" on this shape.
+        // Repair exactly this broken grammar; already-escaped `\left\{` / `\right\}` never match the literal forms.
+        normalized = normalized.replace("\\left{", "\\left\\{").replace("\\right}", "\\right\\}");
         // JSON decoders treat the `\\r` in an unescaped `\\rightarrow` as a carriage return.  After
         // newline normalization this appears as `\\item ightarrow` or `\\par ightarrow`; repair the
         // command before XeLaTeX parses the body so a valid arrow cannot trigger a PDFBox fallback.
@@ -455,9 +459,12 @@ public class TeachingHandoutPdfExportService {
                 .replaceAll("\\\\par\\s*ightarrow", "\\\\rightarrow");
         // A legacy Markdown-to-LaTeX adapter occasionally wrapped a display formula in list items.  TeX forbids
         // \item in math mode, so close only this explicit malformed itemize fragment before normal line filtering.
+        // The bare-formula item repair must require the WHOLE line to be one $...$ run: an authored item whose
+        // text merely STARTS with inline math (e.g. `\item $a, b$ 的正负号…`) keeps its \item marker, otherwise
+        // XeLaTeX aborts with "missing \item" on the orphaned text line inside itemize.
         normalized = normalized
                 .replaceAll("(?m)^\\\\item\\s+\\\\\\[$", "\\\\end{itemize}\\n\\\\[")
-                .replaceAll("(?m)^\\\\item\\s+(?=\\$)", "")
+                .replaceAll("(?m)^\\\\item\\s+(\\$[^$\\n]+\\$)\\s*$", "$1")
                 .replaceAll("(?m)^\\\\item\\s+\\\\\\]$", "\\\\]");
         // Source ids such as math_b_bixiu_4_p014_ai_001 are useful in traces, but printing them leaks workflow
         // internals and makes TeX interpret repeated underscores as an invalid nested subscript.
@@ -701,8 +708,9 @@ public class TeachingHandoutPdfExportService {
         }
         // Image markers are an internal transport format.  Escape ordinary LaTeX text, but keep the marker
         // byte-for-byte intact so renderLatexBody can resolve the permission-checked local asset later.
+        String joined = wrapOrphanListItems(String.join("\n", lines));
         String cleaned = cleanBlocksPreservingPageBreaks(
-                escapeLooseTextSpecialsPreservingImageMarkers(String.join("\n", lines)));
+                escapeLooseTextSpecialsPreservingImageMarkers(joined));
         cleaned = cleaned.replaceAll("(?m)^\\s*\\*{4}(?:\\\\par)?\\s*$\\n?", "");
         cleaned = renderPairedMarkdownBold(cleaned);
         // A legacy evidence compactor may reintroduce the environment label after the first pass. Remove
@@ -711,6 +719,53 @@ public class TeachingHandoutPdfExportService {
                 .replaceAll("(?m)^\\s*(?:-\\s*)+itemize\\s*-\\s*", "")
                 .replaceAll("(?m)^\\s*(?:-\\s*)+enumerate\\s*-\\s*", "")
                 .strip();
+    }
+
+    /**
+     * Wraps orphan `\item` runs in a plain itemize environment. A lost `\begin{itemize}` opener (transport or
+     * authored defect) otherwise aborts XeLaTeX with "Lonely \item" and pushes the whole handout into the recovery
+     * placeholder. The wrapping is purely mechanical layout repair: authored item text stays byte-for-byte, and
+     * items already inside a real list environment are left untouched.
+     */
+    static String wrapOrphanListItems(String source) {
+        if (source == null || source.isBlank() || !source.contains("\\item")) {
+            return source == null ? "" : source;
+        }
+        Pattern environmentBoundary = Pattern.compile("\\\\(begin|end)\\{(itemize|enumerate|description)}");
+        Pattern orphanItem = Pattern.compile("^\\\\item(?:\\s|$)");
+        java.util.List<String> output = new ArrayList<>();
+        int listDepth = 0;
+        boolean openOrphanRun = false;
+        for (String line : source.split("\n", -1)) {
+            String strippedLine = line.strip();
+            // A stray closer with no matching opener is the mirror transport defect of an orphan \item; dropping
+            // the bare line keeps TeX parsing while any real content around it stays intact.
+            if (strippedLine.matches("\\\\end\\{(itemize|enumerate|description)}") && listDepth == 0) {
+                continue;
+            }
+            Matcher boundary = environmentBoundary.matcher(strippedLine);
+            while (boundary.find()) {
+                listDepth += "begin".equals(boundary.group(1)) ? 1 : -1;
+                listDepth = Math.max(0, listDepth);
+            }
+            if (orphanItem.matcher(strippedLine).find() && listDepth == 0) {
+                if (!openOrphanRun) {
+                    output.add("\\begin{itemize}");
+                    openOrphanRun = true;
+                }
+                output.add(line);
+                continue;
+            }
+            if (openOrphanRun && !line.isBlank()) {
+                output.add("\\end{itemize}");
+                openOrphanRun = false;
+            }
+            output.add(line);
+        }
+        if (openOrphanRun) {
+            output.add("\\end{itemize}");
+        }
+        return String.join("\n", output);
     }
 
     /**

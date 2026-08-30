@@ -20,7 +20,6 @@ from app.handout_runtime import (
     ResourceCollectionAction,
     ResourceCollectionDecision,
     TeacherBlueprint,
-    AssetPlacement,
     WritingPlan,
     WriterDocument,
     DEFAULT_HANDOUT_MAX_OUTPUT_TOKENS,
@@ -321,6 +320,41 @@ class HandoutGraphContractTest(unittest.TestCase):
 
         self.assertTrue(normalized.ready_for_derivation)
         self.assertTrue(normalized.model_dump(by_alias=True)["readyForDerivation"])
+
+    def test_teacher_blueprint_requires_retaining_authorized_source_image_row(self):
+        """A teacher PDF-required source image cannot be silently omitted after the model sees its authorized row."""
+        question = "【题目 1】\n已知函数 f(x)=x^2，求最小值。"
+        image_row = "![source-image:opaque-run-image-001](IMAJES/image-001.jpg)"
+        blueprint = TeacherBlueprint.model_validate({
+            "title": "教师版",
+            "markdown": (
+                f"## 题目\n\n{question}\n\n## 解题过程\n\n步骤 1：根据题设选择方法。"
+                "\n\n## 最终答案\n\n最小值为 $0$。\n\n## 评分点\n\n- 方法正确。"
+                "\n\n## 易错点\n\n- 注意顶点。"
+            ),
+            "completionChecklist": ["覆盖题目"],
+            "remainingEdits": [],
+            "readyForDerivation": True,
+        })
+        evidence = EvidenceSnapshot(inspectedItems=[EvidenceItem(
+            ref="ev_image", documentRef="doc_image", excerpt="来源图说明\n" + image_row,
+            imageRefs=[{"markdownLine": image_row, "logicalPath": "解析几何/IMAJES/image-001.jpg"}],
+        )])
+        plan = WritingPlan.model_validate({
+            "learningObjective": "掌握最小值",
+            "questions": [{"number": 1, "question": question, "teachingSequence": ["读题"]}],
+            "completionCriteria": ["覆盖题目"],
+            "readyForNextStage": True,
+        })
+
+        with self.assertRaisesRegex(ValueError, "authorized source image row must be retained verbatim"):
+            HandoutRuntime._validate_teacher_blueprint(
+                blueprint,
+                HandoutRunRequest(runId="run-blueprint-image-required-001", taskId="task-blueprint-image-required-001",
+                                  writingGoal="函数讲义", questionText=question),
+                plan,
+                evidence,
+            )
 
     def test_teacher_blueprint_validates_ai_planned_questions_not_raw_goal_text(self):
         """A concise raw goal must not reject a blueprint that covers the approved AI-authored plan."""
@@ -850,8 +884,8 @@ class HandoutGraphContractTest(unittest.TestCase):
             self.assertEqual(package.phase, "PLAN_APPROVED")
             self.assertEqual([operation for operation, _ in calls], [])
 
-    def test_preplan_collection_searches_reads_and_redecides_before_plan(self):
-        """An insufficient decision performs one exact search/read/document-search before the next decision plans."""
+    def test_preplan_collection_reads_authorized_document_before_redeciding(self):
+        """An insufficient decision reads one authorized document, then the next decision plans from its full block."""
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {
             "MATH_AGENT_HANDOUT_CHECKPOINT_DB": os.path.join(directory, "checkpoints.sqlite3"),
         }, clear=False):
@@ -861,17 +895,23 @@ class HandoutGraphContractTest(unittest.TestCase):
 
             def broker(operation, payload, **_kwargs):
                 sequence.append(operation)
+                self.assertEqual(operation, "handout-document-read")
                 self.assertEqual(payload["documentRef"], "doc_initial")
-                if operation == "handout-document-read":
-                    return {"blocks": [{"ref": "ev_read", "text": "原始解析 Markdown 连续窗口：完整已授权配方法段落"}]}
-                self.assertEqual(operation, "handout-document-search")
-                self.assertEqual(payload["keyword"], "配方法")
-                return {"blocks": [{"ref": "ev_search", "text": "精确检索配方法段落"}]}
+                self.assertNotIn("query", payload)
+                return {"blocks": [{
+                    "ref": "ev_read",
+                    "text": "原始解析 Markdown 连续窗口：完整已授权配方法段落\n\n![source-image:opaque-run-image-001](IMAJES/image-001.png)",
+                    "articlePath": "抛物线/定义.md",
+                    "imageRefs": [{
+                        "markdownLine": "![source-image:opaque-run-image-001](IMAJES/image-001.png)",
+                        "logicalPath": "抛物线/定义/IMAJES/image-001.png",
+                    }],
+                }]}
 
             runtime._java_broker_request = broker
             decisions = iter([
-                {"sufficient": False, "actions": [{"kind": "document_read", "documentRef": "doc_initial"}, {"kind": "document_search", "documentRef": "doc_initial", "query": "配方法"}], "sourceToGapAssessment": "初始直接命中需要定位方法细节"},
-                {"sufficient": True, "actions": [], "sourceToGapAssessment": "深读段落补足方法来源"},
+                {"sufficient": False, "actions": [{"kind": "document_read", "documentRef": "doc_initial"}], "sourceToGapAssessment": "初始直接命中需要精读原文"},
+                {"sufficient": True, "actions": [], "sourceToGapAssessment": "连续原文已补足方法来源"},
             ])
 
             def provider(request, node, prompt, **_kwargs):
@@ -884,23 +924,24 @@ class HandoutGraphContractTest(unittest.TestCase):
                         self.assertNotIn("ev_read", payload["authorizedEvidence"])
                     else:
                         self.assertIn("ev_read", payload["authorizedEvidence"])
-                        self.assertIn("原始解析 Markdown 连续窗口：完整已授权配方法段落", payload["authorizedEvidence"])
+                        self.assertIn("原始解析 Markdown 连续窗口", payload["authorizedEvidence"])
+                        self.assertIn("![source-image:opaque-run-image-001](IMAJES/image-001.png)", payload["authorizedEvidence"])
+                        self.assertIn("抛物线/定义/IMAJES/image-001.png", payload["authorizedEvidence"])
                     candidate = next(decisions)
                 else:
-                    candidate = {"learningObjective": "掌握配方法", "questions": [{"number": 1, "question": request.question_text, "evidenceRefs": ["ev_initial"], "knowledgePoint": "函数", "teachingSequence": ["配方"], "figureRequired": False}], "completionCriteria": ["覆盖题目"], "readyForNextStage": True, "revisionRound": 0, "warnings": []}
+                    candidate = {"learningObjective": "掌握配方法", "questions": [{"number": 1, "question": request.question_text, "evidenceRefs": ["ev_initial"], "knowledgePoint": "函数", "teachingSequence": ["配方"], "figureRequired": True, "assetPlacements": [{"logicalPath": "抛物线/定义/IMAJES/image-001.png", "markdownLine": "![source-image:opaque-run-image-001](IMAJES/image-001.png)", "anchorBefore": "完整已授权配方法段落", "anchorAfter": "", "layout": "single", "variants": ["teacher_writer", "student_writer", "lecture_writer"], "caption": "配方法示意图"}]}], "completionCriteria": ["覆盖题目"], "readyForNextStage": True, "revisionRound": 0, "warnings": []}
                 return candidate, {"promptTokens": 1, "completionTokens": 1, "totalTokens": 2, "estimatedCost": 0.0}, "test", "test"
 
             runtime._invoke_json_model = provider
-            runtime.execute(HandoutRunRequest(runId="run-collection-search-001", taskId="task", writingGoal="函数讲义", questionText="【题目 1】\n已知函数 f(x)=x^2，求最小值。", operation="PLAN"))
-            self.assertEqual(sequence, ["resource_curation", "handout-document-read", "handout-document-search", "resource_curation", "plan_writer"])
-            private = runtime._checkpoint.load_private_state("run-collection-search-001")["privateDiagnostics"]["resourceCollection"]
+            runtime.execute(HandoutRunRequest(runId="run-collection-read-001", taskId="task", writingGoal="函数讲义", questionText="【题目 1】\n已知函数 f(x)=x^2，求最小值。", operation="PLAN"))
+            self.assertEqual(sequence, ["resource_curation", "handout-document-read", "resource_curation", "plan_writer"])
+            private = runtime._checkpoint.load_private_state("run-collection-read-001")["privateDiagnostics"]["resourceCollection"]
             deep_reads = private["iterations"]["1"]["agentSelectedDeepReads"]
-            self.assertEqual([entry["operation"] for entry in deep_reads], ["handout-document-read", "handout-document-search"])
+            self.assertEqual([entry["operation"] for entry in deep_reads], ["handout-document-read"])
             self.assertEqual(deep_reads[0]["documentRef"], "doc_initial")
             self.assertEqual(deep_reads[0]["acceptedBlocks"][0]["ref"], "ev_read")
             self.assertIn("原始解析 Markdown 连续窗口", deep_reads[0]["acceptedBlocks"][0]["text"])
-            self.assertEqual(deep_reads[1]["selectionQuery"], "配方法")
-            self.assertEqual(deep_reads[1]["acceptedBlocks"][0]["ref"], "ev_search")
+            self.assertNotIn("handout-document-search", json.dumps(private, ensure_ascii=False))
 
     def test_preplan_collection_uses_fixed_canonical_question_read_without_selector(self):
         """Canonical reads expose only a run-authorized opaque document reference to the decision model."""
@@ -998,48 +1039,160 @@ class HandoutGraphContractTest(unittest.TestCase):
             private = json.dumps(runtime._checkpoint.load_private_state("run-collection-insufficient-001"), ensure_ascii=False)
             self.assertIn(secret, private)
 
-    def test_rag_context_expands_only_broker_authorized_opaque_documents(self):
-        with tempfile.TemporaryDirectory() as directory:
-            previous = os.environ.get("MATH_AGENT_HANDOUT_CHECKPOINT_DB")
-            os.environ["MATH_AGENT_HANDOUT_CHECKPOINT_DB"] = os.path.join(directory, "checkpoints.sqlite3")
-            try:
-                runtime = HandoutRuntime()
-                calls = []
+    def test_rag_context_allows_automatic_authorized_source_image_read(self):
+        """An authorized image source is scheduled by the bounded enrichment step, not model action formatting."""
+        evidence = EvidenceSnapshot.model_validate({"items": [{
+            "ref": "ev_opaque_match", "documentRef": "doc_opaque_source", "excerpt": "命中片段",
+            "imageRefs": [{
+                "markdownLine": "![source-image:opaque-run-image-001](IMAJES/image-001.png)",
+                "logicalPath": "完整资料/IMAJES/image-001.png",
+            }],
+        }]})
 
-                def broker(operation, payload):
-                    calls.append((operation, payload))
-                    if operation == "handout-context":
-                        self.assertNotIn("query", payload)
-                        return {"items": [{
-                            "ref": "ev_opaque_match", "title": "完整资料", "documentName": "完整资料.docx",
-                            "documentRef": "doc_opaque_source", "excerpt": "命中片段", "assetId": "asset_opaque_placement",
-                        }]}
-                    self.assertEqual(operation, "handout-document-read")
-                    self.assertEqual(payload["documentRef"], "doc_opaque_source")
-                    self.assertEqual(payload["maxBlocks"], 80)
-                    return {"blocks": [{"ref": "ev_opaque_block", "text": "原始文档完整内容中的已授权段落"}]}
+        decision = HandoutRuntime._validate_collection_decision(
+            {"sufficient": False, "actions": [], "sourceToGapAssessment": "交接时自动读取授权图片原文"},
+            evidence,
+        )
 
-                runtime._java_broker_request = broker
-                runtime._reviewed_model_candidate = lambda *_args, **_kwargs: (
-                    ResourceCollectionDecision(sufficient=True, actions=[], sourceToGapAssessment="初始授权资料已覆盖题干和方法"),
-                    {"promptTokens": 0, "completionTokens": 0, "totalTokens": 0, "estimatedCost": 0.0},
-                    "test-provider", "test-model", type("Review", (), {"turns": 1, "checkpoint_value": lambda self: {}})(),
-                )
-                evidence = runtime._resource_curation({"request": HandoutRunRequest(
-                    runId="run-source-inspection-001", taskId="task-source-inspection-001",
-                    writingGoal="函数讲义", questionText="【题目 1】已知函数 f(x)=x^2，求最小值。",
-                )})["evidence"]
+        self.assertFalse(decision.sufficient)
+        self.assertEqual(decision.actions, [])
 
-                self.assertEqual([item.document_name for item in evidence.items], ["完整资料.docx"])
-                self.assertEqual(evidence.items[0].asset_id, "asset_opaque_placement")
-                self.assertEqual([item.ref for item in evidence.inspected_items], [])
-                self.assertNotIn("filesystemPath", str(calls))
-                self.assertEqual([call[0] for call in calls], ["handout-context"])
-            finally:
-                if previous is None:
-                    os.environ.pop("MATH_AGENT_HANDOUT_CHECKPOINT_DB", None)
+    def test_recovery_initial_evidence_still_deep_reads_authorized_source_image(self):
+        """Fresh resume evidence is input to collection, not proof that source Markdown was already inspected."""
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {
+            "MATH_AGENT_HANDOUT_CHECKPOINT_DB": os.path.join(directory, "checkpoints.sqlite3"),
+        }, clear=False):
+            runtime = HandoutRuntime()
+            request = HandoutRunRequest(
+                runId="run-recovery-image-read-001", taskId="task", writingGoal="抛物线讲义",
+                questionText="【题目 1】证明抛物线焦点弦性质。", operation="PLAN",
+                initialEvidence=[{
+                    "ref": "ev_image", "documentRef": "doc_image", "excerpt": "图形相关的命中段落",
+                    "imageRefs": [{
+                        "markdownLine": "![](IMAJES/image-001.jpg)",
+                        "logicalPath": "解析几何/IMAJES/image-001.jpg",
+                    }],
+                }],
+            )
+            calls = []
+
+            def broker(operation, payload, **_kwargs):
+                calls.append((operation, payload))
+                self.assertEqual(operation, "handout-document-read")
+                self.assertEqual(payload["documentRef"], "doc_image")
+                return {"blocks": [{
+                    "ref": "ev_image_block",
+                    "text": "原始资料段落\n\n![source-image:opaque-run-image-001](IMAJES/image-001.jpg)",
+                    "imageRefs": [{
+                        "markdownLine": "![source-image:opaque-run-image-001](IMAJES/image-001.jpg)",
+                        "logicalPath": "解析几何/IMAJES/image-001.jpg",
+                    }],
+                }]}
+
+            decisions = iter([
+                {"sufficient": False, "actions": [{"kind": "document_read", "documentRef": "doc_image"}],
+                 "sourceToGapAssessment": "需要读取带图原文"},
+                {"sufficient": True, "actions": [], "sourceToGapAssessment": "已读取原文"},
+            ])
+
+            def provider(_request, node, _prompt, **_kwargs):
+                if node == "resource_curation":
+                    candidate = next(decisions)
                 else:
-                    os.environ["MATH_AGENT_HANDOUT_CHECKPOINT_DB"] = previous
+                    candidate = {"learningObjective": "理解性质", "questions": [{
+                        "number": 1, "question": request.question_text, "evidenceRefs": ["ev_image"],
+                        "knowledgePoint": "抛物线", "teachingSequence": ["读图"], "figureRequired": False,
+                    }], "completionCriteria": ["覆盖题目"], "readyForNextStage": True,
+                    "revisionRound": 0, "warnings": []}
+                return candidate, {"promptTokens": 1, "completionTokens": 1, "totalTokens": 2, "estimatedCost": 0.0}, "test", "test"
+
+            runtime._java_broker_request = broker
+            runtime._invoke_json_model = provider
+            package = runtime.execute(request)
+            self.assertEqual(package.status, "WAITING_REVIEW")
+            self.assertEqual([operation for operation, _payload in calls], ["handout-document-read"])
+            self.assertEqual(len(package.evidence.inspected_items), 1)
+            self.assertIn("source-image:opaque-run-image-001", package.evidence.inspected_items[0].excerpt)
+
+    def test_collection_prioritizes_selected_image_document_within_read_budget(self):
+        """A selected source image read is not starved by earlier text-only reads under the fixed cap."""
+        runtime = HandoutRuntime()
+        request = HandoutRunRequest(
+            runId="run-image-priority-001", taskId="task", writingGoal="抛物线讲义", questionText="题目",
+        )
+        evidence = EvidenceSnapshot.model_validate({"items": [
+            {"ref": "ev_text", "documentRef": "doc_text", "excerpt": "教材文字"},
+            {"ref": "ev_image", "documentRef": "doc_image", "excerpt": "图形文字", "imageRefs": [{
+                "markdownLine": "![](IMAJES/image-001.jpg)", "logicalPath": "解析几何/IMAJES/image-001.jpg",
+            }]},
+        ]})
+        reads = []
+
+        def broker(operation, payload, **_kwargs):
+            self.assertEqual(operation, "handout-document-read")
+            reads.append(payload["documentRef"])
+            return {"blocks": [{"ref": f"read_{payload['documentRef']}", "text": "原文"}]}
+
+        runtime._java_broker_request = broker
+        enriched = runtime._execute_collection_actions(request, evidence, [
+            ResourceCollectionAction(kind="document_read", documentRef="doc_text"),
+            ResourceCollectionAction(kind="document_read", documentRef="doc_image"),
+        ], 1)
+        self.assertEqual(reads, ["doc_image", "doc_text"])
+        self.assertEqual([item.document_ref for item in enriched.inspected_items], ["doc_image", "doc_text"])
+
+    def test_completed_checkpoint_refresh_regenerates_image_evidence(self):
+        """A completed checkpoint cannot reuse old writers when recovery supplies refreshed source evidence."""
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {
+            "MATH_AGENT_HANDOUT_CHECKPOINT_DB": os.path.join(directory, "checkpoints.sqlite3"),
+        }, clear=False):
+            runtime = HandoutRuntime()
+            run_id = "run-completed-refresh-001"
+            old_writer = WriterDocument(stageCode="teacher_writer", title="旧教师稿", markdown="旧正文")
+            runtime._checkpoint.save(run_id, "COMPLETED", {
+                "request": HandoutRunRequest(runId=run_id, taskId="old", writingGoal="旧讲义", questionText="旧题").model_dump(by_alias=True),
+                "writingPlan": {"learningObjective": "旧目标", "questions": [{
+                    "number": 1, "question": "旧题", "evidenceRefs": ["ev_old"], "knowledgePoint": "旧知识",
+                    "teachingSequence": ["旧步骤"], "figureRequired": False,
+                }], "completionCriteria": ["旧完成"], "readyForNextStage": True, "revisionRound": 0, "warnings": []},
+                "writers": [old_writer.model_dump(by_alias=True)],
+            }, {"event": "completed", "status": "COMPLETED"})
+            request = HandoutRunRequest(
+                runId=run_id, taskId="new", writingGoal="抛物线讲义", questionText="【题目 1】证明抛物线性质。",
+                operation="PLAN", initialEvidence=[{
+                    "ref": "ev_image", "documentRef": "doc_image", "excerpt": "带图命中",
+                    "imageRefs": [{"markdownLine": "![](IMAJES/image-001.jpg)", "logicalPath": "解析几何/IMAJES/image-001.jpg"}],
+                }],
+            )
+            calls = []
+
+            def broker(operation, payload, **_kwargs):
+                calls.append(operation)
+                self.assertEqual(operation, "handout-document-read")
+                self.assertEqual(payload["documentRef"], "doc_image")
+                return {"blocks": [{"ref": "ev_image_block", "text": "原文 ![source-image:opaque](IMAJES/image-001.jpg)", "imageRefs": [{
+                    "markdownLine": "![source-image:opaque](IMAJES/image-001.jpg)", "logicalPath": "解析几何/IMAJES/image-001.jpg",
+                }]}]}
+
+            decisions = iter([
+                {"sufficient": False, "actions": [{"kind": "document_read", "documentRef": "doc_image"}], "sourceToGapAssessment": "精读"},
+                {"sufficient": True, "actions": [], "sourceToGapAssessment": "完成"},
+            ])
+
+            def provider(_request, node, _prompt, **_kwargs):
+                candidate = next(decisions) if node == "resource_curation" else {
+                    "learningObjective": "新目标", "questions": [{"number": 1, "question": request.question_text,
+                    "evidenceRefs": ["ev_image"], "knowledgePoint": "抛物线", "teachingSequence": ["读图"], "figureRequired": False}],
+                    "completionCriteria": ["覆盖题目"], "readyForNextStage": True, "revisionRound": 0, "warnings": []}
+                return candidate, {"promptTokens": 1, "completionTokens": 1, "totalTokens": 2, "estimatedCost": 0.0}, "test", "test"
+
+            runtime._java_broker_request = broker
+            runtime._invoke_json_model = provider
+            package = runtime.execute(request)
+            self.assertEqual(package.status, "WAITING_REVIEW")
+            self.assertEqual(calls, ["handout-document-read"])
+            self.assertEqual(package.writing_plan.learning_objective, "新目标")
+            self.assertEqual(len(package.evidence.inspected_items), 1)
 
     def test_teacher_resource_curation_reads_only_new_authorized_documents(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1061,14 +1214,6 @@ class HandoutGraphContractTest(unittest.TestCase):
                         "excerpt": "已授权的完整原文块",
                     }],
                 })
-                plan = WritingPlan.model_validate({
-                    "learningObjective": "掌握函数最小值", "questions": [{
-                        "number": 1, "question": request.question_text, "evidenceRefs": ["ev_existing"],
-                        "knowledgePoint": "函数最小值", "teachingSequence": ["读题"], "figureRequired": False,
-                    }],
-                    "completionCriteria": ["覆盖题目"], "readyForNextStage": True,
-                    "teacherResourceQueries": ["函数最小值 配方法"],
-                })
                 calls = []
 
                 def broker(operation, payload, **_kwargs):
@@ -1081,32 +1226,25 @@ class HandoutGraphContractTest(unittest.TestCase):
                             "ref": "ev_teacher_match", "title": "教师资料", "documentName": "教师资料.docx",
                             "documentRef": "doc_teacher", "excerpt": "教师资料命中", "assetId": "asset_teacher",
                         }]}
-                    if operation == "handout-document-read":
-                        self.assertEqual(payload["runId"], request.run_id)
-                        self.assertEqual(payload["documentRef"], "doc_teacher")
-                        self.assertEqual(payload["maxBlocks"], 80)
-                        self.assertNotIn("query", payload)
-                        return {"blocks": [{"ref": "ev_teacher_block", "text": "教师资料中的完整已授权段落"}]}
-                    self.assertEqual(operation, "handout-document-search")
+                    self.assertEqual(operation, "handout-document-read")
                     self.assertEqual(payload["runId"], request.run_id)
                     self.assertEqual(payload["documentRef"], "doc_teacher")
-                    self.assertEqual(payload["keyword"], "函数最小值 配方法")
                     self.assertEqual(payload["maxBlocks"], 80)
-                    return {"blocks": [{"ref": "ev_teacher_search_block", "text": "教师资料中的检索命中段落"}]}
+                    self.assertNotIn("query", payload)
+                    return {"blocks": [{"ref": "ev_teacher_block", "text": "教师资料中的完整已授权段落"}]}
 
                 runtime._java_broker_request = broker
                 discovered = runtime._collect_teacher_resource_queries(request, evidence, ["函数最小值 配方法"], 1)
                 result = runtime._enrich_authorized_document_context(
-                    request, discovered, document_search_queries={"doc_teacher": ["函数最小值 配方法"]},
-                    target_document_refs=["doc_teacher"],
-                )
+                    request, discovered, target_document_refs=["doc_teacher"])
 
-                self.assertEqual([item.document_ref for item in result.inspected_items], ["doc_existing", "doc_teacher", "doc_teacher"])
-                self.assertEqual([item.ref for item in result.inspected_items], ["ev_existing_block", "ev_teacher_block", "ev_teacher_search_block"])
+                self.assertEqual([item.document_ref for item in result.inspected_items], ["doc_existing", "doc_teacher"])
+                self.assertEqual([item.ref for item in result.inspected_items], ["ev_existing_block", "ev_teacher_block"])
                 self.assertEqual([operation for operation, _ in calls], [
-                    "handout-teacher-resource-search", "handout-document-read", "handout-document-search",
+                    "handout-teacher-resource-search", "handout-document-read",
                 ])
                 self.assertNotIn("doc_existing", [payload.get("documentRef") for _, payload in calls])
+                self.assertNotIn("handout-document-search", json.dumps(calls, ensure_ascii=False))
                 self.assertNotIn("filesystemPath", str(calls))
                 self.assertNotIn("base64", str(calls).lower())
             finally:
@@ -1115,24 +1253,17 @@ class HandoutGraphContractTest(unittest.TestCase):
                 else:
                     os.environ["MATH_AGENT_HANDOUT_CHECKPOINT_DB"] = previous
 
-    def test_teacher_resource_curation_searches_each_document_with_its_originating_query(self):
-        """Distinct AI-selected queries retain their document provenance during bounded broker reads."""
+    def test_teacher_resource_curation_reads_each_authorized_document_once(self):
+        """Distinct AI-selected queries retain only their authorized document refs for sequential full reads."""
         runtime = HandoutRuntime()
         request = HandoutRunRequest(
             runId="run-multi-query-source-001", taskId="task-multi-query-source-001",
             writingGoal="函数讲义", questionText="【题目 1】已知函数 f(x)=x^2，求最小值。",
         )
-        plan = WritingPlan.model_validate({
-            "learningObjective": "掌握函数最小值", "questions": [{
-                "number": 1, "question": request.question_text, "evidenceRefs": ["ev_initial"],
-                "knowledgePoint": "函数最小值", "teachingSequence": ["读题"], "figureRequired": False,
-            }], "completionCriteria": ["覆盖题目"], "readyForNextStage": True,
-            "teacherResourceQueries": ["配方法", "顶点式"],
-        })
         evidence = EvidenceSnapshot.model_validate({"items": [{
             "ref": "ev_initial", "documentName": "教材", "excerpt": "初始证据",
         }]})
-        document_keywords: list[tuple[str, str]] = []
+        read_documents: list[str] = []
 
         def broker(operation, payload, **_kwargs):
             if operation == "handout-teacher-resource-search":
@@ -1141,20 +1272,111 @@ class HandoutGraphContractTest(unittest.TestCase):
                     "ref": f"ev_{suffix}", "documentName": f"资料{suffix}",
                     "documentRef": f"doc_{suffix}", "excerpt": payload["query"],
                 }]}
-            if operation == "handout-document-read":
-                return {"blocks": [{"ref": f"read_{payload['documentRef']}", "text": "已授权正文"}]}
-            self.assertEqual(operation, "handout-document-search")
-            document_keywords.append((payload["documentRef"], payload["keyword"]))
-            return {"blocks": [{"ref": f"search_{payload['documentRef']}", "text": "关键词命中"}]}
+            self.assertEqual(operation, "handout-document-read")
+            read_documents.append(payload["documentRef"])
+            return {"blocks": [{"ref": f"read_{payload['documentRef']}", "text": "已授权原始连续正文"}]}
 
         runtime._java_broker_request = broker
         discovered = runtime._collect_teacher_resource_queries(request, evidence, ["配方法", "顶点式"], 1)
-        runtime._enrich_authorized_document_context(
-            request, discovered, document_search_queries={"doc_one": ["配方法"], "doc_two": ["顶点式"]},
-            target_document_refs=["doc_one", "doc_two"],
-        )
+        enriched = runtime._enrich_authorized_document_context(
+            request, discovered, target_document_refs=["doc_one", "doc_two"])
 
-        self.assertEqual(document_keywords, [("doc_one", "配方法"), ("doc_two", "顶点式")])
+        self.assertEqual(read_documents, ["doc_one", "doc_two"])
+        self.assertEqual([item.ref for item in enriched.inspected_items], ["read_doc_one", "read_doc_two"])
+        self.assertNotIn("handout-document-search", json.dumps(enriched.model_dump(by_alias=True), ensure_ascii=False))
+
+    def test_source_enrichment_skips_unavailable_authorized_document_and_reads_selected_image_source(self):
+        runtime = HandoutRuntime()
+        request = HandoutRunRequest(
+            runId="run-unavailable-source-001", taskId="task-unavailable-source-001",
+            writingGoal="抛物线讲义", questionText="【题目 1】求抛物线的焦点。",
+        )
+        evidence = EvidenceSnapshot.model_validate({"items": [
+            {"ref": "ev_unavailable", "documentName": "失效资料", "documentRef": "doc_unavailable", "excerpt": "旧资料"},
+            {"ref": "ev_image", "documentName": "图形资料", "documentRef": "doc_image", "excerpt": "图形资料", "imageRefs": [{
+                "markdownLine": "![source-image:opaque](IMAJES/image-001.jpg)",
+                "logicalPath": "解析几何/IMAJES/image-001.jpg",
+            }]},
+        ]})
+        diagnostic_trace: list[dict[str, object]] = []
+
+        def broker(operation, payload, **_kwargs):
+            self.assertEqual(operation, "handout-document-read")
+            if payload["documentRef"] == "doc_unavailable":
+                raise HTTPException(status_code=404, detail={
+                    "code": "HANDOUT_BROKER_CLIENT_FAILURE", "operation": operation, "status": 404,
+                })
+            self.assertEqual(payload["documentRef"], "doc_image")
+            return {"blocks": [{
+                "ref": "ev_image_block",
+                "text": "焦点弦图形。![source-image:opaque](IMAJES/image-001.jpg)",
+                "imageRefs": [{
+                    "markdownLine": "![source-image:opaque](IMAJES/image-001.jpg)",
+                    "logicalPath": "解析几何/IMAJES/image-001.jpg",
+                }],
+            }]}
+
+        runtime._java_broker_request = broker
+        enriched = runtime._enrich_authorized_document_context(
+            request, evidence, diagnostic_trace=diagnostic_trace,
+            target_document_refs=["doc_unavailable", "doc_image"])
+
+        self.assertEqual([item.document_ref for item in enriched.inspected_items], ["doc_image"])
+        self.assertEqual(enriched.inspected_items[0].image_refs, [{
+            "markdownLine": "![source-image:opaque](IMAJES/image-001.jpg)",
+            "logicalPath": "解析几何/IMAJES/image-001.jpg",
+        }])
+        self.assertEqual(diagnostic_trace[0], {
+            "operation": "handout-document-read",
+            "documentRef": "doc_unavailable",
+            "payload": {
+                "runId": request.run_id,
+                "documentRef": "doc_unavailable",
+                "maxBlocks": 80,
+                "maxChars": 24_000,
+            },
+            "sourceAvailability": "UNAVAILABLE",
+        })
+        self.assertEqual(diagnostic_trace[1]["documentRef"], "doc_image")
+        self.assertEqual(diagnostic_trace[1]["acceptedBlocks"][0]["ref"], "ev_image_block")
+
+    def test_source_enrichment_reads_authorized_image_source_without_model_selection(self):
+        runtime = HandoutRuntime()
+        request = HandoutRunRequest(
+            runId="run-required-image-source-001", taskId="task-required-image-source-001",
+            writingGoal="抛物线讲义", questionText="【题目 1】求抛物线的焦点。",
+        )
+        evidence = EvidenceSnapshot.model_validate({"items": [
+            {"ref": "ev_text", "documentName": "文字资料", "documentRef": "doc_text", "excerpt": "文字资料"},
+            {"ref": "ev_image", "documentName": "图形资料", "documentRef": "doc_image", "excerpt": "图形资料", "imageRefs": [{
+                "markdownLine": "![source-image:opaque](IMAJES/image-001.jpg)",
+                "logicalPath": "解析几何/IMAJES/image-001.jpg",
+            }]},
+        ]})
+        reads: list[str] = []
+
+        def broker(operation, payload, **_kwargs):
+            self.assertEqual(operation, "handout-document-read")
+            reads.append(payload["documentRef"])
+            return {"blocks": [{
+                "ref": f"ev_{payload['documentRef']}",
+                "text": "图形原文。![source-image:opaque](IMAJES/image-001.jpg)" if payload["documentRef"] == "doc_image" else "文字原文。",
+                "imageRefs": [{
+                    "markdownLine": "![source-image:opaque](IMAJES/image-001.jpg)",
+                    "logicalPath": "解析几何/IMAJES/image-001.jpg",
+                }] if payload["documentRef"] == "doc_image" else [],
+            }]}
+
+        runtime._java_broker_request = broker
+        enriched = runtime._execute_collection_actions(
+            request, evidence, [ResourceCollectionAction(kind="document_read", documentRef="doc_text")], 1)
+
+        self.assertEqual(reads, ["doc_image", "doc_text"])
+        self.assertEqual([item.document_ref for item in enriched.inspected_items], ["doc_image", "doc_text"])
+        self.assertEqual(enriched.inspected_items[0].image_refs, [{
+            "markdownLine": "![source-image:opaque](IMAJES/image-001.jpg)",
+            "logicalPath": "解析几何/IMAJES/image-001.jpg",
+        }])
 
     def test_source_enrichment_uses_shared_budget_and_never_splits_a_block(self):
         runtime = HandoutRuntime()
@@ -1334,6 +1556,17 @@ class HandoutGraphContractTest(unittest.TestCase):
                 self.assertEqual([node for node, _ in calls], ["resource_curation", "plan_writer", "plan_writer"])
                 self.assertIn("invalidCandidate", calls[2][1])
                 self.assertEqual(calls[2][1]["failureCodes"], ["CANDIDATE_INCOMPLETE"])
+                self.assertIn("validationMessage", calls[2][1])
+                self.assertIn("questions", calls[2][1]["validationMessage"])
+                self.assertIn("Field required", calls[2][1]["validationMessage"])
+                self.assertEqual(calls[2][1]["operation"], "PLAN")
+                self.assertEqual(calls[2][1]["contractHints"]["revisionRound"], 0)
+                self.assertIn("修复调用不等于业务修订", calls[2][1]["contractHints"]["instruction"])
+                self.assertIn("source-image", calls[2][1]["instruction"])
+                self.assertIn("不得输出 assetPlacements", calls[2][1]["instruction"])
+                self.assertIn("不得新增、重复或改写", calls[2][1]["instruction"])
+                self.assertIn("assetId、assetIds", calls[2][1]["instruction"])
+                self.assertNotIn("不得输出空 assetIds", calls[2][1]["instruction"])
                 self.assertEqual(package.status, "WAITING_REVIEW")
             finally:
                 if previous is None:
@@ -1473,37 +1706,31 @@ class HandoutGraphContractTest(unittest.TestCase):
                 questions,
             )
 
-    def test_writing_plan_rejects_cross_evidence_asset_and_requires_figure_selection(self):
+    def test_writing_plan_rejects_duplicate_image_placement_fields(self):
         evidence = EvidenceSnapshot(items=[EvidenceItem(
-            ref="ev_asset", documentRef="doc_asset", excerpt="原始题干", assetIds=["asset_allowed"]
+            ref="ev_asset", documentRef="doc_asset", excerpt="原始题干",
+            imageRefs=[{"markdownLine": "![source-image:run-image-001](IMAJES/image-001.png)",
+                        "logicalPath": "函数/最值/IMAJES/image-001.png"}],
         )])
         request = HandoutRunRequest(
             runId="run-asset-contract", taskId="task-asset-contract", writingGoal="函数讲义", questionText="【题目 1】\n求函数最值。")
-        cross_asset = WritingPlan.model_validate({
-            "learningObjective": "理解最值", "questions": [{"number": 1, "question": "求函数最值。",
-            "evidenceRefs": ["ev_asset"], "knowledgePoint": "函数", "teachingSequence": ["读题"],
-            "figureRequired": True, "assetPlacements": [{"questionNumber": 1, "assetIds": ["asset_other"],
-            "anchor": "question", "layout": "single", "variants": ["teacher_writer"], "caption": "图"}]}],
-            "completionCriteria": ["覆盖题目"], "readyForNextStage": True})
-        with self.assertRaisesRegex(ValueError, "outside its evidence"):
-            HandoutRuntime._validate_writing_plan(cross_asset, request, evidence)
-        missing_placement = cross_asset.model_copy(update={"questions": [cross_asset.questions[0].model_copy(
-            update={"asset_placements": []})]})
-        with self.assertRaisesRegex(ValueError, "requires an AI-selected asset placement"):
-            HandoutRuntime._validate_writing_plan(missing_placement, request, evidence)
-
-    def test_writer_rejects_asset_replacement_outside_approved_plan(self):
         plan = WritingPlan.model_validate({
             "learningObjective": "理解最值", "questions": [{"number": 1, "question": "求函数最值。",
             "evidenceRefs": ["ev_asset"], "knowledgePoint": "函数", "teachingSequence": ["读题"],
-            "figureRequired": False, "assetPlacements": [{"questionNumber": 1, "assetIds": ["asset_allowed"],
-            "anchor": "question", "layout": "single", "variants": ["student_writer"], "caption": "图"}]}],
+            "figureRequired": True, "assetPlacements": [{"logicalPath": "函数/最值/IMAJES/image-001.png"}]}],
             "completionCriteria": ["覆盖题目"], "readyForNextStage": True})
+        HandoutRuntime._validate_writing_plan(plan, request, evidence)
+        self.assertFalse(hasattr(plan.questions[0], "asset_placements"))
+
+    def test_writer_ignores_duplicate_image_placement_fields(self):
+        plan = WritingPlan.model_validate({
+            "learningObjective": "理解最值", "questions": [{"number": 1, "question": "求函数最值。",
+            "evidenceRefs": ["ev_asset"], "knowledgePoint": "函数", "teachingSequence": ["读题"],
+            "figureRequired": False}], "completionCriteria": ["覆盖题目"], "readyForNextStage": True})
         payload = {"stageCode": "student_writer", "title": "学生版", "markdown": "## 题目\n\n求函数最值。请先写出函数的定义域，并根据开口方向、顶点坐标和取值范围完成独立推理。\n\n## 提示\n\n先整理已知条件，再说明所用方法与每一步的依据，最后保留足够作答空间。",
-                   "assetPlacements": [{"questionNumber": 1, "assetIds": ["asset_other"], "anchor": "question",
-                   "layout": "single", "variants": ["student_writer"], "caption": "图"}]}
-        with self.assertRaisesRegex(ValueError, "differs from approved writing plan"):
-            HandoutRuntime._normalize_writer_payload(payload, "student_writer", "【题目 1】\n求函数最值。", plan)
+                   "assetPlacements": [{"logicalPath": "其他文章/IMAJES/image-001.png"}]}
+        document = HandoutRuntime._normalize_writer_payload(payload, "student_writer", "【题目 1】\n求函数最值。", plan)
+        self.assertFalse(hasattr(document, "asset_placements"))
 
     def test_normalizer_preserves_nested_student_document_from_provider_wrapper(self):
         """A provider wrapper must not turn an already generated student worksheet into an empty repair request."""
@@ -1616,6 +1843,22 @@ class HandoutGraphContractTest(unittest.TestCase):
         parsed = HandoutRuntime._parse_json(content)
         self.assertIsInstance(parsed, dict)
         self.assertEqual(parsed["stageCode"], "teacher_writer")
+
+    def test_json_parser_repairs_unescaped_latex_commands_inside_markdown_strings(self):
+        """A complete provider response may contain Markdown LaTeX without JSON-escaping command backslashes."""
+        content = (
+            '{"stageCode":"teacher_writer","title":"抛物线",'
+            '"markdown":"由 $p=\\operatorname{dist}(F,l)$ 得 $F\\left(\\frac{p}{2},0\\right)$。",'
+            '"citations":[]}'
+        )
+
+        parsed = HandoutRuntime._parse_json(content)
+
+        self.assertEqual(parsed["stageCode"], "teacher_writer")
+        self.assertEqual(
+            parsed["markdown"],
+            "由 $p=\\operatorname{dist}(F,l)$ 得 $F\\left(\\frac{p}{2},0\\right)$。",
+        )
 
     def test_list_writer_payload_projects_text_fields(self):
         questions = "【题目 1】\n已知函数 f(x)=x^2，求最小值。"

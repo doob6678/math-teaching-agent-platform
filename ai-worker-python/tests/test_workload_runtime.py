@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -216,11 +217,21 @@ class MigratedWorkloadContractTest(unittest.TestCase):
                 "providerRoute": self.route(),
             })
             first = list(runtime.stream_events(request))
-            replay = list(runtime.stream_events(request, after_id=first[1][0]))
+            first_delta_id = next(event_id for event_id, event in first if event["event"] == "delta")
+            replay = list(runtime.stream_events(request, after_id=first_delta_id))
 
             self.assertEqual(calls, [request.runId])
-            self.assertEqual([event[1]["event"] for event in first], ["started", "delta", "delta", "completed"])
-            self.assertEqual([event[1]["event"] for event in replay], ["delta", "completed"])
+            # 合并窗口内到达的 delta 会被检查点层合并成一条事件（内容按序拼接、不丢失），
+            # 因此断言事件形态与内容完整性，而不是固定 delta 条数。
+            first_events = [event["event"] for _, event in first]
+            self.assertEqual(first_events[0], "started")
+            self.assertEqual(first_events[-1], "completed")
+            self.assertIn("delta", first_events)
+            merged_content = "".join(
+                str(event["data"].get("content", "")) for _, event in first if event["event"] == "delta"
+            )
+            self.assertEqual(merged_content, "第一段第二段")
+            self.assertEqual([event["event"] for _, event in replay][-1], "completed")
 
     def test_durable_stream_persists_error_when_executor_has_no_terminal_event(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(
@@ -335,7 +346,7 @@ class MigratedWorkloadContractTest(unittest.TestCase):
             def raise_for_status(self):
                 return None
 
-            def iter_lines(self, decode_unicode=True):
+            def iter_lines(self, chunk_size=None, decode_unicode=True):
                 return iter(response_lines)
 
         with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key", "MATH_AGENT_STUDENT_EXPLANATION_RETRY_BACKOFF_SECONDS": "0"}), patch.object(
@@ -368,7 +379,7 @@ class MigratedWorkloadContractTest(unittest.TestCase):
             def raise_for_status(self):
                 return None
 
-            def iter_lines(self, decode_unicode=True):
+            def iter_lines(self, chunk_size=None, decode_unicode=True):
                 return iter(self.lines)
 
         valid = 'data: {"choices":[{"delta":{"content":"{\\"conversationTitle\\":\\"定义域\\",\\"cards\\":[]}"}}]}\ndata: [DONE]'
@@ -405,7 +416,7 @@ class MigratedWorkloadContractTest(unittest.TestCase):
             def raise_for_status(self):
                 return None
 
-            def iter_lines(self, decode_unicode=True):
+            def iter_lines(self, chunk_size=None, decode_unicode=True):
                 return iter([
                     "data: ping",
                     'data: {"choices":[{"delta":{"content":"{\\"conversationTitle\\":\\"定义域\\",\\"cards\\":[]}"}}]}',
@@ -447,7 +458,7 @@ class MigratedWorkloadContractTest(unittest.TestCase):
             def raise_for_status(self):
                 return None
 
-            def iter_lines(self, decode_unicode=True):
+            def iter_lines(self, chunk_size=None, decode_unicode=True):
                 return iter(self.lines)
 
         with patch.dict(os.environ, {
@@ -488,7 +499,7 @@ class MigratedWorkloadContractTest(unittest.TestCase):
             def raise_for_status(self):
                 return None
 
-            def iter_lines(self, decode_unicode=True):
+            def iter_lines(self, chunk_size=None, decode_unicode=True):
                 return iter([
                     "event: chat.completion.chunk",
                     'data: {"choices":[{"delta":',
@@ -523,7 +534,7 @@ class MigratedWorkloadContractTest(unittest.TestCase):
             def raise_for_status(self):
                 return None
 
-            def iter_lines(self, decode_unicode=True):
+            def iter_lines(self, chunk_size=None, decode_unicode=True):
                 from requests import RequestException
                 yield 'data: {"choices":[{"delta":{"content":"partial"}}]}'
                 raise RequestException("interrupted")
@@ -551,7 +562,7 @@ class MigratedWorkloadContractTest(unittest.TestCase):
                 return False
             def raise_for_status(self):
                 return None
-            def iter_lines(self, decode_unicode=True):
+            def iter_lines(self, chunk_size=None, decode_unicode=True):
                 return iter(response_lines)
         with patch.object(migrated_workload_runtime(), "_session") as session, patch(
             "app.workload_runtime.fallback_tokens", return_value=(2, 3, 5)
@@ -571,7 +582,16 @@ class MigratedWorkloadContractTest(unittest.TestCase):
             )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers["content-type"].split(";")[0], "text/event-stream")
-        self.assertEqual(response.text.count("event: delta"), 3)
+        # 检查点层会在 80ms 窗口内合并连续 delta（内容按序拼接），所以断言至少一条增量
+        # 且三个 provider 分片全部到达，而不是固定 delta 事件数。
+        self.assertGreaterEqual(response.text.count("event: delta"), 1)
+        merged_delta_content = "".join(
+            json.loads(item)["content"]
+            for item in re.findall(r'event: delta\ndata: ({.*?})\n', response.text)
+        )
+        self.assertIn('{\"decision\":\"final\",', merged_delta_content)
+        self.assertIn('\"conversationTitle\":\"定义域\",', merged_delta_content)
+        self.assertIn('\"cards\":[{\"summary\":\"先看分母。\"}]', merged_delta_content)
         self.assertIn("id: 1\nevent: started\n", response.text)
         self.assertIn("id: 2\nevent: delta\n", response.text)
         self.assertIn("event: completed\n", response.text)
@@ -600,7 +620,7 @@ class MigratedWorkloadContractTest(unittest.TestCase):
             def raise_for_status(self):
                 return None
 
-            def iter_lines(self, decode_unicode=True):
+            def iter_lines(self, chunk_size=None, decode_unicode=True):
                 return iter(response_lines)
 
         with patch.object(migrated_workload_runtime(), "_session") as session, patch.object(
@@ -621,7 +641,9 @@ class MigratedWorkloadContractTest(unittest.TestCase):
                 },
             )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.text.count("event: delta"), 0)
+        # compose 模式同样实时转发 provider 增量（Java 投影层只提取 title/summary/items 文本），
+        # 这是学生端首字从整包 9 秒级降到首个字段到达的关键契约。
+        self.assertGreaterEqual(response.text.count("event: delta"), 1)
         self.assertIn('"decision":"final"', response.text)
         self.assertIn('"cardKey":"domain"', response.text)
 

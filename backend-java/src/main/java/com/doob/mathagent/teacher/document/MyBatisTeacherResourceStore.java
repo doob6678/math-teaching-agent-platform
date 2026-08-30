@@ -4,13 +4,20 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.doob.mathagent.teacher.document.entity.TeacherSourceDocumentEntity;
 import com.doob.mathagent.teacher.document.mapper.TeacherSourceDocumentMapper;
-import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
 import com.doob.mathagent.teacher.support.TeacherResourceSourceIdentity;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.ArrayList;
+
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Repository;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * MyBatis-Plus store for teacher-managed source documents.
@@ -18,6 +25,9 @@ import org.springframework.stereotype.Repository;
 @Repository
 @ConditionalOnProperty(prefix = "math-agent.database", name = "enabled", havingValue = "true")
 public class MyBatisTeacherResourceStore implements TeacherResourceStore {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(MyBatisTeacherResourceStore.class);
+    private static final ObjectMapper METADATA_MAPPER = new ObjectMapper();
 
     private final TeacherSourceDocumentMapper mapper;
 
@@ -75,6 +85,7 @@ public class MyBatisTeacherResourceStore implements TeacherResourceStore {
             return List.of();
         }
         return mapper.selectList(query).stream()
+                .filter(entity -> !"FILE".equalsIgnoreCase(parseMetadata(entity.getMetadataJson()).getOrDefault("documentKind", "")))
                 .map(MyBatisTeacherResourceStore::toResponse)
                 .toList();
     }
@@ -92,24 +103,10 @@ public class MyBatisTeacherResourceStore implements TeacherResourceStore {
             String tenantId,
             String viewerRole,
             String viewerSubjectId) {
-        LambdaQueryWrapper<TeacherSourceDocumentEntity> query = new LambdaQueryWrapper<TeacherSourceDocumentEntity>()
-                .eq(TeacherSourceDocumentEntity::getTenantId, tenantId)
-                .ne(TeacherSourceDocumentEntity::getSyncStatus, "archived")
-                .orderByAsc(TeacherSourceDocumentEntity::getTitle)
-                .orderByAsc(TeacherSourceDocumentEntity::getId);
-        if ("teacher".equals(viewerRole)) {
-            query.and(wrapper -> wrapper
-                    .eq(TeacherSourceDocumentEntity::getCreatedBy, viewerSubjectId)
-                    .or()
-                    .in(TeacherSourceDocumentEntity::getPermissionScope,
-                            TeacherResourceVisibilityPolicy.TEACHER_SHARED_SCOPES));
-        } else if ("student".equals(viewerRole)) {
-            query.in(TeacherSourceDocumentEntity::getPermissionScope,
-                    TeacherResourceVisibilityPolicy.STUDENT_SHARED_SCOPES);
-        } else if (!"admin".equals(viewerRole)) {
+        if (!"admin".equals(viewerRole) && !"teacher".equals(viewerRole) && !"student".equals(viewerRole)) {
             return List.of();
         }
-        return mapper.selectList(query).stream()
+        return mapper.selectSearchableRootDocuments(tenantId, viewerRole, viewerSubjectId).stream()
                 .map(MyBatisTeacherResourceStore::toResponse)
                 .toList();
     }
@@ -155,14 +152,14 @@ public class MyBatisTeacherResourceStore implements TeacherResourceStore {
                         .eq(TeacherSourceDocumentEntity::getSourceType, "feishu")
                         .ne(TeacherSourceDocumentEntity::getSyncStatus, "archived")
                         .orderByAsc(TeacherSourceDocumentEntity::getId))
-                .stream().map(MyBatisTeacherResourceStore::toResponse).toList();
+                .stream()
+                .filter(entity -> !"FILE".equalsIgnoreCase(parseMetadata(entity.getMetadataJson()).getOrDefault("documentKind", "")))
+                .map(MyBatisTeacherResourceStore::toResponse)
+                .toList();
         /*
          * A Feishu folder is identified by its canonical source identity, not by the display title or
-         * the operator who registered it.  Older registrations can therefore leave two rows for one
-         * URL when they were created by different service subjects.  Scheduling both rows downloads
-         * the same remote tree twice and races block/asset replacement.  Keep the first row because
-         * the query is ordered by numeric id, making the winner deterministic and preserving the
-         * already verified canonical mirror.
+         * the operator who registered it. Older registrations can therefore leave two rows for one
+         * URL; scheduling both rows would download the same remote tree twice.
          */
         Map<String, TeacherResourceDocumentResponse> uniqueBySource = new LinkedHashMap<>();
         for (TeacherResourceDocumentResponse document : documents) {
@@ -175,13 +172,306 @@ public class MyBatisTeacherResourceStore implements TeacherResourceStore {
         return List.copyOf(uniqueBySource.values());
     }
 
+    @Override
+    public boolean supportsFileDocuments() {
+        return true;
+    }
+
+    @Override
+    public boolean hasArchivedFileDocuments(String tenantId, String rootDocumentId) {
+        return tenantId != null && !tenantId.isBlank()
+                && rootDocumentId != null && !rootDocumentId.isBlank()
+                && mapper.existsArchivedFileByRoot(tenantId, rootDocumentId);
+    }
+
+    @Override
+    public TeacherFileDocument findOrCreateFileDocument(
+            TeacherResourceDocumentResponse rootDocument,
+            String providerItemId,
+            String sourcePath,
+            String checksum,
+            String splitFingerprint) {
+        if (rootDocument == null || parseId(rootDocument.documentId()) == null) {
+            return null;
+        }
+        String normalizedProviderId = normalizeIdentity(providerItemId);
+        String normalizedPath = normalizePath(sourcePath);
+        String pathIdentityHash = fileIdentityHash(rootDocument.documentId(), "", normalizedPath);
+        String fileIdentityHash = fileIdentityHash(rootDocument.documentId(), normalizedProviderId, normalizedPath);
+        TeacherSourceDocumentEntity existing = mapper.selectActiveFileByIdentity(
+                        rootDocument.tenantId(),
+                        rootDocument.documentId(),
+                        normalizedProviderId,
+                        fileIdentityHash,
+                        pathIdentityHash,
+                        normalizedPath)
+                .stream()
+                .findFirst()
+                .orElse(null);
+        TeacherSourceDocumentEntity entity = existing == null ? new TeacherSourceDocumentEntity() : existing;
+        if (existing == null) {
+            entity.setTenantId(rootDocument.tenantId());
+            entity.setSourceType(rootDocument.sourceType());
+            entity.setTitle(normalizedPath.isBlank() ? rootDocument.title() : normalizedPath);
+            entity.setOriginalUrl(rootDocument.originalUrl());
+            entity.setLocalPath(rootDocument.localPath());
+            entity.setPermissionScope(rootDocument.permissionScope());
+            entity.setCreatedBy(rootDocument.ownerSubjectId());
+            entity.setSyncStatus("synced");
+            entity.setParseStatus("pending");
+            entity.setEmbeddingStatus("pending");
+            entity.setFeishuExportFormat(normalizedFormat(rootDocument.feishuExportFormat()));
+            entity.setMetadataJson(fileMetadata(
+                    rootDocument.documentId(), normalizedProviderId, normalizedPath, fileIdentityHash, splitFingerprint));
+            mapper.insert(entity);
+        } else {
+            Map<String, String> metadata = parseMetadata(entity.getMetadataJson());
+            metadata.put("documentKind", "FILE");
+            metadata.put("rootDocumentId", rootDocument.documentId());
+            metadata.put("providerItemId", normalizedProviderId);
+            metadata.put("sourcePath", normalizedPath);
+            metadata.put("fileIdentityHash", fileIdentityHash);
+            metadata.put("splitFingerprint", normalizeIdentity(splitFingerprint));
+            entity.setTitle(normalizedPath.isBlank() ? entity.getTitle() : normalizedPath);
+            entity.setOriginalUrl(rootDocument.originalUrl());
+            entity.setLocalPath(rootDocument.localPath());
+            entity.setPermissionScope(rootDocument.permissionScope());
+            entity.setCreatedBy(rootDocument.ownerSubjectId());
+            entity.setChecksum(blankToNull(checksum));
+            entity.setParseStatus("pending");
+            entity.setEmbeddingStatus("pending");
+            metadata.put("indexStatus", "waiting_rebuild");
+            entity.setMetadataJson(writeMetadata(metadata));
+            entity.setSyncStatus("synced");
+            mapper.updateById(entity);
+        }
+        TeacherResourceDocumentResponse fileResponse = toResponse(entity);
+        return new TeacherFileDocument(
+                String.valueOf(entity.getId()),
+                rootDocument.documentId(),
+                normalizedProviderId,
+                normalizedPath,
+                fileIdentityHash,
+                normalizeIdentity(splitFingerprint),
+                fileResponse);
+    }
+
+    @Override
+    public List<TeacherFileDocument> listSearchableFileDocuments(
+            String tenantId,
+            String viewerRole,
+            String viewerSubjectId,
+            List<String> rootDocumentIds,
+            int limit) {
+        List<Long> roots = numericIds(rootDocumentIds);
+        if (roots.isEmpty() || limit <= 0 || (!"admin".equals(viewerRole)
+                && !"teacher".equals(viewerRole) && !"student".equals(viewerRole))) {
+            return List.of();
+        }
+        List<TeacherSourceDocumentEntity> rows = mapper.selectSearchableFiles(
+                tenantId,
+                viewerRole,
+                viewerSubjectId,
+                roots,
+                Math.max(1, Math.min(limit, 512)));
+        LOGGER.info("teacher_file_searchable_query tenant={} role={} roots={} limit={} rows={}",
+                tenantId, viewerRole, roots.size(), limit, rows.size());
+        return rows.stream()
+                .map(entity -> toFileDocument(entity, parseMetadata(entity.getMetadataJson())))
+                .toList();
+    }
+
+    @Override
+    public List<TeacherFileDocument> listSearchableFileDocumentsByIds(
+            String tenantId,
+            String viewerRole,
+            String viewerSubjectId,
+            List<String> fileDocumentIds,
+            int limit) {
+        List<String> ids = (fileDocumentIds == null ? List.<String>of() : fileDocumentIds).stream()
+                .filter(value -> value != null && !value.isBlank())
+                .map(String::strip)
+                .distinct()
+                .limit(12)
+                .toList();
+        if (ids.isEmpty() || limit <= 0 || tenantId == null || tenantId.isBlank()) {
+            return List.of();
+        }
+        return mapper.selectSearchableFilesByIds(
+                        tenantId,
+                        viewerRole,
+                        viewerSubjectId,
+                        ids,
+                        Math.max(1, Math.min(limit, 12)))
+                .stream()
+                .map(entity -> toFileDocument(entity, parseMetadata(entity.getMetadataJson())))
+                .toList();
+    }
+
+    @Override
+    public List<TeacherFileDocument> listFileDocumentsForIndexing(
+            String tenantId,
+            String rootDocumentId,
+            int limit) {
+        return listFileDocumentsForIndexing(tenantId, rootDocumentId, limit, "");
+    }
+
+    @Override
+    public List<TeacherFileDocument> listFileDocumentsForIndexing(
+            String tenantId,
+            String rootDocumentId,
+            int limit,
+            String afterFileDocumentId) {
+        if (tenantId == null || tenantId.isBlank() || rootDocumentId == null || rootDocumentId.isBlank()) {
+            return List.of();
+        }
+        List<TeacherSourceDocumentEntity> rows = mapper.selectFileDocumentsForIndexing(
+                tenantId,
+                rootDocumentId,
+                normalizeIdentity(afterFileDocumentId),
+                Math.max(1, Math.min(limit, 128)));
+        LOGGER.info("teacher_file_indexing_query tenant={} root={} after={} limit={} rows={}",
+                tenantId, rootDocumentId, normalizeIdentity(afterFileDocumentId), limit, rows.size());
+        return rows.stream()
+                .map(entity -> toFileDocument(entity, parseMetadata(entity.getMetadataJson())))
+                .toList();
+    }
+
+    @Override
+    public List<TeacherFileDocument> listMissingFileDocuments(
+            String tenantId,
+            String rootDocumentId,
+            List<String> activeFileIdentityHashes,
+            String afterFileDocumentId,
+            int limit) {
+        if (tenantId == null || tenantId.isBlank() || rootDocumentId == null || rootDocumentId.isBlank()) {
+            return List.of();
+        }
+        List<String> active = normalizeHashes(activeFileIdentityHashes);
+        return mapper.selectMissingFileDocuments(
+                        tenantId,
+                        rootDocumentId,
+                        active,
+                        normalizeIdentity(afterFileDocumentId),
+                        Math.max(1, Math.min(limit, 128)))
+                .stream()
+                .map(entity -> toFileDocument(entity, parseMetadata(entity.getMetadataJson())))
+                .toList();
+    }
+
+    @Override
+    public boolean archiveFileDocument(String tenantId, String fileDocumentId) {
+        Long id = parseId(fileDocumentId);
+        if (tenantId == null || tenantId.isBlank() || id == null) {
+            return false;
+        }
+        return mapper.archiveFileDocument(tenantId, id) > 0;
+    }
+
+    @Override
+    public int archiveMissingFileDocuments(String tenantId, String rootDocumentId, List<String> activeFileIdentityHashes) {
+        String root = normalizeIdentity(rootDocumentId);
+        if (root.isBlank()) {
+            return 0;
+        }
+        List<String> active = normalizeHashes(activeFileIdentityHashes);
+        return mapper.archiveMissingFiles(tenantId, root, active);
+    }
+
+    private static List<String> normalizeHashes(List<String> values) {
+        return (values == null ? List.<String>of() : values).stream()
+                .map(MyBatisTeacherResourceStore::normalizeIdentity)
+                .filter(value -> !value.isBlank())
+                .distinct()
+                .toList();
+    }
+
+    private static TeacherFileDocument toFileDocument(TeacherSourceDocumentEntity entity, Map<String, String> metadata) {
+        return new TeacherFileDocument(
+                String.valueOf(entity.getId()),
+                metadata.getOrDefault("rootDocumentId", ""),
+                metadata.getOrDefault("providerItemId", ""),
+                metadata.getOrDefault("sourcePath", ""),
+                metadata.getOrDefault("fileIdentityHash", ""),
+                metadata.getOrDefault("splitFingerprint", ""),
+                toResponse(entity));
+    }
+
+    private static boolean visible(TeacherSourceDocumentEntity entity, String role, String subjectId) {
+        if ("admin".equals(role)) return true;
+        if ("teacher".equals(role)) {
+            return subjectId != null && subjectId.equals(entity.getCreatedBy())
+                    || TeacherResourceVisibilityPolicy.TEACHER_SHARED_SCOPES.contains(entity.getPermissionScope());
+        }
+        return TeacherResourceVisibilityPolicy.STUDENT_SHARED_SCOPES.contains(entity.getPermissionScope());
+    }
+
+    private static List<Long> numericIds(List<String> values) {
+        List<Long> result = new ArrayList<>();
+        for (String value : values == null ? List.<String>of() : values) {
+            Long id = parseId(value);
+            if (id != null) result.add(id);
+        }
+        return result;
+    }
+
+    private static String fileIdentityHash(String rootDocumentId, String providerItemId, String sourcePath) {
+        String identity = providerItemId.isBlank() ? rootDocumentId + "\u001f" + sourcePath : providerItemId;
+        return TeacherResourceSourceIdentity.hash(identity);
+    }
+
+    private static String normalizePath(String value) {
+        return value == null ? "" : value.replace('\\', '/').strip();
+    }
+
+    private static String normalizeIdentity(String value) {
+        return value == null ? "" : value.strip();
+    }
+
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value;
+    }
+
+    private static Map<String, String> parseMetadata(String value) {
+        Map<String, String> result = new LinkedHashMap<>();
+        if (value == null || value.isBlank()) return result;
+        try {
+            JsonNode node = METADATA_MAPPER.readTree(value);
+            node.fields().forEachRemaining(entry -> {
+                if (entry.getValue().isValueNode()) result.put(entry.getKey(), entry.getValue().asText(""));
+            });
+        } catch (JsonProcessingException ignored) {
+            // Legacy metadata is treated as absent and will be replaced on the next file sync.
+        }
+        return result;
+    }
+
+    private static String fileMetadata(
+            String rootDocumentId, String providerItemId, String sourcePath, String fileIdentityHash, String splitFingerprint) {
+        Map<String, String> metadata = new LinkedHashMap<>();
+        metadata.put("documentKind", "FILE");
+        metadata.put("rootDocumentId", normalizeIdentity(rootDocumentId));
+        metadata.put("providerItemId", normalizeIdentity(providerItemId));
+        metadata.put("sourcePath", normalizePath(sourcePath));
+        metadata.put("fileIdentityHash", normalizeIdentity(fileIdentityHash));
+        metadata.put("splitFingerprint", normalizeIdentity(splitFingerprint));
+        return writeMetadata(metadata);
+    }
+
+    private static String writeMetadata(Map<String, String> values) {
+        try {
+            return METADATA_MAPPER.writeValueAsString(values);
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("Failed to serialize source document metadata", exception);
+        }
+    }
     /**
      * Converts response data to a source_document entity.
      *
      * @param document resource response
      * @return source document entity
      */
-    private static TeacherSourceDocumentEntity toEntity(TeacherResourceDocumentResponse document) {
+    private TeacherSourceDocumentEntity toEntity(TeacherResourceDocumentResponse document) {
         TeacherSourceDocumentEntity entity = new TeacherSourceDocumentEntity();
         entity.setId(parseId(document.documentId()));
         entity.setTenantId(document.tenantId());
@@ -202,8 +492,19 @@ public class MyBatisTeacherResourceStore implements TeacherResourceStore {
         entity.setParseStatus(document.parseStatus());
         entity.setParseMode(normalizeParseMode(document.parseMode()));
         entity.setEmbeddingStatus(document.embeddingStatus());
-        entity.setMetadataJson(indexMetadata(document.indexStatus(), document.feishuExportFormat(), document.parseMode()));
+        Map<String, String> metadata = parseMetadata(document.documentId() == null ? "" : existingMetadata(document.documentId()));
+        metadata.put("indexStatus", document.indexStatus());
+        metadata.put("feishuExportFormat", normalizedFormat(document.feishuExportFormat()));
+        metadata.put("parseMode", normalizeParseMode(document.parseMode()));
+        entity.setMetadataJson(writeMetadata(metadata));
         return entity;
+    }
+
+    private String existingMetadata(String documentId) {
+        Long id = parseId(documentId);
+        if (id == null) return "";
+        TeacherSourceDocumentEntity existing = mapper.selectById(id);
+        return existing == null ? "" : existing.getMetadataJson();
     }
 
     /**

@@ -181,6 +181,9 @@ class StudentExplanationRunStore:
 class DurableStudentExplanationRuntime:
     """Adds idempotency and event replay around the typed Python explanation runtime."""
 
+    # 连续 delta 在该窗口内合并成一条检查点事件，见 _run_stream_worker。
+    _DELTA_FLUSH_SECONDS = 0.08
+
     def __init__(self, executor: Callable[[StudentExplanationRunRequest], dict[str, Any]], stream_executor: Callable[[StudentExplanationRunRequest], Any] | None = None) -> None:
         self._executor = executor
         self._stream_executor_method = stream_executor
@@ -263,15 +266,49 @@ class DurableStudentExplanationRuntime:
 
     def _run_stream_worker(self, request: StudentExplanationRunRequest, fingerprint: str) -> None:
         try:
+            pending_delta: dict[str, Any] | None = None
+            pending_since = 0.0
+
+            def flush_pending_delta() -> None:
+                nonlocal pending_delta
+                if pending_delta is not None:
+                    self._store.save(request.runId, fingerprint, "RUNNING", None, pending_delta)
+                    pending_delta = None
+
             for item in self._executor_stream(request):
                 event = {"event": str(item.get("event", "progress")), "data": item.get("data", {})}
                 if event["event"] in {"completed", "error"}:
+                    flush_pending_delta()
                     self._store.save(request.runId, fingerprint, "COMPLETED" if event["event"] == "completed" else "FAILED", event["data"] if event["event"] == "completed" else None, event)
                     return
+                if event["event"] == "delta":
+                    now = time.monotonic()
+                    if pending_delta is None:
+                        pending_delta = event
+                        pending_since = now
+                    else:
+                        # 逐 token 各写一次检查点会把事件表放大几百倍；在短窗口内合并文本增量，
+                        # 读取端本来按 50ms 轮询，合并不引入可感知延迟。
+                        pending_delta = {**pending_delta, "data": {
+                            **pending_delta["data"],
+                            "content": str(pending_delta["data"].get("content", "")) + str(event["data"].get("content", "")),
+                        }}
+                    if now - pending_since >= self._DELTA_FLUSH_SECONDS:
+                        flush_pending_delta()
+                    continue
+                flush_pending_delta()
                 self._store.save(request.runId, fingerprint, "RUNNING", None, event)
-            self._store.save(request.runId, fingerprint, "FAILED", None, {"event": "error", "data": {"runId": request.runId, "status": 503, "message": "STUDENT_EXPLANATION_STREAM_ENDED_WITHOUT_TERMINAL_EVENT"}})
+            flush_pending_delta()
+            self._store.save(request.runId, fingerprint, "FAILED", None, {"event": "error", "data": {"runId": request.runId, "status": 503, "message": "STUDENT_EXPLANATION_STREAM_ENDED_WITHOUT_TERMINAL_EVENT", "cause": "StreamEndedWithoutTerminalEvent"}})
         except Exception as exc:
-            self._store.save(request.runId, fingerprint, "FAILED", None, {"event": "error", "data": {"runId": request.runId, "status": 503, "message": "STUDENT_EXPLANATION_RUN_FAILED"}, "cause": type(exc).__name__})
+            # cause 只带异常类型名与栈尾帧（不带消息细节），足够定位失败层又不泄漏 provider 细节。
+            import traceback as _traceback
+            tail = ""
+            try:
+                tail = _traceback.format_exc().strip().splitlines()[-1][:200]
+            except Exception:
+                tail = ""
+            self._store.save(request.runId, fingerprint, "FAILED", None, {"event": "error", "data": {"runId": request.runId, "status": 503, "message": "STUDENT_EXPLANATION_RUN_FAILED", "cause": type(exc).__name__, "where": tail}})
 
     def _can_resume_pre_delta(self, run_id: str) -> bool:
         events = self._store.events_after(run_id, 0, MAX_EVENT_PAGE_LIMIT)

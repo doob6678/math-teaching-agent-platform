@@ -1,0 +1,4567 @@
+datasetVersion: "teacher-math-manual-annotated-20260827-v2"
+schemaVersion: "teacher-retrieval-manual-v1"
+description: "人工阅读真实 Feishu 高中数学 Markdown 后编写的 FILE-scoped 检索集；当前版本含人工 query、知识点、目标章节、来源摘录和真实 FILE/block 身份绑定。"
+cases:
+  -
+    case_id: "AG-001"
+    topic: "解析几何/椭圆"
+    query_intent: "定义与参数关系"
+    query: "椭圆离心率如何由焦半距和长半轴表示，a、b、c之间还有什么关系？"
+    expected_source_path: "解析几何/e与椭圆的形状.md"
+    expected_block_order: 1
+    target_section: "一、椭圆离心率 e 的定义"
+    manual_summary: "应解释 e=c/a，并指出 a²=b²+c² 及标准椭圆离心率范围。"
+    acceptable_evidence:
+      - "离心率定义"
+      - "a²=b²+c²"
+      - "0<e<1"
+    case_type: "positive"
+    expected_document_id: "2092515717581553665"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515717581553665"
+    expected_provider_item_id: "KvakdBpe5o2XpEx7CIpc6kOLn9g"
+    expected_block_id: "2092515718172950530"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "analysis"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515717581553665:teacher-sync-fil"
+    document_title: "解析几何/e与椭圆的形状.md"
+    block_order: 1
+    source_excerpt: "在椭圆中，我们定义离心率 e 为椭圆的半焦距与长半轴的比值： e=\\frac{c}{a} 其中： a 为椭圆的长半轴长， c 为椭圆的半焦距（焦点到椭圆中心的距离）， 三者满足椭圆的核心关系：\\boldsymbol{a^2 = b^2 + c^2}（b 为短半轴长）。 对于标准椭圆，离心率的取值范围是 \\boldsymbol{0 < e < 1}。"
+    resolved_section: "一、椭圆离心率 e 的定义"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "AG-002"
+    topic: "解析几何/椭圆"
+    query_intent: "形状变化"
+    query: "椭圆的离心率变大时，短半轴和图形扁平程度怎样变化？"
+    expected_source_path: "解析几何/e与椭圆的形状.md"
+    expected_block_order: 3
+    target_section: "二、e 与椭圆形状的关系"
+    manual_summary: "应说明 b/a=sqrt(1-e²)，e接近1更扁、e接近0更接近圆。"
+    acceptable_evidence:
+      - "b/a=sqrt(1-e²)"
+      - "e与扁平程度"
+      - "接近圆"
+    case_type: "positive"
+    expected_document_id: "2092515717581553665"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515717581553665"
+    expected_provider_item_id: "KvakdBpe5o2XpEx7CIpc6kOLn9g"
+    expected_block_id: "2092515718219087873"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "analysis"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515717581553665:teacher-sync-fil"
+    document_title: "解析几何/e与椭圆的形状.md"
+    block_order: 3
+    source_excerpt: "离心率 e 的核心作用是量化椭圆的扁平程度，我们可以通过公式推导直观理解： 由 a^2 = b^2 + c^2，两边同除以 a^2 得： 1 = \\left(\\frac{b}{a}\\right)^2 + e^2 \\implies \\frac{b}{a} = \\sqrt{1-e^2} \\frac{b}{a} 是短半轴与长半轴的比值：这个比值越接近1，椭圆越接近正圆形；比值越小，椭圆越扁。 结合 e \\in (0,1)，可以得到结论： e 越接近1：\\sqrt{1-e^2} 越小，\\frac{b}{a} 越小，短轴相对长轴越短，椭圆越扁；此时焦点离椭圆中心越远，椭圆被“拉得越长”。 e 越接近0：\\sqrt{1-e^2} 越接近1，\\frac{b}{a} 越接近1，短轴与长轴长度越接近，椭圆越圆；此时焦点离椭圆中心越近，椭圆形态越饱满。 举两个直观例子： 若 e=0.1，\\frac{b}{a}\\approx0.995，椭圆几乎和圆看不出区别； 若 e=0.9，\\frac{b}{a}\\approx0.436，椭圆会非常扁长。 ---"
+    resolved_section: "二、e 与椭圆形状的关系"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "AG-003"
+    topic: "解析几何/椭圆"
+    query_intent: "存在角的离心率范围"
+    query: "椭圆上存在一点使两焦点张角达到直角时，离心率需要满足什么范围？"
+    expected_source_path: "解析几何/e与椭圆的形状.md"
+    expected_block_order: 7
+    target_section: "例题1 存在90°求e范围"
+    manual_summary: "应从短轴顶点处最大张角和 c²≥b² 推出 e²≥1/2，再结合椭圆范围。"
+    acceptable_evidence:
+      - "最大焦点角"
+      - "e²≥1/2"
+      - "sqrt(2)/2≤e<1"
+    case_type: "positive"
+    expected_document_id: "2092515717581553665"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515717581553665"
+    expected_provider_item_id: "KvakdBpe5o2XpEx7CIpc6kOLn9g"
+    expected_block_id: "2092515718328139778"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "analysis"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515717581553665:teacher-sync-fil"
+    document_title: "解析几何/e与椭圆的形状.md"
+    block_order: 7
+    source_excerpt: "已知椭圆\\dfrac{x^2}{a^2}+\\dfrac{y^2}{b^2}=1(a>b>0)，F_1,F_2为左右焦点，椭圆上存在点A使得\\angle F_1AF_2=90^\\circ，求离心率e的取值范围。 #### 解答 焦点三角形顶角最大值在短轴顶点，需最大角≥90° 上顶点构成等腰三角形，c\\ge b c^2\\ge a^2-c^2 \\Rightarrow 2c^2\\ge a^2 \\Rightarrow e^2\\ge \\dfrac12 又(0<e<1) 结果：\\boldsymbol{e\\in\\left[\\dfrac{\\sqrt2}{2},1\\right)} ---"
+    resolved_section: "例题1 存在90°求e范围"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "AG-004"
+    topic: "解析几何/参数方程"
+    query_intent: "参数式与极坐标区分"
+    query: "椭圆的 x=a cos t、y=b sin t 中的 t 是什么参数，和极角是不是同一个概念？"
+    expected_source_path: "解析几何/参数方程表示椭圆和双曲线.md"
+    expected_block_order: 1
+    target_section: "1. 椭圆【参数方程】"
+    manual_summary: "应区分直角坐标参数方程与极坐标，t是离心角参数而非极角θ。"
+    acceptable_evidence:
+      - "t为参数"
+      - "直角坐标参数式"
+      - "不是极角"
+    case_type: "positive"
+    expected_document_id: "2092515719095697409"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515719095697409"
+    expected_provider_item_id: "Csr5d9IJ0o9RLsxElHOcabvLn1b"
+    expected_block_id: "2092515719473184769"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "analysis"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515719095697409:teacher-sync-fil"
+    document_title: "解析几何/参数方程表示椭圆和双曲线.md"
+    block_order: 1
+    source_excerpt: "\\boldsymbol{x=a\\cos t,\\quad y=b\\sin t} t是离心角（参数），不是极角\\theta 还是直角坐标系下的表达式，不属于极坐标。"
+    resolved_section: "1. 椭圆【参数方程】"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "AG-005"
+    topic: "解析几何/参数方程"
+    query_intent: "参数方程求点与焦点"
+    query: "参数为π/6时，x=4cos t、y=3sin t对应的椭圆点如何求，焦点又怎样确定？"
+    expected_source_path: "解析几何/参数方程表示椭圆和双曲线.md"
+    expected_block_order: 6
+    target_section: "参数方程↔普通方程互化、求点坐标"
+    manual_summary: "应代入参数得到点坐标，识别a=4,b=3并由c²=a²-b²确定焦点。"
+    acceptable_evidence:
+      - "代入π/6"
+      - "普通方程"
+      - "c=sqrt(7)及焦点"
+    case_type: "positive"
+    expected_document_id: "2092515719095697409"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515719095697409"
+    expected_provider_item_id: "Csr5d9IJ0o9RLsxElHOcabvLn1b"
+    expected_block_id: "2092515719640956929"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "analysis"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515719095697409:teacher-sync-fil"
+    document_title: "解析几何/参数方程表示椭圆和双曲线.md"
+    block_order: 6
+    source_excerpt: "#### 题1：椭圆基础 已知椭圆参数方程为\\begin{cases}x=4\\cos t\\\\y=3\\sin t\\end{cases}（t为参数） 求当t=\\frac{\\pi}{6}时，椭圆上对应点的坐标 写出该椭圆的普通方程及焦点坐标 解答： 代入t=\\frac{\\pi}{6}： x=4\\cos\\frac{\\pi}{6}=4\\times\\frac{\\sqrt{3}}{2}=2\\sqrt{3} y=3\\sin\\frac{\\pi}{6}=3\\times\\frac{1}{2}=\\frac{3}{2} 对应点坐标：\\boldsymbol{(2\\sqrt{3},\\frac{3}{2})} 由\\cos t=\\frac{x}{4}，\\sin t=\\frac{y}{3}，利用\\cos^2t+\\sin^2t=1消参： 普通方程：\\boldsymbol{\\frac{x^2}{16}+\\frac{y^2}{9}=1} a=4,b=3，则c=\\sqrt{a^2-b^2}=\\sqrt{7}，焦点在x轴上 焦点坐标：\\boldsymbol{(\\pm\\sqrt{7},0)} #### 题2：双曲线基础 将双曲线参数方程\\begin{cases}x=2\\sec t\\\\y=\\sqrt{3}\\tan t\\end{cases}（t为参数）化为普通方程，并求其离心率。 解答： 由\\sec t=\\frac{x}{2}，\\t"
+    resolved_section: "参数方程↔普通方程互化、求点坐标"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "AG-006"
+    topic: "解析几何/圆锥曲线定义"
+    query_intent: "第一定义"
+    query: "处理椭圆或双曲线的焦点距离时，为什么要主动把另一个焦点也连出来？"
+    expected_source_path: "解析几何/圆锥曲线三大定义和结论.md"
+    expected_block_order: 1
+    target_section: "椭圆（焦点在 x 轴）"
+    manual_summary: "应落到椭圆焦距和为2a、双曲线焦距差的基本定义，而非死记二级结论。"
+    acceptable_evidence:
+      - "椭圆距离和2a"
+      - "双曲线距离差2a"
+      - "连另一个焦点"
+    case_type: "positive"
+    expected_document_id: "2092515720299462658"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515720299462658"
+    expected_provider_item_id: "JeZEdoSdio9f3KxY45fc5ivunAe"
+    expected_block_id: "2092515723482939394"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "analysis"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515720299462658:teacher-sync-fil"
+    document_title: "解析几何/圆锥曲线三大定义和结论.md"
+    block_order: 1
+    source_excerpt: "\\frac{x^2}{a^2} + \\frac{y^2}{b^2} = 1 \\quad (a > b > 0) 这里给出焦点在x轴时候的图"
+    resolved_section: "椭圆（焦点在 x 轴）"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "AG-007"
+    topic: "解析几何/圆锥曲线定义"
+    query_intent: "第二定义与准线"
+    query: "椭圆第二定义里，点到焦点的距离和到准线距离的比值由哪个量表示？"
+    expected_source_path: "解析几何/圆锥曲线三大定义和结论.md"
+    expected_block_order: 6
+    target_section: "椭圆的第二定义"
+    manual_summary: "应说明距离比等于离心率e，且椭圆满足0<e<1。"
+    acceptable_evidence:
+      - "焦点与准线"
+      - "距离比"
+      - "离心率e"
+    case_type: "positive"
+    expected_document_id: "2092515720299462658"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515720299462658"
+    expected_provider_item_id: "JeZEdoSdio9f3KxY45fc5ivunAe"
+    expected_block_id: "2092515723591991297"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "analysis"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515720299462658:teacher-sync-fil"
+    document_title: "解析几何/圆锥曲线三大定义和结论.md"
+    block_order: 6
+    source_excerpt: "平面内到一个定点 F_2 （焦点）的距离与到一条定直线 x=\\frac{a^2}{c} （对应准线）的距离之比为常数 e（离心率）的点的轨迹，其中 (0 < e < 1)。 用公式表示为：\\frac{|PF_2|}{d} = e 其中： P(x_0, y_0) 是椭圆上任意一点 |PF_2| 是点 P 到焦点 F_2 的距离 d 是点 P 到对应准线 x=\\frac{a^2}{c} 的垂直距离 e = \\frac{c}{a} 是椭圆的离心率，满足 (0 < e < 1) 焦点：F_2(c,0) 对应准线：x = \\frac{a^2}{c} 另一焦点：F_1(-c, 0) ，对应准线：x = -\\frac{a^2}{c} #### 当焦点在x轴时 由\\frac{|PF_2|}{d} = \\frac{|PF_2|}{\\frac{a^2}{c} - x_0} = e 可以推出下面非常重要的公式"
+    resolved_section: "椭圆的第二定义"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "AG-008"
+    topic: "解析几何/圆锥曲线定义"
+    query_intent: "第三定义斜率关系"
+    query: "椭圆上两点与左右顶点形成的斜率乘积，为什么能化成固定值？"
+    expected_source_path: "解析几何/圆锥曲线三大定义和结论.md"
+    expected_block_order: 14
+    target_section: "椭圆第三定义"
+    manual_summary: "应说明利用点在椭圆方程、消元和坐标化把斜率积化为常量。"
+    acceptable_evidence:
+      - "点在椭圆上"
+      - "斜率乘积"
+      - "消元代数化"
+    case_type: "positive"
+    expected_document_id: "2092515720299462658"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515720299462658"
+    expected_provider_item_id: "JeZEdoSdio9f3KxY45fc5ivunAe"
+    expected_block_id: "2092515723818483714"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "analysis"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515720299462658:teacher-sync-fil"
+    document_title: "解析几何/圆锥曲线三大定义和结论.md"
+    block_order: 14
+    source_excerpt: "当椭圆上两点 A，B关于原点对称时，有椭圆上A，B以外一点P使得 k_{PA} \\cdot k_{PB} = -\\frac{b^2}{a^2} 恒成立"
+    resolved_section: "椭圆第三定义"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "AG-009"
+    topic: "解析几何/切线"
+    query_intent: "椭圆切线公式"
+    query: "已知椭圆上的切点坐标，怎样直接写出该点的切线方程？"
+    expected_source_path: "解析几何/圆锥曲线的切线.md"
+    expected_block_order: 3
+    target_section: "1. 曲线上一点的切线方程"
+    manual_summary: "应给出椭圆切点式，并说明切点必须在椭圆上。"
+    acceptable_evidence:
+      - "切点坐标"
+      - "椭圆切线方程"
+      - "点在曲线上"
+    case_type: "positive"
+    expected_document_id: "2092515724527321090"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515724527321090"
+    expected_provider_item_id: "G0CVd8QtKoU1k6x0foKcI52Xnlh"
+    expected_block_id: "2092515725059997698"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "analysis"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515724527321090:teacher-sync-fil"
+    document_title: "解析几何/圆锥曲线的切线.md"
+    block_order: 3
+    source_excerpt: "若点 P(x_0,y_0) 在椭圆上，则以 P 为切点的切线方程为： \\frac{xx_0}{a^2}+\\frac{yy_0}{b^2}=1 记忆法则：x^2 \\to xx_0，y^2 \\to yy_0，常数项保持不变。"
+    resolved_section: "1. 曲线上一点的切线方程"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "AG-010"
+    topic: "解析几何/切线"
+    query_intent: "切点弦同构"
+    query: "从椭圆外一点引两条切线时，两切点连线如何不用联立直接写出？"
+    expected_source_path: "解析几何/圆锥曲线的切线.md"
+    expected_block_order: 4
+    target_section: "曲线外一点的切点弦方程"
+    manual_summary: "应说明把外点坐标代入切线式，得到切点都满足的同形直线方程。"
+    acceptable_evidence:
+      - "外点引切线"
+      - "切点弦"
+      - "同构思想"
+    case_type: "positive"
+    expected_document_id: "2092515724527321090"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515724527321090"
+    expected_provider_item_id: "G0CVd8QtKoU1k6x0foKcI52Xnlh"
+    expected_block_id: "2092515725085163521"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "analysis"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515724527321090:teacher-sync-fil"
+    document_title: "解析几何/圆锥曲线的切线.md"
+    block_order: 4
+    source_excerpt: "过椭圆外一点 G(x_1,y_1) 作椭圆的两条切线，切点分别为 A、B，推导直线 AB 的方程： 设 A(x_A,y_A)，B(x_B,y_B)。 由切线公式，切线 GA 的方程：\\displaystyle \\frac{x x_A}{a^2}+\\frac{y y_A}{b^2}=1。 因为 G(x_1,y_1) 在切线 GA 上，代入得： \\frac{x_1 x_A}{a^2}+\\frac{y_1 y_A}{b^2}=1 \\tag{1} 同理，切线 GB 过点 G，代入得： \\frac{x_1 x_B}{a^2}+\\frac{y_1 y_B}{b^2}=1 \\tag{2} 观察(1)(2)：A、B 两点的坐标都满足方程 \\displaystyle \\boldsymbol{\\frac{x_1 x}{a^2}+\\frac{y_1 y}{b^2}=1}。 两点确定唯一一条直线，因此切点弦 AB 的方程就是： \\frac{x_1 x}{a^2}+\\frac{y_1 y}{b^2}=1 这就是同构：两个点对应完全相同结构的等式，直接反推出它们所在的直线方程。 ---"
+    resolved_section: "2. 曲线外一点的切点弦方程（同构推导）"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "AG-011"
+    topic: "解析几何/焦半径"
+    query_intent: "椭圆焦半径"
+    query: "椭圆上一点的两个焦半径已知横坐标时，如何用第二定义快速表达？"
+    expected_source_path: "解析几何/焦半径与焦点弦长.md"
+    expected_block_order: 5
+    target_section: "横坐标形式（已知点坐标时用）"
+    manual_summary: "应给出按横坐标表达焦半径，并能验证两段之和为2a。"
+    acceptable_evidence:
+      - "横坐标形式"
+      - "两个焦半径"
+      - "距离和2a"
+    case_type: "positive"
+    expected_document_id: "2092515754097164290"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515754097164290"
+    expected_provider_item_id: "YuRfdOnxwoy8kjxbY3bciC8anfb"
+    expected_block_id: "2092515755116380161"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "analysis"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515754097164290:teacher-sync-fil"
+    document_title: "解析几何/焦半径与焦点弦长.md"
+    block_order: 5
+    source_excerpt: "设椭圆上一点 P(x_0,y_0)，由第二定义直接推导： 左焦半径：|PF_1| = a + e x_0 右焦半径：|PF_2| = a - e x_0 验证：|PF_1|+|PF_2| = 2a，完全符合第一定义，记不住就用第二定义10秒推一遍。"
+    resolved_section: "1. 横坐标形式（已知点坐标时用）"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "AG-012"
+    topic: "解析几何/抛物线"
+    query_intent: "焦点弦定值"
+    query: "过 y²=2px 焦点的弦与曲线交点纵坐标之间有什么定值关系？"
+    expected_source_path: "解析几何/抛物线/抛物线小题.md"
+    expected_block_order: 7
+    target_section: "3.1.1 过焦点坐标相乘为定值"
+    manual_summary: "应指出联立过焦点直线与抛物线后由韦达得到 y1y2=-p²，并说明适用条件。"
+    acceptable_evidence:
+      - "过焦点"
+      - "y1y2=-p²"
+      - "联立与韦达"
+    case_type: "positive"
+    expected_document_id: "2092515743032590338"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515743032590338"
+    expected_provider_item_id: "Tr4pdqBWiog2pNx4SzEco6GBndc"
+    expected_block_id: "2092515746455142402"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "analysis"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515743032590338:teacher-sync-fil"
+    document_title: "解析几何/抛物线/抛物线小题.md"
+    block_order: 7
+    source_excerpt: "已知抛物线 y^2 = 2px\\ (p>0)，过焦点 F\\left(\\frac{p}{2},0\\right) 的直线交抛物线于 A(x_1,y_1)、B(x_2,y_2) 两点，则有： x_1x_2 = \\frac{p^2}{4};\\quad y_1y_2 = -p^2 --- #### 推导思路 对于开口朝右的抛物线，我们联立的时候喜欢反设 反设 x = my + \\frac{p}{2} 避免了斜率不存在时候的讨论，同时也避免了对于y的平方有很多复杂的项 做大题必用 直接代换x即可 同时注意此时对于x_1x_2 一定要代到抛物线而不是直线，这样直接用y_1y_2 的值 设过焦点的直线方程为 x = my + \\frac{p}{2}，联立抛物线方程 y^2 = 2px，得： y^2 - 2pmy - p^2 = 0 由韦达定理： y_1 + y_2 = 2pm,\\quad y_1y_2 = -p^2 结合 x_1 = \\frac{y_1^2}{2p}、x_2 = \\frac{y_2^2}{2p}，可得： x_1x_2 = \\frac{(y_1y_2)^2}{4p^2} = \\frac{p^4}{4p^2} = \\frac{p^2}{4}"
+    resolved_section: "3.1.1 过焦点坐标相乘为定值"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "AG-013"
+    topic: "解析几何/抛物线"
+    query_intent: "通径最短"
+    query: "抛物线的焦点弦中哪一条是通径，为什么它最短？"
+    expected_source_path: "解析几何/抛物线/抛物线小题.md"
+    expected_block_order: 5
+    target_section: "2.抛物线的通径"
+    manual_summary: "应说明过焦点且垂直轴的弦为通径，长度2p并在焦点弦中最短。"
+    acceptable_evidence:
+      - "通径定义"
+      - "过焦点垂轴"
+      - "2p最短"
+    case_type: "positive"
+    expected_document_id: "2092515743032590338"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515743032590338"
+    expected_provider_item_id: "Tr4pdqBWiog2pNx4SzEco6GBndc"
+    expected_block_id: "2092515746404810754"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "analysis"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515743032590338:teacher-sync-fil"
+    document_title: "解析几何/抛物线/抛物线小题.md"
+    block_order: 5
+    source_excerpt: "过焦点，垂直于焦点所在轴的弦是通径，这里就是 焦点在x轴，通径|AB|=2p 焦点弦长，通径最短 |AB| = |AF| + |BF| = \\left(x_1 + \\frac{p}{2}\\right) + \\left(x_2 + \\frac{p}{2}\\right) = x_1 + x_2 + p x_1 + x_2 \\ge 2\\sqrt{x_1x_2} = 2\\sqrt{\\frac{p^2}{4}} = p |AB| \\ge p + p = 2p 当且仅当 x_1 = x_2 = \\frac{p}{2} 时取等号，此时弦 AB 为通径，故焦点弦中通径最短，最短长度为 2p。"
+    resolved_section: "2.抛物线的通径"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "AG-014"
+    topic: "解析几何/弦长"
+    query_intent: "直线与圆锥曲线弦长"
+    query: "直线与圆锥曲线交于两点时，弦长怎样用交点坐标或韦达关系计算？"
+    expected_source_path: "解析几何/怎么翻译/弦长的翻译.md"
+    expected_block_order: 4
+    target_section: "韦达定理和弦长"
+    manual_summary: "应连接两点距离公式、联立后的根与系数关系，避免逐个解根。"
+    acceptable_evidence:
+      - "两点距离"
+      - "韦达定理"
+      - "弦长公式"
+    case_type: "positive"
+    expected_document_id: "2092515734149054466"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515734149054466"
+    expected_provider_item_id: "KvUddVSDKo7LwVxU85zcK0Gmnsc"
+    expected_block_id: "2092515734513958914"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "analysis"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515734149054466:teacher-sync-fil"
+    document_title: "解析几何/怎么翻译/弦长的翻译.md"
+    block_order: 4
+    source_excerpt: "这个形式是高考里专门用来规避“直线斜率不存在”问题的，推导逻辑和上面完全一致，只是替换的项不同。 前提：A(x_1,y_1)、B(x_2,y_2)都在直线x=ty+m上，因此两点坐标满足： x_1=ty_1+m，x_2=ty_2+m #### 步骤1：计算横坐标的差x_1-x_2 两个式子相减，消去常数项m： x_1-x_2=(ty_1+m)-(ty_2+m)=t(y_1-y_2) #### 步骤2：代入根本公式，替换x_1-x_2 把结果代入根本公式里的(x_1-x_2)^2项： |AB|=\\sqrt{\\left[t(y_1-y_2)\\right]^2+(y_1-y_2)^2} #### 步骤3：展开平方项，提取公因式 展开平方： |AB|=\\sqrt{t^2\\cdot(y_1-y_2)^2+(y_1-y_2)^2} 提取公因式(y_1-y_2)^2： |AB|=\\sqrt{(1+t^2)\\cdot(y_1-y_2)^2} #### 步骤4：开根号，得到最终公式 同样根据二次根式的运算规则开根号，保证结果非负： |AB|=\\sqrt{1+t^2}\\cdot|y_1-y_2| 这就是高考大题高频使用的、反斜形式直线对应的弦长公式，完美解决竖直线斜率不存在的计算漏洞。 ---"
+    resolved_section: "三、直线x=ty+m对应的弦长公式 完整化简过程"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "AG-015"
+    topic: "解析几何/点与椭圆"
+    query_intent: "点在曲线上判断"
+    query: "给定一个点的坐标，怎样快速判断它在椭圆上、椭圆内还是椭圆外？"
+    expected_source_path: "解析几何/点与圆锥曲线、直线位置关系.md"
+    expected_block_order: 3
+    target_section: "三、点与椭圆"
+    manual_summary: "应代入椭圆左端表达式，与1比较判断位置。"
+    acceptable_evidence:
+      - "代入椭圆方程"
+      - "等于1在椭圆上"
+      - "与1比较"
+    case_type: "positive"
+    expected_document_id: "2092515753077948418"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515753077948418"
+    expected_provider_item_id: "WfxcdRySeo1pVtxb39FcanvFnCe"
+    expected_block_id: "2092515753447047170"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "analysis"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515753077948418:teacher-sync-fil"
+    document_title: "解析几何/点与圆锥曲线、直线位置关系.md"
+    block_order: 3
+    source_excerpt: "椭圆：\\dfrac{x^2}{a^2}+\\dfrac{y^2}{b^2}=1(a>b>0)，点P(x_0,y_0) \\dfrac{x_0^2}{a^2}+\\dfrac{y_0^2}{b^2}=1：点在椭圆上 \\dfrac{x_0^2}{a^2}+\\dfrac{y_0^2}{b^2}>1：点在椭圆外 \\dfrac{x_0^2}{a^2}+\\dfrac{y_0^2}{b^2}<1：点在椭圆内 例：\\dfrac{x^2}{2}+y^2=1，P(\\sqrt2,1) \\dfrac{2}{2}+1=2>1，点在椭圆外。 补充：图像法（代 x 比 y）： y_{上}=b\\sqrt{1-\\dfrac{x_0^2}{a^2}}，y_{下}=-b\\sqrt{1-\\dfrac{x_0^2}{a^2}} y_0=y_{上/下}：椭圆上 y_0>y_{上}或y_0<y_{下}：椭圆外 y_{下}<y_0<y_{上}：椭圆内 ---"
+    resolved_section: "三、点与椭圆"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "AG-016"
+    topic: "解析几何/点与抛物线"
+    query_intent: "开口方向位置判断"
+    query: "点和抛物线的位置关系判断，开口向右与开口向上的代入变量为什么不同？"
+    expected_source_path: "解析几何/点与圆锥曲线、直线位置关系.md"
+    expected_block_order: 5
+    target_section: "1. 上下开口（代x比y）"
+    manual_summary: "应说明上下开口代x比较y，左右开口代y比较x，并解释内外侧方向。"
+    acceptable_evidence:
+      - "上下开口代x"
+      - "左右开口代y"
+      - "内外侧判断"
+    case_type: "positive"
+    expected_document_id: "2092515753077948418"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515753077948418"
+    expected_provider_item_id: "WfxcdRySeo1pVtxb39FcanvFnCe"
+    expected_block_id: "2092515753501573121"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "analysis"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515753077948418:teacher-sync-fil"
+    document_title: "解析几何/点与圆锥曲线、直线位置关系.md"
+    block_order: 5
+    source_excerpt: "开口向上：y=ax^2+bx+c(a>0) 代入x_0得y_抛 y_0=y_抛：抛物线上 y_0>y_抛：上方（外） y_0<y_抛：下方（内） 开口向下：y=ax^2+bx+c(a<0) y_0=y_抛：抛物线上 y_0>y_抛：上方（内） y_0<y_抛：下方（外）"
+    resolved_section: "1. 上下开口（代x比y）"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "AG-017"
+    topic: "解析几何/角度转化"
+    query_intent: "斜率与向量选择"
+    query: "解析几何中的角度条件，什么时候用斜率，什么时候用向量点积更稳妥？"
+    expected_source_path: "解析几何/怎么翻译/直线角度要翻译成向量_斜率.md"
+    expected_block_order: 8
+    target_section: "1. 优先使用向量的场景"
+    manual_summary: "应区分斜率存在与否、顶点位置和不规则角，说明向量的兜底作用。"
+    acceptable_evidence:
+      - "斜率不存在"
+      - "角顶点不在坐标轴"
+      - "向量兜底"
+    case_type: "positive"
+    expected_document_id: "2092515736799854593"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515736799854593"
+    expected_provider_item_id: "HQrod2kayoi6ZQxmXihcTYFnnhe"
+    expected_block_id: "2092515737512886273"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "analysis"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515736799854593:teacher-sync-fil"
+    document_title: "解析几何/怎么翻译/直线角度要翻译成向量_斜率.md"
+    block_order: 8
+    source_excerpt: "涉及垂直x轴的直线，用斜率需要分类讨论，向量可统一处理； 角度顶点不在坐标轴上，倾斜角无法直接对应x轴正方向； 角度为任意不规则角，无需拆分倾斜角，一步到位转化。"
+    resolved_section: "1. 优先使用向量的场景"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "AG-018"
+    topic: "解析几何/角度转化"
+    query_intent: "垂直条件翻译"
+    query: "两条直线斜率都存在时，垂直条件怎样翻译成代数式？竖直线要怎么补充？"
+    expected_source_path: "解析几何/怎么翻译/直线角度要翻译成向量_斜率.md"
+    expected_block_order: 5
+    target_section: "模块1：垂直/直角的斜率转化"
+    manual_summary: "应给出 k1k2=-1，并说明斜率不存在时需单独讨论水平线与竖直线。"
+    acceptable_evidence:
+      - "k1k2=-1"
+      - "斜率均存在"
+      - "水平竖直特殊情形"
+    case_type: "positive"
+    expected_document_id: "2092515736799854593"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515736799854593"
+    expected_provider_item_id: "HQrod2kayoi6ZQxmXihcTYFnnhe"
+    expected_block_id: "2092515737420611586"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "analysis"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515736799854593:teacher-sync-fil"
+    document_title: "解析几何/怎么翻译/直线角度要翻译成向量_斜率.md"
+    block_order: 5
+    source_excerpt: "#### 转化规则（全覆盖无遗漏） 若两条直线l_1,l_2的斜率k_1,k_2均存在，则： \\boldsymbol{l_1\\perp l_2 \\iff k_1·k_2 = -1} 斜率不存在的特殊垂直：一条直线斜率为0（平行x轴，\\alpha=0），另一条直线斜率不存在（垂直x轴，\\alpha=\\frac{\\pi}{2}），两直线也垂直。 #### 适用场景 直角三角形、直径所对圆周角、菱形对角线垂直、矩形邻边垂直等所有90°角场景。 #### 简单例题 已知A(0,0)，B(4,0)，点P在直线y=x-1上，且\\angle APB=90^\\circ，求P的坐标。 解：设P(x,x-1) ① 斜率均存在时：k_{PA}=\\frac{x-1}{x}，k_{PB}=\\frac{x-1}{x-4}，由垂直得k_{PA}·k_{PB}=-1 代入化简得2x^2-6x+1=0，解得x=\\frac{3\\pm\\sqrt{7}}{2} ② 验证斜率不存在的情况：x=0或x=4时，P分别为(0,-1)、(4,3)，均不满足直角条件，舍去。 最终P点坐标为\\left(\\frac{3+\\sqrt{7}}{2},\\frac{1+\\sqrt{7}}{2}\\right)、\\left(\\frac{3-\\sqrt{7}}{2},\\frac{1-\\sqrt{7}}{2}\\right)。 ---"
+    resolved_section: "模块1：垂直/直角的斜率转化"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "AG-019"
+    topic: "解析几何/轨迹"
+    query_intent: "参数消元轨迹"
+    query: "由椭圆上的动点构造中点时，怎样用参数式消去参数得到中点轨迹？"
+    expected_source_path: "解析几何/求点轨迹问题.md"
+    expected_block_order: 1
+    target_section: "构造点轨迹的参数消元"
+    manual_summary: "应先写构造点坐标，再利用参数关系消去t，得到轨迹方程。"
+    acceptable_evidence:
+      - "构造点坐标"
+      - "参数消元"
+      - "轨迹方程"
+    case_type: "positive"
+    expected_document_id: "2092515752151007233"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515752151007233"
+    expected_provider_item_id: "AFjvdaIbGoDFWzxHZkMcBT06nDf"
+    expected_block_id: "2092515752306196482"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "analysis"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515752151007233:teacher-sync-fil"
+    document_title: "解析几何/求点轨迹问题.md"
+    block_order: 1
+    source_excerpt: "解析几何里，很多轨迹问题并不是直接求动点，而是先给出一个已知点，再由这个点构造出另一个点。 例如已知点P₀(x₀,y₀)在曲线C上，即 F(x₀,y₀)=0 然后从P₀出发，作直线、切线、垂线、中点、交点，得到新的动点P(x,y)。题目最终要求的往往是P(x,y)的轨迹。 这类题的关键不是一直保留x₀、y₀，而是要意识到： x₀、y₀只是构造过程中的中间变量，真正要求的是x、y。 所以应当想办法用x、y表示x₀、y₀，再代回原曲线方程 F(x₀,y₀)=0 从而得到只含x、y的轨迹方程。 也就是说，轨迹问题常用的消参方向逻辑： P₀(x₀,y₀)属于曲线C ⇒ 生成动点P(x,y) 但求轨迹时要反过来处理： x₀=φ(x,y)，y₀=ψ(x,y) 再代入 F(x₀,y₀)=0 得到 F(φ(x,y),ψ(x,y))=0 这就是动点P(x,y)的轨迹。 举例说明：若P(x,y)是由P₀(x₀,y₀)经过某种几何关系得到的点，题目中可能先推出 x=2x₀+1，y=y₀−3 不要停留在用x₀、y₀表示x、y这一步，我们最终需要x与y的关系式。应当反解出 x₀=(x−1)/2，y₀=y+3 再将其代入P₀所在的曲线方程。 所以解析几何中的轨迹消参，本质是： 已知源点满足原曲线方程，轨迹点才是最终变量；只要能用x、y表示出x₀、y₀，就优先消去中间量x₀、y₀。 总结一句话： 源点满足曲线方"
+    resolved_section: ""
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "AG-020"
+    topic: "解析几何/定值定点"
+    query_intent: "比例式定值"
+    query: "解析几何里一个分式要恒定，为什么常常要把分子分母化成固定比例？"
+    expected_source_path: "解析几何/定值定点/定值是怎么来的？.md"
+    expected_block_order: 0
+    target_section: "定值是怎么来的"
+    manual_summary: "应说明通分、因式分解或消元后比较分子分母的比例。"
+    acceptable_evidence:
+      - "分子分母固定比例"
+      - "通分化简"
+      - "定值"
+    case_type: "positive"
+    expected_document_id: "2092515726528004097"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515726528004097"
+    expected_provider_item_id: "Pv6cdxWQaoG05Ux0c1CcumRfn2e"
+    expected_block_id: "2092515726989377538"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "analysis"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515726528004097:teacher-sync-fil"
+    document_title: "解析几何/定值定点/定值是怎么来的？.md"
+    block_order: 0
+    source_excerpt: "定值是怎么来的？ 对于呃分式来说，如果说想要一个分式是定值，那么必须分子是分母的k倍，或者说分母是分子的k倍，也就是说它们都有其中的一个公因式，那么如果说我们求出来一个表达式那么化简，然后通分让分子分母呃比例对相同就可以。"
+    resolved_section: ""
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "AG-021"
+    topic: "解析几何/焦点三角形"
+    query_intent: "内心坐标"
+    query: "椭圆焦点三角形的内心横坐标为什么可以用焦半径和三角形边长表示？"
+    expected_source_path: "解析几何/焦点三角形内心坐标公式.md"
+    expected_block_order: 2
+    target_section: "一、椭圆焦点三角形内心坐标推导"
+    manual_summary: "应利用内心按边长加权的坐标公式，并代入两焦半径。"
+    acceptable_evidence:
+      - "内心坐标加权"
+      - "焦半径"
+      - "椭圆焦点三角形"
+    case_type: "positive"
+    expected_document_id: "2092515756005572609"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515756005572609"
+    expected_provider_item_id: "L6Z0d47oXobil7xwf7RcHa6tnMg"
+    expected_block_id: "2092515756425003010"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "analysis"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515756005572609:teacher-sync-fil"
+    document_title: "解析几何/焦点三角形内心坐标公式.md"
+    block_order: 2
+    source_excerpt: "设椭圆\\frac{x^2}{a^2}+\\frac{y^2}{b^2}=1，焦点F_1(-c,0),F_2(c,0)，点P(x_0,y_0)在椭圆上，I为\\triangle PF_1F_2内心。 #### 1. 横坐标 x_I = e x_0 由切线长定理：内切圆与x轴切点为M，则 |F_1M|-|F_2M| = |PF_1|-|PF_2| 结合椭圆焦半径|PF_1|=a+ex_0，|PF_2|=a-ex_0，得 |PF_1|-|PF_2|=2ex_0 又|F_1M|+|F_2M|=2c，联立解得|F_2M|=c-ex_0，因此切点横坐标x_M = c - (c-ex_0) = ex_0。 内心横坐标与切点横坐标一致，故\\boldsymbol{x_I = ex_0}。 #### 2. 纵坐标 y_I = \\frac{e}{e+1}y_0 内心纵坐标等于内切圆半径r。 三角形面积：S = \\frac{1}{2}\\cdot |F_1F_2|\\cdot |y_0| = c|y_0| 半周长：p = \\frac{|PF_1|+|PF_2|+|F_1F_2|}{2} = a+c 由S = p\\cdot r，得 r = \\frac{c|y_0|}{a+c} = \\frac{\\frac{c}{a}|y_0|}{\\frac{a+c}{a}} = \\frac{e|y_0|}{e+1} 即\\boldsy"
+    resolved_section: "一、椭圆焦点三角形内心坐标推导"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "CP-001"
+    topic: "排列组合/基本原理"
+    query_intent: "分类与分步"
+    query: "排列组合题中什么时候用分类加法，什么时候用分步乘法？"
+    expected_source_path: "排列组合知识点/排列组合基本内容.md"
+    expected_block_order: 1
+    target_section: "排列组合基本内容"
+    manual_summary: "应区分互斥分类与连续步骤，并说明两种计数原理的使用边界。"
+    acceptable_evidence:
+      - "分类加法"
+      - "分步乘法"
+      - "互斥与连续步骤"
+    case_type: "positive"
+    expected_document_id: "2092515572223754241"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515572223754241"
+    expected_provider_item_id: "HIlHdqsdyoj3bCxEv1zcdvjnnFg"
+    expected_block_id: "2092515573096169473"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "method"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515572223754241:teacher-sync-fil"
+    document_title: "排列组合知识点/排列组合基本内容.md"
+    block_order: 1
+    source_excerpt: "从深圳到上海，有 m 种直达方式和 n 种其他方式，则总方法数为： m + n"
+    resolved_section: "1. 加法原理（分类）"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "CP-002"
+    topic: "排列组合/选排"
+    query_intent: "排列组合区分"
+    query: "从n个不同元素取出m个，考虑顺序与不考虑顺序时分别对应什么计数？"
+    expected_source_path: "排列组合知识点/排列组合基本内容.md"
+    expected_block_order: 2
+    target_section: "排列组合基本内容"
+    manual_summary: "应区分排列与组合，说明顺序是否影响结果。"
+    acceptable_evidence:
+      - "排列"
+      - "组合"
+      - "顺序影响"
+    case_type: "positive"
+    expected_document_id: "2092515572223754241"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515572223754241"
+    expected_provider_item_id: "HIlHdqsdyoj3bCxEv1zcdvjnnFg"
+    expected_block_id: "2092515573121335297"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "method"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515572223754241:teacher-sync-fil"
+    document_title: "排列组合知识点/排列组合基本内容.md"
+    block_order: 2
+    source_excerpt: "从深圳经苏州到上海，深圳到苏州有 m 种方式，苏州到上海有 n 种方式，则总方法数为： m \\times n"
+    resolved_section: "2. 乘法原理（分步）"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "CP-003"
+    topic: "排列组合/补集法"
+    query_intent: "正难则反"
+    query: "直接数满足复杂限制的方案很难时，怎样通过总数减去不合格方案？"
+    expected_source_path: "排列组合知识点/正难则反（补集法）.md"
+    expected_block_order: 0
+    target_section: "正难则反（补集法）"
+    manual_summary: "应说明补集法的总数、反面事件和避免重复计数。"
+    acceptable_evidence:
+      - "总方案数"
+      - "补集"
+      - "正难则反"
+    case_type: "positive"
+    expected_document_id: "2092515575407230977"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515575407230977"
+    expected_provider_item_id: "CYGEdjqZRoRB1UxglyVcnYy7nGD"
+    expected_block_id: "2092515576296423425"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515575407230977:teacher-sync-fil"
+    document_title: "排列组合知识点/正难则反（补集法）.md"
+    block_order: 0
+    source_excerpt: "正难则反（补集法）"
+    resolved_section: ""
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "CP-004"
+    topic: "排列组合/选座"
+    query_intent: "相邻约束"
+    query: "座位安排中要求若干人相邻或不相邻时，如何把相邻对象捆绑或插空处理？"
+    expected_source_path: "排列组合知识点/基本的选座问题.md"
+    expected_block_order: 0
+    target_section: "基本的选座问题"
+    manual_summary: "应覆盖捆绑、插空和先后排列的计数顺序。"
+    acceptable_evidence:
+      - "捆绑法"
+      - "插空法"
+      - "座位约束"
+    case_type: "positive"
+    expected_document_id: "2092515570508283905"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515570508283905"
+    expected_provider_item_id: "Kv5QdX76YoaB3UxgEsIcPFwRnnf"
+    expected_block_id: "2092515570634113025"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "method"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515570508283905:teacher-sync-fil"
+    document_title: "排列组合知识点/基本的选座问题.md"
+    block_order: 0
+    source_excerpt: "基本的选座问题 模拟题很多一些难题最后其实根本就是选座模型 本质上就是有多少个空位，然后一次性选出来多少，甚至都不需要分配，也不用排列 只需要你用组合数计算，使用的一些计算方法其实也是有限的 19题压轴大题 14题填空"
+    resolved_section: ""
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "CP-005"
+    topic: "排列组合/约束条件"
+    query_intent: "特殊条件分类"
+    query: "带有至少、至多、恰好或相邻等限制的排列组合题，怎样拆分条件避免漏算？"
+    expected_source_path: "排列组合知识点/带有约束_特殊条件的问题.md"
+    expected_block_order: 1
+    target_section: "带有约束/特殊条件的问题"
+    manual_summary: "应说明按特殊元素、数量限制或位置约束分类讨论并检查互斥。"
+    acceptable_evidence:
+      - "至少至多恰好"
+      - "分类讨论"
+      - "不重不漏"
+    case_type: "positive"
+    expected_document_id: "2092515571368116226"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515571368116226"
+    expected_provider_item_id: "XchwdRxIAoBRLyxF7picOS5wn2d"
+    expected_block_id: "2092515571590414338"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515571368116226:teacher-sync-fil"
+    document_title: "排列组合知识点/带有约束_特殊条件的问题.md"
+    block_order: 1
+    source_excerpt: "对于有附加条件的排列组合问题，一般采用： 先考虑满足特殊的元素和位置，再考虑其它元素和位置。 也就是特殊元素优先 分类一定优先按照个数分类，特殊元素也是"
+    resolved_section: ""
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "CP-006"
+    topic: "排列组合/综合题"
+    query_intent: "压轴小题"
+    query: "排列组合选择填空题中，如何先识别是排列、组合、捆绑还是补集模型？"
+    expected_source_path: "排列组合知识点/排列组合练习题/排列组合小题压轴.md"
+    expected_block_order: 1
+    target_section: "排列组合小题压轴"
+    manual_summary: "应以题型识别为主，给出顺序、相邻、限制和反面事件的选择路径。"
+    acceptable_evidence:
+      - "题型识别"
+      - "排列组合"
+      - "捆绑或补集"
+    case_type: "positive"
+    expected_document_id: "2092515574165716993"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515574165716993"
+    expected_provider_item_id: "PdSIdxwT6ost3uxmsD0ckAxence"
+    expected_block_id: "2092515574559981570"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "method"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515574165716993:teacher-sync-fil"
+    document_title: "排列组合知识点/排列组合练习题/排列组合小题压轴.md"
+    block_order: 1
+    source_excerpt: "某科技公司有 AI 研发、芯片制造、软件编程三类项目，每个项目各有 8 个任务名额，现要将这些名额全部分配给 A、B 两个团队，每个团队每类项目至少分得一个任务名额。若 A 团队所得到的三类任务名额的个数的乘积与 B 团队所得到的三类任务名额的个数的乘积相等，则这样的分配方法有____种。 --- 我们需要从题目中找到衍生出来的题型和方法 也是仿照之前高考考过的列出来二十个那种"
+    resolved_section: ""
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "CP-007"
+    topic: "排列组合/插空法"
+    query_intent: "不相邻计数"
+    query: "若特殊元素不能相邻，先排普通元素后插入时，空位数为什么是n+1？"
+    expected_source_path: "排列组合知识点/AI 和问题 捆绑法和插空法.md"
+    expected_block_order: 4
+    target_section: "步骤2：计算可插入的空位数"
+    manual_summary: "应说明n个普通元素排成一列产生前、中、后三类共n+1个空位。"
+    acceptable_evidence:
+      - "n个普通元素"
+      - "前中后空位"
+      - "n+1"
+    case_type: "positive"
+    expected_document_id: "2092515557497552898"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515557497552898"
+    expected_provider_item_id: "EAAUdssygoVVzPxt2t1cHr9un5g"
+    expected_block_id: "2092515558596460545"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515557497552898:teacher-sync-fil"
+    document_title: "排列组合知识点/AI 和问题 捆绑法和插空法.md"
+    block_order: 4
+    source_excerpt: "(n) 个元素排成一行，前后+中间空隙总数： [ \\text{空位总数} = n+1 ] 图示：_ X _ X _ X _ ，3个元素，4个空"
+    resolved_section: "步骤2：计算可插入的空位数"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "CP-008"
+    topic: "排列组合/插空法"
+    query_intent: "相同与不同元素"
+    query: "从空位中插入k个特殊元素时，特殊元素不同用排列、相同用组合，为什么？"
+    expected_source_path: "排列组合知识点/AI 和问题 捆绑法和插空法.md"
+    expected_block_order: 5
+    target_section: "步骤3：从空位里选k个插入特殊元素"
+    manual_summary: "应区分空位选择和特殊元素内部顺序，给出A与C两种情况。"
+    acceptable_evidence:
+      - "不同特殊元素排列"
+      - "相同特殊元素组合"
+      - "一个空位一个元素"
+    case_type: "positive"
+    expected_document_id: "2092515557497552898"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515557497552898"
+    expected_provider_item_id: "EAAUdssygoVVzPxt2t1cHr9un5g"
+    expected_block_id: "2092515558625820674"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515557497552898:teacher-sync-fil"
+    document_title: "排列组合知识点/AI 和问题 捆绑法和插空法.md"
+    block_order: 5
+    source_excerpt: "两条硬性铁律： 一个空位最多只放1个特殊元素（保证不相邻）； 特殊元素不同：用排列 (A_{n+1}^k) 特殊元素完全相同：用组合 (C_{n+1}^k)"
+    resolved_section: "步骤3：从空位里选k个插入特殊元素"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "CP-009"
+    topic: "排列组合/涂色"
+    query_intent: "容斥去重"
+    query: "涂色分类中同一种情况被两个分支重复计算时，怎样用容斥减掉重复部分？"
+    expected_source_path: "排列组合知识点/七、涂色问题（长时间不考）.md"
+    expected_block_order: 7
+    target_section: "2013年涂色问题"
+    manual_summary: "应说明先分支计数，再减去交集重复，并保持相邻区域颜色限制。"
+    acceptable_evidence:
+      - "分类计数"
+      - "重复交集"
+      - "容斥减重"
+    case_type: "positive"
+    expected_document_id: "2092515564040667138"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515564040667138"
+    expected_provider_item_id: "JdADd9Qc6o5JcbxdzsJcrn3qnJf"
+    expected_block_id: "2092515569426153474"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "question"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515564040667138:teacher-sync-fil"
+    document_title: "排列组合知识点/七、涂色问题（长时间不考）.md"
+    block_order: 7
+    source_excerpt: "如果把第四种给4，那么5必须和3一样 所以可以计算 C_4^3 A_3^3 C_2^1 = 4 \\times 6 \\times 2 = 48 合计： 24+48=72 我们要做的就只有分配 通过上面的处理我们发现了，其实涂色问题的核心在于 确定一组内部块颜色后，会有对应的块颜色被固定，无法选择 总结，找到涂色中心，围绕中心找最小涂色组合,然后依次增加颜色数 涂色中心一般都是靠边的，偏中心的 对每种颜色情况都需要从总颜色里面选出来当前颜色分类情况数，然后再优先分配最小的 给最小组合分配颜色是用顺序的需要排列数A 每次都是在最小涂色组合基础上，增加一种颜色就会有分类讨论 会发现放置一个颜色给未涂色的一个块后，剩下的未涂色块的颜色被确定（为1），或者可选择的数量减少，总之就是随之被确定 如果是中心为最小涂色组合，对于两边要考虑同时选择同一种颜色时的容斥，可以看例题 6种颜色"
+    resolved_section: "2013年涂色问题"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "CP-010"
+    topic: "排列组合/选座"
+    query_intent: "组合选位"
+    query: "固定座位或方格中只需要选择位置而不需要给位置排序时，为什么用组合数？"
+    expected_source_path: "排列组合知识点/基本的选座问题.md"
+    expected_block_order: 0
+    target_section: "基本的选座问题"
+    manual_summary: "应区分选择座位与安排对象顺序，说明只选位置时顺序不产生新方案。"
+    acceptable_evidence:
+      - "固定位置"
+      - "只选择位置"
+      - "组合数"
+    case_type: "positive"
+    expected_document_id: "2092515570508283905"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515570508283905"
+    expected_provider_item_id: "Kv5QdX76YoaB3UxgEsIcPFwRnnf"
+    expected_block_id: "2092515570634113025"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "method"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515570508283905:teacher-sync-fil"
+    document_title: "排列组合知识点/基本的选座问题.md"
+    block_order: 0
+    source_excerpt: "基本的选座问题 模拟题很多一些难题最后其实根本就是选座模型 本质上就是有多少个空位，然后一次性选出来多少，甚至都不需要分配，也不用排列 只需要你用组合数计算，使用的一些计算方法其实也是有限的 19题压轴大题 14题填空"
+    resolved_section: ""
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "CP-011"
+    topic: "排列组合/容斥"
+    query_intent: "补集与容斥边界"
+    query: "排列组合中先数总方案再扣掉违规方案时，怎样检查补集是否完整且没有重复？"
+    expected_source_path: "排列组合知识点/正难则反（补集法）.md"
+    expected_block_order: 0
+    target_section: "正难则反（补集法）"
+    manual_summary: "应说明补集覆盖全部违规情形，若违规情形交叠则需要容斥校正。"
+    acceptable_evidence:
+      - "总方案"
+      - "补集完整"
+      - "重复情形容斥"
+    case_type: "positive"
+    expected_document_id: "2092515575407230977"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515575407230977"
+    expected_provider_item_id: "CYGEdjqZRoRB1UxglyVcnYy7nGD"
+    expected_block_id: "2092515576296423425"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515575407230977:teacher-sync-fil"
+    document_title: "排列组合知识点/正难则反（补集法）.md"
+    block_order: 0
+    source_excerpt: "正难则反（补集法）"
+    resolved_section: ""
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "LC-001"
+    topic: "直线与圆/直线"
+    query_intent: "倾斜角斜率"
+    query: "直线的倾斜角和斜率怎样定义，竖直直线为什么要单独处理？"
+    expected_source_path: "直线与圆/直线/第一章-倾斜角与斜率.md"
+    expected_block_order: 4
+    target_section: "倾斜角的定义"
+    manual_summary: "应说明倾斜角取值、斜率与 tan 的关系及竖直线斜率不存在。"
+    acceptable_evidence:
+      - "倾斜角定义"
+      - "斜率tanα"
+      - "竖直直线"
+    case_type: "positive"
+    expected_document_id: "2092515627873779714"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515627873779714"
+    expected_provider_item_id: "HGrrd47XxorWOTxiBfic6YRZnjb"
+    expected_block_id: "2092515628955910146"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515627873779714:teacher-sync-fil"
+    document_title: "直线与圆/直线/第一章-倾斜角与斜率.md"
+    block_order: 4
+    source_excerpt: "倾斜角的标准定义：直线的倾斜角\\alpha，是以x轴正方向为始边，逆时针旋转到与直线重合时的最小正角，范围固定为 \\boldsymbol{0\\leq\\alpha<\\pi}。"
+    resolved_section: "倾斜角的定义"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "LC-002"
+    topic: "直线与圆/直线"
+    query_intent: "点到直线距离"
+    query: "点到一般式直线的距离公式如何写，分子为什么取绝对值？"
+    expected_source_path: "直线与圆/直线/直线的性质.md"
+    expected_block_order: 1
+    target_section: "点到直线距离公式"
+    manual_summary: "应给出一般式 Ax+By+C=0 的点线距公式并解释绝对值保证距离非负。"
+    acceptable_evidence:
+      - "一般式"
+      - "点线距"
+      - "绝对值"
+    case_type: "positive"
+    expected_document_id: "2092515627143970818"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515627143970818"
+    expected_provider_item_id: "P5DBdonwKo2Z0AxLBlyc3kJhndc"
+    expected_block_id: "2092515627320131585"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515627143970818:teacher-sync-fil"
+    document_title: "直线与圆/直线/直线的性质.md"
+    block_order: 1
+    source_excerpt: "设点 P(x_0,y_0)，直线一般式：Ax+By+C=0 \\boldsymbol{d=\\dfrac{|Ax_0+By_0+C|}{\\sqrt{A^2+B^2}}} 说明： 分子加绝对值保证距离非负； 分母是 A、B 平方和开根号，不能为0（直线系数不同时为0）。 就是把点坐标带进直线方程加绝对值，分母就是x前面系数平方加y前面系数平方开根号"
+    resolved_section: "点到直线距离公式"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "LC-003"
+    topic: "直线与圆/圆"
+    query_intent: "直角与圆"
+    query: "看到几何题中的直角三角形，怎样联想到圆的直径性质？"
+    expected_source_path: "直线与圆/看到直角三角形就要想到圆.md"
+    expected_block_order: 0
+    target_section: "看到直角三角形就要想到圆"
+    manual_summary: "应关联圆周角为直角时所对边是直径，以及由直角构造圆。"
+    acceptable_evidence:
+      - "直角三角形"
+      - "斜边为直径"
+      - "圆周角定理"
+    case_type: "positive"
+    expected_document_id: "2092515629572472834"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515629572472834"
+    expected_provider_item_id: "XR03dBcDloXYL4xhdXtcZCrcnzh"
+    expected_block_id: "2092515629912211457"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515629572472834:teacher-sync-fil"
+    document_title: "直线与圆/看到直角三角形就要想到圆.md"
+    block_order: 0
+    source_excerpt: "看到直角三角形就要想到圆"
+    resolved_section: ""
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "LC-004"
+    topic: "直线与圆/阿波罗尼斯圆"
+    query_intent: "定比分点轨迹"
+    query: "两定点到动点的距离比保持常数时，动点轨迹为什么是阿波罗尼斯圆？"
+    expected_source_path: "直线与圆/阿波罗尼斯圆 （阿氏圆）.md"
+    expected_block_order: 0
+    target_section: "阿波罗尼斯圆"
+    manual_summary: "应说明固定距离比的轨迹、比值为1时退化为垂直平分线的特殊情形。"
+    acceptable_evidence:
+      - "两定点距离比"
+      - "轨迹是圆"
+      - "比值1特殊情形"
+    case_type: "positive"
+    expected_document_id: "2092515630692352002"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515630692352002"
+    expected_provider_item_id: "KO7MdKdP5oCOGYxPKJHc3Or2nkc"
+    expected_block_id: "2092515631191474177"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515630692352002:teacher-sync-fil"
+    document_title: "直线与圆/阿波罗尼斯圆 （阿氏圆）.md"
+    block_order: 0
+    source_excerpt: "阿波罗尼斯圆 （阿氏圆） PA=kPB 动点在圆上 一般：A=(x_1,y_1)，B=(x_2,y_2)，P=(x,y)，\\dfrac{|PA|}{|PB|}=k（k>0且k\\neq1） 则P轨迹为阿氏圆，方程为： \\boldsymbol{\\left(x+\\frac{k^2x_2-x_1}{1-k^2}\\right)^2+\\left(y+\\frac{k^2y_2-y_1}{1-k^2}\\right)^2=\\left(\\frac{k}{|1-k^2|}|AB|\\right)^2} \\Rightarrow 圆心：\\boldsymbol{\\left(\\dfrac{x_1-k^2x_2}{1-k^2},\\ \\dfrac{y_1-k^2y_2}{1-k^2}\\right)} 半径：\\boldsymbol{r=\\left|\\frac{k}{1-k^2}\\right|\\cdot|AB|} 圆心必在直线AB上。 你根本不需要记住这个公式，只需要知道考试看见两个线段成比例想到圆 实际上看到k倍不管是斜率还是弦长还是什么，都可以考虑轨迹是否是一个圆里面提到 找到圆最重要的是配方，凑成标准圆的形式"
+    resolved_section: ""
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "LC-005"
+    topic: "直线与圆/直线"
+    query_intent: "直线性质"
+    query: "同一直线上的两点坐标怎样转成直线方程或斜率条件？"
+    expected_source_path: "直线与圆/直线/直线的性质.md"
+    expected_block_order: 0
+    target_section: "直线性质"
+    manual_summary: "应覆盖两点确定直线、斜率或一般式表达之间的转换。"
+    acceptable_evidence:
+      - "两点确定直线"
+      - "斜率"
+      - "直线方程"
+    case_type: "positive"
+    expected_document_id: "2092515627143970818"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515627143970818"
+    expected_provider_item_id: "P5DBdonwKo2Z0AxLBlyc3kJhndc"
+    expected_block_id: "2092515627282382850"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515627143970818:teacher-sync-fil"
+    document_title: "直线与圆/直线/直线的性质.md"
+    block_order: 0
+    source_excerpt: "直线的性质 倾斜角 \\alpha \\in [0,\\ \\pi) 斜率公式 k=\\tan\\alpha=\\frac{y_2-y_1}{x_2-x_1} （当x_2-x_1,即x=t 时候斜率不存在，也是后面很多讨论之一） 直线系方程 A_1x+B_1y+C_1 + \\lambda\\left(A_2x+B_2y+C_2\\right)=0 过两直线交点： \\begin{cases} A_1x+B_1y+C_1=0\\\\ A_2x+B_2y+C_2=0 \\end{cases} 一般式直线 Ax+By+C=0 斜率：\\boldsymbol{k=-\\dfrac{A}{B}}（B\\neq0） 方向向量 \\vec{a}=(B,\\ -A) 法向量 \\vec{n}=(A,\\ B) 两直线位置关系（l_1:A_1x+B_1y+C_1=0,\\ l_2:A_2x+B_2y+C_2=0） 平行：法向量 \\vec{n_1}=(A_1,B_1),\\ \\vec{n_2}=(A_2,B_2) 充要条件：A_1B_2 = A_2B_1 且 A_1C_2 \\neq A_2C_1（或 A_1B_2\\neq A_2B_1 会重合） 垂直：\\boldsymbol{A_1A_2+B_1B_2=0}"
+    resolved_section: ""
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "LC-006"
+    topic: "直线与圆/直线角度"
+    query_intent: "两直线夹角"
+    query: "两条直线斜率已知时，夹角正切公式为什么要取绝对值？"
+    expected_source_path: "直线与圆/直线/TODO 补充图片 到角公式.md"
+    expected_block_order: 2
+    target_section: "两条直线的夹角公式"
+    manual_summary: "应给出斜率夹角公式，并说明几何夹角取非负值。"
+    acceptable_evidence:
+      - "斜率夹角公式"
+      - "绝对值"
+      - "几何夹角非负"
+    case_type: "positive"
+    expected_document_id: "2092515625722101762"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515625722101762"
+    expected_provider_item_id: "VbCwdzl2FolO5VxGTarc0WWInYc"
+    expected_block_id: "2092515626309304321"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515625722101762:teacher-sync-fil"
+    document_title: "直线与圆/直线/TODO 补充图片 到角公式.md"
+    block_order: 2
+    source_excerpt: "设两直线斜率 k_1,k_2，倾斜角 \\alpha,\\beta，满足 k_1=\\tan\\alpha,k_2=\\tan\\beta，夹角 \\theta=|\\beta-\\alpha|，由正切差角公式：\\tan(\\beta-\\alpha)=\\frac{\\tan\\beta-\\tan\\alpha}{1+\\tan\\alpha\\tan\\beta}得夹角公式：\\boxed{\\tan\\theta=\\left|\\frac{k_2-k_1}{1+k_1k_2}\\right|}其中夹角范围：0\\leq \\theta\\leq \\frac{\\pi}{2}。"
+    resolved_section: "两条直线的夹角公式"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "LC-007"
+    topic: "直线与圆/直线角度"
+    query_intent: "平行垂直判定"
+    query: "斜率存在时，两直线平行和垂直分别对应什么代数条件？"
+    expected_source_path: "直线与圆/直线/TODO 补充图片 到角公式.md"
+    expected_block_order: 10
+    target_section: "总结"
+    manual_summary: "应同时返回k1=k2与k1k2=-1，并提醒竖直线需单独判断。"
+    acceptable_evidence:
+      - "k1=k2"
+      - "k1k2=-1"
+      - "竖直线特殊"
+    case_type: "positive"
+    expected_document_id: "2092515625722101762"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515625722101762"
+    expected_provider_item_id: "VbCwdzl2FolO5VxGTarc0WWInYc"
+    expected_block_id: "2092515626489659394"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515625722101762:teacher-sync-fil"
+    document_title: "直线与圆/直线/TODO 补充图片 到角公式.md"
+    block_order: 10
+    source_excerpt: "直线倾斜角与斜率：\\boxed{k=\\tan\\alpha} 两直线平行：\\boxed{k_1=k_2} 两直线垂直：\\boxed{k_1k_2=-1} 两直线夹角：\\displaystyle\\boxed{\\tan\\theta=\\left|\\frac{k_2-k_1}{1+k_1k_2}\\right|} 做题时先看有没有斜率，x=a型直线斜率不存在，需要单独处理。"
+    resolved_section: "总结"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "LC-008"
+    topic: "直线与圆/位置关系"
+    query_intent: "点与圆位置"
+    query: "给出圆心和半径后，如何只比较距离平方判断点在圆内、圆上还是圆外？"
+    expected_source_path: "解析几何/点与圆锥曲线、直线位置关系.md"
+    expected_block_order: 2
+    target_section: "二、点与圆（圆心距法，标准解法）"
+    manual_summary: "应比较点到圆心距离平方与r²，避免不必要开根号。"
+    acceptable_evidence:
+      - "圆心距平方"
+      - "与r²比较"
+      - "圆内圆上圆外"
+    case_type: "positive"
+    expected_document_id: "2092515753077948418"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515753077948418"
+    expected_provider_item_id: "WfxcdRySeo1pVtxb39FcanvFnCe"
+    expected_block_id: "2092515753426075650"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "analysis"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515753077948418:teacher-sync-fil"
+    document_title: "解析几何/点与圆锥曲线、直线位置关系.md"
+    block_order: 2
+    source_excerpt: "圆：(x-h)^2+(y-k)^2=r^2，圆心C(h,k)，半径r>0 点P(x_0,y_0)，圆心距|PC|=\\sqrt{(x_0-h)^2+(y_0-k)^2} |PC|=r：点在圆上 |PC|>r：点在圆外 |PC|<r：点在圆内 实用简化：直接比较平方 (x_0-h)^2+(y_0-k)^2=r^2：圆上 (x_0-h)^2+(y_0-k)^2>r^2：圆外 (x_0-h)^2+(y_0-k)^2<r^2：圆内 例 1：x^2+y^2=4，P(1,3) 1^2+3^2=10>4，点在圆外。 例 2：(x-1)^2+(y-2)^2=1，P(1,1) 0+1=1，点在圆上。 例 3：x^2+y^2=9，P(2,0) 4<9，点在圆内。 ---"
+    resolved_section: "二、点与圆（圆心距法，标准解法）"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "LC-009"
+    topic: "直线与圆/阿波罗尼斯圆"
+    query_intent: "轨迹特殊情形"
+    query: "两定点距离比等于1时，阿波罗尼斯圆为什么退化成垂直平分线？"
+    expected_source_path: "直线与圆/阿波罗尼斯圆 （阿氏圆）.md"
+    expected_block_order: 0
+    target_section: "阿波罗尼斯圆"
+    manual_summary: "应指出到两定点距离相等的轨迹是垂直平分线，这是比值为1的特殊情形。"
+    acceptable_evidence:
+      - "距离相等"
+      - "垂直平分线"
+      - "比值1"
+    case_type: "positive"
+    expected_document_id: "2092515630692352002"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515630692352002"
+    expected_provider_item_id: "KO7MdKdP5oCOGYxPKJHc3Or2nkc"
+    expected_block_id: "2092515631191474177"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515630692352002:teacher-sync-fil"
+    document_title: "直线与圆/阿波罗尼斯圆 （阿氏圆）.md"
+    block_order: 0
+    source_excerpt: "阿波罗尼斯圆 （阿氏圆） PA=kPB 动点在圆上 一般：A=(x_1,y_1)，B=(x_2,y_2)，P=(x,y)，\\dfrac{|PA|}{|PB|}=k（k>0且k\\neq1） 则P轨迹为阿氏圆，方程为： \\boldsymbol{\\left(x+\\frac{k^2x_2-x_1}{1-k^2}\\right)^2+\\left(y+\\frac{k^2y_2-y_1}{1-k^2}\\right)^2=\\left(\\frac{k}{|1-k^2|}|AB|\\right)^2} \\Rightarrow 圆心：\\boldsymbol{\\left(\\dfrac{x_1-k^2x_2}{1-k^2},\\ \\dfrac{y_1-k^2y_2}{1-k^2}\\right)} 半径：\\boldsymbol{r=\\left|\\frac{k}{1-k^2}\\right|\\cdot|AB|} 圆心必在直线AB上。 你根本不需要记住这个公式，只需要知道考试看见两个线段成比例想到圆 实际上看到k倍不管是斜率还是弦长还是什么，都可以考虑轨迹是否是一个圆里面提到 找到圆最重要的是配方，凑成标准圆的形式"
+    resolved_section: ""
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "LC-010"
+    topic: "直线与圆/角度向量"
+    query_intent: "向量点积求角"
+    query: "角的顶点不在坐标轴上时，怎样用两条方向向量的点积求夹角？"
+    expected_source_path: "解析几何/怎么翻译/直线角度要翻译成向量_斜率.md"
+    expected_block_order: 9
+    target_section: "2. 核心转化公式（万能无限制）"
+    manual_summary: "应给出点积除以模长乘积的余弦公式和向量取向。"
+    acceptable_evidence:
+      - "方向向量"
+      - "点积"
+      - "模长乘积"
+    case_type: "positive"
+    expected_document_id: "2092515736799854593"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515736799854593"
+    expected_provider_item_id: "HQrod2kayoi6ZQxmXihcTYFnnhe"
+    expected_block_id: "2092515737533857794"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "analysis"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515736799854593:teacher-sync-fil"
+    document_title: "解析几何/怎么翻译/直线角度要翻译成向量_斜率.md"
+    block_order: 9
+    source_excerpt: "对于顶点为P的角\\angle MPN=\\theta，取从顶点出发的方向向量\\overrightarrow{PM}=(x_M-x_P,y_M-y_P) 、\\overrightarrow{PN}=(x_N-x_P,y_N-y_P)，则： 余弦形式（最常用，覆盖垂直、相等、倍数） \\boldsymbol{\\cos\\theta = \\frac{\\overrightarrow{PM}·\\overrightarrow{PN}}{|\\overrightarrow{PM}|·|\\overrightarrow{PN}|}} 其中点积\\overrightarrow{PM}·\\overrightarrow{PN}=(x_M-x_P)(x_N-x_P)+(y_M-y_P)(y_N-y_P)，模长|\\overrightarrow{PM}|=\\sqrt{(x_M-x_P)^2+(y_M-y_P)^2}。 这里弦长一般都是全部化为k或者t那个 垂直/直角的向量转化：\\boldsymbol{\\overrightarrow{PM}·\\overrightarrow{PN}=0}（无需分类讨论，比斜率更便捷） 角度相等：\\angle MPN=\\angle QPR \\iff \\cos\\angle MPN=\\cos\\angle QPR，代入公式列等式 角度倍数：如\\theta_2=2\\theta_1，用\\cos2\\thet"
+    resolved_section: "2. 核心转化公式（万能无限制）"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "PR-001"
+    topic: "概率统计/条件概率"
+    query_intent: "条件概率定义"
+    query: "已知事件B已经发生时，事件A的概率应该怎样重新计算？"
+    expected_source_path: "概率统计/条件概率、全概率与贝叶斯公式.md"
+    expected_block_order: 1
+    target_section: "条件概率公式"
+    manual_summary: "应给出 P(A|B)=P(AB)/P(B) 及 P(B)>0 的条件。"
+    acceptable_evidence:
+      - "条件概率"
+      - "交集概率"
+      - "分母P(B)"
+    case_type: "positive"
+    expected_document_id: "2092515616704348162"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515616704348162"
+    expected_provider_item_id: "S6addgkm5ojoWhxC23zc0zRSnTd"
+    expected_block_id: "2092515617241219074"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515616704348162:teacher-sync-fil"
+    document_title: "概率统计/条件概率、全概率与贝叶斯公式.md"
+    block_order: 1
+    source_excerpt: "P(B|A) = \\frac{P(AB)}{P(A)} 这里事件A是条件，我们是在假设A发生了的条件之下计算B发生的概率"
+    resolved_section: "1.条件概率公式"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "PR-002"
+    topic: "概率统计/全概率"
+    query_intent: "全概率分组"
+    query: "把样本空间按互斥完备事件分组后，目标事件概率怎样拆开计算？"
+    expected_source_path: "概率统计/条件概率、全概率与贝叶斯公式.md"
+    expected_block_order: 4
+    target_section: "全概率公式"
+    manual_summary: "应说明按分组事件加总 P(A|Bi)P(Bi)，并强调分组互斥完备。"
+    acceptable_evidence:
+      - "互斥完备分组"
+      - "条件概率加权"
+      - "全概率公式"
+    case_type: "positive"
+    expected_document_id: "2092515616704348162"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515616704348162"
+    expected_provider_item_id: "S6addgkm5ojoWhxC23zc0zRSnTd"
+    expected_block_id: "2092515617325105153"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515616704348162:teacher-sync-fil"
+    document_title: "概率统计/条件概率、全概率与贝叶斯公式.md"
+    block_order: 4
+    source_excerpt: "(2023·甲卷) 某地的中学生中有 60% 的同学爱好滑冰，50% 的同学爱好滑雪，70% 的同学爱好滑冰或爱好滑雪，在该地的中学生中随机调查一位同学，若该同学爱好滑雪，则该同学也爱好滑冰的概率为（ ） A. 0.8 B. 0.4 C. 0.2 D. 0.1 ---"
+    resolved_section: "练习题"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "PR-003"
+    topic: "概率统计/贝叶斯"
+    query_intent: "逆概率"
+    query: "观察到结果A后，怎样反推原因B发生的后验概率？"
+    expected_source_path: "概率统计/条件概率、全概率与贝叶斯公式.md"
+    expected_block_order: 5
+    target_section: "贝叶斯公式"
+    manual_summary: "应说明后验概率由联合概率除以结果概率，结合全概率展开分母。"
+    acceptable_evidence:
+      - "后验概率"
+      - "联合概率"
+      - "全概率分母"
+    case_type: "positive"
+    expected_document_id: "2092515616704348162"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515616704348162"
+    expected_provider_item_id: "S6addgkm5ojoWhxC23zc0zRSnTd"
+    expected_block_id: "2092515617341882369"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "analysis"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515616704348162:teacher-sync-fil"
+    document_title: "概率统计/条件概率、全概率与贝叶斯公式.md"
+    block_order: 5
+    source_excerpt: "利用加法公式和条件概率 设事件 A 为“爱好滑冰”，事件 B 为“爱好滑雪”，已知： P(A) = 0.6,\\quad P(B) = 0.5,\\quad P(A\\cup B) = 0.7 先由加法公式求 P(AB)： P(A\\cup B) = P(A) + P(B) - P(AB) 代入数据： 0.7 = 0.6 + 0.5 - P(AB) 解得： P(AB) = 0.6 + 0.5 - 0.7 = 0.4 再由条件概率公式求 P(A|B)： P(A|B) = \\frac{P(AB)}{P(B)} = \\frac{0.4}{0.5} = 0.8 ✅ 答案：A. 0.8"
+    resolved_section: "解题过程"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "PR-004"
+    topic: "概率统计/基本概念"
+    query_intent: "互斥与加法公式"
+    query: "两个事件不能同时发生时，它们并事件的概率怎样求？"
+    expected_source_path: "概率统计/高一 概率基本概念.md"
+    expected_block_order: 2
+    target_section: "互斥事件"
+    manual_summary: "应区分互斥事件与一般事件，给出互斥时加法公式。"
+    acceptable_evidence:
+      - "互斥"
+      - "并事件"
+      - "加法公式"
+    case_type: "positive"
+    expected_document_id: "2092515622907723777"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515622907723777"
+    expected_provider_item_id: "Nfnidm41roNx6KxdHmYcWBaQnlj"
+    expected_block_id: "2092515623708835841"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515622907723777:teacher-sync-fil"
+    document_title: "概率统计/高一 概率基本概念.md"
+    block_order: 2
+    source_excerpt: "P(A\\cup B)=P(A)+P(B)-P(AB)"
+    resolved_section: ""
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "PR-005"
+    topic: "概率统计/抽样"
+    query_intent: "有放回二项分布"
+    query: "每次抽球后放回并重复m次，目标球次数为什么服从二项分布？"
+    expected_source_path: "概率统计/概率模型/有放回和不放回.md"
+    expected_block_order: 4
+    target_section: "一、有放回"
+    manual_summary: "应说明每次概率不变且相互独立，次数变量服从二项分布。"
+    acceptable_evidence:
+      - "放回"
+      - "独立重复试验"
+      - "二项分布"
+    case_type: "positive"
+    expected_document_id: "2092515618788917250"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515618788917250"
+    expected_provider_item_id: "MW55dgoL3oSeTkx9l3IcZlRDn6b"
+    expected_block_id: "2092515619975905281"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515618788917250:teacher-sync-fil"
+    document_title: "概率统计/概率模型/有放回和不放回.md"
+    block_order: 4
+    source_excerpt: "有放回的意思是：每次摸完后，球放回盒中，下一次盒中球的组成不变。 若盒中共有 N 个球，其中红球 M 个，每次摸 1 个，摸后放回，重复摸 m 次，设摸到红球的个数为 X，则每次摸到红球的概率恒为 p=\\frac MN，并且各次相互独立。 所以 X\\sim B(m,p)，即 P(X=k)=C_m^k p^k(1-p)^{m-k}。 例如每次摸 1 个，摸后放回，问 m 次中恰好摸到 k 次红球，就是二项分布。"
+    resolved_section: "一、有放回"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "PR-006"
+    topic: "概率统计/抽样"
+    query_intent: "不放回超几何分布"
+    query: "连续抽取但不把球放回时，为什么不能直接套二项分布？"
+    expected_source_path: "概率统计/概率模型/有放回和不放回.md"
+    expected_block_order: 2
+    target_section: "不放回"
+    manual_summary: "应说明总体组成变化、抽取不独立，适用超几何分布。"
+    acceptable_evidence:
+      - "不放回"
+      - "概率变化"
+      - "超几何分布"
+    case_type: "positive"
+    expected_document_id: "2092515618788917250"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515618788917250"
+    expected_provider_item_id: "MW55dgoL3oSeTkx9l3IcZlRDn6b"
+    expected_block_id: "2092515619921379329"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "tip"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515618788917250:teacher-sync-fil"
+    document_title: "概率统计/概率模型/有放回和不放回.md"
+    block_order: 2
+    source_excerpt: "注意，这种适用于只有两种情况黑球红球这种简单情况，如果分类过多，那么不适合，比如 就不适合用这种公式 一共有N个球，其中白球个数M个，黑球N-M个，最后求的是 取出来 r个红球的概率 有放回：一次取一个，进行 m 次。每次概率不变，独立重复试验，用二项分布。 P(X=r)=C_m^r p^r(1-p)^{m-r} 不放回：一次取一个，进行 m 次。每次概率会变，但可以直接从总体中选样本，用组合数计算，用超几何分布。 P(Y=r)=\\frac{C_M^rC_{N-M}^{m-r}}{C_N^m} 一次取 k 个：若一次从 N 个球中取出 k 个球，则摸到 r 个红球的概率是 P(Y=r)=\\frac{C_M^rC_{N-M}^{k-r}}{C_N^k} 一次取 k 个本质上还是不放回，但它是一次完成； 有放回和不放回那两条默认是一次取一个，进行 m 次。"
+    resolved_section: ""
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "PR-007"
+    topic: "概率统计/百分位数"
+    query_intent: "百分位数位置"
+    query: "一组数据求第p百分位数时，为什么必须先排序再按位置索引定位？"
+    expected_source_path: "概率统计/数据统计/求百分位数_中位数.md"
+    expected_block_order: 2
+    target_section: "第p百分位数的标准计算方法"
+    manual_summary: "应覆盖排序、位置索引和非整数/整数位置的取值规则。"
+    acceptable_evidence:
+      - "先排序"
+      - "位置索引"
+      - "整数与非整数位置"
+    case_type: "positive"
+    expected_document_id: "2092515613642506241"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515613642506241"
+    expected_provider_item_id: "HcRGdKMjCoctGSxTCPUclJ4Vn6e"
+    expected_block_id: "2092515614787551233"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "method"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515613642506241:teacher-sync-fil"
+    document_title: "概率统计/数据统计/求百分位数_中位数.md"
+    block_order: 2
+    source_excerpt: "中位数是一组数据按大小顺序排列后，处于中间位置的数值，它等价于第50百分位数，可以将数据划分为数量相等的上下两部分。中位数不受极端值的影响，是描述数据集中趋势的常用指标。"
+    resolved_section: "2. 中位数"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "PR-008"
+    topic: "概率统计/中位数"
+    query_intent: "奇偶样本中位数"
+    query: "样本数量为奇数或偶数时，中位数分别取哪个位置或怎样平均？"
+    expected_source_path: "概率统计/数据统计/求百分位数_中位数.md"
+    expected_block_order: 7
+    target_section: "中位数的计算方法"
+    manual_summary: "应区分奇数取中间值、偶数取中间两项平均。"
+    acceptable_evidence:
+      - "奇数样本"
+      - "偶数样本"
+      - "中间两项平均"
+    case_type: "positive"
+    expected_document_id: "2092515613642506241"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515613642506241"
+    expected_provider_item_id: "HcRGdKMjCoctGSxTCPUclJ4Vn6e"
+    expected_block_id: "2092515614921768962"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "method"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515613642506241:teacher-sync-fil"
+    document_title: "概率统计/数据统计/求百分位数_中位数.md"
+    block_order: 7
+    source_excerpt: "例1：已知7名学生的数学成绩为：82, 75, 91, 68, 88, 79, 85，计算第40百分位数。 解： 将成绩从小到大排序：68, 75, 79, 82, 85, 88, 91，共7个数据，n=7。 计算位置：i = \\frac{40}{100} \\times 7 = 2.8 2.8不是整数，向上取整得k=3，对应排序后第3个数据79。 因此，这组数据的第40百分位数为79分。 例2：已知8个数据：12, 15, 9, 20, 18, 10, 14, 16，计算第50百分位数。 解： 排序：9, 10, 12, 14, 15, 16, 18, 20，n=8。 计算位置：i = \\frac{50}{100} \\times 8 = 4 i=4是整数，取第4个和第5个数据的平均值：\\frac{14 + 15}{2} = 14.5 因此，这组数据的第50百分位数为14.5。"
+    resolved_section: "计算示例"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "PR-009"
+    topic: "概率统计/分组数据"
+    query_intent: "累计频率插值"
+    query: "频率分布表没有原始数据时，分位数怎样在所在组内用累计频率估算？"
+    expected_source_path: "概率统计/数据统计/求百分位数_中位数.md"
+    expected_block_order: 20
+    target_section: "频率分布直方图中的百分位数与中位数计算"
+    manual_summary: "应通过累计频率定位组，再用下限、前累计频率、组频率和组距插值。"
+    acceptable_evidence:
+      - "累计频率定位"
+      - "组内插值"
+      - "L、F、f、d"
+    case_type: "positive"
+    expected_document_id: "2092515613642506241"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515613642506241"
+    expected_provider_item_id: "HcRGdKMjCoctGSxTCPUclJ4Vn6e"
+    expected_block_id: "2092515615236341762"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "analysis"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515613642506241:teacher-sync-fil"
+    document_title: "概率统计/数据统计/求百分位数_中位数.md"
+    block_order: 20
+    source_excerpt: "首先计算各组频率与累计频率，所有分组组距d=10： 这个表格只是帮助你更好理解，分析阶段是用来带你一起分析的 考试时候不需要都写出来，可以看标准解答部分 分组区间 \\frac{\\text{频率}}{\\text{组距}} 本组频率 累计频率 345-355 0.005 0.05 0.05 355-365 0.015 0.15 0.20 365-375 0.02 0.20 0.40 375-385 0.025 0.25 0.65 385-395 0.015 0.15 0.80 395-405 0.01 0.10 0.90 405-415 0.005 0.05 0.95 415-425 0.005 0.05 1.00 #### 1. 第一四分位数与中位数 第一四分位数对应第25百分位数，中位数对应第50百分位数。 ##### （1）第一四分位数（第25百分位数） 累计到355-365组时，累计频率为0.20 < 0.25； 累计到365-375组时，累计频率为0.40 \\geq 0.25，因此第25百分位数位于365-375组内。 代入插值公式：下限L=365，前序累计频率F=0.20，本组频率f=0.20，组距d=10 \\text{第25百分位数} = 365 + \\frac{0.25 - 0.20}{0.20} \\times 10 \\\\ = 365 + 2.5 \\\\ = 367.5 "
+    resolved_section: "分析"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "PR-010"
+    topic: "概率统计/期望方差"
+    query_intent: "方差恒等式"
+    query: "方差为什么能写成 E(X²)-[E(X)]²，这个公式怎样从定义展开？"
+    expected_source_path: "概率统计/数据统计/期望和方差/期望和方差的性质.md"
+    expected_block_order: 1
+    target_section: "公式 D(X)=E(X²)-[E(X)]² 简要推导"
+    manual_summary: "应展示平方展开、取期望和常数项处理，得到方差恒等式。"
+    acceptable_evidence:
+      - "方差定义"
+      - "完全平方展开"
+      - "期望线性性质"
+    case_type: "positive"
+    expected_document_id: "2092515612568764417"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515612568764417"
+    expected_provider_item_id: "DULWdiJKgoL6hLxwiMCcTRBrnOc"
+    expected_block_id: "2092515612849782786"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515612568764417:teacher-sync-fil"
+    document_title: "概率统计/数据统计/期望和方差/期望和方差的性质.md"
+    block_order: 1
+    source_excerpt: "E(X)=x_1p_1+x_2p_2+\\dots+x_np_n \\boldsymbol{E(aX+b)=aE(X)+b} \\boldsymbol{E(X+Y)=E(X)+E(Y)}。 期望就是均值，就是随机变量取值关于取值概率的加权平均数，就是理论值，就是大自然期望发生的事平均下来会发生的结果。 D(X)=(x_1-E(X))^2p_1+(x_2-E(X))^2p_2+\\dots+(x_n-E(X))^2p_n。 \\boldsymbol{D(aX+b)=a^2D(X)}。 由此可得，两组数据如果对应项和固定，或者差固定，则方差相等。 \\boldsymbol{D(X)=E(X^2)-[E(X)]^2}。"
+    resolved_section: ""
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "PR-011"
+    topic: "概率统计/马尔科夫链"
+    query_intent: "递推关系与通项"
+    query: "累计得分由最后一次加1分或加2分决定时，概率递推关系怎样建立并求出通项？"
+    expected_source_path: "概率统计/马尔科夫链 数列和概率结合.md"
+    expected_block_order: 5
+    target_section: "(2) 递推关系 + 通项"
+    manual_summary: "应按最后一步加1分或加2分分类，建立B_n=(1/3)B_{n-1}+(2/3)B_{n-2}并说明初值与通项。"
+    acceptable_evidence:
+      - "最后一步分类"
+      - "递推式"
+      - "初值与通项"
+    case_type: "positive"
+    expected_document_id: "2092515621662015489"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515621662015489"
+    expected_provider_item_id: "Q2J3dQ9SgoObVOx5kW4cz5m9nnm"
+    expected_block_id: "2092515622295355394"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "method"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515621662015489:teacher-sync-fil"
+    document_title: "概率统计/马尔科夫链 数列和概率结合.md"
+    block_order: 5
+    source_excerpt: "我们这道共享出行的得分题，与跳台阶是同一个内核：累计恰好得到n分的情况，最后一次使用交通工具也只有两种可能——要么是骑共享单车加1分（从n-1分而来），要么是骑共享电动车加2分（从n-2分而来），从来没有第三种来路。 要恰好得n分，有两种最后一步： 之前刚好n-1分，本次骑单车（+1分），概率\\dfrac13 B_{n-1}； 之前刚好n-2分，本次骑电动车（+2分），概率\\dfrac23 B_{n-2}。 递推式： B_n = \\frac13 B_{n-1} + \\frac23 B_{n-2}\\quad (n\\ge 3) 初值： B_1：只能单次单车，B_1=\\dfrac13； B_2：两次单车 或 一次电动车： B_2=\\left(\\tfrac13\\right)^2 + \\tfrac23 = \\tfrac19+\\tfrac69=\\tfrac79 整理递推： 通过两项作差构造出等比数列，标准的处理方法，如果你不知道后面跟的常数是多少，可以设一个未知数 比如设 B_n - B_{n-1} = -\\frac23\\left(B_{n-1}-B_{n-2}\\right) 令a_n = B_n - B_{n-1}，则\\{a_n\\}是等比数列，公比q=-\\dfrac23。 首项： a_2 = B_2 - B_1 = \\tfrac79 - \\tfrac13 = \\tfrac49 a_n = a"
+    resolved_section: "(2) 递推关系 + 通项"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "PR-012"
+    topic: "概率统计/分布列"
+    query_intent: "期望与分布列"
+    query: "离散随机变量给出分布列后，数学期望怎样按概率加权求和？"
+    expected_source_path: "概率统计/概率统计大题练习.md"
+    expected_block_order: 1
+    target_section: "求X的分布列与数学期望"
+    manual_summary: "应从取值和概率列出分布，再用 ΣxP(X=x) 计算期望。"
+    acceptable_evidence:
+      - "分布列"
+      - "取值乘概率"
+      - "数学期望"
+    case_type: "positive"
+    expected_document_id: "2092515620714102785"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515620714102785"
+    expected_provider_item_id: "KddWd8iCbo1ZnxxRCZucHIBInrh"
+    expected_block_id: "2092515620982538241"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515620714102785:teacher-sync-fil"
+    document_title: "概率统计/概率统计大题练习.md"
+    block_order: 1
+    source_excerpt: "(本小题满分 15 分) 一个袋子中有 3 个红球，n个绿球，已知从中一次摸出的 2 个球都是红球的概率为\\frac{1}{5}。 (1) 求n的值； (2) 从袋中依次随机摸出 2 个球作为样本（一次只摸出一个球），设采用有放回和不放回摸球得到的样本中绿球的个数分别为X,Y。 (i) 求X的分布列与数学期望； (ii) 分别就有放回摸球和不放回摸球，用样本中绿球比例估计总体中的绿球比例，求误差的绝对值不超过 0.2 的概率，并比较所求两概率的大小，说明其实际意义。 不放回就是相当于连续摸两次 ---"
+    resolved_section: "有放回和不放回"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "PR-013"
+    topic: "概率统计/均值"
+    query_intent: "均值与总和"
+    query: "知道样本容量和平均数后，怎样把均值条件改写成数据总和条件？"
+    expected_source_path: "概率统计/数据统计/TODO 均值的表示和变换.md"
+    expected_block_order: 1
+    target_section: "题目里均值的提取通用步骤"
+    manual_summary: "应使用Σxi=n xbar，并能处理拆分后的求和式。"
+    acceptable_evidence:
+      - "Σxi=n xbar"
+      - "样本容量"
+      - "拆分求和"
+    case_type: "positive"
+    expected_document_id: "2092515610358366209"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515610358366209"
+    expected_provider_item_id: "OiNmdlPxmofmr5x5LaOc8st2nGd"
+    expected_block_id: "2092515610513555458"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "question"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515610358366209:teacher-sync-fil"
+    document_title: "概率统计/数据统计/TODO 均值的表示和变换.md"
+    block_order: 1
+    source_excerpt: "遇到带均值、求和符号的题，按 4 步走： 找核心条件：先定位「样本容量n」和「均值\\bar{x}（不管题目用什么字母）」，都有 \\sum_{i=1}^n x_i = n\\bar{x}； 拆求和式：把题目里的求和式展开，拆分出「数据求和项含有 x_i 的」和「常数项」； 代入消元：把\\sum x_i替换成n\\bar{x}，消掉所有x_i，把式子变成关于所求参数的表达式；"
+    resolved_section: "题目里均值的提取通用步骤"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "PR-014"
+    topic: "概率统计/随机变量"
+    query_intent: "随机变量线性变换"
+    query: "已知随机变量X的期望和方差，Y=aX+b的期望方差怎样直接得到？"
+    expected_source_path: "概率统计/数据统计/期望和方差/期望和方差的性质.md"
+    expected_block_order: 1
+    target_section: "期望和方差的性质"
+    manual_summary: "应给出E(aX+b)=aE(X)+b和D(aX+b)=a²D(X)。"
+    acceptable_evidence:
+      - "期望线性变换"
+      - "方差平方系数"
+      - "常数平移"
+    case_type: "positive"
+    expected_document_id: "2092515612568764417"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515612568764417"
+    expected_provider_item_id: "DULWdiJKgoL6hLxwiMCcTRBrnOc"
+    expected_block_id: "2092515612849782786"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515612568764417:teacher-sync-fil"
+    document_title: "概率统计/数据统计/期望和方差/期望和方差的性质.md"
+    block_order: 1
+    source_excerpt: "E(X)=x_1p_1+x_2p_2+\\dots+x_np_n \\boldsymbol{E(aX+b)=aE(X)+b} \\boldsymbol{E(X+Y)=E(X)+E(Y)}。 期望就是均值，就是随机变量取值关于取值概率的加权平均数，就是理论值，就是大自然期望发生的事平均下来会发生的结果。 D(X)=(x_1-E(X))^2p_1+(x_2-E(X))^2p_2+\\dots+(x_n-E(X))^2p_n。 \\boldsymbol{D(aX+b)=a^2D(X)}。 由此可得，两组数据如果对应项和固定，或者差固定，则方差相等。 \\boldsymbol{D(X)=E(X^2)-[E(X)]^2}。"
+    resolved_section: ""
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "PR-015"
+    topic: "概率统计/古典概型"
+    query_intent: "等可能建模"
+    query: "古典概型成立需要哪些基本条件，为什么有利结果数除以总结果数？"
+    expected_source_path: "概率统计/AI 古典概型.md"
+    expected_block_order: 0
+    target_section: "古典概型"
+    manual_summary: "应说明有限样本空间、基本事件等可能和计数比值。"
+    acceptable_evidence:
+      - "有限样本空间"
+      - "等可能基本事件"
+      - "有利数除总数"
+    case_type: "positive"
+    expected_document_id: "2092515606268919810"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515606268919810"
+    expected_provider_item_id: "UX14dd8YbocgcFxZcZjckmwenWg"
+    expected_block_id: "2092515606860316674"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515606268919810:teacher-sync-fil"
+    document_title: "概率统计/AI 古典概型.md"
+    block_order: 0
+    source_excerpt: "AI 古典概型"
+    resolved_section: ""
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "PR-016"
+    topic: "概率统计/抽签"
+    query_intent: "无放回条件概率"
+    query: "依次不放回抽签时，前面的人没有抽中特殊签，后面抽中的概率怎样更新？"
+    expected_source_path: "概率统计/概率模型/抽签的概率是相同的.md"
+    expected_block_order: 2
+    target_section: "解答"
+    manual_summary: "应根据条件发生后的剩余签数和特殊签数重新计算，而不是把每次概率当独立。"
+    acceptable_evidence:
+      - "不放回"
+      - "条件更新"
+      - "剩余签数"
+    case_type: "positive"
+    expected_document_id: "2092515617941667841"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515617941667841"
+    expected_provider_item_id: "B8gpd6egtohEhKxItQDcrz35nhd"
+    expected_block_id: "2092515618193326081"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "analysis"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515617941667841:teacher-sync-fil"
+    document_title: "概率统计/概率模型/抽签的概率是相同的.md"
+    block_order: 2
+    source_excerpt: "前提：一共8条道，2条黄金道；1班先抽，然后2班，再3班，抽完不放回去。 现在已知：1班没抽到黄金道。 那就等于1班拿走了一条普通赛道，场上还剩7条赛道，黄金道依旧还是2条。 现在看后面抽签： 先看2班：从7条里抽，抽到黄金道的概率就是 \\dfrac{2}{7}。 再算3班，要分两种可能性： 第一种：2班运气好抽到黄金道（概率\\dfrac{2}{7}），那剩下6条赛道只剩1条黄金道，3班中奖概率\\dfrac{1}{6}； 第二种：2班没抽到黄金道（概率\\dfrac{5}{7}），剩下6条赛道还有2条黄金道，3班中奖概率\\dfrac{2}{6}。 两者合在一起算一算： \\dfrac{2}{7}×\\dfrac{1}{6}+\\dfrac{5}{7}×\\dfrac{2}{6}=\\dfrac{12}{42}=\\dfrac{2}{7} ✅关键点： 只要我们不知道2班到底抽没抽中，2班和3班的机会是均等的，概率一样都是\\dfrac{2}{7}。抽签本身是公平游戏，先后顺序不影响概率。 最终答案：\\boldsymbol{\\dfrac{2}{7}}。"
+    resolved_section: "解答"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "PR-017"
+    topic: "概率统计/二项分布"
+    query_intent: "独立重复试验"
+    query: "二项分布模型需要哪些独立重复条件，随机变量表示的到底是什么次数？"
+    expected_source_path: "概率统计/数据统计/分布问题/TODO 二项分布.md"
+    expected_block_order: 0
+    target_section: "二项分布"
+    manual_summary: "应检查试验次数固定、每次成功概率相同且相互独立，并明确X为成功次数。"
+    acceptable_evidence:
+      - "固定次数"
+      - "相同成功概率"
+      - "独立"
+      - "成功次数"
+    case_type: "positive"
+    expected_document_id: "2092515611176255490"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515611176255490"
+    expected_provider_item_id: "B05qdjsfmoUJRDxZJOicPTabnSh"
+    expected_block_id: "2092515611289501697"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515611176255490:teacher-sync-fil"
+    document_title: "概率统计/数据统计/分布问题/TODO 二项分布.md"
+    block_order: 0
+    source_excerpt: "TODO 二项分布"
+    resolved_section: ""
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "PR-018"
+    topic: "概率统计/期望方差"
+    query_intent: "方差推导"
+    query: "从方差定义展开完全平方后，哪一步能得到E(X²)-[E(X)]²？"
+    expected_source_path: "概率统计/数据统计/期望和方差/期望和方差的性质.md"
+    expected_block_order: 4
+    target_section: "步骤2：两边取期望"
+    manual_summary: "应强调E(X)是常数并使用期望线性性质合并各项。"
+    acceptable_evidence:
+      - "E(X)为常数"
+      - "期望线性"
+      - "E(X²)-[E(X)]²"
+    case_type: "positive"
+    expected_document_id: "2092515612568764417"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515612568764417"
+    expected_provider_item_id: "DULWdiJKgoL6hLxwiMCcTRBrnOc"
+    expected_block_id: "2092515612929474561"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515612568764417:teacher-sync-fil"
+    document_title: "概率统计/数据统计/期望和方差/期望和方差的性质.md"
+    block_order: 4
+    source_excerpt: "E(X)是常数： \\begin{align} D(X) &=E\\left[X^2-2E(X)\\cdot X+\\big(E(X)\\big)^2\\right] \\\\ &=E(X^2)-2E(X)\\cdot E(X)+E\\left[\\big(E(X)\\big)^2\\right] \\\\ &=E(X^2)-2\\left[E(X)\\right]^2+\\left[E(X)\\right]^2 \\\\ &=\\boldsymbol{E(X^2)-\\big[E(X)\\big]^2} \\end{align} 关键：E(X)为确定常数，E[c\\cdot X]=cE(X),\\ E(c)=c。"
+    resolved_section: "步骤2：两边取期望，利用期望线性性质 E(A+B)=E(A)+E(B)、常数期望不变"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "SG-001"
+    topic: "立体几何/平行垂直"
+    query_intent: "线面平行判定"
+    query: "空间中证明一条直线平行于平面，最常用的判定条件是什么？"
+    expected_source_path: "立体几何/立体几何平行垂直基本知识.md"
+    expected_block_order: 2
+    target_section: "① 线面平行判定"
+    manual_summary: "应说明通过直线与平面内一条直线平行且不在平面内来判定线面平行。"
+    acceptable_evidence:
+      - "线线平行"
+      - "平面内直线"
+      - "线面平行判定"
+    case_type: "positive"
+    expected_document_id: "2092515661856030722"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515661856030722"
+    expected_provider_item_id: "G5R9dlO3soz9xhxaKAXcaex2ngd"
+    expected_block_id: "2092515664955621377"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515661856030722:teacher-sync-fil"
+    document_title: "立体几何/立体几何平行垂直基本知识.md"
+    block_order: 2
+    source_excerpt: "由线线平行推线面平行 \\left. \\begin{aligned} a \\parallel b \\\\ a \\not\\subset \\alpha \\\\ b \\subset \\alpha \\end{aligned} \\right\\} \\Rightarrow a \\parallel \\alpha ---"
+    resolved_section: "① 线面平行判定"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "SG-002"
+    topic: "立体几何/平行垂直"
+    query_intent: "面面平行判定"
+    query: "两平面平行可以用平面内的几条相交直线来判定吗，条件是什么？"
+    expected_source_path: "立体几何/立体几何平行垂直基本知识.md"
+    expected_block_order: 6
+    target_section: "③ 面面平行判定"
+    manual_summary: "应说明一个平面内两条相交直线分别平行于另一个平面即可判定面面平行。"
+    acceptable_evidence:
+      - "两条相交直线"
+      - "分别平行另一平面"
+      - "面面平行"
+    case_type: "positive"
+    expected_document_id: "2092515661856030722"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515661856030722"
+    expected_provider_item_id: "G5R9dlO3soz9xhxaKAXcaex2ngd"
+    expected_block_id: "2092515665060478978"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515661856030722:teacher-sync-fil"
+    document_title: "立体几何/立体几何平行垂直基本知识.md"
+    block_order: 6
+    source_excerpt: "\\left. \\begin{aligned} a \\parallel \\beta \\\\ b \\parallel \\beta \\\\ a \\cap b = A \\\\ a,b \\subset \\alpha \\end{aligned} \\right\\} \\Rightarrow \\alpha \\parallel \\beta ---"
+    resolved_section: "③ 面面平行判定"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "SG-003"
+    topic: "立体几何/平行垂直"
+    query_intent: "线面垂直判定"
+    query: "一条直线要证明垂直一个平面，需要在平面内找到什么样的直线？"
+    expected_source_path: "立体几何/立体几何平行垂直基本知识.md"
+    expected_block_order: 12
+    target_section: "① 线面垂直判定"
+    manual_summary: "应说明直线垂直平面内两条相交直线即可判定线面垂直。"
+    acceptable_evidence:
+      - "平面内两条相交直线"
+      - "分别垂直"
+      - "线面垂直判定"
+    case_type: "positive"
+    expected_document_id: "2092515661856030722"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515661856030722"
+    expected_provider_item_id: "G5R9dlO3soz9xhxaKAXcaex2ngd"
+    expected_block_id: "2092515665194696705"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515661856030722:teacher-sync-fil"
+    document_title: "立体几何/立体几何平行垂直基本知识.md"
+    block_order: 12
+    source_excerpt: "\\left. \\begin{aligned} a \\perp b \\\\ a \\perp c \\\\ b \\cap c = A \\\\ b,c \\subset \\alpha \\end{aligned} \\right\\} \\Rightarrow a \\perp \\alpha ---"
+    resolved_section: "① 线面垂直判定"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "SG-004"
+    topic: "立体几何/三垂线"
+    query_intent: "三垂线定理"
+    query: "斜线在平面内的射影若垂直某条平面内直线，原斜线与该直线是否也垂直？"
+    expected_source_path: "立体几何/立体几何平行垂直基本知识.md"
+    expected_block_order: 23
+    target_section: "三垂线定理（正向）"
+    manual_summary: "应识别三垂线正向定理，并交代射影、垂直关系和结论。"
+    acceptable_evidence:
+      - "斜线射影"
+      - "射影垂直"
+      - "三垂线正向"
+    case_type: "positive"
+    expected_document_id: "2092515661856030722"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515661856030722"
+    expected_provider_item_id: "G5R9dlO3soz9xhxaKAXcaex2ngd"
+    expected_block_id: "2092515665463132162"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515661856030722:teacher-sync-fil"
+    document_title: "立体几何/立体几何平行垂直基本知识.md"
+    block_order: 23
+    source_excerpt: "已知： AT \\perp \\alpha（AT 是平面 \\alpha 的垂线） BC \\subset \\alpha，DE \\subset \\alpha BC \\perp DE（BC 是 AB 在平面 \\alpha 内的射影，且射影垂直于 DE） 求证：AB \\perp DE 证明： \\because AT \\perp \\alpha,\\ DE \\subset \\alpha \\\\ \\therefore AT \\perp DE \\quad (\\text{线面垂直性质}) \\\\ \\because BC \\perp DE,\\ AT \\cap BC = T,\\ AT, BC \\subset \\text{平面 } ABC \\\\ \\therefore DE \\perp \\text{平面 } ABC \\quad (\\text{线面垂直判定}) \\\\ \\because AB \\subset \\text{平面 } ABC \\\\ \\therefore DE \\perp AB \\quad (\\text{线面垂直性质}) ---"
+    resolved_section: "一、三垂线定理（正向）"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "SG-005"
+    topic: "立体几何/三余弦定理"
+    query_intent: "线线角与线面角"
+    query: "斜线与平面内任一直线的夹角，能否用线面角和射影夹角的余弦相乘表示？"
+    expected_source_path: "立体几何/三垂弦定理三余弦定理_三正弦定理 知识点.md"
+    expected_block_order: 3
+    target_section: "几何模型设定"
+    manual_summary: "应给出三余弦定理的角度角色和乘积关系，区分线面角与射影夹角。"
+    acceptable_evidence:
+      - "线面角"
+      - "射影夹角"
+      - "三余弦乘积"
+    case_type: "positive"
+    expected_document_id: "2092515643308818433"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515643308818433"
+    expected_provider_item_id: "HxXxdQ5RBosJu2xt11ZcRvv0nRg"
+    expected_block_id: "2092515644143484930"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "question"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515643308818433:teacher-sync-fil"
+    document_title: "立体几何/三垂弦定理三余弦定理_三正弦定理 知识点.md"
+    block_order: 3
+    source_excerpt: "设直线 AB 斜交平面 \\alpha 于点 A； 过 B 作 BO\\perp\\alpha，垂足为 O，连接 AO： \\boldsymbol{\\theta = \\angle BAO}：直线 AB 与平面 \\alpha 的线面角（题目记为 \\theta_1）； 在平面 \\alpha 内过 A 作直线 AC，\\boldsymbol{\\theta_2 = \\angle OAC}（平面内射影与直线夹角）； 设斜线 AB 与平面内直线 AC 的夹角为 \\boldsymbol{\\varphi = \\angle BAC}。 三余弦定理核心公式： \\cos\\varphi = \\cos\\theta \\cdot \\cos\\theta_2 含义：斜线与平面内任意直线夹角的余弦 = 线面角余弦 × 射影与该直线夹角余弦。"
+    resolved_section: "1. 几何模型设定"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "SG-006"
+    topic: "立体几何/二面角"
+    query_intent: "法向量求二面角"
+    query: "用两个半平面的法向量求二面角时，为什么还要判断锐角还是钝角？"
+    expected_source_path: "空间向量/空间向量角 线线角 线面角 面面角.md"
+    expected_block_order: 19
+    target_section: "法向量法核心原理"
+    manual_summary: "应说明法向量夹角与二面角可能相等或互补，需结合图形确定符号。"
+    acceptable_evidence:
+      - "两个法向量"
+      - "相等或互补"
+      - "锐钝判断"
+    case_type: "positive"
+    expected_document_id: "2092515638627975170"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515638627975170"
+    expected_provider_item_id: "P543dVjJUoQ0Nsx1nd3cJK2RnHe"
+    expected_block_id: "2092515641798868993"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "method"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515638627975170:teacher-sync-fil"
+    document_title: "空间向量/空间向量角 线线角 线面角 面面角.md"
+    block_order: 19
+    source_excerpt: "直观观察法：通过立体图形判断二面角是锐角还是钝角。锐角则\\cos\\theta取正值，钝角则\\cos\\theta取负值。 法向量方向法： 两法向量一个指向二面角内部、一个指向外部 → 二面角与法向量夹角相等（\\theta=\\varphi）"
+    resolved_section: "三、判断“相等”还是“互补”的方法"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "SG-007"
+    topic: "立体几何/空间向量"
+    query_intent: "四点共面"
+    query: "如何用两个不共线向量的线性组合证明四个空间点共面？"
+    expected_source_path: "空间向量/空间向量及其运算.md"
+    expected_block_order: 2
+    target_section: "证明A,B,C,D四点共面"
+    manual_summary: "应说明若 AD 可写成 AB、AC 的实数线性组合，则四点共面。"
+    acceptable_evidence:
+      - "AD=xAB+yAC"
+      - "AB与AC不共线"
+      - "四点共面"
+    case_type: "positive"
+    expected_document_id: "2092515635138314241"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515635138314241"
+    expected_provider_item_id: "WTqudbXysoc4Fhx84XRcdBv6nvg"
+    expected_block_id: "2092515636228833282"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "question"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515635138314241:teacher-sync-fil"
+    document_title: "空间向量/空间向量及其运算.md"
+    block_order: 2
+    source_excerpt: "和平面几何类似，只不过是有时候在一个平面里看，有时候在另一个平面里看 对于某些研究立体几何的题目，通过三维变成二维，也就是画出一个平面，我们可以更好的研究点的轨迹 计算出轨迹曲线（圆，椭圆，抛物线）也可以更好的运用平面的知识，计算某些线段具体值 这在很多立体几何小题题目中常见"
+    resolved_section: ""
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "SG-008"
+    topic: "立体几何/外接球"
+    query_intent: "外接球半径模型"
+    query: "正棱锥外接球半径通常怎样把底面外接圆半径和高联系起来？"
+    expected_source_path: "立体几何/外接球和内切球/外接球常见模型 长方体 棱柱 棱锥.md"
+    expected_block_order: 2
+    target_section: "正棱锥外接球半径推导"
+    manual_summary: "应围绕球心、底面外心和棱锥高构成的直角三角形推导半径。"
+    acceptable_evidence:
+      - "底面外接圆半径"
+      - "球心到底面距离"
+      - "勾股关系"
+    case_type: "positive"
+    expected_document_id: "2092515644982345729"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515644982345729"
+    expected_provider_item_id: "TFQWdhw1joNd42xvZ2zcuKg0nFf"
+    expected_block_id: "2092515646215471106"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515644982345729:teacher-sync-fil"
+    document_title: "立体几何/外接球和内切球/外接球常见模型 长方体 棱柱 棱锥.md"
+    block_order: 2
+    source_excerpt: "#### 一、线段与几何元素定义 R：外接球半径，球心O到顶点P、底面顶点A的距离，即OA=OP=R h：正棱锥的高，顶点P到底面的垂线段PO_1，O_1为底面正多边形的外接圆圆心 r：底面外接圆半径，底面中心O_1到底面顶点的距离，即O_1A=r 球心O必在高PO_1所在的直线上，分球心在棱锥内部、外部两种情形，均在直角\\boldsymbol{\\triangle OO_1A}中用勾股定理计算。 --- #### 二、情形1：球心在棱锥内部（棱锥高瘦型）"
+    resolved_section: "正棱锥外接球半径推导"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "SG-009"
+    topic: "立体几何/外接球"
+    query_intent: "球的垂径定理"
+    query: "球被平面截出的圆，球心到截面圆心的连线与截面有什么关系？"
+    expected_source_path: "立体几何/外接球和内切球/外接球问题.md"
+    expected_block_order: 3
+    target_section: "球的垂径定理"
+    manual_summary: "应说明球心到截面圆心垂直截面，并用截面圆半径、球半径和距离构成勾股。"
+    acceptable_evidence:
+      - "截面圆心"
+      - "垂直截面"
+      - "球半径勾股"
+    case_type: "positive"
+    expected_document_id: "2092515647805112322"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515647805112322"
+    expected_provider_item_id: "Ao16dpLu7oJx9YxTz75czvCcnke"
+    expected_block_id: "2092515649600274434"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515647805112322:teacher-sync-fil"
+    document_title: "立体几何/外接球和内切球/外接球问题.md"
+    block_order: 3
+    source_excerpt: "三角形每个边的意义： R是球的半径，d是球心到底面的纬线距离，r是小圆的半径 垂径定理：球面上任意小圆（纬线圈）的圆心向上作垂线必通过球心 其实这个小圆的圆心，其实是点在球上的三角形所在平面的外心 可以把这个小圆圆心记作三角形的外心"
+    resolved_section: "球的垂径定理"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "SG-010"
+    topic: "立体几何/体积"
+    query_intent: "棱台体积与割补"
+    query: "棱台体积除了直接公式，还能怎样通过顶点补成棱锥来计算？"
+    expected_source_path: "立体几何/常见立体几何面积表面积/棱台和棱柱的体积.md"
+    expected_block_order: 6
+    target_section: "顶点转化/割补法"
+    manual_summary: "应说明顶点转化、补锥或大锥减小锥的割补思路及适用性。"
+    acceptable_evidence:
+      - "棱台体积"
+      - "补锥"
+      - "大锥减小锥"
+    case_type: "positive"
+    expected_document_id: "2092515652586618882"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515652586618882"
+    expected_provider_item_id: "T83hdrIw3oW00jxZrbYcGlBpnMc"
+    expected_block_id: "2092515653459034114"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515652586618882:teacher-sync-fil"
+    document_title: "立体几何/常见立体几何面积表面积/棱台和棱柱的体积.md"
+    block_order: 6
+    source_excerpt: "#### （1）三棱柱→三棱锥（顶点分割，推导棱锥公式） 将三棱柱沿顶点连线分割为3个等体积三棱锥： 棱柱 ABC-A_1B_1C_1 可拆为 A-A_1B_1C_1、B_1-ABC、C_1-ABC。 每个三棱锥体积 V_{\\text{锥}}=\\frac{1}{3}S_{\\text{底}}h，验证 V_{\\text{柱}}=3V_{\\text{锥}}。 #### （2）斜棱柱→直棱柱（顶点/侧棱转化） 斜棱柱体积 = 直截面面积 × 侧棱长（沿直截面切割、平移拼接为直棱柱）。 V=S_{\\text{直截面}} \\cdot l S_{\\text{直截面}}：垂直于侧棱的截面面积；l：侧棱长。 #### （3）补形/等积变换（顶点换底） 四棱柱可补为长方体（顶点对齐），用长方体体积反推。 三棱锥（四面体）可换顶点作底面（等积），选易算底与高。"
+    resolved_section: "2. 顶点转化/割补法（核心进阶）"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "SG-011"
+    topic: "立体几何/建系"
+    query_intent: "空间直角坐标系选择"
+    query: "立体几何建空间直角坐标系时，为什么优先选择带直角的面作为坐标基准？"
+    expected_source_path: "立体几何/立体几何常见模型/常见选择建系的面.md"
+    expected_block_order: 5
+    target_section: "尽量选择有直角的建系"
+    manual_summary: "应说明直角面能让坐标轴正交、点坐标简单并降低向量计算量。"
+    acceptable_evidence:
+      - "有直角的面"
+      - "坐标轴选择"
+      - "简化坐标计算"
+    case_type: "positive"
+    expected_document_id: "2092515660195086337"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515660195086337"
+    expected_provider_item_id: "DncGdiy4uowTOGxbkRVctdisntV"
+    expected_block_id: "2092515661210107905"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515660195086337:teacher-sync-fil"
+    document_title: "立体几何/立体几何常见模型/常见选择建系的面.md"
+    block_order: 5
+    source_excerpt: "选择一个直角定点，这样那个点作为原点，之后"
+    resolved_section: "尽量选择有直角的建系"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "SG-012"
+    topic: "立体几何/外接球"
+    query_intent: "外接球体积综合题"
+    query: "三棱锥外接球问题怎样先算底面外接圆，再求球心到平面的距离？"
+    expected_source_path: "立体几何/外接球和内切球/外接球问题.md"
+    expected_block_order: 8
+    target_section: "步骤3：求球心O到平面ABC的距离d"
+    manual_summary: "应覆盖底面外接圆半径、球心距平面距离和球半径的分步链路。"
+    acceptable_evidence:
+      - "底面外接圆半径"
+      - "球心到平面距离"
+      - "球半径"
+    case_type: "positive"
+    expected_document_id: "2092515647805112322"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515647805112322"
+    expected_provider_item_id: "Ao16dpLu7oJx9YxTz75czvCcnke"
+    expected_block_id: "2092515649759657985"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "question"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515647805112322:teacher-sync-fil"
+    document_title: "立体几何/外接球和内切球/外接球问题.md"
+    block_order: 8
+    source_excerpt: "球半径R=1，由球心距、截面圆半径、球半径关系 R^2=d^2+r^2： d=\\sqrt{R^2-r^2}=\\sqrt{1^2-\\left(\\frac{\\sqrt{2}}{2}\\right)^2}=\\sqrt{1-\\frac12}=\\frac{\\sqrt{2}}{2}"
+    resolved_section: "步骤3：求球心O到平面ABC的距离d"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "SG-013"
+    topic: "立体几何/三余弦定理"
+    query_intent: "最小角定理"
+    query: "为什么斜线与平面内直线的夹角不小于线面角？"
+    expected_source_path: "立体几何/三垂弦定理三余弦定理_三正弦定理 知识点.md"
+    expected_block_order: 8
+    target_section: "线面角是最小角"
+    manual_summary: "应由 cosθ2≤1 和余弦单调性推出 φ≥θ。"
+    acceptable_evidence:
+      - "线面角最小"
+      - "cosθ2≤1"
+      - "余弦单调"
+    case_type: "positive"
+    expected_document_id: "2092515643308818433"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515643308818433"
+    expected_provider_item_id: "HxXxdQ5RBosJu2xt11ZcRvv0nRg"
+    expected_block_id: "2092515644294479873"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515643308818433:teacher-sync-fil"
+    document_title: "立体几何/三垂弦定理三余弦定理_三正弦定理 知识点.md"
+    block_order: 8
+    source_excerpt: "\\theta 是斜线与平面内所有直线形成的角里最小角； 证明：\\cos\\theta_2 \\in (0,1]，故 \\cos\\varphi \\le \\cos\\theta； 余弦在 (0,\\tfrac{\\pi}{2}) 单调递减，因此 \\boldsymbol{\\varphi \\ge \\theta}； 当且仅当 \\theta_2=0（AC 与射影 AO 重合）时取等号，此时夹角等于线面角。"
+    resolved_section: ""
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "SG-014"
+    topic: "立体几何/三垂线"
+    query_intent: "逆定理"
+    query: "已知斜线垂直平面内一条直线，怎样推出它的射影也垂直这条直线？"
+    expected_source_path: "立体几何/立体几何平行垂直基本知识.md"
+    expected_block_order: 24
+    target_section: "二、三垂线逆定理"
+    manual_summary: "应识别三垂线逆定理，区分斜线、射影和目标平面内直线。"
+    acceptable_evidence:
+      - "三垂线逆定理"
+      - "斜线垂直"
+      - "射影垂直"
+    case_type: "positive"
+    expected_document_id: "2092515661856030722"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515661856030722"
+    expected_provider_item_id: "G5R9dlO3soz9xhxaKAXcaex2ngd"
+    expected_block_id: "2092515665488297985"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515661856030722:teacher-sync-fil"
+    document_title: "立体几何/立体几何平行垂直基本知识.md"
+    block_order: 24
+    source_excerpt: "已知： AT \\perp \\alpha（AT 是平面 \\alpha 的垂线） BC \\subset \\alpha，DE \\subset \\alpha AB \\perp DE（斜线 AB 垂直于 DE） 求证：BC \\perp DE 证明： \\because AT \\perp \\alpha,\\ DE \\subset \\alpha \\\\ \\therefore AT \\perp DE \\quad (\\text{线面垂直性质}) \\\\ \\because AB \\perp DE,\\ AT \\cap AB = A,\\ AT, AB \\subset \\text{平面 } ABC \\\\ \\therefore DE \\perp \\text{平面 } ABC \\quad (\\text{线面垂直判定}) \\\\ \\because BC \\subset \\text{平面 } ABC \\\\ \\therefore DE \\perp BC \\quad (\\text{线面垂直性质})"
+    resolved_section: "二、三垂线逆定理"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "SG-015"
+    topic: "立体几何/建系"
+    query_intent: "墙角模型"
+    query: "三个面两两垂直的墙角模型，空间直角坐标系的原点和三条轴怎样选？"
+    expected_source_path: "立体几何/立体几何常见模型/墙角模型.md"
+    expected_block_order: 1
+    target_section: "墙角模型建系"
+    manual_summary: "应说明取墙角顶点为原点，沿三条互相垂直棱设轴。"
+    acceptable_evidence:
+      - "墙角三面垂直"
+      - "原点"
+      - "三条坐标轴"
+    case_type: "positive"
+    expected_document_id: "2092515659255562242"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515659255562242"
+    expected_provider_item_id: "A1c6dGCI4oQuQsxdRxpcOZ2gncb"
+    expected_block_id: "2092515659641438210"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515659255562242:teacher-sync-fil"
+    document_title: "立体几何/立体几何常见模型/墙角模型.md"
+    block_order: 1
+    source_excerpt: "三个面垂直这种 这样选里面一个长方体的一个截面截出来的，选择C为坐标原点"
+    resolved_section: ""
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "SG-016"
+    topic: "立体几何/平面图"
+    query_intent: "三维二维化"
+    query: "立体几何图形关系太复杂时，为什么要抽取一个平面截面来分析？"
+    expected_source_path: "立体几何/立体几何小题/TODO 三维问题二维化 立体几何画出平面图.md"
+    expected_block_order: 0
+    target_section: "三维问题二维化"
+    manual_summary: "应说明选取包含关键线段和垂直关系的平面，把空间关系转成平面几何。"
+    acceptable_evidence:
+      - "选取平面截面"
+      - "保留关键线段"
+      - "空间转平面"
+    case_type: "positive"
+    expected_document_id: "2092515655925284865"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515655925284865"
+    expected_provider_item_id: "FtEwdvi4TobMGFxlKRac1apHnOc"
+    expected_block_id: "2092515656030142466"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "question"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515655925284865:teacher-sync-fil"
+    document_title: "立体几何/立体几何小题/TODO 三维问题二维化 立体几何画出平面图.md"
+    block_order: 0
+    source_excerpt: "TODO 三维问题二维化 立体几何画出平面图 很多题目讲解的时候都是给你画出来一整个立体图，但是实际上这很难画准确的关系和标出来长度 因此我们需要画出来二维的图也就是平面图，通过在平面图中可以更好的找到线之间关系 当然选择哪个面就是要具体选择，一道题可以画多个不同平面图"
+    resolved_section: ""
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "SG-017"
+    topic: "立体几何/外接球"
+    query_intent: "正棱锥模型"
+    query: "正棱锥外接球计算中，为什么球心、底面外心和顶点可以放进同一个截面？"
+    expected_source_path: "立体几何/外接球和内切球/外接球常见模型 长方体 棱柱 棱锥.md"
+    expected_block_order: 2
+    target_section: "正棱锥外接球半径推导"
+    manual_summary: "应说明正棱锥对称性使球心落在高线上，截面得到直角三角形。"
+    acceptable_evidence:
+      - "对称轴"
+      - "底面外心"
+      - "截面直角三角形"
+    case_type: "positive"
+    expected_document_id: "2092515644982345729"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515644982345729"
+    expected_provider_item_id: "TFQWdhw1joNd42xvZ2zcuKg0nFf"
+    expected_block_id: "2092515646215471106"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515644982345729:teacher-sync-fil"
+    document_title: "立体几何/外接球和内切球/外接球常见模型 长方体 棱柱 棱锥.md"
+    block_order: 2
+    source_excerpt: "#### 一、线段与几何元素定义 R：外接球半径，球心O到顶点P、底面顶点A的距离，即OA=OP=R h：正棱锥的高，顶点P到底面的垂线段PO_1，O_1为底面正多边形的外接圆圆心 r：底面外接圆半径，底面中心O_1到底面顶点的距离，即O_1A=r 球心O必在高PO_1所在的直线上，分球心在棱锥内部、外部两种情形，均在直角\\boldsymbol{\\triangle OO_1A}中用勾股定理计算。 --- #### 二、情形1：球心在棱锥内部（棱锥高瘦型）"
+    resolved_section: "正棱锥外接球半径推导"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "SG-018"
+    topic: "立体几何/体积"
+    query_intent: "体积公式"
+    query: "棱柱和棱锥的体积公式分别依赖底面积和什么高度关系？"
+    expected_source_path: "立体几何/常见立体几何面积表面积/棱台和棱柱的体积.md"
+    expected_block_order: 1
+    target_section: "棱柱和棱台体积"
+    manual_summary: "应区分棱柱底面积乘高与棱锥三分之一底面积乘高。"
+    acceptable_evidence:
+      - "棱柱底面积乘高"
+      - "棱锥三分之一"
+      - "垂直高"
+    case_type: "positive"
+    expected_document_id: "2092515652586618882"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515652586618882"
+    expected_provider_item_id: "T83hdrIw3oW00jxZrbYcGlBpnMc"
+    expected_block_id: "2092515653308039169"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515652586618882:teacher-sync-fil"
+    document_title: "立体几何/常见立体几何面积表面积/棱台和棱柱的体积.md"
+    block_order: 1
+    source_excerpt: "\\boldsymbol{V = S_{\\text{底}} \\cdot h} S_{\\text{底}}：棱柱一个底面的面积 h：棱柱的高（两底面之间垂直距离）"
+    resolved_section: "通用公式"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "SQ-001"
+    topic: "数列/等差数列"
+    query_intent: "由前n项和求通项"
+    query: "已知前n项和表达式，怎样用 Sn-S(n-1) 求出数列通项？"
+    expected_source_path: "数列/数列an与Sn关系.md"
+    expected_block_order: 1
+    target_section: "通过Sn求an"
+    manual_summary: "应强调 n≥2 使用差分，并检查 a1，必要时分段表示。"
+    acceptable_evidence:
+      - "a_n=S_n-S_{n-1}"
+      - "先求a1"
+      - "分段检查"
+    case_type: "positive"
+    expected_document_id: "2092515582222974978"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515582222974978"
+    expected_provider_item_id: "YSILdciWwokSpAxeeBycmKpTngg"
+    expected_block_id: "2092515582785011713"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "tip"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515582222974978:teacher-sync-fil"
+    document_title: "数列/数列an与Sn关系.md"
+    block_order: 1
+    source_excerpt: "已知数列前 n 项和 S_n = 2n^2 - 5n + 3，求通项公式 a_n。 --- 注意 求通项公式，使用 a_n = S_n - S_{n-1} 时候一定要注意 n \\ge 2 所以一定要先求出来 a_1 最后把 a_1 代入求出来的通项公式验证是否满足 如果符合就直接合并到通项公式，否则写成分段 #### 详细求解步骤 求首项 a_1 当 n=1 时，a_1 = S_1，代入得： a_1 = 2\\times1^2 - 5\\times1 + 3 = 2 - 5 + 3 = 0 求 n \\ge 2 时的通项 当 n \\ge 2 时，通项公式为 a_n = S_n - S_{n-1}。 先计算 S_{n-1}： S_{n-1} = 2(n-1)^2 - 5(n-1) + 3 = 2(n^2 - 2n + 1) - 5n + 5 + 3 = 2n^2 - 4n + 2 - 5n + 8 = 2n^2 - 9n + 10 再计算 a_n： a_n = S_n - S_{n-1} = (2n^2 - 5n + 3) - (2n^2 - 9n + 10) = 2n^2 - 5n + 3 - 2n^2 + 9n - 10 = 4n - 7 判断并区分 a_1 将 n=1 代入 n \\ge 2 时的表达式 4n - 7： 4\\times1 - 7 = -3 \\neq a_1 = 0 因此"
+    resolved_section: "1.通过Sn求an"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "SQ-002"
+    topic: "数列/等差数列"
+    query_intent: "由Sn证明等差"
+    query: "只知道前n项和时，如何证明原数列从相邻项之差看是等差数列？"
+    expected_source_path: "数列/已知Sn如何证明等差数列.md"
+    expected_block_order: 4
+    target_section: "两式相减消去 a1"
+    manual_summary: "应通过相邻递推式相减得到 a(n+1)-2an+a(n-1)=0。"
+    acceptable_evidence:
+      - "Sn与S(n-1)"
+      - "二阶差分为0"
+      - "相邻差相等"
+    case_type: "positive"
+    expected_document_id: "2092515581065347073"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515581065347073"
+    expected_provider_item_id: "FUrxdr2yzoA5hFxXKoFc0Fs0nig"
+    expected_block_id: "2092515581526720514"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515581065347073:teacher-sync-fil"
+    document_title: "数列/已知Sn如何证明等差数列.md"
+    block_order: 4
+    source_excerpt: "将 n 替换为 n+1（n \\ge 2）： (n-1)a_{n+1} - na_n + a_1 = 0 \\quad (n \\ge 2) \\tag{2} 数列就是这样，你要么往前面写出来 n-1项，要么往后面写出来 n+1项 得出来两个方程，要找规律优先作差，当然除了加就是减 顶多就是倍数加倍数减（消元）"
+    resolved_section: "步骤3：递推得到 n+1 时的式子"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "SQ-003"
+    topic: "数列/递推"
+    query_intent: "累加法"
+    query: "递推式给出 a(n+1)-an 等于一个等比项时，累加法怎样展开？"
+    expected_source_path: "数列/数列求通项.md"
+    expected_block_order: 3
+    target_section: "方法1-累加法"
+    manual_summary: "应说明逐项相减后求和、使用等比数列求和并验证首项。"
+    acceptable_evidence:
+      - "差分递推"
+      - "逐项相加"
+      - "等比求和与首项验证"
+    case_type: "positive"
+    expected_document_id: "2092515587377774593"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515587377774593"
+    expected_provider_item_id: "WRoQdsyV4osvBUxD9Zgc0OQfnlh"
+    expected_block_id: "2092515587667181570"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "analysis"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515587377774593:teacher-sync-fil"
+    document_title: "数列/数列求通项.md"
+    block_order: 3
+    source_excerpt: "这是累加法求通项的典型题型，递推关系为： a_{n+1} - a_n = 3\\cdot 2^{2n-1} #### 步骤1：写出累加法的展开式 当n\\geq2时： a_n - a_{n-1} = 3\\cdot 2^{2n-3} a_{n-1} - a_{n-2} = 3\\cdot 2^{2n-5} \\vdots a_2 - a_1 = 3\\cdot 2^{1} 将以上n-1 个式子累加，左边抵消过程如下（划线部分为被约去的项）： 抵消后得： (a_n - \\cancel{a_{n-1}}) + (\\cancel{a_{n-1}} - \\cancel{a_{n-2}}) + \\dots + (\\cancel{a_2} - a_1) = a_n - a_1 a_n - a_1 = 3\\left(2^1 + 2^3 + 2^5 + \\dots + 2^{2n-3}\\right) #### 步骤2：计算等比数列的和 右边是首项为2、公比为2^2=4、项数为n-1的等比数列： 2^1 + 2^3 + 2^5 + \\dots + 2^{2n-3} = \\frac{2\\left(4^{n-1}-1\\right)}{4-1} = \\frac{2}{3}\\left(4^{n-1}-1\\right) #### 步骤3：代入化简 上式中，3与分母3约去（划线部分为被约去的项）： a_n - a_1 = "
+    resolved_section: "方法1-累加法："
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "SQ-004"
+    topic: "数列/等差数列"
+    query_intent: "等差核心性质"
+    query: "等差数列中任意两项相隔相同下标时，和有什么对称性质？"
+    expected_source_path: "数列/等差数列经典结论.md"
+    expected_block_order: 2
+    target_section: "核心性质"
+    manual_summary: "应涉及等差中项和下标对称项之和相等。"
+    acceptable_evidence:
+      - "a_n-a_m=(n-m)d"
+      - "等差中项"
+      - "对称下标和"
+    case_type: "positive"
+    expected_document_id: "2092515588371824641"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515588371824641"
+    expected_provider_item_id: "JLqbd63oAovJOWxYIOfcYTzwnvh"
+    expected_block_id: "2092515588715757569"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "analysis"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515588371824641:teacher-sync-fil"
+    document_title: "数列/等差数列经典结论.md"
+    block_order: 2
+    source_excerpt: "设数列 a_n 为等差数列，公差为 d 。 下标差与项差： a_5 - a_2 = 3d = a_9 - a_6 等差数列性质解析 a_n - a_m = (n-m)d 下标差相等则项差相等。 下标和性质①： 本条性质常用于小题替换计算，用已知的两个求未知的两个 常见于你的作业里面 若m + n = p + q(m,n,p,q \\in \\mathbb{N}^*)，则： a_m + a_n = a_p + a_q 特例：a_{n+1} + a_{n-1} = 2a_n（等差中项性质 这个常用来证明是等差数列）。 注意：d=0时此性质依然成立，不能推出特殊结论。 下标和性质②： 若m + n + p = r + s + t(m,n,p,r,s,t \\in \\mathbb{N}^*)，则： a_m + a_n + a_p = a_r + a_s + a_t 本质：下标和相等时，对应项的和相等，可推广到更多项。 其实这个公式也可以不用，直接用a1和d表示然后整体代换有时候更快 详情："
+    resolved_section: "2. 核心性质"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "SQ-005"
+    topic: "数列/等差数列"
+    query_intent: "等差与一次函数"
+    query: "怎样判断一个关于 n 的表达式构成等差数列，公差从哪里看？"
+    expected_source_path: "数列/等差数列经典结论.md"
+    expected_block_order: 4
+    target_section: "等差数列与一次函数的关系"
+    manual_summary: "应说明 a_n=pn+q 时相邻差为常数p，反之亦然。"
+    acceptable_evidence:
+      - "一次函数形式"
+      - "公差p"
+      - "充要关系"
+    case_type: "positive"
+    expected_document_id: "2092515588371824641"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515588371824641"
+    expected_provider_item_id: "JLqbd63oAovJOWxYIOfcYTzwnvh"
+    expected_block_id: "2092515588766089217"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515588371824641:teacher-sync-fil"
+    document_title: "数列/等差数列经典结论.md"
+    block_order: 4
+    source_excerpt: "\\{a_n\\} \\text{ 是等差数列} \\iff a_n = pn + q \\quad (\\text{且} \\ d = p) 推导： a_{n+1} - a_n = p(n+1) + q - (pn + q) = p \\ (\\text{常数}) 单调性： d>0：数列单调递增 d=0：常数列 d<0：数列单调递减 下标性质示例： 子数列 a_1, a_4, a_7, a_{10}, \\dots 的公差为 3d"
+    resolved_section: "4. 等差数列与一次函数的关系"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "SQ-006"
+    topic: "数列/求和"
+    query_intent: "错位相减"
+    query: "等比因子和一次因子相乘的数列求和，什么时候用错位相减，步骤是什么？"
+    expected_source_path: "数列/数列求和/错位相减.md"
+    expected_block_order: 8
+    target_section: "第三步：两式相减"
+    manual_summary: "应说明写 Sn、乘公比、错位相减并处理剩余等比项。"
+    acceptable_evidence:
+      - "Sn"
+      - "乘公比"
+      - "错位相减"
+      - "剩余项"
+    case_type: "positive"
+    expected_document_id: "2092515585863630849"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515585863630849"
+    expected_provider_item_id: "HrJzdVlr0oT9FZxolTCcc1azn8W"
+    expected_block_id: "2092515586647965698"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515585863630849:teacher-sync-fil"
+    document_title: "数列/数列求和/错位相减.md"
+    block_order: 8
+    source_excerpt: "用第一行减第二行： S_n-qS_n=(a+b)+[(2a+b)-(a+b)]q+[(3a+b)-(2a+b)]q^2+\\cdots+[(na+b)-((n-1)a+b)]q^{n-1}-(na+b)q^n 中间每一组括号都只剩下 a，所以： (1-q)S_n=(a+b)+aq+aq^2+\\cdots+aq^{n-1}-(na+b)q^n 也就是： (1-q)S_n=(a+b)+a(q+q^2+\\cdots+q^{n-1})-(na+b)q^n"
+    resolved_section: "第三步：两式相减"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "SQ-007"
+    topic: "数列/求和"
+    query_intent: "基本求和公式"
+    query: "自然数、平方数或立方数的前n项和分别使用哪些基本公式？"
+    expected_source_path: "数列/数列求和/基本数列求和公式.md"
+    expected_block_order: 5
+    target_section: "平方和公式"
+    manual_summary: "应返回基本数列求和公式族，并区分项式与求和结果。"
+    acceptable_evidence:
+      - "自然数和"
+      - "平方和"
+      - "立方和"
+    case_type: "positive"
+    expected_document_id: "2092515583506432002"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515583506432002"
+    expected_provider_item_id: "IYpgdVFWOoZW6TxGZfccnH3mnrg"
+    expected_block_id: "2092515584307544065"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515583506432002:teacher-sync-fil"
+    document_title: "数列/数列求和/基本数列求和公式.md"
+    block_order: 5
+    source_excerpt: "人教版（B 版）：在选择性必修第二册的数列求和内容中出现"
+    resolved_section: "三、平方和公式"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "SQ-008"
+    topic: "数列/求和"
+    query_intent: "奇偶分类求和"
+    query: "数列求和遇到奇偶下标不一样时，为什么要拆成奇数项和偶数项两组？"
+    expected_source_path: "数列/数列求和/奇偶讨论求和.md"
+    expected_block_order: 0
+    target_section: "奇偶讨论求和"
+    manual_summary: "应解释按下标奇偶分组、分别求和再合并，不能把两种规律直接混算。"
+    acceptable_evidence:
+      - "奇偶下标"
+      - "分组求和"
+      - "分别处理"
+    case_type: "positive"
+    expected_document_id: "2092515585205125121"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515585205125121"
+    expected_provider_item_id: "MjlGdEi9YoEAFyxSeiDcDjSvndf"
+    expected_block_id: "2092515585301594113"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "tip"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515585205125121:teacher-sync-fil"
+    document_title: "数列/数列求和/奇偶讨论求和.md"
+    block_order: 0
+    source_excerpt: "奇偶讨论求和 如果奇偶项表达式不一样 那么奇数项偶数项分别求和 注意中间差了一项 如果之前各自为等差或者等比，那么新的数列的d和q需要重新计算"
+    resolved_section: ""
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "SQ-009"
+    topic: "数列/等比数列"
+    query_intent: "等比求和条件"
+    query: "等比数列前n项和公式为什么必须区分公比q等于1和不等于1？"
+    expected_source_path: "数列/数列求和/基本数列求和公式.md"
+    expected_block_order: 4
+    target_section: "等比数列求和公式"
+    manual_summary: "应给出q≠1的分式公式，并说明q=1时直接为na1。"
+    acceptable_evidence:
+      - "q≠1"
+      - "等比求和"
+      - "q=1特殊情形"
+    case_type: "positive"
+    expected_document_id: "2092515583506432002"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515583506432002"
+    expected_provider_item_id: "IYpgdVFWOoZW6TxGZfccnH3mnrg"
+    expected_block_id: "2092515584286572546"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515583506432002:teacher-sync-fil"
+    document_title: "数列/数列求和/基本数列求和公式.md"
+    block_order: 4
+    source_excerpt: "当 q \\neq 1 时： S_n = \\frac{a_1(1 - q^n)}{1 - q} = \\frac{a_1 - a_n q}{1 - q} 当 q = 1 时： S_n = n a_1"
+    resolved_section: "2. 求和公式"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "SQ-010"
+    topic: "数列/分组求和"
+    query_intent: "通项拆分"
+    query: "通项由等比项、等差项和常数相加组成时，前n项和怎样分组计算？"
+    expected_source_path: "数列/数列求和/基本数列求和公式.md"
+    expected_block_order: 9
+    target_section: "等差、等比与常数分组求和"
+    manual_summary: "应把通项拆成三部分，分别使用等比、等差和常数求和。"
+    acceptable_evidence:
+      - "通项拆分"
+      - "分组求和"
+      - "三类基本公式"
+    case_type: "positive"
+    expected_document_id: "2092515583506432002"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515583506432002"
+    expected_provider_item_id: "IYpgdVFWOoZW6TxGZfccnH3mnrg"
+    expected_block_id: "2092515584412401666"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "question"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515583506432002:teacher-sync-fil"
+    document_title: "数列/数列求和/基本数列求和公式.md"
+    block_order: 9
+    source_excerpt: "已知数列 a_n = 2^n + 2n + 1，求数列 {a_n} 的前 n 项和 S_n。 --- 数列的通项由等比数列 2^n、等差数列 2n 和常数项 1 三部分组成，我们可以用分组求和法，分别计算每一部分的和，再相加。考试的 --- 等比数列部分求和： 数列 {2^n} 是首项 a_1=2，公比 q=2 的等比数列，其前 n 项和为： \\sum_{k=1}^n 2^k = 2(2^n - 1) = 2^{n+1} - 2 等差数列部分求和： 数列 {2n} 是首项 b_1=2，公差 d=2 的等差数列，其前 n 项和为： \\sum_{k=1}^n 2k = 2 \\cdot \\frac{n(n+1)}{2} = n(n+1) = n^2 + n 常数项部分求和： 数列 {1} 是常数列，其前 n 项和为： \\sum_{k=1}^n 1 = n --- S_n=(2^{n+1}-2)+n(n+1)+n=2^{n+1}+n^2+2n-2 使用表达累加"
+    resolved_section: "例题 -1"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "SQ-011"
+    topic: "数列/递推"
+    query_intent: "前n项和递推"
+    query: "递推式同时含有 a(n+1) 和 Sn 时，怎样先用 Sn-S(n-1) 把它改写成通项递推？"
+    expected_source_path: "数列/数列求和/基本数列求和公式.md"
+    expected_block_order: 12
+    target_section: "含Sn递推求通项"
+    manual_summary: "应先处理a1和Sn关系，再消去Sn得到一阶递推或等比结构。"
+    acceptable_evidence:
+      - "Sn-S(n-1)"
+      - "先求a1"
+      - "递推化简"
+    case_type: "positive"
+    expected_document_id: "2092515583506432002"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515583506432002"
+    expected_provider_item_id: "IYpgdVFWOoZW6TxGZfccnH3mnrg"
+    expected_block_id: "2092515584504676354"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "analysis"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515583506432002:teacher-sync-fil"
+    document_title: "数列/数列求和/基本数列求和公式.md"
+    block_order: 12
+    source_excerpt: "(2016年浙江) 设数列{a_n}的前n项和为S_n。已知S_2=4，a_{n+1}=2S_n+1，n\\in N^*。 (I) 求通项公式a_n； (II) 求数列{a_n-n-2}的前n项和。 (I) 求通项公式 a_n 当 n=1 时： a_2 = 2a_1 + 1 S_2 = a_1 + a_2 = 3a_1 + 1 = 4 \\implies a_1 = 1,\\ a_2 = 3 由递推关系： a_{n+1} = 2S_n + 1 \\\\ a_n = 2S_{n-1} + 1 \\quad (n \\ge 2) 两式相减得： a_{n+1} - a_n = 2a_n \\implies a_{n+1} = 3a_n \\quad (n \\ge 2) 故 n \\ge 2 时，数列 {a_n} 是公比为 3 的等比数列： a_n = a_2 \\cdot 3^{n-2} = 3 \\cdot 3^{n-2} = 3^{n-1} 又 a_1 = 1 = 3^{0}，因此通项公式为： a_n = 3^{n-1} \\quad (n \\in N^*) --- (II) 求数列 {a_n - n - 2} 的前 n 项和 T_n 由 a_n = 3^{n-1}，得： a_n - n - 2 = 3^{n-1} - (n + 2) 前 n 项和： T_n = \\sum_{k=1}^n 3^{k-1} - "
+    resolved_section: "例题 -4"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "SQ-012"
+    topic: "数列/等差数列"
+    query_intent: "等差不等式"
+    query: "等差数列前n项和的不等式条件，怎样转化成公差正负来判断单调性？"
+    expected_source_path: "数列/等差数列经典结论练习题.md"
+    expected_block_order: 2
+    target_section: "解题推导"
+    manual_summary: "应通过相邻前n项和之差得到相邻项比较，再判断公差。"
+    acceptable_evidence:
+      - "相邻前n项和差"
+      - "相邻项比较"
+      - "公差正负"
+    case_type: "positive"
+    expected_document_id: "2092515589374263297"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515589374263297"
+    expected_provider_item_id: "TGB8dT8ZEov8HtxB4wpc43l4nqf"
+    expected_block_id: "2092515589974048770"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515589374263297:teacher-sync-fil"
+    document_title: "数列/等差数列经典结论练习题.md"
+    block_order: 2
+    source_excerpt: "S_1 + S_3 < 2S_2 \\Rightarrow S_3 - S_2 < S_2 - S_1 \\Rightarrow a_3 < a_2 \\Rightarrow a_3 - a_2 < 0 \\Rightarrow d < 0 当 d < 0 时，等差数列 {a_n} 为递减数列； 反之，若 {a_n} 为递减数列，则 d < 0，可推出 S_1 + S_3 < 2S_2。 因此二者互为充分必要条件。 ---"
+    resolved_section: "解题推导"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "SQ-013"
+    topic: "数列/等差数列"
+    query_intent: "特殊值法"
+    query: "等差数列只有比例条件而没有具体首项时，为什么可以令首项为1来求某些比值？"
+    expected_source_path: "数列/等差数列经典结论练习题.md"
+    expected_block_order: 11
+    target_section: "方法一：特殊值法"
+    manual_summary: "应说明比值对整体缩放不变，特殊赋值可避免求出首项具体值。"
+    acceptable_evidence:
+      - "特殊值法"
+      - "整体缩放"
+      - "比值不变"
+    case_type: "positive"
+    expected_document_id: "2092515589374263297"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515589374263297"
+    expected_provider_item_id: "TGB8dT8ZEov8HtxB4wpc43l4nqf"
+    expected_block_id: "2092515590192152577"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "method"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515589374263297:teacher-sync-fil"
+    document_title: "数列/等差数列经典结论练习题.md"
+    block_order: 11
+    source_excerpt: "这类比值型小题，条件只有一个等式，无法解出 a_1 和 d 的具体值，因此可以令 a_1 = 1（或其他方便计算的数），快速算出结果，避免繁琐的字母运算。 令 a_1 = 1，由 a_2 = 3a_1 得公差 d = a_2 - a_1 = 2。 \\frac{S_{10}}{S_5} = \\frac{\\frac{(a_1 + a_{10}) \\times 10}{2}}{\\frac{(a_1 + a_5) \\times 5}{2}} \\\\ = \\frac{(2 + 2 \\times 9) \\times 2}{2 + 2 \\times 4} \\\\ = \\frac{40}{10} = 4 ---"
+    resolved_section: "方法一：特殊值法（小题速算）"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "TG-001"
+    topic: "三角函数/公式"
+    query_intent: "对偶式"
+    query: "已知 asinα+bcosα的值，怎样构造另一个关系来求tanα或tan2α？"
+    expected_source_path: "三角函数/三角函数做题公式.md"
+    expected_block_order: 2
+    target_section: "对偶式的过程"
+    manual_summary: "应说明交换sin/cos并按加减号构造对偶式，再联立求所需量。"
+    acceptable_evidence:
+      - "对偶式"
+      - "sin cos互换"
+      - "tanα或tan2α"
+    case_type: "positive"
+    expected_document_id: "2092515464497250305"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515464497250305"
+    expected_provider_item_id: "Ft0sdGFZGoZOmvxXIkscUYGDnhf"
+    expected_block_id: "2092515464811823105"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "method"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515464497250305:teacher-sync-fil"
+    document_title: "三角函数/三角函数做题公式.md"
+    block_order: 2
+    source_excerpt: "当题目中出现：a\\sin\\alpha + b\\cos\\alpha = c 要求\\sin\\alpha、\\cos\\alpha、\\tan\\alpha一般用对偶 构造方法口诀： sin对cos，cos对sin 加对减，减对加 (只变有加减号的部分) 看到 a\\sin\\alpha + b\\cos\\alpha = c 构造 a\\cos\\alpha - b\\sin\\alpha = t 通过两式平方相加，利用 \\cos^2\\alpha + \\sin^2\\alpha = 1 进行替换 来解出来t，然后 联立方程组： \\begin{cases} a\\sin\\alpha + b\\cos\\alpha = c \\\\ a\\cos\\alpha - b\\sin\\alpha = t \\end{cases} 两式平方相加： (a\\sin\\alpha+b\\cos\\alpha)^2+(a\\cos\\alpha-b\\sin\\alpha)^2=c^2+t^2 a^2\\sin^2\\alpha+2ab\\sin\\alpha\\cos\\alpha+b^2\\cos^2\\alpha+a^2\\cos^2\\alpha-2ab\\sin\\alpha\\cos\\alpha+b^2\\sin^2\\alpha=c^2+t^2 a^2(\\sin^2\\alpha+\\cos^2\\alpha)+b^2(\\sin^2\\alpha+\\cos^2\\alpha)=c^2+t"
+    resolved_section: "对偶式的过程"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "TG-002"
+    topic: "三角函数/基本函数"
+    query_intent: "函数定义与性质"
+    query: "高中常见正弦、余弦、正切函数的定义域和值域分别怎样判断？"
+    expected_source_path: "三角函数/常见的三角函数.md"
+    expected_block_order: 1
+    target_section: "常见的三角函数"
+    manual_summary: "应区分三类函数的定义域和值域，特别是正切的不可取点。"
+    acceptable_evidence:
+      - "正弦余弦"
+      - "正切"
+      - "定义域和值域"
+    case_type: "positive"
+    expected_document_id: "2092515467462623234"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515467462623234"
+    expected_provider_item_id: "EZGFdBXjNoOyzwxF6VucELK8nhe"
+    expected_block_id: "2092515467982716929"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "question"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515467462623234:teacher-sync-fil"
+    document_title: "三角函数/常见的三角函数.md"
+    block_order: 1
+    source_excerpt: "在很多考试中，我们往往需要利用题目已有的一个等式结合 \\sin^2\\alpha+\\cos^2\\alpha=1 来解方程解出来具体值 但是有些常见的三角形我们不需要自己解，只需要实验值就行"
+    resolved_section: ""
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "TG-003"
+    topic: "三角函数/作图"
+    query_intent: "五点作图法"
+    query: "非标准三角函数图像如何通过周期内五个关键点快速作出？"
+    expected_source_path: "三角函数/五点作图法_画出非标准三角函数.md"
+    expected_block_order: 1
+    target_section: "五点作图法"
+    manual_summary: "应覆盖振幅、周期、相位和平移后五个关键点的取法。"
+    acceptable_evidence:
+      - "五点"
+      - "周期"
+      - "振幅相位平移"
+    case_type: "positive"
+    expected_document_id: "2092515466586013697"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515466586013697"
+    expected_provider_item_id: "Y5OrdeRt4oz5V0xpRKxcOjOUnvh"
+    expected_block_id: "2092515466820894722"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515466586013697:teacher-sync-fil"
+    document_title: "三角函数/五点作图法_画出非标准三角函数.md"
+    block_order: 1
+    source_excerpt: "就是画出来三角函数的极值点和零点 一个周期内共五个，所以叫做五点作图"
+    resolved_section: "五点作图"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "TG-004"
+    topic: "三角函数/不等式"
+    query_intent: "正弦不等式"
+    query: "解 sin x 大于或小于某个常数的不等式时，怎样利用单位圆和周期写通解？"
+    expected_source_path: "三角函数/正弦函数不等式.md"
+    expected_block_order: 1
+    target_section: "正弦函数不等式"
+    manual_summary: "应说明先求一个周期内区间，再按周期2kπ平移。"
+    acceptable_evidence:
+      - "单位圆"
+      - "一个周期区间"
+      - "2kπ周期"
+    case_type: "positive"
+    expected_document_id: "2092515468888686593"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515468888686593"
+    expected_provider_item_id: "CbXndu6e1ojrATxCwawcxl1anYe"
+    expected_block_id: "2092515469442334722"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515468888686593:teacher-sync-fil"
+    document_title: "三角函数/正弦函数不等式.md"
+    block_order: 1
+    source_excerpt: "出现 A+B 固定（或三角形中 A+B+C=\\pi），需要比较或求最值的“正弦乘积/和/边长”问题时，常用“等和条件下乘积最大在两角相等”的思想，或利用乘积化和差恒等式进行放缩。 目的：把未知两角 A、B 收敛到“相等”或只剩单变量 C，从而判断三角形形状或求出上、下界。 ---"
+    resolved_section: "场景识别"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "TG-005"
+    topic: "三角函数/和差化积"
+    query_intent: "恒等变形"
+    query: "两个正弦或余弦的和差怎样改写成积，常用于什么类型的化简？"
+    expected_source_path: "三角函数/积化和差 和差化积.md"
+    expected_block_order: 1
+    target_section: "积化和差 和差化积"
+    manual_summary: "应给出和差化积的结构及其在方程、不等式和化简中的用途。"
+    acceptable_evidence:
+      - "和差化积"
+      - "半和半差"
+      - "化简用途"
+    case_type: "positive"
+    expected_document_id: "2092515470448967682"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515470448967682"
+    expected_provider_item_id: "LuLcdOhMnogrGcxruZ5cYYJGn2c"
+    expected_block_id: "2092515470709014530"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515470448967682:teacher-sync-fil"
+    document_title: "三角函数/积化和差 和差化积.md"
+    block_order: 1
+    source_excerpt: "这些公式是后面推导的基础 \\sin(\\alpha+\\beta)=\\sin\\alpha\\cos\\beta+\\cos\\alpha\\sin\\beta \\quad \\sin(\\alpha-\\beta)=\\sin\\alpha\\cos\\beta-\\cos\\alpha\\sin\\beta \\\\[1cm] \\cos(\\alpha+\\beta)=\\cos\\alpha\\cos\\beta-\\sin\\alpha\\sin\\beta \\quad \\cos(\\alpha-\\beta)=\\cos\\alpha\\cos\\beta+\\sin\\alpha\\sin\\beta \\\\[1cm] \\tan(\\alpha+\\beta)=\\frac{\\tan\\alpha+\\tan\\beta}{1-\\tan\\alpha\\tan\\beta} \\quad \\tan(\\alpha-\\beta)=\\frac{\\tan\\alpha-\\tan\\beta}{1+\\tan\\alpha\\tan\\beta} \\\\[1cm]"
+    resolved_section: "①和差公式"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "TG-006"
+    topic: "三角函数/辅助角"
+    query_intent: "辅助角公式"
+    query: "a sin x+b cos x怎样合并成一个正弦函数，振幅和相位如何确定？"
+    expected_source_path: "三角函数/辅助角公式.md"
+    expected_block_order: 1
+    target_section: "辅助角公式"
+    manual_summary: "应说明 R sin(x+φ) 形式，R=sqrt(a²+b²)，并处理相位象限。"
+    acceptable_evidence:
+      - "辅助角"
+      - "R=sqrt(a²+b²)"
+      - "相位"
+    case_type: "positive"
+    expected_document_id: "2092515471422046210"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515471422046210"
+    expected_provider_item_id: "TTqudaii1oOizgxQcmdc0DDwnNd"
+    expected_block_id: "2092515471946334209"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "method"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515471422046210:teacher-sync-fil"
+    document_title: "三角函数/辅助角公式.md"
+    block_order: 1
+    source_excerpt: "辅助角公式的作用，是把形如\\boldsymbol{a\\sin x+b\\cos x}的式子合并成一个三角函数。这样一来，求最值、周期、单调区间、对称轴、值域等问题都会简单很多。"
+    resolved_section: ""
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "TG-007"
+    topic: "三角函数/方程"
+    query_intent: "同值解关系"
+    query: "sin x1=sin x2时，除了相差整数周期，还存在什么对称关系？"
+    expected_source_path: "三角函数/！！！三角函数两个值相等如何表示.md"
+    expected_block_order: 2
+    target_section: "sin x1=sin x2"
+    manual_summary: "应给出差为2kπ或和为π+2kπ两类关系，并说明对称来源。"
+    acceptable_evidence:
+      - "同相位周期"
+      - "对称相位"
+      - "两类通解"
+    case_type: "positive"
+    expected_document_id: "2092515472801972225"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515472801972225"
+    expected_provider_item_id: "HjRGdxXaooo4v6xFIkRcpxAFnic"
+    expected_block_id: "2092515473288511490"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515472801972225:teacher-sync-fil"
+    document_title: "三角函数/！！！三角函数两个值相等如何表示.md"
+    block_order: 2
+    source_excerpt: "两种等价关系： 差为周期整数倍（同相位重复）： \\boldsymbol{x_2 - x_1 = 2k\\pi \\quad (k\\in\\mathbb{Z})} 和为定值（对称相位相等）： \\boldsymbol{x_1 + x_2 = \\pi + 2k\\pi \\quad (k\\in\\mathbb{Z})}"
+    resolved_section: "1. 基本形式：\\boldsymbol{\\sin x_1 = \\sin x_2}"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "TG-008"
+    topic: "三角函数/方程"
+    query_intent: "零点与最值周期"
+    query: "带ω和φ的正弦函数零点间隔、最值点间隔分别是多少？"
+    expected_source_path: "三角函数/！！！三角函数两个值相等如何表示.md"
+    expected_block_order: 8
+    target_section: "零点场景与最值场景"
+    manual_summary: "应区分零点相邻间隔π/ω与最值重复间隔2π/ω。"
+    acceptable_evidence:
+      - "π/ω"
+      - "2π/ω"
+      - "零点与最值区别"
+    case_type: "positive"
+    expected_document_id: "2092515472801972225"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515472801972225"
+    expected_provider_item_id: "HjRGdxXaooo4v6xFIkRcpxAFnic"
+    expected_block_id: "2092515473431117825"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515472801972225:teacher-sync-fil"
+    document_title: "三角函数/！！！三角函数两个值相等如何表示.md"
+    block_order: 8
+    source_excerpt: "正弦零点：相邻零点相差半个周期 \\frac{\\pi}{\\omega}，通解 x=\\frac{k\\pi-\\varphi}{\\omega} 余弦零点：相邻零点相差半个周期 \\frac{\\pi}{\\omega}，通解 x=\\frac{\\frac{\\pi}{2}+k\\pi-\\varphi}{\\omega}"
+    resolved_section: "零点场景（函数值为0）"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "TG-009"
+    topic: "三角函数/倒数函数"
+    query_intent: "sec csc cot定义"
+    query: "sec、csc、cot分别是哪个三角函数的倒数，定义域要排除什么值？"
+    expected_source_path: "三角函数/sec，csc，cot都是什么.md"
+    expected_block_order: 0
+    target_section: "核心速记"
+    manual_summary: "应给出sec=1/cos、csc=1/sin、cot=cos/sin并说明分母不能为0。"
+    acceptable_evidence:
+      - "sec=1/cos"
+      - "csc=1/sin"
+      - "cot=cos/sin"
+      - "定义域"
+    case_type: "positive"
+    expected_document_id: "2092515463813578754"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515463813578754"
+    expected_provider_item_id: "WdItdNIyIo09VbxNgn8c6PjYnud"
+    expected_block_id: "2092515463922630658"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515463813578754:teacher-sync-fil"
+    document_title: "三角函数/sec，csc，cot都是什么.md"
+    block_order: 0
+    source_excerpt: "sec，csc，cot都是什么 核心速记（3行） \\boldsymbol{\\sec\\theta=\\dfrac{1}{\\cos\\theta}}（正割，斜边/邻边） \\boldsymbol{\\csc\\theta=\\dfrac{1}{\\sin\\theta}}（余割，斜边/对边） \\boldsymbol{\\cot\\theta=\\dfrac{1}{\\tan\\theta}=\\dfrac{\\cos\\theta}{\\sin\\theta}}（余切，邻边/对边） 公式结论（2行） \\sec^2\\theta-\\tan^2\\theta=1 \\csc^2\\theta-\\cot^2\\theta=1"
+    resolved_section: ""
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "TG-010"
+    topic: "三角函数/特殊角"
+    query_intent: "常见值"
+    query: "3-4-5直角三角形中，锐角的sin、cos、tan怎样由边长得到？"
+    expected_source_path: "三角函数/常见的三角函数.md"
+    expected_block_order: 2
+    target_section: "一、最基础：3-4-5三角形"
+    manual_summary: "应按对边、邻边、斜边给出三角函数值，并区分互余角。"
+    acceptable_evidence:
+      - "3-4-5"
+      - "对边邻边斜边"
+      - "sin cos tan"
+    case_type: "positive"
+    expected_document_id: "2092515467462623234"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515467462623234"
+    expected_provider_item_id: "EZGFdBXjNoOyzwxF6VucELK8nhe"
+    expected_block_id: "2092515467999494145"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515467462623234:teacher-sync-fil"
+    document_title: "三角函数/常见的三角函数.md"
+    block_order: 2
+    source_excerpt: "三边：3, 4, 5 设锐角为\\alpha \\sin\\alpha=\\frac{3}{5},\\ \\cos\\alpha=\\frac{4}{5},\\ \\tan\\alpha=\\frac{3}{4} \\sin\\beta=\\frac{4}{5},\\ \\cos\\beta=\\frac{3}{5},\\ \\tan\\beta=\\frac{4}{3} ---"
+    resolved_section: "一、最基础：3‑4‑5 三角形"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "TG-011"
+    topic: "三角函数/和差化积"
+    query_intent: "公式结构"
+    query: "sinα+sinβ化成积时，积中的半和半差分别对应什么角？"
+    expected_source_path: "三角函数/积化和差 和差化积.md"
+    expected_block_order: 1
+    target_section: "①和差公式"
+    manual_summary: "应说明和差化积中的半和与半差结构及符号。"
+    acceptable_evidence:
+      - "sinα+sinβ"
+      - "半和"
+      - "半差"
+    case_type: "positive"
+    expected_document_id: "2092515470448967682"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515470448967682"
+    expected_provider_item_id: "LuLcdOhMnogrGcxruZ5cYYJGn2c"
+    expected_block_id: "2092515470709014530"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515470448967682:teacher-sync-fil"
+    document_title: "三角函数/积化和差 和差化积.md"
+    block_order: 1
+    source_excerpt: "这些公式是后面推导的基础 \\sin(\\alpha+\\beta)=\\sin\\alpha\\cos\\beta+\\cos\\alpha\\sin\\beta \\quad \\sin(\\alpha-\\beta)=\\sin\\alpha\\cos\\beta-\\cos\\alpha\\sin\\beta \\\\[1cm] \\cos(\\alpha+\\beta)=\\cos\\alpha\\cos\\beta-\\sin\\alpha\\sin\\beta \\quad \\cos(\\alpha-\\beta)=\\cos\\alpha\\cos\\beta+\\sin\\alpha\\sin\\beta \\\\[1cm] \\tan(\\alpha+\\beta)=\\frac{\\tan\\alpha+\\tan\\beta}{1-\\tan\\alpha\\tan\\beta} \\quad \\tan(\\alpha-\\beta)=\\frac{\\tan\\alpha-\\tan\\beta}{1+\\tan\\alpha\\tan\\beta} \\\\[1cm]"
+    resolved_section: "①和差公式"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "TG-012"
+    topic: "三角函数/同值关系"
+    query_intent: "余弦同值解"
+    query: "cos x1=cos x2的通解为什么有相差周期和相反对称两种形式？"
+    expected_source_path: "三角函数/！！！三角函数两个值相等如何表示.md"
+    expected_block_order: 5
+    target_section: "1. 基本形式：cos x1=cos x2"
+    manual_summary: "应给出x2-x1=2kπ或x1+x2=2kπ，并解释余弦偶性。"
+    acceptable_evidence:
+      - "cos同值"
+      - "周期2kπ"
+      - "偶性对称"
+    case_type: "positive"
+    expected_document_id: "2092515472801972225"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515472801972225"
+    expected_provider_item_id: "HjRGdxXaooo4v6xFIkRcpxAFnic"
+    expected_block_id: "2092515473359814657"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515472801972225:teacher-sync-fil"
+    document_title: "三角函数/！！！三角函数两个值相等如何表示.md"
+    block_order: 5
+    source_excerpt: "两种等价关系： 差为周期整数倍（同相位重复）： \\boldsymbol{x_2 - x_1 = 2k\\pi \\quad (k\\in\\mathbb{Z})} 和为定值（对称相位相等）： \\boldsymbol{x_1 + x_2 = 2k\\pi \\quad (k\\in\\mathbb{Z})}"
+    resolved_section: "1. 基本形式：\\boldsymbol{\\cos x_1 = \\cos x_2}"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "TG-013"
+    topic: "三角函数/难题"
+    query_intent: "周期参数"
+    query: "函数sin(ωx+φ)的图像题中，等距点和周期信息怎样用来确定ω？"
+    expected_source_path: "三角函数/三角函数难题/三角函数难题.md"
+    expected_block_order: 2
+    target_section: "难题 2026 武汉三调"
+    manual_summary: "应结合相位差、同一直线几何条件和周期/对称性求ω。"
+    acceptable_evidence:
+      - "sin(ωx+φ)"
+      - "等距点"
+      - "周期参数ω"
+    case_type: "positive"
+    expected_document_id: "2092515465583575042"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515465583575042"
+    expected_provider_item_id: "N7ujdYZYUoQuiHxBB94cltJsnCh"
+    expected_block_id: "2092515466011394049"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "analysis"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515465583575042:teacher-sync-fil"
+    document_title: "三角函数/三角函数难题/三角函数难题.md"
+    block_order: 2
+    source_excerpt: "如图，已知 \\omega>0，在函数 f(x)=\\sin(\\omega x+\\varphi) 的部分图象中，其图象上的点 A,B,C 是同一直线上的三点，且该直线与 x 轴交于点 D，若 |AD|=|DB|=|BC|=1，则 \\omega=\\underline{\\qquad}。 这里说的是模长，我们在解析几何中可以知道，直接得到这些横坐标的关系， 因为这里只要求\\omega ，所以我们可以用一个好的形式重新建系算，可以重新计算看看，选择D为坐标原点，那么函数可以直接改为 cos(\\omega x) 因为只用求 \\omega 那么可以正常用勾股定理算长度，计算出B横坐标。由于AB的y值相反 根据 \\cos\\omega(x+\\tfrac T2)=-\\cos\\omega x 可以知道AB间隔 \\tfrac T2 解答 已知：原点D(0,0)，f(x)=\\cos\\omega x，A,B,C共线，|AD|=|DB|=|BC|=1，则D是AB中点、B是DC中点。设B(x_0,t)，由中点坐标得：A(-x_0,-t)，C(2x_0,2t)，且B、C在曲线y=\\cos\\omega x上。 ① 利用二倍角求t=\\cos(\\omega x_0) \\begin{cases} t=\\cos(\\omega x_0)\\\\ 2t=\\cos(2\\omega x_0) \\end{cases} 由二倍角公式\\cos2"
+    resolved_section: "难题 2026 武汉三调"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "TR-001"
+    topic: "解三角形/SSA"
+    query_intent: "解的个数"
+    query: "已知两边和其中一边对角的SSA条件时，三角形可能有几个不同解？"
+    expected_source_path: "解三角形/SSA求三角形解的个数问题.md"
+    expected_block_order: 1
+    target_section: "SSA解的个数"
+    manual_summary: "应判断SSA的高、边长和角度关系导致0、1或2解，不能机械套正弦定理。"
+    acceptable_evidence:
+      - "SSA"
+      - "高比较"
+      - "0/1/2个解"
+    case_type: "positive"
+    expected_document_id: "2092515697201430530"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515697201430530"
+    expected_provider_item_id: "YyfSdq3e7oH0BoxgpLmcNMXsnif"
+    expected_block_id: "2092515698593939458"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515697201430530:teacher-sync-fil"
+    document_title: "解三角形/SSA求三角形解的个数问题.md"
+    block_order: 1
+    source_excerpt: "只有SSA边边角会出现多解；SAS、SSS、ASA、AAS全部唯一确定三角形； 以下所有结论都是通过正弦定理证明的 由 \\sin B=\\dfrac{b\\sin A}{a} \\sin B>1 → 无解； \\sin B=1 → B=90^\\circ，1解； 0<\\sin B<1： A锐角且(b>a) → B可取\\theta 和180^\\circ-\\theta ，两解； b\\le a 或 A钝角 → 只取锐角\\theta ，1解。 已知：边a，边b，角A（a是\\angle A对边，b是\\angle B对边） 过C作AB垂线，高 h = b\\sin A，分A为锐角、A为钝角/直角两大类判断。"
+    resolved_section: "核心前提"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "TR-002"
+    topic: "解三角形/角型翻译"
+    query_intent: "锐直钝条件"
+    query: "三角形中最大角是锐角、直角或钝角时，对应的边平方关系分别怎样写？"
+    expected_source_path: "解三角形/三角形中锐角直角钝角条件翻译.md"
+    expected_block_order: 0
+    target_section: "三角形中锐角直角钝角条件翻译"
+    manual_summary: "应把角型转译为余弦定理或边平方不等式，明确最大边对应最大角。"
+    acceptable_evidence:
+      - "最大角与最大边"
+      - "平方关系"
+      - "锐直钝分类"
+    case_type: "positive"
+    expected_document_id: "2092515701492203522"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515701492203522"
+    expected_provider_item_id: "BbtTdexNhoxjA4xh6t0cs0V6nUe"
+    expected_block_id: "2092515701609644034"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "method"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515701492203522:teacher-sync-fil"
+    document_title: "解三角形/三角形中锐角直角钝角条件翻译.md"
+    block_order: 0
+    source_excerpt: "三角形中锐角直角钝角条件翻译 我们经常看见什么锐角直角钝角 我们可以用两个分析 首先是锐角和钝角 从向量角度，可以用的是cos值大于0小于0 很常见是在解三角形中解出来两个值，sin>0，如果锐角三角形就可以舍去一个值 或者是根据 cos 值小于0判断是钝角 同时锐角三角形可以确定 角度的大小范围，和二分之派比较，后面如果化为一个角度表示的三角函数式子可以方便求出来范围 同时一定要注意，一个角度是0-二分之派可以解出来范围，其他角度也要解出来范围 最常见是题目第一问解出来A的值，然后说锐角三角形，然后第三问求一个范围， 那么最后化为一个角表示，比如用B表示，那么首先B是0-二分之派，而且C也要用B表示，然后这样B的范围被进一步确定，这样都可以表示 使用余弦定理判断角度大小 由于sin值在0到pai都是正的，所以只有cos值可以准确判断锐角，直角，钝角 锐角三角形另一个方法，是用三边的比例，这个实际上就是余弦定理的分子，大家记住这些不等式 a方+b方> c方 还有 c方+b方>a方，这样通过条件可以转化为用边表示的最值，比如都是a方这样表示 对于直角三角形，这就是已经知道一个角度是二分之派了，那么剩下都可以用一个角度表示，比如全是B 同时要注意，此时 sinB = sin(派/2-C) = cosC 注意二分之派可以代换应用 其他的什么圆模型，面积模型，中线模型不再强调"
+    resolved_section: ""
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "TR-003"
+    topic: "解三角形/正弦定理"
+    query_intent: "边角互换"
+    query: "已知三角形一组边角对应关系时，正弦定理怎样把未知边和未知角联系起来？"
+    expected_source_path: "解三角形/三角形常用定理/正弦定理.md"
+    expected_block_order: 0
+    target_section: "正弦定理"
+    manual_summary: "应给出 a/sinA=b/sinB=c/sinC=2R 的边角对应关系。"
+    acceptable_evidence:
+      - "对应边角"
+      - "正弦比"
+      - "外接圆半径"
+    case_type: "positive"
+    expected_document_id: "2092515703211868161"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515703211868161"
+    expected_provider_item_id: "Q63ydFqdjoqlapxwzEycu9UknUe"
+    expected_block_id: "2092515703379640322"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515703211868161:teacher-sync-fil"
+    document_title: "解三角形/三角形常用定理/正弦定理.md"
+    block_order: 0
+    source_excerpt: "正弦定理 正弦定理基本公式 大边对大角，大角对大边"
+    resolved_section: ""
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "TR-004"
+    topic: "解三角形/模型"
+    query_intent: "正弦余弦选择"
+    query: "解三角形题目中，已知两角一边、两边夹角和三边时分别优先考虑什么定理？"
+    expected_source_path: "解三角形/解三角形基本模型.md"
+    expected_block_order: 1
+    target_section: "解三角形基本模型"
+    manual_summary: "应按已知条件选择正弦定理、余弦定理或面积公式，并说明模型识别。"
+    acceptable_evidence:
+      - "两角一边"
+      - "两边夹角"
+      - "三边与余弦定理"
+    case_type: "positive"
+    expected_document_id: "2092515705535512577"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515705535512577"
+    expected_provider_item_id: "F6GedIDqpo7t3xxSL3rcGnCLnpc"
+    expected_block_id: "2092515706550534146"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515705535512577:teacher-sync-fil"
+    document_title: "解三角形/解三角形基本模型.md"
+    block_order: 1
+    source_excerpt: "最常见的，D为BC中点，叫做AD为中线"
+    resolved_section: "中线情况"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "TR-005"
+    topic: "解三角形/最值"
+    query_intent: "三角形最值"
+    query: "解三角形中的边长或面积最值，怎样把边角条件转成一个变量的三角函数？"
+    expected_source_path: "解三角形/解三角形最值.md"
+    expected_block_order: 1
+    target_section: "解三角形最值"
+    manual_summary: "应说明利用正余弦定理、基本不等式或辅助角把约束化为可求最值的形式。"
+    acceptable_evidence:
+      - "边角条件"
+      - "一个变量"
+      - "三角函数最值"
+    case_type: "positive"
+    expected_document_id: "2092515707221622786"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515707221622786"
+    expected_provider_item_id: "R85IdRQQ7o67ysxomTLcUjIinrf"
+    expected_block_id: "2092515707360034818"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "tip"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515707221622786:teacher-sync-fil"
+    document_title: "解三角形/解三角形最值.md"
+    block_order: 1
+    source_excerpt: "凑出来 x+1/x 这种形式，然后用取等，注意取等条件"
+    resolved_section: "均值不等式"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "TR-006"
+    topic: "解三角形/面积"
+    query_intent: "面积公式"
+    query: "已知两边及其夹角时，三角形面积怎样直接计算，为什么需要正弦？"
+    expected_source_path: "解三角形/解三角形面积.md"
+    expected_block_order: 0
+    target_section: "解三角形面积"
+    manual_summary: "应给出 S=1/2 ab sinC，并解释作高或夹角正弦来源。"
+    acceptable_evidence:
+      - "两边夹角"
+      - "半乘积sin"
+      - "作高"
+    case_type: "positive"
+    expected_document_id: "2092515713290780674"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515713290780674"
+    expected_provider_item_id: "QoUfdstMGo2gHbxJxu2cdYSTnif"
+    expected_block_id: "2092515713819262977"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515713290780674:teacher-sync-fil"
+    document_title: "解三角形/解三角形面积.md"
+    block_order: 0
+    source_excerpt: "解三角形面积"
+    resolved_section: ""
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "TR-007"
+    topic: "解三角形/综合建模"
+    query_intent: "综合条件转化"
+    query: "解三角形综合题如何先识别条件，再选择边角互化和面积模型？"
+    expected_source_path: "解三角形/解三角形综合题.md"
+    expected_block_order: 1
+    target_section: "解三角形综合题"
+    manual_summary: "应体现条件翻译、建立中间量、正余弦与面积的组合，而非单一公式。"
+    acceptable_evidence:
+      - "条件转化"
+      - "模型选择"
+      - "正余弦与面积组合"
+    case_type: "positive"
+    expected_document_id: "2092515712363839489"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515712363839489"
+    expected_provider_item_id: "EWfmd8wKjokdjWxnsAgcoLxtnnh"
+    expected_block_id: "2092515712565166081"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515712363839489:teacher-sync-fil"
+    document_title: "解三角形/解三角形综合题.md"
+    block_order: 1
+    source_excerpt: "(2022·新高考Ⅰ) 记\\triangle ABC的内角A,B,C 的对边分别为a,b,c，已知\\frac{\\cos A}{1+\\sin A}=\\frac{\\sin 2B}{1+\\cos 2B}。 (1) 若C=\\frac{2\\pi}{3}，求B； (2) 求\\frac{a^2+b^2}{c^2}的最小值。"
+    resolved_section: "2022新高考I 难"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "TR-008"
+    topic: "解三角形/设元"
+    query_intent: "少设未知数"
+    query: "综合几何题里为什么尽量只设一个未知量，并用它表示其他线段？"
+    expected_source_path: "解三角形/设未知数.md"
+    expected_block_order: 1
+    target_section: "设未知数"
+    manual_summary: "应说明减少变量、利用边角关系表示其余量，降低方程数量和消元复杂度。"
+    acceptable_evidence:
+      - "少设未知数"
+      - "线段表示"
+      - "降低消元"
+    case_type: "positive"
+    expected_document_id: "2092515714444214273"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515714444214273"
+    expected_provider_item_id: "Bqo1dzbSCorORbxreS5chQlLnCd"
+    expected_block_id: "2092515714683289602"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515714444214273:teacher-sync-fil"
+    document_title: "解三角形/设未知数.md"
+    block_order: 1
+    source_excerpt: "未知数越少越好，尽可能用一个未知数表示所有 因为有几个未知数就至少需要几个方程，才能解出来未知数 里面常数尽可能替换，解出来及时更新条件"
+    resolved_section: ""
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "TR-009"
+    topic: "解三角形/诱导公式"
+    query_intent: "角度变换"
+    query: "三角形内角和出现π-A-B时，怎样用诱导公式改写正弦或余弦？"
+    expected_source_path: "解三角形/诱导公式.md"
+    expected_block_order: 0
+    target_section: "诱导公式"
+    manual_summary: "应联系 sin(π-x)、cos(π-x) 等符号和角度变换规则。"
+    acceptable_evidence:
+      - "π-A-B"
+      - "诱导公式"
+      - "正余弦符号"
+    case_type: "positive"
+    expected_document_id: "2092515715312435201"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515715312435201"
+    expected_provider_item_id: "W2dJdch09oovEUxjRPecm92Cnib"
+    expected_block_id: "2092515715429875714"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515715312435201:teacher-sync-fil"
+    document_title: "解三角形/诱导公式.md"
+    block_order: 0
+    source_excerpt: "诱导公式"
+    resolved_section: ""
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "TR-010"
+    topic: "解三角形/三角函数变形"
+    query_intent: "边角互化"
+    query: "三角形中出现tanC和A+B时，怎样利用内角和把式子化成可用的三角函数关系？"
+    expected_source_path: "解三角形/解三角形变形/TODO 解三角形中三角函数怎么化.md"
+    expected_block_order: 1
+    target_section: "解三角形中三角函数怎么化"
+    manual_summary: "应将 C=π-(A+B) 代入并用诱导、和角关系化简。"
+    acceptable_evidence:
+      - "C=π-A-B"
+      - "tanC变形"
+      - "和角关系"
+    case_type: "positive"
+    expected_document_id: "2092515703996203009"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515703996203009"
+    expected_provider_item_id: "L3J8dtRGFozVLvxOrArcwv7mnc3"
+    expected_block_id: "2092515704612765697"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515703996203009:teacher-sync-fil"
+    document_title: "解三角形/解三角形变形/TODO 解三角形中三角函数怎么化.md"
+    block_order: 1
+    source_excerpt: "在任意 \\triangle ABC 中，三个内角和满足： A + B + C = \\pi 移项可得： A + B = \\pi - C 由此衍生而来两个常见的正弦定理和余弦定理"
+    resolved_section: "1. 核心前提：三角形内角和"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "TR-011"
+    topic: "解三角形/射影定理"
+    query_intent: "直角三角形射影"
+    query: "直角三角形斜边上的高把两条直角边分成射影后，平方关系分别是什么？"
+    expected_source_path: "解三角形/三角形常用定理/TODO 射影定理.md"
+    expected_block_order: 1
+    target_section: "一、定理内容"
+    manual_summary: "应给出两直角边平方等于对应射影乘斜边，高平方等于两射影乘积。"
+    acceptable_evidence:
+      - "直角三角形"
+      - "直角边平方"
+      - "射影乘斜边"
+    case_type: "positive"
+    expected_document_id: "2092515702188457985"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515702188457985"
+    expected_provider_item_id: "HZiFdoScKolaosxYcvpcJF8Wn1A"
+    expected_block_id: "2092515702452699138"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515702188457985:teacher-sync-fil"
+    document_title: "解三角形/三角形常用定理/TODO 射影定理.md"
+    block_order: 1
+    source_excerpt: "在\\text{Rt}\\triangle ABC中，\\angle BAC=90^\\circ，AD\\perp BC于D，则： AB^2 = BD \\cdot BC（直角边AB的平方，等于它在斜边上的射影BD乘以斜边BC） AC^2 = CD \\cdot CB（直角边AC的平方，等于它在斜边上的射影CD乘以斜边BC） AD^2 = BD \\cdot CD（斜边上的高AD的平方，等于两条直角边在斜边上的射影的乘积） ---"
+    resolved_section: "一、定理内容（TODO没有图中）"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "TR-012"
+    topic: "解三角形/正弦定理"
+    query_intent: "外接圆联系"
+    query: "正弦定理中的2R为什么是三角形外接圆直径？"
+    expected_source_path: "解三角形/三角形常用定理/正弦定理.md"
+    expected_block_order: 0
+    target_section: "正弦定理"
+    manual_summary: "应联系边与对角正弦比以及外接圆半径R。"
+    acceptable_evidence:
+      - "a/sinA"
+      - "外接圆半径R"
+      - "直径2R"
+    case_type: "positive"
+    expected_document_id: "2092515703211868161"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515703211868161"
+    expected_provider_item_id: "Q63ydFqdjoqlapxwzEycu9UknUe"
+    expected_block_id: "2092515703379640322"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515703211868161:teacher-sync-fil"
+    document_title: "解三角形/三角形常用定理/正弦定理.md"
+    block_order: 0
+    source_excerpt: "正弦定理 正弦定理基本公式 大边对大角，大角对大边"
+    resolved_section: ""
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "TR-013"
+    topic: "解三角形/练习题"
+    query_intent: "三角恒等变形"
+    query: "锐角三角形中出现cos2A+cos2B时，为什么可以优先改写成sin²项？"
+    expected_source_path: "解三角形/解三角形练习题/三角函数类的练习题.md"
+    expected_block_order: 2
+    target_section: "思路"
+    manual_summary: "应说明利用cos2α=1-2sin²α，结合A+B+C=π整理。"
+    acceptable_evidence:
+      - "cos2α公式"
+      - "sin²改写"
+      - "三角形内角和"
+    case_type: "positive"
+    expected_document_id: "2092515710715478018"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515710715478018"
+    expected_provider_item_id: "VcLkd7niSoMSgexOjdDcJ4gNnGE"
+    expected_block_id: "2092515711034245121"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "question"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515710715478018:teacher-sync-fil"
+    document_title: "解三角形/解三角形练习题/三角函数类的练习题.md"
+    block_order: 2
+    source_excerpt: "已知\\triangle ABC的面积为\\frac{1}{4}，若\\cos2A+\\cos2B+2\\sin C=2，\\cos A\\cos B\\sin C=\\frac{1}{4}，则（） A. \\sin C=\\sin^2A+\\sin^2B B. AB=\\sqrt{2} C. \\sin A+\\sin B=\\frac{\\sqrt{6}}{2} D. AC^2+BC^2=3"
+    resolved_section: "题目2 2025新高考一卷"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "TR-014"
+    topic: "解三角形/条件转化"
+    query_intent: "射影关系"
+    query: "三角形边长条件中出现 c=b cosA+a cosB，几何上对应什么投影关系？"
+    expected_source_path: "解三角形/TODO 补充 解三角形常见转化条件.md"
+    expected_block_order: 1
+    target_section: "射影定理"
+    manual_summary: "应解释两条边在第三边方向上的投影相加得到另一边。"
+    acceptable_evidence:
+      - "投影"
+      - "b cosA+a cosB"
+      - "边长转化"
+    case_type: "positive"
+    expected_document_id: "2092515700565262337"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515700565262337"
+    expected_provider_item_id: "PqbPdowZ6obGPTxz3VwcfGtnnQe"
+    expected_block_id: "2092515700749811714"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515700565262337:teacher-sync-fil"
+    document_title: "解三角形/TODO 补充 解三角形常见转化条件.md"
+    block_order: 1
+    source_excerpt: "c = b\\cos A + a\\cos B"
+    resolved_section: "射影定理"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "TR-015"
+    topic: "解三角形/多选题"
+    query_intent: "正弦定理判断"
+    query: "在三角形多选题中，a cosB=b cosA能推出什么对称的边角关系？"
+    expected_source_path: "解三角形/解三角形练习题/解三角形多选题.md"
+    expected_block_order: 1
+    target_section: "2026辽宁名校三月"
+    manual_summary: "应结合正弦定理或积化关系判断等腰条件，不能直接凭形式猜结论。"
+    acceptable_evidence:
+      - "a cosB=b cosA"
+      - "正弦定理转化"
+      - "等腰判断"
+    case_type: "positive"
+    expected_document_id: "2092515711655002114"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515711655002114"
+    expected_provider_item_id: "FX27dQkL9oU2ZKxstzocVge3n4b"
+    expected_block_id: "2092515711801802753"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "reference"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515711655002114:teacher-sync-fil"
+    document_title: "解三角形/解三角形练习题/解三角形多选题.md"
+    block_order: 1
+    source_excerpt: "在\\triangle ABC中，内角A,B,C所对的边分别为a,b,c，下列说法正确的是 A. 若a\\cos B=b\\cos A，则\\triangle ABC为等腰三角形 B. 若a=2,b=3,A=30^\\circ，则满足条件的三角形有且仅有1个 C. 若\\cos 2A<\\cos 2B，则A>B D. 若A,B\\in\\left(0,\\dfrac{\\pi}{2}\\right)，c=a\\sin B，则\\tan C\\in\\left(1,\\dfrac{4}{3}\\right)"
+    resolved_section: "2026辽宁名校三月"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null
+  -
+    case_id: "TR-016"
+    topic: "解三角形/三角函数练习"
+    query_intent: "锐角约束"
+    query: "锐角三角形的面积范围题，哪些角度和正弦取值约束必须同时使用？"
+    expected_source_path: "解三角形/解三角形练习题/三角函数类的练习题.md"
+    expected_block_order: 1
+    target_section: "题目1"
+    manual_summary: "应结合锐角范围、内角和以及正余弦恒等式建立面积范围。"
+    acceptable_evidence:
+      - "锐角范围"
+      - "内角和"
+      - "面积与sin"
+    case_type: "positive"
+    expected_document_id: "2092515710715478018"
+    expected_root_document_id: "2091761180343918593"
+    expected_file_document_id: "2092515710715478018"
+    expected_provider_item_id: "VcLkd7niSoMSgexOjdDcJ4gNnGE"
+    expected_block_id: "2092515710988107778"
+    expected_library: "feishu"
+    requested_library: "feishu"
+    expected_role: "analysis"
+    expected_scope: "TEACHER_SHARED"
+    split_fingerprint: "teacher-sync-file-v2"
+    split_group: "feishu:2092515710715478018:teacher-sync-fil"
+    document_title: "解三角形/解三角形练习题/三角函数类的练习题.md"
+    block_order: 1
+    source_excerpt: "已知在锐角\\triangle ABC中，内角A,B,C的对边分别为a,b,c，\\cos 2A+\\cos 2B=2\\cos 2C，则 \\tan C\\left(\\dfrac{1}{\\tan A}+\\dfrac{1}{\\tan B}\\right)=；若c=1，则\\triangle ABC面积的取值范围为。 --- 对于这种形式，如果tanC 化为A，B表示，那么后面计算没法消掉，更加复杂，所以考虑切化弦 用sin和cos表示tan \\boldsymbol{2}；\\boldsymbol{\\left(\\dfrac{\\sqrt{2}}{4},\\dfrac{\\sqrt{3}}{4}\\right]} 【解析】\\cos 2A+\\cos 2B=2\\cos 2C，由二倍角公式 得 \\sin^{2}A+\\sin^{2}B=2\\sin^{2}C，由正弦定理得 a^{2}+b^{2}=2c^{2}。 \\tan C\\left(\\dfrac{1}{\\tan A}+\\dfrac{1}{\\tan B}\\right)=\\dfrac{\\sin C}{\\cos C}\\left(\\dfrac{\\cos A}{\\sin A}+\\dfrac{\\cos B}{\\sin B}\\right)=\\dfrac{\\sin C}{\\cos C}\\cdot\\dfrac{\\sin B\\cos A+\\cos B\\sin A}{\\sin A\\sin "
+    resolved_section: "题目1"
+    resolved_block_type: "markdown"
+    manual_score: 8
+    score_reason: "目标章节直接覆盖 query 的核心知识点，且保留了必要条件或公式上下文。"
+    retrieval_status: "pending_real_http_run"
+    retrieved_hits:
+    exact_block_hit: null
+    physical_file_hit: null
+    same_file_hit: null
+    evidence_window_hit: null

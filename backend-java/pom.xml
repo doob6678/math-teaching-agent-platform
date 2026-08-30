@@ -26,6 +26,8 @@
         <sa-token.version>1.44.0</sa-token.version>
         <apache-poi.version>5.4.1</apache-poi.version>
         <pdfbox.version>3.0.5</pdfbox.version>
+        <minio.version>8.6.0</minio.version>
+        <lucene.version>9.12.3</lucene.version>
     </properties>
 
     <dependencies>
@@ -93,6 +95,21 @@
             <groupId>com.mysql</groupId>
             <artifactId>mysql-connector-j</artifactId>
             <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.lucene</groupId>
+            <artifactId>lucene-core</artifactId>
+            <version>${lucene.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.lucene</groupId>
+            <artifactId>lucene-analysis-common</artifactId>
+            <version>${lucene.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.lucene</groupId>
+            <artifactId>lucene-queryparser</artifactId>
+            <version>${lucene.version}</version>
         </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>

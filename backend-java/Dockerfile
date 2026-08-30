@@ -3,9 +3,10 @@ WORKDIR /workspace
 # Resolve the Maven graph in the image build so the runtime JAR always corresponds to the source in this context.
 # The dependency layer remains cacheable while a clean build prevents a stale host target directory from being used.
 COPY backend-java/pom.xml ./backend-java/pom.xml
-RUN mvn -q -f backend-java/pom.xml -DskipTests dependency:go-offline
+# Persist Maven artifacts across BuildKit builds and retain download output for operational visibility.
+RUN --mount=type=cache,target=/root/.m2 mvn -f backend-java/pom.xml -DskipTests dependency:go-offline
 COPY backend-java/src ./backend-java/src
-RUN mvn -q -f backend-java/pom.xml -DskipTests package
+RUN --mount=type=cache,target=/root/.m2 mvn -f backend-java/pom.xml -DskipTests package
 
 FROM eclipse-temurin:21-jre
 WORKDIR /app
@@ -16,6 +17,7 @@ RUN apt-get update \
         curl \
         python3 \
         python3-requests \
+        poppler-utils \
         # DOCX is rendered in this Linux image before entering the common PDF/PNG source pipeline; do not depend on
         # Windows Word or PowerShell for a Docker production run.
         libreoffice-writer \

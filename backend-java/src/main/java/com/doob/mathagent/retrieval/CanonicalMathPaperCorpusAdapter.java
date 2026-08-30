@@ -75,6 +75,10 @@ public class CanonicalMathPaperCorpusAdapter {
                     || !authorizedQuestion(documentName, questionNumber, metadata)) {
                 continue;
             }
+            List<String> boundAssets = assetIds(metadata);
+            if (boundAssets.isEmpty()) {
+                boundAssets = manifestAssetIds(documentName, questionNumber);
+            }
             result.add(new TeachingEvidence(
                     "CANONICAL_MATH_PAPER",
                     documentName,
@@ -87,7 +91,7 @@ public class CanonicalMathPaperCorpusAdapter {
                     "canonical_math_paper",
                     "",
                     "",
-                    assetIds(metadata),
+                    boundAssets,
                     questionNumber));
         }
         return List.copyOf(result);
@@ -173,7 +177,8 @@ public class CanonicalMathPaperCorpusAdapter {
                 boolean legacyRowWithoutAssetBinding = !metadata.has("questionAssets")
                         && !metadata.has("pageAssetIds")
                         && !metadata.has("assetIds");
-                return (legacyRowWithoutAssetBinding || indexedAssets.equals(metadataAssets))
+                return (legacyRowWithoutAssetBinding
+                        || java.util.Set.copyOf(indexedAssets).equals(java.util.Set.copyOf(metadataAssets)))
                         && question.path("sourcePages").isArray()
                         && question.path("sourcePages").size() > 0;
             }
@@ -182,6 +187,33 @@ public class CanonicalMathPaperCorpusAdapter {
         }
         return false;
     }
+    private List<String> manifestAssetIds(String documentName, String questionNumber) {
+        Path documentRoot = corpusRoot.resolve(documentName).normalize();
+        Path manifest = documentRoot.resolve("source-manifest.json").normalize();
+        if (!documentRoot.startsWith(corpusRoot) || !Files.isRegularFile(manifest)) {
+            return List.of();
+        }
+        try {
+            JsonNode source = JSON.readTree(Files.readString(manifest));
+            for (JsonNode question : source.path("questions")) {
+                if (!questionNumber.equals(question.path("questionNumber").asText(""))) continue;
+                List<String> result = new ArrayList<>();
+                for (JsonNode assetId : question.path("assetIds")) {
+                    String value = assetId.asText("").strip();
+                    if (!value.isBlank() && !result.contains(value)) result.add(value);
+                }
+                for (JsonNode asset : question.path("assets")) {
+                    String value = asset.path("assetId").asText("").strip();
+                    if (!value.isBlank() && !result.contains(value)) result.add(value);
+                }
+                return List.copyOf(result);
+            }
+        } catch (Exception ignored) {
+            // Authorization already fails closed; an unreadable manifest must never create an asset binding.
+        }
+        return List.of();
+    }
+
     private static List<String> assetIds(JsonNode metadata) {
         List<String> assetIds = new ArrayList<>();
         for (JsonNode asset : metadata.path("questionAssets")) {
@@ -191,6 +223,12 @@ public class CanonicalMathPaperCorpusAdapter {
             }
         }
         for (JsonNode assetId : metadata.path("pageAssetIds")) {
+            String value = assetId.asText("").strip();
+            if (!value.isBlank()) {
+                assetIds.add(value);
+            }
+        }
+        for (JsonNode assetId : metadata.path("assetIds")) {
             String value = assetId.asText("").strip();
             if (!value.isBlank()) {
                 assetIds.add(value);

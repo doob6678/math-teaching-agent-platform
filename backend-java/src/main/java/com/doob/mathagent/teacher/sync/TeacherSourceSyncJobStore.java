@@ -53,6 +53,11 @@ public interface TeacherSourceSyncJobStore {
         return null;
     }
 
+    /** Terminates non-terminal jobs when their source document is archived. */
+    default int terminateActiveByDocument(String tenantId, String documentId, Instant now) {
+        return 0;
+    }
+
     /** Recovers a worker job that stayed running beyond its lease after a process or host crash. */
     default int recoverStaleRunningJobs(Instant now, long staleAfterSeconds) {
         return 0;

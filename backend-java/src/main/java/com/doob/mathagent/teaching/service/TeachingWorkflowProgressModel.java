@@ -456,6 +456,23 @@ final class TeachingWorkflowProgressModel {
         return new TeachingWorkflowNode(code, name, status, summary);
     }
 
+    /**
+     * 终态失败落盘时收敛运行中的 DAG 节点：running → failed。
+     *
+     * <p>失败快照若原样保留生成中节点，前端会永远显示"生成中"且与任务徽章（失败）互相矛盾；
+     * 未开始的 pending 节点保持原状，因为它们确实从未执行。</p>
+     */
+    static List<TeachingWorkflowNode> failRunningNodes(List<TeachingWorkflowNode> nodes) {
+        if (nodes == null || nodes.isEmpty()) {
+            return nodes == null ? List.of() : nodes;
+        }
+        return nodes.stream()
+                .map(node -> "running".equals(node.status())
+                        ? new TeachingWorkflowNode(node.code(), node.name(), "failed", "本次生成已失败终止。")
+                        : node)
+                .toList();
+    }
+
 
     /**
      * Builds a recoverable event snapshot from the completed workflow without exposing raw prompts or diagnostics.

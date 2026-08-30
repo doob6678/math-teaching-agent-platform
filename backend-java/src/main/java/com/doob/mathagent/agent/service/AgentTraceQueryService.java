@@ -38,7 +38,19 @@ public class AgentTraceQueryService {
      * @return visible traces
      */
     public List<AgentTraceResponse> list(AgentTraceQueryRequest request, RequestSubject subject) {
-        return visibleRecords(request, subject).stream()
+        // 项目未引入 MyBatis-Plus 分页拦截器（3.5.9+ 已拆到 mybatis-plus-jsqlparser 依赖），
+        // store.search 的 selectPage 不会追加 LIMIT 而是全量返回：控制台首屏因此拉到全部 trace
+        // （实测 1723 条 / 1.96MB 响应，前端渲染约 7000 个折叠块，是页面卡顿主因）。
+        // 列表路径按请求 limit 在服务层截断（store 已按 created_at 倒序，截断保留最新 N 条）；
+        // usage/diagnostic 两个汇总不截断，保持“N 次调用 / 总用量”的全量口径不变。
+        int boundedLimit = (request == null
+                ? new AgentTraceQueryRequest(null, null, null)
+                : request)
+                .normalize().limit();
+        List<AgentTraceRecord> records = visibleRecords(request, subject).stream()
+                .limit(boundedLimit)
+                .toList();
+        return records.stream()
                 .map(AgentTraceQueryService::toResponse)
                 .sorted(Comparator.comparing(AgentTraceResponse::traceId))
                 .toList();

@@ -12,5 +12,23 @@ public record VectorIndexRebuildResponse(
         int upsertedCount,
         String embeddingModel,
         int promptTokens,
-        String message) {
+        String message,
+        int deletedExistingCount,
+        long embeddingElapsedMs,
+        long milvusDeleteElapsedMs,
+        long milvusUpsertElapsedMs) {
+
+    public VectorIndexRebuildResponse(
+            String status,
+            String documentId,
+            String collectionName,
+            int blockCount,
+            int embeddedCount,
+            int upsertedCount,
+            String embeddingModel,
+            int promptTokens,
+            String message) {
+        this(status, documentId, collectionName, blockCount, embeddedCount, upsertedCount, embeddingModel,
+                promptTokens, message, 0, 0, 0, 0);
+    }
 }

@@ -81,7 +81,7 @@ class ProtocolDiscoveryControllerTest {
     }
 
     @Test
-    void startsLegacyMcpWritingAsOneTeachingTaskInsteadOfTheDisabledV1Workflow() throws Exception {
+    void startsMcpWritingAsDurableAsyncWorkflow() throws Exception {
         McpToolExecutionController controller = new McpToolExecutionController(McpToolExecutionServiceFixture.service(
                 registryWithWriting(), null, new TextbookResourceProperties(textbookCorpus())));
 
@@ -95,9 +95,44 @@ class ProtocolDiscoveryControllerTest {
 
         @SuppressWarnings("unchecked")
         Map<String, Object> result = (Map<String, Object>) response.result();
-        assertThat(result).containsEntry("status", "CREATED")
+        assertThat(result).containsEntry("status", "RUNNING")
                 .containsKey("workflowId")
                 .doesNotContainKeys("evidenceRefs", "sourcePath");
+    }
+
+    @Test
+    void refusesCallerSuppliedInitialImageRowsWithoutAnAuthoritativeVisibleBlock() throws Exception {
+        McpToolExecutionController controller = new McpToolExecutionController(McpToolExecutionServiceFixture.service(
+                registryWithWriting(), null, new TextbookResourceProperties(textbookCorpus())));
+        Map<String, Object> imageRef = Map.of(
+                "markdownLine", "![](IMAJES/image-001.jpg)",
+                "logicalPath", "抛物线/定义/IMAJES/image-001.jpg");
+
+        Map<String, Object> started = result(controller.callTool(
+                "Bearer teacher_writing_secret_1234567890", "start_multi_agent_writing",
+                new McpToolCallRequest(Map.of(
+                        "questionText", "讲解抛物线顶点式。",
+                        "writingGoal", "Teacher handout",
+                        "initialEvidence", List.of(Map.of(
+                                "sourceScope", "TEACHER_RESOURCE",
+                                "sourceTitle", "抛物线资料",
+                                "chunkId", "image-block",
+                                "sourceDocumentId", "image-document",
+                                "sourceType", "feishu",
+                                "snippet", "顶点式图像。![](IMAJES/image-001.jpg)",
+                                "imageRefs", List.of(imageRef)))))));
+
+        Map<String, Object> status = result(controller.callTool(
+                "Bearer teacher_writing_secret_1234567890", "get_multi_agent_writing_status",
+                new McpToolCallRequest(Map.of("workflowId", started.get("workflowId")))));
+        @SuppressWarnings("unchecked")
+        List<com.doob.mathagent.agent.vo.MultiAgentWritingResponse.StageResult> stages =
+                (List<com.doob.mathagent.agent.vo.MultiAgentWritingResponse.StageResult>) status.get("stages");
+        String snapshot = stages.stream()
+                .filter(stage -> "resource_curation".equals(stage.stageCode()))
+                .findFirst().orElseThrow().generatedContent();
+        assertThat(snapshot).contains("\"imageRefs\":[]")
+                .doesNotContain("markdownLine", "logicalPath", "抛物线/定义/IMAJES/image-001.jpg");
     }
 
     @Test
@@ -164,8 +199,8 @@ class ProtocolDiscoveryControllerTest {
                 "teacher-mcp-client",
                 McpClientRegistryProperties.secretHash("teacher_writing_secret_1234567890"),
                 true,
-                List.of("start_multi_agent_writing"),
-                List.of("agent-writing:execute"))));
+                List.of("start_multi_agent_writing", "get_multi_agent_writing_status"),
+                List.of("agent-writing:execute", "agent-writing:read"))));
         return properties;
     }
 

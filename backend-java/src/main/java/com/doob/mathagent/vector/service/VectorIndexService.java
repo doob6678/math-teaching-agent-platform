@@ -5,7 +5,6 @@ import com.doob.mathagent.teacher.document.TeacherResourceStore;
 import com.doob.mathagent.teacher.block.TeacherDocumentBlockResponse;
 import com.doob.mathagent.teacher.document.TeacherResourceDocumentResponse;
 import com.doob.mathagent.teacher.sync.TeacherSourceSyncManifestStore;
-import com.doob.mathagent.teacher.service.TeacherSourceFileReader;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
@@ -30,8 +29,9 @@ public class VectorIndexService {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final Logger log = LoggerFactory.getLogger(VectorIndexService.class);
     private static final int MILVUS_UPSERT_BATCH_SIZE = 128;
-    private static final int MILVUS_RATE_LIMIT_RETRY_ATTEMPTS = 4;
-    private static final Duration MILVUS_RATE_LIMIT_RETRY_DELAY = Duration.ofSeconds(12);
+    private static final int MILVUS_RATE_LIMIT_RETRY_ATTEMPTS = 9;
+    private static final Duration MILVUS_RATE_LIMIT_RETRY_BASE_DELAY = Duration.ofSeconds(1);
+    private static final Duration MILVUS_RATE_LIMIT_RETRY_MAX_DELAY = Duration.ofSeconds(4);
     private static final int VECTOR_SEARCH_RETRY_ATTEMPTS = 3;
 
     private final VectorIndexProperties properties;
@@ -46,7 +46,6 @@ public class VectorIndexService {
     private volatile boolean teacherSearchReady;
     private TeacherResourceImageClipService teacherImageClipService;
     private TeacherSourceSyncManifestStore manifestStore;
-    private TeacherSourceFileReader sourceFileReader;
 
     public VectorIndexService(
             VectorIndexProperties properties,
@@ -66,19 +65,11 @@ public class VectorIndexService {
     }
 
     /** Optional in focused tests; production resolves provider file identity from the existing sync manifest. */
-    @Autowired(required = false)
     public void setManifestStore(TeacherSourceSyncManifestStore manifestStore) {
         this.manifestStore = manifestStore;
     }
 
-    /** Keeps the authoritative source locator in the Docker volume, separate from the vector and database stores. */
-    @Autowired(required = false)
-    public void setSourceFileReader(TeacherSourceFileReader sourceFileReader) {
-        this.sourceFileReader = sourceFileReader;
-    }
-
-    public VectorIndexStatusResponse status() {
-        String baseStatus = properties.enabled()
+    public VectorIndexStatusResponse status() {        String baseStatus = properties.enabled()
                 ? properties.fullyConfigured() ? "ready_to_index" : "configuration_error"
                 : "disabled";
         RuntimeVectorStatus runtime = properties.fullyConfigured()
@@ -113,12 +104,16 @@ public class VectorIndexService {
         if ("teacher".equals(subjectType) && !subjectId.equals(document.ownerSubjectId())) {
             throw new IllegalArgumentException("Teacher can rebuild only owned resource indexes");
         }
-        List<TeacherDocumentBlockResponse> blocks = blockStore.listByDocument(tenantId, documentId).stream()
-                .filter(block -> !text(block.normalizedText()).isBlank())
-                .toList();
+        List<TeacherResourceStore.TeacherFileDocument> fileDocuments = List.of();
         try {
             properties.requireFullyConfigured();
-            if (blocks.isEmpty()) {
+            if (resourceStore.supportsFileDocuments()) {
+                return rebuildFileDocumentsPaged(tenantId, subjectType, subjectId, document);
+            }
+            List<TeacherDocumentBlockResponse> legacyBlocks = blockStore.listByDocument(tenantId, documentId).stream()
+                    .filter(block -> !text(block.normalizedText()).isBlank())
+                    .toList();
+            if (legacyBlocks.isEmpty()) {
                 return new VectorIndexRebuildResponse(
                         "no_blocks",
                         documentId,
@@ -130,52 +125,316 @@ public class VectorIndexService {
                         0,
                         "No parsed active blocks are available for indexing.");
             }
-            if (sourceFileReader != null && document.localPath() != null && !document.localPath().isBlank()) {
-                sourceFileReader.register(
-                        tenantId,
-                        documentId,
-                        java.nio.file.Path.of(document.localPath()),
-                        document.contentChecksum());
-            }
-            EmbeddingBatch embeddings = embed(blocks.stream().map(TeacherDocumentBlockResponse::normalizedText).toList());
-            ensureCollection();
-            ensureVectorIndex();
-            // Milvus rejects deletes against an unloaded collection. Loading before the idempotent document cleanup
-            // makes the first rebuild of a newly-created BGE collection behave the same as later rebuilds.
-            loadCollection();
-            deleteExistingDocumentVectors(document);
-            int upserted = upsert(document, blocks, embeddings.vectors());
-            flushCollection();
-            loadCollection();
-            // Image files are already persisted as owner-scoped assets and referenced from Markdown. CLIP is an
-            // optional secondary index because lightweight deployments intentionally omit its large model runtime.
-            if (properties.teacherImageClipEnabled() && teacherImageClipService != null) {
-                teacherImageClipService.indexDocument(tenantId, subjectType, subjectId, documentId);
-            }
-            resourceStore.save(withIndexStatus(document, "ready", "ready"));
-            return new VectorIndexRebuildResponse(
-                    "indexed",
-                    documentId,
-                    properties.normalizedCollectionName(),
-                    blocks.size(),
-                    embeddings.vectors().size(),
-                    upserted,
-                    properties.embeddingModel(),
-                    embeddings.promptTokens(),
-                    "Milvus upsert completed.");
+            return rebuildLegacyDocument(tenantId, subjectType, subjectId, document, legacyBlocks);
         } catch (RuntimeException exception) {
             resourceStore.save(withIndexStatus(document, "failed", "failed"));
             return new VectorIndexRebuildResponse(
                     "failed",
                     documentId,
                     properties.normalizedCollectionName(),
-                    blocks.size(),
+                    0,
                     0,
                     0,
                     properties.embeddingModel(),
                     0,
                     "Vector index rebuild failed: " + safe(exception.getMessage()));
         }
+    }
+
+    private VectorIndexRebuildResponse rebuildLegacyDocument(
+            String tenantId,
+            String subjectType,
+            String subjectId,
+            TeacherResourceDocumentResponse document,
+            List<TeacherDocumentBlockResponse> legacyBlocks) {
+        long embeddingStarted = System.nanoTime();
+        EmbeddingBatch embeddings = embed(legacyBlocks.stream().map(TeacherDocumentBlockResponse::normalizedText).toList());
+        long embeddingElapsedMs = elapsedMillis(embeddingStarted);
+        ensureCollection();
+        ensureVectorIndex();
+        loadCollection();
+        long milvusDeleteStarted = System.nanoTime();
+        deleteExistingDocumentVectors(document);
+        long milvusDeleteElapsedMs = elapsedMillis(milvusDeleteStarted);
+        long milvusUpsertStarted = System.nanoTime();
+        int upserted = upsert(document, legacyBlocks, embeddings.vectors());
+        long milvusUpsertElapsedMs = elapsedMillis(milvusUpsertStarted);
+        flushCollection();
+        loadCollection();
+        resourceStore.save(withIndexStatus(document, "ready", "ready"));
+        return new VectorIndexRebuildResponse(
+                "indexed", document.documentId(), properties.normalizedCollectionName(), legacyBlocks.size(),
+                embeddings.vectors().size(), upserted, properties.embeddingModel(), embeddings.promptTokens(),
+                "Legacy ROOT vector rebuild completed; deletedExistingCount=" + legacyBlocks.size()
+                        + ", embeddingElapsedMs=" + embeddingElapsedMs
+                        + ", milvusDeleteElapsedMs=" + milvusDeleteElapsedMs
+                        + ", milvusUpsertElapsedMs=" + milvusUpsertElapsedMs,
+                legacyBlocks.size(), embeddingElapsedMs, milvusDeleteElapsedMs, milvusUpsertElapsedMs);
+    }
+
+    private VectorIndexRebuildResponse rebuildFileDocumentsPaged(
+            String tenantId,
+            String subjectType,
+            String subjectId,
+            TeacherResourceDocumentResponse root) {
+        long embeddingStarted = System.nanoTime();
+        long milvusDeleteElapsedMs = 0L;
+        long milvusUpsertElapsedMs = 0L;
+        int fileCount = 0;
+        int blockCount = 0;
+        int embeddedCount = 0;
+        int upsertedCount = 0;
+        int deletedExistingCount = 0;
+        int promptTokens = 0;
+        ensureCollection();
+        ensureVectorIndex();
+        loadCollection();
+        // 20260830 parent-child: the derived child collection is best-effort. A child failure never fails the block
+        // rebuild because search falls back to the block collection when the child route yields nothing.
+        boolean childCollectionReady = false;
+        int childChunkCount = 0;
+        try {
+            ensureChildCollectionReady();
+            childCollectionReady = true;
+        } catch (RuntimeException exception) {
+            log.warn("teacher_child_collection_prepare_failed rebuild_continues_without_children reason={}",
+                    abbreviate(safe(exception.getMessage()), 200));
+        }
+        String afterFileDocumentId = "";
+        while (true) {
+            List<TeacherResourceStore.TeacherFileDocument> page = resourceStore.listFileDocumentsForIndexing(
+                    tenantId, root.documentId(), 64, afterFileDocumentId);
+            if (page.isEmpty()) {
+                break;
+            }
+            for (TeacherResourceStore.TeacherFileDocument file : page) {
+                fileCount += 1;
+                long deleteStarted = System.nanoTime();
+                deleteExistingDocumentVectors(file.document());
+                milvusDeleteElapsedMs += elapsedMillis(deleteStarted);
+                deletedExistingCount += 1;
+                Integer afterBlockOrder = null;
+                while (true) {
+                    List<TeacherDocumentBlockResponse> blocks = blockStore.listBlocksForFile(
+                            tenantId, file.documentId(), 128, afterBlockOrder);
+                    if (blocks.isEmpty()) {
+                        break;
+                    }
+                    List<TeacherDocumentBlockResponse> indexable = blocks.stream()
+                            .filter(block -> !text(block.normalizedText()).isBlank())
+                            .toList();
+                    if (!indexable.isEmpty()) {
+                        EmbeddingBatch embeddings = embed(indexable.stream()
+                                .map(TeacherDocumentBlockResponse::normalizedText)
+                                .toList());
+                        embeddedCount += embeddings.vectors().size();
+                        promptTokens += embeddings.promptTokens();
+                        long upsertStarted = System.nanoTime();
+                        upsertedCount += upsert(file, indexable, embeddings.vectors());
+                        milvusUpsertElapsedMs += elapsedMillis(upsertStarted);
+                        blockCount += indexable.size();
+                    }
+                    afterBlockOrder = blocks.getLast().blockOrder();
+                }
+                if (childCollectionReady) {
+                    childChunkCount += indexChildChunksBestEffort(file);
+                }
+                resourceStore.save(withIndexStatus(file.document(), "ready", "ready"));
+                afterFileDocumentId = file.documentId();
+            }
+            if (page.size() < 64) {
+                break;
+            }
+        }
+        flushCollection();
+        loadCollection();
+        if (childCollectionReady) {
+            try {
+                flushCollection(properties.normalizedChildCollectionName());
+                loadCollection(properties.normalizedChildCollectionName());
+            } catch (RuntimeException exception) {
+                log.warn("teacher_child_collection_finalize_failed reason={}",
+                        abbreviate(safe(exception.getMessage()), 200));
+            }
+        }
+        resourceStore.save(withIndexStatus(root, "ready", "ready"));
+        return new VectorIndexRebuildResponse(
+                "indexed", root.documentId(), properties.normalizedCollectionName(), blockCount, embeddedCount,
+                upsertedCount, properties.embeddingModel(), promptTokens,
+                "FILE-scoped paged Milvus rebuild completed; fileCount=" + fileCount
+                        + ", childChunkCount=" + childChunkCount,
+                deletedExistingCount, elapsedMillis(embeddingStarted), milvusDeleteElapsedMs, milvusUpsertElapsedMs);
+    }
+
+    /**
+     * Re-derives and upserts one file's child chunks. Old children of the same file are deleted first so a re-parse
+     * with different block ids cannot leave orphan vectors. Deterministic from block text; nothing is stored in MySQL.
+     */
+    private int indexChildChunksBestEffort(TeacherResourceStore.TeacherFileDocument file) {
+        try {
+            deleteChildVectors(file.document().tenantId(), file.documentId());
+            List<TeacherDocumentBlockResponse> blocks = blockStore.listBlocksForFile(
+                    file.document().tenantId(), file.documentId(), Integer.MAX_VALUE - 1, null);
+            List<TeacherDocumentBlockResponse> indexable = blocks.stream()
+                    .filter(block -> !text(block.normalizedText()).isBlank())
+                    .toList();
+            if (indexable.isEmpty()) {
+                return 0;
+            }
+            List<Map<String, Object>> entities = new ArrayList<>();
+            List<String> childTexts = new ArrayList<>();
+            for (TeacherDocumentBlockResponse block : indexable) {
+                List<String> chunks = TeacherChildChunkSplitter.split(block.normalizedText());
+                for (int childIndex = 0; childIndex < chunks.size(); childIndex += 1) {
+                    entities.add(childEntityShell(file, block, childIndex));
+                    childTexts.add(chunks.get(childIndex));
+                }
+            }
+            if (entities.isEmpty()) {
+                return 0;
+            }
+            EmbeddingBatch embeddings = embed(childTexts);
+            for (int index = 0; index < entities.size(); index += 1) {
+                entities.get(index).put("vector", embeddings.vectors().get(index));
+            }
+            return upsertEntities(properties.normalizedChildCollectionName(), entities, "child chunk upsert");
+        } catch (RuntimeException exception) {
+            log.warn("teacher_child_chunk_index_failed fileDocumentId={} reason={}",
+                    file.documentId(), abbreviate(safe(exception.getMessage()), 200));
+            return 0;
+        }
+    }
+
+    /** Builds the child entity without its vector; the vector is injected after batched embedding. */
+    private Map<String, Object> childEntityShell(
+            TeacherResourceStore.TeacherFileDocument file,
+            TeacherDocumentBlockResponse block,
+            int childIndex) {
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("tenantId", file.document().tenantId());
+        metadata.put("documentId", file.documentId());
+        metadata.put("fileDocumentId", file.documentId());
+        metadata.put("documentKind", "FILE");
+        metadata.put("rootDocumentId", file.rootDocumentId());
+        // The child row carries its PARENT block identity under the same metadata keys as block rows, so every
+        // downstream consumer (file grouping, representative choice, evidence window, evaluation oracle) keeps working
+        // without any mapping layer: a child hit is a parent-block hit.
+        metadata.put("blockId", block.blockId());
+        metadata.put("blockOrder", block.blockOrder());
+        metadata.put("childIndex", childIndex);
+        metadata.put("unit", "child_chunk");
+        metadata.put("title", text(file.document().title()));
+        metadata.put("sourceType", text(file.document().sourceType()));
+        metadata.put("permissionScope", text(file.document().permissionScope()));
+        metadata.put("chapter", text(block.chapter()));
+        metadata.put("section", text(block.section()));
+        metadata.put("sourcePath", text(file.sourcePath()));
+        metadata.put("providerItemId", text(file.providerItemId()));
+        metadata.put("splitFingerprint", text(file.splitFingerprint()));
+        metadata.put("blockRole", text(block.blockRole()));
+        return new LinkedHashMap<>(Map.of(
+                "id", file.documentId() + ":" + block.blockId() + ":c" + childIndex,
+                "text", "",
+                "metadata", metadata));
+    }
+
+    private int deleteChildVectors(String tenantId, String fileDocumentId) {
+        String filter = "metadata[\"tenantId\"] == " + milvusStringLiteral(text(tenantId))
+                + " and metadata[\"documentId\"] == " + milvusStringLiteral(text(fileDocumentId));
+        VectorHttpResponse response = milvusPostWithRateLimitRetry("/v2/vectordb/entities/delete", Map.of(
+                "collectionName", properties.normalizedChildCollectionName(),
+                "filter", filter));
+        JsonNode root = readJson("Milvus child delete", response);
+        if (!response.success2xx() || root.path("code").asInt(-1) != 0) {
+            throw new IllegalStateException("Milvus child delete failed: HTTP " + response.statusCode()
+                    + " body=" + abbreviate(response.body(), 300));
+        }
+        return 0;
+    }
+
+    private int upsertEntities(String collectionName, List<Map<String, Object>> data, String action) {
+        int upserted = 0;
+        for (int start = 0; start < data.size(); start += MILVUS_UPSERT_BATCH_SIZE) {
+            VectorHttpResponse response = milvusPost("/v2/vectordb/entities/upsert", Map.of(
+                    "collectionName", collectionName,
+                    "data", data.subList(start, Math.min(start + MILVUS_UPSERT_BATCH_SIZE, data.size()))));
+            JsonNode root = readJson(action, response);
+            if (!response.success2xx() || root.path("code").asInt(-1) != 0) {
+                throw new IllegalStateException(action + " failed: HTTP " + response.statusCode()
+                        + " body=" + abbreviate(response.body(), 300));
+            }
+            upserted += root.path("data").path("upsertCount").asInt(0);
+        }
+        return upserted;
+    }
+
+    /**
+     * Legacy bounded implementation retained below for focused compatibility callers; production FILE rebuilds use the
+     * durable cursor method above and never request the whole ROOT FILE set at once.
+     */
+    private VectorIndexRebuildResponse rebuildFileDocuments(
+            String tenantId,
+            String subjectType,
+            String subjectId,
+            TeacherResourceDocumentResponse root,
+            List<TeacherResourceStore.TeacherFileDocument> fileDocuments) {
+        long embeddingStarted = System.nanoTime();
+        long milvusDeleteStarted = 0L;
+        long milvusUpsertStarted = 0L;
+        int blockCount = 0;
+        int embeddedCount = 0;
+        int upsertedCount = 0;
+        int deletedExistingCount = 0;
+        int promptTokens = 0;
+        ensureCollection();
+        ensureVectorIndex();
+        loadCollection();
+        for (TeacherResourceStore.TeacherFileDocument file : fileDocuments) {
+            TeacherResourceDocumentResponse fileDocument = file.document();
+            milvusDeleteStarted = System.nanoTime();
+            deleteExistingDocumentVectors(fileDocument);
+            deletedExistingCount += 1;
+            List<TeacherDocumentBlockResponse> page = blockStore.listBlocksForFile(
+                    tenantId, file.documentId(), 128, null);
+            while (!page.isEmpty()) {
+                List<TeacherDocumentBlockResponse> indexable = page.stream()
+                        .filter(block -> !text(block.normalizedText()).isBlank())
+                        .toList();
+                if (!indexable.isEmpty()) {
+                    EmbeddingBatch embeddings = embed(indexable.stream()
+                            .map(TeacherDocumentBlockResponse::normalizedText)
+                            .toList());
+                    embeddedCount += embeddings.vectors().size();
+                    promptTokens += embeddings.promptTokens();
+                    milvusUpsertStarted = System.nanoTime();
+                    upsertedCount += upsert(file, indexable, embeddings.vectors());
+                    blockCount += indexable.size();
+                }
+                int lastOrder = page.getLast().blockOrder();
+                page = blockStore.listBlocksForFile(tenantId, file.documentId(), 128, lastOrder);
+            }
+            resourceStore.save(withIndexStatus(fileDocument, "ready", "ready"));
+        }
+        flushCollection();
+        loadCollection();
+        resourceStore.save(withIndexStatus(root, "ready", "ready"));
+        long embeddingElapsedMs = elapsedMillis(embeddingStarted);
+        long milvusDeleteElapsedMs = milvusDeleteStarted == 0L ? 0L : elapsedMillis(milvusDeleteStarted);
+        long milvusUpsertElapsedMs = milvusUpsertStarted == 0L ? 0L : elapsedMillis(milvusUpsertStarted);
+        return new VectorIndexRebuildResponse(
+                "indexed",
+                root.documentId(),
+                properties.normalizedCollectionName(),
+                blockCount,
+                embeddedCount,
+                upsertedCount,
+                properties.embeddingModel(),
+                promptTokens,
+                "FILE-scoped Milvus rebuild completed; fileCount=" + fileDocuments.size(),
+                deletedExistingCount,
+                embeddingElapsedMs,
+                milvusDeleteElapsedMs,
+                milvusUpsertElapsedMs);
     }
 
     public List<VectorSearchHit> searchTeacherResourceBlocks(String query, int limit) {
@@ -353,12 +612,83 @@ public class VectorIndexService {
         }
         EmbeddingBatch embedding = embed(List.of(normalizedQuery));
         ensureTeacherSearchReady();
-        Map<String, Object> body = searchBody(embedding.vectors().getFirst(), limit, filter);
+        // 20260830 parent-child fusion route: block-level anchors keep their original behavior (a whole block with
+        // several matching paragraphs still scores as one vector), while paragraph-level child anchors ADD parents the
+        // block route never surfaced. Both ANN calls reuse one query embedding; per-parent max fusion happens below.
+        // This is pure vector search — no additional rerank stage on the latency budget.
+        List<VectorSearchHit> blockHits = searchCollectionOnce(
+                properties.normalizedCollectionName(), embedding.vectors().getFirst(), limit, filter, "blocks");
+        if (!properties.normalizedChildChunkSearchEnabled()) {
+            return blockHits;
+        }
+        List<VectorSearchHit> childHits;
+        try {
+            childHits = searchChildChunksCollapsedToParents(embedding.vectors().getFirst(), limit, filter);
+        } catch (RuntimeException exception) {
+            log.warn("teacher_child_chunk_search_failed falling_back_to_blocks reason={}",
+                    abbreviate(safe(exception.getMessage()), 200));
+            invalidateTeacherSearchReadiness();
+            childHits = List.of();
+        }
+        if (childHits.isEmpty()) {
+            return blockHits;
+        }
+        // Fuse both routes WITHOUT trimming back to the block-route pool size: the union can only add anchor
+        // information (per-file caps downstream still bound admission), and trimming was observed to displace
+        // block-route anchors and cost 3pp doc@3. One anchor per parent block, keeping the higher score.
+        Map<String, VectorSearchHit> fusedByParent = new LinkedHashMap<>();
+        for (VectorSearchHit hit : blockHits) {
+            fusedByParent.put(hit.fileDocumentId() + ":" + hit.blockId(), hit);
+        }
+        for (VectorSearchHit hit : childHits) {
+            fusedByParent.merge(hit.fileDocumentId() + ":" + hit.blockId(), hit,
+                    (blockRoute, childRoute) -> childRoute.score() > blockRoute.score() ? childRoute : blockRoute);
+        }
+        return fusedByParent.values().stream()
+                .sorted(java.util.Comparator.comparingDouble(VectorSearchHit::score).reversed())
+                .toList();
+    }
+
+    /**
+     * Child-chunk ANN collapsed to one anchor per parent block.
+     *
+     * <p>Naively copying the block-level anchor budget onto child rows lets the 2-3 children of one long block
+     * consume several anchor slots for the same parent, shrinking the number of DISTINCT parent blocks that reach
+     * stage two and regressing file admission (observed 2026-08-30: doc@3 0.867→0.825 before this collapse). The
+     * small-to-big contract is therefore: over-fetch children, keep the best child per parent in Milvus score order,
+     * and return exactly {@code limit} parent-level anchors.</p>
+     */
+    private List<VectorSearchHit> searchChildChunksCollapsedToParents(List<Double> queryVector, int limit, VectorSearchFilter filter) {
+        int distinctParents = Math.max(1, limit);
+        List<VectorSearchHit> overFetched = searchCollectionOnce(
+                properties.normalizedChildCollectionName(), queryVector, distinctParents * 4, filter, "child_chunks");
+        List<VectorSearchHit> collapsed = new ArrayList<>(distinctParents);
+        java.util.Set<String> seenParents = new java.util.HashSet<>();
+        for (VectorSearchHit hit : overFetched) {
+            String parentKey = hit.fileDocumentId() + ":" + hit.blockId();
+            if (!seenParents.add(parentKey)) {
+                continue;
+            }
+            collapsed.add(hit);
+            if (collapsed.size() >= distinctParents) {
+                break;
+            }
+        }
+        return List.copyOf(collapsed);
+    }
+
+    private List<VectorSearchHit> searchCollectionOnce(
+            String collectionName,
+            List<Double> queryVector,
+            int limit,
+            VectorSearchFilter filter,
+            String route) {
+        Map<String, Object> body = searchBody(collectionName, queryVector, limit, filter);
         VectorHttpResponse response = milvusPost("/v2/vectordb/entities/search", body);
         JsonNode root = readJson("Milvus search", response);
         if (!response.success2xx() || root.path("code").asInt(-1) != 0) {
-            log.error("teacher_resource_milvus_filter_failed filter={} httpStatus={} code={} body={}",
-                    filterSummary(filter), response.statusCode(), root.path("code").asInt(-1), abbreviate(response.body(), 300));
+            log.error("teacher_resource_milvus_filter_failed route={} filter={} httpStatus={} code={} body={}",
+                    route, filterSummary(filter), response.statusCode(), root.path("code").asInt(-1), abbreviate(response.body(), 300));
             throw new IllegalStateException("Milvus search failed: HTTP " + response.statusCode()
                     + " body=" + abbreviate(response.body(), 300));
         }
@@ -369,10 +699,14 @@ public class VectorIndexService {
             String blockId = metadata.path("blockId").asText("");
             if (!documentId.isBlank() && !blockId.isBlank()) {
                 hits.add(new VectorSearchHit(
+                        metadata.path("rootDocumentId").asText(""),
+                        metadata.path("fileDocumentId").asText(""),
                         documentId,
                         blockId,
                         metadata.path("sourcePath").asText(""),
                         metadata.path("providerItemId").asText(""),
+                        metadata.path("blockOrder").asInt(0),
+                        metadata.path("splitFingerprint").asText(""),
                         item.path("text").asText(""),
                         item.path("distance").asDouble(0.0)));
             }
@@ -397,8 +731,24 @@ public class VectorIndexService {
             ensureCollection();
             ensureVectorIndex();
             loadCollection();
+            // The child route is best-effort: an absent/empty child collection simply yields no hits and the caller
+            // falls back to the block collection, so its readiness failure must never block block-route search.
+            try {
+                ensureChildCollectionReady();
+            } catch (RuntimeException exception) {
+                log.warn("teacher_child_collection_not_ready fallback_to_blocks reason={}",
+                        abbreviate(safe(exception.getMessage()), 200));
+            }
             teacherSearchReady = true;
         }
+    }
+
+    /** Idempotent create/index/load for the derived child-chunk collection; same schema as the block collection. */
+    private void ensureChildCollectionReady() {
+        String childCollectionName = properties.normalizedChildCollectionName();
+        ensureCollection(childCollectionName);
+        ensureVectorIndex(childCollectionName);
+        loadCollection(childCollectionName);
     }
 
     /** Clears the optimistic local readiness observation after a Milvus-backed teacher search failure. */
@@ -496,9 +846,9 @@ public class VectorIndexService {
         }
     }
 
-    private Map<String, Object> searchBody(List<Double> vector, int limit, VectorSearchFilter filter) {
+    private Map<String, Object> searchBody(String collectionName, List<Double> vector, int limit, VectorSearchFilter filter) {
         Map<String, Object> body = new LinkedHashMap<>();
-        body.put("collectionName", properties.normalizedCollectionName());
+        body.put("collectionName", collectionName);
         body.put("data", List.of(vector));
         body.put("limit", Math.max(1, limit));
         body.put("outputFields", List.of("id", "text", "metadata"));
@@ -509,7 +859,25 @@ public class VectorIndexService {
         return body;
     }
 
+    /** Flushes the shared teacher text collection after a batch of set-based deletes. */
+    public void flushTeacherResourceVectors() {
+        if (!properties.enabled()) {
+            return;
+        }
+        properties.requireFullyConfigured();
+        flushCollection();
+    }
+
+    /**
+     * Removes one document's vectors. Callers deleting several documents should pass {@code false} and flush once
+     * after the batch so Milvus control-plane rate limits are not multiplied by the number of archived files.
+     */
     public int deleteTeacherResourceVectors(String tenantId, String documentId) {
+        return deleteTeacherResourceVectors(tenantId, documentId, true);
+    }
+
+    /** Deletes one document's vectors and optionally flushes the shared collection. */
+    public int deleteTeacherResourceVectors(String tenantId, String documentId, boolean flush) {
         if (!properties.enabled()) {
             return 0;
         }
@@ -518,17 +886,20 @@ public class VectorIndexService {
         if (document == null) {
             return 0;
         }
-        List<TeacherDocumentBlockResponse> blocks = blockStore.listByDocument(tenantId, documentId).stream()
-                .filter(block -> text(block.blockId()).isBlank() == false)
-                .toList();
         deleteExistingDocumentVectors(document);
-        flushCollection();
-        // Text and image retrieval share the same archive lifecycle.  Delete the private CLIP rows before the
-        // caller purges asset metadata, otherwise image-search can still return an archived Feishu source.
-        if (properties.teacherImageClipEnabled() && teacherImageClipService != null) {
-            teacherImageClipService.deleteDocumentVectors(tenantId, documentId);
+        // Child chunks share the document lifecycle; leaving them behind would make archived files ghost-recallable.
+        try {
+            deleteChildVectors(tenantId, documentId);
+        } catch (RuntimeException exception) {
+            log.warn("teacher_child_delete_failed documentId={} reason={}",
+                    documentId, abbreviate(safe(exception.getMessage()), 200));
         }
-        return blocks.size();
+        if (flush) {
+            flushCollection();
+        }
+        // CLIP is an isolated optional figure-search module and is intentionally excluded from the text RAG lifecycle.
+        // The delete endpoint is set-based; do not load every block merely to manufacture a count for the caller.
+        return 1;
     }
 
     /**
@@ -745,6 +1116,34 @@ public class VectorIndexService {
         return "ready_to_index";
     }
 
+    private static long elapsedMillis(long started) {
+        return java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+    }
+
+    private int upsert(
+            TeacherResourceStore.TeacherFileDocument file,
+            List<TeacherDocumentBlockResponse> blocks,
+            List<List<Double>> vectors) {
+        int upserted = 0;
+        for (int start = 0; start < blocks.size(); start += MILVUS_UPSERT_BATCH_SIZE) {
+            List<Map<String, Object>> data = new ArrayList<>();
+            int end = Math.min(start + MILVUS_UPSERT_BATCH_SIZE, blocks.size());
+            for (int index = start; index < end; index++) {
+                data.add(toMilvusEntity(file, blocks.get(index), vectors.get(index)));
+            }
+            VectorHttpResponse response = milvusPost("/v2/vectordb/entities/upsert", Map.of(
+                    "collectionName", properties.normalizedCollectionName(),
+                    "data", data));
+            JsonNode root = readJson("Milvus upsert", response);
+            if (!response.success2xx() || root.path("code").asInt(-1) != 0) {
+                throw new IllegalStateException("Milvus upsert failed: HTTP " + response.statusCode()
+                        + " body=" + abbreviate(response.body(), 300));
+            }
+            upserted += root.path("data").path("upsertCount").asInt(data.size());
+        }
+        return upserted;
+    }
+
     private int upsert(
             TeacherResourceDocumentResponse document,
             List<TeacherDocumentBlockResponse> blocks,
@@ -790,6 +1189,36 @@ public class VectorIndexService {
     }
 
     private Map<String, Object> toMilvusEntity(
+            TeacherResourceStore.TeacherFileDocument file,
+            TeacherDocumentBlockResponse block,
+            List<Double> vector) {
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("tenantId", file.document().tenantId());
+        metadata.put("documentId", file.documentId());
+        metadata.put("fileDocumentId", file.documentId());
+        metadata.put("documentKind", "FILE");
+        metadata.put("rootDocumentId", file.rootDocumentId());
+        metadata.put("blockId", block.blockId());
+        metadata.put("title", text(file.document().title()));
+        metadata.put("sourceType", text(file.document().sourceType()));
+        metadata.put("permissionScope", text(file.document().permissionScope()));
+        metadata.put("chapter", text(block.chapter()));
+        metadata.put("section", text(block.section()));
+        metadata.put("sourcePath", text(file.sourcePath()));
+        metadata.put("providerItemId", text(file.providerItemId()));
+        metadata.put("blockOrder", block.blockOrder());
+        metadata.put("splitFingerprint", text(file.splitFingerprint()));
+        metadata.put("blockRole", text(block.blockRole()));
+        metadata.put("graphTagsJson", text(block.graphTagNamesJson()));
+        metadata.put("checksum", text(block.checksum()));
+        return Map.of(
+                "id", file.documentId() + ":" + block.blockId(),
+                "vector", vector,
+                "text", text(block.normalizedText()),
+                "metadata", metadata);
+    }
+
+    private Map<String, Object> toMilvusEntity(
             TeacherResourceDocumentResponse document,
             TeacherDocumentBlockResponse block,
             List<Double> vector) {
@@ -797,7 +1226,6 @@ public class VectorIndexService {
         String providerItemId = manifestStore == null
                 ? ""
                 : text(manifestStore.providerItemId(document.tenantId(), document.documentId(), sourcePath));
-        String parentKey = fileParentKey(document.documentId(), providerItemId, sourcePath, block.blockId());
         Map<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("tenantId", document.tenantId());
         metadata.put("documentId", document.documentId());
@@ -809,7 +1237,6 @@ public class VectorIndexService {
         metadata.put("section", text(block.section()));
         metadata.put("sourcePath", sourcePath);
         metadata.put("providerItemId", providerItemId);
-        metadata.put("parentKey", parentKey);
         metadata.put("blockRole", text(block.blockRole()));
         metadata.put("graphTagsJson", text(block.graphTagNamesJson()));
         metadata.put("checksum", text(block.checksum()));
@@ -861,8 +1288,11 @@ public class VectorIndexService {
     }
 
     private static void sleepBeforeMilvusRetry(int attempt) {
+        long delayMs = Math.min(
+                MILVUS_RATE_LIMIT_RETRY_MAX_DELAY.toMillis(),
+                MILVUS_RATE_LIMIT_RETRY_BASE_DELAY.toMillis() * (1L << Math.min(attempt - 1, 2)));
         try {
-            Thread.sleep(MILVUS_RATE_LIMIT_RETRY_DELAY.toMillis() * attempt);
+            Thread.sleep(delayMs);
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Interrupted while waiting for Milvus rate-limit retry", exception);
@@ -984,6 +1414,11 @@ public class VectorIndexService {
                     + filter.sourceTypes().stream().map(VectorIndexService::milvusStringLiteral)
                     .collect(java.util.stream.Collectors.joining(",")) + "]");
         }
+        if (filter.physicalFilesOnly()) {
+            // Existing FILE vectors carry this durable identity; using it keeps the preserved legacy ROOT vectors out
+            // without deleting or rebuilding the production collection just to backfill a newer metadata field.
+            parts.add("metadata[\"fileDocumentId\"] != \"\"");
+        }
         if (!filter.permissionScopes().isEmpty()) {
             parts.add("metadata[\"permissionScope\"] in ["
                     + filter.permissionScopes().stream()
@@ -994,20 +1429,13 @@ public class VectorIndexService {
         return String.join(" and ", parts);
     }
 
-    /** Uses stable provider identity first and isolates legacy blocks with no file identity. */
-    private static String fileParentKey(String documentId, String providerItemId, String sourcePath, String blockId) {
-        String identity = text(providerItemId);
-        if (identity.isBlank()) identity = text(sourcePath);
-        if (identity.isBlank()) identity = "missing-source-path:" + text(blockId);
-        return text(documentId) + "::" + identity;
-    }
-
     private static String filterSummary(VectorSearchFilter filter) {
         if (filter == null) return "null";
         return "tenantIds=" + filter.tenantIds().size()
                 + ",documentIds=" + filter.documentIds().size()
                 + ",permissionScopes=" + filter.permissionScopes().size()
-                + ",sourceTypes=" + filter.sourceTypes().size();
+                + ",sourceTypes=" + filter.sourceTypes().size()
+                + ",physicalFilesOnly=" + filter.physicalFilesOnly();
     }
 
     private record EmbeddingBatch(List<List<Double>> vectors, int promptTokens) {

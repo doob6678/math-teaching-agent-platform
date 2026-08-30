@@ -11,6 +11,13 @@ export default defineConfig({
         target: "http://localhost:8080",
         changeOrigin: true,
         secure: false,
+        // 后端的 API 访问校验不接受浏览器 Origin（与 nginx.conf 的 proxy_set_header Origin ""
+        // 行为一致），代理层直接移除该头，否则开发服务器下所有请求都会被 403。
+        configure: (proxy) => {
+          proxy.on("proxyReq", (proxyReq) => {
+            proxyReq.removeHeader("origin");
+          });
+        },
       },
     },
   },
