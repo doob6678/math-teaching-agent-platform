@@ -79,15 +79,15 @@ flowchart TD
 
 以下截图取自本地真实运行的前端控制台（`http://127.0.0.1:5173`）：
 
-**工作台**——教学概览与教材资源统计（教材 8 册、文本块 3,317、PDF 页 1,067）：
+**工作台**——教学任务入口与教材资源统计（教材 8 册、文本块 3,317、PDF 页 1,067）：
 
 ![工作台](docs/assets/frontend/dashboard.png)
 
-**讲义生成**——教学目标提交与三版本 PDF 生成入口：
+**讲义生成**——讲义母版选择、教学目标提交与三版本 PDF 生成入口：
 
 ![讲义生成](docs/assets/frontend/handout-generation.png)
 
-**知识库**——SVG 力导向知识图谱（142 节点，支持拖拽、缩放与悬停高亮）：
+**知识库**——知识图谱与题库工作台（142 谱节点、146 关系边、201 知识点、6,678 条向量，SVG 力导向图支持拖拽、缩放与悬停高亮）：
 
 ![知识库](docs/assets/frontend/knowledge-base.png)
 
@@ -95,7 +95,7 @@ flowchart TD
 
 ![AI 控制台](docs/assets/frontend/ai-console.png)
 
-**MCP 接入**——按当前登录态生成个人 MCP Key 与标准握手配置：
+**MCP 接入**——按当前登录态生成个人 MCP Key、标准握手配置与工具清单：
 
 ![MCP 接入](docs/assets/frontend/mcp-console.png)
 

@@ -1,7 +1,9 @@
+# 本机 WSL 对 registry.npmjs.org 直连长期超时（NAT 出网），npmmirror 实测 0.7s 可达；
+# 仅在镜像构建期使用镜像源安装依赖，不改变运行时行为。
 FROM node:22-alpine AS build
 WORKDIR /workspace
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN npm ci --registry=https://registry.npmmirror.com
 COPY index.html tsconfig.json vite.config.ts ./
 COPY src ./src
 RUN npm run build
