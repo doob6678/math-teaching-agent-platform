@@ -196,8 +196,21 @@ class MyBatisStudentExplanationHistoryStoreTest {
                         case "selectPage" -> selectPage(
                                 (Page<StudentExplanationMessageEntity>) args[0],
                                 (Wrapper<StudentExplanationMessageEntity>) args[1]);
+                        // store 现用 .last("LIMIT n") + selectList 把上限落到 SQL 层；仿真按同一过滤排序返回。
+                        case "selectList" -> selectList();
                         default -> throw new UnsupportedOperationException(method.getName());
                     });
+        }
+
+        private List<StudentExplanationMessageEntity> selectList() {
+            return rows.stream()
+                    .filter(row -> "school-a".equals(row.getTenantId()))
+                    .filter(row -> "student".equals(row.getSubjectType()))
+                    .filter(row -> "student-1".equals(row.getSubjectId()))
+                    .filter(row -> "conversation-1".equals(row.getConversationId()))
+                    .sorted(Comparator.comparing(StudentExplanationMessageEntity::getCreatedAt).reversed())
+                    .limit(200)
+                    .toList();
         }
 
         private Page<StudentExplanationMessageEntity> selectPage(

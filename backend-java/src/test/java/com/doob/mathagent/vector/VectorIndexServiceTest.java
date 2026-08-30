@@ -207,10 +207,12 @@ class VectorIndexServiceTest {
         service.searchTeacherResourceBlocks("triangle sine rule", 3);
         service.searchTeacherResourceBlocks("cosine rule", 3);
 
-        assertThat(requestCount(transport, "/collections/create")).isEqualTo(1);
-        assertThat(requestCount(transport, "/indexes/create")).isEqualTo(1);
-        assertThat(requestCount(transport, "/collections/load")).isEqualTo(1);
-        assertThat(requestCount(transport, "/entities/search")).isEqualTo(2);
+        // 20260830 parent-child 融合路由：block 与 child 两个集合各自做一次就绪探测（create/index/load），
+        // 缓存命中后每次检索发 block + child 两次 /entities/search，复用同一次 query embedding。
+        assertThat(requestCount(transport, "/collections/create")).isEqualTo(2);
+        assertThat(requestCount(transport, "/indexes/create")).isEqualTo(2);
+        assertThat(requestCount(transport, "/collections/load")).isEqualTo(2);
+        assertThat(requestCount(transport, "/entities/search")).isEqualTo(4);
     }
 
     @Test
@@ -221,10 +223,12 @@ class VectorIndexServiceTest {
         service.searchTeacherResourceBlocks("triangle sine rule", 3);
         service.searchTeacherResourceBlocks("cosine rule", 3);
 
-        assertThat(requestCount(transport, "/collections/create")).isEqualTo(2);
-        assertThat(requestCount(transport, "/indexes/create")).isEqualTo(2);
-        assertThat(requestCount(transport, "/collections/load")).isEqualTo(2);
-        assertThat(requestCount(transport, "/entities/search")).isEqualTo(3);
+        // 第 2 次 /entities/search（child 路由）注入 503：child 失败清空双集合就绪缓存，
+        // 第二次检索对 block 与 child 全部重新 create/index/load，检索共 4 次（2 次/检索 × 2 检索）。
+        assertThat(requestCount(transport, "/collections/create")).isEqualTo(4);
+        assertThat(requestCount(transport, "/indexes/create")).isEqualTo(4);
+        assertThat(requestCount(transport, "/collections/load")).isEqualTo(4);
+        assertThat(requestCount(transport, "/entities/search")).isEqualTo(4);
     }
 
     @Test

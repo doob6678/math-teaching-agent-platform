@@ -811,7 +811,9 @@ class _CheckpointStore:
         configured = os.getenv("MATH_AGENT_HANDOUT_CHECKPOINT_DB", "/app/data/handout-checkpoints.sqlite3")
         self.path = Path(configured)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as conn:
+        # closing() 必须显式包裹：sqlite3 连接对象进 with 只提交事务、不关闭文件句柄，
+        # Windows 上未关闭句柄会让临时目录清理报 WinError 32（测试顺序相关闪失的根因）。
+        with closing(self._connect()) as conn:
             conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS handout_checkpoint (

@@ -1,7 +1,6 @@
 package com.doob.mathagent.teaching.service;
 
 import static org.assertj.core.api.Assertions.assertThatCode;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import org.junit.jupiter.api.Test;
@@ -9,9 +8,8 @@ import org.junit.jupiter.api.Test;
 class TeachingHandoutPdfExportPolicyPartATest {
 
     /**
-     * The publication gate operates on a complete numbered unit, including the AI explanation. A method sentence
-     * such as “在平面图中…” must not be mistaken for an omitted source figure, while “图中” in the actual prompt
-     * still fails closed without an authorized image marker.
+     * 2026-08-30 起按老板决定取消图片硬门槛：图中/投影等文字不再触发“缺同源图像”的发布失败，
+     * 图片选用交给 AI 相关性提示词（见 docs 的讲义架构与 no-hard-gate 结论）。
      */
     @Test
     void distinguishesPlanarProjectionProseFromARequiredSourceFigure() {
@@ -22,7 +20,7 @@ class TeachingHandoutPdfExportPolicyPartATest {
                 \\paragraph{推导}
                 折叠前先在平面图中找出对应的垂直关系，再转入空间证明。
                 """;
-        String missingFigure = """
+        String proseOnlyFigure = """
                 \\subsection*{第1题 例题}
                 \\paragraph{题目}
                 图中点 A、B、C 的位置如题设，求线面角。
@@ -31,31 +29,33 @@ class TeachingHandoutPdfExportPolicyPartATest {
         assertThatCode(() -> TeachingHandoutPdfExportPolicyPartA
                 .validateQuestionPublicationUnits(selfContainedProjection, "teacher"))
                 .doesNotThrowAnyException();
-        assertThatThrownBy(() -> TeachingHandoutPdfExportPolicyPartA
-                .validateQuestionPublicationUnits(missingFigure, "teacher"))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("同源、已授权且可读取的图像");
+        assertThatCode(() -> TeachingHandoutPdfExportPolicyPartA
+                .validateQuestionPublicationUnits(proseOnlyFigure, "teacher"))
+                .doesNotThrowAnyException();
     }
 
-    /** A split `\\vec` command must become one valid inline formula before XeLaTeX sees the draft. */
+    /**
+     * 含 $ 定界的行不再做跨 $ 合并（skip 规则，避免 MIXED_MATH_DELIMITER 误伤）；分裂的 \vec 只补全花括号，
+     * 空的 \item $$ 被移除。合并行为由写作端保证，不再由导出端跨定界重写。
+     */
     @Test
     void restoresSplitVectorCommandInsideInlineMath() {
         String sanitized = TeachingHandoutPdfExportService.sanitizeLatexForExport(
                 "\\begin{itemize}\n\\item $$\n\\item 设 $\\vec{OA}$=$\\vec$ a，$\\vec{OB}$=$\\vec$ b。\n\\end{itemize}");
 
-        assertThat(sanitized).contains("$\\vec{OA}=\\vec{a}$", "$\\vec{OB}=\\vec{b}$")
+        assertThat(sanitized).contains("$\\vec{OA}$=$\\vec{a}$", "$\\vec{OB}$=$\\vec{b}$")
                 .doesNotContain("$\\vec$ a", "$\\vec$ b", "\\item $$");
     }
 
-    /** The real exporter must rejoin a function and its TeX operand without consuming ordinary prose. */
+    /** 已含 $ 定界且无需补全的行必须原样保留：不做跨定界合并，也不吞并普通散文。 */
     @Test
-    void rejoinsAdjacentInlineMathAroundATeXControlWordWithoutAbsorbingProse() {
+    void keepsPreDelimitedInlineMathVerbatimWithoutAbsorbingProse() {
         String sanitized = TeachingHandoutPdfExportService.sanitizeLatexForExport(
                 "公式 $\\sin$\\theta=$\\frac{1}{2}$；变量 $x$ and $y$ 保持分开。");
 
         assertThat(sanitized)
-                .contains("$\\sin\\theta=\\frac{1}{2}$", "$x$ and $y$")
-                .doesNotContain("$\\sin$\\theta=$\\frac{1}{2}$");
+                .contains("$\\sin$\\theta=$\\frac{1}{2}$", "$x$ and $y$")
+                .doesNotContain("$\\sin\\theta=\\frac{1}{2}$");
     }
 
     /** Bare styled symbols are valid AI math content but must not be passed to XeLaTeX outside math mode. */

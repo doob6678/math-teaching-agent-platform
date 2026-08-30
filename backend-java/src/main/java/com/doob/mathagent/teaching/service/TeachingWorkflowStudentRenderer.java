@@ -861,13 +861,11 @@ final class TeachingWorkflowStudentRenderer {
             return "";
         }
         // XeLaTeX's configured CJK font intentionally does not promise glyph coverage for mathematical symbols.
-        // Convert source Unicode before the generic sanitizer so triangle/angle relations never degrade to visible
-        // square boxes in a printed geometry question.
-        String sourceMathNormalized = value
+        // sanitizeFeishuMath owns Unicode ∠/⊥/∥ conversion (normalizeGeometryRelations) and its span-repair
+        // heuristics treat freshly inserted $...$ pairs as broken spans, so pre-converting here corrupts them;
+        // run the sanitizer on the raw glyphs and only add the △ mapping it lacks, after the sanitizer pass.
+        String normalized = com.doob.mathagent.infrastructure.text.FormulaMarkupSanitizer.sanitizeFeishuMath(value)
                 .replace("△", "$\\triangle$")
-                .replace("∠", "$\\angle$")
-                .replace("⊥", "$\\perp$");
-        String normalized = com.doob.mathagent.infrastructure.text.FormulaMarkupSanitizer.sanitizeFeishuMath(sourceMathNormalized)
                 // JSON producers occasionally interpret LaTeX commands as JSON escapes (\b, \t, \f). Restore the
                 // intended command before splitting math/text; otherwise XeLaTeX rejects the control character.
                 .replace("\u0008oldsymbol", "\\boldsymbol")

@@ -458,8 +458,8 @@ class TeachingWorkflowServiceTest {
                 "模板：", "题目入口", "讲评入口", "审题提醒", "题型入口", "知识入口",
                 "课前定位", "来源依据", "讲评主线", "核心公式与方法卡", "16:10 横版讲解卡", "板书与二次反馈");
         assertThat(response.lectureHandoutLatex())
-                .contains("\\section{课堂讲解}", "\\vspace")
-                .doesNotContain("\\section{答案与评分点}", "教师手写区", "手写区", "板书留白", "MODEL_CALL", "JSON_PARSE", "tokens=");
+                .contains("课堂投影", "\\par")
+                .doesNotContain("\\section{课堂讲解}", "\\vspace", "\\section{答案与评分点}", "教师手写区", "手写区", "板书留白", "MODEL_CALL", "JSON_PARSE", "tokens=");
         assertThat(response.teacherHandoutLatex()).doesNotContain(
                 "来源 1", "公开教材", "用途：知识点定位与公式依据");
         assertThat(response.teacherHandoutLatex()).doesNotContain(
@@ -921,11 +921,12 @@ class TeachingWorkflowServiceTest {
         assertThat(response.memoryReuse().reuseScope()).isEqualTo("private");
         assertThat(response.memoryReuse().answer()).contains("cosθ");
         assertThat(response.evidence()).isEmpty();
-        // REUSE_RESOURCE 节点已删除，不再检查该节点
+        // REUSE_RESOURCE 节点已删除，不再检查该节点；20260830 起记忆复用只作为首个阶段，不再短路后续检索管线，
+        // 证据不足仍整体 FAILED，因此 stageTimings 首个必须是 memory_reuse。
         assertThat(response.stageTimings()).extracting(TeachingTaskResponse.StageTiming::stage)
-                .containsExactly("memory_reuse");
+                .first().isEqualTo("memory_reuse");
         assertThat(response.status()).isEqualTo(TeachingTaskStatus.FAILED);
-        assertThat(response.errorMessage()).contains("教材、题库或教师资料证据");
+        assertThat(response.errorMessage()).contains("缺少可核验来源证据");
     }
 
     /** 已核验证据只触发一次 v2 Writer，不再经由通用题目代理的 /v1/ai-runs/sync。 */
@@ -1214,8 +1215,9 @@ class TeachingWorkflowServiceTest {
                 .doesNotContain("\"answer\"", "\"steps\"", "\"scoring\"", "\"extraNote\"",
                         "双曲线定义与参数关系基础题 / 难度：A 基础", "教师版保留完整答案");
         assertThat(response.studentHandoutLatex())
-                .contains("\\section{题型：双曲线定义与参数关系}", "\\paragraph{知识速记}", "\\paragraph{自检任务}", "\\vspace{18em}")
-                .doesNotContain("作答区", "手写区", "留白区", "推导区", "板书区");
+                .contains("【知识速记】", "【练习任务】", "\\par")
+                .doesNotContain("\\section{题型：双曲线定义与参数关系}", "\\paragraph{知识速记}", "\\vspace{18em}",
+                        "作答区", "手写区", "留白区", "推导区", "板书区");
         assertThat(response.studentHandoutLatex())
                 .doesNotContain("答案要点", "answer", "steps", "extraNote", "c=5", "scoring", "评分", "得分");
     }
@@ -1430,8 +1432,8 @@ class TeachingWorkflowServiceTest {
         assertThat(response.teacherHandoutLatex()).contains("【知识定位】先读清 $D(x_0)$ 的定义", "【方法步骤】", "【答案与评分点】")
                 .doesNotContain("\\section{本节目标}", "题目入口", "讲评入口", "审题提醒", "模板：", "16:10 横版讲解卡", "来源依据");
         assertThat(response.lectureHandoutLatex())
-                .contains("\\section{课堂讲解}", "\\subsection*{第 1 题 / 讲解单元}", "\\vspace{14em}")
-                .doesNotContain("教师手写区", "手写区", "板书留白");
+                .contains("已知条件与目标", "\\par")
+                .doesNotContain("\\section{课堂讲解}", "教师手写区", "手写区", "板书留白");
         assertThat(response.teacherHandoutLatex()).contains("$D(x_0)$", "$$c^2=a^2+b^2$$", "$c^2=a^2+b^2$");
         assertThat(response.teacherHandoutLatex()).contains("写出定义中的自变量位置");
         assertThat(response.teacherHandoutLatex()).doesNotContain("\\$D", "c\\textasciicircum{}2");
@@ -1513,12 +1515,13 @@ class TeachingWorkflowServiceTest {
                 new TeachingTaskRequest("req-normalize-fraction", "函数新概念 D(x_0)", "反比例函数从概念到基础题型", 2),
                 new TeachingRequestContext("tenant-a", "teacher", "teacher-1", "device-1"));
 
+        // 20260830 导出端 skip 规则：作者端已给定 $...$ 定界的内容原样保留，斜线分数不再被强制改写为 \frac。
         assertThat(response.teacherHandoutLatex())
-                .contains("$y=\\frac{k}{x}$")
-                .doesNotContain("$y=k/x$");
+                .contains("$y=k/x$")
+                .doesNotContain("$y=\\frac{k}{x}$");
         assertThat(response.studentHandoutLatex())
-                .contains("$y=\\frac{k}{x}$")
-                .doesNotContain("$y=k/x$", "教师版保留", "最终答案", "答案与评分点");
+                .contains("$y=k/x$")
+                .doesNotContain("$y=\\frac{k}{x}$", "教师版保留", "最终答案", "答案与评分点");
         assertThat(response.studentHandoutLatex())
                 .contains("【知识速记】", "【题型识别】");
     }

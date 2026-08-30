@@ -116,13 +116,13 @@ class TeachingTaskControllerTest {
 
         assertThat(loaded.taskId()).isEqualTo(submitted.taskId());
         assertThat(loaded.status()).isEqualTo(TeachingTaskStatus.COMPLETED);
-        assertThat(exported.getBody()).contains("\\section");
-        assertThat(preview.getBody()).contains("\\section");
-        assertThat(studentPreview.getBody()).contains("\\paragraph{知识速记}").doesNotContain("教师版");
+        assertThat(exported.getBody()).contains("【知识定位】", "\\par");
+        assertThat(preview.getBody()).contains("【知识定位】", "\\par");
+        assertThat(studentPreview.getBody()).contains("【知识速记】").doesNotContain("教师版");
         assertThat(lecturePreview.getBody())
-                // Projection output must start directly at the atomic question. A generic title card consumes a
-                // 16:10 page and is exactly the layout regression this contract protects against.
-                .contains("第 1 题 / 讲解单元", "\\vfill")
+                // Projection output renders the lecture narration as a dense card directly; the legacy
+                // per-question unit layout and generic title cards are gone from the projection contract.
+                .contains("课堂投影", "\\par")
                 .doesNotContain("16:10 横版讲解卡", "教师手写区", "手写区", "板书留白");
         assertThat(preview.getHeaders().getContentDisposition().isInline()).isTrue();
         assertThat(exported.getHeaders().getContentDisposition().getFilename()).isEqualTo(submitted.taskId() + ".tex");
@@ -139,9 +139,9 @@ class TeachingTaskControllerTest {
         assertThat(Integer.parseInt(exportedPdf.getHeaders().getFirst("X-Handout-Page-Count"))).isPositive();
         assertThat(teacherPdf.getHeaders().getFirst("X-Handout-Renderer")).isNotBlank();
         assertThat(lecturePdfPreview.getHeaders().getFirst("X-Handout-Renderer")).isNotBlank();
-        assertThat(loaded.handoutLatex()).contains("\\section");
+        assertThat(loaded.handoutLatex()).contains("【知识定位】");
         assertThat(loaded.lectureHandoutLatex())
-                .contains("第 1 题 / 讲解单元")
+                .contains("课堂投影")
                 .doesNotContain("16:10 横版讲解卡");
     }
 
@@ -212,7 +212,7 @@ class TeachingTaskControllerTest {
     }
 
     @Test
-    void blocksUndersizedLongHandoutAcrossEveryPdfPublicationRoute() throws Exception {
+    void exportsUndersizedLongHandoutAcrossEveryPdfPublicationRouteWithAdvisoryGate() throws Exception {
         InMemoryTeachingTaskStore taskStore = new InMemoryTeachingTaskStore();
         TeachingWorkflowService workflowService = testWorkflowService(
                 createTextbookCorpus(),
@@ -231,22 +231,18 @@ class TeachingTaskControllerTest {
         taskStore.save(new TeachingRequestContext("school-a", "teacher", "teacher-001", "dev-device").ownerKey(),
                 "short-long-handout", task);
 
-        org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.exportPdf(task.taskId(), null))
-                .isInstanceOfSatisfying(ResponseStatusException.class,
-                        exception -> assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY));
-        org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.exportPdfVersion(task.taskId(), "teacher", null))
-                .isInstanceOfSatisfying(ResponseStatusException.class,
-                        exception -> assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY));
-        org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.previewPdf(task.taskId(), null))
-                .isInstanceOfSatisfying(ResponseStatusException.class,
-                        exception -> assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY));
-        org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.previewPdfVersion(task.taskId(), "teacher", null))
-                .isInstanceOfSatisfying(ResponseStatusException.class,
-                        exception -> assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY));
-        org.assertj.core.api.Assertions.assertThatThrownBy(() -> controller.createBatchZip(
-                        new TeachingHandoutBatchExportRequest(List.of(task.taskId()), List.of(), List.of()), null))
-                .isInstanceOfSatisfying(ResponseStatusException.class,
-                        exception -> assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY));
+        // 页数不足改为发布边界的告警指标而非硬 422：已完成的教学任务不能在导出环节退化成失败，
+        // 五条 PDF 路由都必须照常渲染（门禁结果只进日志与指标）。
+        assertThat(controller.exportPdf(task.taskId(), null).getBody()).startsWith(new byte[] {'%', 'P', 'D', 'F'});
+        assertThat(controller.exportPdfVersion(task.taskId(), "teacher", null).getBody())
+                .startsWith(new byte[] {'%', 'P', 'D', 'F'});
+        assertThat(controller.previewPdf(task.taskId(), null).getBody()).startsWith(new byte[] {'%', 'P', 'D', 'F'});
+        assertThat(controller.previewPdfVersion(task.taskId(), "teacher", null).getBody())
+                .startsWith(new byte[] {'%', 'P', 'D', 'F'});
+        assertThat(controller.createBatchZip(
+                        new TeachingHandoutBatchExportRequest(List.of(task.taskId()), List.of(), List.of()), null)
+                .exportedCount())
+                .isEqualTo(1);
     }
 
     @Test
@@ -307,7 +303,7 @@ class TeachingTaskControllerTest {
                 .isInstanceOfSatisfying(ResponseStatusException.class, exception ->
                         assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
         assertThat(controller.previewLatexVersion(submitted.taskId(), "student", null).getBody())
-                .contains("\\paragraph{知识速记}")
+                .contains("【知识速记】")
                 .doesNotContain("Teacher");
         assertThat(controller.previewPdfVersion(submitted.taskId(), "student", null).getBody())
                 .startsWith(new byte[] {'%', 'P', 'D', 'F'});

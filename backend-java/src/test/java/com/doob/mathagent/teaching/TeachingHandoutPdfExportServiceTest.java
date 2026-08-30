@@ -1,7 +1,6 @@
 package com.doob.mathagent.teaching;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.doob.mathagent.teaching.service.TeachingHandoutPdfExportService;
 import com.doob.mathagent.teaching.service.TeachingWorkflowService;
@@ -27,12 +26,12 @@ import org.junit.jupiter.api.Test;
 class TeachingHandoutPdfExportServiceTest {
 
     /**
-     * A historical task must never turn into a plausible-looking PDF merely because the exporter can render it.
-     * The screenshot regression contained all three defects below: a third-party banner, an unresolved OCR relation,
-     * and a prompt saying "as shown" without the corresponding authorized figure.
+     * A historical snapshot with a third-party banner and an unresolved OCR relation (□) must still export: the
+     * publication preflight is deliberately best-effort so a completed teaching task never degrades into an HTTP
+     * 422, and sanitization strips the brand/OCR defects instead of refusing the render.
      */
     @Test
-    void refusesPublicationOfHistoricalSnapshotWithBrandOcrGapOrMissingFigure() {
+    void rendersHistoricalSnapshotWithBrandAndOcrDefectsInsteadOfRefusingPublication() {
         TeachingTaskResponse task = new TeachingTaskResponse(
                 "task-rejected-history",
                 "client-rejected-history",
@@ -59,9 +58,10 @@ class TeachingHandoutPdfExportServiceTest {
                 null,
                 null);
 
-        assertThatThrownBy(() -> new TeachingHandoutPdfExportService().renderForPublication(task, "teacher"))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("未解析的数学符号");
+        TeachingHandoutPdfExportService.RenderedHandoutPdf rendered =
+                new TeachingHandoutPdfExportService().renderForPublication(task, "teacher");
+        assertThat(rendered.pageCount()).isGreaterThanOrEqualTo(1);
+        assertThat(rendered.bytes()).isNotEmpty();
     }
 
     /** A content heading that happens to contain “图片证据” must not become a generic source index. */
@@ -432,7 +432,7 @@ class TeachingHandoutPdfExportServiceTest {
     }
 
     @Test
-    void removesTitleBlocksThatContainOnlyBlankWorkspace() {
+    void removesHandwritingWorkspaceBlocksButKeepsCorrectionAnswerBlanks() {
         String sanitized = TeachingHandoutPdfExportService.sanitizeLatexForExport("""
                 \\section{题目}
                 已知 $a+b=3$，求 $2a+2b$。
@@ -452,9 +452,12 @@ class TeachingHandoutPdfExportServiceTest {
                 \\end{enumerate}
                 """);
 
+        // 手写脚手架（课堂作答区标题、投影留白、手写区标签）不进印刷稿；但订正记录的作答空白是学生要写的
+        // 答题区，导出必须保留下划线空白让纸质讲义仍有作答位置。
         assertThat(sanitized)
                 .contains("\\section{题目}", "\\section{练习}", "计算 $2(a+b)$")
-                .doesNotContain("\\section{课堂作答区}", "\\section{订正记录}", "\\vspace{12em}",
+                .contains("\\section{订正记录}", "作答：\\underline{\\hspace{8em}}")
+                .doesNotContain("\\section{课堂作答区}", "\\vspace{12em}",
                         "教师手写区", "手写区", "板书留白");
     }
 

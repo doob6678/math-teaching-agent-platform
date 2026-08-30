@@ -17,7 +17,7 @@ describe("McpPanels", () => {
     expect(html).toContain("teacher-001");
     expect(html).toContain("school-a");
     expect(html).toContain("前端不传身份参数");
-    expect(html).toContain("隔离与审计");
+    expect(html).toContain("凭证边界与审计");
     expect(html).toContain("租户隔离");
     expect(html).toContain("身份绑定");
     expect(html).toContain("最小暴露");

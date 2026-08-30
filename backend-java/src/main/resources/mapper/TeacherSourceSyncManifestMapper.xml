@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- 飞书同步 manifest 按路径反查；全部取值走 #{} 参数绑定，规则见 文档/开发进度/SQL注入防护规则.md。
+     LIKE 前缀 '%/' 是固定字面量，拼接对象也是绑定参数，不存在用户可控 SQL 片段。 -->
+<mapper namespace="com.doob.mathagent.teacher.sync.mapper.TeacherSourceSyncManifestMapper">
+
+    <select id="selectProviderItemIdByPath" resultType="string">
+        SELECT provider_item_id FROM teacher_source_sync_manifest
+        WHERE tenant_id = #{tenantId} AND document_id = #{documentId} AND item_type IN ('file','docx')
+        AND (logical_path = #{sourcePath} OR local_path = #{sourcePath}
+        OR logical_path = #{pathWithoutExportExtension}
+        OR logical_path LIKE CONCAT('%/', #{sourcePath})
+        OR logical_path LIKE CONCAT('%/', #{pathWithoutExportExtension})
+        OR local_path LIKE CONCAT('%/', #{sourcePath})
+        OR local_path LIKE CONCAT('%/', #{pathWithoutExportExtension}))
+        ORDER BY provider_item_id ASC
+        LIMIT 1
+    </select>
+</mapper>
