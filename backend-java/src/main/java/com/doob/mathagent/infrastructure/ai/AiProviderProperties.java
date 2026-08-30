@@ -28,6 +28,9 @@ public class AiProviderProperties {
     /** Java-owned route metadata for Ark provider/model selection. */
     private Provider ark = new Provider("ark", false, "doubao-seed-2-0-lite-260428");
 
+    /** Java-owned route metadata for GLM (Z.ai Anthropic-compatible endpoint) provider/model selection. */
+    private Provider glm = new Provider("glm", false, "glm-5.3-flash");
+
     /**
      * Returns the default provider name.
      *
@@ -116,6 +119,24 @@ public class AiProviderProperties {
      */
     public void setArk(Provider ark) {
         this.ark = ark;
+    }
+
+    /**
+     * Returns GLM provider configuration.
+     *
+     * @return GLM configuration
+     */
+    public Provider getGlm() {
+        return glm;
+    }
+
+    /**
+     * Sets GLM provider configuration.
+     *
+     * @param glm GLM configuration
+     */
+    public void setGlm(Provider glm) {
+        this.glm = glm;
     }
 
     /**

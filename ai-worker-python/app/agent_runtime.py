@@ -11,6 +11,7 @@ from fastapi import HTTPException
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, ConfigDict, Field
 import requests
+from app import anthropic_compat
 from app.model_review_runtime import BoundedModelReviewController, ModelReviewExhausted
 from app.usage import UsageEvent, UsageLedger, cost_for, fallback_tokens
 
@@ -200,11 +201,13 @@ class AgentRuntime:
         )
 
     @staticmethod
-    def _review_prompt(turn: int, prior: str | None, codes: tuple[str, ...]) -> str:
+    def _review_prompt(turn: int, prior: str | None, active_hash: str, codes: tuple[str, ...]) -> str:
+        # 与 model_review_runtime 的 4 参契约对齐（turn, prior, active_hash, codes）；
+        # 旧 3 参签名会让通用评审循环在第二轮 TypeError。
         if turn == 1:
             return "Produce the final answer candidate and strict self-review envelope."
         return json.dumps({
-            "previousCandidate": prior or "", "feedbackCodes": list(codes),
+            "previousCandidate": prior or "", "baseCandidateHash": active_hash, "feedbackCodes": list(codes),
             "instruction": "Correct only the candidate to satisfy the final-answer contract.",
         }, separators=(",", ":"))
 
@@ -249,7 +252,7 @@ class AgentRuntime:
         ledger = UsageLedger()
         failures: list[str] = []
         for attempt, (provider, routed_model) in enumerate(providers, 1):
-            key_name = {"openai": "OPENAI_API_KEY", "dashscope": "DASHSCOPE_API_KEY", "deepseek": "DEEPSEEK_API_KEY", "ark": "ARK_API_KEY"}.get(provider, "")
+            key_name = {"openai": "OPENAI_API_KEY", "dashscope": "DASHSCOPE_API_KEY", "deepseek": "DEEPSEEK_API_KEY", "ark": "ARK_API_KEY", "glm": "GLM_API_KEY"}.get(provider, "")
             api_key = os.getenv(key_name) if key_name else None
             if not api_key:
                 failures.append(f"{provider}:missing_key")
@@ -259,9 +262,11 @@ class AgentRuntime:
                 "dashscope": "https://dashscope.aliyuncs.com/compatible-mode/v1",
                 "deepseek": "https://api.deepseek.com/v1",
                 "ark": "https://ark.cn-beijing.volces.com/api/v3",
+                "glm": anthropic_compat.default_base_url(),
             }.get(provider, "")
             base_url = os.getenv(f"{provider.upper()}_BASE_URL", default_base_url).rstrip("/")
-            model = routed_model or os.getenv(f"MATH_AGENT_AI_RUNTIME_{provider.upper()}_MODEL", os.getenv("MATH_AGENT_AI_RUNTIME_MODEL", os.getenv("OPENAI_CHAT_MODEL", "gpt-5.6-luna")))
+            # 模型链与 handout_runtime._provider_config 一致：route 指定 > {PROVIDER}_CHAT_MODEL > 通用链。
+            model = routed_model or os.getenv(f"{provider.upper()}_CHAT_MODEL", os.getenv(f"MATH_AGENT_AI_RUNTIME_{provider.upper()}_MODEL", os.getenv("MATH_AGENT_AI_RUNTIME_MODEL", os.getenv("OPENAI_CHAT_MODEL", "gpt-5.6-luna"))))
             # Java signs this limit before the Worker sees the request, so a concise branch cannot consume an
             # unbounded provider generation window or delay the surrounding lecture lease.
             payload: dict[str, Any] = {
@@ -275,9 +280,13 @@ class AgentRuntime:
                 # A bounded final turn prevents unbounded model/tool loops and keeps model cost predictable.
                 payload["tool_choice"] = "none"
             try:
-                response = requests.post(f"{base_url}/chat/completions", headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, json=payload, timeout=float(os.getenv("MATH_AGENT_AI_RUNTIME_TIMEOUT_SECONDS", "30")))
-                response.raise_for_status()
-                data = response.json()
+                if anthropic_compat.is_anthropic_provider(provider):
+                    # GLM 的 Anthropic 兼容端点在适配层完成 OpenAI 形状转换，响应/异常类型与下方 OpenAI 分支一致。
+                    data = anthropic_compat.post_chat_completion(None, api_key, base_url, payload, float(os.getenv("MATH_AGENT_AI_RUNTIME_TIMEOUT_SECONDS", "30")))
+                else:
+                    response = requests.post(f"{base_url}/chat/completions", headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, json=payload, timeout=float(os.getenv("MATH_AGENT_AI_RUNTIME_TIMEOUT_SECONDS", "30")))
+                    response.raise_for_status()
+                    data = response.json()
                 message = data["choices"][0]["message"]
                 usage = data.get("usage") or {}
                 prompt = int(usage.get("prompt_tokens", 0) or 0)

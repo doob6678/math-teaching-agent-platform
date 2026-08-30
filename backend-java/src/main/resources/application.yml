@@ -112,6 +112,11 @@ math-agent:
       name: ark
       enabled: ${MATH_AGENT_PROVIDER_ARK_ENABLED:false}
       chat-model: doubao-seed-2-0-lite-260428
+    glm:
+      name: glm
+      # GLM 走 Z.ai 的 Anthropic 兼容端点；密钥与 GLM_BASE_URL 只存在于 ai-worker，Java 仅签发路由元数据。
+      enabled: ${MATH_AGENT_PROVIDER_GLM_ENABLED:true}
+      chat-model: ${GLM_CHAT_MODEL:glm-5.3-flash}
   teaching:
     canonical-paper:
       # The real-paper ingestion owner publishes this exact FLAT/COSINE collection after source manifests, Terra
@@ -237,10 +242,12 @@ math-agent:
     # BGE query embedding while BM25 and the final reranker continue to appear healthy.
     embedding-api-key: ${MATH_AGENT_WORKER_API_KEY:}
     embedding-model: local_bge_embedding
-    # DashScope's compatible endpoint accepts at most ten input strings per request; keeping this configurable lets
-    # another provider raise or lower the limit without changing indexing code.
-    embedding-batch-size: 10
-    teacher-image-clip-enabled: true
+    # The local worker accepts bounded batches; 32 improves GPU utilization without increasing sync consumer concurrency.
+    # RabbitMQ remains single-prefetch and the source-sync consumer stays capped at two long-running jobs.
+    embedding-batch-size: ${MATH_AGENT_EMBEDDING_BATCH_SIZE:32}
+    # Teacher text RAG is file/document scoped. CLIP figure retrieval is kept as an isolated optional module but is
+    # excluded from synchronization, indexing, and benchmark execution because it has no text-context semantics.
+    teacher-image-clip-enabled: false
     # Parallel textbook/teacher retrieval can queue one cold CUDA rerank batch behind another; keep the request
     # bounded while allowing the real worker to finish instead of triggering an expensive embedding fallback.
     request-timeout-ms: 120000
@@ -292,7 +299,20 @@ math-agent:
         # Keep exact theorem/formula hits that BGE misses outside the global Top-N. The final Cross-Encoder still
         # owns the visible order; this switch only controls same-document candidate admission.
         lexical-rescue-enabled: ${MATH_AGENT_TEACHER_SEARCH_RUNTIME_LEXICAL_RESCUE_ENABLED:true}
-        max-lexical-rescue-blocks-per-document: ${MATH_AGENT_TEACHER_SEARCH_RUNTIME_MAX_LEXICAL_RESCUE_BLOCKS_PER_DOCUMENT:3}
+        max-lexical-rescue-blocks-per-document: ${MATH_AGENT_TEACHER_SEARCH_RUNTIME_MAX_LEXICAL_RESCUE_BLOCKS_PER_DOCUMENT:12}
+        # Calibrated from the current positive/negative rerank score split; override for a new model calibration run.
+        minimum-rerank-score: ${MATH_AGENT_TEACHER_SEARCH_RUNTIME_MINIMUM_RERANK_SCORE:-6.60}
+        low-confidence-score: ${MATH_AGENT_TEACHER_SEARCH_RUNTIME_LOW_CONFIDENCE_SCORE:-6.00}
+        minimum-rerank-margin: ${MATH_AGENT_TEACHER_SEARCH_RUNTIME_MINIMUM_RERANK_MARGIN:0.15}
+      candidate-fusion:
+        rrf-k: ${MATH_AGENT_TEACHER_SEARCH_CANDIDATE_FUSION_RRF_K:60}
+        vector-weight: ${MATH_AGENT_TEACHER_SEARCH_CANDIDATE_FUSION_VECTOR_WEIGHT:1.0}
+        lexical-weight: ${MATH_AGENT_TEACHER_SEARCH_CANDIDATE_FUSION_LEXICAL_WEIGHT:0.0}
+        tag-weight: ${MATH_AGENT_TEACHER_SEARCH_CANDIDATE_FUSION_TAG_WEIGHT:1.0}
+        route-candidate-limit: ${MATH_AGENT_TEACHER_SEARCH_CANDIDATE_FUSION_ROUTE_CANDIDATE_LIMIT:96}
+        vector-quality-limit: ${MATH_AGENT_TEACHER_SEARCH_CANDIDATE_FUSION_VECTOR_QUALITY_LIMIT:32}
+        lexical-quality-limit: ${MATH_AGENT_TEACHER_SEARCH_CANDIDATE_FUSION_LEXICAL_QUALITY_LIMIT:32}
+        tag-quality-limit: ${MATH_AGENT_TEACHER_SEARCH_CANDIDATE_FUSION_TAG_QUALITY_LIMIT:32}
     formula-recognition:
       # Only documents uploaded with parseMode=AI consume this budget. TEXT parsing remains local and free.
       enabled: true
@@ -370,6 +390,12 @@ math-agent:
     timeout-ms: ${MATH_AGENT_PYTHON_AGENT_TIMEOUT_MS:120000}
     connect-timeout-ms: ${MATH_AGENT_PYTHON_AGENT_CONNECT_TIMEOUT_MS:5000}
     lease-safety-margin-ms: ${MATH_AGENT_PYTHON_AGENT_LEASE_SAFETY_MARGIN_MS:15000}
+  handout:
+    # Python sees only source-relative Markdown rows with run-stable labels; binaries remain backend-authorized.
+    source-image-label-prefix: ${MATH_AGENT_HANDOUT_SOURCE_IMAGE_LABEL_PREFIX:source-image}
+    # A full teacher source may contain multiple diagrams. The worker receives at most 50 rewritten,
+    # run-authorized rows; images beyond that boundary are excluded together with their source blocks.
+    max-images: ${MATH_AGENT_HANDOUT_MAX_IMAGES:50}
   python-handout:
     # New handouts execute only in Python; Java retains authorization, task/queue state and publication.
     # Disabling this is an explicit operational outage/rollback action, never a silent Java-AI fallback.
@@ -398,3 +424,4 @@ math-agent:
     reference-handout-pdf: C:/Users/doob/Desktop/code/dev/math_agent_rag/文档/项目测试数据位置/参考讲义数学空间向量.pdf
     prompt-design-pdf: C:/Users/doob/Desktop/code/dev/math_agent_rag/文档/豆包爱学的提示词设计.pdf
     local-file-storage-root: /app/data
+    teacher-resource-upload-root: /app/data/teacher-resource-uploads

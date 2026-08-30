@@ -27,7 +27,7 @@ class ProviderSelection(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    name: Literal["openai", "dashscope", "deepseek", "ark"]
+    name: Literal["openai", "dashscope", "deepseek", "ark", "glm"]
     model: str = Field(min_length=1, max_length=160)
 
 
@@ -80,7 +80,7 @@ def verify_route_grant(value: str, run_id: str, workload: str) -> list[tuple[str
         routes = payload.get("routes")
         if not isinstance(routes, list) or not routes or len(routes) > 4:
             raise ValueError("route grant routes are invalid")
-        allowed = {"openai", "dashscope", "deepseek", "ark"}
+        allowed = {"openai", "dashscope", "deepseek", "ark", "glm"}
         result = []
         for route in routes:
             if not isinstance(route, dict) or route.get("name") not in allowed:

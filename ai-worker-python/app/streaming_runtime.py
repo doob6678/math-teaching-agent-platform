@@ -8,6 +8,7 @@ from typing import Any, Iterator
 from fastapi import HTTPException
 import requests
 
+from app import anthropic_compat
 from app.agent_runtime import AgentRunRequest, AgentRuntime
 from app.sse import iter_sse_data_events
 from app.usage import UsageEvent, UsageLedger, cost_for, fallback_tokens
@@ -70,15 +71,21 @@ class AgentStreamingRuntime:
             tool_parts: dict[int, dict[str, str]] = {}
             usage: dict[str, Any] = {}
             try:
+                anthropic_format = anthropic_compat.is_anthropic_provider(provider)
+                url = f"{base_url}/v1/messages" if anthropic_format else f"{base_url}/chat/completions"
+                headers = anthropic_compat.anthropic_headers(key) if anthropic_format else {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+                body = anthropic_compat.build_messages_payload(payload) if anthropic_format else payload
                 with requests.post(
-                    f"{base_url}/chat/completions",
-                    headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                    json=payload, stream=True,
+                    url,
+                    headers=headers,
+                    json=body, stream=True,
                     timeout=float(os.getenv("MATH_AGENT_AI_RUNTIME_TIMEOUT_SECONDS", "30")),
                 ) as response:
                     response.raise_for_status()
                     yield {"event": "provider", "data": {"provider": provider, "model": model, "attempt": attempt}}
-                    for data in self._sse_json(response):
+                    # Anthropic 流由适配层翻译成 OpenAI 形状的 chunk dict；thinking 增量在适配层被丢弃。
+                    data_events = anthropic_compat.openai_sse_data_frames(response) if anthropic_format else self._sse_json(response)
+                    for data in data_events:
                         usage = data.get("usage") or usage
                         for choice in data.get("choices") or []:
                             delta = choice.get("delta") or {}
@@ -184,11 +191,12 @@ class AgentStreamingRuntime:
 
     @staticmethod
     def _provider_config(provider: str) -> tuple[str | None, str, str]:
-        keys = {"openai": "OPENAI_API_KEY", "dashscope": "DASHSCOPE_API_KEY", "deepseek": "DEEPSEEK_API_KEY", "ark": "ARK_API_KEY"}
-        bases = {"openai": os.getenv("OPENAI_BASE_URL", "https://api1.aisz.mom/v1"), "dashscope": "https://dashscope.aliyuncs.com/compatible-mode/v1", "deepseek": "https://api.deepseek.com/v1", "ark": "https://ark.cn-beijing.volces.com/api/v3"}
+        keys = {"openai": "OPENAI_API_KEY", "dashscope": "DASHSCOPE_API_KEY", "deepseek": "DEEPSEEK_API_KEY", "ark": "ARK_API_KEY", "glm": "GLM_API_KEY"}
+        bases = {"openai": os.getenv("OPENAI_BASE_URL", "https://api1.aisz.mom/v1"), "dashscope": "https://dashscope.aliyuncs.com/compatible-mode/v1", "deepseek": "https://api.deepseek.com/v1", "ark": "https://ark.cn-beijing.volces.com/api/v3", "glm": anthropic_compat.default_base_url()}
         key = os.getenv(keys.get(provider, ""))
         base = os.getenv(f"{provider.upper()}_BASE_URL", bases.get(provider, "")).rstrip("/")
-        model = os.getenv(f"MATH_AGENT_AI_RUNTIME_{provider.upper()}_MODEL", os.getenv("MATH_AGENT_AI_RUNTIME_MODEL", os.getenv("OPENAI_CHAT_MODEL", "gpt-5.6-luna")))
+        # 模型链与 handout_runtime._provider_config 一致：{PROVIDER}_CHAT_MODEL > 通用运行时链 > 默认。
+        model = os.getenv(f"{provider.upper()}_CHAT_MODEL", os.getenv(f"MATH_AGENT_AI_RUNTIME_{provider.upper()}_MODEL", os.getenv("MATH_AGENT_AI_RUNTIME_MODEL", os.getenv("OPENAI_CHAT_MODEL", "gpt-5.6-luna"))))
         return key, base, model
 
     @staticmethod

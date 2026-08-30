@@ -7,6 +7,8 @@ import com.doob.mathagent.agent.service.AgentRunPlanService;
 import com.doob.mathagent.agent.service.AgentTraceQueryService;
 import com.doob.mathagent.agent.service.HandoutTaskFacade;
 import com.doob.mathagent.agent.service.MultiAgentWritingArtifact;
+import com.doob.mathagent.agent.service.MultiAgentWritingArtifactExportService;
+import com.doob.mathagent.agent.service.MultiAgentWritingService;
 import com.doob.mathagent.agent.service.MultiQuestionTextParser;
 import com.doob.mathagent.agent.vo.AgentRunExecuteResponse;
 import com.doob.mathagent.agent.vo.AgentRunPlanResponse;
@@ -89,16 +91,12 @@ public class McpToolExecutionService {
     private final KnowledgeQuestionBankService questionBankService;
     /** Routes legacy MCP writing tools through the teaching-task authorization and v2 Python adapter. */
     private final HandoutTaskFacade handoutTaskFacade;
+    private final MultiAgentWritingService multiAgentWritingService;
+    private final MultiAgentWritingArtifactExportService multiAgentWritingArtifactExportService;
     private final TaskExecutor toolExecutor;
     private TeacherSourceFileReader sourceFileReader;
 
-    /**
-     * Creates an MCP execution service.
-     *
-     * @param clientResolver registered MCP client secret resolver
-     * @param textbookRetrievalService real textbook retrieval service
-     * @param textbookResourceProperties processed textbook resource configuration
-     */
+    /** Creates the MCP execution service with the canonical Python handout dependencies. */
     @Autowired
     public McpToolExecutionService(
             McpClientResolver clientResolver,
@@ -113,26 +111,47 @@ public class McpToolExecutionService {
             TeacherSourceSyncExecutionService teacherSourceSyncExecutionService,
             KnowledgeQuestionBankService questionBankService,
             HandoutTaskFacade handoutTaskFacade,
+            MultiAgentWritingService multiAgentWritingService,
+            MultiAgentWritingArtifactExportService multiAgentWritingArtifactExportService,
             @Qualifier("mcpRetrievalTaskExecutor") TaskExecutor toolExecutor) {
         this.clientResolver = Objects.requireNonNull(clientResolver, "clientResolver is required");
         this.textbookRetrievalService = Objects.requireNonNull(textbookRetrievalService, "textbookRetrievalService is required");
         this.textbookResourceProperties = Objects.requireNonNull(textbookResourceProperties, "textbookResourceProperties is required");
-        this.teacherResourceBlockSearchService = Objects.requireNonNull(
-                teacherResourceBlockSearchService, "teacherResourceBlockSearchService is required");
+        this.teacherResourceBlockSearchService = Objects.requireNonNull(teacherResourceBlockSearchService, "teacherResourceBlockSearchService is required");
         this.agentTraceQueryService = Objects.requireNonNull(agentTraceQueryService, "agentTraceQueryService is required");
         this.agentRunPlanService = Objects.requireNonNull(agentRunPlanService, "agentRunPlanService is required");
-        this.teacherFeishuDiscoveryService = Objects.requireNonNull(
-                teacherFeishuDiscoveryService, "teacherFeishuDiscoveryService is required");
+        this.teacherFeishuDiscoveryService = Objects.requireNonNull(teacherFeishuDiscoveryService, "teacherFeishuDiscoveryService is required");
         this.teacherResourceService = Objects.requireNonNull(teacherResourceService, "teacherResourceService is required");
-        this.teacherSourceSyncJobService = Objects.requireNonNull(
-                teacherSourceSyncJobService, "teacherSourceSyncJobService is required");
-        this.teacherSourceSyncExecutionService = Objects.requireNonNull(
-                teacherSourceSyncExecutionService, "teacherSourceSyncExecutionService is required");
+        this.teacherSourceSyncJobService = Objects.requireNonNull(teacherSourceSyncJobService, "teacherSourceSyncJobService is required");
+        this.teacherSourceSyncExecutionService = Objects.requireNonNull(teacherSourceSyncExecutionService, "teacherSourceSyncExecutionService is required");
         this.questionBankService = Objects.requireNonNull(questionBankService, "questionBankService is required");
-        this.handoutTaskFacade = Objects.requireNonNull(
-                handoutTaskFacade, "handoutTaskFacade is required");
+        this.handoutTaskFacade = Objects.requireNonNull(handoutTaskFacade, "handoutTaskFacade is required");
+        this.multiAgentWritingService = Objects.requireNonNull(multiAgentWritingService, "multiAgentWritingService is required");
+        this.multiAgentWritingArtifactExportService = Objects.requireNonNull(multiAgentWritingArtifactExportService, "multiAgentWritingArtifactExportService is required");
         this.toolExecutor = Objects.requireNonNull(toolExecutor, "toolExecutor is required");
     }
+
+    /** Compatibility constructor retained for focused retrieval fixtures that do not exercise handout execution. */
+    public McpToolExecutionService(
+            McpClientResolver clientResolver,
+            TextbookRetrievalService textbookRetrievalService,
+            TextbookResourceProperties textbookResourceProperties,
+            TeacherResourceBlockSearchService teacherResourceBlockSearchService,
+            AgentTraceQueryService agentTraceQueryService,
+            AgentRunPlanService agentRunPlanService,
+            TeacherFeishuDiscoveryService teacherFeishuDiscoveryService,
+            TeacherResourceService teacherResourceService,
+            TeacherSourceSyncJobService teacherSourceSyncJobService,
+            TeacherSourceSyncExecutionService teacherSourceSyncExecutionService,
+            KnowledgeQuestionBankService questionBankService,
+            HandoutTaskFacade handoutTaskFacade,
+            TaskExecutor toolExecutor) {
+        this(clientResolver, textbookRetrievalService, textbookResourceProperties, teacherResourceBlockSearchService,
+                agentTraceQueryService, agentRunPlanService, teacherFeishuDiscoveryService, teacherResourceService,
+                teacherSourceSyncJobService, teacherSourceSyncExecutionService, questionBankService, handoutTaskFacade,
+                null, null, toolExecutor);
+    }
+
 
     /** Injects the file-backed source reader without changing focused MCP test constructors. */
     @Autowired(required = false)
@@ -294,14 +313,21 @@ public class McpToolExecutionService {
                 refs.add(String.valueOf(evidenceRef));
             }
             Object rawAssets = hit.get("assetRefs");
-            if (!(rawAssets instanceof List<?> assets)) {
-                continue;
+            if (rawAssets instanceof List<?> assets) {
+                for (Object rawAsset : assets) {
+                    if (rawAsset instanceof TeacherResourceBlockSearchResponse.AssetRef asset
+                            && asset.assetId() != null && !asset.assetId().isBlank()
+                            && asset.assetUri() != null && !asset.assetUri().isBlank()) {
+                        refs.add("asset://group/TEACHER_SHARED/" + asset.assetId());
+                    }
+                }
             }
-            for (Object rawAsset : assets) {
-                if (rawAsset instanceof TeacherResourceBlockSearchResponse.AssetRef asset
-                        && asset.assetId() != null && !asset.assetId().isBlank()
-                        && asset.assetUri() != null && !asset.assetUri().isBlank()) {
-                    refs.add("asset://group/TEACHER_SHARED/" + asset.assetId());
+            Object rawAssetIds = hit.get("assetIds");
+            if (rawAssetIds instanceof List<?> assetIds) {
+                for (Object rawAssetId : assetIds) {
+                    if (rawAssetId != null && !String.valueOf(rawAssetId).isBlank()) {
+                        refs.add("asset://group/CANONICAL_MATH_PAPER/" + String.valueOf(rawAssetId));
+                    }
                 }
             }
         }
@@ -317,6 +343,7 @@ public class McpToolExecutionService {
         hit.put("questionNumber", evidence.canonicalQuestionNumber());
         hit.put("pageNo", evidence.pageNo());
         hit.put("snippet", evidence.snippet());
+        hit.put("assetIds", evidence.assetIds());
         hit.put("transparentReference", transparentCanonicalReference(evidence));
         return hit;
     }
@@ -423,21 +450,53 @@ public class McpToolExecutionService {
                 }).toList();
     }
 
-    /** Reads authoritative source text from the Docker volume; this operation never queries MySQL. */
+    /** Reads a bounded page or evidence window from one authorized physical FILE document. */
     private Object readTeacherResourceBlocks(McpClientRegistryProperties.Client client, McpToolCallRequest request) {
-        String documentId = stringArgument(request == null ? Map.of() : request.arguments(), "documentId");
-        if (sourceFileReader == null) {
-            throw new IllegalStateException("File-backed teacher source reader is not configured");
+        Map<String, Object> arguments = request == null ? Map.of() : request.arguments();
+        String fileDocumentId = stringArgument(arguments, "fileDocumentId");
+        if (fileDocumentId.isBlank()) {
+            throw new IllegalArgumentException("fileDocumentId is required");
         }
-        TeacherSourceFileReader.SourceDocument source = sourceFileReader.read(client.tenantId(), documentId);
+        int limit = Math.max(1, Math.min(128, intArgument(arguments, "limit", 32)));
+        String afterBlockOrderValue = stringArgument(arguments, "afterBlockOrder");
+        Integer afterBlockOrder = afterBlockOrderValue.isBlank()
+                ? null
+                : intArgument(arguments, "afterBlockOrder", 0);
+        String centerBlockOrderValue = stringArgument(arguments, "centerBlockOrder");
+        if (!centerBlockOrderValue.isBlank()) {
+            int centerBlockOrder = intArgument(arguments, "centerBlockOrder", 0);
+            int radius = Math.max(0, Math.min(6, intArgument(arguments, "radius", 1)));
+            List<com.doob.mathagent.teacher.block.TeacherDocumentBlockResponse> blocks =
+                    teacherResourceBlockSearchService.listVisibleEvidenceWindow(
+                            client.tenantId(),
+                            normalizedProfile(client.profile()),
+                            client.subjectId(),
+                            fileDocumentId,
+                            centerBlockOrder,
+                            radius,
+                            limit);
+            return Map.of("fileDocumentId", fileDocumentId, "centerBlockOrder", centerBlockOrder,
+                    "radius", radius, "blocks", blocks);
+        }
+        List<com.doob.mathagent.teacher.block.TeacherDocumentBlockResponse> blocks =
+                teacherResourceBlockSearchService.listVisibleFileBlocks(
+                        client.tenantId(),
+                        normalizedProfile(client.profile()),
+                        client.subjectId(),
+                        fileDocumentId,
+                        limit,
+                        afterBlockOrder);
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("documentId", source.documentId());
-        result.put("sourceChecksum", source.checksum());
-        result.put("files", source.files().stream().map(file -> Map.of(
-                "relativeName", file.relativeName(),
-                "text", file.text())).toList());
+        result.put("fileDocumentId", fileDocumentId);
+        result.put("limit", limit);
+        result.put("afterBlockOrder", afterBlockOrder);
+        result.put("blocks", blocks);
+        if (!blocks.isEmpty()) {
+            result.put("nextAfterBlockOrder", blocks.getLast().blockOrder());
+        }
         return result;
     }
+
 
     /**
      * Returns permission-filtered question stems and stored answers for AI verification.  The query may be empty for
@@ -619,13 +678,15 @@ public class McpToolExecutionService {
     private Object startMultiAgentWriting(
             McpClientRegistryProperties.Client client,
             McpToolCallRequest request) {
-        MultiAgentWritingRequest writingRequest = multiAgentWritingRequest(request);
-        // MCP evidence refs are retrieval handles, never Python authorization. The facade creates one teaching task,
-        // whose persisted evidence is then signed for this exact run by the v2 adapter.
-        MultiAgentWritingResponse response = handoutTaskFacade.startAsync(
+        Map<String, Object> arguments = request == null ? Map.of() : request.arguments();
+        MultiAgentWritingRequest writingRequest = multiAgentWritingRequest(request, requestSubject(client));
+        // The MCP workflow lifecycle must use one durable store end-to-end.  The compatibility facade owns
+        // teaching-task records, whereas this MCP status/resume/export surface reads multi-agent workflow rows.
+        // Starting through the same service keeps the returned opaque workflowId immediately recoverable.
+        MultiAgentWritingResponse response = multiAgentWritingService.startAsync(
                 writingRequest,
                 requestSubject(client),
-                stringArgument(request == null ? Map.of() : request.arguments(), "clientRequestId"));
+                stringArgument(arguments, "clientRequestId"));
         Map<String, Object> result = multiAgentWritingResult(response);
         /*
          * Surface only deterministic parser metadata, never the submitted problem text. This lets an MCP client
@@ -644,7 +705,9 @@ public class McpToolExecutionService {
             McpToolCallRequest request) {
         Map<String, Object> arguments = request == null ? Map.of() : request.arguments();
         String workflowId = normalizedWorkflowId(stringArgument(arguments, "workflowId"));
-        MultiAgentWritingResponse response = handoutTaskFacade.get(workflowId, requestSubject(client));
+        MultiAgentWritingResponse response = multiAgentWritingService.find(
+                workflowId, requestSubject(client))
+                .orElseThrow(() -> new IllegalArgumentException("Multi-agent writing workflow not found"));
         return multiAgentWritingResult(response);
     }
 
@@ -656,7 +719,7 @@ public class McpToolExecutionService {
             McpToolCallRequest request) {
         Map<String, Object> arguments = request == null ? Map.of() : request.arguments();
         String workflowId = normalizedWorkflowId(stringArgument(arguments, "workflowId"));
-        MultiAgentWritingArtifact artifact = handoutTaskFacade.artifact(workflowId, requestSubject(client));
+        MultiAgentWritingArtifact artifact = multiAgentWritingService.artifact(workflowId, requestSubject(client));
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("workflowId", artifact.workflowId());
         result.put("tenantId", artifact.tenantId());
@@ -677,7 +740,7 @@ public class McpToolExecutionService {
             McpToolCallRequest request) {
         Map<String, Object> arguments = request == null ? Map.of() : request.arguments();
         String workflowId = normalizedWorkflowId(stringArgument(arguments, "workflowId"));
-        MultiAgentWritingArtifactExportResponse response = handoutTaskFacade.export(
+        MultiAgentWritingArtifactExportResponse response = multiAgentWritingArtifactExportService.export(
                 workflowId,
                 stringArgumentOrDefault(arguments, "format", "markdown"),
                 "",
@@ -704,8 +767,9 @@ public class McpToolExecutionService {
             McpToolCallRequest request) {
         Map<String, Object> arguments = request == null ? Map.of() : request.arguments();
         String workflowId = normalizedWorkflowId(stringArgument(arguments, "workflowId"));
-        MultiAgentWritingResponse response = handoutTaskFacade.resume(
+        MultiAgentWritingResponse response = multiAgentWritingService.resume(
                 workflowId,
+                multiAgentWritingRequest(request, requestSubject(client)),
                 requestSubject(client));
         return multiAgentWritingResult(response);
     }
@@ -713,7 +777,8 @@ public class McpToolExecutionService {
     /**
      * Converts loose MCP JSON arguments into the backend multi-agent writing request.
      */
-    private static MultiAgentWritingRequest multiAgentWritingRequest(McpToolCallRequest request) {
+    private MultiAgentWritingRequest multiAgentWritingRequest(
+            McpToolCallRequest request, RequestSubject subject) {
         Map<String, Object> arguments = request == null ? Map.of() : request.arguments();
         String questionText = stringArgumentOrDefault(
                 arguments,
@@ -730,7 +795,103 @@ public class McpToolExecutionService {
                 stringListArgument(arguments, "evidenceRefs"),
                 false,
                 normalizedProviderName(stringArgument(arguments, "preferredProviderName")),
-                stringArgument(arguments, "preferredModelCode"));
+                stringArgument(arguments, "preferredModelCode"),
+                initialEvidence(arguments, subject));
+    }
+
+    private List<TeachingEvidence> initialEvidence(Map<String, Object> arguments, RequestSubject subject) {
+        Object raw = arguments.get("initialEvidence");
+        if (!(raw instanceof List<?> rows)) return List.of();
+        List<TeachingEvidence> result = new ArrayList<>();
+        for (Object value : rows) {
+            if (!(value instanceof Map<?, ?> row)) continue;
+            String sourceDocumentId = preferredFileDocumentId(row);
+            String sourceScope = stringValue(row, "sourceScope");
+            String chunkId = stringValue(row, "chunkId");
+            List<Map<String, String>> imageRefs = authoritativeInitialImageRefs(
+                    sourceScope, sourceDocumentId, chunkId, subject);
+            result.add(new TeachingEvidence(
+                    sourceScope,
+                    stringValue(row, "sourceTitle"),
+                    chunkId,
+                    integerValue(row.get("pageNo")),
+                    stringValue(row, "snippet"), "", "",
+                    sourceDocumentId,
+                    stringValue(row, "sourceType"), "", "",
+                    stringValues(row.get("assetIds")),
+                    stringValue(row, "canonicalQuestionNumber"),
+                    imageRefs));
+        }
+        return List.copyOf(result);
+    }
+
+    /**
+     * Keeps block evidence attached to the physical FILE returned by teacher retrieval.
+     * ROOT ids remain retrieval metadata and cannot address the persisted block/image bindings.
+     */
+    private static String preferredFileDocumentId(Map<?, ?> row) {
+        String fileDocumentId = stringValue(row, "fileDocumentId").strip();
+        return fileDocumentId.isBlank() ? stringValue(row, "sourceDocumentId").strip() : fileDocumentId;
+    }
+
+    private static String stringValue(Map<?, ?> row, String key) {
+        Object value = row.get(key);
+        return value == null ? "" : String.valueOf(value);
+    }
+
+    private static int integerValue(Object value) {
+        return value instanceof Number number ? number.intValue() : 0;
+    }
+
+    /**
+     * Resolves initial teacher image rows from the current subject's persisted physical FILE block. MCP input cannot
+     * nominate a figure or path; root retrieval ids remain synchronization scope only.
+     */
+    private List<Map<String, String>> authoritativeInitialImageRefs(
+            String sourceScope, String documentId, String blockId, RequestSubject subject) {
+        if (!"TEACHER_RESOURCE".equals(sourceScope) || teacherResourceBlockSearchService == null
+                || subject == null || documentId == null || documentId.isBlank() || blockId == null || blockId.isBlank()) {
+            return List.of();
+        }
+        try {
+            return teacherResourceBlockSearchService.listVisibleBlocks(
+                            subject.tenantId(), subject.subjectType(), subject.subjectId(), documentId)
+                    .stream()
+                    .filter(block -> blockId.equals(block.blockId()) || blockId.equals(block.externalBlockId()))
+                    .findFirst()
+                    .map(block -> imageRefsJson(block.imageRefs()))
+                    .orElse(List.of());
+        } catch (IllegalArgumentException | IllegalStateException exception) {
+            return List.of();
+        }
+    }
+
+    private static List<Map<String, String>> imageRefsJson(String rawJson) {
+        if (rawJson == null || rawJson.isBlank()) return List.of();
+        try {
+            com.fasterxml.jackson.databind.JsonNode root = new com.fasterxml.jackson.databind.ObjectMapper().readTree(rawJson);
+            if (root == null || !root.isArray()) return List.of();
+            List<Map<String, String>> result = new ArrayList<>();
+            for (com.fasterxml.jackson.databind.JsonNode item : root) {
+                if (item == null || !item.isObject() || result.size() >= 12) continue;
+                String markdownLine = item.path("markdownLine").asText("").strip();
+                String logicalPath = item.path("logicalPath").asText("").strip();
+                if (markdownLine.isBlank() || logicalPath.isBlank()
+                        || markdownLine.contains("http://") || markdownLine.contains("https://")
+                        || markdownLine.contains("data:") || logicalPath.contains("..") || logicalPath.contains("\\\\")) {
+                    continue;
+                }
+                result.add(Map.of("markdownLine", markdownLine, "logicalPath", logicalPath));
+            }
+            return List.copyOf(result);
+        } catch (java.io.IOException exception) {
+            return List.of();
+        }
+    }
+
+    private static List<String> stringValues(Object value) {
+        if (!(value instanceof List<?> values)) return List.of();
+        return values.stream().filter(item -> item != null && !String.valueOf(item).isBlank()).map(String::valueOf).toList();
     }
 
     /**
@@ -1033,6 +1194,9 @@ public class McpToolExecutionService {
             row.put("mergedScore", reciprocalRankScore(index));
             row.put("title", hit.documentTitle());
             row.put("documentId", hit.documentId());
+            row.put("sourceDocumentId", preferredFileDocumentId(hit));
+            row.put("fileDocumentId", preferredFileDocumentId(hit));
+            row.put("rootDocumentId", hit.rootDocumentId());
             row.put("blockId", hit.blockId());
             row.put("pageNo", hit.pageNo());
             row.put("sectionTitle", hit.section());
@@ -1068,7 +1232,13 @@ public class McpToolExecutionService {
     private static String transparentTeacherReference(TeacherResourceBlockSearchResponse.Hit hit) {
         String scope = hit.sourceType() == null || hit.sourceType().isBlank() ? "teacher_resource" : hit.sourceType();
         String group = hit.permissionScope() == null || hit.permissionScope().isBlank() ? "TEACHER_SHARED" : hit.permissionScope();
-        return "feishu://group/" + group + "/resource/" + hit.documentId() + "/block/" + hit.blockId();
+        return "feishu://group/" + group + "/resource/" + preferredFileDocumentId(hit) + "/block/" + hit.blockId();
+    }
+
+    /** Uses the physical FILE identity because the associated block and source assets are persisted there. */
+    private static String preferredFileDocumentId(TeacherResourceBlockSearchResponse.Hit hit) {
+        String fileDocumentId = hit.fileDocumentId() == null ? "" : hit.fileDocumentId().strip();
+        return fileDocumentId.isBlank() ? (hit.documentId() == null ? "" : hit.documentId().strip()) : fileDocumentId;
     }
 
     private static String transparentCanonicalReference(TeachingEvidence evidence) {
@@ -1475,6 +1645,7 @@ public class McpToolExecutionService {
         return switch (providerName.strip().toLowerCase()) {
             case "qwen", "qianwen", "通义千问", "千问" -> "dashscope";
             case "doubao", "豆包", "volcengine" -> "ark";
+            case "glm", "zhipu", "chatglm", "智谱" -> "glm";
             default -> providerName;
         };
     }

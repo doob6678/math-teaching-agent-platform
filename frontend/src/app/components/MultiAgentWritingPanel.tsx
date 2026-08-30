@@ -1045,6 +1045,7 @@ function providerLabel(provider: string) {
     openai: "OpenAI",
     dashscope: "通义千问",
     deepseek: "DeepSeek",
+    glm: "智谱 GLM",
     ark: "火山方舟",
   };
   return labels[provider] ?? provider;

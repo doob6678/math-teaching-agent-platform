@@ -6,12 +6,6 @@
 
 ---
 
-## ⚠️ 必读：[TODO.md](TODO.md) — 已知问题与修复清单
-
-**任何人对本项目做开发、测试、验收、面试准备之前，必须先阅读 [TODO.md](TODO.md)。** 该文件列出全线源码审查发现的已知问题（P0/P1/P2），含精准源码位置、影响评估和修复建议。其中 P0 级问题影响核心功能正确性，不得以"功能已上线"绕过。
-
----
-
 ## 高中数学来源与讲义调用流程
 
 高考原卷的 GPU 资产提取、Terra 页级转写、逐题 Markdown 发布、Milvus 入库、run-scoped 精读授权和 AI 选图/PDF 物化流程见[高中数学来源与讲义调用流程](docs/high-school-source-and-handout-flow.md)。
@@ -20,12 +14,15 @@
 
 开发前先阅读项目指令 [AGENTS.md](AGENTS.md)，交付前逐项执行[讲义架构验收清单](docs/handout-architecture-acceptance-checklist.md)。以下约束适用于教师版、学生版、课堂讲解版及其 PDF：
 
+！！禁止给AI传入UUID等会让AI迷惑的资源信息，必须语义明确，img01等这种，禁止返回超长UUID，严禁返回，这是架构严重错误！！
+
 1. **只有 AI/Python Writer** 可以创作任何可见教学正文，并决定图片是否使用及其位置；Java 和前端只做通用鉴权、持久化、格式化/渲染、可见性隔离与校验。
 2. Java 和前端不得写入固定教学文案、按题目/知识点分支、默认标题/答案/提示，也不得自行选择或回退生成示意图、图片。
 3. 图片领域和模型契约只以不透明的 `evidenceRef` 加 `assetId` 关联；禁止传递文件系统路径、URL、Base64 或 AI 生成的 LaTeX 图片命令。仅在权威 `evidenceRef` 与 `assetId` 已获授权且图片选择已校验后，通用渲染器可生成内部 LaTeX 图片标记；没有有效选择即不展示图片。
 4. 高中来源材料必须遵循：GPU PaddleOCR/版面分析生成题图 PNG、`question-assets.jsonl`、`assets.md` 和源文件哈希报告，再将完整页图交给默认 Luna（或显式 Terra）转写。题图不作为单题视觉输入；其来源、页码、bbox、哈希和绑定规则会写入题目 `metadata.questionAssets`，并与向量入库和讲义资产共用。
-5. **RAG 检索必须由 AI Agent 自主执行**：AI 通过 Java 提供的 MCP 工具（`handout-context`、`handout-document-read`、`handout-document-search`、`handout-teacher-resource-search`）自行构造检索参数并调用，Java 仅提供已授权的不透明 `evidenceRef`/`documentRef` 和受限读取接口。禁止 Java 或前端直接将用户输入作为检索 query，禁止在本机文件系统中直接搜索或读取资料，所有资源必须先入库到向量数据库（Milvus）后通过受控检索链路访问。
-6. 交付必须同时通过：来源证据和完整来源名、AI 独占可见内容、学生答案隔离、真实来源图片、中文与公式检查、PDF 视觉审阅。历史输出不能替代本次验收证据。
+5. **高考题讲义图片只允许使用题目级 `figures/` 资产**：以 `output/math-paper-corpus/<完整来源文件名>/figures/` 中由题目 `questions[].assets`/`assetIds` 明确绑定、且题目 Markdown 有对应引用的图片为唯一合格来源。`page-images/` 是整页定位、OCR、版面审计和来源复核的内部产物，禁止进入 AI 选图、授权资产、讲义 Markdown、XeLaTeX 物化和任何 PDF；禁止对页面进行二次切分来补图。题目没有可核验的 `figures/` 引用时，高考只使用题目文字，不显示图片。教材页面图同样不进入讲义 PDF。
+6. **RAG 检索必须由 AI Agent 自主执行**：AI 通过 Java 提供的 MCP 工具（`handout-context`、`handout-document-read`、`handout-document-search`、`handout-teacher-resource-search`）自行构造检索参数并调用，Java 仅提供已授权的不透明 `evidenceRef`/`documentRef` 和受限读取接口。禁止 Java 或前端直接将用户输入作为检索 query，
+7. 交付必须同时通过：来源证据和完整来源名、AI 独占可见内容、学生答案隔离、真实来源图片、中文与公式检查、PDF 视觉审阅。历史输出不能替代本次验收证据。
 
 ---
 
@@ -265,7 +262,9 @@ wsl.exe -d Ubuntu -- bash -lc "cd /mnt/c/Users/doob/Desktop/code/dev/math_agent_
 3. 发布 hash 绑定的完整原卷 Markdown、题级 Markdown、manifest、页图与题图；未完成 manifest 或任一哈希校验时 Java 必须 fail closed。
 4. 使用本机真实 embedding 写入统一高考 Milvus collection `gaokao_math`，然后 flush 并以刚写入记录作真实 recall。
 
-高考题统一使用 `gaokao_math` collection；之后任何高考题导入不得新建按年份或模型拆分的 collection。外部批量脚本不能绕开后端并发租约，也不得并行启动多个发布任务。AI 通过 run-scoped opaque `documentRef` 调用固定题级读取接口；用户可见来源标题保持真实 UTF-8 文件名，AI 不接触路径、URL、Base64 或 shell。
+高考题统一使用 `gaokao_math` collection；之后任何高考题导入不得新建按年份或模型拆分的 collection。题目向量的最终主键固定为 `UUIDv5(URL, "question\\n" + sourceSha256 + "\\n" + numericQuestionNumber)`：同一来源同一题号只有一条记录，同一来源的不同题号保持独立。题号修复、跨页合并和答案/解析挂载全部在最终 ID 生成前完成；答案或解析变化不会改变题目身份。入库使用 embedding 批次 10、Milvus upsert 有界批次（默认 100）和单次最终 flush，历史清理只允许在 `gaokao_math` 中按当前 canonical replacement 白名单的 `sourceFile/documentFullName` 服务端过滤执行，不读取全量 collection，也不按语义、答案或关键词去重。
+
+每个新来源必须先完成完整 PDF、Terra 页级 evidence、题目级 `figures/` 资产、`source-manifest.json` 和 `questions/*.md` 的 canonical replacement；只有 replacement 已覆盖该来源时才允许清理其历史行。未覆盖来源即使在召回中出现，也必须保留为残留风险并使资产验收失败，禁止猜测删除。真实去重对照证据见 `output/acceptance/knowledge-point-recall-baseline-pre-dedup-20260826.json`、`output/acceptance/gaokao-ingestion-preflight-20260826.json`、`output/math-paper-transcription-runs/terra-gaokao-20260820T232559Z-975d2574-report.json` 和 `output/acceptance/knowledge-point-recall-report-after-exact-dedup-20260826.json`。
 
 ### Final local startup contract
 
@@ -275,12 +274,17 @@ worker, retry, or concurrency environment variables. Their fixed values live in 
 Redis `6380`, Milvus `19531`, `gaokao_math`, `local_bge_embedding` (512 dimensions), and AI concurrency `20`.
 The AI worker owns provider credentials and endpoints. The backend receives only route metadata and signs scoped grants; set `MATH_AGENT_PROVIDER_ROUTE_GRANT_SECRET` and the provider enable flags in the deployment environment.
 
+GLM（智谱）走 Z.ai 的 Anthropic 兼容端点，不是 OpenAI 格式：worker 内 `app/anthropic_compat.py` 在传输边界完成 OpenAI↔Anthropic 请求/响应/SSE 转换，六个 runtime 调用点只按 provider 名分支。`glm-5.3-flash` 强制思考（网关不支持关闭，仅 low/high/max 三档，默认弱思考 `MATH_AGENT_GLM_THINKING_EFFORT=low`），思考计入 `max_tokens`（下限 `MATH_AGENT_GLM_MIN_MAX_TOKENS=2048`），且与 `temperature` 互斥（适配层自动丢弃）。凭据：`GLM_API_KEY` + `GLM_BASE_URL`（默认 `https://api.z.ai/api/anthropic`），仅注入 ai-worker。
+
 ```powershell
 $env:OPENAI_API_KEY = "your-provider-key"
+$env:GLM_API_KEY = "your-glm-key"
 wsl.exe -d Ubuntu -- bash -lc "cd /mnt/c/Users/doob/Desktop/code/dev/math_agent_rag && docker compose up -d --build"
 ```
 
 After the stack is healthy, open `http://127.0.0.1:5173`. Do not use the obsolete `5174` or `8081` ports.
+
+构建经验：worker 使用本机已验证的 `math-agent-rag-ai-worker:deps-20260827` GPU 依赖基底；换机器首次使用或修改 `requirements.txt` 时必须先准备同名且重新校验的依赖基底。源码改动只重建 `COPY app` 层，不会重新 pip 安装或下载 `/models`；禁止使用 `--cache-from image:tag`（DaoCloud 代理会返回 403）及任何 prune。
 
 2024 视觉入库会读取这一个全局值并据此创建最多相同数量的页任务；其最终报告的 `concurrency.globalLimit` 与 `concurrency.effectivePageWorkers`、以及每页审计的 `taskSequence`、`workerThread`、`taskStartedAt`、`taskCompletedAt` 共同证明没有绕开全局控制。
 

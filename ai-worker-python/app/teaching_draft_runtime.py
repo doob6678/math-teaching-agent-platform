@@ -20,6 +20,7 @@ import requests
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
+from app import anthropic_compat
 from app.model_review_runtime import BoundedModelReviewController, ModelReviewExhausted, ModelReviewMetadata
 from app.usage import UsageEvent, UsageLedger, cost_for, fallback_tokens
 
@@ -298,11 +299,12 @@ class TeachingDraftRuntime:
         return messages
 
     @staticmethod
-    def _review_prompt(turn: int, prior: str | None, codes: tuple[str, ...]) -> str:
+    def _review_prompt(turn: int, prior: str | None, active_hash: str, codes: tuple[str, ...]) -> str:
         if turn == 1:
             return "生成候选教学草稿并完成严格自审。"
         return json.dumps({
             "previousCandidate": prior or "",
+            "baseCandidateHash": active_hash,
             "feedbackCodes": list(codes),
             "instruction": "仅修正候选以满足结构与学生安全合同，再返回严格信封。",
         }, ensure_ascii=False, separators=(",", ":"))
@@ -316,7 +318,7 @@ class TeachingDraftRuntime:
             attempt: int,
     ) -> tuple[str, dict[str, int | float]]:
         """Calls an OpenAI-compatible provider with the remaining graph deadline."""
-        api_key_name = {"openai": "OPENAI_API_KEY", "deepseek": "DEEPSEEK_API_KEY", "ark": "ARK_API_KEY"}.get(provider, "")
+        api_key_name = {"openai": "OPENAI_API_KEY", "deepseek": "DEEPSEEK_API_KEY", "ark": "ARK_API_KEY", "glm": "GLM_API_KEY"}.get(provider, "")
         api_key = os.getenv(api_key_name) if api_key_name else None
         if not api_key:
             raise HTTPException(status_code=503, detail=f"{provider} API key is missing")
@@ -324,18 +326,26 @@ class TeachingDraftRuntime:
             "openai": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
             "deepseek": "https://api.deepseek.com/v1",
             "ark": "https://ark.cn-beijing.volces.com/api/v3",
+            "glm": anthropic_compat.default_base_url(),
         }.get(provider, "")
         base_url = os.getenv(f"{provider.upper()}_BASE_URL", default_base).rstrip("/")
         timeout = self._remaining_timeout(request)
         try:
-            response = self._session.post(
-                f"{base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json={"model": model, "messages": messages, "temperature": 0.2},
-                timeout=timeout,
-            )
-            response.raise_for_status()
-            data = response.json()
+            if anthropic_compat.is_anthropic_provider(provider):
+                # GLM Anthropic 兼容端点：请求/响应转换收敛在适配层，temperature 由适配层丢弃（与 thinking 互斥）。
+                data = anthropic_compat.post_chat_completion(
+                    self._session, api_key, base_url,
+                    {"model": model, "messages": messages, "temperature": 0.2}, timeout,
+                )
+            else:
+                response = self._session.post(
+                    f"{base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    json={"model": model, "messages": messages, "temperature": 0.2},
+                    timeout=timeout,
+                )
+                response.raise_for_status()
+                data = response.json()
             content = str(data["choices"][0]["message"].get("content") or "")
             usage = data.get("usage") or {}
             prompt = int(usage.get("prompt_tokens", 0) or 0)

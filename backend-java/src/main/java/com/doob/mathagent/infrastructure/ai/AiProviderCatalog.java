@@ -129,7 +129,8 @@ public class AiProviderCatalog {
                 properties.getOpenai(),
                 properties.getDashscope(),
                 properties.getDeepseek(),
-                properties.getArk());
+                properties.getArk(),
+                properties.getGlm());
     }
 
     /**
@@ -183,6 +184,8 @@ public class AiProviderCatalog {
             case "dashscope" -> List.of("qwen3.6-flash", "qwen3.7-plus", "qwen3.7-max");
             case "deepseek" -> List.of("deepseek-v4-flash", "deepseek-v4-pro");
             case "ark" -> List.of("doubao-seed-2-0-lite-260428", "doubao-seed-2.0-mini");
+            // 只放行已实测通过的 glm-5.3-flash（Z.ai Anthropic 兼容端点）；未验证的模型编码不得进入允许列表。
+            case "glm" -> List.of("glm-5.3-flash");
             default -> List.of();
         };
     }
@@ -208,6 +211,7 @@ public class AiProviderCatalog {
             case "dashscope" -> 1;
             case "deepseek" -> 2;
             case "ark" -> 3;
+            case "glm" -> 4;
             default -> 99;
         };
     }

@@ -29,6 +29,7 @@ from langgraph.graph import END, START, StateGraph
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, StrictBool, ValidationError, field_validator, model_validator
 
 from app.ai_run_runtime import ProviderRoute
+from app import anthropic_compat
 from app.model_review_runtime import ModelReviewMetadata
 from app.sse import iter_sse_data_events
 from app.usage import HandoutMetricsLedger, UsageEvent, UsageLedger, cost_for, fallback_tokens
@@ -341,6 +342,7 @@ class HandoutRunRequest(BaseModel):
     writing_goal: str = Field(alias="writingGoal", min_length=1, max_length=1200)
     question_text: str = Field(alias="questionText", min_length=1, max_length=16000)
     evidence_refs: list[str] = Field(default_factory=list, alias="evidenceRefs", max_length=24)
+    initial_evidence: list[dict[str, Any]] = Field(default_factory=list, alias="initialEvidence", max_length=24)
     graph_version: str = Field(default=DEFAULT_GRAPH_VERSION, alias="graphVersion", min_length=1, max_length=40)
     idempotency_key: str = Field(default="", alias="idempotencyKey", max_length=160)
     trace_id: str | None = Field(default=None, alias="traceId", max_length=120)
@@ -360,6 +362,7 @@ class HandoutRunRequest(BaseModel):
             # Question markers are line-oriented; collapsing their newlines would silently merge a batch into one stem.
             "question_text": self.question_text.strip()[:16000],
             "evidence_refs": list(dict.fromkeys(_bounded(item, 240) for item in self.evidence_refs if item.strip()))[:24],
+            "initial_evidence": [dict(item) for item in self.initial_evidence[:24] if isinstance(item, dict)],
             "graph_version": _bounded(self.graph_version, 40) or DEFAULT_GRAPH_VERSION,
             # Legacy callers used runId as the retry identity. Preserve that deterministic behavior during rollout.
             "idempotency_key": _bounded(self.idempotency_key, 160) or self.run_id,
@@ -370,49 +373,35 @@ class HandoutRunRequest(BaseModel):
 
 
 class EvidenceItem(BaseModel):
-    """Compact permission-filtered RAG evidence; refs and source-image placement stay opaque."""
+    """Compact permission-filtered evidence; source images remain ordinary Markdown references."""
 
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
     ref: str = Field(default="", max_length=240)
+    transparent_ref: str = Field(default="", alias="transparentRef", max_length=700)
     title: str = Field(default="", max_length=600)
     document_name: str = Field(default="", alias="documentName", max_length=600)
     document_ref: str = Field(default="", alias="documentRef", max_length=240)
     page_no: int = Field(default=0, alias="pageNo", ge=0)
-    excerpt: str = Field(default="", max_length=3000)
-    asset_ids: list[str] = Field(default_factory=list, alias="assetIds", max_length=12)
-    asset_id: str | None = Field(default=None, alias="assetId", max_length=160)
+    excerpt: str = Field(default="", max_length=12000)
+    source_relative_path: str = Field(default="", alias="sourceRelativePath", max_length=1200)
+    markdown: str = Field(default="", max_length=12000)
+    image_refs: list[dict[str, str]] = Field(default_factory=list, alias="imageRefs", max_length=50)
 
-    @model_validator(mode="after")
-    def normalize_asset_ids(self) -> "EvidenceItem":
-        """Preserves only broker-issued opaque asset identifiers, with the old single field as read compatibility."""
-        values = [str(value).strip() for value in [*self.asset_ids, self.asset_id] if str(value or "").strip()]
-        self.asset_ids = list(dict.fromkeys(values))[:12]
-        self.asset_id = self.asset_ids[0] if self.asset_ids else None
-        return self
-
-
-class AssetPlacement(BaseModel):
-    """AI-selected authorized source-image group; Java later validates and materializes it without selecting assets."""
-
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-    question_number: int = Field(alias="questionNumber", ge=1, le=100)
-    asset_ids: list[str] = Field(alias="assetIds", min_length=1, max_length=2)
-    anchor: str = Field(pattern="^(question|explanation_after_question)$")
-    layout: str = Field(pattern="^(single|vertical_sequence|two_column)$")
-    variants: list[str] = Field(min_length=1, max_length=3)
-    caption: str = Field(default="", max_length=1000)
-
-    @model_validator(mode="after")
-    def validate_contract(self) -> "AssetPlacement":
-        self.asset_ids = list(dict.fromkeys(str(value).strip() for value in self.asset_ids if str(value).strip()))
-        self.variants = list(dict.fromkeys(str(value).strip() for value in self.variants if str(value).strip()))
-        if not self.asset_ids or len(self.asset_ids) > 2:
-            raise ValueError("asset placement requires one or two assetIds")
-        if not set(self.variants).issubset({"teacher_writer", "student_writer", "lecture_writer"}):
-            raise ValueError("asset placement has unsupported variant")
-        return self
+    @field_validator("image_refs", mode="before")
+    @classmethod
+    def validate_image_refs(cls, value: Any) -> list[dict[str, str]]:
+        if not isinstance(value, list):
+            return []
+        result: list[dict[str, str]] = []
+        for item in value[:50]:
+            if not isinstance(item, dict):
+                continue
+            line = str(item.get("markdownLine") or "")
+            logical = str(item.get("logicalPath") or "")
+            if line and logical and "http://" not in line and "https://" not in line and ".." not in logical:
+                result.append({"markdownLine": line[:12000], "logicalPath": logical[:1200]})
+        return result
 
 
 class PlannedQuestion(BaseModel):
@@ -424,7 +413,6 @@ class PlannedQuestion(BaseModel):
     knowledge_point: str = Field(default="", alias="knowledgePoint", max_length=600)
     teaching_sequence: list[str] = Field(default_factory=list, alias="teachingSequence", min_length=1, max_length=8)
     figure_required: bool = Field(default=False, alias="figureRequired")
-    asset_placements: list[AssetPlacement] = Field(default_factory=list, alias="assetPlacements", max_length=2)
 
 
 class WritingPlan(BaseModel):
@@ -450,9 +438,7 @@ class TeacherBlueprint(BaseModel):
     title: str = Field(min_length=1, max_length=600)
     markdown: str = Field(min_length=DEFAULT_MIN_DOCUMENT_CHARS, max_length=DEFAULT_MAX_OUTPUT_CHARS)
     citations: list[str] = Field(default_factory=list, max_length=24)
-    asset_placements: list[AssetPlacement] = Field(default_factory=list, alias="assetPlacements", max_length=48)
-    # The blueprint retains writer-authored projection cards as opaque structure. Both direct card arrays and the
-    # legacy cards container are accepted because neither Python nor Java may rewrite their teaching semantics.
+    # A preserved source-image Markdown row in markdown is the only image placement signal.
     lecture_cards: list[dict[str, Any]] | dict[str, list[dict[str, Any]]] = Field(
         default_factory=list,
         alias="lectureCards",
@@ -520,8 +506,7 @@ class EvidenceSnapshot(BaseModel):
 
 
 class ResourceCollectionAction(BaseModel):
-    """One bounded opaque-broker action selected by the private collection decision."""
-
+    """A private decision can only read already-authorized documents; retrieval is owned by the prior curation step."""
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     kind: str = Field(min_length=1, max_length=40)
@@ -532,12 +517,12 @@ class ResourceCollectionAction(BaseModel):
 
     @model_validator(mode="after")
     def validate_broker_scope(self) -> "ResourceCollectionAction":
-        """Allows only fixed broker actions and their minimum opaque arguments."""
-        if self.kind not in {"document_read", "document_page_read", "document_search", "canonical_question_read", "teacher_resource_search"}:
+        """Allows only sequential reads against opaque run-authorized document references."""
+        if self.kind not in {"document_read", "document_page_read", "canonical_question_read", "teacher_resource_search"}:
             raise ValueError("unsupported collection action")
-        if self.kind in {"document_read", "document_page_read", "document_search", "canonical_question_read"} and not self.document_ref:
+        if self.kind in {"document_read", "document_page_read", "canonical_question_read"} and not self.document_ref:
             raise ValueError("document action requires documentRef")
-        if self.kind in {"document_search", "teacher_resource_search"} and not self.query.strip():
+        if self.kind == "teacher_resource_search" and not self.query.strip():
             raise ValueError("search action requires query")
         if self.kind in {"document_read", "canonical_question_read"} and (self.query or self.page_no or self.page_radius):
             raise ValueError(f"{self.kind} cannot include query or page selection")
@@ -568,7 +553,7 @@ class WriterDocument(BaseModel):
     title: str = Field(min_length=1, max_length=600)
     markdown: str = Field(min_length=1, max_length=DEFAULT_MAX_OUTPUT_CHARS)
     citations: list[str] = Field(default_factory=list, max_length=24)
-    asset_placements: list[AssetPlacement] = Field(default_factory=list, alias="assetPlacements", max_length=48)
+    # A preserved source-image Markdown row in markdown is the only image placement signal.
     warnings: list[str] = Field(default_factory=list, max_length=24)
 
 
@@ -1247,6 +1232,8 @@ class HandoutRuntime:
             self._telemetry_by_run[request.run_id] = telemetry
         telemetry.sample_system()
         started_state: HandoutRunState = {"request": request}
+        if request.initial_evidence:
+            started_state["evidence"] = EvidenceSnapshot(items=[EvidenceItem.model_validate(item) for item in request.initial_evidence])
         existing = self._checkpoint.load(request.run_id) if request.resume else None
         if existing:
             saved_request = existing[1].get("request") if isinstance(existing[1], dict) else None
@@ -1259,7 +1246,10 @@ class HandoutRuntime:
                     raise HTTPException(status_code=409, detail="GRAPH_VERSION_INCOMPATIBLE")
                 if saved_idempotency_key != request.idempotency_key:
                     raise HTTPException(status_code=409, detail="IDEMPOTENCY_KEY_INCOMPATIBLE")
-        if existing and existing[0] == "COMPLETED" and existing[1].get("package"):
+                saved_refs = saved_request.get("evidenceRefs") or []
+                if list(saved_refs) != list(request.evidence_refs):
+                    existing = None
+        if existing and not request.initial_evidence and existing[0] == "COMPLETED" and existing[1].get("package"):
             return HandoutDraftPackage.model_validate(existing[1]["package"])
         # A v1 checkpoint can already contain all validated audience documents. Preserve that completed work during
         # the v2 rollout instead of reopening provider calls merely to recreate intermediate review artifacts.
@@ -1278,23 +1268,26 @@ class HandoutRuntime:
             # A partially executed v1 run cannot safely infer a visible plan from an old teacher document. Explicitly
             # reject it so Java can start the v2 staged artifact rather than silently spending model calls.
             raise HTTPException(status_code=409, detail="LEGACY_CHECKPOINT_REQUIRES_RESTART")
-        if existing and existing[1].get("evidence"):
+        if existing and existing[1].get("evidence") and not request.initial_evidence:
             started_state["evidence"] = EvidenceSnapshot.model_validate(existing[1]["evidence"])
-        if existing and existing[1].get("writingPlan"):
+        # Evidence-refresh recovery deliberately regenerates every downstream artifact. Reusing a plan, blueprint, or
+        # writer document from the completed checkpoint would bind the refreshed source set to old visible content.
+        reuse_existing_artifacts = bool(existing) and not request.initial_evidence
+        if reuse_existing_artifacts and existing[1].get("writingPlan"):
             saved_plan = WritingPlan.model_validate(existing[1]["writingPlan"])
             if request.operation == "PLAN_REVISE":
                 if saved_plan.revision_round >= DEFAULT_PLAN_REVISION_LIMIT:
                     raise HTTPException(status_code=409, detail="PLAN_REVISION_EXHAUSTED")
             else:
                 started_state["writing_plan"] = saved_plan
-        if existing and existing[1].get("teacherBlueprint"):
+        if reuse_existing_artifacts and existing[1].get("teacherBlueprint"):
             saved_blueprint = TeacherBlueprint.model_validate(existing[1]["teacherBlueprint"])
             if request.operation == "BLUEPRINT_REVISE":
                 if saved_blueprint.revision_round >= DEFAULT_BLUEPRINT_REVISION_LIMIT:
                     raise HTTPException(status_code=409, detail="TEACHER_BLUEPRINT_REVISION_EXHAUSTED")
             else:
                 started_state["teacher_blueprint"] = saved_blueprint
-        if existing and existing[1].get("writers"):
+        if reuse_existing_artifacts and existing[1].get("writers"):
             # A node checkpoint is authoritative after queue redelivery. Resumed nodes return validated artifacts
             # without opening another provider socket, so retries cannot silently double token cost.
             started_state["writers"] = [WriterDocument.model_validate(item) for item in existing[1]["writers"]]
@@ -1421,28 +1414,42 @@ class HandoutRuntime:
         request = state["request"]
         self._check_deadline(request)
         started = time.monotonic()
-        if state.get("evidence") is not None:
+        supplied_evidence = state.get("evidence")
+        # A recovery request can carry freshly re-authorized initial evidence. That evidence is not a completed
+        # collection stage: it must still pass the document-specific deep-read gate before planning. Only a state
+        # that has already reached a downstream artifact may reuse its previously collected evidence.
+        if supplied_evidence is not None and (
+                state.get("writing_plan") is not None
+                or state.get("teacher_blueprint") is not None
+                or bool(state.get("writers"))):
             self._record_node(request, "resource_curation", started, "RESUMED")
-            return {"evidence": state["evidence"]}
+            return {"evidence": supplied_evidence}
         payload = {
             "runId": request.run_id,
             "evidenceRefs": request.evidence_refs,
             "limit": int(os.getenv("MATH_AGENT_HANDOUT_CONTEXT_LIMIT", str(DEFAULT_CONTEXT_LIMIT))),
         }
         try:
-            response = self._java_context(payload) if request.deadline_epoch_ms is None else self._java_context(
-                payload, deadline_epoch_ms=request.deadline_epoch_ms)
-            evidence = EvidenceSnapshot.model_validate(response)
-            # Direct context is intentionally not deep-read. Only a later AI-selected opaque document action may
-            # materialize original-Markdown blocks into inspected_items.
-            self._save_collection_diagnostic(request, {
-                "directContextEvidence": evidence.model_dump(by_alias=True, exclude_none=True),
-                "initialContextPayload": payload, "initialContextResponse": response,
-            })
+            if supplied_evidence is not None:
+                evidence = supplied_evidence
+                self._save_collection_diagnostic(request, {
+                    "directContextEvidence": evidence.model_dump(by_alias=True, exclude_none=True),
+                    "initialContextPayload": {"initialEvidence": True, "runId": request.run_id},
+                })
+            else:
+                response = self._java_context(payload) if request.deadline_epoch_ms is None else self._java_context(
+                    payload, deadline_epoch_ms=request.deadline_epoch_ms)
+                evidence = EvidenceSnapshot.model_validate(response)
+                # Direct context is intentionally not deep-read. Only a later AI-selected opaque document action may
+                # materialize original-Markdown blocks into inspected_items.
+                self._save_collection_diagnostic(request, {
+                    "directContextEvidence": evidence.model_dump(by_alias=True, exclude_none=True),
+                    "initialContextPayload": payload, "initialContextResponse": response,
+                })
             for iteration in range(1, DEFAULT_COLLECTION_DECISION_LIMIT + 1):
                 decision, usage, provider, model, review = self._reviewed_model_candidate(
                     request, "resource_curation", self._resource_collection_prompt(request, evidence, iteration),
-                    self._validate_collection_decision,
+                    lambda candidate: self._validate_collection_decision(candidate, evidence),
                 )
                 self._save_collection_diagnostic(request, {"iterations": {str(iteration): {
                     "decisionPrompt": self._resource_collection_prompt(request, evidence, iteration),
@@ -1456,7 +1463,7 @@ class HandoutRuntime:
                         request, state, evidence, iteration, "SUFFICIENT", started, usage, provider, model, review)
                 # The final decision is a forced handoff boundary. Its prompt forbids another query, and any malformed
                 # query is ignored rather than extending collection beyond the fixed decision cap.
-                if iteration == DEFAULT_COLLECTION_DECISION_LIMIT:
+                if iteration == DEFAULT_COLLECTION_DECISION_LIMIT and not decision.actions:
                     if not any(item.ref for item in evidence.items):
                         self._terminate_insufficient_evidence(request, evidence, iteration, "NO_USABLE_EVIDENCE")
                     return self._handoff_collected_evidence(
@@ -1477,10 +1484,13 @@ class HandoutRuntime:
                     "actionCount": len(actions), "newEvidenceCount": new_count, "newInspectedCount": new_inspected_count,
                     "evidenceCount": len(evidence.items),
                 })
+                if iteration == DEFAULT_COLLECTION_DECISION_LIMIT:
+                    return self._handoff_collected_evidence(
+                        request, state, evidence, iteration, "DECISION_CAP_IMAGE_READ_HANDOFF", started, usage, provider, model, review)
                 if not new_count and not new_inspected_count and any(item.ref for item in evidence.items):
                     # A selected read/search that returns no usable block is still a private observation the next
                     # decision needs in order to choose a different authorized document or teacher-resource search.
-                    selected_document_action = any(action.kind in {"document_read", "document_search", "canonical_question_read"} for action in actions)
+                    selected_document_action = any(action.kind in {"document_read", "document_page_read", "canonical_question_read"} for action in actions)
                     if selected_document_action:
                         self._save_collection_diagnostic(request, {"iterations": {str(iteration): {
                             "collectionObservation": "UNREADABLE_OR_EMPTY_DOCUMENT",
@@ -1528,30 +1538,54 @@ class HandoutRuntime:
         self._checkpoint.save_private_state(request.run_id, {"privateDiagnostics": {"resourceCollection": merged}})
 
     @staticmethod
-    def _validate_collection_decision(candidate: Any) -> ResourceCollectionDecision:
-        """A sufficient decision cannot also schedule a search, and an insufficient one needs an explicit gap."""
+    def _validate_collection_decision(candidate: Any, evidence: EvidenceSnapshot) -> ResourceCollectionDecision:
+        """Requires a selected original-source read before planning can hand off image-bearing evidence."""
         decision = ResourceCollectionDecision.model_validate(candidate)
         if decision.sufficient and decision.actions:
             raise ValueError("resource collection: sufficient decision cannot include actions")
+        if decision.sufficient and any(item.document_ref for item in evidence.items) and not evidence.inspected_items:
+            raise ValueError("resource collection: inspectable evidence requires an authorized deep read before handoff")
+        image_document_refs = {
+            item.document_ref or item.ref
+            for item in evidence.items
+            if item.image_refs
+        }
+        inspected_image_document_refs = {
+            item.document_ref or item.ref
+            for item in evidence.inspected_items
+            if item.image_refs
+        }
+        missing_image_document_refs = image_document_refs - inspected_image_document_refs
+        selected_document_refs = {
+            action.document_ref
+            for action in decision.actions
+            if action.kind in {"document_read", "document_page_read", "canonical_question_read"}
+        }
+        # Image-bearing sources are deep-read automatically at the bounded handoff. The decision model may focus its
+        # limited actions on remaining evidence without restating a Java-authorized source-image document.
         return decision
 
     def _resource_collection_prompt(self, request: HandoutRunRequest, evidence: EvidenceSnapshot, iteration: int) -> str:
         """Supplies the private decision model only current run-authorized evidence and its own prior collection state."""
         final_iteration = iteration >= DEFAULT_COLLECTION_DECISION_LIMIT
         action_rules = (
-            "当前资料充分时必须立即停止并返回 sufficient=true、actions=[]。仅当存在明确来源缺口且未到上限时，"
-            "才可请求最多 4 个有界动作。"
+            "直接命中包含可读 documentRef 时，必须先选择至少一个 document_read、document_page_read 或 canonical_question_read，完成原文深读后才能返回 sufficient=true、actions=[]；仅当没有可读 documentRef 或原文已精读充分时才可停止。"
+            "transparentRef 以 gaokao:// 开头的 documentRef 必须选择 canonical_question_read 精读，不得对它使用 document_read。"
             if not final_iteration else
-            "这是最终第 %d/%d 轮：必须交接当前已授权证据，返回 sufficient=false、actions=[]；不得请求任何新动作。"
+            "这是最终第 %d/%d 轮：应交接当前已授权证据。仅当存在尚未精读且带 imageRefs 的 documentRef 时，必须选择对应 document_read、document_page_read 或 canonical_question_read；否则返回 sufficient=false、actions=[]，不得请求任何新动作或检索。"
             % (iteration, DEFAULT_COLLECTION_DECISION_LIMIT)
         )
         return json.dumps({
             "stageCode": "resource_curation",
-            "instruction": "只输出 ResourceCollectionDecision JSON。评估直接命中与此前 agentSelectedDeepReads 是否足以支撑后续计划的真实题干、方法和必要图形。sourceToGapAssessment 必须说明来源覆盖与具体缺口。%s actions 最多 4 项；document_read、document_page_read、document_search 和 canonical_question_read 只能使用 authorizedEvidence 中已有的 opaque documentRef；canonical_question_read 仅用于 canonical 高考证据，固定读取当前 run 已授权的单题，不能提供题号、文件名、路径、查询或页码；document_page_read 的 pageNo 必须与该 documentRef 对应 retrieved_hit 的 pageNo 完全相同，pageRadius 只能为 0 至 4；teacher_resource_search 仅在当前授权文档仍不能填补缺口时使用。不得输出教学正文、逐步推理、路径、URL、Base64、文件系统信息或未经授权的引用。" % action_rules,
+            "instruction": ("只输出 ResourceCollectionDecision JSON。评估直接命中与此前 agentSelectedDeepReads 是否足以支撑后续计划的真实题干、方法和必要图形。"
+                            "sourceToGapAssessment 必须说明来源覆盖与具体缺口。%s actions 最多 4 项；document_read、document_page_read 和 canonical_question_read 只能使用 authorizedEvidence 中已有的 opaque documentRef；"
+                            "canonical_question_read 仅用于 canonical 高考证据，固定读取当前 run 已授权的单题，不能提供题号、文件名、路径、查询或页码；"
+                            "document_page_read 的 pageNo 必须与该 documentRef 对应 retrieved_hit 的 pageNo 完全相同，pageRadius 只能为 0 至 4；"
+                            "teacher_resource_search 仅在当前授权文档仍不能填补缺口时使用。不得输出教学正文、逐步推理、路径、URL、Base64、文件系统信息或未经授权的引用。" % action_rules),
             "iteration": iteration, "decisionLimit": DEFAULT_COLLECTION_DECISION_LIMIT, "finalIteration": final_iteration,
             "writingGoal": request.writing_goal, "questionText": request.question_text,
             "authorizedEvidence": evidence.prompt_text(),
-            "outputContract": {"sufficient": False, "actions": [{"kind": "document_read|document_page_read|document_search|canonical_question_read|teacher_resource_search", "documentRef": "opaque ref for document actions", "pageNo": "required only for document_page_read and must equal retrieved page", "pageRadius": "0 through 4 only for document_page_read", "query": "required only for search actions"}], "sourceToGapAssessment": "来源到缺口的评估"},
+            "outputContract": {"sufficient": False, "actions": [{"kind": "document_read|document_page_read|canonical_question_read|teacher_resource_search", "documentRef": "opaque ref for document actions", "pageNo": "required only for document_page_read and must equal retrieved page", "pageRadius": "0 through 4 only for document_page_read", "query": "required only for teacher_resource_search"}], "sourceToGapAssessment": "来源到缺口的评估"},
         }, ensure_ascii=False)
 
     def _execute_collection_actions(self, request: HandoutRunRequest, evidence: EvidenceSnapshot,
@@ -1563,8 +1597,14 @@ class HandoutRuntime:
         canonical_question_reads = {
             action.document_ref for action in actions if action.kind == "canonical_question_read"
         }
+        # Canonical 高考证据没有初始 imageRefs，模型可能只对飞书带图来源执行深读。与下方 imageRefs 自动补排
+        # 同一模式：尚未精读的 gaokao:// 引用在此补排为单题 canonical 精读，保证授权题干与其 figures 行到达 Writer。
+        canonical_hit_refs = {
+            item.document_ref for item in evidence.items
+            if item.document_ref and str(item.transparent_ref or "").startswith("gaokao://")
+        }
+        canonical_question_reads.update(ref for ref in canonical_hit_refs if ref not in canonical_question_reads)
         page_reads: dict[str, tuple[int, int]] = {}
-        document_queries: dict[str, list[str]] = {}
         teacher_queries: list[str] = []
         allowed_refs = {item.document_ref for item in evidence.items if item.document_ref}
         for action in actions:
@@ -1574,21 +1614,25 @@ class HandoutRuntime:
                     diagnostics.setdefault("rejectedActions", []).append({"action": action.model_dump(by_alias=True), "reason": "UNAUTHORIZED_RETRIEVED_PAGE"})
                 else:
                     page_reads[action.document_ref] = (action.page_no, action.page_radius)
-            elif action.kind == "document_search":
-                if action.document_ref not in allowed_refs:
-                    diagnostics.setdefault("rejectedActions", []).append({"action": action.model_dump(by_alias=True), "reason": "UNAUTHORIZED_DOCUMENT_REF"})
-                else:
-                    document_queries.setdefault(action.document_ref, []).append(action.query)
             elif action.kind == "teacher_resource_search":
                 teacher_queries.append(action.query)
         if teacher_queries:
             evidence = self._collect_teacher_resource_queries(request, evidence, teacher_queries, iteration)
             diagnostics["teacherSearches"] = teacher_queries
         trace: list[dict[str, Any]] = []
-        target_refs = list(dict.fromkeys([*document_reads, *canonical_question_reads, *page_reads, *document_queries]))
+        selected_refs = list(dict.fromkeys([*document_reads, *canonical_question_reads, *page_reads]))
+        # An image-bearing source already authorized by Java must be available to the writer before handoff. This only
+        # schedules its bounded original-source read; the Writer remains the sole authority for retaining its row.
+        image_refs = {item.document_ref for item in evidence.items if item.document_ref and item.image_refs}
+        selected_refs.extend(ref for ref in image_refs if ref not in selected_refs)
+        # The fixed deep-read budget serves canonical single-question reads first (one bounded block each, carrying
+        # manifest-bound figures), then image-bearing sources, then the model's remaining selections.
+        target_refs = [ref for ref in selected_refs if ref in canonical_question_reads]
+        target_refs.extend(ref for ref in selected_refs if ref in image_refs and ref not in canonical_question_reads)
+        target_refs.extend(ref for ref in selected_refs if ref not in image_refs and ref not in canonical_question_reads)
         if target_refs:
             evidence = self._enrich_authorized_document_context(request, evidence,
-                document_search_queries=document_queries, diagnostic_trace=trace, target_document_refs=target_refs,
+                diagnostic_trace=trace, target_document_refs=target_refs,
                 canonical_question_read_refs=canonical_question_reads, page_reads=page_reads)
         diagnostics["agentSelectedDeepReads"] = trace
         self._save_collection_diagnostic(request, {"iterations": {str(iteration): diagnostics}})
@@ -1596,9 +1640,8 @@ class HandoutRuntime:
 
     def _collect_teacher_resource_queries(self, request: HandoutRunRequest, evidence: EvidenceSnapshot,
                                           queries: list[str], iteration: int) -> EvidenceSnapshot:
-        """Executes exactly the model-selected queries and preserves the query-to-document provenance privately."""
+        """Executes exactly the model-selected searches; later reads use only returned authorized document refs."""
         discovered: list[EvidenceItem] = []
-        document_queries: dict[str, list[str]] = {}
         diagnostics: dict[str, Any] = {"selectedQueries": queries, "searches": [], "dedupeDrops": [], "capacityDrops": []}
         existing_refs = {item.ref for item in evidence.items if item.ref}
         for query in queries:
@@ -1622,8 +1665,6 @@ class HandoutRuntime:
                     diagnostics["capacityDrops"].append({"reason": "EVIDENCE_CAPACITY", "query": query, "item": row})
                     continue
                 discovered.append(item)
-                if item.document_ref:
-                    document_queries.setdefault(item.document_ref, []).append(query)
         merged = evidence.model_copy(update={"items": [*evidence.items, *discovered]})
         # Search hits are direct context for the next decision. The collector must explicitly choose a document action
         # before any original-Markdown block is materialized as an agent-selected deep read.
@@ -1688,12 +1729,14 @@ class HandoutRuntime:
         last_model = ""
         candidate: Any = None
         feedback_codes: tuple[str, ...] = ()
+        validation_message = ""
         repair_attempts = max(0, int(os.getenv(
             "MATH_AGENT_HANDOUT_MODEL_REPAIR_ATTEMPTS", str(DEFAULT_MODEL_REPAIR_ATTEMPTS))))
 
         for turn in range(1, repair_attempts + 2):
             prompt = initial_prompt if turn == 1 else self._repair_prompt(
-                node, initial_prompt, candidate, feedback_codes)
+                node, initial_prompt, candidate, feedback_codes, validation_message,
+                request.operation, self._expected_revision_round(request, node))
             try:
                 raw, usage, provider, model = self._invoke_json_model(request, node, prompt, review_turn=turn)
                 # Older deterministic test adapters returned the removed review envelope. Runtime prompts now request
@@ -1703,12 +1746,13 @@ class HandoutRuntime:
                 last_provider, last_model = provider, model
                 validated = validate_candidate(candidate)
             except (ValidationError, ValueError, ModelResponseParseError) as exc:
+                validation_message = str(exc)
                 feedback_codes = self._validation_feedback_codes(exc)
                 self._record_model_turn(request, node, turn, 0, {
                     "validation": "FAILED",
                     "candidate": candidate,
                     "validationErrorType": type(exc).__name__,
-                    "validationMessage": str(exc),
+                    "validationMessage": validation_message,
                     "feedbackCodes": list(feedback_codes),
                     "repairScheduled": turn <= repair_attempts,
                 })
@@ -1740,21 +1784,48 @@ class HandoutRuntime:
         message = str(error).lower()
         if "unauthorized evidence" in message:
             return ("EVIDENCE_REFERENCE_INVALID",)
+        if "asset" in message or "image" in message or "placement" in message:
+            return ("ASSET_PLACEMENT_REQUIRED",)
         if "math" in message or "latex" in message:
             return ("MATH_MARKUP_INVALID",)
         if "question" in message or "missing" in message:
             return ("CANDIDATE_INCOMPLETE",)
         return ("CANDIDATE_INVALID",)
 
+    def _expected_revision_round(self, request: HandoutRunRequest, node: str) -> int | None:
+        """Returns the semantic revision required by the operation; a repair turn never increments it."""
+        if node == "plan_writer":
+            field = "writingPlan"
+            revise = request.operation == "PLAN_REVISE"
+        elif node == "teacher_blueprint_writer":
+            field = "teacherBlueprint"
+            revise = request.operation == "BLUEPRINT_REVISE"
+        else:
+            return None
+        if not revise:
+            return 0
+        saved = self._checkpoint.load(request.run_id)
+        saved_round = int((saved[1].get(field) or {}).get("revisionRound", 0)) if saved else -1
+        return saved_round + 1
+
     @staticmethod
-    def _repair_prompt(node: str, initial_prompt: str, candidate: Any, feedback_codes: tuple[str, ...]) -> str:
+    def _repair_prompt(node: str, initial_prompt: str, candidate: Any,
+                       feedback_codes: tuple[str, ...], validation_message: str,
+                       operation: str, expected_revision_round: int | None) -> str:
         """Requests one complete replacement candidate from a concrete failed output and safe validation details."""
+        revision_hint = ({
+            "revisionRound": expected_revision_round,
+            "instruction": "修复调用不等于业务修订；revisionRound 必须保持该操作要求的语义值。",
+        } if expected_revision_round is not None else None)
         return json.dumps({
             "stageCode": node,
-            "instruction": "上一次 JSON 未通过确定性合同校验。只输出一个完整、可直接校验的 JSON 对象或数组，不要 Markdown、解释、推理、URL、路径或 Base64。必须修复所有 failureCodes 和 validationMessage 指出的错误。",
+            "operation": operation,
+            "instruction": "上一次 JSON 未通过确定性合同校验。只输出一个完整、可直接校验的 JSON 对象或数组，不要 Markdown、解释、推理、URL、路径或 Base64。必须修复所有 failureCodes 和 validationMessage 指出的错误。图片选择不通过 JSON 字段回传：不得输出 assetPlacements、logicalPath、assetId、assetIds、锚点、布局或题号绑定。写作正文若采用授权图片，只能在相关位置原样保留已有的 source-image: Markdown 行，不得新增、重复或改写该行。不能输出占位图。",
             "originalInstruction": initial_prompt,
             "invalidCandidate": candidate,
             "failureCodes": list(feedback_codes),
+            "validationMessage": validation_message[:1200],
+            "contractHints": revision_hint,
         }, ensure_ascii=False)
 
     def _plan_writer(self, state: HandoutRunState) -> dict[str, Any]:
@@ -1813,7 +1884,8 @@ class HandoutRuntime:
                 request,
                 "teacher_blueprint_writer",
                 self._teacher_blueprint_prompt(request, state.get("evidence", EvidenceSnapshot()), plan),
-                lambda candidate: self._validate_blueprint_candidate(candidate, request, plan),
+                lambda candidate: self._validate_blueprint_candidate(
+                    candidate, request, plan, state.get("evidence", EvidenceSnapshot())),
             )
         except HandoutOutputContractError:
             self._record_node(request, "teacher_blueprint_writer", started, "FAILED", provider_calls=2,
@@ -1832,7 +1904,7 @@ class HandoutRuntime:
         return {"teacher_blueprint": blueprint}
 
     def _validate_blueprint_candidate(self, candidate: Any, request: HandoutRunRequest,
-                                      plan: WritingPlan) -> TeacherBlueprint:
+                                      plan: WritingPlan, evidence: EvidenceSnapshot | None = None) -> TeacherBlueprint:
         """Validates only self-approved blueprints and keeps revision ownership at this node."""
         blueprint = TeacherBlueprint.model_validate(candidate)
         saved = self._checkpoint.load(request.run_id) if request.operation == "BLUEPRINT_REVISE" else None
@@ -1840,7 +1912,7 @@ class HandoutRuntime:
         expected_round = saved_round + 1 if request.operation == "BLUEPRINT_REVISE" else 0
         if blueprint.revision_round != expected_round:
             raise ValueError("teacher blueprint: revision round does not match requested operation")
-        return self._validate_teacher_blueprint(blueprint, request, plan)
+        return self._validate_teacher_blueprint(blueprint, request, plan, evidence)
 
     def _writer(self, state: HandoutRunState, stage_code: str, audience: str, instruction: str) -> dict[str, Any]:
         """Runs the student or lecture writer through the shared self-review controller."""
@@ -1889,7 +1961,7 @@ class HandoutRuntime:
         if blueprint is None or not blueprint.ready_for_derivation:
             raise ValueError("teacher_writer: approved teacher blueprint is required")
         document = WriterDocument(stageCode="teacher_writer", title=blueprint.title, markdown=blueprint.markdown,
-                                  citations=blueprint.citations, assetPlacements=blueprint.asset_placements,
+                                  citations=blueprint.citations,
                                   warnings=blueprint.remaining_edits)
         self._record_node(request, "teacher_writer", started, "SUCCESS")
         self._checkpoint.save(
@@ -1953,38 +2025,9 @@ class HandoutRuntime:
             raise ValueError(f"{stage_code}: markdown is empty or too short")
         document = WriterDocument(stageCode=stage_code, title=title, markdown=markdown,
                                   citations=_string_list(payload.get("citations")),
-                                  assetPlacements=payload.get("assetPlacements", []),
                                   warnings=_string_list(payload.get("warnings")))
         HandoutRuntime._validate_document_semantics(document, stage_code, question_text)
-        if plan is not None:
-            HandoutRuntime._validate_document_asset_placements(document, stage_code, plan)
         return document
-
-    @staticmethod
-    def _validate_document_asset_placements(
-            document: WriterDocument, stage_code: str, plan: WritingPlan) -> None:
-        """Keeps each writer variant bound to the plan-selected asset identity and placement contract.
-
-        Captions are writer-authored visible prose, so an equivalent caption may be revised between the approved
-        plan and a derived audience document. The opaque asset ids and structural placement fields remain exact.
-        """
-        allowed = {
-            (placement.question_number, placement.anchor, placement.layout, tuple(placement.asset_ids))
-            for question in plan.questions for placement in question.asset_placements
-            if stage_code in placement.variants
-        }
-        seen: set[tuple[int, str, str, tuple[str, ...]]] = set()
-        for placement in document.asset_placements:
-            if stage_code not in placement.variants:
-                raise ValueError(f"{stage_code}: asset placement excludes this variant")
-            key = (placement.question_number, placement.anchor, placement.layout, tuple(placement.asset_ids))
-            if key not in allowed:
-                raise ValueError(f"{stage_code}: asset placement differs from approved writing plan")
-            if key in seen:
-                raise ValueError(f"{stage_code}: duplicate asset placement")
-            seen.add(key)
-        if seen != allowed:
-            raise ValueError(f"{stage_code}: missing approved asset placement")
 
     @staticmethod
     def _validate_document_semantics(document: WriterDocument, stage_code: str, question_text: str) -> None:
@@ -2098,8 +2141,6 @@ class HandoutRuntime:
 
     def _enrich_authorized_document_context(
             self, request: HandoutRunRequest, evidence: EvidenceSnapshot,
-            search_keyword: str | None = None,
-            document_search_queries: dict[str, list[str]] | None = None,
             diagnostic_trace: list[dict[str, Any]] | None = None,
             target_document_refs: list[str] | None = None,
             canonical_question_read_refs: set[str] | None = None,
@@ -2149,14 +2190,27 @@ class HandoutRuntime:
                     "maxBlocks": DEFAULT_DOCUMENT_READ_BLOCKS,
                     "maxChars": min(DEFAULT_DOCUMENT_READ_CHARS, remaining),
                 }
-            if request.deadline_epoch_ms is None:
-                response = self._java_broker_request(broker_operation, broker_payload)
-            else:
-                response = self._java_broker_request(
-                    broker_operation, broker_payload, deadline_epoch_ms=request.deadline_epoch_ms)
+            try:
+                if request.deadline_epoch_ms is None:
+                    response = self._java_broker_request(broker_operation, broker_payload)
+                else:
+                    response = self._java_broker_request(
+                        broker_operation, broker_payload, deadline_epoch_ms=request.deadline_epoch_ms)
+            except HTTPException as error:
+                # A run-authorized teacher source can be archived or lose its bounded FILE reader after retrieval.
+                # Keep that source opaque and let the next capped curation decision select another authorized document.
+                if error.status_code == 404 and broker_operation == "handout-document-read":
+                    if diagnostic_trace is not None:
+                        diagnostic_trace.append({
+                            "operation": broker_operation,
+                            "documentRef": document_ref,
+                            "payload": broker_payload,
+                            "sourceAvailability": "UNAVAILABLE",
+                        })
+                    continue
+                raise
             blocks = response.get("blocks", [])
             read_diagnostic = {"operation": broker_operation, "documentRef": document_ref,
-                               "selectionQueries": list(dict.fromkeys(document_search_queries.get(document_ref, []))) if document_search_queries else [],
                                "payload": broker_payload, "response": response, "budgetBefore": remaining,
                                "acceptedBlocks": [], "skippedBlocks": []}
             if not isinstance(blocks, list):
@@ -2184,71 +2238,29 @@ class HandoutRuntime:
                     documentRef=document_ref,
                     pageNo=int(block.get("pageNo") or 0),
                     excerpt=text,
+                    sourceRelativePath=str(block.get("articlePath") or "")[:1200],
+                    imageRefs=[
+                        {"markdownLine": str(item.get("markdownLine") or "")[:12000],
+                         "logicalPath": str(item.get("logicalPath") or "")[:1200]}
+                        for item in block.get("imageRefs", [])
+                        if isinstance(item, dict) and item.get("markdownLine") and item.get("logicalPath")
+                    ][:50],
                 ))
-                read_diagnostic["acceptedBlocks"].append({"ref": reference, "text": text, "chars": len(text)})
+                read_diagnostic["acceptedBlocks"].append({
+                    "ref": reference,
+                    "text": text,
+                    "imageRefs": [
+                        {"markdownLine": str(item.get("markdownLine") or "")[:12000],
+                         "logicalPath": str(item.get("logicalPath") or "")[:1200]}
+                        for item in block.get("imageRefs", [])
+                        if isinstance(item, dict) and item.get("markdownLine") and item.get("logicalPath")
+                    ][:50],
+                    "chars": len(text),
+                })
                 remaining -= len(text)
             read_diagnostic["budgetAfter"] = remaining
             if diagnostic_trace is not None:
                 diagnostic_trace.append(read_diagnostic)
-            # Search uses only plan-writer-selected keywords and the broker-authorized document returned for this run.
-            # The legacy single keyword argument remains for existing initial-context callers; teacher curation supplies
-            # the exact query set that discovered each document.
-            selected_queries = document_search_queries.get(document_ref, []) if document_search_queries else []
-            if search_keyword:
-                selected_queries.append(search_keyword)
-            for selected_query in dict.fromkeys(selected_queries):
-                self._ensure_curation_budget(request)
-                if remaining <= 0:
-                    break
-                search_payload = {
-                    "runId": request.run_id,
-                    "documentRef": document_ref,
-                    "keyword": _bounded(selected_query, 160),
-                    "maxBlocks": DEFAULT_DOCUMENT_READ_BLOCKS,
-                    "maxChars": min(DEFAULT_DOCUMENT_READ_CHARS, remaining),
-                }
-                if request.deadline_epoch_ms is None:
-                    search_response = self._java_broker_request("handout-document-search", search_payload)
-                else:
-                    search_response = self._java_broker_request(
-                        "handout-document-search", search_payload, deadline_epoch_ms=request.deadline_epoch_ms)
-                search_blocks = search_response.get("blocks", [])
-                search_diagnostic = {"operation": "handout-document-search", "documentRef": document_ref,
-                                     "selectionQuery": selected_query, "payload": search_payload, "response": search_response,
-                                     "budgetBefore": remaining, "acceptedBlocks": [], "skippedBlocks": []}
-                if not isinstance(search_blocks, list):
-                    if diagnostic_trace is not None:
-                        diagnostic_trace.append(search_diagnostic)
-                    raise ValueError("Java handout document search returned invalid blocks")
-                known_refs = {item.ref for item in evidence.inspected_items if item.ref}
-                for block in search_blocks[:DEFAULT_DOCUMENT_READ_BLOCKS]:
-                    if not isinstance(block, dict):
-                        search_diagnostic["skippedBlocks"].append({"reason": "INVALID_BLOCK"})
-                        continue
-                    text = str(block.get("text") or "").strip()
-                    reference = str(block.get("ref") or "").strip()
-                    if not text or not reference:
-                        search_diagnostic["skippedBlocks"].append({"reason": "EMPTY_REF_OR_TEXT", "block": block})
-                        continue
-                    if reference in known_refs:
-                        search_diagnostic["skippedBlocks"].append({"reason": "DUPLICATE_REF", "ref": reference})
-                        continue
-                    if len(text) > remaining:
-                        search_diagnostic["skippedBlocks"].append({"reason": "CHARACTER_BUDGET", "ref": reference, "chars": len(text)})
-                        continue
-                    evidence.inspected_items.append(EvidenceItem(
-                        ref=_bounded(reference, 240),
-                        title=document_name,
-                        documentName=document_name,
-                        documentRef=document_ref,
-                        excerpt=text,
-                    ))
-                    search_diagnostic["acceptedBlocks"].append({"ref": reference, "text": text, "chars": len(text)})
-                    known_refs.add(reference)
-                    remaining -= len(text)
-                search_diagnostic["budgetAfter"] = remaining
-                if diagnostic_trace is not None:
-                    diagnostic_trace.append(search_diagnostic)
         return evidence
 
     def _java_broker_request(
@@ -2259,7 +2271,6 @@ class HandoutRuntime:
             "handout-document-page-read": "handout-document-page-read",
             "handout-document-read": "handout-document-read",
             "handout-canonical-question-read": "handout-canonical-question-read",
-            "handout-document-search": "handout-document-search",
             "handout-teacher-resource-search": "handout-teacher-resource-search",
         }
         route = routes.get(operation)
@@ -2405,10 +2416,11 @@ class HandoutRuntime:
                     raw_events: list[str] = []
                     raw_usage: dict[str, Any] = {}
                     provider_started = time.monotonic()
+                    anthropic_format = anthropic_compat.is_anthropic_provider(provider)
                     response = self._session.post(
-                        f"{base_url}/chat/completions",
-                        headers={"Authorization": f"Bearer {key}"},
-                        json=payload,
+                        f"{base_url}/v1/messages" if anthropic_format else f"{base_url}/chat/completions",
+                        headers=anthropic_compat.anthropic_headers(key) if anthropic_format else {"Authorization": f"Bearer {key}"},
+                        json=anthropic_compat.build_messages_payload(payload) if anthropic_format else payload,
                         stream=True,
                         timeout=max(0.1, timeout),
                     )
@@ -2420,6 +2432,8 @@ class HandoutRuntime:
                             # Some compatible relays ignore stream=true and still return one JSON response. Retain that
                             # valid full candidate rather than treating it as an empty SSE stream.
                             data = response.json()
+                            if anthropic_format:
+                                data = anthropic_compat.to_openai_completion(data)
                             first_choice = (data.get("choices") or [{}])[0]
                             content = str(first_choice.get("message", {}).get("content") or "")
                             finish_reason = str(first_choice.get("finish_reason") or "").strip() or None
@@ -2434,7 +2448,9 @@ class HandoutRuntime:
                                 stream_buffer.add(content)
                                 stream_buffer.flush("non_stream_completion")
                         else:
-                            for event_data in iter_sse_data_events(response):
+                            # Anthropic 流由适配层翻译成 OpenAI 形状的 data 帧字符串，下方解析逻辑保持单一。
+                            event_stream = anthropic_compat.openai_sse_data_lines(response) if anthropic_format else iter_sse_data_events(response)
+                            for event_data in event_stream:
                                 # requests applies its read timeout between chunks; enforce the Java-issued absolute
                                 # deadline here so a slow but chatty SSE response cannot outlive the task lease.
                                 # Leave response serialization and checkpoint cleanup time before Java's HTTP deadline.
@@ -2623,7 +2639,53 @@ class HandoutRuntime:
             )
 
     @staticmethod
-    def _parse_json(content: str) -> Any:
+    def _repair_invalid_json_string_escapes(content: str) -> str:
+        """Preserves model-authored LaTeX when a JSON response leaves its backslashes unescaped.
+
+        JSON permits only a small escape set, while mathematical Markdown commonly contains commands such as
+        ``\\left`` and ``\\operatorname``. The provider can otherwise return a complete object that JSON rejects
+        before the output contract has a chance to validate its fields. Only invalid escapes inside string values
+        are doubled; valid JSON escapes and all structural characters remain untouched.
+        """
+        result: list[str] = []
+        in_string = False
+        escaped = False
+        index = 0
+        valid_simple_escapes = {'"', "\\", "/", "b", "f", "n", "r", "t"}
+        while index < len(content):
+            character = content[index]
+            if not in_string:
+                result.append(character)
+                if character == '"':
+                    in_string = True
+                index += 1
+                continue
+            if escaped:
+                result.append(character)
+                escaped = False
+                index += 1
+                continue
+            if character == "\\":
+                following = content[index + 1] if index + 1 < len(content) else ""
+                next_character = content[index + 2] if index + 2 < len(content) else ""
+                latex_command = following.isalpha() and next_character.isascii() and next_character.isalpha()
+                unicode_escape = following == "u" and index + 5 < len(content) and all(
+                    digit in "0123456789abcdefABCDEF" for digit in content[index + 2:index + 6])
+                if (following in valid_simple_escapes and not latex_command) or unicode_escape:
+                    result.append(character)
+                    escaped = True
+                else:
+                    result.append("\\\\")
+                index += 1
+                continue
+            result.append(character)
+            if character == '"':
+                in_string = False
+            index += 1
+        return "".join(result)
+
+    @classmethod
+    def _parse_json(cls, content: str) -> Any:
         """Parses one provider JSON root without mistaking a nested array for a complete response."""
         cleaned = (content or "").lstrip("\ufeff").strip()
         if cleaned.startswith("```"):
@@ -2636,18 +2698,22 @@ class HandoutRuntime:
         # exists; once selected, never search its nested arrays after an incomplete object fails to decode.
         position = object_start if object_start >= 0 else array_start
         expected_type = dict if object_start >= 0 else list
+        candidate = cleaned[position:]
         try:
-            value, _ = json.JSONDecoder().raw_decode(cleaned[position:])
-        except json.JSONDecodeError as exc:
-            raise ValueError("model response contains no complete top-level JSON value") from exc
+            value, _ = json.JSONDecoder().raw_decode(candidate)
+        except json.JSONDecodeError as initial_error:
+            try:
+                value, _ = json.JSONDecoder().raw_decode(cls._repair_invalid_json_string_escapes(candidate))
+            except json.JSONDecodeError as repaired_error:
+                raise ValueError("model response contains no complete top-level JSON value") from repaired_error
         if not isinstance(value, expected_type):
             raise ValueError("model response root type does not match its opening delimiter")
         return value
 
     @staticmethod
     def _provider_config(provider: str) -> tuple[str | None, str, str]:
-        keys = {"openai": "OPENAI_API_KEY", "dashscope": "DASHSCOPE_API_KEY", "deepseek": "DEEPSEEK_API_KEY", "ark": "ARK_API_KEY"}
-        bases = {"openai": os.getenv("OPENAI_BASE_URL", "https://api1.aisz.mom/v1"), "dashscope": "https://dashscope.aliyuncs.com/compatible-mode/v1", "deepseek": "https://api.deepseek.com/v1", "ark": "https://ark.cn-beijing.volces.com/api/v3"}
+        keys = {"openai": "OPENAI_API_KEY", "dashscope": "DASHSCOPE_API_KEY", "deepseek": "DEEPSEEK_API_KEY", "ark": "ARK_API_KEY", "glm": "GLM_API_KEY"}
+        bases = {"openai": os.getenv("OPENAI_BASE_URL", "https://api1.aisz.mom/v1"), "dashscope": "https://dashscope.aliyuncs.com/compatible-mode/v1", "deepseek": "https://api.deepseek.com/v1", "ark": "https://ark.cn-beijing.volces.com/api/v3", "glm": anthropic_compat.default_base_url()}
         key = os.getenv(keys.get(provider, ""))
         base = os.getenv(f"{provider.upper()}_BASE_URL", bases.get(provider, "")).rstrip("/")
         model = os.getenv(f"{provider.upper()}_CHAT_MODEL", os.getenv(f"MATH_AGENT_AI_RUNTIME_{provider.upper()}_MODEL", os.getenv("MATH_AGENT_AI_RUNTIME_MODEL", os.getenv("OPENAI_CHAT_MODEL", "gpt-5.6-luna"))))
@@ -2658,7 +2724,7 @@ class HandoutRuntime:
         """Requests auditable instructional decisions rather than private model reasoning."""
         return json.dumps({
             "stageCode": "plan_writer",
-            "instruction": "只输出一个完整 WritingPlan JSON 对象，不要 Markdown 代码围栏。计划是可见教学决策，不是思考过程：禁止 <think>、逐步推理、工具日志、原始证据转录、路径、URL、Base64 或图片标记。不得输出单个题目对象或数组。顶层必须逐项包含 learningObjective（非空字符串）、questions（非空数组）、completionCriteria（非空字符串数组）、readyForNextStage（JSON 布尔值 true）、revisionRound（首次为整数 0）和 warnings（数组）；questions 的每一项必须逐项包含 number（从 1 连续编号）、question（题干）、evidenceRefs（数组）、knowledgePoint（字符串）、teachingSequence（至少一个字符串）和 figureRequired（JSON 布尔值）。如选用图片，assetPlacements 必须逐项写明当前题号、来自本题 evidenceRefs 的 opaque assetIds、锚点、布局、可见版本及可见说明；不得写任何图片路径、URL、Base64 或 LaTeX 图片命令。figureRequired 为 true 时必须选择至少一个合法 assetPlacement，否则改写为无需图的题目。按题目顺序覆盖提交题目；每题只引用 evidence 中实际存在的 ref。资料充足时建议组织约 %d 个以上互不重复的真实题目或变式；资料不足时只保留证据支持的题目，绝不凑题或编造题。授权资料收集已在此计划前完成，不得提出或输出检索查询。readyForNextStage 只能在所有完成标准已满足时为 true。" % DEFAULT_RECOMMENDED_QUESTION_COUNT,
+            "instruction": "只输出一个完整 WritingPlan JSON 对象，不要 Markdown 代码围栏。计划是可见教学决策，不是思考过程：禁止 <think>、逐步推理、工具日志、原始证据转录、路径、URL、Base64 或图片标记。不得输出单个题目对象或数组。顶层必须逐项包含 learningObjective（非空字符串）、questions（非空数组）、completionCriteria（非空字符串数组）、readyForNextStage（JSON 布尔值 true）、revisionRound（首次为整数 0）和 warnings（数组）；questions 的每一项必须逐项包含 number（从 1 连续编号）、question（题干）、evidenceRefs（数组）、knowledgePoint（字符串）、teachingSequence（至少一个字符串）和 figureRequired（JSON 布尔值）。图片选择不属于计划 JSON：不得输出 assetPlacements、logicalPath、assetId、assetIds、题号绑定、URL、Base64 或 LaTeX 图片命令。写作阶段若采用授权资料，必须只在相关正文位置原样保留上下文已有的 source-image: Markdown 行，不得改写别名或目标，不得新增或重复图片行。按题目顺序覆盖提交题目；每题只引用 evidence 中实际存在的 ref。资料充足时建议组织约 %d 个以上互不重复的真实题目或变式；资料不足时只保留证据支持的题目，绝不凑题或编造题。授权资料收集已在此计划前完成，不得提出或输出检索查询。readyForNextStage 只能在所有完成标准已满足时为 true。" % DEFAULT_RECOMMENDED_QUESTION_COUNT,
             "writingGoal": request.writing_goal,
             "questionText": request.question_text,
             "revisionFeedback": request.revision_feedback,
@@ -2666,7 +2732,7 @@ class HandoutRuntime:
             "evidence": evidence.prompt_text(),
             "outputContract": {
                 "learningObjective": "string",
-                "questions": [{"number": 1, "question": "题干", "evidenceRefs": ["evidence ref"], "knowledgePoint": "string", "teachingSequence": ["步骤"], "figureRequired": False, "assetPlacements": [{"questionNumber": 1, "assetIds": ["opaque asset id"], "anchor": "question", "layout": "single", "variants": ["teacher_writer", "student_writer", "lecture_writer"], "caption": "AI 编写的图片说明"}]}],
+                "questions": [{"number": 1, "question": "题干", "evidenceRefs": ["evidence ref"], "knowledgePoint": "string", "teachingSequence": ["步骤"], "figureRequired": False}],
                 "completionCriteria": ["可检验完成条件"], "readyForNextStage": True, "revisionRound": 0,
                 "warnings": [],
             },
@@ -2680,6 +2746,10 @@ class HandoutRuntime:
         # carries more precise original wording for the same authorized document.
         authorized_items = [*evidence.items, *evidence.inspected_items]
         allowed_refs = {item.ref for item in authorized_items if item.ref}
+        allowed_images = {
+            (image.get("logicalPath", ""), image.get("markdownLine", ""))
+            for item in authorized_items for image in item.image_refs
+        }
         for expected_number, planned in enumerate(plan.questions, start=1):
             if planned.number != expected_number:
                 raise ValueError("writing plan: question numbers must be consecutive")
@@ -2687,17 +2757,6 @@ class HandoutRuntime:
                 raise ValueError(f"writing plan: question {expected_number} requires authorized evidence")
             if not set(planned.evidence_refs).issubset(allowed_refs):
                 raise ValueError(f"writing plan: question {expected_number} cites unauthorized evidence")
-            placement_assets = {
-                asset_id for item in authorized_items if item.ref in planned.evidence_refs
-                for asset_id in item.asset_ids
-            }
-            if planned.figure_required and not planned.asset_placements:
-                raise ValueError(f"writing plan: question {expected_number} requires an AI-selected asset placement")
-            for placement in planned.asset_placements:
-                if placement.question_number != planned.number:
-                    raise ValueError(f"writing plan: question {expected_number} has a cross-question asset placement")
-                if not set(placement.asset_ids).issubset(placement_assets):
-                    raise ValueError(f"writing plan: question {expected_number} selects an asset outside its evidence")
         if not plan.ready_for_next_stage:
             raise ValueError("writing plan: model did not declare completion")
 
@@ -2706,11 +2765,17 @@ class HandoutRuntime:
         """Requests the single teacher source that downstream audiences derive from."""
         return json.dumps({
             "stageCode": "teacher_blueprint_writer",
-            "instruction": "只输出 DeepSeek/OpenAI structured JSON 的 TeacherBlueprint 对象。依据已批准 writingPlan 写教师版约 80% 完成的可审阅蓝图；不要输出 <think>、私有推理、路径、URL、Base64 或图片/LaTex 标记。每题必须按计划顺序包含题目、解题过程、最终答案、评分点、易错点。completionChecklist 必须列出已完成项目；remainingEdits 只写可执行的剩余编辑。标准字段是布尔型 readyForDerivation：仅当 markdown 已覆盖全部题目和全部五个必填章节时为 true，任何遗漏为 false；不得写字符串。兼容旧 structured 输出时仅接受等价字段 derivationReady，且同样必须是布尔值。不要故意省略声明。",
+            "instruction": "只输出 DeepSeek/OpenAI structured JSON 的 TeacherBlueprint 对象。依据已批准 writingPlan 写完整、可直接派生的教师版蓝图；不要输出 <think>、私有推理、路径、URL、Base64 或 LaTex 标记。下方 authorizedSourceImageRows 是已授权的原始来源图行：若某图与当前题目、解题步骤或关键分类直接相关，应在首次讲解该内容的位置逐字保留该完整 Markdown 行，使教师 PDF 可展示原图；与当前讲解无关的召回图可以不使用。不得改写、借用、重复、移动或新增图片行。每题必须按计划顺序包含题目、解题过程、最终答案、评分点、易错点。completionChecklist 必须列出已完成项目；本次 COMPLETE 操作不得保留 remainingEdits，必须输出空数组。readyForDerivation 必须是布尔值 true，且仅在 markdown 已覆盖全部题目和全部五个必填章节时为 true；不得为了保留编辑项输出 false。revisionRound 必须为数字 0；不要输出 1 或其他修订轮次。兼容旧 structured 输出时仅接受等价字段 derivationReady，且同样必须是布尔值 true。不要故意省略声明。",
             "writingGoal": request.writing_goal,
             "questionText": request.question_text,
             "approvedWritingPlan": plan.model_dump(by_alias=True, exclude_none=True),
             "evidence": evidence.prompt_text(),
+            "authorizedSourceImageRows": list(dict.fromkeys(
+                str(image.get("markdownLine") or "").strip()
+                for item in evidence.inspected_items
+                for image in item.image_refs
+                if str(image.get("markdownLine") or "").strip().startswith("![source-image:")
+            )),
             "mathematicsFormatting": HANDOUT_MATH_MARKUP_CONTRACT,
             "outputContract": {
                 "type": "object",
@@ -2719,7 +2784,6 @@ class HandoutRuntime:
                     "title": "string",
                     "markdown": "教师版蓝图",
                     "citations": ["evidence ref"],
-                    "assetPlacements": [{"questionNumber": 1, "assetIds": ["opaque asset id"], "anchor": "question", "layout": "single", "variants": ["teacher_writer", "student_writer", "lecture_writer"], "caption": "AI 编写的图片说明"}],
                     "lectureCards": [{"title": "投影标题", "content": "投影内容"}],
                     "completionChecklist": ["完成项"],
                     "remainingEdits": [],
@@ -2730,16 +2794,24 @@ class HandoutRuntime:
         }, ensure_ascii=False)
 
     @staticmethod
-    def _validate_teacher_blueprint(blueprint: TeacherBlueprint, request: HandoutRunRequest, plan: WritingPlan) -> TeacherBlueprint:
+    def _validate_teacher_blueprint(blueprint: TeacherBlueprint, request: HandoutRunRequest,
+                                    plan: WritingPlan, evidence: EvidenceSnapshot | None = None) -> TeacherBlueprint:
         """Accepts a readiness alias only after the complete teacher source passes deterministic semantic checks."""
         document = WriterDocument(stageCode="teacher_writer", title=blueprint.title, markdown=blueprint.markdown,
-                                  citations=blueprint.citations, assetPlacements=blueprint.asset_placements,
+                                  citations=blueprint.citations,
                                   warnings=blueprint.remaining_edits)
         planned_question_text = "\n".join(
             f"【题目 {question.number}】\n{question.question}" for question in plan.questions
         )
         HandoutRuntime._validate_document_semantics(document, "teacher_writer", planned_question_text)
-        HandoutRuntime._validate_document_asset_placements(document, "teacher_writer", plan)
+        required_image_rows = {
+            str(image.get("markdownLine") or "").strip()
+            for item in (evidence.inspected_items if evidence is not None else [])
+            for image in item.image_refs
+            if str(image.get("markdownLine") or "").strip().startswith("![source-image:")
+        }
+        if required_image_rows and not any(row in document.markdown for row in required_image_rows):
+            raise ValueError("teacher blueprint: an authorized source image row must be retained verbatim")
         if not blueprint.completion_checklist:
             raise ValueError("teacher blueprint: completion checklist is empty")
         if blueprint.ready_for_derivation is False:
@@ -2758,7 +2830,7 @@ class HandoutRuntime:
             "resourceImages": {
                 "allowedReferencesOnly": True,
                 "neverOutput": ["URL", "file path", "data URL", "Base64", "\\includegraphics", "HTML image tag"],
-                "figureDependentQuestionRule": "题干出现如图、下图或图中时，只能引用当前 evidence 中已有的、与本题同源的 opaque assetId；没有匹配 assetId 时必须改写为不依赖图片的文字题干，不得编造或借用其他题图片。",
+                "figureDependentQuestionRule": "题干出现如图、下图或图中时，只能保留当前 evidence 中已有且同源的 source-image: Markdown 行；没有匹配图片时必须改写为不依赖图片的文字题干，不得编造、借用、新增、重复或改写图片行。",
             },
             "markdownStructure": {
                 "headings": "标题必须从行首写 # 或 ##，禁止 \\# 标题、列表前缀标题或代码围栏。",
@@ -2792,7 +2864,7 @@ class HandoutRuntime:
                            "evidence": evidence.prompt_text(), "projectionRules": projection_rules,
                            "mathematicsFormatting": HANDOUT_MATH_MARKUP_CONTRACT,
                            "outputContract": {"stageCode": stage, "title": "string", "markdown": "完整中文讲义内容",
-                                               "citations": ["evidence ref"], "assetPlacements": "必须与 approvedWritingPlan 中本 variant 的 placement 完全一致，不增删替换", "warnings": []},
+                                               "citations": ["evidence ref"], "warnings": []},
                            "examples": {
                                "teacherSectionHeading": "## 最终答案\n\n$\\boxed{x=1}$",
                                "studentHint": "提示：先写出定义域，再判断端点是否可取。",

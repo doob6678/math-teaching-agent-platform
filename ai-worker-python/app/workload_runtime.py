@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Callable, Literal
 
@@ -17,6 +18,7 @@ from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.ai_run_runtime import ProviderRoute
+from app import anthropic_compat
 from app.model_review_runtime import BoundedModelReviewController, ModelReviewExhausted
 from app.sse import iter_sse_data_events
 from app.usage import UsageEvent, UsageLedger, cost_for, fallback_tokens
@@ -231,11 +233,13 @@ class MigratedWorkloadRuntime:
         ]
 
     @staticmethod
-    def _review_prompt(turn: int, prior: str | None, codes: tuple[str, ...]) -> str:
+    def _review_prompt(turn: int, prior: str | None, active_hash: str, codes: tuple[str, ...]) -> str:
+        # 与 model_review_runtime 的 4 参契约对齐（turn, prior, active_hash, codes）；
+        # 旧 3 参签名会让通用评审循环在第二轮 TypeError。
         if turn == 1:
             return "生成候选分类并完成严格自审。"
         return json.dumps({
-            "previousCandidate": prior or "", "feedbackCodes": list(codes),
+            "previousCandidate": prior or "", "baseCandidateHash": active_hash, "feedbackCodes": list(codes),
             "instruction": "仅修正候选以满足字段、授权知识点和固定安全合同。",
         }, ensure_ascii=False, separators=(",", ":"))
 
@@ -317,19 +321,20 @@ class MigratedWorkloadRuntime:
             try:
                 for item in self._stream_call_json(
                         request.runId, request.providerRoute, messages, require_json_object=request.mode == "compose",
-                        emit_visible_content=request.mode != "compose"):
+                        # 两种模式都把 provider 原始 JSON 增量实时上抛：Java 投影层只提取 title/summary/items
+                        # 文本字段，学生不会看到 JSON 语法。此前 compose 吞掉增量导致首字要等整包完成（9 秒级）。
+                        emit_visible_content=True):
                     provider = item.get("provider", provider)
                     model = item.get("model", model)
                     provider_attempt = int(item.get("attempt", provider_attempt))
                     if item.get("content"):
                         content_parts.append(str(item["content"]))
-                        if request.mode != "compose":
-                            yield {"event": "delta", "data": {
-                                "runId": request.runId,
-                                "content": str(item["content"]),
-                                "providerName": provider,
-                                "modelCode": model,
-                            }}
+                        yield {"event": "delta", "data": {
+                            "runId": request.runId,
+                            "content": str(item["content"]),
+                            "providerName": provider,
+                            "modelCode": model,
+                        }}
                     usage = item.get("usage") or usage
             except HTTPException as exc:
                 raw = "".join(content_parts)
@@ -364,12 +369,12 @@ class MigratedWorkloadRuntime:
         provider_attempts = max(1, int(os.getenv("MATH_AGENT_STUDENT_EXPLANATION_MODEL_ATTEMPTS", "2")))
         retry_backoff_seconds = max(0.0, float(os.getenv("MATH_AGENT_STUDENT_EXPLANATION_RETRY_BACKOFF_SECONDS", "1.0")))
         for provider_index, selection in enumerate([route.primary, *route.fallbacks]):
-            key_name = {"openai": "OPENAI_API_KEY", "dashscope": "DASHSCOPE_API_KEY", "deepseek": "DEEPSEEK_API_KEY", "ark": "ARK_API_KEY"}[selection.name]
+            key_name = {"openai": "OPENAI_API_KEY", "dashscope": "DASHSCOPE_API_KEY", "deepseek": "DEEPSEEK_API_KEY", "ark": "ARK_API_KEY", "glm": "GLM_API_KEY"}[selection.name]
             api_key = os.getenv(key_name)
             if not api_key:
                 failures.append(selection.name + ":configuration")
                 continue
-            bases = {"openai": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"), "dashscope": "https://dashscope.aliyuncs.com/compatible-mode/v1", "deepseek": "https://api.deepseek.com/v1", "ark": "https://ark.cn-beijing.volces.com/api/v3"}
+            bases = {"openai": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"), "dashscope": "https://dashscope.aliyuncs.com/compatible-mode/v1", "deepseek": "https://api.deepseek.com/v1", "ark": "https://ark.cn-beijing.volces.com/api/v3", "glm": anthropic_compat.default_base_url()}
             payload = {
                 "model": selection.model,
                 "messages": messages,
@@ -379,20 +384,23 @@ class MigratedWorkloadRuntime:
             }
             if require_json_object:
                 payload["response_format"] = {"type": "json_object"}
+            anthropic_format = anthropic_compat.is_anthropic_provider(selection.name)
             for provider_try in range(provider_attempts):
                 attempt = provider_index * provider_attempts + provider_try + 1
                 visible_output = False
                 content_parts: list[str] = []
                 try:
                     with self._session.post(
-                        bases[selection.name].rstrip() + "/chat/completions",
-                        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                        json=payload,
+                        bases[selection.name].rstrip() + ("/v1/messages" if anthropic_format else "/chat/completions"),
+                        headers=anthropic_compat.anthropic_headers(api_key) if anthropic_format else {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                        json=anthropic_compat.build_messages_payload(payload) if anthropic_format else payload,
                         stream=True, timeout=float(os.getenv("MATH_AGENT_MIGRATED_RUNTIME_TIMEOUT_SECONDS", "45")),
                     ) as response:
                         response.raise_for_status()
                         completed = False
-                        for value in iter_sse_data_events(response):
+                        # Anthropic 流被适配层翻译成 OpenAI 形状的 data 帧字符串，下游解析保持不变。
+                        data_events = anthropic_compat.openai_sse_data_lines(response) if anthropic_format else iter_sse_data_events(response)
+                        for value in data_events:
                             if value == "[DONE]":
                                 completed = True
                                 break
@@ -671,18 +679,28 @@ class MigratedWorkloadRuntime:
         }
 
     def provider_health(self, request: ProviderHealthRunRequest) -> dict[str, Any]:
-        results = []
-        for selection in [request.providerRoute.primary, *request.providerRoute.fallbacks]:
+        selections = [request.providerRoute.primary, *request.providerRoute.fallbacks]
+
+        def probe(selection) -> dict[str, Any]:
             started = time.monotonic()
             try:
-                result = self._call_one(request.runId, selection.name, selection.model, 1, [{"role": "user", "content": "health-check"}])
-                results.append({"providerName": selection.name, "modelCode": selection.model, "configured": True,
-                                "available": True, "statusCode": 200, "elapsedMs": round((time.monotonic() - started) * 1000),
-                                "message": "Provider answered the health check.", "usage": result.usage()})
+                # 探测消息必须包含 “json” 一词：_call_one 统一要求 response_format=json_object，
+                # OpenAI 兼容网关（含 DeepSeek）会校验消息里出现 json，否则 400，导致健康检查永远失败。
+                result = self._call_one(request.runId, selection.name, selection.model, 1,
+                                        [{"role": "user", "content": 'Health check: reply with the json object {"ok": true} only.'}])
+                return {"providerName": selection.name, "modelCode": selection.model, "configured": True,
+                        "available": True, "statusCode": 200, "elapsedMs": round((time.monotonic() - started) * 1000),
+                        "message": "Provider answered the health check.", "usage": result.usage()}
             except HTTPException as exc:
-                results.append({"providerName": selection.name, "modelCode": selection.model, "configured": True,
-                                "available": False, "statusCode": exc.status_code, "elapsedMs": round((time.monotonic() - started) * 1000),
-                                "message": "Provider health check failed."})
+                return {"providerName": selection.name, "modelCode": selection.model, "configured": True,
+                        "available": False, "statusCode": exc.status_code, "elapsedMs": round((time.monotonic() - started) * 1000),
+                        "message": "Provider health check failed."}
+
+        # 串行探测的耗时 = 各 provider 之和（主模型 + fallback 逐个真实调用，实测 7.5s+），
+        # 控制台“检查”按钮因此极慢。探测语义不变、仍是每家真实调用一次，仅并发执行：
+        # 总耗时收敛为最慢的一家。UsageLedger.append 与 requests/urllib3 连接池均线程安全。
+        with ThreadPoolExecutor(max_workers=max(1, len(selections))) as pool:
+            results = list(pool.map(probe, selections))
         return {"status": "COMPLETED", "results": results}
 
     def _call_json(self, run_id: str, route: ProviderRoute, messages: list[dict[str, Any]]) -> tuple[str, ProviderResult]:
@@ -696,7 +714,7 @@ class MigratedWorkloadRuntime:
         raise HTTPException(status_code=503, detail="all configured providers failed: " + ",".join(failures))
 
     def _call_one(self, run_id: str, provider: str, model: str, attempt: int, messages: list[dict[str, Any]]) -> ProviderResult:
-        key_name = {"openai": "OPENAI_API_KEY", "dashscope": "DASHSCOPE_API_KEY", "deepseek": "DEEPSEEK_API_KEY", "ark": "ARK_API_KEY"}[provider]
+        key_name = {"openai": "OPENAI_API_KEY", "dashscope": "DASHSCOPE_API_KEY", "deepseek": "DEEPSEEK_API_KEY", "ark": "ARK_API_KEY", "glm": "GLM_API_KEY"}[provider]
         api_key = os.getenv(key_name)
         if not api_key:
             raise HTTPException(status_code=503, detail="provider API key is unavailable")
@@ -705,24 +723,33 @@ class MigratedWorkloadRuntime:
             "dashscope": "https://dashscope.aliyuncs.com/compatible-mode/v1",
             "deepseek": "https://api.deepseek.com/v1",
             "ark": "https://ark.cn-beijing.volces.com/api/v3",
+            "glm": anthropic_compat.default_base_url(),
+        }
+        request_payload = {
+            "model": model,
+            "messages": messages,
+            "temperature": 0,
+            # Compose is consumed by a strict card schema below.  Ask every compatible provider for a
+            # JSON object here as well as in the streaming route, otherwise a valid prose answer would
+            # be rejected only after the paid model call has completed.
+            "response_format": {"type": "json_object"},
         }
         try:
-            response = self._session.post(
-                defaults[provider].rstrip("/") + "/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                # Compose is consumed by a strict card schema below.  Ask every compatible provider for a
-                # JSON object here as well as in the streaming route, otherwise a valid prose answer would
-                # be rejected only after the paid model call has completed.
-                json={
-                    "model": model,
-                    "messages": messages,
-                    "temperature": 0,
-                    "response_format": {"type": "json_object"},
-                },
-                timeout=float(os.getenv("MATH_AGENT_MIGRATED_RUNTIME_TIMEOUT_SECONDS", "45")),
-            )
-            response.raise_for_status()
-            data = response.json()
+            if anthropic_compat.is_anthropic_provider(provider):
+                # GLM 的 Anthropic 端点没有 response_format 概念，JSON-only 由提示词合同保证。
+                data = anthropic_compat.post_chat_completion(
+                    self._session, api_key, defaults[provider].rstrip("/"), request_payload,
+                    float(os.getenv("MATH_AGENT_MIGRATED_RUNTIME_TIMEOUT_SECONDS", "45")),
+                )
+            else:
+                response = self._session.post(
+                    defaults[provider].rstrip("/") + "/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    json=request_payload,
+                    timeout=float(os.getenv("MATH_AGENT_MIGRATED_RUNTIME_TIMEOUT_SECONDS", "45")),
+                )
+                response.raise_for_status()
+                data = response.json()
             content = str(data["choices"][0]["message"].get("content") or "")
             usage = data.get("usage") or {}
             prompt = int(usage.get("prompt_tokens", 0) or 0)

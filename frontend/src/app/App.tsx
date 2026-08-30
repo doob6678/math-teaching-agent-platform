@@ -246,6 +246,11 @@ export function App() {
   const [teachingConversationId, setTeachingConversationId] = useState(() => readStoredTeachingConversation().conversationId);
   const [teachingConversationTitle, setTeachingConversationTitle] = useState("AI 讲题");
   const [teachingConversationSummaries, setTeachingConversationSummaries] = useState<StudentExplanationConversationSummary[]>([]);
+  // 侧边栏会话分页：page 从 1 开始；整页返回视为可能还有更早会话，展示“加载更多”。
+  const TEACHING_CONVERSATION_PAGE_SIZE = 12;
+  const [teachingConversationPage, setTeachingConversationPage] = useState(1);
+  const [hasMoreTeachingConversations, setHasMoreTeachingConversations] = useState(false);
+  const [loadingMoreTeachingConversations, setLoadingMoreTeachingConversations] = useState(false);
   const [teachingConversationEntries, setTeachingConversationEntries] =
     useState<TeachingConversationThreadItem[]>(() => readStoredTeachingConversation().entries);
   const [openingTeachingConversationId, setOpeningTeachingConversationId] = useState("");
@@ -339,6 +344,7 @@ export function App() {
   const [mcpCreating, setMcpCreating] = useState(false);
   const [mcpLoadingKeys, setMcpLoadingKeys] = useState(false);
   const [mcpRevokingKeyId, setMcpRevokingKeyId] = useState("");
+  const [mcpDeletingKeyId, setMcpDeletingKeyId] = useState("");
   const [mcpCopyMessage, setMcpCopyMessage] = useState("");
   const [mcpError, setMcpError] = useState("");
   const [mcpTesting, setMcpTesting] = useState(false);
@@ -1026,9 +1032,12 @@ export function App() {
   function refreshTeachingConversationSummaries(conversationId?: string) {
     setLoadingTeachingConversationHistory(true);
     return api
-      .listStudentExplanationConversations(12)
+      .listStudentExplanationConversations(TEACHING_CONVERSATION_PAGE_SIZE, 1)
       .then((response) => {
         setTeachingConversationSummaries(response.items);
+        setTeachingConversationPage(1);
+        // 整页返回时后端可能还有更早的会话，交给“加载更多”按页拉取。
+        setHasMoreTeachingConversations(response.items.length >= TEACHING_CONVERSATION_PAGE_SIZE);
         const targetConversationId = conversationId || teachingConversationId || "";
         const matched = response.items.find((item) => item.conversationId === targetConversationId);
         if (matched?.title) {
@@ -1039,6 +1048,25 @@ export function App() {
       })
       .catch((error: Error) => setTeachingError(toUserFacingError(error)))
       .finally(() => setLoadingTeachingConversationHistory(false));
+  }
+
+  /** 向后翻一页历史会话并追加到侧边栏；按 conversationId 去重，避免刷新竞态造成重复条目。 */
+  function loadMoreTeachingConversations() {
+    if (loadingMoreTeachingConversations) return;
+    setLoadingMoreTeachingConversations(true);
+    const nextPage = teachingConversationPage + 1;
+    api
+      .listStudentExplanationConversations(TEACHING_CONVERSATION_PAGE_SIZE, nextPage)
+      .then((response) => {
+        setTeachingConversationSummaries((current) => {
+          const seen = new Set(current.map((item) => item.conversationId));
+          return [...current, ...response.items.filter((item) => !seen.has(item.conversationId))];
+        });
+        setTeachingConversationPage(nextPage);
+        setHasMoreTeachingConversations(response.items.length >= TEACHING_CONVERSATION_PAGE_SIZE);
+      })
+      .catch((error: Error) => setTeachingError(toUserFacingError(error)))
+      .finally(() => setLoadingMoreTeachingConversations(false));
   }
 
   /** Starts an isolated durable conversation before its first model call, preventing rapid first messages from splitting. */
@@ -1089,6 +1117,10 @@ export function App() {
     // The completed event is authoritative even if the SSE transport needs extra time to close cleanly.
     let completedResponseReceived = false;
     let streamedCharacterCount = 0;
+    // 首 token 计时用单调时钟：firstTokenMs 是提交到首个讲解增量到达的真实耗时（TTFT），
+    // totalMs 是整个流式回合的耗时。两者都展示在回答卡上并输出到控制台，便于持续压响应速度。
+    const submitMonotonicMs = performance.now();
+    let firstTokenMs: number | null = null;
     setSubmittingTeachingConversation(true);
     setTeachingError("");
     setTeachingConversationImageError("");
@@ -1142,6 +1174,13 @@ export function App() {
           completedResponseReceived = true;
           setSubmittingTeachingConversation(false);
         }
+        // 首内容兜底：部分模型通道不吐增量，首个内容是 completed 事件里的完整结果。
+        // 无论哪种形态，都把“第一个讲解字到达”如实记为 TTFT，不虚构流式速度。
+        if (firstTokenMs === null && ((payload.aiContentDelta || "").length > 0 || !!payload.response)) {
+          firstTokenMs = Math.round(performance.now() - submitMonotonicMs);
+          // 控制台输出结构化速度日志，配合回答卡上的“首字”徽标，方便持续优化首 token 响应。
+          globalThis.console?.info?.(`[telemetry] first-token ${firstTokenMs}ms conversation=${activeConversationId}`);
+        }
         streamedCharacterCount += Array.from(payload.aiContentDelta || "").length;
         if (payload.progress?.conversationId) {
           setTeachingConversationId(payload.progress.conversationId);
@@ -1166,6 +1205,7 @@ export function App() {
                     response: entry.response,
                     loading: entry.loading,
                     imageStatus: payload.progress?.imageStatus || entry.imageStatus,
+                    firstTokenMs: firstTokenMs ?? entry.firstTokenMs,
                     // Keep provider-originated bytes visible while strict card parsing continues in parallel. React
                     // renders this as text, so unfinished JSON cannot execute markup or scripts in the browser.
                     liveContent: `${entry.liveContent || ""}${payload.aiContentDelta || ""}`,
@@ -1199,11 +1239,20 @@ export function App() {
             : entry,
         ));
         const charactersToRender = Math.max(streamedCharacterCount, Array.from(completedAnswerText).length);
-        const finalCardDelay = charactersToRender * STUDENT_EXPLANATION_FINAL_CARD_DELAY_PER_CHARACTER_MS
-          + STUDENT_EXPLANATION_FINAL_CARD_HANDOFF_BUFFER_MS;
+        // 打字机已改为自适应批量消费（约 1.5 秒内追平），所以这里的交接等待只保留一个上限，
+        // 避免长回答在流结束后还要按字符数线性等待才能看到最终结构化卡片。
+        const finalCardDelay = Math.min(
+          1200,
+          charactersToRender * STUDENT_EXPLANATION_FINAL_CARD_DELAY_PER_CHARACTER_MS
+            + STUDENT_EXPLANATION_FINAL_CARD_HANDOFF_BUFFER_MS,
+        );
         if (finalCardDelay > 0) {
           await new Promise<void>((resolve) => globalThis.setTimeout(resolve, finalCardDelay));
         }
+        const totalTurnMs = Math.round(performance.now() - submitMonotonicMs);
+        globalThis.console?.info?.(
+          `[telemetry] turn-complete ${totalTurnMs}ms first-token=${firstTokenMs ?? "n/a"}ms chars=${charactersToRender} conversation=${activeConversationId}`,
+        );
         setTeachingConversationId(response.conversationId);
         setTeachingConversationTitle(response.conversationTitle || "AI 讲题");
         setTeachingConversationEntries((current) =>
@@ -1217,6 +1266,8 @@ export function App() {
                   imageFileName: submittedImage?.originalFileName,
                   imageStatus: response.imageStatus || submittedImage?.imageStatus,
                   response,
+                  firstTokenMs: firstTokenMs ?? undefined,
+                  totalMs: totalTurnMs,
                   createdAt: new Date().toISOString(),
                 }
               : entry.id === `user:${requestId}`
@@ -1945,6 +1996,9 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
       // Selecting the already-open task is idempotent; it must not clear the current context or alter history order.
       return;
     }
+    // 选中历史讲义后自动收起历史侧栏：任务和预览都在右侧工作区连续呈现，
+    // 侧栏继续展开只会挡住/挤占预览宽度（老板要求选中即折叠）。
+    setHandoutHistoryOpen(false);
     setLoadingTeachingTask(true);
     setOpeningTeachingHistoryTaskId(task.taskId);
     clearHandoutPreview();
@@ -2307,6 +2361,23 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
       })
       .catch((error: Error) => setMcpError(error.message))
       .finally(() => setMcpRevokingKeyId(""));
+  }
+
+  // 已停用 key 的物理删除：后端只放行 revoked 状态，删除后刷新列表即可清掉验收脚本留下的历史 key。
+  function handleDeleteMcpKey(keyId: string) {
+    setMcpDeletingKeyId(keyId);
+    setMcpError("");
+    api
+      .deleteMcpKey(keyId)
+      .then(() => {
+        if (mcpLatestCreatedKey?.keyId === keyId) {
+          setMcpLatestCreatedKey(null);
+          setMcpTestResult(null);
+        }
+        refreshMcpState();
+      })
+      .catch((error: Error) => setMcpError(error.message))
+      .finally(() => setMcpDeletingKeyId(""));
   }
 
   function handleCopyMcpConfiguration() {
@@ -2760,6 +2831,8 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
         recentConversations={teachingConversationSummaries}
         loading={submittingTeachingConversation}
         loadingHistory={loadingTeachingConversationHistory}
+        hasMoreConversations={hasMoreTeachingConversations}
+        loadingMoreConversations={loadingMoreTeachingConversations}
         error={teachingError}
         imageDraft={teachingConversationImageDraft}
         uploadingImage={uploadingTeachingConversationImage}
@@ -2771,6 +2844,7 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
         onClearImage={clearTeachingConversationImage}
         onStartNewConversation={startNewTeachingConversation}
         onOpenConversation={openTeachingConversation}
+        onLoadMoreConversations={loadMoreTeachingConversations}
       />,
     );
   }
@@ -3101,25 +3175,19 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
           <h1 className="page-title">MCP 接入</h1>
           <p className="page-subtitle">后端按当前登录态生成个人 MCP key 和标准配置，前端不再传递身份或 secret 参数</p>
         </div>
-        <div className="mcp-page-grid">
-          <div className="card card-full mcp-identity-card">
-            <div className="card-header">
-              <h2 className="card-title"><ShieldCheck size={16} /> 当前账号边界</h2>
-            </div>
-            <div className="card-body">
-              <McpIdentityBoundaryCard
-                username={authSession?.username}
-                userId={authSession?.userId}
-                roleLabel={sessionRoleLabel(authSession?.role)}
-                tenantId={authSession?.tenantId}
-              />
-            </div>
-          </div>
-          <div className="card mcp-config-card">
-            <div className="card-header">
-              <h2 className="card-title"><Globe size={16} /> Key 管理</h2>
-            </div>
-            <div className="card-body">
+        <div className="mcp-page">
+          <McpIdentityBoundaryCard
+            username={authSession?.username}
+            userId={authSession?.userId}
+            roleLabel={sessionRoleLabel(authSession?.role)}
+            tenantId={authSession?.tenantId}
+          />
+          <div className="mcp-columns">
+            <section className="mcp-card">
+              <div className="mcp-card-head">
+                <h2>Key 管理</h2>
+                <p>创建与吊销个人 MCP key，真实 secret 仅创建时返回一次</p>
+              </div>
               <McpConfigurationForm
                 creating={mcpCreating}
                 loadingKeys={mcpLoadingKeys}
@@ -3132,18 +3200,19 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
                 keys={mcpKeys}
                 latestCreatedKey={mcpLatestCreatedKey}
                 revokingKeyId={mcpRevokingKeyId}
+                deletingKeyId={mcpDeletingKeyId}
                 loading={mcpLoadingKeys}
                 copyMessage={mcpCopyMessage}
                 onCopyLatestSecret={handleCopyLatestMcpSecret}
                 onRevokeKey={handleRevokeMcpKey}
+                onDeleteKey={handleDeleteMcpKey}
               />
-            </div>
-          </div>
-          <div className="card mcp-result-card">
-            <div className="card-header">
-              <h2 className="card-title"><Network size={16} /> 配置与连接</h2>
-            </div>
-            <div className="card-body">
+            </section>
+            <section className="mcp-card">
+              <div className="mcp-card-head">
+                <h2>配置与连接</h2>
+                <p>把标准配置粘贴到任意 MCP 客户端即可接入</p>
+              </div>
               <McpConnectionTestPanel
                 testing={mcpTesting}
                 result={mcpTestResult}
@@ -3156,7 +3225,7 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
                 copyMessage={mcpCopyMessage}
                 onCopy={handleCopyMcpConfiguration}
               />
-            </div>
+            </section>
           </div>
         </div>
       </>,
@@ -4487,6 +4556,7 @@ function providerOptionLabel(provider: string) {
     openai: "OpenAI",
     dashscope: "通义千问",
     deepseek: "DeepSeek",
+    glm: "智谱 GLM",
     ark: "火山方舟",
   };
   return labels[provider] ?? provider;
