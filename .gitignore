@@ -82,3 +82,6 @@ tmp-*.txt
 # OS
 Thumbs.db
 .DS_Store
+
+# 基准评测真实凭据配置（复制自 config.example.json 后填写，禁止入库）
+benchmarks/config.json
