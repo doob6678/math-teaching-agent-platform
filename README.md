@@ -6,6 +6,55 @@
 
 ---
 
+## 平台架构
+
+系统按「前端控制台 → Java 编排控制面 → Python AI Worker 执行面 → 存储/中间件」分层，模型凭据只存在于 Worker：
+
+```mermaid
+flowchart LR
+    subgraph FE["浏览器"]
+        UI["前端控制台<br/>React 19 + Vite + TypeScript"]
+    end
+    subgraph BE["Java 后端 Spring Boot 3.5"]
+        API["Controller 鉴权限流<br/>Sa-Token + Redis"]
+        ORCH["教学任务编排<br/>DAG/ReAct + 状态机"]
+        MCP["MCP 工具边界<br/>runId 授权 + evidenceRef"]
+        LTX["XeLaTeX PDF 渲染<br/>Docker + Noto CJK"]
+    end
+    subgraph WK["Python AI Worker FastAPI + LangGraph"]
+        AG["多智能体工作流<br/>资源策展/规划/三版 Writer"]
+        AD["模型适配层<br/>OpenAI 与 Anthropic 兼容"]
+    end
+    UI -->|HTTP 与 SSE| API
+    API --> ORCH
+    ORCH --> DB[("MySQL")]
+    ORCH --> RD[("Redis")]
+    ORCH -->|RabbitMQ 领取阶段| AG
+    AG --> AD
+    AD --> LLM["外部模型<br/>gpt-5.6 系列 / GLM / DeepSeek"]
+    AG -->|授权检索| MCP
+    MCP --> MV[("Milvus<br/>gaokao_math 与教材教师资料")]
+    ORCH -->|run-scoped 签发| AG
+    ORCH --> LTX
+```
+
+讲义生成链路：检索 query 由 AI 自主生成，Java 只校验 `runId` 并执行向量检索，图片经 `evidenceRef + assetId` 授权后由渲染器物化：
+
+```mermaid
+flowchart TD
+    A["教师提交教学目标"] --> B["Java 创建任务并签发 runId"]
+    B --> C["resource_curation 接收初始证据"]
+    C --> D["plan_writer 自主生成检索关键词"]
+    D --> E["三源检索 教材/教师资料/高考题库"]
+    E --> F["Java 校验 runId 后执行 Milvus 检索<br/>返回 evidenceRef 与受限摘要"]
+    F --> G["三版 Writer 写作<br/>教师版/学生版/课堂投影版"]
+    G --> H["权威图片选择校验"]
+    H --> I["XeLaTeX 渲染三版本 PDF<br/>学生版隔离答案与批注"]
+    I --> J["验收清单逐项留证"]
+```
+
+---
+
 ## 讲义成品示例
 
 以下页面均由真实任务生成：Python AI Writer 完成全部教学正文与图片选用，Java 完成鉴权、持久化与 XeLaTeX/PDF 渲染，讲义中的题目图片来自经过授权校验的真实来源资产。
@@ -23,6 +72,32 @@
 - [涂色组合专题](output/acceptance/handout-mcp/handout-mcp-coloring-combinatorics-relevant-images-20260829T130201Z/)
 - [立体几何专题](output/acceptance/handout-mcp/handout-mcp-solid-geometry-gaokao-figure-final-20260829T165522Z/)
 - [抛物线专题](output/acceptance/handout-mcp/handout-mcp-parabola-image-binding-final-verified-20260829/)
+
+---
+
+## 前端控制台实拍
+
+以下截图取自本地真实运行的前端控制台（`http://127.0.0.1:5173`）：
+
+**工作台**——教学概览与教材资源统计（教材 8 册、文本块 3,317、PDF 页 1,067）：
+
+![工作台](docs/assets/frontend/dashboard.png)
+
+**讲义生成**——教学目标提交与三版本 PDF 生成入口：
+
+![讲义生成](docs/assets/frontend/handout-generation.png)
+
+**知识库**——SVG 力导向知识图谱（142 节点，支持拖拽、缩放与悬停高亮）：
+
+![知识库](docs/assets/frontend/knowledge-base.png)
+
+**AI 控制台**——模型目录、连通性检查与真实调用记录（1,760 次调用、用量 2,559,050）：
+
+![AI 控制台](docs/assets/frontend/ai-console.png)
+
+**MCP 接入**——按当前登录态生成个人 MCP Key 与标准握手配置：
+
+![MCP 接入](docs/assets/frontend/mcp-console.png)
 
 ---
 
@@ -91,7 +166,7 @@
 |---|---|
 | `backend-java/` | Spring Boot 3.5 + Java 21 后端，承载业务接口、Agent 编排、RAG 检索、数据库持久化、安全策略和协议服务。 |
 | `ai-worker-python/` | FastAPI + LangGraph 的 GPU AI Worker，承载讲义生成、教学规划、流式输出与模型适配层。 |
-| `frontend/` | 配套前端控制台，覆盖多页面导航（工作台、教材检索、教学任务、Agent 编排、流式编排、知识库、系统设置、独立登录页）。 |
+| `frontend/` | 配套前端控制台，覆盖多页面导航（工作台、教材检索、AI 讲题、AI 控制台、讲义生成、知识库、MCP 接入、系统设置、独立登录页）。 |
 | `docs/` | 现行架构规范、部署手册与验收清单。 |
 | `wiki-export/` | 项目 Wiki 导出（10 章 61 篇），见 [Wiki 目录索引](wiki-export/README.md)。 |
 | `benchmarks/` | 检索评测与数据集构建脚本。 |
@@ -189,10 +264,11 @@ RabbitMQ 使用持久化 direct exchange、命令队列和死信队列。MySQL `
 |---|---|
 | 工作台 | 学生学习概览、教材资源统计、快捷操作入口 |
 | 教材检索 | BM25+向量混合检索、命中证据、审计追踪 |
-| 教学任务 | 教学任务创建（异步提交 + 轮询等待）、讲义导出、反馈 |
-| Agent 编排 | Agent Policy 配置、模型规划执行、追踪面板 |
-| 流式编排 | 多智能体协作写作工作流 |
+| AI 讲题 | 单题讲解与流式输出 |
+| AI 控制台 | 模型目录与连通性检查、真实调用记录、用量统计 |
+| 讲义生成 | 讲义任务创建与提交、三版本 PDF 生成、SSE 进度与断点恢复 |
 | 知识库 | SVG 力导向知识图谱可视化、知识点维护、题库管理、向量 RAG 检索 |
+| MCP 接入 | 个人 MCP Key 生成与管理、标准握手配置、连接测试 |
 | 系统设置 | MCP 配置、后端连接、教师资源管理、当前会话状态 |
 | 登录页 | 独立登录页面（手动输入账号密码），登录后自动跳转工作台 |
 
