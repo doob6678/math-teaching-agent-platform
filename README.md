@@ -91,11 +91,11 @@ flowchart TD
 
 ![知识库](docs/assets/frontend/knowledge-base.png)
 
-**AI 控制台**——模型目录、连通性检查与真实调用记录（1,760 次调用、用量 2,559,050）：
+**AI 控制台**——模型目录、连通性检查、真实调用记录与用量汇总：
 
 ![AI 控制台](docs/assets/frontend/ai-console.png)
 
-**MCP 接入**——按当前登录态生成个人 MCP Key、标准握手配置与工具清单：
+**MCP 接入**——按当前登录态创建/吊销个人 MCP Key、连接测试与标准握手配置：
 
 ![MCP 接入](docs/assets/frontend/mcp-console.png)
 
