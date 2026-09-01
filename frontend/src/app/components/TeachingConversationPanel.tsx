@@ -404,25 +404,9 @@ export function TeachingConversationPanel({
                 <button className="teaching-quick-chip subtle" type="button" onClick={handlePasteImageFromClipboard}>
                   <Sparkles size={14} />粘贴图片
                 </button>
-                {/* 模型切换（老板 2026-09-01）：目录来自后端白名单，选择仅作路由偏好，权限与校验仍在后端。 */}
-                <select
-                  className="teaching-model-select"
-                  value={selectedModel}
-                  onChange={(event) => onModelChange(event.target.value)}
-                  aria-label="选择讲解模型"
-                  title="选择本轮讲解使用的模型；自动=后端默认路由"
-                >
-                  <option value="">自动 · {modelCatalog ? `${modelCatalog.defaultProviderName}/${modelCatalog.defaultModelCode}` : "默认模型"}</option>
-                  {(modelCatalog?.providers ?? []).filter((provider) => provider.enabled).map((provider) => (
-                    <optgroup key={provider.name} label={provider.name}>
-                      {(provider.models ?? []).map((model) => (
-                        <option key={`${provider.name}::${model.modelCode}`} value={`${provider.name}::${model.modelCode}`}>
-                          {model.modelCode}{model.modelLevel ? ` · ${model.modelLevel}` : ""}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ))}
-                </select>
+                {/* 模型切换（老板 2026-09-01）：目录来自后端白名单，选择仅作路由偏好，权限与校验仍在后端。
+                    老板反馈原生 select 在嵌入式浏览器里点击弹不出选项，改为 button+menu 的自定义下拉。 */}
+                <ModelPicker catalog={modelCatalog} value={selectedModel} onChange={onModelChange} />
               </div>
               <button className="teaching-send-btn" type="submit" disabled={loading || uploadingImage || (!value.trim() && !imageDraft)}>
                 {loading ? <Loader2 className="spin" size={17} /> : <ArrowUp size={18} />}
@@ -1291,4 +1275,89 @@ function firstClipboardImage(items?: DataTransferItemList | null) {
     if (file) return file;
   }
   return null;
+}
+
+/**
+ * 讲解模型选择器（老板 2026-09-01 二轮反馈）：原生 <select> 在 ZCode 内嵌浏览器里点击弹不出选项，
+ * 改为 button + 弹出菜单的自定义下拉。菜单向上弹出（composer 固定在页面底部）；点击外部或选中后关闭。
+ * 目录仍来自后端白名单（AgentModelCatalogResponse），这里只负责展示与选择，不做任何路由校验。
+ */
+function ModelPicker({
+  catalog,
+  value,
+  onChange,
+}: {
+  catalog: AgentModelCatalogResponse | null;
+  value: string;
+  onChange: (next: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDocMouseDown = (event: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDocMouseDown);
+    return () => document.removeEventListener("mousedown", onDocMouseDown);
+  }, [open]);
+  const autoLabel = `自动 · ${catalog ? `${catalog.defaultProviderName}/${catalog.defaultModelCode}` : "默认模型"}`;
+  const selectedLabel = value ? value.split("::").slice(1).join("::") : autoLabel;
+  const providers = (catalog?.providers ?? []).filter((provider) => provider.enabled);
+  return (
+    <div className="teaching-model-picker" ref={rootRef}>
+      <button
+        type="button"
+        className="teaching-model-trigger"
+        onClick={() => setOpen((current) => !current)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label="选择讲解模型"
+        title="选择本轮讲解使用的模型；自动=后端默认路由"
+      >
+        <span>{selectedLabel}</span>
+        <ChevronDown size={13} />
+      </button>
+      {open ? (
+        <div className="teaching-model-menu" role="listbox">
+          <button
+            type="button"
+            role="option"
+            aria-selected={!value}
+            className={value ? undefined : "active"}
+            onClick={() => {
+              onChange("");
+              setOpen(false);
+            }}
+          >
+            {autoLabel}
+          </button>
+          {providers.map((provider) => (
+            <div key={provider.name} className="teaching-model-group">
+              <em>{provider.name}</em>
+              {(provider.models ?? []).map((model) => {
+                const optionValue = `${provider.name}::${model.modelCode}`;
+                return (
+                  <button
+                    key={optionValue}
+                    type="button"
+                    role="option"
+                    aria-selected={value === optionValue}
+                    className={value === optionValue ? "active" : undefined}
+                    onClick={() => {
+                      onChange(optionValue);
+                      setOpen(false);
+                    }}
+                  >
+                    <span>{model.modelCode}</span>
+                    {model.modelLevel ? <small>{model.modelLevel}</small> : null}
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
 }
