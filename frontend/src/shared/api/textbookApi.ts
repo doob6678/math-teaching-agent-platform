@@ -1612,6 +1612,10 @@ export interface StudentExplanationRequest {
   useConversationMemory?: boolean;
   /** Stable client-generated idempotency key used to resume one explanation run after reconnect. */
   clientRequestId?: string;
+  /** Optional model switch selected in the chat UI; backend validates it against the enabled provider catalog. */
+  preferredProviderName?: string;
+  /** Optional model code selected in the chat UI; blank falls back to the backend default route. */
+  preferredModelCode?: string;
 }
 
 /**
@@ -1868,6 +1872,8 @@ export interface StudentExplanationAiDraft {
   message: string;
   /** Retry, parse, and provider-rotation events. */
   recoveryEvents: StudentExplanationAiRecoveryEvent[];
+  /** Provider hidden-thinking transcript persisted with this round; blank for legacy rounds. */
+  reasoningTrace?: string;
 }
 
 /**

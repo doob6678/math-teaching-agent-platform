@@ -111,7 +111,8 @@ class MyBatisStudentExplanationHistoryStoreTest {
                         14,
                         true,
                         "ok",
-                        List.of()),
+                        List.of(),
+                        ""),
                 List.of(new StudentExplanationResponse.WorkflowStage(
                         "persist_history", "save", "completed", "ok", 1)),
                 List.of(new StudentExplanationResponse.ExplanationCard(

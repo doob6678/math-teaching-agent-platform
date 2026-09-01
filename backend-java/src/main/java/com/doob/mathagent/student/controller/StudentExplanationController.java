@@ -303,6 +303,9 @@ public class StudentExplanationController {
             AtomicBoolean disconnected) {
         StringBuilder streamedProviderContent = new StringBuilder();
         String[] sentVisibleContent = {""};
+        // 思考轨迹与正文分开累计：推理增量原样直传（不做 JSON 投影），只需按已发送前缀去重防止重放重复。
+        StringBuilder streamedProviderReasoning = new StringBuilder();
+        String[] sentReasoningContent = {""};
         explanationService.explain(request, subject, new StudentExplanationProgressListener() {
             @Override
             public boolean isCancelled() {
@@ -320,10 +323,12 @@ public class StudentExplanationController {
                     List<StudentExplanationResponse.ExplanationCard> cards) {
                 String visibleDelta = visibleProviderDelta(streamedProviderContent, sentVisibleContent,
                         delta == null ? "" : delta.contentDelta());
+                String reasoningDelta = rawReasoningDelta(streamedProviderReasoning, sentReasoningContent,
+                        delta == null ? "" : delta.reasoningDelta());
                 List<StudentExplanationResponse.ExplanationCard> safeCards = cards == null ? List.of() : List.copyOf(cards);
-                if (visibleDelta.isBlank() && safeCards.isEmpty()) return;
+                if (visibleDelta.isBlank() && reasoningDelta.isBlank() && safeCards.isEmpty()) return;
                 publish(runId, emitter, disconnected, "ai_delta", new StudentExplanationStreamEvent(
-                        "ai_delta", "", null, null, null, null, visibleDelta, "", safeCards));
+                        "ai_delta", "", null, null, null, null, visibleDelta, reasoningDelta, safeCards));
             }
 
             @Override
@@ -449,6 +454,38 @@ public class StudentExplanationController {
             next = candidate.substring(commonLength);
         }
         sentVisibleContent[0] = candidate;
+        return next;
+    }
+
+    /**
+     * Passes the hidden-thinking transcript through verbatim, deduplicated against what has already been sent.
+     *
+     * <p>Reasoning is plain provider prose, so unlike {@link #visibleProviderDelta} it needs no JSON field
+     * projection or mojibake re-projection — only the same longest-stable-prefix guard against duplicate sends
+     * when a listener is re-invoked after a transport replay.</p>
+     *
+     * @param cumulativeProviderReasoning all reasoning deltas received for this model call
+     * @param sentReasoningContent previously emitted reasoning text
+     * @param reasoningDelta latest provider reasoning delta
+     * @return only the new reasoning text
+     */
+    private static String rawReasoningDelta(
+            StringBuilder cumulativeProviderReasoning,
+            String[] sentReasoningContent,
+            String reasoningDelta) {
+        if (reasoningDelta == null || reasoningDelta.isBlank()) {
+            return "";
+        }
+        cumulativeProviderReasoning.append(reasoningDelta);
+        String cumulative = cumulativeProviderReasoning.toString();
+        String previouslySent = sentReasoningContent[0];
+        String next;
+        if (cumulative.startsWith(previouslySent)) {
+            next = cumulative.substring(previouslySent.length());
+        } else {
+            next = cumulative.substring(commonPrefixLength(previouslySent, cumulative));
+        }
+        sentReasoningContent[0] = cumulative;
         return next;
     }
 

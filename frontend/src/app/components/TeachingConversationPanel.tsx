@@ -1,7 +1,24 @@
 import katex from "katex";
 import { ChangeEvent, ClipboardEvent, FormEvent, useEffect, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, ChevronDown, ChevronLeft, ExternalLink, History, Loader2, Plus, Sparkles, X } from "lucide-react";
 import {
+  ArrowLeft,
+  ArrowUp,
+  CheckCircle2,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Copy,
+  ExternalLink,
+  History,
+  Lightbulb,
+  Loader2,
+  Plus,
+  Sparkles,
+  X,
+  XCircle,
+} from "lucide-react";
+import {
+  AgentModelCatalogResponse,
   StudentExplanationConversationSummary,
   StudentExplanationImageUploadResponse,
   StudentExplanationResponse,
@@ -69,6 +86,9 @@ export function TeachingConversationPanel({
   onStartNewConversation,
   onOpenConversation,
   onLoadMoreConversations = () => {},
+  modelCatalog = null,
+  selectedModel = "",
+  onModelChange = () => {},
 }: {
   conversationTitle: string;
   value: string;
@@ -95,10 +115,17 @@ export function TeachingConversationPanel({
   onStartNewConversation: () => void;
   onOpenConversation: (conversation: StudentExplanationConversationSummary) => void;
   onLoadMoreConversations?: () => void;
+  /** 后端模型目录（复用控制台已加载数据）；为空时选择器只保留“自动”。 */
+  modelCatalog?: AgentModelCatalogResponse | null;
+  /** 当前选中的 "provider::model"；空串表示自动路由。 */
+  selectedModel?: string;
+  onModelChange?: (value: string) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const followsLatestRef = useRef(true);
+  // 追平 Qwen 的回到底部浮动按钮：ref 供滚动联动逻辑同步读取，state 只驱动按钮显隐。
+  const [followsLatest, setFollowsLatest] = useState(true);
   const [clipboardError, setClipboardError] = useState("");
   // 宽屏默认展开左侧历史栏（常驻侧栏），窄屏默认收起、由顶栏按钮唤出抽屉。
   const [drawerOpen, setDrawerOpen] = useState(() => typeof window !== "undefined" && window.innerWidth >= 1100);
@@ -115,6 +142,15 @@ export function TeachingConversationPanel({
     if (!container) return;
     const remaining = container.scrollHeight - container.scrollTop - container.clientHeight;
     followsLatestRef.current = remaining <= 24;
+    setFollowsLatest(remaining <= 24);
+  }
+
+  function scrollToLatestMessage() {
+    const container = scrollRef.current;
+    if (!container) return;
+    followsLatestRef.current = true;
+    setFollowsLatest(true);
+    container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
   }
 
   function handlePickImage(event: ChangeEvent<HTMLInputElement>) {
@@ -157,7 +193,10 @@ export function TeachingConversationPanel({
   const composerError = imageError || clipboardError;
 
   return (
-    <section className="teaching-live-shell teaching-chat-shell" aria-label="AI 讲题">
+    <section
+      className={`teaching-live-shell teaching-chat-shell${entries.length ? "" : " is-empty"}`}
+      aria-label="AI 讲题"
+    >
       <div
         className={`teaching-chat-drawer-backdrop${drawerOpen ? " open" : ""}`}
         onClick={() => setDrawerOpen(false)}
@@ -246,39 +285,45 @@ export function TeachingConversationPanel({
 
       <div className="teaching-live-scroll" ref={scrollRef} onScroll={handleConversationScroll}>
         {!entries.length ? (
-          <div className="teaching-inline-guide">
-            <span>发题目</span>
-            <span>贴题图</span>
-            <span>继续追问</span>
+          <div className="teaching-chat-hero">
+            <h1>有什么数学题可以帮你？</h1>
+            <div className="teaching-chat-hero-tips">
+              <span>发题目</span>
+              <span>贴题图</span>
+              <span>继续追问</span>
+            </div>
           </div>
         ) : null}
 
         {entries.map((entry) => entry.role === "user" ? (
           <article className="teaching-user-row" key={entry.id}>
-            <div className="teaching-user-bubble">
-              {entry.imagePreviewUrl ? (
-                <div className="teaching-inline-image">
-                  <img src={entry.imagePreviewUrl} alt={entry.imageFileName || "题图"} />
-                </div>
-              ) : null}
-              <RichText text={entry.questionText} />
-              {entry.imageFileName ? (
-                <div className="teaching-inline-meta">
-                  <span>{entry.imageFileName}</span>
-                  <span>{imageStatusText(entry.imageStatus)}</span>
-                </div>
-              ) : null}
+            <div className="teaching-user-bubble-wrap">
+              <div className="teaching-user-bubble">
+                {entry.imagePreviewUrl ? (
+                  <div className="teaching-inline-image">
+                    <img src={entry.imagePreviewUrl} alt={entry.imageFileName || "题图"} />
+                  </div>
+                ) : null}
+                <RichText text={entry.questionText} />
+                {entry.imageFileName ? (
+                  <div className="teaching-inline-meta">
+                    <span>{entry.imageFileName}</span>
+                    <span>{imageStatusText(entry.imageStatus)}</span>
+                  </div>
+                ) : null}
+              </div>
+              <CopyButton text={entry.questionText} label="复制提问" />
             </div>
           </article>
         ) : (
           <article className="teaching-assistant-row" key={entry.id}>
-            <div className="teaching-assistant-avatar">AI</div>
             <div className="teaching-assistant-flow">
               {entry.response ? (
                 <AssistantResponse
                   response={entry.response}
                   firstTokenMs={entry.firstTokenMs}
                   totalMs={entry.totalMs}
+                  reasoningTrace={entry.liveThinking}
                 />
               ) : entry.loading ? (
                 <LiveAssistantResponse entry={entry} />
@@ -299,6 +344,15 @@ export function TeachingConversationPanel({
           <div className="teaching-global-error">{error}</div>
         ) : null}
       </div>
+
+      <button
+        type="button"
+        className={`teaching-scroll-bottom${followsLatest ? "" : " show"}`}
+        onClick={scrollToLatestMessage}
+        aria-label="回到最新消息"
+      >
+        <ChevronDown size={16} />
+      </button>
 
       <form className="teaching-live-composer" onSubmit={onSubmit}>
         <input ref={fileInputRef} accept="image/*" className="sr-only-input" type="file" onChange={handlePickImage} />
@@ -350,14 +404,34 @@ export function TeachingConversationPanel({
                 <button className="teaching-quick-chip subtle" type="button" onClick={handlePasteImageFromClipboard}>
                   <Sparkles size={14} />粘贴图片
                 </button>
+                {/* 模型切换（老板 2026-09-01）：目录来自后端白名单，选择仅作路由偏好，权限与校验仍在后端。 */}
+                <select
+                  className="teaching-model-select"
+                  value={selectedModel}
+                  onChange={(event) => onModelChange(event.target.value)}
+                  aria-label="选择讲解模型"
+                  title="选择本轮讲解使用的模型；自动=后端默认路由"
+                >
+                  <option value="">自动 · {modelCatalog ? `${modelCatalog.defaultProviderName}/${modelCatalog.defaultModelCode}` : "默认模型"}</option>
+                  {(modelCatalog?.providers ?? []).filter((provider) => provider.enabled).map((provider) => (
+                    <optgroup key={provider.name} label={provider.name}>
+                      {(provider.models ?? []).map((model) => (
+                        <option key={`${provider.name}::${model.modelCode}`} value={`${provider.name}::${model.modelCode}`}>
+                          {model.modelCode}{model.modelLevel ? ` · ${model.modelLevel}` : ""}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
               </div>
               <button className="teaching-send-btn" type="submit" disabled={loading || uploadingImage || (!value.trim() && !imageDraft)}>
-                {loading ? <Loader2 className="spin" size={17} /> : <ArrowRight size={17} />}
+                {loading ? <Loader2 className="spin" size={17} /> : <ArrowUp size={18} />}
               </button>
             </div>
           </div>
           {composerError ? <div className="teaching-inline-error">{composerError}</div> : null}
         </div>
+        <div className="teaching-composer-disclaimer">内容由 AI 生成，请自行核对重要信息。</div>
       </form>
       </div>
     </section>
@@ -365,16 +439,24 @@ export function TeachingConversationPanel({
 }
 
 /**
- * Shows only stages and text that have arrived from the backend SSE stream. The elapsed clock measures the user's
- * real request wait, while each completed stage keeps its backend-measured duration.
+ * Live view of a running explanation, mirroring the Qwen chat pattern: one collapsed thinking row that streams the
+ * active workflow step in place, plus a fixed right panel ("思考与搜索") that holds the full stage timeline and the
+ * evidence found so far. The panel stays mounted (translated off-screen when closed) so opened state survives
+ * re-renders without remounting the stream-driven list.
  */
 function LiveAssistantResponse({ entry }: { entry: Extract<TeachingConversationThreadItem, { role: "assistant" }> }) {
   const progress = entry.progress;
   const stages = visibleWorkflowStages(progress?.workflowStages ?? []);
   const sources = progress?.sources ?? [];
-  const image = progress?.imageUnderstanding;
   const [liveElapsedMs, setLiveElapsedMs] = useState(() => liveElapsedSince(entry.createdAt, progress?.totalElapsedMs));
+  const [thinkingOpen, setThinkingOpen] = useState(false);
   const liveAnswer = useCharacterRenderedText(liveTextForDisplay(entry.liveContent ?? "", sources));
+  // 主区行只滚动展示最近一条推进：优先正在运行的步骤，否则取最后一条已完成的步骤。
+  const activeStage = [...stages].reverse().find((stage) => stage.status !== "completed") ?? stages[stages.length - 1];
+  // Provider 隐藏思考的完整流式文本；有内容时主区行与右侧面板都展示它（老板要求的"展示思考所有内容"）。
+  const reasoning = entry.liveThinking ?? "";
+  const traceTextRef = useRef<HTMLDivElement | null>(null);
+  const reasoningFollowsRef = useRef(true);
 
   useEffect(() => {
     if (entry.response || entry.error) return;
@@ -384,49 +466,87 @@ function LiveAssistantResponse({ entry }: { entry: Extract<TeachingConversationT
     return () => globalThis.clearInterval(timer);
   }, [entry.createdAt, entry.error, entry.response, progress?.totalElapsedMs]);
 
+  // 思考文本增长时把轨迹滚动区钉在底部；读者向上回看时停止跟随。
+  useEffect(() => {
+    const el = traceTextRef.current;
+    if (!el || !reasoningFollowsRef.current) return;
+    el.scrollTop = el.scrollHeight;
+  }, [reasoning]);
+
   return (
     <>
-      <section className="teaching-status-card pending compact">
-        <div className="teaching-status-head compact">
-          <strong>正在讲解</strong>
-          {typeof entry.firstTokenMs === "number" ? (
-            <span className="teaching-speed-chip good" title="从提交到首个讲解内容到达的耗时">首字 {formatSpeedMs(entry.firstTokenMs)}</span>
-          ) : null}
-          <span><Loader2 className="spin" size={12} />{formatElapsed(liveElapsedMs)}</span>
-        </div>
-        {progress?.questionText || entry.questionText ? (
-          <p className="teaching-status-question">{progress?.questionText || entry.questionText}</p>
+      <button
+        type="button"
+        className={`teaching-thinking-row live${thinkingOpen ? " open" : ""}`}
+        onClick={() => setThinkingOpen((current) => !current)}
+        aria-expanded={thinkingOpen}
+      >
+        <Lightbulb size={17} className="teaching-thinking-bulb" aria-hidden="true" />
+        <strong>正在讲解</strong>
+        <span className="teaching-thinking-live-text">
+          {reasoning ? reasoningTailText(reasoning) : activeStage ? stageDetailText(activeStage) : "正在整理思路…"}
+        </span>
+        {typeof entry.firstTokenMs === "number" ? (
+          <span className="teaching-speed-chip good" title="从提交到首个讲解内容到达的耗时">首字 {formatSpeedMs(entry.firstTokenMs)}</span>
         ) : null}
-        {stages.length ? (
-          <div className="teaching-trace-live compact" aria-label="真实处理过程">
+        <span className="teaching-thinking-elapsed"><Loader2 className="spin" size={12} />{formatElapsed(liveElapsedMs)}</span>
+        <ChevronRight size={15} className="teaching-thinking-chevron" aria-hidden="true" />
+      </button>
+
+      <aside
+        className={`teaching-thinking-panel${thinkingOpen ? " open" : ""}`}
+        aria-label="思考与搜索"
+        aria-hidden={!thinkingOpen}
+      >
+        <div className="teaching-thinking-panel-head">
+          <Lightbulb size={16} aria-hidden="true" />
+          <strong>思考与搜索</strong>
+          <button type="button" className="teaching-thinking-panel-close" onClick={() => setThinkingOpen(false)} aria-label="关闭思考面板">
+            <X size={15} />
+          </button>
+        </div>
+        <div className="teaching-thinking-panel-body">
+          <section className="teaching-thinking-trace" aria-label="思考过程">
+            <div className="teaching-thinking-sources-head">
+              <strong>思考过程</strong>
+              <span>{countCharacters(reasoning)} 字</span>
+            </div>
+            <div
+              className="teaching-thinking-trace-text"
+              ref={traceTextRef}
+              onScroll={(event) => {
+                const el = event.currentTarget;
+                reasoningFollowsRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 24;
+              }}
+            >
+              {reasoning || "模型正在思考…"}
+            </div>
+          </section>
+          <div className="teaching-thinking-timeline" aria-label="真实处理过程">
             {stages.map((stage) => (
-              <div className={`teaching-trace-live-item ${stageTone(stage.status)}`} key={stage.stageKey}>
-                <span className="teaching-trace-live-dot" />
-                <div>
+              <div className={`teaching-thinking-step ${stageTone(stage.status)}`} key={stage.stageKey}>
+                <span className="teaching-thinking-step-icon" aria-hidden="true">
+                  {stage.status === "completed" ? <CheckCircle2 size={15} /> : stage.status === "failed" ? <XCircle size={15} /> : <Loader2 className="spin" size={15} />}
+                </span>
+                <div className="teaching-thinking-step-copy">
                   <strong>{stageTitleText(stage.stageKey, stage.title)}</strong>
-                  <small>{stageDetailText(stage)}</small>
+                  <p>{stageDetailText(stage)}</p>
                 </div>
               </div>
             ))}
           </div>
-        ) : null}
-        {image?.problemText ? (
-          <details className="teaching-live-details">
-            <summary>查看题图识别结果</summary>
-            <RichText text={image.problemText} />
-            <span>识别置信度 {Math.round(image.confidence * 100)}%</span>
-          </details>
-        ) : null}
-      </section>
-      {sources.length ? (
-        <section className="teaching-live-sources" aria-label="已找到的资料">
-          <div className="teaching-live-sources-head">
-            <strong>已找到的资料</strong>
-            <span>{sources.length} 条</span>
-          </div>
-          <EvidenceSourceList sources={sources} />
-        </section>
-      ) : null}
+          {sources.length ? (
+            <section className="teaching-thinking-sources" aria-label="已找到的资料">
+              <div className="teaching-thinking-sources-head">
+                <strong>已找到的资料</strong>
+                <span>{sources.length} 条</span>
+              </div>
+              <EvidenceSourceList sources={sources} />
+            </section>
+          ) : null}
+        </div>
+      </aside>
+
       {liveAnswer ? (
         <section className="teaching-response-card agent teaching-live-answer" aria-label="讲解内容">
           <div className="teaching-rich-block">
@@ -436,6 +556,16 @@ function LiveAssistantResponse({ entry }: { entry: Extract<TeachingConversationT
       ) : null}
     </>
   );
+}
+
+/** 主区思考行只保留推理的最新片段，等价于 Qwen 在状态行上流式刷新的最新思考句。 */
+function reasoningTailText(reasoning: string) {
+  const tail = reasoning.slice(-60);
+  return tail.length < reasoning.length ? `…${tail}` : tail;
+}
+
+function countCharacters(value: string) {
+  return Array.from(value).length;
 }
 
 /** Adaptive character queue: small deltas keep a typewriter feel while large backlogs drain within a bounded time. */
@@ -468,18 +598,24 @@ function AssistantResponse({
   response,
   firstTokenMs,
   totalMs,
+  reasoningTrace,
 }: {
   response: StudentExplanationResponse;
   /** 本轮实测的首字耗时与总耗时；只有当回合由当前浏览器流式发起时才有值。 */
   firstTokenMs?: number;
   totalMs?: number;
+  /** 本轮的模型思考轨迹：流式回合来自浏览器累计，历史回合来自 aiDraft.reasoningTrace 持久化。 */
+  reasoningTrace?: string;
 }) {
   const cards = visibleExplanationCards(response.cards ?? []);
   const sources = response.sources ?? [];
   const stages = visibleWorkflowStages(response.workflowStages ?? []);
+  const reasoning = (reasoningTrace || response.aiDraft?.reasoningTrace || "").trim();
 
   return (
     <div className="teaching-answer-layout">
+      {/* 老板 2026-09-01：完成态"已完成思考"必须像 Qwen 一样位于回答最上方，而不是压在正文下面。 */}
+      <EvidenceInspector response={response} stages={stages} sources={sources} reasoningTrace={reasoning} />
       <div className="teaching-answer-content">
         {typeof firstTokenMs === "number" ? (
           <div className="teaching-speed-line" title="首个讲解内容到达 / 本轮讲解全程耗时">
@@ -497,9 +633,57 @@ function AssistantResponse({
             <div className="teaching-rich-block"><RichText text={safeUserFacingText(response.questionText, "已收到本次问题。")} /></div>
           </section>
         )}
+        <CopyButton
+          text={answerPlainText(cards)}
+          label="复制讲解"
+          disabled={!cards.length}
+        />
       </div>
-      <EvidenceInspector response={response} stages={stages} sources={sources} />
     </div>
+  );
+}
+
+/** 把讲解卡片串成可复制的纯文本；只使用已经过安全清洗的标题与正文，公式保留原始分隔符供粘贴到其他工具。 */
+function answerPlainText(cards: StudentExplanationResponse["cards"]) {
+  return cards
+    .map((card) => {
+      const items = (card.items ?? []).filter((item) => item.trim().length > 0);
+      return [card.title, card.summary, ...items]
+        .map((part) => (part ?? "").trim())
+        .filter(Boolean)
+        .join("\n");
+    })
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+/** Qwen 式悬浮小复制按钮：悬停在消息行上时出现，点击写入剪贴板并短暂提示已复制。 */
+function CopyButton({ text, label, disabled = false }: { text: string; label: string; disabled?: boolean }) {
+  const [copied, setCopied] = useState(false);
+
+  async function handleCopy() {
+    if (!text.trim()) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      globalThis.setTimeout(() => setCopied(false), 1600);
+    } catch {
+      // 剪贴板不可用（非安全上下文等）时静默失败，不打断阅读。
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      className={`teaching-copy-btn${copied ? " done" : ""}`}
+      onClick={handleCopy}
+      disabled={disabled || !text.trim()}
+      aria-label={label}
+      title={copied ? "已复制" : label}
+    >
+      {copied ? <CheckCircle2 size={13} /> : <Copy size={13} />}
+      <span>{copied ? "已复制" : "复制"}</span>
+    </button>
   );
 }
 
@@ -511,12 +695,15 @@ function EvidenceInspector({
   response,
   stages,
   sources,
+  reasoningTrace,
 }: {
   response: StudentExplanationResponse;
   stages: StudentExplanationStage[];
   sources: StudentExplanationResponse["sources"];
+  /** 模型思考轨迹；为空时折叠区不渲染该节，保持旧数据形态不变。 */
+  reasoningTrace?: string;
 }) {
-  if (!stages.length && !sources.length) return null;
+  if (!stages.length && !sources.length && !reasoningTrace) return null;
   const sourceSummary = sourceSummaryText(sources);
   const assignedSourceTypes = new Set(
     stages.map((stage) => retrievalSourceType(stage.stageKey)).filter((type): type is string => type !== null),
@@ -526,11 +713,21 @@ function EvidenceInspector({
     <aside className="teaching-evidence-inspector" aria-label="本轮检索与执行记录">
       <details className="ai-run-disclosure teaching-evidence-disclosure">
         <summary>
-          <span>执行与证据</span>
+          <Lightbulb size={16} className="teaching-thinking-bulb" aria-hidden="true" />
+          <strong className="teaching-thinking-title">已完成思考</strong>
           <span className="teaching-evidence-summary">{stages.length ? `${stages.length} 个实际步骤` : sourceSummary}</span>
           <ChevronDown size={15} aria-hidden="true" />
         </summary>
         <div className="teaching-evidence-body">
+          {reasoningTrace ? (
+            <section className="teaching-thinking-trace" aria-label="思考过程">
+              <div className="teaching-thinking-sources-head">
+                <strong>思考过程</strong>
+                <span>{countCharacters(reasoningTrace)} 字</span>
+              </div>
+              <div className="teaching-thinking-trace-text static">{reasoningTrace}</div>
+            </section>
+          ) : null}
           {stages.length ? (
             <section className="teaching-subtle-panel">
               <div className="teaching-subtle-head">
@@ -684,12 +881,16 @@ export function visibleExplanationCards(cards: StudentExplanationResponse["cards
 
 const LEGACY_SYNTHETIC_STAGE_KEYS = new Set(["plan_explanation", "understand_problem", "default_retrieval"]);
 
+// 内部持久化/会话缓存步骤不是教学动作，学生时间线不展示（老板 2026-09-01 反馈："Mysql 加载那个不应该显示"）。
+const INTERNAL_STAGE_KEYS = new Set(["persist_history", "load_conversation_context"]);
+
 /** Keeps the trace factual: skipped/pending work and legacy pre-announced stages are never presented as execution. */
 export function visibleWorkflowStages(stages: StudentExplanationStage[]) {
   return stages.filter((stage) =>
     stage.status !== "skipped"
     && stage.status !== "pending"
-    && !LEGACY_SYNTHETIC_STAGE_KEYS.has(stage.stageKey));
+    && !LEGACY_SYNTHETIC_STAGE_KEYS.has(stage.stageKey)
+    && !INTERNAL_STAGE_KEYS.has(stage.stageKey));
 }
 
 /** Renders one backend-produced section without inferring a template role from its title or position. */

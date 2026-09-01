@@ -167,14 +167,19 @@ def _openai_usage(usage: dict[str, Any]) -> dict[str, int] | None:
 def to_openai_completion(anthropic_response: dict[str, Any]) -> dict[str, Any]:
     """Converts a full Anthropic Messages response into the OpenAI completion shape.
 
-    thinking blocks stay internal to the model and are never surfaced as answer text.
+    thinking blocks are mapped to the OpenAI-compatible `reasoning_content` message field
+    so runtimes can persist a private thinking trace; they are never merged into answer
+    text, and visible-content code paths only ever read `content`.
     """
     text_parts: list[str] = []
+    reasoning_parts: list[str] = []
     tool_calls: list[dict[str, Any]] = []
     for block in anthropic_response.get("content") or []:
         block_type = str(block.get("type") or "")
         if block_type == "text" and block.get("text"):
             text_parts.append(str(block["text"]))
+        elif block_type == "thinking" and block.get("thinking"):
+            reasoning_parts.append(str(block["thinking"]))
         elif block_type == "tool_use":
             tool_calls.append({
                 "id": str(block.get("id") or ""),
@@ -185,6 +190,8 @@ def to_openai_completion(anthropic_response: dict[str, Any]) -> dict[str, Any]:
                 },
             })
     message: dict[str, Any] = {"role": "assistant", "content": "".join(text_parts)}
+    if reasoning_parts:
+        message["reasoning_content"] = "".join(reasoning_parts)
     if tool_calls:
         message["tool_calls"] = tool_calls
     choice: dict[str, Any] = {"index": 0, "message": message}
@@ -220,10 +227,11 @@ def openai_sse_data_frames(response: Any, completion: dict[str, bool] | None = N
 
     Frames match what the OpenAI runtimes already parse: content deltas, merged
     tool_call argument deltas, and a final frame carrying cumulative usage and
-    finish_reason. Reasoning deltas are dropped so no private model thinking can
-    leak into visible output or durable checkpoints. `completion` receives True
-    only when the provider sent message_stop, so string-framed consumers can keep
-    the original "stream ended before [DONE]" truncation guard.
+    finish_reason. Reasoning deltas are emitted as OpenAI-style
+    `delta.reasoning_content` frames: visible-content parsers never read that key, so
+    thinking reaches only runtimes that explicitly persist private diagnostics.
+    `completion` receives True only when the provider sent message_stop, so string-framed
+    consumers can keep the original "stream ended before [DONE]" truncation guard.
     """
     usage: dict[str, Any] = {}
     stop_reason: str | None = None
@@ -261,7 +269,9 @@ def openai_sse_data_frames(response: Any, completion: dict[str, bool] | None = N
                 yield {"choices": [{"index": 0, "delta": {"tool_calls": [{
                     "index": tool_index, "function": {"arguments": str(delta["partial_json"])},
                 }]}}]}
-            # thinking_delta / signature_delta 是模型私有推理，禁止进入可见流或检查点。
+            elif delta_type == "thinking_delta" and delta.get("thinking"):
+                # 思考增量单独走 reasoning_content，禁止进入可见 content；signature_delta 仍是内部签名，直接丢弃。
+                yield {"choices": [{"index": 0, "delta": {"reasoning_content": str(delta["thinking"])}}]}
         elif event_type == "message_delta":
             delta = event.get("delta") or {}
             if delta.get("stop_reason"):

@@ -214,6 +214,7 @@ public record StudentExplanationResponse(
      * @param structured whether model output parsed into the expected card schema
      * @param message safe status message
      * @param recoveryEvents retry, parse, and provider-rotation events
+     * @param reasoningTrace provider hidden-thinking transcript (bounded); blank for legacy rounds
      */
     public record AiDraft(
             boolean enabled,
@@ -224,13 +225,14 @@ public record StudentExplanationResponse(
             int totalTokens,
             boolean structured,
             String message,
-            List<AiRecoveryEvent> recoveryEvents) {
+            List<AiRecoveryEvent> recoveryEvents,
+            String reasoningTrace) {
 
         /**
          * Returns a disabled AI node result.
          */
         public static AiDraft disabled(String message) {
-            return new AiDraft(false, "", "", 0, 0, 0, false, message, List.of());
+            return new AiDraft(false, "", "", 0, 0, 0, false, message, List.of(), "");
         }
     }
 

@@ -63,9 +63,6 @@ public class StudentExplanationService {
     private static final int RAW_RECENT_CONTEXT_MAX_ESTIMATED_TOKENS = 512;
     /** Cosine scores below this boundary are too weak to replace an explicit graph label match. */
     private static final double DEFAULT_KNOWLEDGE_GRAPH_SEMANTIC_MIN_SCORE = 0.45d;
-    /** Explicit user intents which benefit from the authorized RAG tool-selection turn. */
-    private static final Set<String> RETRIEVAL_INTENT_TERMS = Set.of(
-            "资料", "讲义", "教材", "课件", "来源", "依据", "相关题", "练习", "推荐", "检索", "搜索", "查找", "怎么讲", "如何讲", "知识点");
     // 此版本号用于区分新版 Agent 结果与历史模板结果，无需重写既有会话记录。
     private static final String GENERATED_BY = "student_explanation_react_agent_v1";
     private static final Logger log = LoggerFactory.getLogger(StudentExplanationService.class);
@@ -356,16 +353,14 @@ public class StudentExplanationService {
         listener.throwIfCancelled();
         Set<String> available = availableReactTools(request, subject);
         long decisionStarted = System.nanoTime();
-        if (available.isEmpty() || !requiresRetrievalPlanning(visibleQuestion)) {
-            // A self-contained calculation needs no external fact. Running a planner before the required card
-            // composition would add a second remote model round-trip without improving correctness, so retrieval
-            // is reserved for an explicit material/related-question request. The trace stays explicit for learners.
-            String detail = available.isEmpty()
-                    ? "当前请求未启用可授权检索工具，直接生成讲解。"
-                    : "题干可独立求解，直接生成讲解；需要资料时可明确提出检索请求。";
-            upsertStage(stages, stageFrom(decisionStarted, "react_decision", "AI判断", "completed", detail));
+        if (available.isEmpty()) {
+            // 是否检索交给 AI 决策（react 规划轮），Java 不再用关键词门槛替模型判断——老板实测"教材哪一页"
+            // 被门槛跳过检索后模型凭记忆泛答。只有完全无授权工具时才直接生成讲解。
+            upsertStage(stages, stageFrom(decisionStarted, "react_decision", "AI判断", "completed",
+                    "当前请求未启用可授权检索工具，直接生成讲解。"));
             emitProgress(listener, request, visibleQuestion, stages, cards, sources, imageRecord,
-                    imageUnderstanding, aiDraft, conversationTitle, startedNanos, detail);
+                    imageUnderstanding, aiDraft, conversationTitle, startedNanos,
+                    "当前请求未启用可授权检索工具，直接生成讲解。");
             return new ReactEvidence(List.of(), List.of(), null);
         }
         List<KnowledgeGraphSpineResponse.Node> knowledgeNodes = new ArrayList<>();
@@ -389,7 +384,8 @@ public class StudentExplanationService {
         StudentExplanationAiCardService.ReactDecision decision = aiCardService.nextReactDecision(
                 reactProblemContext(visibleQuestion, packedConversationContext),
                 sources, observations, available, imageDataUrl, decisionStream,
-                request.clientRequestId() + ":react");
+                request.clientRequestId() + ":react",
+                request.preferredProviderName(), request.preferredModelCode());
         String decisionDetail;
         if (decision.isFinal()) {
             decisionDetail = "AI判断题目自洽，本轮不执行检索。";
@@ -538,14 +534,6 @@ public class StudentExplanationService {
         // "teacher resources".  Keeping the tool available lets the model actively retrieve public follow-up facts.
         if (Boolean.TRUE.equals(request.searchTeacherResources())) tools.add("search_teacher_resources");
         return tools;
-    }
-
-    /**
-     * Keeps RAG deliberate: direct calculations compose immediately, while material-seeking questions retain ReAct.
-     */
-    private static boolean requiresRetrievalPlanning(String question) {
-        String normalized = compactForMatch(question);
-        return RETRIEVAL_INTENT_TERMS.stream().anyMatch(normalized::contains);
     }
 
     /** Evidence accumulated by ReAct actions and supplied to the final answer composer. */

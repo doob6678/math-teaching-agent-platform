@@ -94,6 +94,21 @@ public class StudentExplanationAiCardService {
             String imageDataUrl,
             StudentExplanationAiStreamListener streamListener,
             String runId) {
+        return nextReactDecision(problem, sources, observations, availableTools, imageDataUrl, streamListener,
+                runId, null, null);
+    }
+
+    /** 带模型偏好的 ReAct planner 调用；偏好经 Java provider 目录白名单校验后进入路由签发。 */
+    public ReactDecision nextReactDecision(
+            String problem,
+            List<StudentExplanationResponse.ExplanationSource> sources,
+            List<String> observations,
+            Set<String> availableTools,
+            String imageDataUrl,
+            StudentExplanationAiStreamListener streamListener,
+            String runId,
+            String preferredProviderName,
+            String preferredModelCode) {
         Set<String> allowed = availableTools == null ? Set.of() : Set.copyOf(availableTools);
         // 决策改走 Python 流式端点：final 轮的 title/summary JSON 增量实时交给投影层（StudentExplanationController
         // 只提取 title/summary/items 文本），学生首字从整包完成降到首个字段到达；action 轮没有这些字段不会泄漏工具名。
@@ -105,20 +120,25 @@ public class StudentExplanationAiCardService {
                 observations == null ? List.of() : observations,
                 safe(imageDataUrl),
                 event -> {
-                    if (!"delta".equals(event.eventName()) || safe(event.content()).isBlank()) {
+                    // 决策流的真实思考增量进 reasoning 槽位；决策 JSON 正文（decision/cards）绝不能外泄——
+                    // 它既不是可见答案也不是思考文本，最终结论统一由 completed 终态事件下发。
+                    if (!"delta".equals(event.eventName()) || safe(event.reasoning()).isBlank()) {
                         return;
                     }
                     StudentExplanationAiStreamListener listener = streamListener == null
                             ? StudentExplanationAiStreamListener.NOOP : streamListener;
                     listener.onDelta(new AiChatStreamDelta(
-                            event.providerName(), event.modelCode(), event.content(), "", 0, 0, 0), List.of());
-                });
+                            event.providerName(), event.modelCode(), safe(event.reasoning()), "", 0, 0, 0), List.of());
+                },
+                safe(preferredProviderName),
+                safe(preferredModelCode));
         if ("final".equals(result.decision())) {
             List<StudentExplanationResponse.ExplanationCard> cards = normalizeCards(result.cards(), sources);
             if (cards.isEmpty()) {
                 return ReactDecision.invalid("Python ReAct final omitted valid cards.");
             }
-            StudentExplanationResponse.AiDraft draft = aiDraft(result.usage(), result.providerName(), result.modelCode());
+            StudentExplanationResponse.AiDraft draft = aiDraft(
+                    result.usage(), result.providerName(), result.modelCode(), result.reasoningTrace());
             StudentExplanationAiStreamListener listener = streamListener == null
                     ? StudentExplanationAiStreamListener.NOOP : streamListener;
             listener.onDelta(delta(result), cards);
@@ -201,7 +221,10 @@ public class StudentExplanationAiCardService {
                 evidence(sources),
                 safe(imageDataUrl),
                 event -> {
-                    if (!"delta".equals(event.eventName()) || safe(event.content()).isBlank()) {
+                    // 思考增量（reasoning）与可见正文（content）都可能单独到达，二者皆空才跳过；
+                    // reasoning 走 AiChatStreamDelta 的独立槽位，绝不能混入 contentDelta 污染卡片 JSON 流。
+                    if (!"delta".equals(event.eventName())
+                            || (safe(event.content()).isBlank() && safe(event.reasoning()).isBlank())) {
                         return;
                     }
                     StudentExplanationAiStreamListener listener = streamListener == null
@@ -210,8 +233,11 @@ public class StudentExplanationAiCardService {
                     // worker 的可见 JSON 增量必须进 contentDelta；此前传到 reasoning 槽位导致投影层全部丢弃，
                     // 学生端首字退化成整包完成（9 秒级）。
                     listener.onDelta(new AiChatStreamDelta(
-                            event.providerName(), event.modelCode(), "", event.content(), 0, 0, 0), List.of());
-                });
+                            event.providerName(), event.modelCode(), safe(event.reasoning()), safe(event.content()), 0, 0, 0), List.of());
+                },
+                // 模型切换偏好只影响路由 primary；空白时 providerRoute 走默认路由。
+                safe(request.preferredProviderName()),
+                safe(request.preferredModelCode()));
         List<StudentExplanationResponse.ExplanationCard> cards = normalizeCards(result.cards(), sources);
         if (cards.isEmpty()) {
             throw new IllegalStateException("Python student explanation returned no valid cards");
@@ -222,11 +248,11 @@ public class StudentExplanationAiCardService {
                 result.providerName(), result.modelCode(), "", "", result.usage().promptTokens(),
                 result.usage().completionTokens(), result.usage().totalTokens()), cards);
         return new AiCardDraft(result.conversationTitle(), cards,
-                aiDraft(result.usage(), result.providerName(), result.modelCode()));
+                aiDraft(result.usage(), result.providerName(), result.modelCode(), result.reasoningTrace()));
     }
 
     private static StudentExplanationResponse.AiDraft aiDraft(
-            PythonMigratedWorkloadClient.Usage usage, String provider, String model) {
+            PythonMigratedWorkloadClient.Usage usage, String provider, String model, String reasoningTrace) {
         return new StudentExplanationResponse.AiDraft(
                 true, safe(provider), safe(model), usage.promptTokens(), usage.completionTokens(), usage.totalTokens(),
                 true, "Python student explanation completed.",
@@ -234,7 +260,8 @@ public class StudentExplanationAiCardService {
                         event("PYTHON_MODEL_CALL_SUCCEEDED", provider, model, false, true,
                                 "Python worker completed model execution."),
                         event("PYTHON_CITATION_VALIDATED", provider, model, true, false,
-                                "Java validated returned source URIs.")));
+                                "Java validated returned source URIs.")),
+                reasoningTrace == null || reasoningTrace.isBlank() ? "" : reasoningTrace);
     }
 
     private static AiChatStreamDelta delta(PythonMigratedWorkloadClient.ExplanationDecision result) {

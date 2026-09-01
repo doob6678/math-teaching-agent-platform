@@ -31,6 +31,8 @@ public class PythonMigratedWorkloadClient {
     private static final long MIN_TIMEOUT_MS = 1_000L;
     private static final long DEFAULT_TIMEOUT_MS = 60_000L;
     private static final int MAX_FALLBACKS = 3;
+    /** 思考轨迹持久化上限：覆盖长推理链（约 6 万字符 ≈ 2-3 万汉字），超出截断防止 ai_draft_json 无界膨胀。 */
+    private static final int REASONING_TRACE_MAX_CHARS = 65_536;
 
     private final Environment environment;
     private final RestClient client;
@@ -128,6 +130,21 @@ public class PythonMigratedWorkloadClient {
             List<String> observations,
             String imageDataUrl,
             Consumer<ExplanationStreamEvent> listener) {
+        return streamDecideStudentExplanation(runId, problem, evidence, availableTools, observations,
+                imageDataUrl, listener, null, null);
+    }
+
+    /** 带模型偏好的流式决策：偏好无效时 providerRoute 自动回退默认路由。 */
+    public ExplanationDecision streamDecideStudentExplanation(
+            String runId,
+            String problem,
+            List<ExplanationEvidence> evidence,
+            List<String> availableTools,
+            List<String> observations,
+            String imageDataUrl,
+            Consumer<ExplanationStreamEvent> listener,
+            String preferredProviderName,
+            String preferredModelCode) {
         String workerKey = environment.getProperty(
                 "math-agent.python-agent.worker-key", environment.getProperty("math-agent.worker-api-key", ""));
         if (workerKey == null || workerKey.isBlank()) {
@@ -141,7 +158,7 @@ public class PythonMigratedWorkloadClient {
                 "availableTools", availableTools == null ? List.of() : availableTools.stream().map(item -> bounded(item, 80)).toList(),
                 "observations", observations == null ? List.of() : observations.stream().map(item -> bounded(item, 800)).toList(),
                 "imageDataUrl", imageDataUrl == null ? "" : imageDataUrl,
-                "providerRoute", providerRoute(runId, "student_explanation"));
+                "providerRoute", providerRoute(runId, "student_explanation", preferredProviderName, preferredModelCode));
         try {
             return client.post()
                     .uri("/v1/student-explanations/stream")
@@ -176,7 +193,8 @@ public class PythonMigratedWorkloadClient {
                 List.copyOf(finalCards),
                 usage(root),
                 bounded(root.path("providerName").asText(), 64),
-                bounded(root.path("modelCode").asText(), 160));
+                bounded(root.path("modelCode").asText(), 160),
+                bounded(root.path("reasoningTrace").asText(), REASONING_TRACE_MAX_CHARS));
     }
 
     /** 调用 Python 流式卡片 endpoint；每个 delta 到达后立即交给 Java 公共 SSE 投影层。 */
@@ -186,6 +204,18 @@ public class PythonMigratedWorkloadClient {
             List<ExplanationEvidence> evidence,
             String imageDataUrl,
             Consumer<ExplanationStreamEvent> listener) {
+        return streamStudentExplanation(runId, problem, evidence, imageDataUrl, listener, null, null);
+    }
+
+    /** 带模型偏好的流式卡片生成：偏好无效时 providerRoute 自动回退默认路由。 */
+    public ExplanationResult streamStudentExplanation(
+            String runId,
+            String problem,
+            List<ExplanationEvidence> evidence,
+            String imageDataUrl,
+            Consumer<ExplanationStreamEvent> listener,
+            String preferredProviderName,
+            String preferredModelCode) {
         String workerKey = environment.getProperty(
                 "math-agent.python-agent.worker-key", environment.getProperty("math-agent.worker-api-key", ""));
         if (workerKey == null || workerKey.isBlank()) {
@@ -199,7 +229,7 @@ public class PythonMigratedWorkloadClient {
                 "availableTools", List.of(),
                 "observations", List.of(),
                 "imageDataUrl", imageDataUrl == null ? "" : imageDataUrl,
-                "providerRoute", providerRoute(runId, "student_explanation"));
+                "providerRoute", providerRoute(runId, "student_explanation", preferredProviderName, preferredModelCode));
         try {
             return client.post()
                     .uri("/v1/student-explanations/stream")
@@ -253,7 +283,8 @@ public class PythonMigratedWorkloadClient {
                         String normalized = bounded(eventName, 32);
                         if ("delta".equals(normalized)) {
                             if (listener != null) {
-                                listener.accept(new ExplanationStreamEvent("delta", payload.path("content").asText(""), null,
+                                listener.accept(new ExplanationStreamEvent("delta", payload.path("content").asText(""),
+                                        payload.path("reasoning").asText(""), null,
                                         bounded(payload.path("providerName").asText(), 64),
                                         bounded(payload.path("modelCode").asText(), 160), ""));
                             }
@@ -288,7 +319,8 @@ public class PythonMigratedWorkloadClient {
                     stringArray(item.path("sourceUris"), 24, 320), bounded(item.path("renderMode").asText("text"), 32)));
         }
         return new ExplanationResult(bounded(root.path("conversationTitle").asText(), 80), List.copyOf(cards),
-                usage(root), bounded(root.path("providerName").asText(), 64), bounded(root.path("modelCode").asText(), 160));
+                usage(root), bounded(root.path("providerName").asText(), 64), bounded(root.path("modelCode").asText(), 160),
+                bounded(root.path("reasoningTrace").asText(), REASONING_TRACE_MAX_CHARS));
     }
 
     /**
@@ -503,7 +535,17 @@ public class PythonMigratedWorkloadClient {
     }
 
     private Map<String, Object> providerRoute(String runId, String workload) {
-        AiProviderCatalog.Provider primary = providerCatalog.defaultProvider();
+        return providerRoute(runId, workload, null, null);
+    }
+
+    /**
+     * 签发本轮 provider 路由；前端模型切换传入偏好时，偏好模型成为 primary（仍经目录白名单校验），
+     * 其余启用模型按原顺序作 fallback。routeGrant 按实际列表签名，worker 校验与之一致。
+     */
+    private Map<String, Object> providerRoute(
+            String runId, String workload, String preferredProviderName, String preferredModelCode) {
+        AiProviderCatalog.Provider primary = providerCatalog.preferredProvider(preferredProviderName, preferredModelCode)
+                .orElseGet(providerCatalog::defaultProvider);
         List<Map<String, String>> fallbacks = providerCatalog.enabledProviders().stream()
                 .filter(provider -> !provider.name().equals(primary.name())
                         || !provider.chatModel().equals(primary.chatModel()))
@@ -574,7 +616,8 @@ public class PythonMigratedWorkloadClient {
             List<ExplanationCard> cards,
             Usage usage,
             String providerName,
-            String modelCode) {
+            String modelCode,
+            String reasoningTrace) {
     }
 
     public record ExplanationCard(
@@ -589,6 +632,7 @@ public class PythonMigratedWorkloadClient {
     public record ExplanationStreamEvent(
             String eventName,
             String content,
+            String reasoning,
             ExplanationResult result,
             String providerName,
             String modelCode,
@@ -600,7 +644,8 @@ public class PythonMigratedWorkloadClient {
             List<ExplanationCard> cards,
             Usage usage,
             String providerName,
-            String modelCode) {
+            String modelCode,
+            String reasoningTrace) {
     }
 
     public record Usage(int promptTokens, int completionTokens, int totalTokens) {

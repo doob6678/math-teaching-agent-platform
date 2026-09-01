@@ -86,7 +86,7 @@ def test_build_payload_drops_no_tool_marker_with_tool_choice_none():
     assert "tool_choice" not in converted
 
 
-def test_to_openai_completion_skips_thinking_and_maps_tool_use():
+def test_to_openai_completion_isolates_thinking_in_reasoning_content():
     anthropic_response = {
         "id": "msg_1", "type": "message", "role": "assistant", "model": "glm-5.3-flash",
         "content": [
@@ -100,7 +100,9 @@ def test_to_openai_completion_skips_thinking_and_maps_tool_use():
     choice = converted["choices"][0]
     assert choice["message"]["content"] == "收到"
     assert "tool_calls" not in choice["message"]
-    assert "private reasoning" not in json.dumps(converted, ensure_ascii=False)
+    # 2026-08-31 契约变更：thinking 单独落入 reasoning_content 供私有诊断落盘，绝不并入可见 content。
+    assert choice["message"]["reasoning_content"] == "private reasoning"
+    assert choice["message"]["content"] == "收到"
     assert choice["finish_reason"] == "stop"
     assert converted["usage"]["prompt_tokens"] == 17
     assert converted["usage"]["completion_tokens"] == 79
@@ -132,7 +134,7 @@ def _sse_response(frames: list[str]):
     return FakeResponse(frames)
 
 
-def test_openai_sse_data_lines_translates_stream_and_hides_thinking():
+def test_openai_sse_data_lines_translates_stream_and_separates_thinking():
     frames = [
         "event: message_start",
         'data: {"type": "message_start", "message": {"id": "msg_1", "usage": {"input_tokens": 12, "output_tokens": 0}}}',
@@ -160,7 +162,13 @@ def test_openai_sse_data_lines_translates_stream_and_hides_thinking():
     decoded = [json.loads(line) for line in lines[:-1]]
     contents = "".join((item["choices"][0]["delta"].get("content") or "") for item in decoded)
     assert contents == "收到"
-    assert "private" not in "".join(lines)
+    # thinking 增量只能以 reasoning_content 形状出现（私有落盘通道），content 通道必须干净。
+    reasoning = "".join(
+        (item["choices"][0]["delta"].get("reasoning_content") or "") for item in decoded)
+    assert reasoning == "private"
+    for item in decoded:
+        delta = item["choices"][0].get("delta") or {}
+        assert "private" not in (delta.get("content") or "")
     final = decoded[-1]
     assert final["choices"][0]["finish_reason"] == "stop"
     assert final["usage"]["prompt_tokens"] == 17

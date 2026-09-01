@@ -15,6 +15,8 @@ package com.doob.mathagent.student.dto;
  * @param maxTextbookHits maximum textbook evidence hits to use
  * @param maxTeacherResourceHits maximum teacher resource hits to use
  * @param useConversationMemory legacy client flag; an existing conversationId always loads its own history
+ * @param preferredProviderName optional model switch selected in the chat UI; backend validates against the catalog
+ * @param preferredModelCode optional model code selected in the chat UI; blank falls back to the default route
  */
 public record StudentExplanationRequest(
         String conversationId,
@@ -29,7 +31,9 @@ public record StudentExplanationRequest(
         Integer maxTextbookHits,
         Integer maxTeacherResourceHits,
         Boolean useConversationMemory,
-        String clientRequestId) {
+        String clientRequestId,
+        String preferredProviderName,
+        String preferredModelCode) {
 
     /** Preserves existing callers; the legacy memory flag is retained only for wire compatibility. */
     public StudentExplanationRequest(
@@ -57,6 +61,8 @@ public record StudentExplanationRequest(
                 maxTextbookHits,
                 maxTeacherResourceHits,
                 false,
+                null,
+                null,
                 null);
     }
 
@@ -87,6 +93,8 @@ public record StudentExplanationRequest(
                 maxTextbookHits,
                 maxTeacherResourceHits,
                 useConversationMemory,
+                null,
+                null,
                 null);
     }
 
@@ -108,7 +116,10 @@ public record StudentExplanationRequest(
                 clamp(maxTextbookHits, 3, 1, 8),
                 clamp(maxTeacherResourceHits, 3, 1, 6),
                 Boolean.TRUE.equals(useConversationMemory),
-                normalizeClientRequestId(clientRequestId));
+                normalizeClientRequestId(clientRequestId),
+                // 模型偏好是可选路由提示，限长防注入；空串归一为 null 让 providerRoute 走默认路由。
+                boundedOrNull(preferredProviderName, 40),
+                boundedOrNull(preferredModelCode, 80));
     }
 
     /**
@@ -138,7 +149,9 @@ public record StudentExplanationRequest(
                 maxTextbookHits,
                 maxTeacherResourceHits,
                 useConversationMemory,
-                clientRequestId).normalize();
+                clientRequestId,
+                preferredProviderName,
+                preferredModelCode).normalize();
     }
 
     /** 返回携带稳定请求幂等键的副本，供同一轮工作流恢复使用。 */
@@ -156,7 +169,9 @@ public record StudentExplanationRequest(
                 maxTextbookHits,
                 maxTeacherResourceHits,
                 useConversationMemory,
-                nextClientRequestId).normalize();
+                nextClientRequestId,
+                preferredProviderName,
+                preferredModelCode).normalize();
     }
 
     /** 将客户端幂等键限制为可审计的短文本；缺失时由服务端生成。 */
@@ -186,5 +201,14 @@ public record StudentExplanationRequest(
      */
     private static String textOrNull(String value) {
         return value == null || value.isBlank() ? null : value.strip();
+    }
+
+    /** 偏好字段限长截断；空白归一为 null，避免超长输入进入路由签名。 */
+    private static String boundedOrNull(String value, int limit) {
+        String normalized = textOrNull(value);
+        if (normalized == null) {
+            return null;
+        }
+        return normalized.length() > limit ? normalized.substring(0, limit) : normalized;
     }
 }

@@ -18,9 +18,8 @@ from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.ai_run_runtime import ProviderRoute
-from app import anthropic_compat
+from app import provider_profiles
 from app.model_review_runtime import BoundedModelReviewController, ModelReviewExhausted
-from app.sse import iter_sse_data_events
 from app.usage import UsageEvent, UsageLedger, cost_for, fallback_tokens
 
 
@@ -281,7 +280,10 @@ class MigratedWorkloadRuntime:
                     "{\"conversationTitle\":\"不超过15个中文字符\",\"cards\":[{\"cardKey\":\"stable_snake_case\","
                     "\"title\":\"\",\"summary\":\"简明中文讲解\",\"items\":[],\"sourceUris\":[],"
                     "\"renderMode\":\"text|formula|source_list\"}]}。"
-                    "sourceUris 只能来自 evidence；不要输出 Markdown 或推理过程。" + MATH_MARKUP_OUTPUT_CONTRACT
+                    "sourceUris 只能来自 evidence；不要输出 Markdown 或推理过程。"
+                    # 思考质量约束：小模型在拼装 JSON 时容易把思考退化成字段名片段，这里要求思考面向讲解本身。
+                    "思考时请用连贯完整的中文叙述讲解思路与推导依据；不要在思考中逐字拼装 JSON、复述字段名或输出"
+                    "英文碎片，想清内容后直接给出最终 JSON。" + MATH_MARKUP_OUTPUT_CONTRACT
                 )},
                 {"role": "user", "content": json.dumps({
                     "problem": request.problem,
@@ -297,6 +299,12 @@ class MigratedWorkloadRuntime:
                     "final 必须同时返回 cards，引用只能来自 evidence。不要输出推理过程或 Markdown。"
                     "题干已经给出全部条件且可通过代数、几何或定义直接完成的题目，必须选择 final，"
                     "不得为了复述通用概念而检索；只有缺少题目所必需的外部事实时才能选择 action。"
+                    # 老板实测：问"教材哪一页/哪个版本"这类资料定位问题被模型当自洽题跳过检索，答成泛泛而谈。
+                    # 教材版本、页码、章节、出处属于题目自身无法给出的外部事实，必须强制走检索工具。
+                    "当题目询问教材、课本、页码、章节、目录、版本（如人教A版/B版）、资料出处或配套练习时，"
+                    "这些是题目本身不包含的外部事实：必须选择 action，优先调用 search_textbook，"
+                    "并生成 2-4 个含具体知识点名的检索词（如\"人教B版 选择性必修 排列组合 章节定位\"）。"
+                    "思考时请用连贯完整的中文说明判断依据；不要在思考中逐字拼装 JSON 或输出英文碎片。"
                     + MATH_MARKUP_OUTPUT_CONTRACT
                 )},
                 {"role": "user", "content": json.dumps({
@@ -313,6 +321,7 @@ class MigratedWorkloadRuntime:
             ]}
         yield {"event": "started", "data": {"runId": request.runId}}
         content_parts: list[str] = []
+        reasoning_parts: list[str] = []
         usage: dict[str, Any] = {}
         provider = ""
         model = ""
@@ -327,6 +336,14 @@ class MigratedWorkloadRuntime:
                     provider = item.get("provider", provider)
                     model = item.get("model", model)
                     provider_attempt = int(item.get("attempt", provider_attempt))
+                    if item.get("reasoning"):
+                        reasoning_parts.append(str(item["reasoning"]))
+                        yield {"event": "delta", "data": {
+                            "runId": request.runId,
+                            "reasoning": str(item["reasoning"]),
+                            "providerName": provider,
+                            "modelCode": model,
+                        }}
                     if item.get("content"):
                         content_parts.append(str(item["content"]))
                         yield {"event": "delta", "data": {
@@ -358,6 +375,8 @@ class MigratedWorkloadRuntime:
                 response = {"status": "COMPLETED", "decision": "action" if tools else "final",
                             "tools": tools, "queries": queries, "usage": result.usage(),
                             "providerName": provider, "modelCode": model}
+            # 完整思考轨迹随 completed 事件上抛，Java 截断后写入 ai_draft_json，历史回看不再依赖事件表重放。
+            response["reasoningTrace"] = "".join(reasoning_parts)
             yield {"event": "completed", "data": {"runId": request.runId, **response}}
         except HTTPException as exc:
             yield {"event": "error", "data": {"runId": request.runId, "status": exc.status_code, "message": str(exc.detail)}}
@@ -369,12 +388,11 @@ class MigratedWorkloadRuntime:
         provider_attempts = max(1, int(os.getenv("MATH_AGENT_STUDENT_EXPLANATION_MODEL_ATTEMPTS", "2")))
         retry_backoff_seconds = max(0.0, float(os.getenv("MATH_AGENT_STUDENT_EXPLANATION_RETRY_BACKOFF_SECONDS", "1.0")))
         for provider_index, selection in enumerate([route.primary, *route.fallbacks]):
-            key_name = {"openai": "OPENAI_API_KEY", "dashscope": "DASHSCOPE_API_KEY", "deepseek": "DEEPSEEK_API_KEY", "ark": "ARK_API_KEY", "glm": "GLM_API_KEY"}[selection.name]
-            api_key = os.getenv(key_name)
+            resolved = provider_profiles.profile(selection.name)
+            api_key, base_url = provider_profiles.credentials(selection.name)
             if not api_key:
                 failures.append(selection.name + ":configuration")
                 continue
-            bases = {"openai": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"), "dashscope": "https://dashscope.aliyuncs.com/compatible-mode/v1", "deepseek": "https://api.deepseek.com/v1", "ark": "https://ark.cn-beijing.volces.com/api/v3", "glm": anthropic_compat.default_base_url()}
             payload = {
                 "model": selection.model,
                 "messages": messages,
@@ -384,22 +402,19 @@ class MigratedWorkloadRuntime:
             }
             if require_json_object:
                 payload["response_format"] = {"type": "json_object"}
-            anthropic_format = anthropic_compat.is_anthropic_provider(selection.name)
             for provider_try in range(provider_attempts):
                 attempt = provider_index * provider_attempts + provider_try + 1
                 visible_output = False
                 content_parts: list[str] = []
                 try:
-                    with self._session.post(
-                        bases[selection.name].rstrip() + ("/v1/messages" if anthropic_format else "/chat/completions"),
-                        headers=anthropic_compat.anthropic_headers(api_key) if anthropic_format else {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                        json=anthropic_compat.build_messages_payload(payload) if anthropic_format else payload,
-                        stream=True, timeout=float(os.getenv("MATH_AGENT_MIGRATED_RUNTIME_TIMEOUT_SECONDS", "45")),
+                    with provider_profiles.open_stream(
+                        resolved, self._session, api_key, base_url, payload,
+                        float(os.getenv("MATH_AGENT_MIGRATED_RUNTIME_TIMEOUT_SECONDS", "45")),
                     ) as response:
                         response.raise_for_status()
                         completed = False
-                        # Anthropic 流被适配层翻译成 OpenAI 形状的 data 帧字符串，下游解析保持不变。
-                        data_events = anthropic_compat.openai_sse_data_lines(response) if anthropic_format else iter_sse_data_events(response)
+                        # Anthropic 流被 provider 层翻译成 OpenAI 形状的 data 帧字符串，下游解析保持不变。
+                        data_events = provider_profiles.sse_data_lines(resolved, response)
                         for value in data_events:
                             if value == "[DONE]":
                                 completed = True
@@ -430,14 +445,20 @@ class MigratedWorkloadRuntime:
                             if usage:
                                 yield {"provider": selection.name, "model": selection.model, "attempt": attempt, "usage": usage}
                             for choice in decoded.get("choices") or []:
-                                delta = (choice.get("delta") or {}).get("content")
-                                if delta:
-                                    content_parts.append(str(delta))
+                                delta = choice.get("delta") or {}
+                                reasoning = delta.get("reasoning_content")
+                                if reasoning:
+                                    # 思考增量与正文分离上抛：前端要在"思考与搜索"面板展示完整推理过程，
+                                    # 但绝不能混进 content，否则会污染卡片 JSON 流和可见正文。
+                                    yield {"provider": selection.name, "model": selection.model, "attempt": attempt, "reasoning": str(reasoning)}
+                                text = delta.get("content")
+                                if text:
+                                    content_parts.append(str(text))
                                     if require_json_object and not "".join(content_parts).lstrip().startswith("{"):
                                         raise ValueError("provider response does not start with a JSON object")
                                     if emit_visible_content:
                                         visible_output = True
-                                    yield {"provider": selection.name, "model": selection.model, "attempt": attempt, "content": str(delta)}
+                                    yield {"provider": selection.name, "model": selection.model, "attempt": attempt, "content": str(text)}
                         if require_json_object:
                             try:
                                 self._json_object("".join(content_parts))
@@ -714,42 +735,24 @@ class MigratedWorkloadRuntime:
         raise HTTPException(status_code=503, detail="all configured providers failed: " + ",".join(failures))
 
     def _call_one(self, run_id: str, provider: str, model: str, attempt: int, messages: list[dict[str, Any]]) -> ProviderResult:
-        key_name = {"openai": "OPENAI_API_KEY", "dashscope": "DASHSCOPE_API_KEY", "deepseek": "DEEPSEEK_API_KEY", "ark": "ARK_API_KEY", "glm": "GLM_API_KEY"}[provider]
-        api_key = os.getenv(key_name)
+        api_key, base_url = provider_profiles.credentials(provider)
         if not api_key:
             raise HTTPException(status_code=503, detail="provider API key is unavailable")
-        defaults = {
-            "openai": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-            "dashscope": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-            "deepseek": "https://api.deepseek.com/v1",
-            "ark": "https://ark.cn-beijing.volces.com/api/v3",
-            "glm": anthropic_compat.default_base_url(),
-        }
         request_payload = {
             "model": model,
             "messages": messages,
             "temperature": 0,
             # Compose is consumed by a strict card schema below.  Ask every compatible provider for a
             # JSON object here as well as in the streaming route, otherwise a valid prose answer would
-            # be rejected only after the paid model call has completed.
+            # be rejected only after the paid model call has completed.  GLM has no response_format
+            # concept; the provider layer's Anthropic conversion simply ignores this field.
             "response_format": {"type": "json_object"},
         }
         try:
-            if anthropic_compat.is_anthropic_provider(provider):
-                # GLM 的 Anthropic 端点没有 response_format 概念，JSON-only 由提示词合同保证。
-                data = anthropic_compat.post_chat_completion(
-                    self._session, api_key, defaults[provider].rstrip("/"), request_payload,
-                    float(os.getenv("MATH_AGENT_MIGRATED_RUNTIME_TIMEOUT_SECONDS", "45")),
-                )
-            else:
-                response = self._session.post(
-                    defaults[provider].rstrip("/") + "/chat/completions",
-                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                    json=request_payload,
-                    timeout=float(os.getenv("MATH_AGENT_MIGRATED_RUNTIME_TIMEOUT_SECONDS", "45")),
-                )
-                response.raise_for_status()
-                data = response.json()
+            data = provider_profiles.post_completion(
+                provider_profiles.profile(provider), self._session, api_key, base_url, request_payload,
+                float(os.getenv("MATH_AGENT_MIGRATED_RUNTIME_TIMEOUT_SECONDS", "45")),
+            )
             content = str(data["choices"][0]["message"].get("content") or "")
             usage = data.get("usage") or {}
             prompt = int(usage.get("prompt_tokens", 0) or 0)

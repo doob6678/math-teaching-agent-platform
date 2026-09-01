@@ -54,4 +54,8 @@ declare module "lucide-react" {
   export const History: LucideIcon;
   export const Download: LucideIcon;
   export const Eye: LucideIcon;
+  export const Lightbulb: LucideIcon;
+  export const ArrowUp: LucideIcon;
+  export const CheckCircle2: LucideIcon;
+  export const XCircle: LucideIcon;
 }

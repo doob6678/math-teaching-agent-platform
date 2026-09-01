@@ -243,6 +243,9 @@ export function App() {
   const [handoutAiModel, setHandoutAiModel] = useState("");
   const [teachingTask, setTeachingTask] = useState<TeachingTaskResponse | null>(null);
   const [teachingConversationInput, setTeachingConversationInput] = useState("");
+  // 讲题对话模型切换（老板 2026-09-01 要求）："" 表示自动（后端默认路由），否则为 "provider::model"，
+  // 随请求以 preferredProviderName/preferredModelCode 提交，后端仍按目录白名单校验后才进路由。
+  const [teachingModel, setTeachingModel] = useState("");
   const [teachingConversationId, setTeachingConversationId] = useState(() => readStoredTeachingConversation().conversationId);
   const [teachingConversationTitle, setTeachingConversationTitle] = useState("AI 讲题");
   const [teachingConversationSummaries, setTeachingConversationSummaries] = useState<StudentExplanationConversationSummary[]>([]);
@@ -1169,6 +1172,9 @@ export function App() {
         maxTeacherResourceHits: 3,
         // A conversation is the context boundary. Every follow-up carries its durable prior turns automatically.
         useConversationMemory: true,
+        // 模型切换偏好：拆 "provider::model" 交给后端目录校验；空串保持默认路由。
+        preferredProviderName: teachingModel.includes("::") ? teachingModel.split("::", 1)[0] : undefined,
+        preferredModelCode: teachingModel.includes("::") ? teachingModel.split("::").slice(1).join("::") : undefined,
       }, (_eventName: string, payload: StudentExplanationStreamEvent) => {
         if (payload.response) {
           completedResponseReceived = true;
@@ -1209,6 +1215,8 @@ export function App() {
                     // Keep provider-originated bytes visible while strict card parsing continues in parallel. React
                     // renders this as text, so unfinished JSON cannot execute markup or scripts in the browser.
                     liveContent: `${entry.liveContent || ""}${payload.aiContentDelta || ""}`,
+                    // 思考轨迹与正文分离累计；右侧"思考与搜索"面板流式展示完整推理过程。
+                    liveThinking: `${entry.liveThinking || ""}${payload.aiReasoningDelta || ""}`,
                   };
                 })()
               : entry.id === `user:${requestId}`
@@ -1257,7 +1265,7 @@ export function App() {
         setTeachingConversationTitle(response.conversationTitle || "AI 讲题");
         setTeachingConversationEntries((current) =>
           current.map((entry) =>
-            entry.id === pendingAssistantId
+            entry.role === "assistant" && entry.id === pendingAssistantId
               ? {
                   id: `assistant:${response.explanationId}`,
                   role: "assistant",
@@ -1266,6 +1274,8 @@ export function App() {
                   imageFileName: submittedImage?.originalFileName,
                   imageStatus: response.imageStatus || submittedImage?.imageStatus,
                   response,
+                  // 保留本回合已流式到达的思考文本；历史回合则以 response.aiDraft.reasoningTrace 为准。
+                  liveThinking: entry.liveThinking,
                   firstTokenMs: firstTokenMs ?? undefined,
                   totalMs: totalTurnMs,
                   createdAt: new Date().toISOString(),
@@ -2838,6 +2848,9 @@ function handleUseFeishuCandidate(candidate: TeacherFeishuDiscoveryCandidate) {
         uploadingImage={uploadingTeachingConversationImage}
         imageError={teachingConversationImageError}
         openingConversationId={openingTeachingConversationId}
+        modelCatalog={agentModelCatalog}
+        selectedModel={teachingModel}
+        onModelChange={setTeachingModel}
         onValueChange={setTeachingConversationInput}
         onSubmit={handleTeachingConversation}
         onImageSelect={handleTeachingConversationImageUpload}

@@ -4701,9 +4701,10 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .teaching-chat-shell .teaching-live-brand-copy strong {
-  color: #0f172a;
-  font-size: 22px;
-  line-height: 1.25;
+  color: #222222;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.4;
 }
 
 /* Conversation titles are compact UI chrome; keep their KaTeX baseline and width aligned with surrounding text. */
@@ -4742,18 +4743,19 @@ h1, h2, h3, h4, h5, h6 {
   align-items: center;
   gap: 6px;
   min-height: 32px;
-  padding: 0 10px;
-  border: 1px solid rgba(191, 219, 254, 0.9);
+  padding: 0 12px;
+  border: 1px solid rgba(34, 34, 34, 0.1);
   border-radius: 10px;
-  background: #eff6ff;
-  color: #1d4ed8;
-  font-size: 12px;
-  font-weight: 650;
+  background: #ffffff;
+  color: #222222;
+  font-size: 13px;
+  font-weight: 600;
   cursor: pointer;
+  transition: background 0.15s ease;
 }
 
 .teaching-chat-shell .teaching-new-conversation-btn:hover:not(:disabled) {
-  background: #dbeafe;
+  background: #f2f3f5;
 }
 
 .teaching-chat-shell .teaching-new-conversation-btn:disabled {
@@ -4808,15 +4810,18 @@ h1, h2, h3, h4, h5, h6 {
   font-size: 12px;
 }
 
+/* 用户气泡对齐 Qwen：浅蓝底、全圆角 18px、无边框、深灰文字。 */
 .teaching-chat-shell .teaching-user-bubble {
-  max-width: min(78%, 720px);
+  max-width: min(76%, 720px);
   display: grid;
   gap: 10px;
-  padding: 14px 16px;
-  border-radius: 18px 18px 8px 18px;
-  background: #f5f9ff;
-  color: #0f172a;
-  border: 1px solid rgba(219, 234, 254, 0.92);
+  padding: 9px 16px;
+  border-radius: 18px;
+  background: #ebf5ff;
+  color: #222222;
+  border: 0;
+  font-size: 16px;
+  line-height: 26px;
   box-shadow: none;
 }
 
@@ -5101,10 +5106,15 @@ h1, h2, h3, h4, h5, h6 {
   display: grid;
   gap: 8px;
   padding: 12px 14px 10px;
-  border-radius: 18px;
+  border-radius: 28px;
   background: #ffffff;
-  border: 1px solid rgba(226, 232, 240, 0.92);
-  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.04);
+  border: 1px solid rgba(34, 34, 34, 0.12);
+  box-shadow: none;
+  transition: border-color 0.15s ease;
+}
+
+.teaching-chat-shell .teaching-composer-field:focus-within {
+  border-color: rgba(34, 34, 34, 0.24);
 }
 
 .teaching-chat-shell .teaching-composer-field textarea {
@@ -5114,9 +5124,9 @@ h1, h2, h3, h4, h5, h6 {
   border: 0;
   border-radius: 0;
   background: transparent;
-  color: #0f172a;
-  font-size: 15px;
-  line-height: 1.65;
+  color: #222222;
+  font-size: 16px;
+  line-height: 26px;
   resize: none;
 }
 
@@ -5148,11 +5158,15 @@ h1, h2, h3, h4, h5, h6 {
   place-items: center;
   width: 32px;
   height: 32px;
-  border: 1px solid rgba(226, 232, 240, 0.82);
+  border: 0;
   border-radius: 10px;
-  background: #f8fafc;
-  color: #0f172a;
+  background: transparent;
+  color: #4e5969;
   cursor: pointer;
+}
+
+.teaching-chat-shell .teaching-icon-btn:hover {
+  background: #f2f3f5;
 }
 
 .teaching-chat-shell .teaching-quick-chip {
@@ -5162,34 +5176,49 @@ h1, h2, h3, h4, h5, h6 {
   min-height: 28px;
   padding: 0 10px;
   border-radius: 999px;
-  background: #f8fafc;
-  color: #0f172a;
+  background: transparent;
+  color: #4e5969;
   font-size: 13px;
-  border: 1px solid rgba(226, 232, 240, 0.82);
+  border: 1px solid rgba(34, 34, 34, 0.08);
   cursor: pointer;
 }
 
-.teaching-chat-shell .teaching-quick-chip.subtle {
-  color: #94a3b8;
-  cursor: default;
+.teaching-chat-shell .teaching-quick-chip:hover {
+  background: #f2f3f5;
 }
 
+.teaching-chat-shell .teaching-quick-chip.subtle {
+  color: #8c8d9b;
+  cursor: pointer;
+}
+
+/* 发送按钮对齐 Qwen：32px 黑色圆形，禁用态浅灰。 */
 .teaching-chat-shell .teaching-send-btn {
   display: inline-grid;
   place-items: center;
-  width: 38px;
-  height: 38px;
-  min-width: 38px;
-  min-height: 38px;
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  min-height: 32px;
   padding: 0;
-  border-radius: var(--radius-tool);
-  background: var(--accent);
+  border-radius: 50%;
+  background: #222222;
+  color: #ffffff;
+  border: 0;
   box-shadow: none;
+  transition: background 0.15s ease;
+}
+
+.teaching-chat-shell .teaching-send-btn:hover:not(:disabled) {
+  background: #000000;
 }
 
 .teaching-chat-shell .teaching-send-btn:disabled {
-  opacity: 0.55;
+  background: #cccccc;
+  color: #ffffff;
+  opacity: 1;
   box-shadow: none;
+  cursor: default;
 }
 
 .teaching-chat-shell .teaching-upload-strip {
@@ -11695,7 +11724,711 @@ h1, h2, h3, h4, h5, h6 {
   color: var(--accent-strong);
 }
 
-/* The compact mobile composer uses the same tool radius as the desktop action, even when it expands full width. */
+/* The compact mobile composer keeps the same Qwen-style circular send action as the desktop one. */
 .teaching-chat-shell .teaching-send-btn {
-  border-radius: var(--radius-tool);
+  border-radius: 50%;
+}
+
+/* =====================================================================
+   Qwen 风格对话界面改造（2026-08-31）
+   参照 chat.qwen.ai 实测样式：
+   - 内容列 ~800px 居中，用户气泡 #EBF5FF / 18px 圆角 / 右对齐
+   - AI 回复无气泡、无头像、平铺排版，正文 16px/28px #1D1D1F
+   - 思考过程：主区一行"灯泡+思考文本"状态行 + 右侧 400px"思考与搜索"面板
+     （步骤标题 #666 600 磅 / 步骤正文 #999 14px，Qwen 同款灰阶）
+   - 输入框 28px 圆角、1px rgba(34,34,34,.12) 边框、32px 黑色圆形发送按钮
+   全部规则作用域限定在 .teaching-chat-shell，不影响讲义工作台 (handout-live-shell)。
+   ===================================================================== */
+
+.teaching-chat-shell {
+  font-family: system-ui, ui-sans-serif, -apple-system, BlinkMacSystemFont, Inter, "Noto Sans SC", "Microsoft YaHei", sans-serif;
+}
+
+/* 内容列宽度对齐 Qwen（正文 736px + 两侧呼吸位）。 */
+.teaching-chat-shell .teaching-live-header {
+  padding: 14px max(24px, calc((100% - 820px) / 2)) 8px;
+}
+
+.teaching-chat-shell .teaching-live-scroll {
+  padding: 18px max(24px, calc((100% - 820px) / 2)) 152px;
+}
+
+.teaching-chat-shell .teaching-live-composer {
+  padding: 8px max(24px, calc((100% - 820px) / 2)) 12px;
+  border-top: 0;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0) 0%, #ffffff 38%);
+}
+
+/* 消息行间距：Qwen 消息之间留白更宽。 */
+.teaching-chat-shell .teaching-user-row,
+.teaching-chat-shell .teaching-assistant-row {
+  margin: 0;
+}
+
+.teaching-chat-shell .teaching-assistant-flow {
+  gap: 10px;
+}
+
+/* ---- 用户气泡：右对齐 + 悬浮复制按钮 ---- */
+.teaching-chat-shell .teaching-user-bubble-wrap {
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+  max-width: 100%;
+}
+
+.teaching-chat-shell .teaching-copy-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 24px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #8c8d9b;
+  font-size: 12px;
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease, opacity 0.15s ease;
+}
+
+.teaching-chat-shell .teaching-user-row .teaching-copy-btn {
+  opacity: 0;
+}
+
+.teaching-chat-shell .teaching-user-row:hover .teaching-copy-btn,
+.teaching-chat-shell .teaching-user-row:focus-within .teaching-copy-btn {
+  opacity: 1;
+}
+
+.teaching-chat-shell .teaching-copy-btn:hover:not(:disabled) {
+  background: #f2f3f5;
+  color: #4e5969;
+}
+
+.teaching-chat-shell .teaching-copy-btn:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.teaching-chat-shell .teaching-copy-btn.done {
+  color: #22c55e;
+}
+
+/* 键盘可访问性：复制按钮在键盘聚焦时也保持可见。 */
+.teaching-chat-shell .teaching-user-row .teaching-copy-btn:focus-visible {
+  opacity: 1;
+  outline: 2px solid rgba(34, 34, 34, 0.2);
+  outline-offset: 1px;
+}
+
+/* ---- AI 回复：去卡片化，正文平铺 ---- */
+.teaching-chat-shell .teaching-response-card,
+.teaching-chat-shell .teaching-status-card,
+.teaching-chat-shell .teaching-global-error {
+  border-radius: 12px;
+}
+
+.teaching-chat-shell .teaching-response-card {
+  border: 0;
+  background: transparent;
+  color: #1d1d1f;
+  font-size: 16px;
+  line-height: 28px;
+}
+
+.teaching-chat-shell .teaching-answer-content .teaching-response-card + .teaching-response-card {
+  border-top: 0;
+  padding-top: 2px;
+}
+
+/* 卡片标题即 Qwen 的小节标题：20px/600。 */
+.teaching-chat-shell .teaching-response-card .teaching-response-head strong {
+  color: #222222;
+  font-size: 19px;
+  font-weight: 600;
+  line-height: 30px;
+}
+
+.teaching-chat-shell .teaching-response-card p,
+.teaching-chat-shell .teaching-response-card li,
+.teaching-chat-shell .teaching-response-card .teaching-rich-block,
+.teaching-chat-shell .teaching-status-head strong {
+  color: #1d1d1f;
+}
+
+.teaching-chat-shell .teaching-rich-block .teaching-rich-line {
+  line-height: 28px;
+}
+
+.teaching-chat-shell .teaching-response-card.mistake {
+  background: transparent;
+  border-left: 3px solid #f59e0b;
+  padding-left: 12px;
+}
+
+.teaching-chat-shell .teaching-response-card.summary,
+.teaching-chat-shell .teaching-response-card.final,
+.teaching-chat-shell .teaching-response-card.default {
+  background: transparent;
+  border: 0;
+}
+
+/* 速度徽标弱化为安静灰，不再抢占阅读注意力（数据保持真实）。 */
+.teaching-chat-shell .teaching-speed-chip {
+  border: 0;
+  background: #f7f8fa;
+  color: #8c8d9b;
+  font-weight: 500;
+}
+
+.teaching-chat-shell .teaching-speed-chip.good {
+  background: #f7f8fa;
+  color: #4e5969;
+}
+
+/* ---- 思考状态行（主区，Qwen 同款） ---- */
+.teaching-chat-shell .teaching-thinking-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 32px;
+  padding: 4px 12px 4px 8px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.teaching-chat-shell .teaching-thinking-row:hover {
+  background: #f7f8fa;
+}
+
+.teaching-chat-shell .teaching-thinking-bulb {
+  flex: 0 0 auto;
+  color: #222222;
+}
+
+/* 思考进行中灯泡呼吸闪烁；结束后静止。 */
+.teaching-chat-shell .teaching-thinking-row.live .teaching-thinking-bulb {
+  animation: teaching-bulb-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes teaching-bulb-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.teaching-chat-shell .teaching-thinking-row strong,
+.teaching-chat-shell .teaching-evidence-inspector .teaching-thinking-title {
+  color: #666666;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 24px;
+  white-space: nowrap;
+}
+
+.teaching-chat-shell .teaching-thinking-live-text {
+  min-width: 0;
+  max-width: 40vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #666666;
+  font-size: 15px;
+  line-height: 24px;
+}
+
+.teaching-chat-shell .teaching-thinking-elapsed {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  color: #a6a9b8;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.teaching-chat-shell .teaching-thinking-chevron {
+  flex: 0 0 auto;
+  color: #999999;
+  transition: transform 0.16s ease;
+}
+
+.teaching-chat-shell .teaching-thinking-row.open .teaching-thinking-chevron {
+  transform: rotate(90deg);
+}
+
+/* ---- 右侧"思考与搜索"面板（Qwen 400px 同宽，贴边全高列） ---- */
+.teaching-chat-shell .teaching-thinking-panel {
+  position: fixed;
+  top: var(--nav-height);
+  right: 0;
+  bottom: 0;
+  width: min(400px, 100vw);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  background: #ffffff;
+  border-left: 1px solid rgba(34, 34, 34, 0.08);
+  box-shadow: -8px 0 32px rgba(15, 23, 42, 0.06);
+  transform: translateX(108%);
+  transition: transform 0.22s ease;
+  z-index: 47;
+}
+
+.teaching-chat-shell .teaching-thinking-panel.open {
+  transform: translateX(0);
+}
+
+.teaching-chat-shell .teaching-thinking-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 20px;
+  border-bottom: 1px solid rgba(34, 34, 34, 0.06);
+  color: #222222;
+}
+
+.teaching-chat-shell .teaching-thinking-panel-head strong {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.teaching-chat-shell .teaching-thinking-panel-close {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  margin-left: auto;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #8c8d9b;
+  cursor: pointer;
+}
+
+.teaching-chat-shell .teaching-thinking-panel-close:hover {
+  background: #f2f3f5;
+  color: #222222;
+}
+
+.teaching-chat-shell .teaching-thinking-panel-body {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 20px 24px;
+}
+
+/* 步骤时间线：灰勾 + 深灰标题 + 浅灰正文（Qwen 同款灰阶）。 */
+.teaching-chat-shell .teaching-thinking-timeline {
+  display: grid;
+  gap: 2px;
+}
+
+.teaching-chat-shell .teaching-thinking-step {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  column-gap: 8px;
+  padding: 8px 0;
+}
+
+.teaching-chat-shell .teaching-thinking-step-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  margin-top: 2px;
+  color: #b8bcc8;
+}
+
+.teaching-chat-shell .teaching-thinking-step.running .teaching-thinking-step-icon {
+  color: #222222;
+}
+
+.teaching-chat-shell .teaching-thinking-step.failed .teaching-thinking-step-icon {
+  color: #e5484d;
+}
+
+.teaching-chat-shell .teaching-thinking-step-copy strong {
+  display: block;
+  color: #666666;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 26px;
+}
+
+.teaching-chat-shell .teaching-thinking-step-copy p {
+  margin: 2px 0 0;
+  color: #999999;
+  font-size: 14px;
+  line-height: 24px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.teaching-chat-shell .teaching-thinking-sources {
+  margin-top: 10px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(34, 34, 34, 0.06);
+}
+
+.teaching-chat-shell .teaching-thinking-sources-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.teaching-chat-shell .teaching-thinking-sources-head strong {
+  color: #666666;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.teaching-chat-shell .teaching-thinking-sources-head span {
+  color: #a6a9b8;
+  font-size: 12px;
+}
+
+/* 面板与证据区里的来源条目：去卡片化，悬停浅灰。 */
+.teaching-chat-shell .teaching-thinking-panel .teaching-source-inline-item,
+.teaching-chat-shell .teaching-evidence-inspector .teaching-source-inline-item {
+  border: 0;
+  background: transparent;
+  padding: 8px 10px;
+}
+
+.teaching-chat-shell .teaching-thinking-panel .teaching-source-inline-item:hover,
+.teaching-chat-shell .teaching-evidence-inspector .teaching-source-inline-item:hover {
+  background: #f7f8fa;
+}
+
+.teaching-chat-shell .teaching-thinking-panel .teaching-source-inline-item strong,
+.teaching-chat-shell .teaching-evidence-inspector .teaching-source-inline-item strong {
+  color: #4e5969;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.teaching-chat-shell .teaching-thinking-panel .teaching-source-inline-item p,
+.teaching-chat-shell .teaching-evidence-inspector .teaching-source-inline-item p {
+  color: #999999;
+  font-size: 13px;
+}
+
+/* ---- 已完成消息的"已完成思考"折叠行（复用思考行视觉） ---- */
+.teaching-chat-shell .teaching-evidence-inspector {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.teaching-chat-shell .teaching-evidence-inspector summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  min-height: 32px;
+  padding: 4px 12px 4px 8px;
+  border-radius: 10px;
+  cursor: pointer;
+  color: #666666;
+  font-size: 15px;
+  font-weight: 600;
+  list-style: none;
+}
+
+.teaching-chat-shell .teaching-evidence-inspector summary:hover {
+  background: #f7f8fa;
+}
+
+.teaching-chat-shell .teaching-evidence-inspector .teaching-evidence-summary {
+  color: #a6a9b8;
+  font-size: 12px;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.teaching-chat-shell .teaching-evidence-inspector summary svg {
+  color: #999999;
+}
+
+.teaching-chat-shell .teaching-evidence-body {
+  border-top: 0;
+  padding: 4px 8px 8px 32px;
+}
+
+/* 步骤证据条目弱化为时间线质感：序号圆变浅灰，文字改 Qwen 灰阶。 */
+.teaching-chat-shell .teaching-trace-inline-item {
+  border: 0;
+  background: transparent;
+  padding: 6px 8px;
+}
+
+.teaching-chat-shell .teaching-trace-inline-item > span {
+  background: transparent;
+  color: #c0c3cf;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.teaching-chat-shell .teaching-trace-inline-item strong {
+  color: #666666;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.teaching-chat-shell .teaching-trace-inline-item p,
+.teaching-chat-shell .teaching-source-inline-item p {
+  color: #999999;
+}
+
+.teaching-chat-shell .teaching-trace-inline-item em {
+  color: #c0c3cf;
+}
+
+.teaching-chat-shell .teaching-subtle-head span {
+  color: #666666;
+}
+
+.teaching-chat-shell .teaching-retrieval-evidence {
+  border: 0;
+  background: transparent;
+  padding: 4px 0 4px 8px;
+}
+
+/* ---- 回到底部浮动按钮 ---- */
+.teaching-chat-shell .teaching-scroll-bottom {
+  position: absolute;
+  bottom: 132px;
+  left: 50%;
+  transform: translateX(-50%) translateY(6px);
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid rgba(34, 34, 34, 0.1);
+  border-radius: 50%;
+  background: #ffffff;
+  color: #4e5969;
+  box-shadow: 0 6px 20px rgba(15, 23, 42, 0.1);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  z-index: 43;
+}
+
+.teaching-chat-shell .teaching-scroll-bottom.show {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* ---- 空状态首屏：居中问候语（Qwen 同款落位） ---- */
+.teaching-chat-shell.is-empty .teaching-live-scroll {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  padding-bottom: 10px;
+}
+
+.teaching-chat-shell.is-empty .teaching-live-composer {
+  margin-bottom: 15vh;
+}
+
+.teaching-chat-shell .teaching-chat-hero {
+  display: grid;
+  justify-items: center;
+  gap: 14px;
+  text-align: center;
+}
+
+.teaching-chat-shell .teaching-chat-hero h1 {
+  margin: 0;
+  color: #222222;
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: 0.5px;
+}
+
+.teaching-chat-shell .teaching-chat-hero-tips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+.teaching-chat-shell .teaching-chat-hero-tips span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: #f7f8fa;
+  color: #6b7280;
+  font-size: 13px;
+}
+
+/* ---- 输入框底部免责声明 ---- */
+.teaching-chat-shell .teaching-composer-disclaimer {
+  margin-top: 6px;
+  text-align: center;
+  color: #a6a9b8;
+  font-size: 11px;
+}
+
+/* 窄屏：思考面板改为整宽覆盖层，内容列回归全宽。 */
+@media (max-width: 760px) {
+  .teaching-chat-shell .teaching-thinking-panel {
+    width: 100vw;
+    border-left: 0;
+  }
+
+  .teaching-chat-shell .teaching-thinking-live-text {
+    max-width: 34vw;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .teaching-chat-shell .teaching-thinking-row.live .teaching-thinking-bulb {
+    animation: none;
+  }
+
+  .teaching-chat-shell .teaching-thinking-panel,
+  .teaching-chat-shell .teaching-scroll-bottom {
+    transition: none;
+  }
+}
+
+/* Qwen 补充微调：完成态步骤序号去彩底改浅灰，failed 保留语义红；顶栏历史按钮弱化为安静幽灵按钮。 */
+.teaching-chat-shell .teaching-trace-inline-item > span,
+.teaching-chat-shell .teaching-trace-inline-item.completed > span,
+.teaching-chat-shell .teaching-trace-inline-item.running > span {
+  background: transparent;
+  color: #c0c3cf;
+}
+
+.teaching-chat-shell .teaching-trace-inline-item.failed > span {
+  background: transparent;
+  color: #e5484d;
+}
+
+.teaching-chat-shell .teaching-live-brand-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  background: transparent;
+  color: #4e5969;
+  box-shadow: none;
+}
+
+.teaching-chat-shell .teaching-live-brand-icon:hover {
+  background: #f2f3f5;
+}
+
+/* 思考轨迹文本区：流式与完成态共用，Qwen 灰阶、等宽留白、独立滚动。 */
+.teaching-chat-shell .teaching-thinking-trace {
+  margin-top: 4px;
+}
+
+.teaching-chat-shell .teaching-thinking-trace-text {
+  max-height: min(46vh, 430px);
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  color: #999999;
+  font-size: 14px;
+  line-height: 24px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: #fafafa;
+}
+
+.teaching-chat-shell .teaching-thinking-trace-text.static {
+  max-height: 320px;
+}
+
+/* ============================================================
+ * 2026-09-01 老板验收反馈修复（对话界面）
+ * 1) 直播思考行固定在最上方（sticky），尾部思考片段用 flex 截断，
+ *    右侧 elapsed/箭头不再被文字宽度变化推动；数字用等宽字形防抖动。
+ * 2) 最近讲题列表改为 zcode 式紧凑行，去掉大卡片空白高度。
+ * ============================================================ */
+
+.teaching-chat-shell .teaching-thinking-row.live {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  width: 100%;
+  max-width: 100%;
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(4px);
+}
+
+.teaching-chat-shell .teaching-thinking-row.live .teaching-thinking-live-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: none;
+}
+
+.teaching-chat-shell .teaching-thinking-row.live .teaching-thinking-elapsed {
+  flex: 0 0 auto;
+  margin-left: 0;
+  min-width: 4.6em;
+  justify-content: flex-end;
+  font-variant-numeric: tabular-nums;
+}
+
+.teaching-chat-shell .teaching-chat-drawer-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.teaching-chat-shell .teaching-chat-drawer-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 0;
+  padding: 7px 10px;
+  border-radius: 8px;
+}
+
+.teaching-chat-shell .teaching-chat-drawer-item strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.teaching-chat-shell .teaching-chat-drawer-item span {
+  flex: 0 0 auto;
+  font-size: 11px;
+}
+
+/* 输入框内模型切换下拉：Qwen 式次级小控件，与快捷 chip 同高同灰度。 */
+.teaching-chat-shell .teaching-model-select {
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid rgba(34, 34, 34, 0.1);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #4e5969;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  max-width: 220px;
+}
+
+.teaching-chat-shell .teaching-model-select:hover {
+  background: #f7f8fa;
 }
