@@ -63,8 +63,27 @@ def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 def preferred_chunks(book_root: Path) -> Path:
+    """Pick the page-chunk source with real coverage, not just presence.
+
+    上游 AI 页级步骤可能中断后只留下部分 jsonl_ai（2026-09-01 选必二事故：4/142 页），
+    旧实现"存在即优先"会让影子库静默继承残缺覆盖，检索侧表现为整章查无此料。
+    当 jsonl_ai 覆盖页号少于机械 jsonl 时回退并告警，保证影子构建拿到完整页集。
+    """
     ai = book_root / "jsonl_ai" / "chunks.jsonl"
-    return ai if ai.exists() else book_root / "jsonl" / "chunks.jsonl"
+    text = book_root / "jsonl" / "chunks.jsonl"
+    if not ai.exists():
+        return text
+    if text.exists():
+        ai_pages = {row.get("page_no") for row in read_jsonl(ai) if row.get("page_no")}
+        text_pages = {row.get("page_no") for row in read_jsonl(text) if row.get("page_no")}
+        if ai_pages < text_pages:
+            print(
+                f"warning: {book_root.name} jsonl_ai covers {len(ai_pages)}/{len(text_pages)} pages; "
+                "falling back to jsonl for section build",
+                flush=True,
+            )
+            return text
+    return ai
 
 
 def front_matter_reason(row: dict[str, Any]) -> str | None:
@@ -361,6 +380,9 @@ def main() -> None:
     parser.add_argument("--retry-count", type=int, default=DEFAULT_RETRY_COUNT)
     parser.add_argument("--max-input-characters", type=int, default=DEFAULT_MAX_INPUT_CHARACTERS)
     parser.add_argument("--max-output-tokens", type=int, default=DEFAULT_MAX_OUTPUT_TOKENS)
+    # 单本重建：影子库历史模型（gpt-5.4-mini）不满足 reuse 的 luna 校验，全量跑会重做所有书；
+    # 事故修复只需要坏掉的那本（2026-09-01 选必二）。可重复传，缺省保持旧的全量行为。
+    parser.add_argument("--book", action="append", default=None, help="仅构建指定 doc_id（可重复）；缺省构建全部")
     args = parser.parse_args()
     args.source_root = args.source_root.expanduser().resolve()
     args.target_root = args.target_root.expanduser().resolve()
@@ -376,10 +398,24 @@ def main() -> None:
     args.endpoint = normalize_base_url(os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1"))
     args.target_root.mkdir(parents=True, exist_ok=True)
     catalog = read_json(args.source_root / "catalog.json")
+    # --book 单本模式下，未重建的书必须原样保留目标 catalog 条目，否则整库 catalog 会被缩成一本。
+    existing_target_catalog: dict[str, dict[str, Any]] = {}
+    target_catalog_path = args.target_root / "catalog.json"
+    if args.book and target_catalog_path.exists():
+        existing_target_catalog = {
+            str(item.get("doc_id")): item for item in read_json(target_catalog_path).get("books", [])
+        }
     catalog_rows: list[dict[str, Any]] = []
     total_rows = 0
     for item in catalog.get("books", []):
         doc_id = str(item["doc_id"])
+        if args.book and doc_id not in args.book:
+            kept = existing_target_catalog.get(doc_id)
+            if kept is None:
+                raise SystemExit(f"--book mode: target catalog has no entry for untouched book {doc_id}")
+            catalog_rows.append(kept)
+            total_rows += int(kept.get("section_count") or 0)
+            continue
         rows, stats = build_book(doc_id, args.source_root / doc_id, args.target_root, args)
         target_book = args.target_root / doc_id
         source_pages = args.source_root / doc_id / "pages"

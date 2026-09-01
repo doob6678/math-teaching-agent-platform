@@ -90,3 +90,23 @@ Credentials are read only from the existing process environment or existing `.en
 
 11. `reseed-knowledge-graph-spine.ps1`
    - Deletes the curated `display_spine_v0.1` rows from MySQL, restarts the backend, waits for startup seeding to finish, and verifies non-zero node and edge counts.
+
+## 教材影子库（section library）建库流程
+
+运行期教材检索读取的是影子库（章节级 chunk + 页码），不是源页库；源页库不可变。
+完整顺序（缺任何一步都会让"整章查无此料"静默发生，2026-09-01 选必二事故复盘）：
+
+1. `build_section_library_mini.py [--book <doc_id>] --target-root <影子根>`
+   - 逐页调用 luna 把源页 chunk 标注为章节小节；`--book` 单本重建，未重建的书原样保留 catalog 条目。
+   - 输入选择是覆盖度感知的：`jsonl_ai` 覆盖页少于 `jsonl` 时自动回退并告警（防上游页级步骤中断被静默继承）。
+   - 环境变量：`OPENAI_API_KEY`、`OPENAI_BASE_URL`（取 .env）。默认 `--target-root` 是 c1，生产挂的是 c2，必须显式传。
+2. `check_section_coverage.py --target-root <影子根>`
+   - 覆盖度门禁：逐本源正文页 vs 影子覆盖页，低于 95% 非零退出。必须在建索引之前跑，红了不许进下一步。
+3. `export_section_library_markdown.py`
+   - 把章节 chunk 导出为 `markdown_sections/`（展示与引用追溯用）。
+4. `build_section_indexes.py`
+   - 重建 `_bm25_index` 与 `_section_bge_index`（本地 BGE，cuda）；后端启动时按文件签名失效 Redis 检索缓存。
+5. 重启 backend（`docker compose restart backend`），warmup 重新加载 chunk 进内存；用真实问题验证页码可答。
+
+Redis 的教材检索缓存（`TextbookSearchCache`）按源文件签名失效，保留是刻意的：BGE 重排是延迟大头，
+重复查询命中缓存可跳过模型调用；删除它只会让每次检索都付全价，不解决任何正确性问题。
