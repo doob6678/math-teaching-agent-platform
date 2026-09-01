@@ -1120,9 +1120,12 @@ export function App() {
     // The completed event is authoritative even if the SSE transport needs extra time to close cleanly.
     let completedResponseReceived = false;
     let streamedCharacterCount = 0;
-    // 首 token 计时用单调时钟：firstTokenMs 是提交到首个讲解增量到达的真实耗时（TTFT），
-    // totalMs 是整个流式回合的耗时。两者都展示在回答卡上并输出到控制台，便于持续压响应速度。
+    // 首 token 计时用单调时钟：老板 2026-09-01 反馈"首字 61s 有问题，统计应该从思考开始"——
+    // 提交到思考开始之间是 react 决策轮+向量检索等系统开销，混进"首字"会高估模型延迟。
+    // 新口径：firstTokenMs = 首个讲解增量 − 首个思考增量（compose 思考开始）；无思考的模型回退到提交时刻。
+    // totalMs 仍是整个流式回合的耗时，两者都展示在回答卡上并输出到控制台，便于持续压响应速度。
     const submitMonotonicMs = performance.now();
+    let thinkingStartMonotonicMs: number | null = null;
     let firstTokenMs: number | null = null;
     setSubmittingTeachingConversation(true);
     setTeachingError("");
@@ -1180,10 +1183,14 @@ export function App() {
           completedResponseReceived = true;
           setSubmittingTeachingConversation(false);
         }
+        // 思考开始锚点：决策轮的推理不会下发到本流，首个 aiReasoningDelta 即讲解 compose 的思考开始。
+        if (thinkingStartMonotonicMs === null && (payload.aiReasoningDelta || "").length > 0) {
+          thinkingStartMonotonicMs = performance.now();
+        }
         // 首内容兜底：部分模型通道不吐增量，首个内容是 completed 事件里的完整结果。
-        // 无论哪种形态，都把“第一个讲解字到达”如实记为 TTFT，不虚构流式速度。
+        // 无论哪种形态，都把“第一个讲解字到达 − 思考开始”如实记为 TTFT，不虚构流式速度。
         if (firstTokenMs === null && ((payload.aiContentDelta || "").length > 0 || !!payload.response)) {
-          firstTokenMs = Math.round(performance.now() - submitMonotonicMs);
+          firstTokenMs = Math.round(performance.now() - (thinkingStartMonotonicMs ?? submitMonotonicMs));
           // 控制台输出结构化速度日志，配合回答卡上的“首字”徽标，方便持续优化首 token 响应。
           globalThis.console?.info?.(`[telemetry] first-token ${firstTokenMs}ms conversation=${activeConversationId}`);
         }

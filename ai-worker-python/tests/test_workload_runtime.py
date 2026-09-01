@@ -474,7 +474,10 @@ class MigratedWorkloadContractTest(unittest.TestCase):
 
         self.assertEqual(post.call_count, 2)
         self.assertEqual(events[-1]["attempt"], 2)
-        logged = warning.call_args.args[0]
+        # provider_attempt_failed 诊断日志（2026-09-01）会在帧日志之后再 warning 一次，
+        # 契约断言改为扫描全部 warning 调用中的 non_json_frame 那一条。
+        logged = next(call.args[0] for call in warning.call_args_list
+                      if '"event": "provider_sse_non_json_frame"' in call.args[0])
         self.assertIn('"event": "provider_sse_non_json_frame"', logged)
         self.assertIn('"frameLength": ' + str(len(unknown_frame)), logged)
         self.assertIn('"requestId": "relay-request-1"', logged)

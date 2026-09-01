@@ -381,11 +381,13 @@ public class StudentExplanationService {
                         "AI已开始判断，正在生成实际工具和检索参数。");
             }
         };
+        // 决策轮固定走默认快速路由，不吃用户的讲解模型偏好（老板 2026-09-01"太慢了"）：
+        // 偏好模型（如 GLM 强制思考）连输出一个决策 JSON 都要先想近 30 秒，纯系统开销；
+        // "模型切换"语义只作用于讲解生成（compose），决策与检索属于基础设施仍用默认 fast_text 路由。
         StudentExplanationAiCardService.ReactDecision decision = aiCardService.nextReactDecision(
                 reactProblemContext(visibleQuestion, packedConversationContext),
                 sources, observations, available, imageDataUrl, decisionStream,
-                request.clientRequestId() + ":react",
-                request.preferredProviderName(), request.preferredModelCode());
+                request.clientRequestId() + ":react");
         String decisionDetail;
         if (decision.isFinal()) {
             decisionDetail = "AI判断题目自洽，本轮不执行检索。";

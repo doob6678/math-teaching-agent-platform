@@ -471,7 +471,7 @@ function LiveAssistantResponse({ entry }: { entry: Extract<TeachingConversationT
           {reasoning ? reasoningTailText(reasoning) : activeStage ? stageDetailText(activeStage) : "正在整理思路…"}
         </span>
         {typeof entry.firstTokenMs === "number" ? (
-          <span className="teaching-speed-chip good" title="从提交到首个讲解内容到达的耗时">首字 {formatSpeedMs(entry.firstTokenMs)}</span>
+          <span className="teaching-speed-chip good" title="从思考开始到首个讲解内容到达的耗时（决策与检索等系统开销不计入）">首字 {formatSpeedMs(entry.firstTokenMs)}</span>
         ) : null}
         <span className="teaching-thinking-elapsed"><Loader2 className="spin" size={12} />{formatElapsed(liveElapsedMs)}</span>
         <ChevronRight size={15} className="teaching-thinking-chevron" aria-hidden="true" />
@@ -602,7 +602,7 @@ function AssistantResponse({
       <EvidenceInspector response={response} stages={stages} sources={sources} reasoningTrace={reasoning} />
       <div className="teaching-answer-content">
         {typeof firstTokenMs === "number" ? (
-          <div className="teaching-speed-line" title="首个讲解内容到达 / 本轮讲解全程耗时">
+          <div className="teaching-speed-line" title="首字=思考开始到首个讲解内容（不含决策与检索） / 全程=本轮讲解总耗时">
             <span className="teaching-speed-chip good">首字 {formatSpeedMs(firstTokenMs)}</span>
             {typeof totalMs === "number" ? <span className="teaching-speed-chip">全程 {formatSpeedMs(totalMs)}</span> : null}
           </div>

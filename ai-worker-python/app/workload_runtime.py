@@ -83,6 +83,23 @@ class ExplanationEvidence(BaseModel):
     snippet: str = Field(default="", max_length=1_600)
 
 
+# 工具目录（老板 2026-09-01："让它主动调用，不要写死在流程中"）：决策轮不再用"问教材就必须检索"
+# 这类写死规则，而是把每个工具的能力与适用事实类型如实告诉模型，由模型对照题目自主决定 action/final。
+# 描述只陈述工具能取到什么，不指定任何题型的路由；权限 allow-list 仍由 Java availableTools 决定。
+REACT_TOOL_CATALOG: dict[str, str] = {
+    "search_textbook": "检索已入库高中教材的正文块、章节目录与页码。教材版本、页码、章节结构、"
+                       "教材原文的引入/例题/习题等都不在题目里，需要这类外部事实时才能取到。",
+    "match_knowledge_graph": "把题目知识点匹配到学科知识图谱主干，用于说明前置、后续与相关知识点关系。",
+    "search_teacher_resources": "检索本次运行已授权的教师资料（讲义、题库、课件）正文，"
+                                "题目出处、配套练习与教师讲解素材需要这类外部事实时才能取到。",
+}
+
+
+def react_tool_catalog_entries(names: list[str]) -> list[dict[str, str]]:
+    """把 Java 签发的工具名映射为带能力描述的清单；未收录的名字不下发描述，避免泄露内部工具。"""
+    return [{"name": name, "description": REACT_TOOL_CATALOG.get(name, "")} for name in dict.fromkeys(names)]
+
+
 class StudentExplanationRunRequest(BaseModel):
     """学生解释模型合同；检索和引用授权仍由 Java 完成。"""
 
@@ -299,17 +316,14 @@ class MigratedWorkloadRuntime:
                     "final 必须同时返回 cards，引用只能来自 evidence。不要输出推理过程或 Markdown。"
                     "题干已经给出全部条件且可通过代数、几何或定义直接完成的题目，必须选择 final，"
                     "不得为了复述通用概念而检索；只有缺少题目所必需的外部事实时才能选择 action。"
-                    # 老板实测：问"教材哪一页/哪个版本"这类资料定位问题被模型当自洽题跳过检索，答成泛泛而谈。
-                    # 教材版本、页码、章节、出处属于题目自身无法给出的外部事实，必须强制走检索工具。
-                    "当题目询问教材、课本、页码、章节、目录、版本（如人教A版/B版）、资料出处或配套练习时，"
-                    "这些是题目本身不包含的外部事实：必须选择 action，优先调用 search_textbook，"
-                    "并生成 2-4 个含具体知识点名的检索词（如\"人教B版 选择性必修 排列组合 章节定位\"）。"
+                    "对照 availableTools 中每个工具能取到的事实类型自主判断：题目所需的事实在题目之外、"
+                    "且某个工具恰好能取到时才调用；检索词写具体知识点名，2-4 个。"
                     "思考时请用连贯完整的中文说明判断依据；不要在思考中逐字拼装 JSON 或输出英文碎片。"
                     + MATH_MARKUP_OUTPUT_CONTRACT
                 )},
                 {"role": "user", "content": json.dumps({
                     "problem": request.problem,
-                    "availableTools": list(dict.fromkeys(request.availableTools)),
+                    "availableTools": react_tool_catalog_entries(request.availableTools),
                     "observations": request.observations,
                     "evidence": [item.model_dump() for item in request.evidence],
                 }, ensure_ascii=False)},
@@ -473,15 +487,37 @@ class MigratedWorkloadRuntime:
                     status = exc.response.status_code if exc.response is not None else 0
                     error = f"HTTP_{status}"
                     retryable = status == 429 or status >= 500
+                    error_detail = str(exc)
                 except (requests.RequestException, ValueError, KeyError, json.JSONDecodeError) as exc:
                     error = type(exc).__name__
                     retryable = True
-                if visible_output:
+                    error_detail = str(exc)
+                # 老板 2026-09-01"太慢了"：GLM flash 的 compose JSON 经常不合格，旧逻辑一旦吐过正文
+                # 增量就 503 终止整轮、不回退。结构化输出（require_json_object）下学生看到的只是
+                # 直播面板的过程文本，终稿由 completed 事件的 cards 整包渲染，半截 JSON 增量不会
+                # 进入终稿，因此允许换下一个 provider 重试；自由文本模式仍保持 fail-closed。
+                if visible_output and not require_json_object:
                     raise HTTPException(
                         status_code=503,
                         detail="provider stream interrupted after visible output: " + selection.name,
                     )
                 failures.append(selection.name + ":" + error)
+                # 老板 2026-09-01 验收：GLM flash compose 失败时整条链只有 usage ledger 的 ValueError 字样，
+                # 无法区分"通道断/JSON 不合格/超时"，这里把 provider 路由与失败上下文如实落一条结构化日志。
+                logger.warning(json.dumps({
+                    "event": "provider_attempt_failed",
+                    "runId": run_id,
+                    "provider": selection.name,
+                    "model": selection.model,
+                    "attempt": attempt,
+                    "error": error,
+                    "errorDetail": error_detail[:200],
+                    "retryable": retryable,
+                    "visibleOutput": visible_output,
+                    "requireJson": require_json_object,
+                    "contentChars": sum(len(part) for part in content_parts),
+                    "route": [item.name for item in [route.primary, *route.fallbacks]],
+                }, ensure_ascii=False, sort_keys=True))
                 self._ledger.append(UsageEvent(
                     run_id, selection.name, selection.model, attempt, "FAILED", 0, 0, 0, -1.0,
                     "unavailable", error,
@@ -519,7 +555,7 @@ class MigratedWorkloadRuntime:
             )},
             {"role": "user", "content": json.dumps({
                 "problem": request.problem,
-                "availableTools": available_tools,
+                "availableTools": react_tool_catalog_entries(available_tools),
                 "observations": request.observations,
                 "evidence": [item.model_dump() for item in request.evidence],
             }, ensure_ascii=False)},
