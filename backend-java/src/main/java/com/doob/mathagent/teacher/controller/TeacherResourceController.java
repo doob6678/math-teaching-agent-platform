@@ -2,6 +2,7 @@ package com.doob.mathagent.teacher.controller;
 
 import com.doob.mathagent.infrastructure.security.RequestSubject;
 import com.doob.mathagent.infrastructure.security.RequestSubjectResolver;
+import com.doob.mathagent.retrieval.CanonicalMathPaperAssetService;
 import com.doob.mathagent.retrieval.CanonicalMathPaperRetrievalService;
 import com.doob.mathagent.teaching.TeachingEvidence;
 import com.doob.mathagent.teacher.dto.TeacherResourceRegistrationRequest;
@@ -87,6 +88,8 @@ public class TeacherResourceController {
     private final Environment environment;
     /** Optional public canonical-paper route; teacher-resource FILE search remains the default path. */
     private CanonicalMathPaperRetrievalService canonicalMathPaperRetrievalService;
+    /** Canonical question-image reader shared with the MCP broker; optional so focused tests skip it. */
+    private CanonicalMathPaperAssetService canonicalMathPaperAssetService;
 
     /**
      * Creates a teacher resource controller.
@@ -193,6 +196,13 @@ public class TeacherResourceController {
     public void setCanonicalMathPaperRetrievalService(
             CanonicalMathPaperRetrievalService canonicalMathPaperRetrievalService) {
         this.canonicalMathPaperRetrievalService = canonicalMathPaperRetrievalService;
+    }
+
+    /** Wires the same manifest-bound asset reader the MCP broker uses; kept optional for the test constructors. */
+    @Autowired(required = false)
+    public void setCanonicalMathPaperAssetService(
+            CanonicalMathPaperAssetService canonicalMathPaperAssetService) {
+        this.canonicalMathPaperAssetService = canonicalMathPaperAssetService;
     }
 
     /**
@@ -304,9 +314,13 @@ public class TeacherResourceController {
     /**
      * Searches parsed blocks from teacher-managed resources visible to the backend subject.
      *
-     * <p>The search API now accepts only logical {@code library} selectors. Raw {@code sourceType} remains document
-     * metadata for ingestion/debugging, but it is no longer exposed as a retrieval filter because mixing storage
-     * implementation names with retrieval libraries made AI callers leak across QQ/Feishu/mock/textbook boundaries.</p>
+     * <p>{@code library} and {@code sourceType} are two HTTP aliases for the same retrieval dimension: the filter
+     * record stores normalized source-library selectors (feishu, qq_bundle, gaokao, mock_exam, ...) in its
+     * {@code sourceTypes} field, exactly like the MCP tool that merges its {@code libraries}/{@code sourceTypes}
+     * arguments before building the filter. The record has no dedicated "libraries" dimension and {@code tags}
+     * matches free text instead of corpus selection, so dropping {@code library} into either of them would break
+     * existing {@code ?library=} callers; the aliases are therefore merged. Before this merge only {@code library}
+     * reached the filter, so {@code ?sourceType=gaokao} could never route into the canonical gaokao branch.</p>
      *
      * @param query search query
      * @param limit maximum hit count
@@ -320,14 +334,23 @@ public class TeacherResourceController {
             @RequestParam(value = "permissionScope", required = false) List<String> permissionScopes,
             @RequestParam(value = "documentId", required = false) List<String> documentIds,
             @RequestParam(value = "library", required = false) List<String> libraries,
+            @RequestParam(value = "sourceType", required = false) List<String> sourceTypes,
             @RequestParam(value = "tag", required = false) List<String> tags,
             HttpServletRequest httpRequest) {
         RequestSubject subject = subjectResolver.resolve(httpRequest).normalize();
         requireTeacherOrAdmin(subject);
+        // 两个别名并入 of() 的第 3 参（sourceTypes 即库选择器维度）；of() 会统一去空白、转小写并去重。
+        List<String> librarySelectors = new java.util.ArrayList<>();
+        if (libraries != null) {
+            librarySelectors.addAll(libraries);
+        }
+        if (sourceTypes != null) {
+            librarySelectors.addAll(sourceTypes);
+        }
         TeacherResourceSearchFilter filter = TeacherResourceSearchFilter.of(
                 permissionScopes,
                 documentIds,
-                libraries,
+                librarySelectors,
                 tags);
         try {
             if (filter.sourceTypes().contains("gaokao")) {
@@ -422,6 +445,32 @@ public class TeacherResourceController {
     }
 
     /**
+     * Streams one canonical gaokao question image to a signed-in teacher/admin over plain HTTP.
+     *
+     * <p>This exposes the MCP broker's existing canonical image materialization
+     * ({@link CanonicalMathPaperAssetService#openVisibleAsset(String, RequestSubject)}) as a read-only HTTP view;
+     * it adds no new authorization logic. Visibility is still decided by the manifest binding rechecked inside the
+     * service, so unknown or tampered asset ids resolve to 404 exactly like the broker path. The body is streamed
+     * from the {@code FileSystemResource} instead of being copied into memory to keep concurrent image reads cheap.</p>
+     */
+    @GetMapping("/api/teacher/resources/gaokao/assets/{assetId}/image")
+    public ResponseEntity<Resource> readGaokaoAssetImage(
+            @PathVariable String assetId,
+            HttpServletRequest httpRequest) {
+        RequestSubject subject = subjectResolver.resolve(httpRequest).normalize();
+        requireTeacherOrAdmin(subject);
+        if (canonicalMathPaperAssetService == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Canonical gaokao asset service is not configured");
+        }
+        CanonicalMathPaperAssetService.VisibleAsset asset = canonicalMathPaperAssetService
+                .openVisibleAsset(assetId, subject)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Canonical gaokao asset not found"));
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType(asset.mimeType()))
+                .body(asset.resource());
+    }
+
+    /**
      * Searches only rendered teacher-resource page assets through the private CLIP collection. The request image is
      * a data URI supplied by the browser; no local path is accepted, so the backend remains the only file boundary.
      */
@@ -454,6 +503,21 @@ public class TeacherResourceController {
             int limit,
             HttpServletRequest httpRequest) {
         return searchBlocks(query, limit, null, null, null, null, httpRequest);
+    }
+
+    /**
+     * Compatibility overload for focused controller tests that predate the {@code sourceType} alias parameter;
+     * HTTP routing always lands on the full overload above where both aliases are merged.
+     */
+    public TeacherResourceBlockSearchResponse searchBlocks(
+            String query,
+            int limit,
+            List<String> permissionScopes,
+            List<String> documentIds,
+            List<String> libraries,
+            List<String> tags,
+            HttpServletRequest httpRequest) {
+        return searchBlocks(query, limit, permissionScopes, documentIds, libraries, null, tags, httpRequest);
     }
 
     /**

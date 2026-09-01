@@ -298,6 +298,9 @@ class MigratedWorkloadRuntime:
                     "\"title\":\"\",\"summary\":\"简明中文讲解\",\"items\":[],\"sourceUris\":[],"
                     "\"renderMode\":\"text|formula|source_list\"}]}。"
                     "sourceUris 只能来自 evidence；不要输出 Markdown 或推理过程。"
+                    # 老板 09-01：讲解范围锁死高中课标，防止小模型顺手用大学方法（极限/洛必达等）跳级
+                    "讲解必须限定在高中数学课程范围内，禁止使用大学数学工具（如极限、洛必达法则、多元微积分、线性代数）解题；"
+                    "即使题目超纲也要先给高中生能懂的方法，再指出超纲点。"
                     # 思考质量约束：小模型在拼装 JSON 时容易把思考退化成字段名片段，这里要求思考面向讲解本身。
                     "思考时请用连贯完整的中文叙述讲解思路与推导依据；不要在思考中逐字拼装 JSON、复述字段名或输出"
                     "英文碎片，想清内容后直接给出最终 JSON。" + MATH_MARKUP_OUTPUT_CONTRACT
@@ -658,7 +661,8 @@ class MigratedWorkloadRuntime:
             request: StudentExplanationRunRequest, sources: list[dict[str, Any]], review_prompt: str) -> list[dict[str, Any]]:
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": (
-                "你是高中数学教师。只返回严格 JSON 信封："
+                "你是高中数学教师。讲解必须限定在高中数学课程范围内，禁止使用大学数学工具（如极限、洛必达法则、多元微积分、线性代数）解题。"
+                "只返回严格 JSON 信封："
                 "{\"candidate\":{\"conversationTitle\":\"不超过15个中文字符\",\"cards\":[{\"cardKey\":\"stable_snake_case\","
                 "\"title\":\"\",\"summary\":\"简明中文讲解\",\"items\":[],\"sourceUris\":[],"
                 "\"renderMode\":\"text|formula|source_list\"}]},"

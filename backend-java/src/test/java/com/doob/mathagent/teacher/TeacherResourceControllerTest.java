@@ -1,8 +1,10 @@
 package com.doob.mathagent.teacher;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.doob.mathagent.infrastructure.security.RequestSubject;
+import com.doob.mathagent.retrieval.CanonicalMathPaperAssetService;
 import com.doob.mathagent.infrastructure.security.RequestSubjectResolver;
 import com.doob.mathagent.teacher.controller.TeacherResourceController;
 import com.doob.mathagent.teacher.dto.TeacherResourceRegistrationRequest;
@@ -43,6 +45,10 @@ import java.nio.file.Path;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.springframework.core.io.FileSystemResource;
+import org.springframework.core.io.Resource;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.web.server.ResponseStatusException;
@@ -1255,6 +1261,101 @@ class TeacherResourceControllerTest {
                                 assertThat(assetRef.mimeType()).isEqualTo("image/png");
                             });
                 });
+    }
+
+    /**
+     * The sourceType request alias must reach the same library-selector filter as library; an explicit gaokao
+     * selector short-circuits into the canonical branch (empty here because no retriever is wired), which was
+     * unreachable before both aliases were merged into the filter's sourceTypes slot.
+     */
+    @Test
+    void sourceTypeAliasRoutesGaokaoToSelectorBranch() {
+        InMemoryTeacherResourceStore store = new InMemoryTeacherResourceStore();
+        InMemoryTeacherDocumentBlockStore blockStore = new InMemoryTeacherDocumentBlockStore();
+        store.save(new TeacherResourceDocumentResponse(
+                "doc-notes",
+                "school-a",
+                "teacher-88",
+                "local_path",
+                "Vector notes",
+                null,
+                "C:/math/notes",
+                "TEACHER_PRIVATE",
+                "synced",
+                "parsed",
+                "ready",
+                "ready",
+                List.of()));
+        blockStore.replaceActiveBlocks("school-a", "doc-notes", List.of(searchBlock(
+                "block-notes",
+                "doc-notes",
+                "vector angle method notes")));
+        TeacherResourceController controller = controller(
+                TeacherResourceServiceFixture.service(store, blockStore),
+                new TeacherSourceSyncJobService(store, new InMemoryTeacherSourceSyncJobStore()),
+                syncExecutionService(store, new InMemoryTeacherSourceSyncJobStore(), blockStore),
+                com.doob.mathagent.teacher.TeacherResourceBlockSearchServiceFixture.service(store, blockStore),
+                request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"));
+
+        // Without a selector the block-search corpus answers, proving the canonical result below is a routing effect.
+        assertThat(controller.searchBlocks("vector angle method", 10, new MockHttpServletRequest()).hits())
+                .isNotEmpty();
+
+        TeacherResourceBlockSearchResponse viaSourceType = controller.searchBlocks(
+                "vector angle method", 10, null, null, null, List.of("gaokao"), null,
+                new MockHttpServletRequest());
+        assertThat(viaSourceType.retrievalMode()).isEqualTo("canonical_gaokao_manifest_authorized");
+        assertThat(viaSourceType.hits()).isEmpty();
+
+        // The library alias keeps working because both names feed the same filter dimension.
+        TeacherResourceBlockSearchResponse viaLibrary = controller.searchBlocks(
+                "vector angle method", 10, null, null, List.of("gaokao"), null,
+                new MockHttpServletRequest());
+        assertThat(viaLibrary.retrievalMode()).isEqualTo("canonical_gaokao_manifest_authorized");
+    }
+
+    /**
+     * The gaokao image endpoint is a thin HTTP view over the broker's manifest-bound asset reader: a visible id
+     * streams original bytes, while an unknown id 404s without leaking corpus locations.
+     */
+    @Test
+    void gaokaoAssetImageStreamsManifestBoundAssetToTeacher() throws Exception {
+        byte[] png = pngBytes();
+        Path image = Files.createFile(tempDir.resolve("canonical-figure.png"));
+        Files.write(image, png);
+        CanonicalMathPaperAssetService assetService = new CanonicalMathPaperAssetService(tempDir) {
+            @Override
+            public java.util.Optional<VisibleAsset> openVisibleAsset(String assetId, RequestSubject subject) {
+                // Stub the manifest binding so the test only asserts the controller pass-through behavior.
+                return "asset-known".equals(assetId)
+                        ? java.util.Optional.of(new VisibleAsset(
+                                assetId, "image/png", new FileSystemResource(image)))
+                        : java.util.Optional.empty();
+            }
+        };
+        TeacherResourceController controller = controller(
+                TeacherResourceServiceFixture.service(new InMemoryTeacherResourceStore()),
+                new TeacherSourceSyncJobService(
+                        new InMemoryTeacherResourceStore(), new InMemoryTeacherSourceSyncJobStore()),
+                syncExecutionService(
+                        new InMemoryTeacherResourceStore(),
+                        new InMemoryTeacherSourceSyncJobStore(),
+                        new InMemoryTeacherDocumentBlockStore()),
+                request -> new RequestSubject("school-a", "teacher", "teacher-88", "device-1"));
+        controller.setCanonicalMathPaperAssetService(assetService);
+
+        ResponseEntity<Resource> response = controller.readGaokaoAssetImage(
+                "asset-known", new MockHttpServletRequest());
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getHeaders().getContentType()).hasToString("image/png");
+        assertThat(response.getBody()).isNotNull();
+        try (java.io.InputStream input = response.getBody().getInputStream()) {
+            assertThat(input.readAllBytes()).isEqualTo(png);
+        }
+
+        ResponseStatusException missing = assertThrows(ResponseStatusException.class, () -> controller.readGaokaoAssetImage(
+                "asset-missing", new MockHttpServletRequest()));
+        assertThat(missing.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
     }
 
     /**
