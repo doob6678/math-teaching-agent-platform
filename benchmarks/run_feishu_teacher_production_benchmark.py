@@ -142,8 +142,11 @@ def main() -> None:
 def _load_dataset(path: Path) -> dict[str, Any]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     cases = payload.get("cases") if isinstance(payload, dict) else None
-    if not isinstance(cases, list) or len(cases) != 100:
-        raise ValueError(f"manual dataset must contain exactly 100 cases: {path}")
+    # 100 例是 2026-08 人工正例原始规模；09-03 重绑把期望内容已离开语料的漂移例移除后，
+    # 数据集在 caseCount 字段自我声明规模（缺省仍要求 100，保留对残缺文件的原有防线）。
+    expected = int(payload.get("caseCount", 100))
+    if not isinstance(cases, list) or len(cases) != expected:
+        raise ValueError(f"manual dataset must contain exactly {expected} cases: {path}")
     ids = [str(case.get("id") or "") for case in cases]
     if any(not case_id for case_id in ids) or len(set(ids)) != len(ids):
         raise ValueError("manual dataset case ids must be non-empty and unique")
