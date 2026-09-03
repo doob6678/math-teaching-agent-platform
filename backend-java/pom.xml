@@ -126,6 +126,18 @@
             <artifactId>spring-test</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- @SpringBootTest for the opt-in SpringContextStartupSmokeTest only; mockito/junit/assertj are already
+             declared above, so just the two boot-test artifacts are needed to boot a real context in tests. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-test-autoconfigure</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>

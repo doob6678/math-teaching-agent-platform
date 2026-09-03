@@ -210,13 +210,19 @@ def vision_request(image: Path, paper: str, page: int, model: str) -> dict[str, 
         "page": page,
         "requiredOutput": {
             "pageText": "string",
-            "questions": [{"number": "string", "text": "string", "latex": ["string"], "continuesToNextPage": "boolean", "confidence": "number"}],
+            "questions": [{"number": "string", "text": "string", "answer": "string", "analysis": "string",
+                           "figureAnchor": "string", "latex": ["string"], "continuesToNextPage": "boolean", "confidence": "number"}],
             "layout": "single-column|multi-column|uncertain",
             "boundaryRisks": ["string"]
         },
         "constraints": [
             "Read only the supplied page image.",
             "pageText is the authoritative complete transcription of this page. Preserve mathematical formulas as LaTex strings in latex. Every visible mathematical fraction MUST use \\frac{numerator}{denominator}; never write a fraction as a/b, 1/2, or x/y in a latex field.",
+            # 输出格式契约（取代下游逐字形归一化补丁表，见 docs/gaokao-ingestion-bottlenecks.md 第 7.1/7.2 节）：
+            # 直接规定模型该写成什么形式、不该写成什么形式，让转写形态天然可机读、可对齐。
+            "Math notation form: write exponents and subscripts ONLY in TeX ASCII form x^2, a_1, 10^{-3} (braces for multi-character groups). Never use Unicode superscript/subscript glyphs such as \u00b2 \u00b3 \u207b \u2081 \u2082. Use the ASCII hyphen-minus for minus signs; never use en-dash or em-dash as a minus.",
+            "Per-question structure: for each question fill answer (the final answer text, empty string if the page shows none) and analysis (the printed solution/derivation text, empty string if none). Keep text limited to the stem; do not repeat answer or analysis inside text.",
+            "figureAnchor: if the stem references a figure, copy the exact printed referring sentence verbatim into figureAnchor; otherwise empty string.",
             "Do not invent an answer, solution, unshown text, or an official correctness judgement.",
             "Use an empty questions list if no question is visible."
         ],
@@ -329,9 +335,17 @@ def recognized_questions(response: dict[str, Any], source_name: str, page: int, 
         # The key derives only from immutable visual evidence. A recovery run can
         # therefore upsert the same question instead of creating a fresh duplicate.
         stable_identity = f"{source_name}\n{page}\n{question_number}\n{vector_text}"
+        # textSegments 记录“页 -> 该页正文块”的逐字对应关系，发布阶段据此把题图插回其
+        # 所在页的语义位置；它只服务排版，不进入向量元数据（见 vector_metadata 的排除）。
+        # _transcriptionFields 承载输出契约的结构化字段（answer/analysis/figureAnchor），
+        # 下划线前缀标记为发布临时字段：vector_metadata 排除 + 守卫双保险，绝不进 Milvus。
+        transcription_fields = {key: str(item.get(key, "") or "").strip() for key in ("answer", "analysis", "figureAnchor")}
+        metadata: dict[str, Any] = {"sourceFile": source_name, "page": page, "pageStart": page, "pageEnd": page, "questionNumber": question_number, "latex": latex, "confidence": item.get("confidence"), "continuesToNextPage": bool(item.get("continuesToNextPage", False)), "extraction": f"{provider.upper()}_VISUAL_PAGE", "questionAssets": question_assets.get(question_number, []), "textSegments": [{"page": page, "text": vector_text}]}
+        if any(transcription_fields.values()):
+            metadata["_transcriptionFields"] = transcription_fields
         output.append({
             "id": str(uuid.uuid5(uuid.NAMESPACE_URL, stable_identity)), "text": vector_text,
-            "metadata": {"sourceFile": source_name, "page": page, "pageStart": page, "pageEnd": page, "questionNumber": question_number, "latex": latex, "confidence": item.get("confidence"), "continuesToNextPage": bool(item.get("continuesToNextPage", False)), "extraction": f"{provider.upper()}_VISUAL_PAGE", "questionAssets": question_assets.get(question_number, [])},
+            "metadata": metadata,
         })
     return output
 
@@ -425,7 +439,16 @@ def merge_cross_page_questions(questions: list[dict[str, Any]]) -> list[dict[str
                 previous_metadata.setdefault("pageStart", previous_metadata.get("page"))
                 previous_metadata["pageEnd"] = metadata.get("pageEnd", metadata.get("page"))
                 previous_metadata["continuesToNextPage"] = bool(metadata.get("continuesToNextPage"))
-                previous_metadata["questionAssets"] = list(previous_metadata.get("questionAssets", [])) + list(metadata.get("questionAssets", []))
+                # questionAssets 按题号整卷挂载，同号续页合并会把同一份列表拼两遍；
+                # 按 assetId 去重，保证逐题材料与 manifest 不出现重复题图。
+                merged_assets = list(previous_metadata.get("questionAssets", []))
+                seen_asset_ids = {str(asset.get("assetId")) for asset in merged_assets}
+                for asset in metadata.get("questionAssets", []):
+                    if str(asset.get("assetId")) not in seen_asset_ids:
+                        merged_assets.append(asset)
+                        seen_asset_ids.add(str(asset.get("assetId")))
+                previous_metadata["questionAssets"] = merged_assets
+                previous_metadata["textSegments"] = list(previous_metadata.get("textSegments", [])) + list(metadata.get("textSegments", []))
                 identity = f"{previous_metadata['sourceFile']}\n{previous_metadata['pageStart']}\n{previous_metadata['pageEnd']}\n{previous_metadata.get('questionNumber', '')}\n{combined_text}"
                 previous["id"] = str(uuid.uuid5(uuid.NAMESPACE_URL, identity))
                 continue
@@ -463,6 +486,7 @@ def load_question_assets(asset_root: Path, source_file: Path) -> dict[str, list[
             "assetSha256": actual_asset_sha256,
             "sourceSha256": source_sha256,
             "pageNumber": item["pageNumber"],
+            "pageHeightPixels": item.get("pageHeightPixels"),
             "bboxPixels": item["bboxPixels"],
             "bindingMethod": item["bindingMethod"],
             "_sourceAssetPath": asset_path,
@@ -489,33 +513,51 @@ def copy_source_asset(source: Path, destination: Path) -> None:
 
 
 
+# 记号原子：^2、_1、x^{12} 这类 TeX 上下标与其 Unicode 预组合字形（²、₁）表达同一语义，
+# 定位时统一折叠到数字串。规则按 Unicode 通用类别（Pd 破折号）折叠，不逐字形枚举特例——
+# 逐字形补丁表永不完备（见 docs/gaokao-ingestion-bottlenecks.md 第 7.1 节）。
+NOTATION_ATOM = re.compile(r"[\^_]\{?[0-9]+\}?")
+DASH_FOLD = {chr(cp) for cp in range(0x10000) if unicodedata.category(chr(cp)) == "Pd"} | {"−"}
+
+
+def _fold_output(character: str) -> str:
+    """NFKC 折叠 + 破折号类别折叠到 ASCII '-'，单字符级输出（原子在调用处整体处理）。"""
+    folded = unicodedata.normalize("NFKC", character)
+    return "".join("-" if out in DASH_FOLD else out for out in folded)
+
+
 def _normalize_locator_text(text: str) -> str:
-    """Normalizes equivalent Unicode and TeX glyphs for locating the same visual stem."""
-    normalized = unicodedata.normalize("NFKC", text)
-    return normalized.translate(str.maketrans({
-        "²": "^2",
-        "³": "^3",
-        "⁴": "^4",
-        "⁵": "^5",
-        "₁": "_1",
-        "₂": "_2",
-        "₃": "_3",
-        "−": "-",
-        "—": "-",
-    }))
+    r"""Canonicalizes notation variants to one locating form with generic rules:
+    NFKC (²→2), [\^_] digit/braced-group stripping (^{12}→12), dash-category fold."""
+    compact, _offsets = _compact_with_offsets(text)
+    return compact
 
 
 def _compact_with_offsets(text: str) -> tuple[str, list[int]]:
-    """Builds a normalized whitespace-free view while retaining source offsets."""
+    """Builds the folded whitespace-free view while retaining approximate source offsets.
+
+    记号原子（^2、^{12}）作为整体折叠成数字串，其输出字符的偏移记为原子起点；
+    定位只用于印刷题号锚点扫描的邻域，原子级精度足够。
+    """
     compact: list[str] = []
     offsets: list[int] = []
-    for index, character in enumerate(text):
-        normalized = _normalize_locator_text(character)
-        for output_character in normalized:
-            if output_character.isspace():
-                continue
-            compact.append(output_character)
-            offsets.append(index)
+
+    def emit(segment: str, base: int) -> None:
+        for index, character in enumerate(segment):
+            for output_character in _fold_output(character):
+                if output_character.isspace():
+                    continue
+                compact.append(output_character)
+                offsets.append(base + index)
+
+    position = 0
+    for atom in NOTATION_ATOM.finditer(text):
+        emit(text[position:atom.start()], position)
+        for digit in re.sub(r"\D", "", atom.group()):
+            compact.append(digit)
+            offsets.append(atom.start())
+        position = atom.end()
+    emit(text[position:], position)
     return "".join(compact), offsets
 
 
@@ -529,7 +571,9 @@ def _question_signature(question: dict[str, Any]) -> str:
     """Returns a stable stem prefix for locating the same question in full Terra page text."""
     text = str(question.get("text", "")).strip()
     first_line = next((line.strip() for line in text.splitlines() if line.strip()), text)
-    signature = re.sub(r"\\\\[A-Za-z]*$", "", re.sub(r"\\s+", "", first_line)[:96])
+    # 与页文本侧共用 _compact_with_offsets 的折叠视图，两侧规范形完全一致才能定位命中。
+    stripped = _normalize_locator_text(first_line)
+    signature = re.sub(r"\\[A-Za-z]*$", "", stripped)[:96]
     return signature
 
 
@@ -575,6 +619,28 @@ def _locate_question_in_pages(
         f"cannot locate structured question stem in Terra page text: "
         f"{question['metadata'].get('sourceFile', '')} #{number}"
     )
+
+
+SOLUTION_HEADING = re.compile(r"【[^】\n]{1,8}】")
+
+
+def _solution_segment_offset(segment: str) -> int:
+    """返回该题完整文本段中解析区的起点偏移，找不到返回 -1。
+
+    通用结构信号：解析卷的解析区总以【…】小节标题开始（【答案】【解析】【详解】
+    【考点】及任何未来变体一律命中，不枚举具体字样），但小节标题必须**另起一行**：
+    行边界既可能是真实换行，也可能是转写模型把整页压成单行时写进正文的字面 \\n
+    转义序列（2023Ⅰ 实测存在），两种都认；标题出现在行内（如“见行内【答案】混排”、
+    题干填空“【 】”）一律不算。标题前允许水平空白。"""
+    for match in SOLUTION_HEADING.finditer(segment):
+        head = match.start()
+        while head > 0 and segment[head - 1] in " \t　":
+            head -= 1
+        if head == 0:
+            continue
+        if segment[head - 1] == "\n" or segment[head - 2:head] == "\\n":
+            return match.start()
+    return -1
 
 
 def attach_solution_sections(
@@ -655,9 +721,23 @@ def attach_solution_sections(
                 {"fromPage": page, "toPage": page + 1} for page in source_pages[:-1]
             ],
         }
-        solution_start = segment.find("【答案】")
+        # 解析区起点用通用结构信号（见 _solution_segment_offset），不再搜“【答案】”字面量；
+        # 页段无小节标题时回退到输出契约的结构化字段（_transcriptionFields），两者都失败才判未附解析。
+        solution_start = _solution_segment_offset(segment)
         if solution_start < 0:
-            metadata["solutionAttached"] = False
+            transcription_fields = metadata.get("_transcriptionFields") or {}
+            answer = str(transcription_fields.get("answer", "")).strip()
+            analysis = str(transcription_fields.get("analysis", "")).strip()
+            if answer or analysis:
+                parts = []
+                if answer:
+                    parts.append(f"【答案】{answer}")
+                if analysis:
+                    parts.append(f"【解析】{analysis}")
+                metadata["solutionAttached"] = True
+                question["text"] = f"{str(question['text']).strip()}\\n\\n{'\\n\\n'.join(parts)}"
+            else:
+                metadata["solutionAttached"] = False
             continue
         solution = segment[solution_start:].strip()
         solution = re.sub(
@@ -667,6 +747,20 @@ def attach_solution_sections(
         ).strip()
         metadata["solutionAttached"] = True
         question["text"] = f"{str(question['text']).strip()}\\n\\n{solution}"
+        # 解析块按页切分：页与页之间由 joined_parts 写入的字面量 \n\n 连接，切出的块与
+        # 最终正文逐字对应，发布阶段据此把每张题图插回其所在页的语义位置。块数与解析
+        # 实际覆盖页数不一致（模型输出了字面 \n 等）时放弃精确对齐，回退到文末追加。
+        chunks = [chunk.strip() for chunk in solution.split("\\n\\n") if chunk.strip()]
+        solution_pages = [
+            page for page, page_start, page_end, _text in joined_pages
+            if max(start + solution_start, page_start) < min(end, page_end)
+            and not _page_footer_only(joined[max(start + solution_start, page_start):min(end, page_end)])
+        ]
+        if len(chunks) == len(solution_pages):
+            stem_segments = list(metadata.get("textSegments", []))
+            metadata["textSegments"] = stem_segments + [
+                {"page": page, "text": chunk} for page, chunk in zip(solution_pages, chunks)
+            ]
 
 
 def reconcile_question_numbers_from_page_text(
@@ -676,7 +770,7 @@ def reconcile_question_numbers_from_page_text(
     for question in questions:
         source_name = str(question["metadata"].get("sourceFile", ""))
         grouped.setdefault(source_name, []).append(question)
-    anchor_pattern = re.compile(r"(?m)^\s*([1-9]\d{0,2})\s*[．.、)]\s*")
+    anchor_pattern = re.compile(r"(?m)^\s*([1-9]\d{0,2})\s*[．.、)](?!\d)\s*")
     for source_name, source_questions in grouped.items():
         page_texts = page_texts_by_source.get(source_name, {})
         if not page_texts:
@@ -699,7 +793,10 @@ def reconcile_question_numbers_from_page_text(
                 (start, end, text) for candidate_page, start, end, text in joined_pages if candidate_page == page
             )
             local_position = position - page_start
-            matches = list(anchor_pattern.finditer(page_text[:local_position]))
+            # 锚点必须“包含定位点本身”：签名定位停在题干首字（题号紧贴其前），题号回退定位
+            # 停在题干自己的印刷题号上。只看定位点之前会把回退路径的记录改成上一题的号
+            # （2026-08-31 空白卷被成批改号 -13 题的回归即源于此）。
+            matches = [matched for matched in anchor_pattern.finditer(page_text[:local_position + 4]) if matched.start() <= local_position]
             if not matches:
                 continue
             number = matches[-1].group(1)
@@ -768,6 +865,98 @@ def repair_question_number_collisions(
     return (retained, collision_count) if with_stats else retained
 
 
+# 通用信号：中文数学卷里引用图形的句子必含“图”字（如图/见图/所示的统计图…），
+# 用单字命中替代“如图|见图|如下图|…”字样枚举表；几何比例仍是选点主信号，
+# 词信号只做候选收窄，整页无“图”字时按比例就近插入（见 place_question_figures）。
+FIGURE_REFERENCE_PATTERN = re.compile("图")
+
+
+def _paragraph_bounds(body: str, region_start: int, region_end: int) -> list[tuple[int, int]]:
+    bounds: list[tuple[int, int]] = []
+    cursor = region_start
+    while cursor < region_end:
+        boundary = body.find("\n\n", cursor, region_end)
+        if boundary < 0:
+            bounds.append((cursor, region_end))
+            break
+        bounds.append((cursor, boundary))
+        cursor = boundary + 2
+    return bounds
+
+
+def place_question_figures(body: str, segments: list[dict[str, Any]],
+                           figure_markdowns: list[tuple[dict[str, Any], str]]) -> str:
+    """把每张题图插回正文里“其来源页上与图的实际纵向位置最贴近的如图段落”之后。
+
+    segments 是页级正文块（textSegments），其文本逐字出现在 body 中；资产携带
+    pageNumber/pageHeightPixels/bboxPixels.top。页内候选插入点取含“图”字的段落
+    （通用单字信号），用 bbox.top 占页高的比例挑最贴近的一个；整页无“图”字段落时
+    对全部段落按同一比例就近；同页多图按先后消耗候选点。
+    无法定位（无 segments/页块失配）时回退文末追加，绝不丢图。
+    """
+    if not figure_markdowns:
+        return body
+    fallback_markdown = "".join(f"\n\n{markdown}" for _asset, markdown in figure_markdowns)
+    if not body or not segments:
+        return body + fallback_markdown
+    page_regions: dict[int, list[int]] = {}
+    cursor = 0
+    for segment in segments:
+        needle = str(segment.get("text", "")).strip()
+        page = segment.get("page")
+        if not needle or not isinstance(page, int):
+            continue
+        position = body.find(needle, cursor)
+        if position < 0:
+            continue
+        # 同页的题干段与解析段取并集，保证该页所有“如图”候选点都参与选择。
+        if page in page_regions:
+            page_regions[page] = [min(page_regions[page][0], position), max(page_regions[page][1], position + len(needle))]
+        else:
+            page_regions[page] = [position, position + len(needle)]
+        cursor = position + len(needle)
+    ordered = sorted(
+        enumerate(figure_markdowns),
+        key=lambda pair: (int(pair[1][0].get("pageNumber", 0) or 0),
+                          int((pair[1][0].get("bboxPixels") or {}).get("top", 0) or 0), pair[0]),
+    )
+    insertions: list[tuple[int, int, str]] = []
+    consumed: dict[int, set[int]] = {}
+    for sequence, (_original_index, (asset, markdown)) in enumerate(ordered):
+        page = int(asset.get("pageNumber", 0) or 0)
+        region = page_regions.get(page)
+        if region is None:
+            insertions.append((len(body), sequence, markdown))
+            continue
+        region_start, region_end = region
+        height = asset.get("pageHeightPixels")
+        top = int((asset.get("bboxPixels") or {}).get("top", 0) or 0)
+        target = (top / float(height)) if isinstance(height, (int, float)) and height > 0 and top > 0 else None
+        used = consumed.setdefault(page, set())
+        bounds = [
+            (paragraph_start, paragraph_end)
+            for paragraph_start, paragraph_end in _paragraph_bounds(body, region_start, region_end)
+            if paragraph_end not in used
+        ]
+        candidates = [end for start, end in bounds if FIGURE_REFERENCE_PATTERN.search(body[start:end])]
+        if not candidates:
+            # 整页没有任何含“图”的段落：退回几何信号，按 bbox 比例就近取段落。
+            candidates = [end for _start, end in bounds]
+        if candidates and target is not None:
+            offset = min(candidates, key=lambda c: abs((c - region_start) / max(1, region_end - region_start) - target))
+        elif candidates:
+            offset = candidates[-1]
+        else:
+            offset = region_end
+        used.add(offset)
+        insertions.append((offset, sequence, markdown))
+    result = body
+    # 从后往前插入，避免前面的偏移被后面的插入移位；同偏移时小序号最终排在前面。
+    for offset, _sequence, markdown in sorted(insertions, key=lambda item: (item[0], item[1]), reverse=True):
+        result = result[:offset] + "\n\n" + markdown + result[offset:]
+    return result
+
+
 def publish_canonical_paper(
         corpus_root: Path,
         source_file: Path,
@@ -828,13 +1017,19 @@ def publish_canonical_paper(
             f"- 来源题目：{number}",
             f"- 跨页连续：{'是' if len(source_pages) > 1 else '否'}", "", question["text"], "",
         ]
+        ordered_assets = sorted(
+            enumerate(metadata.get("questionAssets", [])),
+            key=lambda pair: (int(pair[1].get("pageNumber", 0) or 0),
+                              int((pair[1].get("bboxPixels") or {}).get("top", 0) or 0), pair[0]),
+        )
         copied_assets: list[dict[str, Any]] = []
         manifest_assets: list[dict[str, Any]] = []
-        for asset_index, asset in enumerate(metadata.get("questionAssets", []), start=1):
+        figure_markdowns: list[tuple[dict[str, Any], str]] = []
+        for asset_order, (_original_index, asset) in enumerate(ordered_assets, start=1):
             source_asset = asset.get("_sourceAssetPath")
             if not isinstance(source_asset, Path):
                 raise RuntimeError("question asset has no private publication path")
-            relative_asset = Path("figures") / f"q-{file_stem}-{asset_index:02d}{source_asset.suffix.lower()}"
+            relative_asset = Path("figures") / f"q-{file_stem}-{asset_order:02d}{source_asset.suffix.lower()}"
             copied_asset_path = paper_root / relative_asset
             copy_source_asset(source_asset, copied_asset_path)
             copied_asset = {key: value for key, value in asset.items() if not key.startswith("_")}
@@ -845,7 +1040,11 @@ def publish_canonical_paper(
                 "canonicalAssetPath": relative_asset.as_posix(),
             }
             manifest_assets.append(manifest_asset)
-            question_lines.extend([f"![第 {number} 题图]({relative_asset.as_posix()})", ""])
+            figure_markdowns.append((asset, f"![第 {number} 题图]({relative_asset.as_posix()})"))
+        # 题图按来源页与页内位置插回正文语义位置；无法定位的资产由 place_question_figures
+        # 保底追加到文末，资产本身绝不会丢失。
+        question_lines[6] = place_question_figures(
+            str(question["text"]), list(metadata.get("textSegments", [])), figure_markdowns)
         question_path = paper_root / question_file
         question_path.parent.mkdir(parents=True, exist_ok=True)
         question_path.write_text("\n".join(question_lines), encoding="utf-8")
@@ -893,7 +1092,11 @@ def vector_metadata(record: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("vector record metadata must be an object")
     # Formula strings are already part of the embedded text and canonical Markdown.
     # Excluding this redundant field prevents the path guard treating TeX backslashes as paths.
-    metadata = {key: value for key, value in metadata.items() if key != "latex"}
+    # textSegments 是发布阶段的排版辅助（页->正文块），正文已含全部文字，不重复进入向量库。
+    # 下划线前缀键（如 _transcriptionFields 的答案/解析契约字段）是发布临时量，学生版隔离红线
+    # 要求答案绝不进入检索面，这里先于守卫整体剔除。
+    metadata = {key: value for key, value in metadata.items()
+                if key not in {"latex", "textSegments"} and not key.startswith("_")}
     forbidden_tokens = ("path", "root", "directory", "file://", "\\\\", "/app/", "/mnt/", "c:/", "d:/")
 
     def validate(value: Any, key: str = "") -> Any:
@@ -1277,6 +1480,9 @@ def main() -> None:
     # An unnumbered page fragment is valid only while being merged into an explicit
     # preceding continuation. It is never a standalone canonical question/vector row.
     all_questions = [item for item in all_questions if str(item["metadata"].get("questionNumber", "")).isdigit()]
+    # reconcile_question_numbers_from_page_text 曾在此接线修复视觉误标（2023Ⅱ Q9 被标成 7），
+    # 但 2026-08-31 实测在真实证据上会误改正确记录（页文缺题干行 / 签名首现匹配错位），
+    # 导致 -13 题回归，故保持不接线；误标案例与改进方向见 docs/gaokao-ingestion-bottlenecks.md。
     all_questions, collision_count = repair_question_number_collisions(all_questions, with_stats=True)
     all_questions, duplicate_skipped_count = canonical_question_records(all_questions, with_stats=True)
     if not all_questions:

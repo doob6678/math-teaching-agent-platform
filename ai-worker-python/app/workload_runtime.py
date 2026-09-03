@@ -764,6 +764,16 @@ class MigratedWorkloadRuntime:
             results = list(pool.map(probe, selections))
         return {"status": "COMPLETED", "results": results}
 
+    def chat_messages(self, run_id: str, route: ProviderRoute, messages: list[dict[str, Any]]) -> str:
+        """单次非流式模型调用的公开入口，供上下文图生成五维会话摘要。
+
+        必须复用 _call_json：provider 路由、重试与 UsageLedger 记账都在那里完成，摘要调用的
+        token 用量与讲解调用同等入账，禁止任何绕过本方法的 untracked provider call。失败按
+        HTTPException 抛出，由调用方决定降级策略（上下文图会回退到确定性抽取式摘要）。
+        """
+        content, _result = self._call_json(run_id, route, messages)
+        return content
+
     def _call_json(self, run_id: str, route: ProviderRoute, messages: list[dict[str, Any]]) -> tuple[str, ProviderResult]:
         failures: list[str] = []
         for attempt, selection in enumerate([route.primary, *route.fallbacks], 1):

@@ -63,6 +63,16 @@ public class StudentExplanationService {
     private static final int RAW_RECENT_CONTEXT_MAX_ESTIMATED_TOKENS = 512;
     /** Cosine scores below this boundary are too weak to replace an explicit graph label match. */
     private static final double DEFAULT_KNOWLEDGE_GRAPH_SEMANTIC_MIN_SCORE = 0.45d;
+    // 2026-09-02 老板拍板的压缩预算：每次压缩都会改写"较早摘要+最近会话"消息前缀，令 provider
+    // prompt/prefix cache 作废；本链路证据有讲义字符预算锁死、ReAct 动作与迭代轮数封顶，正常会话
+    // 几乎到不了 130k token，因此把触发抬到 130k 级——压缩是极端长会话的兜底而非常态。
+    // 131072 对齐 128K 上下文模型档位。上限必须与 Python v2 契约（StudentExplanationGraphLimits）
+    // 和 PythonMigratedWorkloadClient 的钳位保持一致，@Value 默认值复用这些常量拼接。
+    static final int CONTEXT_MAX_INPUT_TOKENS_CAP = 131_072;
+    static final int CONTEXT_SUMMARY_TRIGGER_TOKENS_CAP = 130_000;
+    static final int DEFAULT_CONTEXT_MAX_INPUT_TOKENS = 131_072;
+    static final int DEFAULT_CONTEXT_RESERVED_OUTPUT_TOKENS = 1_500;
+    static final int DEFAULT_CONTEXT_SUMMARY_TRIGGER_TOKENS = 130_000;
     // 此版本号用于区分新版 Agent 结果与历史模板结果，无需重写既有会话记录。
     private static final String GENERATED_BY = "student_explanation_react_agent_v1";
     private static final Logger log = LoggerFactory.getLogger(StudentExplanationService.class);
@@ -97,7 +107,9 @@ public class StudentExplanationService {
         this(textbookResourceProperties, textbookRetrievalService, knowledgeGraphSpineService,
                 teacherResourceBlockSearchService, teacherResourceStore, aiCardService, imageStoreService,
                 historyStore, new NoOpStudentExplanationConversationContextCache(), null, null, Runnable::run,
-                DEFAULT_KNOWLEDGE_GRAPH_SEMANTIC_MIN_SCORE, 200, 8_000, 1_500, 4_000);
+                DEFAULT_KNOWLEDGE_GRAPH_SEMANTIC_MIN_SCORE, 200,
+                DEFAULT_CONTEXT_MAX_INPUT_TOKENS, DEFAULT_CONTEXT_RESERVED_OUTPUT_TOKENS,
+                DEFAULT_CONTEXT_SUMMARY_TRIGGER_TOKENS);
     }
 
     /** Compatibility constructor for focused semantic-retrieval tests and controlled adapters. */
@@ -114,7 +126,9 @@ public class StudentExplanationService {
         this(textbookResourceProperties, textbookRetrievalService, knowledgeGraphSpineService,
                 teacherResourceBlockSearchService, teacherResourceStore, aiCardService, imageStoreService,
                 historyStore, new NoOpStudentExplanationConversationContextCache(), null, vectorIndexService,
-                Runnable::run, DEFAULT_KNOWLEDGE_GRAPH_SEMANTIC_MIN_SCORE, 200, 8_000, 1_500, 4_000);
+                Runnable::run, DEFAULT_KNOWLEDGE_GRAPH_SEMANTIC_MIN_SCORE, 200,
+                DEFAULT_CONTEXT_MAX_INPUT_TOKENS, DEFAULT_CONTEXT_RESERVED_OUTPUT_TOKENS,
+                DEFAULT_CONTEXT_SUMMARY_TRIGGER_TOKENS);
     }
 
     @Autowired
@@ -134,9 +148,12 @@ public class StudentExplanationService {
             @Value("${math-agent.student.explanation.knowledge-graph-semantic-min-score:0.45}")
                     double knowledgeGraphSemanticMinScore,
             @Value("${math-agent.student.explanation.conversation-history-fetch-limit:200}") int conversationHistoryFetchLimit,
-            @Value("${math-agent.student.explanation.context-max-input-tokens:8000}") int contextMaxInputTokens,
-            @Value("${math-agent.student.explanation.context-reserved-output-tokens:1500}") int contextReservedOutputTokens,
-            @Value("${math-agent.student.explanation.context-summary-trigger-tokens:4000}") int contextSummaryTriggerTokens) {
+            @Value("${math-agent.student.explanation.context-max-input-tokens:"
+                    + DEFAULT_CONTEXT_MAX_INPUT_TOKENS + "}") int contextMaxInputTokens,
+            @Value("${math-agent.student.explanation.context-reserved-output-tokens:"
+                    + DEFAULT_CONTEXT_RESERVED_OUTPUT_TOKENS + "}") int contextReservedOutputTokens,
+            @Value("${math-agent.student.explanation.context-summary-trigger-tokens:"
+                    + DEFAULT_CONTEXT_SUMMARY_TRIGGER_TOKENS + "}") int contextSummaryTriggerTokens) {
         this.textbookResourceProperties = Objects.requireNonNull(
                 textbookResourceProperties, "textbookResourceProperties is required");
         this.textbookRetrievalService = Objects.requireNonNull(
@@ -158,10 +175,12 @@ public class StudentExplanationService {
                 ? knowledgeGraphSemanticMinScore
                 : DEFAULT_KNOWLEDGE_GRAPH_SEMANTIC_MIN_SCORE;
         this.conversationHistoryFetchLimit = Math.max(1, Math.min(conversationHistoryFetchLimit, 200));
-        this.contextMaxInputTokens = Math.max(512, Math.min(contextMaxInputTokens, 120_000));
+        // 钳位上限即 128K 档位预算（常量注释说明了为什么是这个量级）；操作者只能通过配置下调。
+        this.contextMaxInputTokens = Math.max(512, Math.min(contextMaxInputTokens, CONTEXT_MAX_INPUT_TOKENS_CAP));
         this.contextReservedOutputTokens = Math.max(128, Math.min(contextReservedOutputTokens,
                 this.contextMaxInputTokens - 1));
-        this.contextSummaryTriggerTokens = Math.max(256, Math.min(contextSummaryTriggerTokens, 100_000));
+        this.contextSummaryTriggerTokens = Math.max(256, Math.min(contextSummaryTriggerTokens,
+                CONTEXT_SUMMARY_TRIGGER_TOKENS_CAP));
     }
 
     /**

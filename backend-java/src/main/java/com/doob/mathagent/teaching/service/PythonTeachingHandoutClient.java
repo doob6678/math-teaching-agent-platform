@@ -7,6 +7,8 @@ import com.doob.mathagent.teaching.dto.TeachingTaskRequest;
 import com.doob.mathagent.teaching.vo.TeachingTaskResponse;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -15,6 +17,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import org.springframework.core.env.Environment;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
@@ -29,8 +32,9 @@ import org.springframework.web.client.RestClient;
  * the existing durable teaching-task draft rather than creating a second workflow row.</p>
  */
 @Service
-public class PythonTeachingHandoutClient implements TeachingHandoutAiClient {
+public class PythonTeachingHandoutClient implements TeachingHandoutAiClient, ModelLatexRepairClient {
 
+    private static final Logger LOGGER = LoggerFactory.getLogger(PythonTeachingHandoutClient.class);
     private static final String CONTRACT_VERSION = "handout-ai-v2";
     private static final long MIN_TIMEOUT_MS = 1_000L;
     private static final long DEFAULT_TIMEOUT_MS = 300_000L;
@@ -216,6 +220,89 @@ public class PythonTeachingHandoutClient implements TeachingHandoutAiClient {
                 "primary", Map.of("name", terra.name(), "model", terra.chatModel()),
                 "fallbacks", fallbacks,
                 "routeGrant", routeGrantSigner.sign(runId, "handout", routes));
+    }
+
+    /**
+     * 把编译失败的完整文档与真实 XeLaTeX 错误摘录交给 Python 的模型修复端点。
+     *
+     * <p>任何异常都折叠为 empty（超时、5xx、结构校验被拒、worker key 缺失），
+     * 调用方因此可以继续走 recovery-stub 路径；修复文本只有再次编译成功才会发布。</p>
+     */
+    @Override
+    public Optional<String> repairLatex(String runId, String latexSource, String compilerError, int turn) {
+        if (runId == null || runId.isBlank() || latexSource == null || latexSource.isBlank()) {
+            return Optional.empty();
+        }
+        String workerKey = configuredWorkerKey();
+        if (workerKey == null) {
+            return Optional.empty();
+        }
+        try {
+            JsonNode root = client.post()
+                    .uri("/v1/latex-repair/sync")
+                    .header("Authorization", "Bearer " + workerKey)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(Map.of(
+                            "runId", runId,
+                            "latexSource", latexSource,
+                            "compilerError", compilerError == null ? "" : compilerError,
+                            "turn", turn))
+                    .retrieve().body(JsonNode.class);
+            if (root != null && "REPAIRED".equals(root.path("status").asText())) {
+                String repaired = root.path("repairedLatex").asText("");
+                if (!repaired.isBlank()) {
+                    return Optional.of(repaired);
+                }
+            }
+            return Optional.empty();
+        } catch (RuntimeException exception) {
+            LOGGER.warn("LaTeX repair call failed for run {} turn {}: {}", runId, turn, exception.toString());
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * 读取 Python 私有 model-turn 诊断投影（含思考轨迹截断片段）。
+     *
+     * <p>worker key 只在本机/内网边界使用；Python 端投影已剔除 prompt/rawResponse/答案原文，
+     * 调用方必须仍先完成任务归属与教师/管理员身份校验。</p>
+     */
+    public List<Map<String, Object>> readModelDiagnostics(String runId, int excerptChars) {
+        if (runId == null || runId.isBlank()) {
+            throw new IllegalArgumentException("runId is required");
+        }
+        String workerKey = environment.getProperty(
+                "math-agent.python-handout.worker-key", environment.getProperty("math-agent.worker-api-key", ""));
+        if (workerKey == null || workerKey.isBlank()) {
+            throw new IllegalStateException("Python handout worker key is not configured");
+        }
+        JsonNode root = client.get()
+                .uri(uriBuilder -> uriBuilder.path("/v1/handout-runs/{runId}/model-diagnostics")
+                        .queryParam("excerptChars", Math.max(0, Math.min(excerptChars, 20_000))).build(runId))
+                .header("Authorization", "Bearer " + workerKey)
+                .retrieve().body(JsonNode.class);
+        if (root == null || !runId.equals(root.path("runId").asText())) {
+            throw new IllegalStateException("Python model diagnostics response has an invalid runId");
+        }
+        List<Map<String, Object>> turns = new ArrayList<>();
+        ObjectMapper mapper = new ObjectMapper();
+        for (JsonNode item : root.path("turns")) {
+            if (!item.isObject()) {
+                continue;
+            }
+            @SuppressWarnings("unchecked")
+            Map<String, Object> row = mapper.convertValue(item, Map.class);
+            // 保留 null 值（finishReason 可为空）：Map.copyOf 会 NPE，这里用只读 LinkedHashMap。
+            turns.add(java.util.Collections.unmodifiableMap(new java.util.LinkedHashMap<>(row)));
+        }
+        return List.copyOf(turns);
+    }
+
+    /** Returns the configured worker key, or null when repair calls cannot be authenticated. */
+    private String configuredWorkerKey() {
+        String workerKey = environment.getProperty(
+                "math-agent.python-handout.worker-key", environment.getProperty("math-agent.worker-api-key", ""));
+        return workerKey == null || workerKey.isBlank() ? null : workerKey;
     }
 
     /** Keeps provider values and token totals from Python while treating absent pricing as unknown. */

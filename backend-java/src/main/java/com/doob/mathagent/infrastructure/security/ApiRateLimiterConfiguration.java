@@ -1,13 +1,13 @@
 package com.doob.mathagent.infrastructure.security;
 
+import org.redisson.api.RedissonClient;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.data.redis.core.StringRedisTemplate;
 
 /**
- * API 限流器配置：默认使用本地内存，显式启用 Redis 后切换为分布式计数。
+ * API 限流器配置：默认使用本地内存，显式启用 Redis 后切换为分布式限流。
  */
 @Configuration
 @EnableConfigurationProperties(RedisRateLimitProperties.class)
@@ -17,16 +17,18 @@ public class ApiRateLimiterConfiguration {
      * 本地内存限流器：适合单机开发和无 Redis 的测试环境。
      */
     /**
-     * Redis 分布式限流器：适合部署阶段共享请求次数统计。
+     * Redis 分布式限流器：基于 Redisson RRateLimiter 的原子 Lua 令牌限流，适合部署阶段多实例
+     * 共享请求次数统计。复用 {@code RedissonClientConfiguration} 提供的 RedissonClient
+     * （与讲义并发守卫同一客户端，不新建连接池），因此该分支要求
+     * {@code math-agent.redis.redisson.enabled=true} 与之同时打开；若只开限流不开 Redisson，
+     * 应用会因缺少 RedissonClient Bean 在启动期快速失败，而不是运行期限流失效静默放行。
      */
     @Bean
     @ConditionalOnProperty(name = "math-agent.redis.rate-limit.enabled", havingValue = "true")
     public ApiRateLimiter redisApiRateLimiter(
-            StringRedisTemplate redisTemplate,
+            RedissonClient redissonClient,
             RedisRateLimitProperties properties) {
-        return new RedisFixedWindowRateLimiter(
-                new StringRedisRateLimitCounter(redisTemplate),
-                properties.keyPrefix());
+        return new RedissonApiRateLimiter(redissonClient, properties.keyPrefix());
     }
 
     /**

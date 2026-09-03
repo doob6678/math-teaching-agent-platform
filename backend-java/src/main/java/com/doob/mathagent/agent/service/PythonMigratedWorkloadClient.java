@@ -33,6 +33,13 @@ public class PythonMigratedWorkloadClient {
     private static final int MAX_FALLBACKS = 3;
     /** 思考轨迹持久化上限：覆盖长推理链（约 6 万字符 ≈ 2-3 万汉字），超出截断防止 ai_draft_json 无界膨胀。 */
     private static final int REASONING_TRACE_MAX_CHARS = 65_536;
+    /**
+     * 学生讲解上下文预算的 wire 钳位，与 Python v2 契约 StudentExplanationGraphLimits 的上限一致。
+     * 2026-09-02 起压缩触发为 130k 级（兜底而非常态，保护 provider 前缀缓存），131072 对齐 128K
+     * 上下文模型档位；超出契约会被 worker 校验拒绝，两侧必须同步调整。
+     */
+    private static final int CONTEXT_MAX_INPUT_TOKENS_CAP = 131_072;
+    private static final int CONTEXT_SUMMARY_TRIGGER_TOKENS_CAP = 130_000;
 
     private final Environment environment;
     private final RestClient client;
@@ -359,9 +366,9 @@ public class PythonMigratedWorkloadClient {
                 "imageDataUrl", "",
                 "context", contextPayload,
                 "limits", Map.of(
-                        "maxInputTokens", Math.max(512, Math.min(maxInputTokens, 120_000)),
+                        "maxInputTokens", Math.max(512, Math.min(maxInputTokens, CONTEXT_MAX_INPUT_TOKENS_CAP)),
                         "reservedOutputTokens", Math.max(128, Math.min(reservedOutputTokens, 32_000)),
-                        "summaryTriggerTokens", Math.max(256, Math.min(summaryTriggerTokens, 100_000)),
+                        "summaryTriggerTokens", Math.max(256, Math.min(summaryTriggerTokens, CONTEXT_SUMMARY_TRIGGER_TOKENS_CAP)),
                         "maxProviderCalls", 1),
                 "providerRoute", providerRoute(runId, "student_explanation")));
         List<String> selected = stringArray(root.path("selectedMessageIds"), 200, 160);
@@ -414,9 +421,9 @@ public class PythonMigratedWorkloadClient {
                                 "answerText", bounded(item.answerText(), 8_000),
                                 "createdAt", bounded(item.createdAt(), 64))).toList()),
                 "limits", Map.of(
-                        "maxInputTokens", Math.max(512, Math.min(maxInputTokens, 120_000)),
+                        "maxInputTokens", Math.max(512, Math.min(maxInputTokens, CONTEXT_MAX_INPUT_TOKENS_CAP)),
                         "reservedOutputTokens", Math.max(128, Math.min(reservedOutputTokens, 32_000)),
-                        "summaryTriggerTokens", Math.max(256, Math.min(summaryTriggerTokens, 100_000)),
+                        "summaryTriggerTokens", Math.max(256, Math.min(summaryTriggerTokens, CONTEXT_SUMMARY_TRIGGER_TOKENS_CAP)),
                         "maxProviderCalls", 1),
                 "providerRoute", providerRoute(runId, "student_explanation"));
         try {

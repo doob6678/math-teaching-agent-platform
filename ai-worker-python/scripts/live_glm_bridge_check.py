@@ -47,6 +47,8 @@ def main() -> None:
     print(f"[1] tool_call ok: name={call['function']['name']} arguments={call['function']['arguments']}")
 
     # 2) Streaming: expect visible content deltas plus a final usage frame and [DONE].
+    # 2026-08-31 reasoning 落盘合同：thinking_delta 必须单独成为 reasoning_content 帧，
+    # content 通道不得混入思考；GLM 强制思考，真实调用应同时出现两路。
     stream_payload = {
         "model": payload["model"],
         "messages": [{"role": "user", "content": "只回复两个字：收到"}],
@@ -60,9 +62,12 @@ def main() -> None:
     assert chunks[-1] == "[DONE]", chunks[-3:]
     decoded = [json.loads(frame) for frame in chunks[:-1]]
     text = "".join(item["choices"][0]["delta"].get("content") or "" for item in decoded)
+    reasoning = "".join(item["choices"][0]["delta"].get("reasoning_content") or "" for item in decoded)
     final = decoded[-1]
     print(f"[2] stream text={text!r} finish={final['choices'][0].get('finish_reason')} usage={final.get('usage')}")
+    print(f"[2] reasoning_chars={len(reasoning)}")
     assert "收到" in text
+    assert len(reasoning) > 0, "GLM 强制思考，streaming 应出现 reasoning_content 帧（落盘前提）"
     assert final.get("usage", {}).get("total_tokens", 0) > 0
 
     # 3) Full agent runtime path with provider order glm (production agent loop, real review envelope).

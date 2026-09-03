@@ -29,9 +29,8 @@ from langgraph.graph import END, START, StateGraph
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, StrictBool, ValidationError, field_validator, model_validator
 
 from app.ai_run_runtime import ProviderRoute
-from app import anthropic_compat
+from app import anthropic_compat, provider_profiles
 from app.model_review_runtime import ModelReviewMetadata
-from app.sse import iter_sse_data_events
 from app.usage import HandoutMetricsLedger, UsageEvent, UsageLedger, cost_for, fallback_tokens
 
 
@@ -71,6 +70,9 @@ class ModelResponseParseError(ValueError):
 
 # One bounded original document may be supplied after RAG authorization; leave room for its full inspected content.
 DEFAULT_MAX_EVIDENCE_CHARS = 64_000
+# 思考轨迹落盘上限：私有 checkpoint 只保留尾部片段，避免长思考把 MySQL 状态列撑爆；
+# 操作者需要完整原文时走 provider 原始帧（rawResponse 仍按既有策略保留）。
+DEFAULT_REASONING_TRACE_CHARS = 20_000
 DEFAULT_MAX_INSPECTED_SOURCE_CHARS = 64_000
 DEFAULT_MAX_OUTPUT_CHARS = 24000
 DEFAULT_MIN_DOCUMENT_CHARS = 32
@@ -1366,6 +1368,35 @@ class HandoutRuntime:
         """Returns one bounded event-store page for SSE and reconnecting control-plane consumers."""
         return self._checkpoint.events_after(run_id, after_id, limit)
 
+    # 教师/运维诊断投影允许出现的字段；其余（requestPayload、rawResponse、extractedJson 等）
+    # 一律不出端点，防止 prompt 与答案原文经诊断接口回流。
+    _DIAGNOSTIC_PUBLIC_KEYS = (
+        "node", "reviewTurn", "attemptNumber", "provider", "model", "requestedAt",
+        "receivedAt", "elapsedMs", "finishReason", "outcome", "httpStatus", "reasoningChars",
+    )
+
+    def model_turn_diagnostics(self, run_id: str, excerpt_chars: int = 2000) -> list[dict[str, Any]]:
+        """Projects the durable per-turn diagnostics, including the private reasoning trace.
+
+        This is the read side of the reasoning落盘 feature: Java may surface it only after
+        task-ownership and teacher/admin checks; students never call or see this path.
+        """
+        turns = self._checkpoint.load_private_state(run_id).get("modelTurnDiagnostics") or {}
+        projected: list[dict[str, Any]] = []
+        for record_id in sorted(turns, key=lambda key: str(key)):
+            update = turns[record_id]
+            if not isinstance(update, dict):
+                continue
+            item = {"recordId": record_id}
+            for key in self._DIAGNOSTIC_PUBLIC_KEYS:
+                if key in update:
+                    item[key] = update[key]
+            trace = update.get("reasoningTrace")
+            if isinstance(trace, str) and trace:
+                item["reasoningExcerpt"] = trace[:max(0, excerpt_chars)]
+            projected.append(item)
+        return projected
+
     def _build_graph(self):
         graph = StateGraph(HandoutRunState)
         graph.add_node("resource_curation", self._resource_curation)
@@ -2373,14 +2404,17 @@ class HandoutRuntime:
                     "temperature": float(os.getenv("MATH_AGENT_HANDOUT_TEMPERATURE", "0.2")),
                     "max_tokens": max_output_tokens,
                 }
-                if provider == "deepseek" and model == "deepseek-v4-flash":
-                    # Structured handout contracts need the visible JSON within the bounded completion budget. This
-                    # route otherwise spends that budget in reasoning_content, leaving an empty or truncated content
-                    # stream despite JSON-object mode. Operators may explicitly opt back in for provider diagnostics.
-                    payload["response_format"] = {"type": "json_object"}
-                    disable_thinking = os.getenv("MATH_AGENT_HANDOUT_DEEPSEEK_DISABLE_THINKING", "true")
-                    if disable_thinking.strip().lower() in {"1", "true", "yes"}:
-                        payload["enable_thinking"] = False
+                # Structured handout contracts on reasoning-eating relays need the visible JSON within the
+                # bounded completion budget. The model list is deployment config, not a code branch, so
+                # operators can add or remove routes without touching the runtime.
+                json_object_models = {item.strip() for item in os.getenv(
+                    "MATH_AGENT_HANDOUT_JSON_OBJECT_MODELS", "deepseek-v4-flash").split(",") if item.strip()}
+                provider_profile = provider_profiles.profile(provider)
+                if model in json_object_models:
+                    # A relay otherwise spends that budget in reasoning_content, leaving an empty or truncated
+                    # content stream despite JSON-object mode; the profile layer maps provider capabilities.
+                    provider_profiles.apply_json_object_mode(provider_profile, payload)
+                    provider_profiles.apply_thinking_off(provider_profile, payload)
                 # Use provider SSE so every received writer character becomes a private durable artifact immediately.
                 # A timeout can then preserve the exact partial candidate instead of discarding the whole response body.
                 payload["stream"] = True
@@ -2415,14 +2449,16 @@ class HandoutRuntime:
                         lambda update: self._record_model_turn(request, node, review_turn, attempt_number, update)
                     )
                     partial_content: list[str] = []
+                    # 思考轨迹单独累计：只写入私有 checkpoint（modelTurnDiagnostics），永不进入正文或事件流。
+                    partial_reasoning: list[str] = []
                     raw_events: list[str] = []
                     raw_usage: dict[str, Any] = {}
+                    anthropic_format = provider_profile.supports_anthropic_wire()
                     provider_started = time.monotonic()
-                    anthropic_format = anthropic_compat.is_anthropic_provider(provider)
                     response = self._session.post(
-                        f"{base_url}/v1/messages" if anthropic_format else f"{base_url}/chat/completions",
-                        headers=anthropic_compat.anthropic_headers(key) if anthropic_format else {"Authorization": f"Bearer {key}"},
-                        json=anthropic_compat.build_messages_payload(payload) if anthropic_format else payload,
+                        provider_profiles.completion_endpoint(provider_profile, base_url),
+                        headers=provider_profiles.request_headers(provider_profile, key),
+                        json=provider_profiles.build_request(provider_profile, payload),
                         stream=True,
                         timeout=max(0.1, timeout),
                     )
@@ -2436,8 +2472,11 @@ class HandoutRuntime:
                             data = response.json()
                             if anthropic_format:
                                 data = anthropic_compat.to_openai_completion(data)
+                            message_content, message_reasoning = provider_profiles.extract_message(data)
                             first_choice = (data.get("choices") or [{}])[0]
-                            content = str(first_choice.get("message", {}).get("content") or "")
+                            content = message_content
+                            if message_reasoning:
+                                partial_reasoning.append(message_reasoning)
                             finish_reason = str(first_choice.get("finish_reason") or "").strip() or None
                             raw_usage = data.get("usage") or {}
                             raw_body = response.text
@@ -2450,8 +2489,8 @@ class HandoutRuntime:
                                 stream_buffer.add(content)
                                 stream_buffer.flush("non_stream_completion")
                         else:
-                            # Anthropic 流由适配层翻译成 OpenAI 形状的 data 帧字符串，下方解析逻辑保持单一。
-                            event_stream = anthropic_compat.openai_sse_data_lines(response) if anthropic_format else iter_sse_data_events(response)
+                            # Anthropic 流由 provider 层翻译成 OpenAI 形状的 data 帧字符串，下方解析逻辑保持单一。
+                            event_stream = provider_profiles.sse_data_lines(provider_profile, response)
                             for event_data in event_stream:
                                 # requests applies its read timeout between chunks; enforce the Java-issued absolute
                                 # deadline here so a slow but chatty SSE response cannot outlive the task lease.
@@ -2476,8 +2515,9 @@ class HandoutRuntime:
                                     reported_finish_reason = str(choice.get("finish_reason") or "").strip()
                                     if reported_finish_reason:
                                         finish_reason = reported_finish_reason
-                                    delta = choice.get("delta") or {}
-                                    content_delta = delta.get("content")
+                                    content_delta, reasoning_delta = provider_profiles.delta_fields(choice)
+                                    if reasoning_delta:
+                                        partial_reasoning.append(reasoning_delta)
                                     if not content_delta:
                                         continue
                                     partial_content.append(str(content_delta))
@@ -2493,6 +2533,7 @@ class HandoutRuntime:
                         if callable(close):
                             close()
                     elapsed_ms = max(0, int((time.monotonic() - provider_started) * 1000))
+                    reasoning_text = "".join(partial_reasoning)[-DEFAULT_REASONING_TRACE_CHARS:]
                     adaptive_ceiling = None
                     if finish_reason == "length":
                         adaptive_ceiling = self._record_length_ceiling(node, provider, model, max_output_tokens)
@@ -2504,6 +2545,9 @@ class HandoutRuntime:
                         "finishReason": finish_reason or "not_reported",
                         "requestedCompletionTokens": max_output_tokens,
                         "nextCompletionCeiling": adaptive_ceiling,
+                        # 私有思考轨迹：仅存 checkpoint（教师/运维诊断接口读取），学生侧与正文永不接触。
+                        "reasoningChars": len(reasoning_text),
+                        "reasoningTrace": reasoning_text or None,
                     })
                     data = {"choices": [{"message": {"content": content}}], "usage": raw_usage}
                     self._record_model_turn(request, node, review_turn, attempt_number, {
@@ -2714,12 +2758,8 @@ class HandoutRuntime:
 
     @staticmethod
     def _provider_config(provider: str) -> tuple[str | None, str, str]:
-        keys = {"openai": "OPENAI_API_KEY", "dashscope": "DASHSCOPE_API_KEY", "deepseek": "DEEPSEEK_API_KEY", "ark": "ARK_API_KEY", "glm": "GLM_API_KEY"}
-        bases = {"openai": os.getenv("OPENAI_BASE_URL", "https://api1.aisz.mom/v1"), "dashscope": "https://dashscope.aliyuncs.com/compatible-mode/v1", "deepseek": "https://api.deepseek.com/v1", "ark": "https://ark.cn-beijing.volces.com/api/v3", "glm": anthropic_compat.default_base_url()}
-        key = os.getenv(keys.get(provider, ""))
-        base = os.getenv(f"{provider.upper()}_BASE_URL", bases.get(provider, "")).rstrip("/")
-        model = os.getenv(f"{provider.upper()}_CHAT_MODEL", os.getenv(f"MATH_AGENT_AI_RUNTIME_{provider.upper()}_MODEL", os.getenv("MATH_AGENT_AI_RUNTIME_MODEL", os.getenv("OPENAI_CHAT_MODEL", "gpt-5.6-luna"))))
-        return key, base, model
+        key, base = provider_profiles.credentials(provider)
+        return key, base, provider_profiles.default_model_chain(provider)
 
     @staticmethod
     def _plan_prompt(request: HandoutRunRequest, evidence: EvidenceSnapshot) -> str:

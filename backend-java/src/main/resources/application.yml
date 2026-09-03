@@ -140,10 +140,13 @@ math-agent:
       max-provider-attempts: 2
       conversation-context-max-chars: 100000
       conversation-history-fetch-limit: 200
-      # The deterministic context graph preserves a compact summary and the newest useful turns before model calls.
-      context-max-input-tokens: ${MATH_AGENT_STUDENT_CONTEXT_MAX_INPUT_TOKENS:8000}
+      # 压缩是兜底而非常态：每次压缩都会改写消息前缀、使 provider prompt/prefix cache 失效，
+      # 因此触发阈值抬到 130k（证据与 ReAct 迭代已有预算封顶，正常会话不会触发）。
+      # Python 端优先用模型生成五维结构化摘要（目标/已完成/已阅读资料/选择/结论），失败回退确定性抽取式。
+      # 131072 对齐 128K 上下文模型档位；上调不得超过 PythonMigratedWorkloadClient 与 Python 契约上限。
+      context-max-input-tokens: ${MATH_AGENT_STUDENT_CONTEXT_MAX_INPUT_TOKENS:131072}
       context-reserved-output-tokens: ${MATH_AGENT_STUDENT_CONTEXT_RESERVED_OUTPUT_TOKENS:1500}
-      context-summary-trigger-tokens: ${MATH_AGENT_STUDENT_CONTEXT_SUMMARY_TRIGGER_TOKENS:4000}
+      context-summary-trigger-tokens: ${MATH_AGENT_STUDENT_CONTEXT_SUMMARY_TRIGGER_TOKENS:130000}
       # Cross-conversation learner profiling is intentionally outside the normal conversation context path.
       long-term-memory-enabled: false
       long-term-memory-top-k: 5

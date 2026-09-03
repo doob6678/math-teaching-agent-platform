@@ -48,6 +48,9 @@ public class ApiAccessPolicy {
                 new ApiAccessRule("/api/feishu/oauth/authorize", ApiAccessLevel.USER, Set.of("teacher", "admin"), 0, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/feishu/oauth/status", ApiAccessLevel.USER, Set.of("teacher", "admin"), 0, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/feishu/oauth/callback", ApiAccessLevel.PUBLIC, Set.of("*"), 0, Duration.ofMinutes(1)),
+                // 2026-08-31 写侧：按租户建库与批量上传统一使用机器人租户身份，学生角色不可见也不可触发。
+                new ApiAccessRule("/api/feishu/library", ApiAccessLevel.USER, Set.of("teacher", "admin"), 0, Duration.ofMinutes(1)),
+                new ApiAccessRule("/api/feishu/handout/uploads", ApiAccessLevel.USER, Set.of("teacher", "admin"), 3, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/a2a/.well-known/agent-card.json", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 0, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/mcp/configuration/me", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 0, Duration.ofMinutes(1)),
                 new ApiAccessRule("/api/mcp/keys/", ApiAccessLevel.USER, Set.of("student", "teacher", "admin"), 0, Duration.ofMinutes(1)),

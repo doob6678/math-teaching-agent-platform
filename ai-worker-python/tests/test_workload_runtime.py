@@ -665,6 +665,34 @@ class MigratedWorkloadContractTest(unittest.TestCase):
         self.assertEqual(response.status_code, 422)
         self.assertIn("imageDataUrl", response.text)
 
+    def test_chat_messages_reuses_tracked_call_json_path(self):
+        # 上下文图的五维摘要调用必须复用 _call_json：provider 路由与 UsageLedger 记账都在那里，
+        # 保证摘要 token 入账、不存在 untracked provider call。
+        from app.ai_run_runtime import ProviderRoute
+        from app.workload_runtime import ProviderResult
+
+        route = ProviderRoute.model_validate(self.route())
+        messages = [{"role": "user", "content": "压缩这轮对话"}]
+        tracked = ProviderResult("openai", "gpt-5.6-luna", "{}", 10, 5, 15, 0.0)
+        with patch(
+                "app.workload_runtime.MigratedWorkloadRuntime._call_json",
+                return_value=('{"goal":"复习函数"}', tracked)) as call:
+            content = MigratedWorkloadRuntime().chat_messages("context-run-9", route, messages)
+        self.assertEqual(content, '{"goal":"复习函数"}')
+        call.assert_called_once_with("context-run-9", route, messages)
+
+    def test_context_graph_is_wired_to_tracked_summarizer(self):
+        from app.server import migrated_workload_runtime, student_explanation_context_graph
+
+        student_explanation_context_graph.cache_clear()
+        try:
+            graph = student_explanation_context_graph()
+            # 装配必须注入 workload runtime 的入账通道；丢失装配会让生产环境的压缩静默退回抽取式。
+            self.assertEqual(graph._summarizer.__name__, "chat_messages")
+            self.assertIs(graph._summarizer.__self__, migrated_workload_runtime())
+        finally:
+            student_explanation_context_graph.cache_clear()
+
 
 if __name__ == "__main__":
     unittest.main()

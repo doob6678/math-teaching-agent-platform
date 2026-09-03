@@ -1,0 +1,20 @@
+{
+  "sourceRootWsl": "/mnt/c/Users/doob/Desktop/个人资料/高考真题/数学高考真题试卷【点进去分开保存，链接长期在】/【新·PDF版】2008-2024·高考数学真题/高考题目数学最近几年",
+  "containerInputRoot": "/app/data/gaokao-input",
+  "evidenceRoot": "output/test-gaokao-structured-20260901/math-paper-corpus",
+  "questionAssetRoot": "output/math-paper-assets/gaokao-2024",
+  "assetOutputRoot": "output/test-gaokao-structured-20260901/math-paper-assets",
+  "paperType": "GAOKAO",
+  "subject": "MATHEMATICS",
+  "selectedFiles": [
+    "2022年高考数学试卷（新高考Ⅰ卷）（解析卷）.pdf"
+  ],
+  "blankPaperGoldenExpectations": {},
+  "visionOptimization": {
+    "pageInitialReviewMaxLongEdgePixels": 960,
+    "pageInitialReviewJpegQuality": 0.82,
+    "policy": "沿用生产 2024 配置的同页验证参数（960px/0.82），test 小库仅用于对比 v2 结构化协议与旧正则管线的输出差异，不引入新的图像变量。"
+  },
+  "collection": "gaokao_math_structured_test",
+  "scopeExplanation": "v2 结构化协议改造的小库验收配置：只含 2022 新高考Ⅰ卷解析卷（q19 双图验收锚点）。questionAssetRoot 只读复用生产 2024 资产目录（哈希校验防错绑），所有写出一律落在 test-gaokao-structured-20260901 与 gaokao_math_structured_test。"
+}

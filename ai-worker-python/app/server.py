@@ -52,6 +52,7 @@ from app.student_explanation_graph import (
     as_v1_compose_request,
 )
 from app.streaming_runtime import AgentStreamingRuntime
+from app.latex_repair_runtime import LatexRepairRequest, LatexRepairRuntime
 from app.tokenizer import count_texts
 from fastapi.responses import JSONResponse, StreamingResponse
 import json
@@ -183,8 +184,13 @@ def migrated_workload_runtime() -> MigratedWorkloadRuntime:
 
 @lru_cache(maxsize=1)
 def student_explanation_context_graph() -> StudentExplanationContextGraph:
-    """Keeps the compiled deterministic context graph available for v2 requests."""
-    return StudentExplanationContextGraph()
+    """Compiles the v2 context graph once per worker process.
+
+    摘要生成注入 migrated_workload_runtime().chat_messages：触发压缩时（默认阈值 130k，保护
+    provider 前缀缓存，见 student_explanation_graph 的常量注释）模型调用走与讲解相同的 provider
+    路由与 UsageLedger 记账；该可调用缺失或失败时图自动降级为确定性抽取式摘要。
+    """
+    return StudentExplanationContextGraph(summarizer=migrated_workload_runtime().chat_messages)
 
 
 @lru_cache(maxsize=1)
@@ -382,6 +388,22 @@ def provider_health_sync(payload: ProviderHealthRunRequest) -> dict:
     return migrated_workload_runtime().provider_health(payload)
 
 
+@lru_cache(maxsize=1)
+def latex_repair_runtime() -> LatexRepairRuntime:
+    """XeLaTeX 编译失败后的模型重写闭环执行体（单连接池，无状态转换）。"""
+    return LatexRepairRuntime()
+
+
+@app.post("/v1/latex-repair/sync", dependencies=[Depends(require_worker_key)])
+def latex_repair_sync(payload: LatexRepairRequest) -> dict:
+    """Java 把真实 XeLaTeX 错误摘录连同失败文档发来；模型修复语法，结构校验不过即 REJECTED。
+
+    返回值只含 repairedLatex/problems/provider 审计字段；教学语义仍由 AI 唯一作者产出，
+    Java 拿到 REPAIRED 后仍需重新编译成功才会发布。
+    """
+    return latex_repair_runtime().repair(payload)
+
+
 def _submit_handout_once(payload: HandoutRunRequest) -> Future:
     """Deduplicates an SSE-triggered graph so browser reconnects cannot spend another provider budget."""
     with _handout_futures_lock:
@@ -450,6 +472,21 @@ def handout_run_events(
         "runId": run_id,
         "events": [{"eventId": event_id, **event} for event_id, event in rows],
         "nextAfterId": rows[-1][0] if rows else after_id,
+    }
+
+
+@app.get("/v1/handout-runs/{run_id}/model-diagnostics", dependencies=[Depends(require_worker_key)])
+def handout_model_diagnostics(
+    run_id: str,
+    excerpt_chars: int = Query(default=2000, alias="excerptChars", ge=0, le=20_000),
+) -> dict:
+    """思考轨迹落盘的读侧：Java 仅在任务归属与教师/管理员身份校验通过后代理本端点。
+
+    投影只含运行元数据与截断后的 reasoningExcerpt；prompt、raw 响应与答案原文不出端点。
+    """
+    return {
+        "runId": run_id,
+        "turns": handout_runtime().model_turn_diagnostics(run_id, excerpt_chars=excerpt_chars),
     }
 
 

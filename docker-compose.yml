@@ -155,6 +155,14 @@ services:
       # glm-5.3-flash 强制思考且与 temperature 互斥；弱思考档位与思考预算下限由部署显式声明。
       MATH_AGENT_GLM_THINKING_EFFORT: ${MATH_AGENT_GLM_THINKING_EFFORT:-low}
       MATH_AGENT_GLM_MIN_MAX_TOKENS: ${MATH_AGENT_GLM_MIN_MAX_TOKENS:-2048}
+      # provider 适配层统一控制思考轨迹：推理内容只落盘到教师侧诊断，默认全局关闭非强制思考模型的 thinking。
+      MATH_AGENT_WORKER_DISABLE_THINKING: ${MATH_AGENT_WORKER_DISABLE_THINKING:-true}
+      # 讲义 JSON 对象输出模式按模型白名单启用（GLM 网关不支持该模式，适配层会自动跳过）。
+      MATH_AGENT_HANDOUT_JSON_OBJECT_MODELS: ${MATH_AGENT_HANDOUT_JSON_OBJECT_MODELS:-deepseek-v4-flash}
+      # LaTeX 编译错误回喂模型重写闭环：providers 为空时沿用讲义 provider 顺序。
+      MATH_AGENT_LATEX_REPAIR_PROVIDERS: ${MATH_AGENT_LATEX_REPAIR_PROVIDERS:-}
+      MATH_AGENT_LATEX_REPAIR_TIMEOUT_SECONDS: ${MATH_AGENT_LATEX_REPAIR_TIMEOUT_SECONDS:-60}
+      MATH_AGENT_LATEX_REPAIR_MAX_OUTPUT_TOKENS: ${MATH_AGENT_LATEX_REPAIR_MAX_OUTPUT_TOKENS:-16000}
       MATH_AGENT_AI_RUNTIME_PROVIDER_ORDER: ${MATH_AGENT_AI_RUNTIME_PROVIDER_ORDER:-openai,deepseek}
       # Acceptance can explicitly prefer the verified DeepSeek flash route without changing the retained Terra route.
       MATH_AGENT_HANDOUT_PREFERRED_PROVIDER: ${MATH_AGENT_HANDOUT_PREFERRED_PROVIDER:-deepseek}
@@ -243,9 +251,9 @@ services:
     logging: *container-logging
     environment:
       MATH_AGENT_WORKER_API_KEY: ${MATH_AGENT_WORKER_API_KEY:?MATH_AGENT_WORKER_API_KEY must be set}
-      # This URL is emitted into external MCP client configuration. It must target the Windows-reachable backend port,
-      # not the Docker service name or a proxy-rewritten Host header.
-      MATH_AGENT_MCP_PUBLIC_URL: ${MATH_AGENT_MCP_PUBLIC_URL:-http://127.0.0.1:8080/api/mcp}
+      # This URL is emitted into external MCP client configuration. It targets the hosts-mapped
+      # api domain (proxied by the frontend nginx to backend:8080) so copied configs never show a raw 127.0.0.1.
+      MATH_AGENT_MCP_PUBLIC_URL: ${MATH_AGENT_MCP_PUBLIC_URL:-http://api.mathagent.local/api/mcp}
       MATH_AGENT_VECTOR_INDEX_EMBEDDING_API_KEY: ${MATH_AGENT_WORKER_API_KEY:?MATH_AGENT_WORKER_API_KEY must be set}
       # Retrieval can score thousands of locally indexed source chunks. Batch enough BGE inputs to keep a teaching
       # task bounded while leaving headroom for the Windows GPU used by the real ai-worker model.
@@ -296,6 +304,11 @@ services:
       FEISHU_APP_SECRET: ${FEISHU_APP_SECRET:-}
       FEISHU_APPID: ${FEISHU_APPID:-}
       FEISHU_APPSECRET: ${FEISHU_APPSECRET:-}
+      # 按租户自动建飞书云文档库：父目录 token 留空则建在应用云空间根目录；前缀用于租户库文件夹命名。
+      FEISHU_LIBRARY_PARENT_TOKEN: ${FEISHU_LIBRARY_PARENT_TOKEN:-}
+      FEISHU_LIBRARY_PREFIX: ${FEISHU_LIBRARY_PREFIX:-mathagent}
+      # LaTeX 模型重写最大轮数（0-3，Spring 属性 math-agent.teaching.latex-repair.max-rounds，环境变量名去连字符）。
+      MATH_AGENT_TEACHING_LATEXREPAIR_MAXROUNDS: ${MATH_AGENT_TEACHING_LATEXREPAIR_MAXROUNDS:-1}
       MATH_AGENT_TEACHER_SYNC_DOWNLOADER_SCRIPT: /app/scripts/download_feishu_url.py
       MATH_AGENT_TEACHER_SYNC_STAGING_ROOT: /app/data/teacher-source-imports
       MATH_AGENT_TEACHER_SYNC_ASSET_STORAGE_ROOT: /app/data/teacher-assets
@@ -354,7 +367,9 @@ services:
     build: ./frontend
     restart: unless-stopped
     logging: *container-logging
-    ports: ["${MATH_AGENT_FRONTEND_HOST_PORT:-5173}:80"]
+    # Default host port 80 pairs with the local hosts mapping (mathagent.local / api.mathagent.local),
+    # so the console is reached as http://mathagent.local without an explicit port suffix.
+    ports: ["${MATH_AGENT_FRONTEND_HOST_PORT:-80}:80"]
     depends_on:
       backend: {condition: service_healthy}
 

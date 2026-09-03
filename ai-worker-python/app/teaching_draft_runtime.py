@@ -20,7 +20,7 @@ import requests
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from app import anthropic_compat
+from app import provider_profiles
 from app.model_review_runtime import BoundedModelReviewController, ModelReviewExhausted, ModelReviewMetadata
 from app.usage import UsageEvent, UsageLedger, cost_for, fallback_tokens
 
@@ -317,35 +317,17 @@ class TeachingDraftRuntime:
             messages: list[dict[str, str]],
             attempt: int,
     ) -> tuple[str, dict[str, int | float]]:
-        """Calls an OpenAI-compatible provider with the remaining graph deadline."""
-        api_key_name = {"openai": "OPENAI_API_KEY", "deepseek": "DEEPSEEK_API_KEY", "ark": "ARK_API_KEY", "glm": "GLM_API_KEY"}.get(provider, "")
-        api_key = os.getenv(api_key_name) if api_key_name else None
+        """Calls a configured provider with the remaining graph deadline."""
+        api_key, base_url = provider_profiles.credentials(provider)
         if not api_key:
             raise HTTPException(status_code=503, detail=f"{provider} API key is missing")
-        default_base = {
-            "openai": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-            "deepseek": "https://api.deepseek.com/v1",
-            "ark": "https://ark.cn-beijing.volces.com/api/v3",
-            "glm": anthropic_compat.default_base_url(),
-        }.get(provider, "")
-        base_url = os.getenv(f"{provider.upper()}_BASE_URL", default_base).rstrip("/")
         timeout = self._remaining_timeout(request)
         try:
-            if anthropic_compat.is_anthropic_provider(provider):
-                # GLM Anthropic 兼容端点：请求/响应转换收敛在适配层，temperature 由适配层丢弃（与 thinking 互斥）。
-                data = anthropic_compat.post_chat_completion(
-                    self._session, api_key, base_url,
-                    {"model": model, "messages": messages, "temperature": 0.2}, timeout,
-                )
-            else:
-                response = self._session.post(
-                    f"{base_url}/chat/completions",
-                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                    json={"model": model, "messages": messages, "temperature": 0.2},
-                    timeout=timeout,
-                )
-                response.raise_for_status()
-                data = response.json()
+            # GLM Anthropic 兼容端点：请求/响应转换收敛在 provider 层，temperature 由适配层丢弃（与 thinking 互斥）。
+            data = provider_profiles.post_completion(
+                provider_profiles.profile(provider), self._session, api_key, base_url,
+                {"model": model, "messages": messages, "temperature": 0.2}, timeout,
+            )
             content = str(data["choices"][0]["message"].get("content") or "")
             usage = data.get("usage") or {}
             prompt = int(usage.get("prompt_tokens", 0) or 0)

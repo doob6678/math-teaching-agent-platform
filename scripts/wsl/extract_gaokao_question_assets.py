@@ -21,7 +21,10 @@ from PIL import Image
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = PROJECT_ROOT / "config" / "gaokao-ingestion-2024.json"
 RENDERER_CLASS = "RenderPdfEvidencePage"
-QUESTION_NUMBER = re.compile(r"(?:^|\s)([1-9]|[12]\d|3[0-9])(?:[.、．]|\s)")
+# 题号锚点必须是行首的“数字+显式分隔符”（如“19. 如图”）。旧模式允许任意位置加空格分隔，
+# 会把“共 7 种”“A. 1”这类选项/正文行误判为题号；跨页绑定放大误锚点后必须收紧。
+# 分隔符后 (?!\d) 排除小数（如“1.6×10⁹m³”会被当成题号 1），题号后总是紧跟文字。
+QUESTION_NUMBER = re.compile(r"^\s*([1-9]|[12]\d|3[0-9])\s*[.、．](?!\d)")
 FIGURE_LABELS = {"figure", "image", "chart", "table"}
 
 
@@ -68,8 +71,10 @@ def render_page(renderer: Path, pdf: Path, page: int, output: Path) -> None:
 
 def count_pages(pdf: Path) -> int:
     """Reads page count with the publisher's pre-existing system Python, not a new dependency in the GPU venv."""
+    # 必须绝对路径调用系统解释器：脚本常在 GPU venv 激活下运行，裸 python3 会解析到
+    # venv 解释器，而 venv 没有 pypdf（系统 python3 才有）。
     result = subprocess.run(
-        ["python3", "-c", "from pypdf import PdfReader; import sys; print(len(PdfReader(sys.argv[1]).pages))", str(pdf)],
+        ["/usr/bin/python3", "-c", "from pypdf import PdfReader; import sys; print(len(PdfReader(sys.argv[1]).pages))", str(pdf)],
         check=True, capture_output=True, text=True, encoding="utf-8")
     page_total = int(result.stdout.strip())
     if page_total < 1:
@@ -112,8 +117,8 @@ def crop_box(box: tuple[int, int, int, int], image: Image.Image, padding: int) -
     return bounded if bounded[2] - bounded[0] >= 24 and bounded[3] - bounded[1] >= 24 else None
 
 
-def question_anchors(detection: dict[str, Any], recognizer: Any, page_image: Path, scratch: Path) -> list[tuple[int, int, str]]:
-    anchors: list[tuple[int, int, str]] = []
+def question_anchors(detection: dict[str, Any], recognizer: Any, page_image: Path, scratch: Path, page_no: int) -> list[tuple[int, int, int, str]]:
+    anchors: list[tuple[int, int, int, str]] = []
     scratch.mkdir(parents=True, exist_ok=True)
     polygons = detection.get("dt_polys", [])
     with Image.open(page_image) as source:
@@ -128,22 +133,53 @@ def question_anchors(detection: dict[str, Any], recognizer: Any, page_image: Pat
             source.crop(clipped).convert("RGB").save(line, format="PNG")
             recognized = prediction(recognizer, line)
             text = str(recognized.get("rec_text", "")).strip()
-            matched = QUESTION_NUMBER.search(text)
+            matched = QUESTION_NUMBER.match(text)
             if matched:
-                anchors.append((clipped[0], clipped[1], matched.group(1)))
+                anchors.append((page_no, clipped[0], clipped[1], matched.group(1)))
     return anchors
 
 
-def select_question(anchors: list[tuple[int, int, str]], box: tuple[int, int, int, int]) -> str | None:
-    above = [anchor for anchor in anchors if anchor[1] <= (box[1] + box[3]) // 2]
+def select_question(anchors: list[tuple[int, int, int, str]], page_no: int, box: tuple[int, int, int, int]) -> str | None:
+    """Binds a figure to the nearest printed question number above it in whole-document reading order.
+
+    Anchors accumulate across pages: a figure that continues onto the next page (e.g. the 2022
+    新高考Ⅰ卷 question 19 coordinate figure on page 16) has no printed number on its own page,
+    so the previous page's anchor must remain eligible; the next printed number appears below
+    the figure and therefore never wins.
+    """
+    center_y = (box[1] + box[3]) // 2
+    above = [anchor for anchor in anchors if anchor[0] < page_no or (anchor[0] == page_no and anchor[2] <= center_y)]
     if not above:
         return None
-    return max(above, key=lambda anchor: (anchor[1], -abs(anchor[0] - box[0])))[2]
+    return max(above, key=lambda anchor: (anchor[0], anchor[2], -abs(anchor[1] - box[0])))[3]
+
+
+def clear_target(target: Path) -> None:
+    """--replace 的容错清理：优先整目录删除；目录壳被 Windows 句柄占用时退化为清空子项。
+
+    资产是纯派生物，可由源 PDF 完整重建；只要子项全部清掉，重建结果与整删重建一致。
+    """
+    import shutil
+    if not target.exists():
+        return
+    shutil.rmtree(target, ignore_errors=True)
+    if not target.exists():
+        return
+    for child in target.iterdir():
+        if child.is_dir():
+            shutil.rmtree(child, ignore_errors=True)
+        else:
+            child.unlink(missing_ok=True)
+    leftovers = list(target.iterdir())
+    if leftovers:
+        raise RuntimeError(f"cannot clear staged assets for regeneration: {[str(item) for item in leftovers[:3]]}")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Create canonical Gaokao question assets through installed GPU PaddleOCR")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    parser.add_argument("--only", help="restrict the run to PDFs whose name contains this substring (single-paper acceptance test); the 12-file whitelist in config stays validated")
+    parser.add_argument("--replace", action="store_true", help="delete and regenerate an existing staged asset directory instead of failing")
     args = parser.parse_args()
     config = json.loads(args.config.read_text(encoding="utf-8"))
     models = config["localGpuModels"]
@@ -153,24 +189,31 @@ def main() -> None:
     require_gpu()
     from paddlex.inference.models import create_predictor
     # Direct installed predictors accept the actual local mobile model identities; high-level PPStructure does not.
-    layout = create_predictor("PP-DocLayout-L", models["layoutModelDir"], device="gpu:0")
-    detector = create_predictor("PP-OCRv5_mobile_det", models["ocrDetectionModelDir"], device="gpu:0")
-    recognizer = create_predictor("PP-OCRv5_mobile_rec", models["ocrRecognitionModelDir"], device="gpu:0")
+    # model_dir/device 必须关键字传参：paddlex 3.7+ 把 model_dir 改成 keyword-only，位置传参会直接 TypeError。
+    layout = create_predictor("PP-DocLayout-L", model_dir=models["layoutModelDir"], device="gpu:0")
+    detector = create_predictor("PP-OCRv5_mobile_det", model_dir=models["ocrDetectionModelDir"], device="gpu:0")
+    recognizer = create_predictor("PP-OCRv5_mobile_rec", model_dir=models["ocrRecognitionModelDir"], device="gpu:0")
     renderer, root = ensure_renderer(), (PROJECT_ROOT / config["assetOutputRoot"]).resolve()
     minimum_score, padding = float(config["figureExtraction"]["minimumLayoutScore"]), int(config["figureExtraction"]["paddingPixels"])
     summaries: list[dict[str, Any]] = []
     for pdf in resolve_files(config):
+        if args.only and args.only not in pdf.name:
+            continue
         target = root / pdf.stem
         if target.exists():
-            raise FileExistsError(f"refusing to overwrite staged assets: {target}")
+            if not args.replace:
+                raise FileExistsError(f"refusing to overwrite staged assets: {target}")
+            clear_target(target)
         pages, figures, scratch = target / "page-images", target / "figures", target / ".ocr-lines"
-        pages.mkdir(parents=True)
+        pages.mkdir(parents=True, exist_ok=True)
         source_hash, entries, page_records = sha256_file(pdf), [], []
+        # 锚点跨页累积：解析卷的题图常落在题号所在页的续页上，同页无锚点时必须允许上一页锚点命中。
+        anchors: list[tuple[int, int, int, str]] = []
         for page_no in range(1, count_pages(pdf) + 1):
             page = pages / f"page-{page_no:03d}.png"
             render_page(renderer, pdf, page_no, page)
             layout_result, detection_result = prediction(layout, page), prediction(detector, page)
-            anchors = question_anchors(detection_result, recognizer, page, scratch / f"page-{page_no:03d}")
+            anchors.extend(question_anchors(detection_result, recognizer, page, scratch / f"page-{page_no:03d}", page_no))
             regions = []
             for item in layout_result.get("boxes", []):
                 if str(item.get("label", "")).lower() not in FIGURE_LABELS or float(item.get("score", 0)) < minimum_score:
@@ -181,13 +224,14 @@ def main() -> None:
             with Image.open(page) as source:
                 for ordinal, region in enumerate(regions, start=1):
                     bounded = crop_box(region, source, padding)
-                    question = select_question(anchors, bounded) if bounded else None
+                    question = select_question(anchors, page_no, bounded) if bounded else None
                     if bounded is None or question is None:
                         continue
                     output = figures / f"page-{page_no:03d}-region-{ordinal:02d}.png"
                     output.parent.mkdir(parents=True, exist_ok=True)
                     source.crop(bounded).convert("RGB").save(output, format="PNG")
-                    entries.append({"sourceSha256": source_hash, "questionNumber": question, "pageNumber": page_no, "bboxPixels": {"left": bounded[0], "top": bounded[1], "right": bounded[2], "bottom": bounded[3]}, "relativeAssetPath": output.relative_to(target).as_posix(), "assetSha256": sha256_file(output), "bindingMethod": "GPU_PP_DOCLAYOUT_L_PP_OCRV5_NEAREST_PRINTED_QUESTION_NUMBER"})
+                    # pageHeightPixels 供发布阶段把 bbox.top 换算成页内比例，用于图片插入点的语义对齐。
+                    entries.append({"sourceSha256": source_hash, "questionNumber": question, "pageNumber": page_no, "pageHeightPixels": source.height, "bboxPixels": {"left": bounded[0], "top": bounded[1], "right": bounded[2], "bottom": bounded[3]}, "relativeAssetPath": output.relative_to(target).as_posix(), "assetSha256": sha256_file(output), "bindingMethod": "GPU_PP_DOCLAYOUT_L_PP_OCRV5_NEAREST_PRINTED_QUESTION_NUMBER"})
             page_records.append({"pageNumber": page_no, "pageImage": page.relative_to(target).as_posix(), "pageImageSha256": sha256_file(page), "layoutRegionCount": len(regions), "boundAssetCount": sum(1 for entry in entries if entry["pageNumber"] == page_no)})
         if scratch.exists():
             import shutil

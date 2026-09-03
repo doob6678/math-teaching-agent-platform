@@ -23,5 +23,8 @@ public class AgentWorkerNodeController {
     @PostMapping("/internal/agent-workers/register") public AgentWorkerNode register(@RequestHeader("X-Agent-Worker-Key") String key, @RequestBody AgentWorkerRegistrationRequest request) { authorize(key); return registry.register(request); }
     @PostMapping("/internal/agent-workers/{workerId}/heartbeat") public AgentWorkerNode heartbeat(@RequestHeader("X-Agent-Worker-Key") String key, @PathVariable String workerId, @RequestBody AgentWorkerHeartbeatRequest request) { authorize(key); return registry.heartbeat(workerId, request); }
     @GetMapping("/api/agents/workers") public List<AgentWorkerNode> nodes() { return registry.nodes(); }
-    private void authorize(String actual) { String expected=environment.getProperty("math-agent.agent-worker.shared-key", ""); if (expected.isBlank() || !expected.equals(actual)) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Agent Worker key is invalid"); }
+    // Constant-time comparison mirrors AgentToolBrokerController.authorize: a plain String.equals leaks the matched
+    // prefix length through timing, and this endpoint shares the same worker key, so both checks must use the same
+    // MessageDigest.isEqual contract (changed in one place only would re-open the gap).
+    private void authorize(String actual) { String expected=environment.getProperty("math-agent.agent-worker.shared-key", ""); if (expected.isBlank() || actual == null || !java.security.MessageDigest.isEqual(expected.getBytes(java.nio.charset.StandardCharsets.UTF_8), actual.getBytes(java.nio.charset.StandardCharsets.UTF_8))) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Agent Worker key is invalid"); }
 }

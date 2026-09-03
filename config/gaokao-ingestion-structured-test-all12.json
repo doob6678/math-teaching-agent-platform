@@ -1,0 +1,32 @@
+{
+  "sourceRootWsl": "/mnt/c/Users/doob/Desktop/个人资料/高考真题/数学高考真题试卷【点进去分开保存，链接长期在】/【新·PDF版】2008-2024·高考数学真题/高考题目数学最近几年",
+  "containerInputRoot": "/app/data/gaokao-input",
+  "evidenceRoot": "output/test-gaokao-structured-20260901-all12/math-paper-corpus",
+  "transcriptionRunRoot": "output/test-gaokao-structured-20260901-all12/math-paper-transcription-runs",
+  "questionAssetRoot": "output/math-paper-assets/gaokao-2024",
+  "assetOutputRoot": "output/test-gaokao-structured-20260901-all12/math-paper-assets",
+  "paperType": "GAOKAO",
+  "subject": "MATHEMATICS",
+  "selectedFiles": [
+    "2022年高考数学试卷（新高考Ⅰ卷）（解析卷）.pdf",
+    "2022年高考数学试卷（新高考Ⅱ卷）（解析卷）.pdf",
+    "2023年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+    "2023年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+    "2024年高考数学试卷（理）（全国甲卷）（解析卷）.pdf",
+    "2024年高考数学试卷（理）（全国甲卷）（空白卷）.pdf",
+    "2024年高考数学试卷（天津）（解析卷）.pdf",
+    "2024年高考数学试卷（天津）（空白卷）.pdf",
+    "2024年高考数学试卷（新课标Ⅰ卷）（解析卷）.pdf",
+    "2024年高考数学试卷（新课标Ⅰ卷）（空白卷）.pdf",
+    "2024年高考数学试卷（新课标Ⅱ卷）（解析卷）.pdf",
+    "2024年高考数学试卷（新课标Ⅱ卷）（空白卷）.pdf"
+  ],
+  "blankPaperGoldenExpectations": {},
+  "visionOptimization": {
+    "pageInitialReviewMaxLongEdgePixels": 960,
+    "pageInitialReviewJpegQuality": 0.82,
+    "policy": "与生产 2024 配置完全一致（960px/0.82），all12 批次只为 v2 协议采集全量证据，不引入新的图像变量。"
+  },
+  "collection": "gaokao_math_structured_test",
+  "scopeExplanation": "12 卷全量 test 批次：为生产接入扫描备齐 v2 协议证据。写出仅限 test-gaokao-structured-20260901-all12 目录与 gaokao_math_structured_test collection；questionAssetRoot 只读复用生产 2024 资产目录（脚本对来源哈希做权威校验，绝不写回）。"
+}

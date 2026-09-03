@@ -44,6 +44,10 @@ public class TeachingHandoutPdfExportService {
     private final HandoutPublicationGate publicationGate;
     /** Optional because isolated renderer tests do not provision the telemetry schema. */
     private HandoutRunMetricsStore handoutMetricsStore;
+    /** 确定性 sanitizer 修不掉时把真实编译错误回喂 AI 作者；未注入（如隔离测试）时保持旧的 recovery-stub 行为。 */
+    private ModelLatexRepairClient latexRepairClient;
+    /** 修复轮数上限；Java 不在此改写任何教学语义，只负责传输错误与再次真实编译。 */
+    private int latexRepairRounds;
 
     /** Keeps direct unit construction deterministic while the Spring bean uses the same independent gate. */
     public TeachingHandoutPdfExportService() {
@@ -54,6 +58,23 @@ public class TeachingHandoutPdfExportService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     void configureHandoutMetricsStore(HandoutRunMetricsStore store) {
         this.handoutMetricsStore = store;
+    }
+
+    /** Adds the model repair closed loop; max-rounds is clamped so an export cannot spin on paid calls. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void configureLatexRepair(ModelLatexRepairClient client,
+            @org.springframework.beans.factory.annotation.Value(
+                    "${math-agent.teaching.latex-repair.max-rounds:1}") int maxRounds) {
+        this.latexRepairClient = client;
+        this.latexRepairRounds = Math.max(0, Math.min(maxRounds, 3));
+    }
+
+    /** One real XeLaTeX pass: PDF bytes on success, the compiler error excerpt on a genuine failure. */
+    record CompileAttempt(java.util.Optional<byte[]> pdf, boolean engineAvailable, String errorTail) {
+    }
+
+    /** Compile outcome including which renderer stage actually produced the PDF. */
+    record RenderedCompileResult(java.util.Optional<byte[]> pdf, String renderer, int repairRounds) {
     }
 
     public record RenderedHandoutPdf(byte[] bytes, String renderer, int pageCount) {
@@ -199,9 +220,10 @@ public class TeachingHandoutPdfExportService {
      * Renders one specific handout version and returns bytes plus rendering metadata for audit and frontend preview.
      */
     public RenderedHandoutPdf renderDetailed(TeachingTaskResponse task, String version) {
-        Optional<byte[]> compiled = compileLatex(task, version);
-        if (compiled.isPresent()) {
-            return new RenderedHandoutPdf(compiled.get(), "xelatex", countPages(compiled.get()));
+        RenderedCompileResult compiled = compileLatex(task, version);
+        if (compiled.pdf().isPresent()) {
+            return new RenderedHandoutPdf(
+                    compiled.pdf().get(), compiled.renderer(), countPages(compiled.pdf().get()));
         }
         // Preserve a real XeLaTeX PDF even when a model draft contains irreparable TeX. The fallback deliberately
         // avoids model text and asset references, so a compiler error never leaks a path or turns into a fake PDF.
@@ -312,17 +334,59 @@ public class TeachingHandoutPdfExportService {
     }
 
     /**
-     * Compiles the handout with a real XeLaTeX engine when available so math formulas are rendered by LaTeX.
+     * Compiles the handout with a real XeLaTeX engine, then runs the model repair closed loop
+     * when the deterministic sanitizers could not save the document.
      */
-    Optional<byte[]> compileLatex(TeachingTaskResponse task, String version) {
-        return compileLatexSource(task, version, fullLatexDocument(task, version));
+    RenderedCompileResult compileLatex(TeachingTaskResponse task, String version) {
+        return compileWithModelRepair(task.taskId(), fullLatexDocument(task, version));
+    }
+
+    /**
+     * 修复闭环主体：只依赖文档字符串与编译尝试结果，便于用假编译环做单元测试；
+     * task 侧文档构建留在 compileLatex，保证两条路径共用同一个真实引擎。
+     */
+    RenderedCompileResult compileWithModelRepair(String taskId, String source) {
+        CompileAttempt attempt = compileOnce(taskId, source);
+        if (attempt.pdf().isPresent() || !attempt.engineAvailable()) {
+            return new RenderedCompileResult(attempt.pdf(), "xelatex", 0);
+        }
+        if (latexRepairClient == null || latexRepairRounds <= 0 || attempt.errorTail().isBlank()) {
+            return new RenderedCompileResult(java.util.Optional.empty(), "xelatex", 0);
+        }
+        int rounds = 0;
+        String current = source;
+        while (rounds < latexRepairRounds && !attempt.errorTail().isBlank()) {
+            rounds += 1;
+            java.util.Optional<String> repaired = latexRepairClient.repairLatex(taskId, current, attempt.errorTail(), rounds);
+            if (repaired.isEmpty()) {
+                break;
+            }
+            current = repaired.get();
+            attempt = compileOnce(taskId, current);
+            if (attempt.pdf().isPresent()) {
+                LOGGER.info("XeLaTeX model repair compiled handout {} after {} round(s)", taskId, rounds);
+                return new RenderedCompileResult(attempt.pdf(), "xelatex-model-repair", rounds);
+            }
+            if (!attempt.engineAvailable()) {
+                break;
+            }
+        }
+        return new RenderedCompileResult(java.util.Optional.empty(), "xelatex-model-repair", rounds);
     }
 
     /** Compiles either the sanitized handout or the bounded recovery document with the same real XeLaTeX engine. */
     Optional<byte[]> compileLatexSource(TeachingTaskResponse task, String version, String latexSource) {
+        return compileOnce(task.taskId(), latexSource).pdf();
+    }
+
+    /**
+     * Runs one real XeLaTeX pass (two passes for cross references) and captures the compiler error excerpt.
+     * Package-private seam: the closed-loop test overrides it to simulate genuine engine outcomes.
+     */
+    CompileAttempt compileOnce(String taskId, String latexSource) {
         Optional<Path> engine = latexEnginePath();
         if (engine.isEmpty()) {
-            return Optional.empty();
+            return new CompileAttempt(Optional.empty(), false, "");
         }
         Path workDir = null;
         try {
@@ -333,41 +397,74 @@ public class TeachingHandoutPdfExportService {
             Files.writeString(source, latexSource);
             Process process = runXeLaTeX(engine.get(), workDir, source, compilerOutput);
             if (process == null) {
-                LOGGER.warn("XeLaTeX timed out for teaching handout {}", task.taskId());
-                return Optional.empty();
+                LOGGER.warn("XeLaTeX timed out for teaching handout {}", taskId);
+                return new CompileAttempt(Optional.empty(), true,
+                        "XeLaTeX timed out; the run exceeded its bounded wall-clock window.");
             }
             if (process.exitValue() == 0) {
                 Process secondPass = runXeLaTeX(engine.get(), workDir, source, compilerOutput);
                 if (secondPass == null) {
-                    LOGGER.warn("XeLaTeX second pass timed out for teaching handout {}", task.taskId());
-                    return Optional.empty();
+                    LOGGER.warn("XeLaTeX second pass timed out for teaching handout {}", taskId);
+                    return new CompileAttempt(Optional.empty(), true,
+                            "XeLaTeX second pass timed out after a successful first pass.");
                 }
                 process = secondPass;
             }
             Path pdf = workDir.resolve("handout.pdf");
             if (process.exitValue() == 0 && Files.isRegularFile(pdf)) {
-                return Optional.of(Files.readAllBytes(pdf));
+                return new CompileAttempt(Optional.of(Files.readAllBytes(pdf)), true, "");
             }
             Path log = workDir.resolve("handout.log");
-            String logTail = Files.isRegularFile(log) ? tail(Files.readString(log), 1200)
-                    : Files.isRegularFile(compilerOutput) ? tail(Files.readString(compilerOutput), 1200) : "";
-            LOGGER.warn("XeLaTeX failed for teaching handout {} with exit {}. {}", task.taskId(), process.exitValue(), logTail);
+            String logText = Files.isRegularFile(log) ? Files.readString(log)
+                    : Files.isRegularFile(compilerOutput) ? Files.readString(compilerOutput) : "";
+            String errorTail = compilerErrorExcerpt(logText);
+            LOGGER.warn("XeLaTeX failed for teaching handout {} with exit {}. {}", taskId, process.exitValue(),
+                    tail(logText, 1200));
             // Preserve the exact .tex/.log pair after a real compiler failure.  Without it the finally block erased
             // the only evidence needed to repair a model-produced formula, forcing operators to guess from a short
             // logger tail and repeatedly fall back to PDFBox.
             workDir = null;
-            return Optional.empty();
+            return new CompileAttempt(Optional.empty(), true, errorTail);
         } catch (IOException exception) {
-            LOGGER.warn("XeLaTeX compilation unavailable for teaching handout {}", task.taskId(), exception);
-            return Optional.empty();
+            LOGGER.warn("XeLaTeX compilation unavailable for teaching handout {}", taskId, exception);
+            return new CompileAttempt(Optional.empty(), false, "");
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
-            return Optional.empty();
+            return new CompileAttempt(Optional.empty(), false, "");
         } finally {
             if (workDir != null) {
                 deleteRecursively(workDir);
             }
         }
+    }
+
+    /**
+     * Extracts the first genuine TeX error block ("! ..." plus the following context lines) that the model needs;
+     * falls back to the log tail when the engine aborted before writing a `!` line.
+     */
+    static String compilerErrorExcerpt(String log) {
+        if (log == null || log.isBlank()) {
+            return "";
+        }
+        String[] lines = log.split("\r?\n");
+        StringBuilder excerpt = new StringBuilder();
+        for (int index = 0; index < lines.length && excerpt.length() < 3_600; index += 1) {
+            if (lines[index].startsWith("!")) {
+                excerpt.append(lines[index]).append('\n');
+                for (int follow = index + 1; follow < Math.min(index + 7, lines.length); follow += 1) {
+                    // 下一条 `!` 是新的独立错误块：截在这里避免把无关错误塞进模型上下文。
+                    if (lines[follow].startsWith("!")) {
+                        break;
+                    }
+                    excerpt.append(lines[follow]).append('\n');
+                }
+                break;
+            }
+        }
+        if (excerpt.isEmpty()) {
+            excerpt.append(tail(log, 1_200));
+        }
+        return excerpt.length() > 4_000 ? excerpt.substring(0, 4_000) : excerpt.toString();
     }
     // Pure export rule delegated to TeachingHandoutPdfExportPolicyPartA; process/lifecycle state remains in the exporter facade.
     static void materializeBundledLatexAsset(Path workDir, String assetName) throws IOException { TeachingHandoutPdfExportPolicyPartA.materializeBundledLatexAsset(workDir, assetName); }

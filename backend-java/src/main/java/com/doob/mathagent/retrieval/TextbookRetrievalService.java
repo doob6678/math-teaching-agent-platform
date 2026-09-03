@@ -388,12 +388,22 @@ public class TextbookRetrievalService {
          * The lexical engine now only decides which pages are plausible enough to enter semantic rerank, not their
          * final order.
          */
+        // Per-stage milliseconds let load tests attribute retrieval latency to a concrete route (body BM25 vs
+        // title BM25 vs BGE vs CLIP vs rerank) instead of only reporting one opaque end-to-end number.
+        long lexicalStartedAt = System.nanoTime();
         List<TextbookSearchHit> coarseHits = collapseLogicalBlockCandidates(
                 searchEngine.search(query, chunks, chunks.size(), queryGraph), blockIndex);
         Map<String, List<TextbookSearchHit>> lexicalCandidates = groupByDocument(coarseHits);
+        executionStages.add(new TextbookRetrievalStage(
+                "lexical_bm25",
+                "正文 BM25 召回",
+                "completed",
+                "已检索页面正文 n-gram 倒排；该路线只提供候选，不与小标题或 BGE 分数相加。",
+                elapsedMs(lexicalStartedAt)));
         // Fielded title BM25 remains a separate candidate route. It prevents body
         // OCR frequency from suppressing an exact visible small heading, without
         // copying page-library body text or adding incomparable route scores together.
+        long titleStartedAt = System.nanoTime();
         List<TextbookSearchHit> titleHits = collapseLogicalBlockCandidates(
                 searchEngine.searchSectionTitles(query, chunks, chunks.size()), blockIndex);
         Map<String, List<TextbookSearchHit>> titleCandidates = groupByDocument(titleHits);
@@ -401,7 +411,8 @@ public class TextbookRetrievalService {
                 "title_bm25",
                 "小标题 BM25 召回",
                 "completed",
-                "已独立检索可见小标题；该路线只提供候选，不与正文 BM25 或 BGE 分数相加。"));
+                "已独立检索可见小标题；该路线只提供候选，不与正文 BM25 或 BGE 分数相加。",
+                elapsedMs(titleStartedAt)));
         /*
          * Stage one intentionally unions independent evidence routes. A positive BM25 hit must not suppress BGE:
          * OCR wording often overlaps a generic sibling page while BGE retrieves the semantically correct page. The
