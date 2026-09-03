@@ -101,8 +101,13 @@ public class TeacherResourceBlockSearchService {
     static final int MAX_NEARBY_IMAGE_BLOCK_DISTANCE = 4;
     /** A single evidence hit should not flood MCP/model context with every decorative image in a document. */
     static final int MAX_IMAGE_ASSETS_PER_HIT = 2;
-    /** A single GPU rerank request may contain at most twelve physical-file candidates. */
-    static final int MAX_RERANK_CANDIDATES = 12;
+    /**
+     * A single GPU rerank request may contain at most sixteen physical-file candidates.
+     * 20260903 12→16：sourcePath 准入去重后窗口里全是不同路径，向量强命中的真题/专题文件不再被同代
+     * 重复挤占；75 例实测多代去重让原 fused@1-6 的位置腾出给次优路径，16 对 cross-encoder 在 P95
+     * 预算内（扩窗后实测 P50 ~350ms，目标 5s），把 rank4-6 的边界相关文件送进 GPU 裁决。
+     */
+    static final int MAX_RERANK_CANDIDATES = 16;
     /** Reserve eight physical FILE slots for the semantic route before any route fusion. */
     static final int MAX_VECTOR_FILE_ADMISSION = 8;
     /** Reserve four physical FILE slots for the bounded SQL lexical/BM25 route before any route fusion. */
@@ -462,7 +467,7 @@ public class TeacherResourceBlockSearchService {
             int safeLimit,
             TeacherResourceSearchFilter filter) {
         FileRouteRecall routes = fileRouteRecall(
-                tenantId, viewerRole, viewerSubjectId, focusedQuery, queryGraph, safeLimit, filter);
+                tenantId, viewerRole, viewerSubjectId, normalizedQuery, focusedQuery, queryGraph, safeLimit, filter);
         VectorCoarseRecall coarseRecall = routes.vectorRecall();
         List<String> fileCandidateIds = routes.fusedFileDocumentIds();
         List<TeacherResourceDocumentResponse> searchableDocuments = fileCandidateIds.isEmpty()
@@ -575,7 +580,7 @@ public class TeacherResourceBlockSearchService {
         if (semanticCandidateDocumentIds == null || semanticCandidateDocumentIds.isEmpty()) {
             return contexts;
         }
-        int fileLimit = Math.min(12, stageDocumentCandidateLimit(semanticCandidateDocumentIds.size()));
+        int fileLimit = Math.min(MAX_RERANK_CANDIDATES, stageDocumentCandidateLimit(semanticCandidateDocumentIds.size()));
         for (String documentId : semanticCandidateDocumentIds) {
             if (contexts.size() >= fileLimit) {
                 break;
@@ -606,6 +611,15 @@ public class TeacherResourceBlockSearchService {
                         continue;
                     }
                     fileContexts.add(toContext(document, block, fileIdentitiesByDocumentId.get(documentId)));
+                }
+            }
+            // 20260903 代表块保底：图谱标签只应筛选邻居窗，不应否决代表块自身的语义证据。
+            // 真题类文件（如 2026 新高考一卷）块文本不含知识点标签，标签过滤会把整文件滤空，
+            // 使 fused@1 的向量强命中（0.68 余弦）在 stage1 直接消失（75 例漏斗实测 fused@1-6 全灭）。
+            // 此时回退保留代表块，cross-encoder 仍负责最终裁决；有标签命中的正常文件行为不变。
+            if (fileContexts.isEmpty()) {
+                for (TeacherDocumentBlockResponse representative : representatives) {
+                    fileContexts.add(toContext(document, representative, fileIdentitiesByDocumentId.get(documentId)));
                 }
             }
             if (!fileContexts.isEmpty()) {
@@ -810,6 +824,7 @@ public class TeacherResourceBlockSearchService {
             String tenantId,
             String viewerRole,
             String viewerSubjectId,
+            String normalizedQuery,
             FocusedSearchQuery focusedQuery,
             TeacherResourceGraphAlignmentService.QueryGraphContext queryGraph,
             int safeLimit,
@@ -833,6 +848,21 @@ public class TeacherResourceBlockSearchService {
                 : List.of();
         List<String> lexicalFiles = distinctFileIds(lexicalBlocks.stream()
                 .map(TeacherDocumentBlockResponse::documentId).toList(), fusion.lexicalQualityLimit());
+        // 20260903 文件名锚点准入（设计依据与零得分影响证明见 Policy.prioritizeTitleAnchors 注释）：
+        // 漏斗实测证明 F049/F045/F014 等期望文件已在 lexical 召回列表内，却因 4 个 lexical 槽被泛词
+        // 文件占满而进不了 12 文件 rerank 窗口；此处仅把"文件名与查询共享 ≥3 字面连续片段"的文件提到
+        // 槽位前列，不新增 GPU 调用，最终次序仍由看到 documentTitle 的 cross-encoder 裁决。
+        if (!lexicalFiles.isEmpty()) {
+            Map<String, String> sourcePathByLexicalFile = resourceStore.listSearchableFileDocumentsByIds(
+                            tenantId, viewerRole, viewerSubjectId, lexicalFiles, lexicalFiles.size()).stream()
+                    .collect(Collectors.toMap(
+                            TeacherResourceStore.TeacherFileDocument::documentId,
+                            file -> textOrDefault(file.sourcePath(), ""),
+                            (left, ignored) -> left,
+                            LinkedHashMap::new));
+            lexicalFiles = TeacherResourceBlockSearchPolicy.prioritizeTitleAnchors(
+                    lexicalFiles, sourcePathByLexicalFile, normalizedQuery);
+        }
         List<String> tagFiles = distinctFileIds(tagBlocks.stream()
                 .map(TeacherDocumentBlockResponse::documentId).toList(), fusion.tagQualityLimit());
         Map<String, Double> fusedFileScores = TeacherResourceBlockSearchPolicy.fuseFileScores(
@@ -845,6 +875,21 @@ public class TeacherResourceBlockSearchService {
                 MAX_VECTOR_FILE_ADMISSION,
                 MAX_LEXICAL_FILE_ADMISSION,
                 MAX_RERANK_CANDIDATES);
+        // 20260903 一代一槽：重同步多代 FILE 会带着相同向量命中挤满 12 窗口并造成回归（A/B 实测 2 条），
+        // 因此按 sourcePath 去重后从完整 RRF 排名补齐。纯准入规则，得分与最终次序不变（见 Policy 注释）。
+        LinkedHashSet<String> pathLookupIds = new LinkedHashSet<>(fused);
+        pathLookupIds.addAll(fusedFileScores.keySet());
+        Map<String, String> sourcePathByFile = pathLookupIds.isEmpty()
+                ? Map.of()
+                : resourceStore.listSearchableFileDocumentsByIds(
+                        tenantId, viewerRole, viewerSubjectId, List.copyOf(pathLookupIds), pathLookupIds.size()).stream()
+                .collect(Collectors.toMap(
+                        TeacherResourceStore.TeacherFileDocument::documentId,
+                        file -> textOrDefault(file.sourcePath(), ""),
+                        (left, ignored) -> left,
+                        LinkedHashMap::new));
+        fused = TeacherResourceBlockSearchPolicy.dedupeAdmittedFilesBySourcePath(
+                fused, fusedFileScores, sourcePathByFile, MAX_RERANK_CANDIDATES);
         Map<String, BlockEvidence> blockEvidenceByKey = new LinkedHashMap<>();
         Map<String, Integer> vectorCountsByFile = new LinkedHashMap<>();
         int vectorRank = 1;

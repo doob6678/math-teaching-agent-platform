@@ -299,6 +299,9 @@ math-agent:
         # CPU BGE reranking is quadratic in candidate count. Twelve evidence blocks preserve one candidate per
         # narrow-library document while keeping the post-warmup P95 target below five seconds on the local worker.
         max-block-rerank-candidates: 12
+        # 20260903 与 Java 侧 MAX_RERANK_CANDIDATES=16 对齐：sourcePath 准入去重后每槽都是不同路径，
+        # GPU 对数从 ~6-10 提升到 ≤16，P95 实测仍远低于 5s 目标。改一处必须两处同步。
+        max-document-rerank-candidates: 16
         # Keep exact theorem/formula hits that BGE misses outside the global Top-N. The final Cross-Encoder still
         # owns the visible order; this switch only controls same-document candidate admission.
         lexical-rescue-enabled: ${MATH_AGENT_TEACHER_SEARCH_RUNTIME_LEXICAL_RESCUE_ENABLED:true}

@@ -185,6 +185,84 @@ class TeacherResourceBlockSearchPolicyTest {
                 "l1", "l2", "l3", "l4");
     }
 
+    /**
+     * 20260903 文件名锚点准入：期望文件已在 lexical 召回列表内、但被泛词文件挤出槽位的回归用例画像
+     * （F049：查询"2025新高考一卷数学函数与数列" vs "2026年数学模拟题/2025年新高考一卷.md"）。
+     */
+    @Test
+    void titleAnchorPromotesFilesWhoseNameSharesThreeCharRunWithQuery() {
+        List<String> ordered = TeacherResourceBlockSearchPolicy.prioritizeTitleAnchors(
+                List.of("generic-a", "generic-b", "exam-2025"),
+                Map.of(
+                        "generic-a", "函数/三次函数总结.md",
+                        "generic-b", "三角函数/正弦函数不等式.md",
+                        "exam-2025", "2026年数学模拟题/2025年新高考一卷.md"),
+                "2025新高考一卷数学函数与数列");
+
+        // "三次函数"/"函数" 与查询的最长共享片段不足 3 字（泛词不晋升），2025年新高考一卷 独占前位。
+        assertThat(ordered).containsExactly("exam-2025", "generic-a", "generic-b");
+    }
+
+    @Test
+    void titleAnchorIsOrderPreservingNoOpWithoutAnyMatch() {
+        List<String> files = List.of("a", "b");
+        List<String> ordered = TeacherResourceBlockSearchPolicy.prioritizeTitleAnchors(
+                files, Map.of("a", "数列/数列求和.md", "b", "立体几何/体积.md"), "古典概型等可能基本事件个数");
+
+        assertThat(ordered).containsExactly("a", "b");
+    }
+
+    @Test
+    void titleAnchorIgnoresPunctuationWhitespaceAndFileExtensions() {
+        List<String> ordered = TeacherResourceBlockSearchPolicy.prioritizeTitleAnchors(
+                List.of("other", "paper"),
+                Map.of("other", "概率统计/AI 古典概型.md", "paper", "！！！重要必看！！！.md"),
+                "重要必看！导数专题复习");
+
+        // 标点/扩展名剥离后 "重要必看" 4 字连续片段命中全角感叹号文件词干；AI古典概型 共享片段 <3 不晋升。
+        assertThat(ordered).containsExactly("paper", "other");
+    }
+
+    /**
+     * 20260903 一代一槽：重同步三代同路径 FILE 带着相同向量命中占满窗口（A/B 实测挤掉正确路径，
+     * 2 条 @3 回归）。dedupe 后每路径只留首个，剩余槽位从完整 RRF 排名补齐不同路径。
+     */
+    @Test
+    void sourcePathDedupeKeepsOneGenerationPerPathAndFillsFromRrfRanking() {
+        List<String> admitted = List.of("gen3", "gen2", "gen1", "dup-a1", "other");
+        Map<String, Double> rrf = new java.util.LinkedHashMap<>();
+        rrf.put("gen3", 0.030d);
+        rrf.put("gen2", 0.029d);
+        rrf.put("gen1", 0.028d);
+        rrf.put("dup-a1", 0.027d);
+        rrf.put("other", 0.026d);
+        rrf.put("dup-a2", 0.025d);
+        rrf.put("filler", 0.024d);
+        Map<String, String> pathByFile = Map.of(
+                "gen3", "真题/2026一卷.md",
+                "gen2", "真题/2026一卷.md",
+                "gen1", "真题/2026一卷.md",
+                "dup-a1", "函数/单调性.md",
+                "dup-a2", "函数/单调性.md",
+                "other", "概率/古典概型.md",
+                "filler", "数列/求和.md");
+
+        List<String> kept = TeacherResourceBlockSearchPolicy.dedupeAdmittedFilesBySourcePath(
+                admitted, rrf, pathByFile, 5);
+
+        // 真题路径只留 gen3 一代；dup-a2 与 dup-a1 同路径不重复占槽；filler 补足第 4 个不同路径。
+        assertThat(kept).containsExactly("gen3", "dup-a1", "other", "filler");
+    }
+
+    @Test
+    void sourcePathDedupeTreatsMissingPathAsUniqueFile() {
+        List<String> kept = TeacherResourceBlockSearchPolicy.dedupeAdmittedFilesBySourcePath(
+                List.of("a", "b"), Map.of("a", 0.01d, "b", 0.02d), Map.of("a", ""), 8);
+
+        // 无 sourcePath 的行按自身 id 去重，宁可各占槽也不吞并未知文件。
+        assertThat(kept).containsExactly("a", "b");
+    }
+
     @Test
     void overlappingRouteFilesUseOnePhysicalAdmissionSlot() {
         List<String> admitted = TeacherResourceBlockSearchPolicy.admitFileCandidates(

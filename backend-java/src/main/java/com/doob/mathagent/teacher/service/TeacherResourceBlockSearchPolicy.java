@@ -363,6 +363,114 @@ final class TeacherResourceBlockSearchPolicy {
         return List.copyOf(admitted);
     }
 
+    /**
+     * 20260903 文件名锚点排序（75 例实测：F049 等"文件名族"用例的期望文件其实已被 BM25 路召回，
+     * 但 4 个 lexical 准入槽被高频泛词文件占满，撑不到 rerank 窗口）。只调整 lexical 路内部的
+     * 准入顺序：文件名与查询共享 ≥3 字面连续片段的文件优先进槽。lexical-weight=0 时本重排不改变
+     * 任何 RRF 得分（乘 0 结果相同），最终次序仍交给能看到 documentTitle 的 cross-encoder——
+     * 与块级 lexical-rescue 相同的设计纪律：这是准入规则，不是打分权重。
+     */
+    static List<String> prioritizeTitleAnchors(
+            List<String> lexicalFiles,
+            Map<String, String> titleByFileId,
+            String query) {
+        if (lexicalFiles == null || lexicalFiles.isEmpty()) {
+            return lexicalFiles == null ? List.of() : lexicalFiles;
+        }
+        String normalizedQuery = anchorNormalize(query);
+        if (normalizedQuery.isEmpty()) {
+            return lexicalFiles;
+        }
+        List<String> anchored = new ArrayList<>();
+        List<String> remainder = new ArrayList<>();
+        for (String fileId : lexicalFiles) {
+            String stem = anchorNormalize(titleByFileId == null ? "" : stripFileExtension(titleByFileId.get(fileId)));
+            if (!stem.isEmpty() && longestSharedRun(normalizedQuery, stem) >= MIN_TITLE_ANCHOR_RUN) {
+                anchored.add(fileId);
+            } else {
+                remainder.add(fileId);
+            }
+        }
+        if (anchored.isEmpty()) {
+            return lexicalFiles;
+        }
+        anchored.addAll(remainder);
+        return anchored;
+    }
+
+    /**
+     * 20260903 sourcePath 级 FILE 准入去重。飞书重同步会为同一物理文件产生多代 FILE 行；三代共享相同的
+     * 向量命中，会在 12 文件 rerank 窗口里互抢槽位（75 例 A/B 实测：两个路径 × 三代占满 fused@1-6，
+     * 挤掉其它正确路径并造成 2 条回归）。保留准入顺序中每个路径的首个文件，其余槽位从完整 RRF 排名
+     * （fusedFileScores 已按分数降序）补齐到 maxCandidates 个不同路径。纯准入规则，不改任何打分；
+     * 最终次序仍由 cross-encoder 裁决。sourcePath 缺失的文件按唯一处理（保守：宁可不合并也不吞并异文件）。
+     */
+    static List<String> dedupeAdmittedFilesBySourcePath(
+            List<String> admitted,
+            Map<String, Double> fusedFileScores,
+            Map<String, String> sourcePathByFile,
+            int maxCandidates) {
+        int limit = Math.max(1, maxCandidates);
+        LinkedHashSet<String> kept = new LinkedHashSet<>();
+        LinkedHashSet<String> seenPaths = new LinkedHashSet<>();
+        List<String> pools = new ArrayList<>();
+        if (admitted != null) {
+            pools.addAll(admitted);
+        }
+        if (fusedFileScores != null) {
+            pools.addAll(fusedFileScores.keySet());
+        }
+        for (String fileId : pools) {
+            if (kept.size() >= limit) {
+                break;
+            }
+            if (fileId == null || fileId.isBlank()) {
+                continue;
+            }
+            String stripped = fileId.strip();
+            String sourcePath = sourcePathByFile == null ? "" : textOrDefault(sourcePathByFile.get(stripped), "");
+            if (seenPaths.add(sourcePath.isBlank() ? stripped : sourcePath)) {
+                kept.add(stripped);
+            }
+        }
+        return List.copyOf(kept);
+    }
+
+    static final int MIN_TITLE_ANCHOR_RUN = 3;
+
+    /** 锚点比较去空白与标点（含全角），标点不得截断"2025年新高考一卷"这类文件名字面。 */
+    private static final Pattern ANCHOR_NOISE =
+            Pattern.compile("[\\s\\p{Punct}！，。、；：？（）《》“”‘’—…·]+");
+
+    private static String anchorNormalize(String value) {
+        return value == null ? "" : ANCHOR_NOISE.matcher(value.toLowerCase(Locale.ROOT)).replaceAll("");
+    }
+
+    private static String stripFileExtension(String title) {
+        String normalized = textOrDefault(title, "");
+        int dot = normalized.lastIndexOf('.');
+        return dot > 0 ? normalized.substring(0, dot) : normalized;
+    }
+
+    /** 查询与文件名词干都被上游预算截断，DP 全对组合保持微秒级。 */
+    private static int longestSharedRun(String left, String right) {
+        int best = 0;
+        int[] previous = new int[right.length() + 1];
+        for (int i = 1; i <= left.length(); i++) {
+            int[] current = new int[right.length() + 1];
+            for (int j = 1; j <= right.length(); j++) {
+                if (left.charAt(i - 1) == right.charAt(j - 1)) {
+                    current[j] = previous[j - 1] + 1;
+                    if (current[j] > best) {
+                        best = current[j];
+                    }
+                }
+            }
+            previous = current;
+        }
+        return best;
+    }
+
     private static void addRouteQuota(
             LinkedHashSet<String> admitted,
             List<String> routeFiles,
