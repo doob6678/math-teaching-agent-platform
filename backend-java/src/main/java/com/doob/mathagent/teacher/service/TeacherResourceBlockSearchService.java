@@ -1219,8 +1219,23 @@ public class TeacherResourceBlockSearchService {
         // 20260830 晚：按老板要求撤掉窗口内块级重排的额外 rerank（多一次 GPU 调用拖慢 P95）。
         // 精确块命中改由父子块索引保证：向量锚点升级为段落级子块（VectorIndexService 子块集合），
         // 子块命中直接携带父块身份，代表块选择自然落到真正回答查询的块上。
-        return rankedCandidates.stream()
-                .limit(safeLimit)
+        //
+        // 20260903 文件多样性（老板批准 rerank 改造第一步）：终排此前按块分数逐条截取，同一物理文件的
+        // 第二、三块会占用 visible limit 槽位（75 例评测中 10 例被此挤到 rank4/5）。文档级召回是讲义链路
+        // 的考核口径，AI 拿到一条证据后本就有 handout-document-read 工具精读整文件，因此每个文件只保留
+        // 分数最高的一个块参与输出，让 5 个槽位覆盖 5 个不同来源。空 sourcePath（合成引用）不去重。
+        List<BlockCandidate> diverseCandidates = new ArrayList<>();
+        LinkedHashSet<String> seenFiles = new LinkedHashSet<>();
+        for (BlockCandidate candidate : rankedCandidates) {
+            String fileKey = textOrDefault(candidate.block().sourcePath(), "");
+            if (fileKey.isBlank() || seenFiles.add(fileKey)) {
+                diverseCandidates.add(candidate);
+                if (diverseCandidates.size() >= safeLimit) {
+                    break;
+                }
+            }
+        }
+        return diverseCandidates.stream()
                 .map(candidate -> toTwoStageHit(candidate, candidate.parentBlocks(), normalizedQuery, terms))
                 .toList();
     }
